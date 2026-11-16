@@ -961,16 +961,6 @@ message DecideProposalRequest {
   bool accept = 3;
 }
 
-message InspectAgentsRequest {
-  string target = 1;
-  string kind = 2;
-}
-
-message InspectAgentsResponse {
-  string output = 1;
-  int32 findings = 2;
-}
-
 message UpdateSessionRequest {
   string id = 1;
   optional bool pinned = 2;
@@ -1329,7 +1319,6 @@ service Web {
   rpc ProposeDraftChanges(ProposeDraftChangesRequest) returns (AgentDraftProposal);
   rpc DecideProposal(DecideProposalRequest) returns (AgentDraftProposal);
   rpc SaveBehaviorSettings(SaveBehaviorSettingsRequest) returns (ListConfigResponse);
-  rpc InspectAgents(InspectAgentsRequest) returns (InspectAgentsResponse);
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
   rpc Identity(IdentityRequest) returns (IdentityResponse);

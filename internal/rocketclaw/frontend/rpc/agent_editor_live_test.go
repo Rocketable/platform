@@ -175,7 +175,8 @@ func TestAgentEditorRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, rt.Cfg, "")
+	web := NewHTTPHandler(connection, rt.Cfg, "")
+	handler := signedIn("alice", web)
 	alice := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/test/unlimit":
@@ -190,10 +191,7 @@ func TestAgentEditorRealBackendBrowser(t *testing.T) {
 	}))
 	t.Cleanup(alice.Close)
 
-	bob := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.RemoteAddr = "192.0.2.2:1234"
-		handler.ServeHTTP(w, r)
-	}))
+	bob := httptest.NewServer(signedIn("bob", web))
 	t.Cleanup(bob.Close)
 
 	runWebTest(t, "src/agent-editor-transport.test.ts", "ROCKETCLAW_EDITOR_ALICE_URL="+alice.URL, "ROCKETCLAW_EDITOR_BOB_URL="+bob.URL, "ROCKETCLAW_EDITOR_WORKSPACE="+cfg.Workspace, "ROCKETCLAW_EDITOR_PR_STATE="+prState)

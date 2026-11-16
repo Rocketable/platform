@@ -41,15 +41,12 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	    "app_token": "xapp-test",
 	    "channels": [{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]
 	  },
-	  "web": {"auto_settle_after": "1h"}
+	  "web": {"auto_settle_after": "1h", "listen_address": "127.0.0.1:8080", "tls_cert_file": "cert.pem", "tsnet": {}}
 	}`)
 
 	assert.Equal(t, "api_key", cfg.OpenAI.Auth)
 	assert.Empty(t, cfg.AutoApproverModel)
-	assert.Equal(t, "0.0.0.0:3000", cfg.Web.ListenAddress)
-	cfg.Web.ListenAddress = "127.0.0.1:8080"
-	require.NoError(t, cfg.Validate())
-	assert.Equal(t, "127.0.0.1:8080", cfg.Web.ListenAddress)
+	assert.Equal(t, "rocketclaw", cfg.Web.Tsnet.Hostname)
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
 	assert.Empty(t, cfg.Logging.Level)
 	require.NoError(t, cfg.ValidateBehavior())
@@ -60,7 +57,7 @@ func TestLoadAcceptsSetupOnlyFile(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "openai": {"api_key": "test-key"},
 	  "slack": {"bot_token": "xoxb-test", "app_token": "xapp-test"},
-	  "web": {"admins": ["alice@example.com"]}
+	  "web": {"admins": ["alice@example.com"], "tsnet": {}}
 	}`)
 
 	assert.Empty(t, cfg.Slack.Channels)
@@ -121,7 +118,7 @@ func TestAttachmentLocation(t *testing.T) {
 		} {
 			t.Run(runtimeDir+"/"+test.name, func(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "config.json")
-				body := fmt.Sprintf(`{"workspace":"work","database_url":"postgres://localhost/test","openai":{"api_key":"test"},"slack":{"bot_token":"test","app_token":"test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"attachments":%s}`, test.raw)
+				body := fmt.Sprintf(`{"workspace":"work","database_url":"postgres://localhost/test","openai":{"api_key":"test"},"slack":{"bot_token":"test","app_token":"test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"web":{"tsnet":{}},"attachments":%s}`, test.raw)
 				require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 
 				cfg, err := Load(path, "", &AWSFetcher{})
@@ -154,7 +151,7 @@ func TestLoadTsnet(t *testing.T) {
 		want      *TsnetConfig
 		wantErr   bool
 	}{
-		{name: "off", web: `{}`},
+		{name: "missing", web: `{}`, wantErr: true},
 		{name: "default hostname", web: `{"tsnet":{}}`, want: &TsnetConfig{Hostname: "rocketclaw"}},
 		{name: "configured", web: `{"tsnet":{"hostname":"phone-1","tags":["tag:rocketclaw"],"origin":"https://evil.example"}}`, want: &TsnetConfig{Hostname: "phone-1", Tags: []string{"tag:rocketclaw"}}},
 		{name: "path hostname", web: `{"tsnet":{"hostname":"../state"}}`, wantErr: true},
@@ -689,6 +686,7 @@ func TestLoadDefaultsWorkspaceToConfigDirectory(t *testing.T) {
 	  "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 	  "openai": {"api_key": "test-key"},
 	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
+	  "web": {"tsnet": {}},
 	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"},
 	  "opencode": {"box": {"url": "https://box.example:4096", "password": "pw", "port": 4100}}
 	}`), 0o600))
@@ -904,6 +902,10 @@ func loadTestConfig(t *testing.T, content string) *Config {
 		content = strings.Replace(content, "{", `{"database_url":"postgres://localhost/rocketclaw_test?sslmode=disable",`, 1)
 	}
 
+	if !strings.Contains(content, `"tsnet"`) {
+		content = strings.Replace(content, "{", `{"web":{"tsnet":{}},`, 1)
+	}
+
 	path := filepath.Join(t.TempDir(), "rocketclaw.json")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644), "write config")
 	cfg, err := Load(path, "", &AWSFetcher{})
@@ -920,13 +922,7 @@ func validConfig() *Config {
 	cfg.Slack.AppToken = "xapp-test"
 	cfg.Slack.Channels = []SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U123"}}}
 	cfg.OpenAI.APIKey = "test-key"
+	cfg.Web.Tsnet = &TsnetConfig{}
 
 	return cfg
-}
-
-func TestWebCertificateNeedsBothFiles(t *testing.T) {
-	for _, web := range []WebConfig{{TLSCertFile: "cert.pem"}, {TLSKeyFile: "key.pem"}} {
-		cfg := &Config{Workspace: t.TempDir(), Web: web}
-		require.ErrorContains(t, cfg.Validate(), "web.tls_cert_file and web.tls_key_file")
-	}
 }

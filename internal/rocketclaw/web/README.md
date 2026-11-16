@@ -390,9 +390,8 @@ transport/browser tests through their Go-owned PostgreSQL and provider fixtures.
 Running those transport files directly with
 `bun test` does not create their fixtures.
 
-Build these assets before building `cmd/rocketclaw`, then run that Go executable
-with Web automatically listening on `0.0.0.0:3000` (override with `web.listen_address`
-in the JSON configuration). Navigation uses the browser History API;
+Build these assets before building `cmd/rocketclaw`, then run that Go executable;
+it serves the Web on its `web.tsnet` node's HTTPS name. Navigation uses the browser History API;
 non-API page paths must return `index.html`, including direct `/s/<base64url-id>`
 and `/cron` loads. The source lives in `internal/rocketclaw/web/`; no JavaScript server is shipped.
 Keep `TMPDIR` inside the repository's `.tmp/` for builds and tests.
@@ -402,18 +401,11 @@ The local `go.mod` is a boundary that keeps this JavaScript project and its
 excludes `node_modules`; frontend source uses the separate JS/TS budget.
 
 The Config page shows the configured Web username and the connected device's
-Tailscale user login. RocketClaw runs `tailscale whois --json` on the browser's
-connection IP; the `tailscale` executable must be on its PATH and able to reach
-the local Tailscale service. Missing or unsuccessful lookups display
-"Unavailable". Browsers are admitted by their Tailscale login.
+Tailscale user login. Browsers are admitted by their Tailscale login, which the
+`web.tsnet` node looks up for each connection; it refuses tagged or unknown devices.
 New messages use `UserProfile.DisplayName`, falling back to the admitted login
 when the display name is missing or blank. Ownership, routing, and Config's
-Tailscale display remain login-based. Failed lookups, missing logins, and tagged
-devices are denied. Successful WHOIS results are cached
-for five minutes. These IP rules apply to the `web.listen_address` listener. On the
-`web.tsnet` listener the Tailscale node identifies each connection itself: it
-refuses tagged or unknown devices, never consults the CLI, and the
-Config page shows the connection's login.
+Tailscale display remain login-based.
 
 Users named in the config file's `web.admins`, unless limited to spaces, also
 get a **Behavior settings** section on the Config page. **Edit** shows one control per Behavior Setting

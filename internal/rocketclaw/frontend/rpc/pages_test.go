@@ -86,43 +86,43 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, new(config.LockedConfig), "")
+	denied := NewHTTPHandler(connection, new(config.LockedConfig), "")
+	admitted := signedIn("alice", denied)
 	app := httptest.NewRecorder()
-	handler.ServeHTTP(app, httptest.NewRequest(http.MethodGet, "/", http.NoBody))
+	admitted.ServeHTTP(app, httptest.NewRequest(http.MethodGet, "/", http.NoBody))
 
-	const admitted, denied = "127.0.0.1:1234", "192.0.2.99:1234"
 	for _, tc := range []struct {
-		path, address string
-		code          int
-		body          string
-		contentType   string
-		location      string
+		path        string
+		handler     http.Handler
+		code        int
+		body        string
+		contentType string
+		location    string
 	}{
-		{path: "/pages-raw/reporter/x.html", address: admitted, code: http.StatusOK, body: "<p>x</p>", contentType: "text/html"},
-		{path: "/pages-raw/reporter/docs/", address: admitted, code: http.StatusOK, body: "<p>docs</p>", contentType: "text/html"},
-		{path: "/pages-raw/reporter/large.js", address: admitted, code: http.StatusOK, body: string(large), contentType: "text/javascript"},
-		{path: "/pages-raw/main%2Freview/a.html", address: admitted, code: http.StatusOK, body: "<p>review</p>", contentType: "text/html"},
-		{path: "/pages-raw/nobody/x.html", address: admitted, code: http.StatusNotFound},
-		{path: "/pages-raw/gone/index.html", address: admitted, code: http.StatusNotFound},
-		{path: "/pages-raw/reporter/missing.html", address: admitted, code: http.StatusNotFound},
-		{path: "/pages-raw/reporter/x.html", address: denied, code: http.StatusUnauthorized},
-		{path: "/pages/billing/reporter/x.html", address: admitted, code: http.StatusPermanentRedirect, location: "/pages/Ops/reporter/x.html"},
-		{path: "/pages/Ops/reporter%2Freview/a%20b/c.html?v=1", address: admitted, code: http.StatusPermanentRedirect, location: "/pages/Ops%20Team/reporter%2Freview/a%20b/c.html?v=1"},
-		{path: "/pages/OPS/reporter/x.html", address: admitted, code: http.StatusOK, body: app.Body.String()},
-		{path: "/pages/billing/main%2Freview/a.html", address: admitted, code: http.StatusOK, body: app.Body.String()},
-		{path: "/pages/-/main%2Freview/a.html", address: admitted, code: http.StatusOK, body: app.Body.String()},
-		{path: "/pages/Ops/nobody/x.html", address: admitted, code: http.StatusNotFound},
-		{path: "/pages-raw/opencode:box:ses_a/index.html", address: admitted, code: http.StatusOK, body: "<p>a</p>", contentType: "text/html"},
-		{path: "/pages-raw/opencode%3Abox%3Ases_b/", address: admitted, code: http.StatusOK, body: "<p>b</p>", contentType: "text/html"},
-		{path: "/pages/Ops/opencode%3Abox%3Ases_a/index.html", address: admitted, code: http.StatusPermanentRedirect, location: "/pages/Billing/opencode%3Abox%3Ases_a/index.html"},
-		{path: "/pages/billing/opencode:box:ses_a/index.html", address: admitted, code: http.StatusOK, body: app.Body.String()},
-		{path: "/pages/Ops/reporter/missing.html", address: admitted, code: http.StatusNotFound},
-		{path: "/pages/Ops/reporter/x.html", address: denied, code: http.StatusUnauthorized},
+		{path: "/pages-raw/reporter/x.html", handler: admitted, code: http.StatusOK, body: "<p>x</p>", contentType: "text/html"},
+		{path: "/pages-raw/reporter/docs/", handler: admitted, code: http.StatusOK, body: "<p>docs</p>", contentType: "text/html"},
+		{path: "/pages-raw/reporter/large.js", handler: admitted, code: http.StatusOK, body: string(large), contentType: "text/javascript"},
+		{path: "/pages-raw/main%2Freview/a.html", handler: admitted, code: http.StatusOK, body: "<p>review</p>", contentType: "text/html"},
+		{path: "/pages-raw/nobody/x.html", handler: admitted, code: http.StatusNotFound},
+		{path: "/pages-raw/gone/index.html", handler: admitted, code: http.StatusNotFound},
+		{path: "/pages-raw/reporter/missing.html", handler: admitted, code: http.StatusNotFound},
+		{path: "/pages-raw/reporter/x.html", handler: denied, code: http.StatusUnauthorized},
+		{path: "/pages/billing/reporter/x.html", handler: admitted, code: http.StatusPermanentRedirect, location: "/pages/Ops/reporter/x.html"},
+		{path: "/pages/Ops/reporter%2Freview/a%20b/c.html?v=1", handler: admitted, code: http.StatusPermanentRedirect, location: "/pages/Ops%20Team/reporter%2Freview/a%20b/c.html?v=1"},
+		{path: "/pages/OPS/reporter/x.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
+		{path: "/pages/billing/main%2Freview/a.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
+		{path: "/pages/-/main%2Freview/a.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
+		{path: "/pages/Ops/nobody/x.html", handler: admitted, code: http.StatusNotFound},
+		{path: "/pages-raw/opencode:box:ses_a/index.html", handler: admitted, code: http.StatusOK, body: "<p>a</p>", contentType: "text/html"},
+		{path: "/pages-raw/opencode%3Abox%3Ases_b/", handler: admitted, code: http.StatusOK, body: "<p>b</p>", contentType: "text/html"},
+		{path: "/pages/Ops/opencode%3Abox%3Ases_a/index.html", handler: admitted, code: http.StatusPermanentRedirect, location: "/pages/Billing/opencode%3Abox%3Ases_a/index.html"},
+		{path: "/pages/billing/opencode:box:ses_a/index.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
+		{path: "/pages/Ops/reporter/missing.html", handler: admitted, code: http.StatusNotFound},
+		{path: "/pages/Ops/reporter/x.html", handler: denied, code: http.StatusUnauthorized},
 	} {
 		request := httptest.NewRequest(http.MethodGet, tc.path, http.NoBody)
-		request.RemoteAddr = tc.address
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, request)
+		tc.handler.ServeHTTP(response, request)
 		require.Equal(t, tc.code, response.Code, tc.path)
 		require.Equal(t, tc.location, response.Header().Get("Location"), tc.path)
 
@@ -142,7 +142,7 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 		}
 	}
 
-	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewOutgoingContext(t.Context(), tailnetUser("alice"))
 	data, err := invoke[Page](ctx, connection, "GetPage", &PageRequest{Agent: "reporter", Path: "revenue", Data: true})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(&Page{Space: "Ops", ContentType: "application/json", Body: []byte(`{"total":3}`)}, data), "unexpected page data: %v", data)
@@ -161,19 +161,17 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 		{Agent: "reporter/review", Space: "Ops Team", Path: "a b/c.html"},
 	}}, listed), "unexpected pages: %v", listed)
 
-	deniedCtx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.99"))
-	_, err = invoke[Page](deniedCtx, connection, "GetPage", &PageRequest{Agent: "reporter", Path: "x.html"})
+	_, err = invoke[Page](t.Context(), connection, "GetPage", &PageRequest{Agent: "reporter", Path: "x.html"})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
-	_, err = invoke[ListPagesResponse](deniedCtx, connection, "ListPages", &ListPagesRequest{})
+	_, err = invoke[ListPagesResponse](t.Context(), connection, "ListPages", &ListPagesRequest{})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 
 	request := httptest.NewRequest(http.MethodPost, "/api/Identity", strings.NewReader(`{}`))
-	request.RemoteAddr = admitted
 	request.Header.Set("Sec-Fetch-Site", "cross-site")
 	request.Header.Set("Origin", "null")
 
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
+	admitted.ServeHTTP(response, request)
 	require.Equal(t, http.StatusForbidden, response.Code)
 }
 
@@ -221,7 +219,7 @@ func TestPagesRealBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, config.NewLockedConfig(cfg), "")
+	handler := signedIn("alice", NewHTTPHandler(connection, config.NewLockedConfig(cfg), ""))
 
 	var (
 		mu      sync.Mutex

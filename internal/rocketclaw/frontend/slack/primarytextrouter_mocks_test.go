@@ -30,7 +30,7 @@ var _ protocol.PrimaryTextRouter = &primaryTextRouterMock{}
 //			SubmitMentionFunc: func(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
 //				panic("mock out the SubmitMention method")
 //			},
-//			WebURLFunc: func(ctx context.Context, conversationID string) (string, error) {
+//			WebURLFunc: func(conversationID string) (string, error) {
 //				panic("mock out the WebURL method")
 //			},
 //		}
@@ -50,7 +50,7 @@ type primaryTextRouterMock struct {
 	SubmitMentionFunc func(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error)
 
 	// WebURLFunc mocks the WebURL method.
-	WebURLFunc func(ctx context.Context, conversationID string) (string, error)
+	WebURLFunc func(conversationID string) (string, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -77,8 +77,6 @@ type primaryTextRouterMock struct {
 		}
 		// WebURL holds details about calls to the WebURL method.
 		WebURL []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
 			// ConversationID is the conversationID argument value.
 			ConversationID string
 		}
@@ -198,21 +196,19 @@ func (mock *primaryTextRouterMock) SubmitMentionCalls() []struct {
 }
 
 // WebURL calls WebURLFunc.
-func (mock *primaryTextRouterMock) WebURL(ctx context.Context, conversationID string) (string, error) {
+func (mock *primaryTextRouterMock) WebURL(conversationID string) (string, error) {
 	if mock.WebURLFunc == nil {
 		panic("primaryTextRouterMock.WebURLFunc: method is nil but PrimaryTextRouter.WebURL was just called")
 	}
 	callInfo := struct {
-		Ctx            context.Context
 		ConversationID string
 	}{
-		Ctx:            ctx,
 		ConversationID: conversationID,
 	}
 	mock.lockWebURL.Lock()
 	mock.calls.WebURL = append(mock.calls.WebURL, callInfo)
 	mock.lockWebURL.Unlock()
-	return mock.WebURLFunc(ctx, conversationID)
+	return mock.WebURLFunc(conversationID)
 }
 
 // WebURLCalls gets all the calls that were made to WebURL.
@@ -220,11 +216,9 @@ func (mock *primaryTextRouterMock) WebURL(ctx context.Context, conversationID st
 //
 //	len(mockedPrimaryTextRouter.WebURLCalls())
 func (mock *primaryTextRouterMock) WebURLCalls() []struct {
-	Ctx            context.Context
 	ConversationID string
 } {
 	var calls []struct {
-		Ctx            context.Context
 		ConversationID string
 	}
 	mock.lockWebURL.RLock()

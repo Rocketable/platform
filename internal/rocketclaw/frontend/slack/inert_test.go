@@ -18,6 +18,6 @@ func (inertThreadRouter) SubmitMention(context.Context, string, protocol.TextCon
 func (inertThreadRouter) InterruptThread(protocol.TextConversationTarget) (*protocol.InboundMessage, error) {
 	return nil, errors.New("slack thread routing is not configured")
 }
-func (inertThreadRouter) WebURL(context.Context, string) (string, error) {
+func (inertThreadRouter) WebURL(string) (string, error) {
 	return "", errors.New("web links are not configured")
 }

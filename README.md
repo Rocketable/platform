@@ -52,9 +52,9 @@ A workspace contains `AGENTS.md` and, optionally, `agents/`, `skills/`, `scripts
 
 ### Web page
 
-The web page is the main way to work with RocketClaw. It is built into RocketClaw and serves HTTPS on `0.0.0.0:3000`; plain `http://` does not answer. To change the address, set `"web": {"listen_address": "127.0.0.1:3000"}`. To use your own certificate, set both `"tls_cert_file"` and `"tls_key_file"` under `web` to PEM files; without them RocketClaw makes a self-signed certificate at each start, which browsers warn about until you accept it. Over HTTPS, browsers carry every tab over one connection, so many open tabs never run out of connections. Links RocketClaw hands out use the tsnet node's HTTPS name once that node serves (see [Voice](#voice)), and this machine's Tailscale address otherwise. The browser tab reads `<name> - RocketClaw`, so several servers stay apart: `name` is `"server_display_name"` when set, else the Tailscale node name (`web.tsnet.hostname`, or this machine's node). A saved change shows on pages loaded after the save.
+The web page is the main way to work with RocketClaw. It is built into RocketClaw, which joins your tailnet as its own Tailscale node (tsnet) and serves the page only there, over HTTPS on port 443 of the node's name, `https://<hostname>.<tailnet>.ts.net`. `web.tsnet` is required; see [Tailnet setup](#tailnet-setup). Over HTTPS, browsers carry every tab over one connection, so many open tabs never run out of connections. Links RocketClaw hands out use the node's HTTPS name; until the node serves, RocketClaw has no link to hand out. The browser tab reads `<name> - RocketClaw`, so several servers stay apart: `name` is `"server_display_name"` when set, else `web.tsnet.hostname`. A saved change shows on pages loaded after the save.
 
-RocketClaw identifies each browser by its Tailscale login, found with a Tailscale lookup of the browser's IP address. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features.
+RocketClaw identifies each browser by its Tailscale login, which the node looks up for each connection. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features.
 
 #### Voice
 
@@ -73,7 +73,11 @@ Per call, OpenAI receives your microphone audio; up to 40 of the conversation's 
 
 A call ends when you stop it, when the page closes or stays hidden for 30 seconds, or when OpenAI ends the call. There are no idle or no-speech timers. If RocketClaw's connection to OpenAI drops, the `chatgpt` route reconnects, as Codex does, and the Voice page shows "Reconnecting to the agent…" meanwhile; the `api_key` route ends that OpenAI call as lost. The browser starts a new call on the same microphone after any lost connection (to RocketClaw, to OpenAI, or of the browser's audio, including audio not up 20 seconds after OpenAI answers), with sound cues, until you hang up; see the [Web README](internal/rocketclaw/web/README.md#voice).
 
-The microphone needs a secure page: HTTPS with a certificate the browser trusts. For a phone or another device, RocketClaw can join your tailnet as its own Tailscale node (tsnet) and serve the web page over HTTPS. Turn on MagicDNS and HTTPS certificates for the tailnet, then add `web.tsnet`:
+The microphone needs a secure page: HTTPS with a certificate the browser trusts, which the tailnet's HTTPS name provides. On a phone, with Tailscale connected, open `https://<hostname>.<tailnet>.ts.net/voice`.
+
+#### Tailnet setup
+
+Turn on MagicDNS and HTTPS certificates for the tailnet, then add `web.tsnet`:
 
 ```json
 "web": {"tsnet": {"hostname": "rocketclaw", "tags": ["tag:rocketclaw"]}}
@@ -83,19 +87,17 @@ The microphone needs a secure page: HTTPS with a certificate the browser trusts.
 
 1. With RocketClaw stopped, run `rocketclaw ts login`. It prints a login link (and asks for device approval if your tailnet requires it), waits until the node is running, and exits. With `"auth_key": "tskey-auth-…"` under `web.tsnet`, it logs in with that key instead, and so does the server when the node is logged out. Prefer a single-use, pre-approved, tagged key; the key sits in the config file like other secrets.
 2. In the Tailscale admin console, confirm that the node appears in your own tailnet. The login link adds the node to whichever tailnet signs in with it.
-3. Start RocketClaw. It never prints a login link or waits for one: a logged-out node without a key only logs "Tailscale authentication unavailable", and the Web serves its plain listener.
-4. On the phone, with Tailscale connected, open `https://<hostname>.<tailnet>.ts.net/voice`.
+3. Start RocketClaw. It never prints a login link or waits for one: a logged-out node without a key only logs "Tailscale authentication unavailable", and RocketClaw runs without the web page until you log the node in and restart it.
+4. With Tailscale connected, open `https://<hostname>.<tailnet>.ts.net`.
 
 - Tag the node, for example `tag:rocketclaw` (the tailnet policy must list the tag under `tagOwners`). Add a tailnet rule that lets only named users reach it and lets it reach nothing. An untagged node acts as the Tailscale user who logged it in.
-- The node signs each phone in as the phone's Tailscale user. It refuses tagged devices, and no request header can choose the user.
+- The node signs each browser in as its device's Tailscale user. It refuses tagged devices, and no request header can choose the user.
 - Node keys expire after 180 days unless the node is tagged or key expiry is disabled for it in the admin console. An expired node needs `rocketclaw ts login` again.
 - Turning on tailnet HTTPS publishes machine names, including this node's, in public certificate-transparency logs.
 - The node keeps its state outside the workspace, in `rocketclaw/tsnet-<hostname>` under the user config directory (`$XDG_CONFIG_HOME`, or `~/.config`). Tailscale's log upload is off.
 - Never use `tailscale funnel`: it would put RocketClaw on the public internet.
 
-The `listen_address` listener identifies each browser with a Tailscale lookup of its IP address. It never trusts `Tailscale-User-*` headers. `127.0.0.1` has no Tailscale user, so a browser on the RocketClaw machine opens it at this machine's Tailscale address, or uses the tsnet name.
-
-Processes on this machine, including agent tools and MCP servers, can still act as the owner: through the `listen_address` listener, or through this machine's own Tailscale address. See the [transport README](internal/rocketclaw/frontend/rpc/README.md#identity-boundary) for the identity details.
+A browser on the RocketClaw machine uses the tsnet name too. Processes on a device signed in to Tailscale act as that device's user when they reach the node, so on an untagged machine signed in as the owner, local processes, including agent tools and MCP servers, can act as the owner. See the [transport README](internal/rocketclaw/frontend/rpc/README.md#identity-boundary) for the identity details.
 
 #### Remote RocketClaws
 
@@ -119,7 +121,7 @@ Names use only `a-z`, `0-9`, and `-`, and each URL or trusted address is an `htt
 - The browser calls each remote directly, and the remote signs you in with your own Tailscale login, so you act as yourself with that remote's agents and accounts.
 - A remote must serve its tsnet name over HTTPS, run a RocketClaw version with this feature, and trust the local page. Otherwise the page shows it as unavailable, with its address. A remote that stops answering keeps its chats listed, greyed out, until it answers again. A remote on another version keeps working with a notice, and some actions may fail.
 
-Each RocketClaw's tsnet listener accepts these calls only from the pages its `trusted_rocketclaws` lists, because the remote signs in whoever's browser opened the page: any page it trusted could act as that person. Other pages, including other pages on the same tailnet, get no access. The `listen_address` listener accepts none.
+Each RocketClaw's tsnet listener accepts these calls only from the pages its `trusted_rocketclaws` lists, because the remote signs in whoever's browser opened the page: any page it trusted could act as that person. Other pages, including other pages on the same tailnet, get no access.
 
 #### Space permissions
 
@@ -263,7 +265,7 @@ One more setting controls who may write into an agent's sessions:
 
 Name each tool under `permission.rocketclaw`. Wildcards such as `"*"` and the short form `rocketclaw: allow` are not accepted there.
 
-To give one agent every tool and feature, including ones added later, set `sudo: yes` in its frontmatter (`true`, `1`, `on` or `yes`; `false`, `0`, `off` or `no` turn it off). Sudo replaces the agent's `permission` block: every call goes to the guardian for review first, including each `execute` script and every call inside it. Skills, `task` delegation, `ask_user_question`, `rocketclaw_update_goal`, `rocketclaw_attach_files_to_response`, scheduled messages and `rocketclaw_reload` run without review. Web search runs on the provider and is never reviewed. Session tag groups still go under `permission.rocketclaw.rocketclaw_set_tag`, and `permission.rocketclaw.rocketclaw_sessions_recipient` may stay too; `rocketclaw lint` reports any other `permission` entry next to `sudo`. Sudo does not lift `.env` blocking, workspace confinement, or `maxRecursion`, and it does not pass to subagents.
+To give one agent every tool and feature, including ones added later, set `sudo: yes` in its frontmatter (`true`, `1`, `on` or `yes`; `false`, `0`, `off` or `no` turn it off). Sudo replaces the agent's `permission` block: every call goes to the guardian for review first, including each `execute` script and every call inside it. Skills, `task` delegation, `ask_user_question`, `rocketclaw_update_goal`, `rocketclaw_attach_files_to_response`, scheduled messages and `rocketclaw_reload` run without review. Web search runs on the provider and is never reviewed. Session tag groups still go under `permission.rocketclaw.rocketclaw_set_tag`, and `permission.rocketclaw.rocketclaw_sessions_recipient` may stay too. Sudo does not lift `.env` blocking, workspace confinement, or `maxRecursion`, and it does not pass to subagents.
 
 ```yaml
 sudo: yes

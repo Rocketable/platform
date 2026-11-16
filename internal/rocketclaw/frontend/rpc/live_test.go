@@ -184,7 +184,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		require.NoError(t, err)
 
 		html = regexp.MustCompile(`<script type="module" src="[^"]+"></script>`).ReplaceAll(html, []byte(`<script type="module" src="/current.js"></script>`))
-		handler := NewHTTPHandler(connection, config.NewLockedConfig(cfg), "")
+		handler := signedIn("alice", NewHTTPHandler(connection, config.NewLockedConfig(cfg), ""))
 		httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.URL.Path == "/current.js":
@@ -287,7 +287,7 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 	require.NoError(t, seeded.UpsertActiveTurn(t.Context(), checkpoint))
 
 	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	view, err := server.history(ctx, &HistoryRequest{Id: "chat"})
 	require.NoError(t, err)
 	require.Len(t, view.Messages, 4)
@@ -385,7 +385,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 
 	engine := &mockBackend{SandboxErrorFunc: noSandboxError}
 	server := &Server{sessions: sessions, cfg: config.NewLockedConfig(cfg), backend: engine}
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	initial, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1})
 	require.NoError(t, err)
 	require.True(t, initial.RevertEligible)
@@ -476,7 +476,6 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 
 	handler := NewHTTPHandler(connection, config.NewLockedConfig(cfg), "")
 	request := httptest.NewRequest(http.MethodPost, "/api/Reload", strings.NewReader(`{"reason":"updated assets"}`))
-	request.RemoteAddr = "192.0.2.99:1234"
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	require.Equal(t, http.StatusUnauthorized, response.Code)
@@ -485,7 +484,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, agent+"Original prompt\n", string(live))
 
-	httpServer := httptest.NewServer(handler)
+	httpServer := httptest.NewServer(signedIn("alice", handler))
 	t.Cleanup(httpServer.Close)
 	runWebTest(t, "src/reload-transport.test.ts", "ROCKETCLAW_RELOAD_TEST_URL="+httpServer.URL)
 
@@ -576,7 +575,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	httpServer := httptest.NewServer(NewHTTPHandler(connection, config.NewLockedConfig(cfg), ""))
+	httpServer := httptest.NewServer(signedIn("alice", NewHTTPHandler(connection, config.NewLockedConfig(cfg), "")))
 	t.Cleanup(httpServer.Close)
 	runWebTest(t, "src/revert-transport.test.ts", "ROCKETCLAW_REVERT_TEST_URL="+httpServer.URL)
 
@@ -611,7 +610,7 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
 	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
 	var keys []string
 
@@ -718,7 +717,7 @@ func TestHistoryFollowsHiddenRun(t *testing.T) {
 	require.NoError(t, err)
 
 	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
 	_, err = sessions.AppendEntryID(ctx, "chat", &harness.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"person"}`)}})
 	require.NoError(t, err)
@@ -767,7 +766,7 @@ func TestHistoryLinksBackgroundTaskSubagent(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
 	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
 	_, err = sessions.AppendEntryID(ctx, "chat", &harness.SessionEntry{Type: "turn", TurnID: "turn", ResponseID: "response", ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","content":"look in the background"}`),
@@ -808,7 +807,7 @@ func TestHistoryShowsLiveReasoningSummaries(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
 	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	checkpoint := &testCheckpoint{TurnID: "turn", ConversationKey: "chat", Agent: "main", DisplayModel: "root/model", ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","input_id":"input","content":"ask"}`),
 	}, OutputTrace: []json.RawMessage{
@@ -847,7 +846,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("public", backend.ThreadState{Agent: "main"}))
 	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	checkpoint := &testCheckpoint{TurnID: "turn", ConversationKey: "public", Agent: "main", DisplayModel: "root/model", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","input_id":"input","content":"ask"}`),
 		json.RawMessage(`{"type":"function_call","call_id":"A","name":"task","arguments":"{}"}`),
@@ -1219,7 +1218,7 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
 	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
 	review := func(callID string, entries ...*harness.SessionEntry) {
 		seeded.RecordReview(t, "chat", "turn", callID)

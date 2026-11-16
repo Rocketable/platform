@@ -2,18 +2,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/json"
-	"encoding/pem"
-	"errors"
-	"io"
 	"log/slog"
-	"math/big"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,7 +32,6 @@ func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
 		for _, path := range []string{"", "heap", "allocs", "goroutine", "profile?seconds=1", "trace?seconds=0.01", "cmdline", "symbol", "block", "mutex", "unknown"} {
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, prefix+path, http.NoBody)
-			request.RemoteAddr = "127.0.0.1:12345"
 			handler.ServeHTTP(response, request)
 			if strings.HasPrefix(prefix, "/s/") {
 				require.Equal(t, http.StatusOK, response.Code, prefix+path)
@@ -73,7 +61,9 @@ func webSessions(t *testing.T) *backend.SessionService {
 	return sessions
 }
 
-func TestWebRPCTailnetNode(t *testing.T) {
+func isolateTailnet(t *testing.T) string {
+	t.Helper()
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
@@ -82,19 +72,17 @@ func TestWebRPCTailnetNode(t *testing.T) {
 	configDir, err := os.UserConfigDir()
 	require.NoError(t, err)
 
-	cfg := &config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:0"}}
-	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Sessions: webSessions(t)}
-	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
-	require.NoError(t, err)
-	require.NoError(t, stop(t.Context()))
-	require.NoDirExists(t, filepath.Join(configDir, "rocketclaw"), "no node starts without web.tsnet")
+	return configDir
+}
+
+func TestWebRPCTailnetNode(t *testing.T) {
+	configDir := isolateTailnet(t)
 
 	var logs bytes.Buffer
 
-	rt.Log = slog.New(slog.NewTextHandler(&logs, nil))
-	cfg.Web.Tsnet = &config.TsnetConfig{Hostname: "rocketclaw-test"}
-	rt.Cfg.Store(cfg)
-	stop, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
+	cfg := &config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}}}
+	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.NewTextHandler(&logs, nil)), Sessions: webSessions(t)}
+	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)
 	require.NoError(t, stop(t.Context()))
 	assert.Contains(t, logs.String(), "Tailscale authentication unavailable")
@@ -114,64 +102,8 @@ func TestWebRPCTailnetNode(t *testing.T) {
 	require.FileExists(t, filepath.Join(configDir, "rocketclaw", "tsnet-rocketclaw-test", "tailscaled.state"))
 }
 
-func fakeTailscaleWhois(t *testing.T) {
-	t.Helper()
-
-	bin := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "tailscale"), []byte("#!/bin/sh\n[ \"$*\" = \"whois --json 127.0.0.1\" ] || exit 1\necho '{\"UserProfile\":{\"LoginName\":\"alice\"}}'\n"), 0o755))
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-func TestWebRPC(t *testing.T) {
-	fakeTailscaleWhois(t)
-
-	rt := &backend.Runtime{Sessions: webSessions(t), Cfg: config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), Log: slog.New(slog.DiscardHandler)}
-
-	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = httpListener.Close() })
-	cfg := rt.Cfg.Clone()
-	require.NoError(t, json.Unmarshal([]byte(`{"web":{"listen_address":"`+httpListener.Addr().String()+`"},"posthog":{"project_token":"phc_test","host":"https://us.i.posthog.com"}}`), cfg))
-	rt.Cfg.Store(cfg)
-
-	_, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
-	require.ErrorContains(t, err, "start Web HTTP")
-	require.NoError(t, httpListener.Close())
-
-	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, stop(t.Context())) }()
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, ForceAttemptHTTP2: true}}
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://"+cfg.Web.ListenAddress+"/api/Identity", strings.NewReader("{}"))
-	require.NoError(t, err)
-	responseHTTP, err := client.Do(request)
-	require.NoError(t, err)
-	require.Equal(t, 2, responseHTTP.ProtoMajor, "HTTPS lets browsers multiplex every tab over one HTTP/2 connection")
-	var identity struct {
-		Username string `json:"username"`
-	}
-	require.NoError(t, json.NewDecoder(responseHTTP.Body).Decode(&identity))
-	require.NoError(t, responseHTTP.Body.Close())
-	require.Equal(t, http.StatusOK, responseHTTP.StatusCode)
-	require.Equal(t, "alice", identity.Username)
-	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+cfg.Web.ListenAddress+"/", nil)
-	require.NoError(t, err)
-	responseHTTP, err = client.Do(request)
-	require.NoError(t, err)
-	body, err := io.ReadAll(responseHTTP.Body)
-	require.NoError(t, err)
-	require.NoError(t, responseHTTP.Body.Close())
-	require.Equal(t, http.StatusOK, responseHTTP.StatusCode)
-	require.Contains(t, string(body), "/assets/main-")
-	require.Contains(t, string(body), `"project_token":"phc_test"`)
-
-	require.NoError(t, stop(t.Context()))
-	stop, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
-	require.NoError(t, err)
-}
-
-func TestWebRPCProxiesAndSyncsOpenCode(t *testing.T) {
-	fakeTailscaleWhois(t)
+func TestWebRPCSyncsOpenCodeWithoutTailnetLogin(t *testing.T) {
+	isolateTailnet(t)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if user, password, ok := r.BasicAuth(); !ok || user != "opencode" || password != "pw" {
@@ -182,18 +114,11 @@ func TestWebRPCProxiesAndSyncsOpenCode(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/session":
 			_, _ = w.Write([]byte(`{"data":[{"id":"ses_a","title":"Alpha","time":{"updated":1000},"location":{"directory":"/srv"}}]}`))
-		case "/api/session/active":
-			_, _ = w.Write([]byte(`{"data":{}}`))
 		default:
-			_, _ = w.Write([]byte("opencode web"))
+			_, _ = w.Write([]byte(`{"data":{}}`))
 		}
 	}))
 	t.Cleanup(upstream.Close)
-
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	address := probe.Addr().String()
-	require.NoError(t, probe.Close())
 
 	servers := map[string]config.OpenCodeConfig{"box": {URL: upstream.URL, Password: "pw"}}
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -202,30 +127,10 @@ func TestWebRPCProxiesAndSyncsOpenCode(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{ListenAddress: address}, OpenCode: servers}
+	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}}, OpenCode: servers}
 	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Sessions: sessions}
 	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)
-
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+address+"/oc/box/api/info", http.NoBody)
-	require.NoError(t, err)
-	response, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}).Do(request)
-	require.NoError(t, err)
-	body, err := io.ReadAll(response.Body)
-	require.NoError(t, errors.Join(err, response.Body.Close()))
-	assert.Equal(t, "opencode web", string(body), "the Web proxies OpenCode with its password")
-
-	for password, code := range map[string]int{"pw": http.StatusOK, "wrong": http.StatusUnauthorized} {
-		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://"+address+"/opencode/box/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"opencode","version":"test"}}}`))
-		require.NoError(t, err)
-		request.SetBasicAuth("opencode", password)
-		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Accept", "application/json, text/event-stream")
-		response, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}).Do(request)
-		require.NoError(t, err)
-		require.NoError(t, response.Body.Close())
-		assert.Equal(t, code, response.StatusCode, password)
-	}
 
 	require.Eventually(t, func() bool {
 		for chat, err := range sessions.SidebarChats(t.Context(), "", &mockWebChannels{}, nil) {
@@ -238,62 +143,4 @@ func TestWebRPCProxiesAndSyncsOpenCode(t *testing.T) {
 	}, 10*time.Second, 50*time.Millisecond)
 
 	require.NoError(t, stop(t.Context()))
-}
-
-func TestWebRPCServesConfiguredCertificate(t *testing.T) {
-	dir := t.TempDir()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(1), IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)}, NotAfter: time.Now().Add(time.Hour)}, &x509.Certificate{SerialNumber: big.NewInt(1)}, &key.PublicKey, key)
-	require.NoError(t, err)
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "cert.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "key.pem"), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600))
-
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	address := probe.Addr().String()
-	require.NoError(t, probe.Close())
-
-	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{ListenAddress: address, TLSCertFile: filepath.Join(dir, "cert.pem"), TLSKeyFile: filepath.Join(dir, "missing.pem")}}
-	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Sessions: webSessions(t)}
-	_, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
-	require.ErrorContains(t, err, "load Web certificate")
-
-	cfg.Web.TLSKeyFile = filepath.Join(dir, "key.pem")
-	rt.Cfg.Store(cfg)
-	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop(t.Context())) })
-
-	leaf, err := x509.ParseCertificate(der)
-	require.NoError(t, err)
-	trusted := x509.NewCertPool()
-	trusted.AddCert(leaf)
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+address+"/", http.NoBody)
-	require.NoError(t, err)
-	response, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: trusted}}}).Do(request)
-	require.NoError(t, err, "only the configured certificate verifies")
-	require.NoError(t, response.Body.Close())
-	require.Equal(t, http.StatusOK, response.StatusCode)
-}
-
-func TestServerName(t *testing.T) {
-	bin := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "tailscale"), []byte("#!/bin/sh\n[ \"$*\" = \"status --json --peers=false\" ] && echo '{\"Self\":{\"DNSName\":\"mac-mini.tail1.ts.net.\"}}'\n"), 0o755))
-	t.Setenv("PATH", bin)
-
-	for _, tt := range []struct {
-		cfg  config.Config
-		want string
-	}{
-		{cfg: config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc"}}}, want: "rc"},
-		{cfg: config.Config{}, want: "mac-mini"},
-	} {
-		require.Equal(t, tt.want, serverName(&tt.cfg))
-	}
-
-	t.Setenv("PATH", t.TempDir())
-	require.Empty(t, serverName(&config.Config{}))
 }

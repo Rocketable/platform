@@ -10,7 +10,6 @@ import (
 	"math"
 	"mime"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"path"
 	"slices"
@@ -48,7 +47,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 		mux.HandleFunc(route, servePage(connection, app))
 	}
 
-	for method := range strings.FieldsSeq("Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions SlackNames Handoff ListAgents CreateSession ListConfig SaveBehaviorSettings InspectAgents ListSkills UpdateSession ListCronJobs RunCronJob GetPage ListPages ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs ReportTyping " + editorMethods) {
+	for method := range strings.FieldsSeq("Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions SlackNames Handoff ListAgents CreateSession ListConfig SaveBehaviorSettings ListSkills UpdateSession ListCronJobs RunCronJob GetPage ListPages ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs ReportTyping " + editorMethods) {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 		responseType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Output().FullName())
@@ -171,30 +170,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 		})
 	}
 
-	return protection.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		address, err := netip.ParseAddrPort(r.RemoteAddr)
-		if err != nil {
-			httpRPCError(w, status.Error(codes.Unauthenticated, "invalid remote address"))
-			return
-		}
-
-		ip := address.Addr().Unmap()
-
-		ctx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-principal", ip.String(), "rocketclaw-direct-local", strconv.FormatBool(directLocal(r, ip))))
-		defer cancel()
-
-		mux.ServeHTTP(w, r.WithContext(ctx))
-	}))
-}
-
-func directLocal(r *http.Request, ip netip.Addr) bool {
-	for name := range r.Header {
-		if name == "X-Forwarded-For" || name == "Forwarded" || strings.HasPrefix(name, "Tailscale-") {
-			return false
-		}
-	}
-
-	return ip.IsLoopback()
+	return protection.Handler(mux)
 }
 
 func servePage(connection *grpc.ClientConn, app http.Handler) http.HandlerFunc {

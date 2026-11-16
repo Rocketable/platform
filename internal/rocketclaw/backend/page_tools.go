@@ -52,8 +52,8 @@ type pageSpace struct {
 	conversation string
 }
 
-func (p pageSpace) url(ctx context.Context, name string) (string, error) {
-	origin, err := p.threads.webOrigin(ctx)
+func (p pageSpace) url(name string) (string, error) {
+	origin, err := p.threads.webOrigin()
 	if err != nil {
 		return "", err
 	}
@@ -83,7 +83,7 @@ func (p pageSpace) storeFile(ctx context.Context, name string, file *protocol.Ou
 		return "", err
 	}
 
-	return p.url(ctx, name)
+	return p.url(name)
 }
 
 func (p pageSpace) nativeTools(root *os.Root, shell *harness.CustomShell) []harness.Tool {
@@ -229,7 +229,7 @@ func (p pageSpace) tools() []harness.Tool {
 					continue
 				}
 
-				link, err := p.url(ctx, page.Name)
+				link, err := p.url(page.Name)
 				if err != nil {
 					return "", err
 				}

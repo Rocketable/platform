@@ -82,7 +82,7 @@ func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
 
 	store := newWorkspaceSessionService(t)
 	bridges := make([]*directBridgeMock, 0, 2)
-	cfg := &config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: "https://rocketclaw.example.ts.net"}}}
+	cfg := &config.Config{Workspace: workspace, Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: "https://rocketclaw.example.ts.net"}}}
 	manager := newThreadBridgeManager(config.NewLockedConfig(cfg), store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
 		bridge := newDirectBridgeMock()
 		bridges = append(bridges, bridge)
@@ -413,10 +413,6 @@ func TestThreadBridgeManagerStashListAndDeleteQueue(t *testing.T) {
 }
 
 func TestSessionsWriteCreatesWebSession(t *testing.T) {
-	bin := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "tailscale"), []byte("#!/bin/sh\n[ \"$*\" = \"ip -4\" ] && echo 100.95.197.99\n"), 0o755))
-	t.Setenv("PATH", bin)
-
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "skills"), 0o755))
 	writeAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-6.1-sol\n---\nPrompt\n")
@@ -428,7 +424,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 		bridge  *Bridge
 	)
 
-	runtime := config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}})
+	runtime := config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: "https://rocketclaw.example.ts.net"}}})
 	factory := &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 		created = *cfg
 		bridge = &Bridge{log: slog.New(slog.DiscardHandler), bus: newTestBus(), config: Config{ConversationID: cfg.ConversationID, Agent: cfg.Agent, SessionService: store}, requestCh: make(chan bridgeRequest, 8), stopCh: make(chan struct{})}
@@ -456,7 +452,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 
 	require.NotEmpty(t, conversationID)
 	assert.Empty(t, slackThread)
-	assert.JSONEq(t, fmt.Sprintf(`{"outcome":"created","session_id":%q,"url":%q,"queue_item_id":"web:caller/"}`, conversationID, "https://100.95.197.99:8080/s/"+base64.RawURLEncoding.EncodeToString([]byte(conversationID))), output.Output)
+	assert.JSONEq(t, fmt.Sprintf(`{"outcome":"created","session_id":%q,"url":%q,"queue_item_id":"web:caller/"}`, conversationID, "https://rocketclaw.example.ts.net/s/"+base64.RawURLEncoding.EncodeToString([]byte(conversationID))), output.Output)
 	assert.Equal(t, Config{ConversationID: conversationID, Agent: "main"}, created)
 	assert.Equal(t, []string{"web:caller/"}, queueIDs(t, store, conversationID), "the first prompt is a Thread Queue row under the returned queue_item_id")
 	require.Len(t, bridge.requestCh, 1)
@@ -510,7 +506,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 			write := sessionsWriteTool(caller, origin, origin, "main", caller.config.ConversationID, harness.Agents{})
 			output, err := write.Call(t.Context(), []byte(`{"session_id":"","mode":"steer","title":"Do not rename","prompt":"next request","agent":""}`), nil)
 			require.NoError(t, err)
-			assert.JSONEq(t, fmt.Sprintf(`{"outcome":"queued","session_id":%q,"url":%q,"queue_item_id":%q}`, id, "https://100.95.197.99:8080/s/"+base64.RawURLEncoding.EncodeToString([]byte(id)), caller.config.ConversationID+"/"), output.Output)
+			assert.JSONEq(t, fmt.Sprintf(`{"outcome":"queued","session_id":%q,"url":%q,"queue_item_id":%q}`, id, "https://rocketclaw.example.ts.net/s/"+base64.RawURLEncoding.EncodeToString([]byte(id)), caller.config.ConversationID+"/"), output.Output)
 			thread, found, err := store.Thread(id)
 			require.NoError(t, err)
 			require.True(t, found)
@@ -539,15 +535,13 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 }
 
 func TestThreadBridgeManagerWebURLUsesTsnetOrigin(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-
-	cfg := &config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: "https://rocketclaw.example.ts.net"}}}
+	cfg := &config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: "https://rocketclaw.example.ts.net"}}}
 	manager := newThreadBridgeManager(config.NewLockedConfig(cfg), nil, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
 		t.Fatal("no conversation should start")
 		return nil
 	}})
 
-	url, err := manager.WebURL(t.Context(), "web:1")
+	url, err := manager.WebURL("web:1")
 	require.NoError(t, err)
 	assert.Equal(t, "https://rocketclaw.example.ts.net/s/"+base64.RawURLEncoding.EncodeToString([]byte("web:1")), url)
 }
@@ -558,7 +552,7 @@ func TestSessionsWriteRejectsUnavailableAgents(t *testing.T) {
 	writeAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-6.1-sol\n---\nPrompt\n")
 
 	store := newWorkspaceSessionService(t)
-	manager := newThreadBridgeManager(config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}), store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
+	manager := newThreadBridgeManager(config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw"}}}), store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
 		t.Fatal("no conversation should start")
 		return nil
 	}})
@@ -580,8 +574,7 @@ func TestSessionsWriteRejectsUnavailableAgents(t *testing.T) {
 	write(cron, "job", "", `agent "job" is not configured`)
 	write(new(protocol.InboundMessage), "missing", "", `agent "missing" is not configured`)
 
-	t.Setenv("PATH", t.TempDir())
-	write(new(protocol.InboundMessage), "main", "", "tailscale")
+	write(new(protocol.InboundMessage), "main", "", "the Web is not serving on the tailnet yet")
 
 	conversations, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations`, "conversations")
 	require.NoError(t, err)

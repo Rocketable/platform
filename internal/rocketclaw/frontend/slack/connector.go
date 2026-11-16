@@ -388,10 +388,10 @@ func titledMessageLayout(header, fallback, text string) (fallbackText string, bl
 	return fallback, blocks, bodyChunks[rootBodyCount:]
 }
 
-func (c *Connector) slackFooter(ctx context.Context, agent, state, conversationID string) (string, []slack.Block) {
+func (c *Connector) slackFooter(agent, state, conversationID string) (string, []slack.Block) {
 	text := agent + " · " + state
 
-	if link, err := c.threadRouter.WebURL(ctx, conversationID); err != nil {
+	if link, err := c.threadRouter.WebURL(conversationID); err != nil {
 		c.log.Warn("build Slack footer Web link", "conversation_id", conversationID, "error", err)
 	} else {
 		text += " · <" + link + "|Open in Web>"
@@ -435,7 +435,7 @@ func (c *Connector) mentionFooter(ctx context.Context, msg *protocol.OutboundMes
 		state = string(msg.Terminal)
 	}
 
-	return c.slackFooter(ctx, msg.Agent, state, msg.ConversationID)
+	return c.slackFooter(msg.Agent, state, msg.ConversationID)
 }
 
 func (c *Connector) startSession(ctx context.Context, msg *protocol.OutboundMessage) {

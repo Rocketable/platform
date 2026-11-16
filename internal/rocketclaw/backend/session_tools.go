@@ -654,7 +654,7 @@ func sessionsGetURLTool(threads *threadBridgeManager) harness.Tool {
 				return harness.ToolResult{}, err
 			}
 
-			url, err := threads.WebURL(ctx, params.SessionID)
+			url, err := threads.WebURL(params.SessionID)
 			if err != nil {
 				return harness.ToolResult{}, err
 			}
@@ -851,7 +851,7 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 				}
 
 				result.SessionID = input.SessionID
-				if result.URL, err = b.threads.WebURL(ctx, input.SessionID); err != nil {
+				if result.URL, err = b.threads.WebURL(input.SessionID); err != nil {
 					return harness.ToolResult{}, err
 				}
 

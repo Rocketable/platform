@@ -218,7 +218,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 	h.conn = connection
-	web := httptest.NewServer(NewHTTPHandler(connection, config.NewLockedConfig(cfg), ""))
+	web := httptest.NewServer(signedIn("alice", NewHTTPHandler(connection, config.NewLockedConfig(cfg), "")))
 	t.Cleanup(web.Close)
 	h.url = web.URL
 
@@ -354,7 +354,7 @@ func spoken(id, text string) string {
 func (h *voiceHarness) messages(t *testing.T) []*TranscriptEvent {
 	t.Helper()
 
-	view, err := h.server.history(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1")), &HistoryRequest{Id: "main"})
+	view, err := h.server.history(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")), &HistoryRequest{Id: "main"})
 	require.NoError(t, err)
 
 	return view.Messages
@@ -389,7 +389,7 @@ func TestPausedChat(t *testing.T) {
 
 	const id = "worker"
 
-	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	alice := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	prompt := func(messageID, text string, delivery PromptDelivery) (*PromptResponse, error) {
 		return h.server.prompt(alice, &PromptRequest{Id: id, Text: text, Delivery: delivery, MessageId: messageID})
 	}
@@ -569,7 +569,7 @@ func TestVoice(t *testing.T) {
 		next.OpenAI.Auth = "chatgpt"
 		h.server.cfg.Store(&next)
 
-		ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+		ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 		catalog, err := h.server.listAgents(ctx, "")
 		require.NoError(t, err)
 
@@ -909,7 +909,7 @@ func TestVoice(t *testing.T) {
 			return response.StatusCode, settings
 		}
 		bob := func(request *VoiceSettingsRequest) (*VoiceSettingsResponse, error) {
-			return h.server.voiceSettings(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.2")), request)
+			return h.server.voiceSettings(metadata.NewIncomingContext(t.Context(), tailnetUser("bob")), request)
 		}
 
 		code, settings := post(`{}`)
@@ -936,8 +936,8 @@ func TestVoice(t *testing.T) {
 	}
 
 	if !t.Run("sticky sessions", func(t *testing.T) {
-		alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
-		bob := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.2"))
+		alice := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
+		bob := metadata.NewIncomingContext(t.Context(), tailnetUser("bob"))
 		create := func(ctx context.Context, agent string) *CreateSessionResponse {
 			t.Helper()
 
@@ -1042,12 +1042,12 @@ func TestVoice(t *testing.T) {
 				var requests errgroup.Group
 				for i := range responses {
 					requests.Go(func() error {
-						ip := "127.0.0.1"
+						login := "alice"
 						if sticky == "global" && i%2 == 0 {
-							ip = "192.0.2.2"
+							login = "bob"
 						}
 
-						ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", ip))
+						ctx := metadata.NewIncomingContext(t.Context(), tailnetUser(login))
 						response, err := h.server.createSession(ctx, &CreateSessionRequest{Agent: name})
 						responses[i] = response
 
@@ -1095,7 +1095,7 @@ func TestVoice(t *testing.T) {
 		ctx, hangUpBob := context.WithCancel(t.Context())
 		t.Cleanup(hangUpBob)
 
-		stream, err := h.conn.NewStream(metadata.NewOutgoingContext(ctx, metadata.Pairs("rocketclaw-principal", "192.0.2.2")), &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/Voice")
+		stream, err := h.conn.NewStream(metadata.NewOutgoingContext(ctx, tailnetUser("bob")), &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/Voice")
 		require.NoError(t, err)
 		require.NoError(t, stream.SendMsg(&VoiceRequest{ConversationId: "shared", Sdp: "offer-bob"}))
 		require.NoError(t, stream.CloseSend())

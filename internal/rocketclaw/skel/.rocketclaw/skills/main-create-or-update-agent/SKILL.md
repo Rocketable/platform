@@ -116,12 +116,11 @@ permission:
     "kubectl apply *": auto(release-reviewer)
 ```
 
-Safety rules enforced by `rocketclaw lint`:
+Safety rules:
 - Write XOR execute: do not give one agent `edit` access to files that can influence its own `bash` calls.
 - Read plus constrained execute can leak script internals into creative shell use; avoid letting an agent read scripts it can execute unless the human explicitly accepts the risk.
 - Delegation chains can escalate access; do not let a writer agent delegate to another agent that can execute the written script.
 - Web-capable agents using `websearch` or `webfetch` must not write files that internal/private agents read unless the human explicitly accepts external-content contamination risk.
-- If the human accepts a specific risk, prefer precise `#nolint RCxxx: reason` on the contributing rule or field.
 
 Later matching rules override earlier matching rules, so allow broad access first and deny narrower subjects after it when a subtraction is required:
 
@@ -304,7 +303,7 @@ The optional `shell` frontmatter field runs every shell command for that agent i
 - set, change, or remove `shell` only when the human explicitly asks, and use the exact value they give
 - never create or edit a `shell` program inside the workspace
 - carry `shell` over unchanged on updates and renames
-- never give an agent `edit` permission over a sandboxed agent's file or its wrapper program; editing either can remove the sandboxing, and `rocketclaw lint` reports it
+- never give an agent `edit` permission over a sandboxed agent's file or its wrapper program; editing either can remove the sandboxing
 - the setting covers only the agent that declares it: task subagents and permission reviewers without their own `shell` run plain `/bin/bash`. When the human asks to sandbox an agent, list the agents it delegates to, and ask whether each needs `shell` too
 
 A `shell` program must:
@@ -400,7 +399,7 @@ When the effective file has `mode: easy`, keep it easy: never add advanced keys,
 5. Create or update the overlay file in `agents/`.
 6. If this is a rename and an old overlay file exists at the previous path, remove that old overlay file.
 7. If the agent names a decision model, check that its provider is under `decision` in `rocketclaw.json`; if not, add it with `main-update-rocketclaw-json` before reloading.
-8. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, run `rocketclaw lint`, resolve or explicitly suppress findings approved by the human, then optionally tell the human you are applying them now and call `rocketclaw_reload` exactly once. Use `rocketclaw_restart` only when setup fields in `rocketclaw.json` changed.
+8. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, then optionally tell the human you are applying them now and call `rocketclaw_reload` exactly once. Use `rocketclaw_restart` only when setup fields in `rocketclaw.json` changed.
 
 ## Important
 
@@ -408,7 +407,6 @@ When the effective file has `mode: easy`, keep it easy: never add advanced keys,
 - Always copy existing agent content from `.rocketclaw` into `agents/` before editing it.
 - RocketCode denies unmatched permissions by default. Do not write top-level or per-bucket default deny rules.
 - Do not write broad `edit: allow` or `bash: allow`; prefer exact `edit` or exact `bash` opt-ins, not both.
-- Run `rocketclaw lint` after requested agent or relevant script edits and before `rocketclaw_reload` or `rocketclaw_restart`.
 - Always end the agent instructions with an explicit instruction to use `MEMORY.md`, or, for easy agents, with ``!`cat MEMORY.md` ``.
 - Never add advanced keys to a `mode: easy` file.
 - Never write `approver.model` or `approver.prompt` in an advanced file; it takes only `approver.decision`, and only for its reviews of other agents.

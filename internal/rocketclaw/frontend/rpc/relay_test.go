@@ -112,19 +112,23 @@ func TestOpenCodeProxy(t *testing.T) {
 
 	handler, sessions, db := startProxyTestRPC(t, upstream.URL)
 
-	serve := func(method, target, remote string, header http.Header) *httptest.ResponseRecorder {
+	serve := func(method, target, login string, header http.Header) *httptest.ResponseRecorder {
 		request := httptest.NewRequestWithContext(t.Context(), method, "http://rocketclaw.example"+target, nil)
 
-		request.RemoteAddr = remote
 		maps.Copy(request.Header, header)
 
+		caller := handler
+		if login != "" {
+			caller = signedIn(login, handler)
+		}
+
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, request)
+		caller.ServeHTTP(response, request)
 
 		return response
 	}
 
-	response := serve(http.MethodGet, "/oc/box/api/session?parentID=null", "192.0.2.10:5000", http.Header{"Cookie": {"rocketclaw=1"}})
+	response := serve(http.MethodGet, "/oc/box/api/session?parentID=null", "alice", http.Header{"Cookie": {"rocketclaw=1"}})
 	assert.Equal(t, http.StatusOK, response.Code)
 	assert.Equal(t, "opencode", response.Body.String())
 	assert.Equal(t, "/api/session?parentID=null", fake.uri, "the prefix is stripped and the query kept")
@@ -135,33 +139,33 @@ func TestOpenCodeProxy(t *testing.T) {
 	assert.Equal(t, "nosniff", response.Header().Get("X-Content-Type-Options"))
 
 	for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
-		assert.Equal(t, http.StatusOK, serve(method, "/oc/box/api/session/ses_a", "192.0.2.10:5000", nil).Code, method)
+		assert.Equal(t, http.StatusOK, serve(method, "/oc/box/api/session/ses_a", "alice", nil).Code, method)
 		assert.Equal(t, "/api/session/ses_a", fake.uri, method)
 	}
 
-	response = serve(http.MethodPost, "/oc/box/api/denied", "192.0.2.10:5000", nil)
+	response = serve(http.MethodPost, "/oc/box/api/denied", "alice", nil)
 	assert.Equal(t, http.StatusUnauthorized, response.Code)
 	assert.Empty(t, response.Header().Get("WWW-Authenticate"), "the browser never prompts for OpenCode's password")
 	assert.Equal(t, "sandbox", response.Header().Get("Content-Security-Policy"))
 
 	before := fake.hits
 
-	assert.Equal(t, http.StatusUnauthorized, serve(http.MethodGet, "/oc/box/api/session", "192.0.2.99:5000", nil).Code, "a caller the Web does not admit")
-	assert.Equal(t, http.StatusForbidden, serve(http.MethodGet, "/oc/box/api/session", "192.0.2.2:5000", nil).Code, "a person limited to spaces")
-	assert.Equal(t, http.StatusNotFound, serve(http.MethodGet, "/oc/nope/api/session", "192.0.2.10:5000", nil).Code, "a server that is not configured")
-	assert.NotEqual(t, "opencode", serve(http.MethodGet, "/oc/box/other", "192.0.2.10:5000", nil).Body.String(), "only the API is proxied")
+	assert.Equal(t, http.StatusUnauthorized, serve(http.MethodGet, "/oc/box/api/session", "", nil).Code, "a caller the Web does not admit")
+	assert.Equal(t, http.StatusForbidden, serve(http.MethodGet, "/oc/box/api/session", "bob", nil).Code, "a person limited to spaces")
+	assert.Equal(t, http.StatusNotFound, serve(http.MethodGet, "/oc/nope/api/session", "alice", nil).Code, "a server that is not configured")
+	assert.NotEqual(t, "opencode", serve(http.MethodGet, "/oc/box/other", "alice", nil).Body.String(), "only the API is proxied")
 
 	for _, header := range []http.Header{
 		{"Origin": {"https://evil.example"}},
 		{"Origin": {"null"}},
 		{"Origin": {"https://evil.example"}, "Connection": {"Upgrade"}, "Upgrade": {"websocket"}},
 	} {
-		assert.Equal(t, http.StatusForbidden, serve(http.MethodGet, "/oc/box/api/session", "192.0.2.10:5000", header).Code, header)
+		assert.Equal(t, http.StatusForbidden, serve(http.MethodGet, "/oc/box/api/session", "alice", header).Code, header)
 	}
 
 	assert.Equal(t, before, fake.hits, "refused requests never reach OpenCode")
 
-	assert.Equal(t, http.StatusOK, serve(http.MethodGet, "/oc/box/api/session", "192.0.2.10:5000", http.Header{"Origin": {"http://rocketclaw.example"}}).Code)
+	assert.Equal(t, http.StatusOK, serve(http.MethodGet, "/oc/box/api/session", "alice", http.Header{"Origin": {"http://rocketclaw.example"}}).Code)
 	assert.Equal(t, upstream.URL, fake.origin, "OpenCode sees its own origin")
 
 	for _, test := range []struct{ method, path, body, want string }{
@@ -175,10 +179,8 @@ func TestOpenCodeProxy(t *testing.T) {
 		{http.MethodGet, "/api/session/s1/prompt", `{ "parts": [] }`, `{ "parts": [] }`},
 	} {
 		request := httptest.NewRequestWithContext(t.Context(), test.method, "http://rocketclaw.example/oc/box"+test.path, strings.NewReader(test.body))
-		request.RemoteAddr = "192.0.2.10:5000"
-
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, request)
+		signedIn("alice", handler).ServeHTTP(response, request)
 		require.Equal(t, http.StatusOK, response.Code, test.body)
 
 		if test.want == test.body {
@@ -191,7 +193,7 @@ func TestOpenCodeProxy(t *testing.T) {
 	_, err := db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, title, name, directory, last_updated, synced_at)
 VALUES ('opencode:box:s2', '', '', 'remote', FALSE, 'remote', 'box', 's2', '', '', '/srv', now(), now())`)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, serve(http.MethodPost, "/oc/box/api/session/s2/prompt", "192.0.2.10:5000", nil).Code)
+	require.Equal(t, http.StatusOK, serve(http.MethodPost, "/oc/box/api/session/s2/prompt", "alice", nil).Code)
 
 	listed := 0
 
@@ -211,7 +213,7 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	proxy, _, _ := startProxyTestRPC(t, upstream.URL)
-	web := httptest.NewServer(proxy)
+	web := httptest.NewServer(signedIn("alice", proxy))
 	t.Cleanup(web.Close)
 
 	tagged := false

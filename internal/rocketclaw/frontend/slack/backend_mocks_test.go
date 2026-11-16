@@ -51,9 +51,6 @@ var _ frontend.Backend = &backendMock{}
 //			EditQueueItemFunc: func(context1 context.Context, s string, s1 string, s2 string) (bool, error) {
 //				panic("mock out the EditQueueItem method")
 //			},
-//			InspectAgentsFunc: func(inspectTarget protocol.InspectTarget, inspectKind protocol.InspectKind) (string, int, error) {
-//				panic("mock out the InspectAgents method")
-//			},
 //			MoveToBackgroundFunc: func(context1 context.Context, s string) (bool, error) {
 //				panic("mock out the MoveToBackground method")
 //			},
@@ -147,9 +144,6 @@ type backendMock struct {
 
 	// EditQueueItemFunc mocks the EditQueueItem method.
 	EditQueueItemFunc func(context1 context.Context, s string, s1 string, s2 string) (bool, error)
-
-	// InspectAgentsFunc mocks the InspectAgents method.
-	InspectAgentsFunc func(inspectTarget protocol.InspectTarget, inspectKind protocol.InspectKind) (string, int, error)
 
 	// MoveToBackgroundFunc mocks the MoveToBackground method.
 	MoveToBackgroundFunc func(context1 context.Context, s string) (bool, error)
@@ -291,13 +285,6 @@ type backendMock struct {
 			S1 string
 			// S2 is the s2 argument value.
 			S2 string
-		}
-		// InspectAgents holds details about calls to the InspectAgents method.
-		InspectAgents []struct {
-			// InspectTarget is the inspectTarget argument value.
-			InspectTarget protocol.InspectTarget
-			// InspectKind is the inspectKind argument value.
-			InspectKind protocol.InspectKind
 		}
 		// MoveToBackground holds details about calls to the MoveToBackground method.
 		MoveToBackground []struct {
@@ -451,7 +438,6 @@ type backendMock struct {
 	lockCreateConversation      sync.RWMutex
 	lockDeleteQueueItem         sync.RWMutex
 	lockEditQueueItem           sync.RWMutex
-	lockInspectAgents           sync.RWMutex
 	lockMoveToBackground        sync.RWMutex
 	lockPendingQuestions        sync.RWMutex
 	lockPopQueueItem            sync.RWMutex
@@ -827,42 +813,6 @@ func (mock *backendMock) EditQueueItemCalls() []struct {
 	mock.lockEditQueueItem.RLock()
 	calls = mock.calls.EditQueueItem
 	mock.lockEditQueueItem.RUnlock()
-	return calls
-}
-
-// InspectAgents calls InspectAgentsFunc.
-func (mock *backendMock) InspectAgents(inspectTarget protocol.InspectTarget, inspectKind protocol.InspectKind) (string, int, error) {
-	if mock.InspectAgentsFunc == nil {
-		panic("backendMock.InspectAgentsFunc: method is nil but Backend.InspectAgents was just called")
-	}
-	callInfo := struct {
-		InspectTarget protocol.InspectTarget
-		InspectKind   protocol.InspectKind
-	}{
-		InspectTarget: inspectTarget,
-		InspectKind:   inspectKind,
-	}
-	mock.lockInspectAgents.Lock()
-	mock.calls.InspectAgents = append(mock.calls.InspectAgents, callInfo)
-	mock.lockInspectAgents.Unlock()
-	return mock.InspectAgentsFunc(inspectTarget, inspectKind)
-}
-
-// InspectAgentsCalls gets all the calls that were made to InspectAgents.
-// Check the length with:
-//
-//	len(mockedBackend.InspectAgentsCalls())
-func (mock *backendMock) InspectAgentsCalls() []struct {
-	InspectTarget protocol.InspectTarget
-	InspectKind   protocol.InspectKind
-} {
-	var calls []struct {
-		InspectTarget protocol.InspectTarget
-		InspectKind   protocol.InspectKind
-	}
-	mock.lockInspectAgents.RLock()
-	calls = mock.calls.InspectAgents
-	mock.lockInspectAgents.RUnlock()
 	return calls
 }
 

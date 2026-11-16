@@ -85,7 +85,7 @@ func sidebarChoicesFixture(tb testing.TB, count int) (*Server, context.Context) 
 		require.NoError(tb, err)
 	}
 
-	return New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{RenameThreadSessionFunc: func(context.Context, string, string) {}}, &mockCronJobs{}), metadata.NewIncomingContext(tb.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	return New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{RenameThreadSessionFunc: func(context.Context, string, string) {}}, &mockCronJobs{}), metadata.NewIncomingContext(tb.Context(), tailnetUser("alice"))
 }
 
 func TestSidebarFingerprintAllocationBudget(t *testing.T) {
@@ -148,7 +148,7 @@ func TestSidebarSendFailures(t *testing.T) {
 	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
-	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewOutgoingContext(t.Context(), tailnetUser("alice"))
 
 	stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/ListSessions")
 	require.NoError(t, err)
@@ -327,7 +327,7 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 	require.Len(t, sent, 2, "an unknown version gets every row")
 	require.Empty(t, unknown.Since)
 
-	bob := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1", "rocketclaw-tailnet-login-bin", "bob@example.com", "rocketclaw-tailnet-name-bin", "Bob"))
+	bob := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-tailnet-login-bin", "bob@example.com", "rocketclaw-tailnet-name-bin", "Bob"))
 	sent, bobs := list(bob, deleted.Version)
 	require.Len(t, sent, 2, "another person's version gets every row")
 	require.Empty(t, bobs.Since)

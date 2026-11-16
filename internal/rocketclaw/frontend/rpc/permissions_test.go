@@ -422,8 +422,8 @@ func TestSpacePermissionTurns(t *testing.T) {
 		require.NoError(t, h.rt.CreateConversation(t.Context(), protocol.Conversation{ID: id, Agent: agent, CreatedBy: "bob", Space: "Ops"}))
 	}
 
-	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
-	bob := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.2"))
+	alice := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
+	bob := metadata.NewIncomingContext(t.Context(), tailnetUser("bob"))
 	prompt := func(ctx context.Context, id, text string, delivery PromptDelivery) (*PromptResponse, error) {
 		return h.server.prompt(ctx, &PromptRequest{Id: id, Text: text, Delivery: delivery})
 	}

@@ -88,8 +88,8 @@ UNION ALL SELECT format('tab %s unread=%s', path, unread_at IS NOT NULL) FROM we
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	unread := func(ip, viewing string) map[string]string {
-		listed, err := invoke[ListSessionsResponse](metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", ip)), connection, "ListSessions", &ListSessionsRequest{Viewing: viewing, SameOrigin: true})
+	unread := func(login, viewing string) map[string]string {
+		listed, err := invoke[ListSessionsResponse](metadata.NewOutgoingContext(t.Context(), tailnetUser(login)), connection, "ListSessions", &ListSessionsRequest{Viewing: viewing, SameOrigin: true})
 		require.NoError(t, err)
 
 		out := map[string]string{}
@@ -110,15 +110,15 @@ UNION ALL SELECT format('tab %s unread=%s', path, unread_at IS NOT NULL) FROM we
 	const at = "2026-10-22T10:00:00.5Z"
 
 	mark()
-	assert.Equal(t, map[string]string{"x": at + " marked", "y": "", "/cron": at}, unread("127.0.0.1", ""), "an empty viewing lists alice's marks")
+	assert.Equal(t, map[string]string{"x": at + " marked", "y": "", "/cron": at}, unread("alice", ""), "an empty viewing lists alice's marks")
 	assert.Equal(t, marked, reads(), "and leaves her view of y and her marks unchanged")
-	assert.Equal(t, map[string]string{"x": "", "y": ""}, unread("192.0.2.2", ""), "bob has no mark")
-	assert.Equal(t, map[string]string{"x": at + " marked", "y": "", "/cron": at}, unread("127.0.0.1", "/s/bm9uZQ"))
+	assert.Equal(t, map[string]string{"x": "", "y": ""}, unread("bob", ""), "bob has no mark")
+	assert.Equal(t, map[string]string{"x": at + " marked", "y": "", "/cron": at}, unread("alice", "/s/bm9uZQ"))
 	assert.Equal(t, []string{"alice viewing=/s/bm9uZQ", "tab /cron unread=t", "tab /s/eA unread=t"}, reads(), "a viewing that names no session clears no mark")
 
-	assert.Equal(t, map[string]string{"x": "", "y": "", "/cron": at}, unread("127.0.0.1", "/s/x"), "viewing x, in its legacy spelling, clears its mark in the same response")
+	assert.Equal(t, map[string]string{"x": "", "y": "", "/cron": at}, unread("alice", "/s/x"), "viewing x, in its legacy spelling, clears its mark in the same response")
 	assert.Equal(t, []string{"alice viewing=/s/eA", "tab /cron unread=t", "tab /s/eA unread=f"}, reads(), "and ends alice's view of y")
-	assert.Equal(t, map[string]string{"x": "", "y": "", "/cron": ""}, unread("127.0.0.1", "/cron"), "viewing the Cron tab clears its mark")
+	assert.Equal(t, map[string]string{"x": "", "y": "", "/cron": ""}, unread("alice", "/cron"), "viewing the Cron tab clears its mark")
 
 	httpServer := startHTTPTestServer(t, connection)
 

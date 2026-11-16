@@ -8,7 +8,7 @@ Use this skill when the human asks to convert, migrate, or switch an advanced ag
 
 The two formats do not mean the same thing, so a conversion is never a pure rewrite. Map what maps, then ask the human about everything else before writing anything. Never guess a value this skill tells you to ask for.
 
-Follow `main-create-or-update-agent` for the easy format itself (its "Easy mode agents" section), for overlay paths, and for `rocketclaw lint` and `rocketclaw_reload`. This skill adds the mapping and the checks around it.
+Follow `main-create-or-update-agent` for the easy format itself (its "Easy mode agents" section), for overlay paths, and for `rocketclaw_reload`. This skill adds the mapping and the checks around it.
 
 ## Runtime paths
 
@@ -116,6 +116,5 @@ After writing the agent, delete each converted local `cron/<file>.md`, or reload
 
 1. Show the human the complete new file for the agent and each shadow, the routines, the files to delete, and a short list of what behaves differently. Write nothing until they confirm.
 2. Write `agents/<name>.md` and each shadow `agents/<name>/<shadow>.md`. Delete the converted `cron/` files. Make the agreed changes to other agents through `main-create-or-update-agent`.
-3. Run `rocketclaw lint` and fix its findings with the human.
-4. Call `rocketclaw_reload` exactly once, after every edit.
-5. When the agent came from a git overlay, tell the human that `agents/<name>.md` now overrides that overlay's copy, so later changes to the overlay's copy are hidden. Suggest committing the new file to the overlay repository and then deleting the workspace copy.
+3. Call `rocketclaw_reload` exactly once, after every edit.
+4. When the agent came from a git overlay, tell the human that `agents/<name>.md` now overrides that overlay's copy, so later changes to the overlay's copy are hidden. Suggest committing the new file to the overlay repository and then deleting the workspace copy.

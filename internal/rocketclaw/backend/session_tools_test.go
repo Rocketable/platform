@@ -681,22 +681,23 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 func TestSessionsGetURLTool(t *testing.T) {
 	s, _ := newSessionSearchFixture(t)
-	bin := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "tailscale"), []byte("#!/bin/sh\necho 100.95.197.99\n"), 0o755))
-	t.Setenv("PATH", bin)
+	cfg := &config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw"}}}
+	threads := &threadBridgeManager{runtime: config.NewLockedConfig(cfg), store: s}
+	tool := sessionsGetURLTool(threads)
 
-	for origin, want := range map[string]string{"": "https://100.95.197.99:8080", "https://rocketclaw.example.ts.net": "https://rocketclaw.example.ts.net"} {
-		cfg := &config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: origin}}}
-		tool := sessionsGetURLTool(&threadBridgeManager{runtime: config.NewLockedConfig(cfg), store: s})
+	_, err := tool.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"session_id":%q}`, searchChatW)), nil)
+	require.ErrorContains(t, err, "the Web is not serving on the tailnet yet")
 
-		result, err := tool.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"session_id":%q}`, searchChatW)), nil)
-		require.NoError(t, err)
-		require.Equal(t, want+"/s/"+base64.RawURLEncoding.EncodeToString([]byte(searchChatW)), result.Output)
+	cfg.Web.Tsnet.Origin = "https://rocketclaw.example.ts.net"
+	threads.runtime.Store(cfg)
 
-		for _, id := range []string{searchChatD + "/call-1", "cron:cron/daily.md:20260102T030405.000000000Z:run", "external_mcp:private", ""} {
-			_, err := tool.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"session_id":%q}`, id)), nil)
-			require.ErrorContains(t, err, "is not a top-level session", id)
-		}
+	result, err := tool.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"session_id":%q}`, searchChatW)), nil)
+	require.NoError(t, err)
+	require.Equal(t, "https://rocketclaw.example.ts.net/s/"+base64.RawURLEncoding.EncodeToString([]byte(searchChatW)), result.Output)
+
+	for _, id := range []string{searchChatD + "/call-1", "cron:cron/daily.md:20260102T030405.000000000Z:run", "external_mcp:private", ""} {
+		_, err := tool.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"session_id":%q}`, id)), nil)
+		require.ErrorContains(t, err, "is not a top-level session", id)
 	}
 }
 
@@ -721,7 +722,7 @@ func TestSessionsWriteStopWithoutPrompt(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
-	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store, bridges: map[string]directBridge{}}
+	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store, bridges: map[string]directBridge{}}
 	bridge := runningTestBridge(t, store, manager, "web:target")
 	require.NoError(t, store.BeginGoal("web:target", &GoalState{Objective: "ship it", MaxTurns: 5}))
 	recordPrivateHistories(t, store, map[string]ConversationKind{"web:sender": KindWebChat})
@@ -777,7 +778,7 @@ func TestSessionsWriteStopLineFollowsStoppedTurn(t *testing.T) {
 	t.Parallel()
 
 	nt := newNoteTest(t, func(_ http.ResponseWriter, r *http.Request, _ int, _ string) { <-r.Context().Done() })
-	nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
+	nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 	manager, _ := nt.run(t, ignoreOutbound)
 
 	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
@@ -1004,7 +1005,7 @@ func TestSessionsWriteRecipients(t *testing.T) {
 	}
 
 	store := newTestSessionServiceAt(t, workspace)
-	cfg := &config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}
+	cfg := &config.Config{Workspace: workspace, Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(cfg), store: store, bridges: map[string]directBridge{}}
 
 	targets := map[string]*Bridge{}
@@ -1160,7 +1161,7 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 			})
 			writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\n"+permission+"\n---\nPrompt\n")
 			nt.cfg.AutoApproverModel = "review-model"
-			nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
+			nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 			require.NoError(t, nt.service.UpsertThread(caller, ThreadState{Agent: "main"}))
 
 			manager, _ := nt.run(t, ignoreOutbound)
@@ -1234,7 +1235,7 @@ func replyNoteTest(t *testing.T, code string, answer noteTestResponder) *noteTes
 		}{"def main():\n    return " + code + "\n"})
 	})
 	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nPrompt\n")
-	nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
+	nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 	require.NoError(t, nt.service.UpsertThread("web:caller", ThreadState{Agent: "main"}))
 
 	return nt
@@ -1356,7 +1357,7 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 	})
 	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n---\nPrompt\n")
 	writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nResearch\n")
-	nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
+	nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 	require.NoError(t, nt.service.UpsertThread("web:ops", ThreadState{Agent: "main"}))
 
 	manager, _ := nt.run(t, ignoreOutbound)
@@ -1409,7 +1410,7 @@ func TestSessionWriteReplyWakesHiddenRun(t *testing.T) {
 
 		writeRawRunMessage(t, w, "resp", "msg", text)
 	})
-	nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
+	nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 	manager, _ := nt.run(t, ignoreOutbound)
 	report := "web:cron:daily"
 

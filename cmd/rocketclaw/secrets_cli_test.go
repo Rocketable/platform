@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"testing"
 	"testing/synctest"
 
@@ -35,7 +34,7 @@ func TestRuntimeAndServeResolveTheSameSecret(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{
-		"workspace": ".", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
+		"workspace": ".", "web": {"tsnet": {}}, "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 		"openai": {"api_key": "test-key"},
 		"slack": {"bot_token":"xoxb-local","app_token":"xapp-test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}
 	}`), 0o600))
@@ -55,22 +54,6 @@ func TestCommandsAcceptSecretsARNFlag(t *testing.T) {
 	t.Run("oai list", func(t *testing.T) {
 		prepareOAIConfig(t)
 		require.NoError(t, runOAIList([]string{"--aws-secrets-manager-arn", testSecretsARN}))
-	})
-	t.Run("lint", func(t *testing.T) {
-		workspace := t.TempDir()
-		t.Chdir(workspace)
-		writeLintConfig(t, workspace)
-		serveLint(t)
-		writeLintAgent(t, filepath.Join(workspace, ".rocketclaw"), "main.md", "---\ndescription: main\n---\nmain\n")
-		require.NoError(t, runLint([]string{"--aws-secrets-manager-arn", testSecretsARN, "current"}))
-	})
-	t.Run("agent-graph", func(t *testing.T) {
-		workspace := t.TempDir()
-		t.Chdir(workspace)
-		writeLintConfig(t, workspace)
-		serveLint(t)
-		writeLintAgent(t, filepath.Join(workspace, ".rocketclaw"), "main.md", "---\ndescription: main\n---\nmain\n")
-		require.NoError(t, runAgentGraph([]string{"--aws-secrets-manager-arn", testSecretsARN, "current"}))
 	})
 	t.Run("oai logout", func(t *testing.T) {
 		prepareOAIConfig(t)
@@ -98,6 +81,7 @@ func TestOAILoginWriteKeepsAWSObject(t *testing.T) {
 	prepareOAIConfig(t)
 	patched := []byte(`{
   "workspace": "../runtime",
+  "web": {"tsnet": {}},
   "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
   "openai": {"auth":"api_key","api_key":"openai-key"},
   "providers": {
@@ -127,7 +111,7 @@ func TestServeErrorOmitsResolvedSecret(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{
-		"workspace": ".", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
+		"workspace": ".", "web": {"tsnet": {}}, "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 		"openai": {"api_key": "test-key"},
 		"slack": {
 		  "bot_token": {"aws":{"arn":"`+testSecretsARN+`","key":"token"}},

@@ -23,7 +23,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
@@ -50,7 +49,7 @@ import (
 
 func TestQueueEdit(t *testing.T) {
 	h := startVoiceHarness(t)
-	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewOutgoingContext(t.Context(), tailnetUser("alice"))
 	_, err := invoke[PromptResponse](ctx, h.conn, "Prompt", &PromptRequest{Id: "main", MessageId: "waiting", Text: "original", Delivery: PromptDelivery_STASH})
 	require.NoError(t, err)
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, h.url+"/api/EditQueueItem", strings.NewReader(`{"id":"main","itemId":"waiting","text":"  corrected\ntext  "}`))
@@ -132,61 +131,16 @@ func TestQueueEdit(t *testing.T) {
 	require.Equal(t, codes.NotFound, status.Code(err))
 }
 
-func TestTailscaleBrowserIdentity(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PATH", dir)
-
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.1"))
-	for _, tt := range []struct{ name, output, want, wantPrincipal string }{
-		{"identified", `{"UserProfile":{"LoginName":"connected@example.com","DisplayName":"Connected Person"}}`, "connected@example.com", "Connected Person"},
-		{"spaced display", `{"UserProfile":{"LoginName":"connected@example.com","DisplayName":" Connected Person "}}`, "connected@example.com", " Connected Person "},
-		{"missing display", `{"UserProfile":{"LoginName":"connected@example.com"}}`, "connected@example.com", "connected@example.com"},
-		{"blank display", `{"UserProfile":{"LoginName":"connected@example.com","DisplayName":"  "}}`, "connected@example.com", "connected@example.com"},
-		{"no user", `{"UserProfile":{}}`, "", ""},
-		{"tagged node", `{"Node":{"Tags":["tag:server"]},"UserProfile":{"LoginName":"tagged-devices"}}`, "", ""},
-		{"invalid response", `not json`, "", ""},
-		{"unavailable", "", "", ""},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			script := "#!/bin/sh\n[ \"$*\" = 'whois --json 100.64.0.1' ] || exit 1\nprintf '%s' '" + tt.output + "'\n"
-			if tt.name == "unavailable" {
-				script = "#!/bin/sh\nexit 1\n"
-			}
-
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "tailscale"), []byte(script), 0o700))
-
-			server := &Server{cfg: new(config.LockedConfig)}
-
-			view, err := server.listConfig(ctx)
-			if tt.want == "" {
-				require.Equal(t, codes.Unauthenticated, status.Code(err))
-				return
-			}
-
-			require.NoError(t, err)
-			require.Equal(t, tt.want, view.Config.TailscaleUser)
-
-			username, principal, err := server.principal(ctx)
-			require.NoError(t, err)
-			require.Equal(t, tt.want, username)
-
-			require.Equal(t, tt.wantPrincipal, principal)
-			_, err = server.listConfig(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.2")))
-			require.Equal(t, codes.Unauthenticated, status.Code(err))
-		})
-	}
-}
-
 func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 	forwarded := netip.MustParseAddr("192.0.2.2")
 
 	for _, tt := range []struct {
 		name   string
-		remote string
+		signed bool
 		code   int
 	}{
-		{"mapped", "127.0.0.1", http.StatusOK},
-		{"unmapped", "192.0.2.99", http.StatusUnauthorized},
+		{"tailnet user", true, http.StatusOK},
+		{"no tailnet user", false, http.StatusUnauthorized},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -219,7 +173,6 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 			for method, body := range calls {
 				request := httptest.NewRequest(http.MethodPost, "/api/"+method, strings.NewReader(body))
 
-				request.RemoteAddr = tt.remote + ":1234"
 				for _, header := range []string{"X-Forwarded-For", "X-Real-Ip", "Rocketclaw-Principal"} {
 					request.Header.Set(header, forwarded.String())
 				}
@@ -227,8 +180,13 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 				request.Header.Set("Tailscale-User-Login", "alice@example.com")
 				request.Header.Set("Tailscale-User-Name", "Alice")
 
+				handler := NewHTTPHandler(connection, new(config.LockedConfig), "")
+				if tt.signed {
+					handler = signedIn("alice", handler)
+				}
+
 				response := httptest.NewRecorder()
-				NewHTTPHandler(connection, new(config.LockedConfig), "").ServeHTTP(response, request)
+				handler.ServeHTTP(response, request)
 
 				code := tt.code
 				if method == "Protocol" {
@@ -259,10 +217,6 @@ func TestTailnetHandlerPassesOpenCodeMCP(t *testing.T) {
 }
 
 func TestTailnetIdentity(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PATH", dir)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "tailscale"), []byte("#!/bin/sh\nexit 1\n"), 0o700))
-
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
@@ -495,74 +449,6 @@ func TestTailnetCrossSitePages(t *testing.T) {
 	}
 }
 
-func TestTailscaleIdentityCache(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PATH", dir)
-	command := filepath.Join(dir, "tailscale")
-	calls := filepath.Join(dir, "calls")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + calls + "'\nprintf '%s' '{\"UserProfile\":{\"LoginName\":\"alice\",\"DisplayName\":\"Alice Smith\"}}'\n"
-	require.NoError(t, os.WriteFile(command, []byte(script), 0o700))
-
-	synctest.Test(t, func(t *testing.T) {
-		server := &Server{cfg: new(config.LockedConfig)}
-		ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.1"))
-
-		var requests errgroup.Group
-		for range 8 {
-			requests.Go(func() error {
-				username, _, err := server.principal(ctx)
-				if err != nil {
-					return err
-				}
-
-				if username != "alice" {
-					return fmt.Errorf("username = %q, want alice", username)
-				}
-
-				return nil
-			})
-		}
-
-		require.NoError(t, requests.Wait())
-
-		view, err := server.listConfig(ctx)
-		require.NoError(t, err)
-		require.Equal(t, "alice", view.Config.TailscaleUser)
-
-		username, principal, err := server.principal(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "::ffff:100.64.0.1")))
-		require.NoError(t, err)
-		require.Equal(t, "alice", username)
-		require.Equal(t, "Alice Smith", principal)
-
-		data, err := os.ReadFile(calls)
-		require.NoError(t, err)
-		require.Equal(t, "whois --json 100.64.0.1\n", string(data))
-
-		_, _, err = server.principal(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.2")))
-		require.NoError(t, err)
-		data, err = os.ReadFile(calls)
-		require.NoError(t, err)
-		require.Equal(t, "whois --json 100.64.0.1\nwhois --json 100.64.0.2\n", string(data))
-
-		require.NoError(t, os.WriteFile(command, []byte("#!/bin/sh\nexit 1\n"), 0o700))
-		time.Sleep(5*time.Minute - time.Nanosecond)
-
-		username, _, err = server.principal(ctx)
-		require.NoError(t, err)
-		require.Equal(t, "alice", username)
-		time.Sleep(time.Nanosecond)
-
-		_, _, err = server.principal(ctx)
-		require.Equal(t, codes.Unauthenticated, status.Code(err))
-
-		require.NoError(t, os.WriteFile(command, []byte(strings.ReplaceAll(script, "alice", "bob")), 0o700))
-
-		username, _, err = server.principal(ctx)
-		require.NoError(t, err)
-		require.Equal(t, "bob", username)
-	})
-}
-
 func searchWaiters(server *Server) int {
 	server.searchMu.Lock()
 	defer server.searchMu.Unlock()
@@ -588,8 +474,8 @@ func TestSaveBehaviorSettings(t *testing.T) {
 		return locked.Do(func(cfg *config.Config) error { cfg.SetBehavior(behavior); return nil })
 	}}
 	server := New(core, nil, locked, &mockChannels{}, &mockCronJobs{})
-	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
-	bob := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.2"))
+	alice := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
+	bob := metadata.NewIncomingContext(t.Context(), tailnetUser("bob"))
 	document := func(change func(*config.Behavior)) string {
 		behavior := locked.Clone().Behavior()
 		change(&behavior)
@@ -618,7 +504,7 @@ func TestSaveBehaviorSettings(t *testing.T) {
 		ctx                     context.Context
 		code                    codes.Code
 	}{
-		{"unidentified", document(func(*config.Behavior) {}), "browser IP is required", t.Context(), codes.Unauthenticated},
+		{"unidentified", document(func(*config.Behavior) {}), "tailnet login is required", t.Context(), codes.Unauthenticated},
 		{"non-admin", document(func(*config.Behavior) {}), "only admins", bob, codes.PermissionDenied},
 		{"malformed", `{"slack":`, "unexpected end of JSON input", alice, codes.InvalidArgument},
 	} {
@@ -659,71 +545,20 @@ func TestSaveBehaviorSettings(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, tt := range []struct {
-		address, body string
-		code          int
+		login, body string
+		code        int
 	}{
-		{"192.0.2.2:1234", string(body), http.StatusForbidden},
-		{"192.0.2.1:1234", `{}`, http.StatusBadRequest},
-		{"192.0.2.1:1234", string(body), http.StatusOK},
+		{"bob", string(body), http.StatusForbidden},
+		{"alice", `{}`, http.StatusBadRequest},
+		{"alice", string(body), http.StatusOK},
 	} {
 		request := httptest.NewRequest(http.MethodPost, "/api/SaveBehaviorSettings", strings.NewReader(tt.body))
-		request.RemoteAddr = tt.address
 		response := httptest.NewRecorder()
-		NewHTTPHandler(connection, new(config.LockedConfig), "").ServeHTTP(response, request)
+		signedIn(tt.login, NewHTTPHandler(connection, new(config.LockedConfig), "")).ServeHTTP(response, request)
 		require.Equal(t, tt.code, response.Code, response.Body.String())
 	}
 
 	require.Equal(t, "gpt-c", locked.Clone().AutoApproverModel)
-}
-
-func TestInspectAgentsDirectLocal(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-
-	core := &mockBackend{InspectAgentsFunc: func(target protocol.InspectTarget, _ protocol.InspectKind) (string, int, error) {
-		return "rocketclaw lint " + string(target) + ": OK\n", 0, nil
-	}}
-	listener, err := net.Listen("unix", testSocketPath(t))
-	require.NoError(t, err)
-
-	transport := grpc.NewServer()
-	New(core, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
-
-	var serving errgroup.Group
-	serving.Go(func() error { return transport.Serve(listener) })
-	t.Cleanup(func() { transport.Stop(); require.NoError(t, serving.Wait()) })
-
-	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, connection.Close()) })
-
-	for _, tt := range []struct {
-		method, address, header string
-		code                    int
-	}{
-		{"InspectAgents", "192.0.2.1:1234", "", http.StatusUnauthorized},
-		{"InspectAgents", "127.0.0.1:1234", "", http.StatusOK},
-		{"InspectAgents", "[::1]:1234", "", http.StatusOK},
-		{"InspectAgents", "127.0.0.1:1234", "X-Forwarded-For", http.StatusUnauthorized},
-		{"InspectAgents", "127.0.0.1:1234", "Forwarded", http.StatusUnauthorized},
-		{"InspectAgents", "127.0.0.1:1234", "Tailscale-User-Login", http.StatusUnauthorized},
-		{"Identity", "127.0.0.1:1234", "", http.StatusUnauthorized},
-	} {
-		body := map[string]string{"InspectAgents": `{"target":"next","kind":"lint"}`, "Identity": `{}`}[tt.method]
-		request := httptest.NewRequest(http.MethodPost, "/api/"+tt.method, strings.NewReader(body))
-		request.RemoteAddr = tt.address
-
-		if tt.header != "" {
-			request.Header.Set(tt.header, "192.0.2.1")
-		}
-
-		response := httptest.NewRecorder()
-		NewHTTPHandler(connection, new(config.LockedConfig), "").ServeHTTP(response, request)
-		require.Equal(t, tt.code, response.Code, "%+v: %s", tt, response.Body.String())
-	}
-
-	require.Len(t, core.InspectAgentsCalls(), 2)
-	require.Equal(t, protocol.InspectNext, core.InspectAgentsCalls()[0].InspectTarget)
-	require.Equal(t, protocol.InspectLint, core.InspectAgentsCalls()[0].InspectKind)
 }
 
 func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
@@ -749,8 +584,8 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 			return nil
 		}},
 	}
-	firstCtx, cancelFirst := context.WithCancel(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")))
-	secondCtx, cancelSecond := context.WithCancel(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.2")))
+	firstCtx, cancelFirst := context.WithCancel(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")))
+	secondCtx, cancelSecond := context.WithCancel(metadata.NewIncomingContext(t.Context(), tailnetUser("bob")))
 
 	defer cancelFirst()
 	defer cancelSecond()
@@ -773,7 +608,7 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 	cancelFirst()
 	require.ErrorIs(t, <-first, context.Canceled)
 	require.NoError(t, scanCtx.Err(), "the other waiter still needs the scan")
-	thirdCtx, cancelThird := context.WithCancel(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")))
+	thirdCtx, cancelThird := context.WithCancel(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")))
 	third := make(chan error, 1)
 
 	go func() {
@@ -788,7 +623,7 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 	require.ErrorIs(t, <-second, context.Canceled)
 	<-scanCtx.Done()
 
-	retryCtx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+	retryCtx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	retry := make(chan error, 1)
 
 	go func() {
@@ -833,7 +668,7 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 			return matching[needle]
 		}},
 	}
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
 	group, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "cs-operators"})
 	require.NoError(t, err)
@@ -903,7 +738,7 @@ func TestSearchSessionsSharedFlightCancellation(t *testing.T) {
 	waiters := func() {
 		require.Eventually(t, func() bool { return searchWaiters(server) == 2 }, time.Second, time.Millisecond)
 	}
-	principal := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+	principal := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	firstCtx, cancelFirst := context.WithCancel(principal)
 	secondCtx, cancelSecond := context.WithCancel(principal)
 	thirdCtx, cancelThird := context.WithCancel(principal)
@@ -980,9 +815,9 @@ func TestSearchSessionsUnreadPerCaller(t *testing.T) {
 
 	var searches errgroup.Group
 
-	for i, ip := range []string{"192.0.2.1", "192.0.2.2"} {
+	for i, login := range []string{"alice", "bob"} {
 		searches.Go(func() error {
-			response, err := server.searchSessions(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", ip)), &SearchSessionsRequest{Query: "is:unread"})
+			response, err := server.searchSessions(metadata.NewIncomingContext(t.Context(), tailnetUser(login)), &SearchSessionsRequest{Query: "is:unread"})
 			for _, match := range response.GetMatches() {
 				found[i] = append(found[i], match.ConversationId)
 			}
@@ -1018,7 +853,7 @@ func TestSearchSessionsResponse(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	entries := make(map[string]int64)
 
 	for _, chat := range []struct{ id, user string }{{"slack-thread:C1:1.1", "ping <@U7> about billing"}, {"web-session:desk", "hello"}, {"web-session:lower", "billing question"}} {
@@ -1091,7 +926,7 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 		cfg:      config.NewLockedConfig(cfg),
 		channels: &mockChannels{SlackTagsMatchingFunc: func(context.Context, string) []string { return nil }},
 	}
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
 	require.NoError(t, sessions.UpsertThread("source", backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
 	require.NoError(t, sessions.SaveAttachment(ctx, "source", "", &protocol.OutboundAttachment{ID: "parity-file", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}, true))
@@ -1160,7 +995,7 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	configPath := filepath.Join(t.TempDir(), "rocketclaw.json")
-	require.NoError(t, os.WriteFile(configPath, []byte(`{"database_url":"postgres://localhost/rocketclaw_test", "openai":{"api_key":"test"}, "slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}}`), 0o600))
+	require.NoError(t, os.WriteFile(configPath, []byte(`{"database_url":"postgres://localhost/rocketclaw_test", "web":{"tsnet":{}}, "openai":{"api_key":"test"}, "slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}}`), 0o600))
 	cfg, err := config.Load(configPath, "", &config.AWSFetcher{})
 	require.NoError(t, err)
 
@@ -1362,12 +1197,12 @@ func TestSessionEntries(t *testing.T) {
 
 	var wire ListSessionEntriesResponse
 
-	err = connection.Invoke(metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.99")), "/rpc.Web/ListSessionEntries", &SessionEntriesRequest{Id: "unrelated"}, &wire)
+	err = connection.Invoke(t.Context(), "/rpc.Web/ListSessionEntries", &SessionEntriesRequest{Id: "unrelated"}, &wire)
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 	_, err = invoke[PromptResponse](t.Context(), connection, "Prompt", &PromptRequest{Id: "unrelated", Text: "hello"})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 
-	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+	ctx := metadata.NewOutgoingContext(t.Context(), tailnetUser("alice"))
 	identity, err := invoke[IdentityResponse](ctx, connection, "Identity", &IdentityRequest{})
 	require.NoError(t, err)
 	require.Equal(t, "alice", identity.Username)
@@ -1376,10 +1211,7 @@ func TestSessionEntries(t *testing.T) {
 		before := len(turns)
 
 		t.Cleanup(func() { turns = turns[:before] })
-		dir := t.TempDir()
-		t.Setenv("PATH", dir)
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "tailscale"), []byte("#!/bin/sh\nprintf '%s' '{\"UserProfile\":{\"LoginName\":\"alice@example.com\",\"DisplayName\":\"Alice Smith\"}}'\n"), 0o700))
-		browser := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.1"))
+		browser := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-tailnet-login-bin", "alice@example.com", "rocketclaw-tailnet-name-bin", "Alice Smith"))
 		identity, err := invoke[IdentityResponse](browser, connection, "Identity", &IdentityRequest{})
 		require.NoError(t, err)
 		require.Equal(t, "alice@example.com", identity.Username)
@@ -1435,8 +1267,8 @@ func TestSessionEntries(t *testing.T) {
 		require.Subset(t, inbound.Metadata, person)
 	})
 
-	for _, values := range [][]string{nil, {"alice"}, {"192.0.2.99"}, {"192.0.2.1", "192.0.2.1"}} {
-		denied := metadata.NewOutgoingContext(t.Context(), metadata.MD{"rocketclaw-principal": values})
+	for _, md := range []metadata.MD{nil, {"rocketclaw-principal": {"127.0.0.1"}}, {"rocketclaw-tailnet-login-bin": {"alice", "bob"}}} {
+		denied := metadata.NewOutgoingContext(t.Context(), md)
 		_, err := invoke[IdentityResponse](denied, connection, "Identity", &IdentityRequest{})
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 		_, err = invoke[ListSessionsResponse](denied, connection, "ListSessions", &ListSessionsRequest{})
@@ -1632,8 +1464,8 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, deleted.Deleted)
 
-	for _, values := range [][]string{nil, {"alice"}, {"192.0.2.99"}, {"192.0.2.1", "192.0.2.2"}, {""}} {
-		unauthorized := metadata.NewOutgoingContext(t.Context(), metadata.MD{"rocketclaw-principal": values})
+	for _, md := range []metadata.MD{nil, {"rocketclaw-principal": {"127.0.0.1"}}, {"rocketclaw-tailnet-login-bin": {"alice", "bob"}}} {
+		unauthorized := metadata.NewOutgoingContext(t.Context(), md)
 		_, err = invoke[ListSessionEntriesResponse](unauthorized, connection, "ListSessionEntries", request)
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 		_, err = invoke[LoadSessionEntriesResponse](unauthorized, connection, "LoadSessionEntries", request)
@@ -1653,7 +1485,7 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 	_, err = invoke[DeleteSessionEntriesResponse](ctx, connection, "DeleteSessionEntries", &SessionEntriesRequest{})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
-	principal, _, err := server.principal(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")))
+	principal, _, err := server.principal(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")))
 	require.NoError(t, err)
 	require.Equal(t, "alice", principal)
 	negotiated, err := invoke[ProtocolResponse](t.Context(), connection, "Protocol", &ProtocolRequest{})
@@ -3092,7 +2924,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, err)
 
 		selectedServer := &Server{backend: server.backend, sessions: lockedSessions, cfg: server.cfg, channels: server.channels, cronjobs: server.cronjobs}
-		incoming := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+		incoming := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 		selected, err := selectedServer.listAgents(incoming, id)
 		require.ErrorContains(t, err, "resolve web conversation visibility")
 		require.Nil(t, selected)
@@ -3274,7 +3106,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		t.Run("a failed change send ends Join", func(t *testing.T) {
 			stream := &mockServerStream{
 				ContextFunc: func() context.Context {
-					return metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+					return metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 				},
 				SendMsgFunc: func(any) error { return errors.New("client gone") },
 			}
@@ -3523,20 +3355,20 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, sessions.SaveAttachment(ctx, conversation, "", &protocol.OutboundAttachment{ID: "orphan", Name: "orphan", Data: []byte("private")}, false))
 
 		for _, test := range []struct {
-			name, conversation, id, principal string
-			code                              codes.Code
+			name, conversation, id string
+			caller                 metadata.MD
+			code                   codes.Code
 		}{
-			{"unreferenced", conversation, "orphan", "192.0.2.1", codes.NotFound},
-			{"cross conversation", "other", file.Id, "192.0.2.1", codes.NotFound},
-			{"missing principal", conversation, file.Id, "", codes.Unauthenticated},
-			{"unmapped principal", conversation, file.Id, "192.0.2.99", codes.Unauthenticated},
-			{"cron", "cron:private", file.Id, "192.0.2.1", codes.PermissionDenied},
-			{"one off cron", "one-off-cron:private", file.Id, "192.0.2.1", codes.PermissionDenied},
-			{"external MCP private", "private-X", producerFile.ID, "192.0.2.1", codes.PermissionDenied},
-			{"deleted source", conversation, producerFile.ID, "192.0.2.1", codes.NotFound},
+			{"unreferenced", conversation, "orphan", tailnetUser("alice"), codes.NotFound},
+			{"cross conversation", "other", file.Id, tailnetUser("alice"), codes.NotFound},
+			{"missing principal", conversation, file.Id, nil, codes.Unauthenticated},
+			{"cron", "cron:private", file.Id, tailnetUser("alice"), codes.PermissionDenied},
+			{"one off cron", "one-off-cron:private", file.Id, tailnetUser("alice"), codes.PermissionDenied},
+			{"external MCP private", "private-X", producerFile.ID, tailnetUser("alice"), codes.PermissionDenied},
+			{"deleted source", conversation, producerFile.ID, tailnetUser("alice"), codes.NotFound},
 		} {
 			t.Run(test.name, func(t *testing.T) {
-				callCtx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", test.principal))
+				callCtx := metadata.NewOutgoingContext(t.Context(), test.caller)
 				stream, err := connection.NewStream(callCtx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/DownloadAttachment")
 				require.NoError(t, err)
 				require.NoError(t, stream.SendMsg(&Attachment{ConversationId: test.conversation, Id: test.id}))
@@ -3828,10 +3660,10 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			err      error
 		}
 
-		firstCtx, cancelFirst := context.WithCancel(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")))
+		firstCtx, cancelFirst := context.WithCancel(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")))
 		defer cancelFirst()
 
-		secondCtx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.3"))
+		secondCtx := metadata.NewIncomingContext(t.Context(), tailnetUser("bob"))
 		first, second := make(chan result, 1), make(chan result, 1)
 
 		go func() {
@@ -3873,7 +3705,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		release = make(chan struct{})
 
 		go func() {
-			response, err := server.searchMessages(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")), &SearchMessagesRequest{Query: "unique shared search text"})
+			response, err := server.searchMessages(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")), &SearchMessagesRequest{Query: "unique shared search text"})
 			first <- result{response, err}
 		}()
 
@@ -3952,7 +3784,7 @@ func TestContinueCronRun(t *testing.T) {
 	core.CreateConversationFunc, core.ContinueRunFunc = rt.CreateConversation, rt.ContinueRun
 	cronjobs := &mockCronJobs{LoadOneOffCronjobFunc: func(string) (protocol.OneOffCronjob, error) { return protocol.OneOffCronjob{}, os.ErrNotExist }}
 	server := &Server{backend: core, sessions: sessions, cfg: config.NewLockedConfig(cfg), cronjobs: cronjobs}
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
 	texts := func(id string) (shown []string) {
 		history, err := server.history(ctx, &HistoryRequest{Id: id})
@@ -4090,7 +3922,7 @@ func TestRoutineCronJobs(t *testing.T) {
 	rt := &backend.Runtime{Sessions: sessions}
 	core.CreateConversationFunc = rt.CreateConversation
 	server := &Server{backend: core, sessions: sessions, cfg: locked, cronjobs: cronfrontend.New(locked, cfg.RuntimeDirName(), sessions, runner, slog.New(slog.DiscardHandler))}
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1", "rocketclaw-tailnet-login-bin", "alice", "rocketclaw-tailnet-name-bin", "Alice"))
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-tailnet-login-bin", "alice", "rocketclaw-tailnet-name-bin", "Alice"))
 
 	run := "cron:agents/marketing.md#30m:20260905T010000.000000001Z:first"
 	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "marketing", CreatedBy: "cron", Run: &protocol.CronRun{Path: "agents/marketing.md#30m", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}}))
@@ -4175,27 +4007,16 @@ func runWebTest(t *testing.T, file string, env ...string) {
 	t.Log(string(output))
 }
 
-func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp(os.Getenv("TMPDIR"), "tailscale-")
-	if err != nil {
-		panic(err)
-	}
+func tailnetUser(login string) metadata.MD {
+	return metadata.Pairs("rocketclaw-tailnet-login-bin", login, "rocketclaw-tailnet-name-bin", "")
+}
 
-	script := "#!/bin/sh\n[ \"$1 $2\" = \"whois --json\" ] || exit 1\ncase \"$3\" in\n" +
-		"127.0.0.1|192.0.2.1|192.0.2.10) login=alice ;;\n192.0.2.2|192.0.2.3) login=bob ;;\n*) exit 1 ;;\nesac\n" +
-		"echo \"{\\\"UserProfile\\\":{\\\"LoginName\\\":\\\"$login\\\"}}\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "tailscale"), []byte(script), 0o700); err != nil {
-		panic(err)
-	}
+func signedIn(login string, next http.Handler) http.Handler {
+	whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) {
+		return &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: login}}, nil
+	}}
 
-	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil {
-		panic(err)
-	}
-
-	code := m.Run()
-	_ = os.RemoveAll(dir)
-
-	os.Exit(code)
+	return NewTailnetHandler(whois, nil, next)
 }
 
 func testSocketPath(t *testing.T) string {
@@ -4289,7 +4110,7 @@ func TestBackgroundJobRPCs(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewOutgoingContext(t.Context(), tailnetUser("alice"))
 	history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "chat"})
 	require.NoError(t, err)
 	require.True(t, history.Movable)
@@ -4402,7 +4223,7 @@ func TestQuestionRPCs(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewOutgoingContext(t.Context(), tailnetUser("alice"))
 	history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "chat"})
 	require.NoError(t, err)
 	require.Len(t, history.PendingQuestions, 1)

@@ -15,7 +15,8 @@
   },
   "server_display_name": "home lab",
   "web": {
-    "admins": ["alice@example.com"]
+    "admins": ["alice@example.com"],
+    "tsnet": {"hostname": "rocketclaw", "tags": ["tag:rocketclaw"]}
   },
   "mcp_external": {
     "enabled": true,

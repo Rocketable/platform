@@ -467,7 +467,7 @@ including uploads referenced by its selected staged user boundary for composer
 restoration—not arbitrary uploads or other references in the hidden suffix—
 then returns exact original bytes in 256 KiB chunks. Merely knowing an ID is not
 authorization. Private Cron producers and recorded private external MCP sessions
-are denied, as are unmapped browser IPs. Deleting history revokes its references.
+are denied, as are callers without a tailnet login. Deleting history revokes its references.
 Queued references remain valid until removed or consumed.
 
 `History` and `ListQueue` carry repeated `attachments` metadata. The
@@ -620,13 +620,11 @@ export TMPDIR="$PWD/.tmp"
 go run ./cmd/rocketclaw
 ```
 
-Web always starts. Its HTTP listener defaults to `0.0.0.0:3000`; set
-`web.listen_address` in `rocketclaw.json` or `femtoclaw.json` to change it.
+The Web is served only by a `tailscale.com/tsnet` node, which `web.tsnet` in
+`rocketclaw.json` or `femtoclaw.json` configures and which serves the handler over
+HTTPS on port 443 of its tailnet name; see [Identity boundary](#identity-boundary).
 The HTTP adapter connects to gRPC entirely in memory inside the same process.
-No Web environment variables or filesystem sockets are needed. Browser identity
-on that listener comes from the connecting IP, through Tailscale WhoIs. When `web.tsnet` is set, RocketClaw also runs a
-`tailscale.com/tsnet` node that serves the same handler over HTTPS on port 443 of
-its tailnet name; see [Identity boundary](#identity-boundary).
+No Web environment variables or filesystem sockets are needed.
 
 The normal RocketClaw command still starts its existing Slack/Cron runtime. The
 isolated transport tests below do not start Slack or touch runtime configuration.
@@ -656,19 +654,17 @@ ranges before the entry snapshot. Join carries no transcript content or executio
 attribution; clients read these through History. Saved copy locators survive
 source-row retention without exposing source or destination IDs in the transcript.
 
-RocketClaw accepts browser connections directly (for example over the private network).
-HTTP mutations and uploads reject cross-origin browser requests using Go's
-`CrossOriginProtection`; browser-IP identity never grants cross-origin authority.
+RocketClaw accepts browser connections only on its tsnet node. HTTP mutations and
+uploads reject cross-origin browser requests using Go's `CrossOriginProtection`;
+tailnet identity never grants cross-origin authority.
 
-The HTTP proxy forwards only the connection's remote IP. It ignores
+Identity comes only from the node's WhoIs of the connection. The handler ignores
 `X-Forwarded-For`, `X-Real-IP`, `Tailscale-User-*`, and client-supplied principal
-headers. Do not put another HTTP reverse proxy in front of it: that would identify
-the proxy rather than the browser.
+headers.
 
 Each `opencode` server's API is proxied at `/oc/<name>/api/` on the Web's own
 listeners, for HTTP, the event stream, and the terminal WebSocket. The route admits
-exactly the browsers the Web admits, by calling `Identity` (by IP on the plain
-listener, by Tailscale user on the tailnet), and adds the server's password. It
+exactly the browsers the Web admits, by calling `Identity` (by Tailscale user), and adds the server's password. It
 refuses any request, WebSocket upgrades included, whose `Origin` is another site,
 and sends OpenCode its own origin so OpenCode's terminal origin check still holds.
 Cookies cross in neither direction, OpenCode's sign-in challenge never reaches the
@@ -698,20 +694,19 @@ OpenCode moves to the server at the first sync the server accepts it.
 Remote forks use `ForkSession`, which records the new session before returning,
 just as `CreateSession` does. Their tabs can save without waiting for a sync.
 
-Each `opencode` server's MCP bridge is served at `/opencode/<name>/mcp` on both
-listeners, outside this proxy. It answers coding servers, not browsers: the tailnet
+Each `opencode` server's MCP bridge is served at `/opencode/<name>/mcp` on the
+node, outside this proxy. It answers coding servers, not browsers: the tailnet
 handler lets that path alone through without a Tailscale user, and the bridge takes
 HTTP Basic `opencode:<password>` with the server's password. Each tool call acts on
 the RocketClaw copy of the session its `_meta["ai.opencode/sessionID"]` names, or of
 its nearest listed ancestor, and is refused when there is none.
 
-Phones get the secure page that voice needs from the `web.tsnet` listener (see the
-root README for setup). There, a wrapping handler asks the node's `LocalClient().WhoIs`
-about the connection's remote address and refuses tagged or unknown callers. It
-passes the login and display name to gRPC as `-bin` metadata keys, because names
-may be non-ASCII. When those keys are present, `principal` and `ListConfig` use them
-and never consult `tailscale whois`. The `listen_address` listener
-never sets those keys and keeps the IP rules below. The node
+The `web.tsnet` node (see the root README for setup) wraps the Web handler in one
+that asks the node's `LocalClient().WhoIs` about the connection's remote address and
+refuses tagged or unknown callers with `Unauthenticated` (HTTP 401). It passes the
+login and display name to gRPC as `-bin` metadata keys, because names may be
+non-ASCII. `principal` and `ListConfig` read only those keys: a call without them is
+`Unauthenticated`. The node
 stores its state under `os.UserConfigDir()/rocketclaw/tsnet-<hostname>`, outside the
 workspace. `rocketclaw ts login` logs it in, with `web.tsnet.auth_key` or a printed
 login link; the server never prints a link or waits for one. A logged-out node without
@@ -730,36 +725,24 @@ with `204`, echoing the requested method and headers, and sets
 `CrossOriginProtection`, the `ListSessions` same-origin rule and the OpenCode relay's
 origin check treat the call as same-origin. So a trusted page's session list polls
 also wake that server's timers. The caller is still the person on the
-connection. The `listen_address` listener trusts no other origin. The OpenCode relay
+connection. The OpenCode relay
 drops OpenCode's own `Access-Control-Allow-Origin`, which would otherwise duplicate
 this one.
 
 Local processes can still act as the owner. On an untagged host signed in to
-Tailscale as the owner, a connection from the host to its own Tailscale IP arrives
-from that IP, and `tailscale whois` names the host's own user (checked on macOS). A
-connection from the host to the tsnet name likewise arrives from the owner's device.
-On a tagged host, WhoIs rejects every local caller.
+Tailscale as the owner, a connection from the host to the tsnet name arrives from
+the owner's device. On a tagged host, WhoIs rejects every local caller.
 
-Go runs `tailscale whois --json` for the browser IP and uses
-`UserProfile.LoginName` as its identity.
+`UserProfile.LoginName` is the caller's identity.
 New prompts instead record `UserProfile.DisplayName` as their principal, with the
 login as the fallback for a missing or blank display name. Prompts also give their turn the principal as
 `ROCKETCLAW_PRINCIPAL_NAME` and the login as `ROCKETCLAW_PRINCIPAL_EMAIL`.
 Admission, conversation ownership, inbound routing,
 and Config's Tailscale user stay login-based. `Identity.username` remains the login;
 the separate `Identity.principal` is used only for new composer/handoff previews.
-Successful lookups are cached per IP for five minutes and shared with the Config
-page. Concurrent misses are serialized; expired entries must be looked up again,
-and a failed refresh denies access rather than using the stale identity.
-Failed lookups, missing login names, and tagged devices are rejected with
-`Unauthenticated` (HTTP 401).
 TypeScript does not read RocketClaw configuration or perform Tailscale WhoIs.
-For the Config page, Go runs `tailscale whois --json` with the authenticated
-browser connection IP and exposes only `UserProfile.LoginName` as `tailscale_user`.
-Lookup failures leave that display field empty. For Tailscale identification, the CLI must be available on the
-RocketClaw process's PATH and connected to its local service.
-`Protocol` exposes only the schema hash to the trusted local proxy and requires
-no browser identity.
+The Config page's `tailscale_user` is the caller's login.
+`Protocol` exposes only the schema hash and requires no browser identity.
 
 ### Space limits
 
@@ -848,7 +831,7 @@ for the full workspace setup, including the browser-test variables below.
 
 `TestSessionEntries` starts real Unix gRPC and the Go HTTP adapter, uses Bun as its
 HTTP test client, and verifies PostgreSQL results. It checks spoofed forwarding headers,
-unmapped IPv6 connections, ordering, empty results, and preservation of unrelated
+callers without a tailnet login, ordering, empty results, and preservation of unrelated
 entries and conversation/goal records. Bun must be installed and `web` dependencies
 must already be installed. The TypeScript integration test needs the URL and
 conversation ID that Go passes it with its isolated storage fixture, so it fails

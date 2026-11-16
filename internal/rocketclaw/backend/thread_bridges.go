@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"net"
-	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -562,8 +560,8 @@ SELECT count(s.*) > 0, q.position FROM queued q LEFT JOIN seen s ON TRUE GROUP B
 	return true, m.PickLaterWork(ctx, conversationID)
 }
 
-func (m *threadBridgeManager) WebURL(ctx context.Context, conversationID string) (string, error) {
-	origin, err := m.webOrigin(ctx)
+func (m *threadBridgeManager) WebURL(conversationID string) (string, error) {
+	origin, err := m.webOrigin()
 	if err != nil {
 		return "", err
 	}
@@ -643,25 +641,13 @@ func (m *threadBridgeManager) InterruptConversation(conversationID string) *prot
 	return managed.InterruptActiveTurn()
 }
 
-func (m *threadBridgeManager) webOrigin(ctx context.Context) (string, error) {
-	cfg := m.runtime.Clone()
-	if cfg.Web.Tsnet != nil && cfg.Web.Tsnet.Origin != "" {
-		return cfg.Web.Tsnet.Origin, nil
+func (m *threadBridgeManager) webOrigin() (string, error) {
+	origin := m.runtime.Clone().Web.Tsnet.Origin
+	if origin == "" {
+		return "", errors.New("the Web is not serving on the tailnet yet, so it has no link")
 	}
 
-	_, port, err := net.SplitHostPort(cfg.Web.ListenAddress)
-	if err != nil {
-		return "", fmt.Errorf("web.listen_address: %w", err)
-	}
-
-	tailscaleIPs, err := exec.CommandContext(ctx, "tailscale", "ip", "-4").Output()
-	if err != nil {
-		return "", fmt.Errorf("find this machine's Tailscale IPv4 for Web links: %w", err)
-	}
-
-	host, _, _ := strings.Cut(strings.TrimSpace(string(tailscaleIPs)), "\n")
-
-	return "https://" + net.JoinHostPort(host, port), nil
+	return origin, nil
 }
 
 func (m *threadBridgeManager) createSession(ctx context.Context, start *threadStart, allowed []string, title string, inbound *protocol.InboundMessage, reply *backgroundJob) (url string, resumed bool, err error) {
@@ -680,7 +666,7 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 
 	start.conversationID = rand.Text()
 
-	origin, err := m.webOrigin(ctx)
+	origin, err := m.webOrigin()
 	if err != nil {
 		return "", false, err
 	}

@@ -108,7 +108,7 @@ func BenchmarkHTTPEventFraming(b *testing.B) {
 func startHTTPTestServer(t *testing.T, connection *grpc.ClientConn) *httptest.Server {
 	t.Helper()
 
-	server := httptest.NewServer(NewHTTPHandler(connection, new(config.LockedConfig), ""))
+	server := httptest.NewServer(signedIn("alice", NewHTTPHandler(connection, new(config.LockedConfig), "")))
 	t.Cleanup(server.Close)
 
 	return server
@@ -149,12 +149,6 @@ func TestHTTPBoundary(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, response.Code, tc.method)
 		require.JSONEq(t, fmt.Sprintf(`{"code":3,"message":%q}`, tc.message), response.Body.String(), tc.method)
 	}
-
-	requestInvalidAddress := httptest.NewRequest(http.MethodPost, "/api/Identity", strings.NewReader(`{}`))
-	requestInvalidAddress.RemoteAddr = "not-an-address"
-	responseInvalidAddress := httptest.NewRecorder()
-	handler.ServeHTTP(responseInvalidAddress, requestInvalidAddress)
-	require.Equal(t, http.StatusUnauthorized, responseInvalidAddress.Code)
 
 	for _, path := range []string{"/api/Prompt", "/api/UploadAttachment?conversationId=x&name=file.txt"} {
 		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"id":"x","text":"run"}`))
@@ -213,16 +207,15 @@ func TestHTTPReload(t *testing.T) {
 	handler := NewHTTPHandler(connection, new(config.LockedConfig), "")
 
 	for _, tc := range []struct {
-		address string
+		handler http.Handler
 		code    int
 	}{
-		{"192.0.2.99:1234", http.StatusUnauthorized},
-		{"127.0.0.1:1234", http.StatusOK},
+		{handler, http.StatusUnauthorized},
+		{signedIn("alice", handler), http.StatusOK},
 	} {
 		request := httptest.NewRequest(http.MethodPost, "/api/Reload", strings.NewReader(`{"reason":"updated assets"}`))
-		request.RemoteAddr = tc.address
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, request)
+		tc.handler.ServeHTTP(response, request)
 		require.Equal(t, tc.code, response.Code)
 
 		if tc.code == http.StatusOK {
@@ -232,18 +225,14 @@ func TestHTTPReload(t *testing.T) {
 		}
 	}
 
-	for _, principal := range []string{"", "not-an-address", "192.0.2.99"} {
-		ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", principal))
-		_, err := invoke[ReloadResponse](ctx, connection, "Reload", &ReloadRequest{Reason: "updated assets"})
-		require.Equal(t, codes.Unauthenticated, status.Code(err))
-	}
+	_, err = invoke[ReloadResponse](t.Context(), connection, "Reload", &ReloadRequest{Reason: "updated assets"})
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
 
 	require.Len(t, core.ReloadCalls(), 1)
 	core.ReloadFunc = func(string) (string, error) { return "", errors.New("invalid staged assets") }
 	request := httptest.NewRequest(http.MethodPost, "/api/Reload", strings.NewReader(`{"reason":"updated assets"}`))
-	request.RemoteAddr = "127.0.0.1:1234"
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
+	signedIn("alice", handler).ServeHTTP(response, request)
 	require.Equal(t, http.StatusInternalServerError, response.Code)
 	require.JSONEq(t, `{"code":2,"message":"web reload: invalid staged assets"}`, response.Body.String())
 	require.Empty(t, core.RunTurnCalls())
@@ -278,7 +267,7 @@ func TestHTTPStreams(t *testing.T) {
 			data := bytes.Repeat([]byte("original\x00bytes\xff"), 400000)
 			canceled := make(chan struct{})
 			transport := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
-				require.Equal(t, []string{"127.0.0.1"}, metadata.ValueFromIncomingContext(stream.Context(), "rocketclaw-principal"))
+				require.Equal(t, []string{"alice"}, metadata.ValueFromIncomingContext(stream.Context(), "rocketclaw-tailnet-login-bin"))
 
 				if test.code != codes.OK && scenario != "upload-final-error" {
 					return status.Error(test.code, "denied")
@@ -429,7 +418,7 @@ func TestHTTPStreams(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 			if scenario == "invalid-text" {
-				stream, err := connection.NewStream(metadata.NewOutgoingContext(ctx, metadata.Pairs("rocketclaw-principal", "127.0.0.1")), &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/ListSessions")
+				stream, err := connection.NewStream(metadata.NewOutgoingContext(ctx, tailnetUser("alice")), &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/ListSessions")
 				require.NoError(t, err)
 
 				response := httptest.NewRecorder()
@@ -444,16 +433,15 @@ func TestHTTPStreams(t *testing.T) {
 
 			if scenario == "upload-read-error" {
 				request := httptest.NewRequest(http.MethodPost, "/api/UploadAttachment?conversationId=visible&name=original.bin", iotest.ErrReader(errors.New("broken body")))
-				request.RemoteAddr = "127.0.0.1:1234"
 				response := httptest.NewRecorder()
-				NewHTTPHandler(connection, new(config.LockedConfig), "").ServeHTTP(response, request)
+				signedIn("alice", NewHTTPHandler(connection, new(config.LockedConfig), "")).ServeHTTP(response, request)
 				require.Equal(t, http.StatusBadRequest, response.Code)
 				require.JSONEq(t, `{"code":3,"message":"read upload body: rpc error: code = InvalidArgument desc = broken body"}`, response.Body.String())
 
 				return
 			}
 
-			server := httptest.NewServer(NewHTTPHandler(connection, new(config.LockedConfig), ""))
+			server := httptest.NewServer(signedIn("alice", NewHTTPHandler(connection, new(config.LockedConfig), "")))
 			t.Cleanup(server.Close)
 
 			path, method := "/api/ListSessions", http.MethodGet

@@ -69,6 +69,11 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "agents"), 0o755))
 			require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\n---\n"), 0o600))
 
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", home)
+			t.Setenv("TS_CONTROL_URL", "http://127.0.0.1:1")
+
 			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 			require.NoError(t, err)
 			configPath := filepath.Join(workspace, "rocketclaw.json")
@@ -82,7 +87,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 				DatabaseURL: dsn,
 				Slack:       slack,
 				MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0"},
-				Web:         config.WebConfig{ListenAddress: "127.0.0.1:0"},
+				Web:         config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}},
 			}
 			require.NoError(t, backend.Run(t.Context(), cfg, configPath, slog.New(slog.DiscardHandler), new(slog.LevelVar), &FrontendAssemblerMock{
 				ValidateAssetsFunc: processAssembler{}.ValidateAssets,

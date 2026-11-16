@@ -35,7 +35,7 @@ func TestChatOriginFactsMatchHistory(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	cfg := &config.Config{Workspace: t.TempDir()}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)

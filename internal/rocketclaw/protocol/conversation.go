@@ -53,5 +53,5 @@ type PrimaryTextRouter interface {
 	MentionThread(target TextConversationTarget) (recorded, report bool, err error)
 	SubmitMention(ctx context.Context, agent string, target TextConversationTarget, inbound *InboundMessage) (bool, error)
 	InterruptThread(target TextConversationTarget) (*InboundMessage, error)
-	WebURL(ctx context.Context, conversationID string) (string, error)
+	WebURL(conversationID string) (string, error)
 }
