@@ -601,8 +601,6 @@ Session-list Slack labels use stored channel facts. A background lane refreshes 
 channels every three minutes; rate limits can extend staleness, and failed
 lookups retain the last known facts. Session-list requests do not wait for Slack.
 Stored facts do not grant permission: action authorization still uses live checks.
-Configure rename subscriptions using
-[Slack Channel Rename Subscriptions](../../../../cmd/rocketclaw/CHEATSHEET.md#slack-channel-rename-subscriptions).
 
 Build the browser assets before compiling Go. Frontend source lives in `internal/rocketclaw/web/`;
 the build writes compiled assets to `internal/rocketclaw/internal/web/dist/`,
