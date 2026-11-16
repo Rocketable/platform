@@ -74,13 +74,18 @@ test("a loud mark the server sets raises one desktop notification per window, a 
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.addInitScript(stubNotifications);
+    await page.clock.install();
     const base = `http://127.0.0.1:${server.port}`, at = (id: string) => `/s/${encode(id)}`, opencode = `/oc/${encode("opencode:box:ses_a")}`;
     await page.goto(`${base}${at("chat")}`);
     const notes = (): Promise<Note[]> => page.evaluate(() => window.notes.map(({ title, body, tag, closed }) => ({ title, body, tag, closed })));
     // A poll answered after the change can still be in flight, so the next one proves the change was read.
     const polls = async () => {
       const seen = viewing.length;
-      while (viewing.length < seen + 2) await Bun.sleep(20);
+      while (viewing.length < seen + 2) {
+        const asked = viewing.length;
+        await page.clock.fastForward(2000);
+        for (const started = Date.now(); viewing.length === asked && Date.now() - started < 300;) await Bun.sleep(10);
+      }
       await Bun.sleep(100);
     };
     await page.getByRole("tab", { name: "Alpha work" }).waitFor();
@@ -199,12 +204,17 @@ test("a person marks tabs read or unread from the tab menu or the palette, each 
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.addInitScript(() => { if (origin !== "null") sessionStorage.setItem("permission", "granted"); });
     await page.addInitScript(stubNotifications);
+    await page.clock.install();
     const base = `http://127.0.0.1:${server.port}`;
     const tab = (id: string) => page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: `${id} work`, exact: true });
     const unread = async (id: string) => (await tab(id).getAttribute("aria-description"))!.includes("Unread");
     const polls = async () => {
       const seen = listed.length;
-      while (listed.length < seen + 2) await Bun.sleep(20);
+      while (listed.length < seen + 2) {
+        const asked = listed.length;
+        await page.clock.fastForward(2000);
+        for (const started = Date.now(); listed.length === asked && Date.now() - started < 300;) await Bun.sleep(10);
+      }
       await Bun.sleep(100);
     };
     await page.goto(`${base}/s/${encode("chat")}`);
@@ -322,11 +332,16 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.addInitScript(() => { if (origin !== "null") sessionStorage.setItem("permission", "granted"); });
     await page.addInitScript(stubNotifications);
+    await page.clock.install();
     const base = `http://127.0.0.1:${server.port}`, strip = page.getByRole("tablist", { name: "Open tabs" }), daily = strip.getByRole("tab", { name: "daily", exact: true });
     const notes = (): Promise<Note[]> => page.evaluate(() => window.notes.map(({ title, body, tag, closed }) => ({ title, body, tag, closed })));
     const polls = async () => {
       const seen = viewing.length;
-      while (viewing.length < seen + 2) await Bun.sleep(20);
+      while (viewing.length < seen + 2) {
+        const asked = viewing.length;
+        await page.clock.fastForward(2000);
+        for (const started = Date.now(); viewing.length === asked && Date.now() - started < 300;) await Bun.sleep(10);
+      }
       await Bun.sleep(100);
     };
     await page.goto(`${base}${chat}`);

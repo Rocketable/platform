@@ -41,7 +41,7 @@ test: build
 	cleanup() { pkill -P 1 -f 'ms-playwright/[c]hromium' || true; }; \
 	cleanup; \
 	trap cleanup EXIT INT TERM; \
-	bash -o pipefail -c 'find ./src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" -print0 | sort -z | xargs -0 -n 1 -P 4 bun test'; \
+	bash -o pipefail -c 'find ./src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" -exec ls -S {} + | xargs -n 1 -P 4 bun test'; \
 	go -C .. test ./frontend/rpc -run 'Test(PublicProgressRealBrowser|RevertRealBackendBrowser|ShadowsRealBackendBrowser|SessionEntries|SidebarHTTPStreamsBeforeGoTailAndCancels|PagesRealBrowser|ReloadRealBackendBrowser|RemoteRocketClawRealBrowser|AgentEditorRealBackendBrowser)$$' -count=1
 	$(MAKE) check-cloc-budget
 

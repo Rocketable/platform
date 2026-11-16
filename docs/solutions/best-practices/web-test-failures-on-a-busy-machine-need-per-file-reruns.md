@@ -38,7 +38,7 @@ tags:
 
 ## Context
 
-`make test` in `internal/rocketclaw/web` builds the bundle, then runs every test file except the `*-transport.test.ts` ones, **four files at a time**: `xargs -0 -n 1 -P 4 bun test` (`internal/rocketclaw/web/Makefile:43`–`48`). Each `bun test <file>` prints its own `src/<file>.test.ts:` header, its results and its summary. All four write to the same output, so their lines interleave.
+`make test` in `internal/rocketclaw/web` builds the bundle, then runs every test file except the `*-transport.test.ts` ones, **four files at a time**, largest file first: `-exec ls -S {} + | xargs -n 1 -P 4 bun test` (`internal/rocketclaw/web/Makefile:43`–`48`). Each `bun test <file>` prints its own `src/<file>.test.ts:` header, its results and its summary. All four write to the same output, so their lines interleave.
 
 That Makefile has no Mac rule, so on a Mac it runs natively. To test on Linux, PR #1115 (the Web typing indicator) ran it inside the `rocketclaw-linux` image with `docker --context colima-rocketclaw-linux run ... rocketclaw-linux sh -c '... make lint; make test'`, from `internal/rocketclaw/web`. The machine was shared with other agents' test containers. Load averages were 11 to 17 (`uptime` at 17:24: `13.47 16.82 18.63`; at 19:52: `12.23 11.29 11.48`).
 
