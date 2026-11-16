@@ -682,7 +682,7 @@ test("the assistant suggests changes as cards that anyone on the draft accepts o
     await described.getByText("From your description.", { exact: true }).waitFor();
     const access = described.getByRole("listitem").filter({ hasText: "RocketClaw tools" });
     await access.getByText("Changes what this agent may do", { exact: false }).waitFor();
-    await access.getByText("All six groups.", { exact: false }).waitFor();
+    await access.getByText("All five groups.", { exact: false }).waitFor();
     await access.getByText("[sessions]", { exact: false }).waitFor();
     expect(await described.getByRole("listitem").filter({ hasText: "Space" }).getByText("Changes what this agent may do", { exact: false }).count()).toBe(0);
 

@@ -1840,23 +1840,6 @@ func TestShadowStepLimitRestartsAtPersonMessages(t *testing.T) {
 	require.Equal(t, "Hit the step limit: 1 vs. parent's 1.", shadowLimitNote(t, store, limited))
 }
 
-func TestShadowWorkflowTurnsHaveNoShadows(t *testing.T) {
-	t.Parallel()
-
-	store, _ := newShadowTestStore(t)
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"parent": KindWebChat})
-	parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
-	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "$workflow audit", true)}
-	request.inbound.Workflow = protocol.WorkflowInvocation{Name: "audit"}
-	admitted, err := parent.activateInbound(t.Context(), &request)
-	require.NoError(t, err)
-	require.True(t, admitted)
-
-	var count int
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns`).Scan(&count))
-	require.Zero(t, count)
-}
-
 func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
 	var logs bytes.Buffer
 

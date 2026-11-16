@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -943,51 +942,6 @@ func TestRevertCompletedFallbackAndPreparationFailure(t *testing.T) {
 	inbound.AttachmentPresence = protocol.AttachmentPresenceImages
 	require.ErrorContains(t, rt.RunTurn(t.Context(), inbound), "different content")
 
-	workflow := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$workflow missing"}, true)
-	workflow.ConversationID, workflow.Metadata["web_message_id"] = "main", "workflow"
-	require.ErrorContains(t, rt.RunTurn(t.Context(), workflow), "not configured")
-	current, _, _, err := s.RevertState(t.Context(), "main")
-	require.NoError(t, err)
-	require.Equal(t, marker, current)
-
-	cfg := b.runtime.Clone()
-	root, err := os.OpenRoot(cfg.Workspace)
-
-	require.NoError(t, err)
-	defer func() { require.NoError(t, root.Close()) }()
-
-	workflowDir := filepath.Join(cfg.RuntimeDirName(), "workflows")
-	require.NoError(t, root.MkdirAll(workflowDir, 0o700))
-	definition := filepath.Join(workflowDir, "audit.star")
-	require.NoError(t, root.WriteFile(definition, []byte("meta = {\"name\": \"audit\", \"description\": \"Audit\", \"phases\": []}\ndef main(args): return \"workflow completed\"\n"), 0o600))
-
-	workflow.Text = "$workflow audit"
-	workflow.Metadata[protocol.InboundRawTextMetadataKey] = workflow.Text
-	workflow.Workflow = protocol.WorkflowInvocation{Name: "audit"}
-	prepared := bridgeRequest{inbound: workflow, completion: &turnCompletion{done: make(chan struct{})}}
-	fresh, err := rt.admitWeb(t.Context(), b, &prepared, protocol.GoalRequest{})
-	require.NoError(t, err)
-	require.True(t, fresh)
-
-	prepared.queueItemID = workflow.Metadata["web_message_id"]
-
-	require.NoError(t, root.Remove(definition), "execution must use the admitted preparation")
-	require.NoError(t, b.enqueue(t.Context(), &prepared, "prepared workflow"))
-	<-prepared.completion.done
-	require.NoError(t, prepared.completion.err)
-	require.Equal(t, "workflow completed", readFinal(t, finals).Text)
-	workflowMarker, restored, err := rt.StageRevert(t.Context(), "main", "")
-	require.NoError(t, err)
-	require.Equal(t, "$workflow audit", restored)
-	require.NoError(t, rt.RunTurn(t.Context(), workflow), "completed workflow retries reconcile before preparation")
-	current, _, _, err = s.RevertState(t.Context(), "main")
-	require.NoError(t, err)
-	require.Equal(t, workflowMarker, current, "retry cannot commit the newly staged cutoff")
-
-	workflow.Text = "$workflow audit changed"
-	workflow.Metadata[protocol.InboundRawTextMetadataKey] = workflow.Text
-	require.ErrorContains(t, rt.RunTurn(t.Context(), workflow), "different content")
-
 	restarted := newBridge()
 	restarted.config.ConversationID = "main"
 	require.NoError(t, restarted.pickLaterWork(t.Context(), false))
@@ -1452,8 +1406,8 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 	}
 
 	for range 2 {
-		item := voice("stored", "$workflow deploy")
-		require.NoError(t, rt.StashQueueItem(t.Context(), "main", &item), "spoken $workflow text starts no workflow")
+		item := voice("stored", "deploy it")
+		require.NoError(t, rt.StashQueueItem(t.Context(), "main", &item))
 	}
 
 	require.Len(t, crashed.requestCh, 1, "a re-delivered hand-off is admitted once")
@@ -1465,7 +1419,7 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 	require.NoError(t, restarted.PickLaterWork(t.Context()))
 
 	header := `[Web media=Voice principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n`
-	require.Contains(t, <-requests, header+"$workflow deploy", "the stored voice item keeps its header across the restart")
+	require.Contains(t, <-requests, header+"deploy it", "the stored voice item keeps its header across the restart")
 	require.Equal(t, "answer", readFinal(t, finals).Text)
 
 	item := voice("skill", "$docs-helper do it")

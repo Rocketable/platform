@@ -22,7 +22,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
-	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 )
 
 func TestRunRejectsInvalidAgentAtStartup(t *testing.T) {
@@ -38,62 +37,6 @@ func TestRunRejectsInvalidAgentAtStartup(t *testing.T) {
 	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), nil, sandbox.None{})
 	require.ErrorContains(t, err, "validate rocketcode definitions")
 	require.ErrorContains(t, err, "model: required non-empty string")
-}
-
-func TestRunRejectsInvalidWorkflowAtStartup(t *testing.T) {
-	t.Parallel()
-
-	workspace := shortTempDir(t)
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	require.NoError(t, root.Mkdir("workflows", 0o755))
-	require.NoError(t, root.WriteFile("workflows/bad.star", []byte("meta = {\"name\": \"bad\", \"description\": \"Bad\"}\nw = worker(name=\"w\", instructions=\"work\", model=\"\")\ndef main(args): return None\n"), 0o600))
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	dsn, errDSN := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, errDSN)
-	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), nil, sandbox.None{})
-	require.ErrorContains(t, err, "worker model must be a non-empty literal string or None")
-}
-
-func TestRuntimeWorkflowDescriptionsListsSavedWorkflows(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-	require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Audit routes\"}\ndef main(args): return args\n"), 0o600))
-	require.NoError(t, root.Close())
-
-	descriptions, err := (&Runtime{Cfg: config.NewLockedConfig(&config.Config{Workspace: workspace})}).WorkflowDescriptions()
-	require.NoError(t, err)
-	assert.Equal(t, []protocol.WorkflowDescription{{Name: "audit", Description: "Audit routes"}}, descriptions)
-
-	_, err = (&Runtime{Cfg: config.NewLockedConfig(&config.Config{Workspace: filepath.Join(workspace, "missing")})}).WorkflowDescriptions()
-	require.ErrorContains(t, err, "open workflow root")
-}
-
-func TestWorkflowValidationKeepsLiveAssetsOnInvalidReload(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-	require.NoError(t, root.WriteFile(".rocketclaw/workflows/live.star", []byte("live"), 0o600))
-	require.NoError(t, root.Mkdir("workflows", 0o755))
-	require.NoError(t, root.WriteFile("workflows/bad.star", []byte("not valid starlark"), 0o600))
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	cfg := &config.Config{Workspace: workspace}
-	err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), new(cfg.Behavior()), slog.New(slog.DiscardHandler), config.NewLockedConfig(cfg), func(runtimeDir string) error {
-		return validateWorkflowDefinitions(cfg, runtimeDir)
-	}, func() error { return nil })
-	require.ErrorContains(t, err, "validate workflow definitions")
-	data, err := root.ReadFile(".rocketclaw/workflows/live.star")
-	require.NoError(t, err)
-	assert.Equal(t, "live", string(data))
 }
 
 func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {

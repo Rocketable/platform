@@ -1267,24 +1267,6 @@ func (s *Server) inspectAgents(ctx context.Context, request *InspectAgentsReques
 	return &InspectAgentsResponse{Output: output, Findings: int32(findings)}, nil
 }
 
-func (s *Server) listWorkflows(ctx context.Context) (*ListWorkflowsResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
-		return nil, err
-	}
-
-	descriptions, err := s.backend.WorkflowDescriptions()
-	if err != nil {
-		return nil, fmt.Errorf("list web workflows: %w", err)
-	}
-
-	response := &ListWorkflowsResponse{}
-	for _, description := range descriptions {
-		response.Workflows = append(response.Workflows, &Workflow{Name: description.Name, Description: description.Description})
-	}
-
-	return response, nil
-}
-
 func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*ListSkillsResponse, error) {
 	_, limit, err := s.spaceLimit(ctx)
 	if err != nil {
@@ -1663,10 +1645,6 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return s.agentReply(ctx, request.Id, words)
 	}
 
-	if len(words) == 1 && strings.EqualFold(words[0], "$workflow") {
-		return s.workflowListReply()
-	}
-
 	goal, text, rejection := webGoal(request.Text, words)
 	if rejection != "" {
 		return &PromptResponse{PrivateText: rejection}, nil
@@ -1701,7 +1679,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return nil, err
 	}
 
-	paused, err := s.pausedSend(ctx, request.Id, kind, text)
+	paused, err := s.pausedSend(ctx, request.Id, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -1743,18 +1721,17 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	return s.submitPrompt(ctx, inbound, goal, paused)
 }
 
-func (s *Server) pausedSend(ctx context.Context, id string, kind protocol.InboundKind, text string) (bool, error) {
+func (s *Server) pausedSend(ctx context.Context, id string, kind protocol.InboundKind) (bool, error) {
 	if kind == protocol.InboundKindEnqueue || kind == protocol.InboundKindHeld {
 		return false, nil
 	}
 
 	paused, err := s.backend.AgentPaused(ctx, id)
-	words := strings.Fields(text)
 
 	switch {
 	case err != nil:
 		return false, fmt.Errorf("web prompt: %w", err)
-	case paused && (kind == protocol.InboundKindPrompt || len(words) > 1 && strings.EqualFold(words[0], "$workflow")):
+	case paused && kind == protocol.InboundKindPrompt:
 		return false, fmt.Errorf("web prompt: %w", backend.AgentPausedError{})
 	}
 
@@ -1795,20 +1772,6 @@ func (s *Server) agentReply(ctx context.Context, id string, words []string) (*Pr
 	}
 
 	return &PromptResponse{PrivateText: "Agent: " + words[1]}, nil
-}
-
-func (s *Server) workflowListReply() (*PromptResponse, error) {
-	descriptions, err := s.backend.WorkflowDescriptions()
-	if err != nil {
-		return nil, fmt.Errorf("list web workflows: %w", err)
-	}
-
-	lines := make([]string, 0, len(descriptions))
-	for _, description := range descriptions {
-		lines = append(lines, description.Name+" - "+description.Description)
-	}
-
-	return &PromptResponse{PrivateText: cmp.Or(strings.Join(lines, "\n"), "No workflows are configured.")}, nil
 }
 
 func (s *Server) submitPrompt(ctx context.Context, inbound *protocol.InboundMessage, goal protocol.GoalRequest, paused bool) (*PromptResponse, error) {

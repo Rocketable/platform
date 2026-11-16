@@ -335,9 +335,7 @@ func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 
 			finish := &turnFinish{conversationID: strings.TrimSpace("main"), outbound: protocol.NewOutboundMessage("main", ""), terminal: tt.terminal}
 			if tt.saved {
-				entry := testSessionEntry("note", "answer")
-				entry.Type = workflowRunEntryType
-				finish.entries = []harness.SessionEntry{*entry}
+				finish.entries = []harness.SessionEntry{*testSessionEntry("note", "answer")}
 			}
 
 			_, err = store.finishTurn(ctx, "turn-2", finish)

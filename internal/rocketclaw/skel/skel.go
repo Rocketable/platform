@@ -24,7 +24,6 @@ const (
 	skillsRoot    = "skills"
 	workspaceCron = "cron"
 	scriptsRoot   = "scripts"
-	workflowsRoot = "workflows"
 	overlaysRoot  = "overlays"
 
 	scriptSymlinkExcludeBegin = "# BEGIN rocketclaw generated script symlinks"
@@ -92,10 +91,6 @@ func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger 
 
 	if err := SyncEffectiveRuntimeAssets(workspace, target, overlays, logger); err != nil {
 		return err
-	}
-
-	if err := os.MkdirAll(filepath.Join(workspace, workflowsRoot), 0o755); err != nil {
-		return fmt.Errorf("create rocketclaw workflows overlay directory: %w", err)
 	}
 
 	if err := syncWorkspaceScriptSymlinks(workspace, runtimeDir, logger); err != nil {
@@ -462,7 +457,7 @@ func syncScriptSymlinkGitExclude(workspace string, generated []string, logger *s
 }
 
 func overlayWorkspaceIn(workspace, target string, logger *slog.Logger) error {
-	for _, root := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot, workflowsRoot} {
+	for _, root := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot} {
 		dir := filepath.Join(workspace, root)
 
 		info, err := os.Stat(dir)
@@ -477,17 +472,6 @@ func overlayWorkspaceIn(workspace, target string, logger *slog.Logger) error {
 
 		if !info.IsDir() {
 			return fmt.Errorf("rocketclaw overlay path is not a directory: %s", dir)
-		}
-
-		if root == workflowsRoot {
-			entries, errReadDir := os.ReadDir(dir)
-			if errReadDir != nil {
-				return fmt.Errorf("read rocketclaw overlay directory %s: %w", dir, errReadDir)
-			}
-
-			if len(entries) == 0 {
-				continue
-			}
 		}
 
 		logger.Info("applying rocketclaw overlay directory", "path", dir)
@@ -610,7 +594,7 @@ func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) er
 		{"init"},
 		{"remote", "add", "origin", overlay.URL},
 		{"sparse-checkout", "init", "--cone"},
-		{"sparse-checkout", "set", agentsRoot, skillsRoot, workspaceCron, scriptsRoot, workflowsRoot},
+		{"sparse-checkout", "set", agentsRoot, skillsRoot, workspaceCron, scriptsRoot},
 		{"fetch", "--depth=1", "--filter=blob:none", "origin", cmp.Or(overlay.Ref, "HEAD")},
 		{"checkout", "--detach", "FETCH_HEAD"},
 	} {
@@ -624,7 +608,7 @@ func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) er
 		}
 	}
 
-	for _, root := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot, workflowsRoot} {
+	for _, root := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot} {
 		if _, err := os.Stat(filepath.Join(overlay.ClonePath, root)); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue

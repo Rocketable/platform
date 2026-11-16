@@ -25,7 +25,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       case "/api/ListConfig": return rejectedConfig ? Response.json({ message: "Config rejected", code: 16 }, { status: 401 }) : Response.json({ config: { workspace } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
-      case "/api/ListWorkflows": return Response.json({ workflows: [] });
       case "/api/ListQueue": return Response.json({ items: marker ? [] : [{ id: "pending", text: "Waiting request", delivery: "STASH" }] });
       case "/api/History": {
         const index = marker ? messages.findIndex((item) => item.messageId === marker) : messages.length;
@@ -286,7 +285,6 @@ test("revert an unsaved latest turn by input ID", async () => {
       case "/api/ListConfig": return Response.json({ config: { workspace: "first" } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
-      case "/api/ListWorkflows": return Response.json({ workflows: [] });
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/History": {
         const visible = marker ? messages.slice(0, 3) : messages;

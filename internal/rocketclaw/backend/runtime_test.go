@@ -966,19 +966,14 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	}
 }
 
-func TestRuntimeQueueEditKeepsPreparedWorkflow(t *testing.T) {
+func TestRuntimeQueueEditRunsWithTurnAgent(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		name, text, want, agent, override string
-		waiting, failCommit               bool
+		name, agent, override string
 	}{
-		{name: "unchanged", text: "$workflow audit", want: "prepared workflow completed", waiting: true},
-		{name: "failed commit", text: "changed text", want: "prepared workflow completed", waiting: true, failCommit: true},
-		{name: "replace waiting", text: "$workflow revised", want: "replacement workflow completed", waiting: true},
-		{name: "replace offered", text: "$workflow revised", want: "replacement workflow completed"},
-		{name: "plain uses current agent", text: "plain edited input", want: "answer", agent: "other"},
-		{name: "plain keeps explicit agent", text: "plain edited input", want: "answer", agent: "main", override: "main"},
+		{name: "current agent", agent: "other"},
+		{name: "explicit agent", agent: "main", override: "main"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			newBridge, store, requests, finals := newResumeTestBridges(t, false)
@@ -994,78 +989,39 @@ func TestRuntimeQueueEditKeepsPreparedWorkflow(t *testing.T) {
 			require.NoError(t, err)
 			defer func() { require.NoError(t, root.Close()) }()
 
-			require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o700))
-			require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Audit\", \"phases\": []}\ndef main(args): return \"prepared workflow completed\"\n"), 0o600))
-			require.NoError(t, root.WriteFile(".rocketclaw/workflows/revised.star", []byte("meta = {\"name\": \"revised\", \"description\": \"Revised\", \"phases\": []}\ndef main(args): return \"replacement workflow completed\"\n"), 0o600))
-
-			inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: "$workflow audit"}, true)
-			inbound.ConversationID, inbound.Metadata["web_message_id"], inbound.Workflow = "main", "workflow", protocol.WorkflowInvocation{Name: "audit"}
+			inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: "queued input"}, true)
+			inbound.ConversationID, inbound.Metadata["web_message_id"] = "main", "queued"
 			inbound.Metadata[inboundAgentMetadataKey] = test.override
 			request := bridgeRequest{inbound: inbound, completion: &turnCompletion{done: make(chan struct{})}}
 			fresh, err := rt.admitWeb(t.Context(), bridge, &request, protocol.GoalRequest{})
 			require.NoError(t, err)
 			require.True(t, fresh)
 
-			request.queueItemID = "workflow"
-			require.NoError(t, bridge.enqueue(t.Context(), &request, "prepared workflow"))
+			request.queueItemID = "queued"
+			require.NoError(t, bridge.enqueue(t.Context(), &request, "queued input"))
 
-			if test.waiting {
-				stop := protocol.NewInboundMessageFromContent(protocol.SourceSystem, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: "stop"}, false)
-				stop.ConversationID, stop.Metadata["web_message_id"] = "main", "stop"
-				_, _, err = bridge.admitAgentWrite(t.Context(), sessionWriteStop, stop, nil)
-				require.NoError(t, err)
-				require.Len(t, bridge.waiting, 1)
-			}
+			require.NoError(t, root.WriteFile(".rocketclaw/agents/other.md", []byte("---\ndescription: Other\nmodel: gpt-6.1-sol\npermission: {}\n---\nOther queue instructions\n"), 0o600))
+			bridge.SwitchAgent("other")
 
-			require.NoError(t, root.Remove(".rocketclaw/workflows/audit.star"))
-
-			if test.agent != "" {
-				require.NoError(t, root.WriteFile(".rocketclaw/agents/other.md", []byte("---\ndescription: Other\nmodel: gpt-6.1-sol\npermission: {}\n---\nOther queue instructions\n"), 0o600))
-				bridge.SwitchAgent("other")
-			}
-
-			if test.failCommit {
-				_, err = store.db.ExecContext(t.Context(), `CREATE FUNCTION reject_queue_edit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'edit commit failed'; END $$;
-CREATE CONSTRAINT TRIGGER reject_queue_edit AFTER UPDATE ON turns DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_queue_edit()`)
-				require.NoError(t, err)
-			}
-
-			changed, err := rt.EditQueueItem(t.Context(), "main", "workflow", test.text)
-			if test.failCommit {
-				require.ErrorContains(t, err, "edit commit failed")
-				_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_queue_edit ON turns`)
-			}
-
+			changed, err := rt.EditQueueItem(t.Context(), "main", "queued", "plain edited input")
 			require.NoError(t, err)
-			require.Equal(t, !test.failCommit, changed)
+			require.True(t, changed)
 
-			if test.waiting {
-				_, err = rt.DeleteQueueItem(t.Context(), "main", "stop")
-				require.NoError(t, err)
-			}
-
-			if test.agent != "" {
-				request = <-bridge.requestCh
-				activated, err := bridge.activateInbound(t.Context(), &request)
-				require.NoError(t, err)
-				require.True(t, activated)
-				snapshot, _, err := loadTurnInputs(t.Context(), store.db, "main", request.turnID)
-				require.NoError(t, err)
-				require.Equal(t, test.agent, snapshot.Agent)
-				bridge.handle(t.Context(), &request)
-			} else {
-				runTestBridge(t, bridge)
-			}
+			request = <-bridge.requestCh
+			activated, err := bridge.activateInbound(t.Context(), &request)
+			require.NoError(t, err)
+			require.True(t, activated)
+			snapshot, _, err := loadTurnInputs(t.Context(), store.db, "main", request.turnID)
+			require.NoError(t, err)
+			require.Equal(t, test.agent, snapshot.Agent)
+			bridge.handle(t.Context(), &request)
 
 			<-request.completion.done
 			require.NoError(t, request.completion.err)
 			final := readFinal(t, finals)
-			require.Equal(t, test.want, final.Text)
-
-			if test.agent != "" {
-				require.Equal(t, test.agent, final.Agent)
-				require.Equal(t, test.agent == "other", strings.Contains(<-requests, "Other queue instructions"))
-			}
+			require.Equal(t, "answer", final.Text)
+			require.Equal(t, test.agent, final.Agent)
+			require.Equal(t, test.agent == "other", strings.Contains(<-requests, "Other queue instructions"))
 		})
 	}
 }
@@ -1126,7 +1082,7 @@ func TestRuntimePoppedWebStashRunsAsEnqueue(t *testing.T) {
 	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store}
 
-	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindHeld, &protocol.InboundContent{Text: "$workflow ship"}, true)
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindHeld, &protocol.InboundContent{Text: "ship it"}, true)
 	inbound.ConversationID = conversationID
 	inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalNameMetadataKey] = "held", "Alice"
 	require.NoError(t, rt.StashQueueItem(t.Context(), conversationID, &protocol.ThreadQueueItem{ID: "held", Kind: protocol.InboundKindHeld, Message: inbound.Text, Principal: "Alice", Source: protocol.SourceWeb, Inbound: inbound}))

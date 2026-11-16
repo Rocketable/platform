@@ -91,7 +91,7 @@ func newSandboxedTools(root *os.Root, spillRel string, shellTemp shellTempConfig
 	return makeSandboxedTools(sfs, sss), sss
 }
 
-func CodeModeOnlyHostTool(name string) bool {
+func codeModeOnlyHostTool(name string) bool {
 	switch name {
 	case "read", "apply_patch", "glob", "grep", "webfetch", "bash":
 		return true
@@ -147,7 +147,7 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 			continue
 		}
 
-		if tool.codeModeOnly || CodeModeOnlyHostTool(name) {
+		if tool.codeModeOnly || codeModeOnlyHostTool(name) {
 			codeHosts[name] = tool
 			delete(tools, name)
 		}

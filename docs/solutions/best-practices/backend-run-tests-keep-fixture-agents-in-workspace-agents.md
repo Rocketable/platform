@@ -36,7 +36,7 @@ What did not explain it:
 
 1. unpacks the built-in agents and cron into the workspace's own `agents/` and `cron/` without overwriting existing files (`internal/rocketclaw/skel/skel.go:78`, `overwrite` is `false`);
 2. empties the runtime directory except a short keep list (`.rocketcode`, `attachments`, `sandbox`, `uploads`, `auth.json`, `auth.json.lock`, `.auth.json-*` files, and, at startup only, the overlay clones; `resetRuntimeDirectory`, `skel.go:595`, called at `skel.go:88`);
-3. rebuilds it from the built-in assets, then configured overlays, then last the workspace's `agents`, `skills`, `cron`, `scripts` and `workflows` directories, each overwriting what came before (`SyncEffectiveRuntimeAssets` at `skel.go:96`, `overlayWorkspaceIn` at `skel.go:401`).
+3. rebuilds it from the built-in assets, then configured overlays, then last the workspace's `agents`, `skills`, `cron` and `scripts` directories, each overwriting what came before (`SyncEffectiveRuntimeAssets` at `skel.go:96`, `overlayWorkspaceIn` at `skel.go:401`).
 
 A reload (`skel.ReplaceRuntimeAssetsAfterValidation`, `internal/rocketclaw/backend/runtime.go:67`) runs steps 2 and 3 through a validated staging copy, so it wipes runtime-only fixtures too.
 
@@ -53,7 +53,7 @@ Two `backend.Run` fixtures still write the runtime directory and are wiped the s
 ## When to Apply
 
 - Adding or changing an agent fixture in any test that calls `backend.Run`, such as the real-backend browser tests in `internal/rocketclaw/frontend/rpc`.
-- A test that runs `backend.Run` can't see an agent, skill, cron job or script its fixture wrote: the same rebuild applies to `skills`, `cron`, `scripts` and `workflows`.
+- A test that runs `backend.Run` can't see an agent, skill, cron job or script its fixture wrote: the same rebuild applies to `skills`, `cron` and `scripts`.
 
 ## Examples
 

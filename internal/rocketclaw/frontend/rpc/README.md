@@ -550,7 +550,7 @@ Each hand-off is admitted in arrival order through `StashQueueItem`, without wai
 for the turn: it joins the running turn as a Web steer or starts the next turn. It
 carries `media=Voice`, the caller's principal, and the hand-off ID as both the queue
 item ID and `web_message_id`, so a re-delivered hand-off is admitted once. It
-bypasses `Prompt`: `$` text in it never runs commands, skills, or workflows. Its
+bypasses `Prompt`: `$` text in it never runs commands or skills. Its
 text is taken the moment the hand-off arrives and written exactly as Codex wraps it:
 `<realtime_delegation>` with the request in `<input>` and the voice conversation
 since the previous hand-off in `<transcript_delta>` (`user:`/`assistant:` lines; the

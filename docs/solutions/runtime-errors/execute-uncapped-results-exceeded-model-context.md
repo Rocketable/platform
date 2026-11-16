@@ -63,7 +63,7 @@ Loader inputs are `result_id`, `start_line`, `limit`, and `line_numbers`. Lines 
 
 A script that finishes after leaving its turn (started with `background: true`, or moved by the Web) has no turn to own its spill. Filing it under whichever turn happens to be current would delete it at that turn's end. `callExecute` therefore asks `backgroundDetached(ctx)` when the script finishes, and a detached script's oversized output goes to `retainExecuteResult` instead (`internal/rocketclaw/harness/execute_results.go`):
 
-- Storage is `Config.RetainedResultDir`, a path relative to `SpillDir`, so the spill-tree denials above cover it. RocketClaw sets it per conversation to `retained/<sha256(conversation ID)>`; workflow and handoff runs use an unused directory.
+- Storage is `Config.RetainedResultDir`, a path relative to `SpillDir`, so the spill-tree denials above cover it. RocketClaw sets it per conversation to `retained/<sha256(conversation ID)>`; handoff and agent editor runs use an unused directory.
 - The ID is a UUID naming `<id>.txt` directly in that directory, so an ID from another conversation is simply not found.
 - Expiry is the file's modification time plus 7 days. Each new retained write and each startup sweep expired files; deleting or pruning a conversation removes its directory, and a fork links the source's files. A load of an expired file removes it and answers `execute result expired`. There is no timer.
 - `load_execute_result` resolves a live turn spill first, then a retained ID. Opening and expiry live in `openStoredExecuteResult`, and paging stays in `loadExecuteResult`.
