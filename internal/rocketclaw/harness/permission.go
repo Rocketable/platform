@@ -75,16 +75,7 @@ var permissionEnvPattern = regexp.MustCompile(`\$\{(ROCKETCLAW_[A-Za-z0-9_]+)\}`
 
 var errRocketClawExactNames = errors.New("name each rocketclaw tool; wildcards and the scalar form are not supported")
 
-func InterpolatePermissions(agent *Agent, env []string) {
-	values := make(map[string]string)
-
-	for _, entry := range env {
-		key, value, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(key, "ROCKETCLAW_") {
-			values[key] = value
-		}
-	}
-
+func InterpolatePermissions(agent *Agent, env map[string]string) {
 	buckets := slices.Clone(agent.Permission.Buckets)
 	for i, bucket := range buckets {
 		kept := slices.Clone(bucket.Rules)[:0]
@@ -115,7 +106,12 @@ func InterpolatePermissions(agent *Agent, env []string) {
 					continue
 				}
 
-				value := values[segment.Text]
+				value := env[segment.Text]
+
+				if !strings.HasPrefix(segment.Text, "ROCKETCLAW_") {
+					value = ""
+				}
+
 				if value == "" && rule.Action == PermissionDeny {
 					rule.segments[k] = ruleSegment{Text: "*"}
 					continue
