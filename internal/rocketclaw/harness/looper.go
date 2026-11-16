@@ -2137,8 +2137,6 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 
 	autoSubjects := []permissionReviewSubject{}
 	reviewer := ""
-	reviewerEmbedded := true
-	reviewerSet := false
 
 	var scripts []string
 
@@ -2167,10 +2165,8 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 			return toolPermissionDecision{denied: true, message: "tool call denied: automatic permission review cannot recursively require automatic approval. Choose a different action."}, nil
 		}
 
-		if !reviewerSet {
+		if len(autoSubjects) == 0 {
 			reviewer = decision.Rule.Reviewer
-			reviewerEmbedded = reviewer == ""
-			reviewerSet = true
 		} else if reviewer != decision.Rule.Reviewer {
 			return toolPermissionDecision{denied: true, message: fmt.Sprintf("tool call denied: permission %q matched multiple automatic reviewers. Choose a different action.", permission)}, nil
 		}
@@ -2192,7 +2188,7 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 		Subjects:         subjects,
 		AutoSubjects:     autoSubjects,
 		Reviewer:         reviewer,
-		ReviewerEmbedded: reviewerEmbedded,
+		ReviewerEmbedded: reviewer == "",
 	}}, nil
 }
 
