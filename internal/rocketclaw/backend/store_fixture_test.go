@@ -113,11 +113,9 @@ func newMigratedTestSessionServiceAt(t *testing.T, workspace string) *SessionSer
 	_, err = admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE "+strings.TrimPrefix(template.Path, "/"))
 	require.NoError(t, errors.Join(err, admin.Close()))
 
-	cfg.Database = name
-
 	t.Cleanup(func() {
 		db := stdlib.OpenDB(*cfg)
-		_, err := db.Exec("DROP SCHEMA fixture CASCADE")
+		_, err := db.Exec("DROP DATABASE " + name)
 		require.NoError(t, errors.Join(err, db.Close()))
 	})
 
@@ -284,4 +282,19 @@ SELECT definition FROM definitions ORDER BY definition`
 	entries, err := second.ObserveEntries(t.Context(), "same")
 	require.NoError(t, err)
 	require.Empty(t, entries)
+
+	var (
+		clone string
+		count int
+	)
+
+	t.Run("cleanup drops clone", func(t *testing.T) {
+		store := newMigratedTestSessionServiceAt(t, t.TempDir())
+		require.NoError(t, store.db.QueryRowContext(t.Context(), "SELECT current_database()").Scan(&clone))
+		require.NoError(t, admin.QueryRowContext(t.Context(), "SELECT count(*) FROM pg_database WHERE datname = $1", clone).Scan(&count))
+		require.Equal(t, 1, count)
+	})
+
+	require.NoError(t, admin.QueryRowContext(t.Context(), "SELECT count(*) FROM pg_database WHERE datname = $1", clone).Scan(&count))
+	require.Zero(t, count, "child cleanup must drop its clone database")
 }
