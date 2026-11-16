@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
@@ -38,7 +40,7 @@ func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	rt := &backend.Runtime{
-		Cfg:    config.NewLockedConfig(&config.Config{}),
+		Cfg:    config.NewLockedConfig(&config.Config{Slack: config.SlackConfig{BotToken: "xoxb", AppToken: "xapp"}}),
 		Log:    slog.New(slog.DiscardHandler),
 		RunCtx: ctx,
 	}
@@ -49,49 +51,61 @@ func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 }
 
 func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
-	serveFakeSlack(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"ok": true, "url": "https://example.slack.com/", "team": "t", "user": "bot", "team_id": "T1", "user_id": "U1"}))
-	})
-
-	workspace := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\n---\n"), 0o600))
-
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-	configPath := filepath.Join(workspace, "rocketclaw.json")
-	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.users.json"), []byte(`{"alice":"secret"}`), 0o600))
-
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	cfg := &config.Config{
-		Workspace:   workspace,
-		DatabaseURL: dsn,
-		Slack: config.SlackConfig{
+	for _, slack := range []config.SlackConfig{
+		{
 			BotToken: "xoxb-test", AppToken: "xapp-test",
 			Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}},
 		},
-		MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0"},
-		Web:         config.WebConfig{ListenAddress: "127.0.0.1:0"},
-	}
-	require.NoError(t, backend.Run(t.Context(), cfg, configPath, slog.New(slog.DiscardHandler), new(slog.LevelVar), &FrontendAssemblerMock{
-		ValidateAssetsFunc: processAssembler{}.ValidateAssets,
-		AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
-			rt.RunCtx = ctx
-			done, stops, err := processAssembler{}.Assemble(rt)
-			require.NoError(t, err)
-			require.NotNil(t, done)
-			require.Len(t, stops, 4, "Slack, Cron, external MCP, and Web must all start")
-			require.IsType(t, &cronfrontend.Manager{}, rt.CronJobs, "a reload refreshes the started cron jobs")
-			cancel()
-			<-done
-			for _, stop := range stops {
-				require.NoError(t, stop(context.Background()))
-			}
+		{},
+	} {
+		t.Run(cmp.Or(slack.BotToken, "without Slack"), func(t *testing.T) {
+			serveFakeSlack(t, func(w http.ResponseWriter, r *http.Request) {
+				assert.NotEmpty(t, slack.BotToken, "Slack is not configured, yet %s was called", r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{"ok": true, "url": "https://example.slack.com/", "team": "t", "user": "bot", "team_id": "T1", "user_id": "U1"}))
+			})
 
-			return done, nil, nil
-		},
-	}, sandbox.None{}))
+			workspace := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "agents"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\n---\n"), 0o600))
+
+			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+			require.NoError(t, err)
+			configPath := filepath.Join(workspace, "rocketclaw.json")
+			require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.users.json"), []byte(`{"alice":"secret"}`), 0o600))
+
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			cfg := &config.Config{
+				Workspace:   workspace,
+				DatabaseURL: dsn,
+				Slack:       slack,
+				MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0"},
+				Web:         config.WebConfig{ListenAddress: "127.0.0.1:0"},
+			}
+			require.NoError(t, backend.Run(t.Context(), cfg, configPath, slog.New(slog.DiscardHandler), new(slog.LevelVar), &FrontendAssemblerMock{
+				ValidateAssetsFunc: processAssembler{}.ValidateAssets,
+				AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+					rt.RunCtx = ctx
+					done, stops, err := processAssembler{}.Assemble(rt)
+					require.NoError(t, err)
+					require.NotNil(t, done)
+					require.Len(t, stops, 4, "Slack, Cron, external MCP, and Web must all start")
+					if slack.BotToken == "" {
+						require.Equal(t, ctx.Done(), done, "the inert Slack ends with the run")
+					}
+
+					require.IsType(t, &cronfrontend.Manager{}, rt.CronJobs, "a reload refreshes the started cron jobs")
+					cancel()
+					<-done
+					for _, stop := range stops {
+						require.NoError(t, stop(context.Background()))
+					}
+
+					return done, nil, nil
+				},
+			}, sandbox.None{}))
+		})
+	}
 }

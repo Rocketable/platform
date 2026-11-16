@@ -384,6 +384,7 @@ func TestRunMergesStoredBehaviorSettings(t *testing.T) {
 
 		cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn}
 		behavior(cfg)
+		cfg.Slack.BotToken, cfg.Slack.AppToken = "xoxb-test", "xapp-test"
 
 		level, copyDone := new(slog.LevelVar), make(chan struct{})
 		close(copyDone)
