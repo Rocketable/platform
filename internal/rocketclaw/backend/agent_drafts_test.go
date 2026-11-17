@@ -2,6 +2,7 @@ package backend
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -11,13 +12,83 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
+
+func TestAgentDraftPresenceConcurrentRefresh(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	draft, err := service.CreateAgentDraft(ctx, "editor", AgentDraftOrigin{Name: "sample", Mode: harness.AgentModeEasy})
+	require.NoError(t, err)
+
+	first := AgentDraftPresence{Client: "first", Username: "editor", Variant: "a", Place: "1"}
+	second := AgentDraftPresence{Client: "second", Username: "editor", Variant: "a", Place: "2"}
+
+	require.NoError(t, service.SetAgentDraftPresence(ctx, draft.ID, first))
+	require.NoError(t, service.SetAgentDraftPresence(ctx, draft.ID, second))
+	_, err = service.db.ExecContext(ctx, `UPDATE agent_draft_presence SET seen_at = clock_timestamp() - interval '1 minute'`)
+	require.NoError(t, err)
+
+	_, err = service.db.ExecContext(ctx, `CREATE FUNCTION pause_presence_refresh() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_advisory_xact_lock_shared(hashtextextended('presence-test:' || NEW.draft_id, 0));
+    RETURN NEW;
+END
+$$`)
+	require.NoError(t, err)
+	_, err = service.db.ExecContext(ctx, `CREATE TRIGGER pause_presence_refresh BEFORE UPDATE ON agent_draft_presence
+FOR EACH ROW EXECUTE FUNCTION pause_presence_refresh()`)
+	require.NoError(t, err)
+
+	gate, err := service.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	var writes errgroup.Group
+
+	defer func() {
+		_ = gate.Rollback()
+		_ = writes.Wait()
+	}()
+
+	var holder int
+	require.NoError(t, gate.QueryRowContext(ctx, `SELECT pg_backend_pid(), pg_advisory_xact_lock(hashtextextended('presence-test:' || $1, 0))`, draft.ID).Scan(&holder, new(any)))
+
+	first.Place, second.Place = "3", "4"
+	for i, presence := range []AgentDraftPresence{first, second} {
+		writes.Go(func() error { return service.SetAgentDraftPresence(ctx, draft.ID, presence) })
+		require.EventuallyWithT(t, func(t *assert.CollectT) {
+			var waiting int
+			require.NoError(t, service.db.QueryRowContext(ctx, `WITH RECURSIVE waiting(pid) AS (
+    SELECT $1::int
+    UNION
+    SELECT activity.pid FROM pg_stat_activity activity JOIN waiting ON waiting.pid = ANY(pg_blocking_pids(activity.pid))
+)
+SELECT count(*) - 1 FROM waiting`, holder).Scan(&waiting))
+
+			assert.Equal(t, i+1, waiting)
+		}, 10*time.Second, 10*time.Millisecond)
+	}
+
+	require.NoError(t, gate.Commit())
+	require.NoError(t, writes.Wait())
+
+	presences, err := service.AgentDraftPresences(ctx, draft.ID)
+	require.NoError(t, err)
+	require.Equal(t, []AgentDraftPresence{first, second}, presences)
+}
 
 func TestAgentDraftBodyTransformVectors(t *testing.T) {
 	t.Parallel()
