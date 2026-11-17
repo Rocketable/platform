@@ -348,7 +348,17 @@ SELECT `+notifyAgentDraft+` FROM changed`,
 }
 
 func (s *SessionService) SetAgentDraftPresence(ctx context.Context, id string, presence AgentDraftPresence) error {
-	_, err := execState(ctx, s.db, "record agent draft presence", `WITH gone AS (
+	tx, err := s.beginStateTx(ctx, "record agent draft presence")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := execState(ctx, tx, "lock agent draft presence", `SELECT pg_advisory_xact_lock(hashtextextended('agent-draft-presence:' || $1, 0))`, id); err != nil {
+		return err
+	}
+
+	_, err = execState(ctx, tx, "record agent draft presence", `WITH gone AS (
     DELETE FROM agent_draft_presence WHERE draft_id = $1 AND client <> $2 AND seen_at < clock_timestamp() - interval '30 seconds'
 ), seen AS (
     INSERT INTO agent_draft_presence (draft_id, client, username, variant, place) VALUES ($1, $2, $3, $4, $5)
@@ -357,8 +367,15 @@ func (s *SessionService) SetAgentDraftPresence(ctx context.Context, id string, p
 )
 SELECT `+notifyAgentDraft+` FROM seen`,
 		id, presence.Client, presence.Username, presence.Variant, presence.Place)
+	if err != nil {
+		return err
+	}
 
-	return err
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit agent draft presence: %w", err)
+	}
+
+	return nil
 }
 
 func (s *SessionService) AgentDraftPresences(ctx context.Context, id string) ([]AgentDraftPresence, error) {
