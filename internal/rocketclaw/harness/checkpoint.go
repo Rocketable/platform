@@ -61,6 +61,7 @@ func (InertJournal) CodeModeCalls(context.Context, string) ([]json.RawMessage, e
 }
 
 type turnStep struct {
+	ReviewInputs    []PromptInput     `json:"review_inputs,omitempty"`
 	AppliedInputIDs []string          `json:"applied_input_ids,omitempty"`
 	Record          SessionEntry      `json:"record"`
 	Trace           []json.RawMessage `json:"trace,omitempty"`

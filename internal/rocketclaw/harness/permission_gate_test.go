@@ -72,10 +72,12 @@ func TestCheckNestedPermissionAutoWithReviewerAllow(t *testing.T) {
 			PermissionReviewer: reviewer,
 			agent:              Agent{Name: "main"},
 		}
-		ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: "call_0"})
+		evidence := []PromptInput{{ID: "event", Texts: []string{"Inspect the demo."}, Header: "[Agent origin=\"helper\"]"}}
+		ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, currentTurnInputs: evidence, output: nil, callID: "call_0"})
 
 		err := CheckNestedPermission(ctx, "execute", "mcp", "demo.echo", map[string]any{"message": "hi"})
 		require.NoError(t, err)
+		require.Equal(t, evidence, reviewedRequests(reviewer)[len(reviewedRequests(reviewer))-1].CurrentTurnInputs)
 	}
 
 	requests := reviewedRequests(reviewer)
