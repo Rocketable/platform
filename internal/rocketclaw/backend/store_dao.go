@@ -858,94 +858,25 @@ WHERE t.space = $1 AND t.path = $2 GROUP BY t.space, t.path, p.id`, space, path)
 	return page, nil
 }
 
-type TopShelf struct {
-	Tabs      []ShelfTab
-	Collapsed bool
+func (s *SessionService) Folds(ctx context.Context, username string) (map[string]bool, error) {
+	folds := []byte("{}")
+	if err := s.db.QueryRowContext(ctx, `SELECT folds FROM web_tab_states WHERE username = $1`, username).Scan(&folds); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("read folds: %w", err)
+	}
+
+	var folded map[string]bool
+	if err := json.Unmarshal(folds, &folded); err != nil {
+		return nil, fmt.Errorf("decode folds: %w", err)
+	}
+
+	return folded, nil
 }
 
-type ShelfTab struct {
-	Server, Space, Path string
-	Search              *SearchPage
-}
+func (s *SessionService) SaveFolds(ctx context.Context, username string, folds map[string]bool) error {
+	_, err := execState(ctx, s.db, "save folds", `INSERT INTO web_tab_states (username, revision, folds) VALUES ($1, 0, COALESCE($2::jsonb, '{}'))
+ON CONFLICT (username) DO UPDATE SET folds = excluded.folds`, username, folds)
 
-func (s *SessionService) TopShelf(ctx context.Context, username string) (TopShelf, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
-	if err != nil {
-		return TopShelf{}, fmt.Errorf("begin top shelf read: %w", err)
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
-	var shelf TopShelf
-	if err := queryScalar(ctx, tx, "read top shelf", `SELECT shelf_collapsed FROM web_tab_states WHERE username = $1`, &shelf.Collapsed, username); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return TopShelf{}, err
-	}
-
-	shelf.Tabs, err = queryRows(ctx, tx, `SELECT t.server, t.space, t.path, `+searchPageSQL+` FROM web_top_shelves t
-`+searchPageJoinSQL+`
-WHERE t.username = $1 GROUP BY t.username, t.server, t.path, p.id ORDER BY t.position`, "top shelf tabs", func(row rowScanner) (ShelfTab, error) {
-		var tab ShelfTab
-		return tab, row.Scan(&tab.Server, &tab.Space, &tab.Path, &tab.Search)
-	}, username)
-
-	return shelf, err
-}
-
-func (s *SessionService) SaveTopShelf(ctx context.Context, username string, shelf *TopShelf) error {
-	tx, err := s.beginStateTx(ctx, "top shelf save")
-	if err != nil {
-		return err
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := execState(ctx, tx, "save top shelf state", `INSERT INTO web_tab_states (username, revision, shelf_collapsed) VALUES ($1, 0, $2)
-ON CONFLICT (username) DO UPDATE SET shelf_collapsed = excluded.shelf_collapsed`, username, shelf.Collapsed); err != nil {
-		return err
-	}
-
-	if _, err := execState(ctx, tx, "clear top shelf", `DELETE FROM web_top_shelves WHERE username = $1`, username); err != nil {
-		return err
-	}
-
-	var (
-		servers, spaces, paths, conversations []string
-		searches                              []*SearchPage
-	)
-
-	for _, tab := range shelf.Tabs {
-		conversation := ""
-		if tab.Server == "" {
-			conversation = TabConversation(tab.Path)
-		}
-
-		servers, spaces, paths, conversations, searches = append(servers, tab.Server), append(spaces, tab.Space), append(paths, tab.Path), append(conversations, conversation), append(searches, tab.Search)
-	}
-
-	if _, err := execState(ctx, tx, "write top shelf", `WITH incoming AS (
-    SELECT t.server, t.space, COALESCE(`+tabPathSQL+`, t.path) AS path, c.conversation_id, t.n - 1 AS position, t.search
-    FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::jsonb[]) WITH ORDINALITY AS t(server, space, path, conversation_id, search, n)
-    LEFT JOIN conversations c ON c.conversation_id = t.conversation_id
-    WHERE t.conversation_id = '' OR c.conversation_id IS NOT NULL
-), kept AS (
-    SELECT DISTINCT ON (server, path) server, space, path, conversation_id, position, search, CASE WHEN search IS NOT NULL THEN gen_random_uuid() END AS search_page
-    FROM incoming ORDER BY server, path, position
-), shelf AS (
-    INSERT INTO web_top_shelves (username, position, server, space, path, conversation_id, search_page)
-    SELECT $1, position, server, space, path, conversation_id, search_page FROM kept
-    RETURNING search_page
-), written AS (
-    SELECT k.search_page, k.search FROM shelf JOIN kept k USING (search_page)
-), `+searchPagesSQL+`
-SELECT count(*) FROM written`, username, servers, spaces, paths, conversations, searches); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit top shelf: %w", err)
-	}
-
-	return nil
+	return err
 }
 
 func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (bool, error) {

@@ -449,25 +449,11 @@ server. A remote that stops answering keeps its rows, greyed and offline; only a
 refusal clears them. Search fans out to every server, and a failing remote drops
 out. Each server marks its own tabs (see Unread below), and the page notifies
 from every server's listing; a server that is offline or on another protocol
-offers no attention items in its rows' menus. The space picker
-lists each server with its spaces, and choosing another server's space opens
-that server's view in that space.
-
-The Top Shelf is the person's own and lives on the local server, in the Tabs
-reply's `topShelf`; each change saves the whole shelf, which the server stores
-as one row per shelved tab. A tab can be on the shelf and in the strip at once.
-A shelved tab names its
-server and space. Opening one on its own server works like a Shared tab: it
-shows the page in its space with no tab, and a shelved Search page edits the
-shelf's copy unless the person has a tab of it there. One on another server is
-opened by entering that server's view in the tab's space. With remotes, a first
-load waits for the shelf, so reloading a shelved page adds no tab. Deleting a
-session from the Web takes it off the shelf, and a local session leaves the
-shelf however it is deleted. A shelved tab reads its
-bold and park from its own server and sends its attention items there.
-One whose server stopped answering is greyed, says "Server offline" in its
-tooltip and to screen readers, and its menu offers only **Remove from Top
-Shelf**.
+offers no attention items in its rows' menus. The tab strip has a section for
+each server with a card for each of its spaces (see Spaces below). Another
+server's cards show its saved tabs, and changes to them save on that server;
+entering one of its spaces or opening one of its tabs opens that server's view
+in that space.
 
 The local server's protocol change reloads the page. A remote that never
 answered shows why it is unavailable, one that stopped answering shows it is
@@ -535,10 +521,10 @@ active tab.
   navigation, or **Sessions: Next needing you** opens the next bold tab, of any kind (see Unread below): first
   sessions asking a question, then the rest, each longest waiting first.
   Pressing it again moves on to the next one and wraps around. Only tabs you
-  see as a tab count: your own tabs in any space, Shared rows, and Top Shelf
-  rows, on any server. Parked tabs, a session of a server that stopped
-  answering, and a marked tab you no longer have do not. A Shared or Top Shelf
-  row opens in its space without a tab of its own. The window title counts the
+  see as a tab count: your own tabs in any space and Shared rows, on any
+  server. Parked tabs, a session of a server that stopped answering, and a
+  marked tab you no longer have do not. A Shared row opens in its space
+  without a tab of its own. The window title counts the
   same tabs, as "(2) …". The command shows, and the button is enabled, only
   while another tab waits. The key is RocketClaw's even then, in a remote
   OpenCode session too, whose auto-accept permissions command has no default
@@ -566,18 +552,18 @@ active tab.
   title, or any other tab's title. Its body says what happened: “Park ended”
   for a park's time, the start of the reply for any other session mark,
   “Search finished”, “Run finished” for a cron, or “<agent> · <page> updated”. Only a tab you have
-  notifies: in your own tabs, Shared, or on the Top Shelf. News on a tab you
+  notifies: in your own tabs or Shared. News on a tab you
   closed shows quietly in bold when you open it again, and a window still
   holding tabs older than the server's waits for its reload before it notifies.
-  Clicking the notification opens the tab where you have it: a Shared or Top
-  Shelf row opens in its space without a tab of your own. Notifications are on by default: the first click or
+  Clicking the notification opens the tab where you have it: a Shared row
+  opens in its space without a tab of your own. Notifications are on by default: the first click or
   key press asks for the browser's permission, the earliest a browser allows;
   turn them off in the browser's site settings. A new mark is noticed on the
   session list's poll, so a hidden window may notify late; a page load never
   notifies for marks that were already there. Notifications show only while a
   RocketClaw window is open; there is no push.
-- **Mark as read and Mark as unread.** Every tab's menu, Shared and Top Shelf
-  rows included, offers **Mark as read** while a selected tab is bold and
+- **Mark as read and Mark as unread.** Every tab's menu, Shared rows
+  included, offers **Mark as read** while a selected tab is bold and
   **Mark as unread** while one is read; with several tabs selected, each acts
   on the tabs it fits. The command palette offers the same as **Tabs: Mark as
   read** and **Tabs: Mark as unread** for the tab in view. Mark as read clears
@@ -596,7 +582,7 @@ active tab.
   parks the session in view that way, and on any other tab does nothing. A parked tab
   leaves the strip for the **Parked** section
   at the bottom, which lists your parked tabs from every space, each with when
-  its park ends, and its header counts them. It folds like Shared, starts folded, and folded still shows
+  its park ends, and its header counts them. It folds like a card, starts folded, and folded still shows
   the tab in view. With more than one space it is a tree: each space with
   parked tabs is a branch that folds on its own, again still showing the tab in
   view, and stays as you left it. With Remote RocketClaws, when more than one
@@ -609,7 +595,7 @@ active tab.
   notification. It comes back by itself, bold with a notification, when its
   time is up (“Park ended”), when the turn it waited for ends (the reply's own
   notification), or when its agent asks you a question, within a poll, also
-  when you had closed it. A parked Shared or Top Shelf row stays
+  when you had closed it. A parked Shared row stays
   where it is, dimmed for you alone; Parked also lists a parked Shared row,
   which opens in its space without a tab of your own. Screen readers hear “Parked”, “Parked
   until …”, or “Parked until it is done”. Close others, Close to the right,
@@ -622,7 +608,7 @@ active tab.
   before RocketClaw has listed the session does not park. Config's **Tabs**
   section has **Auto-park sessions**, your choice for every session, on until
   you turn it off, and a
-  session tab's menu, Shared and Top Shelf rows included, offers **Auto-park
+  session tab's menu, Shared rows included, offers **Auto-park
   when I send** or **Stop auto-parking** for that session alone, which then
   wins over the Config choice. Both are yours alone and kept by the server, so
   they follow you to every device. A message queued behind a running turn
@@ -636,7 +622,7 @@ active tab.
   place, bold with a notification. The palette offers every item above as
   **Tabs: …** for the tab in view, such as **Tabs: Park for 1 hour** and
   **Tabs: Park until I unpark**. New session has none of these items.
-- **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
+- **Reordering.** Drag a tab onto another in its card. With a tab focused, Shift+Arrow moves it.
   A moved tab joins the group of the tab it lands on, or leaves its group when it
   lands on an ungrouped tab. Drag a group's header, or press Shift+Arrow on it, to
   move the whole group before or after the tab or group it lands on. A group
@@ -667,33 +653,45 @@ active tab.
 - **Spaces.** Spaces are shared by everyone except people limited to spaces
   (below): the server keeps one list, oldest first, starting with **Main**, and
   names are unique ignoring case. Every tab
-  belongs to one space. With more than one space the strip is a stack of cards,
-  one per space in their order: the current space's card is tinted and holds its
-  Shared group and your tabs, and every other space's card shows a folder you can
-  enter by its name. Another
-  space's card starts folded, listing only its tabs that wait for you or ask
-  you something, with its name bold and a count while any wait, **Needs you** while one
-  asks, and a spinner while a turn runs there; its chevron unfolds it to list
-  all its tabs, and that choice is saved. A row from another space opens in its
-  space, which becomes the current one, and its menu offers only Close, Copy
-  link, and the attention items. The space button heading the current branch names
-  the current
-  space; its menu lists the spaces to switch to and offers **New space**,
-  **Rename space**, and **Delete space**, which change the space for everyone.
-  A new space takes the first free "Space N" name and is then named in place of
-  the button: Enter or clicking away saves, and Escape, a blank name, or a name
-  another space has keeps the old name. Switching returns to
-  the space's last active tab, or to its first tab. New session is one tab, so
-  entering an empty space, opening New session, or closing a space's last tab
+  belongs to one space. The strip has a section for each RocketClaw server,
+  this one first, named after the first label of the page's host (`hally` for
+  `hally.tail1234.ts.net`), and every remote by its configured name; with only
+  one server there is no section header. A section's header folds it, and
+  folded it shows a blue count of the tabs waiting for you there. A section
+  holds the server's Shared card (see Shared below), then one card per space
+  in their order. Every space's card is drawn and works the same, whichever
+  space is current and whichever server's page you are on; only the current
+  space's card is tinted. Its header shows a folder and the space's name,
+  which you click to enter the space (another server's space opens in that
+  server's view), a spinner while a turn runs in one of its tabs, a blue count
+  of its tabs waiting for you, **Needs you** while one of its sessions asks you
+  something, a **…** button for the space's actions, shown while the header is
+  hovered or focused, and a chevron that folds the card. Its body holds the
+  space's tabs and groups, which work as described above in every card,
+  another server's included: open, close, select, reorder within the
+  card, and take their full menu. Double-clicking a card's empty area starts a
+  new session in its space. Changes to another server's cards save on that
+  server, and opening one of its tabs moves the page to that server. Every
+  card and section starts unfolded; a folded card lists only its tabs that
+  wait for you or ask you something, and the tab in view. Which sections,
+  cards, and Parked branches are folded is saved on the local server, so it is
+  the same on every server's page and every device. The **…** menu offers
+  **New space**, **Rename space**, and, while the server has more than one
+  space, **Delete space**, which change the space for everyone. **New space**
+  does not enter the new space: it takes the first free "Space N" name and is
+  then named in place of its card's name: Enter or clicking away saves, and
+  Escape, a blank name, or a name another space has keeps the old name.
+  Entering a space returns to the space's last active tab, or to its first
+  tab. New session is one tab, so entering an empty space, opening New session, or closing a space's last tab
   moves that tab into the current space. Opening a location that is open in
   another space switches to that space. The tab menu's **Move to space** submenu
   lists each other space, and moving the active tab follows it; the command
   palette offers the same moves as **Tabs: Move to "<space>"**. Moving a tab is
   your own: it moves only in your tabs. Deleting a space moves its tabs to the
   first space; the last space cannot be deleted. Close others, Close to the
-  right, Close all, and Cmd/Ctrl+[ and ] act only within the
-  current space. Screen readers hear each tab's group, if any, and space
-  as its description, such as “Group Work, Space: Main”.
+  right, and Close all act only within the tab's space, and Cmd/Ctrl+[ and ]
+  only within the current space. Screen readers hear each tab's group, if any,
+  and space as its description, such as “Group Work, Space: Main”.
 - **Agents and crons in spaces.** An agent or cron whose frontmatter sets
   `space:` belongs to the space of that name, ignoring case; a cron without one
   takes its agent's. The Cron page and Run cron palette hide crons, and their
@@ -712,44 +710,47 @@ active tab.
   when that leaves none the Slack channel allows, they offer all of those.
 - **People limited to spaces.** A person the config's `permissions` lists (see
   [Space permissions](../../../README.md#space-permissions)) gets only their
-  spaces from the server: the space menu, **Move to space**, and Shared groups
-  show only those, and so do the session list, search, the agent
-  picker, the Cron page, and the Page Index. The space menu hides **New space**,
-  **Rename space**, and **Delete space** for them, because the server refuses
-  them. When another person switches a session to an agent outside their spaces,
-  the session stays open to them, a pending question shows no answer form, and
+  spaces from the server: the space cards, **Move to space**, and the Shared
+  card show only those, and so do the session list, search, the agent
+  picker, the Cron page, and the Page Index. Space cards have no **…** menu
+  for them, because the server refuses **New space**, **Rename space**, and
+  **Delete space** from them. When another person switches a session to an
+  agent outside their spaces, the session stays open to them, a pending question shows no answer form, and
   Send first switches the session to the agent the picker shows, one of theirs.
   A tab they saved earlier for a session outside their spaces opens into a
   refusal. The Config page hides its Runtime, Models, MCP, and Flags sections
   from them, since the server sends them only their Tailscale login and Slack
   channels.
 - **Groups in spaces.** A group lives in one space. The tab menu offers only the
-  current space's groups, and moving a tab to another space takes it out of its group.
+  tab's space's groups, and moving a tab to another space takes it out of its group.
   The group editor adds **Move group to "<space>"** for each other space: it
   moves every member and keeps the group's name, color, and collapsed state, and
   moving the active tab's group follows it. Deleting a space moves its groups,
   intact, to the first space. **New tab in group** brings New session into the
   group's space as well as the group.
-- **Shared.** Every space has one grey **Shared** group, shown first in the
-  sidebar above your own tabs, and hidden while it has no tabs. Its tabs are the
-  same for everyone; their order is your own, newly added ones last. The tab
+- **Shared.** Every space has its Shared tabs, the same for everyone. The tab
   menu and the command palette offer **Add to Shared** and **Remove from
-  Shared**; both change the group for everyone in the space, one tab at a time,
-  so two people's changes never undo each other. New session and sessions no Web
-  user may open cannot be shared. A tab can be in Shared and among your own tabs
-  at once, and both rows light up while it is open. Opening a Shared tab adds no
-  tab of your own and keeps you in the current space. Shared tabs show a people
-  icon instead of a close button, and their menu offers only **Remove from
-  Shared**, the attention items (Mark as read or unread, Park), and,
-  for a Search page, **Rename search** and
-  **Duplicate**; middle-click and selection never act on them. Drag a Shared row
-  onto another to reorder Shared; your own tabs and Shared rows never drop on
-  each other. Otherwise the keyboard treats them as tabs: Cmd/Ctrl+[ and ] step through the Shared rows and then your own tabs,
-  each tab once; arrows, Home, and End cross between the two lists; and
-  Shift+Arrow on a Shared row moves it among the Shared rows. Your Shared order
-  follows you across devices. Collapsing Shared is your own choice, for every
-  space. When the Shared tab you are viewing is removed, the window enters its
-  space as it does for a tab closed elsewhere. Other people's changes arrive
+  Shared**; both change the tab's space's Shared tabs for everyone in the
+  space, one tab at a time, so two people's changes never undo each other. New
+  session and sessions no Web user may open cannot be shared. Each server's
+  section starts with one **Shared** card that lists every space's Shared tabs
+  in your own order, newly added ones last, under a grey pill naming the space
+  when the server has more than one space; it is hidden while the server has
+  no Shared tabs. A tab can be in Shared and among your own tabs
+  at once, and both rows light up while it is open. Opening a Shared row adds no
+  tab of your own and opens it in its space. Shared rows show a people
+  icon instead of a close button, and their menu offers only **Copy link**,
+  **Remove from Shared**, the attention items (Mark as read or unread, Park),
+  and, for a Search page, **Rename search** and, on the page's server,
+  **Duplicate**; middle-click and selection never act on them. Drag a Shared
+  row onto another row of its space, or press Shift+Arrow on it, to reorder it
+  for you alone; your own tabs and
+  Shared rows never drop on each other. Otherwise the keyboard treats them as
+  tabs: Cmd/Ctrl+[ and ] step through the current space's Shared rows and then
+  your own tabs, each tab once, and arrows, Home, and End cross between the
+  lists. Your Shared order follows you across devices. The Shared card folds
+  like any card. When the Shared tab you are viewing is removed, the window
+  enters its space as it does for a tab closed elsewhere. Other people's changes arrive
   when a window regains focus. Deleting a space moves its Shared tabs into the
   first remaining space's, and deleting a session takes it out of every Shared
   group.
@@ -771,11 +772,10 @@ active tab.
   marked too. Agents, Skills, Settings, Shortcuts, Voice, and Recently closed
   are marked only by you. A session's turn or question reaches you, with a
   notification, when you sent or steered that turn from the Web, when the
-  session is in your own tabs in any space, or when it is on your Top Shelf and
-  this server keeps that shelf, or when it is Shared in a space you can see, as
-  a Shared tab is a tab of everyone's; whoever started the turn, Slack mentions
-  and crons included. A Cron or Pages tab reaches you the same way when it is
-  your own tab, on that shelf, or Shared. A
+  session is in your own tabs in any space, or when it is Shared in a space you
+  can see, as a Shared tab is a tab of everyone's; whoever started the turn,
+  Slack mentions and crons included. A Cron or Pages tab reaches you the same
+  way when it is your own tab or Shared. A
   remote OpenCode session's turn counts when it holds a prompt. Nobody is
   marked for the tab they had in view in the last 10 seconds, or the last 4
   for a question or a timer, and nobody is marked for a space outside their
@@ -809,8 +809,7 @@ active tab.
   everyone. Every group holds its place with a hidden tab row whose path is
   `group:<id>`, which no tab command sees; a group saved before every group
   had one gets it after its last tab. Groups with no tabs, that row included,
-  are dropped, except the entries that keep whether you collapsed Shared and
-  Parked. Tabs whose space is gone join the
+  are dropped, except the entry that keeps whether you collapsed Parked. Tabs whose space is gone join the
   first space keeping their group, and tabs whose group is gone leave it. A
   window reloads them when it becomes visible or regains focus: it takes in
   changes made elsewhere, merged with its own unsaved ones, but stays on its own
@@ -823,9 +822,9 @@ Tradeoffs: every opened location keeps its tab until closed, so nothing vanishes
 unexpectedly, but the strip grows until Close others, Close to the right, or Close
 all trims it. Unlike browser-style tabs there is no
 per-tab Back/Forward or reopen-closed-tab. Unlike grouped tabs there are no
-agent/age lines. Spaces hide every other space's tabs, which keeps one task in
-focus but means a tab in another space is reached through the space menu, the
-palette, or a link rather than at a glance. Unlike warm tabs, switching sessions remounts the
+agent/age lines. Every space's card lists all its tabs until you fold it, so a
+tab in another space is at hand, but keeping one task in focus means folding
+the other cards. Unlike warm tabs, switching sessions remounts the
 transcript. In exchange, the strip stays compact, and the menu and drag
 give more control than a minimal strip.
 
@@ -915,8 +914,8 @@ Clicking a command always runs it.
 **Duplicate**, in a Search page's tab menu
 or Shared row menu and in the palette as **Tabs: Duplicate**, opens a copy at a new
 address with the same searches, named "<name> copy" (an unnamed page
-after its shown query, as "<query> copy"). A copy of a page in the current space's
-Shared group is added to it; any other copy is your own tab.
+after its shown query, as "<query> copy"). A copy of a Shared page is added to
+its space's Shared tabs; any other copy is your own tab.
 
 Cmd/Ctrl+P matches plain text against titles in the browser as you type, with no
 request. A query with a filter, even a bare key such as `principal:`, goes to the

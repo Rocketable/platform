@@ -172,7 +172,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Voice", exact: true }).click();
     await page.waitForURL("**/voice");
-    await page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: "Voice", exact: true }).waitFor();
+    await page.getByRole("tablist", { name: "Main tabs" }).getByRole("tab", { name: "Voice", exact: true }).waitFor();
     expect(await page.getByRole("button", { name: "Start voice call", exact: true }).isDisabled()).toBe(true);
     listing.resolve();
     listing = undefined;

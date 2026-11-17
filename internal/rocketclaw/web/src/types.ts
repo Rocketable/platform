@@ -67,6 +67,7 @@ export type SearchPage = { name?: string; searches: { id: string; name?: string;
 // revision counts saves; stale reports a save refused because it was made from an older revision than the one saved.
 // shared is every space's Shared tabs, the same for every person, oldest added first, a Search tab with its one page.
 // closed is the person's last closed tabs, newest first, which a server older than them leaves out.
-export type SavedTabs = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: string; stale?: boolean; shared: { space: string; path: string; search?: SearchPage }[]; unshared?: SearchPage; topShelf?: TopShelf; closed?: { path: string; space?: string; search?: SearchPage }[]; autoPark?: boolean };
-// TopShelf is this person's Top Shelf, kept by the local server: tabs of any RocketClaw, server "" being the local one.
-export type TopShelf = { tabs?: { server?: string; space: string; path: string; search?: SearchPage }[]; collapsed?: boolean };
+export type SavedTabs = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: string; stale?: boolean; shared: { space: string; path: string; search?: SearchPage }[]; unshared?: SearchPage; folds?: Folds; closed?: { path: string; space?: string; search?: SearchPage }[]; autoPark?: boolean };
+// Folds is whether each of this person's tab strip sections, cards and Parked branches, on every RocketClaw, is folded,
+// by its key, kept by the local server.
+export type Folds = { folded?: Record<string, boolean> };

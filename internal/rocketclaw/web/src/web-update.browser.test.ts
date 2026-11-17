@@ -49,7 +49,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     const notice = page.getByText("A new version of RocketClaw is available.", { exact: true });
     const refresh = page.getByRole("button", { name: "Refresh", exact: true });
     // Narrow screens keep the tabs in a drawer behind the footer's Show sidebar button.
-    const tabs = width < 768 ? page.getByRole("button", { name: "Show sidebar", exact: true }) : page.getByRole("tablist", { name: "Open tabs" }).locator("..");
+    const tabs = width < 768 ? page.getByRole("button", { name: "Show sidebar", exact: true }) : page.getByRole("tablist", { name: "Main tabs" }).locator("..");
     await page.goto(`http://127.0.0.1:${server.port}/`);
     await tabs.waitFor();
 

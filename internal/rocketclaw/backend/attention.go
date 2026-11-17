@@ -63,7 +63,6 @@ const sessionReadersSQL = `, people AS (
     UNION SELECT t.username, e.conversation_id, e.kind, e.waking FROM events e JOIN web_tabs t USING (conversation_id)
     UNION SELECT a.username, e.conversation_id, e.kind, e.waking FROM events e JOIN web_tab_attention a USING (conversation_id)
         WHERE a.parked AND a.until = 'infinity'
-    UNION SELECT s.username, e.conversation_id, e.kind, e.waking FROM events e JOIN web_top_shelves s USING (conversation_id)
     UNION SELECT p.username, e.conversation_id, e.kind, e.waking FROM events e JOIN web_shared_tabs t USING (conversation_id) CROSS JOIN web_tab_states p
 ), readers AS (
     SELECT c.username, ` + tabPathSQL + ` AS path, c.conversation_id, c.waking, '' AS note FROM people c
@@ -88,7 +87,6 @@ func (s *SessionService) markLocation(ctx context.Context, tx *sql.Tx, page, spa
 
 	tabs, err := queryRows(ctx, tx, `WITH tabs AS (
     SELECT username, path, space, TRUE AS own FROM web_tabs WHERE starts_with(path, $1)
-    UNION ALL SELECT username, path, space, TRUE FROM web_top_shelves WHERE server = '' AND starts_with(path, $1)
     UNION ALL SELECT p.username, t.path, t.space, FALSE FROM web_shared_tabs t CROSS JOIN web_tab_states p WHERE starts_with(t.path, $1)
 )
 SELECT t.username, t.path, COALESCE(w.name, ''), t.own FROM tabs t LEFT JOIN web_spaces w ON w.id = t.space`, "location tabs", func(row rowScanner) (tab, error) {
@@ -131,7 +129,6 @@ func (s *SessionService) MarkSearchFinished(ctx context.Context, username, path 
 
 	tabs, err := queryRows(ctx, s.db, `WITH tabs AS (
     SELECT '' AS space, TRUE AS own FROM web_tabs WHERE username = $1 AND path = $2
-    UNION ALL SELECT '', TRUE FROM web_top_shelves WHERE username = $1 AND server = '' AND path = $2
     UNION ALL SELECT w.name, FALSE FROM web_shared_tabs t JOIN web_spaces w ON w.id = t.space WHERE t.path = $2
 )
 SELECT space, own FROM tabs`, "search tabs", func(row rowScanner) (tab, error) {

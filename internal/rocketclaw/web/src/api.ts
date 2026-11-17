@@ -1,6 +1,6 @@
 import { hashKey, type QueryKey } from "@tanstack/react-query";
 import { server, serverURL } from "./navigation";
-import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TopShelf, TranscriptEvent, VoiceSettings } from "./types";
+import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, Folds, TranscriptEvent, VoiceSettings } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -102,7 +102,8 @@ export const mutations = {
   createSession: async (input: { name?: string; agent?: string; sourceConversationId?: string; opencodeServer?: string; directory?: string; spaceId?: string }) => rpc<{ id: string; resumed?: boolean }>("CreateSession", input),
   prompt: async (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }, name = server()) => (await rpc<{ privateText: string }>("Prompt", input, undefined, name)).privateText,
   runCron: async (input: { stem: string }) => (await rpc<{ id: string }>("RunCronJob", input)).id,
-  updateSession: (input: { id: string; pinned?: boolean; name?: string; tag?: string; paused?: boolean }) => rpc("UpdateSession", input),
+  // server names the RocketClaw the session is on, this one when unset.
+  updateSession: ({ server: remote, ...input }: { id: string; pinned?: boolean; name?: string; tag?: string; paused?: boolean; server?: string }) => rpc("UpdateSession", input, undefined, remote),
   removeQueueItem: (input: { id: string; itemId: string }) => rpc("RemoveQueueItem", input),
   steerQueueItem: (input: { id: string; itemId: string }) => rpc("SteerQueueItem", input),
   editQueueItem: (input: { id: string; itemId: string; text: string }) => rpc("EditQueueItem", input),
@@ -122,5 +123,5 @@ export const mutations = {
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
   voiceSettings: (input: { action: "UPDATE"; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
   saveBehaviorSettings: async (input: { documentJson: string }) => (await rpc<{ config: ConfigView }>("SaveBehaviorSettings", input)).config,
-  tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; topShelf?: TopShelf; attention?: { paths: string[]; action: AttentionAction; until?: string }; autoPark?: boolean }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),
+  tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; folds?: Folds; attention?: { paths: string[]; action: AttentionAction; until?: string }; autoPark?: boolean }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),
 };

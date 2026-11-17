@@ -206,7 +206,7 @@ test("a person marks tabs read or unread from the tab menu or the palette, each 
     await page.addInitScript(stubNotifications);
     await page.clock.install();
     const base = `http://127.0.0.1:${server.port}`;
-    const tab = (id: string) => page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: `${id} work`, exact: true });
+    const tab = (id: string) => page.getByRole("tablist", { name: "Main tabs" }).getByRole("tab", { name: `${id} work`, exact: true });
     const unread = async (id: string) => (await tab(id).getAttribute("aria-description"))!.includes("Unread");
     const polls = async () => {
       const seen = listed.length;
@@ -333,7 +333,7 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
     await page.addInitScript(() => { if (origin !== "null") sessionStorage.setItem("permission", "granted"); });
     await page.addInitScript(stubNotifications);
     await page.clock.install();
-    const base = `http://127.0.0.1:${server.port}`, strip = page.getByRole("tablist", { name: "Open tabs" }), daily = strip.getByRole("tab", { name: "daily", exact: true });
+    const base = `http://127.0.0.1:${server.port}`, strip = page.getByRole("tablist", { name: "Main tabs" }), daily = strip.getByRole("tab", { name: "daily", exact: true });
     const notes = (): Promise<Note[]> => page.evaluate(() => window.notes.map(({ title, body, tag, closed }) => ({ title, body, tag, closed })));
     const polls = async () => {
       const seen = viewing.length;
@@ -393,11 +393,11 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
     expect((await notes()).slice(2)).toEqual([{ title: "Ops", body: "Search finished", tag: "/search/d", closed: false }]);
     await page.evaluate(() => (window.notes[2] as unknown as Notification).onclick!(new Event("click")));
     await page.waitForURL((url: URL) => url.pathname === "/search/d");
-    await page.getByRole("button", { name: "Space: Team" }).waitFor();
+    await page.locator('button[aria-current="true"][aria-label="Go to Team"]').waitFor();
     expect(await page.getByRole("tablist", { name: "Shared tabs" }).getByRole("tab", { name: "Ops", exact: true }).getAttribute("aria-selected")).toBe("true");
     await polls();
     expect(state.tabs.map((tab) => tab.path)).not.toContain("/search/d");
-    expect(await strip.locator('[data-tab="/search/d"]').count()).toBe(0);
+    expect(await page.getByRole("tablist", { name: "Team tabs" }).locator('[data-tab="/search/d"]').count()).toBe(0);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

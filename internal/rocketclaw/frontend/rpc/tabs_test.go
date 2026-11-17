@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"log/slog"
 	"os"
-	"slices"
 	"testing"
 	"time"
 
@@ -302,31 +301,17 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
 
-	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "nothing shelved yet: %v", response.TopShelf)
+	assert.True(t, proto.Equal(&Folds{}, response.Folds), "nothing folded yet: %v", response.Folds)
 
-	shelf := &TopShelf{Tabs: []*ShelfTab{{Server: "work", Space: "main", Path: "/s/eA"}, {Path: "/s/YQ", Space: "main"}, {Path: "/s/Yw", Space: "main"},
-		{Path: "/search/1", Space: "main", Search: &SearchPage{Name: "x", Searches: []*SavedSearch{{Id: "1", Query: "q"}}, Active: "1"}}, {Server: "work", Path: "/search/1", Space: "main"}}, Collapsed: true}
-	_, err = call("alice", &TabsRequest{TopShelf: shelf})
+	folds := &Folds{Folded: map[string]bool{"@work": true, "work/main": false}}
+	_, err = call("alice", &TabsRequest{Folds: folds})
 	require.NoError(t, err)
 	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
-	assert.True(t, proto.Equal(shelf, response.TopShelf), "a read returns the saved shelf, one path on two servers twice: %v", response.TopShelf)
-
-	_, err = db.ExecContext(t.Context(), `DELETE FROM conversations WHERE conversation_id = 'c'`)
-	require.NoError(t, err)
-	response, err = call("alice", &TabsRequest{})
-	require.NoError(t, err)
-
-	shelf.Tabs = slices.Delete(shelf.Tabs, 2, 3)
-	assert.True(t, proto.Equal(shelf, response.TopShelf), "c's deleted session leaves the shelf: %v", response.TopShelf)
+	assert.True(t, proto.Equal(folds, response.Folds), "a read returns the saved folds: %v", response.Folds)
 	response, err = call("bob", &TabsRequest{})
 	require.NoError(t, err)
-	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "another person's shelf is not theirs: %v", response.TopShelf)
-	_, err = call("alice", &TabsRequest{TopShelf: &TopShelf{}})
-	require.NoError(t, err)
-	response, err = call("alice", &TabsRequest{})
-	require.NoError(t, err)
-	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "an emptied shelf stays empty: %v", response.TopShelf)
+	assert.True(t, proto.Equal(&Folds{}, response.Folds), "another person's folds are not theirs: %v", response.Folds)
 }
 
 func TestPromptAutoParks(t *testing.T) {
