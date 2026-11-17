@@ -257,6 +257,16 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			require.True(t, got.Success, got.Output)
 			require.Equal(t, fmt.Sprintf("argc=1 arg=ls pwd=%s tmp=%s", filepath.Join(realDir, "nested"), outputDir), got.Output)
 		})
+		t.Run("runs in the agent's folder with the shell's variables", func(t *testing.T) {
+			require.NoError(t, root.WriteFile("env.sh", []byte("#!/bin/sh\nprintf 'pwd=%s environment=%s' \"$(pwd -P)\" \"$ROCKETCLAW_ENVIRONMENT\""), 0o755))
+
+			folder, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+
+			got := sss.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "env.sh"), Dir: folder, Env: []string{`ROCKETCLAW_ENVIRONMENT={"commands":{"gh":"gh"}}`}}, bashParams{Command: "ls"})
+			require.True(t, got.Success, got.Output)
+			require.Equal(t, "pwd="+folder+` environment={"commands":{"gh":"gh"}}`, got.Output)
+		})
 		t.Run("an emulated shell without a sandbox refuses and never runs host bash", func(t *testing.T) {
 			folder, err := filepath.EvalSymlinks(t.TempDir())
 			require.NoError(t, err)

@@ -130,7 +130,7 @@ A sandbox capability the Code Mode script can call directly, as opposed to a mod
 
 ### Emulated Shell
 
-An agent's opt-in shell mode, always on for an Easy Agent, in which its shell commands run in real Bash inside a Linux sandbox instead of host bash.
+An agent's opt-in shell mode, the default for an Easy Agent, in which its shell commands run in real Bash inside a Linux sandbox instead of host bash.
 *Avoid:* sandboxed bash, bubblewrap shell
 
 Each command runs in a fresh sandbox with no network. Only the agent's declared working directory reaches the host disk writable, with its uploads and skill folders read-only; temporary files are the command's own and gone when it ends. The commands can start only the host programs the agent declares, and those programs see only the host's environment plus the agent's secrets, never variables the sandboxed script set. Its curl fetches through RocketClaw under the agent's allowed targets. An agent that asked for the Emulated Shell but cannot get one has its shell commands fail rather than fall back to host bash.
@@ -179,7 +179,7 @@ The model-facing tool through which an agent delegates a prompt to another agent
 
 ### Easy Agent
 
-An agent whose file sets `mode: easy`. A section its file leaves out turns on everything in it, a section it writes turns on only what it lists, and everything on is reviewed by the agent's own approver. Its shell commands always run in the Emulated Shell, in its own folder, and it gets only the commands, secrets, MCP tools, skills, models, and Routines its file names.
+An agent whose file sets `mode: easy`. A section its file leaves out turns on everything in it, a section it writes turns on only what it lists, and everything on is reviewed by the agent's own approver. Its shell commands run in its own folder, in the Emulated Shell unless its file names a wrapper program, and it gets only the commands, secrets, MCP tools, skills, models, and Routines its file names.
 
 ### Sticky Session
 

@@ -151,6 +151,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 
 	timedOut := false
 
+	env = append(env, customShell.Env...)
 	shell, args := withCustomShell(customShell, params.Command)
 	cmd := exec.CommandContext(commandCtx, shell, args...)
 	cmd.Dir, cmd.Env = hostDir, env

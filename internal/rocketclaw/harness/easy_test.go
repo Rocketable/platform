@@ -38,7 +38,7 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 		{"missing workingDirectory", "mode: easy\nmodel: gpt-5.4\nspace: Marketing", "main.md: workingDirectory: required non-empty string"},
 		{"description", easyRequired + "\ndescription: Main", "main.md: description: not an easy-mode key"},
 		{"sudo", easyRequired + "\nsudo: yes", "main.md: sudo: not an easy-mode key"},
-		{"shell", easyRequired + "\nshell: emulated", "main.md: shell: not an easy-mode key"},
+		{"relative shell", easyRequired + "\nshell: bash", "main.md: shell: must be an absolute path or emulated"},
 		{"sticky user routines", easyRequired + "\nsticky: user\nroutines: [30m]", "main.md: routines: a sticky: user agent cannot have routines"},
 		{"negative maxRecursion", easyRequired + "\nmaxRecursion: -1", "main.md: maxRecursion: must be an integer of 0 or more"},
 		{"unknown subagent provider", easyRequired + "\nsubagents: [nope/gpt-6]", `main.md: model "nope/gpt-6": provider "nope" is not configured`},
@@ -141,6 +141,15 @@ schema: {output: {type: object, properties: {answer: {type: string}}}}`)
 		require.Equal(t, []AgentRoutine{{Schedule: "*/5 * * * *", Instruction: "Check the dashboard."}, {Schedule: "30m"}}, agent.Routines)
 		require.Equal(t, []string{"main"}, agent.DelegatedFrom)
 		require.Equal(t, map[string]any{"type": "object", "properties": map[string]any{"answer": map[string]any{"type": "string"}}}, agent.OutputSchema)
+	})
+
+	t.Run("shell", func(t *testing.T) {
+		for frontmatter, want := range map[string]CustomShell{"shell: emulated": {Emulated: true}, "shell: /usr/local/bin/wrap": {Path: "/usr/local/bin/wrap"}} {
+			agent, errs := loadEasyTestAgent(t, easyRequired+"\n"+frontmatter)
+			require.Empty(t, errs)
+			require.Equal(t, want, agent.CustomShell)
+			require.Equal(t, "sessions/$ROCKETCLAW_CONVERSATION_ID", agent.WorkingDirectory)
+		}
 	})
 
 	t.Run("delegatedFrom false", func(t *testing.T) {

@@ -42,7 +42,7 @@ Ask only for the missing items.
 
 ## Permission handling
 
-This section and the `shell`, `sudo` and `description` guidance below apply to advanced agents only; easy agents have none of those keys.
+This section and the `sudo` and `description` guidance below apply to advanced agents only; easy agents have neither key. The `shell` guidance below applies to both, with the easy differences it names.
 
 Do not ask the human to write raw `permission` YAML. For creation, ask what kind of agent they want and which exact opt-ins it needs: bash command patterns for execution agents, writable path patterns for file-modifying agents, skill names, task agent names, or another named permission bucket.
 
@@ -299,7 +299,7 @@ The optional `maxRecursion` frontmatter field controls task subdelegation depth 
 - a positive integer caps delegation to that many task levels
 - invalid values fail agent loading
 
-The optional `shell` frontmatter field runs every shell command for that agent instead of `/bin/bash`. Its value is either an absolute path to a program, called as `<shell> <command>`, or `emulated`, which runs the commands in a built-in bash emulator and requires `workingDirectory`. That includes the agent's ``!`…` `` prompt lines and those in the skills it loads. Any other value fails agent loading. When handling it:
+The optional `shell` frontmatter field runs every shell command for that agent instead of `/bin/bash`. Its value is either an absolute path to a program, called as `<shell> <command>`, or `emulated`, which runs the commands in a built-in bash emulator and requires `workingDirectory`. That includes the agent's ``!`…` `` prompt lines and those in the skills it loads. Any other value fails agent loading. In an easy agent, leaving `shell` out means `emulated`; a wrapper starts in its `workingDirectory`, gets its `secretsARN`, `commands` and `allowedNetworkTargets` as one JSON object in `ROCKETCLAW_ENVIRONMENT` instead of the secrets, the commands' programs and the `curl` limits, and its ``!`…` `` lines keep running in host bash. When handling it:
 - set, change, or remove `shell` only when the human explicitly asks, and use the exact value they give
 - never create or edit a `shell` program inside the workspace
 - carry `shell` over unchanged on updates and renames
