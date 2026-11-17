@@ -17,6 +17,8 @@ import (
 )
 
 func TestRuntimeReload(t *testing.T) {
+	sessions := newTestSessionService(t)
+
 	for _, scenario := range []string{"success", "invalid-agent", "invalid-frontend", "refresh-failure", "cron-refresh-failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			cfg := &config.Config{Workspace: t.TempDir()}
@@ -51,7 +53,7 @@ func TestRuntimeReload(t *testing.T) {
 				return nil
 			}}
 			refresh, cron := &runtimeRefresherMock{}, &runtimeRefresherMock{}
-			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, RunCtx: t.Context(), Sessions: newTestSessionService(t), Assemble: assembler, sandboxes: sandbox.None{}, ExternalMCPAgents: refresh, CronJobs: cron}
+			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, RunCtx: t.Context(), Sessions: sessions, Assemble: assembler, sandboxes: sandbox.None{}, ExternalMCPAgents: refresh, CronJobs: cron}
 			refreshed := func(failure string) error {
 				require.False(t, rt.reloadMu.TryLock(), "reload remains serialized through each refresh")
 				live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/main.md")
