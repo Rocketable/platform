@@ -9,6 +9,8 @@ execution: code
 
 # Per-Agent Custom Shell - Plan
 
+Historical plan: `Config.ShellCommand` has since been removed. Default execution selects Bash directly; per-agent custom shells remain supported.
+
 ## Goal Capsule
 
 - **Objective:** An agent author can route one agent's shell commands through a program of their choosing, such as a sandbox entrypoint, by adding one line to that agent's file, while agents without that line behave exactly as before.

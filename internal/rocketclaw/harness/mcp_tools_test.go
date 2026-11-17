@@ -96,7 +96,7 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
 	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o700))
 	shellTemp := testShellTempConfig(t, root, outputDir)
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand{}, &sandbox.Runtime{})
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{})
 	factory := &toolFactory{
 		baseTools: makeSandboxedTools(sfs, sss),
 	}
@@ -296,7 +296,7 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 	require.NoError(t, permissions.Deny("bash", "rm *"))
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand{}, &sandbox.Runtime{})
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{})
 	factory := &toolFactory{
 		baseTools: makeSandboxedTools(sfs, sss),
 	}
@@ -402,7 +402,7 @@ func TestExecuteBashOutputSurvivesContainers(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(".tmp/shell", 0o700))
 	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell"))
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand{}, &sandbox.Runtime{})
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{})
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 
 	var permissions PermissionSet
@@ -1047,7 +1047,7 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 		return TextToolResult("probed"), nil
 	}
 
-	base := makeSandboxedTools(&sandboxedFileSystem{root: root}, newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand{}, &sandbox.Runtime{}))
+	base := makeSandboxedTools(&sandboxedFileSystem{root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}))
 	base["emit"], base["probe"] = emit, probe
 
 	const rules = "rocketclaw: {code_mode_approve: auto}\nbash: {'*': allow, 'rm *': deny}\nread: allow\nemit: allow\nprobe: auto\nmcp: {'demo.*': allow, 'demo.checked': auto, 'demo.risky': auto"

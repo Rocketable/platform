@@ -1918,7 +1918,7 @@ Prompt
 
 	shellTempDir := filepath.Join(workspace, "shell-tmp")
 	require.NoError(t, os.Mkdir(shellTempDir, 0o755))
-	_, err = harness.NewWithModelResolver(resolver, &harness.Config{ShellTempDir: shellTempDir, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, ShellCommand: harness.DefaultShellCommand{}}, root, agents, skills, "main")
+	_, err = harness.NewWithModelResolver(resolver, &harness.Config{ShellTempDir: shellTempDir, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}}, root, agents, skills, "main")
 	require.NoError(t, err)
 }
 

@@ -142,9 +142,6 @@ packages:
       sessionWriter:
         config:
           structname: mockSessionWriter
-      shellCommander:
-        config:
-          structname: mockShellCommander
       SteerDrain:
         config:
           structname: mockSteerDrain

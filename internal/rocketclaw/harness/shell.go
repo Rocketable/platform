@@ -51,18 +51,16 @@ type sandboxedShellSystem struct {
 	spillRel         string
 	shellTemp        shellTempConfig
 	env              []string
-	shellCommand     shellCommander
 	sandbox          *sandbox.Runtime
 	forceKillTimeout time.Duration
 }
 
-func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, shellCommand shellCommander, rt *sandbox.Runtime) *sandboxedShellSystem {
+func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, rt *sandbox.Runtime) *sandboxedShellSystem {
 	return &sandboxedShellSystem{
 		mu:               sync.Mutex{},
 		root:             root,
 		shellTemp:        *shellTemp,
 		env:              slices.Clone(env),
-		shellCommand:     shellCommand,
 		sandbox:          rt,
 		forceKillTimeout: shellForceKillTimeout,
 	}
@@ -153,7 +151,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 
 	timedOut := false
 
-	shell, args := withCustomShell(sss.shellCommand, customShell, params.Command)
+	shell, args := withCustomShell(customShell, params.Command)
 	cmd := exec.CommandContext(commandCtx, shell, args...)
 	cmd.Dir, cmd.Env = hostDir, env
 
