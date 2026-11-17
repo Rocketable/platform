@@ -25,10 +25,6 @@ type CallFunc func(ctx context.Context, server, name string, args map[string]any
 
 type DecideFunc func(ctx context.Context, subject string, args map[string]any) error
 
-type ToolCallObserver interface {
-	ObserveToolCall(ctx context.Context, path []string, name string, args map[string]any)
-}
-
 type HostTool struct {
 	Name        string
 	InputSchema map[string]any
@@ -74,7 +70,7 @@ func BuildCatalog(tools []ToolDesc) (map[string]ToolDesc, error) {
 	return out, nil
 }
 
-func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc, call CallFunc, observe ToolCallObserver, host []HostTool) (string, error) {
+func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc, call CallFunc, host []HostTool) (string, error) {
 	catalog, errCatalog := BuildCatalog(tools)
 	if errCatalog != nil {
 		return "", errCatalog
@@ -84,7 +80,7 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 
 	predeclared := make(starlark.StringDict, len(catalog)+len(host)+len(concurrency))
 	for name, tool := range catalog {
-		predeclared[name] = newKwargsValueBuiltin(name, tool.InputSchema, observe, func(ctx context.Context, callArgs map[string]any) (starlark.Value, error) {
+		predeclared[name] = newKwargsValueBuiltin(name, tool.InputSchema, func(ctx context.Context, callArgs map[string]any) (starlark.Value, error) {
 			if err := decide(ctx, tool.Server+"."+tool.Name, callArgs); err != nil {
 				return nil, err
 			}
@@ -107,7 +103,7 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 			return "", fmt.Errorf("builtin name collision %q", tool.Name)
 		}
 
-		predeclared[tool.Name] = newKwargsValueBuiltin(tool.Name, tool.InputSchema, observe, tool.CallValue)
+		predeclared[tool.Name] = newKwargsValueBuiltin(tool.Name, tool.InputSchema, tool.CallValue)
 	}
 
 	for name, builtin := range concurrency {
@@ -188,7 +184,7 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 	return string(encoded.(starlark.String)), nil
 }
 
-func newKwargsValueBuiltin(name string, schema map[string]any, observe ToolCallObserver, call func(context.Context, map[string]any) (starlark.Value, error)) *starlark.Builtin {
+func newKwargsValueBuiltin(name string, schema map[string]any, call func(context.Context, map[string]any) (starlark.Value, error)) *starlark.Builtin {
 	return starlark.NewBuiltin(name, func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		if len(args) != 0 {
 			return nil, fmt.Errorf("%s: only keyword arguments are allowed", b.Name())
@@ -204,8 +200,6 @@ func newKwargsValueBuiltin(name string, schema map[string]any, observe ToolCallO
 		}
 
 		ctx := thread.Local(localCtx).(context.Context)
-
-		observe.ObserveToolCall(ctx, threadPath(thread), name, callArgs)
 
 		return call(context.WithValue(ctx, callKeyContext{}, nextKey(thread)), callArgs)
 	})

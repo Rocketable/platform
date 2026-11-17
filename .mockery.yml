@@ -172,11 +172,6 @@ packages:
       Decider:
         config:
           structname: mockDecider
-  github.com/Rocketable/platform/internal/rocketclaw/codemode:
-    interfaces:
-      ToolCallObserver:
-        config:
-          structname: toolCallObserverMock
   google.golang.org/grpc:
     interfaces:
       ServerStream:

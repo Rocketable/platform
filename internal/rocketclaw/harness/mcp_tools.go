@@ -334,7 +334,6 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 			return errors.Join(errCheck, tc.observations.recordCodeModeCall(ctx, record.finish(ToolResult{}, errCheck), false))
 		},
 		mcpCall,
-		inertToolCallObserver{},
 		host,
 	)
 	if errRun != nil {
@@ -839,10 +838,6 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 
 	return result, errors.Join(errRun, saveStep(ctx, tc.looper.Journal, key, &want), tc.observations.recordCodeModeCall(ctx, record.finish(result, errRun), false))
 }
-
-type inertToolCallObserver struct{}
-
-func (inertToolCallObserver) ObserveToolCall(context.Context, []string, string, map[string]any) {}
 
 func codeModeHostInputSchema(name string, def *responses.FunctionToolParam) map[string]any {
 	if def == nil || def.Parameters == nil {
