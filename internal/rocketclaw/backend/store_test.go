@@ -1226,6 +1226,8 @@ UPDATE conversations SET external_id = 'external', external_agent = 'main', exte
 }
 
 func TestHistoryRemovalIncludesDelegations(t *testing.T) {
+	t.Parallel()
+
 	t.Run("filesystem failure retry", func(t *testing.T) {
 		store, root := newShadowTestStore(t)
 		recordTestConversations(t, store, "other", map[string]ConversationKind{"parent": KindWebChat})
@@ -1528,6 +1530,8 @@ func TestDeleteOwnedHistoryReportsDeleteFailures(t *testing.T) {
 }
 
 func TestSessionServicePrunesOldState(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
 	cutoff := time.Unix(1_700_000_000, 0).UTC()
@@ -1717,6 +1721,8 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 }
 
 func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
+	t.Parallel()
+
 	cutoff := time.Unix(1_700_000_000, 0).UTC()
 	store := newTestSessionServiceAt(t, t.TempDir())
 
@@ -1999,6 +2005,8 @@ func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.
 }
 
 func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t *testing.T) {
+	t.Parallel()
+
 	cutoff := time.Unix(1_700_000_000, 0).UTC()
 
 	for _, tt := range []struct {

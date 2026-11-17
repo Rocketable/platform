@@ -2115,6 +2115,8 @@ func TestBridgeSteersJoinOpenTurn(t *testing.T) {
 }
 
 func TestStoppedSteerJoinsOnlyOpenTurns(t *testing.T) {
+	t.Parallel()
+
 	for name, tc := range map[string]struct {
 		turn  *protocol.InboundMessage
 		joins bool
