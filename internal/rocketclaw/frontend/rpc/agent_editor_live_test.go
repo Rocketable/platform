@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -29,6 +31,27 @@ import (
 )
 
 func TestAgentEditorRealBackendBrowser(t *testing.T) {
+	if os.Getenv("ROCKETCLAW_TEST_AGENT_EDITOR_CHILD") != "1" {
+		t.Parallel()
+
+		executable, err := os.Executable()
+		require.NoError(t, err)
+
+		args := []string{"-test.run=^" + t.Name() + "$", "-test.cpu=" + strconv.Itoa(runtime.GOMAXPROCS(0)), "-test.v"}
+		if testing.CoverMode() != "" {
+			args = append(args, "-test.gocoverdir="+os.Getenv("GOCOVERDIR"))
+		}
+
+		cmd := exec.CommandContext(t.Context(), executable, args...)
+
+		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_AGENT_EDITOR_CHILD=1")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		t.Log(string(output))
+
+		return
+	}
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 

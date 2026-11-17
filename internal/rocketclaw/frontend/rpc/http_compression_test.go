@@ -18,6 +18,8 @@ func TestHTTPJSONCompressionAllocations(t *testing.T) {
 }
 
 func TestHTTPJSONCompression(t *testing.T) {
+	t.Parallel()
+
 	var writers sync.Pool
 
 	for _, text := range []string{"", "alpha", "quote\" 日本語"} {

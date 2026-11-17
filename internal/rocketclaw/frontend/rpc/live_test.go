@@ -272,6 +272,8 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 }
 
 func TestHistoryReadsActiveReplay(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	seeded := openTestTurns(t, dsn)
@@ -373,6 +375,8 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 }
 
 func TestRevertRPCAndHistoryReset(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	seeded := openTestTurns(t, dsn)
@@ -608,6 +612,8 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 }
 
 func TestHistoryFollowsNewestEntries(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
@@ -704,6 +710,8 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 }
 
 func TestHistoryFollowsHiddenRun(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
@@ -764,6 +772,8 @@ VALUES ('run-turn', 'external_mcp:main:run', '{"SyncDestination":"chat"}', '[{"t
 }
 
 func TestHistoryLinksBackgroundTaskSubagent(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
@@ -804,6 +814,8 @@ VALUES ('chat/D-0a1b2c3d', 'child', '', 'chat', 'subagent', FALSE, 'nested', 'tu
 }
 
 func TestHistoryShowsLiveReasoningSummaries(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	seeded := openTestTurns(t, dsn)
@@ -843,6 +855,8 @@ func TestHistoryShowsLiveReasoningSummaries(t *testing.T) {
 }
 
 func TestHistoryPublicProgress(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	seeded := openTestTurns(t, dsn)
@@ -1215,6 +1229,8 @@ func testCallItems(name string, ids ...string) []json.RawMessage {
 }
 
 func TestHistoryCodeModeCalls(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	seeded := openTestTurns(t, dsn)

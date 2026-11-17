@@ -24,6 +24,8 @@ import (
 )
 
 func TestTabs(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
@@ -366,6 +368,8 @@ func TestPromptAutoParks(t *testing.T) {
 }
 
 func TestTabsSpaceLimit(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 

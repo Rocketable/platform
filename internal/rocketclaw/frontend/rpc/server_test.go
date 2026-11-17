@@ -132,6 +132,8 @@ func TestQueueEdit(t *testing.T) {
 }
 
 func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
+	t.Parallel()
+
 	forwarded := netip.MustParseAddr("192.0.2.2")
 
 	for _, tt := range []struct {
@@ -204,6 +206,8 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 }
 
 func TestTailnetHandlerPassesOpenCodeMCP(t *testing.T) {
+	t.Parallel()
+
 	whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) {
 		return &apitype.WhoIsResponse{Node: &tailcfg.Node{Tags: []string{"tag:server"}}, UserProfile: &tailcfg.UserProfile{LoginName: "tagged-devices"}}, nil
 	}}
@@ -217,6 +221,8 @@ func TestTailnetHandlerPassesOpenCodeMCP(t *testing.T) {
 }
 
 func TestTailnetIdentity(t *testing.T) {
+	t.Parallel()
+
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
@@ -281,6 +287,8 @@ func TestTailnetIdentity(t *testing.T) {
 }
 
 func TestTestModel(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
@@ -357,6 +365,8 @@ func TestTestModel(t *testing.T) {
 }
 
 func TestTailnetCrossSitePages(t *testing.T) {
+	t.Parallel()
+
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
@@ -462,6 +472,8 @@ func searchWaiters(server *Server) int {
 }
 
 func TestSaveBehaviorSettings(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{AutoApproverModel: "gpt-a"}
 	cfg.Slack.Channels = []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U123"}}}
 	cfg.Web.Admins = []string{"alice"}
@@ -562,6 +574,8 @@ func TestSaveBehaviorSettings(t *testing.T) {
 }
 
 func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
@@ -643,6 +657,8 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 }
 
 func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
@@ -698,6 +714,8 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 }
 
 func TestSearchSessionsSharedFlightCancellation(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
@@ -785,6 +803,8 @@ func TestSearchSessionsSharedFlightCancellation(t *testing.T) {
 }
 
 func TestSearchSessionsUnreadPerCaller(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
@@ -843,6 +863,8 @@ func TestSearchSessionsUnreadPerCaller(t *testing.T) {
 }
 
 func TestSearchSessionsResponse(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
@@ -912,6 +934,8 @@ WHERE c.conversation_id = v.id`)
 }
 
 func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	seeded := openTestTurns(t, dsn)
@@ -987,6 +1011,8 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 }
 
 func TestSessionEntries(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	seeded := openTestTurns(t, dsn)
@@ -3761,6 +3787,8 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 }
 
 func TestContinueCronRun(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
@@ -3899,6 +3927,8 @@ func TestContinueCronRun(t *testing.T) {
 }
 
 func TestRoutineCronJobs(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
@@ -4033,6 +4063,8 @@ func testSocketPath(t *testing.T) string {
 }
 
 func TestBackgroundJobRPCs(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
@@ -4186,6 +4218,8 @@ VALUES ($1, 'turn-9/call/k', 'note', FALSE, 'main', 'report', 'k', '/k', '{}', '
 }
 
 func TestQuestionRPCs(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}

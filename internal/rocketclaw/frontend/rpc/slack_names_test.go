@@ -20,6 +20,8 @@ import (
 )
 
 func TestSlackNames(t *testing.T) {
+	t.Parallel()
+
 	channels := &mockChannels{SlackNamesFunc: func(_ context.Context, ids []string) map[string]string {
 		resolved := map[string]string{"U1": "alan", "S1": "cs-operators", "C1": "general"}
 		names := make(map[string]string)
