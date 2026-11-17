@@ -242,7 +242,7 @@ Account for these rocketcode runtime facts when designing agent instructions and
 - The shell tool statically denies common direct env-file and external-path attempts such as `cat .env`, `cat ../outside`, and `cd /tmp`, but this is only a preflight guardrail, not an OS-enforced shell sandbox for dynamically generated paths.
 - `task` subagents never get `ask_user_question`, whatever their permissions.
 - Each `task` subagent runs as a session of its own, hidden from the sidebar, with its own permissions and Background Jobs; its `rocketclaw_sessions_write` and session tags act for its top-level session, but replies to its writes come back to the subagent itself. When a reply or one of its own Background Jobs wakes a subagent after its `task` call returned, its new answer reaches its parent as a note.
-- Prompt shell expansion with ``!`command` `` is opt-in per prompt source. Do not rely on it unless the runtime enables it.
+- Prompt shell expansion with ``!`command` `` works in agent bodies, routine instructions, the `SKILL.md` of loaded skills, and approver prompts. Lines inside `AGENTS.md` and in the arguments passed to a skill stay literal.
 - Prompt shell expansion runs from the workspace root and captures stdout only. The default runner uses `/bin/bash`, ignores `$SHELL`, and disables startup files and inherited shell functions/options. For an agent that sets `shell`, these lines run through that shell instead.
 
 ## Name and path handling
@@ -347,7 +347,7 @@ Keys:
 - `maxRecursion`: subagent levels, 0 or more; `0` turns `task` off; default `1`
 - `approver`: `model` replaces the review model, `prompt` is added to the guardian's rules, and `decision` (`model`, `minConfidence`, `prompt`) replaces the decision model reviews ask first and gives it its own rules; default `guardian` on `auto_approver_model`, after `auto_approver_decision.model` when set; see [Reviews and decision models](#reviews-and-decision-models)
 - `decision`: decision models the Code Mode `decision` tool may call, each `provider/model` with its provider configured under `decision`; calls run without review; default no `decision` tool
-- `secretsARN`: Secrets Manager ARNs, fetched each turn, given only to `commands` programs and ``!`…` `` lines
+- `secretsARN`: Secrets Manager ARNs, fetched each turn, given only to `commands` programs and the ``!`…` `` lines in the body and in loaded skills
 - `commands`: map from command name to the host command line it runs
 - `mcp`: `{}` for none, or a map from server to `auto` or tool groups `[read]` or `[read, write]`; groups come from `mcp_servers.<name>.tools` in `rocketclaw.json` (use `main-update-rocketclaw-json`); an unknown server or group fails loading
 - `rocketclaw`: `[]` for none, or a list of the groups `sessions`, `pages`, `tags`, `background`, `restart`; default all five
@@ -361,6 +361,8 @@ Keys:
 Any other key fails loading with `<key>: not an easy-mode key`, including the advanced keys `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo`, `guardrail` and `additionalInstructions`. `approver` takes only `model`, `prompt` and `decision`, `approver.decision` only `model`, `minConfidence` and `prompt`, and `schema` only `output`.
 
 The body is the agent's whole instructions: easy agents never load `AGENTS.md`, and their tools see only `workingDirectory`. ``!`…` `` lines in the body run in host bash from the workspace, so end the body with ``!`cat MEMORY.md` `` instead of the `MEMORY.md` instruction, and add ``!`cat AGENTS.md` `` when the human wants it included.
+
+``!`…` `` lines also work in `approver.prompt` and `approver.decision.prompt`, for example to load rules from a file. They run in host bash from the workspace without the agent's secrets, run again on every review, so a slow one slows every review, and expand to empty text when they fail, which drops the rule without warning. Write such a prompt as a block scalar (`prompt: |`): a YAML value that starts with `!` fails to load.
 
 ```yaml
 ---
