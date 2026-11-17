@@ -38,7 +38,7 @@ tags:
 
 On a Mac, every `make` target in `internal/rocketclaw` runs again inside the `rocketclaw-linux` container. The Darwin `%` rule runs `docker run ... rocketclaw-linux make $(linux_overrides) $@` (`internal/rocketclaw/Makefile:24`–`29`). The image's `ENTRYPOINT` is `/bin/sh -c "... exec setpriv ... \"$@\""` (`internal/rocketclaw/linux.Containerfile:43`). Each `exec` keeps the same process, so inside the container **`make` is PID 1**.
 
-The `coverage-profile` recipe clears leftover test browsers before and after its run with `pkill -P 1 -f`, whose pattern was then `'ms-playwright/chromium'` (now `internal/rocketclaw/Makefile:177` and `:179`). The comment above it (`:167`–`169`) explains the idea: a browser whose test run was killed is left as an orphan, orphans get PID 1 as their parent, so `-P 1` should match only orphans.
+The `coverage-profile` recipe clears leftover test browsers before and after its run with `pkill -P 1 -f`, whose pattern was then `'ms-playwright/chromium'` (now `internal/rocketclaw/Makefile:177` and `:179`). The idea: a browser whose test run was killed is left as an orphan, orphans get PID 1 as their parent, so `-P 1` should match only orphans.
 
 That idea fails when `make` itself is PID 1:
 
@@ -58,11 +58,11 @@ Fixed on 2026-11-10: the `pkill` patterns in `internal/rocketclaw/Makefile` (`co
 
 Keep the rule when adding a `pkill -f` or `pgrep -f` to a recipe: write its pattern so the pattern's own text does not match it.
 
-The Darwin `%` rule passes command-line variables to the container's `make` as typed (`linux_overrides`, `Makefile:14`–`18`; its comment explains the escaping), so a focused run such as `make -C internal/rocketclaw coverage-profile 'GOTESTRUN=^(TestA|TestB)$$'` works on a Mac.
+The Darwin `%` rule passes command-line variables to the container's `make` as typed (`linux_overrides`, `Makefile:14`–`18`), so a focused run such as `make -C internal/rocketclaw coverage-profile 'GOTESTRUN=^(TestA|TestB)$$'` works on a Mac.
 
 ## Why This Matters
 
-`-P 1` means "orphan" only when PID 1 is an init process. In a container, PID 1 is whatever command the container runs. The Makefile's comment states that assumption. Nothing checks it, and it broke silently when the Mac runs moved into the container. The direct targets are the ones people use for quick checks, so this lands on the person running a single test. Without this doc, they see `Terminated`, rerun it, maybe blame Colima or memory, and finally fall back to a full `make test` that takes much longer.
+`-P 1` means "orphan" only when PID 1 is an init process. In a container, PID 1 is whatever command the container runs. Nothing checks it, and it broke silently when the Mac runs moved into the container. The direct targets are the ones people use for quick checks, so this lands on the person running a single test. Without this doc, they see `Terminated`, rerun it, maybe blame Colima or memory, and finally fall back to a full `make test` that takes much longer.
 
 ## When to Apply
 
