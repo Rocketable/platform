@@ -66,8 +66,8 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 			}
 			defer func() { _ = conn.Close() }()
 
-			_, _, err = conn.ReadMessage()
-			if !assert.NoError(t, err) {
+			_, message, err := conn.ReadMessage()
+			if !assert.NoError(t, err) || answerWebsocketTitle(t, conn, message) {
 				return
 			}
 
@@ -522,7 +522,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 		defer func() { _ = conn.Close() }()
 
 		_, request, err := conn.ReadMessage()
-		if !assert.NoError(t, err) {
+		if !assert.NoError(t, err) || answerWebsocketTitle(t, conn, request) {
 			return
 		}
 

@@ -209,7 +209,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await commandSearch.fill("original");
     expect(await commands.getByRole("button", { name: /Open original conversation/ }).count()).toBe(0);
     await commandSearch.fill("");
-    for (const name of ["Sessions: Fork session", "Sessions: Handoff session", "Sessions: Name session", "Sessions: Pin session", "Sessions: Choose agent", "Command: Start goal ($goal)", "Command: Invoke skill ($skill)", "Command: Enqueue work ($enqueue)", "Command: Stash work ($stash)", "Command: Steer turn ($steer)"]) {
+    for (const name of ["Sessions: Fork session", "Sessions: Handoff session", "Sessions: Name session", "Sessions: Regenerate title", "Sessions: Pin session", "Sessions: Choose agent", "Command: Start goal ($goal)", "Command: Invoke skill ($skill)", "Command: Enqueue work ($enqueue)", "Command: Stash work ($stash)", "Command: Steer turn ($steer)"]) {
       const action = commands.getByRole("button", { name, exact: true });
       await action.waitFor();
       expect(await action.textContent()).toBe(name);

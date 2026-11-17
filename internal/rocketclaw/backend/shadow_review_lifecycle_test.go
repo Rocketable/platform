@@ -247,7 +247,11 @@ func TestShadowReviewClearLiveProducer(t *testing.T) {
 	}
 
 	requests, cancelled := make(chan string, 4), make(chan bool, 2)
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		var request struct {
 			Model string `json:"model"`
 		}

@@ -41,7 +41,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 			defer func() { _ = conn.Close() }()
 
 			for {
-				if _, _, err := conn.ReadMessage(); err != nil {
+				if _, message, err := conn.ReadMessage(); err != nil || answerWebsocketTitle(t, conn, message) {
 					return
 				}
 

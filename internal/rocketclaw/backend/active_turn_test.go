@@ -63,6 +63,10 @@ func newResumeTestBridges(t *testing.T, blocked bool, databaseURL ...string) (ne
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		body, _ := io.ReadAll(r.Body)
 		requests <- string(body)
 
@@ -867,6 +871,10 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	finals := make(chan *protocol.OutboundMessage, 8)
 	requests := make(chan string, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		body, err := io.ReadAll(r.Body)
 		assert.NoError(t, err)
 		w.Header().Set("Content-Type", "application/json")
@@ -1577,6 +1585,10 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 
 	bodies := make(chan string, 8)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		body, _ := io.ReadAll(r.Body)
 		bodies <- string(body)
 

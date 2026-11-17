@@ -87,6 +87,10 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 		var tagOutputs []string
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if answerTitleRequest(w, r) {
+				return
+			}
+
 			var body struct {
 				Input []struct{ Type, Output string }
 			}

@@ -64,6 +64,10 @@ func TestSessionTagToolsBridge(t *testing.T) {
 			requests := 0
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if answerTitleRequest(w, r) {
+					return
+				}
+
 				var body struct {
 					Instructions string `json:"instructions"`
 					Tools        []struct {
@@ -513,6 +517,10 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			var outputs []string
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if answerTitleRequest(w, r) {
+					return
+				}
+
 				raw, err := io.ReadAll(r.Body)
 				if !assert.NoError(t, err) {
 					return
@@ -1036,6 +1044,10 @@ func TestSessionsWriteRecipients(t *testing.T) {
 		var outputs []string
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if answerTitleRequest(w, r) {
+				return
+			}
+
 			var body struct {
 				Input []struct {
 					Type   string `json:"type"`

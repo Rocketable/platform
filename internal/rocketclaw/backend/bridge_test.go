@@ -1173,6 +1173,10 @@ func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 	requests := 0
 	newServer := func(provider string) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if answerTitleRequest(w, r) {
+				return
+			}
+
 			if r.URL.Path != "/responses" {
 				http.NotFound(w, r)
 
@@ -2859,6 +2863,10 @@ func TestRunTurnExposesPrincipalEnv(t *testing.T) {
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		requestBody.Input = nil
 		assert.NoError(t, json.NewDecoder(r.Body).Decode(&requestBody))
 		w.Header().Set("Content-Type", "application/json")
@@ -2942,6 +2950,10 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		if r.URL.Path != "/responses" {
 			errRequest = assert.AnError
 
@@ -3149,6 +3161,10 @@ Request: $ARGUMENTS
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		if r.URL.Path != "/responses" {
 			errRequest = assert.AnError
 
@@ -3340,6 +3356,10 @@ func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
 	var requestBody string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		body, err := io.ReadAll(r.Body)
 		if !assert.NoError(t, err) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -3501,6 +3521,10 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		if r.URL.Path != "/responses" {
 			errRequest = assert.AnError
 
@@ -3683,6 +3707,10 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		if r.URL.Path != "/responses" {
 			errRequest = assert.AnError
 
@@ -3747,6 +3775,10 @@ func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		if r.URL.Path != "/responses" {
 			errRequest = assert.AnError
 
@@ -4139,6 +4171,10 @@ func newNoteTest(t *testing.T, respond noteTestResponder) *noteTest {
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		body, _ := io.ReadAll(r.Body)
 		nt.requests <- string(body)
 
@@ -4186,6 +4222,56 @@ func (nt *noteTest) run(t *testing.T, observe func(*protocol.OutboundMessage)) (
 }
 
 func ignoreOutbound(*protocol.OutboundMessage) {}
+
+func answerTitleRequest(w http.ResponseWriter, r *http.Request) bool {
+	body, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	if !bytes.Contains(body, []byte(`"instructions":"You name conversations`)) {
+		return false
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, `{"id":"resp_title","object":"response","created_at":0,"status":"completed","model":"gpt-6-luna","output":[{"id":"msg_title","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Session title","annotations":[]}]}]}`)
+
+	return true
+}
+
+func TestFirstWebMessageNamesUnnamedSession(t *testing.T) {
+	t.Parallel()
+
+	nt := newNoteTest(t, answerNoteTest)
+	named := "web:named"
+	require.NoError(t, nt.service.UpsertThread(named, ThreadState{Agent: "main"}))
+	_, err := nt.service.UpdateConversationDetails(t.Context(), named, nil, new("Chosen name"))
+	require.NoError(t, err)
+
+	manager, _ := nt.run(t, ignoreOutbound)
+	names := func() []string {
+		names, err := queryStrings(t.Context(), nt.service.db, `SELECT conversation_id || '=' || name FROM conversations ORDER BY conversation_id`, "session names")
+		require.NoError(t, err)
+
+		return names
+	}
+
+	for _, prompt := range []struct{ id, text string }{{nt.conversationID, "why does the billing export fail"}, {named, "why does the billing export fail"}} {
+		bridge := nt.bridge(t, manager, prompt.id)
+		require.NoError(t, bridge.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, prompt.text, true)))
+		readFinalFor(t, nt.finals, prompt.id)
+		bridge.titles.Wait()
+	}
+
+	require.Equal(t, []string{nt.conversationID + "=Session title", named + "=Chosen name"}, names(), "only an unnamed session takes the generated title")
+
+	_, err = nt.service.UpdateConversationDetails(t.Context(), nt.conversationID, nil, new(""))
+	require.NoError(t, err)
+
+	bridge := nt.bridge(t, manager, nt.conversationID)
+	require.NoError(t, bridge.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "and the invoice export?", true)))
+	readFinalFor(t, nt.finals, nt.conversationID)
+	bridge.titles.Wait()
+	require.Equal(t, []string{nt.conversationID + "=", named + "=Chosen name"}, names(), "only a session's first message names it")
+}
 
 func (nt *noteTest) bridge(t *testing.T, manager *threadBridgeManager, conversationID string) *Bridge {
 	t.Helper()

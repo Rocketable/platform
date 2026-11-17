@@ -55,7 +55,7 @@ func TestShadowsRealBackendBrowser(t *testing.T) {
 		defer func() { _ = conn.Close() }()
 
 		_, raw, err := conn.ReadMessage()
-		if !assert.NoError(t, err) {
+		if !assert.NoError(t, err) || answerWebsocketTitle(t, conn, raw) {
 			return
 		}
 
