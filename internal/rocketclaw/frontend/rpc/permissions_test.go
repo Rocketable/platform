@@ -25,6 +25,8 @@ import (
 )
 
 func TestSpacePermissions(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
@@ -619,6 +621,8 @@ func TestSpacePermissionTurns(t *testing.T) {
 }
 
 func TestRunCronJobFollowsStickyAgent(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 

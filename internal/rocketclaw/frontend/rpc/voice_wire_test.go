@@ -17,6 +17,8 @@ import (
 )
 
 func TestVoiceDialectURLs(t *testing.T) {
+	t.Parallel()
+
 	public := func(create, sideband, hangup string) *publicVoice {
 		return &publicVoice{createURL: create, sidebandURL: sideband, hangupURL: hangup}
 	}
@@ -45,6 +47,8 @@ func TestVoiceDialectURLs(t *testing.T) {
 }
 
 func TestVoiceWireRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	instructions, err := json.Marshal(fmt.Sprintf(voiceInstructions, "main"))
 	require.NoError(t, err)
 
@@ -220,6 +224,8 @@ func TestVoiceWireRoundTrip(t *testing.T) {
 }
 
 func TestVoiceAppends(t *testing.T) {
+	t.Parallel()
+
 	euro := func(n int) string {
 		return `{"type":"delegation.context.append","delegation_item_id":"d1","channel":"speakable","content":[{"type":"input_text","text":"` + strings.Repeat("€", n) + `"}]}`
 	}
@@ -243,6 +249,8 @@ func TestVoiceAppends(t *testing.T) {
 }
 
 func TestVoiceSeed(t *testing.T) {
+	t.Parallel()
+
 	skipped := []*TranscriptEvent{{Role: "developer", Text: "dev", Complete: true}, {Role: "tool", Text: "secret", Complete: true}, {Role: "reasoning", Text: "think", Complete: true}, {Role: "assistant", Text: "partial"}}
 
 	counted := make([]*TranscriptEvent, 0, 50)
@@ -292,6 +300,8 @@ func testVoiceDialects(t *testing.T, serverURL string) map[string]voiceDialect {
 }
 
 func TestVoiceWireFailures(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name, auth, location, body string
 		status                     int
@@ -395,6 +405,8 @@ func TestVoiceRedirects(t *testing.T) {
 }
 
 func TestVoiceCodexHangupClosesOverSideband(t *testing.T) {
+	t.Parallel()
+
 	closes := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)

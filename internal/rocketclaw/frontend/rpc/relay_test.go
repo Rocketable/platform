@@ -106,6 +106,8 @@ func startProxyTestRPC(t *testing.T, upstream string) (http.Handler, *backend.Se
 }
 
 func TestOpenCodeProxy(t *testing.T) {
+	t.Parallel()
+
 	fake := &proxyUpstream{}
 	upstream := httptest.NewServer(fake)
 	t.Cleanup(upstream.Close)
@@ -208,6 +210,8 @@ VALUES ('opencode:box:s2', '', '', 'remote', FALSE, 'remote', 'box', 's2', '', '
 }
 
 func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
+	t.Parallel()
+
 	fake := &proxyUpstream{}
 	upstream := httptest.NewServer(fake)
 	t.Cleanup(upstream.Close)

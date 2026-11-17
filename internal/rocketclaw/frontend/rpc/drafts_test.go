@@ -35,6 +35,8 @@ import (
 )
 
 func TestAgentDraftRPCs(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 

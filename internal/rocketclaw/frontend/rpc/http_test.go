@@ -35,6 +35,8 @@ import (
 
 func TestHTTPEventFramingAllocationBudget(t *testing.T) {
 	if os.Getenv("ROCKETCLAW_TEST_EVENT_FRAMING_ALLOCATIONS") != "1" {
+		t.Parallel()
+
 		executable := filepath.Join(t.TempDir(), "rpc.test")
 		build := exec.CommandContext(t.Context(), "go", "test", "-c", "-race=false", "-cover=false", "-o", executable, ".")
 
@@ -115,6 +117,8 @@ func startHTTPTestServer(t *testing.T, connection *grpc.ClientConn) *httptest.Se
 }
 
 func TestHTTPBoundary(t *testing.T) {
+	t.Parallel()
+
 	connection, err := grpc.NewClient("unix:"+testSocketPath(t), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
@@ -182,6 +186,8 @@ func TestHTTPBoundary(t *testing.T) {
 }
 
 func TestHTTPReload(t *testing.T) {
+	t.Parallel()
+
 	core := &mockBackend{SandboxErrorFunc: noSandboxError, ReloadFunc: func(reason string) (string, error) {
 		require.Equal(t, "updated assets", reason)
 		return "rocketclaw runtime assets reloaded", nil
@@ -239,6 +245,8 @@ func TestHTTPReload(t *testing.T) {
 }
 
 func TestHTTPStreams(t *testing.T) {
+	t.Parallel()
+
 	for _, test := range []struct {
 		name     string
 		code     codes.Code

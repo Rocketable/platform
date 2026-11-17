@@ -132,6 +132,8 @@ func (rt *searchRunTest) marks(t *testing.T) []string {
 }
 
 func TestSearchRunOutlivesItsRequest(t *testing.T) {
+	t.Parallel()
+
 	rt := newSearchRunTest(t)
 
 	rt.leave(t, searchRunRequest("s", "a b", true))
@@ -202,6 +204,8 @@ func TestSearchRunOutlivesItsRequest(t *testing.T) {
 }
 
 func TestSearchRunReplacedOrEvictedMarksNothing(t *testing.T) {
+	t.Parallel()
+
 	rt := newSearchRunTest(t)
 
 	replaced := rt.answer(searchRunRequest("s", "a b", true))
@@ -262,6 +266,8 @@ func TestSearchRunReplacedOrEvictedMarksNothing(t *testing.T) {
 }
 
 func TestStopSearchesCancelsAndWaits(t *testing.T) {
+	t.Parallel()
+
 	rt := newSearchRunTest(t)
 
 	rt.leave(t, searchRunRequest("s", "a b", true))
