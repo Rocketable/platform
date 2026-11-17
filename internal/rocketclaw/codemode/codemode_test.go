@@ -12,15 +12,10 @@ import (
 
 func allowAll(context.Context, string, map[string]any) error { return nil }
 
-type inertToolCallObserver struct{}
-
-func (inertToolCallObserver) ObserveToolCall(context.Context, []string, string, map[string]any) {
-}
-
 func TestRunRawStringKeepsUnknownEscapes(t *testing.T) {
 	got, err := Run(t.Context(), `def main():
     return r"find . \( -name '*.go' \)"
-`, nil, allowAll, nilCall, inertToolCallObserver{}, nil)
+`, nil, allowAll, nilCall, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -71,7 +66,7 @@ func TestRunParseFailureDoesNotCallHost(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			called := false
 
-			_, err := Run(t.Context(), tc.source, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
+			_, err := Run(t.Context(), tc.source, nil, allowAll, nilCall, []HostTool{{
 				Name: "bash",
 				CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
 					called = true
@@ -109,7 +104,7 @@ func TestRunRawTripleQuotedMultiline(t *testing.T) {
     return bash(command=r'''python3 - <<'PY'
 print("hello")
 PY''')
-`, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
+`, nil, allowAll, nilCall, []HostTool{{
 		Name: "bash",
 		CallValue: func(_ context.Context, args map[string]any) (starlark.Value, error) {
 			got, _ = args["command"].(string)
@@ -128,7 +123,7 @@ PY''')
 func TestRunDollarInsideRawString(t *testing.T) {
 	got, err := Run(t.Context(), `def main():
     return r'''rg -F -- "$pattern" file.txt'''
-`, nil, allowAll, nilCall, inertToolCallObserver{}, nil)
+`, nil, allowAll, nilCall, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -141,7 +136,7 @@ func TestRunDollarInsideRawString(t *testing.T) {
 func TestRunMainReturnsDictJSON(t *testing.T) {
 	got, err := Run(t.Context(), `def main():
     return {"a": 1, "b": True}
-`, nil, allowAll, nilCall, inertToolCallObserver{}, nil)
+`, nil, allowAll, nilCall, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -163,7 +158,7 @@ func TestRunRejectsInvalidProgram(t *testing.T) {
 		{"unencodable result", "def main():\n    return lambda: 'unused'\n", "encode main result:"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Run(t.Context(), tc.source, nil, allowAll, nilCall, inertToolCallObserver{}, nil)
+			got, err := Run(t.Context(), tc.source, nil, allowAll, nilCall, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Run() error = %v, want %q", err, tc.want)
 			}
@@ -193,7 +188,7 @@ func TestRunDecideDenyDoesNotCall(t *testing.T) {
 	}, func(context.Context, string, string, map[string]any) (string, error) {
 		called = true
 		return "", nil
-	}, inertToolCallObserver{}, nil)
+	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "denied") {
 		t.Fatalf("Run() error = %v, want denied", err)
 	}
@@ -232,7 +227,7 @@ func TestRunInvalidSchemaArgsDoesNotCall(t *testing.T) {
 			got, err := Run(t.Context(), "def main():\n    return "+tc.expression+"\n", tools, allowAll, func(context.Context, string, string, map[string]any) (string, error) {
 				called = true
 				return "", nil
-			}, inertToolCallObserver{}, nil)
+			}, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Run() error = %v, want %q", err, tc.want)
 			}
@@ -269,7 +264,7 @@ func TestBuildCatalogCollision(t *testing.T) {
 		t.Fatalf("BuildCatalog() error = %v, want collision", err)
 	}
 
-	got, err := Run(t.Context(), "def main():\n    return 'unused'\n", tools, allowAll, nilCall, inertToolCallObserver{}, nil)
+	got, err := Run(t.Context(), "def main():\n    return 'unused'\n", tools, allowAll, nilCall, nil)
 	if err == nil || !strings.Contains(err.Error(), "collision") || got != "" {
 		t.Fatalf("Run() = %q, %v, want collision error and no result", got, err)
 	}
@@ -283,7 +278,7 @@ func TestRunCancelledContextStops(t *testing.T) {
     while True:
         pass
     return "done"
-`, nil, allowAll, nilCall, inertToolCallObserver{}, nil)
+`, nil, allowAll, nilCall, nil)
 	if err == nil {
 		t.Fatal("Run() error = nil, want canceled")
 	}
@@ -320,7 +315,7 @@ func TestRunCallsTool(t *testing.T) {
 		}
 
 		return "echoed", nil
-	}, inertToolCallObserver{}, nil)
+	}, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -340,7 +335,7 @@ func TestRunHostTool(t *testing.T) {
 	got, err := Run(t.Context(), `def main():
     first = read(filePath="a.txt")
     return first + read(filePath="a.txt")
-`, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
+`, nil, allowAll, nilCall, []HostTool{{
 		Name: "read",
 		InputSchema: map[string]any{
 			"type":       "object",
@@ -377,7 +372,7 @@ func TestRunRejectsHostToolNames(t *testing.T) {
 		{"concurrency collision", []HostTool{{Name: "gather", CallValue: nilCallHost}}, `builtin name collision "gather"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Run(t.Context(), "def main():\n    return 'unused'\n", []ToolDesc{{Server: "demo", Name: "echo"}}, allowAll, nilCall, inertToolCallObserver{}, tc.host)
+			got, err := Run(t.Context(), "def main():\n    return 'unused'\n", []ToolDesc{{Server: "demo", Name: "echo"}}, allowAll, nilCall, tc.host)
 			if err == nil || err.Error() != tc.want || got != "" {
 				t.Fatalf("Run() = %q, %v, want no result and %q", got, err, tc.want)
 			}
@@ -415,7 +410,7 @@ func TestRunHostToolValueAndError(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Run(t.Context(), "def main():\n    return read()\n", nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{tc.tool})
+			got, err := Run(t.Context(), "def main():\n    return read()\n", nil, allowAll, nilCall, []HostTool{tc.tool})
 			if got != tc.want || !errors.Is(err, tc.err) {
 				t.Fatalf("Run() = %q, %v, want %q, %v", got, err, tc.want, tc.err)
 			}
