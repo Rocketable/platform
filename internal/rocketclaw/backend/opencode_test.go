@@ -34,6 +34,8 @@ type fakeOpenCode struct {
 	events    chan string
 	messages  map[string][]openCodeTestMessage
 	reads     []string
+	mcps      map[string][]string
+	bridges   []string
 
 	pending map[string]map[string][]string
 }
@@ -93,6 +95,18 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": requests})
+	case "GET /api/mcp":
+		servers := []map[string]string{}
+		for _, name := range f.mcps[r.URL.Query().Get("location[directory]")] {
+			servers = append(servers, map[string]string{"name": name})
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": servers})
+	case "PUT /api/experimental/mcp/rocketclaw":
+		body, _ := io.ReadAll(r.Body)
+		f.bridges = append(f.bridges, r.URL.Query().Get("location[directory]")+" "+string(body))
+
+		w.WriteHeader(http.StatusNoContent)
 	case "GET /api/event":
 		_, _ = fmt.Fprint(w, "data: {\"type\":\"server.connected\",\"data\":{}}\n\n: heartbeat\n\n")
 		w.(http.Flusher).Flush()
@@ -237,6 +251,18 @@ func remoteSidebar(t *testing.T, s *SessionService) []SidebarSession {
 	}
 
 	return rows
+}
+
+func TestAddOpenCodeBridgesReachesOpenFoldersWithoutIt(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeOpenCode{locations: []string{"/srv/a", "/srv/b"}, mcps: map[string][]string{"/srv/a": {"context7"}, "/srv/b": {"context7", "rocketclaw"}}}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	addOpenCodeBridges(t.Context(), "https://claw.example.ts.net", "box", config.OpenCodeConfig{URL: server.URL, Password: "pw"})
+
+	assert.Equal(t, []string{`/srv/a {"config":{"type":"remote","url":"https://claw.example.ts.net/opencode/box/mcp","oauth":false,"headers":{"Authorization":"Basic b3BlbmNvZGU6cHc="}}}`}, fake.bridges)
 }
 
 func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {

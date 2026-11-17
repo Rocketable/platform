@@ -55,7 +55,7 @@ Agents running inside remote OpenCode sessions cannot reach RocketClaw features.
 
 **Setup**
 
-- R10. A coding server gains the endpoint through its own OpenCode startup config; RocketClaw documents the config entry, the credential, and the certificate requirement.
+- R10. A coding server gains the endpoint through its own OpenCode startup config; RocketClaw documents the config entry, the credential, and the certificate requirement. Superseded 2026-11-17: RocketClaw adds the bridge per folder through OpenCode's runtime MCP API, before relaying each Web prompt and at each sync for open folders that lack it, as OpenCode's ACP agent does for `session/new`'s `mcpServers`.
 
 ### Key Decisions
 
@@ -72,7 +72,7 @@ Agents running inside remote OpenCode sessions cannot reach RocketClaw features.
 
 - Only tags and Hosted Pages are exposed; other RocketClaw tools (sessions, scheduling, goals) are not.
 - Tools act only on the calling session; no tool names another session.
-- RocketClaw does not edit or push OpenCode configuration.
+- RocketClaw does not edit or push OpenCode configuration. Superseded 2026-11-17 by R10's runtime addition, which edits no configuration file.
 - Sessions started directly in OpenCode, remote sessions that exist before this change, and rows sync re-inserts after a deletion have no Birth Space. Nothing sets a remote session's space after creation, so their page calls are always refused; only sessions created or forked from the Web can publish pages.
 - The endpoint accepts password attempts, without throttling, from any host that reaches either Web listener, tagged tailnet nodes included. The setup docs require a randomly generated high-entropy password for every coding server that uses the bridge, because that password already grants shell access to the server.
 - Considered and not built: a loop guard on the parent walk, because OpenCode assigns a parent once at creation and each lookup already times out; would change if OpenCode ever allowed re-parenting.

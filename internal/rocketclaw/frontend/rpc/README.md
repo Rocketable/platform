@@ -708,7 +708,12 @@ node, outside this proxy. It answers coding servers, not browsers: the tailnet
 handler lets that path alone through without a Tailscale user, and the bridge takes
 HTTP Basic `opencode:<password>` with the server's password. Each tool call acts on
 the RocketClaw copy of the session its `_meta["ai.opencode/sessionID"]` names, or of
-its nearest listed ancestor, and is refused when there is none.
+its nearest listed ancestor, and is refused when there is none. RocketClaw adds the
+bridge to OpenCode itself, as MCP server `rocketclaw` at the Web's tailnet origin,
+through OpenCode's experimental `PUT /api/experimental/mcp/rocketclaw`. An addition
+covers one folder until OpenCode restarts or closes it, so before relaying each
+prompt the relay asks OpenCode for the session's folder and adds the bridge there,
+and each sync adds it to every open folder that lacks it.
 
 The `web.tsnet` node (see the root README for setup) wraps the Web handler in one
 that asks the node's `LocalClient().WhoIs` about the connection's remote address and
