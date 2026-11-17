@@ -69,7 +69,7 @@ func AgentSettings() []AgentSetting {
 			Explanation: "The agent's own folder, which its shell and file tools may read and change. It is relative to RocketClaw's folder and may use $VARIABLES.",
 			Default:     "None: an easy agent must name a folder.", Allowed: "A folder that is not, does not contain, and is not inside the workspace or RocketClaw's own folders."},
 		{Key: "shell", Modes: easy, Group: "Folder and shell", Label: "Shell", Control: AgentSettingText,
-			Explanation: "Where the agent's shell commands run: emulated for real Bash in a Linux sandbox, or the full path of a wrapper program on the server. A wrapper gets each command as its one argument, starts in the agent's folder, and gets the agent's secretsARN, commands and allowedNetworkTargets as one JSON object in ROCKETCLAW_ENVIRONMENT, null where the file leaves a key out.",
+			Explanation: "Where the agent's shell commands run: emulated for real Bash in a Linux sandbox, or the full path of a wrapper program on the server. A wrapper gets each command as its one argument, starts in the agent's folder, and gets the agent's secretsARN, commands and allowedNetworkTargets, null where the file leaves a key out, and the folder as workingDirectory, as one JSON object in ROCKETCLAW_ENVIRONMENT.",
 			Default:     "The emulated shell.", Allowed: "emulated, or the absolute path of one program without arguments."},
 		{Key: "shell", Modes: advanced, Group: "Folder and shell", Label: "Shell", Control: AgentSettingText,
 			Explanation: "Where the agent's shell commands run: emulated for real Bash in a Linux sandbox, or the full path of a wrapper program.",

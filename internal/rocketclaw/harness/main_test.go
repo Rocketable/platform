@@ -487,7 +487,7 @@ func TestExecuteSpillStorageIsPrivate(t *testing.T) {
 						require.NoError(t, err)
 
 						if filepath.IsAbs(path) && !strings.HasPrefix(path, root.Name()+"/") {
-							require.Regexp(t, "execute output storage is private|path escapes root|bash command denied: external path access is blocked", result.Output, "%s(%s)", input.name, raw)
+							require.Regexp(t, "execute output storage is private|path escapes root|bash command denied: (path|workdir) is outside this agent's working directory", result.Output, "%s(%s)", input.name, raw)
 						} else {
 							require.Contains(t, result.Output, deniedSpillAccess, "%s(%s)", input.name, raw)
 						}

@@ -122,10 +122,24 @@ func (e *emulated) bash(t *testing.T, command string) BashResult {
 	return e.sss.Bash(t.Context(), &e.shell, bashParams{Command: command, Workdir: e.shell.Dir})
 }
 
-func (e *emulated) ok(t *testing.T, command, want string) {
+func (e *emulated) sandboxed(t *testing.T, command string) BashResult {
 	t.Helper()
 
-	got := e.bash(t, command)
+	return emulatedBashResult(runEmulated(t.Context(), e.sss.sandbox, &e.shell, command, e.shell.Dir, e.sss.env, append(os.Environ(), e.sss.env...), defaultShellTimeout*time.Millisecond))
+}
+
+func (e *emulated) ok(t *testing.T, command, want string) {
+	t.Helper()
+	requireBashOutput(t, command, e.bash(t, command), want)
+}
+
+func (e *emulated) sandboxedOK(t *testing.T, command, want string) {
+	t.Helper()
+	requireBashOutput(t, command, e.sandboxed(t, command), want)
+}
+
+func requireBashOutput(t *testing.T, command string, got BashResult, want string) {
+	t.Helper()
 	require.True(t, got.Success, "%s: %s (%s)", command, got.Output, got.ErrorCode)
 	require.Equal(t, want, got.Output, command)
 }
@@ -161,6 +175,15 @@ declare -A m=([k]=v); echo "${m[k]}"`, "two: line 2\n3 2 1\nok SUB\nv\n")
 
 	e.ok(t, "echo t > /tmp/t && cat /tmp/t", "t\n")
 	e.ok(t, "cat /tmp/t 2>&1 || true", "cat: /tmp/t: No such file or directory\n")
+
+	e.ok(t, "mkdir /tmp/d && touch /tmp/d/f && cp /tmp/d/f /tmp/g && rm /tmp/g && cd /tmp/d && ls && cat /tmp/d/f", "f\n")
+	e.ok(t, "touch ~/h && cat ~/h && cd ~ && ls", "h\n")
+	require.Equal(t, deniedBashOutsidePath, e.bash(t, "head -c 4 /dev/urandom").Output)
+	require.Equal(t, deniedBashOutsidePath, e.bash(t, "grep -c ^Pid: /proc/self/status").Output)
+
+	got = e.sss.Bash(t.Context(), &e.shell, bashParams{Command: "pwd; touch here; ls", Workdir: "/tmp"})
+	require.True(t, got.Success, got.Output)
+	require.Equal(t, "/tmp\nhere\n", got.Output)
 }
 
 func TestEmulatedShellEnvironment(t *testing.T) {
@@ -168,7 +191,7 @@ func TestEmulatedShellEnvironment(t *testing.T) {
 
 	e := newEmulated(t, map[string]string{"quiet": "true"}, map[string]string{"AGENT_SECRET": "agent-secret"}, nil)
 
-	got := e.bash(t, "env; cat /proc/[0-9]*/environ /proc/[0-9]*/cmdline 2>/dev/null; ls -la /extensions /run/rocketclaw; cat /run/rocketclaw/script; quiet")
+	got := e.sandboxed(t, "env; cat /proc/[0-9]*/environ /proc/[0-9]*/cmdline 2>/dev/null; ls -la /extensions /run/rocketclaw; cat /run/rocketclaw/script; quiet")
 	require.True(t, got.Success, got.Output)
 	require.Contains(t, got.Output, "ROCKETCLAW_CONVERSATION_ID=web:c1")
 
@@ -200,7 +223,7 @@ func TestEmulatedShellHostCommands(t *testing.T) {
 	require.False(t, got.Success)
 	require.Contains(t, got.Output, `"rocketclaw-x": names are`)
 
-	e.ok(t, "head -c 17000000 /dev/zero | copy > /dev/null 2>&1; echo $?", "126\n")
+	e.sandboxedOK(t, "head -c 17000000 /dev/zero | copy > /dev/null 2>&1; echo $?", "126\n")
 	e.ok(t, "killed; echo $?", "137\n")
 
 	e.ok(t, `coproc S { stream; }; echo abc >&"${S[1]}"; read -r l <&"${S[0]}"; echo "got $l"`, "got ABC\n")
@@ -214,19 +237,19 @@ func TestEmulatedShellHostCommands(t *testing.T) {
 
 	host, err := os.ReadFile("/proc/sys/kernel/hostname")
 	require.NoError(t, err)
-	e.ok(t, "hostname; cat /proc/sys/kernel/hostname", string(host)+"rocketclaw\n")
+	e.sandboxedOK(t, "hostname; cat /proc/sys/kernel/hostname", string(host)+"rocketclaw\n")
 
 	builtin := newEmulated(t, map[string]string{"echo": "printf 'host:%s\n'"}, nil, nil)
 	builtin.ok(t, "echo hi; builtin echo native; command echo native2; /extensions/echo abs; bash -c 'echo nested'", "host:hi\nnative\nnative2\nhost:abs\nhost:nested\n")
 	e.ok(t, "my-cmd", "dashed")
 
-	e.ok(t, "head -c 4000000 /dev/urandom > r; copy < r | copy | cmp - r && echo same", "same\n")
+	e.sandboxedOK(t, "head -c 4000000 /dev/urandom > r; copy < r | copy | cmp - r && echo same", "same\n")
 
-	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/evil && /tmp/evil; echo $?", "evil: command not found\n127\n")
-	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge unknown", "exit 127: arbitrary: command not found\n")
-	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge otherexec upper", "exit 126: rocketclaw: host command request for another command\n")
-	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge huge; echo done", "exit 126: rocketclaw: malformed host command request\ndone\n")
-	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge hangup copy; echo done", "done\n")
+	e.sandboxedOK(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/evil && /tmp/evil; echo $?", "evil: command not found\n127\n")
+	e.sandboxedOK(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge unknown", "exit 127: arbitrary: command not found\n")
+	e.sandboxedOK(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge otherexec upper", "exit 126: rocketclaw: host command request for another command\n")
+	e.sandboxedOK(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge huge; echo done", "exit 126: rocketclaw: malformed host command request\ndone\n")
+	e.sandboxedOK(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge hangup copy; echo done", "done\n")
 }
 
 func TestEmulatedShellSecrets(t *testing.T) {
@@ -252,10 +275,10 @@ func TestEmulatedShellSecrets(t *testing.T) {
 
 	e.ok(t, "PATH=/evil AWS_SECRET_ACCESS_KEY=evil HTTPS_PROXY=http://evil /extensions/probe", "host-aws http://host-proxy "+os.Getenv("PATH")+"\n")
 
-	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge guestenv deploy; deploy --release v8", "exit 126: rocketclaw: malformed host command request\n"+want("v8"))
-	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge hostenv deploy", "exit 126: rocketclaw: malformed host command request\n")
+	e.sandboxedOK(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge guestenv deploy; deploy --release v8", "exit 126: rocketclaw: malformed host command request\n"+want("v8"))
+	e.sandboxedOK(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge hostenv deploy", "exit 126: rocketclaw: malformed host command request\n")
 
-	got := e.bash(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge raw quiet | od -c")
+	got := e.sandboxed(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge raw quiet | od -c")
 	require.True(t, got.Success, got.Output)
 	require.NotContains(t, strings.ReplaceAll(got.Output, " ", ""), "host-secret")
 

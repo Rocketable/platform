@@ -67,10 +67,11 @@ func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents ha
 	shell := harness.CustomShell{Emulated: agent.CustomShell.Emulated, Path: agent.CustomShell.Path, Dir: folder, ReadOnly: readOnly, Commands: agent.Commands, NetworkTargets: agent.NetworkTargets, Secrets: secrets}
 	if shell.Path != "" {
 		environment, _ := json.Marshal(struct {
-			SecretsARN     []string          `json:"secretsARN"`
-			Commands       map[string]string `json:"commands"`
-			NetworkTargets []string          `json:"allowedNetworkTargets"`
-		}{agent.SecretsARN, agent.Commands, agent.NetworkTargets}, json.Deterministic(true), json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+			SecretsARN       []string          `json:"secretsARN"`
+			Commands         map[string]string `json:"commands"`
+			NetworkTargets   []string          `json:"allowedNetworkTargets"`
+			WorkingDirectory string            `json:"workingDirectory"`
+		}{agent.SecretsARN, agent.Commands, agent.NetworkTargets, folder}, json.Deterministic(true), json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
 		shell.Env = []string{"ROCKETCLAW_ENVIRONMENT=" + string(environment)}
 	}
 

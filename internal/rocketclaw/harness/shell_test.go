@@ -44,8 +44,8 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		}{
 			{"blank command", bashParams{Command: " \t\n"}, "command is required"},
 			{"negative timeout", bashParams{Command: "touch rejected-command", TimeoutMillisecond: -1}, "Invalid timeout_ms value: -1. timeout_ms must be a positive number."},
-			{"missing workdir", bashParams{Command: "touch rejected-command", Workdir: "missing"}, `resolve workdir "missing":`},
-			{"file workdir", bashParams{Command: "touch rejected-command", Workdir: "root.txt"}, `resolve workdir "root.txt": not a directory`},
+			{"missing workdir", bashParams{Command: "touch rejected-command", Workdir: "missing"}, deniedBashMissingWorkdir},
+			{"file workdir", bashParams{Command: "touch rejected-command", Workdir: "root.txt"}, deniedBashMissingWorkdir},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				got := sss.Bash(t.Context(), &CustomShell{}, tc.command)
@@ -112,7 +112,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	t.Run("external workdir is rejected", func(t *testing.T) {
 		workdir := t.TempDir()
 		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "pwd", TimeoutMillisecond: 0, Workdir: workdir, Description: "external pwd"}).String()
-		require.Equal(t, fmt.Sprintf("resolve workdir %q: path escapes root: %s", workdir, workdir), got)
+		require.Equal(t, deniedBashWorkdir, got)
 	})
 
 	t.Run("direct external file access is denied", func(t *testing.T) {
@@ -121,23 +121,22 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		require.NoError(t, os.WriteFile(externalFile, []byte("secret\n"), 0o644))
 
 		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "cat " + externalFile, TimeoutMillisecond: 0, Workdir: "", Description: "external cat"}).String()
-		require.Contains(t, got, "bash command denied: external path access is blocked")
-		require.Contains(t, got, externalFile)
+		require.Equal(t, deniedBashOutsidePath, got)
 	})
 
 	t.Run("relative external file access is denied", func(t *testing.T) {
 		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "cat ../outside.txt", TimeoutMillisecond: 0, Workdir: "", Description: "relative external cat"}).String()
-		require.Equal(t, "bash command denied: external path access is blocked: ../outside.txt", got)
+		require.Equal(t, deniedBashOutsidePath, got)
 	})
 
 	t.Run("external cd is denied", func(t *testing.T) {
 		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "cd /tmp", TimeoutMillisecond: 0, Workdir: "", Description: "external cd"}).String()
-		require.Equal(t, "bash command denied: external path access is blocked: /tmp", got)
+		require.Equal(t, deniedBashOutsidePath, got)
 	})
 
 	t.Run("direct env file access is denied", func(t *testing.T) {
 		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "cat .env", TimeoutMillisecond: 0, Workdir: "", Description: "env cat"}).String()
-		require.Equal(t, "bash command denied: "+deniedEnvAccessMessage(".env"), got)
+		require.Equal(t, deniedBashEnvFile, got)
 	})
 
 	t.Run("env example file access is allowed", func(t *testing.T) {
@@ -289,6 +288,142 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			require.ErrorIs(t, err, fs.ErrNotExist)
 		})
 	})
+}
+
+func TestBashStaysInTheAgentFolder(t *testing.T) {
+	workspace, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, workspace.Close()) })
+
+	require.NoError(t, workspace.Mkdir(".tmp", 0o700))
+	require.NoError(t, workspace.WriteFile("wrap.sh", []byte("#!/bin/sh\nexec /bin/bash -c \"$1\""), 0o755))
+
+	shellTemp := testShellTempConfig(t, workspace, filepath.Join(workspace.Name(), ".tmp"))
+	sss := newSandboxedShellSystem(workspace, &shellTemp, nil, &sandbox.Runtime{})
+
+	folders := map[string]*os.Root{}
+
+	for _, name := range []string{"folder", "uploads", "outside"} {
+		dir, err := filepath.EvalSymlinks(t.TempDir())
+		require.NoError(t, err)
+
+		folders[name], err = os.OpenRoot(dir)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, folders[name].Close()) })
+	}
+
+	folder, uploads, outside := folders["folder"].Name(), folders["uploads"].Name(), folders["outside"].Name()
+	t.Setenv("HOME", outside)
+	require.NoError(t, folders["uploads"].WriteFile("report.txt", []byte("upload"), 0o644))
+	require.NoError(t, folders["outside"].WriteFile("secret.txt", []byte("secret"), 0o644))
+
+	wrapper := CustomShell{Path: filepath.Join(workspace.Name(), "wrap.sh"), Dir: folder, ReadOnly: []string{uploads}}
+	emulated := CustomShell{Emulated: true, Dir: folder, ReadOnly: []string{uploads}}
+
+	for _, tc := range []struct {
+		name    string
+		shell   CustomShell
+		params  bashParams
+		want    string
+		success bool
+	}{
+		{"wrapper cat outside", wrapper, bashParams{Command: "cat " + outside + "/secret.txt"}, deniedBashOutsidePath, false},
+		{"wrapper cp from outside", wrapper, bashParams{Command: "cp " + outside + "/secret.txt stolen.txt"}, deniedBashOutsidePath, false},
+		{"wrapper cp to outside", wrapper, bashParams{Command: "cp " + uploads + "/report.txt " + outside + "/leak.txt"}, deniedBashOutsidePath, false},
+		{"wrapper write outside", wrapper, bashParams{Command: "touch " + outside + "/new.txt"}, deniedBashOutsidePath, false},
+		{"wrapper relative escape", wrapper, bashParams{Command: "cat ../" + filepath.Base(outside) + "/secret.txt"}, deniedBashOutsidePath, false},
+		{"wrapper write into uploads", wrapper, bashParams{Command: "touch " + uploads + "/new.txt"}, deniedBashOutsidePath, false},
+		{"wrapper cp into uploads", wrapper, bashParams{Command: "cp report.txt " + uploads + "/copy.txt", Workdir: uploads}, deniedBashOutsidePath, false},
+		{"wrapper workdir outside", wrapper, bashParams{Command: "ls", Workdir: outside}, deniedBashWorkdir, false},
+		{"wrapper relative workdir outside", wrapper, bashParams{Command: "ls", Workdir: "../" + filepath.Base(outside)}, deniedBashWorkdir, false},
+		{"wrapper workspace path", wrapper, bashParams{Command: "cat " + workspace.Name() + "/wrap.sh"}, deniedBashOutsidePath, false},
+		{"emulated cat outside", emulated, bashParams{Command: "cat /etc/hostname"}, deniedBashOutsidePath, false},
+		{"emulated workdir outside", emulated, bashParams{Command: "ls", Workdir: "/etc"}, deniedBashWorkdir, false},
+		{"emulated env file in tmp", emulated, bashParams{Command: "cat /tmp/.env"}, deniedBashEnvFile, false},
+		{"wrapper cat tmp", wrapper, bashParams{Command: "cat /tmp/x"}, deniedBashOutsidePath, false},
+		{"wrapper cd tmp", wrapper, bashParams{Command: "cd /tmp"}, deniedBashOutsidePath, false},
+		{"wrapper write tmp", wrapper, bashParams{Command: "touch /tmp/x"}, deniedBashOutsidePath, false},
+		{"wrapper workdir tmp", wrapper, bashParams{Command: "ls", Workdir: "/tmp"}, deniedBashWorkdir, false},
+		{"wrapper read dev", wrapper, bashParams{Command: "head -c 4 /dev/urandom"}, deniedBashOutsidePath, false},
+		{"wrapper read proc", wrapper, bashParams{Command: "grep Pid /proc/self/status"}, deniedBashOutsidePath, false},
+		{"default bash read proc", CustomShell{Dir: folder}, bashParams{Command: "cat /proc/self/status"}, deniedBashOutsidePath, false},
+		{"emulated read dev", emulated, bashParams{Command: "head -c 4 /dev/urandom"}, deniedBashOutsidePath, false},
+		{"emulated read proc", emulated, bashParams{Command: "grep Pid /proc/self/status"}, deniedBashOutsidePath, false},
+		{"emulated workdir under tmp outside", emulated, bashParams{Command: "ls", Workdir: "/tmp/../etc"}, deniedBashWorkdir, false},
+		{"emulated home escape", emulated, bashParams{Command: "cat ~/../etc/passwd"}, deniedBashOutsidePath, false},
+		{"wrapper home", wrapper, bashParams{Command: "cat ~/secret.txt"}, deniedBashOutsidePath, false},
+		{"wrapper home write", wrapper, bashParams{Command: "touch ~/new.txt"}, deniedBashOutsidePath, false},
+		{"wrapper home workdir", wrapper, bashParams{Command: "ls", Workdir: "~"}, deniedBashWorkdir, false},
+		{"default bash home", CustomShell{Dir: folder}, bashParams{Command: "cat ~/secret.txt"}, deniedBashOutsidePath, false},
+		{"wrapper reads uploads", wrapper, bashParams{Command: "cat " + uploads + "/report.txt"}, "upload", true},
+		{"wrapper copies an upload in", wrapper, bashParams{Command: "cp " + uploads + "/report.txt mine.txt && cat mine.txt"}, "upload", true},
+		{"wrapper works in uploads", wrapper, bashParams{Command: "cat report.txt", Workdir: uploads}, "upload", true},
+		{"wrapper works in its folder", wrapper, bashParams{Command: "mkdir sub && touch sub/new.txt && echo hi > own.txt && cat own.txt && pwd", Workdir: folder}, "hi\n" + folder + "\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sss.Bash(t.Context(), &tc.shell, tc.params)
+			require.Equal(t, tc.want, got.Output)
+			require.Equal(t, tc.success, got.Success)
+		})
+	}
+
+	for _, params := range []bashParams{{Command: "cat /tmp/x"}, {Command: "cd /tmp"}, {Command: "touch /tmp/x"}, {Command: "mkdir /tmp/d && cp /tmp/x /tmp/d/y"}, {Command: "pwd", Workdir: "/tmp"}, {Command: "cat ~/secret.txt"}, {Command: "touch ~/x"}, {Command: "cd ~"}, {Command: "pwd", Workdir: "~"}} {
+		require.NotContains(t, sss.Bash(t.Context(), &emulated, params).Output, "bash command denied", params)
+	}
+
+	for _, name := range []string{"stolen.txt", "leak.txt", "new.txt", "copy.txt"} {
+		for _, root := range folders {
+			_, err := root.Stat(name)
+			require.ErrorIs(t, err, fs.ErrNotExist, "%s in %s", name, root.Name())
+		}
+	}
+
+	_, err = folders["folder"].Stat("sub/new.txt")
+	require.NoError(t, err)
+}
+
+func TestBashRefusalsAreTheSameForEveryShell(t *testing.T) {
+	workspace, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, workspace.Close()) })
+
+	require.NoError(t, workspace.MkdirAll(".rocketcode/spill", 0o700))
+	require.NoError(t, workspace.Mkdir(".tmp", 0o700))
+	require.NoError(t, workspace.WriteFile("wrap.sh", []byte("#!/bin/sh\nexec /bin/bash -c \"$1\""), 0o755))
+
+	shellTemp := testShellTempConfig(t, workspace, filepath.Join(workspace.Name(), ".tmp"))
+	sss := newSandboxedShellSystem(workspace, &shellTemp, nil, &sandbox.Runtime{})
+	sss.spillRel = ".rocketcode/spill"
+
+	folder, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	spill := filepath.Join(workspace.Name(), ".rocketcode", "spill", "result.txt")
+
+	shells := map[string]CustomShell{
+		"default":  {},
+		"wrapper":  {Path: filepath.Join(workspace.Name(), "wrap.sh"), Dir: folder},
+		"emulated": {Emulated: true, Dir: folder},
+	}
+
+	for _, tc := range []struct {
+		params bashParams
+		want   string
+	}{
+		{bashParams{Command: "cat /etc/hostname"}, deniedBashOutsidePath},
+		{bashParams{Command: "touch /etc/rocketclaw-new.txt"}, deniedBashOutsidePath},
+		{bashParams{Command: "ls", Workdir: "/var"}, deniedBashWorkdir},
+		{bashParams{Command: "ls", Workdir: "/etc"}, deniedBashWorkdir},
+		{bashParams{Command: "cat .env"}, deniedBashEnvFile},
+		{bashParams{Command: "cat " + spill}, deniedSpillAccess},
+		{bashParams{Command: "ls", Workdir: "missing"}, deniedBashMissingWorkdir},
+	} {
+		for name, shell := range shells {
+			got := sss.Bash(t.Context(), &shell, tc.params)
+			require.Equal(t, tc.want, got.Output, "%s: %+v", name, tc.params)
+			require.False(t, got.Success)
+		}
+	}
 }
 
 func testShellTempConfig(t *testing.T, root *os.Root, outputDir string) shellTempConfig {
