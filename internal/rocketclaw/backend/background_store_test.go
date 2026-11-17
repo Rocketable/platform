@@ -3,6 +3,7 @@ package backend
 import (
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -314,42 +315,47 @@ func TestBackgroundNoteClaimSucceedsOnce(t *testing.T) {
 func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 	t.Parallel()
 
-	for _, tt := range []struct {
+	store := newTestSessionService(t)
+
+	var wantNotes []string
+
+	for i, tt := range []struct {
 		terminal protocol.Terminal
 		saved    bool
 	}{
 		{protocol.TerminalStopped, true}, {protocol.TerminalStopped, false},
 	} {
 		t.Run(string(tt.terminal)+"/saved="+strconv.FormatBool(tt.saved), func(t *testing.T) {
-			store := newTestSessionService(t)
 			ctx := t.Context()
-			recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+			chat := "chat-" + strconv.Itoa(i)
+			turnID := chat + "-turn-2"
+			recordTestConversations(t, store, "main", map[string]ConversationKind{chat: KindWebChat})
 
-			job := testBackgroundJob("main", "turn-1/call/a")
+			job := testBackgroundJob(chat, chat+"/turn-1/call/a")
 			createTestBackgroundJob(t, store, job)
 			finishTestBackgroundJob(t, store, job, backgroundCompleted, true)
-			seedActiveTurn(t, store, "main", "turn-2", nil)
-			claimed, err := claimBackgroundNotes(ctx, store.db, "main", "turn-2", false)
+			seedActiveTurn(t, store, chat, turnID, nil)
+			claimed, err := claimBackgroundNotes(ctx, store.db, chat, turnID, false)
 			require.NoError(t, err)
 			require.Len(t, claimed, 1)
 
-			finish := &turnFinish{conversationID: strings.TrimSpace("main"), outbound: protocol.NewOutboundMessage("main", ""), terminal: tt.terminal}
+			finish := &turnFinish{conversationID: chat, outbound: protocol.NewOutboundMessage(chat, ""), terminal: tt.terminal}
 			if tt.saved {
 				finish.entries = []harness.SessionEntry{*testSessionEntry("note", "answer")}
 			}
 
-			_, err = store.finishTurn(ctx, "turn-2", finish)
-			require.NoError(t, err)
-
-			notes, err := queryStrings(ctx, store.db, `SELECT j.note || ' ' || j.wake::text || ' ' || j.claimed_by`+testJobsSQL, "background notes")
+			_, err = store.finishTurn(ctx, turnID, finish)
 			require.NoError(t, err)
 
 			if tt.saved {
-				require.Equal(t, []string{"consumed true turn-2"}, notes)
-				return
+				wantNotes = append(wantNotes, chat+" consumed true "+turnID)
+			} else {
+				wantNotes = append(wantNotes, chat+" pending false ")
 			}
 
-			require.Equal(t, []string{"pending false "}, notes, "a turn that saved nothing must not be woken again")
+			notes, err := queryStrings(ctx, store.db, `SELECT j.conversation_id || ' ' || j.note || ' ' || j.wake::text || ' ' || j.claimed_by`+testJobsSQL, "background notes")
+			require.NoError(t, err)
+			require.ElementsMatch(t, wantNotes, notes, "a turn that saved nothing must release its claim without waking again")
 		})
 	}
 }
@@ -430,7 +436,11 @@ func testReply(caller, call, target string) *backgroundJob {
 func TestFinishTurnSettlesSessionReplies(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range []struct {
+	store := newTestSessionService(t)
+
+	var wantReplies []string
+
+	for i, tc := range []struct {
 		name, conversation string
 		applied            bool
 		terminal           protocol.Terminal
@@ -443,15 +453,15 @@ func TestFinishTurnSettlesSessionReplies(t *testing.T) {
 		{"shadow copy", "shadow", false, "", "running none false "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			store := newTestSessionService(t)
 			ctx := t.Context()
+			prefix := strconv.Itoa(i) + "-"
+			caller, target, conversation := prefix+"caller", prefix+"target", prefix+tc.conversation
+			turnID := prefix + "turn-2"
 			notes := &backgroundNotesMock{noteReadyFunc: func(string) {}}
 			store.jobs = newBackgroundRegistry(store, notes, testLogger())
-			recordTestConversations(t, store, "main", map[string]ConversationKind{"caller": KindWebChat, "target": KindWebChat, "shadow": KindWebChat})
+			recordTestConversations(t, store, "main", map[string]ConversationKind{caller: KindWebChat, target: KindWebChat, prefix + "shadow": KindWebChat})
 
-			reply := testReply("caller", "turn-1/call/w", "target")
+			reply := testReply(caller, "turn-1/call/w", target)
 			createTestBackgroundJob(t, store, reply)
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "summarize billing", false)
@@ -460,23 +470,24 @@ func TestFinishTurnSettlesSessionReplies(t *testing.T) {
 			if tc.applied {
 				inbound.Metadata["web_message_id"] = "earlier"
 
-				require.NoError(t, store.SaveTurnStep(ctx, tc.conversation, "turn-2", json.RawMessage(`{"applied_input_ids":["`+reply.jobID+`"]}`)))
+				require.NoError(t, store.SaveTurnStep(ctx, conversation, turnID, json.RawMessage(`{"applied_input_ids":["`+reply.jobID+`"]}`)))
 			}
 
-			require.NoError(t, startTurnDB(ctx, store.db, "turn-2", tc.conversation, inbound))
-			_, err := store.finishTurn(ctx, "turn-2", &turnFinish{conversationID: strings.TrimSpace(tc.conversation), entries: []harness.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage(tc.conversation, "billing is fine"), terminal: tc.terminal})
+			require.NoError(t, startTurnDB(ctx, store.db, turnID, conversation, inbound))
+			_, err := store.finishTurn(ctx, turnID, &turnFinish{conversationID: conversation, entries: []harness.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage(conversation, "billing is fine"), terminal: tc.terminal})
 			require.NoError(t, err)
 
-			rows, err := queryStrings(ctx, store.db, `SELECT `+testJobStatusSQL+` || ' ' || j.note || ' ' || j.wake::text || ' ' || j.result`+testJobsSQL, "replies")
+			wantReplies = append(wantReplies, caller+" "+tc.want)
+			rows, err := queryStrings(ctx, store.db, `SELECT j.conversation_id || ' ' || `+testJobStatusSQL+` || ' ' || j.note || ' ' || j.wake::text || ' ' || j.result`+testJobsSQL, "replies")
 			require.NoError(t, err)
-			require.Equal(t, []string{tc.want}, rows)
+			require.ElementsMatch(t, wantReplies, rows)
 
 			woken := make([]string, 0, len(notes.noteReadyCalls()))
 			for _, call := range notes.noteReadyCalls() {
 				woken = append(woken, call.ConversationID)
 			}
 
-			require.Equal(t, map[bool][]string{true: {"caller"}, false: {}}[tc.conversation == "target"], woken)
+			require.Equal(t, map[bool][]string{true: {caller}, false: {}}[conversation == target], woken)
 		})
 	}
 }
@@ -484,9 +495,10 @@ func TestFinishTurnSettlesSessionReplies(t *testing.T) {
 func TestFinishTurnReportsSubagentWakeUp(t *testing.T) {
 	t.Parallel()
 
-	answered := "<subagent id=\"turn-1\" state=\"completed\" description=\"researcher\" continue=\"/a\">\n<task_result>\nbilling noted\n</task_result>\n</subagent>"
+	store := newTestSessionService(t)
+	answered := "<subagent id=%q state=\"completed\" description=\"researcher\" continue=\"/a\">\n<task_result>\nbilling noted\n</task_result>\n</subagent>"
 
-	for _, tc := range []struct {
+	for i, tc := range []struct {
 		name                  string
 		wake, steered, hidden bool
 		terminal              protocol.Terminal
@@ -494,44 +506,44 @@ func TestFinishTurnReportsSubagentWakeUp(t *testing.T) {
 	}{
 		{"wake turn", true, false, false, "", answered, ""},
 		{"hidden-run parent", true, false, true, "", answered, "web:main"},
-		{"failed wake turn", true, false, false, protocol.TerminalFailed, "<subagent id=\"turn-1\" state=\"failed\" description=\"researcher\" continue=\"/a\">\nturn failed\n</subagent>", ""},
+		{"failed wake turn", true, false, false, protocol.TerminalFailed, "<subagent id=%q state=\"failed\" description=\"researcher\" continue=\"/a\">\nturn failed\n</subagent>", ""},
 		{"stopped wake turn", true, false, false, protocol.TerminalStopped, "", ""},
 		{"task input", false, false, false, "", "", ""},
 		{"wake turn took a task steer", true, true, false, "", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			store := newTestSessionService(t)
 			ctx := t.Context()
+			parent := "chat-" + strconv.Itoa(i)
+			child, turnID := parent+"/a", parent+"-turn-1"
 			notes := &backgroundNotesMock{noteReadyFunc: func(string) {}}
 			store.jobs = newBackgroundRegistry(store, notes, testLogger())
 
-			recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+			recordTestConversations(t, store, "main", map[string]ConversationKind{parent: KindWebChat})
 
 			if tc.hidden {
-				reportTestRun(t, store, "main", "web:main")
+				reportTestRun(t, store, parent, tc.destination)
 			}
 
-			require.NoError(t, store.startSubagent(ctx, "main", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "a"}, Agent: "researcher"}))
+			require.NoError(t, store.startSubagent(ctx, parent, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "a"}, Agent: "researcher"}))
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 
-			inbound.Metadata = map[string]string{"web_message_id": "main/turn-0/call/a"}
+			inbound.Metadata = map[string]string{"web_message_id": parent + "/turn-0/call/a"}
 			if tc.wake {
 				inbound.Metadata = map[string]string{backgroundNotesMetadataKey: "turn-0/call/x"}
 			}
 
 			if tc.steered {
-				require.NoError(t, store.PutThreadQueueItem("main/turn-2/call/s", &protocol.ThreadQueueItem{ID: "main/turn-2/call/s", ConversationID: "main/a", Kind: protocol.InboundKindSteer}))
-				require.NoError(t, store.SaveTurnStep(ctx, "main/a", "turn-1", json.RawMessage(`{"applied_input_ids":["main/turn-2/call/s"]}`)))
+				steerID := parent + "/turn-2/call/s"
+				require.NoError(t, store.PutThreadQueueItem(steerID, &protocol.ThreadQueueItem{ID: steerID, ConversationID: child, Kind: protocol.InboundKindSteer}))
+				require.NoError(t, store.SaveTurnStep(ctx, child, turnID, json.RawMessage(`{"applied_input_ids":["`+steerID+`"]}`)))
 			}
 
-			require.NoError(t, startTurnDB(ctx, store.db, "turn-1", "main/a", inbound))
-			_, err := store.finishTurn(ctx, "turn-1", &turnFinish{conversationID: strings.TrimSpace("main/a"), entries: []harness.SessionEntry{*testSessionEntry("notes", "billing noted")}, outbound: protocol.NewOutboundMessage("main/a", "turn failed"), terminal: tc.terminal, report: "<task_result>\nbilling noted\n</task_result>"})
+			require.NoError(t, startTurnDB(ctx, store.db, turnID, child, inbound))
+			_, err := store.finishTurn(ctx, turnID, &turnFinish{conversationID: child, entries: []harness.SessionEntry{*testSessionEntry("notes", "billing noted")}, outbound: protocol.NewOutboundMessage(child, "turn failed"), terminal: tc.terminal, report: "<task_result>\nbilling noted\n</task_result>"})
 			require.NoError(t, err)
 
-			reports, err := store.notedBackgroundJobs(ctx, "main", []string{"turn-1"})
+			reports, err := store.notedBackgroundJobs(ctx, parent, []string{turnID})
 			require.NoError(t, err)
 
 			woken := make([]string, 0, len(notes.noteReadyCalls()))
@@ -547,8 +559,11 @@ func TestFinishTurnReportsSubagentWakeUp(t *testing.T) {
 			}
 
 			require.Len(t, reports, 1)
-			require.Equal(t, []any{tc.want, notePending, true, tc.destination}, []any{backgroundNote(&reports[0]), reports[0].noteState, reports[0].wake, reports[0].origin.SyncDestination})
-			require.Equal(t, []string{"main"}, woken)
+			require.Equal(t, fmt.Sprintf(tc.want, turnID), backgroundNote(&reports[0]))
+			require.Equal(t, notePending, reports[0].noteState)
+			require.True(t, reports[0].wake)
+			require.Equal(t, tc.destination, reports[0].origin.SyncDestination)
+			require.Equal(t, []string{parent}, woken)
 		})
 	}
 }
