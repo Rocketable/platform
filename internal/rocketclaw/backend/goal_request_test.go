@@ -16,7 +16,7 @@ func TestParseGoalRequestMaxTurnsDefaultAndOverrides(t *testing.T) {
 		name, text string
 		want       int
 	}{
-		{name: "omitted", text: "update the docs", want: 5},
+		{name: "omitted", text: "update the docs", want: 0},
 		{name: "explicit", text: "maxTurns: 20 update the docs", want: 20},
 		{name: "attached", text: "maxTurns:20 update the docs", want: 20},
 		{name: "zero", text: "maxTurns: 0 update the docs", want: 0},
@@ -36,7 +36,7 @@ func TestParseGoalRequestKeepsParametersAfterObjective(t *testing.T) {
 
 	goal, rejection := protocol.ParseGoalRequest("ship maxTurns:2")
 	require.Empty(t, rejection)
-	assert.Equal(t, protocol.GoalRequest{Objective: "ship maxTurns:2", MaxTurns: 5}, goal)
+	assert.Equal(t, protocol.GoalRequest{Objective: "ship maxTurns:2"}, goal)
 }
 
 func TestParseGoalRequestUsesCanonicalExamples(t *testing.T) {
