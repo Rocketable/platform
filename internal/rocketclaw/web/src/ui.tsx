@@ -1160,7 +1160,7 @@ function useTabs() {
   const identity = useQuery(queries.identity(name));
   const owner = identity.data?.username;
   const saved = useQuery({ ...queries.tabs(owner ?? "", name), enabled: owner !== undefined });
-  const shared = saved.data?.shared ?? noShared, reach = shared;
+  const shared = saved.data?.shared ?? noShared;
   const visited = usePathname() || "/", pathname = viewed ? visited : "";
   const [state, setState] = useState(() => viewed ? loadTabs(pathname) : savedTabs());
   // A tab this window reopened leaves the list before the save that reopened it answers.
@@ -1170,7 +1170,6 @@ function useTabs() {
     const rank = (path: string) => order.indexOf(path) + 1 || Infinity;
     return shared.flatMap((tab) => tab.space === space ? [tab.path] : []).toSorted((a, b) => rank(a) - rank(b) || 0);
   };
-  const sharedHere = sharedIn(state.space);
   const [editor, setEditor] = useState<{ id: string; open: boolean }>();
   const [picking, setPicking] = useState<Picking>();
   // This server's parked tab locations, one per line: as its session list says, and as this window's own parks and
@@ -1180,9 +1179,9 @@ function useTabs() {
   const sync = useRef<{ saving: boolean; dirty: boolean; next?: TabState; applied?: TabState; base?: SavedTabs["state"]; revision: number; at?: number; server: string }>({ saving: false, dirty: false, revision: 0, server: name });
   const spaceChange = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onSuccess: (view) => setState((current) => ({ ...current, spaces: view.spaces })), onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
   const sharing = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
-  if (viewed && state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname, reach));
+  if (viewed && state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname, shared));
   // Another server's tabs have no tab in view, so a change that moves tabs only moves them.
-  const settled = (next: TabState) => viewed ? openTab(next, next.active, reach) : next;
+  const settled = (next: TabState) => viewed ? openTab(next, next.active, shared) : next;
   // A page link whose space segment was rewritten shows the rewritten path, once the owner's spaces are known.
   useEffect(() => {
     if (!viewed || state.owner === undefined || state.active === pathname) return;
@@ -1204,15 +1203,15 @@ function useTabs() {
     if (!saved.data || (state.owner === owner && queue.at === saved.dataUpdatedAt)) return;
     queue.at = saved.dataUpdatedAt;
     const alive = saved.data.spaces.some((item) => item.id === state.space);
-    const base = queue.base, revision = Number(saved.data.revision), inShared = viewed && alive && isShared(reach, state.space, state.active);
+    const base = queue.base, revision = Number(saved.data.revision), inShared = viewed && alive && isShared(shared, state.space, state.active);
     // A first load saves the tab its URL added.
     if (state.owner !== owner) {
       [queue.base, queue.revision] = [saved.data.state, revision];
-      return setState(viewed ? loadTabs(pathname, owner, saved.data, reach) : savedTabs(owner, saved.data));
+      return setState(viewed ? loadTabs(pathname, owner, saved.data, shared) : savedTabs(owner, saved.data));
     }
     if (revision <= queue.revision) {
-      if (!alive) return setState(viewed ? openTab(leave(state, state.space, saved.data.spaces), state.active, reach) : leave(state, state.space, saved.data.spaces));
-      if (viewed && !inShared && !state.tabs.some((tab) => tab.path === state.active && tab.space === state.space)) navigate(entry(state, state.space, reach));
+      if (!alive) return setState(viewed ? openTab(leave(state, state.space, saved.data.spaces), state.active, shared) : leave(state, state.space, saved.data.spaces));
+      if (viewed && !inShared && !state.tabs.some((tab) => tab.path === state.active && tab.space === state.space)) navigate(entry(state, state.space, shared));
       return;
     }
     [queue.base, queue.revision] = [saved.data.state, revision];
@@ -1224,8 +1223,8 @@ function useTabs() {
     const merged = { ...next, tabs, active: state.active, space: open?.space && next.spaces.some((item) => item.id === open.space) ? open.space : next.spaces.some((item) => item.id === state.space) ? state.space : next.spaces[0].id };
     queue.applied = queue.dirty ? undefined : merged;
     setState(merged);
-    if (viewed && !open) navigate(entry(merged, merged.space, reach));
-  }, [saved.data, saved.dataUpdatedAt, owner, state, pathname, reach, viewed]);
+    if (viewed && !open) navigate(entry(merged, merged.space, shared));
+  }, [saved.data, saved.dataUpdatedAt, owner, state, pathname, shared, viewed]);
   // Each change to the saved form saves the whole state, made from the saved revision, one save at a time, the newest
   // waiting change next. A failed save is not undone: the next change or reload saves it again. A save refused because
   // another window saved first answers with that newer state, which the reload above merges in and saves again.
@@ -1277,7 +1276,7 @@ function useTabs() {
   const tabsOf = (space: string) => state.tabs.filter((tab) => tab.space === space && !isKeeper(tab));
   const groupsOf = (space: string) => state.groups.filter((group) => stripOf(space).some((tab) => tab.group === group.id));
   const spaceOfGroup = (id: string) => state.tabs.find((tab) => tab.group === id)?.space ?? state.space;
-  const strip = stripOf(state.space), shown = shownOf(state.space), groups = groupsOf(state.space);
+  const shown = shownOf(state.space);
   // Closing the active tab activates the target, else its right neighbour, else its left one, in this space; an emptied space gets New session.
   // Only this person's tabs close: here, in Parked, or in another space unless it is the page in view, so a tab only in
   // Shared stays open.
@@ -1291,12 +1290,12 @@ function useTabs() {
   };
   // Entering a space of another server moves the page there, into that space.
   const enter = (id: string, spaces = state.spaces) => {
-    const path = entry(state, id, reach);
+    const path = entry(state, id, shared);
     if (!viewed) {
       arriving = id;
       return navigate(path, false, name);
     }
-    setState(openTab({ ...state, spaces, space: id }, path, reach));
+    setState(openTab({ ...state, spaces, space: id }, path, shared));
     if (path !== pathname) navigate(path);
   };
   // An attention change acts on this person's attention on the tab locations paths; the session list, asked again, shows
@@ -1328,13 +1327,13 @@ function useTabs() {
     queryClient.setQueriesData<SavedTabs>({ queryKey: [{ server: name }, "tabs"] }, (old) => old && { ...old, shared: reply.shared });
     if (theirs) saveShared(space, path, theirs, rebase(base, page, theirs));
   } });
-  const open = (path: string, query = "", space?: string, preview = false, list = reach, search?: SearchPageState) => flushSync(() => { setState((current) => openTab(space ? { ...current, space } : current, path, list, preview, search)); navigate(path + query, preview); });
+  const open = (path: string, query = "", space?: string, preview = false, list = shared, search?: SearchPageState) => flushSync(() => { setState((current) => openTab(space ? { ...current, space } : current, path, list, preview, search)); navigate(path + query, preview); });
   const addSearch = (page: SearchPageState, inShared: boolean) => {
     const path = freshSearch(), id = (i: number) => `${path.slice("/search/".length)}-${i}`, search = { ...page, searches: page.searches.map((item, i) => ({ ...item, id: id(i) })), active: id(page.searches.findIndex((item) => item.id === page.active)) };
-    return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, false, reply.shared) }) : open(path, "", undefined, false, reach, search);
+    return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, false, reply.shared) }) : open(path, "", undefined, false, shared, search);
   };
   return {
-    name, viewed, state, strip, shown, groups, here: sharedHere, sharedIn, stripOf, shownOf, groupsOf, shared, reach, closed, pathname, close, enter, edit, editor, setEditor, settle, picking, setPicking, parked, setParked, attend, open, addSearch, newIn, pending: spaceChange.isPending,
+    name, viewed, state, sharedIn, stripOf, shownOf, shared, closed, pathname, close, enter, edit, editor, setEditor, settle, picking, setPicking, parked, setParked, open, newIn, pending: spaceChange.isPending,
     deleted: (path: string) => close([path]),
     // Opening a tab, or a Shared row without a tab of its own, enters its space; another server's moves the page there.
     go: (path: string, space: string, inShared = false) => {
@@ -1349,7 +1348,7 @@ function useTabs() {
       const known = state.spaces.find((item) => item.id === space)?.id;
       flushSync(() => {
         setState((current) => {
-          const next = openTab(known ? { ...current, space: known } : current, path, reach, false, search);
+          const next = openTab(known ? { ...current, space: known } : current, path, shared, false, search);
           return known ? { ...next, tabs: next.tabs.map((tab) => tab.path === path ? { ...tab, unplaced: undefined } : tab) } : next;
         });
         navigate(path);
@@ -1379,7 +1378,7 @@ function useTabs() {
     // Cmd/Ctrl+[ and ], and their palette commands, step through this space's Shared rows, then its tabs, each tab once,
     // wrapping and skipping parked ones.
     step: (back: boolean) => {
-      const order = [...new Set([...sharedHere.filter((path) => !parked.has(path)), ...shown.map((tab) => tab.path)])], at = order.indexOf(pathname);
+      const order = [...new Set([...sharedIn(state.space).filter((path) => !parked.has(path)), ...shown.map((tab) => tab.path)])], at = order.indexOf(pathname);
       const target = order[at < 0 ? (back ? order.length - 1 : 0) : (at + (back ? order.length - 1 : 1)) % order.length];
       if (target !== pathname) navigate(target);
     },
@@ -1477,11 +1476,11 @@ function TabSettling() {
 // A server's tabs this person sees: their own tabs of any space, then its Shared rows, each in its space; the live ones
 // here, the saved ones elsewhere.
 function useTabsOf() {
-  const { servers } = useContext(Sidebar), { state, reach } = useContext(TabActions);
+  const { servers } = useContext(Sidebar), { state, shared } = useContext(TabActions);
   const name = useServer();
   return (server: string) => {
     const saved = servers[server]?.tabs, own = server === name ? state.tabs : saved?.state.tabs ?? [];
-    return { own, open: [...own, ...server === name ? reach : saved?.shared ?? []] };
+    return { own, open: [...own, ...server === name ? shared : saved?.shared ?? []] };
   };
 }
 
