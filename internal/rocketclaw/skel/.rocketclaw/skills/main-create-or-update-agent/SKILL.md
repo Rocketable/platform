@@ -373,7 +373,7 @@ approver:
   decision:
     prompt: "Deny write actions the user did not explicitly request."
 mcp:
-  alitu_google_marketing: [read]
+  acme_google_marketing: [read]
 rocketclaw: [sessions, pages]
 skills:
   - marketing

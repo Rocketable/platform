@@ -45,7 +45,7 @@ test("fenced blocks preserve code, recognize closing fences and tolerate streami
 
 test("prose renders http(s) links in a new tab and Slack bold, leaving everything else literal", () => {
   const a = (href: string, label = href) => `<a href="${href}" class="underline" target="_blank" rel="noopener noreferrer">${label}</a>`;
-  const issue = "https://github.com/the-podcast-host/alitu-mono/issues/835";
+  const issue = "https://github.com/acme/acme-mono/issues/835";
   const tag = (label: string) => `<span class="font-medium text-primary">${label}</span>`;
   for (const [text, markup] of [
     [`*Found the feature request:* [#835: Provide finer control over audio cleanup options](${issue}). I read …`,

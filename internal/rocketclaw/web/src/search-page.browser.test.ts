@@ -336,24 +336,24 @@ test("principal filters retain links, pills and quoted suggestions", async () =>
 
 test("search URL follows the active tab, folds legacy filters, and reopens a matching tab", async () => {
   const { chromium: engine } = await import(playwright!);
-  const folded = "agent:alitu-cs-support outage";
-  const { server, paths, tabs: api, origin } = serve([{ id: "chat", name: "Outage chat", preview: "", agent: "alitu-cs-support" }], ({ query }) => query === folded ? response(query, [{ conversationId: "chat", field: "Name", text: "Outage chat" }], ["agent:alitu-cs-support"]) : response(query));
+  const folded = "agent:acme-cs-support outage";
+  const { server, paths, tabs: api, origin } = serve([{ id: "chat", name: "Outage chat", preview: "", agent: "acme-cs-support" }], ({ query }) => query === folded ? response(query, [{ conversationId: "chat", field: "Name", text: "Outage chat" }], ["agent:acme-cs-support"]) : response(query));
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
-    const link = "/search?q=outage&agent=alitu-cs-support";
-    const canonical = "/search?q=agent%3Aalitu-cs-support+outage";
+    const link = "/search?q=outage&agent=acme-cs-support";
+    const canonical = "/search?q=agent%3Aacme-cs-support+outage";
     const at = (target: string) => page.waitForURL((url: URL) => url.pathname + url.search === target);
     const search = page.getByRole("textbox", { name: "Search sessions" });
     const tabs = page.getByRole("tablist", { name: "Searches" }).getByRole("tab");
     const opened = async (count: number) => {
-      await page.getByRole("button", { name: "agent:alitu-cs-support", exact: true }).waitFor();
+      await page.getByRole("button", { name: "agent:acme-cs-support", exact: true }).waitFor();
       expect(await tabs.count()).toBe(count);
       expect(await tabs.first().getAttribute("aria-selected")).toBe("true");
       expect(await search.inputValue()).toBe("outage");
     };
     await page.goto(`${origin}/`);
-    await page.evaluate(() => localStorage.setItem("search-tabs:tester", JSON.stringify({ tabs: [{ id: "legacy", query: "outage", agentFilter: "alitu-cs-support", roomFilter: "" }], active: "legacy" })));
+    await page.evaluate(() => localStorage.setItem("search-tabs:tester", JSON.stringify({ tabs: [{ id: "legacy", query: "outage", agentFilter: "acme-cs-support", roomFilter: "" }], active: "legacy" })));
     await page.goto(origin + link);
     await opened(1); // The legacy tab, folded once into its query, matches the folded link, and moves into the page's tab.
     const saved = () => api.tabs().find((tab) => tab.path === "/search")?.search?.searches;

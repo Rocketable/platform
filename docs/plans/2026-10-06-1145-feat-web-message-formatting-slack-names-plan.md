@@ -14,7 +14,7 @@ deepened: 2026-10-06
 
 - **Objective:** RocketClaw Web shows agent replies the way a Slack reader would see them. Code blocks, bold, italics, strikethrough, inline code, quotes, and lists are formatted, and Slack tags such as `<!subteam^S0BA868QQ90>` show real names such as `@cs-operators`. This applies on every surface that shows message text or a message-derived title. Searching for a name finds messages that tag it.
 - **Means:** One shared formatter in `transcript-text.tsx` covers block and inline text, with optional search highlighting. A new Web RPC lets the Slack connector resolve Slack IDs to names, and message search also matches the IDs whose names contain the query.
-- **Authority:** The operator's feedback (6 Oct 2026, screenshot of `/search?q=sort:newest tag:operator-needed&room=alitu-cs-claw`) and the user's answers recorded under Key Decisions.
+- **Authority:** The operator's feedback (6 Oct 2026, screenshot of `/search?q=sort:newest tag:operator-needed&room=acme-cs-claw`) and the user's answers recorded under Key Decisions.
 - **Execution profile:** Six units. U1 and U2 are Go plus proto. U3–U5 are Web in `internal/rocketclaw/web`. U6 covers docs and the bundle.
 - **Stop conditions:** Stop and report if the TS source CLOC would reach the failure limit (7500, hazard zone from 7250) or the RocketClaw Go source CLOC would reach 23500 (hazard zone from 23000). The user raised these budgets in this workspace on 6 Oct 2026. Report the measured numbers in the work summary. Also stop if name resolution needs Slack data beyond `users:read`, `usergroups:read`, and the stored channel facts.
 - **Completion owner:** `ce-work` implements and verifies locally. Merge and deployment stay with the user.
@@ -29,7 +29,7 @@ Render Slack-style message text as formatted text across RocketClaw Web, turn Sl
 
 ### Problem Frame
 
-Agents such as `alitu-cs-principal` write replies for Slack. They use `*bold*`, fenced code, inline code, `- ` bullets, and user-group mentions (`<!subteam^S0BA868QQ90>`).
+Agents such as `acme-cs-principal` write replies for Slack. They use `*bold*`, fenced code, inline code, `- ` bullets, and user-group mentions (`<!subteam^S0BA868QQ90>`).
 `/search` shows that text raw. `MatchedExcerpt` (`internal/rocketclaw/web/src/ui.tsx`) prints the whole message as monospace `whitespace-pre-wrap` text, so fences, asterisks, and backticks appear literally.
 The result heading and the sidebar, palette, and matrix row titles show the raw first line, for example `<!subteam^S0BA868QQ90> *Allen now says…*`.
 The chat page (`TranscriptText`) already renders fenced code, bold, and links. It leaves inline code, lists, and Slack tags literal, as the earlier plan's R10 deliberately chose.
@@ -327,7 +327,7 @@ flowchart LR
 
 ### Sources
 
-- Operator feedback and screenshot, 6 Oct 2026 (`/search?q=sort:newest tag:operator-needed&room=alitu-cs-claw`).
+- Operator feedback and screenshot, 6 Oct 2026 (`/search?q=sort:newest tag:operator-needed&room=acme-cs-claw`).
 - Wallace evidence: `rocketclaw` v0.1.15; `session_entries` id 94120; `auth.test` scopes and `usergroups.list` output after the scope was added.
 - User decisions, 6 Oct 2026: `@handle` for teams, display name for people, nearby-lines search windows, 8-hour name refresh, cleaned tooltips, raw Copy, italics/strikethrough/quotes now, name search now.
 - `docs/plans/2026-10-05-1839-fix-web-search-links-tags-feedback-plan.md`: KTD7 tokenizer and R10, which this plan revises.

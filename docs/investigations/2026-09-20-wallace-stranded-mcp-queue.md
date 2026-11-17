@@ -74,7 +74,7 @@ Counts and absence checks are observations of a live system, not a single frozen
 
 Customer text is summarized here rather than copied in full. IDs allow an authorized operator to recover the exact rows if needed.
 
-All managed IDs have the prefix `slack-thread:C0B8CQT7P2N:`. All private IDs have the prefix `external_mcp:alitu-cs-customer-triage:`.
+All managed IDs have the prefix `slack-thread:C0B8CQT7P2N:`. All private IDs have the prefix `external_mcp:acme-cs-customer-triage:`.
 
 | Queue item ID | Managed ID suffix | Private ID suffix | External conversation ID | Message subject |
 | --- | --- | --- | --- | --- |
@@ -157,7 +157,7 @@ The stored rows' managed IDs and empty Slack message fields match this path. The
 
 [`backend/bridge.go:569–615`](https://github.com/Rocketable/platform/blob/v0.0.52/internal/rocketclaw/backend/bridge.go#L569-L615), `pickLaterWork`, reads goals, queue rows, and scheduled messages using `b.config.ConversationID`.
 
-For these completing jobs, the logs show that ID is `external_mcp:alitu-cs-customer-triage:...`. The saved row instead belongs to `slack-thread:C0B8CQT7P2N:...`.
+For these completing jobs, the logs show that ID is `external_mcp:acme-cs-customer-triage:...`. The saved row instead belongs to `slack-thread:C0B8CQT7P2N:...`.
 
 The finishing bridge therefore does not select the saved follow-up. Releasing the pair lock does not itself trigger a pick on the paired managed conversation.
 

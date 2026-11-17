@@ -34,7 +34,7 @@ The `is:` suggestions offer only `pinned` and `forked`, so there is no way to re
 Typing `sort:` offers nothing and silently becomes free text, which also triggers the slow origin load.
 The `/search` URL never changes, so a search cannot be bookmarked or shared.
 Agent messages show `*bold*` and `[label](url)` literally, and links are not clickable.
-The `alitu-cs-support` agent's red/yellow/green case tags never appear in the sidebar or in `tag:` search, because they are written to the private producer conversation that Web hides.
+The `acme-cs-support` agent's red/yellow/green case tags never appear in the sidebar or in `tag:` search, because they are written to the private producer conversation that Web hides.
 
 ### Requirements
 
@@ -229,7 +229,7 @@ These are planning defaults chosen without user confirmation.
   3. Document the parameters in the README, including that `agent:`/`room:` typed inside `q` are not filters.
 - **Patterns to follow:** `useSearch` for reading `location.search`; the session page's `?message=` handling.
 - **Test scenarios:**
-  - Opening `/search?q=outage&agent=alitu-cs-support` with empty storage shows one tab with that query and agent filter, and it survives reload.
+  - Opening `/search?q=outage&agent=acme-cs-support` with empty storage shows one tab with that query and agent filter, and it survives reload.
   - Opening the same URL with existing tabs that include a matching tab activates it without adding a tab.
   - Navigating from a result to a session and back does not add a duplicate tab.
   - Typing, switching tabs, closing the active tab, and adding a tab each update the URL to the active tab's parameters without adding history entries.
@@ -248,7 +248,7 @@ These are planning defaults chosen without user confirmation.
   3. Add a README line that transcript links open in a new tab.
 - **Patterns to follow:** `fencedParts`' single-regex `matchAll` style.
 - **Test scenarios:**
-  - Alex's sentence `*Found the feature request:* [#835: Provide finer control over audio cleanup options](https://github.com/the-podcast-host/alitu-mono/issues/835). I read …` renders a `<strong>` and an anchor with that label, `target="_blank"`, and `rel="noopener noreferrer"`.
+  - Alex's sentence `*Found the feature request:* [#835: Provide finer control over audio cleanup options](https://github.com/acme/acme-mono/issues/835). I read …` renders a `<strong>` and an anchor with that label, `target="_blank"`, and `rel="noopener noreferrer"`.
   - `[label](<https://example.com/a>)`, `<https://example.com|Example>`, `<https://example.com>`, and a bare `https://example.com/x` each render one anchor with the right label.
   - Trailing punctuation after a bare URL (`see https://x.com/a.` and `(https://x.com/a)`) stays outside the link.
   - `<https://x.com/?a=1&amp;b=2|x>` links to `?a=1&b=2`.
