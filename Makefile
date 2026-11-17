@@ -1,5 +1,5 @@
-# generate rewrites vendor/ and the mocks, so it finishes before
-# the rocketclaw tests overlap with the funneld checks.
+
+
 test:
 	cd internal/rocketclaw; $(MAKE) generate lint
 	$(MAKE) -j 2 test-rocketclaw test-others
