@@ -32,12 +32,11 @@ export function mcpState(draft: AgentDraft, first?: AgentDraftExternalMCP) {
 }
 
 export function useMcpWrites(draft: AgentDraft, apply: Apply) {
-  const sending = useRef<{ count: number; value?: AgentDraftExternalMCP; last: Promise<unknown> }>({ count: 0, last: Promise.resolve() });
+  const sending = useRef<{ value?: AgentDraftExternalMCP; last: Promise<unknown> }>({ last: Promise.resolve() });
   return (change: (base: AgentDraftExternalMCP) => AgentDraftExternalMCP) => {
     const now = sending.current, base = now.value ?? draft.externalMcp ?? {}, value = { ...base, ...change(base) };
     now.value = value;
-    now.count++;
-    now.last = now.last.then(() => apply({ kind: "set_external_mcp", externalMcp: value })).finally(() => { if (!--now.count) now.value = undefined; });
+    now.last = now.last.then(() => apply({ kind: "set_external_mcp", externalMcp: value })).finally(() => { if (now.value === value) now.value = undefined; });
   };
 }
 
