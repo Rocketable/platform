@@ -312,6 +312,6 @@ Paths are under `internal/rocketclaw/` unless they start with `cmd/`.
   restart; keys k1, k1x, k2, external_conversation_id; values v1, v2; one caller
   (two in `two-callers`). Liveness is not checked.
 
-Recorded with `make check` on macOS (Apple Silicon, 12 cores): make exit status 0, wall time 6 min 26 s. TLC banner: `TLC2 Version 2026.11.06.222357 (rev: d8fb231)`. Java: `openjdk version "21.0.13.0.3" 2026-10-24`.
+Recorded with `make check` on a 12-core arm64 machine: make exit status 0, wall time 6 min 26 s. TLC banner: `TLC2 Version 2026.11.06.222357 (rev: d8fb231)`. Java: `openjdk version "21.0.13.0.3" 2026-10-24`.
 
 README impact: this README is the model's evidence record; no other README changes.

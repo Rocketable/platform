@@ -19,8 +19,8 @@ bubblewrap sandbox instead of just-bash under Node. It serves RocketClaw exclusi
    Guest `curl` is a thin call into the webfetch code, so network rules stay shared (R34).
 2. **The RocketClaw binary is the guest relay.** Mounted read-only into the sandbox; argv0 dispatch. RocketClaw
    is built with `CGO_ENABLED=0` (verified it builds).
-3. **Linux only.** On other systems emulated shell commands refuse ("needs Linux"); RocketClaw itself is
-   deployed in a Linux container (Apple Container) on Macs. Never falls back to host Bash.
+3. **Linux only.** On other systems emulated shell commands refuse ("needs Linux").
+   Never falls back to host Bash.
 4. **Rootfs built at first start.** Ubuntu 26.04 LTS (resolute) from snapshot.ubuntu.com `20261031T000000Z`,
    built in pure Go around `mmdebstrap` into the runtime dir under the digest of its pin and lock, and checked
    against the embedded lock. Chosen over embedding it (an ~80 MB git-ignored file breaks
@@ -29,7 +29,7 @@ bubblewrap sandbox instead of just-bash under Node. It serves RocketClaw exclusi
    `go run`. 26.04's default uutils (Rust) coreutils stay the guest's `ls`, `cat`, etc.; the
    differences from GNU are accepted. Upgrades: `go generate ./internal/rocketclaw/sandbox` always moves to
    the newest archive snapshot (the human partner's choice) and rewrites the snapshot, both locks and both
-   SBOMs when a package changed, nothing otherwise; it runs on Linux, in a container on a Mac (qemu-user for the
+   SBOMs when a package changed, nothing otherwise; it runs on Linux (qemu-user for the
    other architecture; Ubuntu 24.04's qemu 8.2 cannot run 26.04's glibc, qemu 10 can). A new release is a
    change of `suite` first.
 5. **RocketClaw surfaces only.** No public RegisterCommand/HostEnv/GuestFS API, examples, or demo. Every
@@ -49,9 +49,9 @@ bubblewrap sandbox instead of just-bash under Node. It serves RocketClaw exclusi
 
 ## Verification
 
-- Real Linux (Lima VM `linuxbash`, Ubuntu 24.04; CI ubuntu-24.04) runs acceptance A–G; missing prerequisites
+- Real Linux (Ubuntu 24.04 VM; CI ubuntu-24.04) runs acceptance A–G; missing prerequisites
   fail CI. Done in the VM, normal and `-race`, on the 26.04 image; the CI `sandbox` job also merges its coverage.
-- `go test ./...`, `make lint`, `make test` (CLOC, coverage). Done on macOS.
+- `go test ./...`, `make lint`, `make test` (CLOC, coverage).
 - Acceptance checklist: `docs/verification/2026-11-01-emulated-shell-acceptance.md`. Architecture and security
   review: `docs/explainers/2026-11-01-emulated-shell-sandbox.md`.
 - Still to see: one green run of the GitHub Actions `sandbox` job (amd64 runner, `sudo systemd-run --scope`).

@@ -820,16 +820,9 @@ OpenCode branches of `CreateSession` and `ForkSession` refuse them.
 Use a dedicated test PostgreSQL database, never a production database. Each run
 creates an isolated schema via the existing test helper.
 
-RocketClaw's Go packages do not build on macOS. On a Mac, run the tests through
-`make`, which runs them in the Linux container with its own test database and
-the browser-test variables set:
-
-```sh
-make -C internal/rocketclaw web-assets  # once in a fresh workspace
-make -C internal/rocketclaw coverage-profile 'GOTESTRUN=^(TestWebRPC|TestSessionEntries)$$'
-```
-
-On a Linux host, run `go test` with a test database of your own:
+In a fresh workspace, build the web assets once with
+`make -C internal/rocketclaw web-assets`. Then run `go test` with a test database
+of your own:
 
 ```sh
 export ROCKETCLAW_TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:55435/rocketclaw_test?sslmode=disable'
@@ -838,8 +831,7 @@ go test -race -count=1 -run '^(TestWebRPC|TestSessionEntries)$' \
 ```
 
 The tests bind Unix sockets under `TMPDIR`, and a socket path must stay under
-108 bytes on Linux, so keep `TMPDIR` short. A long Mac workspace path seen
-inside the Linux container can exceed it. See
+108 bytes on Linux, so keep `TMPDIR` short. See
 [Frontend RPC Browser Tests Fail Without Their Setup](../../../../docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md)
 for the full workspace setup, including the browser-test variables below.
 

@@ -337,7 +337,7 @@ Therefore: **the specific production MCP race has been removed, but deleting the
 
 ### Local verification
 
-The checks ran in an isolated Jujutsu workspace at the pinned revision, using a dedicated native PostgreSQL **18.6** instance and Go **1.27.1** on macOS. Database files, workspace, test temporary directories, and logs were kept under `.tmp/wallace-queue-main-audit/`. Production runs PostgreSQL 18.4; this was a runtime-path investigation, not a production-copy migration rehearsal.
+The checks ran in an isolated Jujutsu workspace at the pinned revision, using a dedicated native PostgreSQL **18.6** instance and Go **1.27.1**. Database files, workspace, test temporary directories, and logs were kept under `.tmp/wallace-queue-main-audit/`. Production runs PostgreSQL 18.4; this was a runtime-path investigation, not a production-copy migration rehearsal.
 
 Existing tests passed before the diagnostic additions:
 

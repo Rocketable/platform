@@ -168,7 +168,7 @@ Full `make check`: exit 0, 888 s (3 PASS, 26 expected counterexamples confirmed)
 prefixes up to the first counterexample and vary slightly between runs with two workers.
 
 TLC banner: `TLC2 Version 2026.11.06.222357 (rev: d8fb231)` from the pinned v1.8.0 artifact. Java: OpenJDK
-21.0.13.0.3 (Homebrew), macOS aarch64. Other models were running on the same machine, so times are rough.
+21.0.13.0.3, aarch64. Other models were running on the same machine, so times are rough.
 
 ### Bound choices
 

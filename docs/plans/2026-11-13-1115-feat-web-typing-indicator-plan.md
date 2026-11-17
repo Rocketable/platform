@@ -132,10 +132,9 @@ sequenceDiagram
 
 ### Implementation Constraints
 
-- `make generate` does not regenerate the proto. Run `go generate ./internal/rocketclaw/frontend/rpc`, which needs `protoc` (present at `/opt/homebrew/bin/protoc`) and `protoc-gen-go` at the version pinned in `web.pb.go`'s header, v1.36.12. It is not installed on this Mac; install that exact version with `GOBIN` under the repository's `.tmp/`. Commit `web.pb.go` and `protocol.gen.go` together, since `web/src/api.test.ts` checks the hash.
+- `make generate` does not regenerate the proto. Run `go generate ./internal/rocketclaw/frontend/rpc`, which needs `protoc` and `protoc-gen-go` at the version pinned in `web.pb.go`'s header, v1.36.12. It was not installed; install that exact version with `GOBIN` under the repository's `.tmp/`. Commit `web.pb.go` and `protocol.gen.go` together, since `web/src/api.test.ts` checks the hash.
 - Any proto change makes every open page reload once on deploy (`ProtocolGuard`), which is expected.
 - Line budgets: Go has about 939 lines before `GO_SOURCE_CLOC_BUDGET`'s hazard zone (`internal/rocketclaw/Makefile`), TypeScript about 705 before `TS_CLOC_BUDGET`'s (`internal/rocketclaw/web/Makefile`). Never edit either budget.
-- RocketClaw packages build only on Linux; on a Mac run their checks through `make -C internal/rocketclaw …`.
 
 ### Deferred to Implementation
 
@@ -282,7 +281,7 @@ sequenceDiagram
 | Proto regeneration | `go generate ./internal/rocketclaw/frontend/rpc` with `protoc-gen-go` v1.36.12 on `PATH` | U1 |
 | Go format | `gofmt` on touched Go files | U1 |
 | RocketClaw Go lint | `make -C internal/rocketclaw lint` | U1 |
-| RocketClaw Go tests, line budget and coverage | `make -C internal/rocketclaw test` (Linux container on a Mac; needs the test PostgreSQL per that Makefile) | U1 |
+| RocketClaw Go tests, line budget and coverage | `make -C internal/rocketclaw test` (needs the test PostgreSQL per that Makefile) | U1 |
 | Web lint (oxlint, tsc, react-doctor) | `make -C internal/rocketclaw/web lint` | U3, U4 |
 | Web tests, browser tests, TypeScript line budget | `make -C internal/rocketclaw/web test`, after `bun install --frozen-lockfile`, with `ROCKETCLAW_PLAYWRIGHT_MODULE` and `ROCKETCLAW_CHROMIUM` set per `web/README.md` | U3, U4 |
 | Repository gates | `make lint`, `make test`, `go test ./...` for non-RocketClaw packages | all |

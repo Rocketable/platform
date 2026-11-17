@@ -141,9 +141,9 @@ the last submit the server will take.
 
 ## Checks and results
 
-Recorded on 2026-11-13 with `make check` (exit 0, 16 min 40 s in total), on a 12-core Mac shared with other TLC runs, so times are rough.
+Recorded on 2026-11-13 with `make check` (exit 0, 16 min 40 s in total), on a 12-core machine shared with other TLC runs, so times are rough.
 TLC banner `TLC2 Version 2026.11.06.222357 (rev: d8fb231)`
-(`pcal.trans` 1.12); OpenJDK 21.0.13.0.3 (Homebrew). Constants not listed are
+(`pcal.trans` 1.12); OpenJDK 21.0.13.0.3. Constants not listed are
 as built: Clients `{a, b}`, FileClients `{a}`, MaxOps 2 (File-tab client),
 OtherOps 1, SeedLen 2, Keys `{k1, k2}`, Mode `split`, FileBody `splices`,
 FileRebase `fromtext`, SetMode `pendingwins`, FormEdits `{body, set}`,

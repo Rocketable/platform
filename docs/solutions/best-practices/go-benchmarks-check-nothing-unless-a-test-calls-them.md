@@ -95,4 +95,3 @@ A check could hold this: a test under `internal/rocketclaw` that parses every `_
 ## Related
 
 - `docs/solutions/logic-errors/permission-review-reasons-read-from-transport-specific-trace.md`: the same History path; its Solution names the review prompt's size as a second trap, which the replacement test now holds.
-- `docs/solutions/best-practices/coverage-profile-kills-its-own-shell-when-make-is-pid-1.md`: how `coverage-profile`, the recipe that runs every RocketClaw test, behaves on a Mac.

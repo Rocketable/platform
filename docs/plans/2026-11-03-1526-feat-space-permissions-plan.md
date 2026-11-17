@@ -360,7 +360,7 @@ U1 (config) feeds U2 (backend limit and listing filter). U3 builds on U2 and add
 - **Test scenarios:**
   - The limited pass asserts the visible space names and sidebar titles exactly.
   - The unrestricted pass asserts all spaces are present.
-- **Verification:** the test passes in the Linux container, and the screenshots and `.webm` exist under `.tmp/permissions-demo/`. The browser bundle is rebuilt before the run (`docs/solutions/best-practices/web-browser-tests-run-the-last-bundle-that-built.md`).
+- **Verification:** the test passes on Linux, and the screenshots and `.webm` exist under `.tmp/permissions-demo/`. The browser bundle is rebuilt before the run (`docs/solutions/best-practices/web-browser-tests-run-the-last-bundle-that-built.md`).
 
 ---
 
@@ -369,7 +369,7 @@ U1 (config) feeds U2 (backend limit and listing filter). U3 builds on U2 and add
 | Gate | Command | Applies to |
 | --- | --- | --- |
 | Go format | `gofmt -l` on touched Go files is empty | U1 to U5, U8 |
-| RocketClaw tests, coverage ≥ 91.8%, Go CLOC budget 41750 | `make -C internal/rocketclaw test`, which runs on Linux in the container on a Mac | U1 to U5, U8 |
+| RocketClaw tests, coverage ≥ 91.8%, Go CLOC budget 41750 | `make -C internal/rocketclaw test` | U1 to U5, U8 |
 | Repo lint | `make lint` | all |
 | Repo tests | `make test` | all |
 | Web lint (react-doctor) and TS CLOC budget 9300 | `make -C internal/rocketclaw/web lint` and `make check-cloc-budget` | U6 |

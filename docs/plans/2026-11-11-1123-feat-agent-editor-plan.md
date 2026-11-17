@@ -873,7 +873,7 @@ Waits on: PR6 (merge order only); PR3, PR4 and PR5 (needed before this group can
 
 | Gate | Command | Applies to |
 |---|---|---|
-| Go format, lint, generate, tests, coverage (91.8%), Go CLOC budget | `make -C internal/rocketclaw test` (runs in the Linux container on a Mac) | Every PR |
+| Go format, lint, generate, tests, coverage (91.8%), Go CLOC budget | `make -C internal/rocketclaw test` | Every PR |
 | Web type check, oxlint, react-doctor | `make -C internal/rocketclaw/web lint` | PR6, PR7 |
 | Web unit and real-browser tests, TS CLOC budget | `make -C internal/rocketclaw/web test` | PR6, PR7 |
 | Whole repo | `make test` and `make check-cloc-budget` at the repo root | Every PR before review |

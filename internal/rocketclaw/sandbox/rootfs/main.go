@@ -1,7 +1,7 @@
 //go:build linux
 
 // Command rootfs moves the emulated shell's guest image to the newest Ubuntu archive snapshot. `go generate
-// ./internal/rocketclaw/sandbox` runs it, through make, so on a Mac it runs on Linux. It builds the image for
+// ./internal/rocketclaw/sandbox` runs it, through make. It builds the image for
 // amd64 and arm64 with mmdebstrap (qemu-user emulation runs the other architecture) in a temporary folder.
 // When a package version changed, it writes the snapshot to snapshot.gen.go, the versions to
 // packages.<arch>.lock, and an SBOM per architecture beside this file; otherwise it changes nothing, so hosts
@@ -87,8 +87,7 @@ func update(dir, snapshot string) (bool, error) {
 }
 
 // buildImage builds arch's image from snapshot in a temporary folder, the same every run, and removes it. It is
-// not the repository's .tmp: on a Mac, whose folders this runs in through the Linux container, that is
-// case-insensitive, and Ubuntu has pam.7.gz and PAM.7.gz.
+// not the repository's .tmp, which may be on a case-insensitive file system, and Ubuntu has pam.7.gz and PAM.7.gz.
 func buildImage(snapshot, arch string) (installed []string, release string, err error) {
 	tmp := filepath.Join(os.TempDir(), "rocketclaw-sandbox-image")
 	defer func() { _ = os.RemoveAll(tmp) }()

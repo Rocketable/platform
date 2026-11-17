@@ -1,31 +1,3 @@
-ifeq ($(shell uname -s),Darwin)
-
-LINUX_PROFILE ?= rocketclaw-linux
-linux_docker := docker --context colima-$(LINUX_PROFILE)
-linux_sandbox := /sandbox/$(subst /,_,$(abspath ../..))
-
-space := $(subst ,, )
-linux_overrides = $(foreach o,$(subst \$(space),\001,$(MAKEOVERRIDES)),'$(subst \001,$(space),$(subst $$$$,$$,$(subst ','\'',$(o))))')
-
-.DEFAULT_GOAL := run
-.PHONY: linux-container
-Makefile: ;
-
-%: linux-container
-	$(linux_docker) run --rm --privileged --network host -v $(HOME):$(HOME) -w $(CURDIR) \
-		-v /var/run/docker.sock:/var/run/docker.sock -v rocketclaw-linux-home:/home/dev \
-		-v rocketclaw-linux-sandbox:/sandbox -e SANDBOX_TEST_DIR=$(linux_sandbox) -e SANDBOX_PACKAGE_CACHE=/sandbox/packages \
-		-e SANDBOX_TEST_WORKSPACES=/sandbox -e GOCACHE=$(abspath ../../.tmp)/gocache \
-		rocketclaw-linux make $(linux_overrides) $@
-
-linux-container:
-	colima status $(LINUX_PROFILE) >/dev/null 2>&1 || colima start $(LINUX_PROFILE) --activate=false --binfmt --cpu 6 --memory 8 --disk 100 --mount $(HOME):w
-	colima ssh -p $(LINUX_PROFILE) -- sudo sh -c 'printf "abi <abi/4.0>,\ninclude <tunables/global>\nprofile rocketclaw-bwrap /usr/bin/bwrap flags=(unconfined) {\n  userns,\n}\n" > /etc/apparmor.d/rocketclaw-bwrap && apparmor_parser -r /etc/apparmor.d/rocketclaw-bwrap'
-	$(linux_docker) build -q -t rocketclaw-linux --build-arg GO_VERSION=$$(awk '$$1 == "go" { print $$2 }' ../../go.mod) \
-		--build-arg UID=$$(id -u) - < linux.Containerfile >/dev/null
-
-else
-
 COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
 COVERAGE_REQUIRED ?= 91.8
@@ -62,17 +34,11 @@ SANDBOX_TEST_DIR ?= $(abspath ../../.tmp)/sandbox-test
 SANDBOX_PACKAGE_CACHE ?= $(SANDBOX_TEST_DIR)/packages
 SANDBOX_TEST_FLAGS ?=
 SANDBOX_TEST_CGO ?= 0
-ifneq ($(wildcard /.dockerenv),)
-SANDBOX_TEST_SCOPE ?= /bin/sh -c 'cg=/sys/fs/cgroup$$(cut -d: -f3 /proc/self/cgroup); cg=$${cg%/supervisor}; mkdir -p $$cg/init $$cg/test-$$$$; for p in $$(cat $$cg/cgroup.procs); do echo $$p > $$cg/init/cgroup.procs 2>/dev/null || true; done; echo "+cpu +memory +pids" > $$cg/cgroup.subtree_control; echo $$$$ > $$cg/test-$$$$/cgroup.procs; exec "$$@"' sh
-endif
 SANDBOX_TEST_SCOPE ?= systemd-run --user --scope --quiet -p Delegate=yes
 SANDBOX_TEST_COVERPROFILE ?=
-SANDBOX_TEST_WORKSPACES ?=
 sandbox-test:
 	rm -rf $(SANDBOX_TEST_DIR)/gocover
 	mkdir -p $(SANDBOX_TEST_DIR)/tmp $(SANDBOX_TEST_DIR)/gocover
-	$(if $(SANDBOX_TEST_WORKSPACES),echo '$(abspath ../..)' > $(SANDBOX_TEST_DIR)/.workspace; \
-		for d in $(SANDBOX_TEST_WORKSPACES)/*/; do if w=$$(cat "$$d.workspace" 2>/dev/null) && [ ! -d "$$w" ]; then rm -rf "$$d"; fi; done)
 	CGO_ENABLED=$(SANDBOX_TEST_CGO) go test -c $(SANDBOX_TEST_FLAGS) $(if $(SANDBOX_TEST_COVERPROFILE),-cover -covermode=atomic -coverpkg=$(COVERPKG)) -o $(SANDBOX_TEST_DIR)/harness.test ./harness
 	cd harness && $(SANDBOX_TEST_SCOPE) /bin/sh -c '"$$@"; exit $$?' sh /usr/bin/env ROCKETCLAW_SANDBOX_REQUIRE=1 \
 		ROCKETCLAW_SANDBOX_DIR=$(SANDBOX_TEST_DIR)/sandbox TMPDIR=$(SANDBOX_TEST_DIR)/tmp \
@@ -179,5 +145,3 @@ go-mod-update:
 
 sync-opencode-testdata:
 	bash ./harness/scripts/sync-opencode-testdata.sh
-
-endif

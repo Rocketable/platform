@@ -51,8 +51,6 @@ docker run -d --name rocketclaw-test-pg --shm-size=1g \
 export ROCKETCLAW_TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:55432/rocketclaw_test?sslmode=disable'
 ```
 
-On a Mac, this setup does not reach `make test`. Every `make` target in `internal/rocketclaw` runs again in the `rocketclaw-linux` container, on the `colima-rocketclaw-linux` Docker context, with `--network host` (`internal/rocketclaw/Makefile:8`, `:24`–`29`). That container receives only variables given on the `make` command line, not your exported environment. Plain `docker` on the Mac uses another context, whose published port is not the test container's `127.0.0.1`. Start the database with the setup in `docs/solutions/best-practices/concurrent-make-test-runs-share-one-test-database-container-name.md`, which uses that context and passes the URL as `make test ROCKETCLAW_TEST_DATABASE_URL=...`, and add `--shm-size=1g` to its `docker run`.
-
 As of this writing, neither of the repo's own container setups sets it:
 
 - `make test` in `internal/rocketclaw` (target `coverage-profile` in `internal/rocketclaw/Makefile`) runs `docker run -d ... postgres:$latest` with no `--shm-size` when `ROCKETCLAW_TEST_DATABASE_URL` is unset.
@@ -79,5 +77,4 @@ After: `docker run -d --shm-size=1g ... postgres:18`. The same suite passed.
 ## Related
 
 - `docs/solutions/best-practices/postgres-extension-in-migration-with-shared-test-database.md`: another consequence of every test sharing one database.
-- `docs/solutions/best-practices/concurrent-make-test-runs-share-one-test-database-container-name.md`: how to start a test database that `make test` can reach on a Mac.
 - `docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md`: other setup a fresh workspace needs before RocketClaw tests run.

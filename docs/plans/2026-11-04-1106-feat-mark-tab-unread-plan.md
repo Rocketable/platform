@@ -169,7 +169,7 @@ A person reads a session but wants to come back to it later. Today, having a tab
 |---|---|---|
 | Proto regenerated | `go generate ./internal/rocketclaw/frontend/rpc` | `web.pb.go` and `protocol.gen.go` match `web.proto` |
 | Go format | `gofmt -l` on touched Go files | No formatting drift |
-| RocketClaw Go tests | `make -C internal/rocketclaw test` (Linux container on a Mac) | U1, U2 |
+| RocketClaw Go tests | `make -C internal/rocketclaw test` | U1, U2 |
 | Web lint and tests | `make -C internal/rocketclaw/web lint test` | U3, react-doctor limits |
 | Repo lint and tests | `make lint` and `make test` | Repo-wide gates, CLOC budget |
 
