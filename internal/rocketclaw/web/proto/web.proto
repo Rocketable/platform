@@ -1168,10 +1168,11 @@ message SharedTab {
   SearchPage base = 4;
 }
 
-// Folds is whether each of one person's tab strip sections, space cards and Parked branches, on every RocketClaw, is
-// folded, by its key.
-message Folds {
+// StripLayout is how one person lays out their tab strip on every RocketClaw: whether each of its cards and Parked
+// branches is folded, by its key, and the order of its cards, by their keys.
+message StripLayout {
   map<string, bool> folded = 1;
+  repeated string order = 2;
 }
 
 // AttentionAction is what a person does to the attention of their tabs.
@@ -1201,7 +1202,7 @@ message AttentionChange {
 
 // TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space,
 // adds one tab to or removes one from a space's Shared group, changes the caller's attention on tabs, replaces the
-// caller's folds, or sets whether they auto-park every session.
+// caller's layout, or sets whether they auto-park every session.
 // revision is the saved revision the state was made from.
 message TabsRequest {
   reserved 8, 9, 10, 12, 13;
@@ -1219,14 +1220,14 @@ message TabsRequest {
   AttentionChange attention = 14;
   // auto_park sets whether the caller auto-parks every session they chose nothing for.
   optional bool auto_park = 15;
-  // folds replaces the caller's folds when set.
-  Folds folds = 16;
+  // layout replaces the caller's layout when set.
+  StripLayout layout = 16;
 }
 
 // TabsResponse is every space, oldest first, and the caller's saved tab state and its revision.
 // stale reports a refused save: the state was made from an older revision than the one saved, or a Shared Search
 // page edit made from a page that has since changed.
-// shared is every space's Shared tabs, oldest added first. folds is the caller's folds.
+// shared is every space's Shared tabs, oldest added first. layout is the caller's layout.
 message TabsResponse {
   reserved 6, 8;
   reserved "mutes", "top_shelf";
@@ -1242,7 +1243,7 @@ message TabsResponse {
   repeated Tab closed = 9;
   // auto_park is whether the caller auto-parks every session they chose nothing for.
   bool auto_park = 10;
-  Folds folds = 11;
+  StripLayout layout = 11;
 }
 
 // The first event answers the browser's SDP offer; the last ends the call.

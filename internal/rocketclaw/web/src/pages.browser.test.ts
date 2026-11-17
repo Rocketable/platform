@@ -57,20 +57,22 @@ const names = (page: any) => strip(page).getByRole("tab").evaluateAll((nodes: HT
 const space = (page: any) => page.locator('button[aria-current="true"]').getAttribute("aria-label");
 const go = (page: any, link: string) => page.evaluate((link: string) => { history.pushState(null, "", link); dispatchEvent(new PopStateEvent("popstate")); }, link);
 async function chooseSpace(page: any, name: string) {
-  await page.getByRole("button", { name: `Go to ${name}`, exact: true }).click();
-  await page.locator(`button[aria-current="true"][aria-label="Go to ${name}"]`).waitFor();
+  await page.getByRole("button", { name, exact: true }).hover();
+  await page.getByRole("button", { name: `${name} space actions`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "Go to space", exact: true }).click();
+  await page.locator(`button[aria-current="true"][aria-label="${name}"]`).waitFor();
 }
 
 test("a page link opens in the space named by its segment, ignoring case, on a fresh load and in the app", () => withPage(["Main", "billing"], async (page, origin) => {
   await page.goto(`${origin}/pages/Billing/reporter/index.html`);
   // The strip draws before the spaces load; the tab then moves to the space its link names.
-  await page.locator('button[aria-current="true"][aria-label="Go to billing"]').waitFor();
+  await page.locator('button[aria-current="true"][aria-label="billing"]').waitFor();
   await page.waitForURL(`${origin}/pages/billing/reporter/index.html`);
 
   await chooseSpace(page, "Main");
   await go(page, "/pages/Billing/reporter/q3/report.html");
   await strip(page).getByRole("tab", { name: "reporter · q3/report.html", exact: true }).waitFor();
-  expect(await space(page)).toBe("Go to billing");
+  expect(await space(page)).toBe("billing");
   await page.waitForURL(`${origin}/pages/billing/reporter/q3/report.html`);
   expect((await names(page)).toSorted()).toEqual(["reporter · index.html", "reporter · q3/report.html"]);
 
@@ -78,9 +80,9 @@ test("a page link opens in the space named by its segment, ignoring case, on a f
   await chooseSpace(page, "Main");
   await go(page, "/pages/Finance/reporter/index.html");
   await strip(page).getByRole("tab", { name: "reporter · index.html", exact: true }).waitFor();
-  expect(await space(page)).toBe("Go to Main");
+  expect(await space(page)).toBe("Main");
   expect(page.url()).toBe(`${origin}/pages/Finance/reporter/index.html`);
-  expect(await page.locator('[data-tab-lists] button[aria-label^="Go to "]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Go to Main", "Go to billing"]);
+  expect(await page.locator("[data-tab-lists] button[aria-description][aria-expanded]").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Main", "billing"]);
 }), 60_000);
 
 test("a page's shared link and its Page Index link share one tab, and a - link opens in each space", () => withPage(["Main", "billing", "Space 2"], async (page, origin) => {
@@ -97,12 +99,12 @@ test("a page's shared link and its Page Index link share one tab, and a - link o
   await chooseSpace(page, "Main");
   await go(page, "/pages/-/main/index.html");
   await page.waitForURL(`${origin}/pages/Main/main/index.html`);
-  expect(await space(page)).toBe("Go to Main");
+  expect(await space(page)).toBe("Main");
   expect(await names(page)).toContain("main · index.html");
 
   await go(page, "/pages/Space%202/main/index.html");
   await page.waitForURL(`${origin}/pages/Space%202/main/index.html`);
-  expect(await space(page)).toBe("Go to Space 2");
+  expect(await space(page)).toBe("Space 2");
   expect(await names(page)).toEqual(["main · index.html"]);
 }), 60_000);
 

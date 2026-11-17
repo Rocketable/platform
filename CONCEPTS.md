@@ -290,7 +290,7 @@ One of the last 50 tabs a person closed, which the server keeps, newest first, w
 
 ### Shared Group
 
-The one tab group named Shared that every space has. The Web shows every space's Shared Group of a server in that server's Shared card, first in its section of the sidebar, under a grey pill naming the space when the server has more than one space. Its tabs are the same for every Web user who can see its space, and any of them can add a tab to it or remove one, which removes it for everyone. A tab can be in a space's Shared Group and in a person's own tabs at once. Its order and folding the Shared card are each person's own; tabs a person has not placed follow, oldest added first. Deleting a space moves its Shared Group's tabs into the first remaining space's.
+The one tab group named Shared that every space has. The Web shows every space's Shared Group of a server in that server's Shared card in the sidebar, under a grey pill naming the space when the server has more than one space. Its tabs are the same for every Web user who can see its space, and any of them can add a tab to it or remove one, which removes it for everyone. A tab can be in a space's Shared Group and in a person's own tabs at once. Its order, and where the Shared card sits and whether it is folded, are each person's own; tabs a person has not placed follow, oldest added first. Deleting a space moves its Shared Group's tabs into the first remaining space's.
 
 A Shared Group is a tab group several people share, and its tabs behave for each of them like their own: something new on a Shared session, Cron or Pages tab makes it waiting with a notification for everyone who can see its space, and an agent's question ends a park on it. A Shared Search Page's finished search marks only the person who entered it, whose search ran. Each person's Unread and Parked on a Shared tab are their own: a tab one person parked stays in the group, dimmed for them only. A Shared tab has no Close: Remove from Shared takes it out for everyone.
 
@@ -316,7 +316,7 @@ A pull request counts as created in the conversation only when a successful reco
 
 ### Remote RocketClaw
 
-Another RocketClaw server declared in the local server's configuration, whose chats, spaces and pages the local Web page lists and operates beside its own; the browser talks to it directly, and it identifies each person by their own Tailscale login. Its spaces appear as cards in its own section of the Web's tab strip and hold only its own chats. Not to be confused with a Remote OpenCode Session, which RocketClaw keeps a synced copy of.
+Another RocketClaw server declared in the local server's configuration, whose chats, spaces and pages the local Web page lists and operates beside its own; the browser talks to it directly, and it identifies each person by their own Tailscale login. Its spaces appear as cards in the Web's tab strip, among the local server's in each person's own order, titled with the server's name, and hold only its own chats. Not to be confused with a Remote OpenCode Session, which RocketClaw keeps a synced copy of.
 
 ### Birth Space
 

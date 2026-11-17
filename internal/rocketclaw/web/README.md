@@ -449,8 +449,8 @@ server. A remote that stops answering keeps its rows, greyed and offline; only a
 refusal clears them. Search fans out to every server, and a failing remote drops
 out. Each server marks its own tabs (see Unread below), and the page notifies
 from every server's listing; a server that is offline or on another protocol
-offers no attention items in its rows' menus. The tab strip has a section for
-each server with a card for each of its spaces (see Spaces below). Another
+offers no attention items in its rows' menus. The tab strip lists every
+server's cards, one for each of its spaces, in one list (see Spaces below). Another
 server's cards show its saved tabs, and changes to them save on that server;
 entering one of its spaces or opening one of its tabs opens that server's view
 in that space.
@@ -653,34 +653,41 @@ active tab.
 - **Spaces.** Spaces are shared by everyone except people limited to spaces
   (below): the server keeps one list, oldest first, starting with **Main**, and
   names are unique ignoring case. Every tab
-  belongs to one space. The strip has a section for each RocketClaw server,
-  this one first, named after the first label of the page's host (`hally` for
-  `hally.tail1234.ts.net`), and every remote by its configured name; with only
-  one server there is no section header. A section's header folds it, and
-  folded it shows a blue count of the tabs waiting for you there. A section
-  holds the server's Shared card (see Shared below), then one card per space
-  in their order. Every space's card is drawn and works the same, whichever
-  space is current and whichever server's page you are on; only the current
-  space's card is tinted. Its header shows a folder and the space's name,
-  which you click to enter the space (another server's space opens in that
-  server's view), a spinner while a turn runs in one of its tabs, a blue count
-  of its tabs waiting for you, **Needs you** while one of its sessions asks you
-  something, a **…** button for the space's actions, shown while the header is
-  hovered or focused, and a chevron that folds the card. Its body holds the
-  space's tabs and groups, which work as described above in every card,
-  another server's included: open, close, select, reorder within the
+  belongs to one space. The strip is one list of cards from every RocketClaw
+  server: each server's Shared card (see Shared below) and one card per space.
+  You put the cards in your own order: drag a card's title onto another card,
+  above or below its middle, or press Shift+ArrowUp or Shift+ArrowDown on the
+  title. A card you have not placed yet, such as a new space's, comes last, in
+  its server's order. With more than one server, a card's title names its server
+  after the space, as in "Main · hally": the page's host by its first label
+  (`hally` for `hally.tail1234.ts.net`), and every remote by its configured name.
+  A narrow strip cuts the server's name before the space's. Every space's card
+  is drawn and works the same, whichever space is current and whichever server's
+  page you are on; only the current space's card is tinted. Its title shows an
+  open folder, or a closed one while the card is folded, its name, "· offline"
+  while its server does not answer, a spinner while a turn runs in one of its
+  tabs, and a blue count of its tabs waiting for you; clicking the title folds
+  or unfolds the card. After the title come **Needs you** while one of its
+  sessions asks you something, and a **…** button for the space's actions. Its
+  body holds the space's tabs and groups, which work as described above in every
+  card, another server's included: open, close, select, reorder within the
   card, and take their full menu. Double-clicking a card's empty area starts a
   new session in its space. Changes to another server's cards save on that
   server, and opening one of its tabs moves the page to that server. Every
-  card and section starts unfolded; a folded card lists only its tabs that
-  wait for you or ask you something, and the tab in view. Which sections,
-  cards, and Parked branches are folded is saved on the local server, so it is
-  the same on every server's page and every device. The **…** menu offers
-  **New space**, **Rename space**, and, while the server has more than one
-  space, **Delete space**, which change the space for everyone. **New space**
-  does not enter the new space: it takes the first free "Space N" name and is
-  then named in place of its card's name: Enter or clicking away saves, and
-  Escape, a blank name, or a name another space has keeps the old name.
+  card starts unfolded; a folded card lists only its tabs that wait for you or
+  ask you something, and the tab in view. Your card order and which cards and
+  Parked branches are folded are saved on the local server, so they are the same
+  on every server's page and every device. The **…** menu offers **Go to
+  space**, which enters the space (another server's space opens in that
+  server's view), then **Rename space** and, while the server has more than one
+  space, **Delete space**, which change the space for everyone and which someone
+  limited to their own sessions does not get. Renaming edits the name in place
+  of the title: Enter or clicking away saves, and Escape, a blank name, or a
+  name another space has keeps the old name. Opening a tab also enters its
+  space. The command palette's **Spaces: New space**, or **Spaces: New space on
+  <server>** for each server when there are several, asks for the new space's
+  name and makes it on that server; a name another space has, ignoring case, is
+  refused. It does not enter the new space.
   Entering a space returns to the space's last active tab, or to its first
   tab. New session is one tab, so entering an empty space, opening New session, or closing a space's last tab
   moves that tab into the current space. Opening a location that is open in
@@ -712,9 +719,10 @@ active tab.
   [Space permissions](../../../README.md#space-permissions)) gets only their
   spaces from the server: the space cards, **Move to space**, and the Shared
   card show only those, and so do the session list, search, the agent
-  picker, the Cron page, and the Page Index. Space cards have no **…** menu
-  for them, because the server refuses **New space**, **Rename space**, and
-  **Delete space** from them. When another person switches a session to an
+  picker, the Cron page, and the Page Index. Their space cards' **…** menu
+  offers only **Go to space**, and the command palette offers no **New space**
+  on that server, because the server refuses making, renaming, and deleting
+  spaces from them. When another person switches a session to an
   agent outside their spaces, the session stays open to them, a pending question shows no answer form, and
   Send first switches the session to the agent the picker shows, one of theirs.
   A tab they saved earlier for a session outside their spaces opens into a
@@ -732,8 +740,8 @@ active tab.
   menu and the command palette offer **Add to Shared** and **Remove from
   Shared**; both change the tab's space's Shared tabs for everyone in the
   space, one tab at a time, so two people's changes never undo each other. New
-  session and sessions no Web user may open cannot be shared. Each server's
-  section starts with one **Shared** card that lists every space's Shared tabs
+  session and sessions no Web user may open cannot be shared. Each server has
+  one **Shared** card, which has no **…** menu and lists every space's Shared tabs
   in your own order, newly added ones last, under a grey pill naming the space
   when the server has more than one space; it is hidden while the server has
   no Shared tabs. A tab can be in Shared and among your own tabs
@@ -749,7 +757,7 @@ active tab.
   tabs: Cmd/Ctrl+[ and ] step through the current space's Shared rows and then
   your own tabs, each tab once, and arrows, Home, and End cross between the
   lists. Your Shared order follows you across devices. The Shared card folds
-  like any card. When the Shared tab you are viewing is removed, the window
+  and moves like any card. When the Shared tab you are viewing is removed, the window
   enters its space as it does for a tab closed elsewhere. Other people's changes arrive
   when a window regains focus. Deleting a space moves its Shared tabs into the
   first remaining space's, and deleting a session takes it out of every Shared

@@ -9700,29 +9700,30 @@ func (x *SharedTab) GetBase() *SearchPage {
 	return nil
 }
 
-// Folds is whether each of one person's tab strip sections, space cards and Parked branches, on every RocketClaw, is
-// folded, by its key.
-type Folds struct {
+// StripLayout is how one person lays out their tab strip on every RocketClaw: whether each of its cards and Parked
+// branches is folded, by its key, and the order of its cards, by their keys.
+type StripLayout struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Folded        map[string]bool        `protobuf:"bytes,1,rep,name=folded,proto3" json:"folded,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	Order         []string               `protobuf:"bytes,2,rep,name=order,proto3" json:"order,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Folds) Reset() {
-	*x = Folds{}
+func (x *StripLayout) Reset() {
+	*x = StripLayout{}
 	mi := &file_web_proto_msgTypes[142]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Folds) String() string {
+func (x *StripLayout) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Folds) ProtoMessage() {}
+func (*StripLayout) ProtoMessage() {}
 
-func (x *Folds) ProtoReflect() protoreflect.Message {
+func (x *StripLayout) ProtoReflect() protoreflect.Message {
 	mi := &file_web_proto_msgTypes[142]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -9734,14 +9735,21 @@ func (x *Folds) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Folds.ProtoReflect.Descriptor instead.
-func (*Folds) Descriptor() ([]byte, []int) {
+// Deprecated: Use StripLayout.ProtoReflect.Descriptor instead.
+func (*StripLayout) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{142}
 }
 
-func (x *Folds) GetFolded() map[string]bool {
+func (x *StripLayout) GetFolded() map[string]bool {
 	if x != nil {
 		return x.Folded
+	}
+	return nil
+}
+
+func (x *StripLayout) GetOrder() []string {
+	if x != nil {
+		return x.Order
 	}
 	return nil
 }
@@ -9809,7 +9817,7 @@ func (x *AttentionChange) GetUntil() string {
 
 // TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space,
 // adds one tab to or removes one from a space's Shared group, changes the caller's attention on tabs, replaces the
-// caller's folds, or sets whether they auto-park every session.
+// caller's layout, or sets whether they auto-park every session.
 // revision is the saved revision the state was made from.
 type TabsRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
@@ -9825,8 +9833,8 @@ type TabsRequest struct {
 	Attention  *AttentionChange `protobuf:"bytes,14,opt,name=attention,proto3" json:"attention,omitempty"`
 	// auto_park sets whether the caller auto-parks every session they chose nothing for.
 	AutoPark *bool `protobuf:"varint,15,opt,name=auto_park,json=autoPark,proto3,oneof" json:"auto_park,omitempty"`
-	// folds replaces the caller's folds when set.
-	Folds         *Folds `protobuf:"bytes,16,opt,name=folds,proto3" json:"folds,omitempty"`
+	// layout replaces the caller's layout when set.
+	Layout        *StripLayout `protobuf:"bytes,16,opt,name=layout,proto3" json:"layout,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9931,9 +9939,9 @@ func (x *TabsRequest) GetAutoPark() bool {
 	return false
 }
 
-func (x *TabsRequest) GetFolds() *Folds {
+func (x *TabsRequest) GetLayout() *StripLayout {
 	if x != nil {
-		return x.Folds
+		return x.Layout
 	}
 	return nil
 }
@@ -9941,7 +9949,7 @@ func (x *TabsRequest) GetFolds() *Folds {
 // TabsResponse is every space, oldest first, and the caller's saved tab state and its revision.
 // stale reports a refused save: the state was made from an older revision than the one saved, or a Shared Search
 // page edit made from a page that has since changed.
-// shared is every space's Shared tabs, oldest added first. folds is the caller's folds.
+// shared is every space's Shared tabs, oldest added first. layout is the caller's layout.
 type TabsResponse struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Spaces   []*Space               `protobuf:"bytes,1,rep,name=spaces,proto3" json:"spaces,omitempty"`
@@ -9954,8 +9962,8 @@ type TabsResponse struct {
 	// closed is the caller's last 50 closed tabs, newest first, each with the space it was in and a Search tab's page.
 	Closed []*Tab `protobuf:"bytes,9,rep,name=closed,proto3" json:"closed,omitempty"`
 	// auto_park is whether the caller auto-parks every session they chose nothing for.
-	AutoPark      bool   `protobuf:"varint,10,opt,name=auto_park,json=autoPark,proto3" json:"auto_park,omitempty"`
-	Folds         *Folds `protobuf:"bytes,11,opt,name=folds,proto3" json:"folds,omitempty"`
+	AutoPark      bool         `protobuf:"varint,10,opt,name=auto_park,json=autoPark,proto3" json:"auto_park,omitempty"`
+	Layout        *StripLayout `protobuf:"bytes,11,opt,name=layout,proto3" json:"layout,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -10046,9 +10054,9 @@ func (x *TabsResponse) GetAutoPark() bool {
 	return false
 }
 
-func (x *TabsResponse) GetFolds() *Folds {
+func (x *TabsResponse) GetLayout() *StripLayout {
 	if x != nil {
-		return x.Folds
+		return x.Layout
 	}
 	return nil
 }
@@ -11054,16 +11062,17 @@ const file_web_proto_rawDesc = "" +
 	"\x05space\x18\x01 \x01(\tR\x05space\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12'\n" +
 	"\x06search\x18\x03 \x01(\v2\x0f.rpc.SearchPageR\x06search\x12#\n" +
-	"\x04base\x18\x04 \x01(\v2\x0f.rpc.SearchPageR\x04base\"r\n" +
-	"\x05Folds\x12.\n" +
-	"\x06folded\x18\x01 \x03(\v2\x16.rpc.Folds.FoldedEntryR\x06folded\x1a9\n" +
+	"\x04base\x18\x04 \x01(\v2\x0f.rpc.SearchPageR\x04base\"\x94\x01\n" +
+	"\vStripLayout\x124\n" +
+	"\x06folded\x18\x01 \x03(\v2\x1c.rpc.StripLayout.FoldedEntryR\x06folded\x12\x14\n" +
+	"\x05order\x18\x02 \x03(\tR\x05order\x1a9\n" +
 	"\vFoldedEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\bR\x05value:\x028\x01\"k\n" +
 	"\x0fAttentionChange\x12\x14\n" +
 	"\x05paths\x18\x01 \x03(\tR\x05paths\x12,\n" +
 	"\x06action\x18\x02 \x01(\x0e2\x14.rpc.AttentionActionR\x06action\x12\x14\n" +
-	"\x05until\x18\x03 \x01(\tR\x05until\"\x9b\x04\n" +
+	"\x05until\x18\x03 \x01(\tR\x05until\"\xa3\x04\n" +
 	"\vTabsRequest\x12#\n" +
 	"\x05state\x18\x01 \x01(\v2\r.rpc.TabStateR\x05state\x12!\n" +
 	"\fcreate_space\x18\x02 \x01(\tR\vcreateSpace\x12-\n" +
@@ -11076,13 +11085,12 @@ const file_web_proto_rawDesc = "" +
 	"\vedit_shared\x18\v \x01(\v2\x0e.rpc.SharedTabR\n" +
 	"editShared\x122\n" +
 	"\tattention\x18\x0e \x01(\v2\x14.rpc.AttentionChangeR\tattention\x12 \n" +
-	"\tauto_park\x18\x0f \x01(\bH\x00R\bautoPark\x88\x01\x01\x12 \n" +
-	"\x05folds\x18\x10 \x01(\v2\n" +
-	".rpc.FoldsR\x05foldsB\f\n" +
+	"\tauto_park\x18\x0f \x01(\bH\x00R\bautoPark\x88\x01\x01\x12(\n" +
+	"\x06layout\x18\x10 \x01(\v2\x10.rpc.StripLayoutR\x06layoutB\f\n" +
 	"\n" +
 	"_auto_parkJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
 	"J\x04\b\n" +
-	"\x10\vJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eR\vswap_sharedR\x04muteR\x06unmuteR\ttop_shelfR\vmark_unread\"\xdd\x02\n" +
+	"\x10\vJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eR\vswap_sharedR\x04muteR\x06unmuteR\ttop_shelfR\vmark_unread\"\xe5\x02\n" +
 	"\fTabsResponse\x12\"\n" +
 	"\x06spaces\x18\x01 \x03(\v2\n" +
 	".rpc.SpaceR\x06spaces\x12#\n" +
@@ -11093,9 +11101,8 @@ const file_web_proto_rawDesc = "" +
 	"\bunshared\x18\a \x01(\v2\x0f.rpc.SearchPageR\bunshared\x12 \n" +
 	"\x06closed\x18\t \x03(\v2\b.rpc.TabR\x06closed\x12\x1b\n" +
 	"\tauto_park\x18\n" +
-	" \x01(\bR\bautoPark\x12 \n" +
-	"\x05folds\x18\v \x01(\v2\n" +
-	".rpc.FoldsR\x05foldsJ\x04\b\x06\x10\aJ\x04\b\b\x10\tR\x05mutesR\ttop_shelf\"\xda\x01\n" +
+	" \x01(\bR\bautoPark\x12(\n" +
+	"\x06layout\x18\v \x01(\v2\x10.rpc.StripLayoutR\x06layoutJ\x04\b\x06\x10\aJ\x04\b\b\x10\tR\x05mutesR\ttop_shelf\"\xda\x01\n" +
 	"\n" +
 	"VoiceEvent\x12*\n" +
 	"\x06answer\x18\x01 \x01(\v2\x10.rpc.VoiceAnswerH\x00R\x06answer\x12'\n" +
@@ -11367,7 +11374,7 @@ var file_web_proto_goTypes = []any{
 	(*TabGroup)(nil),                      // 143: rpc.TabGroup
 	(*TabState)(nil),                      // 144: rpc.TabState
 	(*SharedTab)(nil),                     // 145: rpc.SharedTab
-	(*Folds)(nil),                         // 146: rpc.Folds
+	(*StripLayout)(nil),                   // 146: rpc.StripLayout
 	(*AttentionChange)(nil),               // 147: rpc.AttentionChange
 	(*TabsRequest)(nil),                   // 148: rpc.TabsRequest
 	(*TabsResponse)(nil),                  // 149: rpc.TabsResponse
@@ -11381,7 +11388,7 @@ var file_web_proto_goTypes = []any{
 	nil,                                   // 157: rpc.AgentDraftExternalMCP.MetadataEntry
 	nil,                                   // 158: rpc.AgentDraftMessage.LabelsEntry
 	nil,                                   // 159: rpc.TabState.LastEntry
-	nil,                                   // 160: rpc.Folds.FoldedEntry
+	nil,                                   // 160: rpc.StripLayout.FoldedEntry
 }
 var file_web_proto_depIdxs = []int32{
 	0,   // 0: rpc.Session.kind:type_name -> rpc.ConversationKind
@@ -11456,7 +11463,7 @@ var file_web_proto_depIdxs = []int32{
 	159, // 69: rpc.TabState.last:type_name -> rpc.TabState.LastEntry
 	141, // 70: rpc.SharedTab.search:type_name -> rpc.SearchPage
 	141, // 71: rpc.SharedTab.base:type_name -> rpc.SearchPage
-	160, // 72: rpc.Folds.folded:type_name -> rpc.Folds.FoldedEntry
+	160, // 72: rpc.StripLayout.folded:type_name -> rpc.StripLayout.FoldedEntry
 	3,   // 73: rpc.AttentionChange.action:type_name -> rpc.AttentionAction
 	144, // 74: rpc.TabsRequest.state:type_name -> rpc.TabState
 	139, // 75: rpc.TabsRequest.rename_space:type_name -> rpc.Space
@@ -11464,13 +11471,13 @@ var file_web_proto_depIdxs = []int32{
 	145, // 77: rpc.TabsRequest.unshare:type_name -> rpc.SharedTab
 	145, // 78: rpc.TabsRequest.edit_shared:type_name -> rpc.SharedTab
 	147, // 79: rpc.TabsRequest.attention:type_name -> rpc.AttentionChange
-	146, // 80: rpc.TabsRequest.folds:type_name -> rpc.Folds
+	146, // 80: rpc.TabsRequest.layout:type_name -> rpc.StripLayout
 	139, // 81: rpc.TabsResponse.spaces:type_name -> rpc.Space
 	144, // 82: rpc.TabsResponse.state:type_name -> rpc.TabState
 	145, // 83: rpc.TabsResponse.shared:type_name -> rpc.SharedTab
 	141, // 84: rpc.TabsResponse.unshared:type_name -> rpc.SearchPage
 	140, // 85: rpc.TabsResponse.closed:type_name -> rpc.Tab
-	146, // 86: rpc.TabsResponse.folds:type_name -> rpc.Folds
+	146, // 86: rpc.TabsResponse.layout:type_name -> rpc.StripLayout
 	151, // 87: rpc.VoiceEvent.answer:type_name -> rpc.VoiceAnswer
 	152, // 88: rpc.VoiceEvent.ended:type_name -> rpc.VoiceEnded
 	20,  // 89: rpc.ListSessionsResponse.AgentTagsEntry.value:type_name -> rpc.TagChoices

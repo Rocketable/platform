@@ -301,17 +301,17 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
 
-	assert.True(t, proto.Equal(&Folds{}, response.Folds), "nothing folded yet: %v", response.Folds)
+	assert.True(t, proto.Equal(&StripLayout{}, response.Layout), "nothing laid out yet: %v", response.Layout)
 
-	folds := &Folds{Folded: map[string]bool{"@work": true, "work/main": false}}
-	_, err = call("alice", &TabsRequest{Folds: folds})
+	layout := &StripLayout{Folded: map[string]bool{"@work": true, "work/main": false}, Order: []string{"work/lab", "#shared", "/main"}}
+	_, err = call("alice", &TabsRequest{Layout: layout})
 	require.NoError(t, err)
 	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
-	assert.True(t, proto.Equal(folds, response.Folds), "a read returns the saved folds: %v", response.Folds)
+	assert.True(t, proto.Equal(layout, response.Layout), "a read returns the saved layout: %v", response.Layout)
 	response, err = call("bob", &TabsRequest{})
 	require.NoError(t, err)
-	assert.True(t, proto.Equal(&Folds{}, response.Folds), "another person's folds are not theirs: %v", response.Folds)
+	assert.True(t, proto.Equal(&StripLayout{}, response.Layout), "another person's layout is not theirs: %v", response.Layout)
 }
 
 func TestPromptAutoParks(t *testing.T) {
