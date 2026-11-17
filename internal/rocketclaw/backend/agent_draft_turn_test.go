@@ -44,6 +44,10 @@ func startAgentDraftTest(t *testing.T, agents map[string]string, answer func(w h
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		data, _ := io.ReadAll(r.Body)
 
 		var request struct {

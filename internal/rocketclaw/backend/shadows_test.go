@@ -482,6 +482,10 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 
 			toolResults := make(chan string, 4)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if answerTitleRequest(w, r) {
+					return
+				}
+
 				var request struct {
 					Input []struct{ Type, Output string } `json:"input"`
 				}
@@ -698,6 +702,10 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 	requests := make(chan providerRequest, 8)
 	parentRelease, childRelease := make(chan struct{}), make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		var request providerRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
@@ -863,6 +871,10 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 
 			release := make(chan struct{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if answerTitleRequest(w, r) {
+					return
+				}
+
 				var request providerRequest
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Error(err)
@@ -1087,6 +1099,10 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 			}
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if answerTitleRequest(w, r) {
+					return
+				}
+
 				var request struct {
 					Model string `json:"model"`
 				}
@@ -1334,6 +1350,10 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 
 	requests := make(chan string, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		var request struct {
 			Model string `json:"model"`
 		}
@@ -1391,6 +1411,10 @@ func TestShadowSiblingFailureIsIndependent(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		var request struct {
 			Model string `json:"model"`
 		}
@@ -1453,6 +1477,10 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 
 	requests := make(chan []json.RawMessage, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		var request struct {
 			Input []json.RawMessage `json:"input"`
 		}

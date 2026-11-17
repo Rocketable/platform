@@ -114,6 +114,15 @@ func TestModel(ctx context.Context, cfg *config.Config, ref string) (time.Durati
 	return time.Since(startedAt), nil
 }
 
+func GenerateTitle(ctx context.Context, cfg *config.Config, request, recent string) (string, error) {
+	title, err := harness.GenerateTitle(ctx, newModelResolver(cfg, slog.Default()), cfg.TitleModel, request, recent)
+	if err != nil {
+		return "", fmt.Errorf("generate title with %q: %w", cmp.Or(cfg.TitleModel, "default title model"), err)
+	}
+
+	return title, nil
+}
+
 func newDeciders(cfg *config.Config) map[string]harness.Decider {
 	deciders := make(map[string]harness.Decider, len(cfg.Decision))
 	for name, provider := range cfg.Decision {

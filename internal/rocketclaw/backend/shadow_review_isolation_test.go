@@ -35,6 +35,10 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 			}
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if answerTitleRequest(w, r) {
+					return
+				}
+
 				var request struct {
 					Model string `json:"model"`
 				}

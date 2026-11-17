@@ -480,8 +480,8 @@ active tab.
   tab, or use the **…** button on the active tab (for touch) to reach Close,
   Close others, Close to the right, and Close all. Session tabs also offer **Rename session**, which edits the name in
   the tab itself: Enter or clicking away saves and Escape cancels. A blank name
-  shows the last message again for RocketClaw sessions; for remote sessions, it
-  clears the OpenCode title too. Session tabs also offer **Delete session**, as
+  generates a new title from the conversation, as **Regenerate title** does.
+  Session tabs also offer **Delete session**, as
   does the command palette for the current session; it asks first and then
   closes the tab. A remote session is deleted on its OpenCode server; a RocketClaw
   session is deleted for everyone, as retention cleanup deletes it, unless it is
@@ -1042,7 +1042,7 @@ text, and records only selections—not searches or dismissals. Search still fil
 the list, and unavailable session commands stay hidden even when recently used.
 Rows keep compact spacing and touch-sized targets on mobile.
 For the current session it also offers **Open original conversation** (when forked),
-**Name session**, **Pin/Unpin**, **Fork session**,
+**Name session**, **Regenerate title**, **Pin/Unpin**, **Fork session**,
 **Handoff session**, **Choose agent**, **Delete session**, and **Stop turn** while running.
 Fork, handoff, rename, and agent selection open their controls directly.
 For a remote OpenCode session it offers **Copy server link**, which copies the
@@ -1266,12 +1266,18 @@ Use the rename icon beside the pin in the chat to set an optional name. Chat act
 buttons have descriptive tooltips. Add files sits at the far left, before the agent
 selector. On mobile, these and the session actions sit above Steer and Send. The name
 replaces the session row's last-message preview without changing the messages; both
-the name and the preview remain searchable. For RocketClaw sessions, clear the name
-to restore the preview.
+the name and the preview remain searchable.
+When a person's first Web message starts a RocketClaw session that has no name, the
+title model (`title_model`, `openai/gpt-6-luna#low` by default) names it from that
+message in the background, as OpenCode does; a name set meanwhile wins. **Regenerate title** in the
+command palette, or saving a blank name, names it again from its first request and
+recent messages, and stays unavailable until that finishes. A failed attempt keeps
+the old name.
 Pins and names are shared with everyone who can see the session and persist
 across reloads and devices.
-Remote OpenCode names sync both ways: renaming or clearing the name here updates
-OpenCode, and a title changed or cleared in OpenCode appears here on the next sync.
+Remote OpenCode names sync both ways: renaming here updates OpenCode, a blank name
+or **Regenerate title** asks OpenCode to generate a new title, and a title changed
+in OpenCode appears here on the next sync.
 A failed OpenCode update leaves the local name unchanged.
 
 The Cron page shows one line per cron, each name linking to that cron's journal,

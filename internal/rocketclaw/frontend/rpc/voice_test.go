@@ -94,6 +94,13 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 		body, err := io.ReadAll(r.Body)
 		assert.NoError(t, err)
 
+		if titleRequest(body) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, titleResponse)
+
+			return
+		}
+
 		var request struct{ Model string }
 		assert.NoError(t, json.Unmarshal(body, &request))
 

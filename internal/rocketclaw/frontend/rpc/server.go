@@ -1103,6 +1103,50 @@ func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*R
 	return &RunCronJobResponse{Id: id}, nil
 }
 
+func (s *Server) conversationTitle(ctx context.Context, id string) (string, error) {
+	_, recorded, err := s.sessions.Thread(id)
+	if err != nil {
+		return "", fmt.Errorf("read web conversation: %w", err)
+	}
+
+	if !recorded {
+		return "", nil
+	}
+
+	history, err := s.history(ctx, &HistoryRequest{Id: id})
+	if err != nil {
+		return "", err
+	}
+
+	var (
+		first  string
+		recent []string
+	)
+
+	for _, message := range history.Messages {
+		text := strings.TrimSpace(message.Text)
+
+		switch {
+		case text == "" || message.Role != "user" && (message.Role != "assistant" || !message.Complete):
+		case first == "" && message.Role == "user":
+			first = text
+		default:
+			recent = append(recent, map[string]string{"user": "User", "assistant": "Assistant"}[message.Role]+": "+text)
+		}
+	}
+
+	if first == "" {
+		return "", nil
+	}
+
+	title, err := backend.GenerateTitle(ctx, s.cfg.Clone(), first, strings.Join(recent, "\n\n"))
+	if err != nil {
+		return "", fmt.Errorf("regenerate web session title: %w", err)
+	}
+
+	return title, nil
+}
+
 func (s *Server) updateSession(ctx context.Context, request *UpdateSessionRequest) (*UpdateSessionResponse, error) {
 	if err := s.visibleConversation(ctx, request.Id); err != nil {
 		return nil, err
@@ -1114,6 +1158,15 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 		}
 
 		request.Name = new(strings.TrimSpace(*request.Name))
+	}
+
+	if request.Name != nil && *request.Name == "" {
+		title, err := s.conversationTitle(ctx, request.Id)
+		if err != nil {
+			return nil, err
+		}
+
+		request.Name = &title
 	}
 
 	if request.Tag != nil {

@@ -577,7 +577,7 @@ test("remote sessions list, tag, go offline, and start", async () => {
     await page.getByPlaceholder("Type a command").fill("Name session");
     await page.getByRole("button", { name: "Sessions: Name session" }).click();
     const rename = page.getByRole("dialog", { name: "Name session", exact: true });
-    await rename.getByText("Shared with everyone who can see this session. Leave blank to clear the OpenCode title too.", { exact: true }).waitFor();
+    await rename.getByText("Shared with everyone who can see this session. Leave blank to generate a title from the conversation.", { exact: true }).waitFor();
     await rename.getByRole("button", { name: "Cancel", exact: true }).click();
 
     // People type any tag on a remote session; tags already in use are suggested, agent tags are not offered.

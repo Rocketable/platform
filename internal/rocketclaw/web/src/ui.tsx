@@ -3267,6 +3267,7 @@ function useSessionActions(session: Session | undefined, onSuccess?: () => void)
   const items = session ? [
     ...(session.forkedFrom ? [{ key: "origin", label: "Open original conversation", run: () => navigate(rowPath({ id: session.forkedFrom!, kind: session.kind })) }] : []),
     { key: "name", label: "Name session", run: () => setCommand({ mode: "name", source: id }) },
+    { key: "title", label: "Regenerate title", keep: true, run: () => update.mutate({ id, name: "" }) },
     { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
     ...pauseActions(session, (paused) => update.mutate({ id, paused })),
     ...choices.map((tag) => ({ key: `tag-${tag}`, label: `${tags.has(tag) ? "Remove" : "Add"} tag ${tag}`, keep: true, run: () => update.mutate({ id, tag }) })),
@@ -3317,7 +3318,7 @@ function NameSessionDialog({ id, tag = false }: { id: string; tag?: boolean }) {
   return <Dialog open onOpenChange={(open) => { if (!open) setCommand(undefined); }}>
         <DialogContent>
           <DialogTitle>{tag ? "Add tag" : "Name session"}</DialogTitle>
-          <DialogDescription>{tag ? "Pick a tag already in use or type a new one. Search tag:<name> to find tagged sessions." : session?.server ? "Shared with everyone who can see this session. Leave blank to clear the OpenCode title too." : "Shared with everyone who can see this session. Leave blank to show the last message."}</DialogDescription>
+          <DialogDescription>{tag ? "Pick a tag already in use or type a new one. Search tag:<name> to find tagged sessions." : "Shared with everyone who can see this session. Leave blank to generate a title from the conversation."}</DialogDescription>
           <form className="mt-4 flex flex-col gap-3" action={save}>
             <FieldGroup>
               <Field data-invalid={!!update.error}>

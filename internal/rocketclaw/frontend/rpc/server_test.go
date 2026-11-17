@@ -31,6 +31,7 @@ import (
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/gorilla/websocket"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/assert"
@@ -3596,6 +3597,33 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, err)
 		require.Len(t, history.Messages, 3, "handoff generation must leave source history intact")
 
+		titler := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var request struct {
+				Input string `json:"input"`
+			}
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+			assert.Contains(t, request.Input, "Here is the conversation so far:\n\n<conversation>\nOriginal request:\nunique handoff request")
+			assert.Contains(t, request.Input, "Recent conversation:\nAssistant: verified result\n\nUser: next handoff step\n</conversation>")
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"title","status":"completed","output":[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Handoff verification","annotations":[]}]}]}`)
+		}))
+		defer titler.Close()
+
+		sourceName := func() string {
+			listed, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+			require.NoError(t, err)
+
+			return listed.Sessions[slices.IndexFunc(listed.Sessions, func(session *Session) bool { return session.Id == source })].GetName()
+		}
+
+		cfg.OpenAI.APIBaseURL = titler.URL
+		server.cfg.Store(cfg)
+
+		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", &UpdateSessionRequest{Id: source, Name: new(" ")})
+		require.NoError(t, err)
+		require.Equal(t, "Handoff verification", sourceName(), "a blank name regenerates the title from the conversation")
+
 		cfg.OpenAI.APIBaseURL = ":invalid"
 		server.cfg.Store(cfg)
 
@@ -3604,6 +3632,10 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		history, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: source})
 		require.NoError(t, err)
 		require.Len(t, history.Messages, 3, "failed handoffs must also leave source history intact")
+
+		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", &UpdateSessionRequest{Id: source, Name: new("")})
+		require.ErrorContains(t, err, "regenerate web session title")
+		require.Equal(t, "Handoff verification", sourceName(), "a failed regeneration keeps the old name")
 
 		cfg.OpenAI.APIBaseURL = provider.URL
 		server.cfg.Store(cfg)
@@ -4039,6 +4071,24 @@ func invoke[Response any](ctx context.Context, connection *grpc.ClientConn, meth
 	}
 
 	return response, nil
+}
+
+const titleResponse = `{"id":"resp_title","object":"response","created_at":0,"status":"completed","model":"gpt-6-luna","output":[{"id":"msg_title","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Session title","annotations":[]}]}]}`
+
+func titleRequest(body []byte) bool {
+	return bytes.Contains(body, []byte(`"instructions":"You name conversations`))
+}
+
+func answerWebsocketTitle(t *testing.T, conn *websocket.Conn, message []byte) bool {
+	t.Helper()
+
+	if !titleRequest(message) {
+		return false
+	}
+
+	assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":`+titleResponse+`}`)))
+
+	return true
 }
 
 func runWebTest(t *testing.T, file string, env ...string) {

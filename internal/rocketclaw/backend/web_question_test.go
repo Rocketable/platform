@@ -221,6 +221,10 @@ func TestWebTurnQuestionContinuesAfterRestart(t *testing.T) {
 
 	bodies := make(chan string, 8)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answerTitleRequest(w, r) {
+			return
+		}
+
 		body, _ := io.ReadAll(r.Body)
 		bodies <- string(body)
 

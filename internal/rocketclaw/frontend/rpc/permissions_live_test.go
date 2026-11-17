@@ -46,7 +46,7 @@ func TestSpacePermissionsRealBrowser(t *testing.T) {
 
 		for {
 			_, request, err := conn.ReadMessage()
-			if err != nil {
+			if err != nil || answerWebsocketTitle(t, conn, request) {
 				return
 			}
 

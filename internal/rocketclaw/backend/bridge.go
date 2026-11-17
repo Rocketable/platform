@@ -104,6 +104,7 @@ type Bridge struct {
 	stopCh              chan struct{}
 	threads             *threadBridgeManager
 	background          *backgroundRegistry
+	titles              sync.WaitGroup
 	shadow, underShadow bool
 	parent              string
 
@@ -268,6 +269,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 	}
 
 	b.loop(ctx)
+	b.titles.Wait()
 
 	return nil
 }
@@ -2207,6 +2209,19 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
 			return result, fmt.Errorf("publish rocketcode turn start: %w", err)
 		}
+	}
+
+	if request := strings.TrimSpace(cmp.Or(msg.Metadata[protocol.InboundRawTextMetadataKey], msg.Text)); !captured && len(observed) == 0 && msg.Human && msg.Source == protocol.SourceWeb && !b.shadow && layer == nil && request != "" {
+		b.titles.Go(func() {
+			title, err := harness.GenerateTitle(ctx, resolver, runtimeCfg.TitleModel, request, "")
+			if err == nil {
+				_, err = execState(ctx, b.config.SessionService.db, "name session", `UPDATE conversations SET name = $2 WHERE conversation_id = $1 AND name = ''`, b.config.ConversationID, title)
+			}
+
+			if err != nil {
+				b.log.Warn("name session from its first message", "conversation_id", b.config.ConversationID, "error", err)
+			}
+		})
 	}
 
 	prepared.TurnID, prepared.Responses = turnID, output
