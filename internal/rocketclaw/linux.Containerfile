@@ -1,7 +1,3 @@
-# The Linux that RocketClaw's make targets run in on a Mac (see the Makefile), set up like CI: Ubuntu, the Go of
-# go.mod, CI's tools and ripgrep, Playwright's Chromium for the browser tests, and what the emulated shell's
-# acceptance tests need. Targets run as dev, with the Mac user's uid, so files stay theirs and permission
-# checks behave as on CI.
 FROM docker.io/library/ubuntu:26.04
 
 ARG GO_VERSION
@@ -37,7 +33,4 @@ RUN userdel --remove ubuntu \
 
 ENV HOME=/home/dev
 
-# As root, the one thing dev cannot do: give it the container's cgroup tree, in which the emulated shell's
-# tests make their own (the container's processes move to a leaf first), and the Docker socket, for the tests'
-# PostgreSQL. Then the target runs as dev.
 ENTRYPOINT ["/bin/sh", "-c", "cg=/sys/fs/cgroup && mkdir -p $cg/init $cg/dev && for p in $(cat $cg/cgroup.procs); do echo $p > $cg/init/cgroup.procs 2>/dev/null || true; done && echo '+cpu +memory +pids' > $cg/cgroup.subtree_control && chown dev $cg/dev $cg/dev/cgroup.procs $cg/dev/cgroup.subtree_control $cg/dev/cgroup.threads && echo $$ > $cg/dev/cgroup.procs && chmod 666 /var/run/docker.sock && exec setpriv --reuid=dev --regid=dev --init-groups -- \"$@\"", "sh"]
