@@ -1188,6 +1188,43 @@ func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 	require.Equal(t, &protocol.SessionSummary{ConversationID: "thread", LastMessage: "assistant", LastUpdated: time.Unix(1, 0).UTC()}, summaries["thread"])
 }
 
+func TestDeleteChatRemovesItAsRetentionDoes(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"chat": KindWebChat, "busy": KindWebChat})
+	recordPrivateHistories(t, service, map[string]ConversationKind{"cron:daily:run": KindCronRun, "mcp-run": KindExternalMCPRun})
+	_, err := service.db.ExecContext(t.Context(), `WITH linked AS (
+    UPDATE conversations SET reports_to = 'chat' WHERE conversation_id = 'cron:daily:run'
+)
+UPDATE conversations SET external_id = 'external', external_agent = 'main', external_run = 'mcp-run' WHERE conversation_id = 'chat'`)
+	require.NoError(t, err)
+
+	for _, id := range []string{"chat", "busy", "cron:daily:run", "mcp-run"} {
+		_, err := service.AppendEntryID(t.Context(), id, testSessionEntry(id, "assistant"))
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, service.SaveAttachment(t.Context(), "chat", "", &protocol.OutboundAttachment{ID: "blob", Name: "result", Data: []byte("bytes")}, false))
+	_, err = service.db.ExecContext(t.Context(), `INSERT INTO web_tabs (username, path, conversation_id, position) VALUES ('bob', '/s/chat', 'chat', 0)`)
+	require.NoError(t, err)
+	seedActiveTurn(t, service, "busy", "running", nil)
+
+	require.ErrorIs(t, service.DeleteChat(t.Context(), "busy"), ErrSessionBusy)
+	require.ErrorIs(t, service.DeleteChat(t.Context(), "mcp-run"), ErrNotChat)
+	require.NoError(t, service.DeleteChat(t.Context(), "chat"))
+
+	remaining, err := queryStrings(t.Context(), service.db, `SELECT conversation_id FROM conversations ORDER BY 1`, "remaining conversations")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"busy"}, remaining)
+
+	for table, want := range map[string]int{"entries": 1, "attachments": 0, "pending_attachment_deletions": 0, "web_tabs": 0} {
+		var count int
+		require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT count(*) FROM `+table).Scan(&count))
+		assert.Equal(t, want, count, table)
+	}
+}
+
 func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 	t.Run("filesystem failure retry", func(t *testing.T) {
 		store, root := newShadowTestStore(t)

@@ -155,6 +155,23 @@ func (s *Server) DeleteSessionEntries(ctx context.Context, request *SessionEntri
 	return &DeleteSessionEntriesResponse{Deleted: deleted}, nil
 }
 
+func (s *Server) DeleteSession(ctx context.Context, request *DeleteSessionRequest) (*DeleteSessionResponse, error) {
+	if err := s.visibleConversation(ctx, request.Id); err != nil {
+		return nil, err
+	}
+
+	err := s.sessions.DeleteChat(ctx, request.Id)
+	if errors.Is(err, backend.ErrNotChat) || errors.Is(err, backend.ErrSessionBusy) {
+		return nil, fmt.Errorf("web delete session: %w", status.Error(codes.FailedPrecondition, err.Error()))
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("web delete session: %w", status.Error(codes.Internal, "delete session"))
+	}
+
+	return &DeleteSessionResponse{}, nil
+}
+
 func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerStream) error {
 	ctx := stream.Context()
 

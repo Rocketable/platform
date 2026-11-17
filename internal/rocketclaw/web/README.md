@@ -495,7 +495,11 @@ active tab.
   Close others, Close to the right, and Close all. Session tabs also offer **Rename session**, which edits the name in
   the tab itself: Enter or clicking away saves and Escape cancels. A blank name
   shows the last message again for RocketClaw sessions; for remote sessions, it
-  clears the OpenCode title too. As in a macOS menu, a line separates its
+  clears the OpenCode title too. Session tabs also offer **Delete session**, as
+  does the command palette for the current session; it asks first and then
+  closes the tab. A remote session is deleted on its OpenCode server; a RocketClaw
+  session is deleted for everyone, as retention cleanup deletes it, unless it is
+  running or holds queued work, which must be stopped first. As in a macOS menu, a line separates its
   sections: renaming, closing, sharing, attention, grouping and moving, then
   deleting. The command palette offers the same commands as **Tabs: …** for the
   active tab.
@@ -1032,7 +1036,7 @@ the list, and unavailable session commands stay hidden even when recently used.
 Rows keep compact spacing and touch-sized targets on mobile.
 For the current session it also offers **Open original conversation** (when forked),
 **Name session**, **Pin/Unpin**, **Fork session**,
-**Handoff session**, **Choose agent**, and **Stop turn** while running.
+**Handoff session**, **Choose agent**, **Delete session**, and **Stop turn** while running.
 Fork, handoff, rename, and agent selection open their controls directly.
 For a remote OpenCode session it offers **Copy server link**, which copies the
 shown session's address on its own server (the server asks whoever opens it to

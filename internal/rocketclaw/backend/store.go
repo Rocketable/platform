@@ -870,6 +870,41 @@ INSERT INTO pending_attachment_deletions (id) SELECT id FROM removed`, ids); err
 	return rows, s.removeHistoryFiles(ctx, ids)
 }
 
+var (
+	ErrNotChat     = errors.New("only Web chats and Slack threads can be deleted")
+	ErrSessionBusy = errors.New("this session has a running turn, queued or stashed work, a Background Job, or a scheduled message; stop or clear it first")
+)
+
+func (s *SessionService) DeleteChat(ctx context.Context, conversationID string) error {
+	var (
+		kind    ConversationKind
+		private string
+	)
+	if err := s.db.QueryRowContext(ctx, `SELECT kind, COALESCE(external_run, '') FROM conversations WHERE conversation_id = $1`, conversationID).Scan(&kind, &private); err != nil {
+		return fmt.Errorf("read deleted chat: %w", err)
+	}
+
+	if kind != KindWebChat && kind != KindSlackThread {
+		return ErrNotChat
+	}
+
+	active, err := s.HasActiveTurn(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+
+	if active {
+		return ErrSessionBusy
+	}
+
+	_, pruned, err := s.pruneCandidate(ctx, pruneCandidate{kind: pruneThread, id: conversationID, private: private}, time.Now())
+	if err == nil && !pruned {
+		return ErrSessionBusy
+	}
+
+	return err
+}
+
 func (s *SessionService) Delegations(ctx context.Context, conversationID, sourceConversationID string, from, before int64) ([]Delegation, error) {
 	children, err := queryRows(ctx, s.db, delegationsSQL, "delegation histories", scanDelegation, conversationID, sourceConversationID, from, before)
 	if err != nil {
@@ -1316,8 +1351,9 @@ func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, c
 		roots = append(roots, c.private)
 	}
 
-	if c.kind == pruneSticky {
-		runs, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE reports_to = $1 ORDER BY 1`, "sticky chat reports", c.id)
+	if c.kind != pruneOrphan {
+		runs, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE reports_to = $1
+UNION SELECT continues FROM conversations WHERE conversation_id = $1 AND continues IS NOT NULL ORDER BY 1`, "chat runs", c.id)
 		if err != nil {
 			return 0, false, err
 		}

@@ -643,6 +643,15 @@ The `DeleteSessionEntries` RPC removes saved entries and retained failed/stopped
 turns for that exact conversation ID, not an unfinished turn or its
 conversation or goal record, and retains its session tags. Ordinary GC remains
 responsible for those records; permanent session pruning removes tag metadata too.
+In a chat with a message from a cron run, External MCP, or Slack it removes only
+the Web messages after the newest such message, as undo does.
+
+The `DeleteSession` RPC deletes a Web chat or Slack thread for everyone as
+retention cleanup does: its row, history, private MCP session, the runs that
+report into it or that it continues, and everyone's tabs, Shared rows and Top
+Shelf rows of it. Anyone who can see the chat may call it; it refuses shadow
+sessions and a chat with a running turn, queued or stashed work, a Background
+Job, or a scheduled message.
 
 ## Identity boundary
 

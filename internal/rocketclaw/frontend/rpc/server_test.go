@@ -1490,6 +1490,21 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, deleted.Deleted)
 
+	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: "doomed", Agent: "main", CreatedBy: "alice"}))
+	_, err = seeded.db.ExecContext(ctx, `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id) VALUES ('doomed-turn', 'doomed', '{}', '[]', 1, 1, 0)`)
+	require.NoError(t, err)
+	_, err = invoke[DeleteSessionResponse](ctx, connection, "DeleteSession", &DeleteSessionRequest{Id: "doomed"})
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.ErrorContains(t, err, "stop or clear it first")
+	_, err = seeded.db.ExecContext(ctx, `DELETE FROM turns WHERE id = 'doomed-turn'`)
+	require.NoError(t, err)
+	_, err = invoke[DeleteSessionResponse](ctx, connection, "DeleteSession", &DeleteSessionRequest{Id: "doomed"})
+	require.NoError(t, err)
+	_, err = invoke[DeleteSessionResponse](ctx, connection, "DeleteSession", &DeleteSessionRequest{Id: "doomed"})
+	require.Equal(t, codes.NotFound, status.Code(err))
+	_, err = invoke[DeleteSessionResponse](ctx, connection, "DeleteSession", &DeleteSessionRequest{Id: "cron:private"})
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+
 	for _, md := range []metadata.MD{nil, {"rocketclaw-principal": {"127.0.0.1"}}, {"rocketclaw-tailnet-login-bin": {"alice", "bob"}}} {
 		unauthorized := metadata.NewOutgoingContext(t.Context(), md)
 		_, err = invoke[ListSessionEntriesResponse](unauthorized, connection, "ListSessionEntries", request)
@@ -1883,6 +1898,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 			}{
 				{"Prompt", &PromptRequest{Id: child, Text: "off-contract input"}},
 				{"DeleteSessionEntries", &SessionEntriesRequest{Id: child}},
+				{"DeleteSession", &DeleteSessionRequest{Id: child}},
 				{"UpdateSession", &UpdateSessionRequest{Id: child, Paused: new(true)}},
 				{"ForkSession", &ForkSessionRequest{Id: child}},
 				{"StageRevert", &StageRevertRequest{Id: child}},

@@ -24,7 +24,7 @@ type SharedTab = { space: string; path: string; search?: SearchPage };
 const plain = (page?: SearchPage) => JSON.stringify(page ? [page.name ?? "", page.searches.map(({ id, name, query }) => [id, name ?? "", query]), page.active] : null);
 type Change = { paths: string[]; action: string; until?: string };
 // attention is this person's attention on each tab location, sent is every attention change, and polls counts session lists.
-type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; topShelf?: { tabs: { space: string; path: string }[] }; attention: TabAttention[]; sent: Change[]; polls: number; autoPark?: boolean };
+type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; topShelf?: { tabs: { space: string; path: string }[] }; attention: TabAttention[]; sent: Change[]; polls: number; autoPark?: boolean; deletes: string[] };
 
 // Mirrors the server's Tabs call: it saves the state, changes one space, adds, removes, or edits Shared tabs, or changes
 // attention, then answers with every space, the saved state, every space's Shared tabs in order, and the Top Shelf.
@@ -78,7 +78,7 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
   const { chromium: engine } = await import(playwright!);
   const prompts: { id: string; text: string }[] = [];
   const sessions = structuredClone(rows);
-  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, sharedOrder: [] }, revision: 0, refused: 0, shared: [], closed: [], attention: [], sent: [], polls: 0 };
+  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, sharedOrder: [] }, revision: 0, refused: 0, shared: [], closed: [], attention: [], sent: [], polls: 0, deletes: [] };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -114,6 +114,10 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
         return Response.json({ id: "fresh" });
       case "/api/Prompt": prompts.push(input); return Response.json({ privateText: "" });
       case "/api/Tabs": return tabsCall(saved, input);
+      case "/api/DeleteSession":
+        if (saved.deletes.push(input.id) === 1) return Response.json({ message: "this session has a running turn; stop it first", code: 9 }, { status: 400 });
+        sessions.splice(sessions.findIndex((row) => row.id === input.id), 1);
+        return Response.json({});
       // Fixed fixture: searching a row's exact name returns that row.
       case "/api/SearchSessions": return Response.json({ terms: [], text: input.query, needle: input.query.toLowerCase(), matches: rows.filter((row) => row.name === input.query).map((row) => ({ conversationId: row.id, field: "Name", text: row.name })), messages: [], mentionIds: [] });
       default: return Response.json({});
@@ -509,6 +513,26 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Rename session");
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Pull requests");
 }), 60_000);
+
+test("a RocketClaw session's tab menu and palette delete it after asking, showing a refusal and closing its tab", () => withPage({}, async (page, origin, _prompts, saved) => {
+  for (const [link, name] of [[href("alpha"), "Alpha"], [href("bravo"), "Bravo"]]) await openSaved(page, origin, link, name, saved);
+  const confirm = page.getByRole("dialog", { name: "Delete session", exact: true });
+  await menu(page, "Bravo", "Delete session");
+  await confirm.getByText('Delete session "Bravo"?', { exact: true }).waitFor();
+  await confirm.getByRole("button", { name: "Delete session", exact: true }).click();
+  await confirm.getByRole("alert").getByText("this session has a running turn; stop it first", { exact: true }).waitFor();
+  await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+  await confirm.waitFor({ state: "hidden" });
+  expect(await names(page)).toEqual(["Alpha", "Bravo"]);
+
+  await page.keyboard.press("Control+Shift+p");
+  await page.getByPlaceholder("Type a command").fill("Delete session");
+  await page.getByRole("button", { name: "Sessions: Delete session" }).click();
+  await confirm.getByRole("button", { name: "Delete session", exact: true }).click();
+  await until(() => !saved.state.tabs.some((tab) => tab.path === href("bravo")));
+  expect(saved.deletes).toEqual(["bravo", "bravo"]);
+  expect(await names(page)).toEqual(["Alpha"]);
+}));
 
 test("running tabs keep a reachable close control, and closing hands focus to the next tab", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
