@@ -54,7 +54,7 @@ change cannot be made from outside it. Here it could.
 
 Build the action in the Web, and call the OpenCode server's own API through the Web's proxy:
 
-- `internal/rocketclaw/frontend/rpc/relay.go:28` proxies GET, POST, PUT, PATCH and DELETE under
+- `internal/rocketclaw/frontend/rpc/relay.go:30` proxies GET, POST, PUT, PATCH and DELETE under
   `/oc/{server}/api/`, adding the server's password and refusing cross-site origins. The copied view
   uses the same route, so anything the view can do, the Web can do with a plain `fetch`.
 - Delete is `DELETE /oc/<server>/api/session/<remoteSessionId>`. The view's own delete calls the same
@@ -62,12 +62,12 @@ Build the action in the Web, and call the OpenCode server's own API through the 
   `internal/rocketclaw/oc/packages/app/src/runtime/server/runtime.tsx:236`.
 - Confirm with a RocketClaw dialog, close the tab, and invalidate the session list. RocketClaw's
   synced copy goes on its next poll, which deletes rows the server no longer lists within the synced
-  window (`internal/rocketclaw/backend/opencode.go:393`).
+  window (`internal/rocketclaw/backend/opencode.go:380`).
 
-In `internal/rocketclaw/web/src/ui.tsx` this is `DeleteSessionDialog` (line 3215), opened through
+In `internal/rocketclaw/web/src/ui.tsx` this is `DeleteSessionDialog` (line 3341), opened through
 the existing `SessionCommand` flow with mode `"delete"`. The palette adds it in `useSessionActions`
-(line 3158) and the sidebar tab menu in `menuItems` (line 1782, for one tab outside the Shared
-group), both only for rows with a `server`, meaning remote OpenCode sessions:
+(line 3256) and the sidebar tab menu in `menuItems` (line 1686, for one tab outside the Shared
+group). Since "delete any session from the Web", both offer it for every session; the dialog sends a remote OpenCode session (a row with a `server`) to its server through the proxy, and a RocketClaw session to the `DeleteSession` RPC, which refuses remote rows (`TestDeleteSessionRefusesRemoteSessions`):
 
 ```tsx
 const response = await fetch(`${serverURL()}/oc/${session.server}/api/session/${session.remoteSessionId}`, { method: "DELETE" });

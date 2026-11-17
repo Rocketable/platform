@@ -25,9 +25,9 @@ tags:
 
 The Web browser tests do not compile `src/`. Each one serves the prebuilt bundle in `internal/rocketclaw/internal/web/dist` (for example `src/tabs.browser.test.ts:7` and `src/search-page.browser.test.ts:6`: `const dist = path.resolve(import.meta.dir, "../../internal/web/dist")`). The Go transport tests serve the same directory as embedded into the test binary (`internal/rocketclaw/internal/web/assets.go`: `//go:embed dist all:oc-dist`), except `TestPublicProgressRealBrowser`, which bundles `src/main.tsx` itself with `bun build` (no `tsc`) and reuses only `dist/index.html` (`internal/rocketclaw/frontend/rpc/live_test.go`).
 
-That bundle is written by `bun run build`, which is `tsc --noEmit && bun build.ts` (`package.json:12`). `build.ts` empties `dist` and writes the new bundle (`build.ts:7`, ending with `Built SPA: ...` at `build.ts:38`), but only after `tsc` passes. When `tsc` fails, `build.ts` never runs, `dist` keeps the previous bundle, and the only sign is `error: script "build" exited with code 1`.
+That bundle is written by `bun run build`, which is `tsc --noEmit && bun build.ts` (`package.json:12`). `build.ts` empties `dist` and writes the new bundle (`build.ts:7`, ending with `Built SPA: ...` at `build.ts:21`), but only after `tsc` passes. When `tsc` fails, `build.ts` never runs, `dist` keeps the previous bundle, and the only sign is `error: script "build" exited with code 1`.
 
-`make test` in `internal/rocketclaw/web` is safe, because its `test` target depends on `build` (`Makefile:43`) and stops on that failure. The trap is the quick loop of running `bun run build` and then `bun test src/<file>` by hand, with the build's output hidden or unread.
+`make test` in `internal/rocketclaw/web` is safe, because its `test` target depends on `build` (`Makefile:39`) and stops on that failure. The trap is the quick loop of running `bun run build` and then `bun test src/<file>` by hand, with the build's output hidden or unread.
 
 While building the many-Search-pages change (PR #695), this trap fooled two checks in a row:
 

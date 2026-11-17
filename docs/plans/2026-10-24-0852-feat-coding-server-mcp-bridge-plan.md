@@ -59,7 +59,7 @@ Agents running inside remote OpenCode sessions cannot reach RocketClaw features.
 
 ### Key Decisions
 
-- **Inject through OpenCode startup config.** Governs R10. (session-settled: user-directed — chosen over pushing the server per directory through OpenCode's experimental runtime MCP API: OpenCode has no server-wide runtime API, and startup config is stable across restarts)
+- **Inject through OpenCode startup config.** Governs R10. (session-settled: user-directed — chosen over pushing the server per directory through OpenCode's experimental runtime MCP API: OpenCode has no server-wide runtime API, and startup config is stable across restarts) Superseded 2026-11-17 with R10: the runtime API is pushed again before each Web prompt and at each sync, which makes restarts harmless.
 - **Authenticate with the existing coding server password.** Governs R2. (session-settled: user-approved — chosen over a new per-server token: no new secret to configure)
 - **Serve on the Web listener.** Governs R1. (session-settled: user-directed — chosen over the External MCP listener: the Web listener is where coding servers already meet RocketClaw)
 - **The session owns its pages.** Governs R6. (session-settled: user-approved — chosen over one namespace per coding server: sessions never overwrite each other and deletion is whole)

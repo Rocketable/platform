@@ -40,7 +40,7 @@ An easy agent is confined to its `workingDirectory`, plus read-only uploads and 
 
 Compare in one space (real paths), fail closed when a link cannot be resolved, and hand back paths in the space the consumer uses.
 
-Folder check, `internal/rocketclaw/backend/easy_turn.go:129-143`:
+Folder check, `resolveWorkingDirectory` in `internal/rocketclaw/backend/easy_turn.go`:
 
 ```go
 // A definitions folder counts where it really is, which a link may put out of the workspace; a missing
@@ -69,8 +69,8 @@ Working directory in the emulated shell, `guestWorkdir` in `internal/rocketclaw/
 realCwd, err := filepath.EvalSymlinks(cwd)
 // ...
 for _, dir := range folders {
-	real, err := filepath.EvalSymlinks(dir)
-	if rel, errRel := filepath.Rel(real, realCwd); err == nil && errRel == nil && (rel == "." || filepath.IsLocal(rel)) {
+	realDir, err := filepath.EvalSymlinks(dir)
+	if rel, errRel := filepath.Rel(realDir, realCwd); err == nil && errRel == nil && (rel == "." || filepath.IsLocal(rel)) {
 		return filepath.Join(dir, rel), true // the name the sandbox mounts
 	}
 }

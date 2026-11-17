@@ -1,12 +1,13 @@
 ---
 title: Permission Review Reasons Were Read From a Transport-Specific Trace
 date: 2026-10-17
+last_updated: 2026-11-17
 category: docs/solutions/logic-errors/
 module: internal/rocketclaw/harness
 problem_type: logic_error
 component: execute
 symptoms:
-  - Web chats never showed the automatic approver's reasons on deployments that reach models over HTTPS.
+  - Web chats never showed Permission Review's reasons on deployments that reach models over HTTPS.
   - The same chats showed reasons when the model connection used the Responses WebSocket transport.
   - Every saved review entry held a valid allow or deny answer, yet the reason reader returned an empty string.
 root_cause: logic_error
@@ -14,7 +15,6 @@ resolution_type: code_fix
 severity: medium
 tags:
   - permission-review
-  - approver
   - output-trace
   - replay-input
   - transport
@@ -24,7 +24,7 @@ tags:
 # Permission Review Reasons Were Read From a Transport-Specific Trace
 
 ## Problem
-The Web showed no approver reason for any permission review on wallace, which reaches models over HTTPS. The old reader (`PermissionReviewRationale`) only accepted a reason backed by a `rocketcode_public_progress` text record in the review entry's `OutputTrace`. Only transports whose responses RocketClaw reads as a stream write those records (`responseObservations` in `internal/rocketclaw/harness/responses_websocket.go`). Then that was only the Responses WebSocket transport, so HTTP reviews never had one. ChatGPT sign-in requests write them too since PR #1086; plain API-key HTTPS requests still never do.
+The Web showed no reason for any Permission Review on wallace, which reaches models over HTTPS. The old reader (`PermissionReviewRationale`) only accepted a reason backed by a `rocketcode_public_progress` text record in the review entry's `OutputTrace`. Only transports whose responses RocketClaw reads as a stream write those records (`responseObservations` in `internal/rocketclaw/harness/responses_websocket.go`). Then that was only the Responses WebSocket transport, so HTTP reviews never had one. ChatGPT sign-in requests write them too since PR #1086; plain API-key HTTPS requests still never do.
 
 ## Symptoms
 - All 110 saved reviews in wallace chat `AHWNE3GO6MMDBJ3V7OGHZDRH2S` had a final answer such as `{"outcome":"allow","rationale":"..."}` in `ReplayInput`, and none had a progress record.
@@ -36,7 +36,7 @@ The Web showed no approver reason for any permission review on wallace, which re
 ## Solution
 Read the decision the way `reviewPermission` makes it. `(*SessionEntry).PermissionReviewDecision` in `internal/rocketclaw/harness/permission_review.go` scans `ReplayInput` from the end. It takes the last assistant message outside the commentary phase whose content decodes as an allow or deny decision. It never runs the SDK replay decode.
 
-Reading the reviewed action has a second trap, the size of the review prompt. The comments on `(PermissionReview).CodeModeCall` in the same file explain how it decodes only the prompt's tail and why a forged delimiter never matches. `TestPermissionReviewCodeModeCallDecodesOnlyPlannedAction` bounds the bytes that decode allocates, and `TestPermissionReviewCodeModeCallUsesPlannedAction` holds the forged-delimiter case.
+Reading the reviewed action has a second trap, the size of the review prompt. `(PermissionReview).CodeModeCall` in the same file decodes only the prompt's tail: it starts at the last `Planned action JSON:` line in the saved prompt (`bytes.LastIndex`) and requires the `>>> APPROVAL REQUEST END` delimiter after it. The planned action comes after the transcript in the prompt, so a forged delimiter inside the transcript never matches. `TestPermissionReviewCodeModeCallDecodesOnlyPlannedAction` bounds the bytes that decode allocates, and `TestPermissionReviewCodeModeCallUsesPlannedAction` holds the forged-delimiter case.
 
 ## Why This Works
 `ReplayInput` is saved the same way for every transport, and it holds the exact message the review decided from. The trace only holds what a given transport chose to stream.

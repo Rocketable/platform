@@ -38,28 +38,29 @@ tags:
 
 ## Context
 
-Nine Go tests in `internal/rocketclaw/frontend/rpc` start a real backend and then run a Bun test file against it through `runWebTest` (`internal/rocketclaw/frontend/rpc/server_test.go:4070`). That helper runs `bun test <file>` in `internal/rocketclaw/web`, with the parent's environment plus the test's URLs (`server_test.go:4073`–`4078`). It skips nothing.
+Ten Go tests in `internal/rocketclaw/frontend/rpc` start a real backend and then run a Bun test file against it through `runWebTest` (`internal/rocketclaw/frontend/rpc/server_test.go:4044`). That helper runs `bun test <file>` in `internal/rocketclaw/web`, with the parent's environment plus the test's URLs (`server_test.go:4047`–`4050`). It skips nothing.
 
 | Test | `runWebTest` call | Opens Chromium |
 |---|---|---|
-| `TestSessionEntries` | `server_test.go:2131` | yes |
-| `TestPagesRealBrowser` | `pages_test.go:251` | yes |
-| `TestPublicProgressRealBrowser` | `live_test.go:262` | yes |
-| `TestReloadRealBackendBrowser` | `live_test.go:490` | yes |
-| `TestRevertRealBackendBrowser` | `live_test.go:582` | yes |
-| `TestShadowsRealBackendBrowser` | `shadow_live_test.go:164` | yes |
-| `TestRemoteRocketClawRealBrowser` | `remote_test.go:201` | yes |
-| `TestSpacePermissionsRealBrowser` | `permissions_live_test.go:165` | yes |
-| `TestSidebarHTTPStreamsBeforeGoTailAndCancels` | `sidebar_test.go:237` | no, needs only the web packages |
+| `TestSessionEntries` | `server_test.go:2149` | yes |
+| `TestPagesRealBrowser` | `pages_test.go:248` | yes |
+| `TestPublicProgressRealBrowser` | `live_test.go:267` | yes |
+| `TestReloadRealBackendBrowser` | `live_test.go:497` | yes |
+| `TestRevertRealBackendBrowser` | `live_test.go:590` | yes |
+| `TestShadowsRealBackendBrowser` | `shadow_live_test.go:166` | yes |
+| `TestRemoteRocketClawRealBrowser` | `remote_test.go:191` | yes |
+| `TestSpacePermissionsRealBrowser` | `permissions_live_test.go:164` | yes |
+| `TestAgentEditorRealBackendBrowser` | `agent_editor_live_test.go:225` | yes |
+| `TestSidebarHTTPStreamsBeforeGoTailAndCancels` | `sidebar_test.go:232` | no, needs only the web packages |
 
 All paths are under `internal/rocketclaw/frontend/rpc/`. These tests need two things the Go toolchain does not provide:
 
 1. **The web packages in `internal/rocketclaw/web/node_modules`.** A new JJ workspace has none, because `internal/rocketclaw/web/.gitignore:2` ignores them. Without them, Bun cannot load `internal/rocketclaw/web/src/api.ts`, whose first line imports `@tanstack/react-query`.
 2. **`ROCKETCLAW_PLAYWRIGHT_MODULE` and `ROCKETCLAW_CHROMIUM`.** `playwright-core` is not in `internal/rocketclaw/web/package.json`. The test files load it from the variable, for example `await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!)` (`internal/rocketclaw/web/src/pages-transport.test.ts:5`). When the variable is unset, Bun prints `Cannot find package 'undefined'`. Nothing in the message names the variable.
 
-Unix socket paths are limited to 108 bytes on Linux. The socket helper appends `rpc-<random>/s` beneath `TMPDIR` (`testSocketPath`, `server_test.go:4107`–`4118`), and Chromium puts its `SingletonSocket` there too, so a long `TMPDIR`, such as one under a deeply nested workspace's `.tmp/`, makes RPC socket binds fail with `invalid argument` and Chromium abort with `Socket path too long`. Keep `TMPDIR` short.
+Unix socket paths are limited to 108 bytes on Linux. The socket helper appends `rpc-<random>/s` beneath `TMPDIR` (`testSocketPath`, `server_test.go:4068`–`4079`), and Chromium puts its `SingletonSocket` there too, so a long `TMPDIR`, such as one under a deeply nested workspace's `.tmp/`, makes RPC socket binds fail with `invalid argument` and Chromium abort with `Socket path too long`. Keep `TMPDIR` short.
 
-`vendor/` is a separate trap. `make lint` and `make generate` depend on `vendor` (`Makefile:60`, `:69`), which runs `go mod tidy` and `go mod vendor` (`Makefile:50`–`52`) and so deletes and rewrites `vendor/`. Two make runs in one workspace share the same `vendor/`. Some tests also run the Go toolchain mid-run: `buildStdioHelper` calls `go build` (`internal/rocketclaw/mcpclient/registry_test.go:351`, `:354`). A test run that started cleanly can break when another run rewrites `vendor/` under it. Root `make test` orders its own steps for this reason (`Makefile:1`–`5` at the repository root).
+`vendor/` is a separate trap. `make lint` and `make generate` depend on the `vendor` target, which runs `go mod tidy` and `go mod vendor` and so deletes and rewrites `vendor/`. Two make runs in one workspace share the same `vendor/`. Some tests also run the Go toolchain mid-run: `buildStdioHelper` calls `go build` (`internal/rocketclaw/mcpclient/registry_test.go:351`, `:354`). A test run that started cleanly can break when another run rewrites `vendor/` under it. Root `make test` orders its own steps for this reason (`Makefile:1`–`5` at the repository root).
 
 On the session write replies work (PR #765), three workers in a row called these failures "an environment problem, not this change", and one edit inside `TestSessionEntries` was compiled but never ran.
 

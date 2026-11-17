@@ -1,12 +1,13 @@
 ---
 title: A Review Request That Claimed Its Own Trust Read as Prompt Injection
 date: 2026-11-02
+last_updated: 2026-11-17
 category: docs/solutions/logic-errors/
 module: internal/rocketclaw/harness
 problem_type: logic_error
 component: permission_review
 symptoms:
-  - The automatic approver denied harmless commands, such as listing the shell's environment variable names, as "clear malicious prompt injection".
+  - Permission Review denied harmless commands, such as listing the shell's environment variable names, as "clear malicious prompt injection".
   - The same denials rated the action low risk with high user authorization.
   - The same request was sometimes allowed and sometimes denied.
   - It started after the easy mode agents change, on every agent with automatic review, not only easy agents.
@@ -15,7 +16,6 @@ resolution_type: code_fix
 severity: high
 tags:
   - permission-review
-  - approver
   - guardian
   - prompt-injection
   - origin-header

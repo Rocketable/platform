@@ -1,6 +1,7 @@
 ---
 title: A Go Benchmark Checks Nothing in RocketClaw Unless a Test Calls It
 date: 2026-11-14
+last_updated: 2026-11-17
 category: docs/solutions/best-practices/
 module: internal/rocketclaw
 problem_type: best_practice
@@ -29,32 +30,32 @@ tags:
 
 ## Context
 
-Neither `make test` nor CI passes `-bench`. Both run RocketClaw's tests through the `coverage-profile` recipe's one `go test` command (`internal/rocketclaw/Makefile:200`) and the `sandbox-test` recipe. CI runs the first in shards (`.github/workflows/test.yml:147`) and the emulated shell's tests through `sandbox-test` (`:194`–`195`), which runs only `TestEmulatedShell` tests (`internal/rocketclaw/Makefile:113`). So a `func BenchmarkX(b *testing.B)` compiles and lints, and never runs. It asserts nothing, and a later change can undo the improvement it measured without any check failing.
+Neither `make test` nor CI passes `-bench`. Both run RocketClaw's tests through the `coverage-profile` recipe's one `go test` command (in `internal/rocketclaw/Makefile`) and the `sandbox-test` recipe. CI runs the first in shards (`.github/workflows/test.yml:147`) and the emulated shell's tests through `sandbox-test` (`:194`–`195`), which runs only `TestEmulatedShell` tests. So a `func BenchmarkX(b *testing.B)` compiles and lints, and never runs. It asserts nothing, and a later change can undo the improvement it measured without any check failing.
 
-An audit on 2026-11-14 found 20 such benchmarks in RocketClaw's test files. Most came from performance PRs that showed numbers once and left the benchmark behind as evidence: 12 from PRs labeled `observabot` (#224, #231, #268, #329, #399, #659, #686, #715, #723, #744, #842, #885), and the rest from feature PRs #149, #440 and #731. None came from `tests-deslop`. Plans asked for this: the code-mode visibility plan's verification contract measured History latency with "U3's fixture benchmark, before and after" (`docs/plans/2026-10-17-0938-feat-code-mode-block-visibility-plan.md`), and the space dashboards plan called its sidebar benchmark a "benchmark gate" (`docs/plans/2026-10-27-2157-feat-space-work-dashboards-plan.md`). Each was measured for its PR, and no check ran it again. The same audit found a one-off script from `tests-deslop` PR #1131, `internal/rocketclaw/check-coverage_test.sh` (deleted by this change), that nothing ran either.
+An audit on 2026-11-14 found 20 such benchmarks in RocketClaw's test files. Most came from performance PRs that showed numbers once and left the benchmark behind as evidence: 12 from PRs labeled `observabot` (#224, #231, #268, #329, #399, #659, #686, #715, #723, #744, #842, #885), and the rest from feature PRs #149, #440 and #731. None came from `tests-deslop`. Plans asked for this: the code-mode visibility plan's verification contract measured History latency with "U3's fixture benchmark, before and after" (`docs/plans/2026-10-17-0938-feat-code-mode-block-visibility-plan.md`), and the space dashboards plan called its sidebar benchmark a "benchmark gate" (`docs/plans/2026-10-27-2157-feat-space-work-dashboards-plan.md`). Each was measured for its PR, and no check ran it again. The same audit found a one-off script from `tests-deslop` PR #1131, `internal/rocketclaw/check-coverage_test.sh` (deleted alongside the benchmarks), that nothing ran either.
 
 Most of the 20 were not protecting anything a test missed. Of the 20:
 
 - 12 duplicated a check a test already enforced. For example, `TestRemoveSessionEntryNUL` already bounds `removeSessionEntryNUL` with `testing.AllocsPerRun`, `TestSandboxedFileSystemGlobPathAllocations` bounds glob path allocations, and `TestListSessionsSendsChangesSince` bounds session row size, which was the point of the agent-choice benchmark. These were deleted.
 - 4 measured no contract worth keeping: CPU profiling overhead on `sha256`, minute-by-minute health logging, and per-request provider log attributes in `backend` and `oai`. These were deleted.
 - 3 share a check helper with a test that CI runs (`internal/rocketclaw/backend/origin_pairs_test.go:14`, `:59`, `:88`); the benchmark is only a `-bench` handle on the same check. These were kept.
-- 1, `BenchmarkHistoryReviewedScripts`, guarded a rule no test held: History reads the calls of older Execute blocks from each review's saved prompt, and must decode only the prompt's planned-action tail (`internal/rocketclaw/harness/permission_review.go:64`, `:71`), not the transcript before it. It was replaced by a unit test, below.
+- 1, `BenchmarkHistoryReviewedScripts`, guarded a rule no test held: History reads the calls of older Execute blocks from each review's saved prompt, and must decode only the prompt's planned-action tail (`internal/rocketclaw/harness/permission_review.go:52`, `:59`), not the transcript before it. It was replaced by a unit test, below.
 
 ## Guidance
 
-Treat a benchmark as evidence only once a test calls it and asserts a budget. The 13 benchmarks left hold up one of two ways, 10 the first and 3 the second:
+Treat a benchmark as evidence only once a test calls it and asserts a budget. The 14 benchmarks in the tree hold up one of two ways, 11 the first and 3 the second:
 
-- A test runs the benchmark and bounds its result, for example `result := testing.Benchmark(BenchmarkSidebarFingerprints)` then `require.Less(t, result.AllocedBytesPerOp(), int64(4<<20))` (`internal/rocketclaw/frontend/rpc/sidebar_test.go:96`). The others are at `internal/rocketclaw/backend/store_test.go:422`, `internal/rocketclaw/backend/origin_pairs_test.go:133`, `internal/rocketclaw/backend/store_summaries_test.go:79`, `:551`, `:557`, `internal/rocketclaw/frontend/rpc/http_test.go:56`, `internal/rocketclaw/frontend/rpc/http_compression_test.go:16`, `internal/rocketclaw/internal/web/assets_test.go:148` and `internal/rocketclaw/harness/filesystem_test.go:833`.
+- A test runs the benchmark and bounds its result, for example `result := testing.Benchmark(BenchmarkSidebarFingerprints)` then `require.Less(t, result.AllocedBytesPerOp(), int64(4<<20))` (`internal/rocketclaw/frontend/rpc/sidebar_test.go:92`). The others are at `internal/rocketclaw/backend/store_test.go:419`, `internal/rocketclaw/backend/origin_pairs_test.go:132`, `internal/rocketclaw/backend/store_summaries_test.go:78`, `:533`, `:537`, `internal/rocketclaw/frontend/rpc/http_test.go:56`, `internal/rocketclaw/frontend/rpc/http_compression_test.go:16`, `internal/rocketclaw/internal/web/assets_test.go:152`, `internal/rocketclaw/harness/filesystem_test.go:829` and `internal/rocketclaw/harness/execute_results_test.go:160`.
 - A test and the benchmark share a check helper, and the test bounds it with `testing.AllocsPerRun` (`internal/rocketclaw/backend/origin_pairs_test.go:14`).
 
 When writing such a test:
 
-- Lower the iteration count. `testing.Benchmark` honors `-test.benchtime`, whose default of one second makes a test slow. Tests set it to a fixed count and restore it, and stay nonparallel while they do (`internal/rocketclaw/harness/agents_test.go:471`–`474`, `internal/rocketclaw/harness/skills_test.go:88`–`91`).
-- Under `-race`, allocation numbers can lie. `TestHTTPEventFramingAllocationBudget` rebuilds its package with `-race=false` and runs itself again with a fixed benchtime, because the race detector randomly drops `sync.Pool` buffers (`internal/rocketclaw/frontend/rpc/http_test.go:36`–`49`). `make test` runs with `-race` (`internal/rocketclaw/Makefile:200`).
-- Bound what the change removed, with headroom, and say why in a comment: a whole extra copy of the input, a second parser pass, a per-row buffer. A tight number fails on unrelated changes.
+- Lower the iteration count. `testing.Benchmark` honors `-test.benchtime`, whose default of one second makes a test slow. Tests that need a short run set it to a fixed count and restore it, and stay nonparallel while they do (`internal/rocketclaw/harness/agents_test.go:468`–`471`, `internal/rocketclaw/harness/skills_test.go:88`–`91`).
+- Under `-race`, allocation numbers can lie. `TestHTTPEventFramingAllocationBudget` rebuilds its package with `-race=false` and runs itself again with a fixed benchtime, because the race detector randomly drops `sync.Pool` buffers (`internal/rocketclaw/frontend/rpc/http_test.go:36`–`51`; `TestSidebarSessionsAllocationBudgets` in `internal/rocketclaw/backend/store_summaries_test.go` does the same). `make test` runs with `-race`.
+- Bound what the change removed, with headroom, and say why in the PR description, since the repo allows no source comments, tests included: a whole extra copy of the input, a second parser pass, a per-row buffer. A tight number fails on unrelated changes.
 - Prove the test catches the regression before keeping it: put the old shape back in a scratch change and watch the test fail.
 
-`TestPermissionReviewCodeModeCallDecodesOnlyPlannedAction` (`internal/rocketclaw/harness/permission_review_test.go:126`) shows the shape. It needs no database, unlike the benchmark it replaced, which seeded 100 reviews of about 300 KB each. It builds one review with a 300 KB transcript, runs `CodeModeCall` four times through `testing.Benchmark`, and requires fewer than `len(transcript)/8` allocated bytes per call (`:151`). With an extra `json.Unmarshal` of the whole prompt added to `CodeModeCall`, it failed at 985,252 bytes per call against a 38,398-byte limit.
+`TestPermissionReviewCodeModeCallDecodesOnlyPlannedAction` (`internal/rocketclaw/harness/permission_review_test.go:121`) shows the shape. It needs no database, unlike the benchmark it replaced, which seeded 100 reviews of about 300 KB each. It builds one review with a 300 KB transcript, runs `CodeModeCall` four times through `testing.Benchmark`, and requires fewer than `len(transcript)/8` allocated bytes per call (`:144`). With an extra `json.Unmarshal` of the whole prompt added to `CodeModeCall`, it failed at 985,252 bytes per call against a 38,398-byte limit.
 
 If no budget is worth asserting, delete the benchmark rather than keeping it as documentation. Numbers in a PR description already record what was measured once.
 
@@ -86,7 +87,7 @@ func BenchmarkLoadSkill(b *testing.B) {
 }
 ```
 
-Enforced, the shape kept (`internal/rocketclaw/harness/skills_test.go:87`–`112`): the subtest for a file missing its frontmatter sets `test.benchtime` to `4x`, runs `LoadSkills` through `testing.Benchmark`, and requires `cost.AllocedBytesPerOp()` below one and a half times the 64 KiB file, so another full-file copy fails it. Its sibling in `internal/rocketclaw/harness/agents_test.go` holds agents to the same budget.
+Enforced, the shape kept (`internal/rocketclaw/harness/skills_test.go:87`–`111`): the subtest for a file missing its frontmatter sets `test.benchtime` to `4x`, runs `LoadSkills` through `testing.Benchmark`, and requires `cost.AllocedBytesPerOp()` below one and a half times the 64 KiB file, so another full-file copy fails it. Its sibling in `internal/rocketclaw/harness/agents_test.go` holds agents to the same budget.
 
 ## Prevention
 

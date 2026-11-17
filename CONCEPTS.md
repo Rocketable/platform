@@ -171,7 +171,7 @@ Its conversation ID extends the producing conversation's ID with a segment deriv
 An automatic check, by a reviewer agent, of a tool call or a whole Execute script that an agent's permissions mark for review, made before it runs. It allows or denies with a reason; a denial, an unreadable answer, or a failed review blocks the call. Its decision is read from the reviewer's final answer, whichever way the model was reached.
 *Avoid:* approval, approver check
 
-When a decision model is configured, a review asks it first and keeps its answer only when every part is confident, nothing needs a closer look at files or state, and the answers agree with the guardian's outcome rules; otherwise the reviewer reviews as usual. The embedded guardian uses the decision model an easy reviewed agent or the runtime names; a custom reviewer uses one only when its own approver settings name one. The decision model reads its own prompt, not the chat reviewer's added rules. A decision-model answer is saved as the reviewer's would be.
+When a decision model is configured, a review asks it first and keeps its answer only when every part is confident, nothing needs a closer look at files or state, and the answers agree with the guardian's outcome rules; otherwise the reviewer reviews as usual. The embedded guardian uses the decision model an easy reviewed agent or the runtime names; a custom reviewer uses one only when its own approver settings name one. The decision model reads its own prompt together with the rules every review adds, such as the trust given to the turn's origin line. A decision-model answer is saved as the reviewer's would be.
 
 ### Task
 
@@ -307,6 +307,12 @@ The server stores each copy of a page as its own row, with one row per search. A
 A session on a configured OpenCode coding server that RocketClaw keeps a synced copy of, so the Web lists, opens, creates, forks, and deletes it beside RocketClaw's own sessions; its agent runs on that server, not in the Harness.
 
 Its subagents run as child sessions on that server that record it as their parent, so its own history does not hold their work; anything that asks what the session did must read its child sessions too, and theirs.
+
+### MCP Bridge
+
+The MCP server RocketClaw serves for each configured OpenCode coding server, through which an agent in a Remote OpenCode Session reads and changes that session's tags and publishes its Hosted Pages.
+
+Each tool call acts on the Remote OpenCode Session that made it, or for a subagent's call on the nearest ancestor RocketClaw keeps a copy of, and is refused when there is none. RocketClaw adds the bridge to the coding server itself, one folder at a time: before relaying a person's message from the Web it adds it to that session's folder, so the turn the message starts already has the tools, and each sync adds it to every folder the server has open that lacks it. An addition lasts only until the server restarts or closes that folder, and the next message or sync adds it again.
 
 ### Pull Requests Pane
 
