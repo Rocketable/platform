@@ -24,11 +24,13 @@ tags:
 
 ## Context
 
-The RocketCode dissolution moved `internal/rocketcode` to `internal/rocketclaw/harness` and rewrote every import of it. While that change waited for review, `main` changed files under `internal/rocketcode` twice: 5 files in one commit and 10 in another. Each `jj rebase -s <change> -d main@origin` reported those files as `2-sided conflict including 1 deletion`. JJ's rebase does not follow renames (`jj diff` may still display some as `R`), so the move merges as a deletion plus an addition and `main`'s edits to the old path have nowhere to land: the conflict sits on the deleted path, and the moved copy under the new path keeps the old content.
+The RocketCode dissolution (landed as `6ff482c6`) moved `internal/rocketcode` to `internal/rocketclaw/harness` and rewrote every import of it. While that change waited for review, `main` changed files under `internal/rocketcode` twice: 5 files in one commit and 10 in another. Each `jj rebase -s <change> -d main@origin` reported those files as `2-sided conflict including 1 deletion`. JJ's rebase does not follow renames (`jj diff` may still display some as `R`), so the move merges as a deletion plus an addition and `main`'s edits to the old path have nowhere to land: the conflict sits on the deleted path, and the moved copy under the new path keeps the old content.
 
-The same rebases also conflicted in files that only changed imports or wording (backend Go files, `CONCEPTS.md`, `cmd/rocketclaw/CHEATSHEET.md`, two `docs/solutions` learnings per rebase, and the built web bundle). Resolving those by keeping `main`'s side and re-running the rewrite looked clean, built, and passed tests. It still left stale content: after one rebase, two learnings were back on line-number citations that `main` had already corrected (`rocketcode.go:439` instead of `477`, `bridge.go:2159-2164` instead of `2131-2136`). Nothing failed. A per-file comparison against `main` found them.
+The same rebases also conflicted in files that only changed imports or wording (backend Go files, `CONCEPTS.md`, `cmd/rocketclaw/CHEATSHEET.md` (since removed), two `docs/solutions` learnings per rebase, and the built web bundle). Resolving those by keeping `main`'s side and re-running the rewrite looked clean, built, and passed tests. It still left stale content: after one rebase, two learnings were back on line-number citations that `main` had already corrected (`rocketcode.go:439` instead of `477`, `bridge.go:2159-2164` instead of `2131-2136`). Nothing failed. A per-file comparison against `main` found them.
 
 ## Guidance
+
+The commands below are the ones used for that move. `internal/rocketcode` no longer exists, so for another move substitute its old and new paths and its own rewrite rules.
 
 **1. Keep the mechanical rename as a script, and replay it on every rebase.** Hand edits made during the first pass are lost the next time you take `main`'s side. The script must be idempotent so it can run over the whole tree:
 

@@ -26,11 +26,11 @@ tags:
 
 ## Context
 
-The built Web bundle in `internal/rocketclaw/internal/web/dist` is committed. Every Web build rewrites it: `build.ts` empties `dist` (`build.ts:7`), runs Tailwind over `app/globals.css` (`build.ts:27`) and names the stylesheet after a hash of its content (`build.ts:33`). `make lint` and `make test` both rebuild it (`internal/rocketclaw/Makefile:54`–`55` and `:69`; `internal/rocketclaw/web/Makefile:43`).
+The built Web bundle in `internal/rocketclaw/internal/web/dist` is committed. Every Web build rewrites it: `build.ts` empties `dist` (`build.ts:7`), runs Tailwind over `app/globals.css` (`build.ts:10`) and names the stylesheet after a hash of its content (`build.ts:16`). `make lint` and `make test` both rebuild it (the `web-assets` target in `internal/rocketclaw/Makefile`, which `lint` and `generate` depend on; `internal/rocketclaw/web/Makefile:39`).
 
 While re-checking each commit of the sticky-sessions PR (#999), this went wrong twice in one session:
 
-- **Nov 8.** The working copy (@) was the middle commit itself, not a new commit on top of it. A run of the full checks there crashed a Chromium renderer, which left a 220 MB `internal/rocketclaw/web/core`. The next run's build wrote `styles-ed446c921ebd971.css` instead of the `styles-a130e7492852830a.css` the same sources had produced before. The next `jj` command snapshotted the new `dist` into that commit. jj refused only the dump, because 220.3 MiB is over the 100 MiB `snapshot.max-new-file-size` set in this checkout's jj repo config (`jj config list --repo snapshot`).
+- **Nov 8.** The working copy (@) was the middle commit itself, not a new commit on top of it. A run of the full checks there crashed a Chromium renderer, which left a 220 MB `internal/rocketclaw/web/core`. The next run's build wrote `styles-ed446c921ebd971.css` instead of the `styles-a130e7492852830a.css` the same sources had produced before. The next `jj` command snapshotted the new `dist` into that commit. jj refused only the dump, because 220.3 MiB is over the 100 MiB `snapshot.max-new-file-size` set in that checkout's jj config (`jj config get snapshot.max-new-file-size`).
 - **Nov 7.** A failed browser test run left a 27 MB `core` in the same place. The next `make lint` changed the stylesheet name from `styles-a130e7492852830a.css` to `styles-f3774c483db53a6d.css`. The dump was under jj's size limit, so jj tracked it as a new file in @: it showed up in the review's changed-file list until it was deleted. `ui.tsx` had also been edited in that window, so this stylesheet change has two possible causes.
 
 The fix both times was to delete the dump and put the known-good `dist` back. After the rebase, a build with no dump present produced `styles-45fcf796246bf0fc.css`, which matched `main`.
@@ -39,7 +39,7 @@ The fix both times was to delete the dump and put the known-good `dist` back. Af
 
 **Tailwind reads every file under `internal/rocketclaw/web`, not just `src/`.** `internal/rocketclaw/web/app/globals.css` starts with a plain `@import "tailwindcss";` (`app/globals.css:1`) and has no `@source` lines. The build runs from `internal/rocketclaw/web`, so Tailwind's automatic source detection starts there. Asking Tailwind 4.3.5's own scanner (`@tailwindcss/oxide` `Scanner`) which files it reads in this tree lists 97: `src/` and `app/`, plus `README.md`, `Makefile`, `go.mod`, `proto/`, `build.ts`, `index.html` and the JSON configs (paths relative to `internal/rocketclaw/web`). In the tests below it also read a binary file named `core`, which has no extension.
 
-**Chromium crash dumps land in exactly that folder.** The Web browser tests run `bun test` from `internal/rocketclaw/web`. So do the Go real-browser tests, through `runWebTest`, which sets `web.Dir = "../../web"` (`internal/rocketclaw/frontend/rpc/server_test.go:4074`). Both dumps in this session were written there.
+**Chromium crash dumps land in exactly that folder.** The Web browser tests run `bun test` from `internal/rocketclaw/web`. So do the Go real-browser tests, through `runWebTest`, which sets `web.Dir = "../../web"` (`internal/rocketclaw/frontend/rpc/server_test.go:4048`). Both dumps in this session were written there.
 
 **Measured on Tailwind 4.3.5 (scratch copies only):**
 
@@ -60,7 +60,7 @@ That shows a stray `core` in this folder is enough to change the stylesheet and 
 find internal/rocketclaw/web -path '*/node_modules' -prune -o -name core -type f -print
 ```
 
-If one is there, delete it and build again. A stylesheet name of 15 hex characters is fine: `build.ts:33` prints the hash with `toString(16)`, which drops leading zeros.
+If one is there, delete it and build again. A stylesheet name of 15 hex characters is fine: `build.ts:16` prints the hash with `toString(16)`, which drops leading zeros.
 
 **Build and test on a new commit, never on the commit being checked.** jj snapshots the working copy at the start of almost every command. With @ on a real commit, whatever the run leaves behind becomes part of that commit: a rebuilt `dist`, a lint autofix, or any dump under the size limit.
 

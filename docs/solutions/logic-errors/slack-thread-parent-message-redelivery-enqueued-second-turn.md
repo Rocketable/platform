@@ -1,7 +1,7 @@
 ---
 title: Slack Mention Redelivery Must Start At Most One Turn
 date: 2026-08-26
-last_updated: 2026-11-04
+last_updated: 2026-11-17
 category: docs/solutions/logic-errors/
 module: internal/rocketclaw/frontend/slack
 problem_type: logic_error
@@ -50,13 +50,13 @@ Slack intake is now mention-only, and duplicates are refused at one durable poin
 
 1. The connector's `handleEventsAPI` (`internal/rocketclaw/frontend/slack/connector.go`) handles only channel renames, `AppMentionEvent`, `AgentSessionStoppedEvent` and `AgentSessionTitleChangedEvent`. Plain messages, including the parent `message` redelivery, never reach the router. Nothing else in Slack drives an agent.
 2. `handleAppMentionEvent` (same file) builds the inbound message and calls `threadRouter.SubmitMention`. Before submitting, it sets the thread's agent session to `processing`, but only when no turn of the thread is running; a redelivery during a turn leaves the status alone (see [the agent session status learning](../architecture-patterns/slack-agent-session-status-follows-the-running-turn.md)). A refused redelivery returns `false, nil`, so it gets no failure reply, and `settleSession` sets the thread back to `active` unless one of its turns is running.
-3. `threadBridgeManager.SubmitMention` (`internal/rocketclaw/backend/thread_bridges.go:554-610`) makes the Thread Queue item ID `"slack:" + channel + ":" + message ts` (line 556). Inside one State Store transaction, holding the session history lock, it checks for that ID in two places: any model turn row (`turns` with `takes_lane`, whether waiting, running or finished) and saved history (`entries` whose `replay_input` carries that `input_id`) (SQL at lines 574-581). If it finds the ID, it returns `false, nil` (lines 585-586) and writes nothing.
+3. `threadBridgeManager.SubmitMention` (`internal/rocketclaw/backend/thread_bridges.go:505-561`) makes the Thread Queue item ID `"slack:" + channel + ":" + message ts` (line 507). Inside one State Store transaction, holding the session history lock, it checks for that ID in two places: any model turn row (`turns` with `takes_lane`, whether waiting, running or finished) and saved history (`entries` whose `replay_input` carries that `input_id`) (SQL at lines 525-532). If it finds the ID, it returns `false, nil` (lines 536-537) and writes nothing.
 
 Tests that pin this behavior:
 
 - `TestHandleAppMentionEventRedeliveryStartsOnce` (`internal/rocketclaw/frontend/slack/connector_test.go`) sends the root mention, the parent `message` and a threaded reply mention, twice each. It expects four `SubmitMention` calls (the two parent messages never reach the router), and each refused redelivery sets the idle thread back to `active`.
 - `TestHandleEventsAPIIgnoresMessagesAndReactions` (`internal/rocketclaw/frontend/slack/connector_test.go`) shows that a parent `message` with `ts == thread_ts`, a plain reply, a reaction and an edited mention cause no router call.
-- `TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce` (`internal/rocketclaw/backend/thread_bridges_test.go:217-283`) refuses a redelivery in each state: while the mention waits, mid-turn, after a restart, and after its turn has finished. It also checks that a mention never steers the running turn.
+- `TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce` (`internal/rocketclaw/backend/thread_bridges_test.go:156-222`) refuses a redelivery in each state: while the mention waits, mid-turn, after a restart, and after its turn has finished. It also checks that a mention never steers the running turn.
 
 ## Why This Works
 

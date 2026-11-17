@@ -1,7 +1,7 @@
 ---
 title: The Web Shares One Connection, and Keeping Views Mounted Needs a Remount Audit
 date: 2026-10-07
-last_updated: 2026-11-01
+last_updated: 2026-11-17
 category: docs/solutions/architecture-patterns/
 module: internal/rocketclaw/web
 problem_type: architecture_pattern
@@ -39,8 +39,8 @@ can carry, and code that assumes a view mounts when it is shown and unmounts whe
 
 ### The connection
 
-The Web server serves HTTPS on both of its listeners (`cmd/rocketclaw/web.go:104`,
-`cmd/rocketclaw/tailnet.go:190`). Browsers therefore speak HTTP/2 to it and send every request from a
+The Web is served only over HTTPS, on its tsnet listener (`cmd/rocketclaw/tailnet.go:165-177`; the plain
+listener went in "serve the Web only on the tailnet", 2026-11-16). Browsers therefore speak HTTP/2 to it and send every request from a
 page over one TCP connection. That removed the HTTP/1.1 limit of about six connections per host. The
 warm-tabs variant of the tabs work (closed PR #212, plan U6) hit that limit, and it is why only the
 active view was allowed to open `/stream`.
@@ -63,7 +63,7 @@ browser showed the sidebar list arriving at about 43 KB/s. An OpenCode session (
 | What | Size | When |
 |---|---|---|
 | `ListSessions`, the full listing | 7.5 MB raw, about 1.3 MB gzipped | every page load |
-| `ListSessions` poll with nothing changed | about 364 KB raw, about 80 KB gzipped, about 270 KB of it the `order` of every session ID | about every 2 s plus the listing's own time (`ui.tsx:731`) |
+| `ListSessions` poll with nothing changed | about 364 KB raw, about 80 KB gzipped, about 270 KB of it the `order` of every session ID | about every 2 s plus the listing's own time (`ui.tsx:730`) |
 | `ListCronJobs` | 1.1 MB raw, 225 KB gzipped | every page load, even on an OpenCode page |
 | A new OpenCode view | about 40 requests and 1–2 MB | every OpenCode tab switch |
 
@@ -130,7 +130,8 @@ part 2 below.
   - A headless browser on the server's machine opened the session in 2.7 s. The relay's load varies,
     so the person's HAR is the evidence.
   - Opening the server's direct IP to bypass the relay could not sign the person in. The server saw the
-    container's gateway address, not a tailnet identity, so that comparison failed at sign-in.
+    container's gateway address, not a tailnet identity, so that comparison failed at sign-in. The Web no longer listens anywhere but the tailnet, so this
+    bypass is not available at all now.
   - "Browser and server are on the same machine" made the relay look like the bug. They need not share a
     machine, and the page has to work over any link.
   - A few calls finished quickly inside the stall window. This session never explained them, so do not

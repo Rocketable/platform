@@ -51,8 +51,8 @@ ended, and nobody with the session open saw it go unread.
 ## Solution
 
 The sync turns a new OpenCode idle marker into attention events in `syncOpenCode`
-(`internal/rocketclaw/backend/opencode.go:336-340`). It used to make events only from `openCodeSenders`, which reads
-`/message?type=user` (`opencode.go:442`). OpenCode starts a turn after background work with a message of type
+(`internal/rocketclaw/backend/opencode.go:309-315`). It used to make events only from `openCodeSenders`, which reads
+`/message?type=user` (`opencode.go:401`). OpenCode starts a turn after background work with a message of type
 `synthetic`, not `user` (`Session.Message.Synthetic`, `internal/rocketclaw/oc/packages/schema/src/session-message.ts:98`),
 so that list was empty and no event was made. The cursor still moved, so the miss was permanent.
 
@@ -72,16 +72,16 @@ rename, would mark its readers again for an old idle marker.
 ## Why This Works
 
 RocketClaw's own listed sessions always emit the turn itself with an empty username, whoever sent it (`turnEventsSQL`,
-`internal/rocketclaw/backend/attention.go:98`, called from `markTurnEnd`, `store_dao.go:1803`). The OpenCode sync now
+`internal/rocketclaw/backend/attention.go:71`, called from `markTurnEnd`, `store_dao.go:1581`). The OpenCode sync now
 does the same. `sessionReadersSQL` sends any event row to the people with the session's tab and to everyone who
-parked it until it is done (`attention.go:79-84`), so a single row with an empty sender is enough.
+parked it until it is done (`attention.go:61-69`), so a single row with an empty sender is enough.
 
 ## Prevention
 
 - When a behavior keys on "a turn ended", check both producers: `markTurnEnd` for RocketClaw's sessions and
   `syncOpenCode` for Remote OpenCode Sessions. The remote path derives turns from OpenCode's message stream, and a
   turn there need not start with a `user` message.
-- `TestSyncOpenCodeMarksTurnSenders` (`opencode_test.go:656-669`) covers both cases: a turn with no prompt ends a
+- `TestSyncOpenCodeMarksTurnSenders` (`opencode_test.go:655-666`) covers both cases: a turn with no prompt ends a
   park until it is done, and a moved `time.updated` without a new idle marker does not.
 - In the model, a ghost variable tracks the cause (`endedDone`, set on every turn end, `TabAttention.tla:86`), not its
   effect, and `WakeReaches` chooses whether a background turn end reaches anyone (`TabAttention.tla:46`, `:124`).

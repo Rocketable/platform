@@ -1,6 +1,7 @@
 ---
 title: The Search Page Froze Because It Drew Every Result, Not Because Searches Weren't Cancelled
 date: 2026-10-26
+last_updated: 2026-11-17
 category: docs/solutions/performance-issues/
 module: internal/rocketclaw/web
 problem_type: performance_issue
@@ -35,18 +36,18 @@ Typing on `/search` lagged badly. The obvious suspects were searches not being c
 
 - A keystroke could take seconds to show, mostly right after a short or common query's answer arrived.
 - The same query typed steadily (no pause) felt fine, because each answer was aborted before it arrived.
-- Sentry stalls on `/search` entered through `MessagePort.onmessage`, with nothing pointing at our source.
+- Sentry stalls on `/search` entered through `MessagePort.onmessage`, with nothing pointing at our source. (Browser Sentry, and the build's source maps, were removed on 2026-11-15, "remove browser Sentry and the instrumentation settings"; the same reading applies to any long-task trace, such as a Chrome performance profile.)
 
 ## What Didn't Work
 
 - **Blaming cancellation.** It already works end to end. `useSessionSearch` in `internal/rocketclaw/web/src/ui.tsx` aborts the previous request when a newer one starts. On the server at the time, `sharedSearch` in `internal/rocketclaw/frontend/rpc/session_commands.go` cancelled the scan once the last waiting caller left (`TestSearchSessionsSharedFlightCancellation`), and aborted database queries disappeared well before an unaborted search would finish. Search pages now run their search through `runSearch` in `internal/rocketclaw/frontend/rpc/search_runs.go`, which keeps running past the request; a newer query for the same search cancels and replaces it (`TestSearchRunOutlivesItsRequest`, `TestSearchRunReplacedOrEvictedMarksNothing`). `sharedSearch` still serves searches without a tab.
-- **Waiting for source maps to name the slow code.** Sentry maps error stack traces, not timing spans. A long frame entering through `MessagePort.onmessage` is React's scheduler running a render: no map can name the component, because the browser only records where the task started. Treating "unmapped" as a blocker stalls the investigation indefinitely.
+- **Waiting for source maps to name the slow code.** Sentry (removed since) mapped error stack traces, not timing spans. A long frame entering through `MessagePort.onmessage` is React's scheduler running a render: no map can name the component, because the browser only records where the task started. Treating "unmapped" as a blocker stalls the investigation indefinitely.
 - **Looking only at server time.** The search query itself is fast. The cost is in the size of the answer and in rendering it, and neither shows in database statistics.
 - **Memoizing the result list** (PR 674) stopped unchanged groups from being rebuilt on each keystroke. That was a real saving, but the first render of a large answer still drew everything.
 
 ## Solution
 
-Draw rows a page at a time (PR 679). `SearchResults` draws `searchPage` (200) rows across the result groups. An invisible marker after the last row is watched by an `IntersectionObserver` rooted on the results panel with a one-screen bottom margin; when it comes near, the next page is drawn. A new response starts again at one page. `SearchResultGroup` takes `drawn`, slices its hits to it, and still shows the full hit count.
+Draw rows a page at a time (PR 679). `SearchResults` draws `searchPage` (200) rows across the result groups. An invisible marker after the last row is watched by an `IntersectionObserver` (`loadMore`, `ui.tsx:2816`, shared with the palette's 50-row paging) rooted on the results panel with a one-screen bottom margin; when it comes near, the next page is drawn. A new response starts again at one page. `SearchResultGroup` takes `drawn`, slices its hits to it, and still shows the full hit count.
 
 Observed behavior is unchanged: every result is reachable by scrolling, in the same order, with the same counts. The one visible difference is that the browser's find-in-page only finds rows already drawn.
 

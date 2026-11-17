@@ -32,7 +32,7 @@ tags:
 
 ## Context
 
-The backend tests do not each get their own database. Each one creates a fresh schema on the database at `ROCKETCLAW_TEST_DATABASE_URL` (`internal/rocketclaw/backend/harnessbridgetest/database.go`), migrates it, and runs against it. `go test` runs packages concurrently, and parallel tests within a package add more, so a single PostgreSQL server carries many concurrent sessions and migrations.
+The backend tests do not each get their own database. Each one either creates and migrates a fresh schema on the database at `ROCKETCLAW_TEST_DATABASE_URL` (`internal/rocketclaw/backend/harnessbridgetest/database.go`) or, for most backend tests, clones a migrated template database on that same server (`internal/rocketclaw/backend/store_fixture_test.go`). `go test` runs packages concurrently, and parallel tests within a package add more, so a single PostgreSQL server carries many concurrent sessions and migrations.
 
 Docker gives a container a 64 MB `/dev/shm` unless told otherwise. PostgreSQL on Linux keeps its dynamic shared memory there by default (`dynamic_shared_memory_type = posix`). Parallel query workers, among other things, use it. With enough concurrent work, 64 MB runs out and PostgreSQL fails the query with a shared-memory error. The test that fails depends on timing, not on what it tests.
 

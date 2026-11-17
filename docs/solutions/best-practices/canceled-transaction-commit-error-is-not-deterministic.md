@@ -1,7 +1,7 @@
 ---
 title: A canceled transaction's Commit error is not deterministic
 date: 2026-10-26
-last_updated: 2026-10-26
+last_updated: 2026-11-17
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/backend
 problem_type: best_practice
@@ -24,7 +24,7 @@ tags: [database-sql, transaction, context-cancel, flaky-test, err-tx-done, race-
 
 ## Context
 
-`Runtime.SaveBehavior` (`internal/rocketclaw/backend/runtime.go:98`) opens its transaction with `r.Sessions.db.BeginTx(r.RunCtx, nil)` (line 113) and commits last, wrapping any failure as `commit behavior settings: %w` (lines 145-146). `TestRuntimeSaveBehavior`'s "commit" case (`internal/rocketclaw/backend/runtime_reload_test.go:324`) makes that commit fail by canceling `RunCtx` from the External MCP refresh mock (lines 234-235), which runs just before `tx.Commit()`.
+`Runtime.SaveBehavior` (`internal/rocketclaw/backend/runtime.go:91`) opens its transaction with `r.Sessions.db.BeginTx(r.RunCtx, nil)` (line 106) and commits last, wrapping any failure as `commit behavior settings: %w` (lines 142-143). `TestRuntimeSaveBehavior`'s "commit" case (`internal/rocketclaw/backend/runtime_reload_test.go:244`) makes that commit fail by canceling `RunCtx` from the External MCP refresh mock (lines 156-157), which runs after `BeginTx` and before the cron refresh and `tx.Commit()`.
 
 The test first expected `context.Canceled.Error()`. It passed locally, then failed once in CI on PR #685 (open, unmerged as of this writing), shard `rocketclaw (0)`:
 
@@ -53,7 +53,7 @@ When a test cancels a transaction's context to make `Commit` fail, assert on the
 {"commit", ..., "commit behavior settings", 2},
 ```
 
-The assertions after it in the same loop (`runtime_reload_test.go:333-338`) check the real contract: live behavior, the stored row, the log level, and the runtime assets are unchanged. If code really needs to recognize this failure with `errors.Is`, accept both errors:
+The assertions after it in the same loop (`runtime_reload_test.go:253-258`) check the real contract: live behavior, the stored row, the log level, and the runtime assets are unchanged. If code really needs to recognize this failure with `errors.Is`, accept both errors:
 
 ```go
 errors.Is(err, context.Canceled) || errors.Is(err, sql.ErrTxDone)
@@ -84,15 +84,15 @@ So the error depends on whether `awaitDone` has marked the transaction done when
 - not yet: `Commit` returns `context.Canceled`;
 - already: `Commit` returns `sql.ErrTxDone` ("transaction has already been committed or rolled back").
 
-Both are correct results of the same cancellation. Either way nothing is committed: `Commit` returns before calling the driver, and `awaitDone` rolls the transaction back. Goroutine scheduling decides which error you get. On a laptop it was `context.Canceled` in every plain run. Locally, `ErrTxDone` showed up only under `-race` with `-cpu=1,2`. Why CI hits it more often was not measured; slower or busier runners are the likely reason. (Source: the standard library's `$(go env GOROOT)/src/database/sql/sql.go` in Go 1.27.3, the version in `go.mod`: `Tx.awaitDone` at line 2214, `Tx.Commit` at line 2292, `go tx.awaitDone()` at line 1930.)
+Both are correct results of the same cancellation. Either way nothing is committed: `Commit` returns before calling the driver, and `awaitDone` rolls the transaction back. Goroutine scheduling decides which error you get. On a laptop it was `context.Canceled` in every plain run. Locally, `ErrTxDone` showed up only under `-race` with `-cpu=1,2`. Why CI hits it more often was not measured; slower or busier runners are the likely reason. (Source: the standard library's `$(go env GOROOT)/src/database/sql/sql.go` in Go 1.27.4, the version in `go.mod`: `Tx.awaitDone` at line 2214, `Tx.Commit` at line 2292, `go tx.awaitDone()` at line 1930.)
 
 The final test does not show any of this. It asserts a looser string than before. A reviewer who wants the test to be "more precise" would bring back `context.Canceled` or `errors.Is(err, context.Canceled)`, and the test would pass locally and flake in CI again.
 
 ## When to Apply
 
 - The context is canceled after `BeginTx` and before `Commit` runs, whether by the test or by shutdown. This is the window that races.
-- Canceling before the operation starts is deterministic. `DB.BeginTx` and queries get their connection from `DB.conn`, which checks the context first and returns `ctx.Err()` (`sql.go:1328-1332`). Tests in `internal/rocketclaw/backend` that cancel first and then call the store (for example `store_test.go:64-68` and `origin_pairs_test.go:148-158`) are not affected.
-- Production code that classifies a `Commit` error as cancellation must also accept `sql.ErrTxDone`. No production code here does this today. The only non-test `errors.Is(..., context.Canceled)` in `internal` or `cmd` (`internal/rocketclaw/frontend/rpc/voice.go:330`) checks a context's cause, not a database error.
+- Canceling before the operation starts is deterministic. `DB.BeginTx` and queries get their connection from `DB.conn`, which checks the context first and returns `ctx.Err()` (`sql.go:1328-1332`). Tests in `internal/rocketclaw/backend` that cancel first and then call the store (for example `store_test.go:65-69`, `origin_pairs_test.go:242-252`, and `store_cancellation_test.go`) are not affected.
+- Production code that classifies a `Commit` error as cancellation must also accept `sql.ErrTxDone`. No production code here does this today. The only non-test `errors.Is(..., context.Canceled)` in `internal` or `cmd` (`internal/rocketclaw/frontend/rpc/voice.go:296`) checks a context's cause, not a database error.
 
 ## Examples
 

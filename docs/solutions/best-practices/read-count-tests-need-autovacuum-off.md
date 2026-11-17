@@ -30,7 +30,7 @@ tags:
 
 ## Context
 
-`TestChatListingReadsScaleWithReportingRuns` (`internal/rocketclaw/backend/store_schema_test.go:165`) checks that the chat listing reads a number of rows that grows with chats and cron runs, never with entries. It loads 1,280 conversations and about 10,000 entries, runs `ANALYZE` (lines 185-186), calls `saveEntryFacts` on 256 chats (line 193), then sums `pg_stat_get_tuples_returned` over the two tables and their indexes (line 197) and requires fewer than 4,096 (line 221).
+`TestChatListingReadsScaleWithReportingRuns` (`internal/rocketclaw/backend/store_schema_test.go:153`) checks that the chat listing reads a number of rows that grows with chats and cron runs, never with entries. It loads 1,280 conversations and about 10,000 entries, runs `ANALYZE` (lines 171-172), calls `saveEntryFacts` on its 256 chats (line 179), then sums `pg_stat_get_tuples_returned` over the two tables and their indexes (lines 183-188) and requires fewer than 4,096 (line 207).
 
 It usually reads 1,806 rows. Once in CI it read 4,864, which pushed a web-only PR (#661) out of the merge queue. Every local run passed, and the CI failure had nothing to do with that PR's change.
 
@@ -43,7 +43,7 @@ ALTER TABLE conversations SET (autovacuum_enabled = false);
 ALTER TABLE entries SET (autovacuum_enabled = false);
 ```
 
-Then set the planner's statistics yourself with `ANALYZE` at the point the test means them to apply. This is safe in the shared test database: each test runs in its own schema (`harnessbridgetest.IsolatedTestDatabaseURL`), so the setting reaches only that test's tables. PR #663 added it to this test (`store_schema_test.go:175-176`), with a comment saying why (`:172`–`173`).
+Then set the planner's statistics yourself with `ANALYZE` at the point the test means them to apply. This is safe in the shared test database: each test runs in its own schema (`harnessbridgetest.IsolatedTestDatabaseURL`), so the setting reaches only that test's tables. PR #663 added it to this test (`store_schema_test.go:161-162`). Source comments have since been removed from the repo, so this learning is the only record of why.
 
 To check whether a read-count test is exposed, run it under CI-like conditions on a throwaway test database:
 
@@ -82,7 +82,7 @@ Maintenance itself does not add to the counters: `ANALYZE` and `VACUUM` on these
 - Writing a new test that asserts a read count, a scan count, or anything else that depends on the plan.
 - A read-count test that inserts or updates more than a few dozen rows.
 
-Small tests are not exposed. The other read-count tests here (`TestDelegationLookupStopsAtFirstChildEntry`, `TestChatOriginFactsSkipsKnownSourceLookup`, `TestSidebarSessionsReadNoHistory`) passed 8 out of 8 under the same stress without the setting.
+Small tests are not exposed. The other read-count tests here (`TestDelegationLookupStopsAtFirstChildEntry`, `TestSidebarSessionsReadNoHistory`, and a since-removed origin lookup test) passed 8 out of 8 under the same stress without the setting.
 
 ## Related
 
