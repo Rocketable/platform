@@ -315,7 +315,7 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 	assert.Empty(t, remoteSidebar(t, s)[1].Reply)
 
-	updated, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new(true), new("old work"))
+	updated, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new("old work"))
 	require.NoError(t, err)
 	require.True(t, updated)
 	assert.Equal(t, "old work", fake.sessions[2].Title, "renaming in RocketClaw must rename the OpenCode session")
@@ -328,51 +328,47 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 
 	rows = remoteSidebar(t, s)
 	require.Len(t, rows, 3)
-	assert.Equal(t, "opencode:box:ses_c", rows[0].Conversation.ID, "pinned rows sort first")
-	assert.Equal(t, "old work", rows[0].Name)
-	assert.Equal(t, []string{"customer"}, rows[0].Tags)
-	assert.Equal(t, "old work", rows[0].Summary.LastMessage)
+	assert.Equal(t, "opencode:box:ses_c", rows[2].Conversation.ID)
+	assert.Equal(t, "old work", rows[2].Name)
+	assert.Equal(t, []string{"customer"}, rows[2].Tags)
+	assert.Equal(t, "old work", rows[2].Summary.LastMessage)
 
 	for _, title := range []string{"Delta", ""} {
 		fake.sessions[2].Title = title
 
 		require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 		rows = remoteSidebar(t, s)
-		assert.Equal(t, title, rows[0].Name, "an upstream rename or clear must replace the local name")
-		assert.Equal(t, title, rows[0].Summary.LastMessage)
-		assert.True(t, rows[0].Pinned)
-		assert.Equal(t, []string{"customer"}, rows[0].Tags)
+		assert.Equal(t, title, rows[2].Name, "an upstream rename or clear must replace the local name")
+		assert.Equal(t, title, rows[2].Summary.LastMessage)
+		assert.Equal(t, []string{"customer"}, rows[2].Tags)
 	}
 
-	_, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", nil, new("old work"))
+	_, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new("old work"))
 	require.NoError(t, err)
 
 	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
 		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "wrong"}
 		return nil
 	}))
-	updated, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new(false), nil)
+	updated, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", nil)
 	require.NoError(t, err)
 	require.True(t, updated)
-	updated, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new(true), new("refused"))
+	updated, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new("refused"))
 	require.ErrorAs(t, err, new(*openCodeError))
 	assert.False(t, updated)
 	assert.Equal(t, "old work", remoteSidebar(t, s)[2].Name)
-	assert.False(t, remoteSidebar(t, s)[2].Pinned)
 	assert.Equal(t, "old work", fake.sessions[2].Title)
 
 	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
 		cfg.OpenCode["box"] = box
 		return nil
 	}))
-	_, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new(true), nil)
-	require.NoError(t, err)
-	updated, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", nil, new(""))
+	updated, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new(""))
 	require.NoError(t, err)
 	require.True(t, updated)
 	assert.Empty(t, fake.sessions[2].Title, "clearing a name also clears the remote title")
-	assert.Empty(t, remoteSidebar(t, s)[0].Name)
-	assert.Empty(t, remoteSidebar(t, s)[0].Summary.LastMessage)
+	assert.Empty(t, remoteSidebar(t, s)[2].Name)
+	assert.Empty(t, remoteSidebar(t, s)[2].Summary.LastMessage)
 
 	search, err := s.SearchSessions(ctx, "", "/srv/api", SearchFields, nil)
 	require.NoError(t, err)
@@ -426,7 +422,7 @@ func TestOpenCodeRenamesKeepRemoteAndLocalOrder(t *testing.T) {
 
 	var renames errgroup.Group
 	renames.Go(func() error {
-		_, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_a", nil, new("first"))
+		_, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_a", new("first"))
 		return err
 	})
 	require.Equal(t, "first", <-titles)
@@ -436,7 +432,7 @@ func TestOpenCodeRenamesKeepRemoteAndLocalOrder(t *testing.T) {
 	renames.Go(func() error {
 		defer close(secondDone)
 
-		_, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_a", nil, new("second"))
+		_, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_a", new("second"))
 
 		return err
 	})
@@ -505,7 +501,7 @@ func TestOpenCodeRenameSurvivesEarlierPoll(t *testing.T) {
 			})
 			<-listed
 
-			updated, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_a", nil, &name)
+			updated, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_a", &name)
 
 			close(release)
 
@@ -881,14 +877,14 @@ VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	}
 
 	for _, id := range []string{"web", "opencode:box:ses_a"} {
-		updated, err := s.UpdateConversationDetails(ctx, id, new(true), new("Named "+id))
+		updated, err := s.UpdateConversationDetails(ctx, id, new("Named "+id))
 		require.NoError(t, err)
 		require.True(t, updated)
 	}
 
-	facts, err := queryStrings(ctx, s.db, `SELECT concat_ws(' ', conversation_id, kind, tags::text, pinned, name) FROM conversations ORDER BY 1`, "conversation facts")
+	facts, err := queryStrings(ctx, s.db, `SELECT concat_ws(' ', conversation_id, kind, tags::text, name) FROM conversations ORDER BY 1`, "conversation facts")
 	require.NoError(t, err)
-	assert.Equal(t, []string{`opencode:box:ses_a remote ["billing", "urgent"] t Named opencode:box:ses_a`, `web web_chat ["internal"] t Named web`}, facts)
+	assert.Equal(t, []string{`opencode:box:ses_a remote ["billing", "urgent"] Named opencode:box:ses_a`, `web web_chat ["internal"] Named web`}, facts)
 }
 
 func TestOpenCodeMovesOldNamesToTheServer(t *testing.T) {
@@ -1096,9 +1092,9 @@ func TestSidebarHidesUnconfiguredOpenCodeServers(t *testing.T) {
 	t.Parallel()
 
 	s := newOpenCodeTestService(t, "box")
-	_, err := s.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, pinned, remote_session)
-VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), FALSE, 'ses_a'),
-    ('opencode:gone:ses_b', '', '', 'remote', FALSE, 'remote', 'gone', '', '/srv', now(), FALSE, now(), TRUE, 'ses_b')`)
+	_, err := s.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session)
+VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), 'ses_a'),
+    ('opencode:gone:ses_b', '', '', 'remote', FALSE, 'remote', 'gone', '', '/srv', now(), FALSE, now(), 'ses_b')`)
 	require.NoError(t, err)
 
 	rows := remoteSidebar(t, s)
@@ -1112,7 +1108,7 @@ VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 
 	rows = remoteSidebar(t, s)
 	require.Len(t, rows, 2)
-	assert.True(t, rows[0].Pinned)
+	assert.Equal(t, "opencode:gone:ses_b", rows[1].Conversation.ID)
 }
 
 func TestDeleteSessionRefusesRemoteSessions(t *testing.T) {

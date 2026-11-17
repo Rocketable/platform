@@ -4243,7 +4243,7 @@ func TestFirstWebMessageNamesUnnamedSession(t *testing.T) {
 	nt := newNoteTest(t, answerNoteTest)
 	named := "web:named"
 	require.NoError(t, nt.service.UpsertThread(named, ThreadState{Agent: "main"}))
-	_, err := nt.service.UpdateConversationDetails(t.Context(), named, nil, new("Chosen name"))
+	_, err := nt.service.UpdateConversationDetails(t.Context(), named, new("Chosen name"))
 	require.NoError(t, err)
 
 	manager, _ := nt.run(t, ignoreOutbound)
@@ -4263,7 +4263,7 @@ func TestFirstWebMessageNamesUnnamedSession(t *testing.T) {
 
 	require.Equal(t, []string{nt.conversationID + "=Session title", named + "=Chosen name"}, names(), "only an unnamed session takes the generated title")
 
-	_, err = nt.service.UpdateConversationDetails(t.Context(), nt.conversationID, nil, new(""))
+	_, err = nt.service.UpdateConversationDetails(t.Context(), nt.conversationID, new(""))
 	require.NoError(t, err)
 
 	bridge := nt.bridge(t, manager, nt.conversationID)

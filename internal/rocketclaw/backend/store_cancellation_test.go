@@ -36,7 +36,7 @@ func TestSessionOperationsRejectCanceledContext(t *testing.T) {
 			case "append":
 				_, err = store.AppendEntryID(ctx, "chat", testSessionEntry("not saved", "not saved"))
 			case "rename":
-				_, err = store.UpdateConversationDetails(ctx, "chat", new(true), new("not saved"))
+				_, err = store.UpdateConversationDetails(ctx, "chat", new("not saved"))
 			case "attachment":
 				err = store.SaveAttachment(ctx, "chat", "", &protocol.OutboundAttachment{ID: "not-saved", Name: "note.txt", Data: []byte("not saved")}, false)
 			case "voice":
@@ -73,12 +73,8 @@ func TestSessionOperationsRejectCanceledContext(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, before, after)
 
-	var (
-		pinned bool
-		name   string
-	)
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT pinned, name FROM conversations WHERE conversation_id = 'chat'`).Scan(&pinned, &name))
-	require.False(t, pinned)
+	var name string
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT name FROM conversations WHERE conversation_id = 'chat'`).Scan(&name))
 	require.Empty(t, name)
 
 	var attachments int

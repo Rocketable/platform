@@ -122,7 +122,7 @@ func TestSpacePermissionsRealBrowser(t *testing.T) {
 	} {
 		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: chat.id, Agent: chat.agent, CreatedBy: chat.who, Space: chat.space}))
 		say(chat.id, chat.agent, chat.who, chat.ask, chat.answer)
-		_, err := rt.Sessions.UpdateConversationDetails(ctx, chat.id, nil, &chat.name)
+		_, err := rt.Sessions.UpdateConversationDetails(ctx, chat.id, &chat.name)
 		require.NoError(t, err)
 	}
 

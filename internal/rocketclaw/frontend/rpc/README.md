@@ -158,7 +158,7 @@ Job changes and `movable` flips send the usual conversation-change hint.
 durable, lexically sorted active tag names in `ListSessions`. Missing metadata
 returns an empty list. The existing session-list query joins tags without adding a
 request per row or widening private-session discovery. Tag-only changes appear
-on the next snapshot without changing previews, timestamps, or pin. HTTP retains the same owner/completeness envelopes and ordering; no tag
+on the next snapshot without changing previews or timestamps. HTTP retains the same owner/completeness envelopes and ordering; no tag
 mutation RPC or event is added.
 
 Session discovery starts from explicitly recorded conversations with stored entries,

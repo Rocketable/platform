@@ -44,7 +44,7 @@ var _ channelFactsStore = &channelFactsStoreMock{}
 //			TurnProgressFunc: func(ctx context.Context, conversationID string, turnID string) (protocol.TurnProgress, error) {
 //				panic("mock out the TurnProgress method")
 //			},
-//			UpdateConversationDetailsFunc: func(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error) {
+//			UpdateConversationDetailsFunc: func(ctx context.Context, conversationID string, name *string) (bool, error) {
 //				panic("mock out the UpdateConversationDetails method")
 //			},
 //		}
@@ -76,7 +76,7 @@ type channelFactsStoreMock struct {
 	TurnProgressFunc func(ctx context.Context, conversationID string, turnID string) (protocol.TurnProgress, error)
 
 	// UpdateConversationDetailsFunc mocks the UpdateConversationDetails method.
-	UpdateConversationDetailsFunc func(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error)
+	UpdateConversationDetailsFunc func(ctx context.Context, conversationID string, name *string) (bool, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -149,8 +149,6 @@ type channelFactsStoreMock struct {
 			Ctx context.Context
 			// ConversationID is the conversationID argument value.
 			ConversationID string
-			// Pinned is the pinned argument value.
-			Pinned *bool
 			// Name is the name argument value.
 			Name *string
 		}
@@ -446,25 +444,23 @@ func (mock *channelFactsStoreMock) TurnProgressCalls() []struct {
 }
 
 // UpdateConversationDetails calls UpdateConversationDetailsFunc.
-func (mock *channelFactsStoreMock) UpdateConversationDetails(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error) {
+func (mock *channelFactsStoreMock) UpdateConversationDetails(ctx context.Context, conversationID string, name *string) (bool, error) {
 	if mock.UpdateConversationDetailsFunc == nil {
 		panic("channelFactsStoreMock.UpdateConversationDetailsFunc: method is nil but channelFactsStore.UpdateConversationDetails was just called")
 	}
 	callInfo := struct {
 		Ctx            context.Context
 		ConversationID string
-		Pinned         *bool
 		Name           *string
 	}{
 		Ctx:            ctx,
 		ConversationID: conversationID,
-		Pinned:         pinned,
 		Name:           name,
 	}
 	mock.lockUpdateConversationDetails.Lock()
 	mock.calls.UpdateConversationDetails = append(mock.calls.UpdateConversationDetails, callInfo)
 	mock.lockUpdateConversationDetails.Unlock()
-	return mock.UpdateConversationDetailsFunc(ctx, conversationID, pinned, name)
+	return mock.UpdateConversationDetailsFunc(ctx, conversationID, name)
 }
 
 // UpdateConversationDetailsCalls gets all the calls that were made to UpdateConversationDetails.
@@ -474,13 +470,11 @@ func (mock *channelFactsStoreMock) UpdateConversationDetails(ctx context.Context
 func (mock *channelFactsStoreMock) UpdateConversationDetailsCalls() []struct {
 	Ctx            context.Context
 	ConversationID string
-	Pinned         *bool
 	Name           *string
 } {
 	var calls []struct {
 		Ctx            context.Context
 		ConversationID string
-		Pinned         *bool
 		Name           *string
 	}
 	mock.lockUpdateConversationDetails.RLock()

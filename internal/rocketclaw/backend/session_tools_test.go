@@ -1613,7 +1613,7 @@ func TestSessionToolsCriteria(t *testing.T) {
 		rowH   = "human\t1\t2026-01-06T00:00:00Z\t\tcron\t\tbilling\t\n"
 		rowB   = "slack-thread:C9:2.2\t1\t2026-01-04T00:00:00Z\t\ttwo words\tC9\tbilling\t\n"
 		rowW   = "web-session:quarter\t1\t2026-01-03T00:00:00Z\tsupport\tother\t\tbilling\t\n"
-		rowA   = "slack-thread:C1:1.1\t1\t2026-01-05T00:00:00Z\t\tmain\tsupport\t*,Needs review,customer,is:pinned,say \"hello\"\t\n"
+		rowA   = "slack-thread:C1:1.1\t1\t2026-01-05T00:00:00Z\t\tmain\tsupport\t*,Needs review,customer,is:forked,say \"hello\"\t\n"
 	)
 
 	for _, tc := range []struct {
@@ -1633,7 +1633,7 @@ func TestSessionToolsCriteria(t *testing.T) {
 		{sessionListParams{Criteria: "room:support tag:billing room:C9", Since: epoch, Limit: 200}, header + rowB + "[criteria: terms=room:support,tag:billing,room:C9; text=]\n"},
 		{sessionListParams{Criteria: "room:unknown room:missing", Since: epoch, Limit: 200}, header + "[criteria: terms=room:unknown,room:missing; text=]\n"},
 		{sessionListParams{Criteria: "agent:main", Since: epoch, Limit: 2}, header + "mcp-dest\t1\t2026-01-07T00:00:00Z\t\tmain\t\t\t\n" +
-			"slack-thread:C1:1.1\t1\t2026-01-05T00:00:00Z\t\tmain\tsupport\t*,Needs review,customer,is:pinned,say \"hello\"\t\n" +
+			"slack-thread:C1:1.1\t1\t2026-01-05T00:00:00Z\t\tmain\tsupport\t*,Needs review,customer,is:forked,say \"hello\"\t\n" +
 			"[criteria: terms=agent:main; text=]\n[truncated: 2 more matching sessions]\n"},
 	} {
 		require.Equal(t, tc.want, call(&tc.params), tc.params.Criteria)

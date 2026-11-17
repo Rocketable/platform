@@ -119,15 +119,15 @@ export function mergeSessionRows(baseline: Session[], received: Session[]): Sess
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 // A listing made since the held version sends only the rows changed since and names the rows removed since, so the
-// held rows fill in the rest, in the server's order (sidebarSessions): pinned first, then newest updatedAt to the
-// nanosecond, then ID. Any other listing sent every row, in that order.
+// held rows fill in the rest, in the server's order (sidebarSessions): newest updatedAt to the nanosecond, then ID.
+// Any other listing sent every row, in that order.
 export function listedRows(held: SavedListing, result: Pick<EnumerationResult, "received" | "since" | "removed">): Session[] {
   if (result.since !== held.version) return result.received;
   const removed = new Set(result.removed);
   const rows = mergeSessionRows(held.rows, result.received).filter((row) => !removed.has(row.id));
   // RFC 3339 times in UTC compare as text once their fractions have nine digits.
   const updated = new Map(rows.map((row) => [row, row.updatedAt?.replace(/(\.\d+)?Z$/, (_, fraction = ".") => `${fraction.padEnd(10, "0")}Z`) ?? ""]));
-  return rows.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || compare(updated.get(b)!, updated.get(a)!) || compare(a.id, b.id));
+  return rows.toSorted((a, b) => compare(updated.get(b)!, updated.get(a)!) || compare(a.id, b.id));
 }
 
 // Tab rows sent since the held version replace the held ones by location; a row with nothing set leaves.

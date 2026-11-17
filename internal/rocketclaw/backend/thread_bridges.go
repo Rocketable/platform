@@ -703,7 +703,7 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 	}
 
 	if !resumed {
-		if _, err := m.store.UpdateConversationDetails(ctx, start.conversationID, nil, &title); err != nil {
+		if _, err := m.store.UpdateConversationDetails(ctx, start.conversationID, &title); err != nil {
 			return "", false, fmt.Errorf("name new Web session: %w", err)
 		}
 	}

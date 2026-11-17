@@ -404,11 +404,11 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     requests.push(input);
     const { query } = input;
     if (query === "tag:bug x") { started.resolve(); await held.promise; }
-    if (query === "CHAR is:pinned") await filterHeld.promise;
-    if (query === "rlie is:pinned") await removedHeld.promise;
-    if (query === "is:pinned brav" && failing) throw new Error("search unavailable");
-    // As the server does for Cmd+P, the fixture applies only the filters: Alpha and Bravo are pinned, Alpha is tagged bug.
-    const ids = query.startsWith("tag:bug ") ? ["a"] : query.includes("is:pinned") ? ["a", "b"] : [];
+    if (query === "CHAR is:forked") await filterHeld.promise;
+    if (query === "rlie is:forked") await removedHeld.promise;
+    if (query === "is:forked brav" && failing) throw new Error("search unavailable");
+    // As the server does for Cmd+P, the fixture applies only the filters: Alpha and Bravo are forked, Alpha is tagged bug.
+    const ids = query.startsWith("tag:bug ") ? ["a"] : query.includes("is:forked") ? ["a", "b"] : [];
     return response(query, ids.map((conversationId) => ({ conversationId })), query.startsWith("tag:") ? [query.split(" ")[0]] : []);
   });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
@@ -423,23 +423,23 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     await titles(["Alpha", "Bravo", "Charlie"]); // Empty Cmd+P lists the sidebar without a request.
     await input.fill("tag:");
     await palette.getByRole("button", { name: "bug", exact: true }).waitFor();
-    await input.fill("is:pi");
-    await palette.getByRole("button", { name: "pinned", exact: true }).waitFor();
+    await input.fill("is:fo");
+    await palette.getByRole("button", { name: "forked", exact: true }).waitFor();
     for (const typing of ["sort:ne", "agent:", "   "]) await input.fill(typing);
     await input.fill("CHAR"); // A title match, never the body: Bravo only says charlie in its preview.
     await titles(["Charlie"]);
     expect(await palette.getByRole("button", { name: "Search everywhere for 'CHAR'", exact: true }).count()).toBe(1);
     await page.waitForTimeout(400);
     expect(requests).toEqual([]); // Unfinished operators and plain text are not sent.
-    await input.fill("CHAR is:pinned"); // Adding a filter keeps the title matches, dimmed, until the server answers.
+    await input.fill("CHAR is:forked"); // Adding a filter keeps the title matches, dimmed, until the server answers.
     await page.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null);
     await titles(["Charlie"]);
     await input.press("ArrowDown");
     filterHeld.resolve();
     await titles([]);
-    expect(await palette.locator("li > button.bg-accent").textContent()).toBe("Search in this space for 'CHAR is:pinned'");
+    expect(await palette.locator("li > button.bg-accent").textContent()).toBe("Search in this space for 'CHAR is:forked'");
     await input.press("Enter");
-    await page.waitForURL((url: URL) => url.pathname.startsWith("/search/") && url.searchParams.get("q") === "space:Main CHAR is:pinned");
+    await page.waitForURL((url: URL) => url.pathname.startsWith("/search/") && url.searchParams.get("q") === "space:Main CHAR is:forked");
     await page.keyboard.press("Control+p");
 
     const pills = palette.getByRole("button", { name: /^tag:/ });
@@ -462,22 +462,22 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     await pills.first().click();
     expect(await input.inputValue()).toBe("xy");
 
-    await input.fill("is:pinned a"); // The server's pinned rows, matched by title here.
+    await input.fill("is:forked a"); // The server's forked rows, matched by title here.
     await titles(["Alpha", "Bravo"]);
     await input.pressSequentially("v");
     await input.press("Enter"); // Before the pause ends: Enter sends the text and opens the first row whose title holds it, not Alpha.
     await page.waitForURL(`**/s/${Buffer.from("b").toString("base64url")}`);
-    expect(requests.filter(({ query }) => query === "is:pinned av")).toHaveLength(1);
+    expect(requests.filter(({ query }) => query === "is:forked av")).toHaveLength(1);
 
     await page.keyboard.press("Control+p");
     const opened = page.url();
-    await input.fill("is:pinned nothing");
+    await input.fill("is:forked nothing");
     await palette.getByText("No matches", { exact: true }).waitFor();
-    expect(await palette.locator("li > button.bg-accent").textContent()).toBe("Search everywhere for 'is:pinned nothing'");
+    expect(await palette.locator("li > button.bg-accent").textContent()).toBe("Search everywhere for 'is:forked nothing'");
     await input.press("Enter"); // A filtered query with no result opens nothing, not even Search everywhere.
     await page.waitForTimeout(100);
     expect(await palette.isVisible()).toBe(true);
-    await input.fill("is:pinned brav");
+    await input.fill("is:forked brav");
     await palette.getByRole("alert").filter({ hasText: "Search failed" }).waitFor();
     await palette.getByText("Search incomplete", { exact: true }).waitFor();
     await input.press("Enter"); // A failed search opens nothing either.
@@ -492,14 +492,14 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     expect(paths.has("/api/SearchOrigins")).toBe(false);
     await page.keyboard.press("Escape");
     await page.keyboard.press("Control+p");
-    await input.fill("rlie is:pinned");
+    await input.fill("rlie is:forked");
     await page.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null);
     await titles(["Charlie"]);
     await input.press("ArrowDown");
     await input.press("ArrowUp");
     removedHeld.resolve();
     await titles([]);
-    expect(await palette.locator("li > button.bg-accent").textContent()).toBe("Search everywhere for 'rlie is:pinned'");
+    expect(await palette.locator("li > button.bg-accent").textContent()).toBe("Search everywhere for 'rlie is:forked'");
     await input.press("End");
     await input.press("Enter");
     await page.waitForTimeout(100);
@@ -518,7 +518,7 @@ test("/search renders the server's groups, notices and pills", async () => {
   const requests: SearchInput[] = [];
   const hold = Promise.withResolvers<void>();
   const rows = [
-    { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true },
+    { id: "third", name: "Release conversation", preview: "Other text", agent: "main" },
     { id: "second", name: "", title: "", preview: "Needle notes\nOther text", agent: "main" },
     { id: "fourth", name: "Origin chat", preview: "Other text", agent: "main" },
   ];
@@ -529,7 +529,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     if (query === "agent:main" && requests.filter((request) => request.query === query).length === 1) await hold.promise;
     switch (query) {
       case "needle": return response(query, [{ conversationId: "third", field: "" }, { conversationId: "second", text: "Needle notes\nOther text" }, { conversationId: "fourth", field: "Origin", text: "cron source: /notes/needle.md" }], [], { messages: [message("1:0", "user", "Context before NEEDLE then needle"), message("1:1", "assistant", "A second needle response")] });
-      case "chat is:pinned": return response(query, [{ conversationId: "third", field: "Name", text: "Pinned conversation" }], ["is:pinned"]);
+      case "chat is:forked": return response(query, [{ conversationId: "third", field: "Name", text: "Release conversation" }], ["is:forked"]);
       case "outage tag:": return response(query, [{ conversationId: "fourth", field: "Name", text: "Origin chat" }]);
       case "prefix-agent:main agent:main": return response(query, [], [["agent:main", 18]]);
       case "foo tag:bug bar": case "tag:bug foobar": case "tag:bug outage": return response(query, [], ["tag:bug"]);
@@ -548,9 +548,9 @@ test("/search renders the server's groups, notices and pills", async () => {
     const stored = (query: string) => until(() => api.tabs().find((tab) => tab.path === "/search")?.search?.searches[0].query === query);
     const sent = async (query: string) => { while (requests.at(-1)?.query !== query) await page.waitForTimeout(50); };
     await search.fill("needle");
-    await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="Search results"] [role="group"]')].map((node) => node.getAttribute("aria-label")).join("|") === "Pinned conversation|Needle notes|Origin chat", undefined, { timeout: 5000 });
-    const hits = results.getByRole("group", { name: "Pinned conversation" });
-    expect(await hits.getByRole("heading").textContent()).toBe("Pinned conversation(2)"); // Only message text matched: no field row.
+    await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="Search results"] [role="group"]')].map((node) => node.getAttribute("aria-label")).join("|") === "Release conversation|Needle notes|Origin chat", undefined, { timeout: 5000 });
+    const hits = results.getByRole("group", { name: "Release conversation" });
+    expect(await hits.getByRole("heading").textContent()).toBe("Release conversation(2)"); // Only message text matched: no field row.
     expect(await hits.locator('a[href*="?message="]').count()).toBe(2);
     expect(await hits.getByRole("link", { name: /Context before NEEDLE/ }).locator("mark").allTextContents()).toEqual(["NEEDLE", "needle"]);
     const preview = results.getByRole("group", { name: "Needle notes" });
@@ -561,14 +561,14 @@ test("/search renders the server's groups, notices and pills", async () => {
     expect(await field.locator("mark").textContent()).toBe("needle");
     expect(requests).toEqual([{ query: "needle", messages: true, tab: "/search", searchId: expect.any(String), entered: true }]);
 
-    await search.fill("chat is:pinned"); // A saved query ending in a filter reopens with that filter.
-    await results.getByRole("group", { name: "Pinned conversation" }).waitFor();
-    await stored("chat is:pinned");
+    await search.fill("chat is:forked"); // A saved query ending in a filter reopens with that filter.
+    await results.getByRole("group", { name: "Release conversation" }).waitFor();
+    await stored("chat is:forked");
     requests.length = 0;
     await page.reload();
-    await results.getByRole("group", { name: "Pinned conversation" }).waitFor();
-    expect(requests[0]).toEqual({ query: "chat is:pinned", messages: true, tab: "/search", searchId: expect.any(String), entered: false });
-    expect(await search.inputValue()).toBe("chat is:pinned");
+    await results.getByRole("group", { name: "Release conversation" }).waitFor();
+    expect(requests[0]).toEqual({ query: "chat is:forked", messages: true, tab: "/search", searchId: expect.any(String), entered: false });
+    expect(await search.inputValue()).toBe("chat is:forked");
 
     await search.fill("outage tag:"); // Typing leaves the bare operator out; Enter and reopening send it.
     await sent("outage");
@@ -649,7 +649,7 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
   const { chromium: engine } = await import(playwright!);
   const requests: SearchInput[] = [];
   const rows = [
-    { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true },
+    { id: "third", name: "Release conversation", preview: "Other text", agent: "main" },
     { id: "second", name: "", title: "", preview: "Needle notes\nOther text", agent: "main" },
     { id: "opencode:box:ses", kind: "REMOTE_OPENCODE", remoteSessionId: "ses", name: "Remote", preview: "Other text", server: "box", agent: "build", model: "anthropic/claude-opus-4-7" },
     { id: "md", name: "", preview: "**Done.** Updated the runbook", agent: "main" },
@@ -704,24 +704,24 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
 
     // New text opens a Search page of its own, even from a Search page.
     await page.keyboard.press("Control+p");
-    await input.fill("pinned");
-    await palette.getByRole("button", { name: "Search everywhere for 'pinned'", exact: true }).click();
-    await at("pinned");
+    await input.fill("release");
+    await palette.getByRole("button", { name: "Search everywhere for 'release'", exact: true }).click();
+    await at("release");
     await palette.waitFor({ state: "hidden" });
     expect(new URL(page.url()).pathname).not.toBe(first);
-    expect(await page.getByRole("textbox", { name: "Search sessions", exact: true }).inputValue()).toBe("pinned");
-    expect(await page.getByRole("tablist", { name: "Searches" }).getByRole("tab").allTextContents()).toEqual(["pinned"]);
+    expect(await page.getByRole("textbox", { name: "Search sessions", exact: true }).inputValue()).toBe("release");
+    expect(await page.getByRole("tablist", { name: "Searches" }).getByRole("tab").allTextContents()).toEqual(["release"]);
     const strip = page.getByRole("tablist", { name: "Main tabs" });
-    for (const name of ["needle", "pinned"]) await strip.getByRole("tab", { name, exact: true }).waitFor();
+    for (const name of ["needle", "release"]) await strip.getByRole("tab", { name, exact: true }).waitFor();
     // Back and Forward between the two entries switch the open search with the address.
     const searchInput = page.getByRole("textbox", { name: "Search sessions", exact: true });
     await page.goBack();
     await at("needle");
     await page.waitForFunction(() => (document.querySelector('input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "needle");
     await page.goForward();
-    await at("pinned");
-    await page.waitForFunction(() => (document.querySelector('input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "pinned");
-    expect(await searchInput.inputValue()).toBe("pinned");
+    await at("release");
+    await page.waitForFunction(() => (document.querySelector('input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "release");
+    expect(await searchInput.inputValue()).toBe("release");
     // Typed text in Cmd+P lists the Search pages by title or query, never an empty query, whose Enter opens the first
     // session; text one already searches for reopens it.
     await page.keyboard.press("Control+p");
@@ -730,9 +730,9 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
     expect(await pages.count()).toBe(0);
     await input.fill("e");
     await pages.nth(1).waitFor();
-    expect(await pages.allTextContents()).toEqual(["Search: needleMain", "Search: pinnedMain"]);
+    expect(await pages.allTextContents()).toEqual(["Search: needleMain", "Search: releaseMain"]);
     await input.fill("need");
-    await palette.getByRole("button", { name: /^Search: pinned/ }).waitFor({ state: "detached" });
+    await palette.getByRole("button", { name: /^Search: release/ }).waitFor({ state: "detached" });
     expect(await pages.allTextContents()).toEqual(["Search: needleMain"]);
     await input.fill("needle");
     await palette.getByRole("button", { name: "Search everywhere for 'needle'", exact: true }).click();

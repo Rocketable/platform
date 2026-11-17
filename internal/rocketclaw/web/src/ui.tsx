@@ -16,7 +16,7 @@ import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCErro
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, Fragment, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -121,7 +121,7 @@ function slackRooms(sessions: { id: string; title?: string; kind?: ConversationK
 function typingWord(query: string) {
   const word = /(?:^|\s)((?:tag|cron|agent|room|principal|server|model|space):"(?:[^"\\]|\\.)*\\?|\S*)$/i.exec(query)![1];
   const lower = word.toLowerCase();
-  return { word, unfinished: /^(?:tag|cron|agent|room|principal|server|model|space):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:pinned", "is:forked", "is:cron", "is:unread", "is:running", "is:queued", "is:waiting", "is:external", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
+  return { word, unfinished: /^(?:tag|cron|agent|room|principal|server|model|space):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:forked", "is:cron", "is:unread", "is:running", "is:queued", "is:waiting", "is:external", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
 }
 
 function termValue(value: string) {
@@ -3268,7 +3268,6 @@ function useSessionActions(session: Session | undefined, onSuccess?: () => void)
     ...(session.forkedFrom ? [{ key: "origin", label: "Open original conversation", run: () => navigate(rowPath({ id: session.forkedFrom!, kind: session.kind })) }] : []),
     { key: "name", label: "Name session", run: () => setCommand({ mode: "name", source: id }) },
     { key: "title", label: "Regenerate title", keep: true, run: () => update.mutate({ id, name: "" }) },
-    { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
     ...pauseActions(session, (paused) => update.mutate({ id, paused })),
     ...choices.map((tag) => ({ key: `tag-${tag}`, label: `${tags.has(tag) ? "Remove" : "Add"} tag ${tag}`, keep: true, run: () => update.mutate({ id, tag }) })),
     { key: "delete", label: "Delete session", run: () => setCommand({ mode: "delete", source: id }) },
@@ -3578,7 +3577,7 @@ function SearchResultGroup({ session, hits, text, field, needle, tagIds, drawn }
   const clean = useCleanText(label);
   const row = (href: string, kind: string, body: string, key?: string) => <li key={key}><Link href={href} server={session.rocketclaw ?? ""} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><span className="w-16 shrink-0 text-xs text-muted-foreground">{kind}</span><div className="min-w-0"><TranscriptText text={windowed(body, needle, tagIds)} needle={needle} interactive={false} /></div></Link></li>;
   return <li role="group" aria-label={clean} className="min-w-0">
-    <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={rowPath(session)} server={session.rocketclaw ?? ""} title={clean} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring"><InlineText text={label} /></Link><span className="shrink-0 text-muted-foreground">({count})</span>{session.pinned ? <Pin aria-label="Pinned" className="size-3 shrink-0" /> : null}</h2>
+    <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={rowPath(session)} server={session.rocketclaw ?? ""} title={clean} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring"><InlineText text={label} /></Link><span className="shrink-0 text-muted-foreground">({count})</span></h2>
     <ul className="mt-1 border-l pl-2 text-sm leading-5">
       {field ? row(rowPath(session), field, text) : null}
       {hits.slice(0, drawn - Number(!!field)).map((match, i) => row(sessionPath(session.id) + (match.message.messageId ? `?message=${encodeURIComponent(match.message.messageId)}` : ""), match.message.role === "user" ? "You" : "Assistant", match.message.text, match.message.messageId || String(i)))}
@@ -3641,7 +3640,7 @@ function searchChoices(word: string, rows: Session[], catalog: Agent[], principa
   const key = typed?.[1].toLowerCase() ?? "", needle = typed?.[2].toLowerCase() ?? "";
   const remote = (field: "server" | "agent" | "model") => [...new Set(rows.flatMap((row) => row.server && row[field] ? [row[field]!] : []))];
   const names = key === "space" ? spaces.map(({ name }) => name) : key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "cron" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"]
-    : key === "server" ? remote("server") : key === "model" ? [...new Set([...catalog.flatMap(({ model }) => model ? [model] : []), ...remote("model")])] : ["pinned", "forked", "cron", "unread", "running", "queued", "waiting", "external"];
+    : key === "server" ? remote("server") : key === "model" ? [...new Set([...catalog.flatMap(({ model }) => model ? [model] : []), ...remote("model")])] : ["forked", "cron", "unread", "running", "queued", "waiting", "external"];
   const agents = [...catalog.filter((agent, i) => catalog.findIndex(({ name }) => name === agent.name) === i).map(({ name, model, reasoning, rocketclaw }) => ({ key: name, detail: [rocketclaw, model, reasoning].filter(Boolean).join(" · ") })), ...remote("agent").filter((name) => !catalog.some((agent) => agent.name === name)).map((name) => ({ key: name, detail: "OpenCode" }))];
   const quoted = word.includes(':"');
   const spelling = (name: string) => quoted ? JSON.stringify(name).slice(1, -1) : name;

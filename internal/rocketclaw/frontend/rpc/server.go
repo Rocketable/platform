@@ -296,7 +296,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 func sidebarSession(chat *backend.SidebarChat) *Session {
 	row := &chat.Session
 	conversation := row.Conversation
-	session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Pinned: row.Pinned, Paused: row.Paused, Pausable: row.Pausable, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
+	session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Paused: row.Paused, Pausable: row.Pausable, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
 		Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label()}
 
 	if !row.StateSince.IsZero() {
@@ -1187,7 +1187,7 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 		}
 	}
 
-	updated, err := s.sessions.UpdateConversationDetails(ctx, request.Id, request.Pinned, request.Name)
+	updated, err := s.sessions.UpdateConversationDetails(ctx, request.Id, request.Name)
 	if err != nil {
 		return nil, fmt.Errorf("update web conversation: %w", err)
 	}

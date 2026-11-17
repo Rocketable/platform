@@ -135,7 +135,7 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
     await queries.history({ id: "visible", before: "9007199254740993", limit: 50 }).queryFn({ signal });
     expect(requests.at(-1)).toEqual({ path: "/api/History", input: { id: "visible", before: "9007199254740993", limit: 50 } });
     for (const method of ["ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries"]) expect(await rpc<object>(method, { id: "cron:exact:日本語" })).toEqual(responses[method]);
-    await mutations.updateSession({ id: "visible", pinned: false, name: "" });
+    await mutations.updateSession({ id: "visible", name: "" });
     await mutations.removeQueueItem({ id: "visible", itemId: "one" });
     await mutations.steerQueueItem({ id: "visible", itemId: "two" });
     await mutations.popQueueItem({ id: "visible", itemId: "held" });

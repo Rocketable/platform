@@ -20,7 +20,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
   const forks: { id: string; before?: string }[] = [];
   const forkParents: Record<string, string> = {};
   const details: Record<string, Partial<Session>> = { destination: { agent: "a-very-long-agent-name-that-must-not-hide-the-session-age", updatedAt: "2026-09-09T00:00:00.123456Z", tags: ["customer", "a-very-long-tag-name-that-must-not-hide-the-session-age", "<b>literal</b>"] }, source: { pausable: true } };
-  let failPin = true;
+  let failPause = true;
   let agentChoices = true;
   const handoffs: string[] = [];
   const searches: string[] = [];
@@ -60,7 +60,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       }
       case "/api/ListQueue": return Response.json({ items: queues[input.id] ?? [] });
       case "/api/UpdateSession":
-        if (input.pinned && failPin) return Response.json({ message: "Pin failed", code: 13 }, { status: 500 });
+        if (input.paused && failPause) return Response.json({ message: "Pause failed", code: 13 }, { status: 500 });
         details[input.id] = { ...details[input.id], ...input };
         return Response.json({});
       case "/api/ForkSession": {
@@ -209,7 +209,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await commandSearch.fill("original");
     expect(await commands.getByRole("button", { name: /Open original conversation/ }).count()).toBe(0);
     await commandSearch.fill("");
-    for (const name of ["Sessions: Fork session", "Sessions: Handoff session", "Sessions: Name session", "Sessions: Regenerate title", "Sessions: Pin session", "Sessions: Choose agent", "Command: Start goal ($goal)", "Command: Invoke skill ($skill)", "Command: Enqueue work ($enqueue)", "Command: Stash work ($stash)", "Command: Steer turn ($steer)"]) {
+    for (const name of ["Sessions: Fork session", "Sessions: Handoff session", "Sessions: Name session", "Sessions: Regenerate title", "Sessions: Choose agent", "Command: Start goal ($goal)", "Command: Invoke skill ($skill)", "Command: Enqueue work ($enqueue)", "Command: Stash work ($stash)", "Command: Steer turn ($steer)"]) {
       const action = commands.getByRole("button", { name, exact: true });
       await action.waitFor();
       expect(await action.textContent()).toBe(name);
@@ -222,26 +222,17 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     expect(commandBounds.x + commandBounds.width).toBeLessThanOrEqual(width);
     expect(commandBounds.y + commandBounds.height).toBeLessThanOrEqual(height);
     await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/command-palette-${width}.png`), await page.screenshot());
-    const pinIndex = (await commands.getByRole("button").allTextContents()).indexOf("Sessions: Pin session");
-    for (let index = 0; index < pinIndex; index++) await commandSearch.press("ArrowDown");
+    // A Web chat's agent pauses and resumes from the palette, which offers whichever the chat needs.
+    const pauseIndex = (await commands.getByRole("button").allTextContents()).indexOf("Sessions: Pause agent");
+    for (let index = 0; index < pauseIndex; index++) await commandSearch.press("ArrowDown");
     await commandSearch.press("Enter");
     await commands.getByRole("alert").waitFor();
-    expect(await commands.getByRole("alert").textContent()).toBe("Pin failed");
-    const pin = commands.getByRole("button", { name: "Sessions: Pin session", exact: true });
-    expect(await pin.evaluate((element: HTMLElement) => element.classList.contains("bg-accent"))).toBe(true);
-    failPin = false;
-    await pin.waitFor({ state: "visible" });
+    expect(await commands.getByRole("alert").textContent()).toBe("Pause failed");
+    const pause = commands.getByRole("button", { name: "Sessions: Pause agent", exact: true });
+    expect(await pause.evaluate((element: HTMLElement) => element.classList.contains("bg-accent"))).toBe(true);
+    failPause = false;
+    await pause.waitFor({ state: "visible" });
     await commandSearch.press("Enter");
-    await commands.waitFor({ state: "hidden" });
-    await page.keyboard.press("Meta+Shift+p");
-    await commandSearch.fill("Unpin session");
-    await commands.getByRole("button", { name: "Sessions: Unpin session", exact: true }).click();
-    await commands.waitFor({ state: "hidden" });
-    expect(details.source.pinned).toBe(false);
-    // A Web chat's agent pauses and resumes from the palette, which offers whichever the chat needs.
-    await page.keyboard.press("Meta+Shift+p");
-    await commandSearch.fill("agent");
-    await commands.getByRole("button", { name: "Sessions: Pause agent", exact: true }).click();
     await commands.waitFor({ state: "hidden" });
     expect(details.source.paused).toBe(true);
     await page.keyboard.press("Meta+Shift+p");
@@ -572,7 +563,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.goto(`http://127.0.0.1:${server.port}/`);
     await composer.waitFor();
     await page.keyboard.press("Meta+Shift+p");
-    expect(await commands.getByRole("button", { name: /^(Command:|Sessions: (Open original conversation|Fork session|Handoff session|Name session|Pin session|Unpin session|Stop turn|Choose agent))/ }).count()).toBe(0);
+    expect(await commands.getByRole("button", { name: /^(Command:|Sessions: (Open original conversation|Fork session|Handoff session|Name session|Stop turn|Choose agent))/ }).count()).toBe(0);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

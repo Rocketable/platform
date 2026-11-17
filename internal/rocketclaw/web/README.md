@@ -884,7 +884,7 @@ messages that tag `@cs-operators`, and the tag is highlighted. Message matches
 jump to the recorded user or assistant message, including after a reload;
 other matches open the conversation and are labeled with the field that matched
 (Name, Room, Agent, Session, Origin, or Preview). Conversations with message
-matches come first, pinned conversations first within each group.
+matches come first.
 An empty search asks for a query instead of listing conversations. Closing a tab
 removes that search; closing the last returns to the last message visible in any chat, or Home
 if none was seen. Opening Search again starts an empty tab. The address follows the
@@ -908,7 +908,7 @@ Explicitly choosing a saved Search-page match still enters that page's own space
 Each dialog opening clears text, pills, and result selection and focuses
 the input.
 Once text is typed, matching commands appear above the conversations; an empty
-query, or one with a filter such as `tag:customer` or `is:pinned`, lists
+query, or one with a filter such as `tag:customer` or `is:forked`, lists
 conversations only. A bare key such as `cron:` is not a filter. Commands match
 case-insensitively: a label equal to the text comes first, then labels containing
 it, then, once three or more characters are typed, labels containing them in order
@@ -991,11 +991,11 @@ tags match nothing. Bare `tag:`, unclosed quotes, and invalid quoted values stay
 ordinary search text. A filter-only query lists every conversation it keeps;
 `tag:customer outage` keeps message hits only from tagged conversations.
 Filters constrain both row and message matches. The session-search dialog lists each conversation
-once, pinned first, retaining recent-first order within each group.
+once, in recent-first order.
 `sort:newest` or `sort:oldest` instead orders results by last activity on every
-search surface, overriding pinned-first and message-hit grouping; rows without
+search surface, overriding message-hit grouping; rows without
 activity come last, equal times order by conversation ID, and the last `sort:` wins.
-Typing `is:` suggests `pinned`, `forked`, `cron`, and `unread` (sessions bold for you, closed tabs included, parked ones not),
+Typing `is:` suggests `forked`, `cron`, and `unread` (sessions bold for you, closed tabs included, parked ones not),
 then the work terms: `running` (a running turn or background work), `queued` (waiting turns other
 than scheduled reminders), `waiting` (a session marked Needs you: a running turn's unanswered
 question, or a remote OpenCode session's pending form or permission request), and `external` (a
@@ -1006,7 +1006,7 @@ session also carries when its work state (the first of needs you, running, and q
 began, which comes from the server and reads the same for everyone. Typing `sort:` suggests
 `newest` and `oldest`. While typing, a last word that is an unfinished filter
 (a bare `tag:`, `cron:`, `agent:`, `principal:`, `room:`, `server:`, `model:`, or `space:`, a partial `is:` or `sort:` term
-such as `is:pin`, or an unclosed quote) is not sent; Enter, opening a saved
+such as `is:fork`, or an unclosed quote) is not sent; Enter, opening a saved
 search, and following a link send the whole query. Unknown complete terms such
 as `is:foo` stay ordinary text. Filter pills show the server's reading of the
 query: a filter becomes a pill once it is followed by a space and the results
@@ -1042,7 +1042,7 @@ text, and records only selections—not searches or dismissals. Search still fil
 the list, and unavailable session commands stay hidden even when recently used.
 Rows keep compact spacing and touch-sized targets on mobile.
 For the current session it also offers **Open original conversation** (when forked),
-**Name session**, **Regenerate title**, **Pin/Unpin**, **Fork session**,
+**Name session**, **Regenerate title**, **Fork session**,
 **Handoff session**, **Choose agent**, **Delete session**, and **Stop turn** while running.
 Fork, handoff, rename, and agent selection open their controls directly.
 For a remote OpenCode session it offers **Copy server link**, which copies the
@@ -1256,13 +1256,9 @@ stop, a late report never shows them typing again, and that the pill always goes
 their draft stays empty. A pill can still come back for at most 5 seconds when a viewer
 never heard the stop: its stream was full, or it opened after the stop arrived.
 
-Pin a session from the command palette.
-Pinned sessions sort first and keep their normal recent-first order within that
-group. Search `is:pinned` to find only pinned sessions; text and other
-filters still apply.
 The session age stays visible beside the agent; hover it for the exact
 last-update date and time in your local time zone.
-Use the rename icon beside the pin in the chat to set an optional name. Chat action
+Use the rename icon in the chat to set an optional name. Chat action
 buttons have descriptive tooltips. Add files sits at the far left, before the agent
 selector. On mobile, these and the session actions sit above Steer and Send. The name
 replaces the session row's last-message preview without changing the messages; both
