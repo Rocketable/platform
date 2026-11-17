@@ -26,15 +26,14 @@ test("transcript and entry HTTP proxy reach Go", async () => {
   expect(since.flatMap((batch) => batch.sessions ?? [])).toEqual([]);
   expect(since.at(-1)).toEqual({ upstreamSuccess: true, version: expect.not.stringMatching(version), since: version });
   const original = batches.flatMap((batch) => batch.sessions ?? []).find((session) => session.id === id)!;
-  for (const details of [{ id, pinned: true }, { id, name: " Launch " }, { id, pinned: false }, { id, name: "" }]) {
-    await call("UpdateSession", details);
+  for (const name of [" Launch ", ""]) {
+    await call("UpdateSession", { id, name });
     const updated: Session[] = (await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).flatMap((batch) => batch.sessions ?? []);
     const session = updated.find((session) => session.id === id)!;
     expect(session.preview).toBe(original.preview);
     expect(session.updatedAt).toBe(original.updatedAt);
-    // A listing leaves out default values: an unpinned or unnamed session has no pinned or name.
-    if (details.pinned !== undefined) expect(session.pinned ?? false).toBe(details.pinned);
-    if (details.name !== undefined) expect(session.name ?? "").toBe(details.name.trim());
+    // A listing leaves out default values: an unnamed session has no name.
+    expect(session.name ?? "").toBe(name.trim());
   }
   // The agent of a chat a person started pauses and resumes; a listing leaves out a live chat's paused.
   for (const paused of [true, false]) {

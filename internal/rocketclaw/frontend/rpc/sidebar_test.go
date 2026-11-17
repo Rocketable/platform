@@ -99,7 +99,7 @@ func BenchmarkSidebarFingerprints(b *testing.B) {
 	name := strings.Repeat("example", 8192)
 
 	for i := range 32 {
-		_, err := server.sessions.UpdateConversationDetails(ctx, fmt.Sprintf("chat-%02d", i), nil, &name)
+		_, err := server.sessions.UpdateConversationDetails(ctx, fmt.Sprintf("chat-%02d", i), &name)
 		require.NoError(b, err)
 	}
 

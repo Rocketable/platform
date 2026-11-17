@@ -338,7 +338,6 @@ type Session struct {
 	UpdatedAt  string                 `protobuf:"bytes,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	Agent      string                 `protobuf:"bytes,5,opt,name=agent,proto3" json:"agent,omitempty"`
 	Running    bool                   `protobuf:"varint,8,opt,name=running,proto3" json:"running,omitempty"`
-	Pinned     bool                   `protobuf:"varint,9,opt,name=pinned,proto3" json:"pinned,omitempty"`
 	Name       string                 `protobuf:"bytes,10,opt,name=name,proto3" json:"name,omitempty"`
 	ForkedFrom string                 `protobuf:"bytes,13,opt,name=forked_from,json=forkedFrom,proto3" json:"forked_from,omitempty"`
 	Tags       []string               `protobuf:"bytes,14,rep,name=tags,proto3" json:"tags,omitempty"`
@@ -459,13 +458,6 @@ func (x *Session) GetAgent() string {
 func (x *Session) GetRunning() bool {
 	if x != nil {
 		return x.Running
-	}
-	return false
-}
-
-func (x *Session) GetPinned() bool {
-	if x != nil {
-		return x.Pinned
 	}
 	return false
 }
@@ -7788,10 +7780,9 @@ func (x *DecideProposalRequest) GetAccept() bool {
 }
 
 type UpdateSessionRequest struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	Id     string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Pinned *bool                  `protobuf:"varint,2,opt,name=pinned,proto3,oneof" json:"pinned,omitempty"`
-	Name   *string                `protobuf:"bytes,3,opt,name=name,proto3,oneof" json:"name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name  *string                `protobuf:"bytes,3,opt,name=name,proto3,oneof" json:"name,omitempty"`
 	// Toggles a tag a person chose: any tag on a remote OpenCode session, or one its agent allows.
 	Tag *string `protobuf:"bytes,6,opt,name=tag,proto3,oneof" json:"tag,omitempty"`
 	// Pauses or resumes the agent of a Web chat.
@@ -7835,13 +7826,6 @@ func (x *UpdateSessionRequest) GetId() string {
 		return x.Id
 	}
 	return ""
-}
-
-func (x *UpdateSessionRequest) GetPinned() bool {
-	if x != nil && x.Pinned != nil {
-		return *x.Pinned
-	}
-	return false
 }
 
 func (x *UpdateSessionRequest) GetName() string {
@@ -10321,7 +10305,7 @@ const file_web_proto_rawDesc = "" +
 	"\x05since\x18\x02 \x01(\tR\x05since\x12\x12\n" +
 	"\x04hold\x18\x03 \x01(\bR\x04hold\x12\x1f\n" +
 	"\vsame_origin\x18\x04 \x01(\bR\n" +
-	"sameOrigin\"\xb5\a\n" +
+	"sameOrigin\"\xab\a\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -10329,8 +10313,7 @@ const file_web_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x04 \x01(\tR\tupdatedAt\x12\x14\n" +
 	"\x05agent\x18\x05 \x01(\tR\x05agent\x12\x18\n" +
-	"\arunning\x18\b \x01(\bR\arunning\x12\x16\n" +
-	"\x06pinned\x18\t \x01(\bR\x06pinned\x12\x12\n" +
+	"\arunning\x18\b \x01(\bR\arunning\x12\x12\n" +
 	"\x04name\x18\n" +
 	" \x01(\tR\x04name\x12\x1f\n" +
 	"\vforked_from\x18\r \x01(\tR\n" +
@@ -10362,7 +10345,8 @@ const file_web_proto_rawDesc = "" +
 	"until_done\x18% \x01(\bR\tuntilDone\x12\x1b\n" +
 	"\tauto_park\x18& \x01(\bR\bautoPark\x12\x16\n" +
 	"\x06paused\x18' \x01(\bR\x06paused\x12\x1a\n" +
-	"\bpausable\x18( \x01(\bR\bpausableJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rJ\x04\b\x1d\x10\x1eJ\x04\b\x1f\x10 J\x04\b \x10!R\x0eallowed_agents\"\x97\x01\n" +
+	"\bpausable\x18( \x01(\bR\bpausableJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\t\x10\n" +
+	"J\x04\b\v\x10\fJ\x04\b\f\x10\rJ\x04\b\x1d\x10\x1eJ\x04\b\x1f\x10 J\x04\b \x10!R\x0eallowed_agentsR\x06pinned\"\x97\x01\n" +
 	"\fTabAttention\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1b\n" +
 	"\tunread_at\x18\x02 \x01(\tR\bunreadAt\x12\x14\n" +
@@ -10932,17 +10916,15 @@ const file_web_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vproposal_id\x18\x02 \x01(\tR\n" +
 	"proposalId\x12\x16\n" +
-	"\x06accept\x18\x03 \x01(\bR\x06accept\"\xc3\x01\n" +
+	"\x06accept\x18\x03 \x01(\bR\x06accept\"\xa9\x01\n" +
 	"\x14UpdateSessionRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
-	"\x06pinned\x18\x02 \x01(\bH\x00R\x06pinned\x88\x01\x01\x12\x17\n" +
-	"\x04name\x18\x03 \x01(\tH\x01R\x04name\x88\x01\x01\x12\x15\n" +
-	"\x03tag\x18\x06 \x01(\tH\x02R\x03tag\x88\x01\x01\x12\x1b\n" +
-	"\x06paused\x18\a \x01(\bH\x03R\x06paused\x88\x01\x01B\t\n" +
-	"\a_pinnedB\a\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
+	"\x04name\x18\x03 \x01(\tH\x00R\x04name\x88\x01\x01\x12\x15\n" +
+	"\x03tag\x18\x06 \x01(\tH\x01R\x03tag\x88\x01\x01\x12\x1b\n" +
+	"\x06paused\x18\a \x01(\bH\x02R\x06paused\x88\x01\x01B\a\n" +
 	"\x05_nameB\x06\n" +
 	"\x04_tagB\t\n" +
-	"\a_pausedJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06\"\x17\n" +
+	"\a_pausedJ\x04\b\x02\x10\x03J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\x06pinned\"\x17\n" +
 	"\x15UpdateSessionResponse\"\x11\n" +
 	"\x0fProtocolRequest\"5\n" +
 	"\x10ProtocolResponse\x12!\n" +

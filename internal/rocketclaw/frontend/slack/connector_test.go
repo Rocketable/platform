@@ -1791,7 +1791,7 @@ func TestAgentSessionTitleChangedNamesWebConversation(t *testing.T) {
 	server, _ := newAgentSessionServer(t, "")
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, false, nil))
 	facts := connector.facts.(*channelFactsStoreMock)
-	facts.UpdateConversationDetailsFunc = func(context.Context, string, *bool, *string) (bool, error) { return true, nil }
+	facts.UpdateConversationDetailsFunc = func(context.Context, string, *string) (bool, error) { return true, nil }
 
 	for _, ev := range []slackevents.AgentSessionTitleChangedEvent{
 		{Channel: "C123", ThreadTimestamp: "111.222", User: "U123", Title: " Login checks "},
@@ -1804,7 +1804,6 @@ func TestAgentSessionTitleChangedNamesWebConversation(t *testing.T) {
 	calls := facts.UpdateConversationDetailsCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, "slack-thread:C123:111.222", calls[0].ConversationID)
-	assert.Nil(t, calls[0].Pinned)
 	assert.Equal(t, "Login checks", *calls[0].Name)
 }
 

@@ -497,7 +497,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 			require.NoError(t, err)
 
 			name := "Original title"
-			_, err = store.UpdateConversationDetails(t.Context(), id, nil, &name)
+			_, err = store.UpdateConversationDetails(t.Context(), id, &name)
 			require.NoError(t, err)
 
 			origin.Metadata[protocol.InboundPrincipalEmailMetadataKey] = "alice@example.com"

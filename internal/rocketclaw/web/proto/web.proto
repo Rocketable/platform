@@ -27,7 +27,8 @@ message Session {
   reserved 7;
   reserved "allowed_agents";
   bool running = 8;
-  bool pinned = 9;
+  reserved 9;
+  reserved "pinned";
   string name = 10;
   reserved 11;
   reserved 12;
@@ -963,7 +964,8 @@ message DecideProposalRequest {
 
 message UpdateSessionRequest {
   string id = 1;
-  optional bool pinned = 2;
+  reserved 2;
+  reserved "pinned";
   optional string name = 3;
   reserved 4, 5;
   // Toggles a tag a person chose: any tag on a remote OpenCode session, or one its agent allows.

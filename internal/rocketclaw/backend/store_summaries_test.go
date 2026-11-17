@@ -243,7 +243,7 @@ FROM pg_index WHERE indrelid = 'entries'::regclass`
 	require.Zero(t, after-before, "the sidebar reads no entry")
 }
 
-func TestSidebarSessionPinsAndNames(t *testing.T) {
+func TestSidebarSessionNames(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
@@ -257,12 +257,12 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 	}
 
 	for _, id := range []string{"a", "ä"} {
-		updated, err := service.UpdateConversationDetails(ctx, id, new(true), new("Release notes"))
+		updated, err := service.UpdateConversationDetails(ctx, id, new("Release notes"))
 		require.NoError(t, err)
 		require.True(t, updated)
 	}
 
-	updated, err := service.UpdateConversationDetails(ctx, "a", nil, new("Renamed"))
+	updated, err := service.UpdateConversationDetails(ctx, "a", new("Renamed"))
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.NoError(t, service.UpsertThread("a", ThreadState{Agent: "main"}))
@@ -273,7 +273,6 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 		require.NoError(t, err)
 
 		ids = append(ids, row.Conversation.ID)
-		require.Equal(t, row.Conversation.ID != "Z", row.Pinned)
 		require.Equal(t, stamp, row.Summary.LastUpdated)
 
 		if row.Conversation.ID == "a" {
@@ -281,11 +280,9 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 		}
 	}
 
-	require.Equal(t, []string{"a", "ä", "Z"}, ids)
+	require.Equal(t, []string{"Z", "a", "ä"}, ids)
 
-	_, err = service.UpdateConversationDetails(ctx, "ä", new(false), nil)
-	require.NoError(t, err)
-	_, err = service.UpdateConversationDetails(ctx, "a", nil, new(""))
+	_, err = service.UpdateConversationDetails(ctx, "a", new(""))
 	require.NoError(t, err)
 
 	for row, err := range service.sidebarSessions(ctx, "", nil) {
@@ -293,15 +290,13 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 
 		switch row.Conversation.ID {
 		case "a":
-			require.True(t, row.Pinned)
 			require.Empty(t, row.Name)
 		case "ä":
-			require.False(t, row.Pinned)
 			require.Equal(t, "Release notes", row.Name)
 		}
 	}
 
-	updated, err = service.UpdateConversationDetails(ctx, "missing", new(true), nil)
+	updated, err = service.UpdateConversationDetails(ctx, "missing", nil)
 	require.NoError(t, err)
 	require.False(t, updated)
 }
@@ -313,7 +308,7 @@ func TestSidebarSessionsListFirstTurnBeforeHistory(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, service.UpsertThread("new", ThreadState{Agent: "main"}))
 	seedActiveTurn(t, service, "new", "first-turn", nil)
-	updated, err := service.UpdateConversationDetails(ctx, "new", nil, new("Draft"))
+	updated, err := service.UpdateConversationDetails(ctx, "new", new("Draft"))
 	require.NoError(t, err)
 	require.True(t, updated)
 

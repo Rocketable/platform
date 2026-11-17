@@ -533,7 +533,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   // Fixed SearchSessions fixtures: the conversation IDs, in server order, and the filter terms each query returns.
   const searches: Record<string, string[]> = {
     "needle-17mib": ["kept"], "PREVIEW": ["slack-thread:C:1", "kept"], "ORIGINAL-KEY": ["kept"], "preview": ["slack-thread:C:1"], "partial preview 445": ["prefix-445"],
-    "is:pinned fixture 0": ["perf-0"], "Release notes": ["named"], "Original preview": ["named"], "agent:main room:room matching": ["slack-thread:C:active", "slack-thread:C:resolved"],
+    "is:forked fixture 0": ["perf-0"], "Release notes": ["named"], "Original preview": ["named"], "agent:main room:room matching": ["slack-thread:C:active", "slack-thread:C:resolved"],
   };
   const searchTerms: Record<string, string[]> = { "agent:main": ["agent:main"], "agent:main room:ro": ["agent:main"], "agent:main room:room": ["agent:main", "room:room"], "agent:main room:room matching": ["agent:main", "room:room"], "tag:customer": ["tag:customer"] };
   const cronOpens: string[] = [];
@@ -653,7 +653,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() && url.pathname !== "/" ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await req.json() as { id: string; revision?: string; query: string; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; pinned?: boolean };
+    const input = await req.json() as { id: string; revision?: string; query: string; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string };
     try {
       switch (url.pathname) {
         case "/api/Protocol": return Response.json({ protoSha256: ctrl.protocol });
@@ -708,8 +708,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         case "/api/RunCronJob": cronRunCalls++; return Response.json({ id: await cronHold.promise });
         case "/api/SearchSessions":
           searchQueries.push(input.query);
-          if (input.query === "is:pinned fixture 0") await manySearchHold.promise;
-          if (input.query === "is:pinned not-in-any-row") await lastSearchHold.promise;
+          if (input.query === "is:forked fixture 0") await manySearchHold.promise;
+          if (input.query === "is:forked not-in-any-row") await lastSearchHold.promise;
           return Response.json({
             terms: (searchTerms[input.query] ?? []).map((text) => ({ key: text.slice(0, text.indexOf(":")), text, start: input.query.indexOf(text), end: input.query.indexOf(text) + text.length })),
             text: input.query, needle: input.query.toLowerCase(), matches: (searches[input.query] ?? []).map((conversationId) => ({ conversationId, field: "Preview", text: "" })), messages: [], mentionIds: [],
@@ -982,7 +982,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await commandRows.allTextContents()).toEqual(["Tabs: Close to the right", "Tabs: Close others", "Search in this space for 'tabs: close t'", "Search everywhere for 'tabs: close t'"]); // A contiguous match beats a recent fuzzy one.
     await search.fill("cron: run"); // A bare key is not a filter.
     await sessionPalette.getByRole("button", { name: "Cron: Run", exact: true }).waitFor();
-    await search.fill("is:pinned cron: run");
+    await search.fill("is:forked cron: run");
     await sessionPalette.getByRole("button", { name: "Cron: Run", exact: true }).waitFor({ state: "detached" });
     await search.fill("cron: run");
     await search.press("Enter");
@@ -1649,11 +1649,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await runningPage.close();
     // Exercise the palette layout and suggestions against the built App.
     const matrixRows = [
-      { ...slackRow("slack-thread:C:winner", "row and origin union"), name: "Winner", pinned: true, forkedFrom: "original", tags: ["customer", "Needs review", 'say "hello"'] },
-      slackRow("slack-thread:C:another", "Another unpinned chat"),
-      { ...slackRow("slack-thread:C:other-agent", "Other agent"), agent: "other", pinned: true },
-      { ...slackRow("slack-thread:D:other-room", "Other room"), title: "different", pinned: true },
-      slackRow("slack-thread:C:unpinned", "Unpinned chat"),
+      { ...slackRow("slack-thread:C:winner", "row and origin union"), name: "Winner", forkedFrom: "original", tags: ["customer", "Needs review", 'say "hello"'] },
+      slackRow("slack-thread:C:another", "Another chat"),
+      { ...slackRow("slack-thread:C:other-agent", "Other agent"), agent: "other" },
+      { ...slackRow("slack-thread:D:other-room", "Other room"), title: "different" },
+      slackRow("slack-thread:C:plain", "Plain chat"),
       { ...slackRow("slack-thread:C:customer-union", "Customer chat"), tags: ["customer"] },
     ];
     ctrl.yieldBatches = complete(matrixRows);
@@ -1708,7 +1708,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(await matrixDialog.getByRole("button", { name: /^(agent:|room:)/ }).count()).toBe(0);
       expect(await matrixDialog.locator('li > button.bg-accent [data-slot="session-title"]').innerText()).toBe("Winner");
       await matrixSearch.press("ArrowDown");
-      expect(await matrixDialog.locator('li > button.bg-accent [data-slot="session-title"]').innerText()).toBe("Another unpinned chat");
+      expect(await matrixDialog.locator('li > button.bg-accent [data-slot="session-title"]').innerText()).toBe("Another chat");
       await matrix.keyboard.press("Escape");
       await matrixDialog.waitFor({ state: "hidden" });
     }
@@ -1718,10 +1718,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await matrixPills.first().waitFor();
     expect(await matrixSearch.inputValue()).toBe("");
     await matrixPills.first().click();
-    const operatorChoices = matrixDialog.getByRole("button", { name: /^(?:pinned|forked|unread|running|queued|waiting|external|newest|oldest)$/ });
+    const operatorChoices = matrixDialog.getByRole("button", { name: /^(?:forked|unread|running|queued|waiting|external|newest|oldest)$/ });
     await matrixSearch.fill("is:");
-    await matrixDialog.getByRole("button", { name: "pinned", exact: true }).waitFor();
-    expect(await operatorChoices.allTextContents()).toEqual(["pinned", "forked", "unread", "running", "queued", "waiting", "external"]);
+    await matrixDialog.getByRole("button", { name: "forked", exact: true }).waitFor();
+    expect(await operatorChoices.allTextContents()).toEqual(["forked", "unread", "running", "queued", "waiting", "external"]);
     await matrixSearch.fill("sort:");
     await matrixDialog.getByRole("button", { name: "newest", exact: true }).waitFor();
     expect(await operatorChoices.allTextContents()).toEqual(["newest", "oldest"]);
@@ -1779,7 +1779,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await openSessions(many);
     const manyDialog = many.getByRole("dialog", { name: "Go to session or command", exact: true });
     await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length === 50);
-    await manyDialog.getByPlaceholder("Search sessions").pressSequentially("is:pinned fixture 0", { delay: 20 });
+    await manyDialog.getByPlaceholder("Search sessions").pressSequentially("is:forked fixture 0", { delay: 20 });
     await many.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null); // The title matches stay, dimmed, until the response.
     await many.waitForTimeout(300);
     expect(await many.evaluate(() => (window as unknown as { searchFetches: number }).searchFetches)).toBe(1); // Typing settles into one request.
@@ -1787,7 +1787,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     // The shown list follows the response.
     await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button [data-slot="session-title"]').length === 1);
     expect(await manyDialog.getByText("Search fixture 0", { exact: true }).count()).toBe(1);
-    await manyDialog.getByPlaceholder("Search sessions").fill("is:pinned not-in-any-row");
+    await manyDialog.getByPlaceholder("Search sessions").fill("is:forked not-in-any-row");
     // While the next response is held, the earlier response's rows are matched against the new text at once.
     await manyDialog.getByText("Search fixture 0", { exact: true }).waitFor({ state: "detached" });
     lastSearchHold.resolve();
@@ -2415,7 +2415,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await agentOptions.first().waitFor({ state: "hidden" });
     await agentPage.close();
     for (const width of [1280, 390]) {
-      ctrl.rows = [row("recent", "Most recent message"), row("named", "Original preview"), { ...row("pinned", "Pinned preview"), pinned: true }];
+      ctrl.rows = [row("recent", "Most recent message"), row("named", "Original preview"), row("older", "Older preview")];
       ctrl.yieldBatches = complete(ctrl.rows);
       const detailsPage = await browser.newPage({ viewport: { width, height: 844 } });
       await detailsPage.goto(`${origin}/s/${Buffer.from("named").toString("base64url")}`);

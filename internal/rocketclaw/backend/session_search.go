@@ -105,7 +105,7 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 
 		switch term.Key {
 		case keyIs:
-			found = found && slices.Contains([]string{"pinned", "forked", "cron", "unread", "running", "queued", "waiting", "external"}, term.Value)
+			found = found && slices.Contains([]string{"forked", "cron", "unread", "running", "queued", "waiting", "external"}, term.Value)
 		case keySort:
 			found = found && (term.Value == "newest" || term.Value == "oldest")
 		case keyTag, keyCron, keyAgent, keyRoom, keyPrincipal, keyServer, keyModel, keySpace:
@@ -304,7 +304,7 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals, sandboxed []string,
 }
 
 func (c *SidebarChat) is(value string) bool {
-	return value == "pinned" && c.Session.Pinned || value == "forked" && c.Session.ForkedFrom != "" || value == "cron" && c.Cron ||
+	return value == "forked" && c.Session.ForkedFrom != "" || value == "cron" && c.Cron ||
 		value == "unread" && !c.Session.Attention.UnreadAt.IsZero() && !c.Session.Attention.Parked || value == "running" && (c.Session.Running || c.Session.Background) ||
 		value == "queued" && c.Session.Queued || value == "waiting" && c.Session.Asking || value == "external" && c.Session.External
 }

@@ -888,7 +888,7 @@ func TestSearchSessionsResponse(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	_, err = sessions.UpdateConversationDetails(ctx, "web-session:desk", nil, new("Billing desk"))
+	_, err = sessions.UpdateConversationDetails(ctx, "web-session:desk", new("Billing desk"))
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `UPDATE conversations c SET tags = v.tags::jsonb FROM (VALUES ('slack-thread:C1:1.1', '["A"]'), ('web-session:desk', '["A"]'), ('web-session:lower', '["a"]')) v(id, tags)
 WHERE c.conversation_id = v.id`)
@@ -1416,20 +1416,16 @@ func TestSessionEntries(t *testing.T) {
 
 	for _, tt := range []struct {
 		request *UpdateSessionRequest
-		pinned  bool
 		name    string
 	}{
-		{&UpdateSessionRequest{Id: id, Pinned: new(true)}, true, ""},
-		{&UpdateSessionRequest{Id: id, Name: new("  Launch notes  ")}, true, "Launch notes"},
-		{&UpdateSessionRequest{Id: id, Pinned: new(false)}, false, "Launch notes"},
-		{&UpdateSessionRequest{Id: id, Name: new(" ")}, false, ""},
+		{&UpdateSessionRequest{Id: id, Name: new("  Launch notes  ")}, "Launch notes"},
+		{&UpdateSessionRequest{Id: id, Name: new(" ")}, ""},
 	} {
 		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", tt.request)
 		require.NoError(t, err)
 		conversations, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 		require.NoError(t, err)
 		require.Len(t, conversations.Sessions, 1)
-		require.Equal(t, tt.pinned, conversations.Sessions[0].GetPinned())
 		require.Equal(t, tt.name, conversations.Sessions[0].GetName())
 		updatedAt, err := time.Parse(time.RFC3339Nano, conversations.Sessions[0].UpdatedAt)
 		require.NoError(t, err)
@@ -1444,7 +1440,7 @@ func TestSessionEntries(t *testing.T) {
 	require.Len(t, renames, 2, "each saved rename reaches Slack")
 	assert.Equal(t, []string{id, "Launch notes", id, ""}, []string{renames[0].ConversationID, renames[0].Name, renames[1].ConversationID, renames[1].Name})
 
-	_, err = invoke[UpdateSessionResponse](t.Context(), connection, "UpdateSession", &UpdateSessionRequest{Id: id, Pinned: new(true)})
+	_, err = invoke[UpdateSessionResponse](t.Context(), connection, "UpdateSession", &UpdateSessionRequest{Id: id, Name: new("name")})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 
 	for _, tt := range []struct {
@@ -1452,7 +1448,7 @@ func TestSessionEntries(t *testing.T) {
 		code    codes.Code
 	}{
 		{&UpdateSessionRequest{Id: "missing", Name: new("name")}, codes.NotFound},
-		{&UpdateSessionRequest{Id: "cron:private", Pinned: new(true)}, codes.PermissionDenied},
+		{&UpdateSessionRequest{Id: "cron:private", Name: new("name")}, codes.PermissionDenied},
 		{&UpdateSessionRequest{Id: id, Name: new("bad\x00name")}, codes.InvalidArgument},
 		{&UpdateSessionRequest{Id: id, Paused: new(true)}, codes.InvalidArgument},
 	} {

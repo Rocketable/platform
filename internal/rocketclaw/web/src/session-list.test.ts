@@ -34,11 +34,11 @@ const { typingWord } = await import(`data:text/javascript;base64,${Buffer.from(j
 test("only an unfinished operator as the last word is left out while typing", () => {
   for (const [query, word, unfinished] of [
     ["is:", "is:", true],
-    ["is:pin", "is:pin", true],
-    ["IS:PINNE", "IS:PINNE", true],
+    ["is:fork", "is:fork", true],
+    ["IS:FORKE", "IS:FORKE", true],
     ["sort:", "sort:", true],
     ["sort:ne", "sort:ne", true],
-    ["outage is:pin", "is:pin", true],
+    ["outage is:fork", "is:fork", true],
     ["cron:", "cron:", true],
     ["outage TAG:", "TAG:", true],
     ["agent:", "agent:", true],
@@ -53,7 +53,7 @@ test("only an unfinished operator as the last word is left out while typing", ()
     ["tag:bug", "tag:bug", false],
     ["tag:bu", "tag:bu", false],
     ["agent:ma", "agent:ma", false],
-    ["is:pinned", "is:pinned", false],
+    ["is:forked", "is:forked", false],
     ["sort:oldest", "sort:oldest", false],
     ["is:foo", "is:foo", false],
     ['tag:"Needs review"', 'review"', false],
@@ -98,16 +98,15 @@ describe("session list reconciliation", () => {
   });
 
   test("orders rows by the server's rule", () => {
-    // Pinned first, then newest to the nanosecond (Go trims trailing zeros), then ID; a row without a time is oldest.
+    // Newest to the nanosecond (Go trims trailing zeros), then ID; a row without a time is oldest.
     const rows: Session[] = [
       { id: "none" },
       { id: "whole", updatedAt: "2026-11-01T10:00:00Z" },
       { id: "b-ns", updatedAt: "2026-11-01T10:00:00.000000002Z" },
       { id: "a-ns", updatedAt: "2026-11-01T10:00:00.000000002Z" },
       { id: "tenth", updatedAt: "2026-11-01T10:00:00.1Z" },
-      { id: "pinned", pinned: true, updatedAt: "2026-01-01T00:00:00Z" },
     ];
-    expect(listedRows({ version: "v1", rows: rows.slice(0, 3) }, { received: rows.slice(3), since: "v1" }).map((row) => row.id)).toEqual(["pinned", "tenth", "a-ns", "b-ns", "whole", "none"]);
+    expect(listedRows({ version: "v1", rows: rows.slice(0, 3) }, { received: rows.slice(3), since: "v1" }).map((row) => row.id)).toEqual(["tenth", "a-ns", "b-ns", "whole", "none"]);
   });
 
   test("reports the first message's metadata and the completion's changes", async () => {

@@ -92,14 +92,12 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 	_, err := s.AppendEntryID(ctx, searchChatD+"/call-1", testSessionEntry("billing delegated", "support child"))
 	require.NoError(t, err)
 
-	_, err = s.UpdateConversationDetails(ctx, searchChatA, new(true), nil)
-	require.NoError(t, err)
-	_, err = s.UpdateConversationDetails(ctx, searchChatW, nil, new("support"))
+	_, err = s.UpdateConversationDetails(ctx, searchChatW, new("support"))
 	require.NoError(t, err)
 	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET forked_from = 'original' WHERE conversation_id = $1`, searchChatA)
 	require.NoError(t, err)
 
-	for _, tag := range []string{"customer", "Needs review", `say "hello"`, "is:pinned", "*"} {
+	for _, tag := range []string{"customer", "Needs review", `say "hello"`, "is:forked", "*"} {
 		_, err := s.toggleSessionTag(ctx, searchChatA, tag, []string{tag})
 		require.NoError(t, err)
 	}
@@ -213,7 +211,7 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 	t.Parallel()
 
 	s, slack := newSessionSearchFixture(t)
-	all := []string{searchChatA, searchChatX, searchChatH, searchChatB, searchChatW, searchChatD, searchChatE}
+	all := []string{searchChatX, searchChatH, searchChatA, searchChatB, searchChatW, searchChatD, searchChatE}
 
 	daily := strings.TrimPrefix(searchChatD, "web:")
 	_, err := s.db.ExecContext(t.Context(), `UPDATE conversations SET reports_to = $1 WHERE conversation_id = 'external_mcp:private'`, searchChatX)
@@ -240,9 +238,9 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 		{`space:"bad\q"`, nil, `space:"bad\q"`, nil},
 		{`space:"Blue garden`, nil, `space:"Blue garden`, nil},
 		{"tag:customer", []string{"tag=customer"}, "", []string{searchChatA}},
-		{"tag:customer is:pinned tag:customer is:forked outage", []string{"tag=customer", "is=pinned", "tag=customer", "is=forked"}, "outage", []string{searchChatA}},
+		{"tag:customer is:forked tag:customer outage", []string{"tag=customer", "is=forked", "tag=customer"}, "outage", []string{searchChatA}},
 		{`tag:"Needs review" tag:"say \"hello\""`, []string{"tag=Needs review", `tag=say "hello"`}, "", []string{searchChatA}},
-		{`tag:"is:pinned"`, []string{"tag=is:pinned"}, "", []string{searchChatA}},
+		{`tag:"is:forked"`, []string{"tag=is:forked"}, "", []string{searchChatA}},
 		{"tag:*", []string{"tag=*"}, "", []string{searchChatA}},
 		{"tag:Customer", []string{"tag=Customer"}, "", nil},
 		{"tag:unknown", []string{"tag=unknown"}, "", nil},
@@ -253,23 +251,23 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 		{`tag:"bad\q"`, nil, `tag:"bad\q"`, nil},
 		{`tag:""`, nil, `tag:""`, nil},
 		{`tag:"customer"suffix`, nil, `tag:"customer"suffix`, nil},
-		{`tag:"Needs is:pinned review" agent:ma`, []string{"tag=Needs is:pinned review", "agent=ma"}, "", nil},
-		{"is:pinned tag:x outage", []string{"is=pinned", "tag=x"}, "outage", nil},
-		{"is:pinned tag:customer outage", []string{"is=pinned", "tag=customer"}, "outage", []string{searchChatA}},
-		{"IS:PINNED SORT:OLDEST", []string{"is=pinned", "sort=oldest"}, "", []string{searchChatA}},
+		{`tag:"Needs is:forked review" agent:ma`, []string{"tag=Needs is:forked review", "agent=ma"}, "", nil},
+		{"is:forked tag:x outage", []string{"is=forked", "tag=x"}, "outage", nil},
+		{"is:forked tag:customer outage", []string{"is=forked", "tag=customer"}, "outage", []string{searchChatA}},
+		{"IS:FORKED SORT:OLDEST", []string{"is=forked", "sort=oldest"}, "", []string{searchChatA}},
 		{"is:forked", []string{"is=forked"}, "", []string{searchChatA}},
 		{"sort:oldest sort:newest", []string{"sort=oldest", "sort=newest"}, "", []string{searchChatX, searchChatH, searchChatA, searchChatB, searchChatW, searchChatD, searchChatE}},
 		{"is:", nil, "is:", nil},
-		{"is:pin", nil, "is:pin", nil},
+		{"is:fork", nil, "is:fork", nil},
 		{"sort:", nil, "sort:", nil},
 		{"sort:ne", nil, "sort:ne", nil},
-		{"outage is:pin", nil, "outage is:pin", nil},
+		{"outage is:fork", nil, "outage is:fork", nil},
 		{"is:foo", nil, "is:foo", nil},
 		{"sort:bogus", nil, "sort:bogus", nil},
 		{"is:cron", []string{"is=cron"}, "", []string{searchChatD, searchChatE}},
 		{"IS:CRON", []string{"is=cron"}, "", []string{searchChatD, searchChatE}},
 		{"is:cr", nil, "is:cr", nil},
-		{"is:cron is:pinned", []string{"is=cron", "is=pinned"}, "", nil},
+		{"is:cron is:forked", []string{"is=cron", "is=forked"}, "", nil},
 		{"cron:daily", []string{"cron=daily"}, "", []string{searchChatD}},
 		{"is:cron CRON:daily", []string{"is=cron", "cron=daily"}, "", []string{searchChatD}},
 		{`cron:"Weekly report"`, []string{"cron=Weekly report"}, "", []string{searchChatE}},
@@ -282,9 +280,9 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 		{"cron:", nil, "cron:", []string{searchChatD, searchChatE}},
 		{`cron:""`, nil, `cron:""`, nil},
 		{`cron:"bad\q"`, nil, `cron:"bad\q"`, nil},
-		{"agent:main", []string{"agent=main"}, "", []string{searchChatA, searchChatX, searchChatD, searchChatE}},
+		{"agent:main", []string{"agent=main"}, "", []string{searchChatX, searchChatA, searchChatD, searchChatE}},
 		{"AGENT:other", []string{"agent=other"}, "", []string{searchChatW}},
-		{"agent:main agent:other", []string{"agent=main", "agent=other"}, "", []string{searchChatA, searchChatX, searchChatW, searchChatD, searchChatE}},
+		{"agent:main agent:other", []string{"agent=main", "agent=other"}, "", []string{searchChatX, searchChatA, searchChatW, searchChatD, searchChatE}},
 		{"agent:unknown agent:other", []string{"agent=unknown", "agent=other"}, "", []string{searchChatW}},
 		{`agent:other AGENT:"two words" agent:other`, []string{"agent=other", "agent=two words", "agent=other"}, "", []string{searchChatB, searchChatW}},
 		{`agent:"two words"`, []string{"agent=two words"}, "", []string{searchChatB}},
@@ -453,7 +451,7 @@ func TestSearchSessionsWorkTerms(t *testing.T) {
 	ctx := t.Context()
 	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET reports_to = $1 WHERE conversation_id = 'external_mcp:private'`, searchChatX)
 	require.NoError(t, err)
-	_, err = s.UpdateConversationDetails(ctx, searchChatH, nil, new("external mcp notes"))
+	_, err = s.UpdateConversationDetails(ctx, searchChatH, new("external mcp notes"))
 	require.NoError(t, err)
 
 	for id, turn := range map[string]string{searchChatW: "turn-w", searchChatB: "turn-b", "external_mcp:private": "turn-x"} {
@@ -514,7 +512,7 @@ func TestSearchSessionsReadsEveryMatchingWord(t *testing.T) {
 	s, slack := newSessionSearchFixture(t)
 
 	for id, name := range map[string]string{searchChatH: "İSTANBUL ȒOAD", searchChatB: "\u212aELVIN"} {
-		_, err := s.UpdateConversationDetails(t.Context(), id, nil, new(name))
+		_, err := s.UpdateConversationDetails(t.Context(), id, new(name))
 		require.NoError(t, err)
 	}
 
@@ -633,10 +631,7 @@ func TestSearchSessionsSortOrder(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	_, err = s.UpdateConversationDetails(ctx, "b", new(true), nil)
-	require.NoError(t, err)
-
-	for query, want := range map[string][]string{"sort:oldest": {"b", "a", "e", "c", "d"}, "sort:newest": {"a", "e", "b", "c", "d"}, "": {"b", "a", "e", "c", "d"}} {
+	for query, want := range map[string][]string{"sort:oldest": {"b", "a", "e", "c", "d"}, "sort:newest": {"a", "e", "b", "c", "d"}, "": {"a", "e", "b", "c", "d"}} {
 		_, matches := searchTestSessions(t, s, noSlackLookups{}, query, SearchFields)
 
 		ids := make([]string, 0, len(matches))
@@ -779,9 +774,9 @@ func TestSearchSessionsTermOffsets(t *testing.T) {
 		query, text string
 		terms       []SearchTerm
 	}{
-		{"😀 tag:\"Needs review\" x is:pinned", "😀 x", []SearchTerm{
+		{"😀 tag:\"Needs review\" x is:forked", "😀 x", []SearchTerm{
 			{Key: keyTag, Text: `tag:"Needs review"`, Value: "Needs review", Start: 3, End: 21},
-			{Key: keyIs, Text: "is:pinned", Value: "pinned", Start: 24, End: 33},
+			{Key: keyIs, Text: "is:forked", Value: "forked", Start: 24, End: 33},
 		}},
 		{"a\u00a0TAG:x  b", "a  b", []SearchTerm{{Key: keyTag, Text: "TAG:x", Value: "x", Start: 2, End: 7}}},
 		{`😀 space:"Blue garden" x`, "😀 x", []SearchTerm{{Key: "space", Text: `space:"Blue garden"`, Value: "Blue garden", Start: 3, End: 22}}},

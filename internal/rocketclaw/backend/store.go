@@ -16,7 +16,6 @@ import (
 	"net/url"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -366,7 +365,7 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 	return s.removeHistoryFiles(ctx, ids)
 }
 
-func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error) {
+func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversationID string, name *string) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("begin conversation details update: %w", err)
@@ -397,9 +396,9 @@ func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversa
 		}
 	}
 
-	rows, err := execRows(ctx, tx, "update conversation details", `UPDATE conversations SET pinned = COALESCE($2, pinned), name = COALESCE($3, name),
-    title = CASE WHEN kind = $4 THEN COALESCE($3, title) ELSE title END,
-    synced_at = CASE WHEN kind = $4 AND $3 IS NOT NULL THEN clock_timestamp() ELSE synced_at END WHERE conversation_id = $1`, conversationID, pinned, name, KindRemote)
+	rows, err := execRows(ctx, tx, "update conversation details", `UPDATE conversations SET name = COALESCE($2, name),
+    title = CASE WHEN kind = $3 THEN COALESCE($2, title) ELSE title END,
+    synced_at = CASE WHEN kind = $3 AND $2 IS NOT NULL THEN clock_timestamp() ELSE synced_at END WHERE conversation_id = $1`, conversationID, name, KindRemote)
 	if err != nil {
 		return false, err
 	}
@@ -956,7 +955,6 @@ type SidebarSession struct {
 	Running       bool
 	Background    bool
 	Asking        bool
-	Pinned        bool
 	Paused        bool
 	Name          string
 	ForkedFrom    string
@@ -1191,7 +1189,6 @@ SELECT
     c.running,
     COALESCE(w.background, FALSE) AS background,
     k.conversation_id IS NOT NULL AS asking,
-    c.pinned,
     c.paused,
     c.kind = 'web_chat' AND c.created_by NOT IN ('', $2) AND c.cron_run IS NULL AND NOT c.reported AND NOT (c.sticky = 'global' AND COALESCE(c.agent = ANY($7), FALSE)) AS pausable,
     c.name,
@@ -1229,7 +1226,7 @@ LEFT JOIN asking k ON k.conversation_id = c.conversation_id
 LEFT JOIN external_runs x ON x.conversation_id = c.conversation_id
 WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY($5))
 ), remote AS (
-SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.pinned, FALSE AS paused, FALSE AS pausable, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
+SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, FALSE AS paused, FALSE AS pausable, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
     o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at, COALESCE(u.quiet, FALSE),
     COALESCE(u.parked, FALSE), u.until, COALESCE(u.until_done, FALSE), COALESCE(u.note, ''), COALESCE(u.auto_park, e.auto_park, TRUE),
     0, FALSE AS queued, FALSE AS external_mcp, 0,
@@ -1259,12 +1256,12 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			since, arrived int64
 		)
 
-		dest := make([]any, 0, 45)
+		dest := make([]any, 0, 44)
 
 		for rows.Next() {
 			var row SidebarSession
 
-			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Pinned, &row.Paused, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
+			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Paused, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
 				&row.Attention.Parked, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &since, &row.Queued, &row.External, &arrived)
 			if err := scanChatOrigin(rows, &row.Origin, dest...); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
@@ -1305,7 +1302,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 				}
 			}
 
-			return cmp.Or(strings.Compare(strconv.FormatBool(b.Pinned), strconv.FormatBool(a.Pinned)), updated[1].Compare(updated[0]), strings.Compare(a.Conversation.ID, b.Conversation.ID))
+			return cmp.Or(updated[1].Compare(updated[0]), strings.Compare(a.Conversation.ID, b.Conversation.ID))
 		})
 
 		for _, row := range sessions {

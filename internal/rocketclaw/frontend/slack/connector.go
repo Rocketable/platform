@@ -105,7 +105,7 @@ type channelFactsStore interface {
 	LoadTurnStep(ctx context.Context, conversationID, key string) (json.RawMessage, bool, error)
 	SaveTurnStep(ctx context.Context, conversationID, key string, value json.RawMessage) error
 	TurnProgress(ctx context.Context, conversationID, turnID string) (protocol.TurnProgress, error)
-	UpdateConversationDetails(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error)
+	UpdateConversationDetails(ctx context.Context, conversationID string, name *string) (bool, error)
 }
 
 type slackSession struct {
@@ -577,7 +577,7 @@ func (c *Connector) handleAgentSessionTitleChanged(ctx context.Context, ev *slac
 	}
 
 	conversationID := protocol.SlackThreadConversationID(ev.Channel, ev.ThreadTimestamp)
-	if _, err := c.facts.UpdateConversationDetails(ctx, conversationID, nil, &title); err != nil {
+	if _, err := c.facts.UpdateConversationDetails(ctx, conversationID, &title); err != nil {
 		c.log.Warn("name Web conversation after Slack session title", "conversation_id", conversationID, "error", err)
 	}
 }
