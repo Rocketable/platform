@@ -129,8 +129,10 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 		hostDir = root.Name()
 	}
 
-	if denied := sss.deniedBashPath(params.Command, hostDir); customShell.Dir == "" && denied != "" {
-		return bashFailure(denied)
+	if customShell.Dir == "" {
+		if denied := sss.deniedBashPath(params.Command, hostDir); denied != "" {
+			return bashFailure(denied)
+		}
 	}
 
 	if err := sss.shellTemp.ensureTempDir(sss.root); err != nil {

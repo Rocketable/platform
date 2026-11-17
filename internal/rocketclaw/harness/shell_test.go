@@ -267,6 +267,23 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			require.True(t, got.Success, got.Output)
 			require.Equal(t, "pwd="+folder+` environment={"commands":{"gh":"gh"}}`, got.Output)
 		})
+		t.Run("custom directory does not expand forwarded commands", func(t *testing.T) {
+			shell := &CustomShell{Path: filepath.Join(dir, "wrap.sh"), Dir: dir}
+
+			var allocations [2]float64
+
+			for i, command := range []string{"echo plain", "echo {0001..0256}"} {
+				want := fmt.Sprintf("argc=1 arg=%s pwd=%s tmp=%s", command, realDir, outputDir)
+
+				allocations[i] = testing.AllocsPerRun(3, func() {
+					got := sss.Bash(t.Context(), shell, bashParams{Command: command})
+					require.True(t, got.Success, got.Output)
+					require.Equal(t, want, got.Output)
+				})
+			}
+
+			require.Less(t, allocations[1], allocations[0]+32)
+		})
 		t.Run("an emulated shell without a sandbox refuses and never runs host bash", func(t *testing.T) {
 			folder, err := filepath.EvalSymlinks(t.TempDir())
 			require.NoError(t, err)
@@ -289,6 +306,27 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			require.ErrorIs(t, err, fs.ErrNotExist)
 		})
 	})
+}
+
+func BenchmarkCustomDirectoryShell(b *testing.B) {
+	root, err := os.OpenRoot(b.TempDir())
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, root.Close()) })
+	require.NoError(b, root.WriteFile("wrap.sh", []byte("#!/bin/sh\nprintf '%s' \"$1\""), 0o755))
+	require.NoError(b, root.MkdirAll(".tmp/shell-tmp", 0o755))
+	config, err := newShellTempConfig(root, filepath.Join(root.Name(), ".tmp", "shell-tmp"))
+	require.NoError(b, err)
+
+	sss := newSandboxedShellSystem(root, &config, nil, &sandbox.Runtime{})
+	shell := &CustomShell{Path: filepath.Join(root.Name(), "wrap.sh"), Dir: root.Name()}
+
+	const command = "echo {0001..0256}"
+	for b.Loop() {
+		got := sss.Bash(b.Context(), shell, bashParams{Command: command})
+		if !got.Success || got.Output != command {
+			b.Fatalf("Bash = %+v", got)
+		}
+	}
 }
 
 func testShellTempConfig(t *testing.T, root *os.Root, outputDir string) shellTempConfig {
