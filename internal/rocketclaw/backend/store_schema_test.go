@@ -109,13 +109,16 @@ func TestDelegationLookupStopsAtFirstChildEntry(t *testing.T) {
 	_, err := store.db.ExecContext(ctx, `
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
 SELECT 'unrelated-history-' || n, 'main', '', 'web_chat', TRUE FROM generate_series(1, 4096) n;
+ALTER TABLE entries DISABLE TRIGGER entries_transcript_change, DISABLE TRIGGER shadow_entries_change;
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES
     ('parent-history', '{"replay_input":[{"type":"function_call","call_id":"cobalt"},{"type":"function_call","call_id":"amber"},{"type":"function_call","call_id":"missing"}]}', '2000-01-01T00:00:00Z');
+WITH children(conversation_id) AS (VALUES ('parent-history/amber'), ('parent-history/cobalt'))
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT conversation_id, '{}', '2000-01-01T00:00:00Z'
-FROM (VALUES ('parent-history/amber'), ('parent-history/cobalt')) c(conversation_id), generate_series(1, 4096);
+FROM children, generate_series(1, 4096);
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT 'unrelated-history-' || n, '{}', '2000-01-01T00:00:00Z' FROM generate_series(1, 4096) n;
+ALTER TABLE entries ENABLE TRIGGER entries_transcript_change, ENABLE TRIGGER shadow_entries_change;
 ANALYZE entries;
 SET plan_cache_mode = force_generic_plan;
 SELECT pg_stat_force_next_flush();`)
@@ -228,15 +231,18 @@ INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VAL
     ('with-metadata', 'main', '', 'web_chat', TRUE), ('without-metadata', 'main', '', 'web_chat', TRUE), ('other', 'main', '', 'web_chat', TRUE);
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
 SELECT 'thread-' || n, 'main', '', 'web_chat', TRUE FROM generate_series(1, 4096) n;
+ALTER TABLE entries DISABLE TRIGGER entries_transcript_change, DISABLE TRIGGER shadow_entries_change;
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES
     ('with-metadata', '{"type":"mcp_external_metadata","version":1}', '2000-01-01T00:00:00Z'),
     ('with-metadata', '{"type":"mcp_external_metadata","version":2}', '2000-01-01T00:00:00Z'),
     ('other', '{"type":"mcp_external_metadata","version":3}', '2000-01-01T00:00:00Z');
+WITH histories(conversation_id) AS (VALUES ('with-metadata'), ('without-metadata'))
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT conversation_id, '{"type":"turn"}', '2000-01-01T00:00:00Z'
-FROM (VALUES ('with-metadata'), ('without-metadata')) c(conversation_id), generate_series(1, 4096);
+FROM histories, generate_series(1, 4096);
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT 'thread-' || n, '{"type":"mcp_external_metadata","version":4}', '2000-01-01T00:00:00Z' FROM generate_series(1, 4096) n;
+ALTER TABLE entries ENABLE TRIGGER entries_transcript_change, ENABLE TRIGGER shadow_entries_change;
 ANALYZE conversations;
 ANALYZE entries;
 SET plan_cache_mode = force_generic_plan;`)
