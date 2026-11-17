@@ -4729,10 +4729,8 @@ async function sendComposer(input: {
   prompt: { mutateAsync: (value: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }) => Promise<string> };
   create: { mutateAsync: (value: { agent?: string }) => Promise<{ id: string; resumed?: boolean }> };
   scrollToEnd: () => boolean;
-  setBusy: (value: boolean) => void;
   setAgentOpen: (value: boolean) => void;
   setSendError: (value: string) => void;
-  setLines: (update: (current: Line[]) => Line[]) => void;
   refreshHistory: () => Promise<unknown>;
 }) {
   const name = server();
@@ -4771,9 +4769,7 @@ async function sendComposer(input: {
         draft.edit++;
         draft = target;
         input = { ...input, draft, busy: draft.busy,
-          setBusy: (value) => { draft.busy = value; input.onDraftChange(); },
           setSendError: (value) => { draft.error = value; input.onDraftChange(); },
-          setLines: (update) => { draft.lines = update(draft.lines); input.onDraftChange(); },
           refreshHistory: () => readHistoryDelta(sessionId, draft, input.onDraftChange),
         };
         draft.text = input.text;
@@ -4789,12 +4785,12 @@ async function sendComposer(input: {
       input.goSession(sessionId, created.resumed);
     }
     const paused = input.paused?.(sessionId);
-    if (!input.busy && !enqueue && !paused) input.setBusy(true);
+    if (!input.busy && !enqueue && !paused) { draft.busy = true; input.onDraftChange(); }
     optimistic.attachments = input.files.map(({ id, file }) => ({ id, name: file.name, mimeType: file.type, size: String(file.size), conversationId: sessionId, file }));
     if (!enqueue && input.busy && !stopping && !paused) {
       draft.parked = [...(draft.parked ?? []), optimistic];
       input.onDraftChange();
-    } else if (!enqueue) input.setLines((current) => [...current, optimistic]);
+    } else if (!enqueue) { draft.lines = [...draft.lines, optimistic]; input.onDraftChange(); }
     const attachments = await uploadComposerFiles(sessionId, input.files, name);
     if (!stashing && !stopping && !/^\p{White_Space}*\$agent(?=\p{White_Space}|$)/u.test(optimistic.text) && input.sessionId !== "" && input.currentAgent !== "" && input.selected !== "" && input.selected !== input.currentAgent) {
       await input.prompt.mutateAsync({ id: sessionId, text: `$agent ${input.selected}` });
@@ -4802,7 +4798,7 @@ async function sendComposer(input: {
     }
     if (attachments.length) {
       optimistic.attachments = attachments.map((file, index) => ({ ...file, file: input.files[index].file }));
-      input.setLines((current) => current.map((line) => line.id === optimistic.id ? optimistic : line));
+      draft.lines = draft.lines.map((line) => line.id === optimistic.id ? optimistic : line); input.onDraftChange();
     }
     // Prompt waits for the whole turn. Consume only this submission before waiting.
     draft.text = "";
@@ -4826,7 +4822,7 @@ async function sendComposer(input: {
     if (privateText) {
       const parked = draft.parked?.some((line) => line.id === optimistic.id);
       draft.parked = draft.parked?.filter((line) => line.id !== optimistic.id);
-      input.setLines((current) => [...current, ...(parked ? [optimistic] : []), { id: `${optimistic.id}:reply`, role: "assistant", text: privateText, complete: true }]);
+      draft.lines = [...draft.lines, ...(parked ? [optimistic] : []), { id: `${optimistic.id}:reply`, role: "assistant", text: privateText, complete: true }]; input.onDraftChange();
     }
   } catch (err) {
     draft.parked = draft.parked?.filter((line) => line.id !== optimistic.id);
@@ -4837,10 +4833,10 @@ async function sendComposer(input: {
       draft.agent = agent;
       draft.edit++;
     }
-    input.setLines((current) => current.filter((line) => line.id !== optimistic.id));
+    draft.lines = draft.lines.filter((line) => line.id !== optimistic.id); input.onDraftChange();
     if (draft.submission === submission) {
       input.setSendError(err instanceof Error ? err.message : "send failed");
-      if (!stashing) input.setBusy(input.busy);
+      if (!stashing) { draft.busy = input.busy; input.onDraftChange(); }
     }
   }
 }
@@ -4912,11 +4908,10 @@ async function switchQueueAgent(input: QueueAgentSwitch) {
 }
 
 async function promoteComposer(input: QueueAgentSwitch & {
-  draft: Pick<ComposerDraft, "sending" | "submission">;
+  draft: Pick<ComposerDraft, "sending" | "submission" | "busy">;
   itemId: string;
   busy: boolean;
   steerQueueItem: { mutateAsync: (value: { id: string; itemId: string }) => Promise<unknown> };
-  setBusy: (value: boolean) => void;
   setSendError: (value: string) => void;
 }) {
   if (input.id === "" || input.draft.sending) {
@@ -4924,7 +4919,7 @@ async function promoteComposer(input: QueueAgentSwitch & {
   }
   const submission = ++input.draft.submission;
   if (!input.busy) {
-    input.setBusy(true);
+    input.draft.busy = true; input.onDraftChange();
   }
   input.setSendError("");
   try {
@@ -4933,7 +4928,7 @@ async function promoteComposer(input: QueueAgentSwitch & {
   } catch (err) {
     if (input.draft.submission === submission) {
       input.setSendError(err instanceof Error ? err.message : "steer failed");
-      input.setBusy(input.busy);
+      input.draft.busy = input.busy; input.onDraftChange();
     }
   }
 }
@@ -5007,8 +5002,6 @@ function SessionComposer({
   const { setCommand } = useContext(SessionCommands);
   const scope = useContext(DraftScope)!;
   const revert = useContext(RevertActions)!;
-  const setBusy = useCallback((value: boolean) => { draft.busy = value; onDraftChange(); }, [draft, onDraftChange]);
-  const setLines = useCallback((update: (current: Line[]) => Line[]) => { draft.lines = update(draft.lines); onDraftChange(); }, [draft, onDraftChange]);
   const { scrollToEnd, scrollToMessage } = useMessageScroller();
   const prompt = useMutation({ mutationFn: (input: Parameters<typeof mutations.prompt>[0]) => mutations.prompt(input, name), onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
   // No polling: on a slow link a 2 s refresh used a large share of the connection. Agent switches made here
@@ -5125,14 +5118,12 @@ function SessionComposer({
       prompt,
       create,
       scrollToEnd,
-      setBusy,
       setAgentOpen,
       setSendError,
-      setLines,
       refreshHistory,
     });
   };
-  const promoteQueued = (itemId: string) => promoteComposer({ draft, onDraftChange, id, itemId, busy, selected, currentAgent, prompt, steerQueueItem, setBusy, setSendError });
+  const promoteQueued = (itemId: string) => promoteComposer({ draft, onDraftChange, id, itemId, busy, selected, currentAgent, prompt, steerQueueItem, setSendError });
   const stop = () => stopComposer({ draft, id, busy, prompt, refreshHistory, setSendError });
   return (
     <>
