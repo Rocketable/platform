@@ -3,6 +3,7 @@ package backend
 import (
 	"cmp"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -20,7 +21,7 @@ import (
 
 func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents harness.Agents, skills harness.Skills, name string, turnEnv map[string]string, self string) error {
 	agent := agents.Items[name]
-	if !agent.CustomShell.Emulated {
+	if !agent.CustomShell.Emulated && agent.Mode != harness.AgentModeEasy {
 		return nil
 	}
 
@@ -63,7 +64,17 @@ func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents ha
 		}
 	}
 
-	agent.CustomShell = harness.CustomShell{Emulated: true, Dir: folder, ReadOnly: readOnly, Commands: agent.Commands, NetworkTargets: agent.NetworkTargets, Secrets: secrets}
+	shell := harness.CustomShell{Emulated: agent.CustomShell.Emulated, Path: agent.CustomShell.Path, Dir: folder, ReadOnly: readOnly, Commands: agent.Commands, NetworkTargets: agent.NetworkTargets, Secrets: secrets}
+	if shell.Path != "" {
+		environment, _ := json.Marshal(struct {
+			SecretsARN     []string          `json:"secretsARN"`
+			Commands       map[string]string `json:"commands"`
+			NetworkTargets []string          `json:"allowedNetworkTargets"`
+		}{agent.SecretsARN, agent.Commands, agent.NetworkTargets}, json.Deterministic(true), json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+		shell.Env = []string{"ROCKETCLAW_ENVIRONMENT=" + string(environment)}
+	}
+
+	agent.CustomShell = shell
 	agents.Items[name] = agent
 
 	return nil

@@ -26,6 +26,7 @@ type CustomShell struct {
 	Commands       map[string]string
 	NetworkTargets []string
 	Secrets        map[string]string
+	Env            []string
 }
 
 func withCustomShell(customShell *CustomShell, command string) (path string, args []string) {

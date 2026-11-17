@@ -102,6 +102,10 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 		return err
 	}
 
+	if err := parseAgentShell(node, agent); err != nil {
+		return err
+	}
+
 	if maxRecursion < 0 {
 		return errors.New("maxRecursion: must be an integer of 0 or more")
 	}
@@ -351,7 +355,7 @@ func checkKeys(node *yaml.Node, prefix, problem string, keys ...string) error {
 
 func easyKeys() map[string][]string {
 	return map[string][]string{
-		"": {"mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN", "commands", "mcp", "rocketclaw",
+		"": {"mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN", "shell", "commands", "mcp", "rocketclaw",
 			"tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema", "sticky", "decision"},
 		"approver":          {"model", "prompt", "decision"},
 		"approver.decision": {"model", "minConfidence", "prompt"},

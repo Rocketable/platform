@@ -333,6 +333,10 @@ func TestSystemPromptWorkingDirectory(t *testing.T) {
 	agent := Agent{CustomShell: CustomShell{Emulated: true, Dir: "/srv/agent"}}
 	require.Equal(t, "base prompt\n\n## Working Directory\n\nYour working directory is `/srv/agent`. Shell commands start there and relative paths resolve from it. "+
 		"It is the only folder where changes persist: `/tmp` is cleared after every command and every other folder is read-only.", composeSystemPromptWithSkills("base prompt", emptySkills(), &agent))
+
+	wrapped := Agent{CustomShell: CustomShell{Path: "/usr/local/bin/wrap", Dir: "/srv/agent"}}
+	require.Equal(t, "base prompt\n\n## Working Directory\n\nYour working directory is `/srv/agent`. Shell commands start there and relative paths resolve from it.",
+		composeSystemPromptWithSkills("base prompt", emptySkills(), &wrapped))
 	require.Equal(t, "base prompt", composeSystemPromptWithSkills("base prompt", emptySkills(), &Agent{}))
 }
 

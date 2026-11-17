@@ -127,6 +127,18 @@ func TestEasyTurnShell(t *testing.T) {
 	require.NoError(t, b.setEasyShell(t.Context(), cfg, agents, skills, "advanced", turnEnv, "web:parent"))
 	require.Equal(t, advanced, agents.Items["advanced"], "other agents keep their loaded shell")
 
+	wrapped := easy
+	wrapped.CustomShell = harness.CustomShell{Path: "/usr/local/bin/wrap"}
+	agents.Items["wrapped"] = wrapped
+	require.NoError(t, b.setEasyShell(t.Context(), cfg, agents, skills, "wrapped", turnEnv, "web:parent"))
+
+	shell = agents.Items["wrapped"].CustomShell
+	require.Equal(t, "/usr/local/bin/wrap", shell.Path)
+	require.False(t, shell.Emulated)
+	require.Equal(t, filepath.Join(workspace, "data", "web:parent"), shell.Dir, "a wrapper shell runs in the agent's folder")
+	require.Equal(t, []string{`ROCKETCLAW_ENVIRONMENT={"secretsARN":["arn:a"],"commands":{"show":"printenv SECRET_KEY"},"allowedNetworkTargets":null}`}, shell.Env,
+		"the wrapper gets the ARNs, not the secrets, and null for the auto network targets")
+
 	fetcher.SecretStringFunc = func(context.Context, string) (string, error) { return "", errors.New("denied") }
 	agents.Items["easy"] = easy
 	require.ErrorContains(t, b.setEasyShell(t.Context(), cfg, agents, skills, "easy", turnEnv, "web:parent"), "secretsARN: read secret string: denied")
