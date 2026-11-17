@@ -110,7 +110,7 @@ github.com/aws/aws-sdk-go-v2/service/internal/presigned-url
 github.com/aws/aws-sdk-go-v2/service/internal/s3shared
 github.com/aws/aws-sdk-go-v2/service/internal/s3shared/arn
 github.com/aws/aws-sdk-go-v2/service/internal/s3shared/config
-# github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10
+# github.com/aws/aws-sdk-go-v2/service/s3 v1.115.0
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/service/s3
 github.com/aws/aws-sdk-go-v2/service/s3/internal/arn
@@ -411,7 +411,7 @@ github.com/modelcontextprotocol/go-sdk/internal/xcontext
 github.com/modelcontextprotocol/go-sdk/jsonrpc
 github.com/modelcontextprotocol/go-sdk/mcp
 github.com/modelcontextprotocol/go-sdk/oauthex
-# github.com/openai/openai-go/v3 v3.100.0
+# github.com/openai/openai-go/v3 v3.101.0
 ## explicit; go 1.26.0
 github.com/openai/openai-go/v3
 github.com/openai/openai-go/v3/auth
@@ -657,7 +657,7 @@ golang.org/x/image/riff
 golang.org/x/image/vp8
 golang.org/x/image/vp8l
 golang.org/x/image/webp
-# golang.org/x/net v0.62.0
+# golang.org/x/net v0.63.0
 ## explicit; go 1.26.0
 golang.org/x/net/bpf
 golang.org/x/net/dns/dnsmessage
