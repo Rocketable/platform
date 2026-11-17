@@ -76,8 +76,7 @@ PR #507.
 
 ## How it was found
 
-The failure could not be reproduced locally (about 20 runs on macOS and
-Linux). The GitHub Actions history located it: across 200 failed runs, the
+The failure could not be reproduced locally (about 20 runs). The GitHub Actions history located it: across 200 failed runs, the
 fast `background=false` failure first appeared on main at the commit after
 37163263 landed, in none of the 62 failed runs before it and in 16 of the 65
 after. Reading that commit pointed at cancellation causes, and forcing

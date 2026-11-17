@@ -49,7 +49,7 @@ not as one composed world.
 
 ## Recorded run
 
-2026-11-13, on macOS (Apple silicon, 12 workers), OpenJDK 21.0.13, TLC `2026.11.06.222357 (rev: d8fb231)`,
+2026-11-13, on arm64 (12 workers), OpenJDK 21.0.13, TLC `2026.11.06.222357 (rev: d8fb231)`,
 `pcal.trans` 1.12: both checks passed; `make` took 78 s including the tools download. Translating changed nothing
 in `TabAttention.tla`.
 

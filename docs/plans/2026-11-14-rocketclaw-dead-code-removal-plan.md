@@ -21,7 +21,7 @@ Before deploying to Hally, a fresh database backup was taken; the rebased code w
 
 ## Phases
 
-Each phase is its own commit (or PR), smallest risk first. Every phase ends with: `gofmt` on touched files, `make -C internal/rocketclaw lint`, `make -C internal/rocketclaw test` (Linux container on this Mac), web `make lint` when TS changes, a re-read of the diff against the Go standards in `AGENTS.md`, and a re-check that the invariants below still hold.
+Each phase is its own commit (or PR), smallest risk first. Every phase ends with: `gofmt` on touched files, `make -C internal/rocketclaw lint`, `make -C internal/rocketclaw test`, web `make lint` when TS changes, a re-read of the diff against the Go standards in `AGENTS.md`, and a re-check that the invariants below still hold.
 
 ### Phase 1: plain deletions (no behavior change)
 

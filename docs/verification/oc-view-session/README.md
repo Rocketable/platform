@@ -70,7 +70,7 @@ same on every run.
 
 ## Recorded run
 
-2026-11-13, on macOS (Apple silicon), OpenJDK 21.0.13, TLC `2026.11.06.222357 (rev: d8fb231)`, `pcal.trans` 1.12:
+2026-11-13, on arm64, OpenJDK 21.0.13, TLC `2026.11.06.222357 (rev: d8fb231)`, `pcal.trans` 1.12:
 every check matched its expected outcome; `make` took 10 to 12 s including the tools download. Translating changed
 nothing in `ViewSession.tla`.
 

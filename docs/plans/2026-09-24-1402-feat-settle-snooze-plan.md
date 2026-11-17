@@ -112,7 +112,7 @@ flowchart TB
 
 ### Test environment
 
-Use the approved short repository-root scratch directory `.tmp/st` as `TMPDIR` for macOS socket tests.
+Use the approved short repository-root scratch directory `.tmp/st` as `TMPDIR` for socket tests.
 The long workspace-local scratch path exceeds the Unix-socket path limit; `TestPrivateSocket` passes with the short path.
 
 ### Required checks

@@ -131,7 +131,7 @@ part 2 below.
     so the person's HAR is the evidence.
   - Opening the server's direct IP to bypass the relay could not sign the person in. The server saw the
     container's gateway address, not a tailnet identity, so that comparison failed at sign-in.
-  - "Browser and server are on the same Mac" made the relay look like the bug. They need not share a
+  - "Browser and server are on the same machine" made the relay look like the bug. They need not share a
     machine, and the page has to work over any link.
   - A few calls finished quickly inside the stall window. This session never explained them, so do not
     take a few fast responses as proof that the connection is not the problem.

@@ -151,7 +151,7 @@ follows; each must-fail check turns one off and finds the old counterexample aga
 
 ## Checks, bounds and results
 
-Recorded 2026-11-14 on macOS (aarch64) while Go tests ran on the same machine; OpenJDK 21.0.13.0.3; TLC
+Recorded 2026-11-14 on aarch64 while Go tests ran on the same machine; OpenJDK 21.0.13.0.3; TLC
 `2026.11.06.222357 (rev: d8fb231)` from the pinned v1.8.0 jar; `-Xmx3g`; every run under the 600-second limit. Each
 check ran through `make -C docs/verification/agent-pause <check>`, one after another (logs
 `.tmp/run/agent-pause-model/<check>.log` and `make-<check>.out`). Passes used 4 workers, must-fail checks one. There

@@ -80,7 +80,7 @@ one TLC worker its first counterexample is the full buffer; with a larger buffer
 
 ## Recorded run
 
-2026-11-13, on macOS (Apple silicon, 12 workers), OpenJDK 21.0.13, TLC `2026.11.06.222357 (rev: d8fb231)`,
+2026-11-13, on arm64 (12 workers), OpenJDK 21.0.13, TLC `2026.11.06.222357 (rev: d8fb231)`,
 `pcal.trans` 1.12: every check matched its expected outcome; `make` took 17 s with the tools already downloaded.
 Translating changed nothing in `Typing.tla`.
 

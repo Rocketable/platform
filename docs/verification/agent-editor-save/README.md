@@ -207,7 +207,7 @@ Expected violations:
 
 Versions: the TLC banner read `TLC2 Version 2026.11.06.222357 (rev: d8fb231)` and
 the translator `pcal.trans Version 1.12 of 01 July 2024`, both from the pinned
-v1.8.0 jar. Java was OpenJDK 21.0.13.0.3 (Homebrew), on macOS aarch64.
+v1.8.0 jar. Java was OpenJDK 21.0.13.0.3, on aarch64.
 
 ## Accepted limits
 

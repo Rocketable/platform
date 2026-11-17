@@ -283,7 +283,7 @@ Outcome rules, owned by R6: injection probability at or above 0.5 means deny; cr
 | Check | Command | Applies to |
 |---|---|---|
 | Format | `gofmt -l` on touched Go files | every unit |
-| RocketClaw tests, lint, coverage, CLOC | `make -C internal/rocketclaw test` (runs in the Linux container on a Mac) | U1 to U6 |
+| RocketClaw tests, lint, coverage, CLOC | `make -C internal/rocketclaw test` | U1 to U6 |
 | Repo lint | `make lint` | final |
 | Repo tests | `make test` | final |
 | Mocks | `go generate ./cmd/rocketclaw` after the `.mockery.yml` change | U2 |

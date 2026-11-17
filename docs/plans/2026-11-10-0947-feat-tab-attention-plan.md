@@ -362,7 +362,7 @@ Estimates of net source lines per unit, counted as the Makefiles count them.
 - **Watcher cost.** A pass costs one sidebar query per person per space with a flagged lane when the list changed, also for people who are away. Measured listing times are 60 to 126 ms (`docs/verification/2026-09-10-sidebar.md`).
 - **In-memory state is lost on restart.** The first watcher pass records without marking, a search running at shutdown never marks, and a kept result is gone, so opening the page runs it again.
 - **Complexity limits.** `SessionApp` and `CommandPalette` sit at react-doctor's limit of 15 and `changeTabs` near gocyclo's 30. New branches go into hooks, list-building functions and self-hiding components (`docs/solutions/best-practices/react-doctor-complexity-limit-shapes-web-components.md`).
-- **Proto generation is manual.** `go generate ./internal/rocketclaw/frontend/rpc` needs `protoc` and `protoc-gen-go` v1.36.12 on `PATH`; `make generate` does not run it and the Linux container has no `protoc`.
+- **Proto generation is manual.** `go generate ./internal/rocketclaw/frontend/rpc` needs `protoc` and `protoc-gen-go` v1.36.12 on `PATH`; `make generate` does not run it.
 - **Known gaps accepted.** A remote OpenCode session that leaves and re-enters the sync window while asking marks again; a second request inside one 5-second round marks nothing. A lane on `is:unread` sees a person's own mark changes only at the next session change. A timer due with no window open gives bold without a notification. A mark written before a person's Space Limit is narrowed still reaches them until it is cleared. An attention row for a tab that is not a session, such as a parked Search page whose tab and page are gone, stays in the table; no rule can tell that no shelf of another server still holds the tab (R15).
 
 ### System-Wide Impact
@@ -401,7 +401,7 @@ Estimates of net source lines per unit, counted as the Makefiles count them.
   1. Rebase the workspace onto current `main@origin` and confirm `084` to `086` are free there and in sibling workspaces.
   2. Run `bun install --frozen-lockfile` in `web`.
   3. Confirm `protoc` and `protoc-gen-go` v1.36.12 are on `PATH`; ask the owner to install what is missing.
-  4. Confirm which command runs the Web tests on this Mac: `make -C internal/rocketclaw/web test` runs a Go test on the host, which may not build on macOS; if it fails, use the `internal/rocketclaw` Makefile's container route and record the command in the PR description.
+  4. Confirm which command runs the Web tests and record it in the PR description.
   5. Record `make cloc` output for Go and Web as the baseline.
 - **Test scenarios:** Test expectation: none -- no behaviour changes.
 - **Verification:** The full Go and Web gates pass on the rebased, unchanged tree, and the baseline numbers are written down.
@@ -705,8 +705,8 @@ Estimates of net source lines per unit, counted as the Makefiles count them.
 |---|---|---|
 | Go format | `gofmt` on touched files | every Go unit |
 | Go lint | `make lint` at the repo root | every Go unit, before tests, never at the same time as tests |
-| Go tests, coverage, CLOC | `make test` at the repo root; on this Mac RocketClaw packages run through `make -C internal/rocketclaw test`, which re-runs in the Linux container | every Go unit; coverage must stay at or above 91.8% |
-| Focused Go run | the wrapper script from `docs/solutions/best-practices/coverage-profile-kills-its-own-shell-when-make-is-pid-1.md`, saved under this workspace's `.tmp/` | while iterating |
+| Go tests, coverage, CLOC | `make test` at the repo root | every Go unit; coverage must stay at or above 91.8% |
+| Focused Go run | `make -C internal/rocketclaw coverage-profile 'GOTESTRUN=...'` | while iterating |
 | Proto | `go generate ./internal/rocketclaw/frontend/rpc` | U4, U8 |
 | Mocks | `go generate ./cmd/rocketclaw` after adding an interface to `.mockery.yml` | any unit that mocks a new interface |
 | Web lint | `make -C internal/rocketclaw/web lint` | U9, U10, U11 |

@@ -41,7 +41,7 @@ The fix both times was to delete the dump and put the known-good `dist` back. Af
 
 **Chromium crash dumps land in exactly that folder.** The Web browser tests run `bun test` from `internal/rocketclaw/web`. So do the Go real-browser tests, through `runWebTest`, which sets `web.Dir = "../../web"` (`internal/rocketclaw/frontend/rpc/server_test.go:4074`). Both dumps in this session were written there.
 
-**Measured on Tailwind 4.3.5 (macOS binding, scratch copies only):**
+**Measured on Tailwind 4.3.5 (scratch copies only):**
 
 | Setup | Result |
 |---|---|

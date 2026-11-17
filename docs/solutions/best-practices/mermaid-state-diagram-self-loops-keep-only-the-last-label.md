@@ -45,16 +45,16 @@ Whether GitHub's own Mermaid renderer behaves the same was not checked.
 - Use commas, not semicolons, in transition labels.
 - Render the diagram and look at it before trusting it. Mermaid gives no warning for either problem.
 
-Rendering locally, without touching system temp: `mmdc` needs a Chrome it cannot find by default ("Could not find Chrome"). Point it at an installed Chromium through a puppeteer config, and keep its temporary files in the repository's `.tmp/`. Any local Chromium works, such as a Playwright `chromium-<n>` already under the main checkout's `.tmp/ms-playwright/` (a JJ workspace's own `.tmp/` usually has none). The test image's `/opt/ms-playwright` holds a Linux build that the Mac host cannot run:
+Rendering locally, without touching system temp: `mmdc` needs a Chrome it cannot find by default ("Could not find Chrome"). Point it at an installed Chromium through a puppeteer config, and keep its temporary files in the repository's `.tmp/`. Any local Chromium works, such as a Playwright `chromium-<n>` already under the main checkout's `.tmp/ms-playwright/` (a JJ workspace's own `.tmp/` usually has none):
 
 ```sh
 mkdir -p .tmp/mermaid
-chrome='<path to the Chromium binary>'   # on a Mac, e.g. .../ms-playwright/chromium-<n>/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing
+chrome='<path to the Chromium binary>'   # e.g. .../ms-playwright/chromium-<n>/chrome-linux-arm64/chrome
 printf '{"executablePath":"%s"}\n' "$chrome" > .tmp/mermaid/puppeteer.json
 TMPDIR=$PWD/.tmp/mermaid mmdc -p .tmp/mermaid/puppeteer.json -i diagram.mmd -o .tmp/mermaid/diagram.png
 ```
 
-That worked on the Mac host. Inside the Linux container, a long repository-local `TMPDIR` has made Chromium abort with a socket path that is too long; see `docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md`.
+A long repository-local `TMPDIR` can make Chromium abort with a socket path that is too long; see `docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md`.
 
 ## Why This Matters
 

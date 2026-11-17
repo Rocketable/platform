@@ -331,7 +331,7 @@ These are unconfirmed bets made without the user, recorded for review:
 |---|---|---|
 | Format | `gofmt` on touched Go files | U1–U4 |
 | Generated code | `go generate ./internal/rocketclaw/frontend/rpc` (proto); `go generate ./cmd/rocketclaw` (mockery v3 mocks) | U1–U3 |
-| Go lint | `make -C internal/rocketclaw lint`. On a Mac it runs in the Linux container. gocyclo stays at or under 30 with no suppression. | U1–U4 |
+| Go lint | `make -C internal/rocketclaw lint`. gocyclo stays at or under 30 with no suppression. | U1–U4 |
 | Go tests and metrics | `make -C internal/rocketclaw test`: tests, coverage at or above `COVERAGE_REQUIRED`, Go CLOC within `GO_SOURCE_CLOC_BUDGET` (today 41,311 of 42,750) | U1–U4 |
 | Web lint | `make -C internal/rocketclaw/web lint`: eslint, `tsc --noEmit`, react-doctor | U5 |
 | Web tests | `make -C internal/rocketclaw/web test`. Builds first; TS CLOC within `TS_CLOC_BUDGET` (today 9,095 of 10,050) | U5 |
@@ -339,7 +339,7 @@ These are unconfirmed bets made without the user, recorded for review:
 | Model check | the real-model framing evaluation in U6 | U6 |
 | Formal model | `make -C docs/verification/agent-pause` (TLC; see below) | U2, U3, U4 |
 
-RocketClaw packages do not build on macOS; run their Go checks only through `make` in `internal/rocketclaw`. Fresh JJ workspaces need the setup in `docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md` before RPC tests run.
+Fresh JJ workspaces need the setup in `docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md` before RPC tests run.
 
 ### Formal model of the pause
 
