@@ -2,6 +2,7 @@ package harness
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +27,11 @@ const (
 	defaultShellTimeout   = 2 * 60 * 1000
 	shellTimeoutGrace     = 100 * time.Millisecond
 	shellForceKillTimeout = 3 * time.Second
+
+	deniedBashOutsidePath    = "bash command denied: path is outside this agent's working directory"
+	deniedBashWorkdir        = "bash command denied: workdir is outside this agent's working directory"
+	deniedBashMissingWorkdir = "bash command denied: workdir is not an existing folder"
+	deniedBashEnvFile        = "bash command denied: .env files are blocked"
 )
 
 type bashParams struct {
@@ -111,25 +117,31 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 		timeoutMillisecond = defaultShellTimeout
 	}
 
-	hostDir := sss.root.Name()
+	dir := filepath.Clean(cmp.Or(customShell.Dir, sss.root.Name()))
+	folders := append([]string{dir}, customShell.ReadOnly...)
+	hostDir := resolveShellPath(customShell, dir, params.Workdir)
+	inFolders := slices.ContainsFunc(folders, func(folder string) bool { return pathWithinRoot(folder, hostDir) })
 
 	switch {
-	case customShell.Dir != "" && filepath.IsAbs(params.Workdir):
-		hostDir = params.Workdir
-	case customShell.Dir != "":
-		hostDir = filepath.Join(customShell.Dir, params.Workdir)
-	case params.Workdir != "":
-		root, err := sss.workdirRoot(params.Workdir)
-		if err != nil {
-			return bashFailure(err.Error())
+	case !inFolders && customShell.Emulated && pathWithinRoot(emulatedHome, hostDir):
+	case !inFolders:
+		return bashFailure(deniedBashWorkdir)
+	case isExecuteSpillPath(sss.root, sss.spillRel, hostDir):
+		return bashFailure(deniedSpillAccess)
+	default:
+		if info, err := os.Stat(hostDir); err != nil || !info.IsDir() {
+			return bashFailure(deniedBashMissingWorkdir)
 		}
 
-		defer func() { _ = root.Close() }()
+		resolved, ok := guestWorkdir(folders, hostDir)
+		if !ok {
+			return bashFailure(deniedBashWorkdir)
+		}
 
-		hostDir = root.Name()
+		hostDir = resolved
 	}
 
-	if denied := sss.deniedBashPath(params.Command, hostDir); customShell.Dir == "" && denied != "" {
+	if denied := sss.deniedBashPath(customShell, dir, params.Command, hostDir); denied != "" {
 		return bashFailure(denied)
 	}
 
@@ -235,33 +247,6 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 	}
 }
 
-func (sss *sandboxedShellSystem) workdirRoot(workdir string) (*os.Root, error) {
-	name, err := normalizeRootName(sss.root, workdir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve workdir %q: %w", workdir, err)
-	}
-
-	if isExecuteSpillPath(sss.root, sss.spillRel, name) {
-		return nil, errors.New(deniedSpillAccess)
-	}
-
-	info, err := sss.root.Stat(name)
-	if err != nil {
-		return nil, fmt.Errorf("resolve workdir %q: %w", name, err)
-	}
-
-	if !info.IsDir() {
-		return nil, fmt.Errorf("resolve workdir %q: not a directory", name)
-	}
-
-	root, err := sss.root.OpenRoot(name)
-	if err != nil {
-		return nil, fmt.Errorf("resolve workdir %q: %w", name, err)
-	}
-
-	return root, nil
-}
-
 func bashFailure(message string) BashResult {
 	if message == "" {
 		message = "(no output)"
@@ -274,7 +259,7 @@ func bashFailure(message string) BashResult {
 	}
 }
 
-func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string {
+func (sss *sandboxedShellSystem) deniedBashPath(customShell *CustomShell, dir, command, hostDir string) string {
 	parser := syntax.NewParser()
 
 	file, err := parser.Parse(strings.NewReader(command), "")
@@ -283,7 +268,6 @@ func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string 
 	}
 
 	printer := syntax.NewPrinter()
-	rootName := filepath.Clean(sss.root.Name())
 	denied := ""
 
 	syntax.Walk(file, func(node syntax.Node) bool {
@@ -311,7 +295,7 @@ func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string 
 					_, arg, _ = strings.Cut(arg, "=")
 				}
 
-				if isExecuteSpillPath(sss.root, sss.spillRel, resolveBashPath(hostDir, arg)) {
+				if isExecuteSpillPath(sss.root, sss.spillRel, resolveShellPath(customShell, hostDir, arg)) {
 					denied = deniedSpillAccess
 					return false
 				}
@@ -334,26 +318,42 @@ func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string 
 		}
 
 		name := filepath.Base(unquoteShellArg(args[0]))
+
+		var paths []string
+
+		for _, arg := range args[1:] {
+			if pathArg, ok := staticBashPathArg(name, arg); ok {
+				paths = append(paths, pathArg)
+			}
+		}
+
+		reads := 0
+
 		switch name {
-		case "cat", "cd", "chmod", "chown", "cp", "grep", "head", "less", "ln", "mkdir", "more", "mv", "pushd", "rm", "tail", "touch":
+		case "cat", "cd", "grep", "head", "less", "more", "pushd", "tail":
+			reads = len(paths)
+		case "cp":
+			reads = len(paths) - 1
+		case "chmod", "chown", "ln", "mkdir", "mv", "rm", "touch":
 		default:
 			return true
 		}
 
-		for _, arg := range args[1:] {
-			pathArg, ok := staticBashPathArg(name, arg)
-			if !ok {
-				continue
-			}
-
-			resolved := resolveBashPath(hostDir, pathArg)
-			if isDeniedEnvPath(resolved) {
-				denied = "bash command denied: " + deniedEnvAccessMessage(pathArg)
+		for i, pathArg := range paths {
+			resolved := resolveShellPath(customShell, hostDir, pathArg)
+			if isExecuteSpillPath(sss.root, sss.spillRel, resolved) {
+				denied = deniedSpillAccess
 				return false
 			}
 
-			if !pathWithinRoot(rootName, resolved) {
-				denied = "bash command denied: external path access is blocked: " + pathArg
+			if isDeniedEnvPath(resolved) {
+				denied = deniedBashEnvFile
+				return false
+			}
+
+			readable := i < reads && slices.ContainsFunc(customShell.ReadOnly, func(folder string) bool { return pathWithinRoot(folder, resolved) })
+			if !pathWithinRoot(dir, resolved) && !readable && (!customShell.Emulated || !pathWithinRoot(emulatedHome, resolved)) {
+				denied = deniedBashOutsidePath
 				return false
 			}
 		}
@@ -394,6 +394,14 @@ func unquoteShellArg(arg string) string {
 	}
 
 	return arg
+}
+
+func resolveShellPath(customShell *CustomShell, hostDir, arg string) string {
+	if customShell.Emulated && (arg == "~" || strings.HasPrefix(arg, "~/")) {
+		return filepath.Join(emulatedHome, arg[1:])
+	}
+
+	return resolveBashPath(hostDir, arg)
 }
 
 func resolveBashPath(hostDir, arg string) string {

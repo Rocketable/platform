@@ -19,7 +19,10 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 )
 
-const emulatedExpansionTimeout = defaultShellTimeout * time.Millisecond
+const (
+	emulatedExpansionTimeout = defaultShellTimeout * time.Millisecond
+	emulatedHome             = "/tmp"
+)
 
 func runEmulated(ctx context.Context, rt *sandbox.Runtime, shell *CustomShell, command, cwd string, turnEnv, hostEnv []string, timeout time.Duration) (sandbox.Result, error) {
 	if shell.Dir == "" {
@@ -27,12 +30,12 @@ func runEmulated(ctx context.Context, rt *sandbox.Runtime, shell *CustomShell, c
 	}
 
 	cwd, ok := guestWorkdir(append([]string{shell.Dir}, shell.ReadOnly...), cwd)
-	if !ok {
+	if !ok && !pathWithinRoot(emulatedHome, cwd) {
 		return sandbox.Result{}, fmt.Errorf("emulated shell: workdir %s is outside this agent's folders", cwd)
 	}
 
 	env := append(slices.Clone(turnEnv), "PATH=/extensions:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-		"HOME=/tmp", "TMPDIR=/tmp", "LANG=C.UTF-8", "TZ=UTC")
+		"HOME="+emulatedHome, "TMPDIR="+emulatedHome, "LANG=C.UTF-8", "TZ=UTC")
 	host := &emulatedHost{shell: shell, env: slices.Clone(hostEnv), client: easyWebFetchClient(shell.NetworkTargets)}
 
 	for k, v := range shell.Secrets {

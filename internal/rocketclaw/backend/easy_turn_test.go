@@ -136,8 +136,8 @@ func TestEasyTurnShell(t *testing.T) {
 	require.Equal(t, "/usr/local/bin/wrap", shell.Path)
 	require.False(t, shell.Emulated)
 	require.Equal(t, filepath.Join(workspace, "data", "web:parent"), shell.Dir, "a wrapper shell runs in the agent's folder")
-	require.Equal(t, []string{`ROCKETCLAW_ENVIRONMENT={"secretsARN":["arn:a"],"commands":{"show":"printenv SECRET_KEY"},"allowedNetworkTargets":null}`}, shell.Env,
-		"the wrapper gets the ARNs, not the secrets, and null for the auto network targets")
+	require.Equal(t, []string{`ROCKETCLAW_ENVIRONMENT={"secretsARN":["arn:a"],"commands":{"show":"printenv SECRET_KEY"},"allowedNetworkTargets":null,"workingDirectory":"` + shell.Dir + `"}`}, shell.Env,
+		"the wrapper gets the ARNs, not the secrets, null for the auto network targets, and the folder it must stay in")
 
 	fetcher.SecretStringFunc = func(context.Context, string) (string, error) { return "", errors.New("denied") }
 	agents.Items["easy"] = easy

@@ -89,7 +89,7 @@ func TestEmulatedShellNetwork(t *testing.T) {
 		require.False(t, got.Success, "%s reached the network: %s", dial, got.Output)
 	}
 
-	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge dial 1.1.1.1:443 | cut -c1-5", "dial:\n")
+	e.sandboxedOK(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge dial 1.1.1.1:443 | cut -c1-5", "dial:\n")
 
 	e.ok(t, "hostfetch", "unlisted")
 	require.Contains(t, e.bash(t, "curl -sS "+unlisted.URL+"/").Output, "not in allowedNetworkTargets")
@@ -111,20 +111,22 @@ func TestEmulatedShellFilesystem(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(other.shell.Dir, "theirs"), []byte("other agent"), 0o644))
 
 	for _, path := range []string{marker, filepath.Join(other.shell.Dir, "theirs"), "/etc/shadow", "/var/run/docker.sock", "/run/dbus/system_bus_socket", "/sys/kernel"} {
-		got := e.bash(t, "cat "+path)
+		require.Equal(t, deniedBashOutsidePath, e.bash(t, "cat "+path).Output, path)
+
+		got := e.sandboxed(t, "cat "+path)
 		require.False(t, got.Success, "D01, D04, D07: %s is visible: %s", path, got.Output)
 	}
 
 	bashrc := filepath.Join(os.Getenv("HOME"), ".bashrc")
 	if host, err := os.ReadFile(bashrc); err == nil {
-		require.NotEqual(t, string(host), e.bash(t, "cat "+bashrc).Output, "D01: the host's %s is visible", bashrc)
+		require.NotEqual(t, string(host), e.sandboxed(t, "cat "+bashrc).Output, "D01: the host's %s is visible", bashrc)
 	}
 
 	e.ok(t, "cat "+filepath.Join(uploads, "report.txt"), "upload")
 	require.False(t, e.bash(t, "echo x > "+filepath.Join(uploads, "new")).Success, "uploads are read-only")
-	require.False(t, e.bash(t, "touch /usr/bin/evil || touch /evil || touch /etc/evil").Success, "D02: the rootfs is read-only")
+	require.False(t, e.sandboxed(t, "touch /usr/bin/evil || touch /evil || touch /etc/evil").Success, "D02: the rootfs is read-only")
 
-	require.False(t, e.bash(t, "ln -s "+filepath.Dir(marker)+" out && cd out").Success, "a link out of the folder leads nowhere in the guest")
+	require.False(t, e.sandboxed(t, "ln -s "+filepath.Dir(marker)+" out && cd out").Success, "a link out of the folder leads nowhere in the guest")
 
 	for _, target := range []string{"out/host-marker", "../escape", marker, "/etc/passwd"} {
 		got := e.bash(t, "curl -so "+target+" "+server.URL+"/")
@@ -138,7 +140,7 @@ func TestEmulatedShellFilesystem(t *testing.T) {
 	require.Equal(t, "host", string(data))
 	require.NoFileExists(t, filepath.Join(filepath.Dir(e.shell.Dir), "escape"))
 
-	got := e.bash(t, "head -c 300M /dev/zero > big")
+	got := e.sandboxed(t, "head -c 300M /dev/zero > big")
 	require.False(t, got.Success, got.Output)
 	require.Regexp(t, `File size limit exceeded|memory \(256 MiB\) or process \(64\) limit reached`, got.Output)
 
@@ -146,10 +148,10 @@ func TestEmulatedShellFilesystem(t *testing.T) {
 	require.NoError(t, err)
 	require.LessOrEqual(t, big.Size(), int64(256<<20))
 
-	got = e.bash(t, "head -c 300M /dev/zero > /tmp/big")
+	got = e.sandboxed(t, "head -c 300M /dev/zero > /tmp/big")
 	require.False(t, got.Success, got.Output)
 
-	e.ok(t, "id -u; grep -E '^(CapEff|NoNewPrivs|Seccomp):' /proc/self/status", "1000\nCapEff:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n")
+	e.sandboxedOK(t, "id -u; grep -E '^(CapEff|NoNewPrivs|Seccomp):' /proc/self/status", "1000\nCapEff:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n")
 	require.False(t, e.bash(t, "unshare -U true").Success, "no nested user namespaces")
 }
 
@@ -178,7 +180,7 @@ func TestEmulatedShellLimits(t *testing.T) {
 	require.Contains(t, got.Output, "output stopped at 16 MiB", "E04: a host command's output counts too")
 	require.Regexp(t, limitLogged+`exec=x-\S+ command=bigout limit=host_command_output limit_bytes=16777216\n`, e.logs.String())
 
-	e.ok(t, "head -c 17000000 /dev/zero | copy > /dev/null 2>&1; echo $?", "126\n")
+	e.sandboxedOK(t, "head -c 17000000 /dev/zero | copy > /dev/null 2>&1; echo $?", "126\n")
 	require.Regexp(t, limitLogged+`exec=x-\S+ limit=host_command_input command=copy limit_bytes=16777216 received_bytes=\d{8}\n`, e.logs.String())
 
 	require.False(t, e.bash(t, strings.Repeat(":", 8<<20+1)).Success)
