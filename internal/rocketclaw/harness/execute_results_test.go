@@ -156,6 +156,49 @@ func TestSaveExecuteResult(t *testing.T) {
 	}
 }
 
+func TestSaveExecuteResultAllocationBudget(t *testing.T) {
+	cost := testing.Benchmark(BenchmarkSaveExecuteResult)
+	require.Positive(t, cost.N)
+	require.Less(t, cost.AllocedBytesPerOp(), int64(512<<10))
+}
+
+func BenchmarkSaveExecuteResult(b *testing.B) {
+	root, err := os.OpenRoot(b.TempDir())
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, root.Close()) })
+
+	loop := &looper{promptExpansion: promptExpansionEnvironment{root: root}, spillRel: defaultSpillRel}
+	loop.restoreTurnExecuteResults("turn")
+
+	full := strings.Repeat("line\n", 1<<18)
+
+	for b.Loop() {
+		for _, name := range []string{"turn", "retained"} {
+			var got string
+			if name == "retained" {
+				got, err = retainExecuteResult(root, "retained", full)
+			} else {
+				got, err = loop.saveExecuteResult(full)
+			}
+
+			require.NoError(b, err)
+
+			_, tail, found := strings.Cut(got, `result_id="`)
+			require.True(b, found)
+
+			id, _, _ := strings.Cut(tail, `"`)
+
+			path := loop.spillResults[id]
+			if name == "retained" {
+				path = "retained/" + id + ".txt"
+			}
+
+			require.NoError(b, root.Remove(path))
+			delete(loop.spillResults, id)
+		}
+	}
+}
+
 func TestLoadExecuteResultPages(t *testing.T) {
 	root, err := os.OpenRoot(t.TempDir())
 	require.NoError(t, err)
