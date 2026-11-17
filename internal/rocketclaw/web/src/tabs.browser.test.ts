@@ -2085,3 +2085,118 @@ test("a new chat created while another page shows opens when New session shows a
   await page.evaluate(() => { history.pushState(null, "", "/"); dispatchEvent(new PopStateEvent("popstate")); });
   await page.waitForURL(`**${href("fresh")}`);
 }), 30_000);
+
+test("other spaces are branches that list only their waiting tabs until unfolded, open rows in their space without a stray tab, and offer only the menu items that act on the row", () => withPage({}, async (page, origin, _prompts, saved) => {
+  saved.spaces.push({ id: "ops", name: "Ops" });
+  saved.state = { ...saved.state, space: "main", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [{ path: href("alpha"), space: "main" }, ...["bravo", "charlie", "foxtrot", "golf"].map((id) => ({ path: href(id), space: "ops", group: id === "bravo" ? "work" : undefined }))] };
+  saved.shared = [{ space: "ops", path: href("hotel") }];
+  saved.attention = [{ path: href("hotel"), unreadAt: "2026-10-22T11:00:00Z" }];
+  const branch = page.getByRole("tablist", { name: "Ops tabs" }), labels = () => branch.getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+  await page.goto(`${origin}${href("alpha")}`);
+  await branch.getByRole("tab", { name: "Hotel", exact: true }).waitFor();
+  expect(await labels()).toEqual(["Hotel", "Foxtrot", "Golf"]);
+  expect(await page.getByRole("button", { name: "Go to Ops", exact: true }).getAttribute("aria-description")).toBe("3 waiting, Turn running");
+
+  await page.getByRole("button", { name: "Show all Ops tabs", exact: true }).click();
+  await until(() => saved.state.groups.some((group) => group.id === "space:ops" && !group.collapsed));
+  expect(await labels()).toEqual(["Hotel", "Bravo", "Charlie", "Foxtrot", "Golf"]);
+  expect(await branch.getByRole("tab", { name: "Bravo", exact: true }).getAttribute("aria-description")).toBe("Group Work, Space: Ops");
+
+  await branch.getByRole("tab", { name: "Charlie", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem").first().waitFor();
+  expect(await menuLines(page)).toEqual(["Close", "—", "Copy link", "—", "Mark as unread", "Park", "Auto-park when I send"]);
+  await page.getByRole("menuitem", { name: "Close", exact: true }).click();
+  await until(() => !saved.state.tabs.some((tab) => tab.path === href("charlie")));
+  expect(new URL(page.url()).pathname).toBe(href("alpha"));
+
+  await branch.getByRole("tab", { name: "Hotel", exact: true }).click();
+  await page.waitForURL(`**${href("hotel")}`);
+  await shared(page).getByRole("tab", { name: "Hotel", exact: true }).waitFor();
+  await until(() => saved.state.space === "ops");
+  expect(saved.state.tabs.map((tab) => tab.path)).not.toContain(href("hotel"));
+  expect(await names(page)).toEqual(["Bravo", "Foxtrot", "Golf"]);
+
+  await page.getByRole("button", { name: "Go to Main", exact: true }).click();
+  await page.waitForURL(`**${href("alpha")}`);
+  expect(await names(page)).toEqual(["Alpha"]);
+}));
+
+test("with more than one space Parked is a tree whose spaces fold on their own and stay folded after a reload", () => withPage({}, async (page, origin, _prompts, saved) => {
+  saved.spaces.push({ id: "ops", name: "Ops" });
+  saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }, { path: href("charlie"), space: "ops" }, { path: href("bravo"), space: "main" }] };
+  saved.attention = [{ path: href("bravo"), parked: true }, { path: href("charlie"), parked: true }];
+  const parked = page.getByRole("tablist", { name: "Parked tabs" }), tree = () => parked.locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+  await page.goto(`${origin}${href("alpha")}`);
+  await page.getByRole("button", { name: "Parked", exact: true }).click();
+  await parked.getByRole("button", { name: "Parked in Ops", exact: true }).waitFor();
+  expect(await tree()).toEqual(["Parked in Main", "Bravo", "Parked in Ops", "Charlie"]);
+
+  await parked.getByRole("button", { name: "Parked in Ops", exact: true }).click();
+  await until(() => saved.state.groups.some((group) => group.id === "parked:ops" && group.collapsed));
+  await page.reload();
+  await parked.getByRole("tab", { name: "Bravo", exact: true }).waitFor();
+  expect(await tree()).toEqual(["Parked in Main", "Bravo", "Parked in Ops"]);
+}));
+
+test("Parked also lists the Shared rows this person parked, which open in their space without a tab of their own", () => withPage({}, async (page, origin, _prompts, saved) => {
+  saved.spaces.push({ id: "ops", name: "Ops" });
+  saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }] };
+  saved.shared = [{ space: "ops", path: href("hotel") }];
+  saved.attention = [{ path: href("hotel"), parked: true }];
+  const parked = page.getByRole("tablist", { name: "Parked tabs" }), row = parked.getByRole("tab", { name: "Hotel", exact: true });
+  await page.goto(`${origin}${href("alpha")}`);
+  await page.getByRole("button", { name: "Parked", exact: true }).click();
+  expect(await row.getAttribute("aria-description")).toBe("Shared, Space: Ops, Forked session, Parked");
+  expect(await parked.getByRole("button", { name: "Close Hotel" }).count()).toBe(0);
+
+  await row.click({ button: "right" });
+  await page.getByRole("menuitem").first().waitFor();
+  expect(await menuLines(page)).toEqual(["Copy link", "—", "Unpark", "Auto-park when I send"]);
+  await page.keyboard.press("Escape");
+
+  await row.click();
+  await page.waitForURL(`**${href("hotel")}`);
+  await until(() => saved.state.space === "ops");
+  expect(saved.state.tabs.map((tab) => tab.path)).toEqual([href("alpha")]);
+}));
+
+test("with parked tabs on more than one RocketClaw, Parked is a tree of servers whose rows act on their own server", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" }, sent: { paths: string[]; action: string }[] = [];
+  const remoteTabs = { spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [{ path: href("india"), space: "lab" }], groups: [], space: "lab", last: {}, sharedOrder: [] }, revision: 1, shared: [], closed: [] };
+  const remote = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (request.method === "OPTIONS") return new Response(null, { headers: cors });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "india", name: "India", agent: "main", spaceId: "lab", parked: !sent.length }], owner: "tester", upstreamSuccess: true, tabs: [] })}\n\nevent: complete\ndata: {}\n\n`, { headers: { ...cors, "Content-Type": "text/event-stream" } });
+    const input = await request.json().catch(() => ({})) as { attention?: { paths: string[]; action: string } };
+    if (input.attention) sent.push(input.attention);
+    const replies: Record<string, unknown> = { "/api/Identity": { username: "tester" }, "/api/Protocol": { protoSha256: "tabs" }, "/api/Tabs": remoteTabs };
+    return Response.json(replies[url.pathname] ?? {}, { headers: cors });
+  } });
+  try {
+    await page.addInitScript((url: string) => document.addEventListener("readystatechange", () => {
+      if (document.getElementById("rocketclaws")) return;
+      const node = Object.assign(document.createElement("script"), { id: "rocketclaws", type: "application/json", textContent: JSON.stringify([{ name: "work", url }]) });
+      document.head.append(node);
+    }), `http://127.0.0.1:${remote.port}`);
+    saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }, { path: href("bravo"), space: "main" }] };
+    saved.attention = [{ path: href("bravo"), parked: true }];
+    const parked = page.getByRole("tablist", { name: "Parked tabs" }), tree = () => parked.locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+    await page.goto(`${origin}${href("alpha")}`);
+    await page.getByRole("button", { name: "Parked", exact: true }).click();
+    await parked.getByRole("button", { name: "Parked on work", exact: true }).waitFor();
+    expect(await tree()).toEqual(["Parked on Local", "Bravo", "Parked on work", "India"]);
+    expect(await parked.getByRole("tab", { name: "India", exact: true }).getAttribute("aria-description")).toBe("Space: Lab, work, Parked");
+    expect(await parked.getByRole("button", { name: "Close India" }).count()).toBe(0);
+
+    await parked.getByRole("tab", { name: "India", exact: true }).click({ button: "right" });
+    await page.getByRole("menuitem").first().waitFor();
+    expect(await menuLines(page)).toEqual(["Pull requests", "—", "Unpark", "Auto-park when I send"]);
+    await page.getByRole("menuitem", { name: "Unpark", exact: true }).click();
+    await until(() => sent.length === 1);
+    expect(sent).toEqual([{ paths: [href("india")], action: "UNPARK" }]);
+    await parked.getByRole("tab", { name: "India", exact: true }).waitFor({ state: "detached" });
+    expect(await tree()).toEqual(["Bravo"]);
+  } finally {
+    remote.stop(true);
+  }
+}));
