@@ -130,8 +130,9 @@ type LoggingConfig struct {
 }
 
 type MCPExternalConfig struct {
-	Enabled    bool   `json:"enabled"`
-	ListenAddr string `json:"listen_addr"`
+	Enabled    bool              `json:"enabled"`
+	ListenAddr string            `json:"listen_addr"`
+	Users      map[string]string `json:"users"`
 }
 
 type MCPServerConfig struct {
@@ -299,39 +300,6 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 	}
 
 	return &cfg, nil
-}
-
-func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
-	usersPath := filepath.Join(filepath.Dir(configPath), "rocketclaw.users.json")
-
-	info, err := os.Stat(usersPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-
-		return nil, fmt.Errorf("stat external MCP users file %s: %w", usersPath, err)
-	}
-
-	if info.Mode().Perm() != 0o600 {
-		return nil, fmt.Errorf("external MCP users file %s must have mode 0600", usersPath)
-	}
-
-	data, err := os.ReadFile(usersPath)
-	if err != nil {
-		return nil, fmt.Errorf("read external MCP users file %s: %w", usersPath, err)
-	}
-
-	var users map[string]string
-	if err := json.Unmarshal(data, &users); err != nil {
-		return nil, fmt.Errorf("parse external MCP users file %s: %w", usersPath, err)
-	}
-
-	if users == nil {
-		return nil, fmt.Errorf("parse external MCP users file %s: must be a JSON object", usersPath)
-	}
-
-	return users, nil
 }
 
 func (c *Config) Validate() error {

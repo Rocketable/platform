@@ -58,7 +58,6 @@ func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []
 
 func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	workspace := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{}`), 0o600))
 
 	var (
 		mu      sync.Mutex
@@ -121,7 +120,7 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	errRun := make(chan error, 1)
 
 	go func() {
-		errRun <- backend.Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), testLogger(), new(slog.LevelVar), assembler, sandbox.None{})
+		errRun <- backend.Run(ctx, cfg, testLogger(), new(slog.LevelVar), assembler, sandbox.None{})
 	}()
 
 	t.Cleanup(func() {

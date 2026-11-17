@@ -33,15 +33,14 @@ type FrontendAssembler interface {
 }
 
 type lockedRun struct {
-	cancel     context.CancelFunc
-	detach     func() bool
-	signal     <-chan struct{}
-	configPath string
-	logger     *slog.Logger
-	logLevel   *slog.LevelVar
-	assemble   FrontendAssembler
-	sandboxes  sandboxPreparer
-	sessions   *SessionService
+	cancel    context.CancelFunc
+	detach    func() bool
+	signal    <-chan struct{}
+	logger    *slog.Logger
+	logLevel  *slog.LevelVar
+	assemble  FrontendAssembler
+	sandboxes sandboxPreparer
+	sessions  *SessionService
 }
 
 type runShutdown struct {
@@ -79,7 +78,7 @@ func (s *runShutdown) start(reason string, restart bool) bool {
 	return started
 }
 
-func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, logLevel *slog.LevelVar, assemble FrontendAssembler, sandboxes sandboxPreparer) error {
+func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger, logLevel *slog.LevelVar, assemble FrontendAssembler, sandboxes sandboxPreparer) error {
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 
@@ -140,22 +139,21 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}()
 
 	return holdRunLock(runCtx, rocketcodeSessions.db, &lockedRun{
-		cancel:     cancel,
-		detach:     detach,
-		signal:     ctx.Done(),
-		configPath: configPath,
-		logger:     logger,
-		logLevel:   logLevel,
-		assemble:   assemble,
-		sandboxes:  sandboxes,
-		sessions:   rocketcodeSessions,
+		cancel:    cancel,
+		detach:    detach,
+		signal:    ctx.Done(),
+		logger:    logger,
+		logLevel:  logLevel,
+		assemble:  assemble,
+		sandboxes: sandboxes,
+		sessions:  rocketcodeSessions,
 	})
 }
 
 func (s *lockedRun) Run(runCtx context.Context) error {
 	s.detach()
 
-	cfg, configPath, logger, rocketcodeSessions := s.sessions.definitions.Clone(), s.configPath, s.logger, s.sessions
+	cfg, logger, rocketcodeSessions := s.sessions.definitions.Clone(), s.logger, s.sessions
 	rt := new(Runtime)
 	workCtx, cancelWork := context.WithCancelCause(runCtx)
 
@@ -179,17 +177,6 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 
 	if err := s.startWithBehavior(runCtx, cfg); err != nil {
 		return err
-	}
-
-	var externalMCPUsers map[string]string
-
-	if cfg.MCPExternal.Enabled {
-		var err error
-
-		externalMCPUsers, err = config.LoadExternalMCPUsers(configPath)
-		if err != nil {
-			return fmt.Errorf("load external MCP auth users: %w", err)
-		}
 	}
 
 	logger.Info(
@@ -232,7 +219,6 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 	*rt = Runtime{
 		Cfg: rocketcodeSessions.definitions, Log: logger, logLevel: s.logLevel, RunCtx: runCtx,
 		Sessions:          rocketcodeSessions,
-		ExternalMCPUsers:  externalMCPUsers,
 		ExternalMCPAgents: inertRefresher{}, CronJobs: inertRefresher{}, Assemble: s.assemble, sandboxes: s.sandboxes,
 		TextRouter: threadBridges, threads: threadBridges, background: background,
 		questions: questions,

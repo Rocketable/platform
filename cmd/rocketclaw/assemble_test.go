@@ -76,9 +76,6 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 
 			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 			require.NoError(t, err)
-			configPath := filepath.Join(workspace, "rocketclaw.json")
-			require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
-			require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.users.json"), []byte(`{"alice":"secret"}`), 0o600))
 
 			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
@@ -86,10 +83,10 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 				Workspace:   workspace,
 				DatabaseURL: dsn,
 				Slack:       slack,
-				MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0"},
+				MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0", Users: map[string]string{"alice": "secret"}},
 				Web:         config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}},
 			}
-			require.NoError(t, backend.Run(t.Context(), cfg, configPath, slog.New(slog.DiscardHandler), new(slog.LevelVar), &FrontendAssemblerMock{
+			require.NoError(t, backend.Run(t.Context(), cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), &FrontendAssemblerMock{
 				ValidateAssetsFunc: processAssembler{}.ValidateAssets,
 				AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 					rt.RunCtx = ctx

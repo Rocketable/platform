@@ -38,7 +38,6 @@ type Runtime struct {
 	logLevel          *slog.LevelVar
 	RunCtx            context.Context
 	Sessions          *SessionService
-	ExternalMCPUsers  map[string]string
 	ExternalMCPAgents runtimeRefresher
 	CronJobs          runtimeRefresher
 	Assemble          FrontendAssembler

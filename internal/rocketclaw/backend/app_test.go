@@ -52,10 +52,6 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	collector := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(collector.Close)
 
-	configPath := filepath.Join(workspace, "rocketclaw.json")
-	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.users.json"), []byte(`{"alice":"secret"}`), 0o600))
-
 	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: config.SlackConfig{
 		Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#general", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}},
 	}, MCPExternal: config.MCPExternalConfig{Enabled: true}, PostHog: config.PostHogConfig{ProjectToken: "phc_test", Host: collector.URL}}
@@ -94,7 +90,6 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.NoError(t, rt.RunCtx.Err())
 			require.NoError(t, rt.Sessions.db.PingContext(rt.RunCtx))
 			require.Same(t, rt.threads, rt.TextRouter)
-			require.Equal(t, map[string]string{"alice": "secret"}, rt.ExternalMCPUsers)
 
 			require.NoError(t, rt.threads.store.UpsertThread(threadID, ThreadState{Agent: "main"}))
 			require.NoError(t, rt.threads.PickLaterWork(rt.RunCtx, threadID))
@@ -147,7 +142,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	lock, err := client.Acquire(runLockName, pglock.FailIfLocked())
 	require.NoError(t, err)
 	ctxLock, cancelLock := context.WithTimeout(t.Context(), time.Second)
-	err = Run(ctxLock, cfg, configPath, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{})
+	err = Run(ctxLock, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{})
 
 	cancelLock()
 	require.ErrorIs(t, err, pglock.ErrNotAcquired)
@@ -155,7 +150,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	require.NoError(t, lock.Close())
 	require.NoError(t, seed.Stop())
 
-	require.ErrorIs(t, Run(ctx, cfg, configPath, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), ErrRestartRequested)
+	require.ErrorIs(t, Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), ErrRestartRequested)
 	require.Equal(t, []string{"validated", "validated", "assembled", "slack stopped", "extra stopped"}, order)
 
 	for _, resource := range resources {
@@ -172,7 +167,6 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Queue recovery\nmodel: gpt-6.1-sol\npermission: {}\n---\nRespond concisely.\n")
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{}`), 0o600))
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -230,7 +224,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 
 		errRun := make(chan error, 1)
 		go func() {
-			errRun <- Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{})
+			errRun <- Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{})
 		}()
 
 		var texts []string
@@ -389,7 +383,7 @@ func TestRunMergesStoredBehaviorSettings(t *testing.T) {
 		level, copyDone := new(slog.LevelVar), make(chan struct{})
 		close(copyDone)
 
-		err := Run(t.Context(), cfg, "", slog.New(slog.NewTextHandler(&logs, nil)), level, &frontendAssemblerMock{
+		err := Run(t.Context(), cfg, slog.New(slog.NewTextHandler(&logs, nil)), level, &frontendAssemblerMock{
 			ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 			AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 				live = rt.Cfg.Clone()
@@ -545,7 +539,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 
 			done := make(chan error, 1)
 			go func() {
-				done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(&logs, nil)), new(slog.LevelVar), assembler, sandbox.None{})
+				done <- Run(ctx, cfg, slog.New(slog.NewTextHandler(&logs, nil)), new(slog.LevelVar), assembler, sandbox.None{})
 			}()
 
 			var rt *Runtime
@@ -618,7 +612,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 			defer signal()
 
 			go func() {
-				done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), &frontendAssemblerMock{
+				done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), &frontendAssemblerMock{
 					ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 					AssembleFunc: func(*Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 						return nil, nil, nil
@@ -648,7 +642,7 @@ func TestRunStopsOnInvalidFrontendAssets(t *testing.T) {
 
 	errInvalid := errors.New("invalid cron")
 	assembler := &frontendAssemblerMock{ValidateAssetsFunc: func(*config.Config, string) error { return errInvalid }}
-	require.ErrorIs(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), errInvalid)
+	require.ErrorIs(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), errInvalid)
 	assert.Empty(t, assembler.AssembleCalls())
 }
 
@@ -695,7 +689,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(t.Output(), nil)), new(slog.LevelVar), assembler, sandbox.None{})
+		done <- Run(ctx, cfg, slog.New(slog.NewTextHandler(t.Output(), nil)), new(slog.LevelVar), assembler, sandbox.None{})
 
 		close(done)
 	}()

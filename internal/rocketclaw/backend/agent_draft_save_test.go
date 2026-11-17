@@ -47,7 +47,7 @@ func startAgentDraftSave(t *testing.T, workspace, dsn string, overlays ...string
 	done := make(chan error, 1)
 
 	go func() {
-		done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{})
+		done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{})
 	}()
 
 	ds.stop = sync.OnceFunc(func() {
