@@ -530,7 +530,7 @@ github.com/tidwall/match
 # github.com/tidwall/pretty v1.3.0
 ## explicit; go 1.16
 github.com/tidwall/pretty
-# github.com/tidwall/sjson v1.2.9
+# github.com/tidwall/sjson v1.2.10
 ## explicit; go 1.23
 github.com/tidwall/sjson
 # github.com/x448/float16 v0.8.4
@@ -645,7 +645,7 @@ golang.org/x/crypto/nacl/box
 golang.org/x/crypto/nacl/secretbox
 golang.org/x/crypto/poly1305
 golang.org/x/crypto/salsa20/salsa
-# golang.org/x/exp v0.0.0-20261113113407-e3970619a1a4
+# golang.org/x/exp v0.0.0-20261117202309-7a49493bfd90
 ## explicit; go 1.26.0
 golang.org/x/exp/constraints
 golang.org/x/exp/maps
@@ -844,7 +844,7 @@ google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# gvisor.dev/gvisor v0.0.0-20261117040555-0303b2605d5e
+# gvisor.dev/gvisor v0.0.0-20261117211437-aab1e89c78fd
 ## explicit; go 1.27.3
 gvisor.dev/gvisor/pkg/atomicbitops
 gvisor.dev/gvisor/pkg/bits
