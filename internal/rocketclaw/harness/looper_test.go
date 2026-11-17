@@ -770,6 +770,8 @@ func TestLooperPromptInputShellCommandExpansion(t *testing.T) {
 			wantJSON := fmt.Sprintf(`{"content":%q,"role":"user","type":"message"}`, tc.want)
 			require.JSONEq(t, wantJSON, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList[0]))
 			require.JSONEq(t, wantJSON, string(turn.ReplayInput[0]))
+			require.Len(t, looper.observations.saved.ReviewInputs, 1)
+			require.Equal(t, []string{"before !`printf hello` after"}, looper.observations.saved.ReviewInputs[0].Texts)
 		})
 	}
 }

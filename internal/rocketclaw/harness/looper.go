@@ -207,17 +207,18 @@ type permissionReviewSubject struct {
 }
 
 type permissionReviewRequest struct {
-	ActiveAgent      string                                  `json:"active_agent"`
-	ToolName         string                                  `json:"tool_name"`
-	Permission       string                                  `json:"permission"`
-	RawArguments     string                                  `json:"raw_arguments"`
-	Subjects         []string                                `json:"subjects"`
-	AutoSubjects     []permissionReviewSubject               `json:"auto_subjects"`
-	Reviewer         string                                  `json:"reviewer"`
-	ReviewerEmbedded bool                                    `json:"reviewer_embedded"`
-	ReviewContext    []responses.ResponseInputItemUnionParam `json:"-"`
-	Review           ChildKey                                `json:"-"`
-	Turn             string                                  `json:"-"`
+	CurrentTurnInputs []PromptInput                           `json:"current_turn_inputs,omitempty"`
+	ActiveAgent       string                                  `json:"active_agent"`
+	ToolName          string                                  `json:"tool_name"`
+	Permission        string                                  `json:"permission"`
+	RawArguments      string                                  `json:"raw_arguments"`
+	Subjects          []string                                `json:"subjects"`
+	AutoSubjects      []permissionReviewSubject               `json:"auto_subjects"`
+	Reviewer          string                                  `json:"reviewer"`
+	ReviewerEmbedded  bool                                    `json:"reviewer_embedded"`
+	ReviewContext     []responses.ResponseInputItemUnionParam `json:"-"`
+	Review            ChildKey                                `json:"-"`
+	Turn              string                                  `json:"-"`
 }
 
 type permissionReviewRiskLevel string
@@ -851,6 +852,7 @@ func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnSte
 	}
 
 	if !resumed {
+		l.observations.saved.ReviewInputs = []PromptInput{input.permissionReviewInput()}
 		turnItems, errInput = l.promptTurnItems(ctx, input)
 
 		replayInput, err := ReplayInputFromParams(turnItems)
@@ -924,7 +926,7 @@ func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnSte
 
 func (l *looper) saveTurn(ctx context.Context, record *SessionEntry, resp *responses.Response, applied []string) error {
 	o := l.observations
-	step := turnStep{Record: *record, AppliedInputIDs: applied, Revision: o.saved.Revision + 1}
+	step := turnStep{Record: *record, ReviewInputs: o.saved.ReviewInputs, AppliedInputIDs: applied, Revision: o.saved.Revision + 1}
 
 	o.mu.Lock()
 	step.Trace = slices.Clone(o.trace)
@@ -1026,6 +1028,8 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 		}
 
 		*turnItems = append(*turnItems, steer)
+
+		l.observations.saved.ReviewInputs = append(l.observations.saved.ReviewInputs, input.permissionReviewInput())
 		if input.ID != "" {
 			*applied = append(*applied, input.ID)
 		}
@@ -1924,7 +1928,7 @@ func (l *looper) dispatchToolCalls(
 			callCtx, span := l.Observability.startToolSpan(groupCtx, call.name, call.callID, call.tool.Permission, metadata)
 			defer span.span.End()
 
-			callCtx = context.WithValue(callCtx, toolCallContextKey{}, toolCallContext{looper: l, observations: l.observations, reviewInput: reviewContext, output: output, callID: call.callID})
+			callCtx = context.WithValue(callCtx, toolCallContextKey{}, toolCallContext{looper: l, observations: l.observations, reviewInput: reviewContext, currentTurnInputs: slices.Clone(l.observations.saved.ReviewInputs), output: output, callID: call.callID})
 			progress := call.progress
 
 			key := ToolCallKey(callCtx)
@@ -1989,6 +1993,7 @@ func (l *looper) dispatchToolCalls(
 }
 
 func (l *looper) reviewToolCall(ctx context.Context, name, callID string, request *permissionReviewRequest, reviewContext []responses.ResponseInputItemUnionParam) permissionReviewDecision {
+	request.CurrentTurnInputs = slices.Clone(l.observations.saved.ReviewInputs)
 	request.ReviewContext = slices.Clone(reviewContext)
 	request.Review = ChildKey{Path: "/" + ReviewKey(l.observations.turnID, callID), Turn: l.observations.turnID, Call: callID}
 	request.Turn = ReviewTurn(CallKey(l.observations.turnID, callID))

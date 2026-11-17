@@ -14,12 +14,13 @@ import (
 type toolCallContextKey struct{}
 
 type toolCallContext struct {
-	looper       *looper
-	observations *turnObservations
-	reviewInput  []responses.ResponseInputItemUnionParam
-	output       chan<- ChatResponse
-	callID       string
-	sink         *backgroundSink
+	looper            *looper
+	observations      *turnObservations
+	reviewInput       []responses.ResponseInputItemUnionParam
+	currentTurnInputs []PromptInput
+	output            chan<- ChatResponse
+	callID            string
+	sink              *backgroundSink
 }
 
 func toolCallContextFrom(ctx context.Context) (toolCallContext, bool) {
@@ -80,6 +81,7 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 	}
 
 	decision.review.ReviewContext = slices.Clone(tc.reviewInput)
+	decision.review.CurrentTurnInputs = slices.Clone(tc.currentTurnInputs)
 	decision.review.Review = ChildKey{Path: "/" + ReviewKey(tc.observations.turnID, tc.callID), Turn: tc.observations.turnID, Call: tc.callID}
 	decision.review.Turn = ReviewTurn(ToolCallKey(ctx))
 

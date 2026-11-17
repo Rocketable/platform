@@ -192,11 +192,15 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 					return TextToolResult("probed"), nil
 				})
 				turnReview := []responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, "run the tests", "")}
+				turnInputs := []PromptInput{{ID: "initial", Texts: []string{"Run the demo checks."}}}
+				loop.observations.saved.ReviewInputs = slices.Clone(turnInputs)
 				output := make(chan ChatResponse, 20)
 
 				outputs, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", tc.tool, tc.args)}), turnReview, nil, output)
 				require.NoError(t, err)
 				synctest.Wait()
+
+				loop.observations.saved.ReviewInputs[0] = PromptInput{ID: "later", Texts: []string{"Do not run further checks."}}
 
 				text := fmt.Sprintf(backgroundExecuteResult, tc.job.ID)
 				if tc.tool == "task" {
@@ -242,6 +246,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 				turns := []string{}
 
 				for _, request := range reviewedRequests(loop.PermissionReviewer.(*mockPermissionReviewer)) {
+					require.Equal(t, turnInputs, request.CurrentTurnInputs)
 					require.Equal(t, turnReview, request.ReviewContext)
 					require.Equal(t, ChildKey{Path: "/" + reviewKey("turn", "call-1"), Turn: "turn", Call: "call-1"}, request.Review, "a script's host calls, even after its turn, review under the script's call")
 					turns = append(turns, request.Turn)
@@ -476,6 +481,12 @@ func TestSteerSwitchesRunningSessionType(t *testing.T) {
 
 			require.Len(t, saved, 1)
 			require.Equal(t, tc.steer, saved[0].Agent, "the turn ends as the type its steer named")
+			saves := turnSaves(t, journal)
+			evidence := saves[len(saves)-1].ReviewInputs
+			require.Len(t, evidence, 2)
+			require.Equal(t, []string{"probe it"}, evidence[0].Texts)
+			require.Equal(t, "steer-1", evidence[1].ID)
+			require.Equal(t, tc.steer, evidence[1].Agent)
 		})
 	}
 }
