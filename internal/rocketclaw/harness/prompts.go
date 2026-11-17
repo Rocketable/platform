@@ -2,6 +2,7 @@ package harness
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -68,9 +69,10 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 			return string(res.Output)
 		}
 
+		env = append(env, e.customShell.Env...)
 		shell, args := withCustomShell(&e.customShell, command)
 		cmd := exec.CommandContext(context.WithoutCancel(ctx), shell, args...)
-		cmd.Dir, cmd.Env = e.hostDir, env
+		cmd.Dir, cmd.Env = cmp.Or(e.customShell.Dir, e.hostDir), env
 
 		var stdout bytes.Buffer
 
