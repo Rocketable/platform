@@ -85,7 +85,16 @@ func retainExecuteResult(root *os.Root, dir, out string) (string, error) {
 	}
 
 	id := uuid.NewString()
-	if err := root.WriteFile(filepath.Join(dir, id+".txt"), []byte(out), 0o600); err != nil {
+
+	file, err := root.OpenFile(filepath.Join(dir, id+".txt"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err == nil {
+		_, err = file.WriteString(out)
+		if errClose := file.Close(); err == nil {
+			err = errClose
+		}
+	}
+
+	if err != nil {
 		return "", fmt.Errorf("write retained execute result: %w", err)
 	}
 
@@ -172,7 +181,15 @@ func (l *looper) saveExecuteResult(out string) (string, error) {
 		return "", fmt.Errorf("create execute spill dir: %w", err)
 	}
 
-	if err := l.promptExpansion.root.WriteFile(rel, []byte(out), 0o600); err != nil {
+	file, err := l.promptExpansion.root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err == nil {
+		_, err = file.WriteString(out)
+		if errClose := file.Close(); err == nil {
+			err = errClose
+		}
+	}
+
+	if err != nil {
 		return "", fmt.Errorf("write execute spill: %w", err)
 	}
 
