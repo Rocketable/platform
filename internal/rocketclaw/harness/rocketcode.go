@@ -18,10 +18,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-type shellCommander interface {
-	Command(command string) (path string, args []string)
-}
-
 type CustomShell struct {
 	Path           string
 	Emulated       bool
@@ -32,15 +28,12 @@ type CustomShell struct {
 	Secrets        map[string]string
 }
 
-func withCustomShell(shell shellCommander, customShell *CustomShell, command string) (path string, args []string) {
-	switch {
-	case customShell.Emulated:
-		return "", nil
-	case customShell.Path != "":
+func withCustomShell(customShell *CustomShell, command string) (path string, args []string) {
+	if customShell.Path != "" {
 		return customShell.Path, []string{command}
 	}
 
-	return shell.Command(command)
+	return "/bin/bash", []string{"--noprofile", "--norc", "-p", "-c", command}
 }
 
 type Config struct {
@@ -61,7 +54,6 @@ type Config struct {
 	ShellEnv                  map[string]string
 	ChildContext              []SessionEntry
 	OriginHeader              string
-	ShellCommand              shellCommander
 	Sandbox                   sandbox.Runtime
 	MCPServers                map[string]mcpclient.ServerConfig
 	MCPWorkspace              string
@@ -278,7 +270,7 @@ func NewWithModelResolver(
 
 	sb := config.Sandbox
 
-	promptExpansion, err := newPromptExpansionEnvironment(root, shellTemp, shellEnv, config.ShellCommand, &sb)
+	promptExpansion, err := newPromptExpansionEnvironment(root, shellTemp, shellEnv, &sb)
 	if err != nil {
 		return nil, fmt.Errorf("initialize prompt expansion: %w", err)
 	}
@@ -294,7 +286,7 @@ func NewWithModelResolver(
 	agentForTools := &activeAgent
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
 
-	baseTools, shellSystem := newSandboxedTools(root, spillRel, shellTemp, shellEnv, config.ShellCommand, &sb)
+	baseTools, shellSystem := newSandboxedTools(root, spillRel, shellTemp, shellEnv, &sb)
 	if len(config.Deciders) > 0 {
 		baseTools["decision"] = decisionTool(config.Deciders, config.Observability)
 	}

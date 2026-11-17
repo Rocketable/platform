@@ -580,7 +580,7 @@ Args: $ARGUMENTS
 `), 0o644))
 
 	loaded := LoadSkills(os.DirFS(dir), dir).Skills
-	env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand{}, &sandbox.Runtime{})
+	env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, &sandbox.Runtime{})
 	require.NoError(t, err)
 
 	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
@@ -650,7 +650,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 		skills := LoadSkills(root.FS(), dir).Skills
 		factory := testSkillFactory(t, skills, agentWithSkillPermission())
 		factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
-		factory.promptExpansion, err = newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand{}, &sandbox.Runtime{})
+		factory.promptExpansion, err = newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, &sandbox.Runtime{})
 		require.NoError(t, err)
 		result, err := factory.skillTool().Call(t.Context(), json.RawMessage(`{"name":"main-convert-agent-to-easy"}`), nil, emptyToolCallMetadata())
 		require.NoError(t, err)
@@ -672,7 +672,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 	})
 
 	t.Run("skill tool expands shell commands in runtime root", func(t *testing.T) {
-		env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand{}, &sandbox.Runtime{})
+		env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, &sandbox.Runtime{})
 		require.NoError(t, err)
 
 		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
@@ -692,7 +692,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 	})
 
 	t.Run("skill expands through the loading agent shell", func(t *testing.T) {
-		env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand{}, &sandbox.Runtime{})
+		env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, &sandbox.Runtime{})
 		require.NoError(t, err)
 
 		shell := writeCustomShell(t, root)

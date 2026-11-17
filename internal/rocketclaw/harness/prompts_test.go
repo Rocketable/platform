@@ -69,7 +69,7 @@ func TestExpandAgentPrompt(t *testing.T) {
 
 		require.NoError(t, root.WriteFile("MEMORY.md", []byte("workspace memory"), 0o644))
 		shellTemp := testPromptShellTempConfig(t, root, dir)
-		env, err := newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand{}, &sandbox.Runtime{})
+		env, err := newPromptExpansionEnvironment(root, shellTemp, nil, &sandbox.Runtime{})
 		require.NoError(t, err)
 
 		original := Agent{Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "review !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}
@@ -151,7 +151,7 @@ func TestPromptExpansionEnvironmentRunsCommandsInRoot(t *testing.T) {
 
 	require.NoError(t, root.WriteFile("MEMORY.md", []byte("expanded"), 0o644))
 	shellTemp := testPromptShellTempConfig(t, root, dir)
-	env, err := newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand{}, &sandbox.Runtime{})
+	env, err := newPromptExpansionEnvironment(root, shellTemp, nil, &sandbox.Runtime{})
 	require.NoError(t, err)
 
 	got := env.expandShellCommands(context.Background(), "before !`cat MEMORY.md` middle !`cat MEMORY.md; exit 7` after")
@@ -168,7 +168,7 @@ func TestPromptExpansionEnvironmentAppliesShellEnv(t *testing.T) {
 	shellTemp := testPromptShellTempConfig(t, root, dir)
 	t.Setenv("ROCKETCLAW_CONVERSATION_ID", "old")
 
-	env, err := newPromptExpansionEnvironment(root, shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new"}, DefaultShellCommand{}, &sandbox.Runtime{})
+	env, err := newPromptExpansionEnvironment(root, shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new"}, &sandbox.Runtime{})
 	require.NoError(t, err)
 
 	got := env.expandShellCommands(context.Background(), "!`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"`")
@@ -185,7 +185,7 @@ func TestPromptExpansionEnvironmentForcesTMPDIR(t *testing.T) {
 	shellTemp := testPromptShellTempConfig(t, root, dir)
 	t.Setenv("TMPDIR", "/process/tmp")
 
-	env, err := newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand{}, &sandbox.Runtime{})
+	env, err := newPromptExpansionEnvironment(root, shellTemp, nil, &sandbox.Runtime{})
 	require.NoError(t, err)
 
 	got := env.expandShellCommands(context.Background(), "!`printf %s \"$TMPDIR\"`")
@@ -197,7 +197,7 @@ func TestNewPromptExpansionEnvironmentRejectsInvalidSetup(t *testing.T) {
 	t.Run("nil root", func(t *testing.T) {
 		var shellTemp shellTempConfig
 
-		_, err := newPromptExpansionEnvironment(nil, shellTemp, nil, DefaultShellCommand{}, &sandbox.Runtime{})
+		_, err := newPromptExpansionEnvironment(nil, shellTemp, nil, &sandbox.Runtime{})
 
 		require.EqualError(t, err, "prompt expansion root is required")
 	})
@@ -210,7 +210,7 @@ func TestNewPromptExpansionEnvironmentRejectsInvalidSetup(t *testing.T) {
 
 		var shellTemp shellTempConfig
 
-		_, err = newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand{}, &sandbox.Runtime{})
+		_, err = newPromptExpansionEnvironment(root, shellTemp, nil, &sandbox.Runtime{})
 
 		require.ErrorContains(t, err, "stat prompt expansion root")
 	})
@@ -225,7 +225,7 @@ func testPromptExpansionEnvironment(t *testing.T) promptExpansionEnvironment {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	shellTemp := testPromptShellTempConfig(t, root, dir)
-	env, err := newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand{}, &sandbox.Runtime{})
+	env, err := newPromptExpansionEnvironment(root, shellTemp, nil, &sandbox.Runtime{})
 	require.NoError(t, err)
 
 	return env

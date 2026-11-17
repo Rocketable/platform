@@ -35,7 +35,7 @@ func GenerateHandoff(ctx context.Context, locked *config.LockedConfig, agent, tr
 
 	defer func() { err = errors.Join(err, root.RemoveAll(scratch)) }()
 
-	runtimeConfig := harness.Config{ShellTempDir: filepath.Join(cfg.Workspace, scratch), SpillDir: rocketcodeSpillDir(cfg), RetainedResultDir: filepath.Join("retained", "unused"), ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, BackgroundJobs: harness.InertBackgroundJobs{}, ShellCommand: harness.DefaultShellCommand{}}
+	runtimeConfig := harness.Config{ShellTempDir: filepath.Join(cfg.Workspace, scratch), SpillDir: rocketcodeSpillDir(cfg), RetainedResultDir: filepath.Join("retained", "unused"), ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, BackgroundJobs: harness.InertBackgroundJobs{}}
 
 	runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, agent)
 	if err != nil {

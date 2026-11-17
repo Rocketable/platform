@@ -16,16 +16,15 @@ import (
 var promptShellPattern = regexp.MustCompile("!`([^`]+)`")
 
 type promptExpansionEnvironment struct {
-	root         *os.Root
-	hostDir      string
-	shellTemp    shellTempConfig
-	env          []string
-	shellCommand shellCommander
-	sandbox      *sandbox.Runtime
-	customShell  CustomShell
+	root        *os.Root
+	hostDir     string
+	shellTemp   shellTempConfig
+	env         []string
+	sandbox     *sandbox.Runtime
+	customShell CustomShell
 }
 
-func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env []string, shellCommand shellCommander, rt *sandbox.Runtime) (promptExpansionEnvironment, error) {
+func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env []string, rt *sandbox.Runtime) (promptExpansionEnvironment, error) {
 	var zero promptExpansionEnvironment
 
 	if root == nil {
@@ -46,7 +45,7 @@ func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env
 		return zero, fmt.Errorf("resolve prompt expansion root: %w", err)
 	}
 
-	return promptExpansionEnvironment{root: root, hostDir: hostDir, shellTemp: shellTemp, env: slices.Clone(env), shellCommand: shellCommand, sandbox: rt}, nil
+	return promptExpansionEnvironment{root: root, hostDir: hostDir, shellTemp: shellTemp, env: slices.Clone(env), sandbox: rt}, nil
 }
 
 func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, prompt string) string {
@@ -69,7 +68,7 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 			return string(res.Output)
 		}
 
-		shell, args := withCustomShell(e.shellCommand, &e.customShell, command)
+		shell, args := withCustomShell(&e.customShell, command)
 		cmd := exec.CommandContext(context.WithoutCancel(ctx), shell, args...)
 		cmd.Dir, cmd.Env = e.hostDir, env
 
@@ -105,10 +104,4 @@ func (e *promptExpansionEnvironment) forAgent(agent *Agent) promptExpansionEnvir
 	}
 
 	return scoped
-}
-
-type DefaultShellCommand struct{}
-
-func (DefaultShellCommand) Command(command string) (path string, args []string) {
-	return "/bin/bash", []string{"--noprofile", "--norc", "-p", "-c", command}
 }

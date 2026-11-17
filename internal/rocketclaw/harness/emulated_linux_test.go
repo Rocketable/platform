@@ -103,7 +103,7 @@ func newEmulated(t *testing.T, commands, secrets map[string]string, targets []st
 	shellTemp := testShellTempConfig(t, root, filepath.Join(workspace, ".tmp"))
 
 	return &emulated{
-		sss:   newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=web:c1"}, DefaultShellCommand{}, rt),
+		sss:   newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=web:c1"}, rt),
 		shell: CustomShell{Emulated: true, Dir: folder, ReadOnly: readOnly, Commands: commands, Secrets: secrets, NetworkTargets: targets},
 	}
 }

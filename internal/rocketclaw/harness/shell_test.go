@@ -33,7 +33,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	require.NoError(t, root.WriteFile(".env.example", []byte("SECRET=example\n"), 0o644))
 
 	shellTemp := testShellTempConfig(t, root, outputDir)
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand{}, &sandbox.Runtime{})
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{})
 	sss.forceKillTimeout = 10 * time.Millisecond
 
 	t.Run("rejects invalid commands before execution", func(t *testing.T) {
@@ -221,7 +221,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, fs.FileMode(0o700), info.Mode().Perm())
 
-		configured := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new", "TMPDIR=/not/rocketcode"}, DefaultShellCommand{}, &sandbox.Runtime{})
+		configured := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new", "TMPDIR=/not/rocketcode"}, &sandbox.Runtime{})
 
 		result := configured.Bash(t.Context(), &CustomShell{}, bashParams{Command: `printf '%s\n%s' "$ROCKETCLAW_CONVERSATION_ID" "$TMPDIR"`, Description: "env precedence"})
 		require.True(t, result.Success, result.Output)
@@ -336,24 +336,4 @@ func TestResolveBashPath(t *testing.T) {
 			require.Equal(t, tt.want, resolveBashPath("/workspace", tt.arg))
 		})
 	}
-}
-
-func TestShellCommandOverride(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
-	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
-	shellTemp := testShellTempConfig(t, root, outputDir)
-
-	shell := &mockShellCommander{CommandFunc: func(string) (string, []string) {
-		return "/bin/sh", []string{"-c", "printf mocked"}
-	}}
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, shell, &sandbox.Runtime{})
-	got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "gh pr view 1", TimeoutMillisecond: 0})
-
-	require.Equal(t, "gh pr view 1", shell.CommandCalls()[0].Command)
-	require.Contains(t, got.String(), "mocked")
 }
