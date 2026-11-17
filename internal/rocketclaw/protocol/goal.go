@@ -13,7 +13,7 @@ type GoalRequest struct {
 const GoalCommandHelp = `$goal <objective>
 
 Parameters:
-maxTurns: omitted (default 5); positive integer; 0, -1, or infinite
+maxTurns: omitted (default infinite); positive integer; 0, -1, or infinite
 
 Examples:
 $goal ship the release
@@ -23,7 +23,7 @@ $goal maxTurns: infinite ship the release`
 
 func ParseGoalRequest(text string) (goal GoalRequest, rejection string) {
 	text = strings.TrimSpace(text)
-	maxTurns := 5
+	maxTurns := 0
 
 	if text == "" {
 		return GoalRequest{}, GoalCommandHelp
