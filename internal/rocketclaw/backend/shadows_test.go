@@ -1892,6 +1892,8 @@ func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
 func TestHistoryMutationSharesLockOrder(t *testing.T) {
 	t.Parallel()
 
+	s := newTestSessionService(t)
+
 	for _, tc := range []struct {
 		name, producer, child string
 		lockRest              func(context.Context, *sql.Tx, string) error
@@ -1904,7 +1906,6 @@ func TestHistoryMutationSharesLockOrder(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := newTestSessionService(t)
 			ctx := t.Context()
 			web := "web:" + tc.producer
 
