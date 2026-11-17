@@ -365,7 +365,7 @@ commands:
   stripe-write: "stripe -c $ROCKETCLAW_METADATA_CUSTOMER_ID"
 
 mcp:
-  alitu_google_marketing: [read]
+  acme_google_marketing: [read]
 
 rocketclaw: [sessions, tags]
 tags:

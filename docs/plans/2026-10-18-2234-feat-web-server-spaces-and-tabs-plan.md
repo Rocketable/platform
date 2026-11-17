@@ -31,7 +31,7 @@ Spaces move to the server and are shared by everyone. Each person's tab state mo
 
 ### Problem Frame
 
-Spaces, tabs, and tab groups live only in the browser's `localStorage` (`tabs:<user>` and `tab-groups-chrome-spaces:<user>` in `internal/rocketclaw/web/src/ui.tsx`, `loadTabs`). A space made on a laptop (for example "Alitu") never shows up on a phone, and each device keeps its own unrelated tabs. Agents and crons can already name a space with `space:` frontmatter, but that name only filters lists. It never puts a session anywhere, and an agent whose space nobody has created stays hidden. Spaces read as a personal browser setting when they are meant to be shared places that the agents' work lands in.
+Spaces, tabs, and tab groups live only in the browser's `localStorage` (`tabs:<user>` and `tab-groups-chrome-spaces:<user>` in `internal/rocketclaw/web/src/ui.tsx`, `loadTabs`). A space made on a laptop (for example "Acme") never shows up on a phone, and each device keeps its own unrelated tabs. Agents and crons can already name a space with `space:` frontmatter, but that name only filters lists. It never puts a session anywhere, and an agent whose space nobody has created stays hidden. Spaces read as a personal browser setting when they are meant to be shared places that the agents' work lands in.
 
 ### Requirements
 
@@ -266,7 +266,7 @@ stateDiagram-v2
 - **Patterns to follow:** `cmp.Or(job.Space, agents.Items[job.Agent].Space)` in `listCronJobs`; `Runtime.CreateConversation` in `backend/conversations.go`.
 - **Test scenarios:**
   - Covers R7: `createSession` with agent `opsbot` (space "Ops") and person space "Main" returns the id of a newly created "Ops".
-  - `createSession` with a spaceless agent and person space "Alitu" returns the id of "Alitu".
+  - `createSession` with a spaceless agent and person space "Acme" returns the id of "Acme".
   - `createSession` with a spaceless agent and no person space returns an empty space id.
   - `createSession` with a spaceless agent and the id of a space deleted since the Web loaded returns an empty space id and creates no space.
   - `runCronJob` for a cron with `space: Banana`, when "Banana" doesn't exist, creates "Banana" and returns its id.
