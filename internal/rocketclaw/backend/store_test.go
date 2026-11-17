@@ -2007,60 +2007,67 @@ func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.
 func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t *testing.T) {
 	t.Parallel()
 
+	store := newTestSessionService(t)
 	cutoff := time.Unix(1_700_000_000, 0).UTC()
 
-	for _, tt := range []struct {
+	cases := []struct {
 		name                                           string
 		paired, privateFresh, managedFresh, wantPruned bool
 		privateEmpty, managedEmpty                     bool
 	}{
-		{name: "paired both stale", paired: true, wantPruned: true},
-		{name: "paired private fresh", paired: true, privateFresh: true},
-		{name: "paired managed fresh", paired: true, managedFresh: true},
-		{name: "paired private empty", paired: true, privateEmpty: true, managedFresh: true},
-		{name: "paired managed empty", paired: true, managedEmpty: true, privateFresh: true},
-		{name: "paired both empty", paired: true, privateEmpty: true, managedEmpty: true, wantPruned: true},
-		{name: "legacy stale", wantPruned: true},
-		{name: "legacy fresh", managedFresh: true},
-	} {
+		{name: "paired_both_stale", paired: true, wantPruned: true},
+		{name: "paired_private_fresh", paired: true, privateFresh: true},
+		{name: "paired_managed_fresh", paired: true, managedFresh: true},
+		{name: "paired_private_empty", paired: true, privateEmpty: true, managedFresh: true},
+		{name: "paired_managed_empty", paired: true, managedEmpty: true, privateFresh: true},
+		{name: "paired_both_empty", paired: true, privateEmpty: true, managedEmpty: true, wantPruned: true},
+		{name: "legacy_stale", wantPruned: true},
+		{name: "legacy_fresh", managedFresh: true},
+	}
+
+	for _, tt := range cases {
+		managedConversationID := "managed-" + tt.name
+		publicID := "public-" + tt.name
+
+		privateConversationID := ""
+		if tt.paired {
+			privateConversationID = "external_mcp:planner:" + tt.name
+			require.NoError(t, store.RegisterExternalMCPConversation(publicID, "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID}))
+		} else {
+			recordTestConversations(t, store, "main", map[string]ConversationKind{managedConversationID: KindWebChat})
+			_, err := store.db.ExecContext(t.Context(), `UPDATE conversations SET external_id = $2, external_agent = 'planner', origin_pairs = 'null' WHERE conversation_id = $1`, managedConversationID, publicID)
+			require.NoError(t, err)
+		}
+
+		_, err := store.db.ExecContext(t.Context(), `UPDATE conversations SET created_at = $1 WHERE conversation_id IN ($2, $3)`, cutoff.Add(-time.Hour), managedConversationID, privateConversationID)
+		require.NoError(t, err)
+
+		if tt.paired && !tt.privateEmpty {
+			_, err := store.AppendEntryID(t.Context(), privateConversationID, testSessionEntryAt(pruneTestTime(cutoff, tt.privateFresh), "private"))
+			require.NoError(t, err)
+		}
+
+		if !tt.managedEmpty {
+			_, err := store.AppendEntryID(t.Context(), managedConversationID, testSessionEntryAt(pruneTestTime(cutoff, tt.managedFresh), "managed"))
+			require.NoError(t, err)
+		}
+	}
+
+	_, err := store.PruneStateBefore(t.Context(), cutoff, 0)
+	require.NoError(t, err)
+
+	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			store := newTestSessionServiceAt(t, t.TempDir())
-			managedConversationID := "managed"
+			_, ok, err := store.ExternalMCPSession("public-" + tt.name)
+			require.NoError(t, err)
+			assert.Equal(t, !tt.wantPruned, ok, "External MCP binding")
 
-			privateConversationID := ""
+			conversationIDs := []string{"managed-" + tt.name}
 			if tt.paired {
-				privateConversationID = "external_mcp:planner:private"
-				require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID}))
-			} else {
-				recordTestConversations(t, store, "main", map[string]ConversationKind{managedConversationID: KindWebChat})
-				_, err := store.db.ExecContext(t.Context(), `UPDATE conversations SET external_id = 'public-1', external_agent = 'planner', origin_pairs = 'null' WHERE conversation_id = $1`, managedConversationID)
-				require.NoError(t, err)
+				conversationIDs = append(conversationIDs, "external_mcp:planner:"+tt.name)
 			}
 
-			_, err := store.db.ExecContext(t.Context(), `UPDATE conversations SET created_at = $1`, cutoff.Add(-time.Hour))
-			require.NoError(t, err)
-
-			if privateConversationID != "" && !tt.privateEmpty {
-				_, err := store.AppendEntryID(t.Context(), privateConversationID, testSessionEntryAt(pruneTestTime(cutoff, tt.privateFresh), "private"))
-				require.NoError(t, err)
-			}
-
-			if !tt.managedEmpty {
-				_, err := store.AppendEntryID(t.Context(), managedConversationID, testSessionEntryAt(pruneTestTime(cutoff, tt.managedFresh), "managed"))
-				require.NoError(t, err)
-			}
-
-			_, err = store.PruneStateBefore(t.Context(), cutoff, 0)
-			require.NoError(t, err)
-			_, ok, err := store.ExternalMCPSession("public-1")
-			require.NoError(t, err)
-			assert.Equal(t, !tt.wantPruned, ok)
-
-			for _, conversationID := range []string{managedConversationID, privateConversationID} {
-				if conversationID == "" {
-					continue
-				}
-
+			for _, conversationID := range conversationIDs {
 				_, ok, err := store.Thread(conversationID)
 				require.NoError(t, err)
 				assert.Equal(t, !tt.wantPruned, ok, conversationID)
