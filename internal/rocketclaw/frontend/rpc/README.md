@@ -601,8 +601,8 @@ and joins the backfill before releasing the runtime lock or closing the store.
 
 ### Run the Web transport
 
-Session-list Slack labels use stored channel facts. A background lane refreshes known
-channels every three minutes; rate limits can extend staleness, and failed
+Session-list Slack labels use stored channel facts. Known channels are refreshed
+once when the server starts; rate limits can delay that refresh, and failed
 lookups retain the last known facts. Session-list requests do not wait for Slack.
 Stored facts do not grant permission: action authorization still uses live checks.
 

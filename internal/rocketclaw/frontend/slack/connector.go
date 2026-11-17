@@ -82,10 +82,9 @@ type Connector struct {
 	responseMu sync.Mutex
 	sessions   map[string]*slackSession
 
-	facts       channelFactsStore
-	factsWake   chan struct{}
-	refreshWake chan struct{}
-	inbound     errgroup.Group
+	facts     channelFactsStore
+	factsWake chan struct{}
+	inbound   errgroup.Group
 
 	nameMu       sync.Mutex
 	nameByID     map[string]string
@@ -147,7 +146,7 @@ func New(cfg *config.LockedConfig, threadRouter protocol.PrimaryTextRouter, fact
 	return &Connector{
 		log: logger.With("component", "slack"), config: cfg,
 		threadRouter: threadRouter,
-		facts:        facts, factsWake: make(chan struct{}, 1), refreshWake: make(chan struct{}, 1), observations: make(map[string]channelObservation),
+		facts:        facts, factsWake: make(chan struct{}, 1), observations: make(map[string]channelObservation),
 		api: api, socketEvents: make(chan socketmode.Event, 50),
 		newSocketClient: func(api *slack.Client) *socketmode.Client {
 			return socketmode.New(api)
@@ -621,13 +620,6 @@ func (c *Connector) recordChannelFact(ctx context.Context, channelID, name strin
 	}
 }
 
-func (c *Connector) requestChannelFacts() {
-	select {
-	case c.refreshWake <- struct{}{}:
-	default:
-	}
-}
-
 func (c *Connector) queueChannelFact(channelID, name string, observedAt time.Time) {
 	c.mu.Lock()
 	if previous, exists := c.observations[channelID]; !exists || previous.at.Before(observedAt) {
@@ -653,60 +645,48 @@ func (c *Connector) flushChannelFacts(ctx context.Context) {
 }
 
 func (c *Connector) refreshChannelFacts(ctx context.Context) error {
-	ticker := time.NewTicker(3 * time.Minute)
-	defer ticker.Stop()
+	c.flushChannelFacts(ctx)
 
-	for ctx.Err() == nil {
-		c.flushChannelFacts(ctx)
+	ids, err := c.facts.SlackChannelIDs(ctx)
+	if err != nil {
+		c.log.Warn("list Slack channel facts for refresh", "error", err)
+	}
 
-		ids, err := c.facts.SlackChannelIDs(ctx)
-		if err != nil {
-			c.log.Warn("list Slack channel facts for refresh", "error", err)
-		}
+	for _, id := range ids {
+		for ctx.Err() == nil {
+			observedAt := time.Now()
+			channel, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: id})
+			c.flushChannelFacts(ctx)
 
-		for _, id := range ids {
-			for ctx.Err() == nil {
-				observedAt := time.Now()
-				channel, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: id})
-				c.flushChannelFacts(ctx)
-
-				if err == nil {
-					c.recordChannelFact(ctx, id, channel.Name, observedAt)
-					break
-				}
-
-				c.log.Warn("refresh Slack channel fact", "channel", id, "error", err)
-
-				if errRate, ok := errors.AsType[*slack.RateLimitedError](err); ok {
-					select {
-					case <-ctx.Done():
-						return nil
-					case <-time.After(errRate.RetryAfter):
-					}
-
-					continue
-				}
-
+			if err == nil {
+				c.recordChannelFact(ctx, id, channel.Name, observedAt)
 				break
 			}
-		}
 
-	wait:
-		for {
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-ticker.C:
-				break wait
-			case <-c.refreshWake:
-				break wait
-			case <-c.factsWake:
-				c.flushChannelFacts(ctx)
+			c.log.Warn("refresh Slack channel fact", "channel", id, "error", err)
+
+			if errRate, ok := errors.AsType[*slack.RateLimitedError](err); ok {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(errRate.RetryAfter):
+				}
+
+				continue
 			}
+
+			break
 		}
 	}
 
-	return nil
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-c.factsWake:
+			c.flushChannelFacts(ctx)
+		}
+	}
 }
 
 type slackPosting struct {
@@ -914,10 +894,6 @@ func (c *Connector) eventLoop(ctx context.Context) {
 				c.log.Debug("received Slack socket event", "event_type", event.Type, "request_type", event.Request.Type, "envelope_id", event.Request.EnvelopeID, "retry_attempt", event.Request.RetryAttempt, "retry_reason", event.Request.RetryReason)
 			} else {
 				c.log.Debug("received Slack socket event", "event_type", event.Type)
-			}
-
-			if event.Type == socketmode.EventTypeConnected {
-				c.requestChannelFacts()
 			}
 
 			if event.Type == socketmode.EventTypeEventsAPI {

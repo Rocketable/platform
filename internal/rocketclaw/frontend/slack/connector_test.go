@@ -745,26 +745,10 @@ func TestChannelAgentChoicesUsesCurrentPolicy(t *testing.T) {
 	assert.Equal(t, []string{"fallback"}, choices, "empty exact policy preserves live fallback semantics")
 }
 
-func TestChannelFactsRefreshTimingAndCoalescing(t *testing.T) {
+func TestChannelFactsRefreshOncePerStart(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		connector := newTestConnector("http://slack.test")
 		facts := newTestChannelFacts()
-		connector.facts = facts
-		ctx, cancel := context.WithCancel(t.Context())
-		connector.inboundStop = cancel
-
-		connector.inbound.Go(func() error { return connector.refreshChannelFacts(ctx) })
-		go connector.eventLoop(ctx)
-
-		synctest.Wait()
-		require.Len(t, facts.SlackChannelIDsCalls(), 1, "startup refresh")
-		time.Sleep(3*time.Minute - time.Nanosecond)
-		synctest.Wait()
-		require.Len(t, facts.SlackChannelIDsCalls(), 1)
-		time.Sleep(time.Nanosecond)
-		synctest.Wait()
-		require.Len(t, facts.SlackChannelIDsCalls(), 2)
-
 		release := make(chan struct{})
 		facts.SlackChannelIDsFunc = func(ctx context.Context) ([]string, error) {
 			select {
@@ -774,28 +758,29 @@ func TestChannelFactsRefreshTimingAndCoalescing(t *testing.T) {
 
 			return nil, nil
 		}
+		connector.facts = facts
+		ctx, cancel := context.WithCancel(t.Context())
+		connector.inboundStop = cancel
 
-		connector.socketEvents <- socketmode.Event{Type: socketmode.EventTypeConnected}
-
-		synctest.Wait()
-		require.Len(t, facts.SlackChannelIDsCalls(), 3)
-
-		for range 10 {
-			connector.socketEvents <- socketmode.Event{Type: socketmode.EventTypeConnected}
-		}
+		connector.inbound.Go(func() error { return connector.refreshChannelFacts(ctx) })
+		go connector.eventLoop(ctx)
 
 		synctest.Wait()
-		require.Len(t, facts.SlackChannelIDsCalls(), 3, "no overlapping refresh")
+		require.Len(t, facts.SlackChannelIDsCalls(), 1, "startup refresh")
 		connector.handleEventsAPI(ctx, newSlackEventsAPIEvent(&slackevents.ChannelRenameEvent{Channel: slackevents.ChannelRenameInfo{ID: "C1", Name: "new"}}))
 		connector.queueChannelFact("C1", "old", time.Now().Add(-time.Nanosecond))
 		close(release)
 		synctest.Wait()
-		require.Len(t, facts.SlackChannelIDsCalls(), 4, "coalesced reconnect refresh")
 		require.Len(t, facts.RecordChannelFactCalls(), 1)
 		assert.Equal(t, "new", facts.RecordChannelFactCalls()[0].Name, "pending observations retain the newer rename")
-		connector.queueChannelFact("C1", "later", time.Now().Add(time.Nanosecond))
+
+		connector.socketEvents <- socketmode.Event{Type: socketmode.EventTypeConnected}
+
+		time.Sleep(time.Hour)
 		synctest.Wait()
-		require.Len(t, facts.SlackChannelIDsCalls(), 4, "observations must not trigger duplicate Slack lookups")
+		require.Len(t, facts.SlackChannelIDsCalls(), 1, "reconnects and elapsed time must not refresh again")
+		connector.queueChannelFact("C1", "later", time.Now())
+		synctest.Wait()
 		require.Len(t, facts.RecordChannelFactCalls(), 2)
 		require.NoError(t, connector.Stop(ctx))
 	})
@@ -863,7 +848,7 @@ func TestChannelFactsRefreshRetryRetentionAndConvergence(t *testing.T) {
 	}
 
 	rateLimited, retried := make(chan time.Time, 1), make(chan time.Time, 1)
-	finished := make(chan struct{}, 2)
+	finished := make(chan struct{}, 1)
 
 	var mu sync.Mutex
 
@@ -928,15 +913,6 @@ func TestChannelFactsRefreshRetryRetentionAndConvergence(t *testing.T) {
 		require.True(t, found)
 		assert.Equal(t, tc.name, name)
 	}
-
-	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(&slackevents.ChannelRenameEvent{Channel: slackevents.ChannelRenameInfo{ID: "C1", Name: "delayed"}}))
-	connector.requestChannelFacts()
-	<-finished
-
-	name, found, err := store.ChannelFact(t.Context(), "T1", "C1")
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, "current", name, "later refresh converges after delayed rename")
 }
 
 func newTestStoredChannelFacts(t *testing.T) *backend.SessionService {
@@ -2815,7 +2791,6 @@ func newTestConnectorWithOptions(apiURL string, channels []config.SlackChannelCo
 	connector.sessions = map[string]*slackSession{}
 	connector.facts = newTestChannelFacts()
 	connector.factsWake = make(chan struct{}, 1)
-	connector.refreshWake = make(chan struct{}, 1)
 	connector.observations = make(map[string]channelObservation)
 	connector.nameByID = map[string]string{}
 
