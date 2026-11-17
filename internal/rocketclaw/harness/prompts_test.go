@@ -40,6 +40,19 @@ func TestExpandPromptShellCommands(t *testing.T) {
 		require.Equal(t, "prefix  suffix", got)
 	})
 
+	t.Run("a wrapper runs in the agent's folder with the shell's variables", func(t *testing.T) {
+		env := testPromptExpansionEnvironment(t)
+		require.NoError(t, env.root.WriteFile("env.sh", []byte("#!/bin/sh\nprintf 'pwd=%s environment=%s' \"$(pwd -P)\" \"$ROCKETCLAW_ENVIRONMENT\""), 0o755))
+
+		folder, err := filepath.EvalSymlinks(t.TempDir())
+		require.NoError(t, err)
+
+		env.customShell = CustomShell{Path: filepath.Join(env.root.Name(), "env.sh"), Dir: folder, Env: []string{`ROCKETCLAW_ENVIRONMENT={"commands":{"gh":"gh"}}`}}
+		got := env.expandShellCommands(t.Context(), "!`ls`")
+
+		require.Equal(t, "pwd="+folder+` environment={"commands":{"gh":"gh"}}`, got)
+	})
+
 	t.Run("does not treat empty backticks as a shell command", func(t *testing.T) {
 		env := testPromptExpansionEnvironment(t)
 		prompt := "before !`` after"
