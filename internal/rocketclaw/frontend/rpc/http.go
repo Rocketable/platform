@@ -41,7 +41,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 	mux.Handle("GET /api/", http.NotFoundHandler())
 	mux.Handle("POST /api/", http.NotFoundHandler())
 
-	handleOpenCode(mux, connection, cfg.Clone().OpenCode)
+	handleOpenCode(mux, connection, cfg)
 
 	for _, route := range []string{"GET /pages/{space}/{agent}/{path...}", "GET /pages-raw/{agent}/{path...}"} {
 		mux.HandleFunc(route, servePage(connection, app))

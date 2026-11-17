@@ -12,13 +12,16 @@ import (
 	"path"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
-func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, servers map[string]config.OpenCodeConfig) {
+func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, cfg *config.LockedConfig) {
+	servers := cfg.Clone().OpenCode
+
 	proxies := make(map[string]http.Handler, len(servers))
 	for name, server := range servers {
 		proxies[name] = http.StripPrefix("/oc/"+name, openCodeProxy(server))
@@ -46,6 +49,7 @@ func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, servers map
 			if parts := strings.Split(r.PathValue("path"), "/"); r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "session" && parts[2] == "prompt" {
 				tab := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte("opencode:"+r.PathValue("server")+":"+parts[1]))
 				_ = connection.Invoke(r.Context(), "/rpc.Web/Tabs", &TabsRequest{Attention: &AttentionChange{Paths: []string{tab}, Action: AttentionAction_SENT}}, &TabsResponse{})
+				_ = backend.AddOpenCodeSessionBridge(r.Context(), cfg, r.PathValue("server"), parts[1])
 			}
 
 			proxy.ServeHTTP(w, r.WithContext(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-username", identity.Username)))

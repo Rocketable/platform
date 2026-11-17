@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -108,6 +109,64 @@ func (r *Runtime) callOpenCodeTool(ctx context.Context, name string, server conf
 	}
 
 	return result.Output, nil
+}
+
+const openCodeBridgeName = "rocketclaw"
+
+func addOpenCodeBridge(ctx context.Context, origin, name string, server config.OpenCodeConfig, directory string) error {
+	var bridge struct {
+		Config struct {
+			Type    string `json:"type"`
+			URL     string `json:"url"`
+			OAuth   bool   `json:"oauth"`
+			Headers struct {
+				Authorization string `json:"Authorization"`
+			} `json:"headers"`
+		} `json:"config"`
+	}
+
+	bridge.Config.Type, bridge.Config.URL = "remote", origin+"/opencode/"+url.PathEscape(name)+"/mcp"
+	bridge.Config.Headers.Authorization = "Basic " + base64.StdEncoding.EncodeToString([]byte("opencode:"+server.Password))
+
+	return openCodeCall(ctx, name, server, http.MethodPut, "/api/experimental/mcp/"+openCodeBridgeName+"?"+url.Values{"location[directory]": {directory}}.Encode(), &bridge, nil)
+}
+
+func AddOpenCodeSessionBridge(ctx context.Context, cfg *config.LockedConfig, name, session string) error {
+	current := cfg.Clone()
+	server := current.OpenCode[name]
+
+	var found struct {
+		Data openCodeSession `json:"data"`
+	}
+	if err := openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(session), nil, &found); err != nil {
+		return err
+	}
+
+	return addOpenCodeBridge(ctx, current.Web.Tsnet.Origin, name, server, found.Data.Location.Directory)
+}
+
+func addOpenCodeBridges(ctx context.Context, origin, name string, server config.OpenCodeConfig) {
+	type mcpServer struct {
+		Name string `json:"name"`
+	}
+
+	var locations []struct {
+		Directory string `json:"directory"`
+	}
+	if openCodeCall(ctx, name, server, http.MethodGet, "/api/debug/location", nil, &locations) != nil {
+		return
+	}
+
+	for _, location := range locations {
+		var listed struct {
+			Data []mcpServer `json:"data"`
+		}
+
+		if openCodeCall(ctx, name, server, http.MethodGet, "/api/mcp?"+url.Values{"location[directory]": {location.Directory}}.Encode(), nil, &listed) == nil &&
+			!slices.ContainsFunc(listed.Data, func(mcp mcpServer) bool { return mcp.Name == openCodeBridgeName }) {
+			_ = addOpenCodeBridge(ctx, origin, name, server, location.Directory)
+		}
+	}
 }
 
 func (r *Runtime) openCodeTools(conversation, space string) []harness.Tool {

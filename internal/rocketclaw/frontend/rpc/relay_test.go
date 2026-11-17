@@ -29,14 +29,27 @@ import (
 )
 
 type proxyUpstream struct {
-	hits                            int
-	auth, origin, cookie, uri, body string
+	auth, origin, cookie, uri, body, bridge string
+	calls                                   []string
 }
 
 func (u *proxyUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	u.hits++
-	u.origin, u.cookie, u.uri = r.Header.Get("Origin"), r.Header.Get("Cookie"), r.URL.RequestURI()
+	u.calls = append(u.calls, r.Method+" "+r.URL.RequestURI())
 	body, _ := io.ReadAll(r.Body)
+
+	switch r.Method + " " + r.URL.Path {
+	case "GET /api/session/s1":
+		_, _ = w.Write([]byte(`{"data":{"id":"s1","location":{"directory":"/srv/s1"}}}`))
+		return
+	case "PUT /api/experimental/mcp/rocketclaw":
+		u.bridge = string(body)
+
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
+
+	u.origin, u.cookie, u.uri = r.Header.Get("Origin"), r.Header.Get("Cookie"), r.URL.RequestURI()
 	u.body = string(body)
 
 	if user, password, ok := r.BasicAuth(); ok && user == "opencode" {
@@ -74,7 +87,7 @@ func startProxyTestRPC(t *testing.T, upstream string) (http.Handler, *backend.Se
 	require.NoError(t, err)
 
 	servers := map[string]config.OpenCodeConfig{"box": {URL: upstream, Password: "pw"}}
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenCode: servers, Permissions: map[string][]string{"bob": {"Ops"}}}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenCode: servers, Permissions: map[string][]string{"bob": {"Ops"}}, Web: config.WebConfig{Tsnet: &config.TsnetConfig{Origin: "https://claw.example.ts.net"}}}
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
@@ -150,7 +163,7 @@ func TestOpenCodeProxy(t *testing.T) {
 	assert.Empty(t, response.Header().Get("WWW-Authenticate"), "the browser never prompts for OpenCode's password")
 	assert.Equal(t, "sandbox", response.Header().Get("Content-Security-Policy"))
 
-	before := fake.hits
+	before := len(fake.calls)
 
 	assert.Equal(t, http.StatusUnauthorized, serve(http.MethodGet, "/oc/box/api/session", "", nil).Code, "a caller the Web does not admit")
 	assert.Equal(t, http.StatusForbidden, serve(http.MethodGet, "/oc/box/api/session", "bob", nil).Code, "a person limited to spaces")
@@ -165,7 +178,7 @@ func TestOpenCodeProxy(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, serve(http.MethodGet, "/oc/box/api/session", "alice", header).Code, header)
 	}
 
-	assert.Equal(t, before, fake.hits, "refused requests never reach OpenCode")
+	assert.Len(t, fake.calls, before, "refused requests never reach OpenCode")
 
 	assert.Equal(t, http.StatusOK, serve(http.MethodGet, "/oc/box/api/session", "alice", http.Header{"Origin": {"http://rocketclaw.example"}}).Code)
 	assert.Equal(t, upstream.URL, fake.origin, "OpenCode sees its own origin")
@@ -191,6 +204,12 @@ func TestOpenCodeProxy(t *testing.T) {
 			assert.JSONEq(t, test.want, fake.body, test.body)
 		}
 	}
+
+	fake.calls = nil
+
+	require.Equal(t, http.StatusOK, serve(http.MethodPost, "/oc/box/api/session/s1/prompt", "alice", nil).Code)
+	assert.Equal(t, []string{"GET /api/session/s1", "PUT /api/experimental/mcp/rocketclaw?location%5Bdirectory%5D=%2Fsrv%2Fs1", "POST /api/session/s1/prompt"}, fake.calls, "the bridge reaches the session's folder before its prompt does")
+	assert.JSONEq(t, `{"config":{"type":"remote","url":"https://claw.example.ts.net/opencode/box/mcp","oauth":false,"headers":{"Authorization":"Basic b3BlbmNvZGU6cHc="}}}`, fake.bridge)
 
 	_, err := db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, title, name, directory, last_updated, synced_at)
 VALUES ('opencode:box:s2', '', '', 'remote', FALSE, 'remote', 'box', 's2', '', '', '/srv', now(), now())`)

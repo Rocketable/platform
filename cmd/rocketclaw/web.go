@@ -52,7 +52,7 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 
 	if len(cfg.OpenCode) > 0 {
 		serving.Go(func() error {
-			rt.Sessions.SyncOpenCode(ctxSync, cfg.OpenCode)
+			rt.Sessions.SyncOpenCode(ctxSync, rt.Cfg)
 			return nil
 		})
 	}
