@@ -592,8 +592,13 @@ active tab.
   parks the session in view that way, and on any other tab does nothing. A parked tab
   leaves the strip for the **Parked** section
   at the bottom, which lists your parked tabs from every space, each with when
-  its park ends. It folds like Shared, starts folded, and folded still shows
-  the tab in view. A parked tab keeps its space, group, and place, and
+  its park ends, and its header counts them. It folds like Shared, starts folded, and folded still shows
+  the tab in view. With more than one space it is a tree: each space with
+  parked tabs is a branch that folds on its own, again still showing the tab in
+  view, and stays as you left it. With Remote RocketClaws, when more than one
+  server has parked tabs, each server is a branch above its spaces; a row opens
+  on its own server in its space, its menu's attention items act there, and it
+  has no close button. A parked tab keeps its space, group, and place, and
   **Unpark**, in its menu in place of Park, puts it back there.
   It is never bold and never notifies, but what happens on it is remembered:
   unparked, it is bold if something happened that you have not seen, without a
@@ -601,7 +606,8 @@ active tab.
   time is up (“Park ended”), when the turn it waited for ends (the reply's own
   notification), or when its agent asks you a question, within a poll, also
   when you had closed it. A parked Shared or Top Shelf row stays
-  where it is, dimmed for you alone. Screen readers hear “Parked”, “Parked
+  where it is, dimmed for you alone; Parked also lists a parked Shared row,
+  which opens in its space without a tab of your own. Screen readers hear “Parked”, “Parked
   until …”, or “Parked until it is done”. Close others, Close to the right,
   Close all, and Close group close this space's parked tabs too; Cmd/Ctrl+[
   and ] skip them.
@@ -657,8 +663,17 @@ active tab.
 - **Spaces.** Spaces are shared by everyone except people limited to spaces
   (below): the server keeps one list, oldest first, starting with **Main**, and
   names are unique ignoring case. Every tab
-  belongs to one space, and the strip shows only the current
-  space's tabs. The space button at the top of the strip names the current
+  belongs to one space. With more than one space the strip is a stack of cards,
+  one per space in their order: the current space's card is tinted and holds its
+  Shared group and your tabs, and every other space's card shows a folder you can
+  enter by its name. Another
+  space's card starts folded, listing only its tabs that wait for you or ask
+  you something, with its name bold and a count while any wait, **Needs you** while one
+  asks, and a spinner while a turn runs there; its chevron unfolds it to list
+  all its tabs, and that choice is saved. A row from another space opens in its
+  space, which becomes the current one, and its menu offers only Close, Copy
+  link, and the attention items. The space button heading the current branch names
+  the current
   space; its menu lists the spaces to switch to and offers **New space**,
   **Rename space**, and **Delete space**, which change the space for everyone.
   A new space takes the first free "Space N" name and is then named in place of

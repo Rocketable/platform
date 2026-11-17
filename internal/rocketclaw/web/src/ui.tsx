@@ -16,9 +16,9 @@ import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCErro
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
-import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
+import { createContext, Fragment, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { flushSync } from "react-dom";
@@ -1071,7 +1071,8 @@ function loadTabs(path: string, owner?: string, saved?: SavedTabs, shared: Saved
 
 const savedState = (state: TabState): SavedTabs["state"] => {
   const tabs = state.tabs.flatMap(({ path, preview, group, space, search }) => preview ? [] : [{ path, group, space, search }]);
-  return { tabs, groups: state.groups.filter((group) => ["shared", "parked"].includes(group.id) || tabs.some((tab) => tab.group === group.id)), space: state.space, last: state.last, sharedOrder: state.sharedOrder };
+  const folds = new Set(["shared", "parked", ...state.spaces.flatMap((space) => [`space:${space.id}`, `parked:${space.id}`])]);
+  return { tabs, groups: state.groups.filter((group) => folds.has(group.id) || /^parked:(@|.*\/)/.test(group.id) || tabs.some((tab) => tab.group === group.id)), space: state.space, last: state.last, sharedOrder: state.sharedOrder };
 };
 
 type ClosedTab = NonNullable<SavedTabs["closed"]>[number];
@@ -1273,9 +1274,10 @@ function useTabs() {
   const spaceTabs = state.tabs.filter((tab) => tab.space === state.space && !isKeeper(tab));
   const groups = state.groups.filter((group) => strip.some((tab) => tab.group === group.id));
   // Closing the active tab activates the target, else its right neighbour, else its left one, in this space; an emptied space gets New session.
-  // Only this person's tabs here or in Parked close, so a tab only in Shared stays open.
+  // Only this person's tabs close: here, in Parked, or in another space unless it is the page in view, so a tab only in
+  // Shared stays open.
   const close = (paths: string[], target?: string) => {
-    const doomed = new Set(paths.filter((path) => shown.some((tab) => tab.path === path) || (parked.has(path) && state.tabs.some((tab) => tab.path === path)))), kept = (tab: Tab) => !doomed.has(tab.path);
+    const doomed = new Set(paths.filter((path) => shown.some((tab) => tab.path === path) || ((parked.has(path) || path !== pathname) && state.tabs.some((tab) => tab.path === path)))), kept = (tab: Tab) => !doomed.has(tab.path);
     const rest = state.tabs.filter(kept), empty = !shown.some(kept);
     setState({ ...state, tabs: empty ? home(rest, state.space) : rest });
     if (!doomed.has(pathname) || (empty && pathname === "/")) return;
@@ -1331,8 +1333,9 @@ function useTabs() {
     },
     // A moved Shared row moves for this person alone; their order keeps only paths still shared somewhere.
     moveShared: (from: string, to: string) => setState((current) => ({ ...current, sharedOrder: [...new Set([...moveQueueId(here, from, to), ...current.sharedOrder])].filter((path) => shared.some((tab) => tab.path === path)) })),
-    // Collapsing Shared or Parked is this person's choice for every space, kept as the member-less group of that id.
-    fold: (id: "shared" | "parked", collapsed: boolean) => setState((current) => ({ ...current, groups: [...current.groups.filter((group) => group.id !== id), { id, name: "", color: "Grey", collapsed }] })),
+    // Collapsing Shared, Parked, another space's branch, or a space in Parked is this person's choice, kept as the
+    // member-less group of that id.
+    fold: (id: string, collapsed: boolean) => setState((current) => ({ ...current, groups: [...current.groups.filter((group) => group.id !== id), { id, name: "", color: "Grey", collapsed }] })),
     // A new space takes the first free "Space N" name; the server keeps names unique ignoring case.
     addSpace: async () => {
       const taken = new Set(state.spaces.map((space) => space.name.toLowerCase()));
@@ -1440,7 +1443,7 @@ function useTabs() {
 // redraw the whole app.
 function TabSettling() {
   const { rows, marks } = useContext(Sidebar), { settle, setParked } = useContext(TabActions);
-  const parked = [...rows.flatMap((row) => row.parked ? [rowPath(row)] : []), ...(marks ?? []).flatMap((mark) => mark.parked ? [mark.path] : [])].sort().join("\n");
+  const parked = [...parkedPaths({ rows, marks })].sort().join("\n");
   useEffect(() => settle(rows), [rows, settle]);
   // A server that holds no listing, as while it does not answer, says nothing about what is parked.
   useEffect(() => { if (marks !== undefined) setParked(parked); }, [parked, marks, setParked]);
@@ -1658,17 +1661,24 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
 // Sessions and Search pages can be renamed from their tab, and a Search page from its Shared row, which otherwise offers
 // only its Copy link, Shared, Duplicate, Top Shelf, Add to my tabs, and attention items. A remote OpenCode session's own
 // tab can also delete it.
-function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { path: string; shared?: boolean }, view: SidebarView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
+function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { path: string; shared?: boolean; away?: boolean }, view: SidebarView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
+  if (menu.away) return commands(menu.path, view).filter(({ key }) => /^(close$|link|read|unread|park|unpark)/.test(key));
   const renaming = targets.size === 1 && (isSearch(menu.path) || (pathSession(menu.path) && !menu.shared)) ? [{ key: "rename", label: isSearch(menu.path) ? "Rename search" : "Rename session", run: rename }] : [];
   const remote = targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === pathSession(menu.path) && row.server) : undefined;
   return [...renaming, ...menu.shared ? commands(menu.path, view).filter(({ key }) => /^(link|unshare|duplicate|shelve|own|read|unread|park|unpark)/.test(key)) : commands(menu.path, view, targets), ...remote ? [{ key: "delete", label: "Delete session", run: () => remove(remote.id) }] : []];
 }
 
+const shelfItems = (path: string, shelf: ShelfTab, parked: boolean | undefined, view: SidebarView | undefined, send: Attend, pick: (picking: Picking) => void): TabCommand[] =>
+  [...attentionItems(view, path, [path], send, pick), ...parked ? [] : [{ key: "unshelve", label: "Remove from Top Shelf", run: () => unshelve(shelf) }]];
+
+const pullRequestItems = (menu: { path: string; shared?: boolean; shelf?: ShelfTab; away?: boolean }, single: boolean): TabCommand[] =>
+  pathSession(menu.path) && !menu.away && (menu.shared || menu.shelf || single) ? [{ key: "pull-requests", label: "Pull requests", run: () => navigate(`${menu.path}?pullRequests=1`, false, menu.shelf ? menu.shelf.server ?? "" : server()) }] : [];
+
 function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat: () => void }) {
   // The tabs waiting for this person, by rowKey of their location and server, which collapsed headers go bold for.
   const sidebar = useContext(Sidebar), { rows } = sidebar, waiting = new Set(useWaiting().map((mark) => rowKey(mark.path, mark.server)));
   const { state, strip, shown, groups, pathname, close, move, moveGroup, commands, edit, editor, setEditor, groupCommands, newInGroup, attend, setPicking } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
-  const [menu, setMenu] = useState<{ path: string; anchor: MenuAnchor; shared?: boolean; shelf?: ShelfTab; parked?: boolean }>();
+  const [menu, setMenu] = useState<{ path: string; anchor: MenuAnchor; shared?: boolean; shelf?: ShelfTab; parked?: boolean; away?: boolean }>();
   const [editing, setEditing] = useState<string>();
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   const list = useRef<HTMLDivElement>(null), parkedList = useRef<HTMLDivElement>(null), refocus = useRef<{ key: string; from?: RefObject<HTMLDivElement | null> }>({ key: "" });
@@ -1686,8 +1696,8 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
   const targets = menu && !selection.has(menu.path) ? new Set([menu.path]) : selection;
   const { setCommand } = useContext(SessionCommands);
   const items: TabCommand[] = !menu ? [] : [
-    ...pathSession(menu.path) && (menu.shared || menu.shelf || targets.size === 1) ? [{ key: "pull-requests", label: "Pull requests", run: () => navigate(`${menu.path}?pullRequests=1`, false, menu.shelf ? menu.shelf.server ?? "" : server()) }] : [],
-    ...menu.shelf ? [...attentionItems(sidebar.servers[menu.shelf.server ?? ""], menu.path, [menu.path], send(menu.shelf.server ?? ""), setPicking), { key: "unshelve", label: "Remove from Top Shelf", run: () => unshelve(menu.shelf!) }]
+    ...pullRequestItems(menu, targets.size === 1),
+    ...menu.shelf ? shelfItems(menu.path, menu.shelf, menu.parked, sidebar.servers[menu.shelf.server ?? ""], send(menu.shelf.server ?? ""), setPicking)
       : menuItems(commands, menu, sidebar, targets, () => setEditing(`${menu.shared ? "shared:" : ""}${menu.path}`), (id) => setCommand({ mode: "delete", source: id })),
   ];
   // The active tab is the list's keyboard stop, else, while it shows only in Shared or Parked, the first rendered tab.
@@ -1698,9 +1708,9 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
   return <div data-tab-lists className="flex h-full shrink-0 flex-col">
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-width:thin]">
       {rocketclaws().length ? <TopShelfTabs tabs={tabs} waiting={waiting} openMenu={(tab, anchor) => setMenu({ path: tab.path, anchor, shelf: tab })} /> : null}
-      <SpaceMenu tabs={tabs} name={space} />
+      <SpaceTree tabs={tabs} waiting={waiting} newChat={newChat} refocus={() => selected()?.focus()} openMenu={(path, anchor) => setMenu({ path, anchor, away: true })}>
       <SharedTabs tabs={tabs} waiting={waiting} space={space} editing={editing} endEdit={() => setEditing(undefined)} openMenu={(path, anchor) => setMenu({ path, anchor, shared: true })} />
-      <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation="vertical" className="flex flex-1 flex-col gap-0.5 p-1"
+      <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation="vertical" className="flex flex-col gap-0.5 p-1"
         // A selecting click keeps the active tab; Shift+click selects the rendered tabs from the active one to it.
         onClickCapture={(event) => {
           const path = pathOf(event);
@@ -1776,8 +1786,9 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
           ];
         })}
       </div>
+      </SpaceTree>
     </div>
-    <ParkedTabs tabs={tabs} list={parkedList} editing={editing} endEdit={() => setEditing(undefined)} openMenu={(path, anchor) => setMenu({ path, anchor, parked: true })} close={(path) => { flushSync(() => close([path])); selected(parkedList)?.focus(); }} />
+    <ParkedTabs tabs={tabs} list={parkedList} editing={editing} endEdit={() => setEditing(undefined)} openMenu={(item) => setMenu({ ...item, parked: true })} close={(path) => { flushSync(() => close([path])); selected(parkedList)?.focus(); }} />
     {/* The name field lives in a popover because menus take typed letters for type-ahead. */}
     <Popover.Root open={!!editor?.open && !!group} onOpenChange={(open) => setEditor((current) => current && { ...current, open })}>
       <Popover.Portal><Popover.Positioner anchor={header} sideOffset={4} align="start" className="z-50 outline-none"><Popover.Popup aria-label="Edit group" finalFocus={() => header()?.querySelector("button") ?? selected()} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="flex w-56 flex-col gap-2 rounded-md border bg-popover p-2 text-popover-foreground shadow-md outline-none">
@@ -1844,22 +1855,136 @@ function SharedTabs({ tabs: { state, here, shared, pathname, fold, moveShared },
 }
 
 // Parked lists this person's parked tabs of every space at the bottom of the strip, collapsed until they open it, and
-// shows the active one while collapsed. A parked tab keeps its space, group and place among their tabs, where unparking
-// returns it. It is a list of its own, whose rows open, close and take their menu.
-function ParkedTabs({ tabs: { state, parked, pathname, fold }, list, editing, endEdit, openMenu, close }: { tabs: ReturnType<typeof useTabs>; list: RefObject<HTMLDivElement | null>; editing?: string; endEdit: () => void; openMenu: (path: string, anchor: MenuAnchor) => void; close: (path: string) => void }) {
-  const rows = state.tabs.filter((tab) => parked.has(tab.path)), collapsed = state.groups.find((group) => group.id === "parked")?.collapsed ?? true;
-  const stop = rows.some((tab) => tab.path === pathname) ? pathname : rows[0]?.path, inert = () => undefined;
-  if (!rows.length) return null;
+// shows the active one while collapsed. With more than one space it is a tree: each space with parked tabs is a branch
+// that folds on its own, again showing the active one while folded. A parked tab keeps its space, group and place among
+// their tabs, where unparking returns it. It is a list of its own, whose rows open, close and take their menu.
+type ParkedRow = Tab & { shared?: boolean };
+type ParkedMenu = { path: string; anchor: MenuAnchor; away?: boolean; shelf?: ShelfTab };
+const parkedPaths = (view: Pick<SidebarView, "rows" | "marks">) => new Set([...view.rows.flatMap((row) => row.parked ? [rowPath(row)] : []), ...(view.marks ?? []).flatMap((mark) => mark.parked ? [mark.path] : [])]);
+const parkedRows = (tabs: Tab[], shared: SavedTabs["shared"], parked: Set<string>): ParkedRow[] =>
+  [...tabs.filter((tab) => parked.has(tab.path)), ...shared.flatMap((tab) => parked.has(tab.path) && !tabs.some((own) => own.path === tab.path) ? [{ ...tab, shared: true }] : [])];
+
+function useParkedTree({ state, shared, parked, pathname }: ReturnType<typeof useTabs>) {
+  const { servers } = useContext(Sidebar), here = useServer();
+  const others = rocketclaws().length ? ["", ...rocketclaws().map((remote) => remote.name)].filter((name) => name !== here) : [];
+  const sections = [{ name: here, spaces: state.spaces, rows: parkedRows(state.tabs, shared, parked) }, ...others.flatMap((name) => {
+    const view = servers[name];
+    return view?.tabs ? [{ name, spaces: view.tabs.spaces, rows: parkedRows(view.tabs.state.tabs, view.tabs.shared, parkedPaths(view)) }] : [];
+  })].filter((section) => section.rows.length);
+  const folded = (id: string, otherwise = false) => state.groups.find((group) => group.id === id)?.collapsed ?? otherwise, collapsed = folded("parked", true);
+  const tree = sections.map((section) => {
+    const fold = `parked:@${section.name}`, shut = collapsed || (sections.length > 1 && folded(fold));
+    const branches = section.spaces.flatMap((space) => {
+      const id = section.name === here ? `parked:${space.id}` : `parked:${section.name}/${space.id}`, there = section.rows.filter((tab) => tab.space === space.id), closed = shut || folded(id);
+      return there.length ? [{ space, id, closed, there, shown: closed ? there.filter((tab) => section.name === here && tab.path === pathname) : there }] : [];
+    });
+    return { ...section, fold, shut, branches, count: branches.reduce((sum, branch) => sum + branch.there.length, 0) };
+  });
+  const visible = tree.flatMap((section) => section.branches.flatMap((branch) => branch.shown.map((tab) => ({ ...tab, server: section.name, key: `${section.name}\n${tab.path}` }))));
+  return { tree, visible, collapsed, here, count: tree.reduce((sum, section) => sum + section.count, 0), stop: (visible.find((tab) => tab.server === here && tab.path === pathname) ?? visible[0])?.key };
+}
+
+function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: ReturnType<typeof useTabs>; list: RefObject<HTMLDivElement | null>; editing?: string; endEdit: () => void; openMenu: (menu: ParkedMenu) => void; close: (path: string) => void }) {
+  const { pathname, fold } = tabs, { tree, visible, collapsed, here, count, stop } = useParkedTree(tabs), visit = useVisit(), sidebar = useContext(Sidebar);
+  const at = (node: Element) => visible.find((tab) => tab.key === node.closest<HTMLElement>("[data-parked]")?.dataset.parked);
+  const menuOf = (tab: ParkedRow, server: string, anchor: MenuAnchor) => openMenu({ path: tab.path, anchor, away: tab.shared, shelf: server === here ? undefined : { server, space: tab.space ?? "", path: tab.path } });
+  const header = "flex w-full shrink-0 items-center gap-1.5 px-1.5 text-xs font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring";
+  if (!count) return null;
   return <div className="flex max-h-1/3 shrink-0 flex-col gap-0.5 overflow-y-auto border-t px-1 pt-1 [scrollbar-width:thin]">
-    <button type="button" aria-expanded={!collapsed} className="flex h-7 w-fit shrink-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => fold("parked", !collapsed)}>
+    <button type="button" aria-expanded={!collapsed} className="flex h-7 w-fit shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => fold("parked", !collapsed)}>
       <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium text-black", groupColors.Grey)}><SquareParking aria-hidden="true" className="size-3" />Parked</span>
+      <span aria-hidden="true" className="text-xs text-muted-foreground">{count}</span>
     </button>
-    <div ref={list} role="tablist" aria-label="Parked tabs" aria-orientation="vertical" className="flex flex-col gap-0.5" onKeyDown={(event) => tabKeys(event, pathname, openMenu, inert)}>
-      {rows.map((tab) => {
-        const space = state.spaces.find((item) => item.id === tab.space)?.name;
-        return collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} description={`Space: ${space}`} detail={space} chosen={false} active={tab.path === pathname} stop={tab.path === stop} editing={tab.path === editing} endEdit={endEdit} close={() => close(tab.path)} openMenu={(anchor) => openMenu(tab.path, anchor)} />;
-      })}
+    <div ref={list} role="tablist" aria-label="Parked tabs" aria-orientation="vertical" className="flex flex-col gap-0.5"
+      onClickCapture={(event) => {
+        const tab = (event.target as Element).closest('[role="tab"]') && at(event.target as Element);
+        if (!tab || (tab.server === here && tab.path === pathname)) return;
+        event.stopPropagation();
+        visit(tab.server, tab.path);
+      }}
+      onKeyDown={(event) => {
+        if ((event.target as HTMLElement).role !== "tab" || (event.key !== "Enter" && event.key !== " ")) return tabKeys(event, pathname, (_, anchor) => { const tab = at(anchor as Element); if (tab) menuOf(tab, tab.server, anchor); }, () => undefined);
+        event.preventDefault();
+        (event.target as HTMLElement).click();
+      }}>
+      {tree.map((section) => <Fragment key={section.name}>
+        {tree.length > 1 && !collapsed ? <button type="button" aria-expanded={!section.shut} aria-label={`Parked on ${section.name || "Local"}`} className={cn(header, "mt-1 h-7 rounded-md font-semibold text-foreground")} onClick={() => fold(section.fold, !section.shut)}>
+          <ChevronDown aria-hidden="true" className={cn("size-3.5", section.shut && "-rotate-90")} />{section.name || "Local"}{sidebar.servers[section.name]?.offline ? <span className="font-normal">· offline</span> : null}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-muted px-1.5 text-center text-[11px]">{section.count}</span>
+        </button> : null}
+        {section.branches.map(({ space, id, closed, there, shown }) => <Fragment key={space.id}>
+          {section.spaces.length > 1 && !section.shut ? <button type="button" aria-expanded={!closed} aria-label={`Parked in ${space.name}${tree.length > 1 ? ` on ${section.name || "Local"}` : ""}`} className={cn(header, "mt-1 h-6 rounded-t-md bg-muted/50")} onClick={() => fold(id, !closed)}>
+            {closed ? <Folder aria-hidden="true" className="size-3.5" /> : <FolderOpen aria-hidden="true" className="size-3.5" />}{space.name}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-background px-1.5 text-center text-[11px]">{there.length}</span><ChevronDown aria-hidden="true" className={cn("size-3.5", closed && "-rotate-90")} />
+          </button> : null}
+          <div className={cn("flex flex-col [&_[role=tab]]:py-1", section.spaces.length > 1 && !section.shut && "rounded-b-md bg-muted/30 p-0.5")}>
+            {shown.map((tab) => <ParkedItem key={tab.path} tab={tab} server={section.name} here={here} space={space.name} active={section.name === here && tab.path === pathname} stop={stop === `${section.name}\n${tab.path}`} editing={section.name === here && tab.path === editing} endEdit={endEdit} close={() => close(tab.path)} openMenu={(anchor) => menuOf(tab, section.name, anchor)} />)}
+          </div>
+        </Fragment>)}
+      </Fragment>)}
     </div>
+  </div>;
+}
+
+function ParkedItem({ tab, server, here, space, close, ...props }: { tab: ParkedRow; server: string; here: string; space: string; active: boolean; stop: boolean; editing: boolean; endEdit: () => void; close: () => void; openMenu: (anchor: MenuAnchor) => void }) {
+  const view = useContext(Sidebar).servers[server], description = `${tab.shared ? "Shared, " : ""}Space: ${space}${server === here ? "" : `, ${server || "Local"}`}`;
+  return <div data-parked={`${server}\n${tab.path}`}>
+    {server === here ? <TabItem tab={tab} shared={tab.shared} description={description} chosen={false} close={tab.shared ? undefined : close} {...props} />
+      : <ShelfRow tab={{ server, space: tab.space ?? "", path: tab.path, search: tab.search }} rows={view?.rows ?? noRows} offline={view?.offline} shared={tab.shared} description={description} chosen={false} {...props} />}
+  </div>;
+}
+
+function SpaceTree({ tabs, waiting, newChat, refocus, openMenu, children }: { tabs: ReturnType<typeof useTabs>; waiting: Set<string>; newChat: () => void; refocus: () => void; openMenu: (path: string, anchor: MenuAnchor) => void; children: ReactNode }) {
+  const { spaces, space } = tabs.state, at = spaces.findIndex((item) => item.id === space);
+  const branch = (item: Space) => <SpaceBranch key={item.id} tabs={tabs} space={item} waiting={waiting} refocus={refocus} openMenu={openMenu} />;
+  return <>
+    {spaces.filter((_, index) => index < at).map(branch)}
+    <div className={cn("flex min-w-0 shrink-0 flex-col", spaces.length > 1 && "mx-1 mt-1 rounded-lg border border-primary/20 bg-accent/50 pb-0.5 shadow-sm")}>
+      <SpaceMenu tabs={tabs} name={spaces[at]?.name} />
+      <div className="flex flex-col [&_[role=tab]]:py-1">{children}</div>
+    </div>
+    {spaces.filter((_, index) => index > at).map(branch)}
+    <div className="min-h-4 flex-1" onDoubleClick={newChat} />
+  </>;
+}
+
+function SpaceBranch({ tabs, space, waiting, refocus, openMenu }: { tabs: ReturnType<typeof useTabs>; space: Space; waiting: Set<string>; refocus: () => void; openMenu: (path: string, anchor: MenuAnchor) => void }) {
+  const { state, shared, parked, pathname, fold, enter, open, close } = tabs, { rows } = useContext(Sidebar), inert = () => undefined;
+  const collapsed = state.groups.find((group) => group.id === `space:${space.id}`)?.collapsed ?? true;
+  const own = state.tabs.filter((tab) => tab.space === space.id && !isKeeper(tab) && !parked.has(tab.path)), rank = (path: string) => state.sharedOrder.indexOf(path) + 1 || Infinity;
+  const all: (Tab & { shared?: boolean })[] = [...shared.filter((tab) => tab.space === space.id && !own.some((item) => item.path === tab.path)).toSorted((a, b) => rank(a.path) - rank(b.path)).map((tab) => ({ ...tab, shared: true })), ...own];
+  const asking = new Set(rows.flatMap((row) => row.asking ? [rowPath(row)] : [])), paths = new Set(all.map((tab) => tab.path));
+  const work = all.filter((tab) => waiting.has(rowKey(tab.path, server())) || asking.has(tab.path)), running = rows.some((row) => row.running && !row.asking && paths.has(rowPath(row)));
+  const listed = collapsed ? work : all, go = (path: string) => { open(path, "", space.id); refocus(); };
+  const Icon = collapsed ? Folder : FolderOpen;
+  return <div className="mx-1 mt-1 flex shrink-0 flex-col rounded-lg border bg-muted/40 p-0.5">
+    <div className="flex shrink-0 items-center gap-0.5">
+      <button type="button" aria-label={`Go to ${space.name}`} aria-description={[work.length && `${work.length} waiting`, running && "Turn running"].filter(Boolean).join(", ")} className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-[13px] hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => { flushSync(() => enter(space.id)); refocus(); }}>
+        <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /><span className={cn("truncate", work.length ? "font-bold" : "font-medium")}>{space.name}</span>
+        {running ? <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground motion-safe:animate-spin" /> : null}
+        {work.length ? <span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-blue-500 px-1.5 text-center text-[11px] font-semibold text-white">{work.length}</span> : null}
+      </button>
+      {work.some((tab) => asking.has(tab.path)) ? needsYou : null}
+      <button type="button" aria-expanded={!collapsed} aria-label={`Show all ${space.name} tabs`} className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => fold(`space:${space.id}`, !collapsed)}>
+        <ChevronDown aria-hidden="true" className={cn("size-3.5 transition-transform", collapsed && "-rotate-90")} />
+      </button>
+    </div>
+    {listed.length ? <div role="tablist" aria-label={`${space.name} tabs`} aria-orientation="vertical" className="flex flex-col rounded-md bg-background/70 [&_[role=tab]]:py-1"
+      onClickCapture={(event) => {
+        const path = (event.target as Element).closest('[role="tab"]')?.closest<HTMLElement>("[data-tab]")?.dataset.tab;
+        if (!path) return;
+        event.stopPropagation();
+        go(path);
+      }}
+      onKeyDown={(event) => {
+        if ((event.target as HTMLElement).role !== "tab" || (event.key !== "Enter" && event.key !== " ")) return tabKeys(event, pathname, openMenu, inert);
+        event.preventDefault();
+        (event.target as HTMLElement).click();
+      }}
+      onDragStart={(event) => event.preventDefault()}>
+      {listed.map((tab, index) => {
+        const group = state.groups.find((item) => item.id === tab.group);
+        return <TabItem key={tab.path} tab={tab} shared={tab.shared} description={`${tab.shared ? "Shared, " : group ? `Group ${groupName(group)}, ` : ""}Space: ${space.name}`} detail={group && groupName(group)} chosen={false} rule={tab.shared ? "Grey" : group?.color} active={false} stop={index === 0} editing={false} endEdit={inert} close={() => { flushSync(() => close([tab.path])); refocus(); }} openMenu={(anchor) => openMenu(tab.path, anchor)} />;
+      })}
+    </div> : null}
   </div>;
 }
 
@@ -1934,7 +2059,7 @@ function SpaceMenu({ tabs: { state, pending, enter, addSpace, renameSpace, delet
   const limited = useQuery(queries.identity()).data?.limited;
   // With remote RocketClaws the picker is a tree: each server, local first, with its spaces.
   const here = useServer(), servers = rocketclaws().length ? ["", ...rocketclaws().map((remote) => remote.name)] : [here];
-  const box = "m-1 mb-0 flex shrink-0 items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium";
+  const box = "m-0.5 mb-0 flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[13px] font-bold";
   const item = "flex cursor-default items-center rounded-md px-1.5 py-1 text-sm outline-none focus:bg-accent focus:text-accent-foreground";
   return <DropdownMenu>
     {renaming ? <input ref={(node) => node?.focus()} aria-label="Space name" defaultValue={name} className={cn(box, "w-36 bg-background font-normal outline-1 -outline-offset-1 outline-ring")}
@@ -1945,7 +2070,7 @@ function SpaceMenu({ tabs: { state, pending, enter, addSpace, renameSpace, delet
         if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
       }}
       onBlur={(event) => { const value = event.currentTarget.value.trim(); if (value) renameSpace(value); setRenaming(false); }} />
-      : <Menu.Trigger aria-label={`Space: ${here ? `${here} / ${name}` : name}`} disabled={state.owner === undefined && !here} className={cn(box, "cursor-pointer hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring")}><Layers aria-hidden="true" className="size-4" /><span className="max-w-32 truncate">{here ? `${here} / ${name}` : name}</span><ChevronDown aria-hidden="true" className="size-3.5 text-muted-foreground" /></Menu.Trigger>}
+      : <Menu.Trigger aria-label={`Space: ${here ? `${here} / ${name}` : name}`} disabled={state.owner === undefined && !here} className={cn(box, "cursor-pointer hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring")}><FolderOpen aria-hidden="true" className="size-4 text-muted-foreground" /><span className="max-w-32 truncate">{here ? `${here} / ${name}` : name}</span><ChevronDown aria-hidden="true" className="size-3.5 text-muted-foreground" /></Menu.Trigger>}
     <DropdownMenuContent finalFocus={!renaming} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="w-auto min-w-44">
       {servers.map((server) => server === here ? <Menu.Group key={server}>
         {servers.length > 1 ? <Menu.GroupLabel className="px-1.5 py-1 text-xs text-muted-foreground">{server || "Local"}</Menu.GroupLabel> : null}
@@ -2002,7 +2127,7 @@ function timerText(mark?: Omit<TabAttention, "path">) {
 
 // A detail line, such as a Top Shelf tab's server and space, sits under the title inside the tab, so the row's highlight
 // covers both. A row of a server that stopped answering is greyed and says so.
-function TabItem({ tab, description, detail, chosen, rule, active, stop, shared, offline, editing, endEdit, close, openMenu }: { tab: Tab; description: string; detail?: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; offline?: boolean; editing: boolean; endEdit: () => void; close: () => void; openMenu: (anchor: MenuAnchor) => void }) {
+function TabItem({ tab, description, detail, chosen, rule, active, stop, shared, offline, editing, endEdit, close, openMenu }: { tab: Tab; description: string; detail?: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; offline?: boolean; editing: boolean; endEdit: () => void; close?: () => void; openMenu: (anchor: MenuAnchor) => void }) {
   const sidebar = useContext(Sidebar);
   const id = pathSession(tab.path);
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
@@ -2027,9 +2152,13 @@ function TabItem({ tab, description, detail, chosen, rule, active, stop, shared,
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{offline ? `${title} · Server offline` : title}</TooltipContent></Tooltip>
     {active ? <button type="button" aria-label="Tab actions" className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground last:mr-1 hover:bg-accent hover:text-foreground" onClick={(event) => openMenu(event.currentTarget)}><Ellipsis className="size-3.5" /></button> : null}
-    {shared ? <span aria-hidden="true" title="In Shared: everyone in this space sees it" className="mr-1 flex size-6 shrink-0 items-center justify-center text-muted-foreground"><Users className="size-3.5" /></span>
-      : <button type="button" aria-label={`Close ${title}`} className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={close}><X className="size-3.5" /></button>}
+    <TabEnd shared={shared} close={close} title={title} />
   </div>;
+}
+
+function TabEnd({ shared, close, title }: { shared?: boolean; close?: () => void; title: string }) {
+  if (shared) return <span aria-hidden="true" title="In Shared: everyone in this space sees it" className="mr-1 flex size-6 shrink-0 items-center justify-center text-muted-foreground"><Users className="size-3.5" /></span>;
+  return close ? <button type="button" aria-label={`Close ${title}`} className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={close}><X className="size-3.5" /></button> : null;
 }
 
 // Enter and leaving the field save; Escape restores the old name first, so its blur saves nothing.
