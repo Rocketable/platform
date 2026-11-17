@@ -8774,6 +8774,86 @@ func (x *DeleteSessionEntriesResponse) GetDeleted() int64 {
 	return 0
 }
 
+type DeleteSessionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteSessionRequest) Reset() {
+	*x = DeleteSessionRequest{}
+	mi := &file_web_proto_msgTypes[126]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteSessionRequest) ProtoMessage() {}
+
+func (x *DeleteSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_web_proto_msgTypes[126]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteSessionRequest.ProtoReflect.Descriptor instead.
+func (*DeleteSessionRequest) Descriptor() ([]byte, []int) {
+	return file_web_proto_rawDescGZIP(), []int{126}
+}
+
+func (x *DeleteSessionRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type DeleteSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteSessionResponse) Reset() {
+	*x = DeleteSessionResponse{}
+	mi := &file_web_proto_msgTypes[127]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteSessionResponse) ProtoMessage() {}
+
+func (x *DeleteSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_web_proto_msgTypes[127]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteSessionResponse.ProtoReflect.Descriptor instead.
+func (*DeleteSessionResponse) Descriptor() ([]byte, []int) {
+	return file_web_proto_rawDescGZIP(), []int{127}
+}
+
 type IdentityRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -8782,7 +8862,7 @@ type IdentityRequest struct {
 
 func (x *IdentityRequest) Reset() {
 	*x = IdentityRequest{}
-	mi := &file_web_proto_msgTypes[126]
+	mi := &file_web_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8794,7 +8874,7 @@ func (x *IdentityRequest) String() string {
 func (*IdentityRequest) ProtoMessage() {}
 
 func (x *IdentityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[126]
+	mi := &file_web_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8807,7 +8887,7 @@ func (x *IdentityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdentityRequest.ProtoReflect.Descriptor instead.
 func (*IdentityRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{126}
+	return file_web_proto_rawDescGZIP(), []int{128}
 }
 
 // sandbox_error is why emulated shells cannot run, empty when they can or no agent uses one. limited is set,
@@ -8824,7 +8904,7 @@ type IdentityResponse struct {
 
 func (x *IdentityResponse) Reset() {
 	*x = IdentityResponse{}
-	mi := &file_web_proto_msgTypes[127]
+	mi := &file_web_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8836,7 +8916,7 @@ func (x *IdentityResponse) String() string {
 func (*IdentityResponse) ProtoMessage() {}
 
 func (x *IdentityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[127]
+	mi := &file_web_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8849,7 +8929,7 @@ func (x *IdentityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdentityResponse.ProtoReflect.Descriptor instead.
 func (*IdentityResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{127}
+	return file_web_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *IdentityResponse) GetUsername() string {
@@ -8889,7 +8969,7 @@ type ReloadRequest struct {
 
 func (x *ReloadRequest) Reset() {
 	*x = ReloadRequest{}
-	mi := &file_web_proto_msgTypes[128]
+	mi := &file_web_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8901,7 +8981,7 @@ func (x *ReloadRequest) String() string {
 func (*ReloadRequest) ProtoMessage() {}
 
 func (x *ReloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[128]
+	mi := &file_web_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8914,7 +8994,7 @@ func (x *ReloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadRequest.ProtoReflect.Descriptor instead.
 func (*ReloadRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{128}
+	return file_web_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *ReloadRequest) GetReason() string {
@@ -8933,7 +9013,7 @@ type ReloadResponse struct {
 
 func (x *ReloadResponse) Reset() {
 	*x = ReloadResponse{}
-	mi := &file_web_proto_msgTypes[129]
+	mi := &file_web_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8945,7 +9025,7 @@ func (x *ReloadResponse) String() string {
 func (*ReloadResponse) ProtoMessage() {}
 
 func (x *ReloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[129]
+	mi := &file_web_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8958,7 +9038,7 @@ func (x *ReloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadResponse.ProtoReflect.Descriptor instead.
 func (*ReloadResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{129}
+	return file_web_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *ReloadResponse) GetMessage() string {
@@ -8980,7 +9060,7 @@ type VoiceRequest struct {
 
 func (x *VoiceRequest) Reset() {
 	*x = VoiceRequest{}
-	mi := &file_web_proto_msgTypes[130]
+	mi := &file_web_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8992,7 +9072,7 @@ func (x *VoiceRequest) String() string {
 func (*VoiceRequest) ProtoMessage() {}
 
 func (x *VoiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[130]
+	mi := &file_web_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9005,7 +9085,7 @@ func (x *VoiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceRequest.ProtoReflect.Descriptor instead.
 func (*VoiceRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{130}
+	return file_web_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *VoiceRequest) GetConversationId() string {
@@ -9041,7 +9121,7 @@ type VoiceSettingsRequest struct {
 
 func (x *VoiceSettingsRequest) Reset() {
 	*x = VoiceSettingsRequest{}
-	mi := &file_web_proto_msgTypes[131]
+	mi := &file_web_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9053,7 +9133,7 @@ func (x *VoiceSettingsRequest) String() string {
 func (*VoiceSettingsRequest) ProtoMessage() {}
 
 func (x *VoiceSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[131]
+	mi := &file_web_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9066,7 +9146,7 @@ func (x *VoiceSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceSettingsRequest.ProtoReflect.Descriptor instead.
 func (*VoiceSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{131}
+	return file_web_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *VoiceSettingsRequest) GetAction() VoiceSettingsAction {
@@ -9109,7 +9189,7 @@ type VoiceSettingsResponse struct {
 
 func (x *VoiceSettingsResponse) Reset() {
 	*x = VoiceSettingsResponse{}
-	mi := &file_web_proto_msgTypes[132]
+	mi := &file_web_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9121,7 +9201,7 @@ func (x *VoiceSettingsResponse) String() string {
 func (*VoiceSettingsResponse) ProtoMessage() {}
 
 func (x *VoiceSettingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[132]
+	mi := &file_web_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9134,7 +9214,7 @@ func (x *VoiceSettingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceSettingsResponse.ProtoReflect.Descriptor instead.
 func (*VoiceSettingsResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{132}
+	return file_web_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *VoiceSettingsResponse) GetAgent() string {
@@ -9169,7 +9249,7 @@ type Space struct {
 
 func (x *Space) Reset() {
 	*x = Space{}
-	mi := &file_web_proto_msgTypes[133]
+	mi := &file_web_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9181,7 +9261,7 @@ func (x *Space) String() string {
 func (*Space) ProtoMessage() {}
 
 func (x *Space) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[133]
+	mi := &file_web_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9194,7 +9274,7 @@ func (x *Space) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Space.ProtoReflect.Descriptor instead.
 func (*Space) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{133}
+	return file_web_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *Space) GetId() string {
@@ -9224,7 +9304,7 @@ type Tab struct {
 
 func (x *Tab) Reset() {
 	*x = Tab{}
-	mi := &file_web_proto_msgTypes[134]
+	mi := &file_web_proto_msgTypes[136]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9236,7 +9316,7 @@ func (x *Tab) String() string {
 func (*Tab) ProtoMessage() {}
 
 func (x *Tab) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[134]
+	mi := &file_web_proto_msgTypes[136]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9249,7 +9329,7 @@ func (x *Tab) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Tab.ProtoReflect.Descriptor instead.
 func (*Tab) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{134}
+	return file_web_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *Tab) GetPath() string {
@@ -9292,7 +9372,7 @@ type SearchPage struct {
 
 func (x *SearchPage) Reset() {
 	*x = SearchPage{}
-	mi := &file_web_proto_msgTypes[135]
+	mi := &file_web_proto_msgTypes[137]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9304,7 +9384,7 @@ func (x *SearchPage) String() string {
 func (*SearchPage) ProtoMessage() {}
 
 func (x *SearchPage) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[135]
+	mi := &file_web_proto_msgTypes[137]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9317,7 +9397,7 @@ func (x *SearchPage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchPage.ProtoReflect.Descriptor instead.
 func (*SearchPage) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{135}
+	return file_web_proto_rawDescGZIP(), []int{137}
 }
 
 func (x *SearchPage) GetName() string {
@@ -9353,7 +9433,7 @@ type SavedSearch struct {
 
 func (x *SavedSearch) Reset() {
 	*x = SavedSearch{}
-	mi := &file_web_proto_msgTypes[136]
+	mi := &file_web_proto_msgTypes[138]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9365,7 +9445,7 @@ func (x *SavedSearch) String() string {
 func (*SavedSearch) ProtoMessage() {}
 
 func (x *SavedSearch) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[136]
+	mi := &file_web_proto_msgTypes[138]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9378,7 +9458,7 @@ func (x *SavedSearch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SavedSearch.ProtoReflect.Descriptor instead.
 func (*SavedSearch) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{136}
+	return file_web_proto_rawDescGZIP(), []int{138}
 }
 
 func (x *SavedSearch) GetId() string {
@@ -9414,7 +9494,7 @@ type TabGroup struct {
 
 func (x *TabGroup) Reset() {
 	*x = TabGroup{}
-	mi := &file_web_proto_msgTypes[137]
+	mi := &file_web_proto_msgTypes[139]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9426,7 +9506,7 @@ func (x *TabGroup) String() string {
 func (*TabGroup) ProtoMessage() {}
 
 func (x *TabGroup) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[137]
+	mi := &file_web_proto_msgTypes[139]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9439,7 +9519,7 @@ func (x *TabGroup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TabGroup.ProtoReflect.Descriptor instead.
 func (*TabGroup) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{137}
+	return file_web_proto_rawDescGZIP(), []int{139}
 }
 
 func (x *TabGroup) GetId() string {
@@ -9485,7 +9565,7 @@ type TabState struct {
 
 func (x *TabState) Reset() {
 	*x = TabState{}
-	mi := &file_web_proto_msgTypes[138]
+	mi := &file_web_proto_msgTypes[140]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9497,7 +9577,7 @@ func (x *TabState) String() string {
 func (*TabState) ProtoMessage() {}
 
 func (x *TabState) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[138]
+	mi := &file_web_proto_msgTypes[140]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9510,7 +9590,7 @@ func (x *TabState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TabState.ProtoReflect.Descriptor instead.
 func (*TabState) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{138}
+	return file_web_proto_rawDescGZIP(), []int{140}
 }
 
 func (x *TabState) GetTabs() []*Tab {
@@ -9564,7 +9644,7 @@ type SharedTab struct {
 
 func (x *SharedTab) Reset() {
 	*x = SharedTab{}
-	mi := &file_web_proto_msgTypes[139]
+	mi := &file_web_proto_msgTypes[141]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9576,7 +9656,7 @@ func (x *SharedTab) String() string {
 func (*SharedTab) ProtoMessage() {}
 
 func (x *SharedTab) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[139]
+	mi := &file_web_proto_msgTypes[141]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9589,7 +9669,7 @@ func (x *SharedTab) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SharedTab.ProtoReflect.Descriptor instead.
 func (*SharedTab) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{139}
+	return file_web_proto_rawDescGZIP(), []int{141}
 }
 
 func (x *SharedTab) GetSpace() string {
@@ -9632,7 +9712,7 @@ type TopShelf struct {
 
 func (x *TopShelf) Reset() {
 	*x = TopShelf{}
-	mi := &file_web_proto_msgTypes[140]
+	mi := &file_web_proto_msgTypes[142]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9644,7 +9724,7 @@ func (x *TopShelf) String() string {
 func (*TopShelf) ProtoMessage() {}
 
 func (x *TopShelf) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[140]
+	mi := &file_web_proto_msgTypes[142]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9657,7 +9737,7 @@ func (x *TopShelf) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TopShelf.ProtoReflect.Descriptor instead.
 func (*TopShelf) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{140}
+	return file_web_proto_rawDescGZIP(), []int{142}
 }
 
 func (x *TopShelf) GetTabs() []*ShelfTab {
@@ -9688,7 +9768,7 @@ type ShelfTab struct {
 
 func (x *ShelfTab) Reset() {
 	*x = ShelfTab{}
-	mi := &file_web_proto_msgTypes[141]
+	mi := &file_web_proto_msgTypes[143]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9700,7 +9780,7 @@ func (x *ShelfTab) String() string {
 func (*ShelfTab) ProtoMessage() {}
 
 func (x *ShelfTab) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[141]
+	mi := &file_web_proto_msgTypes[143]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9713,7 +9793,7 @@ func (x *ShelfTab) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShelfTab.ProtoReflect.Descriptor instead.
 func (*ShelfTab) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{141}
+	return file_web_proto_rawDescGZIP(), []int{143}
 }
 
 func (x *ShelfTab) GetServer() string {
@@ -9756,7 +9836,7 @@ type AttentionChange struct {
 
 func (x *AttentionChange) Reset() {
 	*x = AttentionChange{}
-	mi := &file_web_proto_msgTypes[142]
+	mi := &file_web_proto_msgTypes[144]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9768,7 +9848,7 @@ func (x *AttentionChange) String() string {
 func (*AttentionChange) ProtoMessage() {}
 
 func (x *AttentionChange) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[142]
+	mi := &file_web_proto_msgTypes[144]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9781,7 +9861,7 @@ func (x *AttentionChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttentionChange.ProtoReflect.Descriptor instead.
 func (*AttentionChange) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{142}
+	return file_web_proto_rawDescGZIP(), []int{144}
 }
 
 func (x *AttentionChange) GetPaths() []string {
@@ -9830,7 +9910,7 @@ type TabsRequest struct {
 
 func (x *TabsRequest) Reset() {
 	*x = TabsRequest{}
-	mi := &file_web_proto_msgTypes[143]
+	mi := &file_web_proto_msgTypes[145]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9842,7 +9922,7 @@ func (x *TabsRequest) String() string {
 func (*TabsRequest) ProtoMessage() {}
 
 func (x *TabsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[143]
+	mi := &file_web_proto_msgTypes[145]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9855,7 +9935,7 @@ func (x *TabsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TabsRequest.ProtoReflect.Descriptor instead.
 func (*TabsRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{143}
+	return file_web_proto_rawDescGZIP(), []int{145}
 }
 
 func (x *TabsRequest) GetState() *TabState {
@@ -9959,7 +10039,7 @@ type TabsResponse struct {
 
 func (x *TabsResponse) Reset() {
 	*x = TabsResponse{}
-	mi := &file_web_proto_msgTypes[144]
+	mi := &file_web_proto_msgTypes[146]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9971,7 +10051,7 @@ func (x *TabsResponse) String() string {
 func (*TabsResponse) ProtoMessage() {}
 
 func (x *TabsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[144]
+	mi := &file_web_proto_msgTypes[146]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9984,7 +10064,7 @@ func (x *TabsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TabsResponse.ProtoReflect.Descriptor instead.
 func (*TabsResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{144}
+	return file_web_proto_rawDescGZIP(), []int{146}
 }
 
 func (x *TabsResponse) GetSpaces() []*Space {
@@ -10073,7 +10153,7 @@ type VoiceEvent struct {
 
 func (x *VoiceEvent) Reset() {
 	*x = VoiceEvent{}
-	mi := &file_web_proto_msgTypes[145]
+	mi := &file_web_proto_msgTypes[147]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10085,7 +10165,7 @@ func (x *VoiceEvent) String() string {
 func (*VoiceEvent) ProtoMessage() {}
 
 func (x *VoiceEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[145]
+	mi := &file_web_proto_msgTypes[147]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10098,7 +10178,7 @@ func (x *VoiceEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceEvent.ProtoReflect.Descriptor instead.
 func (*VoiceEvent) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{145}
+	return file_web_proto_rawDescGZIP(), []int{147}
 }
 
 func (x *VoiceEvent) GetEvent() isVoiceEvent_Event {
@@ -10213,7 +10293,7 @@ type VoiceAnswer struct {
 
 func (x *VoiceAnswer) Reset() {
 	*x = VoiceAnswer{}
-	mi := &file_web_proto_msgTypes[146]
+	mi := &file_web_proto_msgTypes[148]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10225,7 +10305,7 @@ func (x *VoiceAnswer) String() string {
 func (*VoiceAnswer) ProtoMessage() {}
 
 func (x *VoiceAnswer) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[146]
+	mi := &file_web_proto_msgTypes[148]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10238,7 +10318,7 @@ func (x *VoiceAnswer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceAnswer.ProtoReflect.Descriptor instead.
 func (*VoiceAnswer) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{146}
+	return file_web_proto_rawDescGZIP(), []int{148}
 }
 
 func (x *VoiceAnswer) GetSdp() string {
@@ -10265,7 +10345,7 @@ type VoiceEnded struct {
 
 func (x *VoiceEnded) Reset() {
 	*x = VoiceEnded{}
-	mi := &file_web_proto_msgTypes[147]
+	mi := &file_web_proto_msgTypes[149]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10277,7 +10357,7 @@ func (x *VoiceEnded) String() string {
 func (*VoiceEnded) ProtoMessage() {}
 
 func (x *VoiceEnded) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[147]
+	mi := &file_web_proto_msgTypes[149]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10290,7 +10370,7 @@ func (x *VoiceEnded) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceEnded.ProtoReflect.Descriptor instead.
 func (*VoiceEnded) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{147}
+	return file_web_proto_rawDescGZIP(), []int{149}
 }
 
 func (x *VoiceEnded) GetReason() string {
@@ -10980,7 +11060,10 @@ const file_web_proto_rawDesc = "" +
 	"\x1aLoadSessionEntriesResponse\x12/\n" +
 	"\aentries\x18\x01 \x03(\v2\x15.rpc.SessionEntryDataR\aentries\"8\n" +
 	"\x1cDeleteSessionEntriesResponse\x12\x18\n" +
-	"\adeleted\x18\x01 \x01(\x03R\adeleted\"\x11\n" +
+	"\adeleted\x18\x01 \x01(\x03R\adeleted\"&\n" +
+	"\x14DeleteSessionRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\x17\n" +
+	"\x15DeleteSessionResponse\"\x11\n" +
 	"\x0fIdentityRequest\"\x9c\x01\n" +
 	"\x10IdentityResponse\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1c\n" +
@@ -11135,7 +11218,7 @@ const file_web_proto_rawDesc = "" +
 	"\x0fPARK_UNTIL_DONE\x10\x04\x12\r\n" +
 	"\tAUTO_PARK\x10\x05\x12\x12\n" +
 	"\x0eSTOP_AUTO_PARK\x10\x06\x12\b\n" +
-	"\x04SENT\x10\a2\xe1\x1d\n" +
+	"\x04SENT\x10\a2\xa9\x1e\n" +
 	"\x03Web\x126\n" +
 	"\x10UploadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment(\x01\x128\n" +
 	"\x12DownloadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment0\x01\x12E\n" +
@@ -11198,7 +11281,8 @@ const file_web_proto_rawDesc = "" +
 	"\x11StopBackgroundJob\x12\x1d.rpc.StopBackgroundJobRequest\x1a\x1e.rpc.StopBackgroundJobResponse\x12Q\n" +
 	"\x12ListSessionEntries\x12\x1a.rpc.SessionEntriesRequest\x1a\x1f.rpc.ListSessionEntriesResponse\x12Q\n" +
 	"\x12LoadSessionEntries\x12\x1a.rpc.SessionEntriesRequest\x1a\x1f.rpc.LoadSessionEntriesResponse\x12U\n" +
-	"\x14DeleteSessionEntries\x12\x1a.rpc.SessionEntriesRequest\x1a!.rpc.DeleteSessionEntriesResponseBAZ?github.com/Rocketable/platform/internal/rocketclaw/frontend/rpcb\x06proto3"
+	"\x14DeleteSessionEntries\x12\x1a.rpc.SessionEntriesRequest\x1a!.rpc.DeleteSessionEntriesResponse\x12F\n" +
+	"\rDeleteSession\x12\x19.rpc.DeleteSessionRequest\x1a\x1a.rpc.DeleteSessionResponseBAZ?github.com/Rocketable/platform/internal/rocketclaw/frontend/rpcb\x06proto3"
 
 var (
 	file_web_proto_rawDescOnce sync.Once
@@ -11213,7 +11297,7 @@ func file_web_proto_rawDescGZIP() []byte {
 }
 
 var file_web_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_web_proto_msgTypes = make([]protoimpl.MessageInfo, 155)
+var file_web_proto_msgTypes = make([]protoimpl.MessageInfo, 157)
 var file_web_proto_goTypes = []any{
 	(ConversationKind)(0),                 // 0: rpc.ConversationKind
 	(PromptDelivery)(0),                   // 1: rpc.PromptDelivery
@@ -11345,35 +11429,37 @@ var file_web_proto_goTypes = []any{
 	(*SessionEntryData)(nil),              // 127: rpc.SessionEntryData
 	(*LoadSessionEntriesResponse)(nil),    // 128: rpc.LoadSessionEntriesResponse
 	(*DeleteSessionEntriesResponse)(nil),  // 129: rpc.DeleteSessionEntriesResponse
-	(*IdentityRequest)(nil),               // 130: rpc.IdentityRequest
-	(*IdentityResponse)(nil),              // 131: rpc.IdentityResponse
-	(*ReloadRequest)(nil),                 // 132: rpc.ReloadRequest
-	(*ReloadResponse)(nil),                // 133: rpc.ReloadResponse
-	(*VoiceRequest)(nil),                  // 134: rpc.VoiceRequest
-	(*VoiceSettingsRequest)(nil),          // 135: rpc.VoiceSettingsRequest
-	(*VoiceSettingsResponse)(nil),         // 136: rpc.VoiceSettingsResponse
-	(*Space)(nil),                         // 137: rpc.Space
-	(*Tab)(nil),                           // 138: rpc.Tab
-	(*SearchPage)(nil),                    // 139: rpc.SearchPage
-	(*SavedSearch)(nil),                   // 140: rpc.SavedSearch
-	(*TabGroup)(nil),                      // 141: rpc.TabGroup
-	(*TabState)(nil),                      // 142: rpc.TabState
-	(*SharedTab)(nil),                     // 143: rpc.SharedTab
-	(*TopShelf)(nil),                      // 144: rpc.TopShelf
-	(*ShelfTab)(nil),                      // 145: rpc.ShelfTab
-	(*AttentionChange)(nil),               // 146: rpc.AttentionChange
-	(*TabsRequest)(nil),                   // 147: rpc.TabsRequest
-	(*TabsResponse)(nil),                  // 148: rpc.TabsResponse
-	(*VoiceEvent)(nil),                    // 149: rpc.VoiceEvent
-	(*VoiceAnswer)(nil),                   // 150: rpc.VoiceAnswer
-	(*VoiceEnded)(nil),                    // 151: rpc.VoiceEnded
-	nil,                                   // 152: rpc.HistoryResponse.ReviewRationalesEntry
-	nil,                                   // 153: rpc.ListSessionsResponse.OpencodeServersEntry
-	nil,                                   // 154: rpc.ListSessionsResponse.AgentTagsEntry
-	nil,                                   // 155: rpc.SlackNamesResponse.NamesEntry
-	nil,                                   // 156: rpc.AgentDraftExternalMCP.MetadataEntry
-	nil,                                   // 157: rpc.AgentDraftMessage.LabelsEntry
-	nil,                                   // 158: rpc.TabState.LastEntry
+	(*DeleteSessionRequest)(nil),          // 130: rpc.DeleteSessionRequest
+	(*DeleteSessionResponse)(nil),         // 131: rpc.DeleteSessionResponse
+	(*IdentityRequest)(nil),               // 132: rpc.IdentityRequest
+	(*IdentityResponse)(nil),              // 133: rpc.IdentityResponse
+	(*ReloadRequest)(nil),                 // 134: rpc.ReloadRequest
+	(*ReloadResponse)(nil),                // 135: rpc.ReloadResponse
+	(*VoiceRequest)(nil),                  // 136: rpc.VoiceRequest
+	(*VoiceSettingsRequest)(nil),          // 137: rpc.VoiceSettingsRequest
+	(*VoiceSettingsResponse)(nil),         // 138: rpc.VoiceSettingsResponse
+	(*Space)(nil),                         // 139: rpc.Space
+	(*Tab)(nil),                           // 140: rpc.Tab
+	(*SearchPage)(nil),                    // 141: rpc.SearchPage
+	(*SavedSearch)(nil),                   // 142: rpc.SavedSearch
+	(*TabGroup)(nil),                      // 143: rpc.TabGroup
+	(*TabState)(nil),                      // 144: rpc.TabState
+	(*SharedTab)(nil),                     // 145: rpc.SharedTab
+	(*TopShelf)(nil),                      // 146: rpc.TopShelf
+	(*ShelfTab)(nil),                      // 147: rpc.ShelfTab
+	(*AttentionChange)(nil),               // 148: rpc.AttentionChange
+	(*TabsRequest)(nil),                   // 149: rpc.TabsRequest
+	(*TabsResponse)(nil),                  // 150: rpc.TabsResponse
+	(*VoiceEvent)(nil),                    // 151: rpc.VoiceEvent
+	(*VoiceAnswer)(nil),                   // 152: rpc.VoiceAnswer
+	(*VoiceEnded)(nil),                    // 153: rpc.VoiceEnded
+	nil,                                   // 154: rpc.HistoryResponse.ReviewRationalesEntry
+	nil,                                   // 155: rpc.ListSessionsResponse.OpencodeServersEntry
+	nil,                                   // 156: rpc.ListSessionsResponse.AgentTagsEntry
+	nil,                                   // 157: rpc.SlackNamesResponse.NamesEntry
+	nil,                                   // 158: rpc.AgentDraftExternalMCP.MetadataEntry
+	nil,                                   // 159: rpc.AgentDraftMessage.LabelsEntry
+	nil,                                   // 160: rpc.TabState.LastEntry
 }
 var file_web_proto_depIdxs = []int32{
 	0,   // 0: rpc.Session.kind:type_name -> rpc.ConversationKind
@@ -11381,15 +11467,15 @@ var file_web_proto_depIdxs = []int32{
 	14,  // 2: rpc.HistoryResponse.background_jobs:type_name -> rpc.BackgroundJob
 	12,  // 3: rpc.HistoryResponse.pending_questions:type_name -> rpc.PendingQuestion
 	10,  // 4: rpc.HistoryResponse.shadows:type_name -> rpc.ShadowBinding
-	152, // 5: rpc.HistoryResponse.review_rationales:type_name -> rpc.HistoryResponse.ReviewRationalesEntry
+	154, // 5: rpc.HistoryResponse.review_rationales:type_name -> rpc.HistoryResponse.ReviewRationalesEntry
 	9,   // 6: rpc.HistoryResponse.lineage:type_name -> rpc.LineageLevel
 	0,   // 7: rpc.LineageLevel.kind:type_name -> rpc.ConversationKind
 	11,  // 8: rpc.ShadowBinding.turns:type_name -> rpc.ShadowTurn
 	13,  // 9: rpc.PendingQuestion.options:type_name -> rpc.QuestionOption
 	42,  // 10: rpc.StageRevertResponse.prompt:type_name -> rpc.TranscriptEvent
 	5,   // 11: rpc.ListSessionsResponse.sessions:type_name -> rpc.Session
-	153, // 12: rpc.ListSessionsResponse.opencode_servers:type_name -> rpc.ListSessionsResponse.OpencodeServersEntry
-	154, // 13: rpc.ListSessionsResponse.agent_tags:type_name -> rpc.ListSessionsResponse.AgentTagsEntry
+	155, // 12: rpc.ListSessionsResponse.opencode_servers:type_name -> rpc.ListSessionsResponse.OpencodeServersEntry
+	156, // 13: rpc.ListSessionsResponse.agent_tags:type_name -> rpc.ListSessionsResponse.AgentTagsEntry
 	6,   // 14: rpc.ListSessionsResponse.tabs:type_name -> rpc.TabAttention
 	42,  // 15: rpc.ForkSessionResponse.prompt:type_name -> rpc.TranscriptEvent
 	42,  // 16: rpc.MessageMatch.message:type_name -> rpc.TranscriptEvent
@@ -11397,7 +11483,7 @@ var file_web_proto_depIdxs = []int32{
 	29,  // 18: rpc.SearchSessionsResponse.terms:type_name -> rpc.SearchTerm
 	30,  // 19: rpc.SearchSessionsResponse.matches:type_name -> rpc.SessionMatch
 	26,  // 20: rpc.SearchSessionsResponse.messages:type_name -> rpc.MessageMatch
-	155, // 21: rpc.SlackNamesResponse.names:type_name -> rpc.SlackNamesResponse.NamesEntry
+	157, // 21: rpc.SlackNamesResponse.names:type_name -> rpc.SlackNamesResponse.NamesEntry
 	44,  // 22: rpc.TranscriptEvent.attachments:type_name -> rpc.Attachment
 	14,  // 23: rpc.TranscriptEvent.completion_notes:type_name -> rpc.BackgroundJob
 	43,  // 24: rpc.TranscriptEvent.code_mode_calls:type_name -> rpc.CodeModeCall
@@ -11412,7 +11498,7 @@ var file_web_proto_depIdxs = []int32{
 	76,  // 33: rpc.AgentDraft.external_mcp:type_name -> rpc.AgentDraftExternalMCP
 	73,  // 34: rpc.AgentDraft.pending:type_name -> rpc.AgentDraftPending
 	75,  // 35: rpc.AgentDraftVariant.settings:type_name -> rpc.AgentDraftSetting
-	156, // 36: rpc.AgentDraftExternalMCP.metadata:type_name -> rpc.AgentDraftExternalMCP.MetadataEntry
+	158, // 36: rpc.AgentDraftExternalMCP.metadata:type_name -> rpc.AgentDraftExternalMCP.MetadataEntry
 	77,  // 37: rpc.AgentDraftOp.splices:type_name -> rpc.AgentDraftSplice
 	76,  // 38: rpc.AgentDraftOp.external_mcp:type_name -> rpc.AgentDraftExternalMCP
 	72,  // 39: rpc.ListAgentDraftsResponse.drafts:type_name -> rpc.AgentDraft
@@ -11421,7 +11507,7 @@ var file_web_proto_depIdxs = []int32{
 	79,  // 42: rpc.GetAgentDraftResponse.presence:type_name -> rpc.AgentDraftPresence
 	108, // 43: rpc.GetAgentDraftResponse.proposals:type_name -> rpc.AgentDraftProposal
 	85,  // 44: rpc.GetAgentDraftResponse.messages:type_name -> rpc.AgentDraftMessage
-	157, // 45: rpc.AgentDraftMessage.labels:type_name -> rpc.AgentDraftMessage.LabelsEntry
+	159, // 45: rpc.AgentDraftMessage.labels:type_name -> rpc.AgentDraftMessage.LabelsEntry
 	95,  // 46: rpc.AgentDraftMessage.not_run:type_name -> rpc.AgentDraftProblem
 	76,  // 47: rpc.AgentDraftMessage.external_mcp:type_name -> rpc.AgentDraftExternalMCP
 	78,  // 48: rpc.ApplyAgentDraftOpRequest.op:type_name -> rpc.AgentDraftOp
@@ -11441,31 +11527,31 @@ var file_web_proto_depIdxs = []int32{
 	125, // 62: rpc.ListSessionEntriesResponse.entries:type_name -> rpc.SessionEntryMeta
 	127, // 63: rpc.LoadSessionEntriesResponse.entries:type_name -> rpc.SessionEntryData
 	2,   // 64: rpc.VoiceSettingsRequest.action:type_name -> rpc.VoiceSettingsAction
-	139, // 65: rpc.Tab.search:type_name -> rpc.SearchPage
-	140, // 66: rpc.SearchPage.searches:type_name -> rpc.SavedSearch
-	138, // 67: rpc.TabState.tabs:type_name -> rpc.Tab
-	141, // 68: rpc.TabState.groups:type_name -> rpc.TabGroup
-	158, // 69: rpc.TabState.last:type_name -> rpc.TabState.LastEntry
-	139, // 70: rpc.SharedTab.search:type_name -> rpc.SearchPage
-	139, // 71: rpc.SharedTab.base:type_name -> rpc.SearchPage
-	145, // 72: rpc.TopShelf.tabs:type_name -> rpc.ShelfTab
-	139, // 73: rpc.ShelfTab.search:type_name -> rpc.SearchPage
+	141, // 65: rpc.Tab.search:type_name -> rpc.SearchPage
+	142, // 66: rpc.SearchPage.searches:type_name -> rpc.SavedSearch
+	140, // 67: rpc.TabState.tabs:type_name -> rpc.Tab
+	143, // 68: rpc.TabState.groups:type_name -> rpc.TabGroup
+	160, // 69: rpc.TabState.last:type_name -> rpc.TabState.LastEntry
+	141, // 70: rpc.SharedTab.search:type_name -> rpc.SearchPage
+	141, // 71: rpc.SharedTab.base:type_name -> rpc.SearchPage
+	147, // 72: rpc.TopShelf.tabs:type_name -> rpc.ShelfTab
+	141, // 73: rpc.ShelfTab.search:type_name -> rpc.SearchPage
 	3,   // 74: rpc.AttentionChange.action:type_name -> rpc.AttentionAction
-	142, // 75: rpc.TabsRequest.state:type_name -> rpc.TabState
-	137, // 76: rpc.TabsRequest.rename_space:type_name -> rpc.Space
-	143, // 77: rpc.TabsRequest.share:type_name -> rpc.SharedTab
-	143, // 78: rpc.TabsRequest.unshare:type_name -> rpc.SharedTab
-	143, // 79: rpc.TabsRequest.edit_shared:type_name -> rpc.SharedTab
-	144, // 80: rpc.TabsRequest.top_shelf:type_name -> rpc.TopShelf
-	146, // 81: rpc.TabsRequest.attention:type_name -> rpc.AttentionChange
-	137, // 82: rpc.TabsResponse.spaces:type_name -> rpc.Space
-	142, // 83: rpc.TabsResponse.state:type_name -> rpc.TabState
-	143, // 84: rpc.TabsResponse.shared:type_name -> rpc.SharedTab
-	139, // 85: rpc.TabsResponse.unshared:type_name -> rpc.SearchPage
-	144, // 86: rpc.TabsResponse.top_shelf:type_name -> rpc.TopShelf
-	138, // 87: rpc.TabsResponse.closed:type_name -> rpc.Tab
-	150, // 88: rpc.VoiceEvent.answer:type_name -> rpc.VoiceAnswer
-	151, // 89: rpc.VoiceEvent.ended:type_name -> rpc.VoiceEnded
+	144, // 75: rpc.TabsRequest.state:type_name -> rpc.TabState
+	139, // 76: rpc.TabsRequest.rename_space:type_name -> rpc.Space
+	145, // 77: rpc.TabsRequest.share:type_name -> rpc.SharedTab
+	145, // 78: rpc.TabsRequest.unshare:type_name -> rpc.SharedTab
+	145, // 79: rpc.TabsRequest.edit_shared:type_name -> rpc.SharedTab
+	146, // 80: rpc.TabsRequest.top_shelf:type_name -> rpc.TopShelf
+	148, // 81: rpc.TabsRequest.attention:type_name -> rpc.AttentionChange
+	139, // 82: rpc.TabsResponse.spaces:type_name -> rpc.Space
+	144, // 83: rpc.TabsResponse.state:type_name -> rpc.TabState
+	145, // 84: rpc.TabsResponse.shared:type_name -> rpc.SharedTab
+	141, // 85: rpc.TabsResponse.unshared:type_name -> rpc.SearchPage
+	146, // 86: rpc.TabsResponse.top_shelf:type_name -> rpc.TopShelf
+	140, // 87: rpc.TabsResponse.closed:type_name -> rpc.Tab
+	152, // 88: rpc.VoiceEvent.answer:type_name -> rpc.VoiceAnswer
+	153, // 89: rpc.VoiceEvent.ended:type_name -> rpc.VoiceEnded
 	20,  // 90: rpc.ListSessionsResponse.AgentTagsEntry.value:type_name -> rpc.TagChoices
 	44,  // 91: rpc.Web.UploadAttachment:input_type -> rpc.Attachment
 	44,  // 92: rpc.Web.DownloadAttachment:input_type -> rpc.Attachment
@@ -11474,9 +11560,9 @@ var file_web_proto_depIdxs = []int32{
 	36,  // 95: rpc.Web.Join:input_type -> rpc.JoinRequest
 	40,  // 96: rpc.Web.WatchTyping:input_type -> rpc.WatchTypingRequest
 	38,  // 97: rpc.Web.ReportTyping:input_type -> rpc.ReportTypingRequest
-	134, // 98: rpc.Web.Voice:input_type -> rpc.VoiceRequest
-	135, // 99: rpc.Web.VoiceSettings:input_type -> rpc.VoiceSettingsRequest
-	147, // 100: rpc.Web.Tabs:input_type -> rpc.TabsRequest
+	136, // 98: rpc.Web.Voice:input_type -> rpc.VoiceRequest
+	137, // 99: rpc.Web.VoiceSettings:input_type -> rpc.VoiceSettingsRequest
+	149, // 100: rpc.Web.Tabs:input_type -> rpc.TabsRequest
 	45,  // 101: rpc.Web.Prompt:input_type -> rpc.PromptRequest
 	54,  // 102: rpc.Web.ListCronJobs:input_type -> rpc.ListCronJobsRequest
 	61,  // 103: rpc.Web.RunCronJob:input_type -> rpc.RunCronJobRequest
@@ -11511,8 +11597,8 @@ var file_web_proto_depIdxs = []int32{
 	68,  // 132: rpc.Web.SaveBehaviorSettings:input_type -> rpc.SaveBehaviorSettingsRequest
 	110, // 133: rpc.Web.UpdateSession:input_type -> rpc.UpdateSessionRequest
 	112, // 134: rpc.Web.Protocol:input_type -> rpc.ProtocolRequest
-	130, // 135: rpc.Web.Identity:input_type -> rpc.IdentityRequest
-	132, // 136: rpc.Web.Reload:input_type -> rpc.ReloadRequest
+	132, // 135: rpc.Web.Identity:input_type -> rpc.IdentityRequest
+	134, // 136: rpc.Web.Reload:input_type -> rpc.ReloadRequest
 	115, // 137: rpc.Web.ListQueue:input_type -> rpc.ListQueueRequest
 	117, // 138: rpc.Web.RemoveQueueItem:input_type -> rpc.QueueItemRequest
 	117, // 139: rpc.Web.SteerQueueItem:input_type -> rpc.QueueItemRequest
@@ -11524,65 +11610,67 @@ var file_web_proto_depIdxs = []int32{
 	124, // 145: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
 	124, // 146: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
 	124, // 147: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
-	44,  // 148: rpc.Web.UploadAttachment:output_type -> rpc.Attachment
-	44,  // 149: rpc.Web.DownloadAttachment:output_type -> rpc.Attachment
-	19,  // 150: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
-	22,  // 151: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
-	37,  // 152: rpc.Web.Join:output_type -> rpc.ConversationChange
-	41,  // 153: rpc.Web.WatchTyping:output_type -> rpc.TypingEvent
-	39,  // 154: rpc.Web.ReportTyping:output_type -> rpc.ReportTypingResponse
-	149, // 155: rpc.Web.Voice:output_type -> rpc.VoiceEvent
-	136, // 156: rpc.Web.VoiceSettings:output_type -> rpc.VoiceSettingsResponse
-	148, // 157: rpc.Web.Tabs:output_type -> rpc.TabsResponse
-	46,  // 158: rpc.Web.Prompt:output_type -> rpc.PromptResponse
-	55,  // 159: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
-	62,  // 160: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
-	57,  // 161: rpc.Web.GetPage:output_type -> rpc.Page
-	59,  // 162: rpc.Web.ListPages:output_type -> rpc.ListPagesResponse
-	64,  // 163: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
-	8,   // 164: rpc.Web.History:output_type -> rpc.HistoryResponse
-	24,  // 165: rpc.Web.ForkSession:output_type -> rpc.ForkSessionResponse
-	16,  // 166: rpc.Web.StageRevert:output_type -> rpc.StageRevertResponse
-	18,  // 167: rpc.Web.ClearRevert:output_type -> rpc.ClearRevertResponse
-	27,  // 168: rpc.Web.SearchMessages:output_type -> rpc.SearchMessagesResponse
-	31,  // 169: rpc.Web.SearchSessions:output_type -> rpc.SearchSessionsResponse
-	33,  // 170: rpc.Web.SlackNames:output_type -> rpc.SlackNamesResponse
-	35,  // 171: rpc.Web.Handoff:output_type -> rpc.HandoffResponse
-	50,  // 172: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
-	53,  // 173: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
-	69,  // 174: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
-	71,  // 175: rpc.Web.TestModel:output_type -> rpc.TestModelResponse
-	72,  // 176: rpc.Web.CreateAgentDraft:output_type -> rpc.AgentDraft
-	82,  // 177: rpc.Web.ListAgentDrafts:output_type -> rpc.ListAgentDraftsResponse
-	84,  // 178: rpc.Web.GetAgentDraft:output_type -> rpc.GetAgentDraftResponse
-	87,  // 179: rpc.Web.ApplyAgentDraftOp:output_type -> rpc.ApplyAgentDraftOpResponse
-	89,  // 180: rpc.Web.SetAgentDraftPresence:output_type -> rpc.SetAgentDraftPresenceResponse
-	91,  // 181: rpc.Web.AgentSettings:output_type -> rpc.AgentSettingsResponse
-	96,  // 182: rpc.Web.DraftPrompt:output_type -> rpc.DraftPromptResponse
-	96,  // 183: rpc.Web.RestartDraftChat:output_type -> rpc.DraftPromptResponse
-	99,  // 184: rpc.Web.DraftLayers:output_type -> rpc.DraftLayersResponse
-	103, // 185: rpc.Web.SaveDraft:output_type -> rpc.SaveDraftResponse
-	103, // 186: rpc.Web.StopWaiting:output_type -> rpc.SaveDraftResponse
-	108, // 187: rpc.Web.ProposeDraftChanges:output_type -> rpc.AgentDraftProposal
-	108, // 188: rpc.Web.DecideProposal:output_type -> rpc.AgentDraftProposal
-	69,  // 189: rpc.Web.SaveBehaviorSettings:output_type -> rpc.ListConfigResponse
-	111, // 190: rpc.Web.UpdateSession:output_type -> rpc.UpdateSessionResponse
-	113, // 191: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
-	131, // 192: rpc.Web.Identity:output_type -> rpc.IdentityResponse
-	133, // 193: rpc.Web.Reload:output_type -> rpc.ReloadResponse
-	116, // 194: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
-	118, // 195: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
-	118, // 196: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
-	118, // 197: rpc.Web.PopQueueItem:output_type -> rpc.QueueItemResponse
-	118, // 198: rpc.Web.EditQueueItem:output_type -> rpc.QueueItemResponse
-	118, // 199: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
-	121, // 200: rpc.Web.MoveToBackground:output_type -> rpc.MoveToBackgroundResponse
-	123, // 201: rpc.Web.StopBackgroundJob:output_type -> rpc.StopBackgroundJobResponse
-	126, // 202: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
-	128, // 203: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
-	129, // 204: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
-	148, // [148:205] is the sub-list for method output_type
-	91,  // [91:148] is the sub-list for method input_type
+	130, // 148: rpc.Web.DeleteSession:input_type -> rpc.DeleteSessionRequest
+	44,  // 149: rpc.Web.UploadAttachment:output_type -> rpc.Attachment
+	44,  // 150: rpc.Web.DownloadAttachment:output_type -> rpc.Attachment
+	19,  // 151: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
+	22,  // 152: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
+	37,  // 153: rpc.Web.Join:output_type -> rpc.ConversationChange
+	41,  // 154: rpc.Web.WatchTyping:output_type -> rpc.TypingEvent
+	39,  // 155: rpc.Web.ReportTyping:output_type -> rpc.ReportTypingResponse
+	151, // 156: rpc.Web.Voice:output_type -> rpc.VoiceEvent
+	138, // 157: rpc.Web.VoiceSettings:output_type -> rpc.VoiceSettingsResponse
+	150, // 158: rpc.Web.Tabs:output_type -> rpc.TabsResponse
+	46,  // 159: rpc.Web.Prompt:output_type -> rpc.PromptResponse
+	55,  // 160: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
+	62,  // 161: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
+	57,  // 162: rpc.Web.GetPage:output_type -> rpc.Page
+	59,  // 163: rpc.Web.ListPages:output_type -> rpc.ListPagesResponse
+	64,  // 164: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
+	8,   // 165: rpc.Web.History:output_type -> rpc.HistoryResponse
+	24,  // 166: rpc.Web.ForkSession:output_type -> rpc.ForkSessionResponse
+	16,  // 167: rpc.Web.StageRevert:output_type -> rpc.StageRevertResponse
+	18,  // 168: rpc.Web.ClearRevert:output_type -> rpc.ClearRevertResponse
+	27,  // 169: rpc.Web.SearchMessages:output_type -> rpc.SearchMessagesResponse
+	31,  // 170: rpc.Web.SearchSessions:output_type -> rpc.SearchSessionsResponse
+	33,  // 171: rpc.Web.SlackNames:output_type -> rpc.SlackNamesResponse
+	35,  // 172: rpc.Web.Handoff:output_type -> rpc.HandoffResponse
+	50,  // 173: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
+	53,  // 174: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
+	69,  // 175: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
+	71,  // 176: rpc.Web.TestModel:output_type -> rpc.TestModelResponse
+	72,  // 177: rpc.Web.CreateAgentDraft:output_type -> rpc.AgentDraft
+	82,  // 178: rpc.Web.ListAgentDrafts:output_type -> rpc.ListAgentDraftsResponse
+	84,  // 179: rpc.Web.GetAgentDraft:output_type -> rpc.GetAgentDraftResponse
+	87,  // 180: rpc.Web.ApplyAgentDraftOp:output_type -> rpc.ApplyAgentDraftOpResponse
+	89,  // 181: rpc.Web.SetAgentDraftPresence:output_type -> rpc.SetAgentDraftPresenceResponse
+	91,  // 182: rpc.Web.AgentSettings:output_type -> rpc.AgentSettingsResponse
+	96,  // 183: rpc.Web.DraftPrompt:output_type -> rpc.DraftPromptResponse
+	96,  // 184: rpc.Web.RestartDraftChat:output_type -> rpc.DraftPromptResponse
+	99,  // 185: rpc.Web.DraftLayers:output_type -> rpc.DraftLayersResponse
+	103, // 186: rpc.Web.SaveDraft:output_type -> rpc.SaveDraftResponse
+	103, // 187: rpc.Web.StopWaiting:output_type -> rpc.SaveDraftResponse
+	108, // 188: rpc.Web.ProposeDraftChanges:output_type -> rpc.AgentDraftProposal
+	108, // 189: rpc.Web.DecideProposal:output_type -> rpc.AgentDraftProposal
+	69,  // 190: rpc.Web.SaveBehaviorSettings:output_type -> rpc.ListConfigResponse
+	111, // 191: rpc.Web.UpdateSession:output_type -> rpc.UpdateSessionResponse
+	113, // 192: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
+	133, // 193: rpc.Web.Identity:output_type -> rpc.IdentityResponse
+	135, // 194: rpc.Web.Reload:output_type -> rpc.ReloadResponse
+	116, // 195: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
+	118, // 196: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
+	118, // 197: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
+	118, // 198: rpc.Web.PopQueueItem:output_type -> rpc.QueueItemResponse
+	118, // 199: rpc.Web.EditQueueItem:output_type -> rpc.QueueItemResponse
+	118, // 200: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
+	121, // 201: rpc.Web.MoveToBackground:output_type -> rpc.MoveToBackgroundResponse
+	123, // 202: rpc.Web.StopBackgroundJob:output_type -> rpc.StopBackgroundJobResponse
+	126, // 203: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
+	128, // 204: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
+	129, // 205: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
+	131, // 206: rpc.Web.DeleteSession:output_type -> rpc.DeleteSessionResponse
+	149, // [149:207] is the sub-list for method output_type
+	91,  // [91:149] is the sub-list for method input_type
 	91,  // [91:91] is the sub-list for extension type_name
 	91,  // [91:91] is the sub-list for extension extendee
 	0,   // [0:91] is the sub-list for field type_name
@@ -11599,10 +11687,10 @@ func file_web_proto_init() {
 	file_web_proto_msgTypes[98].OneofWrappers = []any{}
 	file_web_proto_msgTypes[106].OneofWrappers = []any{}
 	file_web_proto_msgTypes[110].OneofWrappers = []any{}
-	file_web_proto_msgTypes[127].OneofWrappers = []any{}
-	file_web_proto_msgTypes[131].OneofWrappers = []any{}
-	file_web_proto_msgTypes[143].OneofWrappers = []any{}
-	file_web_proto_msgTypes[145].OneofWrappers = []any{
+	file_web_proto_msgTypes[129].OneofWrappers = []any{}
+	file_web_proto_msgTypes[133].OneofWrappers = []any{}
+	file_web_proto_msgTypes[145].OneofWrappers = []any{}
+	file_web_proto_msgTypes[147].OneofWrappers = []any{
 		(*VoiceEvent_Answer)(nil),
 		(*VoiceEvent_Ended)(nil),
 		(*VoiceEvent_Notice)(nil),
@@ -11616,7 +11704,7 @@ func file_web_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_web_proto_rawDesc), len(file_web_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   155,
+			NumMessages:   157,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

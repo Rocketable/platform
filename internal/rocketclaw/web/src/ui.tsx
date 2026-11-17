@@ -1659,13 +1659,13 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
 }
 
 // Sessions and Search pages can be renamed from their tab, and a Search page from its Shared row, which otherwise offers
-// only its Copy link, Shared, Duplicate, Top Shelf, Add to my tabs, and attention items. A remote OpenCode session's own
-// tab can also delete it.
+// only its Copy link, Shared, Duplicate, Top Shelf, Add to my tabs, and attention items. A session's own tab can also
+// delete it.
 function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { path: string; shared?: boolean; away?: boolean }, view: SidebarView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
   if (menu.away) return commands(menu.path, view).filter(({ key }) => /^(close$|link|read|unread|park|unpark)/.test(key));
   const renaming = targets.size === 1 && (isSearch(menu.path) || (pathSession(menu.path) && !menu.shared)) ? [{ key: "rename", label: isSearch(menu.path) ? "Rename search" : "Rename session", run: rename }] : [];
-  const remote = targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === pathSession(menu.path) && row.server) : undefined;
-  return [...renaming, ...menu.shared ? commands(menu.path, view).filter(({ key }) => /^(link|unshare|duplicate|shelve|own|read|unread|park|unpark)/.test(key)) : commands(menu.path, view, targets), ...remote ? [{ key: "delete", label: "Delete session", run: () => remove(remote.id) }] : []];
+  const session = targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === pathSession(menu.path)) : undefined;
+  return [...renaming, ...menu.shared ? commands(menu.path, view).filter(({ key }) => /^(link|unshare|duplicate|shelve|own|read|unread|park|unpark)/.test(key)) : commands(menu.path, view, targets), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
 }
 
 const shelfItems = (path: string, shelf: ShelfTab, parked: boolean | undefined, view: SidebarView | undefined, send: Attend, pick: (picking: Picking) => void): TabCommand[] =>
@@ -3184,7 +3184,8 @@ function useSessionActions(session: Session | undefined, onSuccess?: () => void)
     { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
     ...pauseActions(session, (paused) => update.mutate({ id, paused })),
     ...choices.map((tag) => ({ key: `tag-${tag}`, label: `${tags.has(tag) ? "Remove" : "Add"} tag ${tag}`, keep: true, run: () => update.mutate({ id, tag }) })),
-    ...(session.server ? [{ key: "add-tag", label: "Add tag…", run: () => setCommand({ mode: "tag", source: id }) }, { key: "delete", label: "Delete session", run: () => setCommand({ mode: "delete", source: id }) }, ...remoteActions(id, remote?.servers[session.server] ?? "", session.remoteSessionId ?? "")] : []),
+    { key: "delete", label: "Delete session", run: () => setCommand({ mode: "delete", source: id }) },
+    ...(session.server ? [{ key: "add-tag", label: "Add tag…", run: () => setCommand({ mode: "tag", source: id }) }, ...remoteActions(id, remote?.servers[session.server] ?? "", session.remoteSessionId ?? "")] : []),
   ].map((item) => ({ ...item, disabled: update.isPending })) : [];
   return { items, error: update.error };
 }
@@ -3223,7 +3224,8 @@ function NameSessionDialog({ id, tag = false }: { id: string; tag?: boolean }) {
     </Dialog>;
 }
 
-// Deletes a remote OpenCode session on its server, through the Web's /oc/<server>/api/ proxy, and closes its tab.
+// Deletes a remote OpenCode session on its server, through the Web's /oc/<server>/api/ proxy, or a RocketClaw session
+// through DeleteSession, and closes its tab.
 function DeleteSessionDialog({ id }: { id: string }) {
   const sidebar = useContext(Sidebar);
   const tabs = useContext(TabActions);
@@ -3231,6 +3233,7 @@ function DeleteSessionDialog({ id }: { id: string }) {
   const [session] = useState(() => sidebar.rows.find((row) => row.id === id)!);
   const remove = useMutation({
     mutationFn: async () => {
+      if (!session.server) return rpc("DeleteSession", { id });
       const response = await fetch(`${serverURL()}/oc/${session.server}/api/session/${session.remoteSessionId}`, { method: "DELETE" });
       if (!response.ok) throw new Error(`${session.server} did not delete the session (HTTP ${response.status}).`);
     },
