@@ -128,6 +128,11 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   // A space's card enters it, saving it as the current space: on this server, and on a remote, whose page opens even in
   // an empty space, which it enters on arrival.
   observed.stage = "enter spaces";
+  const enter = async (space: string, server: string) => {
+    await page.getByRole("button", { name: `${space} space actions on ${server}`, exact: true }).click();
+    await page.getByRole("menuitem", { name: "Go to space", exact: true }).click();
+    await page.getByRole("menu").waitFor({ state: "hidden" });
+  };
   await page.evaluate(async () => { await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ createSpace: "Side" }) }); });
   await page.evaluate(async (url: string) => { await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ createSpace: "Billing" }) }); }, remote);
   await page.goto(`${local}/`);
@@ -135,9 +140,9 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
     const view = await (await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
     return view.spaces.some((space: { id: string; name: string }) => space.name === name && space.id === view.state.space);
   }, [url, name]);
-  await page.getByRole("button", { name: "Go to Side on local", exact: true }).click();
+  await enter("Side", "local");
   while (!await current(local, "Side")) await Bun.sleep(100);
-  await page.getByRole("button", { name: "Go to Billing on work", exact: true }).click();
+  await enter("Billing", "work");
   await page.waitForURL((url: URL) => url.pathname.startsWith("/r/work/"));
   while (!await current(remote, "Billing")) await Bun.sleep(100);
   const online = page.waitForRequest((request: { url(): string; frame(): { url(): string } }) => request.url() === `${remote}/api/Protocol` && request.frame().url() === `${local}/r/work/config`);
@@ -154,7 +159,7 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   expect(await page.evaluate(async () => (await fetch("/test/remote/down", { method: "POST" })).ok)).toBe(true);
   await page.clock.fastForward(2_000);
   await page.getByText("work is offline; this page reopens when it is reachable.").waitFor();
-  await page.getByRole("button", { name: "Go to Main on local", exact: true }).click();
+  await enter("Main", "local");
   await page.waitForURL((url: URL) => !url.pathname.startsWith("/r/work"));
   expect(await page.evaluate(async () => (await fetch("/test/remote/up", { method: "POST" })).ok)).toBe(true);
 

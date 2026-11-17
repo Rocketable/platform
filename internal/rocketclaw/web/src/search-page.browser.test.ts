@@ -320,7 +320,7 @@ test("principal filters retain links, pills and quoted suggestions", async () =>
     await input.fill("principal:");
     await suggestion.waitFor();
     await input.fill("space:");
-    await page.getByRole("button", { name: "Main", exact: true }).click();
+    await page.getByRole("main").getByRole("button", { name: "Main", exact: true }).click();
     const spacePill = page.getByRole("button", { name: "space:Main", exact: true });
     await spacePill.waitFor();
     expect(await input.inputValue()).toBe("");

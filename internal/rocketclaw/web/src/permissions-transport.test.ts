@@ -12,18 +12,12 @@ test("a person limited to Ops sees and drives only Ops, and everything once unli
     page.on("request", (request: { url(): string; postData(): string }) => { if (request.url().endsWith("/api/Prompt")) prompts.push(JSON.parse(request.postData()).text); });
     let shots = 0;
     const shot = (name: string) => page.screenshot({ path: path.join(out, `${String(++shots).padStart(2, "0")}-${name}.png`) });
-    const currentSpace = (name: string) => page.locator(`button[aria-current="true"][aria-label="Go to ${name}"]`).waitFor();
-    // The spaces' cards, and the current one's actions, which someone limited to their own sessions has none of.
+    const currentSpace = (name: string) => page.locator(`button[aria-current="true"][aria-label="${name}"]`).waitFor();
+    // The spaces' cards, and the current one's actions, which for someone limited to their own sessions only enter it.
     const spaceMenu = async (current: string, name: string) => {
       await currentSpace(current);
-      const spaces = await page.locator('[data-tab-lists] button[aria-label^="Go to "]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")!.slice("Go to ".length)));
-      await page.getByRole("button", { name: `Go to ${current}`, exact: true }).hover();
-      const actions = page.getByRole("button", { name: `${current} space actions`, exact: true });
-      if (!await actions.count()) {
-        await shot(name);
-        return [spaces, []];
-      }
-      await actions.click();
+      const spaces = await page.locator('[data-tab-lists] button[aria-description][aria-expanded]:not([aria-label="Shared"])').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+      await page.getByRole("button", { name: `${current} space actions`, exact: true }).click();
       await page.getByRole("menuitem").first().waitFor();
       const listed = [spaces, await page.getByRole("menuitem").allInnerTexts()];
       await shot(name);
@@ -38,6 +32,14 @@ test("a person limited to Ops sees and drives only Ops, and everything once unli
       await shot(name);
       await page.keyboard.press("Escape");
       return titles.toSorted();
+    };
+    const canMakeSpaces = async () => {
+      await page.keyboard.press("Control+Shift+p");
+      const palette = page.getByRole("dialog", { name: "Run command", exact: true });
+      await palette.getByRole("button", { name: "Sessions: New", exact: true }).waitFor();
+      const count = await palette.getByRole("button", { name: "Spaces: New space", exact: true }).count();
+      await page.keyboard.press("Escape");
+      return count === 1;
     };
     const agentMenu = async (name: string) => {
       await page.getByRole("button", { name: "Choose agent", exact: true }).click();
@@ -59,7 +61,7 @@ test("a person limited to Ops sees and drives only Ops, and everything once unli
     await page.goto(url);
     await currentSpace("Ops");
     await shot("limited-new-session");
-    expect(await spaceMenu("Ops", "limited-space-menu-only-ops")).toEqual([["Ops"], []]);
+    expect([await spaceMenu("Ops", "limited-space-menu-only-ops"), await canMakeSpaces()]).toEqual([[["Ops"], ["Go to space"]], false]);
     const ops = ["Ops: deploy checklist", "Ops: on-call handoff"];
     expect(await sessions(ops, "limited-sessions-only-ops")).toEqual(ops);
     expect(await agentMenu("limited-agent-picker-only-ops-agent")).toEqual(["ops-agent"]);
@@ -81,7 +83,7 @@ test("a person limited to Ops sees and drives only Ops, and everything once unli
     await page.goto(url);
     await currentSpace("Ops");
     await shot("unlimited-new-session");
-    expect(await spaceMenu("Ops", "unlimited-space-menu-all-spaces")).toEqual([["Main", "Ops"], ["New space", "Rename space", "Delete space"]]);
+    expect([await spaceMenu("Ops", "unlimited-space-menu-all-spaces"), await canMakeSpaces()]).toEqual([[["Main", "Ops"], ["Go to space", "Rename space", "Delete space"]], true]);
     const every = ["Main: quarterly budget", "No space: scratch notes", ...ops];
     expect(await sessions(every, "unlimited-sessions-all")).toEqual(every);
     expect(await agentMenu("unlimited-agent-picker-all-agents")).toEqual(["loose", "main", "main-agent", "ops-agent", "voice"]);

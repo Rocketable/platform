@@ -858,23 +858,32 @@ WHERE t.space = $1 AND t.path = $2 GROUP BY t.space, t.path, p.id`, space, path)
 	return page, nil
 }
 
-func (s *SessionService) Folds(ctx context.Context, username string) (map[string]bool, error) {
-	folds := []byte("{}")
-	if err := s.db.QueryRowContext(ctx, `SELECT folds FROM web_tab_states WHERE username = $1`, username).Scan(&folds); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("read folds: %w", err)
-	}
-
-	var folded map[string]bool
-	if err := json.Unmarshal(folds, &folded); err != nil {
-		return nil, fmt.Errorf("decode folds: %w", err)
-	}
-
-	return folded, nil
+type StripLayout struct {
+	Folded map[string]bool
+	Order  []string
 }
 
-func (s *SessionService) SaveFolds(ctx context.Context, username string, folds map[string]bool) error {
-	_, err := execState(ctx, s.db, "save folds", `INSERT INTO web_tab_states (username, revision, folds) VALUES ($1, 0, COALESCE($2::jsonb, '{}'))
-ON CONFLICT (username) DO UPDATE SET folds = excluded.folds`, username, folds)
+func (s *SessionService) StripLayout(ctx context.Context, username string) (StripLayout, error) {
+	folds, order := []byte("{}"), []byte("[]")
+	if err := s.db.QueryRowContext(ctx, `SELECT folds, card_order FROM web_tab_states WHERE username = $1`, username).Scan(&folds, &order); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return StripLayout{}, fmt.Errorf("read strip layout: %w", err)
+	}
+
+	var layout StripLayout
+	if err := json.Unmarshal(folds, &layout.Folded); err != nil {
+		return StripLayout{}, fmt.Errorf("decode folds: %w", err)
+	}
+
+	if err := json.Unmarshal(order, &layout.Order); err != nil {
+		return StripLayout{}, fmt.Errorf("decode card order: %w", err)
+	}
+
+	return layout, nil
+}
+
+func (s *SessionService) SaveStripLayout(ctx context.Context, username string, layout *StripLayout) error {
+	_, err := execState(ctx, s.db, "save strip layout", `INSERT INTO web_tab_states (username, revision, folds, card_order) VALUES ($1, 0, COALESCE($2::jsonb, '{}'), COALESCE($3::jsonb, '[]'))
+ON CONFLICT (username) DO UPDATE SET folds = excluded.folds, card_order = excluded.card_order`, username, layout.Folded, layout.Order)
 
 	return err
 }

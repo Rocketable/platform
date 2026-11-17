@@ -40,7 +40,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
-import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, TabAttention, TranscriptEvent, VoiceSettings } from "@/types";
+import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, StripLayout, TabAttention, TranscriptEvent, VoiceSettings } from "@/types";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import { AgentEditorPage, editAgent } from "@/agent-editor";
 import type { MountOptions, Mounted } from "../../oc/host/api";
@@ -59,7 +59,8 @@ import {
 const queryClient = new QueryClient({
   defaultOptions: { queries: { queryKeyHashFn: queryKeyHash } },
 });
-type SessionCommand = { mode: "fork" | "handoff" | "name" | "tag" | "delete"; source: string; target?: MessageMatch };
+// A New space command names in source the server the space is made on.
+type SessionCommand = { mode: "fork" | "handoff" | "name" | "tag" | "delete" | "space"; source: string; target?: MessageMatch };
 const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
 
 function sessionPath(id: string) {
@@ -1076,34 +1077,35 @@ const savedState = (state: TabState): SavedTabs["state"] => {
 };
 
 type ClosedTab = NonNullable<SavedTabs["closed"]>[number];
-const noShared: SavedTabs["shared"] = [], noClosed: ClosedTab[] = [], noFolds: Record<string, boolean> = {};
+const noShared: SavedTabs["shared"] = [], noClosed: ClosedTab[] = [], noLayout: StripLayout = {};
 
-// This person's folds, kept by the local server, from the saved tabs its view or its session list fetches.
-function useFolds(): [Record<string, boolean>, (key: string, folded: boolean) => void] {
+// This person's strip layout, kept by the local server, from the saved tabs its view or its session list fetches.
+function useLayout(): [StripLayout, (change: (layout: StripLayout) => StripLayout) => void] {
   const owner = useQuery(queries.identity("")).data?.username, saved = useQuery({ ...queries.tabs(owner ?? "", ""), enabled: false }).data;
-  return [saved?.folds?.folded ?? noFolds, saveFold];
+  return [saved?.layout ?? noLayout, saveLayout];
 }
 
-// A fold saves every fold to the local server, one save at a time in order, and the cache takes it at once. Until the
-// last save answers, folds build on the newest ones, not on ones a poll brought back meanwhile, and its answer then
-// replaces the cache. Before the folds arrive nothing is saved, which would replace them.
-let folding: { latest?: Record<string, boolean>; saves: Promise<unknown> } = { saves: Promise.resolve() };
-function saveFold(key: string, folded: boolean) {
+// A layout change saves the whole layout to the local server, one save at a time in order, and the cache takes it at
+// once. Until the last save answers, changes build on the newest layout, not on one a poll brought back meanwhile, and its
+// answer then replaces the cache. Before the layout arrives nothing is saved, which would replace it.
+let laying: { latest?: StripLayout; saves: Promise<unknown> } = { saves: Promise.resolve() };
+function saveLayout(change: (layout: StripLayout) => StripLayout) {
   const owner = queryClient.getQueryData<{ username: string }>(queries.identity("").queryKey)?.username, { queryKey } = queries.tabs(owner ?? "", "");
   const saved = queryClient.getQueryData<SavedTabs>(queryKey);
   if (owner === undefined || !saved) return;
-  const latest = folding.latest = { ...folding.latest ?? saved.folds?.folded, [key]: folded };
+  const layout = laying.latest = change(laying.latest ?? saved.layout ?? noLayout);
   void queryClient.cancelQueries({ queryKey });
-  queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, folds: { folded: latest } });
-  folding.saves = folding.saves.then(() => mutations.tabs({ folds: { folded: latest } }, "")).then((reply) => {
-    if (folding.latest !== latest) return;
-    folding = { saves: folding.saves };
-    queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, folds: reply.folds });
+  queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, layout });
+  laying.saves = laying.saves.then(() => mutations.tabs({ layout }, "")).then((reply) => {
+    if (laying.latest !== layout) return;
+    laying = { saves: laying.saves };
+    queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, layout: reply.layout });
   }, () => {
-    folding = { saves: Promise.resolve() };
+    laying = { saves: Promise.resolve() };
     void queryClient.invalidateQueries({ queryKey });
   });
 }
+const foldCard = (key: string, folded: boolean) => saveLayout((layout) => ({ ...layout, folded: { ...layout.folded, [key]: folded } }));
 const sharedTab = (shared: SavedTabs["shared"], space: string, path: string) => shared.find((tab) => tab.space === space && tab.path === path);
 const isShared = (shared: SavedTabs["shared"], space: string, path: string) => !!sharedTab(shared, space, path);
 
@@ -1177,7 +1179,10 @@ function useTabs() {
   const [parkedList, setParked] = useState(""), parked = new Set(parkedList.split("\n")), pageInvalidate = useContext(SidebarInvalidation), invalidate = remote?.invalidate ?? pageInvalidate;
   // base is the saved state this window last saved or took in, at revision; at stamps the read last taken in.
   const sync = useRef<{ saving: boolean; dirty: boolean; next?: TabState; applied?: TabState; base?: SavedTabs["state"]; revision: number; at?: number; server: string }>({ saving: false, dirty: false, revision: 0, server: name });
-  const spaceChange = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onSuccess: (view) => setState((current) => ({ ...current, spaces: view.spaces })), onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
+  const spaceChange = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onMutate: () => queryClient.cancelQueries({ queryKey: queries.tabs(owner ?? "", name).queryKey }), onSuccess: (view) => {
+    setState((current) => ({ ...current, spaces: view.spaces }));
+    queryClient.setQueryData<SavedTabs>(queries.tabs(owner ?? "", name).queryKey, (old) => old && { ...old, spaces: view.spaces });
+  }, onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
   const sharing = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
   if (viewed && state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname, shared));
   // Another server's tabs have no tab in view, so a change that moves tabs only moves them.
@@ -1211,6 +1216,8 @@ function useTabs() {
     }
     if (revision <= queue.revision) {
       if (!alive) return setState(viewed ? openTab(leave(state, state.space, saved.data.spaces), state.active, shared) : leave(state, state.space, saved.data.spaces));
+      // A space made or renamed elsewhere changes no tabs, so it arrives without a newer revision.
+      if (JSON.stringify(saved.data.spaces) !== JSON.stringify(state.spaces)) setState((current) => ({ ...current, spaces: saved.data!.spaces }));
       if (viewed && !inShared && !state.tabs.some((tab) => tab.path === state.active && tab.space === state.space)) navigate(entry(state, state.space, shared));
       return;
     }
@@ -1333,7 +1340,7 @@ function useTabs() {
     return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, false, reply.shared) }) : open(path, "", undefined, false, shared, search);
   };
   return {
-    name, viewed, state, sharedIn, stripOf, shownOf, shared, closed, pathname, close, enter, edit, editor, setEditor, settle, picking, setPicking, parked, setParked, open, newIn, pending: spaceChange.isPending,
+    name, viewed, state, sharedIn, stripOf, shownOf, shared, closed, pathname, close, enter, edit, editor, setEditor, settle, picking, setPicking, parked, setParked, open, newIn,
     deleted: (path: string) => close([path]),
     // Opening a tab, or a Shared row without a tab of its own, enters its space; another server's moves the page there.
     go: (path: string, space: string, inShared = false) => {
@@ -1361,14 +1368,6 @@ function useTabs() {
     }),
     // Collapsing Parked is this person's choice for every space, kept as the member-less group of that id.
     fold: (id: "parked", collapsed: boolean) => setState((current) => ({ ...current, groups: [...current.groups.filter((group) => group.id !== id), { id, name: "", color: "Grey", collapsed }] })),
-    // A new space takes the first free "Space N" name; the server keeps names unique ignoring case. It answers its id.
-    addSpace: async () => {
-      const taken = new Set(state.spaces.map((space) => space.name.toLowerCase()));
-      let n = state.spaces.length + 1;
-      while (taken.has(`space ${n}`)) n++;
-      const spaces = (await spaceChange.mutateAsync({ createSpace: `Space ${n}` })).spaces;
-      return spaces.find((space) => space.name === `Space ${n}`)?.id;
-    },
     // A rejected name keeps the old one.
     renameSpace: (id: string, name: string) => spaceChange.mutate({ renameSpace: { id, name } }),
     deleteSpace: async (doomed: string) => {
@@ -1694,18 +1693,17 @@ const pullRequestItems = (menu: { path: string; shared?: boolean }, single: bool
   pathSession(menu.path) && (menu.shared || single) ? [{ key: "pull-requests", label: "Pull requests", run: () => navigate(`${menu.path}?pullRequests=1`, false, name) }] : [];
 
 type TabStoreValue = ReturnType<typeof useTabs>;
-// A section's tabs, which its rows rename and edit through; outside a section, the page's.
+// A card's tabs, which its rows rename and edit through; outside a card, the page's.
 const TabStore = createContext<TabStoreValue | null>(null);
 type CardMenu = { path: string; anchor: MenuAnchor; space: string; shared?: boolean };
-// The tabs picked besides the one in view, in one space, while that tab stays in view.
-type Picked = { at: string; space: string; paths: Set<string> };
-type Section = { titled: boolean; folds: Record<string, boolean>; setFold: (key: string, folded: boolean) => void; waiting: Set<string>; newChat: () => void };
-type Card = Section & { tabs: TabStoreValue; label: string; picked: Picked; setPicked: (picked: Picked) => void; editing?: string; setEditing: (key?: string) => void; renaming?: string; setRenaming: (space?: string) => void; setMenu: (menu: CardMenu) => void; refocus: (space: string) => void };
+// The tabs picked besides the one in view, in one card, while that tab stays in view.
+type Picked = { at: string; card: string; paths: Set<string> };
+type Card = { tabs: TabStoreValue; label: string; folds: Record<string, boolean>; waiting: Set<string>; newChat: () => void; picked: Picked; setPicked: (picked: Picked) => void; editing?: string; setEditing: (key?: string) => void; renaming?: string; setRenaming: (space?: string) => void; setMenu: (menu: CardMenu) => void; refocus: (space: string) => void; move: (key: string, step: number) => void };
 const selectionIn = (tabs: TabStoreValue, picked: Picked, space: string) =>
-  new Set(tabs.shownOf(space).flatMap((tab) => tab.path === tabs.pathname || (picked.at === tabs.pathname && picked.space === space && picked.paths.has(tab.path)) ? [tab.path] : []));
+  new Set(tabs.shownOf(space).flatMap((tab) => tab.path === tabs.pathname || (picked.at === tabs.pathname && picked.card === `${tabs.name}/${space}` && picked.paths.has(tab.path)) ? [tab.path] : []));
 // The keyboard stop of a card, else of the first list that has one.
-const selected = (node: RefObject<HTMLElement | null>, space?: string) => (space && node.current?.querySelector<HTMLElement>(`[data-card="${CSS.escape(space)}"] [role="tab"][tabindex="0"]`)) || node.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]');
-// The card a drag started in: tabs and groups move only within it.
+const selected = (node: RefObject<HTMLElement | null>, card?: string) => (card && node.current?.querySelector<HTMLElement>(`[data-card="${CSS.escape(card)}"] [role="tab"][tabindex="0"]`)) || node.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]');
+// What a drag started on: a card's tabs and groups move only within it, and a card, as "card:" and its key, among cards.
 let dragging = "";
 
 // A card's work: its tabs waiting for this person or asking them something, whether any of them asks, and whether a turn
@@ -1716,113 +1714,146 @@ function cardWork(name: string, paths: string[], rows: Session[], waiting: Set<s
   return { work, asking: [...work].some((path) => asking.has(path)), running: rows.some((row) => row.running && !row.asking && all.has(rowPath(row))) };
 }
 
-// The strip holds a section for each server, this one first, then Parked, which stays at the bottom with its own scroll.
-// A section holds its server's Shared card and a card for each of its spaces, drawn and acted on the same on any server's
-// page; the page's server's are live, and another server's are its saved tabs, whose changes save there.
+// The strip lists the cards of every server, then Parked, which stays at the bottom with its own scroll. The page's
+// server's tabs are live; each other server's are its saved tabs, whose changes save there.
 function TabStrip({ tabs, newChat }: { tabs: TabStoreValue; newChat: () => void }) {
-  const waiting = new Set(useWaiting().map((mark) => rowKey(mark.path, mark.server))), here = useServer(), [folds, setFold] = useFolds();
-  const names = ["", ...rocketclaws().map((remote) => remote.name)], section: Section = { titled: names.length > 1, folds, setFold, waiting, newChat };
+  const here = useServer(), names = ["", ...rocketclaws().map((remote) => remote.name)];
   return <div data-tab-lists className="flex h-full shrink-0 flex-col">
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-width:thin]">
-      {names.map((name) => name === here ? <ServerSection key={name} tabs={tabs} {...section} /> : <RemoteSection key={name} name={name} {...section} />)}
+      <StoreChain names={names.filter((name) => name !== here)} stores={[tabs]} render={(stores) => <Cards stores={stores.toSorted((a, b) => names.indexOf(a.name) - names.indexOf(b.name))} newChat={newChat} />} />
       <div className="min-h-4 flex-1" onDoubleClick={newChat} />
     </div>
     <ParkedSection tabs={tabs} />
   </div>;
 }
 
-function RemoteSection({ name, ...section }: Section & { name: string }) {
+// Each other server's tabs come from a store of their own, so the strip gathers them one server at a time.
+function StoreChain({ names, stores, render }: { names: string[]; stores: TabStoreValue[]; render: (stores: TabStoreValue[]) => ReactNode }) {
+  return names.length ? <RemoteSection name={names[0]} rest={names.slice(1)} stores={stores} render={render} /> : render(stores);
+}
+
+function RemoteSection({ name, ...chain }: { name: string; rest: string[]; stores: TabStoreValue[]; render: (stores: TabStoreValue[]) => ReactNode }) {
   const invalidate = useContext(Sidebar).servers[name]?.invalidateQueries, remote = useMemo(() => ({ name, invalidate: () => invalidate?.() }), [name, invalidate]);
-  return <RemoteTabs value={remote}><RemoteStore {...section} /></RemoteTabs>;
+  return <RemoteTabs value={remote}><RemoteStore {...chain} /></RemoteTabs>;
 }
 
-function RemoteStore(section: Section) {
+function RemoteStore({ rest, stores, render }: { rest: string[]; stores: TabStoreValue[]; render: (stores: TabStoreValue[]) => ReactNode }) {
   const tabs = useTabs();
-  return <ServerSection tabs={tabs} {...section} />;
-}
-
-// A section reads its server's rows, so its tabs' titles and badges are that server's. With more than one server it has a
-// header that folds it, counting while folded the tabs that wait for this person there.
-function ServerSection({ tabs, ...section }: Section & { tabs: TabStoreValue }) {
-  const sidebar = useContext(Sidebar), view = sidebar.servers[tabs.name], value = useMemo(() => view ? { ...sidebar, ...view } : sidebar, [sidebar, view]);
-  const [menu, setMenu] = useState<CardMenu>(), [editing, setEditing] = useState<string>(), [renaming, setRenaming] = useState<string>();
-  const [picked, setPicked] = useState<Picked>({ at: "", space: "", paths: new Set() }), node = useRef<HTMLDivElement>(null);
-  const label = section.titled ? serverLabel(tabs.name) : "", shut = section.titled && (section.folds[`@${tabs.name}`] ?? false);
-  const card: Card = { ...section, tabs, label, picked, setPicked, editing, setEditing, renaming, setRenaming, setMenu, refocus: (space) => selected(node, space)?.focus() };
-  return <Sidebar.Provider value={value}><TabStore.Provider value={tabs}>
-    {tabs.viewed ? null : <TabSettling />}
-    <div ref={node} data-server={tabs.name} className="flex shrink-0 flex-col">
-      {section.titled ? <ServerHeader tabs={tabs} shut={shut} waiting={section.waiting} onFold={() => section.setFold(`@${tabs.name}`, !shut)} /> : null}
-      {shut ? null : <ServerCards {...card} />}
-    </div>
-    <CardMenuPopup tabs={tabs} menu={menu} setMenu={setMenu} picked={picked} setEditing={setEditing} node={node} />
-    <GroupEditor tabs={tabs} node={node} />
-  </TabStore.Provider></Sidebar.Provider>;
-}
-
-function ServerHeader({ tabs, shut, waiting, onFold }: { tabs: TabStoreValue; shut: boolean; waiting: Set<string>; onFold: () => void }) {
-  const { rows, offline } = useContext(Sidebar);
-  const paths = [...tabs.state.tabs.flatMap((tab) => isKeeper(tab) || tabs.parked.has(tab.path) ? [] : [tab.path]), ...tabs.shared.map((tab) => tab.path)];
-  const count = shut ? cardWork(tabs.name, paths, rows, waiting).work.size : 0;
-  return <button type="button" aria-expanded={!shut} aria-label={serverLabel(tabs.name)} className="mx-1 mt-2 flex shrink-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={onFold}>
-    <ChevronDown aria-hidden="true" className={cn("size-3.5 transition-transform", shut && "-rotate-90")} /><span className="truncate">{serverLabel(tabs.name)}</span>
-    {offline ? <span className="font-normal normal-case">· offline</span> : null}
-    {count ? <span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-blue-500 px-1.5 text-center text-[11px] font-semibold tracking-normal text-white">{count}</span> : null}
-  </button>;
-}
-
-// Another server's cards wait for its saved tabs, saying why while it does not answer.
-function ServerCards(card: Card) {
-  const status = useRemoteStatus(card.tabs.viewed ? "" : card.tabs.name);
-  if (!card.tabs.viewed && card.tabs.state.owner === undefined) return <p role="status" className="mx-2 my-1 text-xs text-muted-foreground">{status.text || "Loading…"}</p>;
   return <>
-    <SharedCard {...card} />
-    {card.tabs.state.spaces.map((space) => <SpaceCard key={space.id} space={space} {...card} />)}
+    <ServerScope tabs={tabs}><TabSettling /></ServerScope>
+    <StoreChain names={rest} stores={[...stores, tabs]} render={render} />
   </>;
+}
+
+// Inside a server's scope, rows read that server's sessions and marks, and edit through its tabs.
+function ServerScope({ tabs, children }: { tabs: TabStoreValue; children: ReactNode }) {
+  const sidebar = useContext(Sidebar), view = sidebar.servers[tabs.name], value = useMemo(() => view ? { ...sidebar, ...view } : sidebar, [sidebar, view]);
+  return <Sidebar.Provider value={value}><TabStore.Provider value={tabs}>{children}</TabStore.Provider></Sidebar.Provider>;
+}
+
+// Every server's Shared card and space cards, in this person's order: dragging a card's title onto another card, or
+// Shift+Arrow on it, moves it there, and a card not yet placed comes last, in its server's order. A server whose tabs
+// have not arrived says why instead, and its cards keep their places.
+function Cards({ stores, newChat }: { stores: TabStoreValue[]; newChat: () => void }) {
+  const waiting = new Set(useWaiting().map((mark) => rowKey(mark.path, mark.server))), [layout] = useLayout(), titled = stores.length > 1, node = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState<CardMenu & { server: string }>(), [editing, setEditing] = useState<{ server: string; key: string }>(), [renaming, setRenaming] = useState<{ server: string; space: string }>();
+  const [picked, setPicked] = useState<Picked>({ at: "", card: "", paths: new Set() }), focusing = useRef("");
+  const loaded = stores.filter((tabs) => tabs.viewed || tabs.state.owner !== undefined), order = layout.order ?? [];
+  const entries = loaded.flatMap((tabs): { key: string; tabs: TabStoreValue; space?: Space }[] => [...tabs.state.spaces.some((space) => tabs.sharedIn(space.id).length) ? [{ key: `${tabs.name}#shared`, tabs }] : [], ...tabs.state.spaces.map((space) => ({ key: `${tabs.name}/${space.id}`, tabs, space }))]);
+  const rank = (key: string) => order.indexOf(key) + 1 || Infinity, sorted = entries.toSorted((a, b) => rank(a.key) - rank(b.key));
+  const place = (from: string, to: string, after: boolean) => {
+    const keys = [...new Set([...order, ...sorted.map((entry) => entry.key)])].filter((key) => key !== from);
+    saveLayout((current) => ({ ...current, order: keys.toSpliced(keys.indexOf(to) + Number(after), 0, from) }));
+  };
+  // A card moved by key keeps its title focused once it lands.
+  useLayoutEffect(() => {
+    if (!focusing.current) return;
+    node.current?.querySelector<HTMLElement>(`[data-card-key="${CSS.escape(focusing.current)}"] [aria-expanded]`)?.focus();
+    focusing.current = "";
+  });
+  const cardFor = (tabs: TabStoreValue): Card => ({
+    tabs, label: titled ? serverLabel(tabs.name) : "", folds: layout.folded ?? noFolds, waiting, newChat, picked, setPicked,
+    editing: editing?.server === tabs.name ? editing.key : undefined, setEditing: (key) => setEditing(key === undefined ? undefined : { server: tabs.name, key }),
+    renaming: renaming?.server === tabs.name ? renaming.space : undefined, setRenaming: (space) => setRenaming(space === undefined ? undefined : { server: tabs.name, space }),
+    setMenu: (item) => setMenu({ ...item, server: tabs.name }), refocus: (space) => selected(node, `${tabs.name}/${space}`)?.focus(),
+    move: (key, step) => {
+      const to = sorted[sorted.findIndex((entry) => entry.key === key) + step]?.key;
+      if (!to) return;
+      focusing.current = key;
+      place(key, to, step > 0);
+    },
+  });
+  return <div ref={node} className="flex shrink-0 flex-col"
+    onDragOver={(event) => { if (dragging.startsWith("card:")) event.preventDefault(); }}
+    onDrop={(event) => {
+      const target = (event.target as Element).closest<HTMLElement>("[data-card-key]"), from = dragging.slice("card:".length);
+      if (!dragging.startsWith("card:") || !target || target.dataset.cardKey === from) return;
+      const box = target.getBoundingClientRect();
+      place(from, target.dataset.cardKey!, event.clientY > box.top + box.height / 2);
+    }}>
+    {sorted.map((entry) => <ServerScope key={entry.key} tabs={entry.tabs}>
+      {entry.space ? <SpaceCard space={entry.space} {...cardFor(entry.tabs)} /> : <SharedCard {...cardFor(entry.tabs)} />}
+    </ServerScope>)}
+    {stores.filter((tabs) => !tabs.viewed && tabs.state.owner === undefined).map((tabs) => <ServerStatus key={tabs.name} name={tabs.name} />)}
+    {loaded.map((tabs) => <ServerScope key={tabs.name} tabs={tabs}>
+      <CardMenuPopup tabs={tabs} menu={menu?.server === tabs.name ? menu : undefined} setMenu={setMenu} picked={picked} setEditing={(key) => setEditing(key === undefined ? undefined : { server: tabs.name, key })} node={node} />
+      <GroupEditor tabs={tabs} node={node} />
+    </ServerScope>)}
+  </div>;
+}
+const noFolds: Record<string, boolean> = {};
+
+// A server whose saved tabs have not arrived says why, while it does not answer.
+function ServerStatus({ name }: { name: string }) {
+  const status = useRemoteStatus(name);
+  return <p role="status" className="mx-2 my-1 text-xs text-muted-foreground">{status.text || `${serverLabel(name)}: Loading…`}</p>;
 }
 
 const cardClass = (current: boolean) => cn("mx-1 mt-1 flex shrink-0 flex-col rounded-lg border p-0.5", current ? "border-primary/20 bg-accent/50 shadow-sm" : "bg-muted/40");
 
-// Every card is headed alike: its name, which a space's card enters it by, a spinner while a turn runs in it, a count
-// of its tabs waiting for this person, Needs you while one asks, its actions, shown while the heading is hovered or
-// focused, and the chevron that folds it.
-function CardHeading({ icon: Icon, name, go, title, count, asking, running, folded, foldLabel, onFold, children }: { icon: typeof Folder; name: string; go?: { label: string; current: boolean; run: () => void }; title?: ReactNode; count: number; asking: boolean; running: boolean; folded: boolean; foldLabel: string; onFold: () => void; children?: ReactNode }) {
-  const body = <>
-    <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /><span className={cn("truncate", count ? "font-bold" : "font-medium")}>{name}</span>
-    {running ? <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground motion-safe:animate-spin" /> : null}
-    {count ? <span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-blue-500 px-1.5 text-center text-[11px] font-semibold text-white">{count}</span> : null}
-  </>;
-  const description = [count && `${count} waiting`, running && "Turn running"].filter(Boolean).join(", "), box = "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-[13px]";
-  return <div className="group/heading flex shrink-0 items-center gap-0.5">
-    {title ?? (go ? <button type="button" aria-label={go.label} aria-current={go.current || undefined} aria-description={description} className={cn(box, "hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring")} onClick={go.run}>{body}</button>
-      : <span aria-description={description} className={box}>{body}</span>)}
+// Every card is headed alike: its title, which folds it, with a folder open while it is unfolded, its name and, with
+// more than one server, its server, which narrows first, "offline" while that server does not answer, a spinner while a
+// turn runs in it, and a count of its tabs waiting for this person; then Needs you while one asks, and its actions.
+// Dragging the heading, or Shift+Arrow on the title, moves the card.
+function CardHeading({ cardKey, icon, name, server, current, title, count, asking, running, folded, onFold, move, children }: { cardKey: string; icon: [typeof Folder, typeof Folder]; name: string; server: string; current?: boolean; title?: ReactNode; count: number; asking: boolean; running: boolean; folded: boolean; onFold: () => void; move: (step: number) => void; children?: ReactNode }) {
+  const { offline } = useContext(Sidebar), Icon = icon[folded ? 1 : 0];
+  const description = [count && `${count} waiting`, running && "Turn running", offline && "Server offline"].filter(Boolean).join(", ");
+  return <div draggable={!title} className="flex shrink-0 items-center gap-0.5" onDragStart={(event) => { dragging = `card:${cardKey}`; event.dataTransfer.setData("application/x-rocketclaw-card", cardKey); }} onDragEnd={() => { dragging = ""; }}>
+    {title ?? <button type="button" aria-expanded={!folded} aria-label={server ? `${name} · ${server}` : name} aria-current={current || undefined} aria-description={description} className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-[13px] hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={onFold}
+      onKeyDown={(event) => {
+        const step = event.shiftKey && (event.key === "ArrowUp" || event.key === "ArrowDown") ? arrows[event.key] : 0;
+        if (!step) return;
+        event.preventDefault();
+        move(step);
+      }}>
+      <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /><span className="truncate"><span className={count ? "font-bold" : "font-medium"}>{name}</span>{server ? <span className="text-muted-foreground"> · {server}</span> : null}</span>
+      {offline ? <span className="shrink-0 text-xs text-muted-foreground">· offline</span> : null}
+      {running ? <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground motion-safe:animate-spin" /> : null}
+      {count ? <span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-blue-500 px-1.5 text-center text-[11px] font-semibold text-white">{count}</span> : null}
+    </button>}
     {asking ? needsYou : null}
     {children}
-    <button type="button" aria-expanded={!folded} aria-label={foldLabel} className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={onFold}>
-      <ChevronDown aria-hidden="true" className={cn("size-3.5 transition-transform", folded && "-rotate-90")} />
-    </button>
   </div>;
 }
 
 // A space's card, the same whichever space is current and on whichever server's page: the current space's is tinted, and
-// its name is marked current.
-// Every card starts unfolded; folded, it lists only its tabs that wait for this person or ask them something, and the
-// tab in view.
+// its title is marked current. With more than one server its title names the server too. Every card starts unfolded;
+// folded, it lists only its tabs that wait for this person or ask them something, and the tab in view.
 function SpaceCard({ space, ...card }: Card & { space: Space }) {
-  const { tabs, label, waiting, folds, setFold, renaming, setRenaming } = card, { rows } = useContext(Sidebar), suffix = label && ` on ${label}`, key = `${tabs.name}/${space.id}`;
+  const { tabs, label, waiting, folds, renaming, setRenaming, move } = card, { rows } = useContext(Sidebar), key = `${tabs.name}/${space.id}`;
   const strip = tabs.stripOf(space.id), { work, asking, running } = cardWork(tabs.name, strip.flatMap((tab) => isKeeper(tab) ? [] : [tab.path]), rows, waiting);
   const folded = folds[key] ?? false, listed = folded ? strip.filter((tab) => work.has(tab.path) || tab.path === tabs.pathname) : strip;
   const current = tabs.viewed && space.id === tabs.state.space;
-  return <div className={cardClass(current)}>
-    <CardHeading icon={folded ? Folder : FolderOpen} name={space.name} go={{ label: `Go to ${space.name}${suffix}`, current, run: () => tabs.enter(space.id) }} count={work.size} asking={asking} running={running} folded={folded} foldLabel={`Show all ${space.name} tabs${suffix}`} onFold={() => setFold(key, !folded)}
-      title={renaming === space.id ? <SpaceName name={space.name} rename={(name) => tabs.renameSpace(space.id, name)} done={() => setRenaming(undefined)} /> : undefined}>
-      <SpaceActions tabs={tabs} space={space} label={`${space.name} space actions${suffix}`} renaming={renaming === space.id} rename={setRenaming} />
+  return <div data-card-key={key} className={cardClass(current)}>
+    <CardHeading cardKey={key} icon={[FolderOpen, Folder]} name={space.name} server={label} current={current} count={work.size} asking={asking} running={running} folded={folded} onFold={() => foldCard(key, !folded)} move={(step) => move(key, step)}
+      title={renaming === space.id ? <SpaceName name={space.name} rename={(value) => tabs.renameSpace(space.id, value)} done={() => setRenaming(undefined)} /> : undefined}>
+      <SpaceActions tabs={tabs} space={space} label={`${space.name} space actions${label && ` on ${label}`}`} renaming={renaming === space.id} rename={setRenaming} />
     </CardHeading>
     <CardTabs {...card} space={space} listed={listed} />
   </div>;
 }
 
-// Renaming edits the name in place of the button, as Base UI's Menu takes printable keys. Escape empties the field, and
+// Renaming edits the name in place of the title, as Base UI's Menu takes printable keys. Escape empties the field, and
 // leaving it blank keeps the old name.
 function SpaceName({ name, rename, done }: { name: string; rename: (name: string) => void; done: () => void }) {
   return <input ref={(node) => node?.focus()} aria-label="Space name" defaultValue={name} className="m-0.5 min-w-0 flex-1 rounded-md bg-background px-2 py-1 text-[13px] outline-1 -outline-offset-1 outline-ring"
@@ -1834,17 +1865,19 @@ function SpaceName({ name, rename, done }: { name: string; rename: (name: string
     onBlur={(event) => { const value = event.currentTarget.value.trim(); if (value) rename(value); done(); }} />;
 }
 
-// A space's actions change it for everyone: a new space, which is then named, renaming, and deleting while it is not the
-// server's last. Someone limited to their own sessions has none.
+// A space's actions: Go to space enters it, at its last tab, else New session, or on another server opens that server's
+// page there. Renaming it, and deleting it while it is not the server's last, change it for everyone, and someone limited
+// to their own sessions cannot.
 function SpaceActions({ tabs, space, label, renaming, rename }: { tabs: TabStoreValue; space: Space; label: string; renaming: boolean; rename: (space?: string) => void }) {
   const limited = useQuery(queries.identity(tabs.name)).data?.limited, item = "flex cursor-default items-center rounded-md px-1.5 py-1 text-sm outline-none focus:bg-accent focus:text-accent-foreground";
-  if (limited) return null;
   return <DropdownMenu>
-    <Menu.Trigger aria-label={label} className="hidden size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground group-focus-within/heading:flex group-hover/heading:flex hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring data-popup-open:flex"><Ellipsis aria-hidden="true" className="size-3.5" /></Menu.Trigger>
+    <Menu.Trigger aria-label={label} className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"><Ellipsis aria-hidden="true" className="size-3.5" /></Menu.Trigger>
     <DropdownMenuContent finalFocus={!renaming} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="w-auto min-w-40">
-      <Menu.Item className={item} disabled={tabs.pending} onClick={() => void tabs.addSpace().then((id) => id && rename(id))}>New space</Menu.Item>
-      <Menu.Item className={item} onClick={() => rename(space.id)}>Rename space</Menu.Item>
-      {tabs.state.spaces.length > 1 ? <Menu.Item className={item} onClick={() => void tabs.deleteSpace(space.id)}>Delete space</Menu.Item> : null}
+      <Menu.Item className={item} onClick={() => tabs.enter(space.id)}>Go to space</Menu.Item>
+      {limited ? null : <>
+        <Menu.Item className={item} onClick={() => rename(space.id)}>Rename space</Menu.Item>
+        {tabs.state.spaces.length > 1 ? <Menu.Item className={item} onClick={() => void tabs.deleteSpace(space.id)}>Delete space</Menu.Item> : null}
+      </>}
     </DropdownMenuContent>
   </DropdownMenu>;
 }
@@ -1856,8 +1889,8 @@ function CardTabs({ tabs, space, listed, label, picked, setPicked, setMenu, newC
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   const groupOf = (tab: Tab) => tabs.state.groups.find((item) => item.id === tab.group);
   const stop = listed.some((tab) => tab.path === pathname) ? pathname : listed.find((tab) => !isKeeper(tab) && !groupOf(tab)?.collapsed)?.path;
-  const pick = (paths: string[]) => setPicked({ at: pathname, space: space.id, paths: new Set(paths) });
-  return <div role="tablist" data-card={space.id} aria-label={`${space.name} tabs${label && ` on ${label}`}`} aria-orientation="vertical" className="flex min-h-1 flex-col gap-0.5 rounded-md pb-1 [&_[role=tab]]:py-1"
+  const pick = (paths: string[]) => setPicked({ at: pathname, card: key, paths: new Set(paths) });
+  return <div role="tablist" data-card={key} aria-label={`${space.name} tabs${label && ` on ${label}`}`} aria-orientation="vertical" className="flex min-h-1 flex-col gap-0.5 rounded-md pb-1 [&_[role=tab]]:py-1"
     // A selecting click keeps the tab in view; Shift+click selects the listed tabs from it, or the first, to the one
     // clicked. Any other click drops the selection and opens the tab.
     onClickCapture={(event) => {
@@ -1888,6 +1921,7 @@ function CardTabs({ tabs, space, listed, label, picked, setPicked, setMenu, newC
     // A group header stands for its first tab, the only drop target a collapsed group shows, or an empty group's
     // placeholder, so a tab dropped there joins it.
     onDrop={(event) => {
+      if (dragging !== key) return;
       const header = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group, group = event.dataTransfer.getData("application/x-rocketclaw-group");
       const path = pathOf(event) ?? listed.find((tab) => !!header && tab.group === header)?.path;
       if (path && group) tabs.moveGroup(group, path);
@@ -1957,17 +1991,16 @@ function GroupHeader({ tabs, group, listed, waiting }: { tabs: TabStoreValue; gr
 // space's name when the server has more than one space, and hides while there are none. Its rows open in their space
 // without a tab of their own; only their menu changes them for everyone, and dragging one onto another of its space, or
 // Shift+Arrow, reorders it for this person alone.
-function SharedCard({ tabs, label, waiting, folds, setFold, editing, setEditing, setMenu }: Card) {
+function SharedCard({ tabs, label, waiting, folds, editing, setEditing, setMenu, move }: Card) {
   const { rows } = useContext(Sidebar), { state, pathname } = tabs, suffix = label && ` on ${label}`, key = `${tabs.name}#shared`, folded = folds[key] ?? false;
   const lists = state.spaces.flatMap((space) => { const paths = tabs.sharedIn(space.id); return paths.length ? [{ space, paths }] : []; });
   const { work, asking, running } = cardWork(tabs.name, lists.flatMap((list) => list.paths), rows, waiting);
-  if (!lists.length) return null;
   const active = (space: string, path: string) => tabs.viewed && space === state.space && path === pathname;
   const shown = lists.map(({ space, paths }) => ({ space, paths: folded ? paths.filter((path) => work.has(path) || active(space.id, path)) : paths })).filter((list) => list.paths.length);
   const rowOf = (node: Element) => node.closest<HTMLElement>("[data-shared]")?.dataset.shared?.split("\n") ?? [];
   const listed = shown.flatMap(({ space, paths }) => paths.map((path) => ({ space: space.id, path }))), stop = listed.find((row) => active(row.space, row.path)) ?? listed[0];
-  return <div className={cardClass(false)}>
-    <CardHeading icon={Users} name="Shared" count={work.size} asking={asking} running={running} folded={folded} foldLabel={`Show all Shared tabs${suffix}`} onFold={() => setFold(key, !folded)} />
+  return <div data-card-key={key} className={cardClass(false)}>
+    <CardHeading cardKey={key} icon={[Users, Users]} name="Shared" server={label} count={work.size} asking={asking} running={running} folded={folded} onFold={() => foldCard(key, !folded)} move={(step) => move(key, step)} />
     {shown.length ? <div role="tablist" aria-label={`Shared tabs${suffix}`} aria-orientation="vertical" className="flex flex-col gap-0.5 rounded-md [&_[role=tab]]:py-1"
       onKeyDown={(event) => {
         const target = event.target as HTMLElement;
@@ -1979,6 +2012,7 @@ function SharedCard({ tabs, label, waiting, folds, setFold, editing, setEditing,
       onDragOver={(event) => { if (dragging === key) event.preventDefault(); }}
       onDragEnd={() => { dragging = ""; }}
       onDrop={(event) => {
+        if (dragging !== key) return;
         const [space, from] = event.dataTransfer.getData(sharedDrag).split("\n"), [there, to] = rowOf(event.target as Element);
         if (to && there === space) tabs.moveShared(from, to);
       }}>
@@ -1992,13 +2026,13 @@ function SharedCard({ tabs, label, waiting, folds, setFold, editing, setEditing,
   </div>;
 }
 
-// A section's tab menu acts on the selected tabs of the menu's space when it opened on one of them, else on its own tab.
-function CardMenuPopup({ tabs, menu, setMenu, picked, setEditing, node }: { tabs: TabStoreValue; menu?: CardMenu; setMenu: (menu?: CardMenu) => void; picked: Picked; setEditing: (key?: string) => void; node: RefObject<HTMLDivElement | null> }) {
+// A server's tab menu acts on the selected tabs of the menu's card when it opened on one of them, else on its own tab.
+function CardMenuPopup({ tabs, menu, setMenu, picked, setEditing, node }: { tabs: TabStoreValue; menu?: CardMenu; setMenu: (menu?: CardMenu & { server: string }) => void; picked: Picked; setEditing: (key?: string) => void; node: RefObject<HTMLDivElement | null> }) {
   const view = useContext(Sidebar), { setCommand } = useContext(SessionCommands);
   const selection = menu ? selectionIn(tabs, picked, menu.space) : new Set<string>(), targets = menu && !selection.has(menu.path) ? new Set([menu.path]) : selection;
   const items = !menu ? [] : [...pullRequestItems(menu, targets.size === 1, tabs.name), ...menuItems(tabs, menu, view, targets, () => setEditing(`${menu.shared ? "shared:" : ""}${menu.path}`), (id) => setCommand({ mode: "delete", source: id }))];
   // Only this person's tabs leave their card; Shared rows stay where they are.
-  return <TabMenu items={items} anchor={menu?.anchor} close={() => setMenu(undefined)} refocus={(key) => !menu?.shared && /^(close|park|unpark)/.test(key) ? selected(node, menu?.space) ?? true : true} />;
+  return <TabMenu items={items} anchor={menu?.anchor} close={() => setMenu(undefined)} refocus={(key) => !menu?.shared && /^(close|park|unpark)/.test(key) ? selected(node, menu && `${tabs.name}/${menu.space}`) ?? true : true} />;
 }
 
 // A tab menu draws a line between its sections and gathers each submenu's items under it.
@@ -2065,7 +2099,7 @@ function useServerTrees({ state, shared, parked }: TabStoreValue): ServerTree[] 
 }
 
 function useParkedTree(tabs: TabStoreValue) {
-  const { state, pathname } = tabs, here = useServer(), [folds] = useFolds();
+  const { state, pathname } = tabs, here = useServer(), [layout] = useLayout(), folds = layout.folded ?? noFolds;
   const sections = useServerTrees(tabs).map((tree) => ({ name: tree.name, spaces: tree.spaces, rows: parkedRows(tree.tabs, tree.shared, tree.parked) })).filter((section) => section.rows.length);
   const collapsed = state.groups.find((group) => group.id === "parked")?.collapsed ?? true;
   const tree = sections.map((section) => {
@@ -2092,7 +2126,7 @@ function ParkedSection({ tabs }: { tabs: TabStoreValue }) {
 }
 
 function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: TabStoreValue; list: RefObject<HTMLDivElement | null>; editing?: string; endEdit: () => void; openMenu: (menu: ParkedMenu) => void; close: (path: string) => void }) {
-  const { pathname, fold } = tabs, { tree, visible, collapsed, here, count, stop } = useParkedTree(tabs), [, setFold] = useFolds(), visit = useVisit(), sidebar = useContext(Sidebar);
+  const { pathname, fold } = tabs, { tree, visible, collapsed, here, count, stop } = useParkedTree(tabs), visit = useVisit(), sidebar = useContext(Sidebar);
   const at = (node: Element) => visible.find((tab) => tab.key === node.closest<HTMLElement>("[data-parked]")?.dataset.parked);
   const menuOf = (tab: ParkedRow, server: string, anchor: MenuAnchor) => openMenu({ path: tab.path, anchor, server, space: tab.space ?? "", shared: tab.shared });
   const header = "flex w-full shrink-0 items-center gap-1.5 px-1.5 text-xs font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring";
@@ -2115,11 +2149,11 @@ function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: T
         (event.target as HTMLElement).click();
       }}>
       {tree.map((section) => <Fragment key={section.name}>
-        {tree.length > 1 && !collapsed ? <button type="button" aria-expanded={!section.shut} aria-label={`Parked on ${serverLabel(section.name)}`} className={cn(header, "mt-1 h-7 rounded-md font-semibold text-foreground")} onClick={() => setFold(section.fold, !section.shut)}>
+        {tree.length > 1 && !collapsed ? <button type="button" aria-expanded={!section.shut} aria-label={`Parked on ${serverLabel(section.name)}`} className={cn(header, "mt-1 h-7 rounded-md font-semibold text-foreground")} onClick={() => foldCard(section.fold, !section.shut)}>
           <ChevronDown aria-hidden="true" className={cn("size-3.5", section.shut && "-rotate-90")} />{serverLabel(section.name)}{sidebar.servers[section.name]?.offline ? <span className="font-normal">· offline</span> : null}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-muted px-1.5 text-center text-[11px]">{section.count}</span>
         </button> : null}
         {section.branches.map(({ space, id, closed, there, shown }) => <Fragment key={space.id}>
-          {section.spaces.length > 1 && !section.shut ? <button type="button" aria-expanded={!closed} aria-label={`Parked in ${space.name}${tree.length > 1 ? ` on ${serverLabel(section.name)}` : ""}`} className={cn(header, "mt-1 h-6 rounded-t-md bg-muted/50")} onClick={() => setFold(id, !closed)}>
+          {section.spaces.length > 1 && !section.shut ? <button type="button" aria-expanded={!closed} aria-label={`Parked in ${space.name}${tree.length > 1 ? ` on ${serverLabel(section.name)}` : ""}`} className={cn(header, "mt-1 h-6 rounded-t-md bg-muted/50")} onClick={() => foldCard(id, !closed)}>
             {closed ? <Folder aria-hidden="true" className="size-3.5" /> : <FolderOpen aria-hidden="true" className="size-3.5" />}{space.name}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-background px-1.5 text-center text-[11px]">{there.length}</span><ChevronDown aria-hidden="true" className={cn("size-3.5", closed && "-rotate-90")} />
           </button> : null}
           <div className={cn("flex flex-col [&_[role=tab]]:py-1", section.spaces.length > 1 && !section.shut && "rounded-b-md bg-muted/30 p-0.5")}>
@@ -2444,6 +2478,7 @@ function PickTimeDialog({ picking: { send } }: { picking: Picking }) {
 function SessionCommandDialog({ command, drafts, onDraftChange }: { command: SessionCommand; drafts: Map<string, ComposerDraft>; onDraftChange: () => void }) {
   if (command.mode === "name" || command.mode === "tag") return <NameSessionDialog id={command.source} tag={command.mode === "tag"} />;
   if (command.mode === "delete") return <DeleteSessionDialog id={command.source} />;
+  if (command.mode === "space") return <NewSpaceDialog server={command.source} />;
   return command.mode === "fork" ? <ForkDialog source={command.source} drafts={drafts} onDraftChange={onDraftChange} /> : <HandoffDialog command={command} drafts={drafts} onDraftChange={onDraftChange} />;
 }
 
@@ -2817,6 +2852,8 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
     else if (path !== at()) tabs.open(path, "", undefined, true);
   };
   const tabCommands = tabs.commands(origin.path, sidebar).map((item) => ({ ...item, key: `tab-${item.key}`, label: `Tabs: ${item.label}` }));
+  // New space asks for its name, on each server where this person is not limited to their own sessions.
+  const spaceCommands = ["", ...rocketclaws().map((remote) => remote.name)].filter((name) => !queryClient.getQueryData<{ limited?: boolean }>(queries.identity(name).queryKey)?.limited).map((name) => ({ key: `space-new-${name}`, label: rocketclaws().length ? `Spaces: New space on ${serverLabel(name)}` : "Spaces: New space", run: () => setCommand({ mode: "space", source: name }) }));
   const attention = useNextAttention(origin.path);
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
@@ -2873,7 +2910,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   // The folder picker leaves session search, so typed folders are never sent as a search.
   const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(""); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent, opencode);
   const cronJobs = cronInSpace(jobs.data, useInSpace());
-  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, cronJobs, newChat, tabs, (cron) => { setQuery(""); setPick(""); setMode(cron); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...attention ? [{ key: "attention-next", label: "Sessions: Next needing you", run: attention }] : [], ...timeline, ...outputs], recent, origin.space));
+  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, cronJobs, newChat, tabs, (cron) => { setQuery(""); setPick(""); setMode(cron); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...spaceCommands, ...keyCommands, ...attention ? [{ key: "attention-next", label: "Sessions: Next needing you", run: attention }] : [], ...timeline, ...outputs], recent, origin.space));
   // Draw more rows only as scrolling or the keyboard needs them; every choice stays reachable.
   const { shown, next, selected, handoffsOnly } = usePalettePage(items, pick, `${mode}:${query}`);
   const choose = (item: (typeof items)[number]) => {
@@ -3237,6 +3274,32 @@ function useSessionActions(session: Session | undefined, onSuccess?: () => void)
     ...(session.server ? [{ key: "add-tag", label: "Add tag…", run: () => setCommand({ mode: "tag", source: id }) }, ...remoteActions(id, remote?.servers[session.server] ?? "", session.remoteSessionId ?? "")] : []),
   ].map((item) => ({ ...item, disabled: update.isPending })) : [];
   return { items, error: update.error };
+}
+
+// A new space is named before it is made, on the server its command named, and joins the end of the strip; the server
+// refuses a name another space has, ignoring case.
+function NewSpaceDialog({ server: name }: { server: string }) {
+  const { setCommand } = useContext(SessionCommands), [value, setValue] = useState(""), nameId = useId();
+  const create = useMutation({ mutationFn: (space: string) => tabsCall(name, { createSpace: space }), onSuccess: () => { void queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }); setCommand(undefined); } });
+  return <Dialog open onOpenChange={(open) => { if (!open) setCommand(undefined); }}>
+    <DialogContent>
+      <DialogTitle>New space</DialogTitle>
+      <DialogDescription>{rocketclaws().length ? `On ${serverLabel(name)}. ` : ""}Everyone who can see spaces there sees it.</DialogDescription>
+      <form className="mt-4 flex flex-col gap-3" action={() => create.mutate(value.trim())}>
+        <FieldGroup>
+          <Field data-invalid={!!create.error}>
+            <FieldLabel htmlFor={nameId}>Space name</FieldLabel>
+            <Input id={nameId} name="name" type="text" value={value} aria-invalid={!!create.error} onChange={(event) => setValue(event.target.value)} />
+            {create.error ? <FieldError>{create.error.message}</FieldError> : null}
+          </Field>
+        </FieldGroup>
+        <div className="flex justify-end gap-2">
+          <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
+          <Button type="submit" disabled={create.isPending || !value.trim()}>{create.isPending ? "Creating…" : "Create"}</Button>
+        </div>
+      </form>
+    </DialogContent>
+  </Dialog>;
 }
 
 // With tag, it adds a typed tag to a remote OpenCode session, suggesting tags already in use.

@@ -42,7 +42,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	var (
 		spaces   []backend.Space
 		shared   []backend.SharedTab
-		folds    map[string]bool
+		layout   backend.StripLayout
 		state    backend.TabState
 		closed   []backend.Tab
 		response = &TabsResponse{Stale: (request.State != nil && !saved) || refused}
@@ -61,7 +61,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	}
 
 	if err == nil {
-		folds, err = s.sessions.Folds(ctx, username)
+		layout, err = s.sessions.StripLayout(ctx, username)
 	}
 
 	if err == nil {
@@ -84,7 +84,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	response.Shared = sharedTabs(slices.DeleteFunc(shared, func(tab backend.SharedTab) bool { return !limit.AllowsSpaceID(tab.Space) }))
 	response.Unshared = webSearchPage(unshared)
 	response.Closed = webTabs(closed)
-	response.Folds = &Folds{Folded: folds}
+	response.Layout = &StripLayout{Folded: layout.Folded, Order: layout.Order}
 
 	for _, space := range spaces {
 		if limit.AllowsSpaceID(space.ID) {
@@ -132,8 +132,8 @@ func (s *Server) changeTabs(ctx context.Context, username string, limit backend.
 		unshared, err = s.sessions.UnshareTab(ctx, request.Unshare.Space, request.Unshare.Path)
 	case request.Attention != nil:
 		err = s.changeAttention(ctx, username, request.Attention)
-	case request.Folds != nil:
-		err = s.sessions.SaveFolds(ctx, username, request.Folds.Folded)
+	case request.Layout != nil:
+		err = s.sessions.SaveStripLayout(ctx, username, &backend.StripLayout{Folded: request.Layout.Folded, Order: request.Layout.Order})
 	case request.AutoPark != nil:
 		err = s.sessions.SetAutoParkAll(ctx, username, *request.AutoPark)
 	}
