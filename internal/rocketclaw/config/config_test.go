@@ -835,55 +835,19 @@ func TestValidateSlackChannelsRejectsInvalidConfig(t *testing.T) {
 }
 
 func TestLoadExternalMCPUsers(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "rocketclaw.json")
-	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
-
-	users, err := LoadExternalMCPUsers(configPath)
-	require.NoError(t, err)
-	assert.Nil(t, users)
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "rocketclaw.users.json"), []byte(`{"admin":"secret"}`), 0o600))
-
-	users, err = LoadExternalMCPUsers(configPath)
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{"admin": "secret"}, users)
-}
-
-func TestLoadExternalMCPUsersRejectsInvalidInputs(t *testing.T) {
-	dir := t.TempDir()
-	fileParent := filepath.Join(dir, "not-dir")
-	require.NoError(t, os.WriteFile(fileParent, []byte("file"), 0o600))
-
-	_, err := LoadExternalMCPUsers(filepath.Join(fileParent, "rocketclaw.json"))
-	require.ErrorContains(t, err, "stat external MCP users file")
-
-	configPath := filepath.Join(dir, "rocketclaw.json")
-	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
-
-	usersPath := filepath.Join(dir, "rocketclaw.users.json")
-	require.NoError(t, os.WriteFile(usersPath, []byte(`{"admin":"secret"}`), 0o644))
-	require.NoError(t, os.Chmod(usersPath, 0o644))
-
-	_, err = LoadExternalMCPUsers(configPath)
-	require.ErrorContains(t, err, "must have mode 0600")
-
-	require.NoError(t, os.Chmod(usersPath, 0o600))
-	require.NoError(t, os.WriteFile(usersPath, []byte(`null`), 0o600))
-
-	_, err = LoadExternalMCPUsers(configPath)
-	require.ErrorContains(t, err, "must be a JSON object")
-
-	require.NoError(t, os.WriteFile(usersPath, []byte(`{`), 0o600))
-
-	_, err = LoadExternalMCPUsers(configPath)
-	require.ErrorContains(t, err, "parse external MCP users file")
-
-	require.NoError(t, os.Remove(usersPath))
-	require.NoError(t, os.Mkdir(usersPath, 0o600))
-
-	_, err = LoadExternalMCPUsers(configPath)
-	require.ErrorContains(t, err, "read external MCP users file")
+	for _, tt := range []struct {
+		name, users string
+		want        map[string]string
+	}{
+		{name: "absent"},
+		{name: "empty", users: `"users":{}`, want: map[string]string{}},
+		{name: "aws reference", users: `"users":{"admin":{"aws":{"arn":"` + otherARN + `","key":"admin"}}}`, want: map[string]string{"admin": "secret"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := loadSecretConfig(t, `{"workspace":".","openai":{"api_key":"test-key"},"mcp_external":{`+tt.users+`}}`, "", mapSecrets{otherARN: `{"admin":"secret"}`})
+			assert.Equal(t, tt.want, cfg.MCPExternal.Users)
+		})
+	}
 }
 
 func TestValidateRejectsAPIKeyAuthWithoutAPIKey(t *testing.T) {

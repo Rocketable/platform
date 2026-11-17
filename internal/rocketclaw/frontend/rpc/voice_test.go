@@ -196,7 +196,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 
 	var running errgroup.Group
 	running.Go(func() error {
-		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly, sandbox.None{})
+		return backend.Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly, sandbox.None{})
 	})
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 

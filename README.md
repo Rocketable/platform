@@ -32,7 +32,7 @@ See [LICENSE](LICENSE) for the full license terms.
 go run github.com/Rocketable/platform/cmd/rocketclaw@main
 ```
 
-Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or the older `femtoclaw.json`) from the current folder. That file holds setup and secrets: it points at the workspace and the database, holds the Slack and provider credentials, and turns on other integrations. Values can also come from AWS Secrets Manager.
+Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or the older `femtoclaw.json`) from the current folder. That file holds setup and secrets: it points at the workspace and the database, holds the Slack, provider, and External MCP credentials, and turns on other integrations. Values can also come from AWS Secrets Manager.
 
 Behavior Settings live in PostgreSQL instead: `auto_approver_model`, `slack.channels`, `server_display_name`, `logging.level`, and `overlays`. The first start copies them from the file once every startup check passes. After that, RocketClaw ignores them in the file and logs a warning naming each one it ignored. The people named in the file's `web.admins` (their Tailscale logins, for example `"web": {"admins": ["alice@example.com"]}`) edit them on the Config page, one control per setting. A save is checked whole and applies to the running server at once, or is refused and changes nothing. Everyone else sees the page read-only.
 
@@ -204,6 +204,8 @@ Release note for Slack answering mentions only:
 
 MCP clients call `session_prompt` with a conversation ID and an agent with `sticky: off` (or no `sticky` setting). Each MCP conversation keeps its own Web chat run by that agent. Sticky agents are not exposed through External MCP. Continue the chat or switch between non-sticky agents from Web.
 
+Set `mcp_external.enabled` to `true` and `mcp_external.listen_addr` to serve External MCP. `mcp_external.users` maps each login to its password, for example `"users": {"ci-bot": "set-me"}`, and callers send them with HTTP Basic auth. Without `mcp_external.users`, External MCP asks callers for no login at all; an empty object `{}` refuses every caller. Like any value in `rocketclaw.json`, a password can come from AWS Secrets Manager. RocketClaw reads the logins when it starts.
+
 A job file in `cron/` runs its agent on its repeating schedule: a 5-field cron expression, a Go duration such as `30m`, an `@daily`-style shortcut, or a list of them. For a single future run, an agent uses `rocketclaw_schedule_message`. An empty reply reports nothing; any other reply opens a new Web chat with the report, run by the job's agent, or reuses that agent's global sticky chat. The Cron page in Web lists every run, and continuing one opens the same chat. An [easy mode agent](#easy-mode-agents) schedules itself with `routines` in its own file instead; a cron file cannot name it.
 
 Cron definition bodies expand shell snippets (an exclamation mark followed by a backtick-quoted command) before the model reads them. These are trusted commands, like those in agent prompts: they run in the workspace through the selected agent's `shell`, when set, without a tool permission review. Ordinary messages, scheduled messages, and Background Job completion notes stay literal.
@@ -215,6 +217,10 @@ Retention cleanup deletes ordinary chats, in Web or Slack and pinned or not, 90 
 Release note for repeating cron schedules:
 
 - A cron file whose `schedule` is an RFC 3339 time no longer runs once and deletes itself; it now fails startup and reload as an invalid schedule. Delete or reschedule such files before upgrading.
+
+Release note for External MCP logins:
+
+- External MCP logins moved from `rocketclaw.users.json` into `rocketclaw.json` as `mcp_external.users`, the same login-to-password object. RocketClaw no longer reads `rocketclaw.users.json`: before upgrading, copy its contents into `mcp_external.users`, or External MCP will ask callers for no login. Then delete the old file.
 
 ## How a request runs
 

@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime/debug"
 	"sync"
 	"syscall"
@@ -34,11 +33,6 @@ func runServe(args []string, diagnosticsAddress string) error {
 	selected, cfg, err := loadRuntimeConfig(*secretsARN)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
-	}
-
-	configPath, err := filepath.Abs(selected.Path)
-	if err != nil {
-		return fmt.Errorf("resolve config path: %w", err)
 	}
 
 	var mirrors []slog.Handler
@@ -111,7 +105,7 @@ func runServe(args []string, diagnosticsAddress string) error {
 		logger.Info("started private pprof HTTP", "address", listener.Addr().String())
 	}
 
-	if err := backend.Run(ctx, cfg, configPath, logger, level, processAssembler{}, sandbox.Bubblewrap{}); err != nil {
+	if err := backend.Run(ctx, cfg, logger, level, processAssembler{}, sandbox.Bubblewrap{}); err != nil {
 		if errors.Is(err, backend.ErrRestartRequested) {
 			logger.Info("rocketclaw restart requested; exiting with code 255 for supervisor restart")
 			return exitCodeError(255)

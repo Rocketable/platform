@@ -20,7 +20,10 @@
   },
   "mcp_external": {
     "enabled": true,
-    "listen_addr": "127.0.0.1:8765"
+    "listen_addr": "127.0.0.1:8765",
+    "users": {
+      "ci-bot": "set-me"
+    }
   },
   "mcp_servers": {
     "filesystem": {
