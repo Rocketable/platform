@@ -40,7 +40,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
-import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, TabAttention, TopShelf, TranscriptEvent, VoiceSettings } from "@/types";
+import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, TabAttention, TranscriptEvent, VoiceSettings } from "@/types";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import { AgentEditorPage, editAgent } from "@/agent-editor";
 import type { MountOptions, Mounted } from "../../oc/host/api";
@@ -75,6 +75,9 @@ function rowPath(session: { id: string; kind?: ConversationKind }) {
 function rowKey(id: string, server?: string) {
   return server ? `${server}/${id}` : id;
 }
+
+// The local server has no configured name, so it goes by the page's host: its first label, or a whole IP address.
+const serverLabel = (name: string) => name || (/^[\d.]+$|:/.test(location.hostname) ? location.hostname : location.hostname.split(".")[0]);
 
 // A row of this server opens in a tab here; another server's opens on that server, whose tab rules pick its space.
 function openRow(tabs: { open: (path: string) => void }, row: Session) {
@@ -897,8 +900,6 @@ function NewSessionButton({ newChat, openCode }: { newChat: () => void; openCode
   // Base UI focuses the popup itself on a mouse open, highlighting no item; this server's item takes that focus
   // instead, which highlights it, so Enter starts it and arrows move from it.
   const native = useRef<HTMLDivElement>(null);
-  // The local server has no configured name, so it goes by the page's host: its first label, or a whole IP address.
-  const host = location.hostname, local = /^[\d.]+$|:/.test(host) ? host : host.split(".")[0];
   const menu = claws.length > 0 || codes.length > 0;
   const button = <Button variant="ghost" size="icon" aria-label="New session" className="size-[var(--navigation-button)] shrink-0" />;
   const pen = <Tooltip><TooltipTrigger render={menu ? <Menu.Trigger render={button} /> : button} onClick={menu ? undefined : newChat}>
@@ -911,7 +912,7 @@ function NewSessionButton({ newChat, openCode }: { newChat: () => void; openCode
     <DropdownMenuContent side="top" className="w-auto min-w-44" onFocus={(event) => { if (event.target === event.currentTarget) native.current!.focus(); }}>
       {groups.map(([group, names, open]) => names.length ? <Menu.Group key={group}>
         <Menu.GroupLabel className="px-1.5 py-1 text-xs text-muted-foreground">{group}</Menu.GroupLabel>
-        {names.map((name) => <Menu.Item key={name} ref={group === "RocketClaw" && name === here ? native : undefined} className="flex cursor-default items-center rounded-md px-1.5 py-1 text-sm outline-none focus:bg-accent focus:text-accent-foreground" onClick={() => open(name)}>{name || local}</Menu.Item>)}
+        {names.map((name) => <Menu.Item key={name} ref={group === "RocketClaw" && name === here ? native : undefined} className="flex cursor-default items-center rounded-md px-1.5 py-1 text-sm outline-none focus:bg-accent focus:text-accent-foreground" onClick={() => open(name)}>{serverLabel(name)}</Menu.Item>)}
       </Menu.Group> : null)}
     </DropdownMenuContent>
   </DropdownMenu>;
@@ -1035,7 +1036,7 @@ function entry(state: Pick<TabState, "tabs" | "last">, space: string, shared: Sa
 }
 
 function leave(state: TabState, doomed: string, spaces: Space[]): TabState {
-  return { ...state, spaces, space: spaces[0].id, tabs: state.tabs.map((tab) => tab.space === doomed ? relocate(tab, spaces[0].id) : tab) };
+  return { ...state, spaces, space: state.space === doomed ? spaces[0].id : state.space, tabs: state.tabs.map((tab) => tab.space === doomed ? relocate(tab, spaces[0].id) : tab) };
 }
 
 const relocate = ({ preview: _preview, unplaced: _unplaced, ...tab }: Tab, space: string): Tab => ({ ...tab, space });
@@ -1053,7 +1054,7 @@ function savedTabs(owner?: string, saved?: Pick<SavedTabs, "spaces" | "state">):
   return { owner, tabs: arrange(kept), active: "", groups, spaces, space: known(saved?.state.space) ? saved!.state.space : spaces[0].id, last: saved?.state.last ?? {}, sharedOrder: saved?.state.sharedOrder ?? [] };
 }
 
-// A space chosen on another server's branch of the space tree, or a Top Shelf tab's, which its first load enters.
+// A space chosen on another server's card, which that server's first load enters.
 let arriving = "";
 // The revision of this window's last tab save, by server: the session list names it as the newest, which holds nothing
 // this window has not got.
@@ -1071,42 +1072,38 @@ function loadTabs(path: string, owner?: string, saved?: SavedTabs, shared: Saved
 
 const savedState = (state: TabState): SavedTabs["state"] => {
   const tabs = state.tabs.flatMap(({ path, preview, group, space, search }) => preview ? [] : [{ path, group, space, search }]);
-  const folds = new Set(["shared", "parked", ...state.spaces.flatMap((space) => [`space:${space.id}`, `parked:${space.id}`])]);
-  return { tabs, groups: state.groups.filter((group) => folds.has(group.id) || /^parked:(@|.*\/)/.test(group.id) || tabs.some((tab) => tab.group === group.id)), space: state.space, last: state.last, sharedOrder: state.sharedOrder };
+  return { tabs, groups: state.groups.filter((group) => group.id === "parked" || tabs.some((tab) => tab.group === group.id)), space: state.space, last: state.last, sharedOrder: state.sharedOrder };
 };
 
 type ClosedTab = NonNullable<SavedTabs["closed"]>[number];
-const noShared: SavedTabs["shared"] = [], noClosed: ClosedTab[] = [], noShelf: TopShelf = {}, noRows: Session[] = [];
-type ShelfTab = NonNullable<TopShelf["tabs"]>[number];
+const noShared: SavedTabs["shared"] = [], noClosed: ClosedTab[] = [], noFolds: Record<string, boolean> = {};
 
-// This person's Top Shelf, kept by the local server, from the saved tabs its view or its session list fetches;
-// undefined until they arrive.
-function useTopShelf() {
+// This person's folds, kept by the local server, from the saved tabs its view or its session list fetches.
+function useFolds(): [Record<string, boolean>, (key: string, folded: boolean) => void] {
   const owner = useQuery(queries.identity("")).data?.username, saved = useQuery({ ...queries.tabs(owner ?? "", ""), enabled: false }).data;
-  return saved && (saved.topShelf ?? noShelf);
+  return [saved?.folds?.folded ?? noFolds, saveFold];
 }
 
-// A Top Shelf change saves the whole shelf to the local server, one save at a time in order, and the cache takes it at
-// once. Until the last save answers, changes build on the newest shelf, not on one a poll brought back meanwhile, and its
-// answer then replaces the cache. Before the shelf arrives nothing is saved, which would replace it.
-let shelving: { latest?: TopShelf; saves: Promise<unknown> } = { saves: Promise.resolve() };
-function saveShelf(change: (shelf: TopShelf) => TopShelf) {
+// A fold saves every fold to the local server, one save at a time in order, and the cache takes it at once. Until the
+// last save answers, folds build on the newest ones, not on ones a poll brought back meanwhile, and its answer then
+// replaces the cache. Before the folds arrive nothing is saved, which would replace them.
+let folding: { latest?: Record<string, boolean>; saves: Promise<unknown> } = { saves: Promise.resolve() };
+function saveFold(key: string, folded: boolean) {
   const owner = queryClient.getQueryData<{ username: string }>(queries.identity("").queryKey)?.username, { queryKey } = queries.tabs(owner ?? "", "");
   const saved = queryClient.getQueryData<SavedTabs>(queryKey);
   if (owner === undefined || !saved) return;
-  const topShelf = shelving.latest = change(shelving.latest ?? saved.topShelf ?? noShelf);
+  const latest = folding.latest = { ...folding.latest ?? saved.folds?.folded, [key]: folded };
   void queryClient.cancelQueries({ queryKey });
-  queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, topShelf });
-  shelving.saves = shelving.saves.then(() => mutations.tabs({ topShelf }, "")).then((reply) => {
-    if (shelving.latest !== topShelf) return;
-    shelving = { saves: shelving.saves };
-    queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, topShelf: reply.topShelf });
+  queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, folds: { folded: latest } });
+  folding.saves = folding.saves.then(() => mutations.tabs({ folds: { folded: latest } }, "")).then((reply) => {
+    if (folding.latest !== latest) return;
+    folding = { saves: folding.saves };
+    queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, folds: reply.folds });
   }, () => {
-    shelving = { saves: Promise.resolve() };
+    folding = { saves: Promise.resolve() };
     void queryClient.invalidateQueries({ queryKey });
   });
 }
-const unshelve = (tab: ShelfTab) => saveShelf((shelf) => ({ ...shelf, tabs: shelf.tabs?.filter((item) => (item.server ?? "") !== (tab.server ?? "") || item.path !== tab.path) }));
 const sharedTab = (shared: SavedTabs["shared"], space: string, path: string) => shared.find((tab) => tab.space === space && tab.path === path);
 const isShared = (shared: SavedTabs["shared"], space: string, path: string) => !!sharedTab(shared, space, path);
 
@@ -1152,39 +1149,46 @@ function mergeTabs(base: SavedTabs["state"], local: SavedTabs["state"], server: 
   };
 }
 
+// The server whose tabs a section edits when it is not the page's, and how to ask its session list again.
+const RemoteTabs = createContext<{ name: string; invalidate: () => void } | null>(null);
+
+// A server's tabs for this person. The page's server's follow the page: its address opens a tab there, and closing or
+// entering moves the page. Another server's, named by RemoteTabs, are its saved tabs, edited and saved the same way,
+// where opening a tab moves the page to that server.
 function useTabs() {
-  const name = useServer();
-  const identity = useQuery(queries.identity());
+  const remote = useContext(RemoteTabs), here = useServer(), name = remote?.name ?? here, viewed = !remote;
+  const identity = useQuery(queries.identity(name));
   const owner = identity.data?.username;
   const saved = useQuery({ ...queries.tabs(owner ?? "", name), enabled: owner !== undefined });
-  const shared = saved.data?.shared ?? noShared, shelf = useTopShelf();
-  const pathname = usePathname() || "/";
-  const [state, setState] = useState(() => loadTabs(pathname));
+  const shared = saved.data?.shared ?? noShared, reach = shared;
+  const visited = usePathname() || "/", pathname = viewed ? visited : "";
+  const [state, setState] = useState(() => viewed ? loadTabs(pathname) : savedTabs());
   // A tab this window reopened leaves the list before the save that reopened it answers.
   const closed = useMemo(() => (saved.data?.closed ?? noClosed).filter((tab) => !state.tabs.some((item) => item.path === tab.path)), [saved.data?.closed, state.tabs]);
-  // This server's Top Shelf tabs open like Shared ones, without a tab; one of a deleted space opens in space. The spaces
-  // are the saved ones, which a first load has before this state does.
-  const shelved = useCallback((spaces: Space[], space: string) => (shelf?.tabs ?? []).flatMap((tab) => (tab.server ?? "") === name ? [{ ...tab, space: spaces.some((item) => item.id === tab.space) ? tab.space : space }] : []), [shelf, name]);
-  const reach = useMemo(() => [...shared, ...shelved(saved.data?.spaces ?? state.spaces, state.space)], [shared, shelved, saved.data?.spaces, state.spaces, state.space]);
-  // This person's order puts the space's Shared tabs it names first; the rest follow, oldest added first.
-  const rank = (path: string) => state.sharedOrder.indexOf(path) + 1 || Infinity;
-  const here = shared.flatMap((tab) => tab.space === state.space ? [tab.path] : []).toSorted((a, b) => rank(a) - rank(b) || 0);
+  // This person's order puts a space's Shared tabs it names first; the rest follow, oldest added first.
+  const sharedIn = (space: string, order = state.sharedOrder) => {
+    const rank = (path: string) => order.indexOf(path) + 1 || Infinity;
+    return shared.flatMap((tab) => tab.space === space ? [tab.path] : []).toSorted((a, b) => rank(a) - rank(b) || 0);
+  };
+  const sharedHere = sharedIn(state.space);
   const [editor, setEditor] = useState<{ id: string; open: boolean }>();
   const [picking, setPicking] = useState<Picking>();
   // This server's parked tab locations, one per line: as its session list says, and as this window's own parks and
   // unparks say until the list does.
-  const [parkedList, setParked] = useState(""), parked = new Set(parkedList.split("\n")), invalidate = useContext(SidebarInvalidation);
+  const [parkedList, setParked] = useState(""), parked = new Set(parkedList.split("\n")), pageInvalidate = useContext(SidebarInvalidation), invalidate = remote?.invalidate ?? pageInvalidate;
   // base is the saved state this window last saved or took in, at revision; at stamps the read last taken in.
-  const sync = useRef<{ saving: boolean; dirty: boolean; next?: TabState; applied?: TabState; base?: SavedTabs["state"]; revision: number; at?: number; server: string; shelf?: TopShelf }>({ saving: false, dirty: false, revision: 0, server: name });
+  const sync = useRef<{ saving: boolean; dirty: boolean; next?: TabState; applied?: TabState; base?: SavedTabs["state"]; revision: number; at?: number; server: string }>({ saving: false, dirty: false, revision: 0, server: name });
   const spaceChange = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onSuccess: (view) => setState((current) => ({ ...current, spaces: view.spaces })), onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
   const sharing = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
-  if (state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname, reach));
+  if (viewed && state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname, reach));
+  // Another server's tabs have no tab in view, so a change that moves tabs only moves them.
+  const settled = (next: TabState) => viewed ? openTab(next, next.active, reach) : next;
   // A page link whose space segment was rewritten shows the rewritten path, once the owner's spaces are known.
   useEffect(() => {
-    if (state.owner === undefined || state.active === pathname) return;
-    history.replaceState(history.state, "", serverPath(state.active) + location.search);
+    if (!viewed || state.owner === undefined || state.active === pathname) return;
+    history.replaceState(history.state, "", serverPath(state.active) + window.location.search);
     dispatchEvent(new PopStateEvent("popstate"));
-  }, [state.owner, state.active, pathname]);
+  }, [viewed, state.owner, state.active, pathname]);
   // The query refetches when the page becomes visible; a window that stayed visible reloads when it regains focus.
   useEffect(() => {
     const reload = () => void saved.refetch({ cancelRefetch: false });
@@ -1192,37 +1196,36 @@ function useTabs() {
     return () => removeEventListener("focus", reload);
   }, [saved.refetch]);
   // A newer saved state merges tabs, groups, and spaces changed elsewhere with this window's own unsaved changes, which
-  // are then saved. The window stays on its tab; when that tab closed elsewhere, or left the space's Shared tabs, it
-  // enters its space as if switching to it. A tab shared in the space stays open there. A space deleted elsewhere is
+  // are then saved. The page's window stays on its tab; when that tab closed elsewhere, or left the space's Shared tabs,
+  // it enters its space as if switching to it. A tab shared in the space stays open there. A space deleted elsewhere is
   // left as if this window deleted it.
   useEffect(() => {
     const queue = sync.current;
-    // A first load waits for the Top Shelf, so a shelved page it opens gets no tab.
-    // A changed shelf rechecks that the page shown is still reachable.
-    if (!saved.data || (state.owner === owner && queue.at === saved.dataUpdatedAt && queue.shelf === shelf) || (state.owner !== owner && rocketclaws().length > 0 && !shelf)) return;
-    [queue.at, queue.shelf] = [saved.dataUpdatedAt, shelf];
+    if (!saved.data || (state.owner === owner && queue.at === saved.dataUpdatedAt)) return;
+    queue.at = saved.dataUpdatedAt;
     const alive = saved.data.spaces.some((item) => item.id === state.space);
-    const base = queue.base, revision = Number(saved.data.revision), inShared = alive && isShared(reach, state.space, state.active);
+    const base = queue.base, revision = Number(saved.data.revision), inShared = viewed && alive && isShared(reach, state.space, state.active);
     // A first load saves the tab its URL added.
     if (state.owner !== owner) {
       [queue.base, queue.revision] = [saved.data.state, revision];
-      return setState(loadTabs(pathname, owner, saved.data, reach));
+      return setState(viewed ? loadTabs(pathname, owner, saved.data, reach) : savedTabs(owner, saved.data));
     }
     if (revision <= queue.revision) {
-      if (!alive) return setState(openTab(leave(state, state.space, saved.data.spaces), state.active, reach));
-      if (!inShared && !state.tabs.some((tab) => tab.path === state.active && tab.space === state.space)) navigate(entry(state, state.space, reach));
+      if (!alive) return setState(viewed ? openTab(leave(state, state.space, saved.data.spaces), state.active, reach) : leave(state, state.space, saved.data.spaces));
+      if (viewed && !inShared && !state.tabs.some((tab) => tab.path === state.active && tab.space === state.space)) navigate(entry(state, state.space, reach));
       return;
     }
     [queue.base, queue.revision] = [saved.data.state, revision];
     const next = savedTabs(owner, { spaces: saved.data.spaces, state: mergeTabs(base!, savedState(state), saved.data.state) }), preview = state.tabs.find((tab) => tab.preview);
     const placed: Tab[] = next.tabs.map((tab) => ({ ...tab, unplaced: state.tabs.find((item) => item.path === tab.path)?.unplaced }));
     const tabs = preview && !placed.some((tab) => tab.path === preview.path) && next.spaces.some((item) => item.id === preview.space) ? arrange(placed.toSpliced(state.tabs.indexOf(preview), 0, preview)) : placed;
-    const open = inShared ? { space: state.space } : tabs.find((tab) => tab.path === state.active);
-    const merged = { ...next, tabs, active: state.active, space: open?.space ?? (next.spaces.some((item) => item.id === state.space) ? state.space : next.spaces[0].id) };
+    // Another server's tabs take the space it saved; the page's stay in the space of the tab in view.
+    const open = !viewed ? { space: next.space } : inShared ? { space: state.space } : tabs.find((tab) => tab.path === state.active);
+    const merged = { ...next, tabs, active: state.active, space: open?.space && next.spaces.some((item) => item.id === open.space) ? open.space : next.spaces.some((item) => item.id === state.space) ? state.space : next.spaces[0].id };
     queue.applied = queue.dirty ? undefined : merged;
     setState(merged);
-    if (!open) navigate(entry(merged, merged.space, reach));
-  }, [saved.data, saved.dataUpdatedAt, owner, state, pathname, reach, shelf]);
+    if (viewed && !open) navigate(entry(merged, merged.space, reach));
+  }, [saved.data, saved.dataUpdatedAt, owner, state, pathname, reach, viewed]);
   // Each change to the saved form saves the whole state, made from the saved revision, one save at a time, the newest
   // waiting change next. A failed save is not undone: the next change or reload saves it again. A save refused because
   // another window saved first answers with that newer state, which the reload above merges in and saves again.
@@ -1248,7 +1251,7 @@ function useTabs() {
     queue.next = state;
     if (!queue.saving) flush();
   }, [state]);
-  const moveTo = (paths: Set<string>, space: string) => setState((current) => openTab({ ...current, tabs: current.tabs.map((tab) => paths.has(tab.path) ? { ...relocate(tab, space), group: undefined } : tab) }, current.active, reach));
+  const moveTo = (paths: Set<string>, space: string) => setState((current) => settled({ ...current, tabs: current.tabs.map((tab) => paths.has(tab.path) ? { ...relocate(tab, space), group: undefined } : tab) }));
   // An unplaced session moves to the space it was born in once its row names it; an unknown new space is fetched first.
   // A background window holds stale tabs, so it waits until it is focused and has reloaded.
   const settle = (rows: Session[]) => {
@@ -1267,25 +1270,32 @@ function useTabs() {
   const update = (change: (tabs: Tab[]) => Tab[]) => setState((current) => ({ ...current, tabs: arrange(change(current.tabs)) }));
   const regroup = (match: (tab: Tab) => boolean, group?: string) => update((tabs) => tabs.map((tab) => match(tab) ? { ...tab, group } : tab));
   const edit = (id: string, change: Partial<TabGroup>) => setState((current) => ({ ...current, groups: current.groups.map((group) => group.id === id ? { ...group, ...change } : group) }));
-  // The strip and menus show only the current space's tabs and groups, leaving out parked tabs, which show in Parked; shown
-  // leaves out groups' placeholders too.
-  const strip = state.tabs.filter((tab) => tab.space === state.space && !parked.has(tab.path)), shown = strip.filter((tab) => !isKeeper(tab));
-  // Bulk closes take this space's tabs, parked ones too.
-  const spaceTabs = state.tabs.filter((tab) => tab.space === state.space && !isKeeper(tab));
-  const groups = state.groups.filter((group) => strip.some((tab) => tab.group === group.id));
+  // A space's card and menus show its tabs and groups, leaving out parked tabs, which show in Parked; shown leaves out
+  // groups' placeholders too, and the space's tabs, which bulk closes take, include parked ones.
+  const stripOf = (space: string) => state.tabs.filter((tab) => tab.space === space && !parked.has(tab.path));
+  const shownOf = (space: string) => stripOf(space).filter((tab) => !isKeeper(tab));
+  const tabsOf = (space: string) => state.tabs.filter((tab) => tab.space === space && !isKeeper(tab));
+  const groupsOf = (space: string) => state.groups.filter((group) => stripOf(space).some((tab) => tab.group === group.id));
+  const spaceOfGroup = (id: string) => state.tabs.find((tab) => tab.group === id)?.space ?? state.space;
+  const strip = stripOf(state.space), shown = shownOf(state.space), groups = groupsOf(state.space);
   // Closing the active tab activates the target, else its right neighbour, else its left one, in this space; an emptied space gets New session.
   // Only this person's tabs close: here, in Parked, or in another space unless it is the page in view, so a tab only in
   // Shared stays open.
   const close = (paths: string[], target?: string) => {
     const doomed = new Set(paths.filter((path) => shown.some((tab) => tab.path === path) || ((parked.has(path) || path !== pathname) && state.tabs.some((tab) => tab.path === path)))), kept = (tab: Tab) => !doomed.has(tab.path);
-    const rest = state.tabs.filter(kept), empty = !shown.some(kept);
+    const rest = state.tabs.filter(kept), empty = viewed && !shown.some(kept);
     setState({ ...state, tabs: empty ? home(rest, state.space) : rest });
     if (!doomed.has(pathname) || (empty && pathname === "/")) return;
     const at = shown.findIndex((tab) => tab.path === pathname);
     navigate(target ?? (shown.slice(at + 1).find(kept) ?? shown.slice(0, at).findLast(kept))?.path ?? "/");
   };
+  // Entering a space of another server moves the page there, into that space.
   const enter = (id: string, spaces = state.spaces) => {
     const path = entry(state, id, reach);
+    if (!viewed) {
+      arriving = id;
+      return navigate(path, false, name);
+    }
     setState(openTab({ ...state, spaces, space: id }, path, reach));
     if (path !== pathname) navigate(path);
   };
@@ -1299,8 +1309,17 @@ function useTabs() {
     move(parks);
     sharing.mutateAsync({ attention: { paths, action, until } }).then(() => invalidate(), () => move(!parks));
   };
-  // New session is one location, so a new tab in a group moves it into the group and its space.
-  const newInGroup = (id: string) => { update((tabs) => join(tabs, "/", id, state.space)); navigate("/"); };
+  // New session is one location, so a new tab in a group moves it into the group and its space, which it enters.
+  const newIn = (space: string, change: (tabs: Tab[]) => Tab[] = (tabs) => tabs) => {
+    if (!viewed) {
+      update(change);
+      arriving = space;
+      return navigate("/", false, name);
+    }
+    setState((current) => ({ ...current, space, tabs: arrange(change(current.tabs)) }));
+    navigate("/");
+  };
+  const newInGroup = (id: string) => newIn(spaceOfGroup(id), (tabs) => join(tabs, "/", id, spaceOfGroup(id)));
   // A Shared Search page's edit saves only onto the page it was made from. Refused because someone changed the page
   // meanwhile, it is made again onto theirs, keeping their searches and this person's change.
   const saveShared = (space: string, path: string, base: SearchPageState | undefined, page: SearchPageState) => sharing.mutate({ editShared: { space, path, base, search: page } }, { onSuccess: (reply) => {
@@ -1315,11 +1334,16 @@ function useTabs() {
     return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, false, reply.shared) }) : open(path, "", undefined, false, reach, search);
   };
   return {
-    state, strip, shown, groups, here, shared, reach, closed, pathname, close, enter, edit, editor, setEditor, settle, picking, setPicking, parked, setParked, attend, open, addSearch, pending: spaceChange.isPending,
-    deleted: (path: string) => {
-      close([path]);
-      const shelved = shelf?.tabs?.find((tab) => (tab.server ?? "") === name && tab.path === path);
-      if (shelved) unshelve(shelved);
+    name, viewed, state, strip, shown, groups, here: sharedHere, sharedIn, stripOf, shownOf, groupsOf, shared, reach, closed, pathname, close, enter, edit, editor, setEditor, settle, picking, setPicking, parked, setParked, attend, open, addSearch, newIn, pending: spaceChange.isPending,
+    deleted: (path: string) => close([path]),
+    // Opening a tab, or a Shared row without a tab of its own, enters its space; another server's moves the page there.
+    go: (path: string, space: string, inShared = false) => {
+      if (!viewed) {
+        arriving = space;
+        return navigate(path, false, name);
+      }
+      if (inShared) return open(path, "", space);
+      if (path !== pathname) navigate(path);
     },
     reopen: ({ path, space, search }: ClosedTab = closed[0]) => {
       const known = state.spaces.find((item) => item.id === space)?.id;
@@ -1331,44 +1355,42 @@ function useTabs() {
         navigate(path);
       });
     },
-    // A moved Shared row moves for this person alone; their order keeps only paths still shared somewhere.
-    moveShared: (from: string, to: string) => setState((current) => ({ ...current, sharedOrder: [...new Set([...moveQueueId(here, from, to), ...current.sharedOrder])].filter((path) => shared.some((tab) => tab.path === path)) })),
-    // Collapsing Shared, Parked, another space's branch, or a space in Parked is this person's choice, kept as the
-    // member-less group of that id.
-    fold: (id: string, collapsed: boolean) => setState((current) => ({ ...current, groups: [...current.groups.filter((group) => group.id !== id), { id, name: "", color: "Grey", collapsed }] })),
-    // A new space takes the first free "Space N" name; the server keeps names unique ignoring case.
+    // A moved Shared row moves, within its space, for this person alone; their order keeps only paths still shared.
+    moveShared: (from: string, to: string) => setState((current) => {
+      const space = shared.find((tab) => tab.path === from)?.space ?? current.space;
+      return { ...current, sharedOrder: [...new Set([...moveQueueId(sharedIn(space, current.sharedOrder), from, to), ...current.sharedOrder])].filter((path) => shared.some((tab) => tab.path === path)) };
+    }),
+    // Collapsing Parked is this person's choice for every space, kept as the member-less group of that id.
+    fold: (id: "parked", collapsed: boolean) => setState((current) => ({ ...current, groups: [...current.groups.filter((group) => group.id !== id), { id, name: "", color: "Grey", collapsed }] })),
+    // A new space takes the first free "Space N" name; the server keeps names unique ignoring case. It answers its id.
     addSpace: async () => {
       const taken = new Set(state.spaces.map((space) => space.name.toLowerCase()));
       let n = state.spaces.length + 1;
       while (taken.has(`space ${n}`)) n++;
-      const spaces = (await spaceChange.mutateAsync({ createSpace: `Space ${n}` })).spaces, id = spaces.find((space) => space.name === `Space ${n}`)?.id;
-      // A new space has no tabs, so entering it opens New session.
-      setState((current) => openTab({ ...current, spaces, space: id ?? current.space }, "/", reach));
-      navigate("/");
+      const spaces = (await spaceChange.mutateAsync({ createSpace: `Space ${n}` })).spaces;
+      return spaces.find((space) => space.name === `Space ${n}`)?.id;
     },
     // A rejected name keeps the old one.
-    renameSpace: (name: string) => spaceChange.mutate({ renameSpace: { id: state.space, name } }),
-    deleteSpace: async () => {
-      const doomed = state.space, reply = await spaceChange.mutateAsync({ deleteSpace: doomed });
-      setState((current) => openTab(leave(current, doomed, reply.spaces), current.active, [...reply.shared, ...shelved(reply.spaces, reply.spaces[0].id)]));
+    renameSpace: (id: string, name: string) => spaceChange.mutate({ renameSpace: { id, name } }),
+    deleteSpace: async (doomed: string) => {
+      const reply = await spaceChange.mutateAsync({ deleteSpace: doomed });
+      setState((current) => settled(leave(current, doomed, reply.spaces)));
     },
     // Cmd/Ctrl+[ and ], and their palette commands, step through this space's Shared rows, then its tabs, each tab once,
     // wrapping and skipping parked ones.
     step: (back: boolean) => {
-      const order = [...new Set([...here.filter((path) => !parked.has(path)), ...shown.map((tab) => tab.path)])], at = order.indexOf(pathname);
+      const order = [...new Set([...sharedHere.filter((path) => !parked.has(path)), ...shown.map((tab) => tab.path)])], at = order.indexOf(pathname);
       const target = order[at < 0 ? (back ? order.length - 1 : 0) : (at + (back ? order.length - 1 : 1)) % order.length];
       if (target !== pathname) navigate(target);
     },
-    // A Search page's change merges into the person's own page or, inShared, into the one page everyone in this space
-    // shares, which the cache takes at once so the next change merges into it.
-    editSearch: (path: string, change: Partial<SearchPageState>, inShared = false) => {
+    // A Search page's change merges into the person's own page or, inShared, into the one page everyone in space shares,
+    // which the cache takes at once so the next change merges into it.
+    editSearch: (path: string, change: Partial<SearchPageState>, inShared = false, space = state.space) => {
       const merge = <T extends { path: string; search?: SearchPageState }>(tab: T) => tab.path === path ? { ...tab, search: { searches: [], active: "", ...tab.search, ...change } } : tab;
-      // A Search page shown only from the Top Shelf saves into the shelf.
-      if (!inShared && !state.tabs.some((tab) => tab.path === path)) return saveShelf((current) => ({ ...current, tabs: current.tabs?.map((tab) => (tab.server ?? "") === name ? merge(tab) : tab) }));
       if (!inShared) return setState((current) => ({ ...current, tabs: current.tabs.map(merge) }));
-      const next = shared.map((tab) => tab.space === state.space ? merge(tab) : tab);
+      const next = shared.map((tab) => tab.space === space ? merge(tab) : tab);
       queryClient.setQueriesData<SavedTabs>({ queryKey: [{ server: name }, "tabs"] }, (old) => old && { ...old, shared: next });
-      saveShared(state.space, path, sharedTab(shared, state.space, path)?.search, sharedTab(next, state.space, path)!.search!);
+      saveShared(space, path, sharedTab(shared, space, path)?.search, sharedTab(next, space, path)!.search!);
     },
     // A moved tab takes the group of the tab it lands on.
     move: (from: string, to: string) => update((tabs) => moveQueueId(tabs.map((tab) => tab.path), from, to).map((path) => tabs.find((tab) => tab.path === path)!).map((tab) => tab.path === from ? { ...tab, group: tabs.find((other) => other.path === to)?.group } : tab)),
@@ -1383,66 +1405,68 @@ function useTabs() {
     // keeps the tab it already has.
     create: (id: string) => update((tabs) => tabs.some((tab) => tab.path === sessionPath(id)) ? tabs.filter((tab) => tab.path !== "/")
       : tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), group: tab.group, space: tab.space, unplaced: true } : tab)),
-    // Close, the attention items, the group commands, and the moves act on paths, the selected tabs; view is this server's.
-    commands: (path: string, view: SidebarView, paths = new Set([path])): TabCommand[] => {
-      const tab = state.tabs.find((item) => item.path === path), selected = state.tabs.filter((item) => paths.has(item.path));
-      const birth = paths.size === 1 && state.spaces.find((space) => space.id === view.rows.find((row) => rowPath(row) === path)?.spaceId);
+    // Close, the attention items, the group commands, and the moves act on paths, the selected tabs of space; view is
+    // this server's.
+    commands: (path: string, view: SidebarView, paths = new Set([path]), space = state.tabs.find((item) => item.path === path)?.space ?? state.space): TabCommand[] => {
+      const tab = state.tabs.find((item) => item.path === path), selected = state.tabs.filter((item) => paths.has(item.path)), there = tabsOf(space), inShared = sharedIn(space).includes(path);
+      const birth = paths.size === 1 && state.spaces.find((item) => item.id === view.rows.find((row) => rowPath(row) === path)?.spaceId);
       // Shared changes act on this one tab, for everyone.
       // Taking a Search page out of Shared keeps the page it held, as the server returns it, as this person's own, with
       // any searches of their own page there, so nobody's searches are lost.
-      const keep = ({ unshared: page }: SavedTabs) => page && setState((current) => ({ ...current, tabs: current.tabs.some((item) => item.path === path)
-        ? current.tabs.map((item) => item.path === path ? { ...item, search: { ...page, searches: [...page.searches, ...item.search?.searches.filter((own) => !page.searches.some((other) => other.id === own.id)) ?? []] } } : item)
-        : [...current.tabs, { path, space: state.space, search: page }] }));
-      const share = here.includes(path) ? [{ key: "unshare", label: "Remove from Shared", run: () => void tabsCall(name, { unshare: { space: state.space, path } }, keep).catch(() => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] })) }]
-        : path === "/" ? [] : [{ key: "share", label: "Add to Shared", run: () => sharing.mutate({ share: { space: state.space, path, search: tab?.search } }) }];
-      const source = sharedTab(shared, state.space, path)?.search ?? tab?.search;
-      const copy = isSearch(path) ? [{ key: "duplicate", label: "Duplicate", run: () => addSearch({ ...source!, name: `${searchTitle(source)} copy` }, here.includes(path)) }] : [];
-      const shelve = rocketclaws().length && shelf && path !== "/" && !shelf.tabs?.some((item) => (item.server ?? "") === name && item.path === path)
-        ? [{ key: "shelve", label: "Add to Top Shelf", run: () => saveShelf((current) => ({ ...current, tabs: [...current.tabs ?? [], { server: name, space: tab?.space ?? state.space, path, search: source }] })) }] : [];
+      const keep = ({ unshared: kept }: SavedTabs) => kept && setState((current) => ({ ...current, tabs: current.tabs.some((item) => item.path === path)
+        ? current.tabs.map((item) => item.path === path ? { ...item, search: { ...kept, searches: [...kept.searches, ...item.search?.searches.filter((own) => !kept.searches.some((other) => other.id === own.id)) ?? []] } } : item)
+        : [...current.tabs, { path, space, search: kept }] }));
+      const share = inShared ? [{ key: "unshare", label: "Remove from Shared", run: () => void tabsCall(name, { unshare: { space, path } }, keep).catch(() => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] })) }]
+        : path === "/" ? [] : [{ key: "share", label: "Add to Shared", run: () => sharing.mutate({ share: { space, path, search: tab?.search } }) }];
+      const source = sharedTab(shared, space, path)?.search ?? tab?.search;
+      const copy = viewed && isSearch(path) ? [{ key: "duplicate", label: "Duplicate", run: () => addSearch({ ...source!, name: `${searchTitle(source)} copy` }, inShared) }] : [];
       const attention = attentionItems(view, path, paths, attend, setPicking), closing = { key: "close", label: "Close", run: () => close([...paths]) };
       // The tab in view copies its whole address, with the view state in its query and fragment.
-      const link = { key: "link", label: "Copy link", run: () => void copyText(path === pagePath() ? location.href : location.origin + serverPath(path, name), document.body) };
+      const link = { key: "link", label: "Copy link", run: () => void copyText(viewed && path === pagePath() ? window.location.href : window.location.origin + serverPath(path, name), document.body) };
       // A parked tab's menu has none of the strip's commands but Close.
-      if (!shown.some((item) => item.path === path)) return [...tab ? [closing] : [], link, ...share, ...copy, ...shelve, ...attention];
+      if (!shownOf(space).some((item) => item.path === path)) return [...tab ? [closing] : [], link, ...share, ...copy, ...attention];
       return [
         closing,
-        { key: "close-others", label: "Close others", run: () => close(spaceTabs.flatMap((tab) => tab.path === path ? [] : [tab.path]), path) },
-        { key: "close-right", label: "Close to the right", run: () => close(spaceTabs.slice(spaceTabs.findIndex((tab) => tab.path === path) + 1).map((tab) => tab.path), path) },
-        { key: "close-all", label: "Close all", run: () => close(spaceTabs.map((tab) => tab.path)) },
-        link, ...share, ...copy, ...shelve, ...attention,
+        { key: "close-others", label: "Close others", run: () => close(there.flatMap((item) => item.path === path ? [] : [item.path]), path) },
+        { key: "close-right", label: "Close to the right", run: () => close(there.slice(there.findIndex((item) => item.path === path) + 1).map((item) => item.path), path) },
+        { key: "close-all", label: "Close all", run: () => close(there.map((item) => item.path)) },
+        link, ...share, ...copy, ...attention,
         { key: "group-new", label: "Add to new group", sub: { menu: "Add to group", label: "New group" }, run: () => {
           const id = crypto.getRandomValues(new Uint32Array(2)).join("-");
-          setState((current) => ({ ...current, groups: [...current.groups, { id, name: "", color: Object.keys(groupColors)[groups.length % Object.keys(groupColors).length] }] }));
-          update((tabs) => join(tabs.map((item) => paths.has(item.path) ? { ...item, group: id } : item), keeper(id), id, state.space));
+          setState((current) => ({ ...current, groups: [...current.groups, { id, name: "", color: Object.keys(groupColors)[groupsOf(space).length % Object.keys(groupColors).length] }] }));
+          update((tabs) => join(tabs.map((item) => paths.has(item.path) ? { ...item, group: id } : item), keeper(id), id, space));
           setEditor({ id, open: true });
         } },
-        ...groups.filter((group) => selected.some((item) => item.group !== group.id)).map((group) => ({ key: `group-${group.id}`, label: `Add to group "${groupName(group)}"`, sub: { menu: "Add to group", label: groupName(group) }, run: () => update((tabs) => selected.reduce((joined, item) => join(joined, item.path, group.id, state.space), tabs)) })),
+        ...groupsOf(space).filter((group) => selected.some((item) => item.group !== group.id)).map((group) => ({ key: `group-${group.id}`, label: `Add to group "${groupName(group)}"`, sub: { menu: "Add to group", label: groupName(group) }, run: () => update((tabs) => selected.reduce((joined, item) => join(joined, item.path, group.id, space), tabs)) })),
         ...selected.some((item) => item.group) ? [{ key: "group-remove", label: "Remove from group", run: () => regroup((item) => paths.has(item.path)) }] : [],
         // A session moved to another space can go back to the space it was born in.
         ...birth && birth.id !== tab?.space ? [{ key: "restore", label: `Restore to "${birth.name}"`, run: () => moveTo(paths, birth.id) }] : [],
-        ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move to "${space.name}"`, sub: { menu: "Move to space", label: space.name }, run: () => moveTo(paths, space.id) })),
+        ...state.spaces.filter((item) => item.id !== space).map((item) => ({ key: `space-${item.id}`, label: `Move to "${item.name}"`, sub: { menu: "Move to space", label: item.name }, run: () => moveTo(paths, item.id) })),
       ];
     },
     newInGroup,
     // Ungrouping or closing a group's tabs leaves it empty; only Delete group, which closes them too, removes it.
-    groupCommands: (id: string) => [
-      { key: "new", label: "New tab in group", run: () => newInGroup(id) },
-      { key: "ungroup", label: "Ungroup", run: () => regroup((tab) => tab.group === id && !isKeeper(tab)) },
-      { key: "close", label: "Close group", run: () => close(spaceTabs.flatMap((tab) => tab.group === id ? [tab.path] : [])) },
-      { key: "delete", label: "Delete group", run: () => {
-        close(spaceTabs.flatMap((tab) => tab.group === id ? [tab.path] : []));
-        update((tabs) => tabs.filter((tab) => tab.path !== keeper(id)));
-      } },
-      ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move group to "${space.name}"`, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? relocate(tab, space.id) : tab) }, state.active, reach)) })),
-    ],
+    groupCommands: (id: string) => {
+      const space = spaceOfGroup(id), members = tabsOf(space).flatMap((tab) => tab.group === id ? [tab.path] : []);
+      return [
+        { key: "new", label: "New tab in group", run: () => newInGroup(id) },
+        { key: "ungroup", label: "Ungroup", run: () => regroup((tab) => tab.group === id && !isKeeper(tab)) },
+        { key: "close", label: "Close group", run: () => close(members) },
+        { key: "delete", label: "Delete group", run: () => {
+          close(members);
+          update((tabs) => tabs.filter((tab) => tab.path !== keeper(id)));
+        } },
+        ...state.spaces.filter((item) => item.id !== space).map((item) => ({ key: `space-${item.id}`, label: `Move group to "${item.name}"`, run: () => setState(settled({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? relocate(tab, item.id) : tab) })) })),
+      ];
+    },
   };
 }
 
-// Sessions follow their sidebar rows to the spaces they were born in, and the tabs this server lists as parked leave the
-// strip for Parked. Only this, TabNotifications and AttentionButton read the rows at the top, so their updates do not
-// redraw the whole app.
+// Sessions follow their sidebar rows to the spaces they were born in, and the tabs a server lists as parked leave its
+// cards for Parked. Only this, TabNotifications and AttentionButton read the page's rows at the top, so their updates do
+// not redraw the whole app; another server's section reads its own.
 function TabSettling() {
-  const { rows, marks } = useContext(Sidebar), { settle, setParked } = useContext(TabActions);
+  const { rows, marks } = useContext(Sidebar), page = useContext(TabActions), { settle, setParked } = useContext(TabStore) ?? page;
   const parked = [...parkedPaths({ rows, marks })].sort().join("\n");
   useEffect(() => settle(rows), [rows, settle]);
   // A server that holds no listing, as while it does not answer, says nothing about what is parked.
@@ -1450,14 +1474,14 @@ function TabSettling() {
   return null;
 }
 
-// A server's tabs this person sees: their own tabs of any space, then its Shared and Top Shelf rows, each in its space;
-// the live ones here, the saved ones elsewhere.
+// A server's tabs this person sees: their own tabs of any space, then its Shared rows, each in its space; the live ones
+// here, the saved ones elsewhere.
 function useTabsOf() {
   const { servers } = useContext(Sidebar), { state, reach } = useContext(TabActions);
-  const name = useServer(), shelf = useTopShelf();
+  const name = useServer();
   return (server: string) => {
     const saved = servers[server]?.tabs, own = server === name ? state.tabs : saved?.state.tabs ?? [];
-    return { own, open: [...own, ...server === name ? reach : [...saved?.shared ?? [], ...shelf?.tabs?.filter((tab) => (tab.server ?? "") === server) ?? []]] };
+    return { own, open: [...own, ...server === name ? reach : saved?.shared ?? []] };
   };
 }
 
@@ -1477,7 +1501,7 @@ function attentionOf(view: Pick<SidebarView, "rows" | "marks"> | undefined, path
 type TabCommand = { key: string; label: string; sub?: { menu: string; label: string }; run: () => void };
 // A tab menu draws a line between its sections, as a macOS menu does: renaming, closing, sharing, attention, grouping and
 // moving, then deleting. Its items come in that order.
-const menuSections = [/^rename/, /^close/, /^(link|share|unshare|duplicate|shelve|unshelve)/, /^(read|unread|park|unpark)/, /^(group|restore|space)/, /^delete/];
+const menuSections = [/^rename/, /^close/, /^(link|share|unshare|duplicate)/, /^(read|unread|park|unpark)/, /^(group|restore|space)/, /^delete/];
 const menuSection = (key: string) => menuSections.findIndex((pattern) => pattern.test(key));
 // A submenu draws its lines the same way: Park's are Until it is done, its times, then Until I unpark.
 const submenuSections = [/^park-done$/, /^park-/];
@@ -1524,8 +1548,8 @@ function useWaiting() {
   });
 }
 
-// Opens a tab this person has on its server: one that is only a Shared or Top Shelf row there opens in that row's space
-// without a tab of its own.
+// Opens a tab this person has on its server: one that is only a Shared row there opens in that row's space without a tab
+// of its own.
 function useVisit() {
   const tabs = useContext(TabActions), tabsOf = useTabsOf();
   return (name: string, path: string) => {
@@ -1572,7 +1596,7 @@ function AttentionButton() {
 
 // The server decides who is marked, on a session's row or a tab location's row: a mark that moves past the one this window
 // last saw raises a desktop notification, unless it is quiet, its tab is parked, or it is the tab in view in a focused
-// window, or this person has no tab for it: in their own tabs, Shared, or on the Top Shelf. Its click opens the tab where
+// window, or this person has no tab for it: in their own tabs or Shared. Its click opens the tab where
 // they have it. A window whose tabs are older than its listing names notifies nothing from it until it reloads them, so it
 // never takes a tab closed or opened elsewhere for one it holds. The first complete live list of each server after a page load or owner change only records the marks; restored rows
 // never count. A session is titled by its name, else its agent, or a remote OpenCode session by its tab title, and shows
@@ -1629,7 +1653,7 @@ function useInSpace() {
   return (item: { space?: string }) => !item.space || item.space.toLowerCase() === name;
 }
 
-const arrows: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }, sharedDrag = "application/x-rocketclaw-shared", shelfDrag = "application/x-rocketclaw-shelf";
+const arrows: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }, sharedDrag = "application/x-rocketclaw-shared";
 type MenuAnchor = Element | { getBoundingClientRect: () => DOMRect };
 const popupClass = "min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none", itemClass = "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent";
 
@@ -1659,223 +1683,396 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
 }
 
 // Sessions and Search pages can be renamed from their tab, and a Search page from its Shared row, which otherwise offers
-// only its Copy link, Shared, Duplicate, Top Shelf, Add to my tabs, and attention items. A session's own tab can also
-// delete it.
-function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { path: string; shared?: boolean; away?: boolean }, view: SidebarView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
-  if (menu.away) return commands(menu.path, view).filter(({ key }) => /^(close$|link|read|unread|park|unpark)/.test(key));
+// only its Copy link, Shared, Duplicate and attention items. A session's own tab on the page's server can also delete
+// it.
+function menuItems(tabs: TabStoreValue, menu: CardMenu, view: SidebarView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
   const renaming = targets.size === 1 && (isSearch(menu.path) || (pathSession(menu.path) && !menu.shared)) ? [{ key: "rename", label: isSearch(menu.path) ? "Rename search" : "Rename session", run: rename }] : [];
-  const session = targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === pathSession(menu.path)) : undefined;
-  return [...renaming, ...menu.shared ? commands(menu.path, view).filter(({ key }) => /^(link|unshare|duplicate|shelve|own|read|unread|park|unpark)/.test(key)) : commands(menu.path, view, targets), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
+  const session = tabs.viewed && targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === pathSession(menu.path)) : undefined;
+  return [...renaming, ...menu.shared ? tabs.commands(menu.path, view, undefined, menu.space).filter(({ key }) => /^(link|unshare|duplicate|read|unread|park|unpark)/.test(key)) : tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
 }
 
-const shelfItems = (path: string, shelf: ShelfTab, parked: boolean | undefined, view: SidebarView | undefined, send: Attend, pick: (picking: Picking) => void): TabCommand[] =>
-  [...attentionItems(view, path, [path], send, pick), ...parked ? [] : [{ key: "unshelve", label: "Remove from Top Shelf", run: () => unshelve(shelf) }]];
+const pullRequestItems = (menu: { path: string; shared?: boolean }, single: boolean, name: string): TabCommand[] =>
+  pathSession(menu.path) && (menu.shared || single) ? [{ key: "pull-requests", label: "Pull requests", run: () => navigate(`${menu.path}?pullRequests=1`, false, name) }] : [];
 
-const pullRequestItems = (menu: { path: string; shared?: boolean; shelf?: ShelfTab; away?: boolean }, single: boolean): TabCommand[] =>
-  pathSession(menu.path) && !menu.away && (menu.shared || menu.shelf || single) ? [{ key: "pull-requests", label: "Pull requests", run: () => navigate(`${menu.path}?pullRequests=1`, false, menu.shelf ? menu.shelf.server ?? "" : server()) }] : [];
+type TabStoreValue = ReturnType<typeof useTabs>;
+// A section's tabs, which its rows rename and edit through; outside a section, the page's.
+const TabStore = createContext<TabStoreValue | null>(null);
+type CardMenu = { path: string; anchor: MenuAnchor; space: string; shared?: boolean };
+// The tabs picked besides the one in view, in one space, while that tab stays in view.
+type Picked = { at: string; space: string; paths: Set<string> };
+type Section = { titled: boolean; folds: Record<string, boolean>; setFold: (key: string, folded: boolean) => void; waiting: Set<string>; newChat: () => void };
+type Card = Section & { tabs: TabStoreValue; label: string; picked: Picked; setPicked: (picked: Picked) => void; editing?: string; setEditing: (key?: string) => void; renaming?: string; setRenaming: (space?: string) => void; setMenu: (menu: CardMenu) => void; refocus: (space: string) => void };
+const selectionIn = (tabs: TabStoreValue, picked: Picked, space: string) =>
+  new Set(tabs.shownOf(space).flatMap((tab) => tab.path === tabs.pathname || (picked.at === tabs.pathname && picked.space === space && picked.paths.has(tab.path)) ? [tab.path] : []));
+// The keyboard stop of a card, else of the first list that has one.
+const selected = (node: RefObject<HTMLElement | null>, space?: string) => (space && node.current?.querySelector<HTMLElement>(`[data-card="${CSS.escape(space)}"] [role="tab"][tabindex="0"]`)) || node.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]');
+// The card a drag started in: tabs and groups move only within it.
+let dragging = "";
 
-function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat: () => void }) {
-  // The tabs waiting for this person, by rowKey of their location and server, which collapsed headers go bold for.
-  const sidebar = useContext(Sidebar), { rows } = sidebar, waiting = new Set(useWaiting().map((mark) => rowKey(mark.path, mark.server)));
-  const { state, strip, shown, groups, pathname, close, move, moveGroup, commands, edit, editor, setEditor, groupCommands, newInGroup, attend, setPicking } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
-  const [menu, setMenu] = useState<{ path: string; anchor: MenuAnchor; shared?: boolean; shelf?: ShelfTab; parked?: boolean; away?: boolean }>();
-  const [editing, setEditing] = useState<string>();
-  const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
-  const list = useRef<HTMLDivElement>(null), parkedList = useRef<HTMLDivElement>(null), refocus = useRef<{ key: string; from?: RefObject<HTMLDivElement | null> }>({ key: "" });
-  // Closing, parking or unparking from a list unmounts the focused control, so focus moves to that list's selected tab,
-  // else the strip's, as in SearchTabs.
-  const selected = (from = list) => from.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]') ?? list.current!.querySelector<HTMLElement>('[role="tab"][tabindex="0"]');
-  // A Top Shelf row's attention changes go to its own server, named before any wait.
-  const send = (name: string): Attend => name === server() ? attend : (paths, action, until) => void tabsCall(name, { attention: { paths, action, until } }).then(sidebar.servers[name].invalidateQueries, () => undefined);
-  const header = () => list.current!.querySelector<HTMLElement>(`[data-group="${editor?.id}"]`);
-  const group = groups.find((item) => item.id === editor?.id);
-  // Cmd/Ctrl+click and Shift+click select tabs besides the active one; activating a tab or Escape drops them.
-  const [picked, setPicked] = useState({ at: pathname, paths: new Set<string>() });
-  const selection = new Set(shown.flatMap((tab) => tab.path === pathname || (picked.at === pathname && picked.paths.has(tab.path)) ? [tab.path] : []));
-  // The menu of a selected tab acts on every selected tab; any other tab's menu acts on that tab alone.
-  const targets = menu && !selection.has(menu.path) ? new Set([menu.path]) : selection;
-  const { setCommand } = useContext(SessionCommands);
-  const items: TabCommand[] = !menu ? [] : [
-    ...pullRequestItems(menu, targets.size === 1),
-    ...menu.shelf ? shelfItems(menu.path, menu.shelf, menu.parked, sidebar.servers[menu.shelf.server ?? ""], send(menu.shelf.server ?? ""), setPicking)
-      : menuItems(commands, menu, sidebar, targets, () => setEditing(`${menu.shared ? "shared:" : ""}${menu.path}`), (id) => setCommand({ mode: "delete", source: id })),
-  ];
-  // The active tab is the list's keyboard stop, else, while it shows only in Shared or Parked, the first rendered tab.
-  const stop = shown.some((tab) => tab.path === pathname) ? pathname : shown.find((tab) => !groups.find((item) => item.id === tab.group)?.collapsed)?.path;
-  // Only this person's tabs and Parked rows leave their list; Shared and Top Shelf rows stay where they are.
-  const option = ({ key, label, run }: (typeof items)[number]) => <Menu.Item key={key} onClick={() => { refocus.current = { key, from: menu?.parked ? parkedList : menu?.shared || menu?.shelf ? undefined : list }; run(); }} className={itemClass}>{label}</Menu.Item>;
-  // Everything above Parked scrolls as one; Parked stays at the bottom with its own scroll.
+// A card's work: its tabs waiting for this person or asking them something, whether any of them asks, and whether a turn
+// runs in any of its tabs.
+function cardWork(name: string, paths: string[], rows: Session[], waiting: Set<string>) {
+  const asking = new Set(rows.flatMap((row) => row.asking ? [rowPath(row)] : [])), all = new Set(paths);
+  const work = new Set(paths.filter((path) => waiting.has(rowKey(path, name)) || asking.has(path)));
+  return { work, asking: [...work].some((path) => asking.has(path)), running: rows.some((row) => row.running && !row.asking && all.has(rowPath(row))) };
+}
+
+// The strip holds a section for each server, this one first, then Parked, which stays at the bottom with its own scroll.
+// A section holds its server's Shared card and a card for each of its spaces, drawn and acted on the same on any server's
+// page; the page's server's are live, and another server's are its saved tabs, whose changes save there.
+function TabStrip({ tabs, newChat }: { tabs: TabStoreValue; newChat: () => void }) {
+  const waiting = new Set(useWaiting().map((mark) => rowKey(mark.path, mark.server))), here = useServer(), [folds, setFold] = useFolds();
+  const names = ["", ...rocketclaws().map((remote) => remote.name)], section: Section = { titled: names.length > 1, folds, setFold, waiting, newChat };
   return <div data-tab-lists className="flex h-full shrink-0 flex-col">
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-width:thin]">
-      {rocketclaws().length ? <TopShelfTabs tabs={tabs} waiting={waiting} openMenu={(tab, anchor) => setMenu({ path: tab.path, anchor, shelf: tab })} /> : null}
-      <SpaceTree tabs={tabs} waiting={waiting} newChat={newChat} refocus={() => selected()?.focus()} openMenu={(path, anchor) => setMenu({ path, anchor, away: true })}>
-      <SharedTabs tabs={tabs} waiting={waiting} space={space} editing={editing} endEdit={() => setEditing(undefined)} openMenu={(path, anchor) => setMenu({ path, anchor, shared: true })} />
-      <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation="vertical" className="flex flex-col gap-0.5 p-1"
-        // A selecting click keeps the active tab; Shift+click selects the rendered tabs from the active one to it.
-        onClickCapture={(event) => {
-          const path = pathOf(event);
-          if (!path || !(event.target as Element).closest('[role="tab"]')) return;
-          const rendered = [...event.currentTarget.querySelectorAll<HTMLElement>("[data-tab]")].map((node) => node.dataset.tab!);
-          const [from, to] = [rendered.indexOf(pathname), rendered.indexOf(path)].toSorted((a, b) => a - b);
-          if (event.shiftKey) setPicked({ at: pathname, paths: new Set(rendered.slice(from, to + 1)) });
-          else if (event.metaKey || event.ctrlKey) setPicked({ at: pathname, paths: selection.symmetricDifference(new Set([path])) });
-          else return setPicked({ at: pathname, paths: new Set() });
-          event.stopPropagation();
-        }}
-        onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
-        onDoubleClick={(event) => { if (event.target === event.currentTarget) newChat(); }}
-        onAuxClick={(event) => {
-          const path = pathOf(event);
-          if (event.button !== 1 || !path) return;
-          event.preventDefault();
-          close([path]);
-        }}
-        onDragStart={(event) => {
-          const group = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group;
-          event.dataTransfer.setData(group ? "application/x-rocketclaw-group" : "application/x-rocketclaw-tab", group ?? pathOf(event)!);
-        }}
-        onDragOver={(event) => { if (!event.dataTransfer.types.some((type) => type === sharedDrag || type === shelfDrag)) event.preventDefault(); }}
-        // A group header stands for its first tab, the only drop target a collapsed group shows, or an empty group's
-        // placeholder, so a tab dropped there joins it.
-        onDrop={(event) => {
-          const header = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group, group = event.dataTransfer.getData("application/x-rocketclaw-group");
-          const path = pathOf(event) ?? strip.find((tab) => !!header && tab.group === header)?.path;
-          if (path && group) moveGroup(group, path);
-          else if (path) move(event.dataTransfer.getData("application/x-rocketclaw-tab"), path);
-        }}
-        onKeyDown={(event) => {
-          if ((event.target as HTMLElement).role === "tab" && event.key === "Escape" && selection.size > 1 && !menu) {
-            event.preventDefault();
-            return setPicked({ at: pathname, paths: new Set() });
-          }
-          tabKeys(event, pathname, (path, anchor) => setMenu({ path, anchor }), move);
-        }}>
-        {strip.flatMap((tab, index) => {
-          const group = groups.find((item) => item.id === tab.group);
-          const openEditor = () => setEditor({ id: group!.id, open: true }), chosen = tab.path !== pathname && selection.has(tab.path);
-          // A collapsed group's name goes bold, like an unread tab's title, while any of its tabs waits for this person,
-          // and it says it needs you while any of their sessions waits on this person's answer. Only its header uses these badges.
-          const hidden = new Set(group?.collapsed && strip[index - 1]?.group !== group.id ? shown.flatMap((item) => item.group === group.id ? [item.path] : []) : []);
-          const unread = [...hidden].some((path) => waiting.has(rowKey(path, server()))), asking = hidden.size > 0 && rows.some((row) => row.asking && hidden.has(rowPath(row)));
-          return [
-            group && strip[index - 1]?.group !== group.id ? <div key={group.id} data-group={group.id} draggable className="flex shrink-0 items-center pt-1" onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
-              <button type="button" aria-expanded={!group.collapsed} aria-label={groupName(group)} className="flex h-7 min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => edit(group.id, { collapsed: !group.collapsed })}
-                onKeyDown={(event) => {
-                  if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") { event.preventDefault(); openEditor(); }
-                  // Shift+Arrow moves the group past the tab or group next to it.
-                  const button = event.currentTarget, step = event.shiftKey ? arrows[event.key] : 0;
-                  const neighbor = step && strip[step < 0 ? strip.findIndex((item) => item.group === group.id) - 1 : strip.findLastIndex((item) => item.group === group.id) + 1];
-                  if (!neighbor) return;
-                  event.preventDefault();
-                  flushSync(() => moveGroup(group.id, neighbor.path));
-                  button.focus();
-                }}>
-                <span className={cn("rounded-full", group.name ? cn("max-w-48 truncate px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium") : "size-3", groupColors[group.color])}>{group.name}</span>
-              </button>
-              {asking ? needsYou : null}
-              <button type="button" aria-label={`Edit ${groupName(group)}`} className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={openEditor}><Ellipsis className="size-3.5" /></button>
-            </div> : null,
-            // An expanded empty group offers New session, which starts one in the group.
-            isKeeper(tab) ? group!.collapsed || shown.some((item) => item.group === group!.id) ? null
-              : <button key={tab.path} type="button" data-tab={tab.path} aria-label={`New session in ${groupName(group!)}`} className="flex shrink-0 items-center rounded-md text-sm text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring" onClick={() => newInGroup(group!.id)}>
-                <span className={cn("pointer-events-none my-1.5 ml-1 w-0.5 shrink-0 self-stretch", groupColors[group!.color])} />
-                <span className="flex items-center gap-1.5 py-2 pr-3 pl-3"><SquarePen aria-hidden="true" className="size-4 shrink-0" />New session</span>
-              </button>
-            // A collapsed group still shows its active tab.
-            : group?.collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} description={[chosen && "In selection", `${group ? `Group ${groupName(group)}, ` : ""}Space: ${space}`].filter(Boolean).join(", ")} chosen={chosen} rule={group?.color} active={tab.path === pathname} stop={tab.path === stop} editing={tab.path === editing} endEdit={() => setEditing(undefined)} close={() => { flushSync(() => close([tab.path])); selected()!.focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />,
-          ];
-        })}
-      </div>
-      </SpaceTree>
+      {names.map((name) => name === here ? <ServerSection key={name} tabs={tabs} {...section} /> : <RemoteSection key={name} name={name} {...section} />)}
+      <div className="min-h-4 flex-1" onDoubleClick={newChat} />
     </div>
-    <ParkedTabs tabs={tabs} list={parkedList} editing={editing} endEdit={() => setEditing(undefined)} openMenu={(item) => setMenu({ ...item, parked: true })} close={(path) => { flushSync(() => close([path])); selected(parkedList)?.focus(); }} />
-    {/* The name field lives in a popover because menus take typed letters for type-ahead. */}
-    <Popover.Root open={!!editor?.open && !!group} onOpenChange={(open) => setEditor((current) => current && { ...current, open })}>
-      <Popover.Portal><Popover.Positioner anchor={header} sideOffset={4} align="start" className="z-50 outline-none"><Popover.Popup aria-label="Edit group" finalFocus={() => header()?.querySelector("button") ?? selected()} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="flex w-56 flex-col gap-2 rounded-md border bg-popover p-2 text-popover-foreground shadow-md outline-none">
-        {group ? <>
-          {/* Leaving the field saves the name, as tab state redraws the whole app; a save per key made typing lag. */}
-          <Input aria-label="Group name" placeholder="Name this group" defaultValue={group.name} onBlur={(event) => { if (event.target.value !== group.name) edit(group.id, { name: event.target.value }); }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
-              if (event.key === "Enter") setEditor({ id: group.id, open: false });
-            }} />
-          <div role="radiogroup" aria-label="Group color" className="flex flex-wrap gap-2 px-1 py-1">
-            {Object.entries(groupColors).map(([color, background]) => <input key={color} type="radio" name="group-color" aria-label={color} checked={group.color === color} onChange={() => edit(group.id, { color })} className={cn("size-5 cursor-pointer appearance-none rounded-full checked:outline-2 checked:outline-offset-2 checked:outline-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring", background)} />)}
-          </div>
-          {groupCommands(group.id).map(({ key, label, run }) => <button key={key} type="button" className="flex rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => { setEditor({ id: group.id, open: false }); run(); }}>{label}</button>)}
-        </> : null}
-      </Popover.Popup></Popover.Positioner></Popover.Portal>
-    </Popover.Root>
-    <Menu.Root open={!!menu} onOpenChange={(open) => { if (!open) setMenu(undefined); }}>
-      <Menu.Portal><Menu.Positioner anchor={menu?.anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const { key, from } = refocus.current; refocus.current = { key: "" }; return /^(rename|group-new)$|pick$/.test(key) ? false : from && /^(close|park|unpark)/.test(key) ? selected(from) : true; }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className={popupClass}>
-        {items.map((item, i) => {
-          const entry = !item.sub ? option(item) : item !== items.find((other) => other.sub?.menu === item.sub!.menu) ? null : <Menu.SubmenuRoot key={item.sub.menu}>
-            <Menu.SubmenuTrigger className={cn(itemClass, "justify-between gap-4 data-popup-open:bg-accent")}>{item.sub.menu}<ChevronRight className="size-4" /></Menu.SubmenuTrigger>
-            <Menu.Portal><Menu.Positioner className="z-50 outline-none"><Menu.Popup className={popupClass}>{items.filter((other) => other.sub?.menu === item.sub!.menu).map((other, j, subs) => {
-              const section = (key: string) => submenuSections.findIndex((pattern) => pattern.test(key)), entry = option({ ...other, label: other.sub!.label });
-              return j > 0 && section(other.key) !== section(subs[j - 1].key) ? [<Menu.Separator key={`line-${other.key}`} className="-mx-1 my-1 h-px bg-border" />, entry] : entry;
-            })}</Menu.Popup></Menu.Positioner></Menu.Portal>
-          </Menu.SubmenuRoot>;
-          return entry && i > 0 && menuSection(item.key) !== menuSection(items[i - 1].key) ? [<Menu.Separator key={`line-${item.key}`} className="-mx-1 my-1 h-px bg-border" />, entry] : entry;
-        })}
-      </Menu.Popup></Menu.Positioner></Menu.Portal>
-    </Menu.Root>
+    <ParkedSection tabs={tabs} />
   </div>;
 }
 
-// Shared shows the space's Shared tabs, the same for everyone, in this person's order, above their tabs, and hides while
-// it has none. It is a list of its own, so the handlers of theirs never act on a Shared row; only its menu changes it for
-// everyone, and dragging a row onto another or Shift+Arrow reorders it for this person alone.
-function SharedTabs({ tabs: { state, here, shared, pathname, fold, moveShared }, waiting, space, editing, endEdit, openMenu }: { tabs: ReturnType<typeof useTabs>; waiting: Set<string>; space?: string; editing?: string; endEdit: () => void; openMenu: (path: string, anchor: MenuAnchor) => void }) {
-  const collapsed = state.groups.some((group) => group.id === "shared" && group.collapsed), stop = here.includes(pathname) ? pathname : here[0];
-  // Like a collapsed group, collapsed Shared goes bold while any of its tabs waits for this person, and says it
-  // needs you while any of their sessions waits on this person's answer.
-  const { rows } = useContext(Sidebar), hidden = new Set(collapsed ? here : []);
-  const unread = [...hidden].some((path) => waiting.has(rowKey(path, server()))), asking = hidden.size > 0 && rows.some((row) => row.asking && hidden.has(rowPath(row)));
-  const inert = () => undefined, pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
-  if (!here.length) return null;
-  return <>
-    <div className="flex shrink-0 flex-col gap-0.5 px-1 pt-1">
-      <div className="flex shrink-0 items-center pt-1">
-        <button type="button" aria-expanded={!collapsed} className="flex h-7 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => fold("shared", !collapsed)}>
-          <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium", groupColors.Grey)}><Users aria-hidden="true" className="size-3" />Shared</span>
-        </button>
-        {asking ? needsYou : null}
-      </div>
-      <div role="tablist" aria-label="Shared tabs" aria-orientation="vertical" className="flex flex-col gap-0.5" onKeyDown={(event) => tabKeys(event, pathname, openMenu, moveShared)}
-        onDragStart={(event) => event.dataTransfer.setData(sharedDrag, pathOf(event)!)}
-        // Only Shared rows drop here, and nowhere else.
-        onDragOver={(event) => { if (event.dataTransfer.types.includes(sharedDrag)) event.preventDefault(); }}
-        onDrop={(event) => { const to = pathOf(event); if (to) moveShared(event.dataTransfer.getData(sharedDrag), to); }}>
-        {here.map((path) => collapsed && path !== pathname ? null : <TabItem key={path} tab={{ path, search: sharedTab(shared, state.space, path)?.search }} shared description={`Shared, Space: ${space}`} chosen={false} rule="Grey" active={path === pathname} stop={path === stop} editing={editing === `shared:${path}`} endEdit={endEdit} close={inert} openMenu={(anchor) => openMenu(path, anchor)} />)}
-      </div>
+function RemoteSection({ name, ...section }: Section & { name: string }) {
+  const invalidate = useContext(Sidebar).servers[name]?.invalidateQueries, remote = useMemo(() => ({ name, invalidate: () => invalidate?.() }), [name, invalidate]);
+  return <RemoteTabs value={remote}><RemoteStore {...section} /></RemoteTabs>;
+}
+
+function RemoteStore(section: Section) {
+  const tabs = useTabs();
+  return <ServerSection tabs={tabs} {...section} />;
+}
+
+// A section reads its server's rows, so its tabs' titles and badges are that server's. With more than one server it has a
+// header that folds it, counting while folded the tabs that wait for this person there.
+function ServerSection({ tabs, ...section }: Section & { tabs: TabStoreValue }) {
+  const sidebar = useContext(Sidebar), view = sidebar.servers[tabs.name], value = useMemo(() => view ? { ...sidebar, ...view } : sidebar, [sidebar, view]);
+  const [menu, setMenu] = useState<CardMenu>(), [editing, setEditing] = useState<string>(), [renaming, setRenaming] = useState<string>();
+  const [picked, setPicked] = useState<Picked>({ at: "", space: "", paths: new Set() }), node = useRef<HTMLDivElement>(null);
+  const label = section.titled ? serverLabel(tabs.name) : "", shut = section.titled && (section.folds[`@${tabs.name}`] ?? false);
+  const card: Card = { ...section, tabs, label, picked, setPicked, editing, setEditing, renaming, setRenaming, setMenu, refocus: (space) => selected(node, space)?.focus() };
+  return <Sidebar.Provider value={value}><TabStore.Provider value={tabs}>
+    {tabs.viewed ? null : <TabSettling />}
+    <div ref={node} data-server={tabs.name} className="flex shrink-0 flex-col">
+      {section.titled ? <ServerHeader tabs={tabs} shut={shut} waiting={section.waiting} onFold={() => section.setFold(`@${tabs.name}`, !shut)} /> : null}
+      {shut ? null : <ServerCards {...card} />}
     </div>
-    <div className="mx-2.5 mt-1 h-px shrink-0 bg-border" />
+    <CardMenuPopup tabs={tabs} menu={menu} setMenu={setMenu} picked={picked} setEditing={setEditing} node={node} />
+    <GroupEditor tabs={tabs} node={node} />
+  </TabStore.Provider></Sidebar.Provider>;
+}
+
+function ServerHeader({ tabs, shut, waiting, onFold }: { tabs: TabStoreValue; shut: boolean; waiting: Set<string>; onFold: () => void }) {
+  const { rows, offline } = useContext(Sidebar);
+  const paths = [...tabs.state.tabs.flatMap((tab) => isKeeper(tab) || tabs.parked.has(tab.path) ? [] : [tab.path]), ...tabs.shared.map((tab) => tab.path)];
+  const count = shut ? cardWork(tabs.name, paths, rows, waiting).work.size : 0;
+  return <button type="button" aria-expanded={!shut} aria-label={serverLabel(tabs.name)} className="mx-1 mt-2 flex shrink-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={onFold}>
+    <ChevronDown aria-hidden="true" className={cn("size-3.5 transition-transform", shut && "-rotate-90")} /><span className="truncate">{serverLabel(tabs.name)}</span>
+    {offline ? <span className="font-normal normal-case">· offline</span> : null}
+    {count ? <span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-blue-500 px-1.5 text-center text-[11px] font-semibold tracking-normal text-white">{count}</span> : null}
+  </button>;
+}
+
+// Another server's cards wait for its saved tabs, saying why while it does not answer.
+function ServerCards(card: Card) {
+  const status = useRemoteStatus(card.tabs.viewed ? "" : card.tabs.name);
+  if (!card.tabs.viewed && card.tabs.state.owner === undefined) return <p role="status" className="mx-2 my-1 text-xs text-muted-foreground">{status.text || "Loading…"}</p>;
+  return <>
+    <SharedCard {...card} />
+    {card.tabs.state.spaces.map((space) => <SpaceCard key={space.id} space={space} {...card} />)}
   </>;
+}
+
+const cardClass = (current: boolean) => cn("mx-1 mt-1 flex shrink-0 flex-col rounded-lg border p-0.5", current ? "border-primary/20 bg-accent/50 shadow-sm" : "bg-muted/40");
+
+// Every card is headed alike: its name, which a space's card enters it by, a spinner while a turn runs in it, a count
+// of its tabs waiting for this person, Needs you while one asks, its actions, shown while the heading is hovered or
+// focused, and the chevron that folds it.
+function CardHeading({ icon: Icon, name, go, title, count, asking, running, folded, foldLabel, onFold, children }: { icon: typeof Folder; name: string; go?: { label: string; current: boolean; run: () => void }; title?: ReactNode; count: number; asking: boolean; running: boolean; folded: boolean; foldLabel: string; onFold: () => void; children?: ReactNode }) {
+  const body = <>
+    <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /><span className={cn("truncate", count ? "font-bold" : "font-medium")}>{name}</span>
+    {running ? <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground motion-safe:animate-spin" /> : null}
+    {count ? <span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-blue-500 px-1.5 text-center text-[11px] font-semibold text-white">{count}</span> : null}
+  </>;
+  const description = [count && `${count} waiting`, running && "Turn running"].filter(Boolean).join(", "), box = "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-[13px]";
+  return <div className="group/heading flex shrink-0 items-center gap-0.5">
+    {title ?? (go ? <button type="button" aria-label={go.label} aria-current={go.current || undefined} aria-description={description} className={cn(box, "hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring")} onClick={go.run}>{body}</button>
+      : <span aria-description={description} className={box}>{body}</span>)}
+    {asking ? needsYou : null}
+    {children}
+    <button type="button" aria-expanded={!folded} aria-label={foldLabel} className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={onFold}>
+      <ChevronDown aria-hidden="true" className={cn("size-3.5 transition-transform", folded && "-rotate-90")} />
+    </button>
+  </div>;
+}
+
+// A space's card, the same whichever space is current and on whichever server's page: the current space's is tinted, and
+// its name is marked current.
+// Every card starts unfolded; folded, it lists only its tabs that wait for this person or ask them something, and the
+// tab in view.
+function SpaceCard({ space, ...card }: Card & { space: Space }) {
+  const { tabs, label, waiting, folds, setFold, renaming, setRenaming } = card, { rows } = useContext(Sidebar), suffix = label && ` on ${label}`, key = `${tabs.name}/${space.id}`;
+  const strip = tabs.stripOf(space.id), { work, asking, running } = cardWork(tabs.name, strip.flatMap((tab) => isKeeper(tab) ? [] : [tab.path]), rows, waiting);
+  const folded = folds[key] ?? false, listed = folded ? strip.filter((tab) => work.has(tab.path) || tab.path === tabs.pathname) : strip;
+  const current = tabs.viewed && space.id === tabs.state.space;
+  return <div className={cardClass(current)}>
+    <CardHeading icon={folded ? Folder : FolderOpen} name={space.name} go={{ label: `Go to ${space.name}${suffix}`, current, run: () => tabs.enter(space.id) }} count={work.size} asking={asking} running={running} folded={folded} foldLabel={`Show all ${space.name} tabs${suffix}`} onFold={() => setFold(key, !folded)}
+      title={renaming === space.id ? <SpaceName name={space.name} rename={(name) => tabs.renameSpace(space.id, name)} done={() => setRenaming(undefined)} /> : undefined}>
+      <SpaceActions tabs={tabs} space={space} label={`${space.name} space actions${suffix}`} renaming={renaming === space.id} rename={setRenaming} />
+    </CardHeading>
+    <CardTabs {...card} space={space} listed={listed} />
+  </div>;
+}
+
+// Renaming edits the name in place of the button, as Base UI's Menu takes printable keys. Escape empties the field, and
+// leaving it blank keeps the old name.
+function SpaceName({ name, rename, done }: { name: string; rename: (name: string) => void; done: () => void }) {
+  return <input ref={(node) => node?.focus()} aria-label="Space name" defaultValue={name} className="m-0.5 min-w-0 flex-1 rounded-md bg-background px-2 py-1 text-[13px] outline-1 -outline-offset-1 outline-ring"
+    onFocus={(event) => event.currentTarget.select()}
+    onKeyDown={(event) => {
+      if (event.key === "Escape") { event.preventDefault(); event.currentTarget.value = ""; }
+      if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
+    }}
+    onBlur={(event) => { const value = event.currentTarget.value.trim(); if (value) rename(value); done(); }} />;
+}
+
+// A space's actions change it for everyone: a new space, which is then named, renaming, and deleting while it is not the
+// server's last. Someone limited to their own sessions has none.
+function SpaceActions({ tabs, space, label, renaming, rename }: { tabs: TabStoreValue; space: Space; label: string; renaming: boolean; rename: (space?: string) => void }) {
+  const limited = useQuery(queries.identity(tabs.name)).data?.limited, item = "flex cursor-default items-center rounded-md px-1.5 py-1 text-sm outline-none focus:bg-accent focus:text-accent-foreground";
+  if (limited) return null;
+  return <DropdownMenu>
+    <Menu.Trigger aria-label={label} className="hidden size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground group-focus-within/heading:flex group-hover/heading:flex hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring data-popup-open:flex"><Ellipsis aria-hidden="true" className="size-3.5" /></Menu.Trigger>
+    <DropdownMenuContent finalFocus={!renaming} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="w-auto min-w-40">
+      <Menu.Item className={item} disabled={tabs.pending} onClick={() => void tabs.addSpace().then((id) => id && rename(id))}>New space</Menu.Item>
+      <Menu.Item className={item} onClick={() => rename(space.id)}>Rename space</Menu.Item>
+      {tabs.state.spaces.length > 1 ? <Menu.Item className={item} onClick={() => void tabs.deleteSpace(space.id)}>Delete space</Menu.Item> : null}
+    </DropdownMenuContent>
+  </DropdownMenu>;
+}
+
+// A card's tabs: its groups, each under its name, and its tabs, which open, close, select, reorder by dragging within the
+// card or by Shift+Arrow, and take their menu. Double-clicking its empty space starts a session in its space.
+function CardTabs({ tabs, space, listed, label, picked, setPicked, setMenu, newChat, waiting, editing, setEditing, refocus }: Card & { space: Space; listed: Tab[] }) {
+  const { pathname } = tabs, key = `${tabs.name}/${space.id}`, selection = selectionIn(tabs, picked, space.id);
+  const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
+  const groupOf = (tab: Tab) => tabs.state.groups.find((item) => item.id === tab.group);
+  const stop = listed.some((tab) => tab.path === pathname) ? pathname : listed.find((tab) => !isKeeper(tab) && !groupOf(tab)?.collapsed)?.path;
+  const pick = (paths: string[]) => setPicked({ at: pathname, space: space.id, paths: new Set(paths) });
+  return <div role="tablist" data-card={space.id} aria-label={`${space.name} tabs${label && ` on ${label}`}`} aria-orientation="vertical" className="flex min-h-1 flex-col gap-0.5 rounded-md pb-1 [&_[role=tab]]:py-1"
+    // A selecting click keeps the tab in view; Shift+click selects the listed tabs from it, or the first, to the one
+    // clicked. Any other click drops the selection and opens the tab.
+    onClickCapture={(event) => {
+      const path = pathOf(event);
+      if (!path || !(event.target as Element).closest('[role="tab"]')) return;
+      const rendered = [...event.currentTarget.querySelectorAll<HTMLElement>("[data-tab]")].map((node) => node.dataset.tab!);
+      const [from, to] = [Math.max(rendered.indexOf(pathname), 0), rendered.indexOf(path)].toSorted((a, b) => a - b);
+      if (event.shiftKey) pick(rendered.slice(from, to + 1));
+      else if (event.metaKey || event.ctrlKey) pick([...selection.symmetricDifference(new Set([path]))]);
+      else return pick([]);
+      event.stopPropagation();
+    }}
+    onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
+    onDoubleClick={(event) => { if (event.target === event.currentTarget) return tabs.viewed && space.id === tabs.state.space ? newChat() : tabs.newIn(space.id); }}
+    onAuxClick={(event) => {
+      const path = pathOf(event);
+      if (event.button !== 1 || !path) return;
+      event.preventDefault();
+      tabs.close([path]);
+    }}
+    onDragStart={(event) => {
+      const group = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group;
+      dragging = key;
+      event.dataTransfer.setData(group ? "application/x-rocketclaw-group" : "application/x-rocketclaw-tab", group ?? pathOf(event)!);
+    }}
+    onDragOver={(event) => { if (dragging === key) event.preventDefault(); }}
+    onDragEnd={() => { dragging = ""; }}
+    // A group header stands for its first tab, the only drop target a collapsed group shows, or an empty group's
+    // placeholder, so a tab dropped there joins it.
+    onDrop={(event) => {
+      const header = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group, group = event.dataTransfer.getData("application/x-rocketclaw-group");
+      const path = pathOf(event) ?? listed.find((tab) => !!header && tab.group === header)?.path;
+      if (path && group) tabs.moveGroup(group, path);
+      else if (path) tabs.move(event.dataTransfer.getData("application/x-rocketclaw-tab"), path);
+    }}
+    onKeyDown={(event) => {
+      const target = event.target as HTMLElement;
+      if (target.role === "tab" && (event.key === "Enter" || event.key === " ")) {
+        event.preventDefault();
+        return target.click();
+      }
+      if (target.role === "tab" && event.key === "Escape" && selection.size > 1) {
+        event.preventDefault();
+        return pick([]);
+      }
+      tabKeys(event, pathname, (path, anchor) => setMenu({ path, anchor, space: space.id }), tabs.move);
+    }}>
+    {listed.flatMap((tab, index) => {
+      const group = groupOf(tab), head = group && listed[index - 1]?.group !== group.id;
+      return [
+        head ? <GroupHeader key={group.id} tabs={tabs} group={group} listed={listed} waiting={waiting} /> : null,
+        <CardEntry key={tab.path} tabs={tabs} tab={tab} group={group} listed={listed} space={space} label={label} chosen={tab.path !== pathname && selection.has(tab.path)} stop={tab.path === stop} editing={editing} setEditing={setEditing} setMenu={setMenu} refocus={refocus} />,
+      ];
+    })}
+  </div>;
+}
+
+// An expanded empty group offers New session, which starts one in the group; a collapsed group shows only its tab in view.
+function CardEntry({ tab, group, listed, space, label, chosen, stop, tabs, editing, setEditing, setMenu, refocus }: Pick<Card, "tabs" | "editing" | "setEditing" | "setMenu" | "refocus"> & { tab: Tab; group?: TabGroup; listed: Tab[]; space: Space; label: string; chosen: boolean; stop: boolean }) {
+  if (isKeeper(tab)) return group!.collapsed || listed.some((item) => item.group === group!.id && !isKeeper(item)) ? null
+    : <button type="button" data-tab={tab.path} aria-label={`New session in ${groupName(group!)}`} className="flex shrink-0 items-center rounded-md text-sm text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring" onClick={() => tabs.newInGroup(group!.id)}>
+      <span className={cn("pointer-events-none my-1.5 ml-1 w-0.5 shrink-0 self-stretch", groupColors[group!.color])} />
+      <span className="flex items-center gap-1.5 py-2 pr-3 pl-3"><SquarePen aria-hidden="true" className="size-4 shrink-0" />New session</span>
+    </button>;
+  if (group?.collapsed && tab.path !== tabs.pathname) return null;
+  const description = [chosen && "In selection", `${group ? `Group ${groupName(group)}, ` : ""}Space: ${space.name}${label && `, ${label}`}`].filter(Boolean).join(", ");
+  return <TabItem tab={tab} description={description} chosen={chosen} rule={group?.color} active={tab.path === tabs.pathname} stop={stop} editing={tab.path === editing} endEdit={() => setEditing(undefined)}
+    open={() => tabs.go(tab.path, space.id)} close={() => { flushSync(() => tabs.close([tab.path])); refocus(space.id); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor, space: space.id })} />;
+}
+
+// A collapsed group's name goes bold, like an unread tab's title, while any of its tabs waits for this person, and it
+// says it needs you while any of their sessions waits on this person's answer. Shift+Arrow moves the group past the tab
+// or group next to it, and its menu key or right-click opens its editor.
+function GroupHeader({ tabs, group, listed, waiting }: { tabs: TabStoreValue; group: TabGroup; listed: Tab[]; waiting: Set<string> }) {
+  const { rows } = useContext(Sidebar), hidden = new Set(group.collapsed ? listed.flatMap((item) => item.group === group.id && !isKeeper(item) ? [item.path] : []) : []);
+  const unread = [...hidden].some((path) => waiting.has(rowKey(path, tabs.name))), asking = hidden.size > 0 && rows.some((row) => row.asking && hidden.has(rowPath(row)));
+  const openEditor = () => tabs.setEditor({ id: group.id, open: true });
+  return <div data-group={group.id} draggable className="flex shrink-0 items-center pt-1" onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
+    <button type="button" aria-expanded={!group.collapsed} aria-label={groupName(group)} className="flex h-7 min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => tabs.edit(group.id, { collapsed: !group.collapsed })}
+      onKeyDown={(event) => {
+        if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") { event.preventDefault(); openEditor(); }
+        const button = event.currentTarget, step = event.shiftKey ? arrows[event.key] : 0;
+        const neighbor = step && listed[step < 0 ? listed.findIndex((item) => item.group === group.id) - 1 : listed.findLastIndex((item) => item.group === group.id) + 1];
+        if (!neighbor) return;
+        event.preventDefault();
+        flushSync(() => tabs.moveGroup(group.id, neighbor.path));
+        button.focus();
+      }}>
+      <span className={cn("rounded-full", group.name ? cn("max-w-48 truncate px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium") : "size-3", groupColors[group.color])}>{group.name}</span>
+    </button>
+    {asking ? needsYou : null}
+    <button type="button" aria-label={`Edit ${groupName(group)}`} className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={openEditor}><Ellipsis className="size-3.5" /></button>
+  </div>;
+}
+
+// A server's Shared card lists every space's Shared tabs, the same for everyone, in this person's order, under their
+// space's name when the server has more than one space, and hides while there are none. Its rows open in their space
+// without a tab of their own; only their menu changes them for everyone, and dragging one onto another of its space, or
+// Shift+Arrow, reorders it for this person alone.
+function SharedCard({ tabs, label, waiting, folds, setFold, editing, setEditing, setMenu }: Card) {
+  const { rows } = useContext(Sidebar), { state, pathname } = tabs, suffix = label && ` on ${label}`, key = `${tabs.name}#shared`, folded = folds[key] ?? false;
+  const lists = state.spaces.flatMap((space) => { const paths = tabs.sharedIn(space.id); return paths.length ? [{ space, paths }] : []; });
+  const { work, asking, running } = cardWork(tabs.name, lists.flatMap((list) => list.paths), rows, waiting);
+  if (!lists.length) return null;
+  const active = (space: string, path: string) => tabs.viewed && space === state.space && path === pathname;
+  const shown = lists.map(({ space, paths }) => ({ space, paths: folded ? paths.filter((path) => work.has(path) || active(space.id, path)) : paths })).filter((list) => list.paths.length);
+  const rowOf = (node: Element) => node.closest<HTMLElement>("[data-shared]")?.dataset.shared?.split("\n") ?? [];
+  const listed = shown.flatMap(({ space, paths }) => paths.map((path) => ({ space: space.id, path }))), stop = listed.find((row) => active(row.space, row.path)) ?? listed[0];
+  return <div className={cardClass(false)}>
+    <CardHeading icon={Users} name="Shared" count={work.size} asking={asking} running={running} folded={folded} foldLabel={`Show all Shared tabs${suffix}`} onFold={() => setFold(key, !folded)} />
+    {shown.length ? <div role="tablist" aria-label={`Shared tabs${suffix}`} aria-orientation="vertical" className="flex flex-col gap-0.5 rounded-md [&_[role=tab]]:py-1"
+      onKeyDown={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.role !== "tab" || (event.key !== "Enter" && event.key !== " ")) return tabKeys(event, pathname, (path, anchor) => setMenu({ path, anchor, space: rowOf(anchor as Element)[0], shared: true }), tabs.moveShared);
+        event.preventDefault();
+        target.click();
+      }}
+      onDragStart={(event) => { dragging = key; event.dataTransfer.setData(sharedDrag, rowOf(event.target as Element).join("\n")); }}
+      onDragOver={(event) => { if (dragging === key) event.preventDefault(); }}
+      onDragEnd={() => { dragging = ""; }}
+      onDrop={(event) => {
+        const [space, from] = event.dataTransfer.getData(sharedDrag).split("\n"), [there, to] = rowOf(event.target as Element);
+        if (to && there === space) tabs.moveShared(from, to);
+      }}>
+      {shown.map(({ space, paths }) => <Fragment key={space.id}>
+        {state.spaces.length > 1 ? <span className={cn("mt-1 ml-1.5 w-fit max-w-48 truncate rounded-full px-2 py-0.5 text-xs font-medium text-black", groupColors.Grey)}>{space.name}</span> : null}
+        {paths.map((path) => <div key={path} data-shared={`${space.id}\n${path}`}>
+          <TabItem tab={{ path, search: sharedTab(tabs.shared, space.id, path)?.search }} shared space={space.id} open={() => tabs.go(path, space.id, true)} description={`Shared, Space: ${space.name}${label && `, ${label}`}`} chosen={false} rule="Grey" active={active(space.id, path)} stop={stop?.space === space.id && stop.path === path} editing={editing === `shared:${path}`} endEdit={() => setEditing(undefined)} openMenu={(anchor) => setMenu({ path, anchor, space: space.id, shared: true })} />
+        </div>)}
+      </Fragment>)}
+    </div> : null}
+  </div>;
+}
+
+// A section's tab menu acts on the selected tabs of the menu's space when it opened on one of them, else on its own tab.
+function CardMenuPopup({ tabs, menu, setMenu, picked, setEditing, node }: { tabs: TabStoreValue; menu?: CardMenu; setMenu: (menu?: CardMenu) => void; picked: Picked; setEditing: (key?: string) => void; node: RefObject<HTMLDivElement | null> }) {
+  const view = useContext(Sidebar), { setCommand } = useContext(SessionCommands);
+  const selection = menu ? selectionIn(tabs, picked, menu.space) : new Set<string>(), targets = menu && !selection.has(menu.path) ? new Set([menu.path]) : selection;
+  const items = !menu ? [] : [...pullRequestItems(menu, targets.size === 1, tabs.name), ...menuItems(tabs, menu, view, targets, () => setEditing(`${menu.shared ? "shared:" : ""}${menu.path}`), (id) => setCommand({ mode: "delete", source: id }))];
+  // Only this person's tabs leave their card; Shared rows stay where they are.
+  return <TabMenu items={items} anchor={menu?.anchor} close={() => setMenu(undefined)} refocus={(key) => !menu?.shared && /^(close|park|unpark)/.test(key) ? selected(node, menu?.space) ?? true : true} />;
+}
+
+// A tab menu draws a line between its sections and gathers each submenu's items under it.
+function TabMenu({ items, anchor, close, refocus }: { items: TabCommand[]; anchor?: MenuAnchor; close: () => void; refocus: (key: string) => HTMLElement | boolean }) {
+  const chosen = useRef("");
+  const option = ({ key, label, run }: TabCommand) => <Menu.Item key={key} onClick={() => { chosen.current = key; run(); }} className={itemClass}>{label}</Menu.Item>;
+  return <Menu.Root open={!!anchor} onOpenChange={(open) => { if (!open) close(); }}>
+    <Menu.Portal><Menu.Positioner anchor={anchor} sideOffset={4} align="start" className="z-50 outline-none"><Menu.Popup finalFocus={() => { const key = chosen.current; chosen.current = ""; return /^(rename|group-new)$|pick$/.test(key) ? false : refocus(key); }} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className={popupClass}>
+      {items.map((item, i) => {
+        const entry = !item.sub ? option(item) : item !== items.find((other) => other.sub?.menu === item.sub!.menu) ? null : <Menu.SubmenuRoot key={item.sub.menu}>
+          <Menu.SubmenuTrigger className={cn(itemClass, "justify-between gap-4 data-popup-open:bg-accent")}>{item.sub.menu}<ChevronRight className="size-4" /></Menu.SubmenuTrigger>
+          <Menu.Portal><Menu.Positioner className="z-50 outline-none"><Menu.Popup className={popupClass}>{items.filter((other) => other.sub?.menu === item.sub!.menu).map((other, j, subs) => {
+            const section = (key: string) => submenuSections.findIndex((pattern) => pattern.test(key)), entry = option({ ...other, label: other.sub!.label });
+            return j > 0 && section(other.key) !== section(subs[j - 1].key) ? [<Menu.Separator key={`line-${other.key}`} className="-mx-1 my-1 h-px bg-border" />, entry] : entry;
+          })}</Menu.Popup></Menu.Positioner></Menu.Portal>
+        </Menu.SubmenuRoot>;
+        return entry && i > 0 && menuSection(item.key) !== menuSection(items[i - 1].key) ? [<Menu.Separator key={`line-${item.key}`} className="-mx-1 my-1 h-px bg-border" />, entry] : entry;
+      })}
+    </Menu.Popup></Menu.Positioner></Menu.Portal>
+  </Menu.Root>;
+}
+
+// A group's name field lives in a popover because menus take typed letters for type-ahead.
+function GroupEditor({ tabs, node }: { tabs: TabStoreValue; node: RefObject<HTMLDivElement | null> }) {
+  const { editor, setEditor, edit, groupCommands } = tabs, group = tabs.state.groups.find((item) => item.id === editor?.id);
+  const header = () => node.current?.querySelector<HTMLElement>(`[data-group="${editor?.id}"]`) ?? null;
+  return <Popover.Root open={!!editor?.open && !!group} onOpenChange={(open) => setEditor((current) => current && { ...current, open })}>
+    <Popover.Portal><Popover.Positioner anchor={header} sideOffset={4} align="start" className="z-50 outline-none"><Popover.Popup aria-label="Edit group" finalFocus={() => header()?.querySelector("button") ?? selected(node) ?? true} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="flex w-56 flex-col gap-2 rounded-md border bg-popover p-2 text-popover-foreground shadow-md outline-none">
+      {group ? <>
+        {/* Leaving the field saves the name, as tab state redraws the whole app; a save per key made typing lag. */}
+        <Input aria-label="Group name" placeholder="Name this group" defaultValue={group.name} onBlur={(event) => { if (event.target.value !== group.name) edit(group.id, { name: event.target.value }); }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
+            if (event.key === "Enter") setEditor({ id: group.id, open: false });
+          }} />
+        <div role="radiogroup" aria-label="Group color" className="flex flex-wrap gap-2 px-1 py-1">
+          {Object.entries(groupColors).map(([color, background]) => <input key={color} type="radio" name="group-color" aria-label={color} checked={group.color === color} onChange={() => edit(group.id, { color })} className={cn("size-5 cursor-pointer appearance-none rounded-full checked:outline-2 checked:outline-offset-2 checked:outline-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring", background)} />)}
+        </div>
+        {groupCommands(group.id).map(({ key, label, run }) => <button key={key} type="button" className="flex rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => { setEditor({ id: group.id, open: false }); run(); }}>{label}</button>)}
+      </> : null}
+    </Popover.Popup></Popover.Positioner></Popover.Portal>
+  </Popover.Root>;
 }
 
 // Parked lists this person's parked tabs of every space at the bottom of the strip, collapsed until they open it, and
 // shows the active one while collapsed. With more than one space it is a tree: each space with parked tabs is a branch
 // that folds on its own, again showing the active one while folded. A parked tab keeps its space, group and place among
-// their tabs, where unparking returns it. It is a list of its own, whose rows open, close and take their menu.
+// their tabs, where unparking returns it. It is a list of its own, whose rows open, close and take their menu: the page's
+// server's rows its whole menu, another server's Pull requests and their attention items, which act there.
 type ParkedRow = Tab & { shared?: boolean };
-type ParkedMenu = { path: string; anchor: MenuAnchor; away?: boolean; shelf?: ShelfTab };
+type ParkedMenu = { path: string; anchor: MenuAnchor; server: string; space: string; shared?: boolean };
+type ServerTree = { name: string; spaces: Space[]; tabs: Tab[]; shared: SavedTabs["shared"]; parked: Set<string> };
 const parkedPaths = (view: Pick<SidebarView, "rows" | "marks">) => new Set([...view.rows.flatMap((row) => row.parked ? [rowPath(row)] : []), ...(view.marks ?? []).flatMap((mark) => mark.parked ? [mark.path] : [])]);
 const parkedRows = (tabs: Tab[], shared: SavedTabs["shared"], parked: Set<string>): ParkedRow[] =>
   [...tabs.filter((tab) => parked.has(tab.path)), ...shared.flatMap((tab) => parked.has(tab.path) && !tabs.some((own) => own.path === tab.path) ? [{ ...tab, shared: true }] : [])];
 
-function useParkedTree({ state, shared, parked, pathname }: ReturnType<typeof useTabs>) {
+function useServerTrees({ state, shared, parked }: TabStoreValue): ServerTree[] {
   const { servers } = useContext(Sidebar), here = useServer();
-  const others = rocketclaws().length ? ["", ...rocketclaws().map((remote) => remote.name)].filter((name) => name !== here) : [];
-  const sections = [{ name: here, spaces: state.spaces, rows: parkedRows(state.tabs, shared, parked) }, ...others.flatMap((name) => {
-    const view = servers[name];
-    return view?.tabs ? [{ name, spaces: view.tabs.spaces, rows: parkedRows(view.tabs.state.tabs, view.tabs.shared, parkedPaths(view)) }] : [];
-  })].filter((section) => section.rows.length);
-  const folded = (id: string, otherwise = false) => state.groups.find((group) => group.id === id)?.collapsed ?? otherwise, collapsed = folded("parked", true);
+  return ["", ...rocketclaws().map((remote) => remote.name)].map((name) => {
+    const view = servers[name], saved = view?.tabs;
+    return name === here ? { name, spaces: state.spaces, tabs: state.tabs, shared, parked }
+      : { name, spaces: saved?.spaces ?? [], tabs: saved?.state.tabs ?? [], shared: saved?.shared ?? [], parked: view ? parkedPaths(view) : new Set<string>() };
+  });
+}
+
+function useParkedTree(tabs: TabStoreValue) {
+  const { state, pathname } = tabs, here = useServer(), [folds] = useFolds();
+  const sections = useServerTrees(tabs).map((tree) => ({ name: tree.name, spaces: tree.spaces, rows: parkedRows(tree.tabs, tree.shared, tree.parked) })).filter((section) => section.rows.length);
+  const collapsed = state.groups.find((group) => group.id === "parked")?.collapsed ?? true;
   const tree = sections.map((section) => {
-    const fold = `parked:@${section.name}`, shut = collapsed || (sections.length > 1 && folded(fold));
+    const fold = `parked:@${section.name}`, shut = collapsed || (sections.length > 1 && (folds[fold] ?? false));
     const branches = section.spaces.flatMap((space) => {
-      const id = section.name === here ? `parked:${space.id}` : `parked:${section.name}/${space.id}`, there = section.rows.filter((tab) => tab.space === space.id), closed = shut || folded(id);
+      const id = `parked:${section.name}/${space.id}`, there = section.rows.filter((tab) => tab.space === space.id), closed = shut || (folds[id] ?? false);
       return there.length ? [{ space, id, closed, there, shown: closed ? there.filter((tab) => section.name === here && tab.path === pathname) : there }] : [];
     });
     return { ...section, fold, shut, branches, count: branches.reduce((sum, branch) => sum + branch.there.length, 0) };
@@ -1884,10 +2081,21 @@ function useParkedTree({ state, shared, parked, pathname }: ReturnType<typeof us
   return { tree, visible, collapsed, here, count: tree.reduce((sum, section) => sum + section.count, 0), stop: (visible.find((tab) => tab.server === here && tab.path === pathname) ?? visible[0])?.key };
 }
 
-function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: ReturnType<typeof useTabs>; list: RefObject<HTMLDivElement | null>; editing?: string; endEdit: () => void; openMenu: (menu: ParkedMenu) => void; close: (path: string) => void }) {
-  const { pathname, fold } = tabs, { tree, visible, collapsed, here, count, stop } = useParkedTree(tabs), visit = useVisit(), sidebar = useContext(Sidebar);
+function ParkedSection({ tabs }: { tabs: TabStoreValue }) {
+  const [menu, setMenu] = useState<ParkedMenu>(), [editing, setEditing] = useState<string>(), list = useRef<HTMLDivElement>(null), sidebar = useContext(Sidebar), { setCommand } = useContext(SessionCommands);
+  const send = (server: string): Attend => (paths, action, until) => void tabsCall(server, { attention: { paths, action, until } }).then(sidebar.servers[server].invalidateQueries, () => undefined);
+  const items = !menu ? [] : menu.server === tabs.name ? [...pullRequestItems(menu, true, menu.server), ...menuItems(tabs, menu, sidebar, new Set([menu.path]), () => setEditing(menu.path), (id) => setCommand({ mode: "delete", source: id }))]
+    : [...pullRequestItems(menu, true, menu.server), ...attentionItems(sidebar.servers[menu.server], menu.path, [menu.path], send(menu.server), tabs.setPicking)];
+  return <TabStore.Provider value={tabs}>
+    <ParkedTabs tabs={tabs} list={list} editing={editing} endEdit={() => setEditing(undefined)} openMenu={setMenu} close={(path) => { flushSync(() => tabs.close([path])); selected(list)?.focus(); }} />
+    <TabMenu items={items} anchor={menu?.anchor} close={() => setMenu(undefined)} refocus={(key) => /^(close|park|unpark)/.test(key) ? selected(list) ?? true : true} />
+  </TabStore.Provider>;
+}
+
+function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: TabStoreValue; list: RefObject<HTMLDivElement | null>; editing?: string; endEdit: () => void; openMenu: (menu: ParkedMenu) => void; close: (path: string) => void }) {
+  const { pathname, fold } = tabs, { tree, visible, collapsed, here, count, stop } = useParkedTree(tabs), [, setFold] = useFolds(), visit = useVisit(), sidebar = useContext(Sidebar);
   const at = (node: Element) => visible.find((tab) => tab.key === node.closest<HTMLElement>("[data-parked]")?.dataset.parked);
-  const menuOf = (tab: ParkedRow, server: string, anchor: MenuAnchor) => openMenu({ path: tab.path, anchor, away: tab.shared, shelf: server === here ? undefined : { server, space: tab.space ?? "", path: tab.path } });
+  const menuOf = (tab: ParkedRow, server: string, anchor: MenuAnchor) => openMenu({ path: tab.path, anchor, server, space: tab.space ?? "", shared: tab.shared });
   const header = "flex w-full shrink-0 items-center gap-1.5 px-1.5 text-xs font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring";
   if (!count) return null;
   return <div className="flex max-h-1/3 shrink-0 flex-col gap-0.5 overflow-y-auto border-t px-1 pt-1 [scrollbar-width:thin]">
@@ -1908,11 +2116,11 @@ function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: R
         (event.target as HTMLElement).click();
       }}>
       {tree.map((section) => <Fragment key={section.name}>
-        {tree.length > 1 && !collapsed ? <button type="button" aria-expanded={!section.shut} aria-label={`Parked on ${section.name || "Local"}`} className={cn(header, "mt-1 h-7 rounded-md font-semibold text-foreground")} onClick={() => fold(section.fold, !section.shut)}>
-          <ChevronDown aria-hidden="true" className={cn("size-3.5", section.shut && "-rotate-90")} />{section.name || "Local"}{sidebar.servers[section.name]?.offline ? <span className="font-normal">· offline</span> : null}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-muted px-1.5 text-center text-[11px]">{section.count}</span>
+        {tree.length > 1 && !collapsed ? <button type="button" aria-expanded={!section.shut} aria-label={`Parked on ${serverLabel(section.name)}`} className={cn(header, "mt-1 h-7 rounded-md font-semibold text-foreground")} onClick={() => setFold(section.fold, !section.shut)}>
+          <ChevronDown aria-hidden="true" className={cn("size-3.5", section.shut && "-rotate-90")} />{serverLabel(section.name)}{sidebar.servers[section.name]?.offline ? <span className="font-normal">· offline</span> : null}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-muted px-1.5 text-center text-[11px]">{section.count}</span>
         </button> : null}
         {section.branches.map(({ space, id, closed, there, shown }) => <Fragment key={space.id}>
-          {section.spaces.length > 1 && !section.shut ? <button type="button" aria-expanded={!closed} aria-label={`Parked in ${space.name}${tree.length > 1 ? ` on ${section.name || "Local"}` : ""}`} className={cn(header, "mt-1 h-6 rounded-t-md bg-muted/50")} onClick={() => fold(id, !closed)}>
+          {section.spaces.length > 1 && !section.shut ? <button type="button" aria-expanded={!closed} aria-label={`Parked in ${space.name}${tree.length > 1 ? ` on ${serverLabel(section.name)}` : ""}`} className={cn(header, "mt-1 h-6 rounded-t-md bg-muted/50")} onClick={() => setFold(id, !closed)}>
             {closed ? <Folder aria-hidden="true" className="size-3.5" /> : <FolderOpen aria-hidden="true" className="size-3.5" />}{space.name}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-background px-1.5 text-center text-[11px]">{there.length}</span><ChevronDown aria-hidden="true" className={cn("size-3.5", closed && "-rotate-90")} />
           </button> : null}
           <div className={cn("flex flex-col [&_[role=tab]]:py-1", section.spaces.length > 1 && !section.shut && "rounded-b-md bg-muted/30 p-0.5")}>
@@ -1925,177 +2133,17 @@ function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: R
 }
 
 function ParkedItem({ tab, server, here, space, close, ...props }: { tab: ParkedRow; server: string; here: string; space: string; active: boolean; stop: boolean; editing: boolean; endEdit: () => void; close: () => void; openMenu: (anchor: MenuAnchor) => void }) {
-  const view = useContext(Sidebar).servers[server], description = `${tab.shared ? "Shared, " : ""}Space: ${space}${server === here ? "" : `, ${server || "Local"}`}`;
+  const view = useContext(Sidebar).servers[server], description = `${tab.shared ? "Shared, " : ""}Space: ${space}${server === here ? "" : `, ${serverLabel(server)}`}`;
   return <div data-parked={`${server}\n${tab.path}`}>
     {server === here ? <TabItem tab={tab} shared={tab.shared} description={description} chosen={false} close={tab.shared ? undefined : close} {...props} />
-      : <ShelfRow tab={{ server, space: tab.space ?? "", path: tab.path, search: tab.search }} rows={view?.rows ?? noRows} offline={view?.offline} shared={tab.shared} description={description} chosen={false} {...props} />}
+      : <RemoteRow tab={tab} view={view} offline={view?.offline} shared={tab.shared} description={description} chosen={false} {...props} />}
   </div>;
 }
 
-function SpaceTree({ tabs, waiting, newChat, refocus, openMenu, children }: { tabs: ReturnType<typeof useTabs>; waiting: Set<string>; newChat: () => void; refocus: () => void; openMenu: (path: string, anchor: MenuAnchor) => void; children: ReactNode }) {
-  const { spaces, space } = tabs.state, at = spaces.findIndex((item) => item.id === space);
-  const branch = (item: Space) => <SpaceBranch key={item.id} tabs={tabs} space={item} waiting={waiting} refocus={refocus} openMenu={openMenu} />;
-  return <>
-    {spaces.filter((_, index) => index < at).map(branch)}
-    <div className={cn("flex min-w-0 shrink-0 flex-col", spaces.length > 1 && "mx-1 mt-1 rounded-lg border border-primary/20 bg-accent/50 pb-0.5 shadow-sm")}>
-      <SpaceMenu tabs={tabs} name={spaces[at]?.name} />
-      <div className="flex flex-col [&_[role=tab]]:py-1">{children}</div>
-    </div>
-    {spaces.filter((_, index) => index > at).map(branch)}
-    <div className="min-h-4 flex-1" onDoubleClick={newChat} />
-  </>;
-}
-
-function SpaceBranch({ tabs, space, waiting, refocus, openMenu }: { tabs: ReturnType<typeof useTabs>; space: Space; waiting: Set<string>; refocus: () => void; openMenu: (path: string, anchor: MenuAnchor) => void }) {
-  const { state, shared, parked, pathname, fold, enter, open, close } = tabs, { rows } = useContext(Sidebar), inert = () => undefined;
-  const collapsed = state.groups.find((group) => group.id === `space:${space.id}`)?.collapsed ?? true;
-  const own = state.tabs.filter((tab) => tab.space === space.id && !isKeeper(tab) && !parked.has(tab.path)), rank = (path: string) => state.sharedOrder.indexOf(path) + 1 || Infinity;
-  const all: (Tab & { shared?: boolean })[] = [...shared.filter((tab) => tab.space === space.id && !own.some((item) => item.path === tab.path)).toSorted((a, b) => rank(a.path) - rank(b.path)).map((tab) => ({ ...tab, shared: true })), ...own];
-  const asking = new Set(rows.flatMap((row) => row.asking ? [rowPath(row)] : [])), paths = new Set(all.map((tab) => tab.path));
-  const work = all.filter((tab) => waiting.has(rowKey(tab.path, server())) || asking.has(tab.path)), running = rows.some((row) => row.running && !row.asking && paths.has(rowPath(row)));
-  const listed = collapsed ? work : all, go = (path: string) => { open(path, "", space.id); refocus(); };
-  const Icon = collapsed ? Folder : FolderOpen;
-  return <div className="mx-1 mt-1 flex shrink-0 flex-col rounded-lg border bg-muted/40 p-0.5">
-    <div className="flex shrink-0 items-center gap-0.5">
-      <button type="button" aria-label={`Go to ${space.name}`} aria-description={[work.length && `${work.length} waiting`, running && "Turn running"].filter(Boolean).join(", ")} className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-[13px] hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => { flushSync(() => enter(space.id)); refocus(); }}>
-        <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /><span className={cn("truncate", work.length ? "font-bold" : "font-medium")}>{space.name}</span>
-        {running ? <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground motion-safe:animate-spin" /> : null}
-        {work.length ? <span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-blue-500 px-1.5 text-center text-[11px] font-semibold text-white">{work.length}</span> : null}
-      </button>
-      {work.some((tab) => asking.has(tab.path)) ? needsYou : null}
-      <button type="button" aria-expanded={!collapsed} aria-label={`Show all ${space.name} tabs`} className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => fold(`space:${space.id}`, !collapsed)}>
-        <ChevronDown aria-hidden="true" className={cn("size-3.5 transition-transform", collapsed && "-rotate-90")} />
-      </button>
-    </div>
-    {listed.length ? <div role="tablist" aria-label={`${space.name} tabs`} aria-orientation="vertical" className="flex flex-col rounded-md bg-background/70 [&_[role=tab]]:py-1"
-      onClickCapture={(event) => {
-        const path = (event.target as Element).closest('[role="tab"]')?.closest<HTMLElement>("[data-tab]")?.dataset.tab;
-        if (!path) return;
-        event.stopPropagation();
-        go(path);
-      }}
-      onKeyDown={(event) => {
-        if ((event.target as HTMLElement).role !== "tab" || (event.key !== "Enter" && event.key !== " ")) return tabKeys(event, pathname, openMenu, inert);
-        event.preventDefault();
-        (event.target as HTMLElement).click();
-      }}
-      onDragStart={(event) => event.preventDefault()}>
-      {listed.map((tab, index) => {
-        const group = state.groups.find((item) => item.id === tab.group);
-        return <TabItem key={tab.path} tab={tab} shared={tab.shared} description={`${tab.shared ? "Shared, " : group ? `Group ${groupName(group)}, ` : ""}Space: ${space.name}`} detail={group && groupName(group)} chosen={false} rule={tab.shared ? "Grey" : group?.color} active={false} stop={index === 0} editing={false} endEdit={inert} close={() => { flushSync(() => close([tab.path])); refocus(); }} openMenu={(anchor) => openMenu(tab.path, anchor)} />;
-      })}
-    </div> : null}
-  </div>;
-}
-
-// The Top Shelf holds this person's tabs from any RocketClaw above the space picker, the same in every space and on every
-// server. Each opens where it is, in its space, without a tab of its own, and names its server and space. Like a group,
-// tabs dragged onto it join it, its tabs reorder by dragging or Shift+Arrow, and collapsed it shows only its active tab,
-// bold while a hidden one waits for this person and saying it needs you while a hidden one's session waits on their answer.
-// Its rows are found by position, as two servers can shelve the same path.
-function TopShelfTabs({ tabs, waiting, openMenu }: { tabs: ReturnType<typeof useTabs>; waiting: Set<string>; openMenu: (tab: ShelfTab, anchor: MenuAnchor) => void }) {
-  const shelf = useTopShelf() ?? noShelf, list = shelf.tabs ?? [], sidebar = useContext(Sidebar), here = useServer(), { state, pathname } = tabs, inert = () => undefined;
-  const active = (tab: ShelfTab) => (tab.server ?? "") === here && tab.path === pathname, rows = (tab: ShelfTab) => sidebar.servers[tab.server ?? ""]?.rows ?? noRows;
-  const hidden = shelf.collapsed ? list.filter((tab) => !active(tab)) : [];
-  const unread = hidden.some((tab) => waiting.has(rowKey(tab.path, tab.server))), asking = hidden.some((tab) => rows(tab).some((row) => row.asking && row.id === pathSession(tab.path)));
-  const whence = (tab: ShelfTab) => [tab.server || "Local", ((tab.server ?? "") === here ? state.spaces : sidebar.servers[tab.server ?? ""]?.tabs?.spaces)?.find((space) => space.id === tab.space)?.name].filter(Boolean).join(" · ");
-  const go = (tab: ShelfTab) => {
-    if ((tab.server ?? "") === here) return tabs.open(tab.path, "", state.spaces.some((space) => space.id === tab.space) ? tab.space : undefined);
-    arriving = tab.space;
-    navigate(tab.path, false, tab.server ?? "");
-  };
-  const move = (from: number, to: number) => saveShelf((current) => ({ ...current, tabs: moveQueueId(Object.keys(current.tabs ?? []), String(from), String(to)).map((at) => current.tabs![Number(at)]) }));
-  const at = (node: EventTarget) => Number((node as Element).closest<HTMLElement>("[data-shelf]")?.dataset.shelf ?? -1);
-  return <>
-    <div className="flex shrink-0 flex-col gap-0.5 px-1 pt-1">
-      <div className="flex shrink-0 items-center">
-        <button type="button" aria-expanded={!shelf.collapsed} className="flex h-7 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => saveShelf((current) => ({ ...current, collapsed: !current.collapsed }))}>
-          <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium", groupColors.Yellow)}><Pin aria-hidden="true" className="size-3" />Top Shelf</span>
-        </button>
-        {asking ? needsYou : null}
-      </div>
-      <div role="tablist" aria-label="Top Shelf" aria-orientation="vertical" className="flex min-h-7 flex-col gap-0.5"
-        // A row opens on its own server, in place of the tab's own navigation on this page's server.
-        onClickCapture={(event) => {
-          if (!(event.target as Element).closest('[role="tab"]')) return;
-          event.stopPropagation();
-          go(list[at(event.target)]);
-        }}
-        onKeyDown={(event) => {
-          // Shift+Arrow moves to the neighbour, the nearest row holding the path it names.
-          const from = at(event.target), near = (path: string) => list.reduce((best, tab, i) => tab.path === path && i !== from && Math.abs(i - from) < Math.abs(best - from) ? i : best, -1);
-          if (event.key !== "Enter" && event.key !== " ") return tabKeys(event, pathname, (_, anchor) => openMenu(list[at(anchor as Element)], anchor), (_, to) => move(from, near(to)));
-          event.preventDefault();
-          (event.target as HTMLElement).click();
-        }}
-        onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
-        onAuxClick={(event) => { if (event.button === 1 && list[at(event.target)]) unshelve(list[at(event.target)]); }}
-        onDragStart={(event) => event.dataTransfer.setData(shelfDrag, String(at(event.target)))}
-        onDragOver={(event) => event.preventDefault()}
-        // A shelved tab dropped on another moves there; a tab of this server dropped here joins the shelf.
-        onDrop={(event) => {
-          const from = event.dataTransfer.getData(shelfDrag), path = event.dataTransfer.getData("application/x-rocketclaw-tab") || event.dataTransfer.getData(sharedDrag), to = at(event.target);
-          if (from) move(Number(from), to < 0 ? list.length - 1 : to);
-          else if (path) tabs.commands(path, sidebar).find((item) => item.key === "shelve")?.run();
-        }}>
-        {list.map((tab, index) => shelf.collapsed && !active(tab) ? null : <div key={`${tab.server} ${tab.path}`} data-shelf={index}>
-          <ShelfRow tab={tab} rows={rows(tab)} offline={sidebar.servers[tab.server ?? ""]?.offline} description={`Top Shelf, ${whence(tab)}`} detail={whence(tab)} chosen={false} rule="Yellow" active={active(tab)} stop={active(tab) || (index === 0 && !list.some(active))} editing={false} endEdit={inert} close={() => unshelve(tab)} openMenu={(anchor) => openMenu(tab, anchor)} />
-        </div>)}
-      </div>
-    </div>
-    <div className="mx-2.5 mt-1 h-px shrink-0 bg-border" />
-  </>;
-}
-
-// A Top Shelf row reads its own server's sessions and tab rows, so its title and badges are that server's.
-function ShelfRow({ tab, rows, ...props }: { tab: ShelfTab; rows: Session[] } & Omit<ComponentProps<typeof TabItem>, "tab">) {
-  const sidebar = useContext(Sidebar), marks = sidebar.servers[tab.server ?? ""]?.marks, value = useMemo(() => ({ ...sidebar, rows, marks }), [sidebar, rows, marks]);
+// Another server's Parked row reads that server's sessions and tab rows, so its title and badges are that server's.
+function RemoteRow({ tab, view, ...props }: { tab: Tab; view?: ServerView } & Omit<ComponentProps<typeof TabItem>, "tab">) {
+  const sidebar = useContext(Sidebar), value = useMemo(() => view ? { ...sidebar, ...view } : sidebar, [sidebar, view]);
   return <Sidebar.Provider value={value}><TabItem tab={{ path: tab.path, search: tab.search }} {...props} /></Sidebar.Provider>;
-}
-
-// The space button opens the space menu; renaming edits the name in place of the button, as Base UI's Menu takes printable keys.
-function SpaceMenu({ tabs: { state, pending, enter, addSpace, renameSpace, deleteSpace }, name }: { tabs: ReturnType<typeof useTabs>; name?: string }) {
-  const [renaming, setRenaming] = useState(false);
-  const limited = useQuery(queries.identity()).data?.limited;
-  // With remote RocketClaws the picker is a tree: each server, local first, with its spaces.
-  const here = useServer(), servers = rocketclaws().length ? ["", ...rocketclaws().map((remote) => remote.name)] : [here];
-  const box = "m-0.5 mb-0 flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[13px] font-bold";
-  const item = "flex cursor-default items-center rounded-md px-1.5 py-1 text-sm outline-none focus:bg-accent focus:text-accent-foreground";
-  return <DropdownMenu>
-    {renaming ? <input ref={(node) => node?.focus()} aria-label="Space name" defaultValue={name} className={cn(box, "w-36 bg-background font-normal outline-1 -outline-offset-1 outline-ring")}
-      onFocus={(event) => event.currentTarget.select()}
-      onKeyDown={(event) => {
-        // Escape empties the field, and leaving it blank keeps the old name.
-        if (event.key === "Escape") { event.preventDefault(); event.currentTarget.value = ""; }
-        if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
-      }}
-      onBlur={(event) => { const value = event.currentTarget.value.trim(); if (value) renameSpace(value); setRenaming(false); }} />
-      : <Menu.Trigger aria-label={`Space: ${here ? `${here} / ${name}` : name}`} disabled={state.owner === undefined && !here} className={cn(box, "cursor-pointer hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring")}><FolderOpen aria-hidden="true" className="size-4 text-muted-foreground" /><span className="max-w-32 truncate">{here ? `${here} / ${name}` : name}</span><ChevronDown aria-hidden="true" className="size-3.5 text-muted-foreground" /></Menu.Trigger>}
-    <DropdownMenuContent finalFocus={!renaming} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="w-auto min-w-44">
-      {servers.map((server) => server === here ? <Menu.Group key={server}>
-        {servers.length > 1 ? <Menu.GroupLabel className="px-1.5 py-1 text-xs text-muted-foreground">{server || "Local"}</Menu.GroupLabel> : null}
-        <DropdownMenuRadioGroup value={state.space} onValueChange={(id: string) => enter(id)}>
-          {state.spaces.map((space) => <DropdownMenuRadioItem key={space.id} value={space.id} closeOnClick>{space.name}</DropdownMenuRadioItem>)}
-        </DropdownMenuRadioGroup>
-      </Menu.Group> : <ServerSpaces key={server} name={server} item={item} />)}
-      {limited ? null : <Menu.Group className="mt-1 border-t pt-1">
-        <Menu.Item className={item} disabled={pending} onClick={() => void addSpace().then(() => setRenaming(true))}>New space</Menu.Item>
-        <Menu.Item className={item} onClick={() => setRenaming(true)}>Rename space</Menu.Item>
-        {state.spaces.length > 1 ? <Menu.Item className={item} onClick={deleteSpace}>Delete space</Menu.Item> : null}
-      </Menu.Group>}
-    </DropdownMenuContent>
-  </DropdownMenu>;
-}
-
-// Another server's spaces, from its saved tabs; choosing one enters it on that server.
-function ServerSpaces({ name, item }: { name: string; item: string }) {
-  const saved = useContext(Sidebar).servers[name]?.tabs, status = useRemoteStatus(name);
-  return <Menu.Group className="mt-1 border-t pt-1">
-    <Menu.GroupLabel className="px-1.5 py-1 text-xs text-muted-foreground">{name || "Local"}</Menu.GroupLabel>
-    {status.text ? <p className="max-w-72 px-1.5 py-1 text-xs text-muted-foreground">{status.text}</p> : null}
-    {saved ? saved.spaces.map((space) => <Menu.Item key={space.id} className={item} onClick={() => { arriving = space.id; navigate(entry(savedTabs(undefined, saved), space.id, saved.shared), false, name); }}>{space.name}</Menu.Item>)
-      : status.block ? null : <Menu.Item disabled className={item}>Loading…</Menu.Item>}
-  </Menu.Group>;
 }
 
 // Marks a session waiting on this person's answer, in its tab, its collapsed group, and its session row.
@@ -2125,9 +2173,10 @@ function timerText(mark?: Omit<TabAttention, "path">) {
   return mark?.parked ? mark.untilDone ? "Parked until it is done" : when ? `Parked until ${when}` : "Parked" : undefined;
 }
 
-// A detail line, such as a Top Shelf tab's server and space, sits under the title inside the tab, so the row's highlight
-// covers both. A row of a server that stopped answering is greyed and says so.
-function TabItem({ tab, description, detail, chosen, rule, active, stop, shared, offline, editing, endEdit, close, openMenu }: { tab: Tab; description: string; detail?: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; offline?: boolean; editing: boolean; endEdit: () => void; close?: () => void; openMenu: (anchor: MenuAnchor) => void }) {
+// A detail line, such as a parked tab's park, sits under the title inside the tab, so the row's highlight covers both. A
+// row of a server that stopped answering is greyed and says so. A Shared row names its space, which renaming it edits in.
+// Clicking a tab not in view opens it, by default on the page's server.
+function TabItem({ tab, description, detail, chosen, rule, active, stop, shared, space, offline, editing, endEdit, open = () => navigate(tab.path), close, openMenu }: { tab: Tab; description: string; detail?: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; space?: string; offline?: boolean; editing: boolean; endEdit: () => void; open?: () => void; close?: () => void; openMenu: (anchor: MenuAnchor) => void }) {
   const sidebar = useContext(Sidebar);
   const id = pathSession(tab.path);
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
@@ -2144,10 +2193,10 @@ function TabItem({ tab, description, detail, chosen, rule, active, stop, shared,
     {rule && <span className={cn("pointer-events-none my-1.5 ml-1 w-0.5 shrink-0 self-stretch", groupColors[rule])} />}
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className="flex min-w-0 flex-1" />}>
       <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={[description, activity, aside, offline && "Server offline"].filter(Boolean).join(", ")} tabIndex={stop ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
-        onClick={() => { if (!active) navigate(tab.path); }}>
+        onClick={() => { if (!active) open(); }}>
         <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 self-start" />
         <span className="flex min-w-0 flex-1 flex-col"><span className="flex min-w-0 items-center gap-1.5">
-          {editing ? <TabRename session={session} tab={tab} shared={shared} placeholder={title} endEdit={endEdit} /> : <><span className="truncate group-data-[unread=true]:font-bold group-data-[asking=true]:font-semibold group-data-[asking=true]:text-amber-600 dark:group-data-[asking=true]:text-amber-300 motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>{session.asking ? needsYou : null}</>}
+          {editing ? <TabRename session={session} tab={tab} shared={shared} space={space} placeholder={title} endEdit={endEdit} /> : <><span className="truncate group-data-[unread=true]:font-bold group-data-[asking=true]:font-semibold group-data-[asking=true]:text-amber-600 dark:group-data-[asking=true]:text-amber-300 motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>{session.asking ? needsYou : null}</>}
         </span><span aria-hidden="true" className="truncate text-xs text-muted-foreground empty:hidden">{[detail, aside].filter(Boolean).join(" · ")}</span></span>
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{offline ? `${title} · Server offline` : title}</TooltipContent></Tooltip>
@@ -2161,9 +2210,10 @@ function TabEnd({ shared, close, title }: { shared?: boolean; close?: () => void
   return close ? <button type="button" aria-label={`Close ${title}`} className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={close}><X className="size-3.5" /></button> : null;
 }
 
-// Enter and leaving the field save; Escape restores the old name first, so its blur saves nothing.
-function TabRename({ session, tab, shared, placeholder, endEdit }: { session: Session; tab: Tab; shared?: boolean; placeholder: string; endEdit: () => void }) {
-  const sidebar = useContext(Sidebar), { editSearch } = useContext(TabActions), search = isSearch(tab.path);
+// Enter and leaving the field save, on the server of the tab's section; Escape restores the old name first, so its blur
+// saves nothing.
+function TabRename({ session, tab, shared, space, placeholder, endEdit }: { session: Session; tab: Tab; shared?: boolean; space?: string; placeholder: string; endEdit: () => void }) {
+  const sidebar = useContext(Sidebar), page = useContext(TabActions), { editSearch, name: remote } = useContext(TabStore) ?? page, search = isSearch(tab.path);
   const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); endEdit(); } });
   const name = (search ? tab.search?.name : session.name) ?? "";
   const input = useRef<HTMLInputElement>(null);
@@ -2178,8 +2228,8 @@ function TabRename({ session, tab, shared, placeholder, endEdit }: { session: Se
     onBlur={(event) => {
       const value = event.currentTarget.value;
       if (value === name) endEdit();
-      else if (search) { editSearch(tab.path, { name: value }, shared); endEdit(); }
-      else update.mutate({ id: session.id, name: value });
+      else if (search) { editSearch(tab.path, { name: value }, shared, space); endEdit(); }
+      else update.mutate({ id: session.id, name: value, server: remote });
     }} />;
 }
 
@@ -3290,12 +3340,11 @@ function withQuery({ searches, active }: SavedSearches, query: string): SavedSea
 // page everyone there edits. A link's query opens once, in the page it led to; a page opened again in place, as when it
 // is shared, shows what it holds.
 function SearchPage() {
-  const { state, shared } = useContext(TabActions), path = usePathname(), inShared = sharedTab(shared, state.space, path), here = useServer();
-  const shelved = useTopShelf()?.tabs?.find((tab) => (tab.server ?? "") === here && tab.path === path);
+  const { state, shared } = useContext(TabActions), path = usePathname(), inShared = sharedTab(shared, state.space, path);
   const [pendingLink, setPendingLink] = useState({ path, search: location.search });
   if (pendingLink.path !== path) setPendingLink({ path, search: location.search });
   if (state.owner === undefined) return null;
-  return <SearchTabs key={`${state.owner} ${path} ${!!inShared}`} path={path} owner={state.owner} inShared={!!inShared} page={(inShared ?? state.tabs.find((tab) => tab.path === path) ?? shelved)?.search} link={pendingLink.search}
+  return <SearchTabs key={`${state.owner} ${path} ${!!inShared}`} path={path} owner={state.owner} inShared={!!inShared} page={(inShared ?? state.tabs.find((tab) => tab.path === path))?.search} link={pendingLink.search}
     consumeLink={() => setPendingLink((current) => current.search ? { path, search: "" } : current)} />;
 }
 

@@ -1168,20 +1168,10 @@ message SharedTab {
   SearchPage base = 4;
 }
 
-// TopShelf is one person's Top Shelf: tabs of any RocketClaw kept above the space picker, in their order, and whether
-// they collapsed it.
-message TopShelf {
-  repeated ShelfTab tabs = 1;
-  bool collapsed = 2;
-}
-
-// ShelfTab is a tab on the Top Shelf: the RocketClaw it is on, "" for this one, its space id and location there, and
-// for a Search tab the page it held when shelved.
-message ShelfTab {
-  string server = 1;
-  string space = 2;
-  string path = 3;
-  SearchPage search = 4;
+// Folds is whether each of one person's tab strip sections, space cards and Parked branches, on every RocketClaw, is
+// folded, by its key.
+message Folds {
+  map<string, bool> folded = 1;
 }
 
 // AttentionAction is what a person does to the attention of their tabs.
@@ -1211,11 +1201,11 @@ message AttentionChange {
 
 // TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space,
 // adds one tab to or removes one from a space's Shared group, changes the caller's attention on tabs, replaces the
-// caller's Top Shelf, or sets whether they auto-park every session.
+// caller's folds, or sets whether they auto-park every session.
 // revision is the saved revision the state was made from.
 message TabsRequest {
-  reserved 8, 9, 10, 13;
-  reserved "swap_shared", "mute", "unmute", "mark_unread";
+  reserved 8, 9, 10, 12, 13;
+  reserved "swap_shared", "mute", "unmute", "top_shelf", "mark_unread";
 
   TabState state = 1;
   string create_space = 2;
@@ -1226,19 +1216,20 @@ message TabsRequest {
   SharedTab unshare = 7;
   // edit_shared saves a Shared Search page's one page; a page no longer shared stays unshared.
   SharedTab edit_shared = 11;
-  TopShelf top_shelf = 12;
   AttentionChange attention = 14;
   // auto_park sets whether the caller auto-parks every session they chose nothing for.
   optional bool auto_park = 15;
+  // folds replaces the caller's folds when set.
+  Folds folds = 16;
 }
 
 // TabsResponse is every space, oldest first, and the caller's saved tab state and its revision.
 // stale reports a refused save: the state was made from an older revision than the one saved, or a Shared Search
 // page edit made from a page that has since changed.
-// shared is every space's Shared tabs, oldest added first. top_shelf is the caller's Top Shelf.
+// shared is every space's Shared tabs, oldest added first. folds is the caller's folds.
 message TabsResponse {
-  reserved 6;
-  reserved "mutes";
+  reserved 6, 8;
+  reserved "mutes", "top_shelf";
 
   repeated Space spaces = 1;
   TabState state = 2;
@@ -1247,11 +1238,11 @@ message TabsResponse {
   repeated SharedTab shared = 5;
   // unshared is the Search page a Search tab taken out of Shared held.
   SearchPage unshared = 7;
-  TopShelf top_shelf = 8;
   // closed is the caller's last 50 closed tabs, newest first, each with the space it was in and a Search tab's page.
   repeated Tab closed = 9;
   // auto_park is whether the caller auto-parks every session they chose nothing for.
   bool auto_park = 10;
+  Folds folds = 11;
 }
 
 // The first event answers the browser's SDP offer; the last ends the call.

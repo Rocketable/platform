@@ -12,10 +12,20 @@ test("a person limited to Ops sees and drives only Ops, and everything once unli
     page.on("request", (request: { url(): string; postData(): string }) => { if (request.url().endsWith("/api/Prompt")) prompts.push(JSON.parse(request.postData()).text); });
     let shots = 0;
     const shot = (name: string) => page.screenshot({ path: path.join(out, `${String(++shots).padStart(2, "0")}-${name}.png`) });
+    const currentSpace = (name: string) => page.locator(`button[aria-current="true"][aria-label="Go to ${name}"]`).waitFor();
+    // The spaces' cards, and the current one's actions, which someone limited to their own sessions has none of.
     const spaceMenu = async (current: string, name: string) => {
-      await page.getByRole("button", { name: `Space: ${current}`, exact: true }).click();
-      await page.getByRole("menuitemradio", { name: current, exact: true }).waitFor();
-      const listed = [await page.getByRole("menuitemradio").allInnerTexts(), await page.getByRole("menuitem").allInnerTexts()];
+      await currentSpace(current);
+      const spaces = await page.locator('[data-tab-lists] button[aria-label^="Go to "]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")!.slice("Go to ".length)));
+      await page.getByRole("button", { name: `Go to ${current}`, exact: true }).hover();
+      const actions = page.getByRole("button", { name: `${current} space actions`, exact: true });
+      if (!await actions.count()) {
+        await shot(name);
+        return [spaces, []];
+      }
+      await actions.click();
+      await page.getByRole("menuitem").first().waitFor();
+      const listed = [spaces, await page.getByRole("menuitem").allInnerTexts()];
       await shot(name);
       await page.keyboard.press("Escape");
       return listed;
@@ -47,7 +57,7 @@ test("a person limited to Ops sees and drives only Ops, and everything once unli
     const transcript = page.locator("#transcript-scroll");
 
     await page.goto(url);
-    await page.getByRole("button", { name: "Space: Ops", exact: true }).waitFor();
+    await currentSpace("Ops");
     await shot("limited-new-session");
     expect(await spaceMenu("Ops", "limited-space-menu-only-ops")).toEqual([["Ops"], []]);
     const ops = ["Ops: deploy checklist", "Ops: on-call handoff"];
@@ -69,7 +79,7 @@ test("a person limited to Ops sees and drives only Ops, and everything once unli
 
     expect(await page.evaluate(async () => (await fetch("/test/unlimit", { method: "POST" })).ok)).toBe(true);
     await page.goto(url);
-    await page.getByRole("button", { name: "Space: Ops", exact: true }).waitFor();
+    await currentSpace("Ops");
     await shot("unlimited-new-session");
     expect(await spaceMenu("Ops", "unlimited-space-menu-all-spaces")).toEqual([["Main", "Ops"], ["New space", "Rename space", "Delete space"]]);
     const every = ["Main: quarterly budget", "No space: scratch notes", ...ops];
@@ -78,7 +88,7 @@ test("a person limited to Ops sees and drives only Ops, and everything once unli
     await page.keyboard.press("Control+p");
     await page.getByRole("dialog", { name: "Go to session or command", exact: true }).getByText("Main: quarterly budget", { exact: true }).click();
     await transcript.getByText("Q4 spend is 8% under plan.", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Space: Main", exact: true }).waitFor();
+    await currentSpace("Main");
     await shot("unlimited-main-chat");
     expect(await agentsPage("main-agent", "unlimited-agents-page-all-agents")).toEqual(["loose", "main", "main-agent", "ops-agent", "voice"]);
     expect(errors).toEqual([]);

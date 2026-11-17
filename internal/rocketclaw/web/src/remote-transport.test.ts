@@ -102,81 +102,44 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await row.click();
   await page.waitForURL((url: URL) => url.pathname === chat);
 
-  // The remote chat goes on the Top Shelf, which names where it lives and keeps it after its tab closes.
-  observed.stage = "remote shelf";
-  const shelf = page.getByRole("tablist", { name: "Top Shelf" }), strip = page.getByRole("tablist", { name: "Open tabs" });
-  const chatTab = strip.locator('[data-tab^="/s/"]');
-  await chatTab.getByRole("button", { name: "Tab actions" }).click();
-  await page.getByRole("menuitem", { name: "Add to Top Shelf" }).click();
-  await shelf.getByText("work · Main").waitFor();
-  await chatTab.getByRole("button", { name: /^Close / }).click();
-  await chatTab.waitFor({ state: "detached" });
-  while (await page.evaluate(async (url: string) => (await (await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).state.tabs.some((tab: { path: string }) => tab.path.startsWith("/s/")), remote)) await Bun.sleep(100);
-  // From a local page, its attention items change the person's attention on the remote, which lists it parked, dimmed in
-  // place, until Unpark.
+  // On a local page the remote chat is in the remote's Main card, whose items act on the remote: Park moves it to
+  // Parked, whose Unpark puts it back, and opening it lands on its server, in its space.
+  observed.stage = "remote card";
   await page.goto(`${local}/`);
+  const chatTab = page.getByRole("tablist", { name: "Main tabs on work" }).locator('[data-tab^="/s/"]');
   const change = (action: string) => page.waitForRequest((request: { url(): string; postData(): string | null }) => request.url() === `${remote}/api/Tabs` && JSON.parse(request.postData()!).attention?.action === action);
   const parking = change("PARK");
-  await shelf.getByRole("tab").click({ button: "right" });
+  await chatTab.getByRole("tab").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Park", exact: true }).click();
   await page.getByRole("menuitem", { name: "Until I unpark", exact: true }).click();
   expect(JSON.parse((await parking).postData()).attention.paths).toEqual([chat.slice("/r/work".length)]);
-  await shelf.locator('[role="tab"][aria-description$=", Parked"]').waitFor();
+  await chatTab.waitFor({ state: "detached" });
+  const parked = page.getByRole("tablist", { name: "Parked tabs" });
+  await page.getByRole("button", { name: "Parked", exact: true }).click();
   const unparking = change("UNPARK");
-  await shelf.getByRole("tab").click({ button: "right" });
+  await parked.getByRole("tab").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Unpark", exact: true }).click();
   await unparking;
-  await shelf.locator('[role="tab"]:not([aria-description*="Parked"])').waitFor();
-  // From a local space it opens on the remote, in its space, without a tab.
-  await shelf.getByRole("tab").click();
+  await chatTab.getByRole("tab").click();
   await page.waitForURL((url: URL) => url.pathname === chat);
   await page.locator("#transcript-scroll").getByText("Remote reply", { exact: true }).first().waitFor();
-  await shelf.getByRole("tab", { selected: true }).waitFor();
-  await page.getByRole("button", { name: "Space: work / Main" }).waitFor();
-  expect(await chatTab.count()).toBe(0);
+  await chatTab.getByRole("tab", { selected: true }).waitFor();
 
-  // A shelved Search page opens without a tab too, also from a space other than Main, and its edits save into the shelf.
-  observed.stage = "shelved search";
+  // A space's card enters it, saving it as the current space: on this server, and on a remote, whose page opens even in
+  // an empty space, which it enters on arrival.
+  observed.stage = "enter spaces";
   await page.evaluate(async () => { await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ createSpace: "Side" }) }); });
-  await page.goto(`${local}/`);
-  await page.getByRole("button", { name: "Space: Main" }).click();
-  await page.getByRole("menuitemradio", { name: "Side" }).click();
-  await page.getByRole("button", { name: "Space: Side" }).waitFor();
-  while (!await page.evaluate(async () => {
-    const view = await (await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
-    return view.spaces.some((space: { id: string; name: string }) => space.name === "Side" && space.id === view.state.space);
-  })) await Bun.sleep(100);
-  await page.goto(`${local}/search/shelved?q=Shelved`);
-  const searchTab = strip.locator('[data-tab="/search/shelved"]');
-  await searchTab.getByRole("button", { name: "Tab actions" }).click();
-  await page.getByRole("menuitem", { name: "Add to Top Shelf" }).click();
-  await shelf.getByText("Local · Side").waitFor();
-  await searchTab.getByRole("button", { name: /^Close / }).click();
-  await searchTab.waitFor({ state: "detached" });
-  await shelf.getByRole("tab", { name: "Shelved", exact: true }).click();
-  const query = page.getByRole("textbox", { name: "Search sessions" });
-  expect(await query.inputValue()).toBe("Shelved");
-  await query.fill("Shelved edit");
-  await page.clock.fastForward(500);
-  while (!await page.evaluate(async () => JSON.stringify((await (await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).topShelf).includes("Shelved edit"))) await Bun.sleep(100);
-  await page.reload();
-  await page.getByRole("textbox", { name: "Search sessions" }).waitFor();
-  expect(await page.getByRole("textbox", { name: "Search sessions" }).inputValue()).toBe("Shelved edit");
-  expect(await searchTab.count()).toBe(0);
-  // Removing a row takes it off the shelf.
-  await shelf.getByRole("tab", { name: "Shelved edit", exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Remove from Top Shelf" }).click();
-  await shelf.getByRole("tab", { name: "Shelved edit", exact: true }).waitFor({ state: "detached" });
-
-  // The space picker is a tree of servers; a remote's space opens on that server, whose settings it shows.
-  // An empty space has no tab to open, so the tree must enter it on arrival.
-  observed.stage = "remote Billing space";
-  await page.goto(`${local}/`);
   await page.evaluate(async (url: string) => { await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ createSpace: "Billing" }) }); }, remote);
-  await page.getByRole("button", { name: /^Space: / }).click();
-  await page.getByRole("group", { name: "work" }).getByRole("menuitem", { name: "Billing" }).click();
-  await page.getByRole("button", { name: "Space: work / Billing" }).waitFor();
-  expect(new URL(page.url()).pathname).toStartWith("/r/work/");
+  await page.goto(`${local}/`);
+  const current = (url: string, name: string) => page.evaluate(async ([url, name]: string[]) => {
+    const view = await (await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
+    return view.spaces.some((space: { id: string; name: string }) => space.name === name && space.id === view.state.space);
+  }, [url, name]);
+  await page.getByRole("button", { name: "Go to Side on local", exact: true }).click();
+  while (!await current(local, "Side")) await Bun.sleep(100);
+  await page.getByRole("button", { name: "Go to Billing on work", exact: true }).click();
+  await page.waitForURL((url: URL) => url.pathname.startsWith("/r/work/"));
+  while (!await current(remote, "Billing")) await Bun.sleep(100);
   const online = page.waitForRequest((request: { url(): string; frame(): { url(): string } }) => request.url() === `${remote}/api/Protocol` && request.frame().url() === `${local}/r/work/config`);
   await page.goto(`${local}/r/work/config`);
   await page.getByText(process.env.ROCKETCLAW_REMOTE_TEST_WORKSPACE!, { exact: true }).waitFor();
@@ -191,9 +154,8 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   expect(await page.evaluate(async () => (await fetch("/test/remote/down", { method: "POST" })).ok)).toBe(true);
   await page.clock.fastForward(2_000);
   await page.getByText("work is offline; this page reopens when it is reachable.").waitFor();
-  await page.getByRole("button", { name: /^Space: work \/ / }).click();
-  await page.getByRole("group", { name: "Local" }).getByRole("menuitem", { name: "Main" }).click();
-  await page.getByRole("button", { name: "Space: Main" }).waitFor();
+  await page.getByRole("button", { name: "Go to Main on local", exact: true }).click();
+  await page.waitForURL((url: URL) => !url.pathname.startsWith("/r/work"));
   expect(await page.evaluate(async () => (await fetch("/test/remote/up", { method: "POST" })).ok)).toBe(true);
 
   // A remote on another protocol keeps working with a notice and never reloads the page; a local one reloads it.

@@ -160,8 +160,6 @@ func TestTurnEndReachesKeepersAndSharedViewers(t *testing.T) {
 
 	const (
 		session = "web:kept"
-		carol   = "carol@example.com"
-		dave    = "dave@example.com"
 		erin    = "erin@example.com"
 	)
 
@@ -177,9 +175,6 @@ func TestTurnEndReachesKeepersAndSharedViewers(t *testing.T) {
 		require.True(t, saved)
 	}
 
-	require.NoError(t, service.SaveTopShelf(ctx, carol, &TopShelf{Tabs: []ShelfTab{{Space: "main", Path: sessionPath(session)}}}))
-	require.NoError(t, service.SaveTopShelf(ctx, dave, &TopShelf{Tabs: []ShelfTab{{Server: "other", Space: "main", Path: sessionPath(session)}}}))
-
 	turnEnds := func(turnID string, inbound *protocol.InboundMessage) []string {
 		t.Helper()
 
@@ -192,22 +187,22 @@ func TestTurnEndReachesKeepersAndSharedViewers(t *testing.T) {
 	}
 
 	cron := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "report", false)
-	assert.Equal(t, []string{alice + " loud", carol + " loud"}, turnEnds("turn:cron", cron), "a cron turn reaches the keepers, not Bob, Dave or Erin")
+	assert.Equal(t, []string{alice + " loud"}, turnEnds("turn:cron", cron), "a cron turn reaches the keepers, not Bob or Erin")
 
 	require.NoError(t, service.ShareTab(ctx, "main", sessionPath(session), nil))
 	_, err := service.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
 	require.NoError(t, err)
-	assert.Equal(t, []string{alice + " loud", bob + " loud", carol + " loud", dave + " loud", erin + " loud"},
+	assert.Equal(t, []string{alice + " loud", bob + " loud", erin + " loud"},
 		turnEnds("turn:bob", webMessage(protocol.InboundKindPrompt, "ask", bob)))
 
 	_, err = service.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
 	require.NoError(t, err)
 	require.NoError(t, service.ChangeAttention(ctx, alice, []string{sessionPath(session)}, AttentionPark, nil))
-	assert.Equal(t, []string{alice + " quiet parked", bob + " loud", carol + " loud", dave + " loud", erin + " loud"},
+	assert.Equal(t, []string{alice + " quiet parked", bob + " loud", erin + " loud"},
 		turnEnds("turn:alice", webMessage(protocol.InboundKindPrompt, "ask", alice)))
 
 	require.NoError(t, service.ChangeAttention(ctx, alice, []string{sessionPath(session)}, AttentionUnpark, nil))
-	assert.Equal(t, []string{alice + " quiet", bob + " loud", carol + " loud", dave + " loud", erin + " loud"}, attentionOn(t, service, session))
+	assert.Equal(t, []string{alice + " quiet", bob + " loud", erin + " loud"}, attentionOn(t, service, session))
 }
 
 func TestMarkUnread(t *testing.T) {

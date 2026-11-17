@@ -638,7 +638,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{
 		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
-		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_attention", "web_top_shelves", "web_closed_tabs", "web_search_pages", "web_searches", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
+		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_attention", "web_closed_tabs", "web_search_pages", "web_searches", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
 		"agent_drafts", "agent_draft_ops", "agent_draft_presence", "agent_draft_proposals", "agent_draft_messages",
 		"behavior_settings",
 	}, tables)
@@ -2627,55 +2627,10 @@ func assertNoOrphanSearchPages(t *testing.T, store *SessionService) {
 
 	orphans, err := queryStrings(t.Context(), store.db, `WITH owned AS (
     SELECT search_page FROM web_tabs UNION ALL SELECT search_page FROM web_shared_tabs UNION ALL SELECT search_page FROM web_closed_tabs
-    UNION ALL SELECT search_page FROM web_top_shelves
 )
 SELECT p.id::text FROM web_search_pages p LEFT JOIN owned o ON o.search_page = p.id WHERE o.search_page IS NULL`, "orphan search pages")
 	require.NoError(t, err)
 	assert.Empty(t, orphans)
-}
-
-func TestWebTopShelfConcurrentSaves(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	ctx := t.Context()
-	require.NoError(t, store.SaveTopShelf(ctx, "alice", &TopShelf{Tabs: []ShelfTab{{Path: "/cron"}}}))
-
-	tx, err := store.db.BeginTx(ctx, nil)
-	require.NoError(t, err)
-
-	var holder int
-	require.NoError(t, tx.QueryRowContext(ctx, `SELECT pg_backend_pid() FROM web_tab_states WHERE username = 'alice' FOR UPDATE`).Scan(&holder))
-
-	page := &SearchPage{Name: "x", Searches: []SavedSearch{{ID: "1", Query: "q"}}}
-	shelves := []TopShelf{
-		{Tabs: []ShelfTab{{Path: "/search/1", Search: page}, {Path: "/cron"}}, Collapsed: true},
-		{Tabs: []ShelfTab{{Path: "/cron"}, {Server: "work", Path: "/search/1"}, {Path: "/search/1", Search: page}}},
-	}
-
-	var saves errgroup.Group
-	for _, shelf := range shelves {
-		saves.Go(func() error { return store.SaveTopShelf(ctx, "alice", &shelf) })
-	}
-
-	assert.Eventually(t, func() bool {
-		var waiting int
-
-		_ = store.db.QueryRowContext(ctx, `WITH RECURSIVE waiting AS (
-    SELECT $1::integer AS pid
-    UNION SELECT a.pid FROM pg_stat_activity a JOIN waiting w ON w.pid = ANY(pg_blocking_pids(a.pid))
-)
-SELECT count(*) - 1 FROM waiting`, holder).Scan(&waiting)
-
-		return waiting == 2
-	}, 5*time.Second, time.Millisecond)
-	require.NoError(t, tx.Commit())
-	require.NoError(t, saves.Wait())
-
-	shelf, err := store.TopShelf(ctx, "alice")
-	require.NoError(t, err)
-	assert.Contains(t, shelves, shelf)
-	assertNoOrphanSearchPages(t, store)
 }
 
 func TestWebClosedTabs(t *testing.T) {

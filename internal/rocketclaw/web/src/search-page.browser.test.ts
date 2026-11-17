@@ -711,7 +711,7 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
     expect(new URL(page.url()).pathname).not.toBe(first);
     expect(await page.getByRole("textbox", { name: "Search sessions", exact: true }).inputValue()).toBe("pinned");
     expect(await page.getByRole("tablist", { name: "Searches" }).getByRole("tab").allTextContents()).toEqual(["pinned"]);
-    const strip = page.getByRole("tablist", { name: "Open tabs" });
+    const strip = page.getByRole("tablist", { name: "Main tabs" });
     for (const name of ["needle", "pinned"]) await strip.getByRole("tab", { name, exact: true }).waitFor();
     // Back and Forward between the two entries switch the open search with the address.
     const searchInput = page.getByRole("textbox", { name: "Search sessions", exact: true });
@@ -1023,7 +1023,7 @@ test("a Search page's search runs on its server, entered when typed, not on retu
     await results.getByRole("heading").getByRole("link", { name: "Wide 0", exact: true }).click(); // Leaving only stops waiting.
     await page.waitForURL(`**/s/${btoa("wide-0").replaceAll("=", "")}`);
     // Returning takes the server's answer, not entered, and draws it 200 rows at a time.
-    await page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: "wide", exact: true }).click();
+    await page.getByRole("tablist", { name: "Main tabs" }).getByRole("tab", { name: "wide", exact: true }).click();
     await results.getByRole("group", { name: "Wide 0", exact: true }).waitFor();
     expect(requests).toEqual([ran(true), ran(false)]);
     expect(await hits.count()).toBe(200);
@@ -1096,7 +1096,7 @@ test("message matches jump after history loads and last close returns to the las
     });
     await page.getByRole("button", { name: "sandboxed" }).click();
     // The Search page's tab, titled by its query, returns to it.
-    const searchTab = page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: "one", exact: true });
+    const searchTab = page.getByRole("tablist", { name: "Main tabs" }).getByRole("tab", { name: "one", exact: true });
     await searchTab.click();
     await page.getByRole("link", { name: /one user 1/ }).click();
     await page.waitForFunction(() => document.querySelector('[data-message-id="one-u1"]')?.getBoundingClientRect().height !== 0);

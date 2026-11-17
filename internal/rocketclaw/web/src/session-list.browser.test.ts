@@ -1856,7 +1856,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await navPage.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     };
     const navMain = navPage.locator("main");
-    const navTabs = navPage.getByRole("tablist", { name: "Open tabs" });
+    const navTabs = navPage.getByRole("tablist", { name: "Main tabs" });
     // Closing a page closes its tab, and a neighbouring tab becomes active.
     const closed = async (name: string) => {
       await navPage.waitForURL((url: URL) => url.pathname !== `/${name.toLowerCase()}`);

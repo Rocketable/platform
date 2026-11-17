@@ -291,7 +291,6 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 	const (
 		carol = "carol@example.com"
 		dave  = "dave@example.com"
-		erin  = "erin@example.com"
 	)
 
 	require.NoError(t, service.definitions.Do(func(cfg *config.Config) error {
@@ -317,7 +316,6 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 		require.True(t, saved)
 	}
 
-	require.NoError(t, service.SaveTopShelf(ctx, erin, &TopShelf{Tabs: []ShelfTab{{Space: mainID, Path: routine}, {Server: "other", Space: mainID, Path: "/cron"}}}))
 	require.NoError(t, service.ShareTab(ctx, mainID, shared, nil))
 
 	runEnds := func(runID, path, space string) []string {
@@ -339,7 +337,6 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 		alice + " /cron loud", alice + " " + shared + " loud", alice + " " + routine + " loud",
 		bob + " " + shared + " loud", bob + " " + typed + " loud",
 		carol + " " + routine + " loud",
-		erin + " " + shared + " loud", erin + " " + routine + " loud",
 	}, runEnds("cron:marketing", "agents/marketing.md#30m", "Ops"))
 
 	assert.ElementsMatch(t, []string{alice + " /cron loud", alice + " " + cronTabPath("daily") + " loud", bob + " /cron loud"},
@@ -388,12 +385,10 @@ func TestMarkSearchFinished(t *testing.T) {
 	saved, err := service.SaveTabState(ctx, alice, &TabState{Tabs: []Tab{{Path: "/search/own", Space: mainID}}}, 0)
 	require.NoError(t, err)
 	require.True(t, saved)
-	require.NoError(t, service.SaveTopShelf(ctx, bob, &TopShelf{Tabs: []ShelfTab{{Space: mainID, Path: "/search/shelf"}, {Server: "other", Space: mainID, Path: "/search/own"}}}))
 	require.NoError(t, service.ShareTab(ctx, mainID, "/search/shared", nil))
 
 	for _, tc := range []struct{ username, path, want string }{
 		{alice, "/search/own", "new note=Search finished"},
-		{bob, "/search/shelf", "new note=Search finished"},
 		{bob, "/search/own", "none"},
 		{bob, "/search/shared", "new note=Search finished"},
 		{carol, "/search/shared", "none"},

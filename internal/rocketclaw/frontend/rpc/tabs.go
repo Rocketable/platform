@@ -42,7 +42,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	var (
 		spaces   []backend.Space
 		shared   []backend.SharedTab
-		shelf    backend.TopShelf
+		folds    map[string]bool
 		state    backend.TabState
 		closed   []backend.Tab
 		response = &TabsResponse{Stale: (request.State != nil && !saved) || refused}
@@ -61,7 +61,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	}
 
 	if err == nil {
-		shelf, err = s.sessions.TopShelf(ctx, username)
+		folds, err = s.sessions.Folds(ctx, username)
 	}
 
 	if err == nil {
@@ -84,7 +84,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	response.Shared = sharedTabs(slices.DeleteFunc(shared, func(tab backend.SharedTab) bool { return !limit.AllowsSpaceID(tab.Space) }))
 	response.Unshared = webSearchPage(unshared)
 	response.Closed = webTabs(closed)
-	response.TopShelf = webTopShelf(&shelf)
+	response.Folds = &Folds{Folded: folds}
 
 	for _, space := range spaces {
 		if limit.AllowsSpaceID(space.ID) {
@@ -132,8 +132,8 @@ func (s *Server) changeTabs(ctx context.Context, username string, limit backend.
 		unshared, err = s.sessions.UnshareTab(ctx, request.Unshare.Space, request.Unshare.Path)
 	case request.Attention != nil:
 		err = s.changeAttention(ctx, username, request.Attention)
-	case request.TopShelf != nil:
-		err = s.sessions.SaveTopShelf(ctx, username, savedTopShelf(request.TopShelf))
+	case request.Folds != nil:
+		err = s.sessions.SaveFolds(ctx, username, request.Folds.Folded)
 	case request.AutoPark != nil:
 		err = s.sessions.SetAutoParkAll(ctx, username, *request.AutoPark)
 	}
@@ -219,24 +219,6 @@ func savedTabState(state *TabState) *backend.TabState {
 
 	for _, group := range state.Groups {
 		saved.Groups = append(saved.Groups, backend.TabGroup{ID: group.Id, Name: group.Name, Color: group.Color, Collapsed: group.Collapsed})
-	}
-
-	return saved
-}
-
-func webTopShelf(shelf *backend.TopShelf) *TopShelf {
-	out := &TopShelf{Collapsed: shelf.Collapsed}
-	for _, tab := range shelf.Tabs {
-		out.Tabs = append(out.Tabs, &ShelfTab{Server: tab.Server, Space: tab.Space, Path: tab.Path, Search: webSearchPage(tab.Search)})
-	}
-
-	return out
-}
-
-func savedTopShelf(shelf *TopShelf) *backend.TopShelf {
-	saved := &backend.TopShelf{Collapsed: shelf.Collapsed}
-	for _, tab := range shelf.Tabs {
-		saved.Tabs = append(saved.Tabs, backend.ShelfTab{Server: tab.Server, Space: tab.Space, Path: tab.Path, Search: savedSearchPage(tab.Search)})
 	}
 
 	return saved

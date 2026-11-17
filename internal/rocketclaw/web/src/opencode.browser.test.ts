@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
-import type { Session, TopShelf } from "./types";
+import type { Session } from "./types";
 import { linked, fetch as openCode, reset, server as fake } from "../../oc/host/test/server";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
@@ -114,7 +114,7 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
 }, 30_000);
 
 // A RocketClaw Web serving the built view at /oc-ui/ and the fake OpenCode server behind /oc/box/api/.
-function start(shelf?: TopShelf) {
+function start() {
   reset();
   const rows: Session[] = [
     { id: "opencode:box:ses_a", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_a", preview: "Alpha work", server: "box", directory: "/repo", updatedAt: new Date().toISOString() },
@@ -173,7 +173,7 @@ function start(shelf?: TopShelf) {
       const file = Bun.file(path.join(dist, url.pathname));
       if (await file.exists()) return new Response(file);
       const index = await Bun.file(path.join(dist, "index.html")).text();
-      return new Response(shelf ? index.replace("</head>", '<script id="rocketclaws" type="application/json">[{"name":"work","url":"http://127.0.0.1:9"}]</script></head>') : index, { headers: { "Content-Type": "text/html" } });
+      return new Response(index, { headers: { "Content-Type": "text/html" } });
     }
     const input = await request.json() as { id?: string; [key: string]: unknown };
     calls.push({ path: url.pathname, body: input });
@@ -194,12 +194,11 @@ function start(shelf?: TopShelf) {
         return Response.json({ id: `opencode:box:${body.data.id}` });
       }
       case "/api/Tabs":
-        if (input.topShelf) shelf = input.topShelf as TopShelf;
-        return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), space: "main" }], groups: [], space: "main", last: {} }, topShelf: shelf });
+        return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), space: "main" }], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
-  return { web, calls, release, terminals, creates, entryFailures, typing, shelved: () => shelf, base: `http://127.0.0.1:${web.port}` };
+  return { web, calls, release, terminals, creates, entryFailures, typing, base: `http://127.0.0.1:${web.port}` };
 }
 
 async function until(check: () => boolean | Promise<boolean>) {
@@ -221,7 +220,7 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
-    const tabs = page.getByRole("tablist", { name: "Open tabs" });
+    const tabs = page.getByRole("tablist", { name: "Main tabs" });
     const view = page.locator("main [data-oc-view]");
     const palette = page.locator("[data-oc-portal] .command-palette");
     const rocketPalette = (mode: "sessions" | "commands") => page.getByPlaceholder(mode === "sessions" ? "Search sessions and commands" : "Type a command");
@@ -241,7 +240,7 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
       const width = probe.getBoundingClientRect().width;
       probe.remove();
       const body = getComputedStyle(document.body);
-      const strip = getComputedStyle(document.querySelector('[aria-label="Open tabs"]')!);
+      const strip = getComputedStyle(document.querySelector('[aria-label="Main tabs"]')!);
       return { width, background: body.backgroundColor, color: body.color, font: body.fontFamily, strip: [strip.backgroundColor, strip.fontFamily, strip.fontSize] };
     });
 
@@ -473,7 +472,7 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await page.locator("[data-oc-portal]").locator("[role=option], button", { hasText: "question in ses_a" }).first().click();
     await page.getByText("Fork was refused", { exact: true }).waitFor();
     expect(page.url()).toBe(`${base}${route("opencode:box:ses_a")}`);
-    expect(await page.locator('[role="tablist"][aria-label="Open tabs"] [role="tab"]').count()).toBe(beforeForkTabs);
+    expect(await page.locator('[role="tablist"][aria-label="Main tabs"] [role="tab"]').count()).toBe(beforeForkTabs);
     const forkRequests = fake.requests.length;
     await page.locator("[data-oc-portal]").locator("[role=option], button", { hasText: "question in ses_a" }).first().click();
     await page.waitForURL(new RegExp(`/oc/${encode("opencode:box:ses_fork_").slice(0, -2)}`));
@@ -512,7 +511,6 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await confirm.getByRole("button", { name: "Cancel", exact: true }).and(page.locator(":focus")).waitFor();
     await confirm.getByRole("button", { name: "Delete session", exact: true }).click();
     await until(async () => !fake.sessions.has("ses_a") && !page.url().includes(route("opencode:box:ses_a")) && await tabs.getByRole("tab", { name: "Alpha work", exact: true }).count() === 0);
-    expect(calls.filter(({ path, body }) => path === "/api/Tabs" && body.topShelf)).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
@@ -529,7 +527,7 @@ test("remote sessions list, tag, go offline, and start", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
-    const openTabs = () => page.locator('[aria-label="Open tabs"] [data-tab]').evaluateAll((nodes: Element[]) => nodes.map((node) => node.getAttribute("data-tab")));
+    const openTabs = () => page.locator('[aria-label="Main tabs"] [data-tab]').evaluateAll((nodes: Element[]) => nodes.map((node) => node.getAttribute("data-tab")));
 
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     await page.locator("main [data-oc-view] [data-slot=session-review-toggle]").waitFor();
@@ -644,7 +642,7 @@ test("remote sessions list, tag, go offline, and start", async () => {
     await page.waitForURL(`${base}${route(`opencode:box:${linked}`)}`);
     // v2.3.0 leaves references to the shown session as plain text (packages/app/src/shell/routes/session-ui-provider.tsx).
     await view.getByText(`answer in ${linked}`).waitFor();
-    await page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: "Alpha work", exact: true }).click();
+    await page.getByRole("tablist", { name: "Main tabs" }).getByRole("tab", { name: "Alpha work", exact: true }).click();
     await view.getByText("answer in ses_a").waitFor();
     await Bun.sleep(200);
     expect(await view.evaluate((node: HTMLElement & { built?: number }) => node.built)).toBe(1);
@@ -735,56 +733,6 @@ test("mobile keyboards keep the composer, model controls and bottom bar above th
       expect((await page.getByRole("button", { name: "Send", exact: true }).boundingBox())!.y).toBeLessThan(410);
       await page.close();
     }
-  } finally {
-    await browser.close();
-    web.stop(true);
-  }
-}, 60_000);
-
-test("a shelf row offers its server's attention items, one of an offline server is greyed and offers only Remove, and a deleted remote session leaves the Top Shelf too", async () => {
-  const { chromium: engine } = await import(playwright!);
-  // work never answers, so its Cron tab's shelf row is offline.
-  const { web, release, shelved, base } = start({ tabs: [{ path: route("opencode:box:ses_a"), space: "main" }, { server: "work", path: "/cron", space: "main" }] });
-  release();
-  const browser = await engine.launch({ executablePath: chromium, headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-    const errors: string[] = [];
-    page.on("pageerror", (error: Error) => errors.push(error.message));
-    await page.goto(`${base}${route("opencode:box:ses_a")}`);
-    await page.locator("main [data-oc-view]").getByText("answer in ses_a").waitFor();
-    const shelf = page.getByRole("tablist", { name: "Top Shelf" }), offline = shelf.getByRole("tab", { name: "Cron", exact: true });
-    const menu = async (row: any) => {
-      await row.click({ button: "right" });
-      await page.getByRole("menuitem").first().waitFor();
-      const items = await page.getByRole("menuitem").allInnerTexts();
-      await page.keyboard.press("Escape");
-      await page.getByRole("menu").waitFor({ state: "hidden" });
-      return items;
-    };
-    await shelf.getByRole("tab", { name: "Alpha work", exact: true }).waitFor();
-    expect(await menu(shelf.getByRole("tab", { name: "Alpha work", exact: true }))).toEqual(["Pull requests", "Mark as unread", "Park", "Auto-park when I send", "Remove from Top Shelf"]);
-    await shelf.getByRole("button", { name: "Tab actions", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
-    await page.getByRole("complementary", { name: "Pull requests", exact: true }).waitFor();
-    expect(new URL(page.url()).pathname).toBe(route("opencode:box:ses_a"));
-    await page.getByRole("button", { name: "Close pull requests", exact: true }).click();
-    await shelf.locator('[role="tab"][aria-label="Cron"][aria-description="Top Shelf, work, Server offline"]').waitFor();
-    expect(await shelf.locator('[data-tab="/cron"]').evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("0.6");
-    await offline.hover();
-    await page.locator('[data-slot="tooltip-content"]').filter({ hasText: "Cron · Server offline" }).waitFor();
-    expect(await menu(offline)).toEqual(["Remove from Top Shelf"]);
-    await page.keyboard.press("Control+Shift+p");
-    // Only a Web chat's agent pauses.
-    await page.getByRole("button", { name: "Sessions: Delete session" }).waitFor();
-    expect(await page.getByRole("button", { name: /^Sessions: (Pause|Resume) agent$/ }).count()).toBe(0);
-    await page.getByPlaceholder("Type a command").fill("Delete session");
-    await page.getByRole("button", { name: "Sessions: Delete session" }).click();
-    await page.getByRole("dialog", { name: "Delete session", exact: true }).getByRole("button", { name: "Delete session", exact: true }).click();
-    await until(() => !fake.sessions.has("ses_a"));
-    await until(() => shelved()?.tabs?.map((tab) => tab.path).join() === "/cron");
-    expect(await shelf.locator("[data-tab]").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.dataset.tab))).toEqual(["/cron"]);
-    expect(errors).toEqual([]);
   } finally {
     await browser.close();
     web.stop(true);
