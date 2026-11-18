@@ -456,7 +456,7 @@ func TestRunMergesStoredBehaviorSettings(t *testing.T) {
 }
 
 func testSlack() config.SlackConfig {
-	return config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}}
+	return config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"assistant"}, AllowedUserIDs: []string{"U1"}}}}
 }
 
 func testLogger() *slog.Logger {

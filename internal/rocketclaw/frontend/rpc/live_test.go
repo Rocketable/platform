@@ -39,7 +39,7 @@ import (
 )
 
 func liveSlack() config.SlackConfig {
-	return config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}}
+	return config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"assistant"}, AllowedUserIDs: []string{"U1"}}}}
 }
 
 func TestPublicProgressRealBrowser(t *testing.T) {

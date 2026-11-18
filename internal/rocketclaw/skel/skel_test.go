@@ -77,14 +77,6 @@ func TestSyncResetsTargetPreservingState(t *testing.T) {
 	assert.Equal(t, "overlay", string(data))
 }
 
-func TestSyncRejectsRootSetupDirectory(t *testing.T) {
-	tmp := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(tmp, "AGENTS.md"), 0o755))
-
-	err := SyncInWithOverlays(tmp, targetRoot, nil, testLogger())
-	require.ErrorContains(t, err, "root setup path is a directory")
-}
-
 func TestSyncReportsWorkspaceDirectoryConflicts(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -98,8 +90,6 @@ func TestSyncReportsWorkspaceDirectoryConflicts(t *testing.T) {
 		{name: "target file", path: targetRoot, want: "reset rocketclaw target"},
 		{name: "scripts file", path: scriptsRoot, want: "apply rocketclaw overlay: rocketclaw overlay path is not a directory"},
 		{name: "overlay clones file", path: targetRoot + "/" + overlaysRoot, want: "reconcile configured rocketclaw overlays: configured overlay clone path is not a directory"},
-		{name: "root setup symlink loop", path: "AGENTS.md", symlink: "AGENTS.md", want: "stat root setup path"},
-		{name: "root setup dangling symlink", path: "AGENTS.md", symlink: "missing/AGENTS.md", want: "write root setup file"},
 		{name: "scripts symlink loop", path: scriptsRoot, symlink: scriptsRoot, want: "remove stale workspace script symlinks: stat workspace scripts directory"},
 		{name: "scripts unreadable", path: scriptsRoot, dirMode: os.ModeDir, want: "remove stale workspace script symlinks: walk workspace scripts: walk workspace scripts"},
 	}
@@ -169,17 +159,12 @@ func TestSyncPreservesExistingWorkspaceSetupFiles(t *testing.T) {
 	tmp := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "agents"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "skills", "example"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmp, "AGENTS.md"), []byte("keep root"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "agents", "main.md"), []byte("keep overlay"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "skills", "example", "SKILL.md"), []byte("keep skill"), 0o644))
 
 	require.NoError(t, SyncInWithOverlays(tmp, targetRoot, nil, testLogger()))
 
-	data, err := os.ReadFile(filepath.Join(tmp, "AGENTS.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "keep root", string(data))
-
-	data, err = os.ReadFile(filepath.Join(tmp, "agents", "main.md"))
+	data, err := os.ReadFile(filepath.Join(tmp, "agents", "main.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "keep overlay", string(data))
 

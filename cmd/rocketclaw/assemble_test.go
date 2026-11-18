@@ -54,7 +54,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 	for _, slack := range []config.SlackConfig{
 		{
 			BotToken: "xoxb-test", AppToken: "xapp-test",
-			Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}},
+			Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"assistant"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#ops", Agents: []string{"assistant"}, AllowedUserIDs: []string{"U1"}}},
 		},
 		{},
 	} {

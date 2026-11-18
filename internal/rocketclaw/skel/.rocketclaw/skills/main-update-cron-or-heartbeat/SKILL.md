@@ -121,7 +121,7 @@ Do this only for body/instruction changes. Do not ask these questions for schedu
 
 ## File handling
 
-If `cron/HEARTBEAT.md` does not exist, copy from `cron/HEARTBEAT.example.md` into `cron/HEARTBEAT.md`.
+If `cron/HEARTBEAT.md` does not exist, create it with a `schedule:` frontmatter value and the body the human asked for.
 
 When `cron/HEARTBEAT.md` already exists:
 
