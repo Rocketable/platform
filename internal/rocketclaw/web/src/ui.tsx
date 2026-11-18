@@ -5946,11 +5946,10 @@ function CronPage() {
     ...Object.values(job).flat(),
     ...[job.lastRun, ...(job.upcoming ?? [])].filter(Boolean).map((at) => `${cronWhen(at)} UTC`),
   ].join(" ").toLowerCase().includes(runNeedle)).map((job) => job.stem));
-  const stems = [...new Set([...defs.map((job) => job.stem), ...runs.map((job) => job.stem)])].filter((stem) => matchingStems.has(stem));
-  const groups = stems.map((stem) => ({
+  const groups = [...Map.groupBy([...defs, ...runs], (job) => job.stem)].filter(([stem]) => matchingStems.has(stem)).map(([stem, items]) => ({
     stem,
-    job: defs.find((item) => item.stem === stem),
-    runs: runs.filter((item) => item.stem === stem),
+    job: items.find((item) => item.status !== "ran"),
+    runs: items.filter((item) => item.status === "ran"),
   }));
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
