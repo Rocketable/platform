@@ -135,5 +135,3 @@ func (*codexVoice) line(said []voiceEvent, role string) int {
 
 	return i
 }
-
-func (*codexVoice) reconnects() bool { return true }

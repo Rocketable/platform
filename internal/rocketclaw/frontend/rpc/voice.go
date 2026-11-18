@@ -239,7 +239,7 @@ func (c *voiceCall) listen(calls *errgroup.Group, done <-chan struct{}) <-chan v
 		for {
 			_, data, err := conn.ReadMessage()
 			if err != nil {
-				if c.dialect.reconnects() && websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+				if c.dialect.route() == voiceRouteCodex && websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 					select {
 					case events <- voiceEvent{kind: voiceEventClosed}:
 					case <-done:
@@ -303,7 +303,7 @@ func (c *voiceCall) loop(ctx context.Context, calls *errgroup.Group, snapshots <
 				_ = c.conn.Close()
 				events = nil
 
-				if !c.dialect.reconnects() {
+				if c.dialect.route() != voiceRouteCodex {
 					reason = "lost"
 					break
 				}
@@ -551,7 +551,7 @@ func (c *voiceCall) end(ctx context.Context, events <-chan voiceEvent, closed bo
 		}
 	}
 
-	if !closed && !c.dialect.reconnects() {
+	if !closed && c.dialect.route() != voiceRouteCodex {
 		hangup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		if err := c.dialect.hangup(hangup, c.header, c.id); err != nil {
 			slog.Warn("hang up voice call", "conversation", c.conversationID, "error", err)
