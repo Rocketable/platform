@@ -1132,8 +1132,10 @@ preview. Expansion is read-only: it keeps attachments, order, delivery, actions,
 and the composer draft unchanged. Long text scrolls inside the queue panel, even
 with one row, so the composer stays on screen.
 **Edit** opens a text box in the queued or stashed row. **Save** changes its text
-without moving it or changing its attachments, delivery, author, or routing;
-**Cancel** discards the edit. Neither action changes the composer draft.
+without moving it or changing its attachments, delivery, or routing. The saved
+message becomes yours: it runs as your Web message and the row names you as its
+author, even when another person or an agent wrote it. **Cancel** discards the
+edit. Neither action changes the composer draft.
 Enter saves an edit without sending it; Shift+Enter inserts a line break.
 The panel grows while editing so the text box, Save, and Cancel fit together;
 long text scrolls within the text box.

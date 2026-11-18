@@ -113,8 +113,9 @@ header; local header metadata is never sent to the provider. Assistant text is u
 `TranscriptEvent.principal` decodes only the stored header's top-level quoted
 principal, including on attachment-bearing inputs. `QueueItem.principal` copies
 the item's recorded author; an item another session's agent wrote has none and
-shows `agent <name> (session <ID>)` instead. Web shows it above human text inside the existing
-bubble and above queue-row text, without replacing it with the viewer's identity.
+shows `agent <name> (session <ID>)` instead. `EditQueueItem` makes the caller the
+item's author, as if they had sent it from Web. Web shows it above human text
+inside the existing bubble and above queue-row text, without replacing it with the viewer's identity.
 Missing or malformed stored principals stay unlabeled; raw headers remain intact.
 Previews use the latest nonempty user or assistant message, including the same
 successful delivery report shown in History.

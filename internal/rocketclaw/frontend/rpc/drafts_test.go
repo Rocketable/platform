@@ -69,7 +69,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 		PromoteQueueItemFunc:  func(context.Context, string, string) (bool, error) { return true, nil },
 		DeleteQueueItemFunc:   func(context.Context, string, string) (bool, error) { return true, nil },
 		PopQueueItemFunc:      func(context.Context, string, string) (bool, error) { return true, nil },
-		EditQueueItemFunc:     func(context.Context, string, string, string) (bool, error) { return true, nil },
+		EditQueueItemFunc:     func(context.Context, string, string, string, string, string) (bool, error) { return true, nil },
 		RunTurnFunc:           func(context.Context, *protocol.InboundMessage) error { return nil },
 		ReorderQueueItemsFunc: func(string, []string) error { return nil },
 		ReloadFunc: func(string) (string, error) {

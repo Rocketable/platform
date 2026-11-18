@@ -1934,7 +1934,10 @@ func (s *Server) queueItem(ctx context.Context, method string, request *QueueIte
 	case "RemoveQueueItem":
 		ok, err = s.backend.DeleteQueueItem(ctx, request.Id, request.ItemId)
 	case "EditQueueItem":
-		ok, err = s.backend.EditQueueItem(ctx, request.Id, request.ItemId, request.Text)
+		var username, principal string
+		if username, principal, err = s.principal(ctx); err == nil {
+			ok, err = s.backend.EditQueueItem(ctx, request.Id, request.ItemId, request.Text, principal, username)
+		}
 	}
 
 	if err != nil {

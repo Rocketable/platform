@@ -48,7 +48,7 @@ var _ frontend.Backend = &mockBackend{}
 //			DeleteQueueItemFunc: func(context1 context.Context, s string, s1 string) (bool, error) {
 //				panic("mock out the DeleteQueueItem method")
 //			},
-//			EditQueueItemFunc: func(context1 context.Context, s string, s1 string, s2 string) (bool, error) {
+//			EditQueueItemFunc: func(context1 context.Context, s string, s1 string, s2 string, s3 string, s4 string) (bool, error) {
 //				panic("mock out the EditQueueItem method")
 //			},
 //			MoveToBackgroundFunc: func(context1 context.Context, s string) (bool, error) {
@@ -143,7 +143,7 @@ type mockBackend struct {
 	DeleteQueueItemFunc func(context1 context.Context, s string, s1 string) (bool, error)
 
 	// EditQueueItemFunc mocks the EditQueueItem method.
-	EditQueueItemFunc func(context1 context.Context, s string, s1 string, s2 string) (bool, error)
+	EditQueueItemFunc func(context1 context.Context, s string, s1 string, s2 string, s3 string, s4 string) (bool, error)
 
 	// MoveToBackgroundFunc mocks the MoveToBackground method.
 	MoveToBackgroundFunc func(context1 context.Context, s string) (bool, error)
@@ -285,6 +285,10 @@ type mockBackend struct {
 			S1 string
 			// S2 is the s2 argument value.
 			S2 string
+			// S3 is the s3 argument value.
+			S3 string
+			// S4 is the s4 argument value.
+			S4 string
 		}
 		// MoveToBackground holds details about calls to the MoveToBackground method.
 		MoveToBackground []struct {
@@ -773,7 +777,7 @@ func (mock *mockBackend) DeleteQueueItemCalls() []struct {
 }
 
 // EditQueueItem calls EditQueueItemFunc.
-func (mock *mockBackend) EditQueueItem(context1 context.Context, s string, s1 string, s2 string) (bool, error) {
+func (mock *mockBackend) EditQueueItem(context1 context.Context, s string, s1 string, s2 string, s3 string, s4 string) (bool, error) {
 	if mock.EditQueueItemFunc == nil {
 		panic("mockBackend.EditQueueItemFunc: method is nil but Backend.EditQueueItem was just called")
 	}
@@ -782,16 +786,20 @@ func (mock *mockBackend) EditQueueItem(context1 context.Context, s string, s1 st
 		S        string
 		S1       string
 		S2       string
+		S3       string
+		S4       string
 	}{
 		Context1: context1,
 		S:        s,
 		S1:       s1,
 		S2:       s2,
+		S3:       s3,
+		S4:       s4,
 	}
 	mock.lockEditQueueItem.Lock()
 	mock.calls.EditQueueItem = append(mock.calls.EditQueueItem, callInfo)
 	mock.lockEditQueueItem.Unlock()
-	return mock.EditQueueItemFunc(context1, s, s1, s2)
+	return mock.EditQueueItemFunc(context1, s, s1, s2, s3, s4)
 }
 
 // EditQueueItemCalls gets all the calls that were made to EditQueueItem.
@@ -803,12 +811,16 @@ func (mock *mockBackend) EditQueueItemCalls() []struct {
 	S        string
 	S1       string
 	S2       string
+	S3       string
+	S4       string
 } {
 	var calls []struct {
 		Context1 context.Context
 		S        string
 		S1       string
 		S2       string
+		S3       string
+		S4       string
 	}
 	mock.lockEditQueueItem.RLock()
 	calls = mock.calls.EditQueueItem
