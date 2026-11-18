@@ -360,14 +360,14 @@ Keys:
 
 Any other key fails loading with `<key>: not an easy-mode key`, including the advanced keys `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo`, `guardrail` and `additionalInstructions`. `approver` takes only `model`, `prompt` and `decision`, `approver.decision` only `model`, `minConfidence` and `prompt`, and `schema` only `output`.
 
-Each `commands` entry becomes a program of that name in the agent's shell, ahead of any tool or builtin with the same name. Name it with 1-64 letters, digits, `_`, `.`, `+` or `-`, starting with a letter, digit or `_` and not with `rocketclaw`. Calling `<name> a b` runs `<command line> "$@"` in host bash with `a` and `b` as `$@`:
+Each `commands` entry becomes a program of that name in the agent's shell. A plain call of that name runs it instead of any tool or builtin with the same name; `builtin`, `command` or a full path such as `/bin/echo` still reach the original. Name it with 1-64 letters, digits, `_`, `.`, `+` or `-`, starting with a letter, digit or `_` and not with `rocketclaw`. Calling `<name> a b` runs `<command line> "$@"` in host bash with `a` and `b` as `$@`:
 
 - each argument arrives as one word and is not expanded again
 - the line's `$VAR`s come from RocketClaw's environment, the turn's `ROCKETCLAW_*` variables and the secrets, never from variables the shell sets or exports
 - the arguments go only to the line's last command, so a line with `;`, `&&` or `|` that needs them elsewhere is written `bash -c '<script using "$1" or "$@">' <name>`
 - it runs in the host folder that matches the shell's current folder inside `workingDirectory`, or in `workingDirectory` itself when the shell is elsewhere
 
-In the shell an entry chains like any program: pipes, redirects, `&&`, `||`, `$(…)` and loops work, input and output stream through, and its exit code comes back. Input over 16 MiB fails with exit code 126. The agent's tools do not list its `commands`, so name each one in the body with what it takes and an example call.
+In the shell an entry chains like any program: pipes, redirects, `&&`, `||`, `$(…)` and loops work, input and output stream through, and its exit code comes back. Each call takes at most 16 MiB of input, or that call fails with exit code 126. All calls in one `bash` run together return at most 16 MiB of output, stdout and stderr counted; at that limit the whole run stops with exit code 137. The agent's tools do not list its `commands`, so name each one in the body with what it takes and an example call.
 
 ```yaml
 commands:
@@ -379,7 +379,7 @@ With these, `pr view 12 --json title | jq -r .title` runs `gh pr view 12 --json 
 
 The body is the agent's whole instructions: easy agents never load `AGENTS.md`, and their tools see only `workingDirectory`. ``!`…` `` lines in the body run in host bash from the workspace, so end the body with ``!`cat MEMORY.md` `` instead of the `MEMORY.md` instruction, and add ``!`cat AGENTS.md` `` when the human wants it included.
 
-``!`…` `` lines also work in `approver.prompt` and `approver.decision.prompt`, for example to load rules from a file. They run in host bash from the workspace without the agent's secrets, run again on every review, so a slow one slows every review, and expand to empty text when they fail, which drops the rule without warning. Write such a prompt as a block scalar (`prompt: |`): a YAML value that starts with `!` fails to load.
+``!`…` `` lines also work in `approver.prompt` and `approver.decision.prompt`, for example to load rules from a file. They run in host bash from the workspace without the agent's secrets, run again on every review, so a slow one slows every review, and expand to empty text when they fail, which drops the rule without warning. Write such a prompt as a block scalar (`prompt: |`). YAML reads a value that starts with `!` as a tag: ``prompt: !`cat rules.md` `` fails to load, and `prompt: !foo bar` loads silently as `bar`.
 
 ```yaml
 ---
