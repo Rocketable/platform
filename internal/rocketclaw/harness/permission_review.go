@@ -80,16 +80,21 @@ func (r PermissionReview) CodeModeCall(e *SessionEntry) (CodeModeCall, bool) {
 }
 
 func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionReviewRequest) permissionReviewDecision {
+	active := f.agents.Items[request.ActiveAgent]
+
 	agent := embeddedGuardianAgent()
+	if active.Approver != nil {
+		agent = *active.Approver
+	}
+
 	agent.Model = f.autoApproverModel
 
-	active := f.agents.Items[request.ActiveAgent]
 	if active.ApproverModel != "" {
 		model, effort := ParseModelRef(active.ApproverModel)
 		agent.Model, agent.ReasoningEffort = model, cmp.Or(effort, agent.ReasoningEffort)
 	}
 
-	agent.Prompt = guardianPolicyPrompt + agentRules(active.ApproverPrompt) + guardianInvestigationPrompt + guardianOutcomePolicyPrompt + guardianAnswerPrompt
+	agent.Prompt = guardianPolicyPrompt + agentRules(active.ApproverPrompt) + guardianInvestigationPrompt + guardianOutcomePolicyPrompt + guardianAnswerPrompt + strings.TrimPrefix(agent.Prompt, embeddedGuardianPrompt)
 
 	var gate ApproverDecision
 

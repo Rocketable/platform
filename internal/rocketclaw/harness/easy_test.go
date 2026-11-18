@@ -3,6 +3,7 @@ package harness
 import (
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -60,6 +61,18 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 		{"wildcard target", easyRequired + "\nallowedNetworkTargets: ['*.googleapis.com']", "main.md: allowedNetworkTargets: *.googleapis.com: wildcards and CIDR ranges are not supported"},
 		{"CIDR target", easyRequired + "\nallowedNetworkTargets: [10.0.0.0/8]", "main.md: allowedNetworkTargets: 10.0.0.0/8: wildcards and CIDR ranges are not supported"},
 		{"target with methods", easyRequired + "\nallowedNetworkTargets: [{target: api.example.com, methods: [GET]}]", "main.md: allowedNetworkTargets: must be auto or a list of strings"},
+		{"secrets not a list", easyRequired + "\nsecretsARN: arn::one", "main.md: secretsARN: must be a list of ARNs"},
+		{"approver folder of its own", easyRequired + "\napprover: {workingDirectory: other}", "main.md: approver.workingDirectory: not an easy-mode key"},
+		{"approver tags group without tags", easyRequired + "\napprover: {rocketclaw: [tags]}", "main.md: approver.tags: required by the tags group in rocketclaw, and only with it"},
+		{"approver tags without its rocketclaw list", easyRequired + "\napprover: {tags: [[open, closed]]}", "main.md: approver.tags: required by the tags group in rocketclaw, and only with it"},
+		{"approver restart group", easyRequired + "\napprover: {rocketclaw: [restart]}", "main.md: approver.rocketclaw: an approver cannot use the restart group"},
+		{"approver background group", easyRequired + "\napprover: {rocketclaw: [sessions, background]}", "main.md: approver.rocketclaw: an approver cannot use the background group"},
+		{"approver unknown rocketclaw group", easyRequired + "\napprover: {rocketclaw: [chat]}", `main.md: approver.rocketclaw: unknown group "chat"`},
+		{"approver missing skill folder", easyRequired + "\napprover: {skills: [missing]}", `main.md: approver.skills: folder "missing" does not exist`},
+		{"approver undefined mcp group", easyRequired + "\napprover: {mcp: {t: [write]}}", `main.md: approver.mcp: server "t" has no "write" tool group`},
+		{"approver wildcard target", easyRequired + "\napprover: {allowedNetworkTargets: ['*.googleapis.com']}", "main.md: approver.allowedNetworkTargets: *.googleapis.com: wildcards and CIDR ranges are not supported"},
+		{"approver reserved command name", easyRequired + "\napprover: {commands: {curl: /usr/bin/curl}}", "main.md: approver.commands: curl is the emulated shell's own"},
+		{"approver secrets not a list", easyRequired + "\napprover: {secretsARN: arn::one}", "main.md: approver.secretsARN: must be a list of ARNs"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, errs := loadEasyTestAgent(t, tc.frontmatter)
@@ -106,6 +119,8 @@ func TestLoadEasyAgentFields(t *testing.T) {
 		require.Nil(t, agent.SecretsARN)
 		require.Nil(t, agent.TagGroups)
 		require.Empty(t, agent.ApproverModel+agent.ApproverPrompt)
+		require.Equal(t, []any{AgentModeEasy, agent.WorkingDirectory, agent.CustomShell}, []any{agent.Approver.Mode, agent.Approver.WorkingDirectory, agent.Approver.CustomShell}, "every easy agent's approver works in its folder")
+		require.Len(t, agent.Approver.Permission.Buckets, 4, "read, glob and grep, and the rocketclaw groups no approver gets")
 	})
 
 	t.Run("every section", func(t *testing.T) {
@@ -310,4 +325,79 @@ func TestEasyAgentSections(t *testing.T) {
 	agent, errs := loadEasyTestAgent(t, easyRequired+"\nmcp: {}")
 	require.Empty(t, errs)
 	require.Empty(t, visibleMCPServers(agent.Permission, []string{"s", "t"}))
+}
+
+func TestEasyApproverTools(t *testing.T) {
+	guardian := [][2]string{{"read", "notes.md"}, {"glob", "*.md"}, {"grep", "TODO"}}
+
+	for _, tc := range []struct {
+		name, approver string
+		on, off        [][2]string
+	}{
+		{name: "an emptied section keeps the guardian's own tools", approver: "skills: []",
+			off: [][2]string{{"bash", "ls"}, {"edit", "notes.md"}, {"webfetch", "https://example.com"}, {"websearch", "*"}, {"mcp", "s.list_reports"}, {"skill", "seo"}, {"rocketclaw", "rocketclaw_sessions"}, {"rocketclaw", "rocketclaw_restart"}, {"task", "main"}}},
+		{name: "listed sections", approver: "rocketclaw: [sessions, tags]\ntags: [[red, green]]\nskills: [marketing]\nmcp: {s: [read]}\nallowedNetworkTargets: [api.stripe.com]\ncommands: {lookup: ./lookup}",
+			on:  [][2]string{{"rocketclaw", "rocketclaw_sessions"}, {"skill", "seo"}, {"skill", "ads"}, {"mcp", "s.list_reports"}, {"webfetch", "https://api.stripe.com"}, {"bash", "lookup 42"}},
+			off: [][2]string{{"rocketclaw", "rocketclaw_restart"}, {"rocketclaw", "rocketclaw_store"}, {"skill", "support"}, {"mcp", "s.update_x"}, {"mcp", "t.get_x"}, {"edit", "notes.md"}}},
+		{name: "auto sections", approver: "rocketclaw: auto\nskills: auto\nmcp: auto\nallowedNetworkTargets: auto",
+			on:  [][2]string{{"rocketclaw", "rocketclaw_sessions"}, {"rocketclaw", "rocketclaw_kv_store"}, {"skill", "support"}, {"mcp", "t.anything"}, {"webfetch", "https://example.com"}},
+			off: [][2]string{{"bash", "ls"}, {"rocketclaw", "rocketclaw_restart"}, {"rocketclaw", AllowBackgroundSubject}}},
+		{name: "no commands and no targets", approver: "commands: {}\nallowedNetworkTargets: []",
+			off: [][2]string{{"bash", "ls"}, {"webfetch", "https://example.com"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent, errs := loadEasyTestAgent(t, easyRequired+"\napprover:\n  "+strings.ReplaceAll(tc.approver, "\n", "\n  "))
+			require.Empty(t, errs)
+			require.NotNil(t, agent.Approver)
+			require.False(t, agent.Approver.Permission.Easy)
+
+			for _, subject := range slices.Concat(guardian, tc.on) {
+				action, _ := agent.Approver.Permission.Evaluate(subject[0], subject[1])
+				require.Equal(t, PermissionAllow, action, "%v runs without review: nothing reviews the reviewer", subject)
+			}
+
+			for _, subject := range tc.off {
+				action, _ := agent.Approver.Permission.Evaluate(subject[0], subject[1])
+				require.Equal(t, PermissionDeny, action, subject)
+			}
+		})
+	}
+
+	agent, errs := loadEasyTestAgent(t, easyRequired+`
+shell: /usr/local/bin/wrap
+secretsARN: ["arn::agent"]
+commands: {deploy: ./deploy}
+tags: [[triage, resolved]]
+approver:
+  model: work/gpt-6-luna#max
+  prompt: Deny writes.
+  rocketclaw: [tags]
+  tags: [[red, green]]
+  secretsARN: ["arn::reviewer"]
+  commands: {lookup: ./lookup}
+  allowedNetworkTargets: []`)
+	require.Empty(t, errs)
+
+	approver := agent.Approver
+	require.Equal(t, []any{guardianAgentName, AgentModeEasy, "low"}, []any{approver.Name, approver.Mode, approver.ReasoningEffort})
+	require.Equal(t, agent.WorkingDirectory, approver.WorkingDirectory, "the reviewer works in the agent's folder")
+	require.Equal(t, CustomShell{Path: "/usr/local/bin/wrap"}, approver.CustomShell, "and in the agent's kind of shell")
+	require.Equal(t, [][]string{{"red", "green"}}, approver.TagGroups)
+	require.Equal(t, []string{"arn::reviewer"}, approver.SecretsARN)
+	require.Equal(t, map[string]string{"lookup": "./lookup"}, approver.Commands)
+	require.Equal(t, []string{}, approver.NetworkTargets, "no targets, not the public addresses auto allows")
+
+	require.Equal(t, "work/gpt-6-luna#max Deny writes.", agent.ApproverModel+" "+agent.ApproverPrompt)
+	require.Equal(t, [][]string{{"triage", "resolved"}}, agent.TagGroups)
+	require.Equal(t, []string{"arn::agent"}, agent.SecretsARN)
+	require.Equal(t, map[string]string{"deploy": "./deploy"}, agent.Commands)
+	require.Nil(t, agent.NetworkTargets)
+
+	action, _ := agent.Permission.Evaluate("mcp", "t.anything")
+	require.Equal(t, PermissionAuto, action, "the agent's own sections still default to everything, reviewed")
+
+	unlisted, errs := loadEasyTestAgent(t, easyRequired+"\napprover: {commands: {lookup: ./lookup}}")
+	require.Empty(t, errs)
+	require.Equal(t, []string{}, unlisted.Approver.NetworkTargets, "a shell without listed targets reaches no network")
+	require.Nil(t, unlisted.Approver.SecretsARN)
 }

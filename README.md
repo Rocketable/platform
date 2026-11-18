@@ -343,6 +343,7 @@ An agent file with `mode: easy` uses a shorter format. Leaving `mode` out, or `m
 
 - A section left out, or set to `auto`, turns on everything in it. A section written out turns on only what it lists.
 - Everything turned on is reviewed before it runs by the agent's approver: the guardian, on `approver.model` when set, with `approver.prompt` added to its rules. `approver.decision` (`model`, `minConfidence`, `prompt`) sets the decision model asked first and its own rules. With `approver.prompt` set and no `approver.decision.prompt`, reviews are never pre-gated; write the rules in both to pre-gate them. As under `sudo`, skills, `task`, web search and the default-on RocketClaw tools (reload, scheduled messages, attaching files, goal updates and questions) run without review, and so does the `decision` tool for the models the `decision` list names.
+- The approver works in the agent's `workingDirectory` and kind of shell, and has no `workingDirectory` of its own. Its `read`, `glob` and `grep` see that folder as the agent's do, not the workspace. It has only those three tools unless `approver` gives it more, with the keys the agent itself uses: `rocketclaw`, `tags`, `skills`, `mcp`, `allowedNetworkTargets`, `commands` and `secretsARN`. They are written and checked exactly as the agent's are, with three differences. A key left out of `approver` turns on nothing, where the same key left out of the agent turns on everything. Nothing reviews the approver: whatever its keys turn on runs at once. And `approver.rocketclaw` takes only `sessions`, `pages` and `tags`; `background` and `restart` fail to load. `tags` are set on the chat it is reviewing. Its `sessions` writes go out under the name `guardian`, so an agent whose `delegatedFrom` is a list must name `guardian` to accept them. `commands` gives it a shell with those commands, which get only the approver's own `secretsARN`, never the agent's. `allowedNetworkTargets` gives it `webfetch` and sets what that shell's `curl` reaches; left out, the shell reaches no network. It uses its tools only while it reviews: a review the decision model settles first never reaches them.
 - An `execute` script is reviewed once, whole, before it runs, and that approves every call it makes: its calls are not reviewed again. The approver sees the script's code but not the values it reads or fetches while it runs. A call the file does not turn on is still refused.
 - `model`, `space` and `workingDirectory` are required. A misspelled or unknown key fails to load, and so do the advanced keys `description`, `reasoningEffort`, `verbosity`, `permission`, `sudo`, `guardrail` and `additionalInstructions`.
 - The body is the agent's whole instructions. Easy agents never load `AGENTS.md` and get no reply-style line; write ``!`cat AGENTS.md` `` in the body to include it.
@@ -366,6 +367,13 @@ approver:
   decision:
     model: typesafe/jev-latest
     prompt: "Cron turns never use write credentials. Deny write actions the user did not explicitly request."
+  rocketclaw: [tags]
+  tags:
+    - [reviewed, escalated]
+  commands:
+    campaign-owner: "campaigns owner"
+  secretsARN:
+    - "arn:aws:secretsmanager:us-east-1:123456789012:secret:marketing-review"
 
 secretsARN:
   - "arn:aws:secretsmanager:us-east-1:123456789012:secret:marketing-read"

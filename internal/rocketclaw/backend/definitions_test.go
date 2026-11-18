@@ -132,7 +132,8 @@ func TestLoadRocketCodeDefinitionsEasy(t *testing.T) {
 
 	for name, content := range map[string]string{
 		".rocketclaw/agents/open.md":                     easy + "tags: [[red, green]]\n---\nPrompt\n",
-		".rocketclaw/agents/none.md":                     easy + "rocketclaw: []\nmcp: {}\nskills: [marketing]\n---\nPrompt\n",
+		".rocketclaw/agents/none.md":                     easy + "rocketclaw: []\nmcp: {}\nskills: [marketing]\napprover: {skills: [support]}\n---\nPrompt\n",
+		".rocketclaw/agents/reviewed.md":                 easy + "approver: {rocketclaw: [tags], tags: [[red, green]]}\n---\nPrompt\n",
 		".rocketclaw/agents/grouped.md":                  easy + "mcp: {s: [read]}\n---\nPrompt\n",
 		".rocketclaw/skills/marketing/seo/SKILL.md":      "---\nname: seo\ndescription: SEO\n---\n",
 		".rocketclaw/skills/support/SKILL.md":            "---\nname: support\ndescription: Support\n---\n",
@@ -181,13 +182,32 @@ func TestLoadRocketCodeDefinitionsEasy(t *testing.T) {
 	require.Equal(t, []string{"ads", "seo"}, available)
 	require.Len(t, skills.Available(&open), 3)
 
+	reviewed, tagging, untagged := agents.Items["reviewed"], agents.Items["reviewed"].Approver, none.Approver
+	require.Equal(t, harness.AgentModeEasy, open.Approver.Mode, "an easy agent without an approver block still gets an approver in its folder")
+	require.Empty(t, skills.Available(open.Approver))
+	require.Len(t, skills.Available(untagged), 1, "the approver loads its own skills, not the agent's")
+	require.Empty(t, skills.Available(tagging))
+	require.NotContains(t, untagged.Prompt, "## Session Tags")
+	require.Contains(t, tagging.Prompt, `Allowed literal, case-sensitive groups: [["red" "green"]]`)
+
+	for _, name := range []string{setTagToolName, getTagsToolName} {
+		for approver, want := range map[*harness.Agent]harness.PermissionAction{tagging: harness.PermissionAllow, untagged: harness.PermissionDeny, &reviewed: harness.PermissionDeny} {
+			action, _ := approver.Permission.Evaluate("rocketclaw_tags", name)
+			require.Equal(t, want, action, name)
+		}
+	}
+
+	action, _ := tagging.Permission.Evaluate("rocketclaw", reloadToolName)
+	require.Equal(t, harness.PermissionDeny, action, "an approver gets no RocketClaw tool it did not list")
+
 	for subject, want := range map[string]harness.PermissionAction{"s.list_reports": harness.PermissionAuto, "s.update_x": harness.PermissionDeny} {
 		action, _ := grouped.Permission.Evaluate("mcp", subject)
 		require.Equal(t, want, action, subject)
 	}
 
 	for sections, want := range map[string]string{
-		"tags: [[red], [red]]": `grouped.md: tags: empty or duplicate tag name "red"`,
+		"tags: [[red], [red]]":                                 `grouped.md: tags: empty or duplicate tag name "red"`,
+		"approver: {rocketclaw: [tags], tags: [[red], [red]]}": `grouped.md: approver.tags: empty or duplicate tag name "red"`,
 	} {
 		require.NoError(t, root.WriteFile(".rocketclaw/agents/grouped.md", []byte(easy+sections+"\n---\nPrompt\n"), 0o644))
 

@@ -102,11 +102,17 @@ func TestEasyTurnShell(t *testing.T) {
 	require.NoError(t, permission.Allow("skill", "b"))
 
 	easy := harness.Agent{Mode: harness.AgentModeEasy, Permission: permission, CustomShell: harness.CustomShell{Emulated: true}, WorkingDirectory: filepath.Join(workspace, "data", "$ROCKETCLAW_CONVERSATION_ID"), Commands: map[string]string{"show": "printenv SECRET_KEY"}, SecretsARN: []string{"arn:a"}}
+
+	reviewer := harness.Agent{Mode: harness.AgentModeEasy, CustomShell: harness.CustomShell{Emulated: true}, WorkingDirectory: easy.WorkingDirectory, Commands: map[string]string{"lookup": "printenv REVIEW_KEY"}, NetworkTargets: []string{}, SecretsARN: []string{"arn:review"}}
+	require.NoError(t, reviewer.Permission.Allow("skill", "c"))
+
+	easy.Approver = &reviewer
 	advanced := harness.Agent{CustomShell: harness.CustomShell{Path: "/bin/sandbox"}}
 	agents := harness.Agents{Items: map[string]harness.Agent{"easy": easy, "advanced": advanced}}
 	turnEnv := map[string]string{rocketclawConversationIDEnv: "web:parent/sub", "ROCKETCLAW_PRINCIPAL_NAME": "Alice"}
 
-	fetcher := &secretFetcherMock{SecretStringFunc: func(context.Context, string) (string, error) { return `{"SECRET_KEY":"s3cr3t"}`, nil }}
+	stored := map[string]string{"arn:a": `{"SECRET_KEY":"s3cr3t"}`, "arn:review": `{"REVIEW_KEY":"r3v13w"}`}
+	fetcher := &secretFetcherMock{SecretStringFunc: func(_ context.Context, arn string) (string, error) { return stored[arn], nil }}
 	b := &Bridge{config: Config{Secrets: fetcher}}
 
 	require.NoError(t, b.setEasyShell(t.Context(), cfg, agents, skills, "easy", turnEnv, "web:parent"))
@@ -124,11 +130,16 @@ func TestEasyTurnShell(t *testing.T) {
 	require.Equal(t, map[string]string{"SECRET_KEY": "s3cr3t"}, shell.Secrets, "secrets reach host commands and host-bash prompt expansion only")
 	require.Equal(t, "web:parent/sub", turnEnv[rocketclawConversationIDEnv], "the turn's own variables are unchanged")
 
+	require.Equal(t, harness.CustomShell{Emulated: true, Dir: shell.Dir, ReadOnly: []string{filepath.Join(skillsRoot, "c"), uploads}, Commands: reviewer.Commands, NetworkTargets: []string{}, Secrets: map[string]string{"REVIEW_KEY": "r3v13w"}},
+		agents.Items["easy"].Approver.CustomShell, "the approver works in the agent's folder with its own skills, commands, network targets and secrets")
+	require.Equal(t, harness.CustomShell{Emulated: true}, reviewer.CustomShell, "the loaded approver is not changed in place")
+
 	require.NoError(t, b.setEasyShell(t.Context(), cfg, agents, skills, "advanced", turnEnv, "web:parent"))
 	require.Equal(t, advanced, agents.Items["advanced"], "other agents keep their loaded shell")
 
-	wrapped := easy
+	wrapped, wrappedReviewer := easy, reviewer
 	wrapped.CustomShell = harness.CustomShell{Path: "/usr/local/bin/wrap"}
+	wrappedReviewer.CustomShell, wrapped.Approver = wrapped.CustomShell, &wrappedReviewer
 	agents.Items["wrapped"] = wrapped
 	require.NoError(t, b.setEasyShell(t.Context(), cfg, agents, skills, "wrapped", turnEnv, "web:parent"))
 
@@ -138,11 +149,21 @@ func TestEasyTurnShell(t *testing.T) {
 	require.Equal(t, filepath.Join(workspace, "data", "web:parent"), shell.Dir, "a wrapper shell runs in the agent's folder")
 	require.Equal(t, []string{`ROCKETCLAW_ENVIRONMENT={"secretsARN":["arn:a"],"commands":{"show":"printenv SECRET_KEY"},"allowedNetworkTargets":null,"workingDirectory":"` + shell.Dir + `"}`}, shell.Env,
 		"the wrapper gets the ARNs, not the secrets, null for the auto network targets, and the folder it must stay in")
+	require.Equal(t, []string{`ROCKETCLAW_ENVIRONMENT={"secretsARN":["arn:review"],"commands":{"lookup":"printenv REVIEW_KEY"},"allowedNetworkTargets":[],"workingDirectory":"` + shell.Dir + `"}`}, agents.Items["wrapped"].Approver.CustomShell.Env,
+		"for the approver the wrapper gets the approver's own, with an empty list for no network targets")
 
-	fetcher.SecretStringFunc = func(context.Context, string) (string, error) { return "", errors.New("denied") }
-	agents.Items["easy"] = easy
-	require.ErrorContains(t, b.setEasyShell(t.Context(), cfg, agents, skills, "easy", turnEnv, "web:parent"), "secretsARN: read secret string: denied")
-	require.Equal(t, easy, agents.Items["easy"], "a failed setup leaves the shell failing closed")
+	for _, denied := range []string{"arn:a", "arn:review"} {
+		fetcher.SecretStringFunc = func(_ context.Context, arn string) (string, error) {
+			if arn == denied {
+				return "", errors.New("denied")
+			}
+
+			return stored[arn], nil
+		}
+		agents.Items["easy"] = easy
+		require.ErrorContains(t, b.setEasyShell(t.Context(), cfg, agents, skills, "easy", turnEnv, "web:parent"), "secretsARN: read secret string: denied")
+		require.Equal(t, easy, agents.Items["easy"], "a failed setup leaves the shell failing closed")
+	}
 }
 
 func TestEasyShadowReadsParentUploads(t *testing.T) {
@@ -175,6 +196,60 @@ func TestEasyShadowReadsParentUploads(t *testing.T) {
 	data, err := uploads.ReadFile(name)
 	require.NoError(t, err)
 	require.Equal(t, "parent upload", string(data))
+}
+
+func TestEasyApproverUsesItsOwnTools(t *testing.T) {
+	t.Parallel()
+
+	reviews, turns := make(chan string, 8), make(chan string, 8)
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		review, answered := strings.Contains(body, "You are judging one planned coding-agent action."), strings.Contains(body, "function_call_output")
+
+		switch {
+		case review && !answered:
+			reviews <- body
+
+			writeRawRunFunctionCall(t, w, "tag", "execute", map[string]string{"code": "def main():\n    return rocketclaw_set_tag(tag=\"red\") + str(bash(command=r'''lookup'''))\n", "description": "tag"})
+		case review:
+			reviews <- body
+
+			writeRawRunMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
+		case !answered:
+			turns <- body
+
+			writeRawRunFunctionCall(t, w, "act", "execute", map[string]string{"code": "def main():\n    return glob(pattern=\"*\")\n", "description": "look"})
+		default:
+			answerNoteTest(w, r, n, body)
+		}
+	})
+	wrapper := filepath.Join(nt.cfg.Workspace, "wrap.sh")
+	require.NoError(t, os.WriteFile(wrapper, []byte("#!/bin/sh\nprintf 'ran %s in %s with %s' \"$1\" \"$PWD\" \"$ROCKETCLAW_ENVIRONMENT\""), 0o755))
+	writeAgent(t, nt.cfg.Workspace, "main", "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: "+filepath.Join(nt.cfg.Workspace, "data", "$ROCKETCLAW_CONVERSATION_ID")+"\nshell: "+wrapper+"\nrocketclaw: []\napprover:\n  rocketclaw: [tags]\n  tags: [[red, green]]\n  commands: {lookup: ./lookup}\n---\nPrompt\n")
+	nt.cfg.AutoApproverModel = "gpt-review"
+
+	manager, _ := nt.run(t, ignoreOutbound)
+	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
+	assert.Equal(t, "answer", readFinal(t, nt.finals).Text)
+
+	tags, err := sessionTags(t.Context(), nt.service.db, nt.conversationID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"red"}, tags, "the approver tagged the chat it was reviewing")
+	require.Equal(t, []int{2, 1}, []int{len(reviews), len(turns)}, "one review of two requests, for the turn's one script")
+
+	offered, tagged, turn := <-reviews, <-reviews, <-turns
+	folder, err := filepath.EvalSymlinks(filepath.Join(nt.cfg.Workspace, "data", nt.conversationID))
+	require.NoError(t, err)
+
+	assert.Contains(t, offered, `- rocketclaw_set_tag(`, "the approver is offered what its own sections turn on")
+	assert.NotContains(t, turn, `- rocketclaw_set_tag(`, "the agent's own sections are not the approver's")
+	assert.Contains(t, offered, `- bash(`, "listing commands gives the approver a shell")
+	assert.Contains(t, turn, `- webfetch(`)
+	assert.NotContains(t, offered, `- webfetch(`, "a section the approver leaves out stays off")
+	assert.Contains(t, offered, `Allowed literal, case-sensitive groups: [[\"red\" \"green\"]]`)
+	assert.Contains(t, offered, "Your working directory is `"+folder+"`")
+	assert.Contains(t, tagged, `{\"tags\":[\"red\"]}`, "its call ran without a review of its own")
+	assert.Contains(t, tagged, `ran lookup in `+folder+` with {\"secretsARN\":null,\"commands\":{\"lookup\":\"./lookup\"},\"allowedNetworkTargets\":[],\"workingDirectory\":\"`+folder+`\"}`,
+		"its shell is the agent's kind, in the agent's folder, with the approver's own commands, secrets and network targets")
 }
 
 func TestEasySubagentWorksInParentFolder(t *testing.T) {

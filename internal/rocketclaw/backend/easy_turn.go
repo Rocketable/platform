@@ -33,11 +33,6 @@ func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents ha
 		return err
 	}
 
-	secrets, err := config.SecretEnv(ctx, b.config.Secrets, agent.SecretsARN)
-	if err != nil {
-		return fmt.Errorf("secretsARN: %w", err)
-	}
-
 	uploads := self
 	if b.shadow || b.underShadow {
 		if uploads, err = b.config.SessionService.ShadowParent(ctx, self); err != nil {
@@ -45,37 +40,54 @@ func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents ha
 		}
 	}
 
-	dirs := []string{filepath.Join(cfg.Workspace, EasyUploadDir(cfg, uploads))}
-	if err := os.MkdirAll(dirs[0], 0o700); err != nil {
+	uploadDir := filepath.Join(cfg.Workspace, EasyUploadDir(cfg, uploads))
+	if err := os.MkdirAll(uploadDir, 0o700); err != nil {
 		return fmt.Errorf("uploads folder: %w", err)
 	}
 
-	for _, skill := range skills.Available(&agent) {
-		dirs = append(dirs, filepath.Join(skills.Root, filepath.FromSlash(path.Dir(skill.Location))))
+	shelled := []*harness.Agent{&agent}
+
+	if agent.Approver != nil {
+		approver := *agent.Approver
+		agent.Approver = &approver
+		shelled = append(shelled, &approver)
 	}
 
-	var readOnly []string
-
-	slices.Sort(dirs)
-
-	for _, dir := range dirs {
-		if !slices.ContainsFunc(readOnly, func(outer string) bool { return within(dir, outer) }) {
-			readOnly = append(readOnly, dir)
+	for _, target := range shelled {
+		secrets, err := config.SecretEnv(ctx, b.config.Secrets, target.SecretsARN)
+		if err != nil {
+			return fmt.Errorf("secretsARN: %w", err)
 		}
+
+		dirs := []string{uploadDir}
+		for _, skill := range skills.Available(target) {
+			dirs = append(dirs, filepath.Join(skills.Root, filepath.FromSlash(path.Dir(skill.Location))))
+		}
+
+		var readOnly []string
+
+		slices.Sort(dirs)
+
+		for _, dir := range dirs {
+			if !slices.ContainsFunc(readOnly, func(outer string) bool { return within(dir, outer) }) {
+				readOnly = append(readOnly, dir)
+			}
+		}
+
+		shell := harness.CustomShell{Emulated: target.CustomShell.Emulated, Path: target.CustomShell.Path, Dir: folder, ReadOnly: readOnly, Commands: target.Commands, NetworkTargets: target.NetworkTargets, Secrets: secrets}
+		if shell.Path != "" {
+			environment, _ := json.Marshal(struct {
+				SecretsARN       []string          `json:"secretsARN"`
+				Commands         map[string]string `json:"commands"`
+				NetworkTargets   []string          `json:"allowedNetworkTargets"`
+				WorkingDirectory string            `json:"workingDirectory"`
+			}{target.SecretsARN, target.Commands, target.NetworkTargets, folder}, json.Deterministic(true), json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+			shell.Env = []string{"ROCKETCLAW_ENVIRONMENT=" + string(environment)}
+		}
+
+		target.CustomShell = shell
 	}
 
-	shell := harness.CustomShell{Emulated: agent.CustomShell.Emulated, Path: agent.CustomShell.Path, Dir: folder, ReadOnly: readOnly, Commands: agent.Commands, NetworkTargets: agent.NetworkTargets, Secrets: secrets}
-	if shell.Path != "" {
-		environment, _ := json.Marshal(struct {
-			SecretsARN       []string          `json:"secretsARN"`
-			Commands         map[string]string `json:"commands"`
-			NetworkTargets   []string          `json:"allowedNetworkTargets"`
-			WorkingDirectory string            `json:"workingDirectory"`
-		}{agent.SecretsARN, agent.Commands, agent.NetworkTargets, folder}, json.Deterministic(true), json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
-		shell.Env = []string{"ROCKETCLAW_ENVIRONMENT=" + string(environment)}
-	}
-
-	agent.CustomShell = shell
 	agents.Items[name] = agent
 
 	return nil
