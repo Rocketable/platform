@@ -29,12 +29,7 @@ func ParseGoalRequest(text string) (goal GoalRequest, rejection string) {
 		return GoalRequest{}, GoalCommandHelp
 	}
 
-	for {
-		text = strings.TrimSpace(text)
-		if text == "" {
-			return GoalRequest{}, "Tell me the goal after the parameters, for example `$goal maxTurns: 5 update the docs`."
-		}
-
+	for text != "" {
 		if after, ok := strings.CutPrefix(text, "maxTurns:"); ok {
 			fields := strings.Fields(after)
 			if len(fields) == 0 {
@@ -59,4 +54,6 @@ func ParseGoalRequest(text string) (goal GoalRequest, rejection string) {
 			return GoalRequest{Objective: text, MaxTurns: maxTurns}, ""
 		}
 	}
+
+	return GoalRequest{}, "Tell me the goal after the parameters, for example `$goal maxTurns: 5 update the docs`."
 }
