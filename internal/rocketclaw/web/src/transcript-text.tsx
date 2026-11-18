@@ -1,6 +1,9 @@
 import { Fragment, useCallback, useMemo, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
 import type { Parent, RootContent } from "mdast";
 import Markdown, { type Components } from "react-markdown";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { Check, Copy, Maximize2, WrapText } from "lucide-react";
@@ -9,6 +12,7 @@ import { Dialog, DialogTrigger, DialogContent, DialogTitle } from "@/components/
 import { CodeBlock as CodeBlockFrame, CodeBlockActions, CodeBlockContent, CodeBlockHeader, CodeBlockTitle } from "@/components/ui/code-block";
 import { useHighlightedCode } from "@/hooks/use-highlighted-code";
 import { queries } from "./api";
+import type { GitHubPR } from "./github-pr";
 import { GitHubPRLink } from "./github-pr-preview";
 
 export async function copyText(text: string, container: Element) {
@@ -279,8 +283,55 @@ function remarkSlackTags() {
   return walk;
 }
 
-// Markdown output has no raw HTML, so every span is a Slack tag.
-const markdownComponents: Components = {
+function remarkGitHubAlerts() {
+  const walk = (node: Parent) => {
+    for (const child of node.children) {
+      if ("children" in child) walk(child);
+      if (child.type !== "blockquote" || child.children[0]?.type !== "paragraph") continue;
+      const paragraph = child.children[0], text = paragraph.children[0];
+      if (text?.type !== "text") continue;
+      const marker = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\r?\n|$)/i.exec(text.value);
+      if (!marker) continue;
+      if (text.value.length > marker[0].length) text.value = text.value.slice(marker[0].length);
+      else if (marker[0].endsWith("\n") || paragraph.children.length === 1) paragraph.children.shift();
+      else continue;
+      if (!paragraph.children.length) child.children.shift();
+      child.data = { hProperties: { dataAlert: marker[1].toLowerCase() } };
+    }
+  };
+  return walk;
+}
+
+const githubReference = /(?<![\w./\\-])(?:([\w.-]+\/[\w.-]+|[\w-]+)?#([1-9]\d*)|(?:([\w.-]+\/[\w.-]+|[\w-]+)@)?([a-f\d]{7,40})(?![\w])|@([a-z\d](?:[a-z\d-]*[a-z\d])?(?:\/[a-z\d][a-z\d-]*)?))(?![\w])/giu;
+
+function remarkGitHubReferences({ owner, repo }: GitHubPR) {
+  const target = (qualifier?: string) => qualifier?.includes("/") ? qualifier : `${qualifier ?? owner}/${repo}`;
+  const walk = (node: Parent) => {
+    node.children = node.children.flatMap((child): RootContent[] => {
+      if (child.type === "link" || child.type === "linkReference") return [child];
+      if (child.type !== "text") {
+        if ("children" in child) walk(child);
+        return [child];
+      }
+      const nodes: RootContent[] = [];
+      let last = 0;
+      for (const match of child.value.matchAll(githubReference)) {
+        const [text, issueRepo, number, commitRepo, sha, mention = ""] = match;
+        if (sha && !/[a-f]/i.test(sha)) continue;
+        const [organization, team] = mention.split("/");
+        const path = number ? `${target(issueRepo)}/issues/${number}` : sha ? `${target(commitRepo)}/commit/${sha}` : team ? `orgs/${organization}/teams/${team}` : mention;
+        nodes.push({ type: "text", value: child.value.slice(last, match.index) }, { type: "link", url: `https://github.com/${path}`, children: [{ type: "text", value: sha ? `${commitRepo ? `${commitRepo}@` : ""}${sha.slice(0, 7)}` : text }] });
+        last = match.index + text.length;
+      }
+      return [...nodes, { type: "text", value: child.value.slice(last) }];
+    });
+  };
+  return walk;
+}
+
+const alertBorders: Record<string, string> = { note: "border-blue-500", tip: "border-green-600", important: "border-purple-500", warning: "border-yellow-500", caution: "border-red-500" };
+
+const sharedComponents: Components = {
   a: ({ href, children }) => <GitHubPRLink href={href}>{children}</GitHubPRLink>,
   code: ({ children }) => <code className="rounded-sm bg-muted px-1 font-mono text-[0.9em]">{children}</code>,
   pre: ({ children }) => {
@@ -288,11 +339,31 @@ const markdownComponents: Components = {
     const language = className.replace(/^language-/, "");
     return <CodeBlock text={text} label={language || "Code"} language={language} />;
   },
-  span: ({ children }) => inlineNodes(String(children)),
   table: ({ children }) => <div className="overflow-x-auto"><table>{children}</table></div>,
 };
 
+// Markdown output has no raw HTML, so every span is a Slack tag.
+const markdownComponents: Components = { ...sharedComponents, span: ({ children }) => inlineNodes(String(children)) };
+
+const pullRequestComponents: Components = {
+  ...sharedComponents,
+  blockquote: ({ node, children }) => {
+    const alert = String(node?.properties.dataAlert ?? "");
+    return alert ? <div role="note" className={`border-s-2 ps-3 ${alertBorders[alert]}`}><p className="font-medium capitalize">{alert}</p>{children}</div> : <blockquote>{children}</blockquote>;
+  },
+  img: ({ src, alt }) => {
+    const url = URL.parse(String(src), location.href);
+    return url?.protocol === "https:" && url.origin !== location.origin ? <img src={url.href} alt={alt} referrerPolicy="no-referrer" loading="lazy" /> : alt;
+  },
+  source: () => null,
+};
+
+const pullRequestSchema = { ...defaultSchema, attributes: { ...defaultSchema.attributes, blockquote: [...defaultSchema.attributes!.blockquote!, ["dataAlert", ...Object.keys(alertBorders)]] } };
+
 // A line starting with <!here> or <!subteam^…> would otherwise be an HTML block that hides its Markdown.
-export function MarkdownText({ text }: { text: string }) {
-  return <div className="markdown break-words"><Markdown remarkPlugins={[remarkGfm, remarkSlackTags]} components={markdownComponents}>{text.replaceAll(/<(?=!(?:here|channel|everyone|subteam\^)[^<>\n]*>)/g, "\\<")}</Markdown></div>;
+export function MarkdownText({ text, repository }: { text: string; repository?: GitHubPR }) {
+  const escaped = text.replaceAll(/<(?=!(?:here|channel|everyone|subteam\^)[^<>\n]*>)/g, "\\<");
+  return <div className={repository ? "markdown break-words [&_p]:whitespace-normal" : "markdown break-words"}>{repository
+    ? <Markdown remarkPlugins={[remarkGfm, remarkGitHubAlerts, remarkBreaks, [remarkGitHubReferences, repository]]} rehypePlugins={[rehypeRaw, [rehypeSanitize, pullRequestSchema]]} components={pullRequestComponents}>{escaped}</Markdown>
+    : <Markdown remarkPlugins={[remarkGfm, remarkSlackTags]} components={markdownComponents}>{escaped}</Markdown>}</div>;
 }

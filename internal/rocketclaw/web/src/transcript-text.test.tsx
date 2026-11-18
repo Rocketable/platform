@@ -196,3 +196,27 @@ test("MarkdownText renders headings, tables, links, code, and Slack tags without
   expect(unsafe).toContain("&lt;script&gt;");
   expect(unsafe).not.toContain("javascript:");
 });
+
+test("MarkdownText for a pull request renders sanitized GitHub Markdown linked to its repository", () => {
+  const pr = (text: string) => html(<MarkdownText text={text} repository={{ owner: "o", repo: "r", number: 1 }} />);
+  const details = pr("<details><summary>More</summary>\n\nfolded\n\n</details>\n\n<!-- hidden-comment -->");
+  expect(details).toContain("<details><summary>More</summary>");
+  expect(details).not.toContain("hidden-comment");
+  const unsafe = pr('<script>alert(1)</script>\n\n<img src="https://cdn.example/a.png" alt="shot" onerror="alert(2)">\n\n[x](javascript:alert(3)) <a href="javascript:alert(4)">y</a>');
+  for (const text of ["alert(1)", "onerror", "javascript:"]) expect(unsafe).not.toContain(text);
+  expect(unsafe).toContain('<img src="https://cdn.example/a.png" alt="shot" referrerPolicy="no-referrer" loading="lazy"/>');
+  const images = pr('![relative](/api/x) ![same](http://localhost/a) ![plain](http://cdn.example/b) <picture><source srcset="/api/y"><img src="https://cdn.example/c" alt="other"></picture>');
+  expect(images.match(/<img /g)).toHaveLength(1);
+  expect(images).toContain("relative same plain");
+  expect(images).not.toMatch(/srcset/i);
+  const alert = pr("> [!NOTE]\n> Read this");
+  expect(alert).toContain('role="note"');
+  expect(alert).toContain("Read this");
+  expect(alert).not.toContain("[!NOTE]");
+  const links = pr("#12 other/repo#3 abc1234 1234567 @user @org/team `#9` [#8](https://x.com/a)");
+  for (const path of ["o/r/issues/12", "other/repo/issues/3", "o/r/commit/abc1234", "user", "orgs/org/teams/team"]) expect(links).toContain(`href="https://github.com/${path}"`);
+  for (const path of ["commit/1234567", "issues/9", "issues/8"]) expect(links).not.toContain(path);
+  expect(pr("one\ntwo")).toContain("<br/>");
+  expect(html(<MarkdownText text={"one\ntwo"} />)).not.toContain("<br");
+  expect(pr("- [ ] todo\n- [x] done").match(/<input type="checkbox" disabled=""/g)).toHaveLength(2);
+});

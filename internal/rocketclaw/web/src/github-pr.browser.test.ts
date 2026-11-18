@@ -5,7 +5,7 @@ import tailwind from "@tailwindcss/postcss";
 import type { SavedTabs, TranscriptEvent } from "./types";
 
 const href = "https://github.com/sample/fixture-repository-marker/pull/7/files";
-const metadata = { title: "Synthetic title marker", body: "description-marker <img src=https://untrusted.invalid/image> ![image](https://untrusted.invalid/image)", state: "open", draft: true, merged: false, changed_files: 101, user: { login: "demo-author" }, updated_at: "2026-11-12T12:00:00Z", additions: 12, deletions: 3, head: { sha: "head", ref: "feature/pr-reader" }, base: { sha: "base", ref: "main" } };
+const metadata = { title: "Synthetic title marker", body: "description-marker <img src='https://untrusted.invalid/image' onerror='window.descriptionRan=1'> ![image](https://untrusted.invalid/image) <img src=/same-origin-image alt=same-origin-alt><script>window.descriptionRan=1</script>", state: "open", draft: true, merged: false, changed_files: 101, user: { login: "demo-author" }, updated_at: "2026-11-12T12:00:00Z", additions: 12, deletions: 3, head: { sha: "head", ref: "feature/pr-reader" }, base: { sha: "base", ref: "main" } };
 const file = (n: number) => ({ filename: n === 100 ? "file-marker-z-last.txt" : `file-marker-${n}.txt`, status: n === 100 ? "renamed" : "modified", additions: 1, deletions: 0, ...(n === 100 ? { previous_filename: "previous-file-marker.txt", patch: "@@ -0,0 +1 @@\n+last-page-patch-marker" } : n ? {} : { patch: "@@ -0,0 +1 @@\n+patch-marker <script>example</script>" }) });
 
 // Compile a focused browser entry in memory; never replace the caller-owned tracked bundle.
@@ -54,7 +54,7 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     await page.setViewportSize({ width: 1280, height: 800 });
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Emulation.setUserAgentOverride", { userAgent: "Mozilla/5.0 AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36" });
-    const errors: string[] = [], unexpected: string[] = [];
+    const errors: string[] = [], unexpected: string[] = [], imageReferers: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.route("**/*", async (route: any) => {
       const request = route.request(), url = new URL(request.url());
@@ -68,6 +68,10 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
           return route.fulfill({ json: url.searchParams.get("page") === "1" ? Array.from({ length: 100 }, (_, n) => file(n)) : [file(100)] });
         }
         return route.fulfill({ json: { ...responseMetadata, head: { sha: changed ? "new" : "head" }, html_url: "https://untrusted.invalid/metadata" } });
+      }
+      if (url.hostname === "untrusted.invalid") {
+        imageReferers.push(request.headers().referer ?? "");
+        return route.abort();
       }
       if (url.hostname === "public-control.test") return route.fulfill({ json: { message: "network-positive-control" }, headers: { "Access-Control-Allow-Origin": "*" } });
       if (url.hostname === "telemetry.test") {
@@ -131,10 +135,14 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     await page.getByRole("option", { name: "Split", exact: true }).click();
     await viewer().locator('[data-diff-type="split"]').waitFor();
     await viewer().getByRole("tab", { name: "Summary", exact: true }).click();
-    await viewer().getByText(metadata.body, { exact: true }).waitFor();
+    await viewer().getByText("description-marker").waitFor();
+    const images = viewer().getByRole("tabpanel").locator("img");
+    expect(await images.evaluateAll((nodes: Element[]) => nodes.map((node) => [node.getAttribute("src"), node.getAttribute("referrerpolicy")]))).toEqual([["https://untrusted.invalid/image", "no-referrer"], ["https://untrusted.invalid/image", "no-referrer"]]);
+    expect(await viewer().getByText("same-origin-alt").count()).toBe(1);
+    expect(await viewer().locator("script, [onerror]").count()).toBe(0);
     await viewer().getByRole("tab", { name: "Code", exact: true }).click();
     await viewer().getByText("patch-marker <script>example</script>", { exact: true }).waitFor();
-    expect(await page.locator('img[src*="untrusted"]').count()).toBe(0);
+    expect(await page.evaluate(() => (window as any).descriptionRan)).toBeUndefined();
     await visibility("hidden");
     expect(await page.evaluate(() => document.visibilityState)).toBe("hidden");
     expect(await viewer().count()).toBe(1);
@@ -231,6 +239,7 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     expect(github).toHaveLength(beforeTokenLayout);
     await viewer().getByRole("button", { name: "Use token", exact: true }).click();
     await viewer().getByText(metadata.title, { exact: true }).waitFor();
+    expect(await viewer().getByRole("tab", { name: "Code", exact: true }).getAttribute("aria-selected")).toBe("true");
     await viewer().getByRole("button", { name: "Load files", exact: true }).click();
     await viewer().getByText("100 of 101 files loaded", { exact: true }).waitFor();
     changed = true;
@@ -325,6 +334,7 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     }
     expect(github.every(({ url, headers }) => url.startsWith("https://api.github.com/repos/") && !headers.cookie && !headers.referer && !headers.baggage)).toBe(true);
     expect(github.some(({ headers }) => headers.authorization === "Bearer synthetic-token-marker")).toBe(true);
+    expect(imageReferers.every((referer) => !referer)).toBe(true);
     expect(unexpected).toEqual([]);
     expect(errors).toEqual([]);
   } finally { release.resolve(); await browser.close(); }
@@ -383,6 +393,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
         return route.fulfill({ json: url.pathname.endsWith("/files") ? [file(0)] : { ...metadata, changed_files: 1 }, headers: { "Access-Control-Allow-Origin": "*" } });
       }
       if (url.origin === origin) return route.continue();
+      if (url.hostname === "untrusted.invalid") return route.abort();
       unexpected.push(url.hostname);
       return route.abort();
     });
