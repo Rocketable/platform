@@ -697,10 +697,12 @@ WHERE t.username = $1 GROUP BY t.username, t.path, p.id`, "tab search pages", fu
 ), touched AS (
     SELECT a.path, c.path IS NOT NULL AS closing FROM web_tab_attention a
     LEFT JOIN closing c USING (path) LEFT JOIN opening n USING (path)
-    WHERE a.username = $1 AND (c.path IS NOT NULL AND a.parked AND a.until IS NULL OR n.path IS NOT NULL AND a.unread_at IS NOT NULL AND NOT a.quiet)
+    WHERE a.username = $1 AND (c.path IS NOT NULL AND (a.parked AND a.until IS NULL OR a.resumes AND a.resume_until IS NULL)
+        OR n.path IS NOT NULL AND a.unread_at IS NOT NULL AND NOT a.quiet)
     ORDER BY a.path FOR UPDATE OF a
 ), unparked AS (
-    UPDATE web_tab_attention a SET parked = FALSE FROM touched u WHERE a.username = $1 AND a.path = u.path AND u.closing AND a.parked AND a.until IS NULL
+    UPDATE web_tab_attention a SET parked = a.parked AND a.until IS NOT NULL, resumes = a.resumes AND a.resume_until IS NOT NULL
+    FROM touched u WHERE a.username = $1 AND a.path = u.path AND u.closing
 ), quieted AS (
     UPDATE web_tab_attention a SET quiet = TRUE FROM touched u WHERE a.username = $1 AND a.path = u.path AND NOT u.closing AND a.unread_at IS NOT NULL
 )
@@ -710,7 +712,7 @@ SELECT count(*) FROM closed`, username, paths, conversations).Scan(&recorded); e
 
 	if recorded > 0 {
 		if _, err := execState(ctx, tx, "trim closed tabs", `WITH timed AS (
-    SELECT path FROM web_tab_attention WHERE username = $1 AND until IS NOT NULL
+    SELECT path FROM web_tab_attention WHERE username = $1 AND (until IS NOT NULL OR resumes)
 ), ranked AS (
     SELECT w.path, row_number() OVER (ORDER BY w.closed_at DESC, w.path) AS n FROM web_closed_tabs w
     LEFT JOIN timed t USING (path) WHERE w.username = $1 AND t.path IS NULL
@@ -1614,7 +1616,9 @@ SELECT count(*) FROM marked`, finish.conversationID, turnID); err != nil {
 		return fmt.Errorf("mark turn readers unread: %w", err)
 	}
 
-	return nil
+	_, err := execState(ctx, tx, "end turn parks", endTurnParksSQL, []string{finish.conversationID}, []bool{finish.terminal == protocol.TerminalFailed})
+
+	return err
 }
 
 func (f *turnFinish) settleInputs(ctx context.Context, tx stateStoreDB, turnID string) ([]string, error) {

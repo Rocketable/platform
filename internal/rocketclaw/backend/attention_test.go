@@ -20,7 +20,10 @@ func attentionOf(t *testing.T, s *SessionService, username, path string) string 
 
 	got, err := queryStrings(t.Context(), s.db, `SELECT concat_ws(' ',
     CASE WHEN unread_at IS NULL THEN 'read' WHEN unread_at < now() - interval '1 hour' THEN 'old' ELSE 'new' END || CASE WHEN unread_at IS NOT NULL AND quiet THEN ' quiet' ELSE '' END,
-    CASE WHEN parked THEN 'parked' END, CASE WHEN until = 'infinity' THEN 'until=done' WHEN until > now() THEN 'until=soon' WHEN until IS NOT NULL THEN 'until=due' END, NULLIF('note=' || note, 'note='))
+    CASE WHEN parked THEN 'parked' END, CASE WHEN until = 'infinity' THEN 'until=done' WHEN until > now() THEN 'until=soon' WHEN until IS NOT NULL THEN 'until=due' END,
+    CASE WHEN worked THEN 'worked' END,
+    CASE WHEN NOT resumes THEN NULL WHEN resume_until IS NULL THEN 'resume=unpark' WHEN resume_until = 'infinity' THEN 'resume=done' WHEN resume_until > now() THEN 'resume=soon' ELSE 'resume=past' END,
+    NULLIF('note=' || note, 'note='))
 FROM web_tab_attention WHERE username = $1 AND path = $2`, "attention", username, path)
 	require.NoError(t, err)
 
@@ -56,47 +59,60 @@ const (
 func TestAttentionMatrix(t *testing.T) {
 	t.Parallel()
 
-	service := newTestSessionService(t)
 	ctx := t.Context()
-	recordTestConversations(t, service, "main", map[string]ConversationKind{"web:attention": KindWebChat})
-
 	soon := time.Now().Add(time.Hour)
-	mark := func(r reader) func(t *testing.T, username, path string) {
-		return func(t *testing.T, username, path string) {
+
+	type step func(t *testing.T, service *SessionService, username, path string)
+
+	mark := func(r reader) step {
+		return func(t *testing.T, service *SessionService, username, path string) {
 			t.Helper()
 			markTab(t, service.db, username, path, r)
 		}
 	}
-	act := func(action AttentionAction, until *time.Time) func(t *testing.T, username, path string) {
-		return func(t *testing.T, username, path string) {
+	act := func(action AttentionAction, until *time.Time) step {
+		return func(t *testing.T, service *SessionService, username, path string) {
 			t.Helper()
 			require.NoError(t, service.ChangeAttention(ctx, username, []string{path}, action, until))
 		}
 	}
-	view := func(hold bool) func(t *testing.T, username, path string) {
-		return func(t *testing.T, username, path string) {
+	view := func(hold bool) step {
+		return func(t *testing.T, service *SessionService, username, path string) {
 			t.Helper()
 
 			_, err := service.PollAttention(ctx, username, path, hold)
 			require.NoError(t, err)
 		}
 	}
-	poll := func(t *testing.T, username, _ string) {
+	tick := func(t *testing.T, service *SessionService, _, _ string) {
 		t.Helper()
-
-		_, err := service.PollAttention(ctx, username, "", false)
-		require.NoError(t, err)
+		require.NoError(t, service.tickParks(ctx))
 	}
-	then := func(steps ...func(t *testing.T, username, path string)) func(t *testing.T, username, path string) {
-		return func(t *testing.T, username, path string) {
+	asked := func(t *testing.T, service *SessionService, username, path string) {
+		t.Helper()
+		markTab(t, service.db, username, path, question)
+		tick(t, service, username, path)
+	}
+	askedTwice := func(t *testing.T, service *SessionService, username, path string) {
+		t.Helper()
+		markTab(t, service.db, username, path, question)
+		markTab(t, service.db, username, path, question)
+	}
+	answered := func(t *testing.T, service *SessionService, username, path string) {
+		t.Helper()
+		tick(t, service, username, path)
+		tick(t, service, username, path)
+	}
+	then := func(steps ...step) step {
+		return func(t *testing.T, service *SessionService, username, path string) {
 			t.Helper()
 
 			for _, step := range steps {
-				step(t, username, path)
+				step(t, service, username, path)
 			}
 		}
 	}
-	save := func(t *testing.T, username, path string, open bool, revision int64) {
+	save := func(t *testing.T, service *SessionService, username, path string, open bool, revision int64) {
 		t.Helper()
 
 		var tabs []Tab
@@ -108,14 +124,14 @@ func TestAttentionMatrix(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, saved)
 	}
-	closeTab := func(t *testing.T, username, path string) {
+	closeTab := func(t *testing.T, service *SessionService, username, path string) {
 		t.Helper()
-		save(t, username, path, false, 1)
+		save(t, service, username, path, false, 1)
 	}
-	reopenTab := func(t *testing.T, username, path string) {
+	reopenTab := func(t *testing.T, service *SessionService, username, path string) {
 		t.Helper()
-		closeTab(t, username, path)
-		save(t, username, path, true, 2)
+		closeTab(t, service, username, path)
+		save(t, service, username, path, true, 2)
 	}
 
 	type seeded struct {
@@ -128,20 +144,24 @@ func TestAttentionMatrix(t *testing.T) {
 		tab    bool
 		seeded seeded
 		viewed time.Duration
-		do     func(t *testing.T, username, path string)
+		do     step
 		want   string
 	}{
 		"turn end viewed 3s ago":           {viewed: 3 * time.Second, do: mark(turnEnd), want: "none"},
 		"turn end viewed 11s ago":          {viewed: 11 * time.Second, do: mark(turnEnd), want: "new note=news"},
-		"question viewed 3s ago on a park": {seeded: seeded{mark: "loud", parked: true, timer: time.Hour}, viewed: 3 * time.Second, do: mark(question), want: "old parked until=due"},
+		"question viewed 3s ago on a park": {seeded: seeded{mark: "loud", parked: true, timer: time.Hour}, viewed: 3 * time.Second, do: mark(question), want: "old parked until=due resume=soon"},
 		"question viewed 5s ago":           {viewed: 5 * time.Second, do: mark(question), want: "new note=news"},
-		"park time due in view":            {seeded: seeded{parked: true, timer: -time.Minute}, viewed: 2 * time.Second, do: poll, want: "read"},
-		"poll views a due park time":       {seeded: seeded{parked: true, timer: -time.Minute}, do: view(false), want: "read"},
-		"park time due":                    {seeded: seeded{mark: "quiet", parked: true, timer: -time.Minute}, do: poll, want: "new note=Park ended"},
+		"park time due in view":            {seeded: seeded{parked: true, timer: -time.Minute}, viewed: 2 * time.Second, do: tick, want: "read"},
+		"a view, then a due park time":     {seeded: seeded{parked: true, timer: -time.Minute}, do: then(view(false), tick), want: "read"},
+		"park time due":                    {seeded: seeded{mark: "quiet", parked: true, timer: -time.Minute}, do: tick, want: "new note=Park ended"},
 		"turn end replaces a quiet mark":   {seeded: seeded{mark: "quiet"}, do: mark(turnEnd), want: "new note=news"},
 		"turn end on a park":               {seeded: seeded{parked: true, timer: time.Hour}, do: mark(turnEnd), want: "new quiet parked until=soon note=news"},
-		"question on a park":               {seeded: seeded{mark: "quiet", parked: true, timer: time.Hour}, do: mark(question), want: "new quiet parked until=due note=news"},
-		"question on a park, then a poll":  {seeded: seeded{mark: "quiet", parked: true, timer: time.Hour}, do: then(mark(question), poll), want: "new note=news"},
+		"question on a park":               {seeded: seeded{mark: "quiet", parked: true, timer: time.Hour}, do: mark(question), want: "new quiet parked until=due resume=soon note=news"},
+		"question on a park, then a tick":  {seeded: seeded{mark: "quiet", parked: true, timer: time.Hour}, do: then(mark(question), tick), want: "new resume=soon note=news"},
+		"question on a park, answered":     {seeded: seeded{mark: "quiet", parked: true, timer: time.Hour}, do: then(mark(question), answered), want: "new quiet parked until=soon note=news"},
+		"two questions on a park":          {seeded: seeded{mark: "quiet", parked: true, timer: time.Hour}, do: askedTwice, want: "new quiet parked until=due resume=soon note=news"},
+		"a question, then marked read":     {seeded: seeded{mark: "quiet", parked: true, timer: time.Hour}, do: then(asked, act(AttentionRead, nil), tick), want: "none"},
+		"a view does not wake a park":      {seeded: seeded{parked: true, timer: -time.Minute}, do: view(false), want: "read parked until=due"},
 		"mark as unread":                   {do: act(AttentionUnread, nil), want: "new quiet"},
 		"mark as unread on a mark":         {seeded: seeded{mark: "loud"}, do: act(AttentionUnread, nil), want: "old"},
 		"mark as unread on a park":         {seeded: seeded{parked: true}, do: act(AttentionUnread, nil), want: "read parked"},
@@ -161,13 +181,16 @@ func TestAttentionMatrix(t *testing.T) {
 			t.Run(name+" on a "+location, func(t *testing.T) {
 				t.Parallel()
 
+				service := newTestSessionService(t)
+				recordTestConversations(t, service, "main", map[string]ConversationKind{"web:attention": KindWebChat})
+
 				username := name + " " + location
 				_, err := service.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, viewing, viewed_at)
 VALUES ($1, 0, CASE WHEN $3::float8 > 0 THEN $2 ELSE '' END, now() - make_interval(secs => $3::float8))`, username, path, tc.viewed.Seconds())
 				require.NoError(t, err)
 
 				if tc.tab {
-					save(t, username, path, true, 0)
+					save(t, service, username, path, true, 0)
 				}
 
 				if tc.seeded != (seeded{}) {
@@ -177,7 +200,7 @@ VALUES ($1, $2, NULLIF($3, ''), CASE WHEN $4 <> '' THEN now() - interval '1 day'
 					require.NoError(t, err)
 				}
 
-				tc.do(t, username, path)
+				tc.do(t, service, username, path)
 				assert.Equal(t, tc.want, attentionOf(t, service, username, path))
 			})
 		}
@@ -194,7 +217,7 @@ func TestAttentionMarkTakesStrongestReader(t *testing.T) {
 	_, err := service.db.ExecContext(t.Context(), `UPDATE web_tab_attention SET parked = TRUE`)
 	require.NoError(t, err)
 	markTab(t, service.db, alice, "/cron", turnEnd, question)
-	assert.Equal(t, "new quiet parked until=due note=news", attentionOf(t, service, alice, "/cron"), "a question among them makes the park due")
+	assert.Equal(t, "new quiet parked until=due resume=unpark note=news", attentionOf(t, service, alice, "/cron"), "a question among them makes the park due")
 }
 
 func TestAttentionDecidesOnLockedRow(t *testing.T) {
@@ -401,66 +424,249 @@ func TestMarkSearchFinished(t *testing.T) {
 func TestAttentionParkUntilDone(t *testing.T) {
 	t.Parallel()
 
+	const carol = "carol@example.com"
+
 	service := newTestSessionService(t)
 	ctx := t.Context()
+	soon := time.Now().Add(time.Hour)
 
-	recordTestConversations(t, service, "main", map[string]ConversationKind{"web:done": KindWebChat})
+	tick := func(t *testing.T) {
+		t.Helper()
+		require.NoError(t, service.tickParks(ctx))
+	}
+	start := func(t *testing.T, chat, turnID string) {
+		t.Helper()
+		require.NoError(t, startTurnDB(ctx, service.db, turnID, chat, protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "run", false)))
+	}
+	end := func(t *testing.T, chat, turnID string, terminal protocol.Terminal) {
+		t.Helper()
 
-	session := Tab{Path: sessionPath("web:done"), Space: "main"}
-	saved, err := service.SaveTabState(ctx, alice, &TabState{Tabs: []Tab{session}, Space: "main"}, 0)
-	require.NoError(t, err)
-	require.True(t, saved)
-
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{session.Path, "/cron"}, AttentionParkUntilDone, nil))
-	assert.Equal(t, "read parked until=done", attentionOf(t, service, alice, session.Path))
-	assert.Equal(t, "none", attentionOf(t, service, alice, "/cron"), "a location that is no session is skipped")
-
-	for row, err := range service.sidebarSessions(ctx, alice, []string{"web:done"}) {
+		_, err := service.finishTurn(ctx, turnID, &turnFinish{conversationID: chat, outbound: protocol.NewOutboundMessage(chat, "done"), terminal: terminal})
 		require.NoError(t, err)
-		assert.True(t, row.Attention.Parked && row.Attention.UntilDone && row.Attention.Until.IsZero(), "the list says until done, with no time")
+	}
+	turn := func(t *testing.T, chat, turnID string, terminal protocol.Terminal) {
+		t.Helper()
+		start(t, chat, turnID)
+		end(t, chat, turnID, terminal)
+		require.NoError(t, service.closeTurn(ctx, turnID))
+	}
+	queue := func(t *testing.T, chat string) {
+		t.Helper()
+		require.NoError(t, service.PutThreadQueueItem(chat+":next", &protocol.ThreadQueueItem{ConversationID: chat, Message: "again"}))
 	}
 
-	saved, err = service.SaveTabState(ctx, alice, &TabState{Space: "main"}, 1)
-	require.NoError(t, err)
-	require.True(t, saved)
-	assert.Equal(t, "read parked until=done", attentionOf(t, service, alice, session.Path), "closing keeps it")
+	t.Run("waits for the session to be idle", func(t *testing.T) {
+		recordTestConversations(t, service, "main", map[string]ConversationKind{"web:done": KindWebChat})
 
-	require.NoError(t, startTurnDB(ctx, service.db, "turn:done", "web:done", protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "run", false)))
-	_, err = service.finishTurn(ctx, "turn:done", &turnFinish{conversationID: "web:done", outbound: protocol.NewOutboundMessage("web:done", "done")})
-	require.NoError(t, err)
-	assert.Equal(t, "new quiet parked until=due", attentionOf(t, service, alice, session.Path))
-
-	_, err = service.PollAttention(ctx, alice, "", false)
-	require.NoError(t, err)
-	assert.Equal(t, "new", attentionOf(t, service, alice, session.Path), "unparked and loud, with no note of its own: the reply speaks")
-
-	state, _, err := service.TabState(ctx, alice)
-	require.NoError(t, err)
-	assert.Equal(t, []Tab{session}, state.Tabs, "the closed tab is back")
-
-	for name, tc := range map[string]struct {
-		viewed bool
-		end    reader
-		unpark bool
-		want   string
-	}{
-		"turn end in view": {viewed: true, end: turnEnd, want: "read parked until=due"},
-		"question":         {end: question, want: "new quiet parked until=due note=news"},
-		"unpark":           {unpark: true, want: "none"},
-	} {
-		username := name + "@example.com"
-		_, err := service.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, viewing, viewed_at)
-VALUES ($1, 0, CASE WHEN $3 THEN $2 ELSE '' END, now())`, username, session.Path, tc.viewed)
+		session := Tab{Path: sessionPath("web:done"), Space: "main"}
+		saved, err := service.SaveTabState(ctx, alice, &TabState{Tabs: []Tab{session}, Space: "main"}, 0)
 		require.NoError(t, err)
-		require.NoError(t, service.ChangeAttention(ctx, username, []string{session.Path}, AttentionParkUntilDone, nil))
+		require.True(t, saved)
 
-		if tc.unpark {
-			require.NoError(t, service.ChangeAttention(ctx, username, []string{session.Path}, AttentionUnpark, nil))
-		} else {
-			markTab(t, service.db, username, session.Path, tc.end)
+		require.NoError(t, service.ChangeAttention(ctx, alice, []string{session.Path, "/cron"}, AttentionParkUntilDone, nil))
+		assert.Equal(t, "read parked until=done", attentionOf(t, service, alice, session.Path))
+		assert.Equal(t, "none", attentionOf(t, service, alice, "/cron"), "a location that is no session is skipped")
+
+		for row, err := range service.sidebarSessions(ctx, alice, []string{"web:done"}) {
+			require.NoError(t, err)
+			assert.True(t, row.Attention.Parked && row.Attention.UntilDone && row.Attention.Until.IsZero(), "the list says until done, with no time")
 		}
 
-		assert.Equal(t, tc.want, attentionOf(t, service, username, session.Path), name)
+		saved, err = service.SaveTabState(ctx, alice, &TabState{Space: "main"}, 1)
+		require.NoError(t, err)
+		require.True(t, saved)
+		tick(t)
+		assert.Equal(t, "read parked until=done", attentionOf(t, service, alice, session.Path), "closing keeps it, and an idle session has not worked yet")
+
+		queue(t, "web:done")
+		start(t, "web:done", "turn:first")
+		end(t, "web:done", "turn:first", "")
+		tick(t)
+		assert.Equal(t, "new quiet parked until=done worked", attentionOf(t, service, alice, session.Path), "a turn still delivering is work")
+
+		require.NoError(t, service.closeTurn(ctx, "turn:first"))
+		tick(t)
+		assert.Equal(t, "new quiet parked until=done worked", attentionOf(t, service, alice, session.Path), "a queued message is work")
+
+		removed, _, err := service.DeleteThreadQueueItem(ctx, "web:done", "web:done:next")
+		require.NoError(t, err)
+		require.True(t, removed)
+
+		turn(t, "web:done", "turn:job", protocol.TerminalStopped)
+
+		_, err = service.db.ExecContext(ctx, `UPDATE turns SET kind = 'script', takes_lane = FALSE, note = 'pending', wake = TRUE WHERE id = 'turn:job'`)
+		require.NoError(t, err)
+		tick(t)
+		assert.Equal(t, "new quiet parked until=done worked", attentionOf(t, service, alice, session.Path), "a background job's result waiting to wake the agent is work")
+
+		_, err = service.db.ExecContext(ctx, `UPDATE turns SET wake = FALSE WHERE id = 'turn:job';
+UPDATE conversations SET goal_objective = 'ship', goal_status = 'active' WHERE conversation_id = 'web:done'`)
+		require.NoError(t, err)
+		tick(t)
+		assert.Equal(t, "new quiet parked until=done worked", attentionOf(t, service, alice, session.Path), "an active goal is work between its turns")
+
+		_, err = service.db.ExecContext(ctx, `UPDATE conversations SET goal_status = 'complete' WHERE conversation_id = 'web:done'`)
+		require.NoError(t, err)
+		tick(t)
+		assert.Equal(t, "new", attentionOf(t, service, alice, session.Path), "unparked and loud, with no note of its own: the reply speaks")
+
+		state, revision, err := service.TabState(ctx, alice)
+		require.NoError(t, err)
+		assert.Equal(t, []Tab{session}, state.Tabs, "the closed tab is back with no window asking")
+		assert.Equal(t, int64(3), revision)
+	})
+
+	for name, tc := range map[string]struct {
+		do   func(t *testing.T, chat, path string)
+		want string
+	}{
+		"a failed turn ends it with work queued": {do: func(t *testing.T, chat, _ string) {
+			t.Helper()
+			queue(t, chat)
+			turn(t, chat, chat+":turn", protocol.TerminalFailed)
+		}, want: "new quiet parked until=due worked"},
+		"a stopped turn only records work": {do: func(t *testing.T, chat, _ string) {
+			t.Helper()
+			queue(t, chat)
+			turn(t, chat, chat+":turn", protocol.TerminalStopped)
+			tick(t)
+		}, want: "new quiet parked until=done worked"},
+		"a question waits for its answer, then puts the park back": {do: func(t *testing.T, chat, path string) {
+			t.Helper()
+			start(t, chat, chat+":turn")
+			_, err := service.db.ExecContext(ctx, `INSERT INTO steps (conversation_id, key, value) VALUES ($1, $2, '{}')`, chat, chat+":turn/ask"+webQuestionStep)
+			require.NoError(t, err)
+			markTab(t, service.db, bob, path, question)
+			tick(t)
+			tick(t)
+			assert.Equal(t, "new resume=done note=news", attentionOf(t, service, bob, path))
+
+			_, err = service.db.ExecContext(ctx, `INSERT INTO steps (conversation_id, key, value) VALUES ($1, $2, '{}')`, chat, chat+":turn/ask/answer")
+			require.NoError(t, err)
+			tick(t)
+		}, want: "new quiet parked until=done note=news"},
+		"a question on a finished session ends the park it puts back": {do: func(t *testing.T, chat, path string) {
+			t.Helper()
+			start(t, chat, chat+":turn")
+			markTab(t, service.db, bob, path, question)
+			tick(t)
+			end(t, chat, chat+":turn", "")
+			require.NoError(t, service.closeTurn(ctx, chat+":turn"))
+			tick(t)
+			assert.Equal(t, "new quiet parked until=done worked note=news", attentionOf(t, service, bob, path))
+			tick(t)
+		}, want: "new note=news"},
+		"a run reporting to the session is work": {do: func(t *testing.T, chat, _ string) {
+			t.Helper()
+
+			_, err := service.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, reports_to) VALUES ($1, 'job', '', 'cron_run', FALSE, $2)`, chat+":run", chat)
+			require.NoError(t, err)
+			turn(t, chat, chat+":turn", "")
+			start(t, chat+":run", chat+":run-turn")
+			tick(t)
+			assert.Equal(t, "new quiet parked until=done worked", attentionOf(t, service, bob, sessionPath(chat)))
+			end(t, chat+":run", chat+":run-turn", "")
+			require.NoError(t, service.closeTurn(ctx, chat+":run-turn"))
+			tick(t)
+		}, want: "new"},
+		"parking again waits for new work": {do: func(t *testing.T, chat, path string) {
+			t.Helper()
+			turn(t, chat, chat+":turn", "")
+			require.NoError(t, service.ChangeAttention(ctx, bob, []string{path}, AttentionUnpark, nil))
+			require.NoError(t, service.ChangeAttention(ctx, bob, []string{path}, AttentionParkUntilDone, nil))
+			tick(t)
+		}, want: "new quiet parked until=done"},
+		"a failed turn after a question drops the park": {do: func(t *testing.T, chat, path string) {
+			t.Helper()
+			markTab(t, service.db, bob, path, question)
+			tick(t)
+			queue(t, chat)
+			turn(t, chat, chat+":turn", protocol.TerminalFailed)
+			tick(t)
+		}, want: "new note=news"},
+		"closing keeps a remembered park until it is done": {do: func(t *testing.T, chat, path string) {
+			t.Helper()
+
+			saved, err := service.SaveTabState(ctx, bob, &TabState{Tabs: []Tab{{Path: path, Space: "main"}}, Space: "main"}, 0)
+			require.NoError(t, err)
+			require.True(t, saved)
+			queue(t, chat)
+			markTab(t, service.db, bob, path, question)
+			tick(t)
+
+			saved, err = service.SaveTabState(ctx, bob, &TabState{Space: "main"}, 1)
+			require.NoError(t, err)
+			require.True(t, saved)
+			tick(t)
+		}, want: "new quiet parked until=done note=news"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			chat := "web:" + name
+			path := sessionPath(chat)
+
+			recordTestConversations(t, service, "main", map[string]ConversationKind{chat: KindWebChat})
+			require.NoError(t, service.ChangeAttention(ctx, bob, []string{path}, AttentionParkUntilDone, nil))
+			tc.do(t, chat, path)
+			assert.Equal(t, tc.want, attentionOf(t, service, bob, path))
+		})
+	}
+
+	for name, tc := range map[string]struct {
+		until *time.Time
+		do    func(t *testing.T, path string)
+		want  string
+	}{
+		"a timed park comes back": {until: &soon, want: "new quiet parked until=soon note=news"},
+		"a timed park whose time passed does not": {until: &soon, do: func(t *testing.T, path string) {
+			t.Helper()
+			markTab(t, service.db, carol, path, question)
+			_, err := service.db.ExecContext(ctx, `UPDATE web_tab_attention SET resume_until = now() - interval '1 minute' WHERE path = $1`, path)
+			require.NoError(t, err)
+			tick(t)
+			tick(t)
+		}, want: "new note=news"},
+		"a park until unparked comes back": {want: "new quiet parked note=news"},
+		"closing drops a park until unparked": {do: func(t *testing.T, path string) {
+			t.Helper()
+
+			saved, err := service.SaveTabState(ctx, carol, &TabState{Tabs: []Tab{{Path: path, Space: "main"}}, Space: "main"}, 0)
+			require.NoError(t, err)
+			require.True(t, saved)
+			markTab(t, service.db, carol, path, question)
+			tick(t)
+
+			saved, err = service.SaveTabState(ctx, carol, &TabState{Space: "main"}, 1)
+			require.NoError(t, err)
+			require.True(t, saved)
+			tick(t)
+		}, want: "new note=news"},
+		"parking again replaces it": {until: &soon, do: func(t *testing.T, path string) {
+			t.Helper()
+			markTab(t, service.db, carol, path, question)
+			tick(t)
+			require.NoError(t, service.ChangeAttention(ctx, carol, []string{path}, AttentionPark, nil))
+			tick(t)
+		}, want: "new quiet parked note=news"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			chat := "web:" + name
+			path := sessionPath(chat)
+
+			recordTestConversations(t, service, "main", map[string]ConversationKind{chat: KindWebChat})
+			require.NoError(t, service.ChangeAttention(ctx, carol, []string{path}, AttentionPark, tc.until))
+
+			if tc.do == nil {
+				tc.do = func(t *testing.T, path string) {
+					t.Helper()
+					markTab(t, service.db, carol, path, question)
+					tick(t)
+					tick(t)
+				}
+			}
+
+			tc.do(t, path)
+			assert.Equal(t, tc.want, attentionOf(t, service, carol, path))
+		})
 	}
 }
 
@@ -478,7 +684,9 @@ func TestPausedMessageMarksOtherReaders(t *testing.T) {
 		require.True(t, saved)
 	}
 
+	require.NoError(t, service.ChangeAttention(ctx, "carol@example.com", []string{path}, AttentionParkUntilDone, nil))
 	require.NoError(t, rt.PostPausedMessage(ctx, pausedWebMessage("web:lunch", "Alice", &protocol.InboundContent{Text: "lunch at noon?"})))
+	require.NoError(t, service.tickParks(ctx))
 
 	assert.Equal(t, []string{
 		"message:\"Bob\" paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you.",
@@ -486,6 +694,7 @@ func TestPausedMessageMarksOtherReaders(t *testing.T) {
 	}, observedEntryTexts(t, service, "web:lunch"))
 	assert.Equal(t, "new", attentionOf(t, service, bob, path))
 	assert.Equal(t, "none", attentionOf(t, service, alice, path), "the sender gets no mark, and her tab is not parked")
+	assert.Equal(t, "new quiet parked until=done", attentionOf(t, service, "carol@example.com", path), "people talking is not the agent being done")
 
 	turns, err := queryStrings(ctx, service.db, `SELECT id FROM turns WHERE conversation_id = $1`, "chat turns", "web:lunch")
 	require.NoError(t, err)
@@ -540,8 +749,9 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 		_, err := service.db.ExecContext(ctx, `UPDATE web_tab_attention SET until = now() - interval '1 second' WHERE until IS NOT NULL`)
 		require.NoError(t, err)
 	}
-	poll := func() int64 {
+	tick := func() int64 {
 		t.Helper()
+		require.NoError(t, service.tickParks(ctx))
 
 		got, err := service.PollAttention(ctx, alice, "", false)
 		require.NoError(t, err)
@@ -567,15 +777,10 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 	var holder int
 	require.NoError(t, tx.QueryRowContext(ctx, `SELECT pg_backend_pid() FROM web_tab_states WHERE username = $1 FOR UPDATE`, alice).Scan(&holder))
 
-	revisions := make(chan int64, 2)
+	var ticks errgroup.Group
 
 	for range 2 {
-		go func() {
-			got, err := service.PollAttention(ctx, alice, "", false)
-			assert.NoError(t, err)
-
-			revisions <- got
-		}()
+		ticks.Go(func() error { return service.tickParks(ctx) })
 	}
 
 	require.Eventually(t, func() bool {
@@ -585,11 +790,11 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 		return waiting > 0
 	}, 5*time.Second, time.Millisecond)
 	require.NoError(t, tx.Commit())
-	assert.Equal(t, []int64{revision + 1, revision + 1}, []int64{<-revisions, <-revisions}, "the revision rises once")
+	require.NoError(t, ticks.Wait())
 
 	state, got, err := service.TabState(ctx, alice)
 	require.NoError(t, err)
-	assert.Equal(t, revision+1, got)
+	assert.Equal(t, revision+1, got, "the revision rises once")
 	assert.Equal(t, []Tab{a, search, cron}, state.Tabs, "back in their space, group and position, a Search tab with its page")
 	assertNoOrphanSearchPages(t, service)
 
@@ -600,7 +805,7 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 	assert.Equal(t, "new note=Park ended", attentionOf(t, service, alice, "/cron"))
 	assert.Equal(t, "new note=Park ended", attentionOf(t, service, alice, a.Path), "a park on an open tab ends in place")
 	assert.Equal(t, "new note=Park ended", attentionOf(t, service, alice, "/agents"), "one on a location never a tab ends alone")
-	assert.Equal(t, revision+1, poll(), "a second poll wakes nothing")
+	assert.Equal(t, revision+1, tick(), "a second tick wakes nothing")
 
 	revision++
 
@@ -608,7 +813,7 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 	save(&TabState{Tabs: []Tab{a, cron}, Groups: group, Space: "main"})
 	save(&TabState{Tabs: []Tab{{Path: a.Path, Space: "main"}}, Space: "main"})
 	due()
-	assert.Equal(t, revision+1, poll())
+	assert.Equal(t, revision+1, tick())
 
 	state, _, err = service.TabState(ctx, alice)
 	require.NoError(t, err)
@@ -620,11 +825,11 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 	save(&TabState{Space: "main"})
 	markTab(t, service.db, alice, a.Path, question)
 	markTab(t, service.db, alice, "/search/x", question)
-	assert.Equal(t, revision+1, poll())
+	assert.Equal(t, revision+1, tick())
 
 	state, _, err = service.TabState(ctx, alice)
 	require.NoError(t, err)
 	assert.Equal(t, []Tab{{Path: a.Path, Space: "main"}}, state.Tabs)
-	assert.Equal(t, "new note=news", attentionOf(t, service, alice, a.Path))
+	assert.Equal(t, "new resume=soon note=news", attentionOf(t, service, alice, a.Path), "a question remembers the park it ends")
 	assert.Equal(t, "new note=news", attentionOf(t, service, alice, "/search/x"))
 }

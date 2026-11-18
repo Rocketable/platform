@@ -294,7 +294,7 @@ ship as three one-way migrations: Search pages, then the Top Shelf, then attenti
 - When a park's time is up, the server sets `unread_at = now()`, as if a turn had ended, so the pop-up
   logic that already exists fires on every open window. This needs something that runs when the time passes. That
   could be the existing Scheduled Messages runner, or a check run when sessions are listed. Which one gets picked
-  in the plan. **Built:** the check when sessions are listed. Each `ListSessions` poll from a page the server
+  in the plan. **Built, until 2026-11-18 (see the change below):** the check when sessions are listed. Each `ListSessions` poll from a page the server
   serves or trusts first records the tab in view, then wakes that person's timers that came due, in one statement
   that checks the timer on the locked row, so two windows wake a timer once and a cancelled timer cannot fire. An
   open window polls every few seconds. There is no job and no startup pass; the Scheduled Messages runner starts
@@ -410,6 +410,17 @@ reached no one and left the park in place for good. The model now ends a turn ei
 tracks the turn end itself rather than a mark; `WakeReaches = FALSE`, the sync as it was, breaks it in a three-state
 trace. With the sync adding the session's own readers to every new idle marker, both checks pass: one-window with
 351,172 states, two-windows with 412,014.
+
+**Changed (2026-11-18): until it is done means until the session is idle.** People re-parked sessions after every
+queued message, every turn that handed work to the background, and every exchange in a paused chat. A park until it
+is done now waits until the session has no turn running, no message queued and no Background Job waiting to wake its
+agent; a turn end only records that work happened, a failed turn ends it at once, and news that is not the agent ends
+nothing. A question still ends any park, and the server remembers the park it ended and puts it back once no question
+waits, unless its time passed. A loop in the web process now ends, restores and wakes
+parks, instead of the session-list check, so parks end with no window open and on Remote RocketClaws. The plan is
+`docs/plans/2026-11-18-0900-feat-park-until-idle-plan.md`; the model replaces `DoneEndsAtTurnEnd` with
+`DoneEndsOnlyWhenIdle`, adds `IdleEndsDone` and `QuestionRestores`, and `fail-old-turn-end` shows the earlier rule
+breaking the new invariant. One-window passes with 1,391,092 states, two-windows with 1,560,139.
 
 ## Limits and open points
 

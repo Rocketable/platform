@@ -178,17 +178,17 @@ duplicates.
 `ListSessions` streams one conversation per response message in list order, each
 with the caller's attention on it: `unread_at` (empty once read), `marked_unread`
 (the mark raises no notification), `parked`, `until` (when its park ends),
-`until_done` (the park lasts until the session's next turn ends, with no time)
+`until_done` (the park lasts until the session is idle after its work, with no time)
 and `note` (the notification text a timer wrote).
 Its `viewing` field names the location of the caller's focused tab, of any kind,
 such as `/s/<id>` or `/cron`. The HTTP adapter sets `same_origin` only for
 same-origin requests, and only such a request, before the listing, records the
-view, clears that location's mark unless `hold` is set and the mark is quiet,
-and wakes the caller's timers that came due: a park ends, also one an agent's
-question or a turn end made due at once, and a closed tab whose timer came due
-goes back where it was. The first
-message carries `tab_revision`, the caller's tab-state revision, which that
-last step raises so the page reloads its tabs. The final message carries `tabs`,
+view and clears that location's mark unless `hold` is set and the mark is quiet.
+Parks end on the server, not in this call: a loop in the web process wakes every
+person's parks that came due, and a closed tab whose park ended goes back where
+it was. The first
+message carries `tab_revision`, the caller's tab-state revision, which a woken
+closed tab raises so the page reloads its tabs. The final message carries `tabs`,
 the caller's attention rows of locations that are not sessions, only those
 changed since `since`, or all of them; a row with only its path says the
 location has none any more.
@@ -203,8 +203,11 @@ Cancellation cancels the gRPC call, including pending reads, and releases databa
 rows.
 `Tabs` changes attention through `attention`: locations, an action (mark read,
 mark unread, park, park until done, unpark), and an RFC 3339 time for a park.
-Park until done parks a session's tab until its next turn ends, and skips any
-other location. It refuses New session (`/`) and `group:` placeholders, and a
+Park until done parks a session's tab until the session is idle after its work:
+no turn running, no message queued, no Background Job to wake it and no active
+goal. A failed
+turn or an agent's question ends it sooner, and the park a question ended comes
+back once nothing is asked. It skips any other location. It refuses New session (`/`) and `group:` placeholders, and a
 session the caller may not open. The mute, unmute and mark unread fields and the
 reply's mutes are gone, and their field numbers are reserved.
 `Identity` returns the Go-mapped username separately from `Protocol` negotiation.

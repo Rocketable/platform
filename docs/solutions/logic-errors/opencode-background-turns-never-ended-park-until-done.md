@@ -1,6 +1,7 @@
 ---
 title: A Remote OpenCode Turn Started by Background Work Never Ended a Park Until It Is Done
 date: 2026-11-11
+last_updated: 2026-11-18
 category: docs/solutions/logic-errors/
 module: internal/rocketclaw/backend
 problem_type: logic_error
@@ -29,7 +30,7 @@ tags:
 
 ## Problem
 
-A park until it is done ends at the session's next turn end. For a Remote OpenCode Session, a turn that OpenCode
+A park until it is done then ended at the session's next turn end. For a Remote OpenCode Session, a turn that OpenCode
 started itself, after a background subagent or shell command finished, reached no one when it ended. The park never
 ended, and nobody with the session open saw it go unread.
 
@@ -71,22 +72,32 @@ rename, would mark its readers again for an old idle marker.
 
 ## Why This Works
 
-RocketClaw's own listed sessions always emit the turn itself with an empty username, whoever sent it (`turnEventsSQL`,
-`internal/rocketclaw/backend/attention.go:71`, called from `markTurnEnd`, `store_dao.go:1581`). The OpenCode sync now
+RocketClaw's own listed sessions always emit the turn itself with an empty username, whoever sent it (`turnEventsSQL`
+in `internal/rocketclaw/backend/attention.go`, called from `markTurnEnd` in `store_dao.go`). The OpenCode sync now
 does the same. `sessionReadersSQL` sends any event row to the people with the session's tab and to everyone who
-parked it until it is done (`attention.go:61-69`), so a single row with an empty sender is enough.
+parked it until it is done, so a single row with an empty sender is enough to mark them.
+
+## Since 2026-11-18
+
+A park until it is done no longer ends at a turn end; it ends when the session is idle after its work (plan
+`docs/plans/2026-11-18-0900-feat-park-until-idle-plan.md`). A turn end now records that work happened on the parks of
+that session with `endTurnParksSQL`, which joins attention rows by `conversation_id` and so does not depend on who the
+event reached; `markTurnEnd` and the OpenCode sync each run it after marking, with whether the turn failed (the idle
+marker's `outcome` on the remote path). The reach fix above still decides who gets the Unread mark and the reply's
+notification.
 
 ## Prevention
 
 - When a behavior keys on "a turn ended", check both producers: `markTurnEnd` for RocketClaw's sessions and
   `syncOpenCode` for Remote OpenCode Sessions. The remote path derives turns from OpenCode's message stream, and a
   turn there need not start with a `user` message.
-- `TestSyncOpenCodeMarksTurnSenders` (`opencode_test.go:655-666`) covers both cases: a turn with no prompt ends a
-  park until it is done, and a moved `time.updated` without a new idle marker does not.
-- In the model, a ghost variable tracks the cause (`endedDone`, set on every turn end, `TabAttention.tla:86`), not its
-  effect, and `WakeReaches` chooses whether a background turn end reaches anyone (`TabAttention.tla:46`, `:124`).
-  With `WakeReaches = FALSE`, `DoneEndsAtTurnEnd` (`TabAttention.tla:641`) fails in a three-state trace: park until
-  done, then a background turn end. An invariant over a variable only the reach path sets cannot see a reach bug.
+- `TestSyncOpenCodeMarksTurnSenders` covers both cases: a new idle marker with no prompt records work on a park
+  until it is done (and ends it when its `outcome` is `failed`), and a moved `time.updated` without a new idle marker
+  does not.
+- An invariant or liveness property over a variable only the reach path sets cannot see a reach bug. The model first
+  tracked the cause with a ghost (`endedDone`) for `DoneEndsAtTurnEnd`; since the idle change it sets `worked` on every
+  turn end outside the `WakeReaches` branch, as the code does, so `IdleEndsDone` cannot hold vacuously when a turn
+  end reaches no one. Keep any new park state set outside that branch, or the property loses its teeth again.
 - To diagnose a stuck park on a remote session, list the session's messages from the OpenCode server,
   `/api/session/<id>/message?order=desc`. Idle markers with only `synthetic` messages since the previous one are
   turns background work started.
