@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
@@ -132,21 +133,18 @@ func (a *cronFrontmatterAgent) UnmarshalJSON(data []byte) error {
 }
 
 func splitCronFrontmatter(data []byte) (frontmatter []byte, body string, err error) {
-	source := string(data)
-
-	line, rest, ok := strings.Cut(source, "\n")
-	if !ok || strings.TrimSuffix(line, "\r") != "---" {
+	line, rest, ok := bytes.Cut(data, []byte("\n"))
+	if !ok || !bytes.Equal(bytes.TrimSuffix(line, []byte("\r")), []byte("---")) {
 		return nil, "", errors.New("yaml frontmatter is required")
 	}
 
-	start := len(source) - len(rest)
-	for offset := start; offset < len(source); {
-		line, rest, _ = strings.Cut(source[offset:], "\n")
-		if strings.TrimSuffix(line, "\r") == "---" {
-			return []byte(source[start:offset]), rest, nil
+	for offset := 0; offset < len(rest); {
+		line, after, _ := bytes.Cut(rest[offset:], []byte("\n"))
+		if bytes.Equal(bytes.TrimSuffix(line, []byte("\r")), []byte("---")) {
+			return rest[:offset], string(after), nil
 		}
 
-		offset = len(source) - len(rest)
+		offset = len(rest) - len(after)
 	}
 
 	return nil, "", errors.New("yaml frontmatter closing delimiter is required")
