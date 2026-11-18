@@ -594,6 +594,8 @@ With a token, RocketClaw sends:
 - Browser page views, clicks, heatmaps, Web Vitals, JavaScript errors, and session replays. Replays record typed text, console logs, and network requests in full, and each browser is identified by its Web username.
 - Traces of agent turns, model calls, and tools. They go to PostHog's AI Observability (model, tokens, and latency for each model call) and to its distributed tracing. Each trace belongs to the person who sent the turn: their email when known, else their principal name. Turns nobody sent, such as cron jobs, have no person. Traces never include the text of prompts, conversation history, tool arguments, replies, or tool results: each of those reads `__REDACTED__`.
 
+Server events and errors use the stored `server_display_name` as their PostHog distinct ID, or `web.tsnet.hostname` when it is blank. A save on the Config page applies to them at once. The few lines logged at startup before RocketClaw reads its Behavior Settings use `web.tsnet.hostname`.
+
 To get console logs and network requests in replays, also turn them on in the PostHog project settings.
 
 ## Repository layout

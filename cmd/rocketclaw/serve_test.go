@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -142,6 +144,77 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 	for name, agent := range agents.Items {
 		require.False(t, agent.CustomShell.Emulated, "Slack auth fixture must not start background sandbox preparation for agent %q", name)
 	}
+}
+
+func TestRunServeAttributesPostHogEventsToStoredServerDisplayName(t *testing.T) {
+	serveFakeSlack(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, err := io.WriteString(w, `{"ok":false,"error":"invalid_auth"}`)
+		assert.NoError(t, err)
+	})
+
+	type captured struct {
+		Event      string `json:"event"`
+		DistinctID string `json:"distinct_id"`
+	}
+
+	var (
+		mu     sync.Mutex
+		events []captured
+	)
+
+	collector := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/batch/" {
+			return
+		}
+
+		var body struct {
+			Batch []captured `json:"batch"`
+		}
+
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		events = append(events, body.Batch...)
+	}))
+	t.Cleanup(collector.Close)
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+
+	exitDistinctIDs := func(displayName string) []string {
+		t.Helper()
+
+		configData := fmt.Sprintf(
+			`{"workspace":%q,"web":{"tsnet":{"hostname":"lab"}},"server_display_name":%q,"database_url":%q,"posthog":{"project_token":"phc_test","host":%q},"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["assistant"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
+			workspace, displayName, dsn, collector.URL,
+		)
+		require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))
+		require.ErrorContains(t, runServe([]string{"--pprof=false"}, "127.0.0.1:0"), "invalid_auth")
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		var ids []string
+
+		for _, event := range events {
+			if event.Event == "rocketclaw exited with error" {
+				ids = append(ids, event.DistinctID)
+			}
+		}
+
+		events = nil
+
+		return ids
+	}
+
+	require.Equal(t, []string{"Imported"}, exitDistinctIDs("Imported"))
+	require.Equal(t, []string{"Imported"}, exitDistinctIDs("Ignored"), "the stored server_display_name names the server in PostHog, not the ignored file value")
 }
 
 func serveFakeSlack(t *testing.T, handler http.HandlerFunc) {

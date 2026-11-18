@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"expvar"
 	"io"
 	"log/slog"
 	"os"
@@ -47,7 +48,7 @@ func startAgentDraftSave(t *testing.T, workspace, dsn string, overlays ...string
 	done := make(chan error, 1)
 
 	go func() {
-		done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{})
+		done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), new(expvar.String), assembler, sandbox.None{})
 	}()
 
 	ds.stop = sync.OnceFunc(func() {

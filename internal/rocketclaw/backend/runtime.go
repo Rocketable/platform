@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"expvar"
 	"fmt"
 	"iter"
 	"log/slog"
@@ -36,6 +37,7 @@ type Runtime struct {
 	Cfg               *config.LockedConfig
 	Log               *slog.Logger
 	logLevel          *slog.LevelVar
+	displayName       *expvar.String
 	RunCtx            context.Context
 	Sessions          *SessionService
 	ExternalMCPAgents runtimeRefresher
@@ -130,6 +132,7 @@ func (r *Runtime) SaveBehavior(behavior *config.Behavior) error {
 		applied = true
 
 		SetLogLevel(r.logLevel, normalized.Logging.Level)
+		r.displayName.Set(normalized.ServerDisplayName)
 
 		if err := r.ExternalMCPAgents.Refresh(); err != nil {
 			return fmt.Errorf("refresh external MCP agents: %w", err)
@@ -171,6 +174,7 @@ func (r *Runtime) SaveBehavior(behavior *config.Behavior) error {
 
 	if applied {
 		SetLogLevel(r.logLevel, previous.Logging.Level)
+		r.displayName.Set(previous.ServerDisplayName)
 
 		if errRefresh := r.ExternalMCPAgents.Refresh(); errRefresh != nil {
 			err = errors.Join(err, fmt.Errorf("refresh external MCP agents after restoring: %w", errRefresh))

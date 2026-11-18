@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"expvar"
 	"fmt"
 	"log/slog"
 	"os"
@@ -34,7 +35,7 @@ func TestRunRejectsInvalidAgentAtStartup(t *testing.T) {
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, slog.New(slog.DiscardHandler), new(slog.LevelVar), nil, sandbox.None{})
+	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, slog.New(slog.DiscardHandler), new(slog.LevelVar), new(expvar.String), nil, sandbox.None{})
 	require.ErrorContains(t, err, "validate rocketcode definitions")
 	require.ErrorContains(t, err, "model: required non-empty string")
 }

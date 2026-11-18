@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"expvar"
 	"io"
 	"log/slog"
 	"net/http"
@@ -98,7 +99,7 @@ func startAgentDraftTest(t *testing.T, agents map[string]string, answer func(w h
 	done := make(chan error, 1)
 
 	go func() {
-		done <- Run(ctx, cfg, slog.New(slog.NewTextHandler(t.Output(), nil)), new(slog.LevelVar), assembler, sandbox.None{})
+		done <- Run(ctx, cfg, slog.New(slog.NewTextHandler(t.Output(), nil)), new(slog.LevelVar), new(expvar.String), assembler, sandbox.None{})
 	}()
 
 	t.Cleanup(func() {

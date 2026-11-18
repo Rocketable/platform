@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"expvar"
 	"fmt"
 	"log/slog"
 	"net"
@@ -120,7 +121,7 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	errRun := make(chan error, 1)
 
 	go func() {
-		errRun <- backend.Run(ctx, cfg, testLogger(), new(slog.LevelVar), assembler, sandbox.None{})
+		errRun <- backend.Run(ctx, cfg, testLogger(), new(slog.LevelVar), new(expvar.String), assembler, sandbox.None{})
 	}()
 
 	t.Cleanup(func() {

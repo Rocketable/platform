@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"expvar"
 	"log/slog"
 	"os"
 
@@ -17,18 +18,24 @@ func newLogger(level *slog.LevelVar, mirrors ...slog.Handler) *slog.Logger {
 	return logger
 }
 
-func postHogMirrors(client posthog.EnqueueClient, distinctID string) []slog.Handler {
+func postHogMirrors(client posthog.EnqueueClient, displayName *expvar.String, hostname string) []slog.Handler {
+	events := postHogEvents{client: client, displayName: displayName, hostname: hostname}
 	exceptions := posthog.NewSlogCaptureHandler(slog.DiscardHandler, client,
-		posthog.WithDistinctIDFn(func(context.Context, slog.Record) string { return distinctID }),
+		posthog.WithDistinctIDFn(func(context.Context, slog.Record) string { return events.distinctID() }),
 		posthog.WithPropertiesFn(posthog.SlogAttrsAsProperties),
 	)
 
-	return []slog.Handler{exceptions, slog.NewJSONHandler(postHogEvents{client: client, distinctID: distinctID}, nil)}
+	return []slog.Handler{exceptions, slog.NewJSONHandler(events, nil)}
 }
 
 type postHogEvents struct {
-	client     posthog.EnqueueClient
-	distinctID string
+	client      posthog.EnqueueClient
+	displayName *expvar.String
+	hostname    string
+}
+
+func (e postHogEvents) distinctID() string {
+	return cmp.Or(e.displayName.Value(), e.hostname)
 }
 
 func (e postHogEvents) Write(record []byte) (int, error) {
@@ -40,5 +47,5 @@ func (e postHogEvents) Write(record []byte) (int, error) {
 	event, _ := properties["event"].(string)
 	message, _ := properties["msg"].(string)
 
-	return len(record), e.client.Enqueue(posthog.Capture{DistinctId: e.distinctID, Event: cmp.Or(event, message), Properties: properties})
+	return len(record), e.client.Enqueue(posthog.Capture{DistinctId: e.distinctID(), Event: cmp.Or(event, message), Properties: properties})
 }

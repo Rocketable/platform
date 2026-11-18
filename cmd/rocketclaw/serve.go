@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"expvar"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -36,7 +37,10 @@ func runServe(args []string, diagnosticsAddress string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	var mirrors []slog.Handler
+	var (
+		mirrors     []slog.Handler
+		displayName expvar.String
+	)
 
 	if cfg.PostHog.ProjectToken != "" {
 		client, err := posthog.NewWithConfig(cfg.PostHog.ProjectToken, posthog.Config{Endpoint: cfg.PostHog.Host, ShutdownTimeout: 5 * time.Second})
@@ -50,7 +54,7 @@ func runServe(args []string, diagnosticsAddress string) error {
 			}
 		}()
 
-		mirrors = postHogMirrors(client, cmp.Or(cfg.ServerDisplayName, cfg.Web.Tsnet.Hostname))
+		mirrors = postHogMirrors(client, &displayName, cfg.Web.Tsnet.Hostname)
 	}
 
 	level := new(slog.LevelVar)
@@ -106,7 +110,7 @@ func runServe(args []string, diagnosticsAddress string) error {
 		logger.Info("started private pprof HTTP", "address", listener.Addr().String())
 	}
 
-	if err := backend.Run(ctx, cfg, logger, level, processAssembler{}, sandbox.Bubblewrap{}); err != nil {
+	if err := backend.Run(ctx, cfg, logger, level, &displayName, processAssembler{}, sandbox.Bubblewrap{}); err != nil {
 		if errors.Is(err, backend.ErrRestartRequested) {
 			logger.Info("rocketclaw restart requested; exiting with code 255 for supervisor restart")
 			return exitCodeError(255)

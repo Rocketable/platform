@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
+	"expvar"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -51,7 +52,7 @@ func TestPostHogMirrorsCaptureEventsAndExceptions(t *testing.T) {
 	level := new(slog.LevelVar)
 	level.Set(slog.LevelError)
 
-	logger := newLogger(level, postHogMirrors(client, "lab")...).With("component", "cron")
+	logger := newLogger(level, postHogMirrors(client, new(expvar.String), "lab")...).With("component", "cron")
 	logger.Debug("ignored")
 	logger.Info("completed cronjob", "event", "cron_completed", "outcome", "ok")
 	logger.Info("rocketclaw health", "go_goroutines", 7)

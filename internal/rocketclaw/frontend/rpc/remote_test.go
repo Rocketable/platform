@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"expvar"
 	"log/slog"
 	"net"
 	"net/http"
@@ -76,7 +77,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 
 		running, ctxRunning := errgroup.WithContext(ctx)
 		running.Go(func() error {
-			return backend.Run(ctx, cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)).With("test", t.Name(), "fixture_reply", reply), new(slog.LevelVar), assembly, sandbox.None{})
+			return backend.Run(ctx, cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)).With("test", t.Name(), "fixture_reply", reply), new(slog.LevelVar), new(expvar.String), assembly, sandbox.None{})
 		})
 		t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 

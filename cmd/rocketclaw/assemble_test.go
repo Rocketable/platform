@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"expvar"
 	"log/slog"
 	"net/http"
 	"os"
@@ -86,7 +87,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 				MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0", Users: map[string]string{"alice": "secret"}},
 				Web:         config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}},
 			}
-			require.NoError(t, backend.Run(t.Context(), cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), &FrontendAssemblerMock{
+			require.NoError(t, backend.Run(t.Context(), cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), new(expvar.String), &FrontendAssemblerMock{
 				ValidateAssetsFunc: processAssembler{}.ValidateAssets,
 				AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 					rt.RunCtx = ctx

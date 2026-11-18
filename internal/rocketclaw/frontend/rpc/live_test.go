@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"expvar"
 	"fmt"
 	"iter"
 	"log/slog"
@@ -125,7 +126,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 
 		var running errgroup.Group
 		running.Go(func() error {
-			return backend.Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly, sandbox.None{})
+			return backend.Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), new(expvar.String), assembly, sandbox.None{})
 		})
 
 		t.Cleanup(func() {
@@ -460,7 +461,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 
 	var running errgroup.Group
 	running.Go(func() error {
-		return backend.Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly, sandbox.None{})
+		return backend.Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), new(expvar.String), assembly, sandbox.None{})
 	})
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
@@ -547,7 +548,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 
 	var running errgroup.Group
 	running.Go(func() error {
-		return backend.Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly, sandbox.None{})
+		return backend.Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), new(expvar.String), assembly, sandbox.None{})
 	})
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 

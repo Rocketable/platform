@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"expvar"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -522,7 +523,7 @@ func TestSessionMigrationsCancelPlanning(t *testing.T) {
 
 	var work errgroup.Group
 	work.Go(func() error {
-		return Run(ctx, &config.Config{Workspace: workspace, DatabaseURL: testStoreDSN(workspace)}, slog.New(slog.DiscardHandler), new(slog.LevelVar), &frontendAssemblerMock{}, sandbox.None{})
+		return Run(ctx, &config.Config{Workspace: workspace, DatabaseURL: testStoreDSN(workspace)}, slog.New(slog.DiscardHandler), new(slog.LevelVar), new(expvar.String), &frontendAssemblerMock{}, sandbox.None{})
 	})
 	require.Eventually(t, func() bool {
 		var n int

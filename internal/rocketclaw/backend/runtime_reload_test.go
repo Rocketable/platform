@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"expvar"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -134,7 +135,7 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 
 	refresh, cron := &runtimeRefresherMock{}, &runtimeRefresherMock{}
 	rt := &Runtime{
-		Cfg: config.NewLockedConfig(cfg), Log: log, logLevel: new(slog.LevelVar), RunCtx: t.Context(), Sessions: store, ExternalMCPAgents: refresh, CronJobs: cron, sandboxes: sandbox.None{},
+		Cfg: config.NewLockedConfig(cfg), Log: log, logLevel: new(slog.LevelVar), displayName: new(expvar.String), RunCtx: t.Context(), Sessions: store, ExternalMCPAgents: refresh, CronJobs: cron, sandboxes: sandbox.None{},
 		Assemble: &frontendAssemblerMock{ValidateAssetsFunc: func(_ *config.Config, runtimeDir string) error {
 			if rejectAssets {
 				return errors.New(`cron job "report" is invalid`)
@@ -213,10 +214,12 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 	require.Empty(t, refresh.RefreshCalls())
 
 	saved := edit(func(b *config.Behavior) { b.AutoApproverModel, b.Logging.Level = "gpt-b", "warn" })
+	saved.ServerDisplayName = "Ops"
 	require.NoError(t, rt.SaveBehavior(saved))
 	require.Equal(t, "gpt-b", rt.Cfg.Clone().AutoApproverModel)
 	require.Equal(t, rt.Cfg.Clone().Behavior(), stored())
 	require.Equal(t, slog.LevelWarn, rt.logLevel.Level())
+	require.Equal(t, "Ops", rt.displayName.Value())
 	require.Equal(t, oldAgent, liveAgent("main.md"), "a save that keeps the overlays does not publish workspace edits")
 	require.Len(t, refresh.RefreshCalls(), 1)
 	require.Len(t, cron.RefreshCalls(), 1)
@@ -249,10 +252,14 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 		rt.RunCtx, cancelRun, fail = ctx, cancel, tt.fail
 		calls := len(refresh.RefreshCalls())
 
-		require.ErrorContains(t, rt.SaveBehavior(edit(tt.change)), tt.want, tt.fail)
+		rejected := edit(tt.change)
+		rejected.ServerDisplayName = "Lab"
+
+		require.ErrorContains(t, rt.SaveBehavior(rejected), tt.want, tt.fail)
 		require.Equal(t, before, rt.Cfg.Clone().Behavior(), tt.fail)
 		require.Equal(t, before, stored(), tt.fail)
 		require.Equal(t, slog.LevelWarn, rt.logLevel.Level(), tt.fail)
+		require.Equal(t, "Ops", rt.displayName.Value(), tt.fail)
 		require.Equal(t, oldAgent, liveAgent("main.md"), tt.fail)
 		require.NoFileExists(t, filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents", "remote.md"), tt.fail)
 		require.Len(t, refresh.RefreshCalls(), calls+tt.refreshes, tt.fail)
