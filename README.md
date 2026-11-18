@@ -32,7 +32,7 @@ See [LICENSE](LICENSE) for the full license terms.
 go run github.com/Rocketable/platform/cmd/rocketclaw@main
 ```
 
-Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or the older `femtoclaw.json`) from the current folder. That file holds setup and secrets: it points at the workspace and the database, holds the Slack, provider, and External MCP credentials, and turns on other integrations. Values can also come from AWS Secrets Manager.
+Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or the older `femtoclaw.json`) from the current folder. That file holds setup and secrets: it points at the workspace and the database, holds the Slack, provider, and External MCP credentials, and turns on other integrations. Values can also come from AWS Secrets Manager. `rocketclaw run --aws-secrets-manager-arn ARN` merges that JSON secret over the file, and with it the file is optional: the secret alone can hold the whole configuration, and the workspace defaults to the current folder.
 
 Behavior Settings live in PostgreSQL instead: `auto_approver_model`, `slack.channels`, `server_display_name`, `logging.level`, and `overlays`. The first start copies them from the file once every startup check passes. After that, RocketClaw ignores them in the file and logs a warning naming each one it ignored. The people named in the file's `web.admins` (their Tailscale logins, for example `"web": {"admins": ["alice@example.com"]}`) edit them on the Config page, one control per setting. A save is checked whole and applies to the running server at once, or is refused and changes nothing. Everyone else sees the page read-only.
 
