@@ -331,8 +331,6 @@ func webAttention(attention *backend.Attention) (unreadAt string, quiet, parked 
 	return unreadAt, quiet, attention.Parked, until, note
 }
 
-type historyRevision = backend.HistoryInventory
-
 func (s *Server) history(ctx context.Context, request *HistoryRequest) (*HistoryResponse, error) {
 	_, limit, err := s.spaceLimit(ctx)
 	if err != nil {
@@ -354,11 +352,11 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		return nil, err
 	}
 
-	var previous historyRevision
+	var previous backend.HistoryInventory
 
 	data, errToken := base64.RawURLEncoding.DecodeString(request.Revision)
-	if errToken != nil || json.Unmarshal(data, &previous) != nil || previous.ConversationID != request.Id || previous.Source != request.SourceConversationId {
-		previous = historyRevision{}
+	if errToken != nil || json.Unmarshal(data, &previous) != nil {
+		previous = backend.HistoryInventory{}
 	}
 
 	view, err := s.sessions.ObserveHistory(ctx, request.Id, request.SourceConversationId, request.GetFrom(), request.GetBefore(), int(request.GetLimit()), &previous)
@@ -367,7 +365,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	}
 
 	if view.Reset {
-		previous = historyRevision{}
+		previous = backend.HistoryInventory{}
 	}
 
 	entries, from, oldest := view.Entries, view.Inventory.From, view.Inventory.Oldest
