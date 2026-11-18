@@ -1262,7 +1262,7 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 	}
 
 	for _, channel := range cfg.Slack.Channels {
-		agents := slices.DeleteFunc(slices.Clone(channel.Agents), func(name string) bool { return !limit.AllowsAgent(name) })
+		agents := slices.DeleteFunc(channel.Agents, func(name string) bool { return !limit.AllowsAgent(name) })
 		view.SlackChannels = append(view.SlackChannels, &ConfigChannel{Channel: channel.Channel, Agents: agents})
 	}
 
