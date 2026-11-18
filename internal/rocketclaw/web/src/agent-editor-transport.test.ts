@@ -493,10 +493,20 @@ test("the test chat answers in every column, labels versions, restarts, and pose
 
     const queue = await call<{ id: string }>("CreateAgentDraft", { name: "queue", mode: "advanced" });
     await apply(queue.id, { kind: "edit_file", variant: "a", value: "---\nmodel: gpt-held\n---\nHelp.\n" });
+    await page.goto("about:blank");
+    await page.clock.install();
     await page.goto(`${alice}/agents/drafts/${queue.id}`);
     await send("one");
     await row(1).getByText("one", { exact: true }).first().waitFor();
-    await send("two");
+    await Promise.all([
+      page.waitForResponse((reply: { url(): string; request(): { postDataJSON(): { id: string; text: string } } }) => {
+        if (reply.url() !== `${alice}/api/DraftPrompt`) return false;
+        const { id, text } = reply.request().postDataJSON();
+        return id === queue.id && text === "two";
+      }),
+      send("two"),
+    ]);
+    await page.clock.runFor(2_000);
     await chat.getByText("Waiting its turn: two", { exact: true }).waitFor();
     const held = (await read(queue.id)).testChat;
     await chat.getByRole("button", { name: "Restart & replay", exact: true }).click();
