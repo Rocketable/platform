@@ -217,6 +217,12 @@ func checkedAgentTagGroups(agent *harness.Agent) ([][]string, error) {
 		return nil, fmt.Errorf("permission.rocketclaw.%s: %w", recipientSetting, err)
 	}
 
+	if agent.Approver != nil {
+		if _, err := agentTagGroups(agent.Approver); err != nil {
+			return nil, fmt.Errorf("approver.tags: %w", err)
+		}
+	}
+
 	return groups, nil
 }
 
@@ -234,7 +240,16 @@ func checkRecipient(agents harness.Agents, target, sender string) error {
 	return fmt.Errorf("agent %q does not accept writes from agent %q (%s)", target, sender, setting)
 }
 
-func appendSessionTagPrompt(agent *harness.Agent, groups [][]string) {
+func setSessionTagTools(agent *harness.Agent, groups [][]string) {
+	action := harness.PermissionDeny
+	if len(groups) > 0 && (agent.Permission.Sudo || agent.Permission.Easy) {
+		action = harness.PermissionAuto
+	} else if len(groups) > 0 {
+		action = harness.PermissionAllow
+	}
+
+	agent.Permission.Buckets = append(agent.Permission.Buckets, harness.PermissionBucket{Name: "rocketclaw_tags", Rules: []harness.PermissionRule{{Pattern: setTagToolName, Action: action}, {Pattern: getTagsToolName, Action: action}}})
+
 	var tools []string
 
 	for _, name := range []string{setTagToolName, getTagsToolName} {

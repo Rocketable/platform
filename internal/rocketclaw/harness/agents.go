@@ -44,6 +44,7 @@ type Agent struct {
 	Subagents        []string
 	ApproverModel    string
 	ApproverPrompt   string
+	Approver         *Agent
 	Routines         []AgentRoutine
 	TagGroups        [][]string
 	DelegatedFrom    []string

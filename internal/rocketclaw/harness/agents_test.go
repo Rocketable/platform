@@ -226,6 +226,7 @@ ignored
 			{frontmatter: "approver: {decision: {rules: Deny deploys.}}", wantErr: "main.md: approver.decision.rules: not an approver.decision key"},
 			{frontmatter: "approver: {decision: [openai/gpt-6-luna]}", wantErr: "main.md: approver.decision: must be a mapping"},
 			{frontmatter: "approver: {prompt: Deny writes.}", wantErr: "main.md: approver.prompt: advanced agents take only approver.decision"},
+			{frontmatter: "approver: {skills: []}", wantErr: "main.md: approver.skills: advanced agents take only approver.decision"},
 			{frontmatter: "approver: openai/gpt-6-luna", wantErr: "main.md: approver: must be a mapping with only decision"},
 		} {
 			t.Run(tt.frontmatter, func(t *testing.T) {

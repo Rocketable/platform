@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -90,8 +91,6 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 	}{
 		{"maxRecursion", "an integer of 0 or more", &maxRecursion},
 		{"approver", "a mapping of model and prompt strings and a decision mapping", &approver},
-		{"secretsARN", "a list of ARNs", &agent.SecretsARN},
-		{"tags", "a list of tag lists", &agent.TagGroups},
 	} {
 		if field := frontmatterField(node, section.key); field != nil && field.Decode(section.target) != nil {
 			return fmt.Errorf("%s: must be %s", section.key, section.shape)
@@ -102,7 +101,7 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 		return err
 	}
 
-	if err := parseAgentShell(node, agent); err != nil {
+	if err := errors.Join(parseAgentShell(node, agent), compileEasyApprover(agent, cfg)); err != nil {
 		return err
 	}
 
@@ -167,14 +166,12 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 		}
 	}
 
-	agent.Permission, err = compileEasyPermissions(agent, cfg)
-
-	return err
+	return compileEasyPermissions(agent, cfg)
 }
 
-func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) (PermissionSet, error) {
-	node := agent.FrontmatterNode
-	permission := PermissionSet{Easy: true}
+func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) error {
+	agent.Permission = PermissionSet{Easy: true}
+	permission := &agent.Permission
 
 	for _, bucket := range []string{"bash", "read", "edit", "glob", "grep", "webfetch", "websearch", "opencode"} {
 		_ = permission.Set(bucket, "*", PermissionAuto)
@@ -187,11 +184,70 @@ func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) (PermissionSet, e
 		_ = permission.Allow("task", agent.Name)
 	}
 
+	if err := compileEasySections(agent, cfg, PermissionAuto); err != nil {
+		return err
+	}
+
+	return compileEasyDecision(agent, cfg, permission)
+}
+
+func compileEasyApprover(agent *Agent, cfg AgentLoadConfig) error {
+	var offUnlessListed yaml.Node
+
+	_ = yaml.Unmarshal([]byte("{mcp: {}, rocketclaw: [], skills: [], allowedNetworkTargets: []}"), &offUnlessListed)
+
+	approver := embeddedGuardianAgent()
+	approver.Mode, approver.WorkingDirectory = AgentModeEasy, agent.WorkingDirectory
+	approver.FrontmatterNode = offUnlessListed.Content[0]
+
+	if node := frontmatterField(agent.FrontmatterNode, "approver"); node != nil {
+		approver.FrontmatterNode.Content = slices.Concat(node.Content, approver.FrontmatterNode.Content)
+	}
+
+	groups, _ := easyList(frontmatterField(approver.FrontmatterNode, "rocketclaw"), "rocketclaw")
+	for _, group := range []string{"background", "restart"} {
+		if slices.Contains(groups, group) {
+			return fmt.Errorf("approver.rocketclaw: an approver cannot use the %s group", group)
+		}
+	}
+
+	if err := cmp.Or(parseEmulatedShell(approver.FrontmatterNode, &approver), compileEasySections(&approver, cfg, PermissionAllow)); err != nil {
+		return fmt.Errorf("approver.%w", err)
+	}
+
+	approver.CustomShell = agent.CustomShell
+	_ = approver.Permission.Deny("rocketclaw", AllowBackgroundSubject)
+	_ = approver.Permission.Deny("rocketclaw", "rocketclaw_restart")
+
+	if len(approver.Commands) > 0 {
+		_ = approver.Permission.Allow("bash", "*")
+	}
+
+	if approver.NetworkTargets == nil || len(approver.NetworkTargets) > 0 {
+		_ = approver.Permission.Allow("webfetch", "*")
+	}
+
+	agent.Approver = &approver
+
+	return nil
+}
+
+func compileEasySections(agent *Agent, cfg AgentLoadConfig, action PermissionAction) error {
+	node, permission := agent.FrontmatterNode, &agent.Permission
+
+	if field := frontmatterField(node, "secretsARN"); field != nil && field.Decode(&agent.SecretsARN) != nil {
+		return errors.New("secretsARN: must be a list of ARNs")
+	}
+
+	if field := frontmatterField(node, "tags"); field != nil && field.Decode(&agent.TagGroups) != nil {
+		return errors.New("tags: must be a list of tag lists")
+	}
+
 	field := frontmatterField(node, "mcp")
 	if field == nil || field.Kind == yaml.ScalarNode && field.Value == "auto" {
-		_ = permission.Set("mcp", "*", PermissionAuto)
+		_ = permission.Set("mcp", "*", action)
 	} else if field.Kind != yaml.MappingNode {
-		return PermissionSet{}, errors.New("mcp: must be auto or a map from server to auto or tool groups")
+		return errors.New("mcp: must be auto or a map from server to auto or tool groups")
 	}
 
 	for i := 0; field != nil && i+1 < len(field.Content); i += 2 {
@@ -199,26 +255,26 @@ func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) (PermissionSet, e
 
 		groups, ok := cfg.MCPToolGroups[server]
 		if !ok {
-			return PermissionSet{}, fmt.Errorf("mcp: server %q is not configured", server)
+			return fmt.Errorf("mcp: server %q is not configured", server)
 		}
 
 		names, err := easyList(field.Content[i+1], "mcp."+server)
 		if err != nil {
-			return PermissionSet{}, err
+			return err
 		}
 
 		if names == nil {
-			_ = permission.Set("mcp", server+".*", PermissionAuto)
+			_ = permission.Set("mcp", server+".*", action)
 		}
 
 		for _, name := range names {
 			patterns := groups[name]
 			if len(patterns) == 0 {
-				return PermissionSet{}, fmt.Errorf("mcp: server %q has no %q tool group", server, name)
+				return fmt.Errorf("mcp: server %q has no %q tool group", server, name)
 			}
 
 			for _, pattern := range patterns {
-				_ = permission.Set("mcp", server+"."+pattern, PermissionAuto)
+				_ = permission.Set("mcp", server+"."+pattern, action)
 			}
 		}
 	}
@@ -233,29 +289,29 @@ func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) (PermissionSet, e
 
 	groups, err := easyList(frontmatterField(node, "rocketclaw"), "rocketclaw")
 	if err != nil {
-		return PermissionSet{}, err
+		return err
 	}
 
 	if groups == nil {
 		groups = slices.Sorted(maps.Keys(rocketclawGroups))
 	} else if slices.Contains(groups, "tags") != (len(agent.TagGroups) > 0) {
-		return PermissionSet{}, errors.New("tags: required by the tags group in rocketclaw, and only with it")
+		return errors.New("tags: required by the tags group in rocketclaw, and only with it")
 	}
 
 	for _, group := range groups {
 		subjects, ok := rocketclawGroups[group]
 		if !ok {
-			return PermissionSet{}, fmt.Errorf("rocketclaw: unknown group %q", group)
+			return fmt.Errorf("rocketclaw: unknown group %q", group)
 		}
 
 		for _, subject := range subjects {
-			_ = permission.Set(subject[0], subject[1], PermissionAuto)
+			_ = permission.Set(subject[0], subject[1], action)
 		}
 	}
 
 	folders, err := easyList(frontmatterField(node, "skills"), "skills")
 	if err != nil {
-		return PermissionSet{}, err
+		return err
 	}
 
 	if folders == nil {
@@ -270,15 +326,11 @@ func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) (PermissionSet, e
 
 			return err
 		}) != nil {
-			return PermissionSet{}, fmt.Errorf("skills: folder %q does not exist", folder)
+			return fmt.Errorf("skills: folder %q does not exist", folder)
 		}
 	}
 
-	if err := compileEasyDecision(agent, cfg, &permission); err != nil {
-		return PermissionSet{}, err
-	}
-
-	return permission, nil
+	return nil
 }
 
 func compileEasyDecision(agent *Agent, cfg AgentLoadConfig, permission *PermissionSet) error {
@@ -357,7 +409,7 @@ func easyKeys() map[string][]string {
 	return map[string][]string{
 		"": {"mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN", "shell", "commands", "mcp", "rocketclaw",
 			"tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema", "sticky", "decision"},
-		"approver":          {"model", "prompt", "decision"},
+		"approver":          {"model", "prompt", "decision", "secretsARN", "commands", "mcp", "rocketclaw", "tags", "skills", "allowedNetworkTargets"},
 		"approver.decision": {"model", "minConfidence", "prompt"},
 		"schema":            {"output"},
 	}

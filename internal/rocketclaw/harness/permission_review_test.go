@@ -9,7 +9,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -235,6 +237,68 @@ func TestPermissionReviewUsesAgentApprover(t *testing.T) {
 			} else {
 				require.Equal(t, -1, rules)
 			}
+		})
+	}
+}
+
+func TestPermissionReviewRunsApproverTools(t *testing.T) {
+	const tagRules = "\n\n## Session Tags\n\nAllowed groups: red, green."
+
+	for _, tc := range []struct {
+		name, approver string
+		offered        bool
+	}{
+		{name: "listed group", approver: "{prompt: Deny writes., rocketclaw: [sessions]}", offered: true},
+		{name: "left out", approver: "{prompt: Deny writes.}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent, errs := loadEasyTestAgent(t, easyRequired+"\napprover: "+tc.approver)
+			require.Empty(t, errs)
+
+			calls := 0
+			tools, err := customLooperTools([]Tool{{Name: "rocketclaw_sessions_list", Permission: "rocketclaw", VisibilitySubjects: []string{"rocketclaw_sessions"},
+				Subjects: func(json.RawMessage) ([]string, error) { return []string{"rocketclaw_sessions"}, nil },
+				Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+					calls++
+
+					return TextToolResult("no other sessions"), nil
+				}}}, nil)
+			require.NoError(t, err)
+
+			replies := []*responses.Response{testResponse("review", []responses.ResponseOutputItemUnion{
+				testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Checked the sessions."}`),
+			})}
+
+			if tc.offered {
+				agent.Approver.Prompt += tagRules
+				replies = slices.Insert(replies, 0, responseWithFunctionCalls("look", []responses.ResponseFunctionToolCall{
+					testFunctionCall("tool", "call", executeToolName, `{"code":"def main():\n    return rocketclaw_sessions_list()\n","description":"look"}`),
+				}))
+			}
+
+			mock := mockResponses(replies...)
+			factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"main": agent}})
+			maps.Copy(factory.baseTools, tools)
+
+			decision := factory.reviewPermission(t.Context(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{"command":"ls"}`, Subjects: []string{"ls"}, ReviewerEmbedded: true})
+
+			require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome, decision.Rationale)
+			require.Len(t, newParams(mock), len(replies))
+
+			instructions := newParams(mock)[0].Instructions.Value
+			require.Equal(t, tc.offered, strings.Contains(instructions, "- rocketclaw_sessions_list("), "the reviewer is offered only what its own sections turn on")
+			require.Contains(t, instructions, "### Agent Rules\nDeny writes.\n")
+
+			if !tc.offered {
+				require.Zero(t, calls)
+
+				return
+			}
+
+			require.Equal(t, 1, calls, "the reviewer's own call runs without a review of its own")
+			require.Contains(t, newParams(mock)[1].Input.OfInputItemList[len(newParams(mock)[1].Input.OfInputItemList)-1].OfFunctionCallOutput.Output.OfString.Value, "no other sessions")
+			require.Less(t, strings.Index(instructions, `"rationale": string`), strings.Index(instructions, tagRules), "what the backend adds to the reviewer's prompt follows the guardian's own")
+			require.Less(t, strings.Index(instructions, tagRules), strings.Index(instructions, "# Turn Origin"))
 		})
 	}
 }

@@ -2647,15 +2647,11 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 			}
 		}
 
-		action := harness.PermissionDeny
-		if len(groups) > 0 && (agent.Permission.Sudo || agent.Permission.Easy) {
-			action = harness.PermissionAuto
-		} else if len(groups) > 0 {
-			action = harness.PermissionAllow
-		}
+		setSessionTagTools(&agent, groups)
 
-		agent.Permission.Buckets = append(agent.Permission.Buckets, harness.PermissionBucket{Name: "rocketclaw_tags", Rules: []harness.PermissionRule{{Pattern: setTagToolName, Action: action}, {Pattern: getTagsToolName, Action: action}}})
-		appendSessionTagPrompt(&agent, groups)
+		if agent.Approver != nil {
+			setSessionTagTools(agent.Approver, agent.Approver.TagGroups)
+		}
 
 		for _, tool := range tools {
 			action, matched := agent.Permission.Evaluate("rocketclaw", tool)
