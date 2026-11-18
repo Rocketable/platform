@@ -249,13 +249,13 @@ SET plan_cache_mode = force_generic_plan;`)
 	require.NoError(t, err)
 
 	for _, conversationID := range []string{"with-metadata", "without-metadata", "missing"} {
-		entry, found, err := store.externalMCPMetadataEntry(ctx, conversationID)
+		entry, err := store.externalMCPMetadataEntry(ctx, conversationID)
 		require.NoError(t, err)
-		require.Equal(t, conversationID == "with-metadata", found)
+		require.Equal(t, conversationID == "with-metadata", entry != nil)
 
-		if found {
-			require.Equal(t, 2, entry.Entry.Version)
-			require.Equal(t, externalMCPMetadataEntryType, entry.Entry.Type)
+		if entry != nil {
+			require.Equal(t, 2, entry.Version)
+			require.Equal(t, externalMCPMetadataEntryType, entry.Type)
 		}
 	}
 

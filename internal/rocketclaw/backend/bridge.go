@@ -2389,17 +2389,12 @@ func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol
 		childContext []harness.SessionEntry
 	)
 
-	metadataEntry, foundMetadata, err := b.config.SessionService.externalMCPMetadataEntry(ctx, self)
+	metadataEntry, err := b.config.SessionService.externalMCPMetadataEntry(ctx, self)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load external MCP metadata: %w", err)
 	}
 
-	if foundMetadata || origin.Source == protocol.SourceExternalMCP {
-		var entries []ObservedSessionEntry
-		if foundMetadata {
-			entries = []ObservedSessionEntry{metadataEntry}
-		}
-
+	if metadataEntry != nil || origin.Source == protocol.SourceExternalMCP {
 		metadataConversationID := self
 
 		_, session, paired, err := b.config.SessionService.ExternalMCPSessionByConversationID(self)
@@ -2411,7 +2406,7 @@ func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol
 			metadataConversationID = session.PrivateConversationID
 		}
 
-		metadataEnv, ok := externalMCPStoredMetadataEnv(metadataConversationID, entries)
+		metadataEnv, ok := externalMCPStoredMetadataEnv(metadataConversationID, metadataEntry)
 		if !ok {
 			metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, origin.ExternalMCPMetadata)
 		}
@@ -3373,37 +3368,33 @@ func externalMCPMetadataVariable(key string) string {
 	}, strings.ToUpper(key))
 }
 
-func externalMCPStoredMetadataEnv(conversationID string, entries []ObservedSessionEntry) (map[string]string, bool) {
+func externalMCPStoredMetadataEnv(conversationID string, entry *harness.SessionEntry) (map[string]string, bool) {
+	if entry == nil || entry.Type != externalMCPMetadataEntryType {
+		return nil, false
+	}
+
+	messages, err := replayInputMessages(entry.ReplayInput)
+	if err != nil {
+		return nil, false
+	}
+
 	conversationLine := rocketclawConversationIDEnv + "=" + strconv.Quote(conversationID)
-
-	for i := range slices.Backward(entries) {
-		entry := entries[i].Entry
-		if entry.Type != externalMCPMetadataEntryType {
+	for _, message := range messages {
+		if !strings.Contains(message.text, conversationLine) {
 			continue
 		}
 
-		messages, err := replayInputMessages(entry.ReplayInput)
-		if err != nil {
-			continue
+		env := map[string]string{}
+
+		for line := range strings.SplitSeq(message.text, "\n") {
+			key, value, ok := strings.Cut(line, "=")
+			if ok && strings.HasPrefix(key, "ROCKETCLAW_") {
+				value, _ = strconv.Unquote(value)
+				env[key] = value
+			}
 		}
 
-		for j := range messages {
-			if !strings.Contains(messages[j].text, conversationLine) {
-				continue
-			}
-
-			env := map[string]string{}
-
-			for line := range strings.SplitSeq(messages[j].text, "\n") {
-				key, value, ok := strings.Cut(line, "=")
-				if ok && strings.HasPrefix(key, "ROCKETCLAW_") {
-					value, _ = strconv.Unquote(value)
-					env[key] = value
-				}
-			}
-
-			return env, true
-		}
+		return env, true
 	}
 
 	return nil, false

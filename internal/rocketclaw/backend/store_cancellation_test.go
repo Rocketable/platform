@@ -62,7 +62,7 @@ func TestSessionOperationsRejectCanceledContext(t *testing.T) {
 			case "continue run":
 				_, err = runtime.ContinueRun(ctx, "run", "chat", false)
 			case "external MCP metadata":
-				_, _, err = store.externalMCPMetadataEntry(ctx, "chat")
+				_, err = store.externalMCPMetadataEntry(ctx, "chat")
 			}
 
 			require.ErrorIs(t, err, context.Canceled)
