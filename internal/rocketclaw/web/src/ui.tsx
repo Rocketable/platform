@@ -2766,9 +2766,7 @@ function usePaletteSessions(query: string, sessions: boolean, entered: boolean) 
   const search = useSessionSearch(filtered ? query : "", "filters", entered);
   const raw = useMemo(() => sessions ? rows.map((row) => sessionTitle(row)) : [], [rows, sessions]);
   const names = useSlackNames(useMemo(() => [...new Set(raw.flatMap(mentionIds))], [raw]));
-  // Titles are cleaned and lowered once per list or name change, so a keystroke only scans them.
-  const titles = useMemo(() => raw.map((title) => cleanText(title, names).toLowerCase()), [raw, names]);
-  const byId = useMemo(() => new Map(rows.map((row, i) => [rowKey(row.id, row.rocketclaw), titles[i] ?? ""])), [rows, titles]);
+  const byId = useMemo(() => new Map(rows.map((row, i) => [rowKey(row.id, row.rocketclaw), raw[i] === undefined ? "" : cleanText(raw[i], names).toLowerCase()])), [rows, raw, names]);
   const matches = useCallback((row: Session) => !free || !!byId.get(rowKey(row.id, row.rocketclaw))?.includes(free), [byId, free]);
   const titled = useMemo(() => sessions ? rows.filter(matches) : rows, [rows, sessions, matches]);
   const passed = useMemo(() => search.rows.filter(matches), [search.rows, matches]);
