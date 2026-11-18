@@ -75,14 +75,12 @@ function useTestChat(chat: string) {
   const histories = useQueries({ queries: stream.shadows.map((binding) => shadowHistory(binding, children)) });
   const turns = useMemo(() => {
     const joined: Turn[] = [];
-    let carried: Turn["items"] = [];
+    let items: Turn["items"] = [];
     for (const turn of transcriptTurns(stream.lines, undefined, true)) {
-      if (!turn.user.length) {
-        carried = [...carried, ...turn.items];
-        continue;
-      }
-      joined.push({ ...turn, items: [...carried, ...turn.items] });
-      carried = [];
+      for (const item of turn.items) items.push(item);
+      if (!turn.user.length) continue;
+      joined.push({ ...turn, items });
+      items = [];
     }
     return joined;
   }, [stream.lines]);
