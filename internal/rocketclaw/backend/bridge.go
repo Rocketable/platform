@@ -151,6 +151,7 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $5 AND reason = $6 RETU
 	current := item.Inbound
 	if current == nil {
 		current = protocol.NewInboundMessageFromContent(item.Source, item.Kind, &content, true)
+		current.Metadata[protocol.InboundPrincipalMetadataKey] = item.Principal
 	}
 
 	request.inbound.Text = current.Text
@@ -162,7 +163,20 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $5 AND reason = $6 RETU
 		request.inbound.Metadata[protocol.InboundRawTextMetadataKey] = raw
 	}
 
+	copyProvenance(request.inbound, current)
+
 	return item, true, nil
+}
+
+func copyProvenance(dst, src *protocol.InboundMessage) {
+	dst.Source, dst.Human = src.Source, src.Human
+	for _, key := range []string{protocol.InboundOriginMetadataKey, protocol.InboundMediaMetadataKey, protocol.InboundPrincipalMetadataKey, protocol.InboundPrincipalNameMetadataKey, protocol.InboundPrincipalEmailMetadataKey, protocol.InboundSenderSessionMetadataKey, protocol.InboundSenderAgentMetadataKey, protocol.InboundSenderActionMetadataKey} {
+		if value, ok := src.Metadata[key]; ok {
+			dst.Metadata[key] = value
+		} else {
+			delete(dst.Metadata, key)
+		}
+	}
 }
 
 type runResult struct {

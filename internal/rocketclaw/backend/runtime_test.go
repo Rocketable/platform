@@ -907,7 +907,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 				bridge.waiting = []bridgeRequest{request}
 			}
 
-			changed, err := rt.EditQueueItem(t.Context(), conversationID, id, "$skill inspect exact\ntext")
+			changed, err := rt.EditQueueItem(t.Context(), conversationID, id, "$skill inspect exact\ntext", "Bob", "bob@example.com")
 			require.NoError(t, err)
 			require.True(t, changed)
 
@@ -922,11 +922,11 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, admitted)
 			require.Equal(t, want, request.inbound.Text)
-			require.Nil(t, inboundDirectSkill(request.inbound), "Slack text keeps its original framing, not Web command interpretation")
-			require.Contains(t, buildPrompt(request.inbound, nil, false), "original author")
+			require.Equal(t, &harness.PromptInputDirectSkill{Name: "inspect", Arguments: "exact\ntext"}, inboundDirectSkill(request.inbound), "the edited text is the editor's Web message")
+			require.Contains(t, buildPrompt(request.inbound, nil, false), `[Web principal="Bob" `)
 			require.Equal(t, content.Attachments, request.inbound.Attachments)
 			require.Equal(t, first.SlackReply, bridge.newOutboundMessage(request.inbound, "turn", "answer", true).SlackReply)
-			changed, err = rt.EditQueueItem(t.Context(), conversationID, id, "too late")
+			changed, err = rt.EditQueueItem(t.Context(), conversationID, id, "too late", "Bob", "bob@example.com")
 			require.NoError(t, err)
 			require.False(t, changed, "consumed input is never recreated")
 
@@ -949,7 +949,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 		race.Go(func() error {
 			var err error
 
-			edited, err = rt.EditQueueItem(t.Context(), conversationID, "race", "after")
+			edited, err = rt.EditQueueItem(t.Context(), conversationID, "race", "after", "Bob", "bob@example.com")
 
 			return err
 		})
@@ -1012,7 +1012,7 @@ func TestRuntimeQueueEditRunsWithTurnAgent(t *testing.T) {
 			require.NoError(t, root.WriteFile(".rocketclaw/agents/other.md", []byte("---\ndescription: Other\nmodel: gpt-6.1-sol\npermission: {}\n---\nOther queue instructions\n"), 0o600))
 			bridge.SwitchAgent("other")
 
-			changed, err := rt.EditQueueItem(t.Context(), "main", "queued", "plain edited input")
+			changed, err := rt.EditQueueItem(t.Context(), "main", "queued", "plain edited input", "Bob", "bob@example.com")
 			require.NoError(t, err)
 			require.True(t, changed)
 
@@ -1059,7 +1059,7 @@ func TestRuntimeQueueEditRejectsPreservedSteer(t *testing.T) {
 	_, _, err = bridge.admitAgentWrite(t.Context(), sessionWriteStop, stop, nil)
 	require.NoError(t, err)
 	require.Len(t, bridge.waiting, 1)
-	changed, err := rt.EditQueueItem(t.Context(), "main", "steer", "changed")
+	changed, err := rt.EditQueueItem(t.Context(), "main", "steer", "changed", "Bob", "bob@example.com")
 	require.NoError(t, err)
 	require.False(t, changed)
 
@@ -1072,10 +1072,62 @@ func TestRuntimeQueueEditRejectsPreservedSteer(t *testing.T) {
 	bridge.inputOpen, bridge.activeTurnID = true, "active"
 	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &items[1]))
 	require.Len(t, bridge.steers, 1)
-	changed, err = rt.EditQueueItem(t.Context(), "main", "steer", "changed after offer")
+	changed, err = rt.EditQueueItem(t.Context(), "main", "steer", "changed after offer", "Bob", "bob@example.com")
 	require.NoError(t, err)
 	require.False(t, changed)
 	require.Equal(t, "original steer", bridge.steers[0].inbound.Text)
+}
+
+func TestRuntimeQueueEditMakesTheEditorTheSender(t *testing.T) {
+	t.Parallel()
+
+	newBridge, store, _, _ := newResumeTestBridges(t, false)
+	bridge := newBridge()
+	bridge.config.ConversationID = "main"
+
+	require.NoError(t, store.UpsertThread("main", ThreadState{Agent: "main"}))
+	manager := newThreadBridgeManager(bridge.runtime, store, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
+	manager.bridges["main"] = bridge
+	rt := &Runtime{Sessions: store, threads: manager, Cfg: bridge.runtime}
+
+	for _, live := range []bool{false, true} {
+		id := fmt.Sprintf("web:planner/call-%t", live)
+		write := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "from planner", false)
+		write.ConversationID, write.Metadata = "main", map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text", protocol.InboundSenderSessionMetadataKey: "web:planner", protocol.InboundSenderAgentMetadataKey: "planner", protocol.InboundSenderActionMetadataKey: protocol.SenderActionStopped, protocol.InboundPrincipalEmailMetadataKey: "alice@example.com", "web_message_id": id}
+		_, _, err := bridge.admitAgentWrite(t.Context(), sessionWriteEnqueue, write, nil)
+		require.NoError(t, err)
+
+		request := bridgeRequest{inbound: write, queueItemID: id}
+		if live {
+			bridge.waiting = []bridgeRequest{request}
+		}
+
+		changed, err := rt.EditQueueItem(t.Context(), "main", id, "from Bob", "Bob", "bob@example.com")
+		require.NoError(t, err)
+		require.True(t, changed)
+
+		items, err := store.ThreadQueueForConversation("main")
+		require.NoError(t, err)
+
+		stored := items[slices.IndexFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == id })]
+		require.Equal(t, []any{protocol.SourceWeb, "Bob", protocol.SourceWeb, true}, []any{stored.Source, stored.Principal, stored.Inbound.Source, stored.Inbound.Human})
+
+		if live {
+			request = bridge.waiting[0]
+			bridge.waiting = nil
+		}
+
+		admitted, err := bridge.activateInbound(t.Context(), &request)
+		require.NoError(t, err)
+		require.True(t, admitted)
+
+		person := map[string]string{protocol.InboundRawTextMetadataKey: "from Bob", "web_message_id": id, protocol.InboundPrincipalMetadataKey: "Bob", protocol.InboundPrincipalNameMetadataKey: "Bob", protocol.InboundPrincipalEmailMetadataKey: "bob@example.com"}
+		require.Equal(t, person, stored.Inbound.Metadata)
+		require.Equal(t, person, request.inbound.Metadata)
+		require.Equal(t, []any{protocol.SourceWeb, true}, []any{request.inbound.Source, request.inbound.Human})
+		require.Equal(t, `[Web principal="Bob"]`, reviewOriginHeader(request.inbound))
+		require.Equal(t, `[Web principal="Bob"]`+"\n\nfrom Bob", buildPrompt(request.inbound, &harness.Agent{Mode: harness.AgentModeEasy}, false))
+	}
 }
 
 func TestRuntimePoppedWebStashRunsAsEnqueue(t *testing.T) {

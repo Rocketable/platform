@@ -130,6 +130,24 @@ func TestQueueEdit(t *testing.T) {
 	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("steer", &protocol.ThreadQueueItem{ID: "steer", ConversationID: "main", Kind: protocol.InboundKindSteer, Message: "unchanged"}))
 	_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "main", ItemId: "steer", Text: "changed"})
 	require.Equal(t, codes.NotFound, status.Code(err))
+
+	write := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindEnqueue, "from planner", false)
+	write.ConversationID, write.Metadata = "main", map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundSenderSessionMetadataKey: "web:planner", protocol.InboundSenderAgentMetadataKey: "planner", "web_message_id": "agent"}
+	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("agent", &protocol.ThreadQueueItem{ID: "agent", ConversationID: "main", Kind: protocol.InboundKindEnqueue, Message: "from planner", Source: protocol.SourceSystem, Inbound: write}))
+
+	bob := metadata.NewOutgoingContext(t.Context(), tailnetUser("bob"))
+	for _, id := range []string{"agent", "waiting"} {
+		_, err = invoke[QueueItemResponse](bob, h.conn, "EditQueueItem", &QueueItemRequest{Id: "main", ItemId: id, Text: "from bob"})
+		require.NoError(t, err)
+		items, err = h.rt.QueueItems("main")
+		require.NoError(t, err)
+		listed, err := invoke[ListQueueResponse](ctx, h.conn, "ListQueue", &ListQueueRequest{Id: "main"})
+		require.NoError(t, err)
+
+		i := slices.IndexFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == id })
+		person := map[string]string{protocol.InboundRawTextMetadataKey: "from bob", "web_message_id": id, protocol.InboundPrincipalMetadataKey: "bob", protocol.InboundPrincipalNameMetadataKey: "bob", protocol.InboundPrincipalEmailMetadataKey: "bob"}
+		require.Equal(t, []any{protocol.SourceWeb, "bob", true, person, "bob"}, []any{items[i].Source, items[i].Principal, items[i].Inbound.Human, items[i].Inbound.Metadata, listed.Items[i].Principal}, id)
+	}
 }
 
 func TestBrowserIdentityIgnoresHeaders(t *testing.T) {

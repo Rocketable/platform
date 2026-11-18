@@ -309,7 +309,7 @@ func (r *Runtime) PromoteQueueItem(ctx context.Context, conversationID, id strin
 	return r.threads.promoteQueueItem(ctx, conversationID, id)
 }
 
-func (r *Runtime) EditQueueItem(ctx context.Context, conversationID, id, text string) (bool, error) {
+func (r *Runtime) EditQueueItem(ctx context.Context, conversationID, id, text, principal, username string) (bool, error) {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
 		return false, err
 	}
@@ -355,7 +355,8 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $3 AND reason <> $4 AND
 		return false, err
 	}
 
-	item.Message, item.Content.Text = text, text
+	item.Message, item.Content.Text, item.Source, item.Principal = text, text, protocol.SourceWeb, principal
+	editor := protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: principal, protocol.InboundPrincipalNameMetadataKey: principal, protocol.InboundPrincipalEmailMetadataKey: username}}
 
 	var inbound *string
 
@@ -382,12 +383,13 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $3 AND reason <> $4 AND
 		}
 
 		item.Inbound.Metadata[protocol.InboundRawTextMetadataKey] = text
+		copyProvenance(item.Inbound, &editor)
 		data, _ := json.Marshal(item.Inbound)
 		inbound = new(string(removeSessionEntryNUL(data)))
 	}
 
 	content, _ := json.Marshal(item.Content)
-	if _, err := tx.ExecContext(ctx, `UPDATE turns SET message = $3, content = $4, inbound_json = $5 WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting'`, conversationID, id, text, content, inbound); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE turns SET message = $3, content = $4, inbound_json = $5, source = $6, principal = $7 WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting'`, conversationID, id, text, content, inbound, item.Source, item.Principal); err != nil {
 		return false, fmt.Errorf("edit queue text: %w", err)
 	}
 
@@ -407,6 +409,7 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $3 AND reason <> $4 AND
 		}
 
 		request.inbound.Metadata[protocol.InboundRawTextMetadataKey] = text
+		copyProvenance(request.inbound, &editor)
 	}
 
 	return true, nil
