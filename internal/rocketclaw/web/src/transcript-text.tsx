@@ -331,18 +331,19 @@ function remarkGitHubReferences({ owner, repo }: GitHubPR) {
 
 const alertBorders: Record<string, string> = { note: "border-blue-500", tip: "border-green-600", important: "border-purple-500", warning: "border-yellow-500", caution: "border-red-500" };
 
+function FencedCode({ children }: { children?: ReactNode }) {
+  const { className = "", children: text = "" } = (children as ReactElement<{ className?: string; children?: string }>).props;
+  const language = className.replace(/^language-/, "");
+  return <CodeBlock text={text} label={language || "Code"} language={language} />;
+}
+
 const sharedComponents: Components = {
   a: ({ href, children }) => <GitHubPRLink href={href}>{children}</GitHubPRLink>,
   code: ({ children }) => <code className="rounded-sm bg-muted px-1 font-mono text-[0.9em]">{children}</code>,
-  pre: ({ children }) => {
-    const { className = "", children: text = "" } = (children as ReactElement<{ className?: string; children?: string }>).props;
-    const language = className.replace(/^language-/, "");
-    return <CodeBlock text={text} label={language || "Code"} language={language} />;
-  },
+  pre: ({ children }) => <FencedCode>{children}</FencedCode>,
   table: ({ children }) => <div className="overflow-x-auto"><table>{children}</table></div>,
 };
 
-// Markdown output has no raw HTML, so every span is a Slack tag.
 const markdownComponents: Components = { ...sharedComponents, span: ({ children }) => inlineNodes(String(children)) };
 
 const pullRequestComponents: Components = {
@@ -356,6 +357,10 @@ const pullRequestComponents: Components = {
     return url?.protocol === "https:" && url.origin !== location.origin ? <img src={url.href} alt={alt} referrerPolicy="no-referrer" loading="lazy" /> : alt;
   },
   source: () => null,
+  pre: ({ node, children }) => {
+    const code = node?.children[0];
+    return node?.children.length === 1 && code?.type === "element" && code.tagName === "code" && code.children.every((child) => child.type === "text") ? <FencedCode>{children}</FencedCode> : <pre>{children}</pre>;
+  },
 };
 
 const pullRequestSchema = { ...defaultSchema, attributes: { ...defaultSchema.attributes, blockquote: [...defaultSchema.attributes!.blockquote!, ["dataAlert", ...Object.keys(alertBorders)]] } };

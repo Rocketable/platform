@@ -1,4 +1,4 @@
-import { CodeView, parsePatchFiles, type CodeViewItem, type FileDiffMetadata, type SelectedLineRange } from "@pierre/diffs";
+import { CodeView, cleanLastNewline, parsePatchFiles, type CodeViewItem, type FileDiffMetadata, type SelectedLineRange } from "@pierre/diffs";
 import { FileTree, useFileTree } from "@pierre/trees/react";
 import { FolderTree } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type RefObject } from "react";
@@ -127,13 +127,12 @@ function useDiffNote(viewer: RefObject<CodeView | null>, reference: GitHubPR, co
 }
 
 function selectedLines(diff: FileDiffMetadata, range: SelectedLineRange) {
-  const text = (line: string) => line.replace(/\r?\n$/, "");
   const rows = diff.hunks.flatMap((hunk) => {
     let deletions = hunk.deletionStart, additions = hunk.additionStart;
     return hunk.hunkContent.flatMap((part): { text: string; deletions?: number; additions?: number }[] => part.type === "context"
-      ? Array.from({ length: part.lines }, (_, at) => ({ text: ` ${text(diff.additionLines[part.additionLineIndex + at])}`, deletions: deletions++, additions: additions++ }))
-      : [...Array.from({ length: part.deletions }, (_, at) => ({ text: `-${text(diff.deletionLines[part.deletionLineIndex + at])}`, deletions: deletions++ })),
-        ...Array.from({ length: part.additions }, (_, at) => ({ text: `+${text(diff.additionLines[part.additionLineIndex + at])}`, additions: additions++ }))]);
+      ? Array.from({ length: part.lines }, (_, at) => ({ text: ` ${cleanLastNewline(diff.additionLines[part.additionLineIndex + at])}`, deletions: deletions++, additions: additions++ }))
+      : [...Array.from({ length: part.deletions }, (_, at) => ({ text: `-${cleanLastNewline(diff.deletionLines[part.deletionLineIndex + at])}`, deletions: deletions++ })),
+        ...Array.from({ length: part.additions }, (_, at) => ({ text: `+${cleanLastNewline(diff.additionLines[part.additionLineIndex + at])}`, additions: additions++ }))]);
   });
   const side = range.side ?? "additions";
   const [first, last] = [rows.findIndex((row) => row[side] === range.start), rows.findIndex((row) => row[range.endSide ?? side] === range.end)].sort((a, b) => a - b);

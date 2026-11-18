@@ -6,28 +6,31 @@ const unreadable = "Could not read this thread's pull requests.";
 const pullRequest = String.raw`https://github\.com/([a-zA-Z\d][a-zA-Z\d-]*)/([\w.-]+)/pull/([1-9]\d*)`;
 const createCommand = /(?:^|[;&|({`\n]|\b(?:do|then|else)\s)\s*(?:(?:\w+=\S*|env|time|nohup|timeout\s+\S+)\s+)*gh\s+pr\s+(?:create|new)(?=$|[\s;&|)])/g;
 const creates = (code: string) => code.match(createCommand)?.length ?? 0;
-const normalized = (match: RegExpMatchArray) => `https://github.com/${match[1]}/${match[2]}/pull/${match[3]}`;
+const pullRequestLine = new RegExp(String.raw`^[ \t]*${pullRequest}(?:/(?:files|commits|checks))?/?(?:[?#]\S*)?[ \t\r]*$`, "gm");
+const pullRequestMention = new RegExp(String.raw`${pullRequest}\b`, "g");
 
 function shellCode(script: string) {
+  for (let previous = ""; previous !== script;) [previous, script] = [script, script.replace(/(?<!<)<<-?[ \t]*(['"]?)(\w+)\1([^\n]*\n)(?:(?:[\s\S]*?\n)?[ \t]*\2[ \t]*(?=\n|$)|[\s\S]*)/g, "$3")];
   return script
-    .replace(/(?<!<)<<-?[ \t]*(['"]?)(\w+)\1([^\n]*\n)(?:(?:[\s\S]*?\n)?[ \t]*\2[ \t]*(?=\n|$)|[\s\S]*)/g, "<<$3")
     .replace(/\\[\s\S]|'[^']*'?|"(?:\\[\s\S]|[^"\\])*"?|(?<=^|[\s;&|(])#[^\n]*/gm, (text) => text[0] === "\\" ? text : /^['"]--dry-run(?:=[^'"]*)?['"]$/.test(text) ? "--dry-run" : "''");
 }
 
 export function pullRequestsIn(command: string, output: string) {
-  const code = shellCode(command);
   let created: string[] = [];
+  if (!output.includes("https://github.com/")) return { created, mentioned: [] };
+  const code = shellCode(command);
   if (/\bgh\s+(?:pr\s+(?:list|status)|search\s+prs|api)\b/.test(code)) return { created, mentioned: [] };
   const count = creates(code);
   if (count && !/gh\s+pr\s+(?:create|new)(?:\s[^\n;&|]*)?\s--dry-run(?:[=\s]|$)/.test(code)) {
     const others = command.replace(/\\[\s\S]|'[^']*'?|"(?:\\[\s\S]|[^"\\])*"?|(&&|\|\||[;|\n])/g, (text, separator) => separator ? "\0" : text).split("\0").filter((segment) => !creates(shellCode(segment))).join("\n");
-    for (const match of output.matchAll(new RegExp(String.raw`^[ \t]*${pullRequest}(?:/(?:files|commits|checks))?/?(?:[?#]\S*)?[ \t\r]*$`, "gm"))) {
-      const url = normalized(match);
-      if (!created.includes(url) && !new RegExp(String.raw`(?:^|[\s#/=("'])${match[3]}(?:$|[\s);&|/"'])`).test(others)) created.push(url);
+    const named = new Set(others.match(/(?<=^|[\s#/=("'])\d+(?=$|[\s);&|/"'])/g));
+    for (const match of output.matchAll(pullRequestLine)) {
+      const url = `https://github.com/${match[1]}/${match[2]}/pull/${match[3]}`;
+      if (!created.includes(url) && !named.has(match[3])) created.push(url);
     }
     if (created.length > count) created = [];
   }
-  const mentioned = [...new Set(Array.from(output.matchAll(new RegExp(String.raw`${pullRequest}\b`, "g")), normalized))].filter((url) => !created.includes(url));
+  const mentioned = [...new Set(output.match(pullRequestMention))].filter((url) => !created.includes(url));
   return { created, mentioned };
 }
 
@@ -63,7 +66,6 @@ async function openCodeList<T>(url: string, first: Record<string, string>, signa
 }
 
 async function openCodeSessionPRs(api: string, session: string, signal: AbortSignal): Promise<SessionPRs> {
-  // Children are listed like upstream packages/client/src/solid/data.ts listChildren.
   const [messages, children] = await Promise.all([
     openCodeList<OpenCodeMessage>(`${api}/session/${encodeURIComponent(session)}/message`, { order: "asc" }, signal),
     openCodeList<{ id: string }>(`${api}/session`, { parentID: session, order: "asc" }, signal),
@@ -92,8 +94,8 @@ async function nativeSessionPRs(session: string, signal: AbortSignal): Promise<S
       for (const call of message.codeModeCalls ?? []) {
         if (call.name !== "bash" || call.status !== "ok") continue;
         if (call.createdPullRequests?.length || call.mentionedPullRequests?.length) result.found.push({ created: call.createdPullRequests ?? [], mentioned: call.mentionedPullRequests ?? [] });
-        else try {
-          result.found.push(pullRequestsIn((JSON.parse(call.arguments!) as { command: string }).command, call.summary ?? ""));
+        else if (call.summary?.includes("https://github.com/")) try {
+          result.found.push(pullRequestsIn((JSON.parse(call.arguments!) as { command: string }).command, call.summary!));
         } catch {}
       }
     }

@@ -31,7 +31,6 @@ function useThreadPRs(id: string, version?: string, initial = "") {
   return { found, checkout, remote, urls, mentioned, url, checkoutOnly, reference, source, loading, finding, setSelected };
 }
 
-// Reads every created PR's head commit only through an OpenCode server's gh login; elsewhere a new PR is the only change seen.
 export function ThreadPRWatch({ id, version }: { id: string; version?: string }) {
   const { found, source, loading } = useThreadPRs(id, version);
   const created = found.data?.created ?? [];

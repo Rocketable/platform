@@ -3,25 +3,35 @@
     "name": "a create's URL counts as created when it is not the last line",
     "command": "gh pr create --title \"Fix login\" --body \"Fixes the login form.\"",
     "output": "Creating pull request for fix-login into main in o/r\n\nhttps://github.com/o/r/pull/7\nWarning: 1 uncommitted change\n",
-    "created": ["https://github.com/o/r/pull/7"]
+    "created": [
+      "https://github.com/o/r/pull/7"
+    ]
   },
   {
     "name": "a viewed PR's links are mentioned in order of first appearance",
     "command": "gh pr view 12",
     "output": "title:\tFix login\nurl:\thttps://github.com/o/r/pull/12\nFollows https://github.com/o/r/pull/3/files and https://github.com/x/y/pull/40?w=1#top, closes https://github.com/o/r/issues/5\n--\nNo checks reported\n",
-    "mentioned": ["https://github.com/o/r/pull/12", "https://github.com/o/r/pull/3", "https://github.com/x/y/pull/40"]
+    "mentioned": [
+      "https://github.com/o/r/pull/12",
+      "https://github.com/o/r/pull/3",
+      "https://github.com/x/y/pull/40"
+    ]
   },
   {
     "name": "repeated links are mentioned once",
     "command": "cat notes.md",
     "output": "https://github.com/o/r/pull/9 and https://github.com/o/r/pull/9/commits\nhttps://github.com/o/r/pull/9\n",
-    "mentioned": ["https://github.com/o/r/pull/9"]
+    "mentioned": [
+      "https://github.com/o/r/pull/9"
+    ]
   },
   {
     "name": "a created PR is not mentioned again",
     "command": "gh pr create --fill",
     "output": "https://github.com/o/r/pull/7\nOpen https://github.com/o/r/pull/7 to review.\n",
-    "created": ["https://github.com/o/r/pull/7"]
+    "created": [
+      "https://github.com/o/r/pull/7"
+    ]
   },
   {
     "name": "gh pr list records nothing",
@@ -42,37 +52,161 @@
     "name": "more URL lines than create commands records none as created",
     "command": "gh pr create --fill && ./print-related.sh",
     "output": "https://github.com/o/r/pull/7\nhttps://github.com/o/r/pull/8\n",
-    "mentioned": ["https://github.com/o/r/pull/7", "https://github.com/o/r/pull/8"]
+    "mentioned": [
+      "https://github.com/o/r/pull/7",
+      "https://github.com/o/r/pull/8"
+    ]
   },
   {
     "name": "a PR another command names is not created",
     "command": "gh pr view 12 --json url -q .url; gh pr create --fill",
     "output": "https://github.com/o/r/pull/12\nhttps://github.com/o/r/pull/13\n",
-    "created": ["https://github.com/o/r/pull/13"],
-    "mentioned": ["https://github.com/o/r/pull/12"]
+    "created": [
+      "https://github.com/o/r/pull/13"
+    ],
+    "mentioned": [
+      "https://github.com/o/r/pull/12"
+    ]
   },
   {
     "name": "gh pr list inside a quoted string does not suppress",
     "command": "echo \"next: gh pr list\" && gh pr create --fill",
     "output": "next: gh pr list\nhttps://github.com/o/r/pull/7\n",
-    "created": ["https://github.com/o/r/pull/7"]
+    "created": [
+      "https://github.com/o/r/pull/7"
+    ]
   },
   {
     "name": "gh pr list inside a heredoc body does not suppress",
     "command": "cat <<'EOF' > notes.md\ngh pr list\nEOF\ngh pr create --fill --body-file notes.md",
     "output": "https://github.com/o/r/pull/7\n",
-    "created": ["https://github.com/o/r/pull/7"]
+    "created": [
+      "https://github.com/o/r/pull/7"
+    ]
   },
   {
     "name": "gh pr list inside a body built from a heredoc does not suppress",
     "command": "gh pr create --title \"Add x\" --body \"$(cat <<'EOF'\n## Summary\n- Compare with gh pr list --state merged; see #12\nEOF\n)\"",
     "output": "https://github.com/o/r/pull/7\n",
-    "created": ["https://github.com/o/r/pull/7"]
+    "created": [
+      "https://github.com/o/r/pull/7"
+    ]
   },
   {
     "name": "a dry run creates nothing",
     "command": "gh pr create --fill --dry-run",
     "output": "Would have created a pull request with:\nhttps://github.com/o/r/pull/7\n",
-    "mentioned": ["https://github.com/o/r/pull/7"]
+    "mentioned": [
+      "https://github.com/o/r/pull/7"
+    ]
+  },
+  {
+    "name": "a quoted body",
+    "command": "gh pr create --title 'change' --body 'text'",
+    "output": "https://github.com/owner/repo/pull/7",
+    "created": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "an apostrophe in a comment",
+    "command": "# don't forget the body\ngh pr create --title 'x'",
+    "output": "https://github.com/owner/repo/pull/7",
+    "created": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "an earlier dry-run push",
+    "command": "jj git push --dry-run -b a\njj git push -b a\ngh pr create --head a",
+    "output": "https://github.com/owner/repo/pull/7",
+    "created": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "dry run in the body text",
+    "command": "gh pr create --body 'Discuss --dry-run in the guide'",
+    "output": "https://github.com/owner/repo/pull/7",
+    "created": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "a quoted create",
+    "command": "echo 'gh pr create'",
+    "output": "https://github.com/owner/repo/pull/7",
+    "mentioned": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "a quoted dry run",
+    "command": "gh pr create '--dry-run'",
+    "output": "https://github.com/owner/repo/pull/7",
+    "mentioned": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "a quoted dry run with a value",
+    "command": "gh pr create \"--dry-run=true\"",
+    "output": "https://github.com/owner/repo/pull/7",
+    "mentioned": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "a URL not alone on its line",
+    "command": "gh pr create",
+    "output": "Created https://github.com/owner/repo/pull/7\n[{\"url\":\"https://github.com/owner/repo/pull/7\"}]",
+    "mentioned": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "an issue",
+    "command": "gh pr create",
+    "output": "https://github.com/owner/repo/issues/7"
+  },
+  {
+    "name": "an escaped newline inside the create",
+    "command": "gh pr create \\\n  --fill",
+    "output": "https://github.com/owner/repo/pull/7",
+    "created": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "a here-string that mentions a listing",
+    "command": "cat <<<\"gh pr list\"; gh pr create --fill",
+    "output": "https://github.com/owner/repo/pull/7",
+    "created": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "a heredoc body inside a quoted command substitution",
+    "command": "gh pr create --title \"Add x\" --body \"$(cat <<'EOF'\nUse \"gh api\" here\nEOF\n)\"",
+    "output": "https://github.com/owner/repo/pull/7",
+    "created": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "two heredocs on one line",
+    "command": "cat <<'A' <<'B'\nx\nA\ngh pr list\nB\ngh pr create --fill",
+    "output": "https://github.com/owner/repo/pull/7",
+    "created": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "a quoted heredoc marker is read as a heredoc",
+    "command": "echo \"see <<EOF usage\"\ngh pr create --fill",
+    "output": "https://github.com/owner/repo/pull/7",
+    "mentioned": [
+      "https://github.com/owner/repo/pull/7"
+    ]
   }
 ]

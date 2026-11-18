@@ -57,10 +57,10 @@ export function SelectionQuote({ container, hidden, quote }: { container: () => 
   }, []);
   return at && !hidden ? <div className="fixed z-50" style={{ left: at.left, top: at.top }}>
     <Button type="button" size="sm" onMouseDown={(event) => { if (event.button === 0) event.preventDefault(); }} onClick={() => {
-      // Read the selection now: a click can arrive before the last selectionchange has rendered.
-      const selected = window.getSelection()!.toString();
+      const selection = window.getSelection()!;
+      const selected = selection.toString();
       setAt(undefined);
-      window.getSelection()?.removeAllRanges();
+      selection.removeAllRanges();
       quote(selected);
     }}>Quote</Button>
   </div> : null;
@@ -196,6 +196,7 @@ function PreviewDetails({ reference, pr, state, composer }: { reference: GitHubP
   const { result, load, idle, tab, setTab } = state;
   const description = useRef<HTMLSpanElement>(null);
   const remaining = result.files.length < Math.min(pr.changed_files, 3000) && !result.ended;
+  const body = useMemo(() => <MarkdownText text={pr.body?.trim() ? pr.body : "_No description provided._"} repository={reference} />, [pr.body, reference]);
   return <Tabs render={<span />} value={tab} onValueChange={(value) => setTab(String(value))} className="min-w-0 shrink-0">
     <PRHeader pr={pr} />
     <span className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-y py-2">
@@ -203,7 +204,7 @@ function PreviewDetails({ reference, pr, state, composer }: { reference: GitHubP
       <span className="text-xs text-muted-foreground">{result.files.length} of {pr.changed_files} files loaded</span>
     </span>
     <TabsContent render={<span />} value="summary" className="block overflow-auto">
-      <span ref={description} className="block py-3"><MarkdownText text={pr.body?.trim() ? pr.body : "_No description provided._"} repository={reference} /></span>
+      <span ref={description} className="block py-3">{body}</span>
       <SelectionQuote container={() => description.current} hidden={composer.status !== "ready"} quote={(text) => composer.quote(reference, text)} />
     </TabsContent>
     <TabsContent render={<span />} value="code" keepMounted className="flex min-h-0 min-w-0 flex-1 flex-col data-[hidden]:hidden">

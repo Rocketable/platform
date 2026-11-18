@@ -175,7 +175,7 @@ func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
 		return r
 	}
 
-	if command != "" && r.Status == codeModeCallOK {
+	if command != "" && r.Status == codeModeCallOK && strings.Contains(text, "https://github.com/") {
 		r.CreatedPullRequests, r.MentionedPullRequests = pullRequestsIn(command, text)
 	}
 
@@ -205,9 +205,10 @@ var (
 	pullRequestLine    = regexp.MustCompile(`(?m)^[ \t]*` + githubPullRequest + `(?:/(?:files|commits|checks))?/?(?:[?#]\S*)?[ \t\r]*$`)
 	pullRequestCreate  = regexp.MustCompile("(?:^|[;&|({`\\n]|\\b(?:do|then|else)\\s)\\s*(?:(?:\\w+=\\S*|env|time|nohup|timeout\\s+\\S+)\\s+)*gh\\s+pr\\s+(?:create|new)")
 	pullRequestDryRun  = regexp.MustCompile(`gh\s+pr\s+(?:create|new)(?:\s[^\n;&|]*)?\s--dry-run(?:[=\s]|$)`)
+	pullRequestNumber  = regexp.MustCompile(`(?:^|[\s#/=("'])(\d+)`)
 	pullRequestListing = regexp.MustCompile(`\bgh\s+(?:pr\s+(?:list|status)|search\s+prs|api)\b`)
 	quotedDryRun       = regexp.MustCompile(`^['"]--dry-run(?:=[^'"]*)?['"]$`)
-	heredocStart       = regexp.MustCompile(`^<<-?[ \t]*(?:'(\w+)'|"(\w+)"|(\w+))`)
+	heredocStart       = regexp.MustCompile(`<<-?[ \t]*(?:'(\w+)'|"(\w+)"|(\w+))`)
 )
 
 func pullRequestsIn(command, output string) (created, mentioned []string) {
@@ -227,9 +228,17 @@ func pullRequestsIn(command, output string) (created, mentioned []string) {
 
 		otherScript := strings.Join(others, "\n")
 
+		var named []string
+
+		for _, number := range pullRequestNumber.FindAllStringSubmatchIndex(otherScript, -1) {
+			if number[3] == len(otherScript) || strings.IndexByte("\t\n\f\r );&|/\"'", otherScript[number[3]]) >= 0 {
+				named = append(named, otherScript[number[2]:number[3]])
+			}
+		}
+
 		for _, match := range pullRequestLine.FindAllStringSubmatch(output, -1) {
 			url := "https://github.com/" + match[1] + "/" + match[2] + "/pull/" + match[3]
-			if slices.Contains(created, url) || regexp.MustCompile(`(?:^|[\s#/=("'])`+match[3]+`(?:$|[\s);&|/"'])`).MatchString(otherScript) {
+			if slices.Contains(created, url) || slices.Contains(named, match[3]) {
 				continue
 			}
 
@@ -240,8 +249,7 @@ func pullRequestsIn(command, output string) (created, mentioned []string) {
 		}
 	}
 
-	for _, match := range pullRequestMention.FindAllStringSubmatch(output, -1) {
-		url := "https://github.com/" + match[1] + "/" + match[2] + "/pull/" + match[3]
+	for _, url := range pullRequestMention.FindAllString(output, -1) {
 		if len(mentioned) < maxPullRequestLinks && !slices.Contains(created, url) && !slices.Contains(mentioned, url) {
 			mentioned = append(mentioned, url)
 		}
@@ -263,9 +271,49 @@ func createCommands(code string) int {
 }
 
 func shellCode(script string) string {
-	var code strings.Builder
+	var (
+		withoutBodies strings.Builder
+		heredocs      []string
+	)
 
-	heredocs := make([]string, 0, 1)
+	for line := range strings.Lines(script) {
+		if len(heredocs) > 0 {
+			if strings.Trim(line, " \t\n") == heredocs[0] {
+				heredocs = heredocs[1:]
+			}
+
+			continue
+		}
+
+		if !strings.HasSuffix(line, "\n") {
+			withoutBodies.WriteString(line)
+
+			continue
+		}
+
+		last := 0
+
+		for _, marker := range heredocStart.FindAllStringSubmatchIndex(line, -1) {
+			if marker[0] > 0 && line[marker[0]-1] == '<' {
+				continue
+			}
+
+			withoutBodies.WriteString(line[last:marker[0]])
+			last = marker[1]
+
+			for group := 2; group < len(marker); group += 2 {
+				if marker[group] >= 0 {
+					heredocs = append(heredocs, line[marker[group]:marker[group+1]])
+				}
+			}
+		}
+
+		withoutBodies.WriteString(line[last:])
+	}
+
+	script = withoutBodies.String()
+
+	var code strings.Builder
 
 	for i := 0; i < len(script); i++ {
 		switch c := script[i]; {
@@ -291,29 +339,6 @@ func shellCode(script string) string {
 			for i+1 < len(script) && script[i+1] != '\n' {
 				i++
 			}
-		case c == '\n':
-			code.WriteByte(c)
-
-			for _, word := range heredocs {
-				for done := false; !done && i < len(script); {
-					line, _, _ := strings.Cut(script[i+1:], "\n")
-					i += len(line) + 1
-					done = strings.Trim(line, " \t") == word
-				}
-			}
-
-			heredocs = heredocs[:0]
-		case strings.HasPrefix(script[i:], "<<<"):
-			code.WriteString("<<<")
-
-			i += 2
-		case c == '<' && heredocStart.MatchString(script[i:]):
-			match := heredocStart.FindStringSubmatch(script[i:])
-			heredocs = append(heredocs, match[1]+match[2]+match[3])
-
-			code.WriteString("<<")
-
-			i += len(match[0]) - 1
 		default:
 			code.WriteByte(c)
 		}
@@ -331,7 +356,7 @@ func shellSegments(script string) []string {
 
 	for i := 0; i < len(script); i++ {
 		switch c := script[i]; {
-		case quote != 0 && c == '\\' && quote == '"':
+		case quote == '"' && c == '\\':
 			i++
 		case quote != 0:
 			if c == quote {

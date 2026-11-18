@@ -209,6 +209,9 @@ test("MarkdownText for a pull request renders sanitized GitHub Markdown linked t
   expect(images.match(/<img /g)).toHaveLength(1);
   expect(images).toContain("relative same plain");
   expect(images).not.toMatch(/srcset/i);
+  expect(pr("<pre>build log</pre>")).toContain("<pre>build log</pre>");
+  expect(pr("<pre><code>a <b>b</b></code></pre>")).toContain("<pre><code");
+  expect(pr("```go\nfmt.Println()\n```")).not.toContain("<pre>");
   const alert = pr("> [!NOTE]\n> Read this");
   expect(alert).toContain('role="note"');
   expect(alert).toContain("Read this");
