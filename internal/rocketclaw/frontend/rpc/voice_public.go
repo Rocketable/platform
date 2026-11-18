@@ -135,5 +135,3 @@ func (*publicVoice) appends(id, text string) [][]byte {
 }
 
 func (*publicVoice) line(said []voiceEvent, _ string) int { return len(said) - 1 }
-
-func (*publicVoice) reconnects() bool { return false }

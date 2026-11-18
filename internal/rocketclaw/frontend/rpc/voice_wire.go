@@ -89,7 +89,6 @@ type voiceDialect interface {
 	kind(eventType string) voiceEventKind
 	appends(id, text string) [][]byte
 	line(said []voiceEvent, role string) int
-	reconnects() bool
 }
 
 type voiceSession struct {
