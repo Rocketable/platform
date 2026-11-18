@@ -99,7 +99,7 @@ export const mutations = {
   clearRevert: (input: { id: string }) => rpc("ClearRevert", input),
   forkSession: (input: { id: string; before?: string }) => rpc<{ id: string; prompt: TranscriptEvent }>("ForkSession", input),
   popQueueItem: (input: { id: string; itemId: string }) => rpc("PopQueueItem", input),
-  createSession: async (input: { name?: string; agent?: string; sourceConversationId?: string; opencodeServer?: string; directory?: string; spaceId?: string }) => rpc<{ id: string; resumed?: boolean }>("CreateSession", input),
+  createSession: async ({ server: remote, ...input }: { name?: string; agent?: string; sourceConversationId?: string; opencodeServer?: string; directory?: string; spaceId?: string; server?: string }) => rpc<{ id: string; resumed?: boolean }>("CreateSession", input, undefined, remote),
   prompt: async (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }, name = server()) => (await rpc<{ privateText: string }>("Prompt", input, undefined, name)).privateText,
   runCron: async (input: { stem: string }) => (await rpc<{ id: string }>("RunCronJob", input)).id,
   // server names the RocketClaw the session is on, this one when unset.
