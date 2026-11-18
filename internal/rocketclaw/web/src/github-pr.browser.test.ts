@@ -383,6 +383,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
   let updatedAt = "2026-01-01T00:00:00Z";
   let prompts = 0;
   let second = false;
+  let mention = false;
   let discovery: Promise<void> | undefined;
   let filesHold: Promise<void> | undefined;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
@@ -408,8 +409,13 @@ test("built App PR layouts preserve the composer draft and existing delegation p
       case "/api/History": {
         if (url.searchParams.has("pull-request-discovery")) await discovery;
         const text = input.id === session ? `[Synthetic change](${href})` : input.id === child ? "Existing delegation fixture" : "Other conversation fixture";
-        const created: TranscriptEvent[] = input.id === session ? [{ ...message(input.id, "execute\n{}"), role: "tool", toolName: "execute", toolCallId: "pr-create", itemId: "pr-create", codeModeCalls: [href.replace(/\/files$/, ""), ...second ? [href.replace(/7\/files$/, "8")] : []].map((summary) => ({ name: "bash", arguments: JSON.stringify({ command: "gh pr create --title 'Sample change' --body 'Sample'" }), status: "ok", summary })) }] : [];
-        return Response.json({ messages: [message(input.id, text), ...created], delegations: input.id === session ? [child] : [], lineage: input.id === child ? [{ id: session }, { id: child, kind: "SUBAGENT" }] : undefined, origin: "", revision: input.id, reset: true, replacedKeys: [], removedKeys: [], entryKeys: [input.id], running: false, terminal: "", backgroundJobs: [], pendingQuestions: [], start: "0", more: false });
+        const bash = (command: string, call: object) => ({ name: "bash", arguments: JSON.stringify({ command }), status: "ok" as const, ...call });
+        const mentioned = href.replace(/7\/files$/, "9"), subagentCreated = href.replace(/7\/files$/, "8");
+        const calls = input.id === session ? [...mention ? [bash("gh pr view 9", { summary: `url:\t${mentioned}`, mentionedPullRequests: [mentioned] })] : [], bash("gh pr create --title 'Sample change' --body 'Sample'", { summary: href.replace(/\/files$/, "") })]
+          : input.id === child && second ? [bash("gh pr create --fill", { summary: subagentCreated, createdPullRequests: [subagentCreated] })] : [];
+        const created: TranscriptEvent[] = calls.length ? [{ ...message(input.id, "execute\n{}"), role: "tool", toolName: "execute", toolCallId: "pr-create", itemId: "pr-create", codeModeCalls: calls }] : [];
+        const task: TranscriptEvent[] = input.id === session ? [{ ...message(input.id, "task\n{}"), role: "tool", toolName: "task", toolCallId: "task", itemId: "task", delegation: child }] : [];
+        return Response.json({ messages: [message(input.id, text), ...created, ...task], delegations: input.id === session ? [child] : [], lineage: input.id === child ? [{ id: session }, { id: child, kind: "SUBAGENT" }] : undefined, origin: "", revision: input.id, reset: true, replacedKeys: [], removedKeys: [], entryKeys: [input.id], running: false, terminal: "", backgroundJobs: [], pendingQuestions: [], start: "0", more: false });
       }
       default: return Response.json({});
     }
@@ -559,16 +565,24 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     expect(await page.getByRole("dialog", { name: "Tabs", exact: true }).isVisible()).toBe(true);
     await page.waitForFunction((node: HTMLElement) => document.activeElement === node, await actions.elementHandle());
     expect(await composer.inputValue()).toBe("Draft still editable beside the PR pane");
-    // On desktop a PR the thread has just created opens the closed pane on that PR.
+    // On desktop a PR a subagent of the thread has just created opens the closed pane on that PR; a mentioned PR does not.
     await page.keyboard.press("Escape");
     // The watch's first look sets what counts as new, so let it answer before the thread creates another PR.
-    const firstLook = page.waitForResponse((response: any) => response.url().includes("/api/History?pull-request-discovery"));
+    const subagentLook = () => page.waitForResponse((response: any) => response.url().includes("/api/History?pull-request-discovery") && response.request().postDataJSON().id === child);
+    let look = subagentLook();
     await page.setViewportSize({ width: 1440, height: 900 });
-    await firstLook;
+    await look;
     await page.getByRole("button", { name: "Show pull requests", exact: true }).waitFor();
     expect(await prs.count()).toBe(0);
+    mention = true;
+    for (const at of ["2026-01-03T00:00:00Z", "2026-01-04T00:00:00Z"]) {
+      look = subagentLook();
+      updatedAt = at;
+      await look;
+    }
+    expect(await prs.count()).toBe(0);
     second = true;
-    updatedAt = "2026-01-03T00:00:00Z";
+    updatedAt = "2026-01-05T00:00:00Z";
     // The picker shows only once the thread has more than one PR.
     await prs.getByRole("combobox", { name: "Thread pull request" }).waitFor();
     expect(await prs.getByRole("combobox", { name: "Thread pull request" }).textContent()).toContain("#8");
@@ -576,11 +590,13 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     await prs.getByRole("combobox", { name: "Thread pull request" }).click();
     const option = page.getByRole("option", { name: "sample/fixture-repository-marker #7", exact: true });
     expect(await option.evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true);
+    expect(await page.getByRole("option").allTextContents()).toEqual(["sample/fixture-repository-marker #7", "sample/fixture-repository-marker #8", "sample/fixture-repository-marker #9 · mentioned"]);
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Hide right pane", exact: true }).click();
     await prs.waitFor({ state: "detached" });
     await page.getByRole("button", { name: "Show pull requests", exact: true }).click();
     await prs.getByText(metadata.title, { exact: true }).waitFor();
+    expect(await prs.getByRole("combobox", { name: "Thread pull request" }).textContent()).toContain("#7");
     // Cmd/Ctrl+Shift+B does what the button does, also while the message box has focus.
     await composer.focus();
     await page.keyboard.press("ControlOrMeta+Shift+B");

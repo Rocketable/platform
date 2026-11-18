@@ -42,6 +42,7 @@ for (const width of [1440, 390, 320]) test(`shadow comparison at ${width}px`, as
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/History": {
+        if (url.searchParams.has("pull-request-discovery")) return Response.json({ messages: [], more: false });
         reads.push(input.id);
         if (input.id !== "parent") expect(input.limit).toBe(50);
         return Response.json(histories.get(input.id)!);

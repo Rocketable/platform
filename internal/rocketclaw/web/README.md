@@ -77,24 +77,27 @@ stays editable beside it; on narrow screens it uses a sheet. It replaces an open
 delegation or skill pane. It shows a PR's description and changed-file patches;
 when the thread has more than one PR, a picker in the pane's header selects it.
 
-On desktop the pane also opens by itself, on that PR, when the thread in view
-gains a PR or one of its PRs gets a new head commit. Discovery then runs after
-every update of that thread, open pane or not. Head commits are read through an
-OpenCode server's `gh` login only, so for a native RocketClaw thread only a new
-PR opens the pane. The first look at a thread, a PR missing from one look, and a
-head that could not be read never open it.
+On desktop the pane also opens by itself, on that PR, when a session in the thread
+creates a PR or one of its created PRs gets a new head commit. Discovery then runs
+after every update of that thread, open pane or not. Head commits are read through
+an OpenCode server's `gh` login only, so for a native RocketClaw thread only a new
+PR opens the pane. The first look at a thread, a PR missing from one look, a head
+that could not be read, and PRs that were only mentioned never open it.
 
-A PR counts as created in this thread when a successful recorded shell call runs
-`gh pr create`, alone or in a script: each GitHub PR URL it prints alone on a line
-counts, as `gh pr create` prints them. A script that also prints some other PR URL
-alone on a line claims it too. Prompts, ordinary links, quoted mentions,
-permission-review plans, dry runs, and failed calls do not establish ownership.
-OpenCode discovery also reads the thread's subagent sessions, and theirs, since
-subagents often open the PRs. Native RocketClaw uses the existing bounded Code Mode
-call summaries; clipped summaries and older history without actual-call records can
-miss a PR. Discovery reads older history pages too. It runs when the pane opens,
-refreshes after thread updates, and can be repeated with the header's **Refresh**
-button, which also reads the PR shown again.
+Discovery reads the thread's whole session tree: its own history, its subagent
+sessions at any depth, and its shadow sessions. Each successful recorded shell
+call contributes PRs, classified the way t3code does. A call that runs
+`gh pr list`, `gh pr status`, `gh search prs` or `gh api` contributes nothing. A
+PR URL that a `gh pr create` prints alone on a line is created, unless another
+command in the script names that PR, the call is a dry run, or the call prints
+more such URLs than it has create commands. Every other GitHub PR URL in the
+output is mentioned. Failed and running calls, prompts and permission-review plans
+contribute nothing. The pane lists created PRs first and marks mentioned ones in
+its picker. Native RocketClaw records both lists from each bash call's full command
+and output; older history without those lists falls back to the bounded call
+summary, which can miss a PR. Discovery reads older history pages too. It runs when
+the pane opens, refreshes after thread updates, and can be repeated with the
+header's **Refresh** button, which also reads the PR shown again.
 
 OpenCode also checks the session folder using its server's installed `gh` and
 existing GitHub login. In a jj workspace, whose Git checkout has no current branch,

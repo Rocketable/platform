@@ -15,7 +15,7 @@ const box = "http://box.test:4096";
 
 test("thread PR pane reads with the OpenCode host's gh login beside the real embedded conversation", async () => {
   const { chromium: engine } = await import(playwright!);
-  const { web, release, base } = start();
+  const { web, release, base, rows } = start();
   release();
   fake.sessions.get("ses_child")!.location = { directory: "/repo/child" };
   const browser = await engine.launch({ executablePath: chromium, headless: true });
@@ -42,7 +42,7 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
       if (request.request().method() === "POST") {
         const body = request.request().postDataJSON(); commands.push(body);
         const command = body.command as string;
-        const output = command.includes("gh pr view") ? checkoutUnavailable ? "could not determine current branch" : JSON.stringify({ url: `https://github.com/sample/fixture-repository-marker/pull/${body.cwd === "/repo/child" ? 8 : 7}`, headRefName: "feature/pr-pane", mergedAt: null, closedAt: null })
+        const output = command.includes("gh pr view") ? checkoutUnavailable ? "could not determine current branch" : JSON.stringify({ url: `https://github.com/sample/fixture-repository-marker/pull/${{ "/repo/child": 8, "/repo/next": 9 }[body.cwd as string] ?? 7}`, headRefName: "feature/pr-pane", mergedAt: null, closedAt: null })
           : command.includes("/files?") ? JSON.stringify([{ filename: "private-file-marker.ts", status: "modified", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+private-patch-marker <script>text only</script>" }])
           : JSON.stringify({ title: command.includes("/pulls/8") ? "Second thread PR marker" : "Remote private PR marker", body: "Private description marker", state: "open", draft: true, merged: false, changed_files: 1, user: { login: "demo-author" }, updated_at: "2026-11-12T12:00:00Z", additions: 1, deletions: 0, head: { sha: "head", ref: "feature/pr-reader" }, base: { sha: "base", ref: "main" } });
         const id = `sh_pr_${outputs.size}`; outputs.set(id, output);
@@ -111,7 +111,26 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
     await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
     await pane.getByRole("button", { name: "Close pull requests", exact: true }).click();
     expect(await draft.textContent()).toBe("OpenCode draft edited beside the PR");
-    expect(commands.every(({ cwd, command }) => ["/repo", "/repo/child", "/repo/moved"].includes(cwd) && /^GH_PROMPT_DISABLED=1 gh (?:pr view \$\(git symbolic-ref -q HEAD >\/dev\/null \|\| jj log .+ \| head -n1\) --json|api --hostname github.com --method GET)/.test(command))).toBe(true);
+    const createdHeadRead = async () => {
+      const posted = await page.waitForResponse((response: any) => response.request().method() === "POST" && /"cwd":"\/repo\/next"/.test(response.request().postData()) && /\/pulls\/7'"/.test(response.request().postData()));
+      const { data: { id } } = await posted.json();
+      await page.waitForResponse((response: any) => response.request().method() === "DELETE" && response.url().includes(`/${id}`));
+    };
+    directory = "/repo/next";
+    for (const minutes of [1, 2]) {
+      const look = createdHeadRead();
+      rows[0].updatedAt = new Date(Date.now() + minutes * 60_000).toISOString();
+      await look;
+    }
+    expect(await pane.count()).toBe(0);
+    await page.getByRole("button", { name: "Tab actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
+    await pane.getByText("Remote private PR marker", { exact: true }).waitFor();
+    await pane.getByRole("combobox", { name: "Thread pull request" }).click();
+    expect(await page.getByRole("option").allTextContents()).toEqual(["sample/fixture-repository-marker #7", "sample/fixture-repository-marker #9"]);
+    await page.keyboard.press("Escape");
+    await pane.getByRole("button", { name: "Close pull requests", exact: true }).click();
+    expect(commands.every(({ cwd, command }) => ["/repo", "/repo/child", "/repo/moved", "/repo/next"].includes(cwd) && /^GH_PROMPT_DISABLED=1 gh (?:pr view \$\(git symbolic-ref -q HEAD >\/dev\/null \|\| jj log .+ \| head -n1\) --json|api --hostname github.com --method GET)/.test(command))).toBe(true);
     expect(removed).toHaveLength(commands.length);
     expect(prompts).toEqual([]);
     expect(errors).toEqual([]);
@@ -203,7 +222,7 @@ function start() {
       default: return Response.json({});
     }
   } });
-  return { web, calls, release, terminals, creates, entryFailures, typing, base: `http://127.0.0.1:${web.port}` };
+  return { web, calls, release, terminals, creates, entryFailures, typing, rows, base: `http://127.0.0.1:${web.port}` };
 }
 
 test("remote diagrams and HTML find keep their content inside the view", async () => {
