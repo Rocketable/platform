@@ -16,12 +16,13 @@ test("session list polls ask for changes since the version they hold", async () 
     v1: { sessions: [row("b", "Beta again", "2026-11-01T10:00:00.5Z")], version: "v2", removed: ["c"] },
     v2: { sessions: [], version: "v3" },
   };
-  const since: string[] = [];
+  const started = performance.now();
+  const polls: { since: string; elapsedMs: number }[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/api/ListSessions") {
       const held = url.searchParams.get("since") ?? "";
-      since.push(held);
+      polls.push({ since: held, elapsedMs: Math.round(performance.now() - started) });
       const { sessions, version, removed } = listings[held] ?? listings.v2;
       const done: SessionBatch = { upstreamSuccess: true, version, ...held && { since: held, removed } };
       return new Response([{ owner: "tester" }, ...sessions.map((session) => ({ sessions: [session] })), done].map((batch) => `data: ${JSON.stringify(batch)}\n\n`).join("") + "event: complete\ndata: {}\n\n", { headers: { "Content-Type": "text/event-stream" } });
@@ -42,10 +43,20 @@ test("session list polls ask for changes since the version they hold", async () 
   try {
     const page = await browser.newPage();
     const errors: string[] = [];
+    const finished: string[] = [];
+    const failed: { since: string; error: string }[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
+    page.on("requestfinished", (request: { url(): string }) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/ListSessions") finished.push(url.searchParams.get("since") ?? "");
+    });
+    page.on("requestfailed", (request: { url(): string; failure(): { errorText: string } }) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/ListSessions") failed.push({ since: url.searchParams.get("since") ?? "", error: request.failure().errorText });
+    });
     await page.goto(`http://127.0.0.1:${server.port}`);
-    for (let tries = 0; tries < 400 && !since.includes("v2"); tries++) await Bun.sleep(20);
-    expect(since.slice(0, 3)).toEqual(["", "v1", "v2"]);
+    for (let tries = 0; tries < 400 && !polls.some(({ since }) => since === "v2"); tries++) await Bun.sleep(20);
+    expect(polls.slice(0, 3).map(({ since }) => since), `Session poll state: ${JSON.stringify({ polls, finished, failed, pageErrors: errors })}`).toEqual(["", "v1", "v2"]);
 
     await page.keyboard.press("ControlOrMeta+p");
     const search = page.getByPlaceholder("Search sessions and commands");
@@ -54,10 +65,10 @@ test("session list polls ask for changes since the version they hold", async () 
     await page.getByRole("button", { name: /^Beta again/ }).waitFor();
     expect(await sessions.allTextContents()).toEqual([expect.stringMatching(/^Beta again/), expect.stringMatching(/^Alpha/)]);
 
-    const polled = since.length;
+    const polled = polls.length;
     await page.reload();
-    for (let tries = 0; tries < 400 && since.length < polled + 2; tries++) await Bun.sleep(20);
-    expect(since.slice(polled).filter((version) => version === "")).toEqual([]);
+    for (let tries = 0; tries < 400 && polls.length < polled + 2; tries++) await Bun.sleep(20);
+    expect(polls.slice(polled).map(({ since }) => since).filter((version) => version === "")).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
