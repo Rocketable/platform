@@ -2,6 +2,7 @@
 .env
 bin/
 testsandbox/
+.history/
 .rocketclaw/*.local.yaml
 !.opencode/
 !.opencode/skills/
