@@ -57,7 +57,7 @@ func runOAILogin(args []string) error {
 	if help {
 		return printStdout(oaiHelpText, "oai help")
 	}
-	selected, cfg, err := loadRuntimeConfig(secretsARN)
+	selected, cfg, err := loadRuntimeConfig(secretsARN, "")
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}
@@ -126,7 +126,7 @@ func runOAIList(args []string) error {
 	if len(flagSet.Args()) != 0 {
 		return errors.New("oai list takes no arguments")
 	}
-	_, cfg, err := loadRuntimeConfig(*secretsARN)
+	_, cfg, err := loadRuntimeConfig(*secretsARN, "")
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}
@@ -157,7 +157,7 @@ func runOAILogout(args []string) error {
 		return errors.New("oai logout accepts no more than one provider")
 	}
 	provider := cmp.Or(strings.Join(rest, ""), "openai")
-	_, cfg, err := loadRuntimeConfig(*secretsARN)
+	_, cfg, err := loadRuntimeConfig(*secretsARN, "")
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}

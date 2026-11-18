@@ -4,6 +4,8 @@ package main
 //go:generate go run -C ../.. -mod=mod -modfile=tools/go.mod github.com/vektra/mockery/v3
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,13 +21,14 @@ const (
 	legacyWorkDir     = ".femtoclaw"
 	secretsARNFlag    = "aws-secrets-manager-arn"
 	secretsARNUsage   = "Secrets Manager ARN of a JSON secret to merge last"
+	usersARNFlag      = "aws-secrets-manager-users-arn"
 )
 
 type runtimeConfigFile struct {
 	Path, WorkDir string
 }
 
-const helpText = "rocketclaw\n\nUsage:\n  rocketclaw run [--pprof=false] [--aws-secrets-manager-arn ARN]\n  rocketclaw oai login [provider] [--headless]\n  rocketclaw oai list\n  rocketclaw oai logout [provider]\n  rocketclaw ts login\n  rocketclaw help\n\nCommands:\n  run          Start rocketclaw and fail if the configuration is missing or invalid.\n  oai          Manage provider-specific ChatGPT credentials for model requests.\n  ts           Log the Web's Tailscale node (web.tsnet) in to the tailnet.\n  help         Show this help screen.\n\nRun options:\n  --pprof      Serve private Go profiles at 127.0.0.1:6060; enabled by default, disable with --pprof=false, not saved in config.\n  --aws-secrets-manager-arn\n               Merge this JSON secret over rocketclaw.json; with it, rocketclaw.json is optional.\n\nRunning `rocketclaw` without a subcommand starts the server when femtoclaw.json or rocketclaw.json is present.\nIf both files are missing, this help screen is shown instead.\n"
+const helpText = "rocketclaw\n\nUsage:\n  rocketclaw run [--pprof=false] [--aws-secrets-manager-arn ARN] [--aws-secrets-manager-users-arn ARN]\n  rocketclaw oai login [provider] [--headless]\n  rocketclaw oai list\n  rocketclaw oai logout [provider]\n  rocketclaw ts login\n  rocketclaw help\n\nCommands:\n  run          Start rocketclaw and fail if the configuration is missing or invalid.\n  oai          Manage provider-specific ChatGPT credentials for model requests.\n  ts           Log the Web's Tailscale node (web.tsnet) in to the tailnet.\n  help         Show this help screen.\n\nRun options:\n  --pprof      Serve private Go profiles at 127.0.0.1:6060; enabled by default, disable with --pprof=false, not saved in config.\n  --aws-secrets-manager-arn\n               Merge this JSON secret over rocketclaw.json; with it, rocketclaw.json is optional.\n  --aws-secrets-manager-users-arn\n               Use this JSON secret of login to password as mcp_external.users, replacing the configured logins.\n\nRunning `rocketclaw` without a subcommand starts the server when femtoclaw.json or rocketclaw.json is present.\nIf both files are missing, this help screen is shown instead.\n"
 
 type exitCoder interface {
 	Error() string
@@ -76,9 +79,13 @@ func run(args []string) error {
 	return runServe(args, "127.0.0.1:6060")
 }
 
-var secretFetcher config.SecretFetcher = &config.AWSFetcher{}
+var (
+	secretFetcher config.SecretFetcher = &config.AWSFetcher{}
 
-func loadRuntimeConfig(secretsARN string) (runtimeConfigFile, *config.Config, error) {
+	errUsersSecretShape = errors.New("secret must be a JSON object of login to password strings")
+)
+
+func loadRuntimeConfig(secretsARN, usersARN string) (runtimeConfigFile, *config.Config, error) {
 	selected, err := selectRuntimeConfigFile()
 	if err != nil {
 		return runtimeConfigFile{}, nil, err
@@ -92,6 +99,21 @@ func loadRuntimeConfig(secretsARN string) (runtimeConfigFile, *config.Config, er
 		return runtimeConfigFile{}, nil, err
 	}
 	cfg.WorkDir = selected.WorkDir
+
+	if usersARN != "" {
+		body, err := secretFetcher.SecretString(context.Background(), usersARN)
+		if err != nil {
+			return runtimeConfigFile{}, nil, fmt.Errorf("read --%s: %w", usersARNFlag, err)
+		}
+
+		var users map[string]string
+		if err := json.Unmarshal([]byte(body), &users); err != nil || users == nil {
+			return runtimeConfigFile{}, nil, fmt.Errorf("read --%s %s: %w", usersARNFlag, usersARN, errUsersSecretShape)
+		}
+
+		cfg.MCPExternal.Users = users
+	}
+
 	return selected, cfg, nil
 }
 func selectRuntimeConfigFile() (runtimeConfigFile, error) {

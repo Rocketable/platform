@@ -235,7 +235,7 @@ func TestSaveOAILoginDoesNotRollbackCommittedToken(t *testing.T) {
 
 func TestRunOAILoginSerializesDifferentProviderConfigChanges(t *testing.T) {
 	workspace := prepareOAIConfig(t)
-	selected, cfg, err := loadRuntimeConfig("")
+	selected, cfg, err := loadRuntimeConfig("", "")
 	require.NoError(t, err)
 	lock, err := os.OpenFile(selected.Path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	require.NoError(t, err)

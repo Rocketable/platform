@@ -53,7 +53,7 @@ func runTSLogin(args []string) error {
 		return errors.New("ts login takes no arguments")
 	}
 
-	_, cfg, err := loadRuntimeConfig(*secretsARN)
+	_, cfg, err := loadRuntimeConfig(*secretsARN, "")
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}

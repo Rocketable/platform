@@ -40,7 +40,7 @@ func TestRuntimeAndServeResolveTheSameSecret(t *testing.T) {
 	}`), 0o600))
 	useTestSecrets(t, testSecrets{testSecretsARN: `{"slack":{"bot_token":"xoxb-secret"}}`})
 
-	_, runtimeCfg, err := loadRuntimeConfig(testSecretsARN)
+	_, runtimeCfg, err := loadRuntimeConfig(testSecretsARN, "")
 	require.NoError(t, err)
 	serveCfg, err := config.Load(defaultConfigPath, testSecretsARN, secretFetcher)
 	require.NoError(t, err)
@@ -56,15 +56,41 @@ func TestSecretAloneConfiguresRuntime(t *testing.T) {
 		"openai": {"api_key": "test-key"}
 	}`})
 
-	selected, cfg, err := loadRuntimeConfig(testSecretsARN)
+	selected, cfg, err := loadRuntimeConfig(testSecretsARN, "")
 	require.NoError(t, err)
 	assert.Equal(t, defaultConfigPath, selected.Path)
 	assert.Equal(t, workspace, cfg.Workspace)
 	assert.Equal(t, config.DefaultRuntimeDir, cfg.WorkDir)
 	assert.Equal(t, "test-key", cfg.OpenAI.APIKey)
 
-	_, _, err = loadRuntimeConfig("")
+	_, _, err = loadRuntimeConfig("", "")
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestUsersSecretReplacesExternalMCPUsers(t *testing.T) {
+	const (
+		usersARN     = "arn:aws:secretsmanager:us-east-1:123456789012:secret:users"
+		configSecret = `{
+			"web": {"tsnet": {}}, "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
+			"openai": {"api_key": "test-key"},
+			"mcp_external": {"users": {"config-user": "config-pw"}}
+		}`
+	)
+
+	t.Chdir(t.TempDir())
+	useTestSecrets(t, testSecrets{testSecretsARN: configSecret, usersARN: `{"alice":"pw-a","bob":"pw-b"}`})
+
+	_, cfg, err := loadRuntimeConfig(testSecretsARN, usersARN)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"alice": "pw-a", "bob": "pw-b"}, cfg.MCPExternal.Users)
+
+	for _, body := range []string{`["LEAKED-SECRET-VALUE"]`, `{"alice":{"pw":"LEAKED-SECRET-VALUE"}}`, `null`} {
+		useTestSecrets(t, testSecrets{testSecretsARN: configSecret, usersARN: body})
+
+		err := runServe([]string{"--aws-secrets-manager-arn", testSecretsARN, "--aws-secrets-manager-users-arn", usersARN}, "127.0.0.1:0")
+		require.ErrorContains(t, err, "--aws-secrets-manager-users-arn "+usersARN)
+		assert.NotContains(t, err.Error(), "LEAKED-SECRET-VALUE")
+	}
 }
 
 func TestCommandsAcceptSecretsARNFlag(t *testing.T) {

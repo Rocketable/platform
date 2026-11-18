@@ -25,12 +25,13 @@ func runServe(args []string, diagnosticsAddress string) error {
 	processStart := time.Now().UTC().Format(time.RFC3339Nano)
 	flagSet := flag.NewFlagSet("rocketclaw", flag.ContinueOnError)
 	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
+	usersARN := flagSet.String(usersARNFlag, "", "Secrets Manager ARN of a JSON secret to use as mcp_external.users")
 	pprofEnabled := flagSet.Bool("pprof", true, "serve private Go profiles at 127.0.0.1:6060")
 	if err := flagSet.Parse(args); err != nil {
 		return fmt.Errorf("parse serve flags: %w", err)
 	}
 
-	selected, cfg, err := loadRuntimeConfig(*secretsARN)
+	selected, cfg, err := loadRuntimeConfig(*secretsARN, *usersARN)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
