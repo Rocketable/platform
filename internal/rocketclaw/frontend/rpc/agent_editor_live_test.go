@@ -31,7 +31,8 @@ import (
 )
 
 func TestAgentEditorRealBackendBrowser(t *testing.T) {
-	if os.Getenv("ROCKETCLAW_TEST_AGENT_EDITOR_CHILD") != "1" {
+	pattern := os.Getenv("ROCKETCLAW_TEST_AGENT_EDITOR_CHILD")
+	if pattern == "" {
 		t.Parallel()
 
 		executable, err := os.Executable()
@@ -42,12 +43,22 @@ func TestAgentEditorRealBackendBrowser(t *testing.T) {
 			args = append(args, "-test.gocoverdir="+os.Getenv("GOCOVERDIR"))
 		}
 
-		cmd := exec.CommandContext(t.Context(), executable, args...)
+		const editingAndSaving = "the.agent.editor.starts|two.people.co-edit|saving.picks"
+		for _, group := range []struct{ name, pattern string }{
+			{"editing_and_saving", "^(?:" + editingAndSaving + ")"},
+			{"preview_and_chat", "^(?!(?:" + editingAndSaving + "))"},
+		} {
+			t.Run(group.name, func(t *testing.T) {
+				t.Parallel()
 
-		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_AGENT_EDITOR_CHILD=1")
-		output, err := cmd.CombinedOutput()
-		require.NoError(t, err, "%s", output)
-		t.Log(string(output))
+				cmd := exec.CommandContext(t.Context(), executable, args...)
+
+				cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_AGENT_EDITOR_CHILD="+group.pattern)
+				output, err := cmd.CombinedOutput()
+				require.NoError(t, err, "%s", output)
+				t.Log(string(output))
+			})
+		}
 
 		return
 	}
@@ -222,5 +233,5 @@ func TestAgentEditorRealBackendBrowser(t *testing.T) {
 	bob := httptest.NewServer(signedIn("bob", web))
 	t.Cleanup(bob.Close)
 
-	runWebTest(t, "src/agent-editor-transport.test.ts", "ROCKETCLAW_EDITOR_ALICE_URL="+alice.URL, "ROCKETCLAW_EDITOR_BOB_URL="+bob.URL, "ROCKETCLAW_EDITOR_WORKSPACE="+cfg.Workspace, "ROCKETCLAW_EDITOR_PR_STATE="+prState)
+	runWebTest(t, "src/agent-editor-transport.test.ts", "BUN_OPTIONS=--test-name-pattern="+pattern, "ROCKETCLAW_EDITOR_ALICE_URL="+alice.URL, "ROCKETCLAW_EDITOR_BOB_URL="+bob.URL, "ROCKETCLAW_EDITOR_WORKSPACE="+cfg.Workspace, "ROCKETCLAW_EDITOR_PR_STATE="+prState)
 }
