@@ -1008,12 +1008,7 @@ func (d stateDAO) scheduledMessages(ctx context.Context, conversationID string) 
 		args = append(args, strings.TrimSpace(conversationID))
 	}
 
-	messages, err := queryMap(ctx, d.db, query, "scheduled messages", scheduledMessageScanner{}, args...)
-	if err != nil || len(messages) == 0 {
-		return nil, err
-	}
-
-	return messages, nil
+	return queryMap(ctx, d.db, query, "scheduled messages", scheduledMessageScanner{}, args...)
 }
 
 func (d stateDAO) resetScheduledMessages(ctx context.Context, conversationID string) error {
