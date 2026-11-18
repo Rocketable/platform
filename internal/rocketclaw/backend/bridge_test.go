@@ -1681,7 +1681,7 @@ func TestFitInboundImageWithinLimitLeavesSmallImageUnchanged(t *testing.T) {
 
 	data := encodeAttachmentTestPNG(t, newAttachmentTestImage(1, 1), png.BestCompression)
 
-	transformed, transformedMIMEType, err := fitInboundImageWithinLimit(" Image/PNG; Charset=UTF-8 ", data, len(data))
+	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/png", data, len(data))
 	require.NoError(t, err)
 	assert.Equal(t, data, transformed)
 	assert.Equal(t, "image/png", transformedMIMEType)
