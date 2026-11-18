@@ -252,6 +252,10 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 	}
 
 	data, err := os.ReadFile(absPath)
+	if errors.Is(err, os.ErrNotExist) && secretsARN != "" {
+		data, err = []byte("{}"), nil
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}

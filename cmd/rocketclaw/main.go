@@ -25,7 +25,7 @@ type runtimeConfigFile struct {
 	Path, WorkDir string
 }
 
-const helpText = "rocketclaw\n\nUsage:\n  rocketclaw run [--pprof=false]\n  rocketclaw oai login [provider] [--headless]\n  rocketclaw oai list\n  rocketclaw oai logout [provider]\n  rocketclaw ts login\n  rocketclaw help\n\nCommands:\n  run          Start rocketclaw and fail if the configuration file is missing or invalid.\n  oai          Manage provider-specific ChatGPT credentials for model requests.\n  ts           Log the Web's Tailscale node (web.tsnet) in to the tailnet.\n  help         Show this help screen.\n\nRun options:\n  --pprof      Serve private Go profiles at 127.0.0.1:6060; enabled by default, disable with --pprof=false, not saved in config.\n\nRunning `rocketclaw` without a subcommand starts the server when femtoclaw.json or rocketclaw.json is present.\nIf both files are missing, this help screen is shown instead.\n"
+const helpText = "rocketclaw\n\nUsage:\n  rocketclaw run [--pprof=false] [--aws-secrets-manager-arn ARN]\n  rocketclaw oai login [provider] [--headless]\n  rocketclaw oai list\n  rocketclaw oai logout [provider]\n  rocketclaw ts login\n  rocketclaw help\n\nCommands:\n  run          Start rocketclaw and fail if the configuration is missing or invalid.\n  oai          Manage provider-specific ChatGPT credentials for model requests.\n  ts           Log the Web's Tailscale node (web.tsnet) in to the tailnet.\n  help         Show this help screen.\n\nRun options:\n  --pprof      Serve private Go profiles at 127.0.0.1:6060; enabled by default, disable with --pprof=false, not saved in config.\n  --aws-secrets-manager-arn\n               Merge this JSON secret over rocketclaw.json; with it, rocketclaw.json is optional.\n\nRunning `rocketclaw` without a subcommand starts the server when femtoclaw.json or rocketclaw.json is present.\nIf both files are missing, this help screen is shown instead.\n"
 
 type exitCoder interface {
 	Error() string
@@ -84,7 +84,7 @@ func loadRuntimeConfig(secretsARN string) (runtimeConfigFile, *config.Config, er
 		return runtimeConfigFile{}, nil, err
 	}
 	if selected.Path == "" {
-		return runtimeConfigFile{}, nil, os.ErrNotExist
+		selected = runtimeConfigFile{Path: defaultConfigPath, WorkDir: config.DefaultRuntimeDir}
 	}
 
 	cfg, err := config.Load(selected.Path, secretsARN, secretFetcher)

@@ -48,6 +48,25 @@ func TestRuntimeAndServeResolveTheSameSecret(t *testing.T) {
 	assert.Equal(t, "xoxb-secret", runtimeCfg.Slack.BotToken)
 }
 
+func TestSecretAloneConfiguresRuntime(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	useTestSecrets(t, testSecrets{testSecretsARN: `{
+		"web": {"tsnet": {}}, "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
+		"openai": {"api_key": "test-key"}
+	}`})
+
+	selected, cfg, err := loadRuntimeConfig(testSecretsARN)
+	require.NoError(t, err)
+	assert.Equal(t, defaultConfigPath, selected.Path)
+	assert.Equal(t, workspace, cfg.Workspace)
+	assert.Equal(t, config.DefaultRuntimeDir, cfg.WorkDir)
+	assert.Equal(t, "test-key", cfg.OpenAI.APIKey)
+
+	_, _, err = loadRuntimeConfig("")
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestCommandsAcceptSecretsARNFlag(t *testing.T) {
 	useTestSecrets(t, testSecrets{testSecretsARN: `{}`})
 
