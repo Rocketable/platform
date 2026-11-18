@@ -7,11 +7,16 @@ import { fetch, linked, reset, server, url } from "./test/server"
 // happy-dom has no IndexedDB; the drafts live in memory for the whole file, so a remount finds them.
 const drafts = await import("@/runtime/persistence/drafts")
 const documents = new Map<string, string>()
+let loads = Promise.resolve()
 mock.module("@/runtime/persistence/drafts", () => ({
   ...drafts,
   createBrowserDraftStore: () =>
     drafts.createDraftStore({
-      get: async (key) => documents.get(key) ?? null,
+      get: async (key) => {
+        await loads
+
+        return documents.get(key) ?? null
+      },
       set: async (key, value) => {
         documents.set(key, value)
 
@@ -698,6 +703,65 @@ test("a typed draft survives disposing and remounting", async () => {
   const again = show()
   await answered(again)
   await until(() => again.root.querySelector("[data-component=composer]")!.textContent?.includes("unsent draft"))
+})
+
+const pullRequestQuote = (text: string) => ({ text, comment: "Why here?", label: "PR #7", subject: "pull request #7" })
+const stored = (text: string) => [...documents.values()].find((value) => value.includes(text))
+
+test("a quote from RocketClaw attaches to the shown session's draft and leaves the prompt text unchanged", async () => {
+  const view = show()
+  await answered(view)
+  await type(view, "my own words")
+
+  view.quote(pullRequestQuote("Adds the pane."))
+  const draft = JSON.parse(await until(() => stored("Adds the pane.")))
+  expect(draft.context.items).toEqual([
+    expect.objectContaining({
+      type: "quote",
+      text: "Adds the pane.",
+      comment: "Why here?",
+      source: { label: "PR #7", icon: "github", subject: "pull request #7" },
+    }),
+  ])
+  expect(draft.prompt).toEqual([expect.objectContaining({ type: "text", content: "my own words" })])
+  expect(view.root.querySelector("[data-component=composer] [contenteditable=true]")?.textContent).toBe("my own words")
+})
+
+test("the view takes no quote in a subagent's session, and tells subscribers when it moves into one", async () => {
+  const view = show()
+  await answered(view)
+  await until(() => view.quotable())
+  let changes = 0
+  const unsubscribe = view.subscribeQuotable(() => changes++)
+
+  view.show("ses_child")
+  await answered(view, "ses_child")
+  await until(() => changes > 0 && !view.quotable())
+  unsubscribe()
+  view.quote(pullRequestQuote("Quoted in a subagent."))
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  expect(stored("Quoted in a subagent.")).toBeUndefined()
+})
+
+test("a quote made before the session's draft loads applies once it loads", async () => {
+  const response = await fetch(`${url}/api/session/ses_a/fork`, { method: "POST", body: "{}" })
+  const fork: string = (await response.json()).data.id
+  let load = () => {}
+  loads = new Promise((resolve) => (load = resolve))
+
+  try {
+    const view = show(1400, fork)
+    await answered(view, fork)
+    await until(() => view.quotable())
+    view.quote(pullRequestQuote("Quoted before the draft loaded."))
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(stored("Quoted before the draft loaded.")).toBeUndefined()
+  } finally {
+    load()
+    loads = Promise.resolve()
+  }
+
+  await until(() => stored("Quoted before the draft loaded."))
 })
 
 // Upstream's health check polls every 10 seconds, so each recovery below waits for the next poll.

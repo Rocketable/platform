@@ -1,13 +1,16 @@
 import "@/runtime/polyfills"
 import "./scope.css"
 import { MemoryRouter, useNavigate } from "@solidjs/router"
-import { createSignal } from "solid-js"
+import { createEffect, createSignal, on } from "solid-js"
 import { render } from "solid-js/web"
+import type { Screen, SessionScreen } from "@opencode/plugin/gui"
 import { terminateWorkerPools } from "@opencode/session-ui/pierre/worker"
+import { uuid } from "@opencode/util/uuid"
 import { AppBaseProviders, AppInterface } from "@/app"
 import { flushPersisted } from "@/runtime/persistence/persist"
 import { PlatformProvider } from "@/runtime/platform/platform"
 import { createWebPlatform } from "@/runtime/platform/web"
+import { useHostApis } from "@/runtime/plugin/root"
 import { ServerConnection } from "@/runtime/server/registry"
 import { useCommand } from "@/shell/commands/command"
 import { sessionHref } from "@/shell/routes/session"
@@ -55,6 +58,9 @@ export function mount(element: HTMLElement, options: MountOptions): Mounted {
   let palette = () => {}
   let navigateView = (_: string) => {}
   let closeDialogs = () => {}
+  let screen = (): SessionScreen | undefined => undefined
+  const quotable = () => screen()?.composer.quotable() ?? false
+  const quotableListeners = new Set<() => void>()
 
   const Palette = () => {
     palette = useCommand().show
@@ -64,6 +70,13 @@ export function mount(element: HTMLElement, options: MountOptions): Mounted {
     closeDialogs = () => {
       for (let open = dialog.active; open; open = dialog.active) dialog.close(open.id)
     }
+
+    return null
+  }
+
+  const Quotes = () => {
+    screen = (useHostApis().apis.screen as () => Screen)().current
+    createEffect(on(quotable, () => quotableListeners.forEach((listener) => listener()), { defer: true }))
 
     return null
   }
@@ -81,6 +94,7 @@ export function mount(element: HTMLElement, options: MountOptions): Mounted {
                 router={(props) => <MemoryRouter {...props} history={history} explicitLinks preload={false} />}
               >
                 <Palette />
+                <Quotes />
                 <ViewHistory history={history} server={key} sessionID={opened()} />
                 <SessionTab server={key} sessionID={opened()} keep={kept()} />
                 <VersionPill server={key} />
@@ -109,6 +123,26 @@ export function mount(element: HTMLElement, options: MountOptions): Mounted {
       terminateMarkdownWorker()
     },
     openPalette: () => palette(),
+    quotable,
+    subscribeQuotable(listener) {
+      quotableListeners.add(listener)
+
+      return () => void quotableListeners.delete(listener)
+    },
+    quote(quote) {
+      const composer = screen()?.composer
+
+      if (!composer?.quotable()) return
+      const commentID = uuid()
+      composer.attach({
+        type: "quote",
+        commentID,
+        text: quote.text,
+        comment: quote.comment,
+        source: { label: quote.label, icon: "github", subject: quote.subject },
+      })
+      composer.focus(commentID)
+    },
     show(sessionID, messageID) {
       if (messageID && sessionID === opened()) return navigateView(href(sessionID, messageID))
       // A dialog opened for the session the view leaves would otherwise stay open and act on it.
