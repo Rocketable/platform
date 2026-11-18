@@ -1,6 +1,6 @@
 import "@/runtime/polyfills"
 import "./scope.css"
-import { MemoryRouter } from "@solidjs/router"
+import { MemoryRouter, useNavigate } from "@solidjs/router"
 import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import { terminateWorkerPools } from "@opencode/session-ui/pierre/worker"
@@ -47,14 +47,19 @@ export function mount(element: HTMLElement, options: MountOptions): Mounted {
 
   const server: ServerConnection.Http = { type: "http", http: { url: options.url }, displayName: options.server }
   const key = ServerConnection.key(server)
-  const history = createViewHistory(sessionHref(key, options.sessionID))
+  const href = (sessionID: string, messageID?: string) =>
+    sessionHref(key, sessionID) + (messageID ? `#message-${messageID}` : "")
+  const history = createViewHistory(href(options.sessionID, options.messageID))
   const [opened, setOpened] = createSignal(options.sessionID)
   const [kept, setKept] = createSignal<string[]>()
   let palette = () => {}
+  let navigateView = (_: string) => {}
   let closeDialogs = () => {}
 
   const Palette = () => {
     palette = useCommand().show
+    const navigate = useNavigate()
+    navigateView = (to) => navigate(to, { scroll: false })
     const dialog = useDialog()
     closeDialogs = () => {
       for (let open = dialog.active; open; open = dialog.active) dialog.close(open.id)
@@ -104,11 +109,12 @@ export function mount(element: HTMLElement, options: MountOptions): Mounted {
       terminateMarkdownWorker()
     },
     openPalette: () => palette(),
-    show(sessionID) {
+    show(sessionID, messageID) {
+      if (messageID && sessionID === opened()) return navigateView(href(sessionID, messageID))
       // A dialog opened for the session the view leaves would otherwise stay open and act on it.
       closeDialogs()
       setOpened(sessionID)
-      history.show(sessionHref(key, sessionID))
+      history.show(href(sessionID, messageID))
     },
     keep(sessionIDs) {
       setKept(sessionIDs)

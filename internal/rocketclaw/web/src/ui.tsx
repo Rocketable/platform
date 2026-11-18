@@ -16,7 +16,7 @@ import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCErro
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, Fragment, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -71,6 +71,8 @@ function sessionPath(id: string) {
 function rowPath(session: { id: string; kind?: ConversationKind }) {
   return session.kind === "REMOTE_OPENCODE" ? `/oc/${encodeSessionId(session.id)}` : sessionPath(session.id);
 }
+
+const messageURL = (path: string, messageID: string) => `${location.origin}${serverPath(`${path}?message=${encodeURIComponent(messageID)}`)}`;
 
 // A row is its chat on its server; a local row keeps its bare ID.
 function rowKey(id: string, server?: string) {
@@ -3091,6 +3093,11 @@ function remoteActions(id: string, origin: string, remoteSessionId: string) {
 const ocEntry = "/oc-ui/_assets/index.js";
 type OcModule = { mount(element: HTMLElement, options: MountOptions): Mounted };
 
+function useLinkedMessage(path: string) {
+  const search = useSearch();
+  return usePathname() === path ? new URLSearchParams(search).get("message") ?? undefined : undefined;
+}
+
 // A remote OpenCode session mounts the copied OpenCode view, which reaches its server through the Web's
 // /oc/<server>/api/ proxy. Any session of a configured server opens, listed yet or not; a view already open
 // stays while the server blips and shows that state itself.
@@ -3098,6 +3105,7 @@ function RemoteSession({ id }: { id: string }) {
   const sidebar = useContext(Sidebar);
   const tabs = useContext(TabActions);
   const container = useRef<HTMLDivElement>(null);
+  const path = rowPath({ id, kind: "REMOTE_OPENCODE" });
   const [, server = "", ...rest] = id.split(":");
   const sessionID = rest.join(":");
   const configured = !!sidebar.remote?.servers[server];
@@ -3129,8 +3137,9 @@ function RemoteSession({ id }: { id: string }) {
     creating.current = true;
     create.mutate({ opencodeServer: server, directory, spaceId: tabs.state.space }, { onSettled: () => { creating.current = false; } });
   });
-  const closeTab = useEffectEvent(() => tabs.deleted(rowPath({ id, kind: "REMOTE_OPENCODE" })));
+  const closeTab = useEffectEvent(() => tabs.deleted(path));
   const reportSession = useEffectEvent((other: string) => { remoteView.shown = other; setReport({ route: sessionID, shown: other }); });
+  const messageLink = useEffectEvent((other: string, message: string) => other === sessionID ? messageURL(path, message) : "");
   const emptied = useEffectEvent(() => { if (blankDraft(composer!)) reportTyping(name, typingId, false); });
   useEffect(() => {
     if (!composer) return;
@@ -3147,18 +3156,20 @@ function RemoteSession({ id }: { id: string }) {
   };
   // One view per server: switching between its sessions' tabs moves the view, as OpenCode's own app moves between
   // sessions, so what OpenCode holds in memory carries over. Leaving for any other tab disposes it.
-  const view = useRef<{ mounted: Mounted; sessionID: string }>(undefined);
+  const view = useRef<{ mounted: Mounted; sessionID: string; messageID?: string }>(undefined);
+  const messageID = useLinkedMessage(path);
   const open = [...new Set(tabs.state.tabs.flatMap((tab) => tab.path.startsWith("/oc/") ? [decodeSessionId(tab.path.slice(4))] : []).flatMap((other) => other.startsWith(`opencode:${server}:`) ? [other.slice(`opencode:${server}:`.length)] : []))].join("\n");
   const show = useEffectEvent(() => {
     if (!view.current) return;
-    if (view.current.sessionID !== sessionID) view.current.mounted.show(sessionID);
+    if (view.current.sessionID !== sessionID || (messageID && view.current.messageID !== messageID)) view.current.mounted.show(sessionID, messageID);
     view.current.sessionID = sessionID;
+    view.current.messageID = messageID;
     view.current.mounted.keep(open ? open.split("\n") : []);
     Object.assign(remoteView, { route: id, shown: sessionID, openPalette: view.current.mounted.openPalette });
   });
   // The view opens on the session shown when it mounts; later sessions move it.
   const attach = useEffectEvent(({ mount }: OcModule) => {
-    view.current = { mounted: mount(container.current!, { server, url: `${serverURL() || location.origin}/oc/${server}`, sessionID, navigation: { openSession, newSession, forkSession, closeTab, reportSession } }), sessionID };
+    view.current = { mounted: mount(container.current!, { server, url: `${serverURL() || location.origin}/oc/${server}`, sessionID, messageID, navigation: { openSession, newSession, forkSession, closeTab, reportSession, messageLink } }), sessionID, messageID };
     show();
   });
   useEffect(() => {
@@ -3174,7 +3185,7 @@ function RemoteSession({ id }: { id: string }) {
       Object.assign(remoteView, { route: "", shown: "", openPalette: () => {} });
     };
   }, [ready, server, retries]);
-  useEffect(() => show(), [id, sessionID, open]);
+  useEffect(() => show(), [id, sessionID, open, messageID]);
   if (!id) return null;
   if (!configured) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{sidebar.enumerationComplete ? "This OpenCode session is no longer available." : "Loading…"}</p>;
   if (!ready) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{server} is offline; this session reopens when it is reachable.</p>;
@@ -3929,22 +3940,29 @@ function RevertButton({ line }: { line: Line }) {
 
 // Copy is always last, with Revert before it on user messages, so the row keeps its shape
 // whether or not the session allows reverting.
-function MessageActions({ line, hasSandboxed }: { line: Line; hasSandboxed: boolean }) {
+function MessageActions({ line, hasSandboxed, conversationId }: { line: Line; hasSandboxed: boolean; conversationId: string }) {
   const [copied, setCopied] = useState<string>();
-  const [error, setError] = useState(false);
+  const [failed, setFailed] = useState<string>();
+  const linked = usePathname() === sessionPath(conversationId) && !!line.messageId;
+  const link = linked ? messageURL(sessionPath(conversationId), line.messageId!) : "";
+  const copy = async (text: string) => {
+    setFailed(undefined);
+    try {
+      await copyText(text, document.body);
+      setCopied(text);
+    } catch {
+      setFailed(text);
+    }
+  };
+  const failure = failed === link ? "Could not copy the link." : "Could not copy. Select and copy the text.";
+  const success = copied === line.text ? "Copied" : linked && copied === link ? "Link copied" : "";
+  const status = failed === undefined ? success : failure;
   return <div data-slot="message-actions" className={cn("invisible flex max-w-full items-center gap-1 group-focus-visible/message:visible [@media(hover:hover)]:group-hover/message:visible [@media(hover:hover)]:group-has-[:focus-visible]/message:visible [@media(hover:none)]:group-focus-within/message:visible", line.role === "user" && "self-end")}>
     <MessageFooter line={line} hasSandboxed={hasSandboxed} />
-    <span role="status" className={error ? "text-xs text-destructive" : "sr-only"}>{error ? "Could not copy. Select and copy the text." : copied === line.text ? "Copied" : ""}</span>
+    <span role="status" className={failed === undefined ? "sr-only" : "text-xs text-destructive"}>{status}</span>
     {line.role === "user" ? <RevertButton line={line} /> : null}
-    <Button type="button" size="icon-xs" variant="ghost" aria-label="Copy message" title="Copy message" onClick={async () => {
-      setError(false);
-      try {
-        await copyText(line.text, document.body);
-        setCopied(line.text);
-      } catch {
-        setError(true);
-      }
-    }}>{copied === line.text && !error ? <Check /> : <Copy />}</Button>
+    {linked ? <Button type="button" size="icon-xs" variant="ghost" aria-label="Copy link" title="Copy link" onClick={() => copy(link)}>{status === "Link copied" ? <Check /> : <Link2 />}</Button> : null}
+    <Button type="button" size="icon-xs" variant="ghost" aria-label="Copy message" title="Copy message" onClick={() => copy(line.text)}>{status === "Copied" ? <Check /> : <Copy />}</Button>
   </div>;
 }
 
@@ -4151,7 +4169,7 @@ function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Li
           </BubbleContent>
           <MessageAttachments attachments={line.attachments} conversationId={conversationId} />
         </Bubble></MessageHeader>
-        <MessageActions line={line} hasSandboxed={hasSandboxed} />
+        <MessageActions line={line} hasSandboxed={hasSandboxed} conversationId={conversationId} />
       </MessageContent>
     </Message>
   );

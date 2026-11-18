@@ -96,6 +96,8 @@ import {
 import { createCopyFeedback, writeClipboard } from "../components/copy"
 // rocketclaw: show who sent each prompt (upstream packages/session-ui/src/message/message-content.tsx)
 import { MessageAuthor } from "@rocketclaw/host/author"
+// rocketclaw: copy RocketClaw's link to a prompt (upstream packages/session-ui/src/message/message-content.tsx)
+import { MessageLink } from "@rocketclaw/host/message-link"
 
 type MetaItem = { label: string; variant?: boolean }
 
@@ -462,6 +464,8 @@ export function CurrentUserMessageDisplay(props: {
 
                 {i18n.t("ui.message.copyMessage")}
               </Menu.Item>
+              {/* rocketclaw: copy RocketClaw's link to a sent prompt (upstream packages/session-ui/src/message/message-content.tsx) */}
+              <Show when={!pending()}><MessageLink sessionID={props.sessionID} messageID={props.message.id} /></Show>
               {/* Like the iOS app, a Voice message also offers the full prompt the session received. */}
               <Show when={props.voice}>
                 <Menu.Item onSelect={() => void writeClipboard(props.message.text)}>

@@ -101,6 +101,7 @@ const navigation: Navigation = {
   },
   closeTab: () => calls.closed++,
   reportSession: (id) => calls.reported.push(id),
+  messageLink: (id, message) => (id === "ses_a" ? `https://rocketclaw.test/oc/${id}?message=${message}` : ""),
 }
 
 const shown: Array<() => void> = []
@@ -285,6 +286,28 @@ test("moving the view to another session shows it in place on the same live stre
   expect(calls.reported.at(-1)).toBe(linked)
   expect(server.streams).toBe(streams)
   await until(() => palettes() === 0)
+})
+
+test("a message of the session the view shows moves to it without closing an open palette or resetting Back", async () => {
+  const view = show()
+  await answered(view)
+  ;(await until(() => view.root.querySelector<HTMLElement>("[data-component=task-tool-card]"))).click()
+  await answered(view, "ses_child")
+  press(document.body, "k", modK)
+  await until(() => palettes())
+
+  view.show("ses_a", "msg_ses_a_1")
+  await until(() => calls.reported.at(-1) === "ses_a")
+  expect(palettes()).toBe(1)
+
+  press(document.body, "Escape")
+  await until(() => palettes() === 0)
+  view.openPalette()
+  const search = await until(() => view.portal.querySelector<HTMLInputElement>(".command-palette input"))
+  search.value = "Navigate back"
+  search.dispatchEvent(new InputEvent("input", { bubbles: true }))
+  ;(await until(() => byText(view.portal, ".command-palette-row", "Navigate back"))).click()
+  await until(() => calls.reported.at(-1) === "ses_child")
 })
 
 test("going forward again into a child session keeps its panels working", async () => {
@@ -610,6 +633,35 @@ test("deleting the shown session closes its RocketClaw tab", async () => {
 
   await until(() => calls.closed)
   expect(server.sessions.has("ses_a")).toBe(false)
+})
+
+test("a prompt's menu copies RocketClaw's link to it, only in the tab's own session", async () => {
+  const copied: string[] = []
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => void copied.push(text) } })
+  const open = async (view: ReturnType<typeof show>, id: string) => {
+    await answered(view, id)
+    const more = await until(() => view.root.querySelector<HTMLElement>("[data-slot=user-message-menu] [aria-label='More actions']"))
+    more.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }))
+    more.click()
+    await until(() => byText(view.portal, "[role=menuitem]", "Copy message"))
+  }
+  try {
+    const view = show()
+    await open(view, "ses_a")
+    const item = byText(view.portal, "[role=menuitem]", "Copy link")!
+    for (const type of ["pointerdown", "pointerup"])
+      item.dispatchEvent(new PointerEvent(type, { bubbles: true, button: 0, pointerType: "mouse" }))
+    item.click()
+    await until(() => copied.length)
+    expect(copied).toEqual(["https://rocketclaw.test/oc/ses_a?message=msg_ses_a_1"])
+    view.dispose()
+
+    const child = show(1400, "ses_child")
+    await open(child, "ses_child")
+    expect(byText(child.portal, "[role=menuitem]", "Copy link")).toBeUndefined()
+  } finally {
+    Reflect.deleteProperty(navigator, "clipboard")
+  }
 })
 
 test("selecting the project in the session's project menu goes nowhere", async () => {

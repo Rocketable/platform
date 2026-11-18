@@ -132,7 +132,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await copyButton.waitFor({ state: "attached" });
     expect(await copyButton.isVisible()).toBe(false);
     // Copy is always last with Revert before it; a session that cannot revert says why instead of hiding it.
-    expect(await headerMessage.locator('[data-slot="message-actions"] button').evaluateAll((nodes: Element[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Revert message", "Copy message"]);
+    expect(await headerMessage.locator('[data-slot="message-actions"] button').evaluateAll((nodes: Element[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Revert message", "Copy link", "Copy message"]);
     expect(await revertButton.isDisabled()).toBe(true);
     expect(await revertButton.locator("..").getAttribute("title")).toBe("Revert isn't available in this session");
     if (width >= 640) await headerMessage.hover();
@@ -175,7 +175,8 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await copyButton.waitFor({ state: "hidden" });
     await headerMessage.focus();
     await copyButton.waitFor();
-    // The disabled Revert takes no focus, so Tab reaches Copy.
+    await page.keyboard.press("Tab");
+    expect(await headerMessage.getByRole("button", { name: "Copy link", exact: true }).evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
     await page.keyboard.press("Tab");
     expect(await copyButton.evaluate((node: HTMLElement) => ({
       copyFocused: node === document.activeElement,

@@ -13,6 +13,7 @@ export type Navigation = {
   forkSession(sessionID: string, before: string): Promise<string>
   closeTab(): void
   reportSession(sessionID: string): void
+  messageLink(sessionID: string, messageID: string): string
 }
 
 export type MountOptions = {
@@ -21,6 +22,7 @@ export type MountOptions = {
   /** The server's same-origin proxy route: the page origin plus /oc/<server>. RocketClaw's proxy adds the password. */
   url: string
   sessionID: string
+  messageID?: string
   navigation: Navigation
 }
 
@@ -31,7 +33,7 @@ export type Mounted = {
    * Moves the view to another session of its server, as OpenCode's own app moves between sessions, so what it holds
    * in memory carries over. Open dialogs close, and Back stops at that session.
    */
-  show(sessionID: string): void
+  show(sessionID: string, messageID?: string): void
   /**
    * The server's sessions open as RocketClaw tabs. They are the view's open tabs, so OpenCode keeps their transcripts
    * and those of the 3 sessions it showed last, and lets the rest go.

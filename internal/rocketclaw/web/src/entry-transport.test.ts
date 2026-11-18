@@ -117,7 +117,7 @@ test("transcript and entry HTTP proxy reach Go", async () => {
       if (width === 390) await user.locator('[data-slot="bubble-content"]').tap();
       else await user.hover();
       await userCopy.waitFor({ state: "visible" });
-      expect(await user.locator('[data-slot="message-actions"] button').evaluateAll((nodes: Element[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Revert message", "Copy message"]);
+      expect(await user.locator('[data-slot="message-actions"] button').evaluateAll((nodes: Element[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Revert message", "Copy link", "Copy message"]);
       await replyCopy.waitFor({ state: "hidden" });
       await userCopy.click();
       expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("human two");
