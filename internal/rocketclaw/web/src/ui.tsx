@@ -1698,7 +1698,7 @@ const TabStore = createContext<TabStoreValue | null>(null);
 type CardMenu = { path: string; anchor: MenuAnchor; space: string; shared?: boolean };
 // The tabs picked besides the one in view, in one card, while that tab stays in view.
 type Picked = { at: string; card: string; paths: Set<string> };
-type Card = { tabs: TabStoreValue; label: string; folds: Record<string, boolean>; waiting: Set<string>; newChat: () => void; picked: Picked; setPicked: (picked: Picked) => void; editing?: string; setEditing: (key?: string) => void; renaming?: string; setRenaming: (space?: string) => void; setMenu: (menu: CardMenu) => void; refocus: (space: string) => void; move: (key: string, step: number) => void };
+type Card = { tabs: TabStoreValue; label: string; folds: Record<string, boolean>; waiting: Set<string>; newChat: () => void; picked: Picked; setPicked: (picked: Picked) => void; editing?: string; setEditing: (key?: string) => void; renaming?: string; setRenaming: (space?: string) => void; menu?: CardMenu; setMenu: (menu: CardMenu) => void; refocus: (space: string) => void; move: (key: string, step: number) => void };
 const selectionIn = (tabs: TabStoreValue, picked: Picked, space: string) =>
   new Set(tabs.shownOf(space).flatMap((tab) => tab.path === tabs.pathname || (picked.at === tabs.pathname && picked.card === `${tabs.name}/${space}` && picked.paths.has(tab.path)) ? [tab.path] : []));
 // The keyboard stop of a card, else of the first list that has one.
@@ -1775,7 +1775,7 @@ function Cards({ stores, newChat }: { stores: TabStoreValue[]; newChat: () => vo
     tabs, label: titled ? serverLabel(tabs.name) : "", folds: layout.folded ?? noFolds, waiting, newChat, picked, setPicked,
     editing: editing?.server === tabs.name ? editing.key : undefined, setEditing: (key) => setEditing(key === undefined ? undefined : { server: tabs.name, key }),
     renaming: renaming?.server === tabs.name ? renaming.space : undefined, setRenaming: (space) => setRenaming(space === undefined ? undefined : { server: tabs.name, space }),
-    setMenu: (item) => setMenu({ ...item, server: tabs.name }), refocus: (space) => selected(node, `${tabs.name}/${space}`)?.focus(),
+    menu, setMenu: (item) => setMenu({ ...item, server: tabs.name }), refocus: (space) => selected(node, `${tabs.name}/${space}`)?.focus(),
     move: (key, step) => {
       const to = sorted[sorted.findIndex((entry) => entry.key === key) + step]?.key;
       if (!to) return;
@@ -1884,7 +1884,7 @@ function SpaceActions({ tabs, space, label, renaming, rename }: { tabs: TabStore
 
 // A card's tabs: its groups, each under its name, and its tabs, which open, close, select, reorder by dragging within the
 // card or by Shift+Arrow, and take their menu. Double-clicking its empty space starts a session in its space.
-function CardTabs({ tabs, space, listed, label, picked, setPicked, setMenu, newChat, waiting, editing, setEditing, refocus }: Card & { space: Space; listed: Tab[] }) {
+function CardTabs({ tabs, space, listed, label, picked, setPicked, menu, setMenu, newChat, waiting, editing, setEditing, refocus }: Card & { space: Space; listed: Tab[] }) {
   const { pathname } = tabs, key = `${tabs.name}/${space.id}`, selection = selectionIn(tabs, picked, space.id);
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   const groupOf = (tab: Tab) => tabs.state.groups.find((item) => item.id === tab.group);
@@ -1933,7 +1933,7 @@ function CardTabs({ tabs, space, listed, label, picked, setPicked, setMenu, newC
         event.preventDefault();
         return target.click();
       }
-      if (target.role === "tab" && event.key === "Escape" && selection.size > 1) {
+      if (target.role === "tab" && event.key === "Escape" && selection.size > 1 && !menu) {
         event.preventDefault();
         return pick([]);
       }

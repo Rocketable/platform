@@ -940,7 +940,7 @@ test("Cmd/Ctrl+click and Shift+click select tabs that the tab menu groups and un
     await tab(name).click({ button: "right" });
     await page.getByRole("menuitem", { name: "Close", exact: true }).waitFor();
     const listed = await page.getByRole("menuitem").allInnerTexts();
-    await page.keyboard.press("Escape");
+    await tab(name).dispatchEvent("keydown", { key: "Escape" });
     await page.getByRole("menu").waitFor({ state: "hidden" });
     return listed;
   };
