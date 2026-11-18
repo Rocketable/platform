@@ -309,23 +309,6 @@ func (c *SidebarChat) is(value string) bool {
 		value == "queued" && c.Session.Queued || value == "waiting" && c.Session.Asking || value == "external" && c.Session.External
 }
 
-func (c *SidebarChat) holds(needle string) bool {
-	row := &c.Session
-
-	var preview string
-	if row.Summary != nil {
-		preview = row.Summary.LastMessage
-	}
-
-	if needle == "" || strings.Contains(strings.ToLower(row.Name+" "+c.Room+" "+preview+" "+row.Conversation.Agent+" "+row.Label()+" "+row.Server+" "+row.Directory), needle) {
-		return true
-	}
-
-	_, origin := DecideOrigin(&row.Origin)
-
-	return strings.Contains(origin, needle)
-}
-
 func (row *SidebarSession) Label() string {
 	if row.SlackChannel != "" {
 		return "slack " + row.SlackChannel
@@ -447,10 +430,6 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 				continue
 			}
 
-			if !withHits && !chat.holds(search.Needle) {
-				continue
-			}
-
 			label := row.Label()
 			_, origin := DecideOrigin(&row.Origin)
 
@@ -472,6 +451,10 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 			}
 
 			if match.Field == "" && !withHits {
+				if !strings.Contains(strings.ToLower(row.Name+" "+chat.Room+" "+preview+" "+row.Conversation.Agent+" "+label+" "+row.Server+" "+row.Directory), search.Needle) {
+					continue
+				}
+
 				match.Field, match.Text = fieldPreview, cmp.Or(preview, label)
 			}
 
