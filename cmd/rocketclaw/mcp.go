@@ -60,9 +60,9 @@ func startExternalMCPServer(
 
 	return externalmcp.StartSessionPromptServer(ctx, logger, listener, users, func(callCtx context.Context, username, externalConversationID, requestedAgent, input string, metadata map[string]string, attachments []externalmcp.SessionAttachment) (result externalmcp.SessionResult, err error) {
 		var (
-			managedConversationID string
-			durableRegistration   bool
-			promptAccepted        bool
+			session             backend.ExternalMCPSessionState
+			durableRegistration bool
+			promptAccepted      bool
 		)
 
 		defer func() {
@@ -71,7 +71,7 @@ func startExternalMCPServer(
 			}
 
 			if err := store.RemoveExternalMCPConversation(externalConversationID); err != nil {
-				logger.Error("clean failed external MCP conversation", "external_conversation_id", externalConversationID, "conversation_id", managedConversationID, "error", err)
+				logger.Error("clean failed external MCP conversation", "external_conversation_id", externalConversationID, "conversation_id", session.ManagedConversationID, "error", err)
 			}
 		}()
 
@@ -102,47 +102,39 @@ func startExternalMCPServer(
 			session.PrivateConversationID = strings.TrimSpace(session.PrivateConversationID)
 			session.ManagedConversationID = strings.TrimSpace(session.ManagedConversationID)
 
-			usedAgent := session.Agent
-			if requestedAgent != usedAgent {
+			if requestedAgent != session.Agent {
 				logger.Warn(
 					"external MCP requested agent mismatched persisted session agent; using persisted agent",
 					"external_conversation_id", externalConversationID,
 					"requested_agent", requestedAgent,
-					"used_agent", usedAgent,
+					"used_agent", session.Agent,
 				)
 			}
 
-			if usedAgent == "" || session.ManagedConversationID == "" {
+			if session.Agent == "" || session.ManagedConversationID == "" {
 				return externalmcp.SessionResult{}, fmt.Errorf("external_conversation_id %q has incomplete persisted state", externalConversationID)
 			}
+		} else {
+			session.Agent = requestedAgent
+		}
 
-			if !agents.Exposed(usedAgent) {
-				return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", usedAgent)
+		if !agents.Exposed(session.Agent) {
+			return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", session.Agent)
+		}
+
+		if !ok {
+			session.PrivateConversationID = "external_mcp:" + session.Agent + ":" + rand.Text()
+			session.ManagedConversationID = rand.Text()
+
+			if err := store.RegisterExternalMCPConversation(externalConversationID, session.Agent, &backend.ExternalMCPSessionState{Agent: session.Agent, PrivateConversationID: session.PrivateConversationID, ManagedConversationID: session.ManagedConversationID, OriginPairs: metadata}); err != nil {
+				return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP conversation: %w", err)
 			}
 
-			result, _, err := submitExternalMCPInput(callCtx, turns, usedAgent, session.PrivateConversationID, session.ManagedConversationID, &inboundContent, metadata, username, externalConversationID)
-
-			return result, err
+			durableRegistration = true
+			logger.Info("started external MCP session", "event", "external_mcp_session_started", "external_conversation_id", externalConversationID, "conversation_id", session.PrivateConversationID, "managed_conversation_id", session.ManagedConversationID, "agent", session.Agent, "user", username)
 		}
 
-		usedAgent := requestedAgent
-
-		if !agents.Exposed(usedAgent) {
-			return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", usedAgent)
-		}
-
-		privateConversationID := "external_mcp:" + usedAgent + ":" + rand.Text()
-		managedConversationID = rand.Text()
-
-		if err := store.RegisterExternalMCPConversation(externalConversationID, usedAgent, &backend.ExternalMCPSessionState{Agent: usedAgent, PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, OriginPairs: metadata}); err != nil {
-			return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP conversation: %w", err)
-		}
-
-		durableRegistration = true
-
-		logger.Info("started external MCP session", "event", "external_mcp_session_started", "external_conversation_id", externalConversationID, "conversation_id", privateConversationID, "managed_conversation_id", managedConversationID, "agent", usedAgent, "user", username)
-
-		result, promptAccepted, err = submitExternalMCPInput(callCtx, turns, usedAgent, privateConversationID, managedConversationID, &inboundContent, metadata, username, externalConversationID)
+		result, promptAccepted, err = submitExternalMCPInput(callCtx, turns, session.Agent, session.PrivateConversationID, session.ManagedConversationID, &inboundContent, metadata, username, externalConversationID)
 
 		return result, err
 	})
