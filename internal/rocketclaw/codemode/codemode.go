@@ -16,6 +16,16 @@ import (
 
 const stepBudget = 1_000_000
 
+func sourceOptions() *syntax.FileOptions {
+	return &syntax.FileOptions{
+		While:           true,
+		Set:             true,
+		TopLevelControl: false,
+		GlobalReassign:  false,
+		Recursion:       false,
+	}
+}
+
 type ToolDesc struct {
 	Server, Name, Description string
 	InputSchema               map[string]any
@@ -114,19 +124,11 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 		predeclared[name] = builtin
 	}
 
-	options := &syntax.FileOptions{
-		While:           true,
-		Set:             true,
-		TopLevelControl: false,
-		GlobalReassign:  false,
-		Recursion:       false,
-	}
-
 	if err := context.Cause(ctx); err != nil {
 		return "", fmt.Errorf("codemode context: %w", err)
 	}
 
-	_, prog, errSource := starlark.SourceProgramOptions(options, "codemode.star", source, predeclared.Has)
+	_, prog, errSource := starlark.SourceProgramOptions(sourceOptions(), "codemode.star", source, predeclared.Has)
 	if errSource != nil {
 		return "", wrapParseError(errSource)
 	}

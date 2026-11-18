@@ -57,7 +57,7 @@ test("transcript and entry HTTP proxy reach Go", async () => {
     { role: "thinking", text: "**Planning the answer**" }, { role: "tool", text: "execute\n{\"code\":\"true\"}" },
     { role: "tool", text: "ok" }, { role: "assistant", text: "answer one" },
     { role: "user", text: "human two" }, { role: "assistant", text: "answer two" },
-    { role: "tool", text: "execute\n{\"code\":\"tag\"}" },
+    { role: "tool", text: "execute\n{\"code\":\"def main():\\n    return tag()\",\"description\":\"Tag\"}" },
     { role: "tool", text: "tagged" },
   ]);
   const config = await call("ListConfig");
