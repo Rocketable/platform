@@ -1088,7 +1088,8 @@ func codexStreamingResponse(ctx context.Context, resp *http.Response) (*http.Res
 			continue
 		}
 
-		if event.Type == "response.failed" {
+		switch event.Type {
+		case "response.failed":
 			var response struct {
 				Error struct {
 					Code    string `json:"code"`
@@ -1102,16 +1103,8 @@ func codexStreamingResponse(ctx context.Context, resp *http.Response) (*http.Res
 				}
 			}
 
-			if err := observe(payload); err != nil {
-				return nil, err
-			}
-
 			errResponse = &codexStreamError{Code: response.Error.Code, Message: response.Error.Message}
-
-			continue
-		}
-
-		if event.Type == "response.incomplete" {
+		case "response.incomplete":
 			var response struct {
 				IncompleteDetails struct {
 					Reason string `json:"reason"`
@@ -1124,46 +1117,36 @@ func codexStreamingResponse(ctx context.Context, resp *http.Response) (*http.Res
 				}
 			}
 
-			if err := observe(payload); err != nil {
-				return nil, err
-			}
-
 			errResponse = fmt.Errorf("codex stream response incomplete: %s", cmp.Or(strings.TrimSpace(response.IncompleteDetails.Reason), "unknown"))
+		case "response.completed":
+			var response map[string]json.RawMessage
+			if err := json.Unmarshal(event.Response, &response); err != nil {
+				return nil, fmt.Errorf("parse Codex completed response: %w", err)
+			}
 
-			continue
-		}
+			if len(outputs) > 0 {
+				outputData, _ := json.Marshal(outputs)
 
-		if event.Type != "response.completed" {
+				response["output"] = outputData
+
+				event.Response, _ = json.Marshal(response)
+				payload, _ = json.Marshal(map[string]json.RawMessage{"type": json.RawMessage(`"response.completed"`), "response": event.Response})
+			}
+
 			if err := observe(payload); err != nil {
 				return nil, err
 			}
 
-			continue
-		}
+			resp.Body = io.NopCloser(bytes.NewReader(event.Response))
+			resp.ContentLength = int64(len(event.Response))
+			resp.Header.Set("Content-Type", "application/json")
 
-		var response map[string]json.RawMessage
-		if err := json.Unmarshal(event.Response, &response); err != nil {
-			return nil, fmt.Errorf("parse Codex completed response: %w", err)
-		}
-
-		if len(outputs) > 0 {
-			outputData, _ := json.Marshal(outputs)
-
-			response["output"] = outputData
-
-			event.Response, _ = json.Marshal(response)
-			payload, _ = json.Marshal(map[string]json.RawMessage{"type": json.RawMessage(`"response.completed"`), "response": event.Response})
+			return resp, nil
 		}
 
 		if err := observe(payload); err != nil {
 			return nil, err
 		}
-
-		resp.Body = io.NopCloser(bytes.NewReader(event.Response))
-		resp.ContentLength = int64(len(event.Response))
-		resp.Header.Set("Content-Type", "application/json")
-
-		return resp, nil
 	}
 
 	if err := scanner.Err(); err != nil {
