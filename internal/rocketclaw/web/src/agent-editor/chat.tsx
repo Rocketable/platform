@@ -15,7 +15,7 @@ import { envName, fixed, mcpState, McpPanel, useMcpWrites, type Apply } from "./
 
 type Turn = ReturnType<typeof transcriptTurns>[number];
 type Found = { row: ReturnType<typeof comparisonRows>[number]; binding: ShadowBinding };
-type Column = { key: string; title: string };
+type Column = { key: string; title: string; revision: number };
 
 const fileKinds = ["set_field", "edit_body", "add_variant", "rename_variant"];
 const changedAt = (log: AgentDraftOp[], variant: string) => Math.max(0, ...log.filter((op) => ["create", "set_mode"].includes(op.kind)
@@ -37,7 +37,7 @@ export function TestChat({ coedit, draft, messages, onFix }: { coedit: CoEdit; d
     onSuccess: (reply) => settle(reply.refused),
     onError: fail,
   });
-  const columns: Column[] = [...draft.variants.map((variant) => ({ key: variant.name, title: variantTitle(draft, variant.name) })), ...draft.existing ? [{ key: "", title: "Live" }] : []];
+  const columns: Column[] = [...draft.variants.map(({ name }) => ({ key: name, title: variantTitle(draft, name), revision: changedAt(coedit.log, name) })), ...draft.existing ? [{ key: "", title: "Live", revision: changedAt(coedit.log, "") }] : []];
   const state = mcpState(draft, messages[0]?.externalMcp), setMcp = useMcpWrites(draft, apply), grid = { gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` };
   const added = "bcdefghijklmnopqrstuvwxyz".split("").find((name) => !draft.variants.some((variant) => variant.name === name));
   return <section aria-label="Test chat" className="flex min-h-96 min-w-0 flex-col border-b lg:min-h-0 lg:border-r lg:border-b-0">
@@ -51,13 +51,13 @@ export function TestChat({ coedit, draft, messages, onFix }: { coedit: CoEdit; d
     <Notices draft={draft} columns={columns.length} state={state} fresh={!messages.length} renamed={!draft.existing && coedit.log.some((op) => op.kind === "rename")} setMcp={setMcp} />
     <McpPanel draft={draft} first={messages[0]?.externalMcp} state={state} set={setMcp} />
     <div className="grid shrink-0 gap-5 border-b px-4 py-2" style={grid}>
-      {columns.map((column, i) => <ColumnHeader key={column.key} column={column} current={changedAt(coedit.log, column.key)} last={messages.at(-1)} removable={i > 0 && !!column.key} apply={apply} />)}
+      {columns.map((column, i) => <ColumnHeader key={column.key} column={column} last={messages.at(-1)} removable={i > 0 && !!column.key} apply={apply} />)}
     </div>
     <div ref={viewport} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       {turns.map((turn, index) => {
         const record = messages.find(({ inputId }) => turn.user.some((line) => line.inputId === inputId));
         return <Row key={turnKey(turn)} index={index} turn={turn} chat={draft.testChat} record={record} first={messages[0]?.externalMcp} grid={grid}>
-          {columns.map((column, i) => <Cell key={column.key} column={column} draft={i === 0} running={busy && index === turns.length - 1} turn={turn} index={index} found={found.get(`${column.key}/${turnKey(turn)}`)} chat={draft.testChat} log={coedit.log} help={help} record={record} onFix={onFix} />)}
+          {columns.map((column, i) => <Cell key={column.key} column={column} draft={i === 0} running={busy && index === turns.length - 1} turn={turn} index={index} found={found.get(`${column.key}/${turnKey(turn)}`)} chat={draft.testChat} help={help} record={record} onFix={onFix} />)}
         </Row>;
       })}
       {queued.map((item) => <p key={item.id} role="status" className="border-b px-4 py-3 text-xs text-muted-foreground">Waiting its turn: {item.text}</p>)}
@@ -109,7 +109,7 @@ function Notices({ draft, columns, state, fresh, renamed, setMcp }: { draft: Age
   </>;
 }
 
-function ColumnHeader({ column, current, last, removable, apply }: { column: Column; current: number; last?: AgentDraftMessage; removable: boolean; apply: Apply }) {
+function ColumnHeader({ column, last, removable, apply }: { column: Column; last?: AgentDraftMessage; removable: boolean; apply: Apply }) {
   const [renaming, setRenaming] = useState(false);
   const label = last?.labels?.[column.key];
   const rename = (name: string) => { setRenaming(false); if (name && name !== column.key) void apply({ kind: "rename_variant", variant: column.key, value: name }); };
@@ -122,7 +122,7 @@ function ColumnHeader({ column, current, last, removable, apply }: { column: Col
         <Button size="icon-xs" variant="ghost" aria-label={`Remove variant ${column.key}`} onClick={() => void apply({ kind: "remove_variant", variant: column.key })}><X /></Button>
       </> : null}
     </span>
-    <span className="truncate text-[11px] text-muted-foreground">{column.key ? `r${current}` : "the saved live version"}{label && Number(label) !== current ? <> · <span className="text-foreground">{`next message uses r${current}`}</span></> : null}</span>
+    <span className="truncate text-[11px] text-muted-foreground">{column.key ? `r${column.revision}` : "the saved live version"}{label && Number(label) !== column.revision ? <> · <span className="text-foreground">{`next message uses r${column.revision}`}</span></> : null}</span>
   </div>;
 }
 
@@ -139,10 +139,10 @@ function Row({ index, turn, chat, record, first, grid, children }: { index: numb
   </section>;
 }
 
-function Cell(props: { column: Column; draft: boolean; running: boolean; turn: Turn; index: number; found?: Found; chat: string; log: AgentDraftOp[]; help: AgentSettingHelp[]; record?: AgentDraftMessage; onFix: (fix: Fix) => void }) {
-  const { column, log, record } = props;
+function Cell(props: { column: Column; draft: boolean; running: boolean; turn: Turn; index: number; found?: Found; chat: string; help: AgentSettingHelp[]; record?: AgentDraftMessage; onFix: (fix: Fix) => void }) {
+  const { column, record } = props;
   const label = column.key ? record?.labels?.[column.key] : record?.live;
-  const faded = !!column.key && !!label && Number(label) < changedAt(log, column.key);
+  const faded = !!column.key && !!label && Number(label) < column.revision;
   const said = ((props.draft ? props.turn : props.found?.row.child)?.items ?? []).filter((line) => line.role === "assistant").map((line) => line.text).join("\n\n");
   return <div role="region" aria-label={`${column.title} answer`} className={cn("min-w-0", faded && "opacity-60")}>
     {label ? <p className="mb-1 text-[11px] text-muted-foreground">{`${column.key ? `r${label}` : `live ${label}`}${faded ? " · changed since" : ""}`}</p> : null}
