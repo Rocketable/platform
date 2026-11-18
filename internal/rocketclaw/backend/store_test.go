@@ -272,32 +272,6 @@ func testStoreDSN(workspace string) string {
 	return dsn
 }
 
-func AppendSessionEntryID(ctx context.Context, workspace, conversationID string, entry *harness.SessionEntry) (int64, error) {
-	if entry == nil {
-		return 0, errors.New("rocketcode session entry is required")
-	}
-
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
-		return 0, errors.New("conversation ID is required")
-	}
-
-	if testStoreDSN(workspace) == os.Getenv("ROCKETCLAW_TEST_DATABASE_URL") {
-		if _, err := NewSessionService(workspace); err != nil {
-			return 0, err
-		}
-	}
-
-	service, err := NewSessionServiceIn(ctx, &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
-	if err != nil {
-		return 0, err
-	}
-
-	defer func() { _ = service.Stop() }()
-
-	return service.AppendEntryID(ctx, conversationID, entry)
-}
-
 func DeleteSession(ctx context.Context, workspace, conversationID string) (int64, error) {
 	service, err := NewSessionServiceIn(ctx, &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -1532,8 +1506,7 @@ func TestDeleteOwnedHistoryReportsDeleteFailures(t *testing.T) {
 func TestSessionServicePrunesOldState(t *testing.T) {
 	t.Parallel()
 
-	workspace := t.TempDir()
-	store := newTestSessionServiceAt(t, workspace)
+	store := newTestSessionService(t)
 	cutoff := time.Unix(1_700_000_000, 0).UTC()
 	oldTime := cutoff.Add(-time.Second)
 	newTime := cutoff.Add(time.Second)
@@ -1581,7 +1554,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 		"old-web":                      oldTime,
 		"active-web":                   newTime,
 	} {
-		_, err := AppendSessionEntryID(context.Background(), workspace, conversationID, testSessionEntryAt(ts, conversationID))
+		_, err := store.AppendEntryID(t.Context(), conversationID, testSessionEntryAt(ts, conversationID))
 		require.NoError(t, err)
 	}
 
@@ -1822,6 +1795,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 
+	scheduledStore := newTestSessionService(t)
 	for _, tc := range []struct {
 		name, conversation, parent, destination string
 		orphan                                  bool
@@ -1833,7 +1807,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 		{"scheduled producer shadow", "scheduled-child", "scheduled-producer", "scheduled-owner", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			store := newTestSessionService(t)
+			store := scheduledStore
 			ctx := t.Context()
 
 			for _, id := range []string{tc.conversation, tc.parent, tc.destination} {
@@ -1899,6 +1873,10 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 			entries, err := store.ObserveEntries(ctx, tc.conversation)
 			require.NoError(t, err)
 			assert.Empty(t, entries)
+
+			ids, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations`, "remaining scheduled conversations")
+			require.NoError(t, err)
+			require.Empty(t, ids)
 		})
 	}
 
