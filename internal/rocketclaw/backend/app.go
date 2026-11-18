@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"runtime/metrics"
 	"strings"
 	"sync"
@@ -267,13 +270,24 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 	var prune errgroup.Group
 	prune.Go(func() error {
 		for {
-			stats, err := rocketcodeSessions.PruneStateBefore(pruneCtx, time.Now().Add(-stateRetention), statePrunePace)
+			cutoff := time.Now().Add(-stateRetention)
+
+			stats, err := rocketcodeSessions.PruneStateBefore(pruneCtx, cutoff, statePrunePace)
 			if err != nil && pruneCtx.Err() == nil {
 				logger.Warn("prune stale rocketclaw state", "error", err)
 			}
 
 			if stats.Threads+stats.ExternalMCPSessions > 0 || stats.SessionRows > 0 {
 				logger.Info("pruned stale rocketclaw state", "threads", stats.Threads, "external_mcp_sessions", stats.ExternalMCPSessions, "session_rows", stats.SessionRows)
+			}
+
+			removed, err := pruneRocketcodeTemp(pruneCtx, filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), ".rocketcode"), cutoff)
+			if err != nil && pruneCtx.Err() == nil {
+				logger.Warn("prune stale rocketcode temp files", "error", err)
+			}
+
+			if removed > 0 {
+				logger.Info("pruned stale rocketcode temp files", "entries", removed)
 			}
 
 			select {
@@ -304,6 +318,43 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 	}
 
 	return nil
+}
+
+func pruneRocketcodeTemp(ctx context.Context, dir string, cutoff time.Time) (int, error) {
+	root, err := os.OpenRoot(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+
+	if err != nil {
+		return 0, fmt.Errorf("open rocketcode dir: %w", err)
+	}
+
+	removed := 0
+
+	for _, sub := range []string{"tmp", "shell-outputs"} {
+		entries, errRead := fs.ReadDir(root.FS(), sub)
+		if !errors.Is(errRead, fs.ErrNotExist) {
+			err = errors.Join(err, errRead)
+		}
+
+		for _, entry := range entries {
+			if ctx.Err() != nil {
+				return removed, errors.Join(err, ctx.Err(), root.Close())
+			}
+
+			info, errEntry := entry.Info()
+			if errEntry == nil && info.ModTime().Before(cutoff) {
+				if errEntry = root.RemoveAll(filepath.Join(sub, entry.Name())); errEntry == nil {
+					removed++
+				}
+			}
+
+			err = errors.Join(err, errEntry)
+		}
+	}
+
+	return removed, errors.Join(err, root.Close())
 }
 
 type conversationFactory struct {

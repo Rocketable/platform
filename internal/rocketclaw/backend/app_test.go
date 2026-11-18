@@ -719,3 +719,50 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 
 	assert.Len(t, assembler.AssembleCalls(), 1)
 }
+
+func TestPruneRocketcodeTempRemovesEntriesOlderThanCutoff(t *testing.T) {
+	workspace := t.TempDir()
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	require.NoError(t, root.MkdirAll("outside", 0o700))
+	require.NoError(t, root.WriteFile("outside/keep.txt", []byte("keep"), 0o600))
+	require.NoError(t, root.MkdirAll("runtime/.rocketcode/tmp/old-conversation", 0o700))
+	require.NoError(t, root.MkdirAll("runtime/.rocketcode/tmp/fresh-conversation", 0o700))
+	require.NoError(t, root.MkdirAll("runtime/.rocketcode/shell-outputs", 0o700))
+	require.NoError(t, root.MkdirAll("empty/.rocketcode", 0o700))
+	require.NoError(t, root.WriteFile("runtime/.rocketcode/tmp/old-conversation/out.txt", []byte("old"), 0o600))
+	require.NoError(t, root.Symlink(filepath.Join(workspace, "outside"), "runtime/.rocketcode/tmp/old-conversation/escape"))
+	require.NoError(t, root.Symlink(filepath.Join(workspace, "outside"), "runtime/.rocketcode/tmp/fresh-link"))
+	require.NoError(t, root.WriteFile("runtime/.rocketcode/shell-outputs/rocketcode-bash-1", []byte("old"), 0o600))
+	require.NoError(t, root.WriteFile("runtime/.rocketcode/shell-outputs/rocketcode-bash-2", []byte("fresh"), 0o600))
+
+	old := time.Now().Add(-stateRetention - time.Hour)
+	require.NoError(t, root.Chtimes("runtime/.rocketcode/tmp/old-conversation", old, old))
+	require.NoError(t, root.Chtimes("runtime/.rocketcode/shell-outputs/rocketcode-bash-1", old, old))
+
+	cutoff := time.Now().Add(-stateRetention)
+
+	removed, err := pruneRocketcodeTemp(t.Context(), filepath.Join(workspace, "runtime", ".rocketcode"), cutoff)
+	require.NoError(t, err)
+	assert.Equal(t, 2, removed)
+
+	for name, kept := range map[string]bool{
+		"runtime/.rocketcode/tmp/old-conversation":            false,
+		"runtime/.rocketcode/shell-outputs/rocketcode-bash-1": false,
+		"runtime/.rocketcode/tmp/fresh-conversation":          true,
+		"runtime/.rocketcode/tmp/fresh-link":                  true,
+		"runtime/.rocketcode/shell-outputs/rocketcode-bash-2": true,
+		"outside/keep.txt": true,
+	} {
+		_, err := root.Lstat(name)
+		assert.Equal(t, kept, err == nil, name)
+	}
+
+	for _, dir := range []string{"empty/.rocketcode", "missing/.rocketcode"} {
+		removed, err := pruneRocketcodeTemp(t.Context(), filepath.Join(workspace, dir), cutoff)
+		require.NoError(t, err, dir)
+		assert.Zero(t, removed, dir)
+	}
+}
