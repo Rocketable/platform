@@ -413,7 +413,7 @@ How an easy agent runs:
 
 ### Emulated shell
 
-An agent that sets `shell: emulated` runs its shell commands in real Bash inside a Linux sandbox instead of host bash: `bash` tool calls and `` !`…` `` lines. The sandbox has a pinned Ubuntu 26.04 LTS with the usual tools plus `python3`, `node` (also as `js-exec`) and `sqlite3`. As on 26.04 itself, `ls`, `cat`, `head` and the other core utilities are the uutils (Rust) coreutils; GNU's are there as `gnuls`, `gnucat` and so on. Each command runs in a fresh Bash, so files in the folder persist between calls but variables, functions and `cd` do not.
+An agent that sets `shell: emulated` runs its shell commands in real Bash inside a Linux sandbox instead of host bash: `bash` tool calls and `` !`…` `` lines. The sandbox has a pinned Ubuntu 26.04 LTS with the usual tools plus `python3` (with NumPy and SciPy), `node` (also as `js-exec`) and `sqlite3`. As on 26.04 itself, `ls`, `cat`, `head` and the other core utilities are the uutils (Rust) coreutils; GNU's are there as `gnuls`, `gnucat` and so on. Each command runs in a fresh Bash, so files in the folder persist between calls but variables, functions and `cd` do not.
 
 ```yaml
 shell: emulated

@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "rocketclaw-sandbox-rootfs-amd64",
-  "documentNamespace": "https://github.com/Rocketable/platform/sandbox-rootfs/20261031T000000Z/amd64",
+  "documentNamespace": "https://github.com/Rocketable/platform/sandbox-rootfs/20261118T191519Z/amd64",
   "creationInfo": {
-    "created": "2026-10-31T00:00:00Z",
+    "created": "2026-11-18T19:15:19Z",
     "creators": [
       "Tool: internal/rocketclaw/sandbox/rootfs"
     ]
@@ -14,14 +14,14 @@
     {
       "SPDXID": "SPDXRef-Package-base-files",
       "name": "base-files",
-      "versionInfo": "14ubuntu6.2",
+      "versionInfo": "14ubuntu6.3",
       "downloadLocation": "NOASSERTION",
       "supplier": "Organization: Canonical",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:deb/ubuntu/base-files@14ubuntu6.2?arch=amd64\u0026distro=ubuntu-26.04"
+          "referenceLocator": "pkg:deb/ubuntu/base-files@14ubuntu6.3?arch=amd64\u0026distro=ubuntu-26.04"
         }
       ]
     },
@@ -70,14 +70,14 @@
     {
       "SPDXID": "SPDXRef-Package-ca-certificates",
       "name": "ca-certificates",
-      "versionInfo": "20260816ubuntu0.26.04.1",
+      "versionInfo": "20260816ubuntu0.26.04.2",
       "downloadLocation": "NOASSERTION",
       "supplier": "Organization: Canonical",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:deb/ubuntu/ca-certificates@20260816ubuntu0.26.04.1?arch=amd64\u0026distro=ubuntu-26.04"
+          "referenceLocator": "pkg:deb/ubuntu/ca-certificates@20260816ubuntu0.26.04.2?arch=amd64\u0026distro=ubuntu-26.04"
         }
       ]
     },
@@ -390,6 +390,20 @@
       ]
     },
     {
+      "SPDXID": "SPDXRef-Package-libblas3",
+      "name": "libblas3",
+      "versionInfo": "3.12.1-7ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libblas3@3.12.1-7ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-Package-libblkid1",
       "name": "libblkid1",
       "versionInfo": "2.41.3-3ubuntu2.2",
@@ -434,42 +448,42 @@
     {
       "SPDXID": "SPDXRef-Package-libc-bin",
       "name": "libc-bin",
-      "versionInfo": "2.43-2ubuntu2.4",
+      "versionInfo": "2.43-2ubuntu2.7",
       "downloadLocation": "NOASSERTION",
       "supplier": "Organization: Canonical",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:deb/ubuntu/libc-bin@2.43-2ubuntu2.4?arch=amd64\u0026distro=ubuntu-26.04"
+          "referenceLocator": "pkg:deb/ubuntu/libc-bin@2.43-2ubuntu2.7?arch=amd64\u0026distro=ubuntu-26.04"
         }
       ]
     },
     {
       "SPDXID": "SPDXRef-Package-libc-gconv-modules-extra",
       "name": "libc-gconv-modules-extra",
-      "versionInfo": "2.43-2ubuntu2.4",
+      "versionInfo": "2.43-2ubuntu2.7",
       "downloadLocation": "NOASSERTION",
       "supplier": "Organization: Canonical",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:deb/ubuntu/libc-gconv-modules-extra@2.43-2ubuntu2.4?arch=amd64\u0026distro=ubuntu-26.04"
+          "referenceLocator": "pkg:deb/ubuntu/libc-gconv-modules-extra@2.43-2ubuntu2.7?arch=amd64\u0026distro=ubuntu-26.04"
         }
       ]
     },
     {
       "SPDXID": "SPDXRef-Package-libc6",
       "name": "libc6",
-      "versionInfo": "2.43-2ubuntu2.4",
+      "versionInfo": "2.43-2ubuntu2.7",
       "downloadLocation": "NOASSERTION",
       "supplier": "Organization: Canonical",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:deb/ubuntu/libc6@2.43-2ubuntu2.4?arch=amd64\u0026distro=ubuntu-26.04"
+          "referenceLocator": "pkg:deb/ubuntu/libc6@2.43-2ubuntu2.7?arch=amd64\u0026distro=ubuntu-26.04"
         }
       ]
     },
@@ -586,6 +600,20 @@
       ]
     },
     {
+      "SPDXID": "SPDXRef-Package-libgfortran5",
+      "name": "libgfortran5",
+      "versionInfo": "16-20260322-1ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libgfortran5@16-20260322-1ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-Package-libgmp10",
       "name": "libgmp10",
       "versionInfo": "2:6.3.0+dfsg-5ubuntu2",
@@ -666,6 +694,20 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:deb/ubuntu/libjq1@1.8.1-4ubuntu2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-liblapack3",
+      "name": "liblapack3",
+      "versionInfo": "3.12.1-7ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/liblapack3@3.12.1-7ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
         }
       ]
     },
@@ -910,14 +952,14 @@
     {
       "SPDXID": "SPDXRef-Package-libpcre2-8-0",
       "name": "libpcre2-8-0",
-      "versionInfo": "10.46-1build1",
+      "versionInfo": "10.46-1ubuntu0.1",
       "downloadLocation": "NOASSERTION",
       "supplier": "Organization: Canonical",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:deb/ubuntu/libpcre2-8-0@10.46-1build1?arch=amd64\u0026distro=ubuntu-26.04"
+          "referenceLocator": "pkg:deb/ubuntu/libpcre2-8-0@10.46-1ubuntu0.1?arch=amd64\u0026distro=ubuntu-26.04"
         }
       ]
     },
@@ -988,6 +1030,20 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:deb/ubuntu/libpython3.14-stdlib@3.14.4-1ubuntu0.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libqhull-r8.0",
+      "name": "libqhull-r8.0",
+      "versionInfo": "2020.2-8",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libqhull-r8.0@2020.2-8?arch=amd64\u0026distro=ubuntu-26.04"
         }
       ]
     },
@@ -1512,14 +1568,14 @@
     {
       "SPDXID": "SPDXRef-Package-perl-base",
       "name": "perl-base",
-      "versionInfo": "5.40.1-7ubuntu0.3",
+      "versionInfo": "5.40.1-7ubuntu0.4",
       "downloadLocation": "NOASSERTION",
       "supplier": "Organization: Canonical",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:deb/ubuntu/perl-base@5.40.1-7ubuntu0.3?arch=amd64\u0026distro=ubuntu-26.04"
+          "referenceLocator": "pkg:deb/ubuntu/perl-base@5.40.1-7ubuntu0.4?arch=amd64\u0026distro=ubuntu-26.04"
         }
       ]
     },
@@ -1538,6 +1594,20 @@
       ]
     },
     {
+      "SPDXID": "SPDXRef-Package-python3-decorator",
+      "name": "python3-decorator",
+      "versionInfo": "5.2.1-2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/python3-decorator@5.2.1-2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-Package-python3-minimal",
       "name": "python3-minimal",
       "versionInfo": "3.14.3-0ubuntu2",
@@ -1548,6 +1618,48 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:deb/ubuntu/python3-minimal@3.14.3-0ubuntu2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-python3-numpy-dev",
+      "name": "python3-numpy-dev",
+      "versionInfo": "1:2.3.5+ds-3ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/python3-numpy-dev@1:2.3.5+ds-3ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-python3-numpy",
+      "name": "python3-numpy",
+      "versionInfo": "1:2.3.5+ds-3ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/python3-numpy@1:2.3.5+ds-3ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-python3-scipy",
+      "name": "python3-scipy",
+      "versionInfo": "1.16.3-4build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/python3-scipy@1.16.3-4build1?arch=amd64\u0026distro=ubuntu-26.04"
         }
       ]
     },

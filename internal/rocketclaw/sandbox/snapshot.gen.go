@@ -3,4 +3,4 @@
 package sandbox
 
 // Snapshot is the Ubuntu archive moment every package of the guest image comes from.
-const Snapshot = "20261031T000000Z"
+const Snapshot = "20261118T191519Z"

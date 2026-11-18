@@ -27,7 +27,7 @@ import (
 
 const (
 	suite    = "resolute"
-	packages = "bash,bzip2,ca-certificates,coreutils,diffutils,file,findutils,gawk,grep,gzip,jq,nodejs,procps,python3,sed,sqlite3,tar,wget,xz-utils"
+	packages = "bash,bzip2,ca-certificates,coreutils,diffutils,file,findutils,gawk,grep,gzip,jq,nodejs,procps,python3,python3-numpy,python3-scipy,sed,sqlite3,tar,wget,xz-utils"
 )
 
 //go:embed ubuntu-archive-keyring.gpg
