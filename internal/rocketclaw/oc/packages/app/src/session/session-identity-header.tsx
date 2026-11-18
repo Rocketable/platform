@@ -314,7 +314,7 @@ export function SessionLocation(props: {
                     <Menu.Portal>
                       <Menu.SubContent class="w-max min-w-[172px] max-w-[calc(100vw-32px)]" aria-label={name()}>
                         <Menu.Item onSelect={() => void copyText(name())}>
-                          <Icon name="outline-copy" class="text-v2-icon-icon-muted" />
+                          <Icon name="copy" class="text-v2-icon-icon-muted" />
                           {language.t("session.location.copyBranch")}
                         </Menu.Item>
                         <Show when={props.context}>
@@ -383,7 +383,7 @@ export function SessionLocation(props: {
                   <Menu.Portal>
                     <Menu.SubContent class="w-max max-w-[calc(100vw-32px)]" aria-label={directory()}>
                       <Menu.Item onSelect={() => void copyText(directory())}>
-                        <Icon name="outline-copy" class="text-v2-icon-icon-muted" />
+                        <Icon name="copy" class="text-v2-icon-icon-muted" />
                         {language.t("session.location.copyPath")}
                       </Menu.Item>
                       <Show when={canReveal()}>
@@ -424,7 +424,8 @@ export function SessionLocation(props: {
         </Menu.Portal>
       </Menu>
       <Show when={props.trailing}>
-        <SessionHeaderSeparator gap={8} before={6} after={4} />
+        {/* A child's lineage follows, whose buttons pad 6px; a title pads 4px. */}
+        <SessionHeaderSeparator gap={8} before={6} after={props.compact ? 6 : 4} />
       </Show>
     </>
   )
@@ -488,21 +489,20 @@ export function SessionAncestorTrail(props: {
                 data-slot={ancestor.direct ? "session-title-parent" : "session-title-ancestor"}
                 data-session-id={ancestor.id}
                 title={ancestor.title}
-                class="max-w-[min(200px,40vw)] shrink-0 truncate text-[13px] font-[530] leading-4 tracking-[-0.04px] text-v2-text-text-faint transition-colors hover:text-v2-text-text-muted"
-                classList={{ "ps-1": index() === 0 }}
+                class="h-7 max-w-[min(200px,40vw)] shrink-0 truncate rounded-[6px] px-1.5 text-[13px] font-[530] leading-4 tracking-[-0.04px] text-v2-text-text-faint transition-colors hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-muted focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:text-v2-text-text-muted focus-visible:outline-none"
                 onClick={() => open(props.sessionID, ancestor.id)}
               >
                 <bdi dir="auto">{ancestor.title}</bdi>
               </button>
               <Show when={index() < ancestors().length - 1}>
-                <SessionHeaderSeparator gap={8} before={0} after={0} />
+                <SessionHeaderSeparator gap={8} before={6} after={6} />
               </Show>
             </>
           )}
         </For>
       </div>
       <Show when={props.trailing}>
-        <SessionHeaderSeparator gap={8} before={0} after={4} />
+        <SessionHeaderSeparator gap={8} before={6} after={4} />
       </Show>
     </div>
   )
