@@ -233,21 +233,22 @@ func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicPr
 	raw, _ := json.Marshal(publicProgressTrace{Type: "rocketcode_public_progress", Progress: snapshot})
 	trace := slices.Clone(o.trace)
 
-	index := slices.IndexFunc(trace, func(raw json.RawMessage) bool {
-		items := PublicProgressFromTrace([]json.RawMessage{raw})
-		return len(items) == 1 && items[0].ID == snapshot.ID && items[0].ParentID == snapshot.ParentID
-	})
-	if index < 0 {
-		trace = append(trace, raw)
-	} else {
-		if existing := PublicProgressFromTrace([]json.RawMessage{trace[index]})[0]; existing == snapshot || existing.State == PublicProgressBackground {
+	for i := range trace {
+		items := PublicProgressFromTrace(trace[i : i+1])
+		if len(items) != 1 || items[0].ID != snapshot.ID || items[0].ParentID != snapshot.ParentID {
+			continue
+		}
+
+		if existing := items[0]; existing == snapshot || existing.State == PublicProgressBackground {
 			return nil
 		}
 
-		trace[index] = raw
+		trace[i] = raw
+
+		return o.saveTraceLocked(ctx, trace)
 	}
 
-	return o.saveTraceLocked(ctx, trace)
+	return o.saveTraceLocked(ctx, append(trace, raw))
 }
 
 func (o *turnObservations) replaceResponse(ctx context.Context, parentID string, progress []PublicProgress) error {
