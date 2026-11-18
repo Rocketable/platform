@@ -20,7 +20,7 @@ import (
 type Bubblewrap struct{}
 
 func (Bubblewrap) Prepare(ctx context.Context, dir string, log *slog.Logger) *Runtime {
-	rt := &Runtime{p: &prepared{ready: make(chan struct{})}}
+	rt := &Runtime{p: &prepared{ready: make(chan struct{}), log: log}}
 
 	go func() {
 		defer close(rt.p.ready)

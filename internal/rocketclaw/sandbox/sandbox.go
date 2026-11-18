@@ -14,7 +14,7 @@ import (
 )
 
 type Host interface {
-	Command(ctx context.Context, name string, args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) int
+	Command(ctx context.Context, log *slog.Logger, name string, args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) int
 }
 
 type Command struct {
@@ -97,6 +97,6 @@ func (rt *Runtime) Wait(ctx context.Context) error {
 
 type probeHost struct{}
 
-func (probeHost) Command(context.Context, string, []string, string, io.Reader, io.Writer, io.Writer) int {
+func (probeHost) Command(context.Context, *slog.Logger, string, []string, string, io.Reader, io.Writer, io.Writer) int {
 	return 127
 }

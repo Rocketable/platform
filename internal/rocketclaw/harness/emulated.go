@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"os/exec"
@@ -88,9 +89,9 @@ type emulatedHost struct {
 	client *http.Client
 }
 
-func (h *emulatedHost) Command(ctx context.Context, name string, args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) int {
+func (h *emulatedHost) Command(ctx context.Context, log *slog.Logger, name string, args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if name == sandbox.Curl {
-		return curl(ctx, h.client, h.shell.Dir, args, cwd, stdout, stderr)
+		return curl(ctx, log, h.client, h.shell.Dir, args, cwd, stdout, stderr)
 	}
 
 	cmd := exec.CommandContext(ctx, "/bin/bash", append([]string{"--noprofile", "--norc", "-c", h.shell.Commands[name] + ` "$@"`, name}, args...)...)

@@ -2,10 +2,13 @@ package harness
 
 import (
 	"bytes"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -61,10 +64,12 @@ func TestEmulatedCurl(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "outside")
 	require.NoError(t, os.Symlink(filepath.Dir(outside), filepath.Join(folder, "link")))
 
+	var logs bytes.Buffer
+
 	run := func(args ...string) (int, string, string) {
 		var stdout, stderr bytes.Buffer
 
-		code := curl(t.Context(), server.Client(), folder, args, folder, &stdout, &stderr)
+		code := curl(t.Context(), slog.New(slog.NewTextHandler(&logs, nil)), server.Client(), folder, args, folder, &stdout, &stderr)
 
 		return code, stdout.String(), stderr.String()
 	}
@@ -98,7 +103,7 @@ func TestEmulatedCurl(t *testing.T) {
 		{[]string{"-o"}, 2, "option -o needs a file"},
 		{[]string{"-so"}, 2, "option -o needs a file"},
 		{[]string{"-f", server.URL + "/missing"}, 22, "returned error: 404"},
-		{[]string{server.URL + "/huge"}, 63, "exceeds 10 MiB"},
+		{[]string{server.URL + "/huge?signature=secret"}, 63, "exceeds 10 MiB"},
 		{[]string{"-o", "link/outside", server.URL + "/"}, 23, ""},
 		{[]string{"-o", "../escape", server.URL + "/"}, 23, "outside the agent's folder"},
 		{[]string{"-o", outside, server.URL + "/"}, 23, "outside the agent's folder"},
@@ -110,6 +115,7 @@ func TestEmulatedCurl(t *testing.T) {
 	}
 
 	require.NoFileExists(t, outside)
+	require.Equal(t, fmt.Sprintf("level=WARN msg=\"emulated shell limit reached\" limit=curl_response limit_bytes=%d content_length=-1 url=%s/huge to_file=false\n", maxCurlBytes, server.URL), regexp.MustCompile(`^time=\S+ `).ReplaceAllString(logs.String(), ""), "only the oversized response is logged, without its query")
 
 	code, _, errOut := run("-s", "-f", server.URL+"/missing")
 	require.Equal(t, 22, code)
@@ -136,7 +142,7 @@ func TestEmulatedHostCommand(t *testing.T) {
 	run := func(name, cwd, stdin string, args ...string) (int, string) {
 		var out bytes.Buffer
 
-		code := host.Command(t.Context(), name, args, cwd, strings.NewReader(stdin), &out, &out)
+		code := host.Command(t.Context(), slog.New(slog.DiscardHandler), name, args, cwd, strings.NewReader(stdin), &out, &out)
 
 		return code, out.String()
 	}

@@ -164,11 +164,11 @@ func cgroupKey(dir, file, key string) (int64, error) {
 	return 0, fmt.Errorf("%s: no %s", file, key)
 }
 
-func (cg *execCgroup) hitResourceLimit() bool {
-	oom, _ := cgroupKey(cg.path, "memory.events", "oom_kill")
-	pids, _ := cgroupKey(cg.path, "pids.events", "max")
+func (cg *execCgroup) limitEvents() (oomKills, processLimitHits int64) {
+	oomKills, _ = cgroupKey(cg.path, "memory.events", "oom_kill")
+	processLimitHits, _ = cgroupKey(cg.path, "pids.events", "max")
 
-	return oom > 0 || pids > 0
+	return oomKills, processLimitHits
 }
 
 func (cg *execCgroup) remove() error {
