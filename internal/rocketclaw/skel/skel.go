@@ -34,46 +34,12 @@ type OverlayInfo struct {
 	Spec, URL, Ref, ClonePath string
 }
 
-//go:embed AGENTS.md main-update-cortex.sh all:.rocketclaw all:agents all:cron
+//go:embed all:.rocketclaw all:agents
 var payload embed.FS
 
 func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger *slog.Logger) error {
-	entries, _ := fs.ReadDir(payload, ".")
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		name := entry.Name()
-		dst := filepath.Join(workspace, name)
-
-		info, err := os.Stat(dst)
-		if err == nil {
-			if info.IsDir() {
-				return fmt.Errorf("root setup path is a directory: %s", dst)
-			}
-
-			continue
-		}
-
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("stat root setup path %s: %w", dst, err)
-		}
-
-		data, _ := fs.ReadFile(payload, name)
-
-		if err := os.WriteFile(dst, data, embeddedFileMode(name)); err != nil {
-			return fmt.Errorf("write root setup file %s: %w", dst, err)
-		}
-
-		logger.Debug("wrote embedded root setup file", "path", dst, "bytes", len(data))
-	}
-
-	for _, root := range [...]string{agentsRoot, workspaceCron} {
-		if err := syncFSFiltered(payload, root, filepath.Join(workspace, root), "unpacking embedded rocketclaw setup files", logger, false, false, inertFileFilter{}); err != nil {
-			return fmt.Errorf("unpack embedded rocketclaw overlay %s: %w", root, err)
-		}
+	if err := syncFSFiltered(payload, agentsRoot, filepath.Join(workspace, agentsRoot), "unpacking embedded rocketclaw setup files", logger, false, false, inertFileFilter{}); err != nil {
+		return fmt.Errorf("unpack embedded rocketclaw overlay %s: %w", agentsRoot, err)
 	}
 
 	if err := os.MkdirAll(filepath.Join(workspace, skillsRoot), 0o755); err != nil {
@@ -105,10 +71,8 @@ func SyncEffectiveRuntimeAssets(workspace, target string, overlays []string, log
 		return fmt.Errorf("sync embedded rocketclaw skeleton: %w", err)
 	}
 
-	for _, root := range [...]string{agentsRoot, workspaceCron} {
-		if err := syncFSFiltered(payload, root, filepath.Join(target, root), "syncing embedded rocketclaw runtime assets", logger, true, false, inertFileFilter{}); err != nil {
-			return fmt.Errorf("sync embedded rocketclaw runtime assets %s: %w", root, err)
-		}
+	if err := syncFSFiltered(payload, agentsRoot, filepath.Join(target, agentsRoot), "syncing embedded rocketclaw runtime assets", logger, true, false, inertFileFilter{}); err != nil {
+		return fmt.Errorf("sync embedded rocketclaw runtime assets %s: %w", agentsRoot, err)
 	}
 
 	overlayInfos := overlayInfosIn(target, overlays)

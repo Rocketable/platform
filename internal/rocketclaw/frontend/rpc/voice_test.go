@@ -985,7 +985,7 @@ func TestVoice(t *testing.T) {
 		assert.Equal(t, [2]string{"global", room.Id}, offered["room"])
 		assert.Equal(t, [2]string{"", ""}, offered["nokey"])
 
-		for id, want := range map[string]string{bobs.Id: "main, voice", plain.Id: "chat, nokey, stale, worker"} {
+		for id, want := range map[string]string{bobs.Id: "main, voice", plain.Id: "assistant, chat, nokey, stale, worker"} {
 			reply, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "$agent"})
 			require.NoError(t, err)
 			assert.Equal(t, want, reply.PrivateText, "a sticky session keeps its agent, and no other session switches to a sticky one")

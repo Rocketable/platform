@@ -26,7 +26,7 @@ For each agent to convert, read the effective file and find:
 
 1. Its origin: the workspace overlay `agents/<name>.md`, a git overlay clone `.rocketclaw/overlays/*/agents/<name>.md` (later overlays in the `overlays` list of `rocketclaw.json` win), or the embedded skeleton.
 2. Its shadows under `.rocketclaw/agents/<name>/`. A shadow whose mode differs from its parent's is dropped with a warning, so every shadow is converted too, with the same questions.
-3. The cron files that run it: every `.rocketclaw/cron/*.md` (not `*.example.md`) whose `agent` is `<name>`, and the origin of each. For each local cron to delete, also inspect same-path copies in every git overlay and the embedded skeleton: deletion exposes the highest remaining layer, which may target this agent even if a lower copy does not.
+3. The cron files that run it: every `.rocketclaw/cron/*.md` (not `*.example.md`) whose `agent` is `<name>`, and the origin of each. For each local cron to delete, also inspect same-path copies in every git overlay: deletion exposes the highest remaining layer, which may target this agent even if a lower copy does not.
 4. Other agents that point at it: `task` rules whose subject matches `<name>` (wildcards included) and `auto(<name>)` reviewer rules in any effective agent.
 
 Use `rg` over `.rocketclaw/agents` and `.rocketclaw/cron` for steps 3 and 4.

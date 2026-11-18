@@ -86,13 +86,13 @@ test("a person limited to Ops sees and drives only Ops, and everything once unli
     expect([await spaceMenu("Ops", "unlimited-space-menu-all-spaces"), await canMakeSpaces()]).toEqual([[["Main", "Ops"], ["Go to space", "Rename space", "Delete space"]], true]);
     const every = ["Main: quarterly budget", "No space: scratch notes", ...ops];
     expect(await sessions(every, "unlimited-sessions-all")).toEqual(every);
-    expect(await agentMenu("unlimited-agent-picker-all-agents")).toEqual(["loose", "main", "main-agent", "ops-agent", "voice"]);
+    expect(await agentMenu("unlimited-agent-picker-all-agents")).toEqual(["assistant", "loose", "main", "main-agent", "ops-agent", "voice"]);
     await page.keyboard.press("Control+p");
     await page.getByRole("dialog", { name: "Go to session or command", exact: true }).getByText("Main: quarterly budget", { exact: true }).click();
     await transcript.getByText("Q4 spend is 8% under plan.", { exact: true }).waitFor();
     await currentSpace("Main");
     await shot("unlimited-main-chat");
-    expect(await agentsPage("main-agent", "unlimited-agents-page-all-agents")).toEqual(["loose", "main", "main-agent", "ops-agent", "voice"]);
+    expect(await agentsPage("main-agent", "unlimited-agents-page-all-agents")).toEqual(["assistant", "loose", "main", "main-agent", "ops-agent", "voice"]);
     expect(errors).toEqual([]);
   } finally { await browser.close(); }
 }, 120_000);

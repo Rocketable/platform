@@ -60,7 +60,7 @@
       {
         "channel": "#channel-name",
         "agents": [
-          "main",
+          "assistant",
           "factory"
         ],
         "allowed_user_ids": [
@@ -70,7 +70,7 @@
       {
         "channel": "@",
         "agents": [
-          "main"
+          "assistant"
         ],
         "allowed_user_ids": [
           "U0987654321"

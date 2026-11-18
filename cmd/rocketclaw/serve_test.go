@@ -130,7 +130,7 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 	require.NoError(t, os.Mkdir("agents", 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join("agents", "voice.md"), []byte("---\ndescription: Voice\nmodel: gpt-6.1-sol\n---\n"), 0o600))
 	configData := fmt.Sprintf(
-		`{"workspace":%q,"web":{"tsnet":{}},"database_url":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
+		`{"workspace":%q,"web":{"tsnet":{}},"database_url":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["assistant"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
 		workspace, dsn,
 	)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))
