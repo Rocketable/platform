@@ -143,9 +143,8 @@ export function projectTimeline<T extends TimelineItem>(items: T[], rows: Timeli
   }
   for (const row of projected) {
     if (row.kind !== "group") continue;
-    const tools = row.members.filter(({ line }) => line.role === "tool").length;
-    const thoughts = row.members.filter(({ line }) => line.role === "thinking").length;
-    row.label = tools ? `Used ${tools} ${tools === 1 ? "tool" : "tools"}` : thoughts === row.members.length ? (thoughts === 1 ? "Thought" : "Thoughts") : "Instructions";
+    const tools = row.members.reduce((count, { line }) => count + (line.role === "tool" ? 1 : 0), 0);
+    row.label = tools ? `Used ${tools} ${tools === 1 ? "tool" : "tools"}` : row.members.every(({ line }) => line.role === "thinking") ? (row.members.length === 1 ? "Thought" : "Thoughts") : "Instructions";
   }
   return projected;
 }
