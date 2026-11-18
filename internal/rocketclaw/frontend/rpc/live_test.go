@@ -1283,7 +1283,7 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	replay := append(append([]json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"ask"}`)}, testCallItems("execute", "new", "old", "broken", "capped")...), testCallItems("bash", "top")...)
 	_, err = sessions.AppendEntryID(ctx, "chat", &harness.SessionEntry{Type: "turn", TurnID: "turn", ReplayInput: replay, OutputTrace: []json.RawMessage{
 		json.RawMessage(`{"type":"rocketcode_code_mode_review","parent_call_id":"new","key":"turn/call/new","outcome":"allow","reason":"script reason"}`),
-		json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"new","key":"turn/call/new/host/0","name":"bash","arguments":"{\"command\":\"printf one\"}","status":"ok","summary":"one"}`),
+		json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"new","key":"turn/call/new/host/0","name":"bash","arguments":"{\"command\":\"printf one\"}","status":"ok","summary":"one","created_pull_requests":["https://github.com/o/r/pull/7"],"mentioned_pull_requests":["https://github.com/o/r/pull/8","https://github.com/o/r/pull/9"]}`),
 		json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"new","key":"turn/call/new/host/1","name":"read","arguments":"{\"filePath\":\"a.txt\"}","status":"ok","summary":"(End of file - total 2 lines)"}`),
 		json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"new","key":"turn/call/new/host/2","name":"bash","arguments":"{\"command\":\"PARSED\"}","status":"denied","summary":"denied","outcome":"deny","reason":"checked"}`),
 	}})
@@ -1309,7 +1309,7 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 
 	for id, want := range map[string]*TranscriptEvent{
 		"new": {ScriptReason: "script reason", ScriptOutcome: "allow", ReviewTurn: harness.ReviewTurn("turn/call/new"), CodeModeCalls: []*CodeModeCall{
-			{Name: "bash", Arguments: `{"command":"printf one"}`, Status: "ok", Summary: "one"},
+			{Name: "bash", Arguments: `{"command":"printf one"}`, Status: "ok", Summary: "one", CreatedPullRequests: []string{"https://github.com/o/r/pull/7"}, MentionedPullRequests: []string{"https://github.com/o/r/pull/8", "https://github.com/o/r/pull/9"}},
 			{Name: "read", Arguments: `{"filePath":"a.txt"}`, Status: "ok", Summary: "(End of file - total 2 lines)"},
 			{Name: "bash", Arguments: `{"command":"PARSED"}`, Status: "denied", Summary: "denied", Outcome: "deny", Reason: "checked", ReviewTurn: harness.ReviewTurn("turn/call/new/host/2")},
 		}},

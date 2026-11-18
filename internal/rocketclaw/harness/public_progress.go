@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -97,6 +98,11 @@ type CodeModeCall struct {
 	Summary      string                  `json:"summary,omitempty"`
 	Outcome      permissionReviewOutcome `json:"outcome,omitempty"`
 	Reason       string                  `json:"reason,omitempty"`
+
+	CreatedPullRequests   []string `json:"created_pull_requests,omitempty"`
+	MentionedPullRequests []string `json:"mentioned_pull_requests,omitempty"`
+
+	command string
 }
 
 func CodeModeCallsFromTrace(traces []json.RawMessage) []CodeModeCall {
@@ -131,7 +137,12 @@ func (r *CodeModeCall) String() string {
 func codeModeCallRecord(ctx context.Context, name string, raw json.RawMessage) CodeModeCall {
 	tc, _ := toolCallContextFrom(ctx)
 
-	return CodeModeCall{Type: codeModeCallTraceType, ParentCallID: tc.callID, Key: ToolCallKey(ctx), Name: name, Arguments: clipCodeModeArguments(string(raw)), Status: codeModeCallRunning}
+	var bash bashParams
+	if name == "bash" {
+		_ = json.Unmarshal(raw, &bash)
+	}
+
+	return CodeModeCall{Type: codeModeCallTraceType, ParentCallID: tc.callID, Key: ToolCallKey(ctx), Name: name, Arguments: clipCodeModeArguments(string(raw)), Status: codeModeCallRunning, command: bash.Command}
 }
 
 func clipCodeModeArguments(arguments string) string {
@@ -143,7 +154,8 @@ func clipCodeModeArguments(arguments string) string {
 }
 
 func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
-	text := attachmentOutputMessage(result)
+	text, command := attachmentOutputMessage(result), r.command
+	r.command = ""
 
 	r.Status = codeModeCallOK
 	if bash, ok := result.Data.(BashResult); ok && bash.ErrorCode != "" {
@@ -163,6 +175,10 @@ func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
 		return r
 	}
 
+	if command != "" && r.Status == codeModeCallOK {
+		r.CreatedPullRequests, r.MentionedPullRequests = pullRequestsIn(command, text)
+	}
+
 	text = strings.TrimRightFunc(text, unicode.IsSpace)
 
 	line := text[strings.LastIndexByte(text, '\n')+1:]
@@ -177,6 +193,165 @@ func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
 	}
 
 	return r
+}
+
+const (
+	githubPullRequest   = `https://github\.com/([a-zA-Z\d][a-zA-Z\d-]*)/([\w.-]+)/pull/([1-9]\d*)`
+	maxPullRequestLinks = 100
+)
+
+var (
+	pullRequestMention = regexp.MustCompile(githubPullRequest + `\b`)
+	pullRequestLine    = regexp.MustCompile(`(?m)^[ \t]*` + githubPullRequest + `(?:/(?:files|commits|checks))?/?(?:[?#]\S*)?[ \t\r]*$`)
+	pullRequestCreate  = regexp.MustCompile("(?:^|[;&|({`\\n]|\\b(?:do|then|else)\\s)\\s*(?:(?:\\w+=\\S*|env|time|nohup|timeout\\s+\\S+)\\s+)*gh\\s+pr\\s+(?:create|new)")
+	pullRequestDryRun  = regexp.MustCompile(`gh\s+pr\s+(?:create|new)(?:\s[^\n;&|]*)?\s--dry-run(?:[=\s]|$)`)
+	pullRequestListing = regexp.MustCompile(`\bgh\s+(?:pr\s+(?:list|status)|search\s+prs|api)\b`)
+	quotedDryRun       = regexp.MustCompile(`^['"]--dry-run(?:=[^'"]*)?['"]$`)
+	heredocStart       = regexp.MustCompile(`^<<-?[ \t]*(?:'(\w+)'|"(\w+)"|(\w+))`)
+)
+
+func pullRequestsIn(command, output string) (created, mentioned []string) {
+	code := shellCode(command)
+	if pullRequestListing.MatchString(code) {
+		return nil, nil
+	}
+
+	if creates := createCommands(code); creates > 0 && !pullRequestDryRun.MatchString(code) {
+		var others []string
+
+		for _, segment := range shellSegments(command) {
+			if createCommands(shellCode(segment)) == 0 {
+				others = append(others, segment)
+			}
+		}
+
+		otherScript := strings.Join(others, "\n")
+
+		for _, match := range pullRequestLine.FindAllStringSubmatch(output, -1) {
+			url := "https://github.com/" + match[1] + "/" + match[2] + "/pull/" + match[3]
+			if slices.Contains(created, url) || regexp.MustCompile(`(?:^|[\s#/=("'])`+match[3]+`(?:$|[\s);&|/"'])`).MatchString(otherScript) {
+				continue
+			}
+
+			if created = append(created, url); len(created) > creates {
+				created = nil
+				break
+			}
+		}
+	}
+
+	for _, match := range pullRequestMention.FindAllStringSubmatch(output, -1) {
+		url := "https://github.com/" + match[1] + "/" + match[2] + "/pull/" + match[3]
+		if len(mentioned) < maxPullRequestLinks && !slices.Contains(created, url) && !slices.Contains(mentioned, url) {
+			mentioned = append(mentioned, url)
+		}
+	}
+
+	return created[:min(len(created), maxPullRequestLinks)], mentioned
+}
+
+func createCommands(code string) int {
+	count := 0
+
+	for _, match := range pullRequestCreate.FindAllStringIndex(code, -1) {
+		if match[1] == len(code) || strings.IndexByte(" \t\r\n;&|)", code[match[1]]) >= 0 {
+			count++
+		}
+	}
+
+	return count
+}
+
+func shellCode(script string) string {
+	var code strings.Builder
+
+	heredocs := make([]string, 0, 1)
+
+	for i := 0; i < len(script); i++ {
+		switch c := script[i]; {
+		case c == '\\':
+			code.WriteString(script[i:min(i+2, len(script))])
+			i++
+		case c == '\'' || c == '"':
+			end := i + 1
+			for ; end < len(script) && script[end] != c; end++ {
+				if c == '"' && script[end] == '\\' {
+					end++
+				}
+			}
+
+			if quotedDryRun.MatchString(script[i:min(end+1, len(script))]) {
+				code.WriteString("--dry-run")
+			} else {
+				code.WriteString("''")
+			}
+
+			i = end
+		case c == '#' && (i == 0 || strings.IndexByte(" \t\n;&|(", script[i-1]) >= 0):
+			for i+1 < len(script) && script[i+1] != '\n' {
+				i++
+			}
+		case c == '\n':
+			code.WriteByte(c)
+
+			for _, word := range heredocs {
+				for done := false; !done && i < len(script); {
+					line, _, _ := strings.Cut(script[i+1:], "\n")
+					i += len(line) + 1
+					done = strings.Trim(line, " \t") == word
+				}
+			}
+
+			heredocs = heredocs[:0]
+		case strings.HasPrefix(script[i:], "<<<"):
+			code.WriteString("<<<")
+
+			i += 2
+		case c == '<' && heredocStart.MatchString(script[i:]):
+			match := heredocStart.FindStringSubmatch(script[i:])
+			heredocs = append(heredocs, match[1]+match[2]+match[3])
+
+			code.WriteString("<<")
+
+			i += len(match[0]) - 1
+		default:
+			code.WriteByte(c)
+		}
+	}
+
+	return code.String()
+}
+
+func shellSegments(script string) []string {
+	var (
+		segments []string
+		quote    byte
+		start    int
+	)
+
+	for i := 0; i < len(script); i++ {
+		switch c := script[i]; {
+		case quote != 0 && c == '\\' && quote == '"':
+			i++
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '\\':
+			i++
+		case c == ';' || c == '|' || c == '\n' || strings.HasPrefix(script[i:], "&&"):
+			segments = append(segments, script[start:i])
+			if strings.HasPrefix(script[i:], "&&") || strings.HasPrefix(script[i:], "||") {
+				i++
+			}
+
+			start = i + 1
+		}
+	}
+
+	return append(segments, script[start:])
 }
 
 type turnObservations struct {
