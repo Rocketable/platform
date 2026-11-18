@@ -2219,12 +2219,12 @@ function serveRemote(tabs: RemoteTabs, sessions: (sent: Change[]) => object[]) {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: stream });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: sessions(sent), owner: "tester", upstreamSuccess: true, tabs: [] })}\n\nevent: complete\ndata: {}\n\n`, { headers: stream });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: sessions(sent), owner: "tester", upstreamSuccess: true, tabs: [], opencodeServers: { far: "http://far.test" } })}\n\nevent: complete\ndata: {}\n\n`, { headers: stream });
     const input = await request.json().catch(() => ({})) as { attention?: Change; state?: Saved["state"]; revision?: number };
     if (input.attention) sent.push(input.attention);
     const stale = !!input.state && input.revision !== saved.revision;
     if (input.state && !stale) [saved.state, saved.revision] = [input.state, saved.revision + 1];
-    const replies: Record<string, unknown> = { "/api/Identity": { username: "tester" }, "/api/Protocol": { protoSha256: "tabs" }, "/api/Tabs": stale ? { ...saved, stale } : saved, "/api/ListConfig": { config: { workspace: "tabs" } }, "/api/ListAgents": { agents: [{ name: "main" }], currentAgent: "main" }, "/api/ListCronJobs": { jobs: [] }, "/api/ListQueue": { items: [] },
+    const replies: Record<string, unknown> = { "/api/Identity": { username: "tester" }, "/api/Protocol": { protoSha256: "tabs" }, "/api/Tabs": stale ? { ...saved, stale } : saved, "/api/ListConfig": { config: { workspace: "tabs" } }, "/api/ListAgents": { agents: [{ name: "main" }], currentAgent: "main" }, "/api/ListCronJobs": { jobs: [] }, "/api/ListQueue": { items: [] }, "/api/CreateSession": { id: "opencode:far:ses_far" },
       "/api/History": { messages: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" } };
     return Response.json(replies[url.pathname] ?? {}, { headers: cors });
   } });
@@ -2314,6 +2314,32 @@ test("with parked tabs on more than one RocketClaw, Parked is a tree of servers 
     expect(sent).toEqual([{ paths: [href("india")], action: "UNPARK" }]);
     await parked.getByRole("tab", { name: "India", exact: true }).waitFor({ state: "detached" });
     expect(await tree()).toEqual(["Bravo"]);
+  } finally {
+    remote.server.stop(true);
+  }
+}));
+
+test("New session and the palette offer every RocketClaw's OpenCode servers from any page, and start the session on the server that has it", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const remote = serveRemote({ spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [], groups: [], space: "lab", last: {}, sharedOrder: [] }, shared: [] }, () => []);
+  try {
+    await addRemote(page, remote.url);
+    saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }] };
+    await page.goto(`${origin}${href("alpha")}`);
+    const created = page.waitForRequest((request: { url(): string }) => request.url() === `${remote.url}/api/CreateSession`);
+    await page.getByRole("button", { name: "New session", exact: true }).click();
+    await page.getByRole("menuitem", { name: "far", exact: true }).click();
+    const folder = page.getByPlaceholder("Folder on far, like /srv/app");
+    await folder.fill("/srv/far");
+    await folder.press("Enter");
+    expect(JSON.parse((await created).postData())).toEqual({ opencodeServer: "far", directory: "/srv/far", spaceId: "lab" });
+    await page.waitForURL(`**/r/work/oc/${Buffer.from("opencode:far:ses_far").toString("base64url")}`);
+    await page.goto(`${origin}/r/nowhere/`);
+    await page.getByRole("button", { name: "New session", exact: true }).click();
+    await page.getByRole("menuitem", { name: "far", exact: true }).waitFor();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Control+Shift+p");
+    await page.getByPlaceholder("Type a command").fill("new on far");
+    await page.getByRole("button", { name: "Sessions: New on far (work)", exact: true }).waitFor();
   } finally {
     remote.server.stop(true);
   }

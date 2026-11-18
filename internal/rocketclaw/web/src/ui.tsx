@@ -893,23 +893,26 @@ function PanelToggle() {
   </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>;
 }
 
+type OpenCodeServer = { rocketclaw: string; server: string };
+
 // New session starts one on this page's server. With other RocketClaws or OpenCode servers it opens a menu of where to
 // start one, with this server highlighted so Enter starts it there: another RocketClaw opens its New session page, and
 // an OpenCode server the palette's folder picker.
-function NewSessionButton({ newChat, openCode }: { newChat: () => void; openCode: (name: string) => void }) {
+function NewSessionButton({ newChat, openCode }: { newChat: () => void; openCode: (target: OpenCodeServer) => void }) {
   const here = useServer();
   const claws = ["", ...rocketclaws().map((remote) => remote.name)].filter((name) => name !== here);
-  const codes = Object.keys(useContext(Sidebar).remote?.servers ?? {}).toSorted();
+  const codes = Object.entries(useContext(Sidebar).servers).map(([rocketclaw, view]) => [rocketclaws().length ? `OpenCode on ${serverLabel(rocketclaw)}` : "OpenCode",
+    Object.keys(view.remote?.servers ?? {}).toSorted(), (server: string) => openCode({ rocketclaw, server })] as const);
   // Base UI focuses the popup itself on a mouse open, highlighting no item; this server's item takes that focus
   // instead, which highlights it, so Enter starts it and arrows move from it.
   const native = useRef<HTMLDivElement>(null);
-  const menu = claws.length > 0 || codes.length > 0;
+  const menu = claws.length > 0 || codes.some(([, names]) => names.length > 0);
   const button = <Button variant="ghost" size="icon" aria-label="New session" className="size-[var(--navigation-button)] shrink-0" />;
   const pen = <Tooltip><TooltipTrigger render={menu ? <Menu.Trigger render={button} /> : button} onClick={menu ? undefined : newChat}>
     <SquarePen className="size-[var(--navigation-icon)]" />
   </TooltipTrigger><TooltipContent side="top">New session</TooltipContent></Tooltip>;
   if (!menu) return pen;
-  const groups = [["RocketClaw", [here, ...claws], (name: string) => name === here ? newChat() : navigate("/", false, name)], ["OpenCode", codes, openCode]] as const;
+  const groups = [["RocketClaw", [here, ...claws], (name: string) => name === here ? newChat() : navigate("/", false, name)] as const, ...codes];
   return <DropdownMenu>
     {pen}
     <DropdownMenuContent side="top" className="w-auto min-w-44" onFocus={(event) => { if (event.target === event.currentTarget) native.current!.focus(); }}>
@@ -2308,7 +2311,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   // The screen stays on while the Voice page is open or a call runs.
   const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
   useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
-  const [palette, setPalette] = useState<{ mode: PaletteMode | undefined; key: number; opencode?: string }>({ mode: undefined, key: 0 });
+  const [palette, setPalette] = useState<{ mode: PaletteMode | undefined; key: number; opencode?: OpenCodeServer }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
   const drafts = useMemo(() => new Map<string, ComposerDraft>(), [scope]);
   const [, setDraftVersion] = useState(0);
@@ -2396,7 +2399,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} />
               <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
                 <div className="flex w-max items-center gap-[var(--navigation-gap)]">
-                  <NewSessionButton newChat={newChat} openCode={(name) => setPalette((current) => ({ mode: "commands", key: current.key + 1, opencode: name }))} />
+                  <NewSessionButton newChat={newChat} openCode={(opencode) => setPalette((current) => ({ mode: "commands", key: current.key + 1, opencode }))} />
                   {([["Search sessions and commands", Search, () => openPalette("sessions")], ["Voice", Mic, () => navigate("/voice")]] as const).map(([label, Icon, onClick]) => (
                     <Tooltip key={label}><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label={label} onClick={onClick}>
                       <Icon className="size-[var(--navigation-icon)]" />
@@ -2782,20 +2785,22 @@ type PaletteMode = keyof typeof paletteCopy;
 // "Sessions: New on <server>" turns the palette into a folder picker for a remote OpenCode
 // session: a typed folder, or one of that server's sessions' folders, those the person picked most recently first,
 // since agents also start sessions there.
-function useRemoteCreation(query: string, close: () => void, restart: () => void, copy: { title: string; desc: string; placeholder: string }, recent: string[], initial?: string) {
+function useRemoteCreation(query: string, close: () => void, restart: () => void, copy: { title: string; desc: string; placeholder: string }, recent: string[], initial?: OpenCodeServer) {
   const sidebar = useContext(Sidebar);
   const tabs = useContext(TabActions);
-  const [server, setServer] = useState(initial);
-  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: ({ id }) => { sidebar.invalidateQueries(); close(); tabs.open(rowPath({ id, kind: "REMOTE_OPENCODE" })); } });
+  const visit = useVisit(), here = useServer();
+  const [target, setTarget] = useState(initial);
+  const server = target?.server, rocketclaw = target?.rocketclaw ?? here, view = target ? sidebar.servers[rocketclaw] : sidebar;
+  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: ({ id }) => { view.invalidateQueries(); close(); visit(rocketclaw, rowPath({ id, kind: "REMOTE_OPENCODE" })); } });
   const typed = query.trim();
   const rank = (directory: string) => recent.indexOf(`folder-${directory}`) + 1 || Infinity;
-  const known = sidebar.rows.flatMap((row) => row.server === server && row.directory ? [row.directory] : []).toSorted((a, b) => rank(a) - rank(b) || 0);
+  const known = view.rows.flatMap((row) => row.server === server && row.directory ? [row.directory] : []).toSorted((a, b) => rank(a) - rank(b) || 0);
   const items: ReturnType<typeof paletteRows> = !server ? [] : [...new Set([typed, ...known])]
     .filter((directory) => directory.startsWith("/") && directory.toLowerCase().includes(typed.toLowerCase()))
-    .map((directory) => ({ key: `folder-${directory}`, label: directory, keep: true, disabled: create.isPending, run: () => create.mutate({ opencodeServer: server, directory, spaceId: tabs.state.space }) }));
+    .map((directory) => ({ key: `folder-${directory}`, label: directory, keep: true, disabled: create.isPending, run: () => create.mutate({ server: rocketclaw, opencodeServer: server, directory, spaceId: rocketclaw === here ? tabs.state.space : view.tabs?.state.space }) }));
   return {
     pick: (palette: () => typeof items) => server ? items : palette(),
-    commands: Object.keys(sidebar.remote?.servers ?? {}).toSorted().map((name) => ({ key: `opencode-${name}`, label: `Sessions: New on ${name}`, keep: true, run: () => { restart(); setServer(name); } })),
+    commands: Object.entries(sidebar.servers).flatMap(([claw, { remote }]) => Object.keys(remote?.servers ?? {}).toSorted().map((name) => ({ key: `opencode-${rowKey(name, claw)}`, label: `Sessions: New on ${name}${rocketclaws().length ? ` (${serverLabel(claw)})` : ""}`, keep: true, run: () => { restart(); setTarget({ rocketclaw: claw, server: name }); } }))),
     copy: server ? { title: `New session on ${server}`, desc: "Type or pick a folder for the new OpenCode session.", placeholder: `Folder on ${server}, like /srv/app` } : copy,
     empty: server && `No known folders on ${server} yet; type one`,
     alert: create.error ? <p role="alert" className="px-3 text-sm text-destructive">{create.error.message}</p> : null,
@@ -2826,7 +2831,7 @@ function usePalettePage<T extends { key: string }>(items: T[], pick: string, key
   };
 }
 
-function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode }: { drafts: Map<string, ComposerDraft>; mode: PaletteMode | undefined; setMode: (mode: PaletteMode | undefined) => void; newChat: () => void; keyCommands: { key: string; label: string; run: () => void }[]; opencode?: string }) {
+function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode }: { drafts: Map<string, ComposerDraft>; mode: PaletteMode | undefined; setMode: (mode: PaletteMode | undefined) => void; newChat: () => void; keyCommands: { key: string; label: string; run: () => void }[]; opencode?: OpenCodeServer }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
   const at = () => pagePath() + location.search + location.hash;
