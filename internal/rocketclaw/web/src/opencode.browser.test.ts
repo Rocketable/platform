@@ -250,6 +250,62 @@ async function until(check: () => boolean | Promise<boolean>) {
   throw new Error("timed out");
 }
 
+test("a message link opens a remote session at that prompt, also when the session is already shown", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const { web, release, base } = start();
+  release();
+  const long = "A long answer line.\n\n".repeat(150);
+  const turn = (n: number) => [
+    { id: `msg_ses_a_${n + 1}`, type: "assistant", time: { created: n + 1, completed: n + 1 }, agent: "build", model: { id: "m", providerID: "p" }, content: [{ type: "text", text: `answer ${n} in ses_a\n\n${long}` }], finish: "stop" },
+    { id: `msg_ses_a_${n}`, type: "user", time: { created: n }, text: `question ${n} in ses_a` },
+  ];
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, permissions: ["clipboard-read", "clipboard-write"] });
+    await page.route((url: URL) => url.pathname === "/oc/box/api/session/ses_a/message", (request: any) => request.request().method() === "GET" ? request.fulfill({ json: { data: [...turn(3), ...turn(1)], cursor: {} } }) : request.continue());
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(error.message));
+    const view = page.locator("main [data-oc-view]");
+    const shown = (id: string) => () => page.evaluate((anchor: string) => {
+      const top = document.getElementById(anchor)?.getBoundingClientRect().top;
+      return top !== undefined && top >= 0 && top < innerHeight;
+    }, `message-${id}`);
+    const visit = (href: string) => page.evaluate((target: string) => { history.pushState(null, "", target); window.dispatchEvent(new PopStateEvent("popstate")); }, href);
+    const link = (id: string) => `${route("opencode:box:ses_a")}?message=${id}`;
+
+    await page.goto(`${base}${link("msg_unknown")}`);
+    await view.getByText("answer 3 in ses_a").waitFor();
+    await Bun.sleep(500);
+    expect(await shown("msg_ses_a_1")()).toBe(false);
+    expect(await shown("msg_ses_a_3")()).toBe(false);
+
+    await visit(link("msg_ses_a_1"));
+    await until(shown("msg_ses_a_1"));
+    await visit(link("msg_ses_a_3"));
+    await until(shown("msg_ses_a_3"));
+    expect(await shown("msg_ses_a_1")()).toBe(false);
+    await visit(route("opencode:box:ses_a"));
+    await Bun.sleep(500);
+    expect(await shown("msg_ses_a_3")()).toBe(true);
+
+    await page.goto(`${base}${link("msg_ses_a_1")}`);
+    await view.getByText("answer 3 in ses_a").waitFor();
+    await until(shown("msg_ses_a_1"));
+    await Bun.sleep(500);
+    expect(await shown("msg_ses_a_1")()).toBe(true);
+
+    const more = view.locator('[id="message-msg_ses_a_1"] [data-slot="user-message-menu"] button');
+    await more.dispatchEvent("pointerdown", { button: 0, pointerType: "mouse" });
+    await more.dispatchEvent("click");
+    await page.locator("[data-oc-portal]").getByRole("menuitem", { name: "Copy link", exact: true }).click();
+    await until(async () => await page.evaluate(() => navigator.clipboard.readText()) === `${base}${link("msg_ses_a_1")}`);
+    expect(errors).toEqual([]);
+  } finally {
+    await browser.close();
+    web.stop(true);
+  }
+}, 30_000);
+
 test("a remote session mounts OpenCode's view in the page, with RocketClaw's keys, commands, and tabs around it", async () => {
   const started = performance.now();
   const { chromium: engine } = await import(playwright!);

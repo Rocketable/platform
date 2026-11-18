@@ -393,9 +393,11 @@ export function createSessionTimelineInteraction(session: SessionModel, visible:
       const delta = next - state.inset
 
       // Measured before the new inset applies: a shrinking region also keeps a reader whose end it uncovers.
+      // rocketclaw: a jump to a message, such as a link's on first load, stays put when the dock settles (upstream packages/app/src/session/timeline/interaction.ts)
       const stick = scroller
         ? follow.following() ||
-          scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 10 + Math.max(0, -delta)
+          (!hasFreshCursorOrSeek(untrack(cursor.state)) && untrack(cursor.state).status !== "pending" &&
+            scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 10 + Math.max(0, -delta))
         : false
 
       setState("inset", next)

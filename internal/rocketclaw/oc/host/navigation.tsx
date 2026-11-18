@@ -15,6 +15,7 @@ const inertNavigation: Navigation = {
   },
   closeTab: () => {},
   reportSession: () => {},
+  messageLink: () => "",
 }
 
 export const NavigationContext = createContext<Navigation>(inertNavigation)

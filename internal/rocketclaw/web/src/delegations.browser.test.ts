@@ -402,3 +402,30 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     server.stop(true);
   }
 }, 30_000);
+
+test("Copy link copies a message's link in its own session only", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const server = serve({
+    chat: { messages: [event("user", "Run the review", { messageId: "1:0" }), event("tool", `task {"description":"Review"}`, { toolName: "task", toolCallId: "call-task", delegation: "chat/call-task" }), event("assistant", "Review finished", { messageId: "1:2" })], delegations: ["chat/call-task"] },
+    "chat/call-task": { messages: [event("assistant", "Child done", { messageId: "4:0" })], delegations: [], lineage: [{ id: "chat" }, { id: "chat/call-task", kind: "SUBAGENT" }] },
+  });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, permissions: ["clipboard-read", "clipboard-write"] });
+    const session = `http://127.0.0.1:${server.port}/s/${btoa("chat").replace(/=+$/, "")}`;
+    await page.goto(session);
+    const reply = page.locator('main [data-message-id="1:2"]');
+    await reply.hover();
+    await reply.getByRole("button", { name: "Copy link", exact: true }).click();
+    await reply.getByRole("status").filter({ hasText: "Link copied" }).waitFor({ state: "attached" });
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${session}?message=1%3A2`);
+    expect(await reply.locator('[data-slot="message-actions"] button').evaluateAll((nodes: Element[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Copy link", "Copy message"]);
+    await page.goto(`${session}?delegation=chat%2Fcall-task`);
+    const child = page.getByRole("complementary", { name: "Delegation", exact: true }).locator('[data-message-id="4:0"]');
+    await child.getByRole("button", { name: "Copy message", exact: true, includeHidden: true }).waitFor({ state: "attached" });
+    expect(await child.getByRole("button", { name: "Copy link", exact: true, includeHidden: true }).count()).toBe(0);
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
