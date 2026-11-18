@@ -239,10 +239,12 @@ counterexamples are retained findings, not properties claimed to hold.
 Paths below are under `internal/rocketclaw/web/src/`. These tests are separate
 implementation evidence; TLC does not execute them:
 
-- `thread-pr.test.ts`: create commands and scripts, rejecting dry-run, quoted
-  mentions and URLs not alone on a line; native pagination and successful
-  calls; paged OpenCode tool/shell history of the thread and its nested
-  subagent sessions rejects failures/running/text links. The model walks a
+- `thread-pr.test.ts`: the created/mentioned rule over the case table shared
+  with the harness (`internal/rocketclaw/harness/testdata/pr-discovery-cases.json`),
+  including listing commands, dry runs and quoted text; the native walk through
+  subagent and shadow histories with a session reachable twice read once, and
+  older records without recorded lists; paged OpenCode tool/shell history of the
+  thread and its nested subagent sessions rejects failures and running calls. The model walks a
   four-session tree with the evidence kinds above; it does not check how
   the code classifies any particular command string.
 - `opencode-pr.test.ts`: checkout uses configured server/directory, not session
