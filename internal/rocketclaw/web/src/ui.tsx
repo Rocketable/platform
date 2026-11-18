@@ -2084,23 +2084,17 @@ function GroupEditor({ tabs, node }: { tabs: TabStoreValue; node: RefObject<HTML
 // server's rows its whole menu, another server's Pull requests and their attention items, which act there.
 type ParkedRow = Tab & { shared?: boolean };
 type ParkedMenu = { path: string; anchor: MenuAnchor; server: string; space: string; shared?: boolean };
-type ServerTree = { name: string; spaces: Space[]; tabs: Tab[]; shared: SavedTabs["shared"]; parked: Set<string> };
 const parkedPaths = (view: Pick<SidebarView, "rows" | "marks">) => new Set([...view.rows.flatMap((row) => row.parked ? [rowPath(row)] : []), ...(view.marks ?? []).flatMap((mark) => mark.parked ? [mark.path] : [])]);
 const parkedRows = (tabs: Tab[], shared: SavedTabs["shared"], parked: Set<string>): ParkedRow[] =>
   [...tabs.filter((tab) => parked.has(tab.path)), ...shared.flatMap((tab) => parked.has(tab.path) && !tabs.some((own) => own.path === tab.path) ? [{ ...tab, shared: true }] : [])];
 
-function useServerTrees({ state, shared, parked }: TabStoreValue): ServerTree[] {
-  const { servers } = useContext(Sidebar), here = useServer();
-  return ["", ...rocketclaws().map((remote) => remote.name)].map((name) => {
+function useParkedTree({ state, pathname, shared, parked }: TabStoreValue) {
+  const here = useServer(), [layout] = useLayout(), folds = layout.folded ?? noFolds, { servers } = useContext(Sidebar);
+  const sections = ["", ...rocketclaws().map((remote) => remote.name)].map((name) => {
     const view = servers[name], saved = view?.tabs;
-    return name === here ? { name, spaces: state.spaces, tabs: state.tabs, shared, parked }
-      : { name, spaces: saved?.spaces ?? [], tabs: saved?.state.tabs ?? [], shared: saved?.shared ?? [], parked: view ? parkedPaths(view) : new Set<string>() };
-  });
-}
-
-function useParkedTree(tabs: TabStoreValue) {
-  const { state, pathname } = tabs, here = useServer(), [layout] = useLayout(), folds = layout.folded ?? noFolds;
-  const sections = useServerTrees(tabs).map((tree) => ({ name: tree.name, spaces: tree.spaces, rows: parkedRows(tree.tabs, tree.shared, tree.parked) })).filter((section) => section.rows.length);
+    return name === here ? { name, spaces: state.spaces, rows: parkedRows(state.tabs, shared, parked) }
+      : { name, spaces: saved?.spaces ?? [], rows: parkedRows(saved?.state.tabs ?? [], saved?.shared ?? [], view ? parkedPaths(view) : new Set<string>()) };
+  }).filter((section) => section.rows.length);
   const collapsed = state.groups.find((group) => group.id === "parked")?.collapsed ?? true;
   const tree = sections.map((section) => {
     const fold = `parked:@${section.name}`, shut = collapsed || (sections.length > 1 && (folds[fold] ?? false));
@@ -2108,7 +2102,7 @@ function useParkedTree(tabs: TabStoreValue) {
       const id = `parked:${section.name}/${space.id}`, there = section.rows.filter((tab) => tab.space === space.id), closed = shut || (folds[id] ?? false);
       return there.length ? [{ space, id, closed, there, shown: closed ? there.filter((tab) => section.name === here && tab.path === pathname) : there }] : [];
     });
-    return { ...section, fold, shut, branches, count: branches.reduce((sum, branch) => sum + branch.there.length, 0) };
+    return { name: section.name, spaces: section.spaces, fold, shut, branches, count: branches.reduce((sum, branch) => sum + branch.there.length, 0) };
   });
   const visible = tree.flatMap((section) => section.branches.flatMap((branch) => branch.shown.map((tab) => ({ ...tab, server: section.name, key: `${section.name}\n${tab.path}` }))));
   return { tree, visible, collapsed, here, count: tree.reduce((sum, section) => sum + section.count, 0), stop: (visible.find((tab) => tab.server === here && tab.path === pathname) ?? visible[0])?.key };
