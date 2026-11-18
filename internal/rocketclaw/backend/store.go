@@ -1530,22 +1530,22 @@ func (s *SessionService) beginStateTx(ctx context.Context, label string) (*sql.T
 	return tx, nil
 }
 
-func (s *SessionService) openSpill() (root *os.Root, found bool, err error) {
-	root, err = os.OpenRoot(s.spillDir)
+func (s *SessionService) openSpill() (*os.Root, error) {
+	root, err := os.OpenRoot(s.spillDir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, false, nil
+		return nil, nil
 	}
 
 	if err != nil {
-		return nil, false, fmt.Errorf("open execute spill dir: %w", err)
+		return nil, fmt.Errorf("open execute spill dir: %w", err)
 	}
 
-	return root, true, nil
+	return root, nil
 }
 
 func (s *SessionService) sweepRetainedResults() error {
-	root, found, err := s.openSpill()
-	if !found {
+	root, err := s.openSpill()
+	if root == nil {
 		return err
 	}
 
@@ -1559,8 +1559,8 @@ func (s *SessionService) sweepRetainedResults() error {
 }
 
 func (s *SessionService) removeRetainedResults(conversationIDs ...string) error {
-	root, found, err := s.openSpill()
-	if !found {
+	root, err := s.openSpill()
+	if root == nil {
 		return err
 	}
 

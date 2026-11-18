@@ -205,8 +205,8 @@ FROM turns JOIN noted_jobs ON job_id = input_id WHERE conversation_id = ANY($2) 
 }
 
 func (s *SessionService) linkRetainedResults(conversationID string, producers []string) error {
-	root, found, err := s.openSpill()
-	if !found {
+	root, err := s.openSpill()
+	if root == nil {
 		return err
 	}
 
