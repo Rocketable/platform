@@ -126,7 +126,7 @@ func TestSelectRuntimeConfigFileReportsStatErrors(t *testing.T) {
 	require.ErrorContains(t, err, "stat")
 	require.ErrorIs(t, err, os.ErrPermission)
 
-	_, _, err = loadRuntimeConfig("")
+	_, _, err = loadRuntimeConfig("", "")
 	require.ErrorIs(t, err, os.ErrPermission)
 
 	err = run(nil)
