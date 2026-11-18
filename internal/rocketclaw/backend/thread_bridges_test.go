@@ -984,10 +984,35 @@ func TestDeleteQueueItemSettlesReply(t *testing.T) {
 	assert.ElementsMatch(t, want, replyQueueItems(t, store))
 }
 
+func heldRequestTestDatabase(t *testing.T) []byte {
+	t.Helper()
+
+	workspace := t.TempDir()
+	newTestSessionServiceAt(t, workspace)
+	dsn, err := os.ReadFile(testDSNFile(workspace))
+	require.NoError(t, err)
+
+	return dsn
+}
+
+func resetHeldRequestTestStore(t *testing.T, dsn []byte) *SessionService {
+	t.Helper()
+
+	workspace := t.TempDir()
+	require.NoError(t, os.WriteFile(testDSNFile(workspace), dsn, 0o600))
+	store := newColdTestSessionServiceAt(t, workspace)
+	_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
+	require.NoError(t, err)
+
+	return store
+}
+
 func TestWriteSessionReleasesHeldRequest(t *testing.T) {
+	dsn := heldRequestTestDatabase(t)
+
 	for _, writer := range []string{"agent", "person"} {
 		t.Run(writer, func(t *testing.T) {
-			store := newTestSessionService(t)
+			store := resetHeldRequestTestStore(t, dsn)
 			manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
 
 			const target = "web:main/a"
@@ -1029,9 +1054,11 @@ func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 }
 
 func TestWebWriteRunsReleasedRequestFirst(t *testing.T) {
+	dsn := heldRequestTestDatabase(t)
+
 	for _, write := range []string{"message", "goal"} {
 		t.Run(write, func(t *testing.T) {
-			store := newTestSessionService(t)
+			store := resetHeldRequestTestStore(t, dsn)
 			manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
 			runtime := &Runtime{Sessions: store, threads: manager}
 
@@ -1052,6 +1079,12 @@ func TestWebWriteRunsReleasedRequestFirst(t *testing.T) {
 			inbound.ConversationID, inbound.Metadata = target, map[string]string{protocol.InboundPrincipalMetadataKey: "alice"}
 
 			var writes errgroup.Group
+
+			t.Cleanup(func() {
+				close(bridge.stopCh)
+
+				_ = writes.Wait()
+			})
 
 			writes.Go(func() error {
 				if write == "goal" {
