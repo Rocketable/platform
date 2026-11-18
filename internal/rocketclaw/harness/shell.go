@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -174,12 +173,12 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 	}
 	defer func() { _ = outputReader.Close() }()
 
-	var output bytes.Buffer
+	var full string
 
 	copied := make(chan struct{})
 
 	go func() {
-		_, _ = io.Copy(&output, outputReader)
+		full = readShellOutput(outputReader)
 
 		close(copied)
 	}()
@@ -226,7 +225,6 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 		}
 	}
 
-	full := output.String()
 	if full == "" {
 		full = "(no output)"
 	}
@@ -244,6 +242,22 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 		Output:    full,
 		ErrorCode: errorCode,
 		Success:   err == nil && !timedOut,
+	}
+}
+
+func readShellOutput(pipe *os.File) string {
+	var (
+		output strings.Builder
+		chunk  [8192]byte
+	)
+	for {
+		n, errRead := pipe.Read(chunk[:])
+		output.Grow(n)
+		_, _ = output.Write(chunk[:n])
+
+		if errRead != nil {
+			return output.String()
+		}
 	}
 }
 
