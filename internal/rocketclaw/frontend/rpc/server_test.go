@@ -1958,7 +1958,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 		json.RawMessage(`{"type":"message","id":"msg_one","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer one","annotations":[]}]}`),
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]","content":"[Web principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhuman two"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"answer two"}`),
-		json.RawMessage(`{"type":"function_call","call_id":"script","name":"execute","arguments":"{\"code\":\"tag\"}"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"script","name":"execute","arguments":"{\"code\":\"def main(): return tag()\",\"description\":\"Tag\"}"}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"script","output":"tagged"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":""}`),
 	}, OutputTrace: []json.RawMessage{
@@ -2005,7 +2005,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 		{"assistant", "answer one"},
 		{"user", "human two"},
 		{"assistant", "answer two"},
-		{"tool", "execute\n{\"code\":\"tag\"}"},
+		{"tool", "execute\n{\"code\":\"def main():\\n    return tag()\",\"description\":\"Tag\"}"},
 		{"tool", "tagged"},
 	}, got)
 

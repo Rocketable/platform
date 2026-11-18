@@ -8,6 +8,8 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -22,6 +24,7 @@ import (
 	"unicode"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend"
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
@@ -903,6 +906,18 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 		text := strings.TrimSpace(kind.Name)
 		if kind.Name == "rocketclaw_attach_files_to_response" {
 			kind.Arguments = ""
+		}
+
+		var execute struct {
+			Code  string         `json:"code,omitzero"`
+			Other jsontext.Value `json:",embed"`
+		}
+		if kind.Name == "execute" && jsonv2.Unmarshal([]byte(kind.Arguments), &execute) == nil {
+			if code, err := codemode.Format(execute.Code); err == nil {
+				execute.Code = code
+				arguments, _ := jsonv2.Marshal(execute)
+				kind.Arguments = string(arguments)
+			}
 		}
 
 		if kind.Arguments != "" {

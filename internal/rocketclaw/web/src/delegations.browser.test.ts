@@ -260,6 +260,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     await a.getByRole("button", { name: "Show script", exact: true }).click();
     await a.locator('[aria-label="Script"] span[style*="--shiki"]').first().waitFor();
     expect(await a.locator('[aria-label="Script"]').innerText()).toBe('def main():\n    print("checked")');
+    expect(await a.locator('[aria-label="Script"]').evaluate((script: Element) => !!(script.compareDocumentPosition(script.closest('[data-tool-call-id]')!.querySelector('[data-slot="trace"]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
     const heredoc = row("call-a", "bash · cat <<'EOF' line one line two EOF");
     expect(await heredoc.locator('[data-slot="trace-line"]').innerText()).toBe("bash · cat <<'EOF' line one line two EOF");
     await heredoc.locator('> [data-slot="trace-collapsible-trigger"]').click();

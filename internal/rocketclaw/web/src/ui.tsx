@@ -4127,6 +4127,7 @@ function CodeModeBlock({ line, status, review, rationale }: { line: Line; status
     // Plain text results show as sent.
   }
   return <>
+    <CodeModeScript text={line.text.slice("execute ".length)} />
     {calls.length ? <Trace className="my-2">{calls.map((call) => {
       const row = codeModeCallRow(call, status === "running");
       return <TraceRow key={lineId("tool", `${call.name} ${call.arguments}`, seen)} open={false} icon={toolIcons[call.name] ?? <Wrench />} label={row.title} status={row.status} description={row.description}
@@ -4141,7 +4142,6 @@ function CodeModeBlock({ line, status, review, rationale }: { line: Line; status
     {/* The script reason and those reviews follow its result, or stand alone until a result arrives. */}
     {line.scriptReason ? <ReviewReason review={review} reason={line.scriptReason} outcome={line.scriptOutcome} turn={line.reviewTurn} /> : null}
     {unshown?.map((reason) => <ReviewReason key={lineId("tool", reason, seen)} review={review} reason={reason} />)}
-    <CodeModeScript text={line.text.slice("execute ".length)} />
   </>;
 }
 
