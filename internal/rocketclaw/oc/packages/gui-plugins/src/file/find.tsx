@@ -1,5 +1,7 @@
 import { Option, Schema } from "effect"
-import { createSignal, onCleanup, Show, untrack } from "solid-js"
+// rocketclaw: HTML find highlights use this view's theme (upstream packages/gui-plugins/src/file/find.tsx)
+import { ViewContext } from "@rocketclaw/host/fences"
+import { createSignal, onCleanup, Show, untrack, useContext } from "solid-js"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { createKeyed, type FileContent } from "@opencode/plugin/gui"
@@ -33,6 +35,7 @@ type PendingFrame = { frame?: number }
  * marks, so both look the same.
  */
 export function createPreviewFind(input: { root: () => HTMLElement | undefined; active: () => boolean }) {
+  const view = useContext(ViewContext)
   const [state, setState] = createSignal<PreviewFindState>()
   const local: PreviewFindDom = { ranges: [] }
 
@@ -49,7 +52,8 @@ export function createPreviewFind(input: { root: () => HTMLElement | undefined; 
 
     if (current.target instanceof HTMLIFrameElement) {
       update({ query, index })
-      current.target.contentWindow?.postMessage({ source: CHANNEL, op: "search", query, index, marks: marks() }, "*")
+      // rocketclaw: see the import (upstream packages/gui-plugins/src/file/find.tsx)
+      current.target.contentWindow?.postMessage({ source: CHANNEL, op: "search", query, index, marks: marks(view.root) }, "*")
 
       return
     }
@@ -247,9 +251,10 @@ export function findableHtml(content: FileContent): FileContent {
 }
 
 /** The page's colors can't resolve the app's theme, so the marks travel resolved with each search. */
-function marks() {
+function marks(root: HTMLElement) {
   const probe = document.createElement("span")
-  document.body.append(probe)
+  // rocketclaw: see the import (upstream packages/gui-plugins/src/file/find.tsx)
+  root.append(probe)
   probe.style.backgroundColor = "rgb(from var(--surface-warning-base) r g b / 0.35)"
   const hit = getComputedStyle(probe).backgroundColor
   probe.style.backgroundColor = "rgb(from var(--surface-warning-strong) r g b / 0.55)"

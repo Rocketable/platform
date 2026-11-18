@@ -1,5 +1,7 @@
 // rocketclaw: measure the mounted view's font (upstream packages/session-ui/src/components/markdown-mermaid.ts)
 import { themeTargets } from "@rocketclaw/host/fences"
+// rocketclaw: sanitize generated SVG before it enters the host page (upstream packages/session-ui/src/components/markdown-mermaid.ts)
+import { sanitizeDiagram } from "@rocketclaw/host/diagrams"
 
 let sequence = 0
 
@@ -17,5 +19,6 @@ export async function renderMermaidSvg(source: string) {
     linkRel: "noopener noreferrer",
   })
 
-  return result.svg
+  // rocketclaw: see the import (upstream packages/session-ui/src/components/markdown-mermaid.ts)
+  return sanitizeDiagram(result.svg)
 }

@@ -180,6 +180,9 @@ function route(method: string, path: string, query: URLSearchParams) {
 
   if (path === "/vcs") return json({ location, data: { branch: {} } })
 
+  if (path === "/fs/read/preview.html")
+    return new Response("<!doctype html><p>needle needle</p>", { headers: { "content-type": "application/octet-stream" } })
+
   if (path === "/config") return json([])
 
   if (path === "/mcp/resource") return json({ location, data: { resources: [] } })
