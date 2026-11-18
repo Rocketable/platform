@@ -524,13 +524,8 @@ SELECT count(*) > 0 FROM advanced LEFT JOIN running r ON TRUE WHERE r.id IS NULL
 }
 
 func (s *SessionService) ActiveGoalThreads() (map[string]ThreadState, error) {
-	threads, err := queryMap(context.Background(), s.db, `SELECT conversation_id, agent, created_by FROM conversations
+	return queryMap(context.Background(), s.db, `SELECT conversation_id, agent, created_by FROM conversations
 WHERE goal_status = '' OR goal_status = $1 ORDER BY conversation_id`, "active goal threads", activeGoalThreadScanner{}, GoalStatusActive)
-	if err != nil || len(threads) == 0 {
-		return nil, err
-	}
-
-	return threads, nil
 }
 
 type activeGoalThreadScanner struct{}
@@ -1865,7 +1860,7 @@ func queryMap[K comparable, V any](ctx context.Context, db stateStoreDB, query, 
 
 		return nil
 	}, args...)
-	if err != nil {
+	if err != nil || len(out) == 0 {
 		return nil, err
 	}
 
