@@ -1299,7 +1299,9 @@ the run's output, or else creates or reuses a writable Web chat that shows the
 run's history, without rerunning the job. Repeated opens return the same chat. It
 offers every loaded agent, and the first loaded agent is selected when the chat is
 created. Removed definitions keep
-their recorded runs visible.
+their recorded runs visible until retention cleanup deletes them: a run no chat
+shows goes 90 days after its last message, and any other run goes with its chat,
+or with its expired messages in a sticky chat.
 A cron's journal opens from its name on the Cron page or from **Cron: Timeline** in
 the command palette, which lists every cron, retired ones too, with its run count
 and last run. It opens in its own tab and lists the cron's runs, newest first under
