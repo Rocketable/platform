@@ -283,7 +283,7 @@ func TestShadowPublicMutationsAreReadOnly(t *testing.T) {
 			case "delete queue":
 				_, err = runtime.DeleteQueueItem(ctx, id, "item")
 			case "reorder":
-				err = runtime.ReorderQueueItems(id, []string{"item"})
+				err = runtime.ReorderQueueItems(ctx, id, []string{"item"})
 			case "stash":
 				err = runtime.StashQueueItem(ctx, id, &protocol.ThreadQueueItem{ID: "item", Source: protocol.SourceWeb})
 			case "switch":

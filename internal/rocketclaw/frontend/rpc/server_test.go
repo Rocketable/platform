@@ -1144,7 +1144,7 @@ func TestSessionEntries(t *testing.T) {
 
 			return false, nil
 		},
-		ReorderQueueItemsFunc: func(conversationID string, ids []string) error {
+		ReorderQueueItemsFunc: func(_ context.Context, conversationID string, ids []string) error {
 			items, err := sessions.ThreadQueueForConversation(conversationID)
 			if err != nil {
 				return fmt.Errorf("list queue: %w", err)
@@ -1722,7 +1722,7 @@ func TestSessionEntries(t *testing.T) {
 		core.PopQueueItemFunc = func(context.Context, string, string) (bool, error) { return false, errUnavailable }
 		core.PromoteQueueItemFunc = func(context.Context, string, string) (bool, error) { return false, errUnavailable }
 		core.DeleteQueueItemFunc = func(context.Context, string, string) (bool, error) { return false, errUnavailable }
-		core.ReorderQueueItemsFunc = func(string, []string) error { return errUnavailable }
+		core.ReorderQueueItemsFunc = func(context.Context, string, []string) error { return errUnavailable }
 		core.QueueItemsFunc = func(string) ([]protocol.ThreadQueueItem, error) { return nil, errUnavailable }
 		core.StashQueueItemFunc = func(context.Context, string, *protocol.ThreadQueueItem) error { return errUnavailable }
 

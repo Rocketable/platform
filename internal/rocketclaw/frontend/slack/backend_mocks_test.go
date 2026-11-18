@@ -72,7 +72,7 @@ var _ frontend.Backend = &backendMock{}
 //			ReloadFunc: func(s string) (string, error) {
 //				panic("mock out the Reload method")
 //			},
-//			ReorderQueueItemsFunc: func(s string, strings []string) error {
+//			ReorderQueueItemsFunc: func(context1 context.Context, s string, strings []string) error {
 //				panic("mock out the ReorderQueueItems method")
 //			},
 //			RunTurnFunc: func(context1 context.Context, inboundMessage *protocol.InboundMessage) error {
@@ -167,7 +167,7 @@ type backendMock struct {
 	ReloadFunc func(s string) (string, error)
 
 	// ReorderQueueItemsFunc mocks the ReorderQueueItems method.
-	ReorderQueueItemsFunc func(s string, strings []string) error
+	ReorderQueueItemsFunc func(context1 context.Context, s string, strings []string) error
 
 	// RunTurnFunc mocks the RunTurn method.
 	RunTurnFunc func(context1 context.Context, inboundMessage *protocol.InboundMessage) error
@@ -341,6 +341,8 @@ type backendMock struct {
 		}
 		// ReorderQueueItems holds details about calls to the ReorderQueueItems method.
 		ReorderQueueItems []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
 			// S is the s argument value.
 			S string
 			// Strings is the strings argument value.
@@ -1081,21 +1083,23 @@ func (mock *backendMock) ReloadCalls() []struct {
 }
 
 // ReorderQueueItems calls ReorderQueueItemsFunc.
-func (mock *backendMock) ReorderQueueItems(s string, strings []string) error {
+func (mock *backendMock) ReorderQueueItems(context1 context.Context, s string, strings []string) error {
 	if mock.ReorderQueueItemsFunc == nil {
 		panic("backendMock.ReorderQueueItemsFunc: method is nil but Backend.ReorderQueueItems was just called")
 	}
 	callInfo := struct {
-		S       string
-		Strings []string
+		Context1 context.Context
+		S        string
+		Strings  []string
 	}{
-		S:       s,
-		Strings: strings,
+		Context1: context1,
+		S:        s,
+		Strings:  strings,
 	}
 	mock.lockReorderQueueItems.Lock()
 	mock.calls.ReorderQueueItems = append(mock.calls.ReorderQueueItems, callInfo)
 	mock.lockReorderQueueItems.Unlock()
-	return mock.ReorderQueueItemsFunc(s, strings)
+	return mock.ReorderQueueItemsFunc(context1, s, strings)
 }
 
 // ReorderQueueItemsCalls gets all the calls that were made to ReorderQueueItems.
@@ -1103,12 +1107,14 @@ func (mock *backendMock) ReorderQueueItems(s string, strings []string) error {
 //
 //	len(mockedBackend.ReorderQueueItemsCalls())
 func (mock *backendMock) ReorderQueueItemsCalls() []struct {
-	S       string
-	Strings []string
+	Context1 context.Context
+	S        string
+	Strings  []string
 } {
 	var calls []struct {
-		S       string
-		Strings []string
+		Context1 context.Context
+		S        string
+		Strings  []string
 	}
 	mock.lockReorderQueueItems.RLock()
 	calls = mock.calls.ReorderQueueItems

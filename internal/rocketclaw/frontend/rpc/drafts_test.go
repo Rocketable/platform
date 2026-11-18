@@ -71,7 +71,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 		PopQueueItemFunc:      func(context.Context, string, string) (bool, error) { return true, nil },
 		EditQueueItemFunc:     func(context.Context, string, string, string, string, string) (bool, error) { return true, nil },
 		RunTurnFunc:           func(context.Context, *protocol.InboundMessage) error { return nil },
-		ReorderQueueItemsFunc: func(string, []string) error { return nil },
+		ReorderQueueItemsFunc: func(context.Context, string, []string) error { return nil },
 		ReloadFunc: func(string) (string, error) {
 			data, err := os.ReadFile(filepath.Join(cfg.Workspace, "agents", "probe.md"))
 			if err == nil {

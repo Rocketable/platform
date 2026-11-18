@@ -1126,6 +1126,10 @@ text is saved literally. Pop moves the row to the end of the ordinary queue.
 The button shows **Popping…** while releasing it, and waiting rows show **Queued**.
 It may run immediately when idle. While busy, the released row offers **Steer**
 as usual. Stashed rows can be reordered or removed, but cannot steer directly.
+Drag a row's handle to reorder the queue. A new order is saved whole or not at
+all, and the agent picks its next row from the old order or the new one, never a
+mix. A row that arrived while you dragged keeps its place among the rest, and a
+row that ran or was removed meanwhile is skipped.
 Each queued or stashed row has an **Expand message** control; activate it with
 Enter or Space to read the complete original text, with line breaks, indentation,
 and long words wrapped to fit. **Collapse message** restores the compact inline

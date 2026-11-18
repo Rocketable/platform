@@ -1971,7 +1971,7 @@ func (s *Server) reorderQueue(ctx context.Context, request *ReorderQueueRequest)
 		return nil, err
 	}
 
-	if err := s.backend.ReorderQueueItems(request.Id, request.ItemIds); err != nil {
+	if err := s.backend.ReorderQueueItems(ctx, request.Id, request.ItemIds); err != nil {
 		return nil, fmt.Errorf("reorder web queue: %w", err)
 	}
 

@@ -28,7 +28,7 @@ type Backend interface {
 	PopQueueItem(context.Context, string, string) (bool, error)
 	DeleteQueueItem(context.Context, string, string) (bool, error)
 	EditQueueItem(context.Context, string, string, string, string, string) (bool, error)
-	ReorderQueueItems(string, []string) error
+	ReorderQueueItems(context.Context, string, []string) error
 	StashQueueItem(context.Context, string, *protocol.ThreadQueueItem) error
 	StartGoal(context.Context, *protocol.InboundMessage, protocol.GoalRequest) error
 	MoveToBackground(context.Context, string) (bool, error)

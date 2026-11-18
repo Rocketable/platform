@@ -423,15 +423,39 @@ func (r *Runtime) DeleteQueueItem(ctx context.Context, conversationID, id string
 	return r.threads.deleteQueueItem(ctx, conversationID, id)
 }
 
-func (r *Runtime) ReorderQueueItems(conversationID string, ids []string) error {
-	if err := rejectShadowMutation(context.Background(), r.Sessions.db, conversationID); err != nil {
+func (r *Runtime) ReorderQueueItems(ctx context.Context, conversationID string, ids []string) error {
+	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
 		return err
 	}
 
-	for i, id := range ids {
-		if _, err := r.Sessions.db.ExecContext(context.Background(), `UPDATE turns SET position = $1 WHERE conversation_id = $2 AND input_id = $3 AND phase = 'waiting'`, i, conversationID, id); err != nil {
-			return fmt.Errorf("reorder thread queue: %w", err)
-		}
+	tx, err := r.Sessions.beginStateTx(ctx, "thread queue reorder")
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+		return err
+	}
+
+	if _, err := execState(ctx, tx, "reorder thread queue", `WITH queue AS (
+    SELECT input_id, row_number() OVER (ORDER BY position, created_at_unix_ns, input_id COLLATE "C") AS slot
+    FROM turns WHERE conversation_id = $1 AND phase = 'waiting' AND reason <> $3
+), requested AS (
+    SELECT input_id, min(n) AS n FROM unnest($2::text[]) WITH ORDINALITY AS r(input_id, n) GROUP BY input_id
+), listed AS (
+    SELECT q.input_id, q.slot, row_number() OVER (ORDER BY r.n) AS wanted, row_number() OVER (ORDER BY q.slot) AS held
+    FROM queue q JOIN requested r USING (input_id)
+), slots AS (
+    SELECT q.input_id, COALESCE(h.slot, q.slot) AS slot FROM queue q LEFT JOIN listed w USING (input_id) LEFT JOIN listed h ON h.held = w.wanted
+)
+UPDATE turns t SET position = s.slot - 1 FROM slots s WHERE t.conversation_id = $1 AND t.phase = 'waiting' AND t.input_id = s.input_id`, conversationID, ids, waitScheduled); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit thread queue reorder: %w", err)
 	}
 
 	return nil
