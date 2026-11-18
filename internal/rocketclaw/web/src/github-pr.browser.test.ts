@@ -125,9 +125,14 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     expect(github).toHaveLength(1);
     expect(await viewer().getByText("Draft", { exact: true }).count()).toBe(1);
     await viewer().getByRole("tab", { name: "Summary", exact: true }).waitFor();
-    await viewer().getByRole("tab", { name: "Code", exact: true }).waitFor();
-    await viewer().getByRole("button", { name: "Load files", exact: true }).click();
+    expect(await viewer().getByRole("tab", { name: "Summary", exact: true }).getAttribute("aria-selected")).toBe("true");
+    await viewer().getByRole("tab", { name: "Code", exact: true }).click();
     await viewer().getByText("100 of 101 files loaded", { exact: true }).waitFor();
+    const filesRequests = (page: string) => github.filter(({ url }) => new URL(url).pathname.endsWith("/files") && new URL(url).searchParams.get("page") === page).length;
+    const scrollPatch = (end: boolean) => viewer().getByRole("region", { name: "File patch", exact: true }).evaluate((node: HTMLElement, end: boolean) => { node.scrollTop = end ? node.scrollHeight : 0; }, end);
+    expect(await viewer().getByRole("region", { name: "Changed files", exact: true }).count()).toBe(0);
+    expect(await viewer().getByRole("button", { name: "File tree", exact: true }).getAttribute("aria-pressed")).toBe("false");
+    await viewer().getByRole("button", { name: "File tree", exact: true }).click();
     await viewer().getByRole("treeitem", { name: "file-marker-0.txt", exact: true }).click();
     await viewer().getByText("patch-marker <script>example</script>", { exact: true }).waitFor();
     expect(await viewer().locator('[data-change-icon="change"]').count()).toBeGreaterThan(0);
@@ -167,14 +172,23 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
         await page.getByRole("textbox", { name: "Conversation draft" }).fill("unchanged draft marker");
       }
     }
+    expect(filesRequests("2")).toBe(0);
     failPage = true;
-    await viewer().getByRole("button", { name: "Load more files", exact: true }).click();
+    await scrollPatch(true);
     await viewer().getByText("GitHub rate limit reached. Try again later.", { exact: true }).waitFor();
+    await scrollPatch(false);
+    await scrollPatch(true);
+    await page.waitForTimeout(500);
+    expect(filesRequests("2")).toBe(1);
     expect(await viewer().getByText("100 of 101 files loaded", { exact: true }).count()).toBe(1);
     expect(await viewer().getByLabel("Personal read token", { exact: true }).count()).toBe(1);
     await viewer().getByLabel("Personal read token", { exact: true }).fill("quota-token-marker");
+    const firstPages = filesRequests("1");
     await viewer().getByRole("button", { name: "Use token", exact: true }).click();
     await viewer().getByText(metadata.title, { exact: true }).waitFor();
+    await viewer().getByText("GitHub rate limit reached. Try again later.", { exact: true }).waitFor();
+    await page.waitForTimeout(500);
+    expect(filesRequests("1")).toBe(firstPages + 1);
     expect(github.at(-1)!.headers.authorization).toBe("Bearer quota-token-marker");
     expect(await viewer().getByText("0 of 101 files loaded", { exact: true }).count()).toBe(1);
     failPage = false;
@@ -183,7 +197,7 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     await viewer().getByRole("treeitem", { name: "file-marker-0.txt", exact: true }).click();
     hold = "files";
     const beforePageCancel = await page.evaluate(() => (window as any).requestAborts);
-    await viewer().getByRole("button", { name: "Load more files", exact: true }).click();
+    await scrollPatch(true);
     await pending.promise;
     await viewer().getByRole("button", { name: "Cancel", exact: true }).click();
     expect(await viewer().count()).toBe(1);
@@ -191,11 +205,17 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     expect(await viewer().getByRole("status").count()).toBe(0);
     expect(await viewer().getByText(metadata.title, { exact: true }).count()).toBe(1);
     expect(await viewer().getByText("100 of 101 files loaded", { exact: true }).count()).toBe(1);
-    expect(await viewer().getByText("patch-marker <script>example</script>", { exact: true }).count()).toBe(1);
+    await scrollPatch(false);
+    await viewer().getByText("patch-marker <script>example</script>", { exact: true }).waitFor();
     hold = ""; release.resolve();
+    const cancelledPages = filesRequests("2");
+    await scrollPatch(true);
+    await page.waitForTimeout(500);
+    expect(filesRequests("2")).toBe(cancelledPages);
     await viewer().getByRole("button", { name: "Load more files", exact: true }).click();
     await viewer().getByText("101 of 101 files loaded", { exact: true }).waitFor();
     expect(github.slice(-3).every(({ headers }) => headers.authorization === "Bearer quota-token-marker")).toBe(true);
+    await scrollPatch(false);
     await viewer().getByText("patch-marker <script>example</script>", { exact: true }).waitFor();
     expect(await viewer().getByText("patch-marker <script>example</script>", { exact: true }).count()).toBe(1);
     const tree = viewer().getByRole("region", { name: "Changed files", exact: true });
@@ -237,9 +257,18 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     await page.getByRole("option", { name: "Dialog", exact: true }).click();
     expect(await token.inputValue()).toBe("synthetic-token-marker");
     expect(github).toHaveLength(beforeTokenLayout);
+    release = Promise.withResolvers<void>(); pending = Promise.withResolvers<void>();
+    hold = "files";
     await viewer().getByRole("button", { name: "Use token", exact: true }).click();
     await viewer().getByText(metadata.title, { exact: true }).waitFor();
     expect(await viewer().getByRole("tab", { name: "Code", exact: true }).getAttribute("aria-selected")).toBe("true");
+    await pending.promise;
+    const cancelledFirstPages = filesRequests("1");
+    await viewer().getByRole("button", { name: "Cancel", exact: true }).click();
+    hold = ""; release.resolve();
+    await page.waitForTimeout(500);
+    expect(filesRequests("1")).toBe(cancelledFirstPages);
+    expect(await viewer().getByText("0 of 101 files loaded", { exact: true }).count()).toBe(1);
     await viewer().getByRole("button", { name: "Load files", exact: true }).click();
     await viewer().getByText("100 of 101 files loaded", { exact: true }).waitFor();
     changed = true;
@@ -281,6 +310,10 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     await viewer().getByText(metadata.title, { exact: true }).waitFor();
     release.resolve();
     expect(await page.getByText("Late cancelled response", { exact: true }).count()).toBe(0);
+    await viewer().getByText("100 of 101 files loaded", { exact: true }).waitFor();
+    expect(await viewer().getByRole("region", { name: "Changed files", exact: true }).count()).toBe(1);
+    await scrollPatch(true);
+    await viewer().getByText("101 of 101 files loaded", { exact: true }).waitFor();
     await page.setViewportSize({ width: 360, height: 740 });
     for (const layout of ["Dialog", "Inline", "Full-screen", "Side panel"]) {
       await page.getByRole("combobox", { name: "Preview layout" }).click();
@@ -351,6 +384,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
   let prompts = 0;
   let second = false;
   let discovery: Promise<void> | undefined;
+  let filesHold: Promise<void> | undefined;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -390,7 +424,8 @@ test("built App PR layouts preserve the composer draft and existing delegation p
       const url = new URL(route.request().url());
       if (url.hostname === "api.github.com") {
         github.push(url.pathname);
-        return route.fulfill({ json: url.pathname.endsWith("/files") ? [file(0)] : { ...metadata, changed_files: 1 }, headers: { "Access-Control-Allow-Origin": "*" } });
+        if (url.pathname.endsWith("/files")) await filesHold;
+        return route.fulfill({ json: url.pathname.endsWith("/files") ? [file(0)] : { ...metadata, changed_files: url.pathname.endsWith("/pulls/8") ? 0 : 1 }, headers: { "Access-Control-Allow-Origin": "*" } });
       }
       if (url.origin === origin) return route.continue();
       if (url.hostname === "untrusted.invalid") return route.abort();
@@ -412,8 +447,9 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     await dialog.getByText(metadata.title, { exact: true }).waitFor();
     expect(await dialog.getAttribute("data-slot")).toBe("sheet-content");
     expect(await dialog.getAttribute("data-side")).toBe("right");
-    await dialog.getByRole("button", { name: "Load files", exact: true }).click();
+    await dialog.getByRole("tab", { name: "Code", exact: true }).click();
     await dialog.getByText("1 of 1 files loaded", { exact: true }).waitFor();
+    await dialog.getByRole("button", { name: "File tree", exact: true }).click();
     await dialog.getByRole("treeitem", { name: "file-marker-0.txt", exact: true }).click();
     const loaded = github.length;
     for (const layout of ["Dialog", "Inline", "Full-screen", "Side panel"]) {
@@ -434,7 +470,9 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     expect(new URL(page.url()).pathname).toBe(sessionPath(session));
     await preview.click();
     await dialog.getByText(metadata.title, { exact: true }).waitFor();
-    expect(github).toHaveLength(loaded + 1);
+    await dialog.getByText("1 of 1 files loaded", { exact: true }).waitFor();
+    const reopened = github.length;
+    expect(reopened).toBe(loaded + 4);
     await page.getByRole("combobox", { name: "Preview layout" }).click();
     await page.getByRole("option", { name: "Inline", exact: true }).click();
     const inline = page.getByRole("region", { name: "Pull request preview", exact: true });
@@ -446,8 +484,12 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     await preview.waitFor();
     await page.waitForFunction(() => document.querySelector("main textarea") instanceof HTMLTextAreaElement && (document.querySelector("main textarea") as HTMLTextAreaElement).value === "App composer draft edited beside preview");
     expect(await inline.count()).toBe(0);
-    expect(github).toHaveLength(loaded + 1);
+    expect(github).toHaveLength(reopened);
     expect(await page.locator("#bottom-navigation").getByRole("button").count()).toBe(6);
+    const filesRead = () => github.filter((pathname) => pathname.endsWith("/pulls/7/files")).length;
+    let files = Promise.withResolvers<void>();
+    filesHold = files.promise;
+    const beforePane = filesRead();
     await page.getByRole("button", { name: "Tab actions", exact: true }).click();
     await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
     const prs = page.getByRole("complementary", { name: "Pull requests", exact: true });
@@ -456,15 +498,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     expect(await composer.inputValue()).toBe("App composer draft edited beside preview");
     await composer.fill("Draft still editable beside the PR pane");
     expect(await composer.isEnabled()).toBe(true);
-    await prs.getByRole("button", { name: "Load files", exact: true }).click();
-    await prs.getByRole("treeitem", { name: "file-marker-0.txt", exact: true }).click();
-    await prs.getByText("patch-marker <script>example</script>", { exact: true }).waitFor();
-    const resize = prs.getByRole("separator", { name: "Resize delegation panel", exact: true });
-    await resize.focus();
-    for (let step = 0; step < 16; step++) await resize.press("ArrowLeft");
-    const patchBox = (await prs.getByRole("region", { name: "File patch", exact: true }).boundingBox())!;
-    const treeBox = (await prs.getByRole("region", { name: "Changed files", exact: true }).boundingBox())!;
-    expect(treeBox.x).toBeGreaterThanOrEqual(patchBox.x + patchBox.width - 1);
+    await prs.getByText("Loading files…").waitFor();
     // A thread update looks for PRs again in the background without moving the PR already shown.
     const title = prs.getByText(metadata.title, { exact: true });
     const top = (await title.boundingBox())!.y;
@@ -476,13 +510,29 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     expect((await title.boundingBox())!.y).toBe(top);
     held.resolve();
     await prs.locator('button:enabled[aria-label="Refresh"]').waitFor();
-    await title.waitFor();
-    expect(await prs.getByText("patch-marker <script>example</script>", { exact: true }).count()).toBe(1);
+    filesHold = undefined; files.resolve();
+    await prs.getByText("1 of 1 files loaded", { exact: true }).waitFor();
+    expect(filesRead() - beforePane).toBe(1);
+    await prs.getByRole("treeitem", { name: "file-marker-0.txt", exact: true }).click();
+    await prs.getByText("patch-marker <script>example</script>", { exact: true }).waitFor();
+    const resize = prs.getByRole("separator", { name: "Resize delegation panel", exact: true });
+    await resize.focus();
+    for (let step = 0; step < 16; step++) await resize.press("ArrowLeft");
+    const patchBox = (await prs.getByRole("region", { name: "File patch", exact: true }).boundingBox())!;
+    const treeBox = (await prs.getByRole("region", { name: "Changed files", exact: true }).boundingBox())!;
+    expect(treeBox.x).toBeGreaterThanOrEqual(patchBox.x + patchBox.width - 1);
     // Refresh also reads the shown PR again, which starts its file list over.
+    files = Promise.withResolvers<void>();
+    filesHold = files.promise;
+    const beforeRefresh = filesRead();
     const reread = page.waitForResponse((response: any) => new URL(response.url()).pathname.endsWith("/pulls/7"));
     await prs.getByRole("button", { name: "Refresh", exact: true }).click();
     await reread;
     await prs.getByText("0 of 1 files loaded", { exact: true }).waitFor();
+    await prs.getByText("Loading files…").waitFor();
+    filesHold = undefined; files.resolve();
+    await prs.getByText("1 of 1 files loaded", { exact: true }).waitFor();
+    expect(filesRead() - beforeRefresh).toBe(1);
     await title.waitFor();
     await page.getByRole("tab", { name: "Other fixture", exact: true }).click({ button: "right" });
     await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
@@ -522,6 +572,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     // The picker shows only once the thread has more than one PR.
     await prs.getByRole("combobox", { name: "Thread pull request" }).waitFor();
     expect(await prs.getByRole("combobox", { name: "Thread pull request" }).textContent()).toContain("#8");
+    await prs.getByText("0 of 0 files loaded", { exact: true }).waitFor();
     await prs.getByRole("combobox", { name: "Thread pull request" }).click();
     const option = page.getByRole("option", { name: "sample/fixture-repository-marker #7", exact: true });
     expect(await option.evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true);
@@ -536,6 +587,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     await prs.waitFor({ state: "detached" });
     await page.keyboard.press("ControlOrMeta+Shift+B");
     await prs.getByText(metadata.title, { exact: true }).waitFor();
+    expect(github.filter((pathname) => pathname.endsWith("/pulls/8/files"))).toEqual([]);
     expect(prompts).toBe(0);
     expect(unexpected).toEqual([]);
     expect(errors).toEqual([]);

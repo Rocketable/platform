@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useEffectEvent, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { ArrowLeft, ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, RefreshCw } from "lucide-react";
 import { cn } from "cn";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +17,8 @@ const layouts = ["Side panel", "Dialog", "Inline", "Full-screen"] as const;
 const TAB_KEY = "pull-request-tab";
 const PRCode = lazy(() => import("./github-pr-code").then((module) => ({ default: module.PRCode })));
 type Layout = (typeof layouts)[number];
-type PreviewResult = { pr?: PullRequest; files: PRFile[]; page: number; ended: boolean; loading: boolean; error: string };
+type PreviewResult = { pr?: PullRequest; files: PRFile[]; page: number; ended: boolean; loading: boolean; halted: boolean; error: string };
+const unread = { files: [], page: 0, ended: false, halted: false, error: "" };
 
 export function PrivatePreviewRoot(props: ComponentProps<"div">) {
   return <div {...props} className={cn(props.className, "ph-no-capture")} />;
@@ -56,15 +57,15 @@ function usePreview(reference: GitHubPR, source?: OpenCodePRSource, refresh = 0)
   const [credential, setCredential] = useState("");
   const token = useRef("");
   const controller = useRef<AbortController | null>(null);
-  const [result, setResult] = useState<PreviewResult>({ files: [], page: 0, ended: false, loading: true, error: "" });
+  const [result, setResult] = useState<PreviewResult>({ ...unread, loading: true });
   useEffect(() => {
     const request = new AbortController();
     controller.current = request;
     // A refresh keeps the PR in place until its new copy arrives, and keeps it if reading fails.
     void loadPR(reference, token.current, request.signal, source).then((pr) => {
-      if (!request.signal.aborted) setResult({ pr, files: [], page: 0, ended: false, loading: false, error: "" });
+      if (!request.signal.aborted) setResult({ pr, ...unread, loading: false });
     }).catch((error: unknown) => {
-      if (!request.signal.aborted) setResult((current) => ({ ...current, loading: false, error: error instanceof GitHubError ? error.message : "Could not read GitHub's response." }));
+      if (!request.signal.aborted) setResult((current) => ({ ...current, loading: false, halted: true, error: error instanceof GitHubError ? error.message : "Could not read GitHub's response." }));
     });
     return () => controller.current!.abort();
   }, [reference, source, refresh]);
@@ -75,7 +76,7 @@ function usePreview(reference: GitHubPR, source?: OpenCodePRSource, refresh = 0)
     controller.current = request;
     token.current = readToken;
     if (!files) setCredential("");
-    setResult((current) => files ? { ...current, loading: true, error: "" } : { files: [], page: 0, ended: false, loading: true, error: "" });
+    setResult((current) => files ? { ...current, loading: true, halted: false, error: "" } : { ...unread, loading: true });
     try {
       if (files) {
         const page = await loadPRFiles(reference, readToken, request.signal, result.pr!, result.page + 1, source);
@@ -85,14 +86,18 @@ function usePreview(reference: GitHubPR, source?: OpenCodePRSource, refresh = 0)
         if (!request.signal.aborted) setResult((current) => ({ ...current, pr, loading: false }));
       }
     } catch (error) {
-      if (!request.signal.aborted) setResult((current) => ({ ...current, loading: false, error: error instanceof GitHubError ? error.message : "Could not read GitHub's response." }));
+      if (!request.signal.aborted) setResult((current) => ({ ...current, loading: false, halted: true, error: error instanceof GitHubError ? error.message : "Could not read GitHub's response." }));
     }
   }
   function cancel() {
     controller.current!.abort();
-    setResult((current) => ({ ...current, loading: false }));
+    setResult((current) => ({ ...current, loading: false, halted: true }));
   }
-  return { result, load, cancel, credential, setCredential, tab, setTab };
+  const idle = !result.loading && !result.halted;
+  const firstPage = idle && tab === "code" && !result.page && Boolean(result.pr?.changed_files);
+  const loadFirstPage = useEffectEvent(() => void load(true));
+  useEffect(() => { if (firstPage) loadFirstPage(); }, [firstPage]);
+  return { result, load, cancel, idle, credential, setCredential, tab, setTab };
 }
 
 function Preview({ reference, close }: { reference: GitHubPR; close: () => void }) {
@@ -146,7 +151,8 @@ function PreviewBody({ reference, state, close, source }: { reference: GitHubPR;
 // Visual reference: t3code apps/web/src/components/pullRequest/PullRequestDetailLayout.tsx
 // at 1d61dd3: title, actor/time, base ← head and counts above a segmented tab bar.
 function PreviewDetails({ reference, pr, state }: { reference: GitHubPR; pr: PullRequest; state: ReturnType<typeof usePreview> }) {
-  const { result, load, tab, setTab } = state;
+  const { result, load, idle, tab, setTab } = state;
+  const remaining = result.files.length < Math.min(pr.changed_files, 3000) && !result.ended;
   return <Tabs render={<span />} value={tab} onValueChange={(value) => setTab(String(value))} className="min-w-0 shrink-0">
     <PRHeader pr={pr} />
     <span className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-y py-2">
@@ -155,13 +161,13 @@ function PreviewDetails({ reference, pr, state }: { reference: GitHubPR; pr: Pul
     </span>
     <TabsContent render={<span />} value="summary" className="block overflow-auto"><span className="block py-3"><MarkdownText text={pr.body?.trim() ? pr.body : "_No description provided._"} repository={reference} /></span></TabsContent>
     <TabsContent render={<span />} value="code" keepMounted className="flex min-h-0 min-w-0 flex-1 flex-col data-[hidden]:hidden">
-      <Suspense fallback={<span role="status">Loading diff viewer…</span>}>{result.files.length > 0 ? <PRCode files={result.files} /> : <span className="py-4 text-muted-foreground">No files loaded.</span>}</Suspense>
+      <Suspense fallback={<span role="status">Loading diff viewer…</span>}>{result.files.length > 0 ? <PRCode files={result.files} more={remaining && idle ? () => void load(true) : undefined} /> : <span className="py-4 text-muted-foreground">No files loaded.</span>}</Suspense>
     </TabsContent>
     <span className="flex shrink-0 flex-col gap-2 py-2 text-xs text-muted-foreground">
       <span>Patches may be incomplete. Open GitHub for the full diff.</span>
       {result.files.length >= 3000 && <span>GitHub's 3,000-file limit reached; this preview may be incomplete.</span>}
       {result.ended && result.files.length < pr.changed_files && <span>GitHub returned fewer files than reported. This preview is incomplete.</span>}
-      {result.files.length < Math.min(pr.changed_files, 3000) && !result.ended && <Button type="button" variant="outline" size="sm" disabled={result.loading} onClick={() => { setTab("code"); void load(true); }}>{result.page ? "Load more files" : "Load files"}</Button>}
+      {remaining && <Button type="button" variant="outline" size="sm" disabled={result.loading} onClick={() => { setTab("code"); void load(true); }}>{result.page ? "Load more files" : "Load files"}</Button>}
     </span>
   </Tabs>;
 }
