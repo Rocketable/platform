@@ -160,19 +160,14 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 		owner = username
 	}
 
-	found, err := s.sharedSearch(ctx, fmt.Sprintf("messages %q %s", owner, needle), messageSearch{owner: owner, needle: needle})
-	if err != nil {
-		return nil, err
-	}
-
-	return found.(*SearchMessagesResponse), nil
+	return sharedSearch(ctx, s, fmt.Sprintf("messages %q %s", owner, needle), messageSearch{owner: owner, needle: needle})
 }
 
 type messageSearch struct {
 	owner, needle string
 }
 
-func (work messageSearch) search(scanCtx context.Context, s *Server) (any, error) {
+func (work messageSearch) search(scanCtx context.Context, s *Server) (*SearchMessagesResponse, error) {
 	hits, mentions, err := s.sessions.SearchMessagesMentioning(scanCtx, work.needle, s.channels)
 	if err != nil {
 		return nil, fmt.Errorf("web message search: %w", err)
@@ -220,12 +215,7 @@ func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequ
 		return s.runSearch(ctx, request, work)
 	}
 
-	found, err := s.sharedSearch(ctx, fmt.Sprintf("sessions %d %q %s", scope, username, query), work)
-	if err != nil {
-		return nil, err
-	}
-
-	return found.(*SearchSessionsResponse), nil
+	return sharedSearch(ctx, s, fmt.Sprintf("sessions %d %q %s", scope, username, query), work)
 }
 
 type sessionSearch struct {
@@ -233,7 +223,7 @@ type sessionSearch struct {
 	scope           backend.SearchScope
 }
 
-func (work sessionSearch) search(scanCtx context.Context, s *Server) (any, error) {
+func (work sessionSearch) search(scanCtx context.Context, s *Server) (*SearchSessionsResponse, error) {
 	search, err := s.sessions.SearchSessions(scanCtx, work.username, work.query, work.scope, s.channels)
 	if err != nil {
 		return nil, fmt.Errorf("web session search: %w", err)
@@ -261,11 +251,11 @@ func messageMatches(hits []backend.MessageSearchHit) []*MessageMatch {
 	return matches
 }
 
-type searchWork interface {
-	search(context.Context, *Server) (any, error)
+type searchWork[T any] interface {
+	search(context.Context, *Server) (*T, error)
 }
 
-func (s *Server) sharedSearch(ctx context.Context, key string, work searchWork) (any, error) {
+func sharedSearch[T any](ctx context.Context, s *Server, key string, work searchWork[T]) (*T, error) {
 	s.searchMu.Lock()
 	scanCtx := ctx
 
@@ -330,7 +320,7 @@ func (s *Server) sharedSearch(ctx context.Context, key string, work searchWork) 
 		}
 		s.searchMu.Unlock()
 
-		return outcome.Val, outcome.Err
+		return outcome.Val.(*T), outcome.Err
 	}
 }
 

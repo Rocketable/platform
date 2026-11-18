@@ -18,7 +18,7 @@ type searchRun struct {
 	entered bool
 	cancel  context.CancelCauseFunc
 	done    chan struct{}
-	found   any
+	found   *SearchSessionsResponse
 	err     error
 }
 
@@ -108,11 +108,7 @@ func (s *Server) runSearch(ctx context.Context, request *SearchSessionsRequest, 
 	}
 	s.runsMu.Unlock()
 
-	if run.err != nil {
-		return nil, run.err
-	}
-
-	return run.found.(*SearchSessionsResponse), nil
+	return run.found, run.err
 }
 
 func (s *Server) StopSearches() {
