@@ -41,4 +41,7 @@ export type Mounted = {
   keep(sessionIDs: string[]): void
   /** Opens OpenCode's command palette (R21). */
   openPalette(): void
+  quotable(): boolean
+  subscribeQuotable(listener: () => void): () => void
+  quote(quote: { text: string; comment?: string; label: string; subject: string }): void
 }
