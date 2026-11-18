@@ -316,9 +316,9 @@ Each tool call acts on the Remote OpenCode Session that made it, or for a subage
 
 ### Pull Requests Pane
 
-The pane beside a conversation that lists the GitHub pull requests the conversation created and lets a person read them without leaving the conversation. On desktop it opens by itself on a pull request the conversation in view has just created, or one whose head commit moved.
+The pane beside a conversation that lists the GitHub pull requests the conversation created or mentioned and lets a person read them without leaving the conversation. On desktop it opens by itself only on a pull request the conversation in view created: one just created, or one whose head commit moved.
 
-A pull request counts as created in the conversation only when a successful recorded create command or script in it printed the pull request's link; mentioned links, dry runs, and failed calls do not count, and for a Remote OpenCode Session the conversation includes its subagents' sessions. A Remote OpenCode Session also shows the current checkout's pull request, found from the branch the session folder is on, or from its nearest bookmark when the folder has no current branch, as in a jj workspace; that reflects the folder's state, not proof the conversation made it, since several sessions may share a folder.
+The conversation here is its whole session tree: its subagents' sessions at any depth and, for RocketClaw's own sessions, its Shadow Sessions. A pull request counts as created when a successful create command, not a dry run, printed its link alone on a line; when a command prints more such links than it ran create commands, none counts as created. Any other pull request link in a successful command's output counts as mentioned, except output of a command that lists or searches pull requests or calls the GitHub API, which counts for nothing. Mentioned pull requests are listed after created ones and marked as mentioned. A Remote OpenCode Session also shows the current checkout's pull request, found from the branch the session folder is on, or from its nearest bookmark when the folder has no current branch, as in a jj workspace; that reflects the folder's state, not proof the conversation made it, since several sessions may share a folder.
 
 ### Remote RocketClaw
 
