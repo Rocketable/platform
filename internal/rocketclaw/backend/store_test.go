@@ -1691,6 +1691,61 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 			assert.True(t, active, "a live turn survives")
 		}
 	})
+
+	t.Run("sticky expired attachments", func(t *testing.T) {
+		store := newTestSessionService(t)
+		ctx := t.Context()
+		cutoff := time.Unix(1_700_000_000, 0).UTC()
+		old := cutoff.Add(-time.Hour)
+
+		id, _, err := store.CreateStickyConversation(ctx, protocol.Conversation{ID: "room", Agent: "room", CreatedBy: "alice@example.com"}, harness.AgentStickyUser)
+		require.NoError(t, err)
+		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: "cron:old", Agent: "room", Run: &protocol.CronRun{Path: "cron/daily.md"}}))
+		_, err = (&Runtime{Sessions: store}).ContinueRun(ctx, "cron:old", id, true)
+		require.NoError(t, err)
+
+		seedActiveTurn(t, store, id, "ended", nil)
+		_, err = store.db.ExecContext(ctx, `UPDATE turns SET phase = 'done', terminal = 'stopped', created_at_unix_ns = $2 WHERE id = $1`, "ended", old.UnixNano())
+		require.NoError(t, err)
+		seedActiveTurn(t, store, id, "live", nil)
+
+		owners := map[string]string{"file-expired": id, "file-shown": id, "file-queued": id, "file-scheduled": id, "file-upload": id, "file-ended": id, "file-live": id, "file-run": "cron:old"}
+
+		turns := map[string]string{"file-ended": "ended", "file-live": "live"}
+		for file, owner := range owners {
+			require.NoError(t, store.SaveAttachment(ctx, owner, turns[file], &protocol.OutboundAttachment{ID: file, Name: file, Data: []byte(file)}, file == "file-upload"))
+		}
+
+		for owner, text := range map[string]string{id: "attachment:file-expired attachment:file-shown attachment:file-queued attachment:file-scheduled attachment:file-live", "cron:old": "attachment:file-run"} {
+			_, err := store.AppendEntryID(ctx, owner, testSessionEntryAt(old, text))
+			require.NoError(t, err)
+		}
+
+		_, err = store.AppendEntryID(ctx, id, testSessionEntryAt(cutoff.Add(time.Second), "attachment:file-shown"))
+		require.NoError(t, err)
+		require.NoError(t, store.PutThreadQueueItem("queued", &protocol.ThreadQueueItem{ID: "queued", ConversationID: id, Message: "attachment:file-queued", Kind: protocol.InboundKindHeld, StashAt: old}))
+		require.NoError(t, store.PutScheduledMessage("daily", &protocol.ScheduledMessageState{ConversationID: id, Agent: "room", Message: "attachment:file-scheduled", DueAt: cutoff, Recurring: true, Interval: time.Hour}))
+
+		_, err = store.PruneStateBefore(ctx, cutoff, 0)
+		require.NoError(t, err)
+
+		kept, err := queryStrings(ctx, store.db, `SELECT id FROM attachments ORDER BY id`, "kept attachments")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"file-live", "file-queued", "file-scheduled", "file-shown", "file-upload"}, kept)
+
+		pending, err := queryStrings(ctx, store.db, `SELECT id FROM pending_attachment_deletions`, "pending attachment deletions")
+		require.NoError(t, err)
+		assert.Empty(t, pending)
+
+		for file := range owners {
+			_, err := store.attachments.Get(ctx, file)
+			if slices.Contains(kept, file) {
+				assert.NoError(t, err, file)
+			} else {
+				assert.ErrorIs(t, err, fs.ErrNotExist, file)
+			}
+		}
+	})
 }
 
 func TestSessionServiceRetainsQueuedConversations(t *testing.T) {

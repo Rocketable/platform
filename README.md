@@ -212,7 +212,7 @@ Cron definition bodies expand shell snippets (an exclamation mark followed by a 
 
 Agents can use `rocketclaw_schedule_message` for a follow-up in the current conversation. `send_this_in` accepts positive durations up to `2160h` (90 days), the retention window, including `12h` and `168h`. Set `recurring` to `false` for one message or `true` to repeat at that interval (at least `1m`) until scheduled messages are reset. Pending schedules protect their conversations and explicit owners from normal retention cleanup.
 
-Retention cleanup deletes ordinary chats, in Web or Slack, 90 days after their last message; an ordinary MCP chat goes with its private MCP session. A chat with no messages counts from when it was created. Queued work and pending schedules keep an ordinary chat. Sticky chat rows remain, but messages older than 90 days are deleted even while the chat is active. Live turns, queued input and stashed drafts remain intact.
+Retention cleanup deletes ordinary chats, in Web or Slack, 90 days after their last message; an ordinary MCP chat goes with its private MCP session. A chat with no messages counts from when it was created. Queued work and pending schedules keep an ordinary chat. Sticky chat rows remain, but messages older than 90 days are deleted even while the chat is active, and so are the attachments only those messages used. Live turns, queued input and stashed drafts remain intact, and so do the attachments that newer messages, turns, queued input or pending schedules still use.
 
 Release note for repeating cron schedules:
 
