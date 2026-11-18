@@ -459,9 +459,9 @@ func normalizeOpenAIConfig(field string, cfg *OpenAIConfig) error {
 }
 
 func normalizeStringList(values []string) []string {
-	normalized, unique := normalizeStrings(values), []string{}
-	for _, value := range normalized {
-		if !slices.Contains(unique, value) {
+	unique := []string{}
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" && !slices.Contains(unique, value) {
 			unique = append(unique, value)
 		}
 	}
