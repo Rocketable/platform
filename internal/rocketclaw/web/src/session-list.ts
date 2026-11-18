@@ -169,18 +169,14 @@ export async function readSessionEnumeration(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let dirty = false;
   let upstreamSuccess = false;
-  let complete = false;
-  let mismatch = false;
-  let remote: Remote | undefined;
-  let version: string | undefined;
-  let since: string | undefined;
-  let removed: string[] | undefined;
-  let tabs: TabAttention[] | undefined;
-  let tabRevision: string | undefined;
+  const result: EnumerationResult = {
+    received: [], complete: false, mismatch: false, remote: undefined,
+    version: undefined, since: undefined, removed: undefined, tabs: undefined, tabRevision: undefined,
+  };
   const cancel = () => clearTimeout(timer);
   const flush = () => {
     timer = undefined;
-    if (!dirty || signal?.aborted || mismatch) return;
+    if (!dirty || signal?.aborted || result.mismatch) return;
     dirty = false;
     onProgress(mergeSessionRows(baseline(), [...byID.values()]));
   };
@@ -190,16 +186,16 @@ export async function readSessionEnumeration(
       if (signal?.aborted) break;
       if (batch.owner !== undefined) {
         if (batch.owner !== owner) {
-          mismatch = true;
+          result.mismatch = true;
           upstreamSuccess = false;
           break;
         }
-        remote = { servers: batch.opencodeServers ?? {}, agentTags: Object.fromEntries(Object.entries(batch.agentTags ?? {}).map(([agent, choices]) => [agent, choices.tags ?? []])) };
-        tabRevision = batch.tabRevision;
-        onRemote(remote);
+        result.remote = { servers: batch.opencodeServers ?? {}, agentTags: Object.fromEntries(Object.entries(batch.agentTags ?? {}).map(([agent, choices]) => [agent, choices.tags ?? []])) };
+        result.tabRevision = batch.tabRevision;
+        onRemote(result.remote);
       }
       upstreamSuccess = batch.upstreamSuccess ?? false;
-      if (upstreamSuccess) ({ version, since, removed, tabs } = batch);
+      if (upstreamSuccess) ({ version: result.version, since: result.since, removed: result.removed, tabs: result.tabs } = batch);
       if (!batch.sessions) continue;
       const first = byID.size === 0;
       for (const row of batch.sessions) byID.set(row.id, row);
@@ -213,14 +209,15 @@ export async function readSessionEnumeration(
         flush();
       } else if (timer === undefined) timer = setTimeout(flush, 16);
     }
-    complete = upstreamSuccess && !mismatch && !signal?.aborted;
+    result.complete = upstreamSuccess && !result.mismatch && !signal?.aborted;
   } catch (error) {
-    mismatch = error instanceof RPCError && error.code === 16;
+    result.mismatch = error instanceof RPCError && error.code === 16;
     // Retain the received prefix, but failed streams cannot promote a snapshot.
   } finally {
     cancel();
     signal?.removeEventListener("abort", cancel);
   }
   flush();
-  return { received: [...byID.values()], complete, mismatch, remote, version, since, removed, tabs, tabRevision };
+  result.received = [...byID.values()];
+  return result;
 }
