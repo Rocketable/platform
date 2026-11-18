@@ -105,7 +105,7 @@ A named account that serves model requests: its sign-in and, for an API-key Prov
 
 Root and child agents resolve their Provider independently. There is no implicit failover from one Provider to another.
 
-Each Provider can set its own Autocompaction Threshold, the token count at which a turn asks that Provider to compact conversation history; unset means the runtime default. A child turn uses a different threshold only when it resolves a different Provider.
+Each Provider can set its own Autocompaction Threshold, the token count at which a turn asks that Provider to compact conversation history; unset means the runtime default. A child turn uses a different threshold only when it resolves a different Provider. The threshold is a request, not a guarantee: when a Provider's endpoint ignores it, that Provider's chats compact only after the model rejects a request as too long and the harness recognizes the rejection as a context overflow.
 
 A Provider authenticates with either an API key or a ChatGPT sign-in. A ChatGPT sign-in Provider is served by ChatGPT's Codex backend, not the public API, so RocketClaw reshapes its requests for that backend. There, compaction is a separate request RocketClaw makes when a response reaches the Provider's Autocompaction Threshold or the backend reports the context is full.
 

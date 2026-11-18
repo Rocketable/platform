@@ -1476,7 +1476,7 @@ func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion) ([
 
 func isContextLengthExceeded(err error) bool {
 	if errAPI, ok := errors.AsType[*openai.Error](err); ok {
-		return errAPI.Code == "context_length_exceeded"
+		return errAPI.Code == "context_length_exceeded" || workaroundCLIProxyAPIClaudePromptTooLongWithoutCodeRemoveOnceUpstreamFixed(errAPI)
 	}
 
 	if errResponse, ok := errors.AsType[*responseFailureError](err); ok {
@@ -1484,6 +1484,10 @@ func isContextLengthExceeded(err error) bool {
 	}
 
 	return false
+}
+
+func workaroundCLIProxyAPIClaudePromptTooLongWithoutCodeRemoveOnceUpstreamFixed(errAPI *openai.Error) bool {
+	return errAPI.Type == "invalid_request_error" && strings.HasPrefix(errAPI.Message, "prompt is too long")
 }
 
 func providerDiagnosticFromFailedResponse(resp *responses.Response, phase string, attempt int, retryAfter time.Duration, raw *http.Response) ProviderDiagnostic {
