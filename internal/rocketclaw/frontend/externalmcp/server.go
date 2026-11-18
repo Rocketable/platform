@@ -100,7 +100,7 @@ func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listener
 	httpServer := &http.Server{Handler: mux}
 	server := &Server{closeFn: httpServer.Shutdown}
 
-	go func() { <-ctx.Done(); _ = server.Close(context.Background()) }()
+	context.AfterFunc(ctx, func() { _ = server.Close(context.Background()) })
 
 	go func() {
 		err := httpServer.Serve(listener)
