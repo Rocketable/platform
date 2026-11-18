@@ -87,7 +87,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
           (queues[input.id] ??= []).push({ id: "stashed", text: input.text, delivery: input.delivery });
           return Response.json({ privateText: "" });
         }
-        if (input.text === "$stop") {
+        if (input.text === "/stop") {
           running.delete(input.id);
           stoppedTurn.resolve();
           return Response.json({ privateText: "" });
@@ -184,7 +184,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       expectedButton: node.outerHTML,
     }))).toMatchObject({ copyFocused: true });
     const composer = page.locator("textarea");
-    await composer.fill("$fork");
+    await composer.fill("/fork");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByRole("button", { name: "Choose this prompt Continue before this message" }).click();
@@ -210,7 +210,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await commandSearch.fill("original");
     expect(await commands.getByRole("button", { name: /Open original conversation/ }).count()).toBe(0);
     await commandSearch.fill("");
-    for (const name of ["Sessions: Fork session", "Sessions: Handoff session", "Sessions: Name session", "Sessions: Regenerate title", "Sessions: Choose agent", "Command: Start goal ($goal)", "Command: Invoke skill ($skill)", "Command: Enqueue work ($enqueue)", "Command: Stash work ($stash)", "Command: Steer turn ($steer)"]) {
+    for (const name of ["Sessions: Fork session", "Sessions: Handoff session", "Sessions: Name session", "Sessions: Regenerate title", "Sessions: Choose agent", "Command: Start goal (/goal)", "Command: Invoke skill (/skill)", "Command: Enqueue work (/enqueue)", "Command: Stash work (/stash)", "Command: Steer turn (/steer)"]) {
       const action = commands.getByRole("button", { name, exact: true });
       await action.waitFor();
       expect(await action.textContent()).toBe(name);
@@ -254,7 +254,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     expect(details.source.name).toBe("Named source");
     expect(prompts).toHaveLength(0);
     await page.getByLabel("Attach files", { exact: true }).setInputFiles({ name: "draft.txt", mimeType: "text/plain", buffer: Buffer.from("keep attachment") });
-    for (const [label, invocation] of [["Start goal", "$goal"], ["Invoke skill", "$skill"], ["Enqueue work", "$enqueue"], ["Stash work", "$stash"], ["Steer turn", "$steer"]]) {
+    for (const [label, invocation] of [["Start goal", "/goal"], ["Invoke skill", "/skill"], ["Enqueue work", "/enqueue"], ["Stash work", "/stash"], ["Steer turn", "/steer"]]) {
       await composer.fill("keep this draft");
       await page.keyboard.press("Meta+Shift+p");
       await commandSearch.fill(label);
@@ -267,14 +267,14 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     }
     // MRU follows command IDs, not sessions or labels, without section dividers.
     await page.keyboard.press("Meta+Shift+p");
-    expect(await commands.getByRole("button").first().textContent()).toBe("Command: Steer turn ($steer)");
+    expect(await commands.getByRole("button").first().textContent()).toBe("Command: Steer turn (/steer)");
     const history = await page.evaluate(() => localStorage.getItem("command-history"));
     await commandSearch.fill("no-such-command");
     await commands.getByText("No matches", { exact: true }).waitFor();
     await page.keyboard.press("Escape");
     expect(await page.evaluate(() => localStorage.getItem("command-history"))).toBe(history);
     await page.keyboard.press("Meta+Shift+p");
-    await commandSearch.fill("$goal");
+    await commandSearch.fill("/goal");
     await commandSearch.press("Enter");
     await commands.waitFor({ state: "hidden" });
     const savedComposer = await composer.inputValue();
@@ -322,14 +322,14 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       } finally { throw error; }
     }
     await page.keyboard.press("Meta+Shift+p");
-    expect(await commands.getByRole("button").first().textContent()).toBe("Command: Start goal ($goal)");
+    expect(await commands.getByRole("button").first().textContent()).toBe("Command: Start goal (/goal)");
     expect(await page.evaluate(() => JSON.parse(localStorage.getItem("command-history")!).filter((key: string) => key === "goal"))).toEqual(["goal"]);
     await commands.evaluate((element: HTMLElement) => Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished)));
     await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/command-recency-${width}.png`), await page.screenshot());
     await commandSearch.press("ArrowDown");
     await commandSearch.press("Enter");
     await commands.waitFor({ state: "hidden" });
-    expect(await composer.inputValue()).toBe(`$steer ${savedComposer}`);
+    expect(await composer.inputValue()).toBe(`/steer ${savedComposer}`);
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Choose agent");
     await commands.getByRole("button", { name: "Sessions: Choose agent" }).click();
@@ -407,7 +407,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     const aborted = page.waitForEvent("requestfailed", (request: { url: () => string }) => request.url().endsWith("/api/Handoff"));
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await aborted;
-    await composer.fill("$handoff");
+    await composer.fill("/handoff");
     await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true }));
     await dialog.getByRole("button", { name: "Copy handoff", exact: true }).click();
@@ -424,7 +424,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     expect(handoffs).toEqual(["source", "source", "source"]);
     expect(prompts).toHaveLength(0);
 
-    await composer.fill("$handoff");
+    await composer.fill("/handoff");
     handoffSeen = Promise.withResolvers();
     await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     await destinationSearch.fill("destination search");
@@ -479,7 +479,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await stashed.getByRole("button", { name: "Pop", exact: true }).waitFor();
     expect(prompts).toHaveLength(1);
 
-    await composer.fill("$handoff");
+    await composer.fill("/handoff");
     await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     expect(prompts).toHaveLength(1);
     await destinationSearch.fill("First request");
@@ -501,7 +501,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await dialog.waitFor({ state: "hidden" });
     expect(prompts).toHaveLength(1);
-    await composer.fill("$handoff");
+    await composer.fill("/handoff");
     await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     await dialog.getByRole("button", { name: "Start new session", exact: true }).click();
     await dialog.getByRole("button", { name: "Starting session…", exact: true }).waitFor({ timeout: 2000 });
@@ -518,7 +518,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
     await composer.waitFor();
     failFirstTurn = true;
-    await composer.fill("$handoff");
+    await composer.fill("/handoff");
     await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     await dialog.getByRole("button", { name: "Start new session", exact: true }).click();
     await page.waitForURL("**/s/" + btoa("created").replace(/=+$/, ""));
@@ -537,10 +537,10 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await commands.getByRole("button", { name: "Sessions: Stop turn" }).click();
     await commands.waitFor({ state: "hidden" });
     await stoppedTurn.promise;
-    expect(prompts.at(-1)?.text).toBe("$stop");
+    expect(prompts.at(-1)?.text).toBe("/stop");
     expect(await composer.inputValue()).toBe("draft during turn");
     handoffReady = Promise.withResolvers<void>();
-    await composer.fill("$handoff");
+    await composer.fill("/handoff");
     await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     await destinationSearch.fill("destination search");
     await dialog.getByRole("button", { name: /Destination search needle/ }).click();
@@ -609,7 +609,7 @@ test("handoff hits and queued items format tags and markup", async () => {
     expect(await queued.getByText("@handle").count()).toBe(1);
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
     await page.locator("textarea").waitFor();
-    await page.locator("textarea").fill("$handoff");
+    await page.locator("textarea").fill("/handoff");
     await page.locator("textarea").press("Enter");
     const dialog = page.getByRole("dialog", { name: "Session handoff" });
     await dialog.getByRole("textbox", { name: "Search messages" }).fill("bold");
@@ -665,7 +665,7 @@ test("handoff's new session starts with main when offered, else the first offere
     for (const agents of [["assistant", "main"], ["ops-agent"]]) {
       offered = agents;
       await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
-      await page.locator("textarea").fill("$handoff");
+      await page.locator("textarea").fill("/handoff");
       await page.locator("textarea").press("Enter");
       await page.getByRole("dialog", { name: "Session handoff" }).getByRole("button", { name: "Start new session", exact: true }).click();
       await page.waitForURL("**/s/" + btoa("created").replace(/=+$/, ""));

@@ -140,8 +140,8 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
     await mutations.steerQueueItem({ id: "visible", itemId: "two" });
     await mutations.popQueueItem({ id: "visible", itemId: "held" });
     expect(requests.at(-1)).toEqual({ path: "/api/PopQueueItem", input: { id: "visible", itemId: "held" } });
-    await mutations.prompt({ id: "visible", text: "$stop", delivery: "STASH", attachmentIds: ["file"] });
-    expect(requests.at(-1)).toEqual({ path: "/api/Prompt", input: { id: "visible", text: "$stop", delivery: "STASH", attachmentIds: ["file"] } });
+    await mutations.prompt({ id: "visible", text: "/stop", delivery: "STASH", attachmentIds: ["file"] });
+    expect(requests.at(-1)).toEqual({ path: "/api/Prompt", input: { id: "visible", text: "/stop", delivery: "STASH", attachmentIds: ["file"] } });
     await mutations.reorderQueue({ id: "visible", itemIds: ["two", "one"] });
     expect(requests.slice(0, 4)).toEqual([
       { path: "/api/ListAgents", input: { conversationId: "visible" } }, { path: "/api/ListSkills", input: { agent: "main" } },

@@ -1046,7 +1046,7 @@ func TestRevertGoalIdentityAndPrompt(t *testing.T) {
 
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "objective"}, true)
 	inbound.ConversationID, inbound.GoalTurn, inbound.GoalAction = "main", true, protocol.GoalActionKickoff
-	inbound.Metadata["web_message_id"], inbound.Metadata["web_goal"], inbound.Metadata["web_goal_prompt"] = "goal", `{"Objective":"objective","MaxTurns":3}`, "$goal max-turns=3 objective"
+	inbound.Metadata["web_message_id"], inbound.Metadata["web_goal"], inbound.Metadata["web_goal_prompt"] = "goal", `{"Objective":"objective","MaxTurns":3}`, "/goal max-turns=3 objective"
 	require.NoError(t, startTurnDB(t.Context(), s.db, "goal-turn", "main", inbound))
 
 	replay := testSessionEntry("objective with generated goal instructions", "answer")
@@ -1057,7 +1057,7 @@ func TestRevertGoalIdentityAndPrompt(t *testing.T) {
 	require.NoError(t, s.closeTurn(t.Context(), "goal-turn"))
 	_, prompt, err := stageRevertDB(t.Context(), s.db, "main", "")
 	require.NoError(t, err)
-	require.Equal(t, "$goal max-turns=3 objective", prompt)
+	require.Equal(t, "/goal max-turns=3 objective", prompt)
 	accepted, err := reconcileWebDB(t.Context(), s.db, inbound)
 	require.NoError(t, err)
 	require.True(t, accepted)
@@ -1423,12 +1423,12 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 	require.Contains(t, <-requests, header+"deploy it", "the stored voice item keeps its header across the restart")
 	require.Equal(t, "answer", readFinal(t, finals).Text)
 
-	item := voice("skill", "$docs-helper do it")
+	item := voice("skill", "/docs-helper do it")
 	require.NoError(t, rt.StashQueueItem(t.Context(), "main", &item))
 
 	request := <-requests
-	require.Contains(t, request, header+"$docs-helper do it")
-	require.NotContains(t, request, "Use this skill for docs.", "spoken $skill text loads no skill")
+	require.Contains(t, request, header+"/docs-helper do it")
+	require.NotContains(t, request, "Use this skill for docs.", "spoken /skill text loads no skill")
 	require.Equal(t, "answer", readFinal(t, finals).Text)
 }
 

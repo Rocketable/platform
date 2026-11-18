@@ -2439,9 +2439,9 @@ func TestHandleAppMentionEventUsesPerChannelAllowlist(t *testing.T) {
 	assert.Equal(t, "triage", started[0].Agent)
 }
 
-func TestSlackDollarTextReachesOrdinaryRouting(t *testing.T) {
+func TestSlackCommandTextReachesOrdinaryRouting(t *testing.T) {
 	for _, root := range []bool{false, true} {
-		for _, text := range []string{"$stop", "$agent factory hi", "$agent", "$goal ship it", "$enqueue later", "$queue", "$", "$review  \"first area\"  second", "$skill stop inspect the logs"} {
+		for _, text := range []string{"/stop", "/agent factory hi", "/agent", "/goal ship it", "/enqueue later", "/queue", "/", "$stop", "/review  \"first area\"  second", "/skill stop inspect the logs", "/tmp is full"} {
 			t.Run(fmt.Sprintf("root=%v/%s", root, text), func(t *testing.T) {
 				var (
 					posted    []url.Values
@@ -2538,7 +2538,7 @@ func TestHandleAppMentionEventQueuesMentionInKnownThread(t *testing.T) {
 	connector.botUserID = "U999"
 
 	mention := newSlackAppMentionEvent()
-	mention.TimeStamp, mention.ThreadTimeStamp, mention.Text = "171235.0001", "171234.5678", "<@U999> $stop use the staging config instead"
+	mention.TimeStamp, mention.ThreadTimeStamp, mention.Text = "171235.0001", "171234.5678", "<@U999> /stop use the staging config instead"
 	mention.Files = []slack.File{
 		{Name: "image.png", Mimetype: "image/png", URLPrivateDownload: server.URL + "/image.png"},
 		{Name: "notes.txt", Mimetype: "text/plain", URLPrivateDownload: server.URL + "/notes.txt"},
@@ -2552,7 +2552,7 @@ func TestHandleAppMentionEventQueuesMentionInKnownThread(t *testing.T) {
 
 	inbound := calls[0].Inbound
 	assert.Equal(t, protocol.InboundKindPrompt, inbound.Kind)
-	assert.Equal(t, "$stop use the staging config instead", inbound.Metadata[protocol.InboundRawTextMetadataKey])
+	assert.Equal(t, "/stop use the staging config instead", inbound.Metadata[protocol.InboundRawTextMetadataKey])
 	assert.Contains(t, inbound.Text, "acquired /notes.txt")
 	assert.Contains(t, inbound.Text, "original forwarded text")
 	assert.Empty(t, inbound.Attachments, "a Slack file the model cannot read never enters")

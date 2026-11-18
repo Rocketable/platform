@@ -3209,15 +3209,14 @@ func splitFirstWord(text string) (word, rest string) {
 }
 
 func parseDirectSkillTrigger(text string) *harness.PromptInputDirectSkill {
-	text = strings.TrimLeftFunc(text, unicode.IsSpace)
-
-	rest, ok := strings.CutPrefix(text, "$")
+	rest, ok := strings.CutPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), "/")
 	if !ok {
 		return nil
 	}
 
 	name, arguments := splitFirstWord(rest)
 	arguments = strings.TrimLeftFunc(arguments, unicode.IsSpace)
+	plainIfUnknown := true
 
 	switch strings.ToLower(name) {
 	case "", "agent", "cron", "stop", "enqueue", "queue", "goal":
@@ -3225,9 +3224,10 @@ func parseDirectSkillTrigger(text string) *harness.PromptInputDirectSkill {
 	case "skill":
 		name, arguments = splitFirstWord(arguments)
 		arguments = strings.TrimLeftFunc(arguments, unicode.IsSpace)
+		plainIfUnknown = false
 	}
 
-	return &harness.PromptInputDirectSkill{Name: name, Arguments: arguments}
+	return &harness.PromptInputDirectSkill{Name: name, Arguments: arguments, PlainIfUnknown: plainIfUnknown}
 }
 
 type promptProvenance struct {

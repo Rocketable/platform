@@ -506,7 +506,7 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 
 	images := map[string][]byte{"first": tinyPNG(), "second": []byte("second")}
 	for _, text := range []string{"first", "second"} {
-		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper " + text, TextAttachments: []string{"attachment text"}, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: images[text]}}}, true)
+		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "/docs-helper " + text, TextAttachments: []string{"attachment text"}, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: images[text]}}}, true)
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = "U1"
 		require.NoError(t, bridge.Submit(t.Context(), inbound))
 	}
@@ -516,7 +516,7 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 	require.Len(t, inputs, 2)
 
 	for i, text := range []string{"first", "second"} {
-		require.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: text}, inputs[i].DirectSkill)
+		require.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: text, PlainIfUnknown: true}, inputs[i].DirectSkill)
 		require.Contains(t, inputs[i].Texts[0], "attachment text")
 		require.Contains(t, inputs[i].Texts[0], text)
 		require.Contains(t, inputs[i].Texts[0], "U1")
@@ -608,7 +608,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 
 		require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
-		content := protocol.InboundContent{Text: "$skill stop \"typed args\"  Next", TextAttachments: []string{"acquired text file", "acquired forwarded thread"}, Attachments: []protocol.InboundAttachment{{Name: "original.png", MIMEType: "image/png", Data: []byte("original")}}}
+		content := protocol.InboundContent{Text: "/skill stop \"typed args\"  Next", TextAttachments: []string{"acquired text file", "acquired forwarded thread"}, Attachments: []protocol.InboundAttachment{{Name: "original.png", MIMEType: "image/png", Data: []byte("original")}}}
 		queued := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &content, true)
 		queued.Metadata[protocol.InboundPrincipalMetadataKey] = "original author"
 		queued.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: "promoted"}
@@ -675,7 +675,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 
 			manager.bridges[conversationID] = bridge
 			for _, id := range []string{"before", "attachment", "after"} {
-				require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Source: protocol.SourceWeb, Principal: "goal_continuation", Content: protocol.InboundContent{TextAttachments: []string{"$docs-helper attachment-only"}}}))
+				require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Source: protocol.SourceWeb, Principal: "goal_continuation", Content: protocol.InboundContent{TextAttachments: []string{"/docs-helper attachment-only"}}}))
 			}
 
 			promoted, err := manager.promoteQueueItem(t.Context(), conversationID, "attachment")
@@ -687,13 +687,13 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 				require.Len(t, inputs, 1)
 				require.Nil(t, inputs[0].DirectSkill)
 				require.Contains(t, inputs[0].Texts[0], "goal_continuation")
-				require.Contains(t, inputs[0].Texts[0], "$docs-helper attachment-only")
+				require.Contains(t, inputs[0].Texts[0], "/docs-helper attachment-only")
 			} else {
 				inbound := (<-bridge.requestCh).inbound
 				require.Equal(t, "goal_continuation", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
 				require.Nil(t, inboundDirectSkill(inbound))
 				require.Empty(t, inbound.Metadata[protocol.InboundRawTextMetadataKey])
-				require.Contains(t, inbound.Text, "$docs-helper attachment-only")
+				require.Contains(t, inbound.Text, "/docs-helper attachment-only")
 			}
 
 			remaining, err := store.ThreadQueueForConversation(conversationID)
@@ -889,7 +889,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 		for _, live := range []bool{false, true} {
 			id := fmt.Sprintf("edited-%d-%t", n, live)
 			content := protocol.InboundContent{Text: original.text, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: tinyPNG()}}}
-			want := "$skill inspect exact\ntext"
+			want := "/skill inspect exact\ntext"
 
 			if original.attachment != "" {
 				content.TextAttachments = []string{original.attachment}
@@ -907,7 +907,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 				bridge.waiting = []bridgeRequest{request}
 			}
 
-			changed, err := rt.EditQueueItem(t.Context(), conversationID, id, "$skill inspect exact\ntext", "Bob", "bob@example.com")
+			changed, err := rt.EditQueueItem(t.Context(), conversationID, id, "/skill inspect exact\ntext", "Bob", "bob@example.com")
 			require.NoError(t, err)
 			require.True(t, changed)
 

@@ -45,10 +45,10 @@ func TestParseGoalRequestUsesCanonicalExamples(t *testing.T) {
 	_, rejection := protocol.ParseGoalRequest("")
 	assert.Equal(t, protocol.GoalCommandHelp, rejection)
 	assert.Contains(t, rejection, "maxTurns:")
-	assert.Contains(t, rejection, "$goal maxTurns: 10 ship the release")
+	assert.Contains(t, rejection, "/goal maxTurns: 10 ship the release")
 
 	_, rejection = protocol.ParseGoalRequest("maxTurns: 5")
-	assert.Contains(t, rejection, "`$goal maxTurns: 5 update the docs`")
+	assert.Contains(t, rejection, "`/goal maxTurns: 5 update the docs`")
 }
 
 func TestParseGoalRequestRejectsMalformedArguments(t *testing.T) {

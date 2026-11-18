@@ -47,13 +47,13 @@ func TestHandleAppMentionEventUnmappedRootAgentDoesNotSwitch(t *testing.T) {
 	}, router)
 	connector.botUserID = "U999"
 	ev := newSlackAppMentionEvent()
-	ev.Text = "<@U999> $agent factory hello"
+	ev.Text = "<@U999> /agent factory hello"
 	connector.handleAppMentionEvent(context.Background(), ev, slackNativeForward{})
 
 	started := router.SubmitMentionCalls()
 	require.Len(t, started, 1)
 	assert.Equal(t, "adhoc", started[0].Agent)
-	assert.Equal(t, "$agent factory hello", started[0].Inbound.Text)
+	assert.Equal(t, "/agent factory hello", started[0].Inbound.Text)
 }
 
 func TestHandleAppMentionEventGroupDMUsesAtFallback(t *testing.T) {
@@ -85,12 +85,12 @@ func TestHandleAppMentionEventAdoptsUnknownThreadWithHistory(t *testing.T) {
 			slack.NewContextBlock("", slack.NewTextBlockObject(slack.MarkdownType, "Component: worker", false, false)),
 		}}},
 		{"ts": "171234.0002", "user": "U555", "text": "keep-1"},
-		{"ts": "171234.9999", "user": "U123", "text": "<@U999> $review jump in"},
+		{"ts": "171234.9999", "user": "U123", "text": "<@U999> /review jump in"},
 	}, &writes)
 	defer server.Close()
 
 	connector := newAdhocConnector(server.URL, router)
-	connector.handleAppMentionEvent(context.Background(), newThreadMention("<@U999> $review jump in"), slackNativeForward{})
+	connector.handleAppMentionEvent(context.Background(), newThreadMention("<@U999> /review jump in"), slackNativeForward{})
 
 	started := router.SubmitMentionCalls()
 	require.Len(t, started, 1)
@@ -103,7 +103,7 @@ func TestHandleAppMentionEventAdoptsUnknownThreadWithHistory(t *testing.T) {
 	assert.Contains(t, started[0].Inbound.Text, "Worker failure")
 	assert.Contains(t, started[0].Inbound.Text, "State: New")
 	assert.Contains(t, started[0].Inbound.Text, "keep-1")
-	assert.Equal(t, "$review jump in", started[0].Inbound.Metadata[protocol.InboundRawTextMetadataKey])
+	assert.Equal(t, "/review jump in", started[0].Inbound.Metadata[protocol.InboundRawTextMetadataKey])
 	assert.Equal(t, []string{"/agents.sessions.setStatus processing 171234.0001"}, writes, "the thread shows working at once")
 }
 

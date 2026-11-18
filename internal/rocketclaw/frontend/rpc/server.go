@@ -1684,7 +1684,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		words = nil
 	}
 
-	if len(words) > 0 && words[0] == "$stop" {
+	if len(words) > 0 && words[0] == "/stop" {
 		if len(words) != 1 {
 			return nil, fmt.Errorf("web stop: %w", status.Error(codes.InvalidArgument, "stop takes no arguments"))
 		}
@@ -1704,7 +1704,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return nil, fmt.Errorf("web prompt: %w", status.Error(codes.FailedPrecondition, "A test chat takes messages only from its agent editor's Send."))
 	}
 
-	if len(words) > 0 && words[0] == "$agent" {
+	if len(words) > 0 && words[0] == "/agent" {
 		return s.agentReply(ctx, request.Id, words)
 	}
 
@@ -1715,10 +1715,10 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 
 	delivery := request.Delivery
 
-	if len(words) > 0 && slices.Contains([]string{"$enqueue", "$stash", "$steer"}, words[0]) {
+	if len(words) > 0 && slices.Contains([]string{"/enqueue", "/stash", "/steer"}, words[0]) {
 		text = strings.TrimLeftFunc(strings.TrimPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), words[0]), unicode.IsSpace)
 		delivery = map[string]PromptDelivery{
-			"$enqueue": PromptDelivery_QUEUE, "$stash": PromptDelivery_STASH, "$steer": PromptDelivery_STEER,
+			"/enqueue": PromptDelivery_QUEUE, "/stash": PromptDelivery_STASH, "/steer": PromptDelivery_STEER,
 		}[words[0]]
 	}
 
@@ -1802,7 +1802,7 @@ func (s *Server) pausedSend(ctx context.Context, id string, kind protocol.Inboun
 }
 
 func webGoal(text string, words []string) (goal protocol.GoalRequest, prompt, rejection string) {
-	if len(words) == 0 || !strings.EqualFold(words[0], "$goal") {
+	if len(words) == 0 || !strings.EqualFold(words[0], "/goal") {
 		return goal, text, ""
 	}
 
@@ -2107,7 +2107,7 @@ func (s *Server) turnFeedable(ctx context.Context, id string, joins bool) error 
 	}
 
 	if !limit.AllowsAgent(thread.Agent) {
-		return status.Errorf(codes.PermissionDenied, "agent %s is outside your spaces; switch to one of yours with $agent", thread.Agent)
+		return status.Errorf(codes.PermissionDenied, "agent %s is outside your spaces; switch to one of yours with /agent", thread.Agent)
 	}
 
 	if !joins {
@@ -2115,7 +2115,7 @@ func (s *Server) turnFeedable(ctx context.Context, id string, joins bool) error 
 	}
 
 	if running := s.backend.RunningAgent(id); running != "" && !limit.AllowsAgent(running) {
-		return status.Errorf(codes.PermissionDenied, "agent %s is running a turn outside your spaces; wait for it, or end it with $stop", running)
+		return status.Errorf(codes.PermissionDenied, "agent %s is running a turn outside your spaces; wait for it, or end it with /stop", running)
 	}
 
 	return nil

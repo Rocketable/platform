@@ -193,7 +193,7 @@ test("a chat that doesn't exist says so instead of loading forever", async () =>
     expect(await page.getByRole("link", { name: "Start a new chat" }).getAttribute("href")).toBe("/");
     expect(await page.getByText("Loading conversation…").count()).toBe(0);
     expect(await page.getByText("conversation is not recorded").count()).toBe(0);
-    expect(await page.getByRole("textbox", { name: "Message or $command" }).count()).toBe(0);
+    expect(await page.getByRole("textbox", { name: "Message or /command" }).count()).toBe(0);
   } finally {
     await browser.close();
     server.stop(true);

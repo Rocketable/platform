@@ -467,7 +467,7 @@ test("actual App renders independent public lifecycle and reconnect replacements
       case "/api/ListConfig": return Response.json({ config: {} });
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/ListSkills": return Response.json({ skills: [] });
-      case "/api/Prompt": expect(input.text).toBe("$stop"); running = false; revision++; return Response.json({ privateText: "" });
+      case "/api/Prompt": expect(input.text).toBe("/stop"); running = false; revision++; return Response.json({ privateText: "" });
       case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
@@ -682,11 +682,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
             ctrl.queue.push({ id: input.messageId, text: input.text, delivery: "STASH", principal: ctrl.principal, attachments: input.attachmentIds?.map((id) => uploadedFiles.find(({ meta }) => meta.id === id)!.meta) });
             return Response.json({ privateText: "" });
           }
-          if (input.text.startsWith("$agent ")) {
+          if (input.text.startsWith("/agent ")) {
             ctrl.currentAgents.set(input.id, input.text.slice(7));
             return Response.json({ privateText: `Switched to ${input.text.slice(7)}` });
           }
-          if (input.text === "$stop") { ctrl.running = false; ctrl.prompting.delete(input.id); return Response.json({ privateText: "Stopped" }); }
+          if (input.text === "/stop") { ctrl.running = false; ctrl.prompting.delete(input.id); return Response.json({ privateText: "Stopped" }); }
           if (ctrl.promptError) throw new RPCError("Send failed; retry", 13);
           ctrl.prompting.add(input.id);
           ctrl.lastInputId = input.messageId;
@@ -948,7 +948,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await search.press("Enter");
     await opened;
     await page.waitForURL(`${origin}/s/${Buffer.from("kept").toString("base64url")}`);
-    await page.getByPlaceholder("Message or $command").waitFor();
+    await page.getByPlaceholder("Message or /command").waitFor();
     expect(historyRequests.some((request) => request.id === "kept")).toBe(true);
     await transcriptStream("kept").promise;
     await navigation.getByRole("button", { name: "New session", exact: true }).click();
@@ -1035,13 +1035,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(ctrl.listCalls).toBe(heldCalls);
 
     const skillComposer = page.getByPlaceholder("Message a new session");
-    await skillComposer.fill("$ski");
+    await skillComposer.fill("/ski");
     await skillComposer.press("Tab");
-    expect(await skillComposer.inputValue()).toBe("$skill ");
-    await page.getByRole("button", { name: "$skill review [args] Review changes", exact: true }).waitFor();
-    await skillComposer.fill("$skill st");
+    expect(await skillComposer.inputValue()).toBe("/skill ");
+    await page.getByRole("button", { name: "/skill review [args] Review changes", exact: true }).waitFor();
+    await skillComposer.fill("/skill st");
     await skillComposer.press("Tab");
-    expect(await skillComposer.inputValue()).toBe("$skill stop ");
+    expect(await skillComposer.inputValue()).toBe("/skill stop ");
     expect(ctrl.prompt).toEqual([]);
     await skillComposer.fill("");
 
@@ -1234,17 +1234,17 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.holdInterventions = false;
     const stopOriginal = page.waitForRequest("**/api/Prompt");
     await page.getByRole("button", { name: "Stop", exact: true }).click();
-    expect((await stopOriginal).postDataJSON()).toEqual({ id: "web-session:new", text: "$stop" });
+    expect((await stopOriginal).postDataJSON()).toEqual({ id: "web-session:new", text: "/stop" });
     await page.locator("textarea").fill("newer draft while the turn runs");
     const createdResponse = page.waitForResponse("**/api/Prompt*");
     promptHold.resolve("private reply for created session");
     await (await createdResponse).finished();
     await shown(page, "private reply for created session");
-    expect(await page.getByPlaceholder("Message or $command").inputValue()).toBe("newer draft while the turn runs");
+    expect(await page.getByPlaceholder("Message or /command").inputValue()).toBe("newer draft while the turn runs");
     await page.setViewportSize({ width: 1280, height: 800 });
     // A consumed picker must follow a later explicit switch, including after navigation.
     ctrl.holdPrompt = false;
-    await page.locator("textarea").fill("$agent main");
+    await page.locator("textarea").fill("/agent main");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await shown(page, "Switched to main");
     await page.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "main" }).waitFor();
@@ -1254,7 +1254,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const switchedResponse = page.waitForResponse("**/api/Prompt");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await switchedResponse;
-    expect(ctrl.prompt.slice(-2)).toEqual(["web-session:new:$agent main", "web-session:new:stay with main"]);
+    expect(ctrl.prompt.slice(-2)).toEqual(["web-session:new:/agent main", "web-session:new:stay with main"]);
     ctrl.holdPrompt = true;
     await page.locator("textarea").fill("created draft to discard");
     await page.keyboard.press("Control+Alt+n");
@@ -1316,7 +1316,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await goToSession(page, "saved preview");
     await page.waitForURL("**/s/a2VwdA");
     ctrl.promptStarted = Promise.withResolvers();
-    await page.getByPlaceholder("Message or $command").fill("held in A");
+    await page.getByPlaceholder("Message or /command").fill("held in A");
     await page.getByRole("button", { name: "Send" }).click();
     await ctrl.promptStarted.promise;
     // A held prompt must not make another session's History report it as running.
@@ -1324,15 +1324,15 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect((await otherHistory.json()).running).toBe(false);
     await goToSession(page, "will vanish");
     await page.waitForURL("**/s/Z29uZQ");
-    await page.getByPlaceholder("Message or $command").fill("B draft");
+    await page.getByPlaceholder("Message or /command").fill("B draft");
     await hidden(page, "Working…");
     expect(await page.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
     const promptResponse = page.waitForResponse("**/api/Prompt*");
     promptHold.resolve("private reply for A");
     await (await promptResponse).finished();
     // A completed render after the response must not clear B's draft or append A's reply.
-    await page.getByPlaceholder("Message or $command").press("End");
-    expect(await page.getByPlaceholder("Message or $command").inputValue()).toBe("B draft");
+    await page.getByPlaceholder("Message or /command").press("End");
+    expect(await page.getByPlaceholder("Message or /command").inputValue()).toBe("B draft");
     await hidden(page, "private reply for A");
     // A late failure must not complete a newer, still-blocked steer in this session.
     promptHold = Promise.withResolvers();
@@ -1901,7 +1901,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await navPage.setViewportSize({ width, height: 844 });
       await goToSession(navPage, "matching active");
       await navPage.waitForURL(`${origin}${chatPath}`);
-      await navPage.getByPlaceholder("Message or $command").fill("keep this chat draft");
+      await navPage.getByPlaceholder("Message or /command").fill("keep this chat draft");
       for (const name of ["Cron", "Agents", "Skills", "Config"]) {
         await openPage(name);
         await navPage.waitForURL(`${origin}/${name.toLowerCase()}`);
@@ -1929,7 +1929,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       }
       await toChat();
       if (width === 390) await navPage.keyboard.press("Escape");
-      expect(await navPage.getByPlaceholder("Message or $command").inputValue()).toBe("keep this chat draft");
+      expect(await navPage.getByPlaceholder("Message or /command").inputValue()).toBe("keep this chat draft");
       const newChat = footer.getByRole("button", { name: "New session", exact: true });
       const groupBox = await newChat.locator("..").boundingBox();
       if (width === 390) {
@@ -2024,7 +2024,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await cronPage.waitForURL(`**/s/${btoa("web:cron:silent-source").replaceAll("=", "")}`);
       await cronPage.locator("#transcript-scroll").getByText("Silent run trace", { exact: true }).waitFor();
       expect(cronOpens.slice(opensBefore)).toEqual(["cron:silent-source"]);
-      await cronPage.getByPlaceholder("Message or $command").fill("Continue this run");
+      await cronPage.getByPlaceholder("Message or /command").fill("Continue this run");
       await cronPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
       await cronPage.getByRole("button", { name: "Choose agent", exact: true }).click();
       await cronPage.getByRole("menuitemradio").first().waitFor();
@@ -2633,7 +2633,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(ctrl.attachmentPrompts.at(-1)?.delivery).toBe("STEER");
     await attachmentPage.getByRole("region", { name: "Pending steers", exact: true }).getByRole("link", { name: "Download steer.bin", exact: true }).waitFor();
     expect(await attachmentPage.getByRole("region", { name: "Messages", exact: true }).getByRole("link", { name: "Download steer.bin", exact: true }).count()).toBe(0);
-    const stopped = attachmentPage.waitForResponse((response: { url: () => string; request: () => { postDataJSON: () => { text: string } } }) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "$stop");
+    const stopped = attachmentPage.waitForResponse((response: { url: () => string; request: () => { postDataJSON: () => { text: string } } }) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "/stop");
     await attachmentPage.getByRole("button", { name: "Stop", exact: true }).click();
     await stopped;
     await attachmentPage.locator("textarea").fill("newer attachment draft");
@@ -2746,7 +2746,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     transcriptStreams.clear();
     const stashPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await stashPage.goto(`${origin}/s/${Buffer.from("stash-session").toString("base64url")}`);
-    await stashPage.locator("textarea").fill("$stop");
+    await stashPage.locator("textarea").fill("/stop");
     await stashPage.locator('input[type="file"]').setInputFiles({ name: "held.txt", mimeType: "text/plain", buffer: Buffer.from("held contents") });
     ctrl.promptError = true;
     await stashPage.getByRole("button", { name: "Composer actions", exact: true }).click();
@@ -2754,20 +2754,20 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await stashButton.isDisabled()).toBe(false);
     await stashButton.click();
     await shown(stashPage, "Stash failed; retry");
-    expect(await stashPage.locator("textarea").inputValue()).toBe("$stop");
+    expect(await stashPage.locator("textarea").inputValue()).toBe("/stop");
     expect(await stashPage.getByRole("button", { name: "Remove held.txt", exact: true }).count()).toBe(1);
     ctrl.promptError = false;
     await stashPage.locator("textarea").focus();
     await stashPage.keyboard.press("Meta+Alt+Enter");
     const heldRow = stashPage.locator("[data-queue-id]");
     await heldRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
-    expect(await heldRow.getByText("$stop", { exact: true }).count()).toBe(1);
+    expect(await heldRow.getByText("/stop", { exact: true }).count()).toBe(1);
     expect(await stashPage.locator("textarea").inputValue()).toBe("");
     expect(await stashPage.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
     expect(await heldRow.getByRole("button", { name: "Steer", exact: true }).count()).toBe(0);
     expect(await heldRow.getByRole("button", { name: "Reorder", exact: true }).count()).toBe(1);
     expect(await heldRow.getByRole("button", { name: "Remove", exact: true }).count()).toBe(1);
-    expect(await stashPage.getByRole("region", { name: "Messages", exact: true }).getByText("$stop", { exact: true }).count()).toBe(0);
+    expect(await stashPage.getByRole("region", { name: "Messages", exact: true }).getByText("/stop", { exact: true }).count()).toBe(0);
     transcriptStreams.clear();
     await stashPage.reload();
     await heldRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
@@ -2793,7 +2793,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await popping.isDisabled()).toBe(true);
     popRelease.resolve();
     await heldRow.getByRole("button", { name: "Steer", exact: true }).waitFor();
-    expect(await heldRow.getByText("$stop", { exact: true }).count()).toBe(1);
+    expect(await heldRow.getByText("/stop", { exact: true }).count()).toBe(1);
     expect(ctrl.queue[0].delivery).toBe("QUEUE");
     expect(await stashPage.getByRole("region", { name: "Pending steers", exact: true }).count()).toBe(0);
     const steerRelease = Promise.withResolvers<void>();
@@ -2809,7 +2809,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await steer.click({ force: true });
     expect(await steer.isDisabled()).toBe(true);
     steerRelease.resolve();
-    await stashPage.getByRole("region", { name: "Pending steers", exact: true }).getByText("$stop", { exact: true }).waitFor();
+    await stashPage.getByRole("region", { name: "Pending steers", exact: true }).getByText("/stop", { exact: true }).waitFor();
     expect(ctrl.queue[0].delivery).toBe("STEER");
     expect(steers).toBe(1);
     expect(await heldRow.getByRole("button", { name: "Edit", exact: true }).count()).toBe(0);
@@ -3067,20 +3067,20 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const popped = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/PopQueueItem"));
     await retiredPage.locator("[data-queue-id]").getByRole("button", { name: "Pop", exact: true }).click();
     await popped;
-    expect(retiredPrompts()).toEqual(["retired-session:held hello", "retired-session:$agent other"]);
+    expect(retiredPrompts()).toEqual(["retired-session:held hello", "retired-session:/agent other"]);
     ctrl.queue = [];
     ctrl.currentAgents.set("retired-session", "retired");
     transcriptStreams.clear();
     await retiredPage.reload();
     await retiredPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
-    await retiredPage.route("**/api/Prompt", (route: { request(): { postDataJSON(): { text: string } }; fulfill(options: object): Promise<void>; continue(): Promise<void> }) => route.request().postDataJSON().text.startsWith("$agent ")
+    await retiredPage.route("**/api/Prompt", (route: { request(): { postDataJSON(): { text: string } }; fulfill(options: object): Promise<void>; continue(): Promise<void> }) => route.request().postDataJSON().text.startsWith("/agent ")
       ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "agent is not currently allowed", code: 3 }) })
       : route.continue());
     await retiredPage.locator("textarea").fill("hello");
     await retiredPage.locator("textarea").press("Enter");
     await shown(retiredPage, "agent is not currently allowed");
     expect(await retiredPage.locator("textarea").inputValue()).toBe("hello");
-    expect(retiredPrompts()).toEqual(["retired-session:held hello", "retired-session:$agent other"]);
+    expect(retiredPrompts()).toEqual(["retired-session:held hello", "retired-session:/agent other"]);
     // A rejected switch keeps the stash held instead of popping it to the unlisted agent.
     ctrl.queue = [{ id: "kept-stash", text: "kept stash", delivery: "STASH", principal: ctrl.principal }];
     const keptRow = retiredPage.locator('[data-queue-id="kept-stash"]');
@@ -3093,7 +3093,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const helloSent = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "hello");
     await retiredPage.locator("textarea").press("Enter");
     await helloSent;
-    expect(retiredPrompts().slice(2)).toEqual(["retired-session:$agent other", "retired-session:hello"]);
+    expect(retiredPrompts().slice(2)).toEqual(["retired-session:/agent other", "retired-session:hello"]);
     expect(ctrl.currentAgents.get("retired-session")).toBe("other");
     // Sending already-queued work also switches the unlisted agent first.
     ctrl.currentAgents.set("retired-session", "retired");
@@ -3104,7 +3104,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const steered = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/SteerQueueItem"));
     await retiredPage.locator('[data-queue-id="queued-work"]').getByRole("button", { name: "Send", exact: true }).click();
     await steered;
-    expect(retiredPrompts().at(-1)).toBe("retired-session:$agent other");
+    expect(retiredPrompts().at(-1)).toBe("retired-session:/agent other");
     expect(ctrl.queue[0].delivery).toBe("STEER");
     ctrl.queue = [];
     // An unrecorded agent is not a mismatch, and a new chat without `main` starts on the first listed agent.
@@ -3209,7 +3209,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await authorPage.unroute("**/api/Identity");
     promptHold.resolve("");
     ctrl.holdPrompt = false;
-    await authorPage.locator("textarea").fill("$handoff");
+    await authorPage.locator("textarea").fill("/handoff");
     const releaseHandoffIdentity = Promise.withResolvers<void>();
     const handoffIdentityStatus = "Identity refreshed for handoff";
     await authorPage.route("**/api/Identity", async (route: { fulfill(options: { json: object }): Promise<void> }) => {

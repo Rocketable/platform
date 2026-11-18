@@ -455,7 +455,7 @@ func TestPausedChat(t *testing.T) {
 
 	_, err = prompt("m1", "lunch at noon?", PromptDelivery_STEER)
 	require.NoError(t, err)
-	_, err = prompt("m2", "$steer noon works for me", PromptDelivery_STEER)
+	_, err = prompt("m2", "/steer noon works for me", PromptDelivery_STEER)
 	require.NoError(t, err)
 
 	view, err := h.server.history(alice, &HistoryRequest{Id: id})
@@ -479,7 +479,7 @@ func TestPausedChat(t *testing.T) {
 	for _, send := range []struct {
 		id, text string
 		delivery PromptDelivery
-	}{{"q1", "queued item", PromptDelivery_QUEUE}, {"q2", "$enqueue enqueued item", PromptDelivery_STEER}, {"s1", "stashed item", PromptDelivery_STASH}} {
+	}{{"q1", "queued item", PromptDelivery_QUEUE}, {"q2", "/enqueue enqueued item", PromptDelivery_STEER}, {"s1", "stashed item", PromptDelivery_STASH}} {
 		_, err := prompt(send.id, send.text, send.delivery)
 		require.NoError(t, err, send.text)
 	}
@@ -487,7 +487,7 @@ func TestPausedChat(t *testing.T) {
 	waiting := queue()
 	assert.ElementsMatch(t, []string{"q1:enqueue", "q2:enqueue", "s1:held"}, waiting)
 
-	_, errGoal := prompt("refused", "$goal ship it", PromptDelivery_STEER)
+	_, errGoal := prompt("refused", "/goal ship it", PromptDelivery_STEER)
 	_, goalRefused := errors.AsType[backend.AgentPausedError](errGoal)
 	assert.True(t, goalRefused, "%v", errGoal)
 
@@ -501,7 +501,7 @@ func TestPausedChat(t *testing.T) {
 	assert.Equal(t, waiting, queue(), "a refused promote leaves the item in its place")
 
 	for _, agent := range []string{"nokey", id} {
-		switched, err := prompt("agent", "$agent "+agent, PromptDelivery_STEER)
+		switched, err := prompt("agent", "/agent "+agent, PromptDelivery_STEER)
 		require.NoError(t, err)
 		assert.Equal(t, "Agent: "+agent, switched.PrivateText)
 	}
@@ -546,7 +546,7 @@ func TestPausedChat(t *testing.T) {
 	assert.Contains(t, <-h.requests, "work")
 	pause(true)
 
-	_, err = prompt("stop", "$stop", PromptDelivery_STEER)
+	_, err = prompt("stop", "/stop", PromptDelivery_STEER)
 	require.NoError(t, err)
 	require.NoError(t, turn.Wait())
 	idle()
@@ -735,7 +735,7 @@ func TestVoice(t *testing.T) {
 
 		assert.Contains(t, <-h.requests, "CANARY_TOOL_RESULT")
 
-		handOff(t, peer, "d2", "$skill deploy")
+		handOff(t, peer, "d2", "/skill deploy")
 		peer.send(t, `{"type":"session.delegation.created","delegation":{"id":"d1"}}`)
 		require.Eventually(t, func() bool {
 			items, err := h.rt.QueueItems("main")
@@ -744,7 +744,7 @@ func TestVoice(t *testing.T) {
 
 		h.replies <- voiceModelText("r2", "Tests passed.")
 
-		assert.Contains(t, <-h.requests, "$skill deploy", "the second hand-off joins the running turn as plain text (R8)")
+		assert.Contains(t, <-h.requests, "/skill deploy", "the second hand-off joins the running turn as plain text (R8)")
 
 		h.replies <- voiceModelText("r3", lint)
 
@@ -795,7 +795,7 @@ func TestVoice(t *testing.T) {
 
 		require.Len(t, users, 4, "a re-delivered hand-off and talk after the last hand-off add no message")
 		assert.Equal(t, "d1 "+voiceDelegation("user: please run the tests", "user: please run the tests"), users[0].InputId+" "+users[0].Text)
-		assert.Equal(t, "d2 "+voiceDelegation("assistant: On it.\nuser: $skill deploy", "assistant: On it.\nuser: $skill deploy"), users[1].InputId+" "+users[1].Text)
+		assert.Equal(t, "d2 "+voiceDelegation("assistant: On it.\nuser: /skill deploy", "assistant: On it.\nuser: /skill deploy"), users[1].InputId+" "+users[1].Text)
 		assert.Contains(t, users[0].Header, `[Web media=Voice principal="alice"`)
 
 		h.ended(t)
@@ -986,13 +986,13 @@ func TestVoice(t *testing.T) {
 		assert.Equal(t, [2]string{"", ""}, offered["nokey"])
 
 		for id, want := range map[string]string{bobs.Id: "main, voice", plain.Id: "assistant, chat, nokey, stale, worker"} {
-			reply, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "$agent"})
+			reply, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "/agent"})
 			require.NoError(t, err)
 			assert.Equal(t, want, reply.PrivateText, "a sticky session keeps its agent, and no other session switches to a sticky one")
 		}
 
 		for id, agent := range map[string]string{bobs.Id: "nokey", plain.Id: "main"} {
-			_, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "$agent " + agent})
+			_, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "/agent " + agent})
 			assert.Equal(t, codes.InvalidArgument, status.Code(err))
 		}
 
@@ -1004,20 +1004,20 @@ func TestVoice(t *testing.T) {
 		create(alice, "aide")
 
 		for id, want := range map[string]string{mine.Id: "main, voice", bobs.Id: "aide, main, voice"} {
-			reply, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "$agent"})
+			reply, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "/agent"})
 			require.NoError(t, err)
 			assert.Equal(t, want, reply.PrivateText, "alice already has a sticky session with aide; bob does not")
 		}
 
-		_, err = h.server.prompt(alice, &PromptRequest{Id: bobs.Id, Text: "$agent aide"})
+		_, err = h.server.prompt(alice, &PromptRequest{Id: bobs.Id, Text: "/agent aide"})
 		require.NoError(t, err)
 		require.NoError(t, root.WriteFile(aide, []byte("---\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
 
-		reply, err := h.server.prompt(alice, &PromptRequest{Id: bobs.Id, Text: "$agent"})
+		reply, err := h.server.prompt(alice, &PromptRequest{Id: bobs.Id, Text: "/agent"})
 		require.NoError(t, err)
 		assert.Equal(t, "aide, main, voice", reply.PrivateText, "a session born sticky: user still takes only sticky: user agents")
 
-		_, err = h.server.prompt(alice, &PromptRequest{Id: bobs.Id, Text: "$agent nokey"})
+		_, err = h.server.prompt(alice, &PromptRequest{Id: bobs.Id, Text: "/agent nokey"})
 		assert.Equal(t, codes.InvalidArgument, status.Code(err))
 	}) {
 		return

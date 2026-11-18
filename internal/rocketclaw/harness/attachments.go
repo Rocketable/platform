@@ -36,8 +36,9 @@ type PromptInput struct {
 }
 
 type PromptInputDirectSkill struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments,omitempty"`
+	Name           string `json:"name"`
+	Arguments      string `json:"arguments,omitempty"`
+	PlainIfUnknown bool   `json:"plainIfUnknown,omitempty"`
 }
 
 type Attachment struct {

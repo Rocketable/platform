@@ -3,7 +3,7 @@
 This bounded transport implements `Protocol`, `ListSessionEntries`,
 `LoadSessionEntries`, `DeleteSessionEntries`, `ListSessions`, `History`, `Prompt`, and `Join` from
 `internal/rocketclaw/web/proto/web.proto`. Steer Prompt waits for Backend RunTurn completion, using the
-authenticated username. Bare `$stop` runs cancel through RunTurn and waits for
+authenticated username. Bare `/stop` runs cancel through RunTurn and waits for
 that interrupted turn. Queue Prompt stashes waiting work through existing
 Backend queue operations and returns without waiting for that turn. `ListQueue`, `SteerQueueItem`, `RemoveQueueItem`, and `ReorderQueue` use
 existing Backend queue operations; promotion keeps the queued item's original
@@ -77,7 +77,7 @@ strings with replay indices; do not convert them to JavaScript numbers.
 Prepared new prompt admission reconciles message identity under the history
 lock and atomically prunes the abandoned suffix, clears the cutoff, rebuilds the
 summary and stores the new queue owner. Retries of accepted IDs do not prune
-again. `$agent` and `$stop` are controls and leave the cutoff intact. Pending
+again. `/agent` and `/stop` are controls and leave the cutoff intact. Pending
 human work is hidden while staged, restored in order on Redo, and removed when
 a replacement is accepted. Automatic recovery, schedules and goal continuation
 cannot execute behind the cutoff. Uploads remain available to restored drafts.
@@ -215,11 +215,11 @@ reply's mutes are gone, and their field numbers are reserved.
 `ListAgents` loads the current runtime definitions and supplies the agent picker,
 using the existing Slack channel policy for Slack Y. Each agent carries its `sticky`
 value and the caller's `sticky_session`, so the New session picker can open it. Session
-rows do not repeat the agent choices. `$agent name` persists selection and updates the
+rows do not repeat the agent choices. `/agent name` persists selection and updates the
 live bridge without resetting history; private producer X cannot be selected. Removed
 choices are not re-added merely because they remain the current selection. A session
 whose agent is sticky offers only that agent, and any other session offers no sticky
-agent (`sameSticky`), in `ListAgents` and to `$agent`; `ForkSession` refuses a sticky
+agent (`sameSticky`), in `ListAgents` and to `/agent`; `ForkSession` refuses a sticky
 agent's session with `FailedPrecondition`.
 
 `ListConfig` exposes only the retained `ConfigView` fields: workspace, overlays,
@@ -246,13 +246,15 @@ excluding denied and review-only permissions; an unavailable agent returns no
 skills. Omitting the filter returns the full skills-page catalog, or, for a person
 limited to spaces, only the skills at least one of their agents may use. The composer
 supplies its selected agent and lists commands before those skills. Choosing a
-skill inserts `$name `, or `$skill name ` for a built-in name collision, without
-sending. Web-only outer `$enqueue` queues automatic later work, `$stash` holds
-work until explicit send, and `$steer` sends now or into the active turn. These
+skill inserts `/name `, or `/skill name ` for a built-in name collision, without
+sending. Web-only outer `/enqueue` queues automatic later work, `/stash` holds
+work until explicit send, and `/steer` sends now or into the active turn. These
 commands override the requested delivery and strip only the outer command and
 surrounding prefix whitespace, preserving inner text, spacing, and nested commands.
 Explicit `Prompt.delivery=STASH` treats the entire payload as literal text instead,
-including all three commands. Bare `$stop` and `$agent` keep their built-in meanings.
+including all three commands. Bare `/stop` and `/agent` keep their built-in meanings.
+A `/name` that is not a command and not a skill the agent can load reaches the
+agent as plain text; `/skill name` reports the missing skill instead.
 Normal Send during a turn queues; Cmd/Ctrl+Enter steers. Skills are loaded when consumed.
 
 `ListCronJobs` uses the same started Cron manager as scheduled execution.
@@ -558,7 +560,7 @@ Each hand-off is admitted in arrival order through `StashQueueItem`, without wai
 for the turn: it joins the running turn as a Web steer or starts the next turn. It
 carries `media=Voice`, the caller's principal, and the hand-off ID as both the queue
 item ID and `web_message_id`, so a re-delivered hand-off is admitted once. It
-bypasses `Prompt`: `$` text in it never runs commands or skills. Its
+bypasses `Prompt`: `/` text in it never runs commands or skills. Its
 text is taken the moment the hand-off arrives and written exactly as Codex wraps it:
 `<realtime_delegation>` with the request in `<input>` and the voice conversation
 since the previous hand-off in `<transcript_delta>` (`user:`/`assistant:` lines; the
@@ -786,16 +788,16 @@ The checks sit where requests already pass:
   reach it through `readableConversation`. History of a cron trace checks the
   cron's space instead (`cronInLimit`): its own `space`, else its agent's.
 - Agent choice: `agentChoices` and `ListAgents` drop agents outside the limit, which
-  covers `CreateSession`, `ForkSession`, `VoiceSettings`, and `$agent`. `sameSpace`
+  covers `CreateSession`, `ForkSession`, `VoiceSettings`, and `/agent`. `sameSpace`
   still offers every remaining choice when the current agent is outside the
-  limit, so `$agent` can switch the session back.
-- Turns: `turnFeedable` refuses a prompt with content (`$goal`, steer, queue,
+  limit, so `/agent` can switch the session back.
+- Turns: `turnFeedable` refuses a prompt with content (`/goal`, steer, queue,
   stash), `SteerQueueItem`, `PopQueueItem`, `EditQueueItem`, `AnswerQuestion`, and
   `Handoff` when the session's current agent is outside the limit. A steer
   prompt, `SteerQueueItem`, `AnswerQuestion`, and a voice hand-off join the turn
   running there, which keeps the agent it started with after a switch, so they
   are also refused while that turn's agent is outside the limit. Queued, stashed,
-  released, and edited items wait for a turn of their own, so they are taken. `$stop`, `$agent`, and `RemoveQueueItem` need only
+  released, and edited items wait for a turn of their own, so they are taken. `/stop`, `/agent`, and `RemoveQueueItem` need only
   a visible session. Voice checks when the call starts and at each hand-off; a
   refused hand-off sends a notice and its lines wait for a later one.
 - Handlers outside those paths check for themselves: `Tabs` (only the person's
@@ -808,7 +810,7 @@ The checks sit where requests already pass:
   (see [Agent editor](#agent-editor)).
 
 New refusals are `PermissionDenied` (HTTP 403) with a plain message. Pages keep
-`NotFound`. `CreateSession`, `ForkSession`, and `$agent` refuse an agent outside
+`NotFound`. `CreateSession`, `ForkSession`, and `/agent` refuse an agent outside
 the limit with the codes they already use for an agent they do not offer. The
 `turnFeedable` check runs when the request arrives: if an unrestricted person
 switches the agent before a queued item starts, the item runs with the new agent.

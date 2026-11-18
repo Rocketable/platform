@@ -145,7 +145,7 @@ function FilterPill({ label, onClear }: { label: string; onClear: () => void }) 
   );
 }
 
-const dollarCommands = [
+const slashCommands = [
   { name: "fork", label: "Fork session", hint: "", desc: "Fork from a chosen message" },
   { name: "handoff", label: "Handoff session", hint: "", desc: "Copy a handoff or send it to another session" },
   { name: "undo", label: "Undo message", hint: "", desc: "Restore the previous request for editing" },
@@ -161,37 +161,37 @@ const dollarCommands = [
   { name: "skill", label: "Invoke skill", hint: "<name> [args]", desc: "Invoke a skill by name" },
 ];
 
-function dollarMatches(text: string, skills: { name: string; description?: string }[]) {
-  const named = /^\$skill(?:[\t ]+([^\s]*))?$/i.exec(text);
+function slashMatches(text: string, skills: { name: string; description?: string }[]) {
+  const named = /^\/skill(?:[\t ]+([^\s]*))?$/i.exec(text);
   if (named) {
     return skills.flatMap((item) => item.name.toLowerCase().startsWith((named[1] ?? "").toLowerCase()) ? [{
       name: item.name,
       hint: "[args]",
       desc: item.description ?? "",
-      invocation: `$skill ${item.name} `,
+      invocation: `/skill ${item.name} `,
     }] : []);
   }
-  if (!text.startsWith("$") || text.includes("\n") || text.includes(" ")) {
+  if (!text.startsWith("/") || text.includes("\n") || text.includes(" ")) {
     return [];
   }
   const query = text.slice(1).toLowerCase();
-  if (dollarCommands.some((cmd) => cmd.name === query && cmd.hint === "")) {
+  if (slashCommands.some((cmd) => cmd.name === query && cmd.hint === "")) {
     return [];
   }
   return [
-    ...dollarCommands.flatMap((cmd) => cmd.name.startsWith(query) ? [{ ...cmd, invocation: `$${cmd.name} ` }] : []),
+    ...slashCommands.flatMap((cmd) => cmd.name.startsWith(query) ? [{ ...cmd, invocation: `/${cmd.name} ` }] : []),
     ...skills.flatMap((skill) => skill.name.toLowerCase().startsWith(query) ? [{
       name: skill.name,
       hint: "[args]",
       desc: skill.description ?? "",
-      invocation: dollarCommands.some((cmd) => cmd.name === skill.name.toLowerCase()) ? `$skill ${skill.name} ` : `$${skill.name} `,
+      invocation: slashCommands.some((cmd) => cmd.name === skill.name.toLowerCase()) ? `/skill ${skill.name} ` : `/${skill.name} `,
     }] : []),
   ];
 }
 
 function isStopCommand(text: string) {
   const trimmed = text.trim().toLowerCase();
-  return trimmed === "$stop" || trimmed.startsWith("$stop ");
+  return trimmed === "/stop" || trimmed.startsWith("/stop ");
 }
 
 function moveQueueId(ids: string[], from: string, to: string) {
@@ -424,7 +424,7 @@ function composerLabels(paused: boolean, asking: boolean, busy: boolean, id: str
   if (paused) return { placeholder: "Message the people here", sendLabel: "Send to the people here" };
   if (asking) return { placeholder: "Answer the question", sendLabel: "Send answer" };
   if (busy) return { placeholder: "Queue a follow-up", sendLabel: "Send to queue" };
-  return { placeholder: id ? "Message or $command" : "Message a new session", sendLabel: "Send message" };
+  return { placeholder: id ? "Message or /command" : "Message a new session", sendLabel: "Send message" };
 }
 
 // Whether someone paused the agent of a chat, by its id: its messages then go to the people there, starting no turn.
@@ -2896,7 +2896,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
   const draft = drafts.get(id);
-  const commands = id ? dollarCommands.filter(({ name }) => name !== "cron" && name !== "queue" && (name !== "undo" || draft?.revertEligible && (draft.canUndo || !draft.revertMessageId && !!unsavedRequest(draft.lines))) && (name !== "redo" || draft?.revertEligible && draft.revertMessageId) && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: ["fork", "handoff", "stop", "agent"].includes(name) ? `Sessions: ${label}` : `Command: ${label} ($${name})`, disabled: [!draft?.hydrated, draft?.sending, draft?.reverting].some(Boolean), run: () => {
+  const commands = id ? slashCommands.filter(({ name }) => name !== "cron" && name !== "queue" && (name !== "undo" || draft?.revertEligible && (draft.canUndo || !draft.revertMessageId && !!unsavedRequest(draft.lines))) && (name !== "redo" || draft?.revertEligible && draft.revertMessageId) && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: ["fork", "handoff", "stop", "agent"].includes(name) ? `Sessions: ${label}` : `Command: ${label} (/${name})`, disabled: [!draft?.hydrated, draft?.sending, draft?.reverting].some(Boolean), run: () => {
     if (name === "fork" || name === "handoff") setCommand({ mode: name, source: id });
     else composer.current!(name);
   } })) : [];
@@ -5082,7 +5082,7 @@ async function sendComposer(input: {
   // While the agent is paused, a message goes to the people here at once: no turn waits for it.
   let delivery = input.delivery ?? (input.busy && !input.paused?.(input.sessionId) ? "QUEUE" : "STEER");
   // Match strings.Fields/unicode.IsSpace in frontend/rpc/server.go, not JavaScript's whitespace.
-  const command = input.delivery === "STASH" ? null : /^\p{White_Space}*\$(enqueue|stash|steer)(?=\p{White_Space}|$)\p{White_Space}*/u.exec(input.text);
+  const command = input.delivery === "STASH" ? null : /^\p{White_Space}*\/(enqueue|stash|steer)(?=\p{White_Space}|$)\p{White_Space}*/u.exec(input.text);
   const followUp: PromptDelivery = command ? command[1] === "enqueue" ? "QUEUE" : command[1] === "stash" ? "STASH" : "STEER" : delivery;
   const stashing = followUp === "STASH";
   const stopping = !stashing && isStopCommand(input.text);
@@ -5136,8 +5136,8 @@ async function sendComposer(input: {
       input.onDraftChange();
     } else if (!enqueue) { draft.lines = [...draft.lines, optimistic]; input.onDraftChange(); }
     const attachments = await uploadComposerFiles(sessionId, input.files, name);
-    if (!stashing && !stopping && !/^\p{White_Space}*\$agent(?=\p{White_Space}|$)/u.test(optimistic.text) && input.sessionId !== "" && input.currentAgent !== "" && input.selected !== "" && input.selected !== input.currentAgent) {
-      await input.prompt.mutateAsync({ id: sessionId, text: `$agent ${input.selected}` });
+    if (!stashing && !stopping && !/^\p{White_Space}*\/agent(?=\p{White_Space}|$)/u.test(optimistic.text) && input.sessionId !== "" && input.currentAgent !== "" && input.selected !== "" && input.selected !== input.currentAgent) {
+      await input.prompt.mutateAsync({ id: sessionId, text: `/agent ${input.selected}` });
       await queryClient.invalidateQueries({ queryKey: ["agents"] });
     }
     if (attachments.length) {
@@ -5243,7 +5243,7 @@ async function switchQueueAgent(input: QueueAgentSwitch) {
   input.draft.sending = true;
   input.onDraftChange();
   try {
-    await input.prompt.mutateAsync({ id: input.id, text: `$agent ${input.selected}` });
+    await input.prompt.mutateAsync({ id: input.id, text: `/agent ${input.selected}` });
     await queryClient.invalidateQueries({ queryKey: ["agents"] });
   } finally {
     input.draft.sending = false;
@@ -5306,7 +5306,7 @@ async function stopComposer(input: {
   const submission = ++input.draft.submission;
   input.setSendError("");
   try {
-    await input.prompt.mutateAsync({ id: input.id, text: "$stop" });
+    await input.prompt.mutateAsync({ id: input.id, text: "/stop" });
     await input.refreshHistory();
   } catch (err) {
     if (input.draft.submission === submission) input.setSendError(err instanceof Error ? err.message : "stop failed");
@@ -5387,8 +5387,8 @@ function SessionComposer({
     draft.agent = value; draft.edit++; onDraftChange();
   };
   const [agentOpen, setAgentOpen] = useState(false);
-  const [dollarOff, setDollarOff] = useState(false);
-  const [dollarPick, setDollarPick] = useState("");
+  const [slashOff, setSlashOff] = useState(false);
+  const [slashPick, setSlashPick] = useState("");
   const voice = voiceFor(useVoice(), id);
   const sendError = draft.error || voice.error;
   // Clearing the send error also dismisses this composer's failed call.
@@ -5399,11 +5399,11 @@ function SessionComposer({
   // Sends switch to the shown agent, so an unlisted current agent moves to the first listed one.
   const selected = offeredAgent(catalog, agent, currentAgent) ?? currentAgent;
   const skills = useQuery({ ...queries.skills({ agent: selected }), enabled: selected !== "", placeholderData: undefined });
-  const matches = dollarOff ? [] : dollarMatches(text, skills.data ?? []);
-  const pick = Math.max(0, matches.findIndex((item) => item.invocation === dollarPick));
-  const applyDollar = (invocation: string) => {
+  const matches = slashOff ? [] : slashMatches(text, skills.data ?? []);
+  const pick = Math.max(0, matches.findIndex((item) => item.invocation === slashPick));
+  const applySlash = (invocation: string) => {
     setText(invocation);
-    setDollarOff(invocation !== "$skill ");
+    setSlashOff(invocation !== "/skill ");
     setAgentOpen(false);
   };
   const pausedIn = usePausedChats(), paused = pausedIn(id), question = useQuestion(id, draft, paused, refreshHistory, setSendError);
@@ -5434,7 +5434,7 @@ function SessionComposer({
     void startVoice(sessionId, speaker);
   };
   const send = (delivery?: PromptDelivery) => {
-    const command = /^\p{White_Space}*\$(fork|handoff|undo|redo)\p{White_Space}*$/u.exec(draft.text);
+    const command = /^\p{White_Space}*\/(fork|handoff|undo|redo)\p{White_Space}*$/u.exec(draft.text);
     if (delivery !== "STASH" && command) {
       if (["undo", "redo"].includes(command[1])) { setText(""); return revert.run(undefined, command[1] === "redo"); }
       if (!id) { setSendError("Open a session first."); return Promise.resolve(); }
@@ -5484,14 +5484,14 @@ function SessionComposer({
         setText={setText}
         matches={matches}
         pick={pick}
-        applyDollar={applyDollar}
+        applySlash={applySlash}
         catalog={catalog}
         selected={selected}
         setAgent={setAgent}
         agentOpen={agentOpen}
         setAgentOpen={setAgentOpen}
-        setDollarOff={setDollarOff}
-        setDollarPick={setDollarPick}
+        setSlashOff={setSlashOff}
+        setSlashPick={setSlashPick}
         placeholder={placeholder}
         busy={busy}
         sendLabel={sendLabel}
@@ -5536,14 +5536,14 @@ function Composer({
   setText,
   matches,
   pick,
-  applyDollar,
+  applySlash,
   catalog,
   selected,
   setAgent,
   agentOpen,
   setAgentOpen,
-  setDollarOff,
-  setDollarPick,
+  setSlashOff,
+  setSlashPick,
   placeholder,
   busy,
   sendLabel,
@@ -5565,16 +5565,16 @@ function Composer({
   sessionId: string;
   text: string;
   setText: (value: string) => void;
-  matches: ReturnType<typeof dollarMatches>;
+  matches: ReturnType<typeof slashMatches>;
   pick: number;
-  applyDollar: (invocation: string) => void;
+  applySlash: (invocation: string) => void;
   catalog: { name: string; model?: string; reasoning?: string }[];
   selected: string;
   setAgent: (name: string) => void;
   agentOpen: boolean;
   setAgentOpen: (open: boolean | ((value: boolean) => boolean)) => void;
-  setDollarOff: (off: boolean) => void;
-  setDollarPick: (pick: string) => void;
+  setSlashOff: (off: boolean) => void;
+  setSlashPick: (pick: string) => void;
   placeholder: string;
   busy: boolean;
   sendLabel: string;
@@ -5600,7 +5600,7 @@ function Composer({
     if (command === "agent") return setAgentOpen(true);
     if (command === "undo" || command === "redo") return historyCommand(command === "redo");
     if (command === "stop") void stop();
-    else applyDollar(`$${command} ${text}`);
+    else applySlash(`/${command} ${text}`);
     messageInput.current?.focus();
   });
   const empty = text.trim() === "" && files.length === 0;
@@ -5636,7 +5636,7 @@ function Composer({
                   disabled={sending}
                   className={cn("flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm", index === pick && "bg-accent")}
                   onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => applyDollar(cmd.invocation)}
+                  onClick={() => applySlash(cmd.invocation)}
                 >
                   <span>
                     <span className="break-all font-medium">{cmd.invocation.trimEnd()}</span>
@@ -5657,7 +5657,7 @@ function Composer({
             disabled={sending}
             value={text}
             onChange={(event) => {
-              setDollarOff(false);
+              setSlashOff(false);
               setAgentOpen(false);
               setText(event.target.value);
             }}
@@ -5674,22 +5674,22 @@ function Composer({
               if (matches.length > 0) {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
-                  setDollarPick(matches[(pick + 1) % matches.length].invocation);
+                  setSlashPick(matches[(pick + 1) % matches.length].invocation);
                   return;
                 }
                 if (event.key === "ArrowUp") {
                   event.preventDefault();
-                  setDollarPick(matches[(pick + matches.length - 1) % matches.length].invocation);
+                  setSlashPick(matches[(pick + matches.length - 1) % matches.length].invocation);
                   return;
                 }
                 if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
                   event.preventDefault();
-                  applyDollar(matches[pick].invocation);
+                  applySlash(matches[pick].invocation);
                   return;
                 }
                 if (event.key === "Escape") {
                   event.preventDefault();
-                  setDollarOff(true);
+                  setSlashOff(true);
                   return;
                 }
               }

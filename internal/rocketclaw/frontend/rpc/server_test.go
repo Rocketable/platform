@@ -1355,10 +1355,17 @@ func TestSessionEntries(t *testing.T) {
 		delivery   PromptDelivery
 	}{
 		{"hello", "hello", PromptDelivery_STEER},
-		{" \t$steer \n$agent planner  next\tstep  ", "$agent planner  next\tstep  ", PromptDelivery_STEER},
-		{"\u2003$steer\t$enqueue inspect  the logs\nnext  ", "$enqueue inspect  the logs\nnext  ", PromptDelivery_QUEUE},
-		{"\u0085$steer\u0085\uFEFFkeep literal", "\uFEFFkeep literal", PromptDelivery_QUEUE},
-		{"\uFEFF$stash keep literal", "\uFEFF$stash keep literal", PromptDelivery_STEER},
+		{" \t/steer \n/agent planner  next\tstep  ", "/agent planner  next\tstep  ", PromptDelivery_STEER},
+		{"\u2003/steer\t/enqueue inspect  the logs\nnext  ", "/enqueue inspect  the logs\nnext  ", PromptDelivery_QUEUE},
+		{"\u0085/steer\u0085\uFEFFkeep literal", "\uFEFFkeep literal", PromptDelivery_QUEUE},
+		{"\uFEFF/stash keep literal", "\uFEFF/stash keep literal", PromptDelivery_STEER},
+		{"$stop", "$stop", PromptDelivery_STEER},
+		{"$steer $agent planner", "$steer $agent planner", PromptDelivery_STEER},
+		{"$5 is the budget", "$5 is the budget", PromptDelivery_STEER},
+		{"/Users/x/y failed", "/Users/x/y failed", PromptDelivery_STEER},
+		{"/tmp is full", "/tmp is full", PromptDelivery_STEER},
+		{"//stop", "//stop", PromptDelivery_STEER},
+		{"/stopping now", "/stopping now", PromptDelivery_STEER},
 	} {
 		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: "prompted", Text: tt.text, Delivery: tt.delivery, MessageId: "direct-message"})
 		require.ErrorContains(t, err, `conversation "prompted" is not recorded`)
@@ -1564,7 +1571,7 @@ func TestSessionEntries(t *testing.T) {
 	t.Run("stash commands remain literal until manual pop", func(t *testing.T) {
 		before := len(turns)
 
-		for _, text := range []string{"  $stop \n", "$agent planner", " $enqueue literal", "\t$stash literal  ", "\u2003$steer literal\n"} {
+		for _, text := range []string{"  /stop \n", "/agent planner", " /enqueue literal", "\t/stash literal  ", "\u2003/steer literal\n"} {
 			_, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: text, Delivery: PromptDelivery_STASH})
 			require.NoError(t, err)
 			items, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: id})
@@ -1599,17 +1606,17 @@ func TestSessionEntries(t *testing.T) {
 	t.Run("goal starts through the shared backend", func(t *testing.T) {
 		before := len(turns)
 
-		help, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$goal", Delivery: PromptDelivery_STEER})
+		help, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/goal", Delivery: PromptDelivery_STEER})
 		require.NoError(t, err)
 		require.Equal(t, protocol.GoalCommandHelp, help.PrivateText)
 
-		rejected, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$goal maxTurns: nope ship", Delivery: PromptDelivery_STEER})
+		rejected, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/goal maxTurns: nope ship", Delivery: PromptDelivery_STEER})
 		require.NoError(t, err)
 		require.Contains(t, rejected.PrivateText, "`maxTurns:`")
 
 		file := protocol.OutboundAttachment{ID: "goal-file", Name: "goal.txt", MIMEType: "text/plain", Data: []byte("goal context")}
 		require.NoError(t, sessions.SaveAttachment(ctx, id, "", &file, true))
-		started, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: " $Goal maxTurns: 2 ship it", Delivery: PromptDelivery_QUEUE, MessageId: "goal-message", AttachmentIds: []string{file.ID}})
+		started, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: " /Goal maxTurns: 2 ship it", Delivery: PromptDelivery_QUEUE, MessageId: "goal-message", AttachmentIds: []string{file.ID}})
 		require.NoError(t, err)
 		require.Empty(t, started.PrivateText)
 		require.Equal(t, []protocol.GoalRequest{{Objective: "ship it", MaxTurns: 2}}, goals)
@@ -1624,11 +1631,11 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, "goal-message", goalInbounds[0].Metadata["web_message_id"])
 		restored, err := server.inputEvent(ctx, id, goalInbounds[0].Metadata["web_goal_prompt"])
 		require.NoError(t, err)
-		require.Equal(t, " $Goal maxTurns: 2 ship it", restored.Text)
+		require.Equal(t, " /Goal maxTurns: 2 ship it", restored.Text)
 		require.Len(t, restored.Attachments, 1)
 		require.Equal(t, file.ID, restored.Attachments[0].Id)
 
-		busy, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$goal busy", Delivery: PromptDelivery_STEER})
+		busy, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/goal busy", Delivery: PromptDelivery_STEER})
 		require.NoError(t, err)
 		require.Equal(t, "A goal is already in progress in this conversation. Stop it before starting another.", busy.PrivateText)
 		require.Len(t, goals, 1)
@@ -1737,8 +1744,8 @@ func TestSessionEntries(t *testing.T) {
 			{"ListQueue", &ListQueueRequest{Id: id}, &ListQueueResponse{}},
 			{"Prompt", &PromptRequest{Id: id, Text: "must not disappear", Delivery: PromptDelivery_QUEUE}, &PromptResponse{}},
 			{"Prompt", &PromptRequest{Id: id, Text: "must not disappear", Delivery: PromptDelivery_STASH}, &PromptResponse{}},
-			{"Prompt", &PromptRequest{Id: id, Text: "$enqueue must not disappear"}, &PromptResponse{}},
-			{"Prompt", &PromptRequest{Id: id, Text: "$stash must not disappear"}, &PromptResponse{}},
+			{"Prompt", &PromptRequest{Id: id, Text: "/enqueue must not disappear"}, &PromptResponse{}},
+			{"Prompt", &PromptRequest{Id: id, Text: "/stash must not disappear"}, &PromptResponse{}},
 		} {
 			err := connection.Invoke(ctx, "/rpc.Web/"+test.method, test.request, test.response)
 			require.Equal(t, codes.Unavailable, status.Code(err), test.method)
@@ -1758,11 +1765,12 @@ func TestSessionEntries(t *testing.T) {
 		kind         protocol.InboundKind
 	}{
 		{"queued from prompt", "queued from prompt", PromptDelivery_QUEUE, PromptDelivery_QUEUE, protocol.InboundKindEnqueue},
-		{" \t$enqueue \n$review \"first area\"  second\tthird  ", "$review \"first area\"  second\tthird  ", PromptDelivery_STEER, PromptDelivery_QUEUE, protocol.InboundKindEnqueue},
-		{"$enqueue $stash keep  literal\n", "$stash keep  literal\n", PromptDelivery_QUEUE, PromptDelivery_QUEUE, protocol.InboundKindEnqueue},
-		{"\u2003$stash\t$enqueue inspect  the logs\nnext  ", "$enqueue inspect  the logs\nnext  ", PromptDelivery_STEER, PromptDelivery_STASH, protocol.InboundKindHeld},
-		{" $stash \n$stop  ", "$stop  ", PromptDelivery_QUEUE, PromptDelivery_STASH, protocol.InboundKindHeld},
-		{"\u0085$stash\u0085\uFEFFkeep literal", "\uFEFFkeep literal", PromptDelivery_STEER, PromptDelivery_STASH, protocol.InboundKindHeld},
+		{" \t/enqueue \n/review \"first area\"  second\tthird  ", "/review \"first area\"  second\tthird  ", PromptDelivery_STEER, PromptDelivery_QUEUE, protocol.InboundKindEnqueue},
+		{"/enqueue /stash keep  literal\n", "/stash keep  literal\n", PromptDelivery_QUEUE, PromptDelivery_QUEUE, protocol.InboundKindEnqueue},
+		{"\u2003/stash\t/enqueue inspect  the logs\nnext  ", "/enqueue inspect  the logs\nnext  ", PromptDelivery_STEER, PromptDelivery_STASH, protocol.InboundKindHeld},
+		{" /stash \n/stop  ", "/stop  ", PromptDelivery_QUEUE, PromptDelivery_STASH, protocol.InboundKindHeld},
+		{"$stash later", "$stash later", PromptDelivery_QUEUE, PromptDelivery_QUEUE, protocol.InboundKindEnqueue},
+		{"\u0085/stash\u0085\uFEFFkeep literal", "\uFEFFkeep literal", PromptDelivery_STEER, PromptDelivery_STASH, protocol.InboundKindHeld},
 	} {
 		t.Run(tt.text, func(t *testing.T) {
 			before := len(turns)
@@ -1788,10 +1796,10 @@ func TestSessionEntries(t *testing.T) {
 		})
 	}
 
-	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$stop later"})
+	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/stop later"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$stop"})
+	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/stop"})
 	require.NoError(t, err)
 	require.Equal(t, protocol.InboundKindCancel, turns[len(turns)-1].Kind)
 	require.Equal(t, id, turns[len(turns)-1].ConversationID)
@@ -1959,7 +1967,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
 		_, err = invoke[QueueItemResponse](ctx, connection, "PopQueueItem", &QueueItemRequest{Id: hidden, ItemId: "q1"})
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
-		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: hidden, Text: "$stop", Delivery: PromptDelivery_STASH})
+		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: hidden, Text: "/stop", Delivery: PromptDelivery_STASH})
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
 		_, err = invoke[QueueItemResponse](ctx, connection, "RemoveQueueItem", &QueueItemRequest{Id: hidden, ItemId: "q1"})
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
@@ -2296,14 +2304,14 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.Len(t, scoped.Agents, 1)
 	require.Equal(t, "planner", scoped.Agents[0].Name)
 
-	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: created.Id, Text: "$agent main"})
+	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: created.Id, Text: "/agent main"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
 	historyBefore, err := sessions.ObserveEntries(ctx, "empty-web")
 	require.NoError(t, err)
 
 	for _, selectedID := range []string{created.Id, "empty-web", id} {
-		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: selectedID, Text: "$agent planner"})
+		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: selectedID, Text: "/agent planner"})
 		require.NoError(t, err)
 		selected, found, err := sessions.Thread(selectedID)
 		require.NoError(t, err)
@@ -2327,7 +2335,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		{"cron:cron/daily.md:20000102T030405.000000006Z:a", "main", codes.PermissionDenied},
 		{"unrecorded", "main", codes.NotFound},
 	} {
-		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: tc.id, Text: "$agent " + tc.agent})
+		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: tc.id, Text: "/agent " + tc.agent})
 		require.Equal(t, tc.code, status.Code(err))
 	}
 
@@ -2337,8 +2345,8 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		require.NoError(t, err)
 	}
 
-	require.Len(t, channels.ChannelAgentChoicesCalls(), liveCalls+1, "$agent uses current live channel policy")
-	require.Len(t, channels.SidebarChannelAgentChoicesCalls(), sidebarCalls, "$agent must not authorize from stored sidebar facts")
+	require.Len(t, channels.ChannelAgentChoicesCalls(), liveCalls+1, "/agent uses current live channel policy")
+	require.Len(t, channels.SidebarChannelAgentChoicesCalls(), sidebarCalls, "/agent must not authorize from stored sidebar facts")
 
 	channels.ChannelAgentChoicesFunc = func(context.Context, string) ([]string, error) {
 		return nil, errors.New("Slack unavailable")
@@ -2413,7 +2421,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		require.NotEqual(t, "private-X", session.Id)
 	}
 
-	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$agent main"})
+	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/agent main"})
 	require.ErrorContains(t, err, "Slack unavailable")
 	unchanged, found, err := sessions.Thread(id)
 	require.NoError(t, err)
@@ -2794,7 +2802,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 				require.True(t, listed.Sessions[index].Cron, "cron origin survives follow-ups and config changes")
 
 				for _, agent := range []string{"main", "planner", "selected"} {
-					_, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: webID, Text: "$agent " + agent})
+					_, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: webID, Text: "/agent " + agent})
 					if slices.Contains(test.want, agent) {
 						require.NoError(t, err)
 					} else {

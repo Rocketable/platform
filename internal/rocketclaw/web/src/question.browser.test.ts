@@ -139,7 +139,7 @@ test("a limited person cannot answer a question of an agent outside their spaces
     await composer.fill("hello");
     await composer.press("Enter");
     for (const started = Date.now(); calls.length < 2 && Date.now() - started < 5_000;) await Bun.sleep(10);
-    expect(calls).toEqual([{ path: "/api/Prompt", text: "$agent ops-agent" }, { path: "/api/Prompt", text: "hello" }]);
+    expect(calls).toEqual([{ path: "/api/Prompt", text: "/agent ops-agent" }, { path: "/api/Prompt", text: "hello" }]);
   } finally {
     await browser.close();
     server.stop(true);

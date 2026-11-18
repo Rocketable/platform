@@ -76,4 +76,4 @@ Both historical bugs had the same cause: the connector decided whether an event 
 - [Saved queue never started after restart](saved-queue-never-started-after-restart.md): the same Thread Queue rows after a restart.
 - [A Slack mention thread's agent session status follows its running turn](../architecture-patterns/slack-agent-session-status-follows-the-running-turn.md): the same mention entry point, for the status Slack shows rather than the work admitted.
 - Historical fixes, now removed: [PR #1](https://github.com/Rocketable/platform/pull/1) (idempotent stack initialization) and [PR #16](https://github.com/Rocketable/platform/pull/16) (mid-turn parent message swallowed).
-- `CONCEPTS.md`: Thread Queue, Managed Slack Thread and Root Slack Mention. Buffered Follow-Up, Slack Steer and Enqueued Slack Message are listed there as historical.
+- `CONCEPTS.md`: Thread Queue, Managed Slack Thread and Root Slack Mention. Buffered Follow-Up and Slack Steer are listed there as historical.

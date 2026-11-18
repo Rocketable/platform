@@ -363,7 +363,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 	require.Empty(t, core.EditQueueItemCalls())
 	require.Len(t, core.StashQueueItemCalls(), 2)
 
-	_, err = invoke[PromptResponse](bob, connection, "Prompt", &PromptRequest{Id: restarted.TestChat, Text: "$stop", Delivery: PromptDelivery_STEER})
+	_, err = invoke[PromptResponse](bob, connection, "Prompt", &PromptRequest{Id: restarted.TestChat, Text: "/stop", Delivery: PromptDelivery_STEER})
 	require.NoError(t, err)
 	require.Len(t, core.RunTurnCalls(), 1)
 	require.Equal(t, protocol.InboundKindCancel, core.RunTurnCalls()[0].InboundMessage.Kind)

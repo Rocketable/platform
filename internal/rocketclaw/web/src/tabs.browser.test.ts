@@ -483,7 +483,7 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
       throw error;
     });
   }
-  await page.getByPlaceholder("Message or $command").focus();
+  await page.getByPlaceholder("Message or /command").focus();
   await page.keyboard.press("Control+BracketRight");
   await page.waitForURL(`**${href("alpha")}`);
   await page.keyboard.press("Meta+BracketLeft");
@@ -521,7 +521,7 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   expect(await tab(long).evaluate((node: HTMLElement) => document.activeElement === node && getComputedStyle(node).outlineStyle)).toBe("solid");
   await menu(page, long, "Rename session");
   await field.fill("Renamed");
-  await page.getByPlaceholder("Message or $command").click();
+  await page.getByPlaceholder("Message or /command").click();
   await tab("Renamed").waitFor();
 
   const box = await strip(page).boundingBox();
@@ -616,7 +616,7 @@ test("narrow screens show the tabs in a drawer opened by the footer's sidebar bu
     await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   };
   // A swipe that starts in a text field is left to the field.
-  const field = (await page.getByPlaceholder("Message or $command").boundingBox())!;
+  const field = (await page.getByPlaceholder("Message or /command").boundingBox())!;
   await swipe(field.x + 20, field.y + 20, 200);
   await page.waitForTimeout(300);
   expect(await strip(page).count()).toBe(0);
@@ -914,7 +914,7 @@ test("tab groups take a name and color, collapse, adopt opened tabs, follow drag
   await header.click();
   expect(await header.getAttribute("aria-expanded")).toBe("false");
   expect(await order(page)).toEqual(["Work", "Charlie"]);
-  await page.getByPlaceholder("Message or $command").focus();
+  await page.getByPlaceholder("Message or /command").focus();
   await page.keyboard.press("Control+BracketRight");
   await page.waitForURL(`**${href("alpha")}`);
   expect(await header.getAttribute("aria-expanded")).toBe("true");

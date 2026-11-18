@@ -387,7 +387,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
 	_, err = seeded.db.ExecContext(t.Context(), `INSERT INTO entries (id, conversation_id, entry_json, entry_timestamp) VALUES
-        (9007199254741001, 'chat', '{"type":"turn","replay_input":[{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\n  $skill exact\n"},{"type":"message","role":"assistant","content":"answer"}]}', '')`)
+        (9007199254741001, 'chat', '{"type":"turn","replay_input":[{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\n  /skill exact\n"},{"type":"message","role":"assistant","content":"answer"}]}', '')`)
 	require.NoError(t, err)
 
 	engine := &mockBackend{SandboxErrorFunc: noSandboxError}
@@ -406,12 +406,12 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 		_, err := seeded.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $2 WHERE conversation_id = $1`, "chat", marker)
 		require.NoError(t, err)
 
-		return marker, "  $skill exact\n", nil
+		return marker, "  /skill exact\n", nil
 	}
 	staged, err := server.stageRevert(ctx, &StageRevertRequest{Id: "chat", MessageId: marker})
 	require.NoError(t, err)
 	require.Equal(t, marker, staged.RevertMessageId)
-	require.Equal(t, "  $skill exact\n", staged.Prompt.Text)
+	require.Equal(t, "  /skill exact\n", staged.Prompt.Text)
 
 	hidden, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1, Revision: initial.Revision})
 	require.NoError(t, err)
