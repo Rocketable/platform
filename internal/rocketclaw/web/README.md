@@ -586,12 +586,17 @@ active tab.
   leaves the strip for the **Parked** section
   at the bottom, which lists your parked tabs from every space, each with when
   its park ends, and its header counts them. It folds like a card, starts folded, and folded still shows
-  the tab in view. With more than one space it is a tree: each space with
+  the tab in view. Unfolded, it is as tall as its rows need, up to a third of
+  the strip; drag its top edge, or focus the edge and press Up/Down, to change
+  that limit, which is kept in this browser. With more than one space it is a tree: each space with
   parked tabs is a branch that folds on its own, again still showing the tab in
   view, and stays as you left it. With Remote RocketClaws, when more than one
   server has parked tabs, each server is a branch above its spaces; a row opens
   on its own server in its space, its menu's attention items act there, and it
-  has no close button. A parked tab keeps its space, group, and place, and
+  has no close button. Drag a parked row onto another row of its space, or
+  press Shift+Arrow on it, to reorder it for you alone; a row you have not
+  placed comes last. A parked tab keeps its space, group, and place, whatever its
+  place in Parked, and
   **Unpark**, in its menu in place of Park, puts it back there.
   It is never bold and never notifies, but what happens on it is remembered:
   unparked, it is bold if something happened that you have not seen, without a
@@ -678,7 +683,8 @@ active tab.
   new session in its space. Changes to another server's cards save on that
   server, and opening one of its tabs moves the page to that server. Every
   card starts unfolded; a folded card lists only its tabs that wait for you or
-  ask you something, and the tab in view. Your card order and which cards and
+  ask you something, and the tab in view. Your card order, your order of parked
+  tabs, and which cards and
   Parked branches are folded are saved on the local server, so they are the same
   on every server's page and every device. The **…** menu offers **Go to
   space**, which enters the space (another server's space opens in that

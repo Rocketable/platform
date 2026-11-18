@@ -1658,7 +1658,7 @@ function useInSpace() {
   return (item: { space?: string }) => !item.space || item.space.toLowerCase() === name;
 }
 
-const arrows: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }, sharedDrag = "application/x-rocketclaw-shared";
+const arrows: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }, sharedDrag = "application/x-rocketclaw-shared", parkedDrag = "application/x-rocketclaw-parked";
 type MenuAnchor = Element | { getBoundingClientRect: () => DOMRect };
 const popupClass = "min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none", itemClass = "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent";
 
@@ -2096,7 +2096,7 @@ const parkedRows = (tabs: Tab[], shared: SavedTabs["shared"], parked: Set<string
   [...tabs.filter((tab) => parked.has(tab.path)), ...shared.flatMap((tab) => parked.has(tab.path) && !tabs.some((own) => own.path === tab.path) ? [{ ...tab, shared: true }] : [])];
 
 function useParkedTree({ state, pathname, shared, parked }: TabStoreValue) {
-  const here = useServer(), [layout] = useLayout(), folds = layout.folded ?? noFolds, { servers } = useContext(Sidebar);
+  const here = useServer(), [layout] = useLayout(), folds = layout.folded ?? noFolds, order = layout.order ?? [], { servers } = useContext(Sidebar);
   const sections = ["", ...rocketclaws().map((remote) => remote.name)].map((name) => {
     const view = servers[name], saved = view?.tabs;
     return name === here ? { name, spaces: state.spaces, rows: parkedRows(state.tabs, shared, parked) }
@@ -2106,13 +2106,42 @@ function useParkedTree({ state, pathname, shared, parked }: TabStoreValue) {
   const tree = sections.map((section) => {
     const fold = `parked:@${section.name}`, shut = collapsed || (sections.length > 1 && (folds[fold] ?? false));
     const branches = section.spaces.flatMap((space) => {
-      const id = `parked:${section.name}/${space.id}`, there = section.rows.filter((tab) => tab.space === space.id), closed = shut || (folds[id] ?? false);
+      const id = `parked:${section.name}/${space.id}`, rank = (tab: Tab) => order.indexOf(`${id}\n${tab.path}`) + 1 || Infinity, closed = shut || (folds[id] ?? false);
+      const there = section.rows.filter((tab) => tab.space === space.id).toSorted((a, b) => rank(a) - rank(b) || 0);
       return there.length ? [{ space, id, closed, there, shown: closed ? there.filter((tab) => section.name === here && tab.path === pathname) : there }] : [];
     });
     return { name: section.name, spaces: section.spaces, fold, shut, branches, count: branches.reduce((sum, branch) => sum + branch.there.length, 0) };
   });
-  const visible = tree.flatMap((section) => section.branches.flatMap((branch) => branch.shown.map((tab) => ({ ...tab, server: section.name, key: `${section.name}\n${tab.path}` }))));
+  const visible = tree.flatMap((section) => section.branches.flatMap((branch) => branch.shown.map((tab) => ({ ...tab, server: section.name, branch: branch.id, key: `${section.name}\n${tab.path}` }))));
   return { tree, visible, collapsed, here, count: tree.reduce((sum, section) => sum + section.count, 0), stop: (visible.find((tab) => tab.server === here && tab.path === pathname) ?? visible[0])?.key };
+}
+
+type ParkedShown = ReturnType<typeof useParkedTree>["visible"][number];
+function moveParked(visible: ParkedShown[], from?: ParkedShown, to?: ParkedShown) {
+  if (!from || !to || from === to || from.branch !== to.branch) return;
+  const paths = moveQueueId(visible.flatMap((tab) => tab.branch === to.branch ? [tab.path] : []), from.path, to.path);
+  saveLayout((layout) => ({ ...layout, order: [...(layout.order ?? []).filter((key) => !key.startsWith(`${to.branch}\n`)), ...paths.map((path) => `${to.branch}\n${path}`)] }));
+}
+
+function ParkedBox({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null), [stored, setStored] = useState(() => Number(localStorage.getItem("parked-height"))), share = stored || 100 / 3;
+  const resize = (height: number) => {
+    const next = Math.min(Math.max(height / box.current!.parentElement!.clientHeight * 100, 10), 90);
+    setStored(next);
+    localStorage.setItem("parked-height", String(next));
+  };
+  return <>
+    {collapsed ? null : <div role="separator" aria-orientation="horizontal" aria-label="Resize Parked" aria-valuenow={Math.round(share)} aria-valuemin={10} aria-valuemax={90} tabIndex={0}
+      className="relative z-10 -my-0.75 h-1.5 shrink-0 cursor-row-resize touch-none outline-none hover:bg-border focus-visible:bg-ring"
+      onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
+      onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) resize(box.current!.getBoundingClientRect().bottom - event.clientY); }}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+        event.preventDefault();
+        resize(box.current!.getBoundingClientRect().height + (event.key === "ArrowUp" ? 16 : -16));
+      }} />}
+    <div ref={box} className="flex shrink-0 flex-col gap-0.5 overflow-y-auto border-t px-1 pt-1 [scrollbar-width:thin]" style={{ maxHeight: `${share}%` }}>{children}</div>
+  </>;
 }
 
 function ParkedSection({ tabs }: { tabs: TabStoreValue }) {
@@ -2132,7 +2161,7 @@ function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: T
   const menuOf = (tab: ParkedRow, server: string, anchor: MenuAnchor) => openMenu({ path: tab.path, anchor, server, space: tab.space ?? "", shared: tab.shared });
   const header = "flex w-full shrink-0 items-center gap-1.5 px-1.5 text-xs font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring";
   if (!count) return null;
-  return <div className="flex max-h-1/3 shrink-0 flex-col gap-0.5 overflow-y-auto border-t px-1 pt-1 [scrollbar-width:thin]">
+  return <ParkedBox collapsed={collapsed}>
     <button type="button" aria-expanded={!collapsed} className="flex h-7 w-fit shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => fold("parked", !collapsed)}>
       <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium text-black", groupColors.Grey)}><SquareParking aria-hidden="true" className="size-3" />Parked</span>
       <span aria-hidden="true" className="text-xs text-muted-foreground">{count}</span>
@@ -2144,8 +2173,13 @@ function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: T
         event.stopPropagation();
         visit(tab.server, tab.path);
       }}
+      onDragStart={(event) => { dragging = "parked"; event.dataTransfer.setData(parkedDrag, at(event.target as Element)!.key); }}
+      onDragOver={(event) => { if (dragging === "parked") event.preventDefault(); }}
+      onDragEnd={() => { dragging = ""; }}
+      onDrop={(event) => { if (dragging === "parked") moveParked(visible, visible.find((tab) => tab.key === event.dataTransfer.getData(parkedDrag)), at(event.target as Element)); }}
       onKeyDown={(event) => {
-        if ((event.target as HTMLElement).role !== "tab" || (event.key !== "Enter" && event.key !== " ")) return tabKeys(event, pathname, (_, anchor) => { const tab = at(anchor as Element); if (tab) menuOf(tab, tab.server, anchor); }, () => undefined);
+        const moveBy = () => { const from = at(event.target as Element)!; moveParked(visible, from, visible[visible.indexOf(from) + arrows[event.key]]); };
+        if ((event.target as HTMLElement).role !== "tab" || (event.key !== "Enter" && event.key !== " ")) return tabKeys(event, pathname, (_, anchor) => { const tab = at(anchor as Element); if (tab) menuOf(tab, tab.server, anchor); }, moveBy);
         event.preventDefault();
         (event.target as HTMLElement).click();
       }}>
@@ -2163,7 +2197,7 @@ function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: T
         </Fragment>)}
       </Fragment>)}
     </div>
-  </div>;
+  </ParkedBox>;
 }
 
 function ParkedItem({ tab, server, here, space, close, ...props }: { tab: ParkedRow; server: string; here: string; space: string; active: boolean; stop: boolean; editing: boolean; endEdit: () => void; close: () => void; openMenu: (anchor: MenuAnchor) => void }) {
