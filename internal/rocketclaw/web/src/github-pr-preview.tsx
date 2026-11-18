@@ -11,8 +11,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { GitHubError, githubPR, loadPR, loadPRFiles, type GitHubPR, type PRFile, type PullRequest } from "./github-pr";
 import type { OpenCodePRSource } from "./opencode-pr";
+import { MarkdownText, setPreference, usePreference } from "./transcript-text";
 
 const layouts = ["Side panel", "Dialog", "Inline", "Full-screen"] as const;
+const TAB_KEY = "pull-request-tab";
 const PRCode = lazy(() => import("./github-pr-code").then((module) => ({ default: module.PRCode })));
 type Layout = (typeof layouts)[number];
 type PreviewResult = { pr?: PullRequest; files: PRFile[]; page: number; ended: boolean; loading: boolean; error: string };
@@ -49,7 +51,8 @@ function PreviewAction({ reference }: { reference: GitHubPR }) {
 }
 
 function usePreview(reference: GitHubPR, source?: OpenCodePRSource, refresh = 0) {
-  const [tab, setTab] = useState("summary");
+  const tab = usePreference(TAB_KEY) ?? "summary";
+  const setTab = (value: string) => setPreference(TAB_KEY, value);
   const [credential, setCredential] = useState("");
   const token = useRef("");
   const controller = useRef<AbortController | null>(null);
@@ -135,14 +138,14 @@ function PreviewBody({ reference, state, close, source }: { reference: GitHubPR;
       <Tooltip><TooltipTrigger render={<a href={`https://github.com/${reference.owner}/${reference.repo}/pull/${reference.number}`} target="_blank" rel="noopener noreferrer" className="flex min-w-0 items-center gap-1 hover:underline"><span className="truncate">{reference.owner}/{reference.repo} #{reference.number}</span><ExternalLink className="size-3 shrink-0" /></a>} /><TooltipContent>Open on GitHub</TooltipContent></Tooltip>
     </span>
     {!source && !result.loading && (!pr || Boolean(result.error)) && <TokenEntry state={state} />}
-    {pr && <PreviewDetails pr={pr} state={state} />}
+    {pr && <PreviewDetails reference={reference} pr={pr} state={state} />}
     {source && <span className="shrink-0 text-xs text-muted-foreground">Read with this OpenCode server's GitHub login.</span>}
   </span>;
 }
 
 // Visual reference: t3code apps/web/src/components/pullRequest/PullRequestDetailLayout.tsx
 // at 1d61dd3: title, actor/time, base ← head and counts above a segmented tab bar.
-function PreviewDetails({ pr, state }: { pr: PullRequest; state: ReturnType<typeof usePreview> }) {
+function PreviewDetails({ reference, pr, state }: { reference: GitHubPR; pr: PullRequest; state: ReturnType<typeof usePreview> }) {
   const { result, load, tab, setTab } = state;
   return <Tabs render={<span />} value={tab} onValueChange={(value) => setTab(String(value))} className="min-w-0 shrink-0">
     <PRHeader pr={pr} />
@@ -150,7 +153,7 @@ function PreviewDetails({ pr, state }: { pr: PullRequest; state: ReturnType<type
       <TabsList render={<span />} aria-label="Pull request tabs"><TabsTrigger value="summary">Summary</TabsTrigger><TabsTrigger value="code">Code</TabsTrigger></TabsList>
       <span className="text-xs text-muted-foreground">{result.files.length} of {pr.changed_files} files loaded</span>
     </span>
-    <TabsContent render={<span />} value="summary" className="block overflow-auto whitespace-pre-wrap"><span className="block py-3">{pr.body || "No description."}</span></TabsContent>
+    <TabsContent render={<span />} value="summary" className="block overflow-auto"><span className="block py-3"><MarkdownText text={pr.body?.trim() ? pr.body : "_No description provided._"} repository={reference} /></span></TabsContent>
     <TabsContent render={<span />} value="code" keepMounted className="flex min-h-0 min-w-0 flex-1 flex-col data-[hidden]:hidden">
       <Suspense fallback={<span role="status">Loading diff viewer…</span>}>{result.files.length > 0 ? <PRCode files={result.files} /> : <span className="py-4 text-muted-foreground">No files loaded.</span>}</Suspense>
     </TabsContent>
