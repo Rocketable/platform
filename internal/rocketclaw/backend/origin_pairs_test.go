@@ -132,6 +132,7 @@ func TestChatOriginFactsAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkChatOriginFacts)
 	require.Positive(t, result.N)
 	require.Less(t, result.AllocedBytesPerOp(), int64(7<<20))
+	require.Less(t, result.AllocsPerOp(), int64(860))
 }
 
 func BenchmarkChatOriginFacts(b *testing.B) {

@@ -1002,22 +1002,25 @@ const shownChatsSQL = `, reporting AS (
 
 const originColumns = `c.external, c.binding_agent, c.managed, c.pairs, c.creating_source, c.producer_agent, c.run_path, c.run_at, c.one_off`
 
-func scanChatOrigin(row rowScanner, facts *ChatOriginFacts, dest ...any) error {
-	var (
-		pairs sql.RawBytes
-		run   protocol.CronRun
-		at    sql.NullInt64
-	)
-	if err := row.Scan(append(dest, &facts.ExternalConversationID, &facts.Binding.Agent, &facts.Binding.ManagedConversationID, &pairs, &facts.CreatingSource, &facts.ProducerAgent, &run.Path, &at, &run.OneOff)...); err != nil {
+type chatOriginScan struct {
+	pairs sql.RawBytes
+	run   protocol.CronRun
+	at    sql.NullInt64
+}
+
+func (scan *chatOriginScan) read(row rowScanner, facts *ChatOriginFacts, dest ...any) error {
+	if err := row.Scan(append(dest, &facts.ExternalConversationID, &facts.Binding.Agent, &facts.Binding.ManagedConversationID, &scan.pairs, &facts.CreatingSource, &facts.ProducerAgent, &scan.run.Path, &scan.at, &scan.run.OneOff)...); err != nil {
 		return fmt.Errorf("with its origin: %w", err)
 	}
 
-	if err := json.Unmarshal(pairs, &facts.Binding.OriginPairs); err != nil {
+	if err := json.Unmarshal(scan.pairs, &facts.Binding.OriginPairs); err != nil {
 		return fmt.Errorf("decode external MCP origin pairs: %w", err)
 	}
 
-	if at.Valid {
-		run.At, facts.Run = time.Unix(0, at.Int64).UTC(), &run
+	if scan.at.Valid {
+		run := scan.run
+		run.At = time.Unix(0, scan.at.Int64).UTC()
+		facts.Run = &run
 	}
 
 	return nil
@@ -1034,11 +1037,13 @@ func (s *SessionService) ChatOriginFacts(ctx context.Context, id string) iter.Se
 
 		dest := make([]any, 0, 11)
 
+		var origin chatOriginScan
+
 		for rows.Next() {
 			var facts ChatOriginFacts
 
 			dest = append(dest[:0], &facts.ConversationID, &facts.CreatedBy)
-			if err := scanChatOrigin(rows, &facts, dest...); err != nil {
+			if err := origin.read(rows, &facts, dest...); err != nil {
 				yield(ChatOriginFacts{}, fmt.Errorf("scan chat origin facts: %w", err))
 				return
 			}
@@ -1249,6 +1254,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			updated        sql.NullTime
 			unread, until  sql.NullTime
 			since, arrived int64
+			origin         chatOriginScan
 		)
 
 		dest := make([]any, 0, 44)
@@ -1258,7 +1264,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 
 			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Paused, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
 				&row.Attention.Parked, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &since, &row.Queued, &row.External, &arrived)
-			if err := scanChatOrigin(rows, &row.Origin, dest...); err != nil {
+			if err := origin.read(rows, &row.Origin, dest...); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
 			}
