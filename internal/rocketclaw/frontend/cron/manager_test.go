@@ -121,7 +121,7 @@ func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
 	}
 
 	def := defs[0]
-	if def.relativePath != "cron/daily.md" || def.agent != "worker" || def.body != "Run daily\n" {
+	if def.job.RelativePath != "cron/daily.md" || def.job.Agent != "worker" || def.job.Prompt != "Run daily\n" {
 		t.Fatalf("definition = %#v; want daily worker body", def)
 	}
 
@@ -255,7 +255,7 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	}}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC) }
 
-	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", body: "Body"})
+	m.executeJob(t.Context(), &definition{job: protocol.OneOffCronjob{RelativePath: "cron/daily.md", Agent: "helper", Prompt: "Body"}})
 	require.Contains(t, logs.String(), `"event":"cron_completed"`)
 	require.Contains(t, logs.String(), `"outcome":"intentional_silence"`)
 	require.Contains(t, logs.String(), `"duration_ms":`)
@@ -264,7 +264,7 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	m.run = &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{ConversationID: "destination"}, nil
 	}}
-	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", body: "Body"})
+	m.executeJob(t.Context(), &definition{job: protocol.OneOffCronjob{RelativePath: "cron/daily.md", Agent: "helper", Prompt: "Body"}})
 	require.Contains(t, logs.String(), `"outcome":"completed"`)
 	require.Contains(t, logs.String(), `"destination_conversation_id":"destination"`)
 	logs.Reset()
@@ -272,7 +272,7 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	m.run = &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, errors.New("secret-bearing-error")
 	}}
-	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", body: "Body"})
+	m.executeJob(t.Context(), &definition{job: protocol.OneOffCronjob{RelativePath: "cron/daily.md", Agent: "helper", Prompt: "Body"}})
 	require.Contains(t, logs.String(), `"outcome":"failed"`)
 	require.NotContains(t, logs.String(), "secret-bearing-error")
 }
@@ -484,8 +484,8 @@ func TestLoadDefinitionLeavesNonStringAgentForValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if def.agent != "7" {
-		t.Fatalf("definition agent = %q; want 7", def.agent)
+	if def.job.Agent != "7" {
+		t.Fatalf("definition agent = %q; want 7", def.job.Agent)
 	}
 }
 
@@ -500,13 +500,13 @@ func TestLoadDefinitionDefaultsBlankAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if def.agent != "main" {
-		t.Fatalf("definition agent = %q; want main", def.agent)
+	if def.job.Agent != "main" {
+		t.Fatalf("definition agent = %q; want main", def.job.Agent)
 	}
 
 	defNull, err := loadDefinition([]byte("---\nschedule: 1h\nagent: null\n---\nBody"), "cron/test.md")
 	require.NoError(t, err)
-	require.Equal(t, "main", defNull.agent)
+	require.Equal(t, "main", defNull.job.Agent)
 }
 
 func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
