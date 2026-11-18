@@ -315,8 +315,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 	case msg.Text != "" && msg.GoalTurn:
 		err = c.sendGoalTurnResponse(ctx, msg, footer)
 	case msg.Text != "":
-		fallbackText, blocks, overflow := titledMessageLayout("💬 "+msg.Agent, slackTruncatedText(msg.Text, slackTextLimit), msg.Text)
-		_, err = c.sendTitledResponse(ctx, msg, fallbackText, append(blocks, footer...), overflow, "reply")
+		_, err = c.sendTitledResponse(ctx, msg, "💬 "+msg.Agent, slackTruncatedText(msg.Text, slackTextLimit), footer, "reply")
 	case len(footer) > 0:
 		c.sendFooterOnlyResponse(ctx, msg, footerText, footer)
 	}
@@ -369,7 +368,7 @@ func slackReplyDestination(replyTarget *protocol.SlackReplyTarget) (channelID, t
 	return strings.TrimSpace(replyTarget.ChannelID), strings.TrimSpace(replyTarget.ThreadTS)
 }
 
-func titledMessageLayout(header, fallback, text string) (fallbackText string, blocks []slack.Block, overflow []string) {
+func titledMessageLayout(header, text string) (blocks []slack.Block, overflow []string) {
 	header = slackTruncatedText(header, 150)
 	bodyChunks := splitSlackText(text, slackBlockTextLimit)
 	rootBodyCount := min(len(bodyChunks), 47)
@@ -384,7 +383,7 @@ func titledMessageLayout(header, fallback, text string) (fallbackText string, bl
 		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, chunk, false, false), nil, nil))
 	}
 
-	return fallback, blocks, bodyChunks[rootBodyCount:]
+	return blocks, bodyChunks[rootBodyCount:]
 }
 
 func (c *Connector) slackFooter(agent, state, conversationID string) (string, []slack.Block) {
@@ -784,9 +783,8 @@ func (c *Connector) findPosted(ctx context.Context, posting *slackPosting, block
 
 func (c *Connector) sendGoalTurnResponse(ctx context.Context, msg *protocol.OutboundMessage, footer []slack.Block) error {
 	header := slackGoalHeaderText(msg.GoalTurnNumber, msg.GoalMaxTurns, msg.GoalComplete)
-	fallbackText, blocks, overflow := titledMessageLayout(header, header, msg.Text)
 
-	posted, err := c.sendTitledResponse(ctx, msg, fallbackText, append(blocks, footer...), overflow, "goal")
+	posted, err := c.sendTitledResponse(ctx, msg, header, header, footer, "goal")
 	if err != nil {
 		return err
 	}
@@ -802,12 +800,13 @@ func (c *Connector) sendGoalTurnResponse(ctx context.Context, msg *protocol.Outb
 	return nil
 }
 
-func (c *Connector) sendTitledResponse(ctx context.Context, msg *protocol.OutboundMessage, fallbackText string, blocks []slack.Block, overflow []string, op string) (protocol.TextConversationTarget, error) {
+func (c *Connector) sendTitledResponse(ctx context.Context, msg *protocol.OutboundMessage, header, fallbackText string, footer []slack.Block, op string) (protocol.TextConversationTarget, error) {
+	blocks, overflow := titledMessageLayout(header, msg.Text)
 	channelID, threadTS := slackReplyDestination(msg.SlackReply)
 	key := msg.TurnID + "/answer"
 	blocks[0].(*slack.HeaderBlock).BlockID = key
 
-	posted, err := c.postOnce(ctx, msg.ConversationID, key, channelID, threadTS, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...))
+	posted, err := c.postOnce(ctx, msg.ConversationID, key, channelID, threadTS, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(append(blocks, footer...)...))
 	if err != nil {
 		return posted, fmt.Errorf("send Slack %s response: %w", op, err)
 	}
