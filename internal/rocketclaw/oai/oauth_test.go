@@ -1407,7 +1407,7 @@ func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
 
 	data, errRead := io.ReadAll(resp.Body)
 	require.NoError(t, errRead)
-	require.JSONEq(t, `{"id":"resp","output":[{"id":"msg","type":"message"}]}`, string(data))
+	require.JSONEq(t, `{"id":"resp","output":[{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","summary":{"text":"private-summary-value"},"type":"compaction"},{"id":"msg","type":"message"}]}`, string(data))
 	t.Logf("Codex overflow recovery: 3 physical attempt events, %d JSON bytes", logs.Len())
 
 	for _, secret := range []string{"access", "refresh", "acc-123", "sealed", "private-content-value", "backend-api", "example.com", "Your input exceeds", "item-1"} {
@@ -1495,17 +1495,16 @@ func TestTransportKeepsOriginalContextErrorWhenCompactReturnsNoItem(t *testing.T
 	})}
 
 	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`))
-	if resp != nil {
-		t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
-	}
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 
-	require.Nil(t, resp)
 	require.Equal(t, 1, responseCalls)
 	require.Equal(t, 1, compactCalls)
-	require.ErrorContains(t, err, "context_length_exceeded: too large")
-	errStream, ok := errors.AsType[*codexStreamError](err)
-	require.True(t, ok)
-	require.Equal(t, "context_length_exceeded", errStream.Code)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, "a client error the SDK does not retry")
+
+	data, errRead := io.ReadAll(resp.Body)
+	require.NoError(t, errRead)
+	require.JSONEq(t, `{"error":{"code":"context_length_exceeded","message":"too large"}}`, string(data))
 }
 
 func TestTransportSkipsCompactionWithUnansweredFunctionCall(t *testing.T) {
