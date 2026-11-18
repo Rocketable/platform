@@ -42,7 +42,7 @@ test("real HTTP Revert commits only retained context and converges across viewer
     expect(hidden.status()).toBe(404);
     await second.locator('[data-slot="message"]').getByText("abandoned answer", { exact: true }).waitFor({ state: "detached" });
     expect(await second.locator("textarea").inputValue()).toBe("Other viewer draft");
-    await first.locator("textarea").fill("$undo"); await first.locator("textarea").press("Enter");
+    await first.locator("textarea").fill("/undo"); await first.locator("textarea").press("Enter");
     await first.waitForFunction(() => document.querySelector("textarea")?.value === "retained request");
     await first.getByLabel("Pending attachments").getByText("retained-upload.txt", { exact: true }).waitFor();
     expect(await first.getByText("boundary-upload.txt", { exact: true }).count()).toBe(0);
@@ -50,7 +50,7 @@ test("real HTTP Revert commits only retained context and converges across viewer
     expect(undone.ok()).toBe(true);
     expect(await undone.text()).toBe("retained-upload bytes");
     expect((await context.request.get(`${url}/api/DownloadAttachment?conversationId=chat&id=boundary-upload`)).status()).toBe(404);
-    await first.locator("textarea").fill("$redo"); await first.locator("textarea").press("Enter");
+    await first.locator("textarea").fill("/redo"); await first.locator("textarea").press("Enter");
     await first.locator('[data-slot="message"]').getByText("abandoned answer", { exact: true }).waitFor();
     expect(await first.locator("textarea").inputValue()).toBe("");
     await selected.hover(); await selected.getByRole("button", { name: "Revert message", exact: true }).click();

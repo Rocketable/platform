@@ -201,25 +201,25 @@ test("history deltas replace whole groups, remove groups, and keep canonical inv
     event("changed", "old", "assistant", "old"), event("changed", "trace", "tool", "old tool"),
     event("removed", "removed", "assistant", "gone"), event("empty", "empty", "thinking", "gone too"), event("kept", "kept", "assistant", "keep"),
   ]), busy: false };
-  draft.lines.splice(2, 0, { id: "command", role: "user", text: "$agent main", complete: true }, { id: "command:reply", role: "assistant", text: "Agent: main", complete: true });
+  draft.lines.splice(2, 0, { id: "command", role: "user", text: "/agent main", complete: true }, { id: "command:reply", role: "assistant", text: "Agent: main", complete: true });
   applyHistoryDelta(draft, view([event("changed", "new", "assistant", "new")], { revision: "next", reset: false, replacedKeys: ["changed", "empty"], removedKeys: ["removed"], entryKeys: ["kept", "empty", "changed"], running: true }));
-  expect(draft.lines.map((line: Line) => line.text)).toEqual(["keep", "new", "$agent main", "Agent: main"]);
+  expect(draft.lines.map((line: Line) => line.text)).toEqual(["keep", "new", "/agent main", "Agent: main"]);
   expect(draft).toMatchObject({ revision: "next", busy: true });
   const unchanged = draft.lines;
   applyHistoryDelta(draft, view([], { revision: "terminal", reset: false, entryKeys: ["kept", "empty", "changed"], terminal: "stopped" }));
   expect(draft.lines).toBe(unchanged);
   expect(draft).toMatchObject({ revision: "terminal", busy: false, terminal: "stopped" });
   applyHistoryDelta(draft, view([event("later", "later", "assistant", "later")], { reset: false, replacedKeys: ["later"], entryKeys: ["kept", "changed", "later"] }));
-  expect(draft.lines.map((line: Line) => line.text)).toEqual(["keep", "new", "$agent main", "Agent: main", "later"]);
+  expect(draft.lines.map((line: Line) => line.text)).toEqual(["keep", "new", "/agent main", "Agent: main", "later"]);
   applyHistoryDelta(draft, view([event("changed", "replacement", "assistant", "replacement")], { reset: false, replacedKeys: ["changed"], entryKeys: ["kept", "changed", "later"] }));
-  expect(draft.lines.map((line: Line) => line.text)).toEqual(["keep", "replacement", "$agent main", "Agent: main", "later"]);
+  expect(draft.lines.map((line: Line) => line.text)).toEqual(["keep", "replacement", "/agent main", "Agent: main", "later"]);
   applyHistoryDelta(draft, view([], { reset: false, removedKeys: ["changed"], entryKeys: ["kept", "later"] }));
-  expect(draft.lines.map((line: Line) => line.text)).toEqual(["keep", "$agent main", "Agent: main", "later"]);
+  expect(draft.lines.map((line: Line) => line.text)).toEqual(["keep", "/agent main", "Agent: main", "later"]);
   applyHistoryDelta(draft, view([], { reset: false, removedKeys: ["kept"], entryKeys: ["later"] }));
-  expect(draft.lines.map((line: Line) => line.text)).toEqual(["$agent main", "Agent: main", "later"]);
+  expect(draft.lines.map((line: Line) => line.text)).toEqual(["/agent main", "Agent: main", "later"]);
   draft.lines.push({ id: "unfinished", role: "user", text: "pending" });
   applyHistoryDelta(draft, view([event("later", "later", "assistant", "later")]));
-  expect(draft.lines.map((line: Line) => line.text)).toEqual(["$agent main", "Agent: main", "later", "pending"]);
+  expect(draft.lines.map((line: Line) => line.text)).toEqual(["/agent main", "Agent: main", "later", "pending"]);
   expect(draft.busy).toBe(true);
 });
 
@@ -291,11 +291,11 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
     expect(draft.lines.map((line) => line.id)).toEqual(["kept:0", "used", "local"]);
     expect(queryClient.getQueryState(["queue", { id: "session" }]).isInvalidated).toBe(true);
     expect(draft.busy).toBe(true);
-    draft.lines.push({ id: "private", role: "user", text: "$agent", complete: true }, { id: "private:reply", role: "assistant", text: "Agent: main", complete: true });
+    draft.lines.push({ id: "private", role: "user", text: "/agent", complete: true }, { id: "private:reply", role: "assistant", text: "Agent: main", complete: true });
     second.resolve(Response.json({ ...view([event("turn", "turn:1", "assistant", "newer")], { reset: false, replacedKeys: ["turn"], entryKeys: ["kept", "turn"], revision: "newest", delegations: ["session/call"] }), origin: "" }));
     await loading;
     expect(draft.revision).toBe("newest");
-    expect(draft.lines.map((line) => line.text)).toEqual([kept.text, "newer", "$agent", "Agent: main", "same"]);
+    expect(draft.lines.map((line) => line.text)).toEqual([kept.text, "newer", "/agent", "Agent: main", "same"]);
     const cached = queryClient.getQueryData(["history", { id: "session" }]);
     expect(cached.messages).toEqual([kept, event("turn", "turn:1", "assistant", "newer")]);
     expect(cached.delegations).toEqual(["session/call"]);
@@ -324,7 +324,7 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
     expect(queryClient.getQueryData(["history", { id: "session" }])).toBeUndefined();
     await refreshHistory();
     expect(requests[6]).toEqual({ id: "session", limit: 50 });
-    expect(draft.lines.map((line) => line.text)).toEqual([kept.text, "$agent", "Agent: main", "same", "later"]);
+    expect(draft.lines.map((line) => line.text)).toEqual([kept.text, "/agent", "Agent: main", "same", "later"]);
     const restored = queryClient.getQueryData(["history", { id: "session" }]);
     expect(restored.messages).toEqual([kept, event("later", "later:0", "assistant", "later")]);
     expect(restored.delegations).toEqual(["session/call"]);
@@ -333,7 +333,7 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
     await refreshHistory();
     await refreshHistory();
     expect(requests.slice(7)).toEqual([{ id: "session", revision: "reopened", limit: 50 }, { id: "session", revision: "reopened", limit: 50 }]);
-    expect(draft.lines.map((line) => line.text)).toEqual(["$agent", "Agent: main", "same", "final"]);
+    expect(draft.lines.map((line) => line.text)).toEqual(["/agent", "Agent: main", "same", "final"]);
     expect(queryClient.getQueryData(["history", { id: "session" }]).messages).toEqual([event("later", "later:0", "assistant", "final")]);
   } finally { globalThis.fetch = originalFetch; }
 });
@@ -468,9 +468,9 @@ test("revert replaces only the captured untouched draft, Redo leaves it alone, a
   try {
     const staging = revertComposer(owner, "9007199254740993:4", false, async () => {}, () => {});
     await revertComposer(owner, "other-message", false, async () => {}, () => {});
-    response.resolve(Response.json({ revertMessageId: "9007199254740993:4", prompt: { text: "  $skill original\n", attachments: [attachment] } }));
+    response.resolve(Response.json({ revertMessageId: "9007199254740993:4", prompt: { text: "  /skill original\n", attachments: [attachment] } }));
     await staging;
-    expect(owner).toMatchObject({ text: "  $skill original\n", agent: "current", focus: 1 });
+    expect(owner).toMatchObject({ text: "  /skill original\n", agent: "current", focus: 1 });
     expect(owner.files).toHaveLength(1);
     expect(owner.files[0].id).not.toBe("old");
     expect(owner.files[0].file.name).toBe(attachment.name);
@@ -480,7 +480,7 @@ test("revert replaces only the captured untouched draft, Redo leaves it alone, a
     expect(other.text).toBe("another session");
     expect(requests).toEqual([{ id: "first", messageId: "9007199254740993:4" }]);
     await revertComposer(owner, undefined, true, async () => {}, () => {});
-    expect(owner.text).toBe("  $skill original\n");
+    expect(owner.text).toBe("  /skill original\n");
     expect(owner.files).toBe(restored);
     expect(owner).toMatchObject({ error: "" });
     const delayed = Promise.withResolvers<Response>();
@@ -642,9 +642,9 @@ test("public call outcomes update their original disclosures independently witho
   expect(draft.lines).toEqual([]);
 });
 
-for (const [prefix, delivery] of [["  $enqueue \t", "QUEUE"], ["  $stash \t", "STASH"], ["  $steer \t", "STEER"], ["\u0085$stash\u0085", "STASH"], ["\u0085$steer\u0085", "STEER"], ["\uFEFF$stash ", "literal"]]) for (const busy of [false, true]) test(`${JSON.stringify(prefix)} delivery=${delivery}, busy=${busy}`, async () => {
-  const text = `${prefix}\uFEFF$skill stop inspect  the logs\nnext  `;
-  const inner = delivery === "literal" ? text : "\uFEFF$skill stop inspect  the logs\nnext  ";
+for (const [prefix, delivery] of [["  /enqueue \t", "QUEUE"], ["  /stash \t", "STASH"], ["  /steer \t", "STEER"], ["\u0085/stash\u0085", "STASH"], ["\u0085/steer\u0085", "STEER"], ["\uFEFF/stash ", "literal"], ["  $enqueue \t", "literal"]]) for (const busy of [false, true]) test(`${JSON.stringify(prefix)} delivery=${delivery}, busy=${busy}`, async () => {
+  const text = `${prefix}\uFEFF/skill stop inspect  the logs\nnext  `;
+  const inner = delivery === "literal" ? text : "\uFEFF/skill stop inspect  the logs\nnext  ";
   const followUp = delivery === "literal" ? busy ? "QUEUE" : "STEER" : delivery;
   const draft = { text, files: [], agent: "", edit: 0, submission: 0, sending: false, parked: [] as Line[], lines: [] as Line[], busy };
   queryClient.setQueryData(["queue", { id: "opaque" }], []);
@@ -659,10 +659,10 @@ for (const [prefix, delivery] of [["  $enqueue \t", "QUEUE"], ["  $stash \t", "S
 });
 
 // While the agent is paused, Send posts to the people here at once, also during a finishing reply: it steers rather
-// than queues and starts no busy state; $enqueue and $stash still queue.
-for (const [text, followUp] of [["lunch at noon?", "STEER"], ["$steer lunch", "STEER"], ["$enqueue later", "QUEUE"], ["$stash later", "STASH"]]) for (const busy of [false, true]) test(`paused ${JSON.stringify(text)} goes out as ${followUp}, busy=${busy}`, async () => {
+// than queues and starts no busy state; /enqueue and /stash still queue.
+for (const [text, followUp] of [["lunch at noon?", "STEER"], ["/steer lunch", "STEER"], ["/enqueue later", "QUEUE"], ["/stash later", "STASH"], ["$stash later", "STEER"]]) for (const busy of [false, true]) test(`paused ${JSON.stringify(text)} goes out as ${followUp}, busy=${busy}`, async () => {
   const draft = { text, files: [], agent: "", edit: 0, submission: 0, sending: false, parked: [] as Line[], lines: [] as Line[], busy };
-  const shown = followUp === "STEER" ? [text.replace("$steer ", "")] : [];
+  const shown = followUp === "STEER" ? [text.replace("/steer ", "")] : [];
   queryClient.setQueryData(["queue", { id: "opaque" }], []);
   await sendComposer({ draft, onDraftChange: () => {}, files: [], text, busy, paused: (id: string) => id === "opaque", sessionId: "opaque", selected: "main", currentAgent: "main", prompt: { mutateAsync: async (request: object) => {
     expect(request).toEqual({ id: "opaque", text, delivery: "STEER", messageId: expect.any(String) });
@@ -694,11 +694,12 @@ for (const busy of [false, true]) test(`new session message into a paused sticky
 });
 
 for (const [text, delivery, sent] of [
-  ["hello", undefined, ["$agent other", "hello"]],
+  ["hello", undefined, ["/agent other", "hello"]],
   ["hello", "STASH", ["hello"]],
-  ["$stop", undefined, ["$stop"]],
-  [" $agent planner", undefined, [" $agent planner"]],
-  ["$steer $agent planner", undefined, ["$steer $agent planner"]],
+  ["/stop", undefined, ["/stop"]],
+  [" /agent planner", undefined, [" /agent planner"]],
+  ["/steer /agent planner", undefined, ["/steer /agent planner"]],
+  ["$stop", undefined, ["/agent other", "$stop"]],
 ] as const) test(`agent switch precedes only ordinary sends: ${JSON.stringify(text)} ${delivery ?? ""}`, async () => {
   const draft = { text, files: [], agent: "", edit: 0, submission: 0, sending: false, parked: [] as Line[], lines: [] as Line[] };
   const texts: string[] = [];
@@ -783,7 +784,7 @@ test("composer renders exact input before Prompt completes and history failure d
   } finally { globalThis.fetch = originalFetch; }
 });
 
-for (const text of ["  $stop\n", ""]) for (const failure of ["", "upload", "stash"]) test(`resumed drafts are kept until explicit stash accepts text and files: ${JSON.stringify(text)} failure=${failure}`, async () => {
+for (const text of ["  /stop\n", ""]) for (const failure of ["", "upload", "stash"]) test(`resumed drafts are kept until explicit stash accepts text and files: ${JSON.stringify(text)} failure=${failure}`, async () => {
   const files = [{ id: "local", file: new File([new Uint8Array([0, 255, 1])], "old.bin") }];
   const draft = { text, files, agent: "main", sessionId: "sticky", edit: 0, submission: 0, sending: false, busy: false, hydrated: true, lines: [], error: "" };
   const drafts = new Map([["sticky", draft]]);
@@ -852,16 +853,16 @@ test("resumed draft upload and stash stay on their owning server after navigatio
 });
 
 for (const busy of [true, false]) test(`private commands retire only their own parked input and stay anchored: busy=${busy}`, async () => {
-  const draft = { text: "$agent", files: [], agent: "", edit: 0, submission: 0, sending: false, consumed: new Set<string>(), parked: [{ id: "ordinary", role: "user", text: "same" }] as Line[], lines: historyLines([event("turn", "turn:0", "assistant", "working")]) as Line[], busy };
+  const draft = { text: "/agent", files: [], agent: "", edit: 0, submission: 0, sending: false, consumed: new Set<string>(), parked: [{ id: "ordinary", role: "user", text: "same" }] as Line[], lines: historyLines([event("turn", "turn:0", "assistant", "working")]) as Line[], busy };
   await sendComposer({ draft, text: draft.text, files: [], delivery: "STEER", busy, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, refreshHistory: async () => { applyHistoryDelta(draft, view([], { reset: false, entryKeys: ["turn"], running: busy })); }, prompt: { mutateAsync: async () => "Agent: main" } });
   expect(draft.parked.map((line) => line.id)).toEqual(["ordinary"]);
-  expect(draft.lines.map((line) => line.text)).toEqual(["working", "$agent", "Agent: main"]);
+  expect(draft.lines.map((line) => line.text)).toEqual(["working", "/agent", "Agent: main"]);
   expect(draft.lines.slice(1).every((line) => line.complete)).toBe(true);
   expect(draft.consumed).toEqual(new Set());
   applyHistoryDelta(draft, view([event("turn", "turn:0", "assistant", "updated"), event("later", "later:0", "assistant", "later")], { reset: false, replacedKeys: ["turn", "later"], entryKeys: ["turn", "later"], running: true }));
-  expect(draft.lines.map((line) => line.text)).toEqual(["updated", "$agent", "Agent: main", "later"]);
+  expect(draft.lines.map((line) => line.text)).toEqual(["updated", "/agent", "Agent: main", "later"]);
   applyHistoryDelta(draft, view([event("later", "later:0", "assistant", "final")], { reset: false, replacedKeys: ["later"], entryKeys: ["turn", "later"] }));
-  expect(draft.lines.map((line) => line.text)).toEqual(["updated", "$agent", "Agent: main", "final"]);
+  expect(draft.lines.map((line) => line.text)).toEqual(["updated", "/agent", "Agent: main", "final"]);
   expect(draft.parked.map((line) => line.id)).toEqual(["ordinary"]);
 });
 
@@ -932,7 +933,7 @@ for (const action of ["pop", "promote"] as const) test(`queue ${action} switches
     expect(calls).toEqual([]);
     const draft = { submission: 0, sending: false, busy: false };
     await run(draft);
-    expect(calls).toEqual(failure ? ["$agent other"] : ["$agent other", `${action}:held`]);
+    expect(calls).toEqual(failure ? ["/agent other"] : ["/agent other", `${action}:held`]);
     expect(error).toBe(failure ? "agent is not currently allowed" : "");
     expect(draft.sending).toBe(false);
   }
@@ -942,7 +943,7 @@ for (const failure of [false, true]) test(`stopping leaves busy status to Histor
   const draft = { submission: 0, lines: [], busy: true };
   let reads = 0, error = "previous error";
   await stopComposer({ draft, id: "session", busy: true,
-    prompt: { mutateAsync: async (request: object) => { expect(request).toEqual({ id: "session", text: "$stop" }); if (failure) throw new Error("stop refused"); } },
+    prompt: { mutateAsync: async (request: object) => { expect(request).toEqual({ id: "session", text: "/stop" }); if (failure) throw new Error("stop refused"); } },
     refreshHistory: async () => { reads++; applyHistoryDelta(draft, view([], { running: true })); },
     setSendError: (value: string) => { error = value; },
   });

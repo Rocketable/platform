@@ -273,8 +273,8 @@ controls.
 Revert stops and settles active work, hides the selected request and everything
 after it, and replaces that session's composer text and files with the request.
 It sends nothing and keeps the current agent and submitting identity.
-`$undo` (also in the command palette) moves to the previous recorded request;
-repeated Undo can leave an empty conversation. **Redo** or `$redo` restores the
+`/undo` (also in the command palette) moves to the previous recorded request;
+repeated Undo can leave an empty conversation. **Redo** or `/redo` restores the
 whole hidden suffix without changing the composer. While history is reverted, a
 [Checkpoint](https://ui.shadcn.com/docs/ai-elements/base/checkpoint) divider below
 the last kept turn says so and offers **Redo**.
@@ -610,8 +610,8 @@ active tab.
   Close all, and Close group close this space's parked tabs too; Cmd/Ctrl+[
   and ] skip them.
 - **Auto-park.** A session you auto-park parks its tab until it is done each
-  time you send it a message: Send, Steer, a queued message, or a `$goal`, but
-  not a stash or a command the server answers itself, such as `$agent`. For a
+  time you send it a message: Send, Steer, a queued message, or a `/goal`, but
+  not a stash or a command the server answers itself, such as `/agent`. For a
   remote OpenCode session it is each prompt you send from its view; one sent
   before RocketClaw has listed the session does not park. Config's **Tabs**
   section has **Auto-park sessions**, your choice for every session, on until
@@ -722,7 +722,7 @@ active tab.
   sessions started outside the Web other than cron report chats, have none and
   open in the current space.
 - **Agent picker.** New session offers every agent. Once a session's agent has a
-  space, its picker and `$agent` offer only agents with that space, ignoring case;
+  space, its picker and `/agent` offer only agents with that space, ignoring case;
   when that leaves none the Slack channel allows, they offer all of those.
 - **People limited to spaces.** A person the config's `permissions` lists (see
   [Space permissions](../../../README.md#space-permissions)) gets only their
@@ -1059,19 +1059,24 @@ For a remote OpenCode session it offers **Copy server link**, which copies the
 shown session's address on its own server (the server asks whoever opens it to
 sign in), and, while the view is open, **OpenCode commands**, which opens
 OpenCode's palette.
-**Command: Start goal ($goal)**, **Command: Invoke skill ($skill)**,
-**Command: Enqueue work ($enqueue)**, **Command: Stash work ($stash)**, and
-**Command: Steer turn ($steer)**
-prefix the corresponding `$command` to the current draft and focus the composer.
+**Command: Start goal (/goal)**, **Command: Invoke skill (/skill)**,
+**Command: Enqueue work (/enqueue)**, **Command: Stash work (/stash)**, and
+**Command: Steer turn (/steer)**
+prefix the corresponding `/command` to the current draft and focus the composer.
 Existing draft text and attachments are kept; nothing is sent until you submit.
-In web, `$enqueue <text>` queues automatic later work, `$stash <text>` holds work
-until explicitly sent, and `$steer <text>` sends now or guides the running turn.
+In web, `/enqueue <text>` queues automatic later work, `/stash <text>` holds work
+until explicitly sent, and `/steer <text>` sends now or guides the running turn.
 Only the outer delivery command is removed; inner commands and text are preserved.
-`$goal <objective>` starts a goal
+`/goal <objective>` starts a goal
 loop on the conversation, with a `maxTurns:` option; its first turn runs right away when idle, otherwise after the active turn.
-Bare `$goal` privately shows usage, and `$stop` ends the goal.
+Bare `/goal` privately shows usage, and `/stop` ends the goal.
+A message is a command only when its first word is `/` plus a command name or
+the name of a skill the agent can use, as in `/review the diff`. Any other first
+word stays plain text, so `/tmp is full`, `/Users/ann/notes failed`, and `//`
+reach the agent as written. `/skill name` always asks for a skill and reports one
+the agent cannot use.
 The Stash button and shortcut still hold the entire draft literally, including
-any `$command` text. Slack has no commands: `$` text in a Slack mention reaches
+any `/command` text. Slack has no commands: `/` text in a Slack mention reaches
 the agent as ordinary text.
 Run cron opens a new session immediately, titled by the cron's name until its first message arrives. The job still runs privately, but its turn shows live in the chat, with **Working…**, and is replaced by the copied history when it finishes. The same holds for every hidden cron or External MCP run that reports to a chat.
 A chat that began as a cron run or an external MCP call starts with a collapsed origin card. Use show more to see its details; the card scrolls with the messages. An ordinary chat has no origin card.
@@ -1092,7 +1097,7 @@ threads retain their agent. When a thread's agent is no longer listed, for examp
 because its Slack channel does not allow it, the selector shows the channel's first configured
 agent (or the first listed agent elsewhere), and your next message, a popped stash, or queued work you send from the
 queue switches the thread to it first.
-Stash, `$stop`, and a typed `$agent` do not switch.
+Stash, `/stop`, and a typed `/agent` do not switch.
 New chat opens a fresh Home composer and creates a session only on the first send.
 It clears the draft and resets the agent to `main`; returning from other pages
 preserves the current draft and selected agent.
@@ -1186,9 +1191,10 @@ actions. Raster images have inline previews, including attachment-only replies.
 Files retain their original bytes; previews do not resize or re-encode uploads.
 HTML, SVG, and other active formats download instead of rendering in the app's
 origin. An **Original unverified** label appears when supplied by the backend.
-Typing `$skill` opens completion for the selected agent's allowed skills;
+Typing `/` lists commands and the selected agent's allowed skills, and typing
+`/skill` lists only the skills;
 typing a name filters the list, and choosing a skill leaves room for arguments.
-Send `$fork` to search the current session's recorded user messages, newest first.
+Send `/fork` to search the current session's recorded user messages, newest first.
 Choosing one copies history **before** that message into a new session and restores
 the selected text and attachments in its composer. **Full session** copies all
 recorded history. The source remains intact, and the fork starts no turn until
@@ -1208,7 +1214,7 @@ usable. Labels follow the existing two-second refresh cycle and do not change
 ordering or incomplete-search feedback.
 The source link is stored for new forks; older forks created without this metadata
 cannot be identified retroactively. Deleting a source leaves its forks intact.
-Send `$handoff` from any session to open a search with **Copy handoff** and
+Send `/handoff` from any session to open a search with **Copy handoff** and
 **Start new session** always available. Type to find a destination by message;
 no destination search runs before you type. Handoff generation begins in the
 background when the dialog opens. An early choice waits for the document; closing
@@ -1255,7 +1261,7 @@ initial, "Ana is typing" and animated dots, "Ana and Cy are typing" for two, all
 three names for three, and "Ana, Cy and 2 others are typing" for more. Long names are
 cut short so it fits the pane. Screen readers hear the sentence once per change,
 without the dots, which stop moving under reduced motion. A typist leaves it when
-their draft empties, by sending, a `$command`, an answer, or deleting, and 5 seconds
+their draft empties, by sending, a `/command`, an answer, or deleting, and 5 seconds
 after their last keystroke report; you never see your own typing. Your composer
 reports on the first keystroke, then at most every 2 seconds while you type, and once
 more when the draft empties. Each report leaves at once, so one that hangs holds back
@@ -1360,14 +1366,14 @@ in the background stay visible at every Timeline detail level. Background Jobs
 and Completion Notes are Trace lines too: a running job spins, and a failed or killed one shows in red. Each Completion Note is one
 row, its label followed by `finished`, `failed`, `stopped by user`,
 `stopped by agent`, or `killed (server restarted)`, shown at every level with the
-full note collapsed beneath it. `$stop` does not stop
+full note collapsed beneath it. `/stop` does not stop
 Background Jobs; use Stop.
 When a turn started in Web calls `ask_user_question`, the question shows as a card
 in the same box above the composer, and stays there after a reload or restart until
 answered. The card is a shadcn/ui
 [Questionnaire](https://ui.shadcn.com/docs/components/base/questionnaire): pick an
 option, or check every option that applies for a multiple choice, then **Submit**. While the card shows, Send answers with the
-composer's text as a custom answer instead of queueing it; Steer, Stash, and `$stop`
+composer's text as a custom answer instead of queueing it; Steer, Stash, and `/stop`
 work as usual. If someone else already answered or the turn ended, the card goes
 away and says so.
 A tool row whose call delegated work (an `auto` permission review or a Task

@@ -1015,11 +1015,13 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 				return false, err
 			}
 
-			if err := appendReplayInput(record, &item); err != nil {
-				return false, err
-			}
+			if item != nil {
+				if err := appendReplayInput(record, item); err != nil {
+					return false, err
+				}
 
-			*turnItems = append(*turnItems, item)
+				*turnItems = append(*turnItems, *item)
+			}
 		}
 
 		steer := PromptInputMessage(input)
@@ -1107,51 +1109,65 @@ func (l *looper) promptTurnItems(ctx context.Context, input *PromptInput) ([]res
 			return turnItems, err
 		}
 
-		turnItems = slices.Insert(turnItems, 0, directSkillItem)
+		if directSkillItem != nil {
+			turnItems = slices.Insert(turnItems, 0, *directSkillItem)
+		}
 	}
 
 	return turnItems, nil
 }
 
-func (l *looper) directSkillInput(ctx context.Context, input *PromptInputDirectSkill) (responses.ResponseInputItemUnionParam, error) {
+func (l *looper) directSkillInput(ctx context.Context, input *PromptInputDirectSkill) (*responses.ResponseInputItemUnionParam, error) {
 	name := strings.TrimSpace(input.Name)
 	if name == "" {
-		return responses.ResponseInputItemUnionParam{}, errors.New("direct skill invocation requires a skill name")
+		return nil, errors.New("direct skill invocation requires a skill name")
 	}
 
 	tool, ok := l.Tools["skill"]
 	if !ok {
-		return responses.ResponseInputItemUnionParam{}, fmt.Errorf("skill %q is not available to the active agent", name)
+		if input.PlainIfUnknown {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("skill %q is not available to the active agent", name)
 	}
 
 	raw, err := json.Marshal(skillToolParams{Name: name, Arguments: input.Arguments, Direct: true})
 	if err != nil {
-		return responses.ResponseInputItemUnionParam{}, fmt.Errorf("marshal direct skill input: %w", err)
+		return nil, fmt.Errorf("marshal direct skill input: %w", err)
 	}
 
 	decision, err := l.permissionDecision("skill", &tool, raw)
 	if err != nil {
-		return responses.ResponseInputItemUnionParam{}, err
+		return nil, err
+	}
+
+	if input.PlainIfUnknown && (decision.denied || decision.review != nil) {
+		return nil, nil
 	}
 
 	if decision.denied {
-		return responses.ResponseInputItemUnionParam{}, errors.New(decision.message)
+		return nil, errors.New(decision.message)
 	}
 
 	if decision.review != nil {
-		return responses.ResponseInputItemUnionParam{}, fmt.Errorf("skill %q is not visible to the active agent", name)
+		return nil, fmt.Errorf("skill %q is not visible to the active agent", name)
 	}
 
 	result, replayInput, err := tool.CallReplay(ctx, raw, nil, toolCallMetadata{})
+	if _, missing := errors.AsType[skillNotFoundError](err); missing && input.PlainIfUnknown {
+		return nil, nil
+	}
+
 	if err != nil {
-		return responses.ResponseInputItemUnionParam{}, err
+		return nil, err
 	}
 
 	if len(replayInput) > 0 {
-		return replayInput[0], nil
+		return &replayInput[0], nil
 	}
 
-	return inputMessageParam(responses.EasyInputMessageRoleDeveloper, easyInputStringContent(result.Output)), nil
+	return new(inputMessageParam(responses.EasyInputMessageRoleDeveloper, easyInputStringContent(result.Output))), nil
 }
 
 func appendReplayInput(record *SessionEntry, item *responses.ResponseInputItemUnionParam) error {

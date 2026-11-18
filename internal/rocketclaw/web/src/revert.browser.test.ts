@@ -80,13 +80,13 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     await page.getByText("draft.txt", { exact: true }).waitFor();
     // A revert shows no notice; Redo is a command and leaves no command text behind.
     expect(await page.getByText("History reverted", { exact: false }).count()).toBe(0);
-    await input.fill("$redo"); await page.getByRole("button", { name: "Send", exact: true }).click();
+    await input.fill("/redo"); await page.getByRole("button", { name: "Send", exact: true }).click();
     await page.getByText("Second answer", { exact: true }).waitFor();
     expect(await input.inputValue()).toBe("");
-    await input.fill("$undo"); await page.getByRole("button", { name: "Send", exact: true }).click();
+    await input.fill("/undo"); await page.getByRole("button", { name: "Send", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "Second request");
     expect(await page.getByText("draft.txt", { exact: true }).count()).toBe(0);
-    await input.fill("$undo"); await page.getByRole("button", { name: "Send", exact: true }).click();
+    await input.fill("/undo"); await page.getByRole("button", { name: "Send", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "First request");
     await page.waitForFunction(() => !document.querySelector("[data-message-id]"));
     expect(await page.locator("[data-message-id]").count()).toBe(0);
@@ -140,7 +140,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
         await input.fill("Keep named draft");
         await page.evaluate(() => { history.pushState({}, "", "/"); dispatchEvent(new PopStateEvent("popstate")); });
       }
-      const scratch = outcome === "reset" ? "$go" : "Discarded scratch";
+      const scratch = outcome === "reset" ? "/go" : "Discarded scratch";
       await input.fill(scratch);
       await page.getByRole("button", { name: "Add files", exact: true }).click();
       await page.locator('input[type="file"]').setInputFiles({ name: "scratch.txt", mimeType: "text/plain", buffer: Buffer.from("scratch bytes") });
@@ -178,7 +178,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       await page.keyboard.type(" typed while clearing");
       // Use actual pointer clicks: disabled controls must not dispatch draft edits.
       const buttons = ["Add files", "Remove scratch.txt", "Composer actions", "Send"];
-      if (outcome === "reset") buttons.unshift("$goal <objective> Start a goal loop");
+      if (outcome === "reset") buttons.unshift("/goal <objective> Start a goal loop");
       for (const name of buttons) {
         const button = page.getByRole("button", { name, exact: true });
         try { expect(await button.isDisabled()).toBe(true); } catch (error) {
@@ -314,13 +314,13 @@ test("revert an unsaved latest turn by input ID", async () => {
     // An older stopped turn cannot be reverted, so its Revert stays in place, disabled, saying why.
     expect(await revert("Stopped request").isDisabled()).toBe(true);
     expect(await revert("Stopped request").locator("..").getAttribute("title")).toBe("This message can't be reverted");
-    // Like OpenCode's undo, $undo starts from the newest request, not the newest saved one.
+    // Like OpenCode's undo, /undo starts from the newest request, not the newest saved one.
     const input = page.locator("textarea");
-    await input.fill("$undo"); await input.press("Enter");
+    await input.fill("/undo"); await input.press("Enter");
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "Live request");
     await page.getByText("Working answer", { exact: true }).waitFor({ state: "detached" });
     expect(staged).toEqual(["live-input"]);
-    await input.fill("$redo"); await input.press("Enter");
+    await input.fill("/redo"); await input.press("Enter");
     await page.getByText("Working answer", { exact: true }).waitFor();
     await live.hover();
     await live.getByRole("button", { name: "Revert message", exact: true }).click();

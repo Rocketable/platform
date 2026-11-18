@@ -197,8 +197,8 @@ test("the composer reports typing, not text, numbered and quietly", async () => 
     hold = undefined;
     release.resolve();
 
-    // $undo empties the draft without sending, and so does answering a question.
-    await composer.fill("$undo");
+    // /undo empties the draft without sending, and so does answering a question.
+    await composer.fill("/undo");
     await arrived(5);
     await composer.press("Enter");
     await arrived(6);

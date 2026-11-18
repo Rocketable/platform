@@ -371,14 +371,14 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     await toggle.click();
     const failure = page.getByText("The default OpenAI provider has no credential for voice.");
     await failure.waitFor();
-    await page.getByPlaceholder("Message or $command").fill("hello");
+    await page.getByPlaceholder("Message or /command").fill("hello");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await failure.waitFor({ state: "detached" });
     voiceFails = false;
     while (!(prompts as { text: string }[]).some((prompt) => prompt.text === "hello")) await Bun.sleep(10);
     prompts.length = 0;
     await page.goto(`${origin}/s/${Buffer.from("voice-1").toString("base64url")}`);
-    await page.getByPlaceholder("Message or $command").fill("keep my unsent draft");
+    await page.getByPlaceholder("Message or /command").fill("keep my unsent draft");
     await page.locator('input[type="file"]').setInputFiles({ name: "draft.txt", mimeType: "text/plain", buffer: Buffer.from("keep this attachment") });
     await page.getByRole("button", { name: "Remove draft.txt" }).waitFor();
     // A hard navigation must wait for the saved File, not just its optimistic attachment button.
@@ -392,7 +392,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     await page.goto(origin);
     await toggle.click(); // A new session's toggle with sticky main resumes its session, says so, then calls on it.
     await page.waitForURL(sessionURL("voice-1"));
-    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Message or $command"]')?.value === "keep my unsent draft");
+    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Message or /command"]')?.value === "keep my unsent draft");
     expect(await page.getByRole("button", { name: "Remove draft.txt" }).count()).toBe(1);
     await toggle.locator("svg.lucide-mic-off").waitFor();
     expect({ session: sessions.at(-1), call: calls.at(-1), voice: spoken.at(-1), alerts }).toEqual({ session: { agent: "main", spaceId: "main" }, call: "voice-1", voice: "cedar", alerts: ["main keeps a single session, so its existing session opens instead of a new one."] });
@@ -433,34 +433,34 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     const heldRow = page.locator("[data-queue-id]").first();
     await heldRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
     await heldRow.getByRole("link", { name: "Download draft.txt", exact: true }).waitFor();
-    expect(await page.getByPlaceholder("Message or $command").inputValue()).toBe("hello main");
+    expect(await page.getByPlaceholder("Message or /command").inputValue()).toBe("hello main");
     expect(await page.getByRole("button", { name: "Remove new.txt" }).count()).toBe(1);
     hideSticky = false;
     await saved("hello main");
     await page.reload();
-    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Message or $command"]')?.value === "hello main");
+    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Message or /command"]')?.value === "hello main");
     expect(await page.getByRole("button", { name: "Remove new.txt" }).count()).toBe(1);
     expect(heldDrafts).toHaveLength(1);
     promptFailure = "";
     await page.getByRole("button", { name: "Send", exact: true }).click();
-    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Message or $command"]')?.value === "");
+    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Message or /command"]')?.value === "");
     expect(heldDrafts).toHaveLength(1);
-    await page.getByPlaceholder("Message or $command").fill("handoff old draft");
+    await page.getByPlaceholder("Message or /command").fill("handoff old draft");
 
     await page.getByRole("button", { name: "Search sessions and commands" }).click();
     await page.getByRole("dialog").getByPlaceholder("Search sessions and commands").fill("Second voice");
     await page.getByRole("dialog").getByText("Second voice", { exact: true }).click();
-    await page.getByPlaceholder("Message or $command").fill("$handoff");
+    await page.getByPlaceholder("Message or /command").fill("/handoff");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     promptFailure = "handoff context";
     await page.getByRole("dialog", { name: "Session handoff" }).getByRole("button", { name: "Start new session", exact: true }).click();
     await page.waitForURL(sessionURL("voice-1"));
     await page.getByText("new send failed", { exact: true }).waitFor();
     expect(heldDrafts.map((item) => item.text)).toEqual(["keep my unsent draft", "handoff old draft"]);
-    expect(await page.getByPlaceholder("Message or $command").inputValue()).toBe("handoff context");
+    expect(await page.getByPlaceholder("Message or /command").inputValue()).toBe("handoff context");
     await saved("handoff context");
     await page.reload();
-    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Message or $command"]')?.value === "handoff context");
+    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Message or /command"]')?.value === "handoff context");
     promptFailure = "";
 
     await page.goto(`${origin}/voice`);

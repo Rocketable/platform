@@ -2410,7 +2410,7 @@ Use this skill for docs.
 	input := make(chan PromptInput, 1)
 	arguments := "write the API guide !`echo run >> calls`"
 
-	input <- PromptInput{Texts: []string{"$docs-helper " + arguments}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: arguments}, ExpandShellCommands: true, Responses: output}
+	input <- PromptInput{Texts: []string{"/docs-helper " + arguments}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: arguments}, ExpandShellCommands: true, Responses: output}
 
 	close(input)
 
@@ -2424,7 +2424,7 @@ Use this skill for docs.
 	require.Contains(t, serialized, "Use this skill for docs.")
 	require.Contains(t, serialized, "write the API guide")
 	require.Contains(t, serialized, `"role":"user"`)
-	require.JSONEq(t, `{"content":"$docs-helper write the API guide !`+"`"+`echo run >> calls`+"`"+`","role":"user","type":"message"}`, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList[1]))
+	require.JSONEq(t, `{"content":"/docs-helper write the API guide !`+"`"+`echo run >> calls`+"`"+`","role":"user","type":"message"}`, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList[1]))
 
 	calls, err := factory.promptExpansion.root.ReadFile("calls")
 	require.NoError(t, err)
@@ -2502,7 +2502,7 @@ Use this skill for docs.
 			saves := 0
 
 			input := make(chan PromptInput, 1)
-			call := PromptInput{ID: "original-input", Texts: []string{"$" + skillName + " !`touch executed`"}, DirectSkill: &PromptInputDirectSkill{Name: skillName, Arguments: "!`touch executed`"}, ExpandShellCommands: true, Responses: output}
+			call := PromptInput{ID: "original-input", Texts: []string{"/" + skillName + " !`touch executed`"}, DirectSkill: &PromptInputDirectSkill{Name: skillName, Arguments: "!`touch executed`"}, ExpandShellCommands: true, Responses: output}
 
 			if steer {
 				looper.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
@@ -2581,6 +2581,49 @@ Use this skill for docs.
 	}
 }
 
+func TestLooperUnknownSlashSkillStaysPlainText(t *testing.T) {
+	loaded := LoadSkills(fstest.MapFS{"docs-helper/SKILL.md": mapFile("---\nname: docs-helper\ndescription: Write docs\n---\n\nUse this skill for docs. !`touch executed`")}, "/virtual/skills").Skills
+
+	for name, tc := range map[string]struct {
+		agent     *Agent
+		skill     string
+		skillTool bool
+	}{
+		"unknown skill":     {agentWithSkillPermission(), "tmp", true},
+		"path":              {agentWithSkillPermission(), "Users/x/y", true},
+		"denied skill":      {agentWithSkillRules(PermissionRule{Pattern: "docs-helper", Action: permissionDeny}), "docs-helper", true},
+		"review-only skill": {agentWithSkillRules(PermissionRule{Pattern: "docs-helper", Action: permissionAuto}), "docs-helper", true},
+		"no skill tool":     {agentWithSkillPermission(), "docs-helper", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mock := mockResponses(responseWithMessage("resp-final", "done"))
+			looper := testLooper(mock)
+			looper.Permissions = tc.agent.Permission
+			factory := testSkillFactory(t, loaded, tc.agent)
+			factory.expandPromptShellCommands.SkillPrompts = true
+
+			if tc.skillTool {
+				looper.Tools = map[string]looperTool{"skill": factory.skillTool()}
+			}
+
+			output := make(chan ChatResponse, 10)
+
+			input := make(chan PromptInput, 1)
+			input <- PromptInput{Texts: []string{"/" + tc.skill + " is full"}, DirectSkill: &PromptInputDirectSkill{Name: tc.skill, Arguments: "is full", PlainIfUnknown: true}, Responses: output}
+
+			close(input)
+
+			require.NoError(t, looper.Loop(t.Context(), input, emptySession(), discardSession(), make(chan os.Signal, 1)))
+			require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
+			require.Len(t, newParams(mock), 1)
+			require.JSONEq(t, `[{"content":"/`+tc.skill+` is full","role":"user","type":"message"}]`, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList))
+
+			_, err := factory.promptExpansion.root.Stat("executed")
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
+}
+
 func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	loaded := LoadSkills(fstest.MapFS{"docs-helper/SKILL.md": mapFile("---\nname: docs-helper\ndescription: Docs\n---\nInstructions !`echo $ARGUMENTS >> calls`")}, "/virtual/skills").Skills
 	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
@@ -2592,10 +2635,10 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	sink := recordingJournal()
 	looper.Journal = sink
 	steers := []PromptInput{
-		{Texts: []string{"$docs-helper first"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}},
-		{Texts: []string{"$missing-skill"}, DirectSkill: &PromptInputDirectSkill{Name: "missing-skill"}},
+		{Texts: []string{"/docs-helper first"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}},
+		{Texts: []string{"/missing-skill"}, DirectSkill: &PromptInputDirectSkill{Name: "missing-skill"}},
 		{Texts: []string{"plain neighboring request"}},
-		{Texts: []string{"$docs-helper last"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
+		{Texts: []string{"/docs-helper last"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
 	}
 	looper.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
 		batch := steers
@@ -3597,12 +3640,14 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	steers := []PromptInput{
 		{Texts: []string{"use the other file"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}, Attachments: []Attachment{{MIME: "image/png", Filename: "screen.png", URL: "data:image/png;base64,c2NyZWVu"}}},
 		{Attachments: []Attachment{{MIME: "image/jpeg", Filename: "photo.jpg", URL: "data:image/jpeg;base64,cGhvdG8="}}},
-		{Texts: []string{"and skip tests"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
+		{Texts: []string{"/tmp is full"}, DirectSkill: &PromptInputDirectSkill{Name: "tmp", Arguments: "is full", PlainIfUnknown: true}},
+		{Texts: []string{"and skip tests"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last", PlainIfUnknown: true}},
 	}
 	want := []string{
 		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\n<skill_metadata>\nname: docs-helper\ndescription: Docs\nlicense: \ncompatibility: \nlocation: docs-helper/SKILL.md\nmetadata: null\n</skill_metadata>\n\nInstructions first fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
 		`{"content":[{"type":"input_text","text":"use the other file"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,c2NyZWVu"}],"role":"user","type":"message"}`,
 		`{"content":[{"type":"input_image","detail":"auto","image_url":"data:image/jpeg;base64,cGhvdG8="}],"role":"user","type":"message"}`,
+		`{"content":"/tmp is full","role":"user","type":"message"}`,
 		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\n<skill_metadata>\nname: docs-helper\ndescription: Docs\nlicense: \ncompatibility: \nlocation: docs-helper/SKILL.md\nmetadata: null\n</skill_metadata>\n\nInstructions last fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
 		`{"content":"and skip tests","role":"user","type":"message"}`,
 	}
@@ -3651,14 +3696,14 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, newParams(mock), 2)
 	items := newParams(mock)[1].Input.OfInputItemList
-	require.Len(t, items, 8)
+	require.Len(t, items, 9)
 	require.JSONEq(t, `{"call_id":"call-1","output":"looked-up","type":"function_call_output"}`, marshalJSON(t, items[2]))
 
 	history, turns, err := loadSession(sessionEntries(saved), "openai")
 	require.NoError(t, err)
 	require.Len(t, turns, 1)
-	require.Len(t, turns[0].ReplayInput, 9)
-	require.Len(t, history, 9)
+	require.Len(t, turns[0].ReplayInput, 10)
+	require.Len(t, history, 10)
 
 	for i, expected := range want {
 		require.JSONEq(t, expected, marshalJSON(t, items[3+i]))

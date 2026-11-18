@@ -485,7 +485,7 @@ func TestHTTPStreams(t *testing.T) {
 
 			if scenario == "stash" {
 				path, method = "/api/Prompt", http.MethodPost
-				requestBody = strings.NewReader(`{"id":"visible","text":"$stop","delivery":"STASH"}`)
+				requestBody = strings.NewReader(`{"id":"visible","text":"/stop","delivery":"STASH"}`)
 			}
 
 			if scenario == "pop" {

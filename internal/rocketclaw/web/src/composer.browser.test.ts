@@ -261,9 +261,9 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
     expect(await page.locator('img[src="x"]').count()).toBe(0);
 
     await toggle.click();
-    await page.locator('textarea[placeholder="Message or $command"]').waitFor();
+    await page.locator('textarea[placeholder="Message or /command"]').waitFor();
     expect(updates.at(-1)).toEqual({ id: "paused", paused: false });
-    expect(await input.getAttribute("placeholder")).toBe("Message or $command");
+    expect(await input.getAttribute("placeholder")).toBe("Message or /command");
 
     // Live, a reply running and a typed message bring Steer, and the toggle steps aside so Send stays on screen.
     running = true;

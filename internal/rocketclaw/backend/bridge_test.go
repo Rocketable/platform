@@ -1125,7 +1125,7 @@ func TestBridgeSubmitAfterStopStoresRequestDurably(t *testing.T) {
 
 	visible, err := (&threadBridgeManager{store: service, bridges: map[string]directBridge{}}).queueItems(conversationID)
 	require.NoError(t, err)
-	assert.Len(t, visible, 1, "stored human input stays visible in $queue")
+	assert.Len(t, visible, 1, "stored human input stays visible in the queue")
 }
 
 func TestBridgeStartReportsStateLoadError(t *testing.T) {
@@ -1773,32 +1773,37 @@ func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
 func TestParseDirectSkillTrigger(t *testing.T) {
 	t.Parallel()
 
-	for _, text := range []string{"$docs-helper write docs", "$skill docs-helper write docs"} {
-		directSkill := parseDirectSkillTrigger(text)
+	assert.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "write docs"}, parseDirectSkillTrigger("/skill docs-helper write docs"))
 
-		require.NotNil(t, directSkill)
-		assert.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "write docs"}, directSkill)
-	}
-
-	directSkill := parseDirectSkillTrigger("$skill   ")
+	directSkill := parseDirectSkillTrigger("/skill   ")
 	require.NotNil(t, directSkill)
 	assert.Empty(t, directSkill.Name)
 
-	assert.Nil(t, parseDirectSkillTrigger("hello $docs-helper"))
-
-	for _, name := range []string{"", "agent", "cron", "stop", "enqueue", "queue", "goal"} {
-		assert.Nil(t, parseDirectSkillTrigger("$"+name))
-		assert.Equal(t, &harness.PromptInputDirectSkill{Name: name, Arguments: ""}, parseDirectSkillTrigger("$skill "+name))
+	for _, text := range []string{"hello /docs-helper", "https://example.com/docs", "/ docs-helper", "$docs-helper write docs", "$skill docs-helper", "$5 is the budget"} {
+		assert.Nil(t, parseDirectSkillTrigger(text), text)
 	}
 
-	assert.Equal(t, &harness.PromptInputDirectSkill{Name: "Docs", Arguments: "\"API guide\"  Next\tLast "}, parseDirectSkillTrigger("  $Docs \"API guide\"  Next\tLast "))
+	for _, name := range []string{"", "agent", "cron", "stop", "enqueue", "queue", "goal"} {
+		assert.Nil(t, parseDirectSkillTrigger("/"+name))
+		assert.Equal(t, &harness.PromptInputDirectSkill{Name: name, Arguments: ""}, parseDirectSkillTrigger("/skill "+name))
+	}
+
+	for text, want := range map[string]harness.PromptInputDirectSkill{
+		" /docs-helper write docs":           {Name: "docs-helper", Arguments: "write docs", PlainIfUnknown: true},
+		"  /Docs \"API guide\"  Next\tLast ": {Name: "Docs", Arguments: "\"API guide\"  Next\tLast ", PlainIfUnknown: true},
+		"/Users/x/y failed":                  {Name: "Users/x/y", Arguments: "failed", PlainIfUnknown: true},
+		"/tmp is full":                       {Name: "tmp", Arguments: "is full", PlainIfUnknown: true},
+		"//":                                 {Name: "/", PlainIfUnknown: true},
+	} {
+		assert.Equal(t, &want, parseDirectSkillTrigger(text), text)
+	}
 
 	for _, source := range []protocol.Source{protocol.SourceSlack, protocol.SourceWeb, protocol.SourceSystem, protocol.SourceExternalMCP} {
 		for _, kind := range []protocol.InboundKind{protocol.InboundKindPrompt, protocol.InboundKindSteer, protocol.InboundKindEnqueue, protocol.InboundKindCancel} {
-			for _, text := range []string{"$docs-helper typed", ""} {
-				msg := protocol.NewInboundMessageFromContent(source, kind, &protocol.InboundContent{Text: text, TextAttachments: []string{"$docs-helper attachment"}}, true)
+			for _, text := range []string{"/docs-helper typed", ""} {
+				msg := protocol.NewInboundMessageFromContent(source, kind, &protocol.InboundContent{Text: text, TextAttachments: []string{"/docs-helper attachment"}}, true)
 				if text != "" && source == protocol.SourceWeb && kind != protocol.InboundKindCancel {
-					assert.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "typed"}, inboundDirectSkill(msg))
+					assert.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "typed", PlainIfUnknown: true}, inboundDirectSkill(msg))
 				} else {
 					assert.Nil(t, inboundDirectSkill(msg))
 				}
@@ -1810,11 +1815,11 @@ func TestParseDirectSkillTrigger(t *testing.T) {
 	}
 }
 
-func TestVoiceInboundRunsNoDollarCommands(t *testing.T) {
+func TestVoiceInboundRunsNoSlashCommands(t *testing.T) {
 	t.Parallel()
 
-	skill := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper do it"}, true)
-	require.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "do it"}, inboundDirectSkill(skill))
+	skill := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "/docs-helper do it"}, true)
+	require.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "do it", PlainIfUnknown: true}, inboundDirectSkill(skill))
 
 	skill.Metadata[protocol.InboundMediaMetadataKey] = "Voice"
 	assert.Nil(t, inboundDirectSkill(skill), skill.Text)
@@ -2046,8 +2051,8 @@ func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 	assert.Equal(t, item.Message, req.inbound.Text)
 	assert.Equal(t, item.Principal, req.inbound.Metadata[protocol.InboundPrincipalMetadataKey])
 
-	for _, text := range []string{"$docs-helper \"typed args\"  Next", "$skill stop \"typed args\"  Next", ""} {
-		item := &protocol.ThreadQueueItem{ID: "raw-queue", ConversationID: bridge.config.ConversationID, Source: protocol.SourceWeb, Message: text, Principal: "author", Content: protocol.InboundContent{Text: text, TextAttachments: []string{"$docs-helper attachment-only"}, AttachmentWarnings: []string{"warning"}}}
+	for _, text := range []string{"/docs-helper \"typed args\"  Next", "/skill stop \"typed args\"  Next", ""} {
+		item := &protocol.ThreadQueueItem{ID: "raw-queue", ConversationID: bridge.config.ConversationID, Source: protocol.SourceWeb, Message: text, Principal: "author", Content: protocol.InboundContent{Text: text, TextAttachments: []string{"/docs-helper attachment-only"}, AttachmentWarnings: []string{"warning"}}}
 		require.NoError(t, bridge.config.SessionService.PutThreadQueueItem(item.ID, item))
 		items, err := bridge.config.SessionService.ThreadQueueForConversation(bridge.config.ConversationID)
 		require.NoError(t, err)
@@ -2057,7 +2062,7 @@ func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 		inbound := (<-bridge.requestCh).inbound
 		require.Equal(t, text, inbound.Metadata[protocol.InboundRawTextMetadataKey])
 		require.Equal(t, "author", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
-		require.Contains(t, inbound.Text, "$docs-helper attachment-only")
+		require.Contains(t, inbound.Text, "/docs-helper attachment-only")
 		require.Equal(t, []string{"warning"}, inbound.AttachmentWarnings)
 		require.Equal(t, parseDirectSkillTrigger(text), inboundDirectSkill(inbound))
 		_, claimed, err := (stateDAO{db: bridge.config.SessionService.db}).claimThreadQueueItem(t.Context(), bridge.config.ConversationID, item.ID)
@@ -2850,7 +2855,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	assert.Equal(t, []string{developerMessages[0]}, reviewMetadata[1])
 }
 
-func TestRunTurnTranslatesDollarToDirectSkill(t *testing.T) {
+func TestRunTurnTranslatesSlashToDirectSkill(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
@@ -2910,7 +2915,7 @@ Request: $ARGUMENTS
 
 	for _, source := range []protocol.Source{protocol.SourceWeb} {
 		for _, kind := range []protocol.InboundKind{protocol.InboundKindPrompt, protocol.InboundKindSteer, protocol.InboundKindEnqueue} {
-			for _, invocation := range []string{"$docs-helper write API docs", "$skill docs-helper write API docs"} {
+			for _, invocation := range []string{"/docs-helper write API docs", "/skill docs-helper write API docs"} {
 				conversationID := fmt.Sprintf("dollar-%s-%s-%s", source, kind, invocation)
 				recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindWebChat})
 				bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
@@ -2921,7 +2926,7 @@ Request: $ARGUMENTS
 				require.NoError(t, root.WriteFile("state", []byte("old"), 0o600))
 				require.NoError(t, root.WriteFile("calls", nil, 0o600))
 
-				promote := kind == protocol.InboundKindEnqueue && strings.HasPrefix(invocation, "$skill ")
+				promote := kind == protocol.InboundKindEnqueue && strings.HasPrefix(invocation, "/skill ")
 				if kind == protocol.InboundKindEnqueue {
 					item := protocol.ThreadQueueItem{ID: conversationID + "-queued", ConversationID: conversationID, Source: source, Message: invocation, Principal: "Alice", Content: protocol.InboundContent{Text: invocation, TextAttachments: []string{"attachment-only argument"}}}
 					require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
@@ -3001,8 +3006,17 @@ Request: $ARGUMENTS
 					require.NoError(t, root.WriteFile("calls", nil, 0o600))
 					result, err := runTestTurn(t.Context(), bridge, (<-bridge.requestCh).inbound, "denied-turn")
 					require.NoError(t, err)
-					require.Contains(t, result.text, "not available to the active agent")
-					require.Empty(t, requestBody.Input, "agent changed after enqueue must be checked before the provider")
+
+					if !strings.HasPrefix(invocation, "/skill ") {
+						assert.Contains(t, result.text, "ok")
+
+						last := requestBody.Input[len(requestBody.Input)-1]
+						assert.Equal(t, "user", last.Role, "a slash name the agent cannot load stays plain text")
+						assert.Contains(t, string(last.Content), invocation)
+					} else {
+						require.Contains(t, result.text, "not available to the active agent")
+						require.Empty(t, requestBody.Input, "agent changed after enqueue must be checked before the provider")
+					}
 
 					calls, err := root.ReadFile("calls")
 					require.NoError(t, err)
@@ -3014,7 +3028,7 @@ Request: $ARGUMENTS
 
 	recordTestConversations(t, service, "main", map[string]ConversationKind{"dollar-slack": KindWebChat, "missing-skill": KindWebChat})
 	mention := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "dollar-slack", Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-	mentionMsg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "$docs-helper write API docs"}, true)
+	mentionMsg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "/docs-helper write API docs"}, true)
 	mentionMsg.ConversationID = mention.config.ConversationID
 	requestBody.Input = nil
 
@@ -3026,12 +3040,12 @@ Request: $ARGUMENTS
 	require.Empty(t, mentionCalls, "a Slack mention runs no skill")
 	require.Len(t, requestBody.Input, 1)
 	assert.Equal(t, "user", requestBody.Input[0].Role)
-	assert.Contains(t, string(requestBody.Input[0].Content), "$docs-helper write API docs")
+	assert.Contains(t, string(requestBody.Input[0].Content), "/docs-helper write API docs")
 
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "missing-skill", Agent: "main", SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler)}
-	msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "$skill missing-skill", true)
+	msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "/skill missing-skill", true)
 	msg.ConversationID = bridge.config.ConversationID
 	msg.Metadata = map[string]string{"web_message_id": "original-input"}
 	requestBody.Input = nil
@@ -3055,6 +3069,20 @@ Request: $ARGUMENTS
 	require.NoError(t, err)
 	require.Len(t, requestBody.Input, 1, "next provider input excludes failed preparation")
 	require.NotContains(t, string(requestBody.Input[0].Content), "missing-skill")
+
+	require.NoError(t, root.WriteFile("calls", nil, 0o600))
+
+	for i, text := range []string{"/missing-skill is full", "$docs-helper write API docs", "$5 is the budget"} {
+		msg.Text = text
+		result, err = runTestTurn(t.Context(), bridge, msg, fmt.Sprintf("plain-turn-%d", i))
+		require.NoError(t, err)
+		assert.Contains(t, result.text, "ok")
+		assert.Contains(t, string(requestBody.Input[len(requestBody.Input)-1].Content), text, "an unknown slash name or $ text reaches the agent as plain text")
+	}
+
+	calls, err := root.ReadFile("calls")
+	require.NoError(t, err)
+	require.Empty(t, calls, "$ text loads no skill")
 }
 
 func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {

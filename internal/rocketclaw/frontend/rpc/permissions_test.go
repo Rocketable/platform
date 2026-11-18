@@ -493,7 +493,7 @@ func TestSpacePermissionTurns(t *testing.T) {
 	} {
 		err := tc.feed(alice)
 		require.Equal(t, codes.PermissionDenied, status.Code(err), "%s: %v", tc.name, err)
-		require.Contains(t, status.Convert(err).Message(), "$agent", tc.name)
+		require.Contains(t, status.Convert(err).Message(), "/agent", tc.name)
 
 		if tc.bob != nil {
 			require.Equal(t, *tc.bob, status.Code(tc.feed(bob)), tc.name)
@@ -518,12 +518,12 @@ func TestSpacePermissionTurns(t *testing.T) {
 	_, err = h.server.queueItem(alice, "RemoveQueueItem", &QueueItemRequest{Id: "switched", ItemId: held})
 	require.NoError(t, err)
 
-	_, err = prompt(alice, "switched", "$stop", PromptDelivery_STEER)
+	_, err = prompt(alice, "switched", "/stop", PromptDelivery_STEER)
 	require.NoError(t, err)
-	_, err = prompt(alice, "switched", "$agent main-agent", PromptDelivery_STEER)
+	_, err = prompt(alice, "switched", "/agent main-agent", PromptDelivery_STEER)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	offered, err := prompt(alice, "switched", "$agent", PromptDelivery_STEER)
+	offered, err := prompt(alice, "switched", "/agent", PromptDelivery_STEER)
 	require.NoError(t, err)
 	require.Equal(t, "ops-agent", offered.PrivateText)
 
@@ -537,7 +537,7 @@ func TestSpacePermissionTurns(t *testing.T) {
 	request, turn = started(bob, "switched")
 	require.Contains(t, request, "You are main-agent.")
 
-	switched, err := prompt(alice, "switched", "$agent ops-agent", PromptDelivery_STEER)
+	switched, err := prompt(alice, "switched", "/agent ops-agent", PromptDelivery_STEER)
 	require.NoError(t, err)
 	require.Equal(t, "Agent: ops-agent", switched.PrivateText)
 
@@ -555,7 +555,7 @@ func TestSpacePermissionTurns(t *testing.T) {
 	}
 
 	require.Equal(t, codes.PermissionDenied, status.Code(errSteer), "%v", errSteer)
-	require.Contains(t, status.Convert(errSteer).Message(), "$stop")
+	require.Contains(t, status.Convert(errSteer).Message(), "/stop")
 
 	_, err = prompt(alice, "switched", "alice queued", PromptDelivery_QUEUE)
 	require.NoError(t, err)
@@ -566,7 +566,7 @@ func TestSpacePermissionTurns(t *testing.T) {
 	require.NoError(t, err)
 	_, err = h.server.queueItem(alice, "SteerQueueItem", &QueueItemRequest{Id: "switched", ItemId: "alice-held"})
 	require.Equal(t, codes.PermissionDenied, status.Code(err), "%v", err)
-	require.Contains(t, status.Convert(err).Message(), "$stop")
+	require.Contains(t, status.Convert(err).Message(), "/stop")
 	_, err = h.server.queueItem(alice, "PopQueueItem", &QueueItemRequest{Id: "switched", ItemId: "alice-held"})
 	require.NoError(t, err)
 	finish(turn)

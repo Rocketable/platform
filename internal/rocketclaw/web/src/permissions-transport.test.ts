@@ -76,7 +76,7 @@ test("a person limited to Ops sees and drives only Ops, and everything once unli
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await transcript.getByText("ops-agent here: Thursday's deploy checklist is ready.", { exact: true }).waitFor();
     await shot("limited-reply-from-ops-agent");
-    expect(prompts).toEqual(["$agent ops-agent", "Is the deploy checklist ready for Thursday?"]);
+    expect(prompts).toEqual(["/agent ops-agent", "Is the deploy checklist ready for Thursday?"]);
     expect(await agentsPage("ops-agent", "limited-agents-page-only-ops-agent")).toEqual(["ops-agent"]);
 
     expect(await page.evaluate(async () => (await fetch("/test/unlimit", { method: "POST" })).ok)).toBe(true);

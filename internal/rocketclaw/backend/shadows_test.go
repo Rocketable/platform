@@ -609,7 +609,7 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 	require.NoError(t, err)
 
 	parent.movedNotes = []harness.PromptInput{systemPromptInput("moved", "moved notice")}
-	steer := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "$docs-helper \"typed args\"  Next\t", true)
+	steer := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "/docs-helper \"typed args\"  Next\t", true)
 	steer.PreserveWhitespace = true
 	completion := &turnCompletion{done: make(chan struct{})}
 	parent.steers = []bridgeRequest{{queueItemID: "s1", inbound: steer, completion: completion}}
@@ -643,7 +643,7 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"note", "moved", "s1"}, []string{inputs[0].ID, inputs[1].ID, inputs[2].ID})
 	require.Equal(t, buildPrompt(steer, nil, true), inputs[2].Texts[0])
-	require.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "\"typed args\"  Next\t"}, inputs[2].DirectSkill)
+	require.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "\"typed args\"  Next\t", PlainIfUnknown: true}, inputs[2].DirectSkill)
 
 	var mirrored []byte
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT inputs FROM shadow_turns LIMIT 1`).Scan(&mirrored))

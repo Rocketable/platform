@@ -701,7 +701,7 @@ func TestPromotedAgentQueueItemStaysNonHuman(t *testing.T) {
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{conversationID: bridge}}
 
 	for _, open := range []bool{true, false} {
-		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindEnqueue, "$docs-helper write docs", false)
+		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindEnqueue, "/docs-helper write docs", false)
 		inbound.Metadata = map[string]string{protocol.InboundSenderSessionMetadataKey: "web:sender", protocol.InboundSenderAgentMetadataKey: "planner"}
 		require.NoError(t, store.PutThreadQueueItem("agent", &protocol.ThreadQueueItem{ConversationID: conversationID, Source: protocol.SourceSystem, Kind: protocol.InboundKindEnqueue, Message: inbound.Text, Inbound: inbound}))
 

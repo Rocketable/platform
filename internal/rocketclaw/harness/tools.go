@@ -491,6 +491,15 @@ func (f *toolFactory) availableSkillSubjects() []string {
 	return subjects
 }
 
+type skillNotFoundError struct {
+	name      string
+	available []string
+}
+
+func (e skillNotFoundError) Error() string {
+	return fmt.Sprintf("skill %q not found. Available skills: %s", e.name, strings.Join(e.available, ", "))
+}
+
 type skillToolParams struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
@@ -541,7 +550,7 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, raw json.RawMes
 
 	skill, ok := f.skills.Items[input.Name]
 	if !ok {
-		return skillToolParams{}, "", fmt.Errorf("skill %q not found. Available skills: %s", input.Name, strings.Join(f.availableSkillSubjects(), ", "))
+		return skillToolParams{}, "", skillNotFoundError{name: input.Name, available: f.availableSkillSubjects()}
 	}
 
 	dir := path.Dir(skill.Location)
