@@ -195,12 +195,8 @@ func TestWebQuestionMarksItsReaders(t *testing.T) {
 
 	assert.Equal(t, []string{alice + " quiet parked", bob + " loud", carol + " quiet parked", dave + " quiet parked", erin + " loud", frank + " loud"}, ask(session, turnID+"/call/c1"+webQuestionStep))
 
-	for _, person := range []string{alice, carol, dave} {
-		_, err := service.PollAttention(ctx, person, "", false)
-		require.NoError(t, err)
-	}
-
-	assert.Equal(t, []string{alice + " loud", bob + " loud", carol + " loud", dave + " loud", erin + " loud", frank + " loud"}, attentionOn(t, service, session), "each park ends at its person's next poll")
+	require.NoError(t, service.tickParks(ctx))
+	assert.Equal(t, []string{alice + " loud", bob + " loud", carol + " loud", dave + " loud", erin + " loud", frank + " loud"}, attentionOn(t, service, session), "the server ends each park")
 
 	_, err = service.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
 	require.NoError(t, err)

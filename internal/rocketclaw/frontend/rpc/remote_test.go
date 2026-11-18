@@ -87,6 +87,10 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 			t.Fatalf("start %q fixture before readiness: %v", reply, running.Wait())
 		}
 
+		var waking errgroup.Group
+		waking.Go(func() error { rt.Sessions.WakeParks(ctx); return nil })
+		t.Cleanup(func() { cancel(); require.NoError(t, waking.Wait()) })
+
 		listener, err := net.Listen("unix", testSocketPath(t))
 		require.NoError(t, err)
 

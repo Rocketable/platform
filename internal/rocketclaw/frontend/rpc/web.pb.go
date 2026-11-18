@@ -195,7 +195,8 @@ const (
 	// Park sets the tab aside until until, or until unparked when until is empty.
 	AttentionAction_PARK   AttentionAction = 2
 	AttentionAction_UNPARK AttentionAction = 3
-	// Park until done sets a session's tab aside until its next turn ends; other locations are skipped.
+	// Park until done sets a session's tab aside until the session is idle after its work, or a turn fails; other
+	// locations are skipped.
 	AttentionAction_PARK_UNTIL_DONE AttentionAction = 4
 	// Auto-park makes each prompt the caller sends a session park its tab until it is done, and stop auto-park makes
 	// none, over their choice for every session; other locations are skipped.
@@ -265,8 +266,8 @@ type ListSessionsRequest struct {
 	Since string `protobuf:"bytes,2,opt,name=since,proto3" json:"since,omitempty"`
 	// The caller marked the viewing tab unread while it was in view: the view counts without clearing the mark.
 	Hold bool `protobuf:"varint,3,opt,name=hold,proto3" json:"hold,omitempty"`
-	// Set by the server for a poll from a page it serves or trusts: only such a poll records the view and wakes the
-	// caller's timers that came due.
+	// Set by the server for a poll from a page it serves or trusts: only such a poll records the view and clears that
+	// location's mark.
 	SameOrigin    bool `protobuf:"varint,4,opt,name=same_origin,json=sameOrigin,proto3" json:"same_origin,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -378,7 +379,7 @@ type Session struct {
 	Until string `protobuf:"bytes,35,opt,name=until,proto3" json:"until,omitempty"`
 	// With a mark, the notification text a timer wrote: "Park ended"; else empty.
 	Note string `protobuf:"bytes,36,opt,name=note,proto3" json:"note,omitempty"`
-	// The caller parked its tab until its next turn ends, which has no time.
+	// The caller parked its tab until the session is idle after its work, which has no time.
 	UntilDone bool `protobuf:"varint,37,opt,name=until_done,json=untilDone,proto3" json:"until_done,omitempty"`
 	// A prompt the caller sends parks its tab until it is done: by their choice for the session, else for every session.
 	AutoPark bool `protobuf:"varint,38,opt,name=auto_park,json=autoPark,proto3" json:"auto_park,omitempty"`

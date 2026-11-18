@@ -397,16 +397,11 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 
 	path := func(id string) string { return "/s/" + base64.RawURLEncoding.EncodeToString([]byte(id)) }
 	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-00")}, backend.AttentionPark, &soon))
-	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-01")}, backend.AttentionPark, new(time.Now().Add(-time.Second))))
 
 	_, done, sessions := list(&ListSessionsRequest{Since: done.Version, SameOrigin: true})
-	require.Len(t, sessions, 2)
+	require.Len(t, sessions, 1)
 	require.True(t, sessions["chat-00"].Parked)
 	require.Equal(t, soon.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano), sessions["chat-00"].Until)
-	require.NotEmpty(t, sessions["chat-01"].UnreadAt, "the poll ended the park")
-	require.False(t, sessions["chat-01"].MarkedUnread)
-	require.False(t, sessions["chat-01"].Parked)
-	require.Equal(t, "Park ended", sessions["chat-01"].Note)
 	require.Empty(t, tabs(done))
 
 	require.NoError(t, server.sessions.SetAutoParkAll(ctx, "alice", true))

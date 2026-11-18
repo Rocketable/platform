@@ -348,8 +348,14 @@ func TestPromptAutoParks(t *testing.T) {
 
 	require.NoError(t, turn.Wait())
 
-	parked = attention()
-	require.True(t, parked.Parked && !parked.UntilDone && !parked.Until.IsZero(), "the turn's end makes the park due: %+v", parked)
+	ctx, cancel := context.WithCancel(t.Context())
+
+	var waking errgroup.Group
+	waking.Go(func() error { h.rt.Sessions.WakeParks(ctx); return nil })
+
+	defer func() { cancel(); require.NoError(t, waking.Wait()) }()
+
+	require.Eventually(t, func() bool { return !attention().Parked }, 10*time.Second, 50*time.Millisecond, "the server ends the park once the session is idle; the held message is not work")
 }
 
 func TestTabsSpaceLimit(t *testing.T) {

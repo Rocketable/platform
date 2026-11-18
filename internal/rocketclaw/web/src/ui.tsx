@@ -2196,7 +2196,7 @@ function useTabTitle(path: string, label: string) {
   return useCleanText((draft && (draft.existing ? `Edit ${draft.name}` : draft.name)) || label);
 }
 
-// A tab's park, with the time it ends or until the session's next turn ends, in words.
+// A tab's park, with the time it ends or until the session is done, in words.
 function timerText(mark?: Omit<TabAttention, "path">) {
   const when = mark?.until && new Date(mark.until).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
   return mark?.parked ? mark.untilDone ? "Parked until it is done" : when ? `Parked until ${when}` : "Parked" : undefined;

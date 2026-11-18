@@ -44,6 +44,7 @@ type openCodeTestMessage struct {
 	Type     string
 	Username string
 	Created  int64
+	Outcome  string
 }
 
 func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +178,7 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			type wireMessage struct {
 				Type     string            `json:"type"`
 				Metadata map[string]string `json:"metadata"`
+				Outcome  string            `json:"outcome,omitempty"`
 				Time     struct {
 					Created int64 `json:"created"`
 				} `json:"time"`
@@ -185,7 +187,7 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			data := []wireMessage{}
 			for _, message := range slices.Backward(history) {
 				if message.Type == query.Get("type") && len(data) < limit {
-					wire := wireMessage{Type: message.Type, Metadata: map[string]string{"displayText": "hi"}}
+					wire := wireMessage{Type: message.Type, Metadata: map[string]string{"displayText": "hi"}, Outcome: message.Outcome}
 					if message.Username != "" {
 						wire.Metadata["rocketclaw_username"] = message.Username
 					}
@@ -659,7 +661,28 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	fake.messages["ses_new"] = append(fake.messages["ses_new"], idle(7050))
 
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
-	assert.Equal(t, "new quiet parked until=due", attentionOf(t, s, "alice", path))
+	assert.Equal(t, "new quiet parked until=done worked", attentionOf(t, s, "alice", path), "a turn end records work; the session's idleness ends the park")
+
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET background = TRUE WHERE conversation_id = $1`, id)
+	require.NoError(t, err)
+	require.NoError(t, s.tickParks(ctx))
+	assert.Equal(t, "new quiet parked until=done worked", attentionOf(t, s, "alice", path), "background work on the remote session keeps it parked")
+
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET background = FALSE WHERE conversation_id = $1`, id)
+	require.NoError(t, err)
+	require.NoError(t, s.tickParks(ctx))
+	assert.Equal(t, "new", attentionOf(t, s, "alice", path), "an idle remote session ends it")
+
+	for i, outcome := range []string{"interrupted", "failed"} {
+		require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionParkUntilDone, nil))
+
+		created := int64(7060 + 10*i)
+		fake.sessions = []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", created)}
+		fake.messages["ses_new"] = append(fake.messages["ses_new"], openCodeTestMessage{Type: "idle", Created: created, Outcome: outcome})
+
+		require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+		assert.Equal(t, map[string]string{"interrupted": "new quiet parked until=done worked", "failed": "new quiet parked until=due worked"}[outcome], attentionOf(t, s, "alice", path), outcome)
+	}
 
 	turn(7000, true)
 	turn(7000, false, prompt("alice", 7100), idle(7200), prompt("bob", 7300), prompt("bob", 7350), idle(7400))
@@ -747,9 +770,9 @@ func TestSyncOpenCodeMarksAskingStarts(t *testing.T) {
 
 	assert.Equal(t, []string{"alice quiet parked", "bob loud"}, sync(true), "the question makes Alice's park due")
 
-	_, err = s.PollAttention(ctx, "alice", "", false)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"alice loud", "bob loud"}, attentionOn(t, s, id), "her next poll ends it")
+	require.NoError(t, s.tickParks(ctx))
+	require.NoError(t, s.tickParks(ctx))
+	assert.Equal(t, "new resume=unpark", attentionOf(t, s, "alice", path), "the server ends it, and keeps the park to put back while the session still asks")
 
 	_, err = s.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
 	require.NoError(t, err)

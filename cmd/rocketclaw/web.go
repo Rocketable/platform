@@ -50,6 +50,11 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 
 	ctxSync, cancelSync := context.WithCancel(context.Background())
 
+	serving.Go(func() error {
+		rt.Sessions.WakeParks(ctxSync)
+		return nil
+	})
+
 	if len(cfg.OpenCode) > 0 {
 		serving.Go(func() error {
 			rt.Sessions.SyncOpenCode(ctxSync, rt.Cfg)

@@ -122,21 +122,16 @@ UNION ALL SELECT format('tab %s unread=%s', path, unread_at IS NOT NULL) FROM we
 
 	httpServer := startHTTPTestServer(t, connection)
 
-	viewed, woken := []string{"alice viewing=/s/eA", "tab /agents unread=t", "tab /cron unread=t", "tab /s/eA unread=f"}, "tab /agents unread=t"
 	for _, tc := range []struct {
 		header, value, query string
 		want                 []string
 	}{
-		{"Sec-Fetch-Site", "cross-site", "viewing=/s/eA", append([]string{"tab /agents unread=f"}, marked...)},
-		{"Origin", "https://elsewhere.example", "viewing=/s/eA", append([]string{"tab /agents unread=f"}, marked...)},
-		{"Sec-Fetch-Site", "same-origin", "viewing=/s/eA", viewed},
-		{"Sec-Fetch-Site", "same-origin", "viewing=/s/eA&hold", []string{"alice viewing=/s/eA", woken, "tab /cron unread=t", "tab /s/eA unread=t"}},
+		{"Sec-Fetch-Site", "cross-site", "viewing=/s/eA", marked},
+		{"Origin", "https://elsewhere.example", "viewing=/s/eA", marked},
+		{"Sec-Fetch-Site", "same-origin", "viewing=/s/eA", []string{"alice viewing=/s/eA", "tab /cron unread=t", "tab /s/eA unread=f"}},
+		{"Sec-Fetch-Site", "same-origin", "viewing=/s/eA&hold", []string{"alice viewing=/s/eA", "tab /cron unread=t", "tab /s/eA unread=t"}},
 	} {
 		mark()
-
-		_, err := db.ExecContext(t.Context(), `INSERT INTO web_tab_attention (username, path, parked, until) VALUES ('alice', '/agents', TRUE, now() - interval '1 second')
-ON CONFLICT (username, path) DO UPDATE SET unread_at = NULL, parked = TRUE, until = excluded.until`)
-		require.NoError(t, err)
 
 		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, httpServer.URL+"/api/ListSessions?"+tc.query, http.NoBody)
 		require.NoError(t, err)
