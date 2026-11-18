@@ -51,8 +51,8 @@ type cronScheduleStore interface {
 }
 
 type definition struct {
-	relativePath, agent, body, space string
-	schedules                        []config.CronSchedule
+	job       protocol.OneOffCronjob
+	schedules []config.CronSchedule
 }
 
 type Job struct {
@@ -108,8 +108,8 @@ func (m *Manager) Start(ctx context.Context) error {
 		for range definition.schedules {
 			m.log.Info(
 				"loaded cronjob schedule",
-				"file", definition.relativePath,
-				"agent", definition.agent,
+				"file", definition.job.RelativePath,
+				"agent", definition.job.Agent,
 			)
 		}
 	}
@@ -166,12 +166,15 @@ func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, erro
 			return protocol.OneOffCronjob{}, fmt.Errorf("load one-off cronjob: %w", err)
 		}
 
-		i := slices.IndexFunc(definitions, func(d definition) bool { return backend.CronStem(d.relativePath) == target })
+		i := slices.IndexFunc(definitions, func(d definition) bool { return backend.CronStem(d.job.RelativePath) == target })
 		if i < 0 {
 			return protocol.OneOffCronjob{}, fmt.Errorf("load one-off cronjob: no routine %q", target)
 		}
 
-		return protocol.OneOffCronjob{RelativePath: definitions[i].relativePath, Agent: definitions[i].agent, Space: definitions[i].space, Prompt: m.preparePrompt(definitions[i].body)}, nil
+		job := definitions[i].job
+		job.Prompt = m.preparePrompt(job.Prompt)
+
+		return job, nil
 	}
 
 	job, err := config.LoadOneOffCronjob(m.workspace, m.runtimeDir, target)
@@ -199,12 +202,12 @@ func (m *Manager) Jobs() ([]Job, error) {
 
 	jobs := make([]Job, 0, len(definitions))
 	for _, definition := range definitions {
-		job := Job{RelativePath: definition.relativePath, Agent: definition.agent, Body: definition.body, Space: definition.space}
+		job := Job{RelativePath: definition.job.RelativePath, Agent: definition.job.Agent, Body: definition.job.Prompt, Space: definition.job.Space}
 		for i, schedule := range definition.schedules {
 			job.Schedules = append(job.Schedules, schedule.Raw)
 
 			for _, trigger := range triggers {
-				if trigger.ScheduleID == scheduleID(definition.relativePath, i, schedule.Raw) && !trigger.NextDue.Before(now) {
+				if trigger.ScheduleID == scheduleID(definition.job.RelativePath, i, schedule.Raw) && !trigger.NextDue.Before(now) {
 					job.Upcoming = append(job.Upcoming, trigger.NextDue)
 				}
 			}
@@ -303,7 +306,7 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 
 	definitionsByPath := map[string]definition{}
 	for _, definition := range definitions {
-		definitionsByPath[definition.relativePath] = definition
+		definitionsByPath[definition.job.RelativePath] = definition
 	}
 
 	for _, state := range due {
@@ -335,7 +338,7 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 		m.wg.Add(1)
 		m.mu.Unlock()
 
-		delete(definitionsByPath, definition.relativePath)
+		delete(definitionsByPath, definition.job.RelativePath)
 
 		go func() {
 			defer m.wg.Done()
@@ -350,7 +353,7 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 func definitionAgents(definitions []definition) []string {
 	agents := make([]string, len(definitions))
 	for i := range definitions {
-		agents[i] = definitions[i].agent
+		agents[i] = definitions[i].job.Agent
 	}
 
 	return agents
@@ -362,8 +365,8 @@ func (m *Manager) scheduledStates(definitions []definition, now time.Time) []bac
 	for _, definition := range definitions {
 		for index, schedule := range definition.schedules {
 			states = append(states, backend.CronScheduleState{
-				ScheduleID:   scheduleID(definition.relativePath, index, schedule.Raw),
-				RelativePath: definition.relativePath,
+				ScheduleID:   scheduleID(definition.job.RelativePath, index, schedule.Raw),
+				RelativePath: definition.job.RelativePath,
 				NextDue:      schedule.Next(now),
 			})
 		}
@@ -377,20 +380,20 @@ const cronReplyInstruction = "Your reply is posted as a report in a new Web chat
 func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	startedAt := m.now()
 	ranAt := startedAt.Format(time.RFC3339)
-	prompt := m.preparePrompt(definition.body)
+	prompt := m.preparePrompt(definition.job.Prompt)
 
-	log := m.log.With("file", definition.relativePath, "agent", definition.agent, "ran_at", ranAt)
+	log := m.log.With("file", definition.job.RelativePath, "agent", definition.job.Agent, "ran_at", ranAt)
 
 	progress := &backend.RawRunProgress{
-		ConversationID: cronTraceConversationID(cronTracePrefix, definition.relativePath, startedAt),
-		Run:            &protocol.CronRun{Path: definition.relativePath, At: startedAt},
-		Cronjob:        &protocol.CronjobMessage{RelativePath: definition.relativePath, Agent: definition.agent, RanAt: ranAt, Space: definition.space},
+		ConversationID: cronTraceConversationID(cronTracePrefix, definition.job.RelativePath, startedAt),
+		Run:            &protocol.CronRun{Path: definition.job.RelativePath, At: startedAt},
+		Cronjob:        &protocol.CronjobMessage{RelativePath: definition.job.RelativePath, Agent: definition.job.Agent, RanAt: ranAt, Space: definition.job.Space},
 	}
 	log = log.With("conversation_id", progress.ConversationID)
 	log.Info("starting cronjob", "event", "cron_started", "prompt_len", len(prompt))
 
 	started := time.Now()
-	result, err := m.run.Run(context.WithoutCancel(ctx), definition.agent, prompt, progress)
+	result, err := m.run.Run(context.WithoutCancel(ctx), definition.job.Agent, prompt, progress)
 
 	outcome := "completed"
 	if err != nil {
@@ -435,11 +438,11 @@ func loadDefinitionsIn(cfg *config.LockedConfig, runtimeDir string) ([]definitio
 			}
 
 			relativePath := "agents/" + agent.Location + "#" + schedule.Raw
-			if slices.ContainsFunc(definitions, func(d definition) bool { return d.relativePath == relativePath }) {
+			if slices.ContainsFunc(definitions, func(d definition) bool { return d.job.RelativePath == relativePath }) {
 				return nil, fmt.Errorf("agents/%s: routines: schedule %q is listed twice", agent.Location, schedule.Raw)
 			}
 
-			definitions = append(definitions, definition{relativePath: relativePath, agent: name, body: cmp.Or(routine.Instruction, "Scheduled run ("+schedule.Raw+")."), space: agent.Space, schedules: []config.CronSchedule{schedule}})
+			definitions = append(definitions, definition{job: protocol.OneOffCronjob{RelativePath: relativePath, Agent: name, Prompt: cmp.Or(routine.Instruction, "Scheduled run ("+schedule.Raw+")."), Space: agent.Space}, schedules: []config.CronSchedule{schedule}})
 		}
 	}
 
@@ -486,16 +489,16 @@ func loadDefinitionsIn(cfg *config.LockedConfig, runtimeDir string) ([]definitio
 			return nil, err
 		}
 
-		if agents.Items[definition.agent].Mode == harness.AgentModeEasy {
-			return nil, fmt.Errorf("%s: agent %s is an easy agent; schedule it with its routines", relativePath, definition.agent)
+		if agents.Items[definition.job.Agent].Mode == harness.AgentModeEasy {
+			return nil, fmt.Errorf("%s: agent %s is an easy agent; schedule it with its routines", relativePath, definition.job.Agent)
 		}
 
-		if agents.Items[definition.agent].Sticky == harness.AgentStickyUser {
-			return nil, fmt.Errorf("%s: agent %s is sticky: user; a cron cannot run it", relativePath, definition.agent)
+		if agents.Items[definition.job.Agent].Sticky == harness.AgentStickyUser {
+			return nil, fmt.Errorf("%s: agent %s is sticky: user; a cron cannot run it", relativePath, definition.job.Agent)
 		}
 
-		if agent := agents.Items[definition.agent]; agent.Sticky == harness.AgentStickyGlobal && definition.space != "" && !strings.EqualFold(definition.space, agent.Space) {
-			return nil, fmt.Errorf("%s: sticky: global agent %s requires the cron to use its space %s", relativePath, definition.agent, agent.Space)
+		if agent := agents.Items[definition.job.Agent]; agent.Sticky == harness.AgentStickyGlobal && definition.job.Space != "" && !strings.EqualFold(definition.job.Space, agent.Space) {
+			return nil, fmt.Errorf("%s: sticky: global agent %s requires the cron to use its space %s", relativePath, definition.job.Agent, agent.Space)
 		}
 
 		definitions = append(definitions, definition)
@@ -510,13 +513,7 @@ func loadDefinition(data []byte, relativePath string) (definition, error) {
 		return definition{}, fmt.Errorf("load cron definition: %w", err)
 	}
 
-	return definition{
-		relativePath: job.RelativePath,
-		agent:        job.Agent,
-		body:         job.Prompt,
-		space:        job.Space,
-		schedules:    schedules,
-	}, nil
+	return definition{job: job, schedules: schedules}, nil
 }
 
 func scheduleID(relativePath string, index int, raw string) string {
