@@ -397,11 +397,10 @@ func listSessionsTool(service *SessionService, threads *threadBridgeManager) har
 			}
 
 			var (
-				ids     []string
-				search  *SessionSearch
-				matches []SessionMatch
-				shown   = make(map[string]int)
-				err     error
+				ids    []string
+				search *SessionSearch
+				shown  = make(map[string]int)
+				err    error
 			)
 
 			if criteria := strings.TrimSpace(params.Criteria); criteria == "" {
@@ -427,18 +426,9 @@ ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, v.conversation_id CO
 				slack := threads.slackLookups
 				threads.mu.Unlock()
 
-				search, matches, err = service.searchSessionsWithin(ctx, criteria, &params, slack)
-				for i := range matches[:min(len(matches), params.Limit)] {
-					ids = append(ids, matches[i].Chat.Session.Conversation.ID)
-					shown[ids[i]] = 0
-				}
+				search, err = service.searchSessionsWithin(ctx, criteria, &params, slack)
 			}
 
-			if err != nil {
-				return harness.ToolResult{}, err
-			}
-
-			summaries, err := service.sessionToolSummaries(ctx, ids, params.IncludeMessagePreview)
 			if err != nil {
 				return harness.ToolResult{}, err
 			}
@@ -450,6 +440,11 @@ ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, v.conversation_id CO
 			output.WriteString("conversation_id\tturns\tlast_updated")
 
 			if search != nil {
+				for i := range search.Matches[:min(len(search.Matches), params.Limit)] {
+					ids = append(ids, search.Matches[i].Chat.Session.Conversation.ID)
+					shown[ids[i]] = 0
+				}
+
 				output.WriteString("\tname\tagent\troom\ttags\tmatched")
 			}
 
@@ -459,13 +454,18 @@ ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, v.conversation_id CO
 
 			output.WriteByte('\n')
 
+			summaries, err := service.sessionToolSummaries(ctx, ids, params.IncludeMessagePreview)
+			if err != nil {
+				return harness.ToolResult{}, err
+			}
+
 			for i, summary := range summaries {
 				var columns string
 
 				if search != nil {
-					chat := &matches[i].Chat
+					chat := &search.Matches[i].Chat
 
-					matched := cmp.Or(string(matches[i].Field), "messages")
+					matched := cmp.Or(string(search.Matches[i].Field), "messages")
 					if search.Needle == "" {
 						matched = ""
 					}
@@ -510,7 +510,7 @@ ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, v.conversation_id CO
 
 				fmt.Fprintf(&output, "[criteria: terms=%s; text=%s]\n", escape.Replace(strings.Join(terms, ",")), escape.Replace(search.Text))
 
-				if more := len(matches) - len(ids); more > 0 {
+				if more := len(search.Matches) - len(ids); more > 0 {
 					fmt.Fprintf(&output, "[truncated: %d more matching sessions]\n", more)
 				}
 			}
@@ -520,29 +520,30 @@ ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, v.conversation_id CO
 	}
 }
 
-func (s *SessionService) searchSessionsWithin(ctx context.Context, criteria string, params *sessionListParams, slack slackLookup) (*SessionSearch, []SessionMatch, error) {
+func (s *SessionService) searchSessionsWithin(ctx context.Context, criteria string, params *sessionListParams, slack slackLookup) (*SessionSearch, error) {
 	search, err := s.SearchSessions(ctx, "", criteria, SearchMessages, slack)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	var matches []SessionMatch
-
-	for i := range search.Matches {
-		if row := &search.Matches[i].Chat.Session; row.Summary != nil && row.Server == "" {
-			if at := strings.TrimSuffix(slices.MaxFunc([]time.Time{row.Summary.LastUpdated, row.ArrivedAt}, time.Time.Compare).Format(time.RFC3339Nano), "Z"); at >= params.Since && (params.Until == "" || at < params.Until) {
-				matches = append(matches, search.Matches[i])
-			}
+	search.Matches = slices.DeleteFunc(search.Matches, func(match SessionMatch) bool {
+		row := &match.Chat.Session
+		if row.Summary == nil || row.Server != "" {
+			return true
 		}
-	}
+
+		at := strings.TrimSuffix(slices.MaxFunc([]time.Time{row.Summary.LastUpdated, row.ArrivedAt}, time.Time.Compare).Format(time.RFC3339Nano), "Z")
+
+		return at < params.Since || params.Until != "" && at >= params.Until
+	})
 
 	if !slices.ContainsFunc(search.Terms, func(term SearchTerm) bool { return term.Key == keySort }) {
-		slices.SortFunc(matches, func(a, b SessionMatch) int {
+		slices.SortFunc(search.Matches, func(a, b SessionMatch) int {
 			return cmp.Or(b.Chat.Session.Summary.LastUpdated.Compare(a.Chat.Session.Summary.LastUpdated), strings.Compare(a.Chat.Session.Conversation.ID, b.Chat.Session.Conversation.ID))
 		})
 	}
 
-	return search, matches, nil
+	return search, nil
 }
 
 func (s *SessionService) sessionToolSummaries(ctx context.Context, ids []string, preview bool) ([]sessionListSummary, error) {
