@@ -271,7 +271,7 @@ Paths are under `internal/rocketclaw/`.
 | User: save | live file `agents/<name>.md`, read whole by `backend/agent_drafts.go:agentLayerFiles` under the config lock (saving itself is modeled in `../agent-editor-save/`) |
 | Client: commit an op | `coedit.ts:CoEdit.soon/flush/receive/settle` (200 ms pause, one op in flight, ack on read) |
 | Client: wait before capture | `coedit.ts:CoEdit.drained/release/holdFile` |
-| Client: Send / restart reaches the server | `frontend/rpc/transport.go` (`DraftPrompt`, `RestartDraftChat` :274) → `backend/agent_draft_chat.go:SendAgentDraft` → `backend/agent_drafts.go:CaptureAgentDraft` (after the lock), `agent_draft_chat.go:agentDraftRecord`; Restart → `recordConversation` (new chat) |
+| Client: Send / restart reaches the server | `frontend/rpc/transport.go` (`DraftPrompt`, `RestartDraftChat` :274) → `backend/agent_draft_chat.go:SendAgentDraft` → `backend/agent_drafts.go:captureAgentDraft` (after the lock), `agent_draft_chat.go:agentDraftRecord`; Restart → `recordConversation` (new chat) |
 | A: claim | `backend/bridge.go:activateInbound` → `backend/shadows.go:admitShadowInputs/startShadowManifests` (roster from the captured files) |
 | A: run with the capture | `bridge.go:runTurn` (`agentDraftFiles(origin)` → `loadRocketCodeDefinitionsIn` with the layer) |
 | B, L: claim and run | `shadows.go:claimShadowTurn` (needs A's inputs; live column gets the live bytes); `bridge.go:runTurn` (own framing when `b.shadow && layer != nil`) |

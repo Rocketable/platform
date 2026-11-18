@@ -144,8 +144,12 @@ func (dt *agentDraftTest) send(t *testing.T, text string) *protocol.ThreadQueueI
 	inbound.ConversationID = dt.chat
 	inbound.Metadata[protocol.InboundPrincipalMetadataKey], inbound.Metadata["web_message_id"] = "alice", rand.Text()
 
-	_, _, err := dt.rt.Sessions.CaptureAgentDraft(t.Context(), dt.draft.ID, inbound)
+	_, _, files, err := dt.rt.Sessions.captureAgentDraft(t.Context(), dt.draft.ID, inbound.Metadata)
 	require.NoError(t, err)
+	data, err := json.Marshal(files)
+	require.NoError(t, err)
+
+	inbound.Metadata[agentDraftFilesMetadataKey] = string(data)
 
 	return &protocol.ThreadQueueItem{ID: inbound.Metadata["web_message_id"], Message: text, Principal: "alice", Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue, StashAt: time.Now().UTC(), Inbound: inbound}
 }
