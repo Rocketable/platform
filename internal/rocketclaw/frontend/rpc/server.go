@@ -236,12 +236,15 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		return !ok || last != fingerprints[key]
 	}
 
+	session := new(Session)
+
 	for chat, err := range s.sessions.SidebarChats(ctx, owner, s.channels, nil) {
 		if err != nil {
 			return err
 		}
 
-		session := sidebarSession(&chat)
+		sidebarSession(session, &chat)
+
 		if !changed(since.rows, listing.rows, session.Id, session) {
 			continue
 		}
@@ -249,6 +252,8 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		if err := stream.SendMsg(&ListSessionsResponse{Sessions: []*Session{session}}); err != nil {
 			return fmt.Errorf("send web session: %w", err)
 		}
+
+		session = new(Session)
 	}
 
 	tabs, err := s.sessions.TabAttention(ctx, owner)
@@ -293,10 +298,10 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	return nil
 }
 
-func sidebarSession(chat *backend.SidebarChat) *Session {
+func sidebarSession(session *Session, chat *backend.SidebarChat) {
 	row := &chat.Session
 	conversation := row.Conversation
-	session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Paused: row.Paused, Pausable: row.Pausable, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
+	*session = Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Paused: row.Paused, Pausable: row.Pausable, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
 		Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label()}
 
 	if !row.StateSince.IsZero() {
@@ -315,8 +320,6 @@ func sidebarSession(chat *backend.SidebarChat) *Session {
 
 	session.UnreadAt, session.MarkedUnread, session.Parked, session.Until, session.Note = webAttention(&row.Attention)
 	session.UntilDone, session.AutoPark = row.Attention.UntilDone, row.AutoPark
-
-	return session
 }
 
 func webAttention(attention *backend.Attention) (unreadAt string, quiet, parked bool, until, note string) {

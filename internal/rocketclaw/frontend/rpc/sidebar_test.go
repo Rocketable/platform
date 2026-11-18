@@ -30,6 +30,9 @@ import (
 
 func TestSidebarSessionTimestamps(t *testing.T) {
 	at := time.Date(2024, time.January, 2, 3, 4, 5, 123456789, time.UTC)
+
+	var got Session
+
 	for _, tc := range []struct {
 		name                   string
 		state, updated         time.Time
@@ -42,7 +45,7 @@ func TestSidebarSessionTimestamps(t *testing.T) {
 		{"zero updated", at, time.Time{}, "2024-01-02T03:04:05.123456789Z", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := sidebarSession(&backend.SidebarChat{Session: backend.SidebarSession{StateSince: tc.state, Summary: &protocol.SessionSummary{LastUpdated: tc.updated}}})
+			sidebarSession(&got, &backend.SidebarChat{Session: backend.SidebarSession{StateSince: tc.state, Summary: &protocol.SessionSummary{LastUpdated: tc.updated}}})
 			require.Equal(t, tc.wantState, got.StateSince)
 			require.Equal(t, tc.wantUpdated, got.UpdatedAt)
 		})
@@ -50,13 +53,15 @@ func TestSidebarSessionTimestamps(t *testing.T) {
 
 	chat := backend.SidebarChat{Session: backend.SidebarSession{StateSince: at, Summary: &protocol.SessionSummary{LastUpdated: at}}}
 
-	var got *Session
-
-	allocs := testing.AllocsPerRun(1, func() { got = sidebarSession(&chat) })
+	allocs := testing.AllocsPerRun(1, func() { sidebarSession(&got, &chat) })
 
 	require.Equal(t, "2024-01-02T03:04:05.123456789Z", got.UpdatedAt)
 	require.Equal(t, got.StateSince, got.UpdatedAt)
-	require.LessOrEqual(t, allocs, float64(2), "identical timestamps need only one formatted string and the response")
+	require.LessOrEqual(t, allocs, float64(1), "a reused row needs only the formatted string")
+
+	sidebarSession(&got, &backend.SidebarChat{})
+	require.Empty(t, got.StateSince)
+	require.Empty(t, got.UpdatedAt)
 }
 
 func sidebarChoicesFixture(tb testing.TB, count int) (*Server, context.Context) {
@@ -107,6 +112,36 @@ func BenchmarkSidebarFingerprints(b *testing.B) {
 
 	for b.Loop() {
 		require.NoError(b, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(any) error { return nil }}))
+	}
+}
+
+func BenchmarkSidebarSessionDelta(b *testing.B) {
+	server, ctx := sidebarChoicesFixture(b, 32)
+	stream := &mockServerStream{ContextFunc: func() context.Context { return ctx }}
+
+	var version string
+
+	stream.SendMsgFunc = func(message any) error {
+		version = message.(*ListSessionsResponse).Version
+		return nil
+	}
+	require.NoError(b, server.listSessions(&ListSessionsRequest{}, stream))
+
+	stream.SendMsgFunc = func(message any) error {
+		response := message.(*ListSessionsResponse)
+		require.Empty(b, response.Sessions)
+
+		if response.Version != "" {
+			version = response.Version
+		}
+
+		return nil
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		require.NoError(b, server.listSessions(&ListSessionsRequest{Since: version}, stream))
 	}
 }
 
@@ -282,6 +317,11 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 
 	sent, full := list(ctx, "")
 	require.ElementsMatch(t, []string{"chat-00", "chat-01", "chat-02"}, sent, "the first listing sends every row")
+
+	for id, row := range rows {
+		require.Equal(t, id, row.Id, "a sent row must not be overwritten by another row")
+	}
+
 	require.Empty(t, full.Since)
 	require.Empty(t, full.Removed)
 	require.NotEmpty(t, full.Version)

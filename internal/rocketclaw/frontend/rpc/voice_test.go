@@ -411,7 +411,11 @@ func TestPausedChat(t *testing.T) {
 
 		for chat, err := range h.rt.Sessions.SidebarChats(t.Context(), "alice", h.server.channels, []string{id}) {
 			require.NoError(t, err)
-			return sidebarSession(&chat), chat.Session.Attention
+
+			session := new(Session)
+			sidebarSession(session, &chat)
+
+			return session, chat.Session.Attention
 		}
 
 		return nil, backend.Attention{}
