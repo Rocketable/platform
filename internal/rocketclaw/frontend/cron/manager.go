@@ -241,10 +241,10 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCron
 	startedAt := time.Now()
 	result, err := m.run.Run(context.WithoutCancel(ctx), job.Agent, job.Prompt, raw)
 
-	outcome := "completed"
+	outcome := "reported"
 	if err != nil {
 		outcome = "failed"
-	} else if result.ConversationID == "" {
+	} else if !result.Reported {
 		outcome = "intentional_silence"
 	}
 
@@ -394,10 +394,10 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	started := time.Now()
 	result, err := m.run.Run(context.WithoutCancel(ctx), definition.job.Agent, prompt, progress)
 
-	outcome := "completed"
+	outcome := "reported"
 	if err != nil {
 		outcome = "failed"
-	} else if result.ConversationID == "" {
+	} else if !result.Reported {
 		outcome = "intentional_silence"
 	}
 

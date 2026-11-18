@@ -209,7 +209,7 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 			t.Fatalf("ConversationID = %q; want one-off trace ID", progress.ConversationID)
 		}
 
-		return protocol.CronRunResult{ConversationID: progress.SyncDestination}, nil
+		return protocol.CronRunResult{ConversationID: progress.SyncDestination, Reported: progress.SyncDestination != ""}, nil
 	}}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC) }
 
@@ -221,7 +221,7 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 	require.Len(t, sources, 2)
 	require.NotEqual(t, sources[0], sources[1])
 	require.Equal(t, 2, strings.Count(logs.String(), `"event":"cron_completed"`))
-	require.Equal(t, 1, strings.Count(logs.String(), `"outcome":"completed"`))
+	require.Equal(t, 1, strings.Count(logs.String(), `"outcome":"reported"`))
 	require.Equal(t, 1, strings.Count(logs.String(), `"outcome":"intentional_silence"`))
 	require.Contains(t, logs.String(), `"duration_ms":`)
 }
@@ -262,11 +262,10 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	logs.Reset()
 
 	m.run = &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		return protocol.CronRunResult{ConversationID: "destination"}, nil
+		return protocol.CronRunResult{Reported: true}, nil
 	}}
 	m.executeJob(t.Context(), &definition{job: protocol.OneOffCronjob{RelativePath: "cron/daily.md", Agent: "helper", Prompt: "Body"}})
-	require.Contains(t, logs.String(), `"outcome":"completed"`)
-	require.Contains(t, logs.String(), `"destination_conversation_id":"destination"`)
+	require.Contains(t, logs.String(), `"outcome":"reported"`)
 	logs.Reset()
 
 	m.run = &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
