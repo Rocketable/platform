@@ -158,6 +158,20 @@ func execRows(ctx context.Context, db stateStoreDB, execOp, query string, args .
 }
 
 func NewSessionServiceIn(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*SessionService, error) {
+	db, err := openSessionDB(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
+
+	service, err := newSessionService(ctx, cfg, db, logger)
+	if err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+
+	return service, nil
+}
+
+func newSessionService(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logger) (*SessionService, error) {
 	driver, location, err := cfg.AttachmentLocation()
 	if err != nil {
 		return nil, fmt.Errorf("configure attachment storage: %w", err)
@@ -174,9 +188,8 @@ func NewSessionServiceIn(ctx context.Context, cfg *config.Config, logger *slog.L
 		attachments = s3Attachments{client: s3.NewFromConfig(aws), bucket: location}
 	}
 
-	db, err := openSessionDB(ctx, cfg.DatabaseURL, logger)
-	if err != nil {
-		return nil, err
+	if err := initializeSessionDB(ctx, db, logger); err != nil {
+		return nil, hideDSN(err, cfg.DatabaseURL, "initialize rocketclaw state store")
 	}
 
 	return &SessionService{db: db, log: logger, attachments: attachments, definitions: config.NewLockedConfig(cfg), jobs: noConversationJobs{}, historyWorkers: noHistoryWorkers{}, spillDir: rocketcodeSpillDir(cfg)}, nil
@@ -1996,7 +2009,7 @@ func holdRunLock(ctx context.Context, db *sql.DB, work runLockWork) error {
 	return nil
 }
 
-func openSessionDB(ctx context.Context, databaseURL string, logger *slog.Logger) (*sql.DB, error) {
+func openSessionDB(ctx context.Context, databaseURL string) (*sql.DB, error) {
 	cfg, err := pgx.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, hideDSN(err, databaseURL, "open rocketclaw state store")
@@ -2008,11 +2021,6 @@ func openSessionDB(ctx context.Context, databaseURL string, logger *slog.Logger)
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, hideDSN(err, databaseURL, "ping rocketclaw state store")
-	}
-
-	if err := initializeSessionDB(ctx, db, logger); err != nil {
-		_ = db.Close()
-		return nil, hideDSN(err, databaseURL, "initialize rocketclaw state store")
 	}
 
 	return db, nil

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -31,6 +32,7 @@ const (
 )
 
 type FrontendAssembler interface {
+	Gate(context.Context, *config.Config, *slog.Logger) (func() error, error)
 	Assemble(*Runtime) (<-chan struct{}, []func(context.Context) error, error)
 	ValidateAssets(*config.Config, string) error
 }
@@ -43,6 +45,8 @@ type lockedRun struct {
 	logLevel  *slog.LevelVar
 	assemble  FrontendAssembler
 	sandboxes sandboxPreparer
+	cfg       *config.Config
+	db        *sql.DB
 	sessions  *SessionService
 }
 
@@ -52,16 +56,6 @@ type runShutdown struct {
 	restartRequested chan struct{}
 
 	once sync.Once
-}
-
-func (s *runShutdown) restart(reason string) string {
-	started := s.start(reason, true)
-
-	if !started {
-		s.logger.Warn("restart requested while shutdown already in progress", "reason", reason)
-	}
-
-	return "restart requested; runtime cancellation started"
 }
 
 func (s *runShutdown) start(reason string, restart bool) bool {
@@ -87,35 +81,13 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger, logLevel 
 
 	detach := context.AfterFunc(ctx, cancel)
 
-	stopInstrumentation, err := configureInstrumentation(runCtx, cfg.PostHog)
-	if err != nil {
-		return err
-	}
-
-	defer func() {
-		shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
-		defer stop()
-
-		if err := stopInstrumentation(shutdownCtx); err != nil {
-			logger.Warn("stop instrumentation", "error", err)
-		}
-	}()
-
-	stateLogger := logger.With("component", "state_store")
-
-	startedAt := time.Now()
-
-	stateLogger.Info("starting rocketclaw state store", "workspace", cfg.Workspace, "runtime_dir", cfg.RuntimeDirName())
-
-	rocketcodeSessions, err := NewSessionServiceIn(runCtx, cfg, stateLogger)
+	db, err := openSessionDB(runCtx, cfg.DatabaseURL)
 	if err != nil {
 		return fmt.Errorf("start rocketcode session service: %w", err)
 	}
 
-	stateLogger.Info("started rocketclaw state store", "elapsed", time.Since(startedAt))
-
 	defer func() {
-		if err := rocketcodeSessions.Stop(); err != nil {
+		if err := db.Close(); err != nil {
 			logger.Warn("stop rocketcode session service", "error", err)
 		}
 	}()
@@ -127,11 +99,11 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger, logLevel 
 		{Name: "/sched/goroutines:goroutines"},
 		{Name: "/sched/latencies:seconds"},
 	}
-	baseline := sampleHealth(samples, rocketcodeSessions.db.Stats())
+	baseline := sampleHealth(samples, db.Stats())
 
 	var health errgroup.Group
 	health.Go(func() error {
-		reportHealth(runCtx, rocketcodeSessions.db, logger, samples, &baseline)
+		reportHealth(runCtx, db, logger, samples, &baseline)
 		return nil
 	})
 
@@ -141,7 +113,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger, logLevel 
 		_ = health.Wait()
 	}()
 
-	return holdRunLock(runCtx, rocketcodeSessions.db, &lockedRun{
+	return holdRunLock(runCtx, db, &lockedRun{
 		cancel:    cancel,
 		detach:    detach,
 		signal:    ctx.Done(),
@@ -149,11 +121,53 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger, logLevel 
 		logLevel:  logLevel,
 		assemble:  assemble,
 		sandboxes: sandboxes,
-		sessions:  rocketcodeSessions,
+		cfg:       cfg,
+		db:        db,
 	})
 }
 
 func (s *lockedRun) Run(runCtx context.Context) error {
+	closeGate, err := s.assemble.Gate(runCtx, s.cfg, s.logger)
+	if err != nil {
+		return fmt.Errorf("start the Web: %w", err)
+	}
+
+	defer func() {
+		if err := closeGate(); err != nil {
+			s.logger.Warn("close the gate's resources", "error", err)
+		}
+	}()
+
+	stopInstrumentation, err := configureInstrumentation(runCtx, s.cfg.PostHog)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+
+		if err := stopInstrumentation(shutdownCtx); err != nil {
+			s.logger.Warn("stop instrumentation", "error", err)
+		}
+	}()
+
+	stateLogger := s.logger.With("component", "state_store")
+	startedAt := time.Now()
+
+	stateLogger.Info("starting rocketclaw state store", "workspace", s.cfg.Workspace, "runtime_dir", s.cfg.RuntimeDirName())
+
+	s.sessions, err = newSessionService(runCtx, s.cfg, s.db, stateLogger)
+	if err != nil {
+		return fmt.Errorf("start rocketcode session service: %w", err)
+	}
+
+	stateLogger.Info("started rocketclaw state store", "elapsed", time.Since(startedAt))
+
+	return s.serve(runCtx)
+}
+
+func (s *lockedRun) serve(runCtx context.Context) error {
 	s.detach()
 
 	cfg, logger, rocketcodeSessions := s.sessions.definitions.Clone(), s.logger, s.sessions
@@ -190,7 +204,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 
 	questions := &webQuestions{store: rocketcodeSessions, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}
 
-	threadBridges = newThreadBridgeManager(rocketcodeSessions.definitions, rocketcodeSessions, logger, conversationFactory{rt: rt, restart: shutdown, secrets: &config.AWSFetcher{}})
+	threadBridges = newThreadBridgeManager(rocketcodeSessions.definitions, rocketcodeSessions, logger, conversationFactory{rt: rt, secrets: &config.AWSFetcher{}})
 	background = newBackgroundRegistry(rocketcodeSessions, threadBridges, logger.With("component", "background_jobs"))
 	rocketcodeSessions.jobs = background
 	rocketcodeSessions.historyWorkers = threadBridges
@@ -224,7 +238,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		Sessions:          rocketcodeSessions,
 		ExternalMCPAgents: inertRefresher{}, CronJobs: inertRefresher{}, Assemble: s.assemble, sandboxes: s.sandboxes,
 		TextRouter: threadBridges, threads: threadBridges, background: background,
-		questions: questions,
+		questions: questions, shutdown: shutdown,
 	}
 
 	rt.prepareSandbox()
@@ -359,12 +373,11 @@ func pruneRocketcodeTemp(ctx context.Context, dir string, cutoff time.Time) (int
 
 type conversationFactory struct {
 	rt      *Runtime
-	restart runtimeRestarter
 	secrets config.SecretFetcher
 }
 
 func (f conversationFactory) newBridge(cfg *Config) directBridge {
-	cfg.RequestRestart = f.restart
+	cfg.RequestRestart = f.rt
 	cfg.RequestReload = f.rt
 	cfg.UserQuestionAsker = f.rt.questions
 	cfg.SessionService = f.rt.Sessions

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,11 +17,13 @@ import (
 	"testing"
 	"time"
 
+	"cirello.io/pglock"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"tailscale.com/tstest/integration/testcontrol"
 )
 
 func TestRunServeReportsAppStartupError(t *testing.T) {
@@ -114,6 +117,52 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 	}
 }
 
+func TestRunServeStopsAtTheTailnetGate(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		control *testcontrol.Server
+		authKey string
+		want    string
+	}{
+		{name: "logged out", control: &testcontrol.Server{RequireAuth: true}, want: errTailnetLogin.Error()},
+		{name: "key needs a login", control: &testcontrol.Server{RequireAuth: true}, authKey: "tskey-auth-test", want: errTailnetLogin.Error()},
+		{name: "no HTTPS name", control: &testcontrol.Server{}, authKey: "tskey-auth-test", want: "no HTTPS name: enable MagicDNS and HTTPS certificates"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useTestTailnet(t, tc.control)
+
+			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+			require.NoError(t, err)
+
+			workspace := t.TempDir()
+			t.Chdir(workspace)
+			require.NoError(t, os.WriteFile(defaultConfigPath, fmt.Appendf(nil,
+				`{"workspace":%q,"web":{"tsnet":{"auth_key":%q}},"database_url":%q,"openai":{"api_key":"sk-test"}}`,
+				workspace, tc.authKey, dsn,
+			), 0o600))
+
+			err = runServe([]string{"--pprof=false"}, "127.0.0.1:0")
+			require.ErrorContains(t, err, "start the Web: ")
+			require.ErrorContains(t, err, tc.want)
+			require.Equal(t, 1, exitCodeForError(err))
+
+			db, err := sql.Open("pgx", dsn)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+			var ledger *string
+			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT to_regclass('pg_migrations')::text`).Scan(&ledger))
+			require.Nil(t, ledger, "a failed gate stops before migrations")
+
+			client, err := pglock.UnsafeNew(db, pglock.WithCustomTable("rocketclaw_locks"), pglock.WithHeartbeatFrequency(0))
+			require.NoError(t, err)
+			lock, err := client.Acquire("rocketclaw-run", pglock.FailIfLocked())
+			require.NoError(t, err, "a failed gate releases the run lock")
+			require.NoError(t, lock.Close())
+		})
+	}
+}
+
 func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 	serveFakeSlack(t, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/auth.test", r.URL.Path)
@@ -122,6 +171,8 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 		_, err := io.WriteString(w, `{"ok":false,"error":"invalid_auth"}`)
 		assert.NoError(t, err)
 	})
+	usePassingTailnet(t)
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
@@ -130,7 +181,7 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 	require.NoError(t, os.Mkdir("agents", 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join("agents", "voice.md"), []byte("---\ndescription: Voice\nmodel: gpt-6.1-sol\n---\n"), 0o600))
 	configData := fmt.Sprintf(
-		`{"workspace":%q,"web":{"tsnet":{}},"database_url":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["assistant"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
+		`{"workspace":%q,"web":{"tsnet":{"auth_key":"tskey-auth-test"}},"database_url":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["assistant"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
 		workspace, dsn,
 	)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))

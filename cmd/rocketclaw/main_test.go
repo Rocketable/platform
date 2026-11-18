@@ -61,12 +61,14 @@ func TestRunWithLegacyConfigAttemptsServe(t *testing.T) {
 }
 
 func TestRunServeKeepsLegacyConfigReadOnly(t *testing.T) {
+	usePassingTailnet(t)
+
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
-	legacy := fmt.Appendf(nil, `{"workspace":".","web":{"tsnet":{}},"database_url":%q,"slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","human_user_id":"U123","room":"D123","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`, dsn)
+	legacy := fmt.Appendf(nil, `{"workspace":".","web":{"tsnet":{"auth_key":"tskey-auth-test"}},"database_url":%q,"slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","human_user_id":"U123","room":"D123","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`, dsn)
 	require.NoError(t, os.WriteFile(defaultConfigPath, legacy, 0o600))
 
 	err = runServe([]string{"--pprof=false"}, "127.0.0.1:0")

@@ -35,6 +35,7 @@ func startAgentDraftSave(t *testing.T, workspace, dsn string, overlays ...string
 	ds := &agentDraftSave{workspace: workspace, validate: func(string) error { return nil }}
 	runtimes := make(chan *Runtime, 1)
 	assembler := &frontendAssemblerMock{
+		GateFunc:           passGate,
 		ValidateAssetsFunc: func(_ *config.Config, stagedWorkDir string) error { return ds.validate(stagedWorkDir) },
 		AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 			runtimes <- rt

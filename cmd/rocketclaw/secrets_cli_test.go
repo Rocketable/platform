@@ -153,10 +153,12 @@ func TestOAILoginWriteKeepsAWSObject(t *testing.T) {
 }
 
 func TestServeErrorOmitsResolvedSecret(t *testing.T) {
+	usePassingTailnet(t)
+
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{
-		"workspace": ".", "web": {"tsnet": {}}, "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
+		"workspace": ".", "web": {"tsnet": {"auth_key": "tskey-auth-test"}}, "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 		"openai": {"api_key": "test-key"},
 		"slack": {
 		  "bot_token": {"aws":{"arn":"`+testSecretsARN+`","key":"token"}},

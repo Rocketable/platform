@@ -110,6 +110,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 
 		ready := make(chan *backend.Runtime)
 		assembly := &mockFrontendAssembler{
+			GateFunc: passGate,
 			AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 				ready <- rt
 
@@ -453,7 +454,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	require.NoError(t, root.WriteFile("agents/main.md", []byte(agent+"Original prompt\n"), 0o600))
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan *backend.Runtime)
-	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+	assembly := &mockFrontendAssembler{GateFunc: passGate, AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 		ready <- rt
 		return rt.RunCtx.Done(), nil, nil
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
@@ -540,7 +541,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	require.NoError(t, root.WriteFile("external-effect.txt", []byte("already happened"), 0o600))
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan *backend.Runtime)
-	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+	assembly := &mockFrontendAssembler{GateFunc: passGate, AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 		ready <- rt
 		return rt.RunCtx.Done(), nil, nil
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
@@ -1352,4 +1353,8 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	running := slices.IndexFunc(live.Messages, func(message *TranscriptEvent) bool { return message.ToolCallId == "run" })
 	require.GreaterOrEqual(t, running, 0)
 	require.True(t, proto.Equal(&CodeModeCall{Name: "bash", Arguments: `{"command":"sleep 9"}`, Status: "running"}, live.Messages[running].GetCodeModeCalls()[0]), "%v", live.Messages[running])
+}
+
+func passGate(context.Context, *config.Config, *slog.Logger) (func() error, error) {
+	return func() error { return nil }, nil
 }

@@ -726,10 +726,11 @@ non-ASCII. `principal` and `ListConfig` read only those keys: a call without the
 `Unauthenticated`. The node
 stores its state under `os.UserConfigDir()/rocketclaw/tsnet-<hostname>`, outside the
 workspace. `rocketclaw ts login` logs it in, with `web.tsnet.auth_key` or a printed
-login link; the server never prints a link or waits for one. A logged-out node without
-a key is closed at startup with one "Tailscale authentication unavailable" warning, and
-a node that loses its login later stops serving the same way. Tailscale's log upload is
-off. Never use `tailscale funnel`.
+login link; the server never prints a link or waits for one. `rocketclaw run` brings
+the node up right after it takes its run lock, before migrations and everything else,
+and exits with code 1 when it needs a login, has no HTTPS name or cannot listen on
+port 443; when the listener stops serving later, the server exits with code 255 to be
+started again. Tailscale's log upload is off. Never use `tailscale funnel`.
 
 The `web.tsnet` listener also serves the RocketClaw pages its config trusts, so one
 page can operate several RocketClaws. A request whose `Origin` exactly matches an entry

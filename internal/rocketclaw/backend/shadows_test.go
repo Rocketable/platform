@@ -1379,7 +1379,7 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 	manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
 	t.Cleanup(shutdown)
 
-	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: "parent", Agent: "main", SessionService: store, RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: "parent", Agent: "main", SessionService: store, RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}}, slog.New(slog.DiscardHandler))
 	bridge.threads = manager
 
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "admitted", true)}
@@ -1499,7 +1499,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	store.definitions = cfg
 	finals := make(chan *protocol.OutboundMessage, 4)
 	manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(bridgeCfg *Config) directBridge {
-		bridgeCfg.SessionService, bridgeCfg.RequestRestart = store, &runtimeRestarterMock{restartFunc: func(string) string { return "" }}
+		bridgeCfg.SessionService, bridgeCfg.RequestRestart = store, &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}
 		return NewConversation(cfg, finalsPublisher{finals: finals}, bridgeCfg, slog.New(slog.DiscardHandler))
 	}})
 	require.NoError(t, store.UpsertThread("parent", ThreadState{Agent: "main"}))

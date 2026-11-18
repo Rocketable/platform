@@ -6,6 +6,7 @@ package backend
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -24,6 +25,9 @@ var _ FrontendAssembler = &frontendAssemblerMock{}
 //			AssembleFunc: func(runtime *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 //				panic("mock out the Assemble method")
 //			},
+//			GateFunc: func(context1 context.Context, config1 *config.Config, logger *slog.Logger) (func() error, error) {
+//				panic("mock out the Gate method")
+//			},
 //			ValidateAssetsFunc: func(config1 *config.Config, s string) error {
 //				panic("mock out the ValidateAssets method")
 //			},
@@ -37,6 +41,9 @@ type frontendAssemblerMock struct {
 	// AssembleFunc mocks the Assemble method.
 	AssembleFunc func(runtime *Runtime) (<-chan struct{}, []func(context.Context) error, error)
 
+	// GateFunc mocks the Gate method.
+	GateFunc func(context1 context.Context, config1 *config.Config, logger *slog.Logger) (func() error, error)
+
 	// ValidateAssetsFunc mocks the ValidateAssets method.
 	ValidateAssetsFunc func(config1 *config.Config, s string) error
 
@@ -47,6 +54,15 @@ type frontendAssemblerMock struct {
 			// Runtime is the runtime argument value.
 			Runtime *Runtime
 		}
+		// Gate holds details about calls to the Gate method.
+		Gate []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// Config1 is the config1 argument value.
+			Config1 *config.Config
+			// Logger is the logger argument value.
+			Logger *slog.Logger
+		}
 		// ValidateAssets holds details about calls to the ValidateAssets method.
 		ValidateAssets []struct {
 			// Config1 is the config1 argument value.
@@ -56,6 +72,7 @@ type frontendAssemblerMock struct {
 		}
 	}
 	lockAssemble       sync.RWMutex
+	lockGate           sync.RWMutex
 	lockValidateAssets sync.RWMutex
 }
 
@@ -88,6 +105,46 @@ func (mock *frontendAssemblerMock) AssembleCalls() []struct {
 	mock.lockAssemble.RLock()
 	calls = mock.calls.Assemble
 	mock.lockAssemble.RUnlock()
+	return calls
+}
+
+// Gate calls GateFunc.
+func (mock *frontendAssemblerMock) Gate(context1 context.Context, config1 *config.Config, logger *slog.Logger) (func() error, error) {
+	if mock.GateFunc == nil {
+		panic("frontendAssemblerMock.GateFunc: method is nil but FrontendAssembler.Gate was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		Config1  *config.Config
+		Logger   *slog.Logger
+	}{
+		Context1: context1,
+		Config1:  config1,
+		Logger:   logger,
+	}
+	mock.lockGate.Lock()
+	mock.calls.Gate = append(mock.calls.Gate, callInfo)
+	mock.lockGate.Unlock()
+	return mock.GateFunc(context1, config1, logger)
+}
+
+// GateCalls gets all the calls that were made to Gate.
+// Check the length with:
+//
+//	len(mockedFrontendAssembler.GateCalls())
+func (mock *frontendAssemblerMock) GateCalls() []struct {
+	Context1 context.Context
+	Config1  *config.Config
+	Logger   *slog.Logger
+} {
+	var calls []struct {
+		Context1 context.Context
+		Config1  *config.Config
+		Logger   *slog.Logger
+	}
+	mock.lockGate.RLock()
+	calls = mock.calls.Gate
+	mock.lockGate.RUnlock()
 	return calls
 }
 
