@@ -4,6 +4,7 @@ package harness
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -59,6 +60,9 @@ func emulatedRuntime(t *testing.T, logs io.Writer) *sandbox.Runtime {
 	require.NoError(t, os.MkdirAll(filepath.Join(stale, "usr"), 0o755))
 
 	rt := sandbox.Bubblewrap{}.Prepare(t.Context(), dir, slog.New(slog.NewTextHandler(io.MultiWriter(t.Output(), logs), nil)))
+	t.Cleanup(func() {
+		_ = rt.Wait(context.WithoutCancel(t.Context()))
+	})
 
 	for rt.Err() == sandbox.ErrPreparing {
 		time.Sleep(time.Second)
