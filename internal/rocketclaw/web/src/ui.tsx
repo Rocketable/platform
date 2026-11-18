@@ -5276,7 +5276,7 @@ function SessionComposer({
   const [agentOpen, setAgentOpen] = useState(false);
   const [dollarOff, setDollarOff] = useState(false);
   const [dollarPick, setDollarPick] = useState("");
-  const voice = useOwnVoice(id);
+  const voice = voiceFor(useVoice(), id);
   const sendError = draft.error || voice.error;
   // Clearing the send error also dismisses this composer's failed call.
   const setSendError = (value: string) => { draft.error = value; onDraftChange(); if (!value && voice.state === "error") stopVoice(); };
@@ -5984,11 +5984,7 @@ function VoicePage() {
   return <VoiceCall key={identity.data.username} username={identity.data.username} />;
 }
 
-// useOwnVoice is the tab's one call as seen from conversation id: idle unless the call is on id.
-function useOwnVoice(id: string): VoiceView {
-  const voice = useVoice();
-  return voice.conversationId === id ? voice : { state: "idle", conversationId: id, error: "", notice: "", captions: [] };
-}
+const voiceFor = (voice: VoiceView, id: string): VoiceView => voice.conversationId === id ? voice : { state: "idle", conversationId: id, error: "", notice: "", captions: [] };
 
 function VoiceClock({ startedAt }: { startedAt: number }) {
   const [now, setNow] = useState(Date.now);
@@ -6058,10 +6054,6 @@ function VoiceStage({ voice, compact, busy, loading, error, onPress }: { voice: 
   </div>;
 }
 
-// useVoiceSettings is the person's voice settings, kept by the server and the same on every
-// device; update shows a change at once, keeps the server's answer, and puts the old value
-// back if the server refuses it. callId is the page's own call's conversation while that
-// call runs. A call that ended with an error keeps its message only.
 function useVoiceSettings(username: string) {
   const settings = useQuery(queries.voiceSettings(username));
   const saved = settings.data ?? { agent: "", voice: "", transcript: false };
@@ -6086,23 +6078,22 @@ function useVoiceSettings(username: string) {
       });
     },
   });
-  const [callId, setCallId] = useState("");
-  const call = useOwnVoice(callId);
-  const live = ["connecting", "reconnecting", "live", "ending"].includes(call.state);
-  // Until the person's settings load, Start would call another agent than theirs.
-  return { saved, update, callId: live ? callId : "", setCallId, agent: saved.agent, loading: settings.isPending, problem: call.error || settings.error?.message };
+  return { saved, update, loading: settings.isPending, problem: settings.error?.message };
 }
 
 function VoiceCall({ username }: { username: string }) {
   const sidebar = useContext(Sidebar);
-  const { saved, update, callId, setCallId, agent, loading, problem } = useVoiceSettings(username);
+  const { saved, update, loading, problem } = useVoiceSettings(username);
   const agents = useQuery(queries.agents());
   const catalog = (agents.data?.agents ?? []).filter((item) => item.sticky === "user");
   // The person's choice, else the shipped voice agent, else main, else the first one offered.
-  const selected = offeredAgent(catalog, agent, "voice", "main") ?? "";
+  const selected = offeredAgent(catalog, saved.agent, "voice", "main") ?? "";
   const agentInfo = catalog.find((item) => item.name === selected);
-  const id = callId || agentInfo?.stickySession || "";
-  const voice = useOwnVoice(id);
+  const [callId, setCallId] = useState("");
+  const snapshot = useVoice(), call = voiceFor(snapshot, callId);
+  const live = ["connecting", "reconnecting", "live", "ending"].includes(call.state);
+  const id = (live ? callId : "") || agentInfo?.stickySession || "";
+  const voice = voiceFor(snapshot, id);
   // The page owns its call: leaving the page hangs it up.
   useEffect(() => () => { if (voiceView().conversationId === id && voiceView().state !== "error") stopVoice(); }, [id]);
   const [picking, setPicking] = useState(false);
@@ -6119,7 +6110,7 @@ function VoiceCall({ username }: { username: string }) {
       if (written) saveSetting({ transcript: true }); // A new call's transcript starts empty.
     });
   }, [id, saveSetting]);
-  const active = voice.state !== "idle" && voice.state !== "error";
+  const active = !["idle", "error"].includes(voice.state);
   const voices = agentInfo?.voices ?? [];
   const speaker = voiceChoice(agentInfo, saved.voice);
   // Leaving cancels a start still creating its conversation.
@@ -6133,7 +6124,7 @@ function VoiceCall({ username }: { username: string }) {
     setCallId(next);
     void startVoice(next, speaker);
   } });
-  const error = [voice.error, problem, ...[start, update].map((mutation) => mutation.error?.message)].find(Boolean);
+  const error = [voice.error, call.error, problem, ...[start, update].map((mutation) => mutation.error?.message)].find(Boolean);
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col gap-4 p-4">
       <PageTitle>Voice</PageTitle>
@@ -6154,7 +6145,7 @@ function VoiceCall({ username }: { username: string }) {
 // VoiceToggle calls with the session's agent, or with agent when the session is new.
 function VoiceToggle({ sessionId, agent, sending, call }: { sessionId: string; agent: string; sending: boolean; call: (speaker: string) => Promise<void> }) {
   const route = useRoute();
-  const { state, notice } = useOwnVoice(sessionId);
+  const { state, notice } = voiceFor(useVoice(), sessionId);
   const calling = state !== "idle" && state !== "error";
   const choices = useQuery(queries.agents({ conversationId: sessionId }));
   const identity = useQuery(queries.identity());
