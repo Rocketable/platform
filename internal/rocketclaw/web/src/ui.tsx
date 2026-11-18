@@ -2735,10 +2735,6 @@ function useSessionSearch(query: string, scope: "messages" | "filters", entered:
   return {
     word, sent, result, found, missing, run, pending,
     error: sent && result.query === sent ? result.error : undefined,
-    // Before any response for typed text the rows are the sidebar's, in its order.
-    rows: sent && result.query ? found.map(({ session }) => session) : rows,
-    // The response the rows come from, if any.
-    response: sent && result.query ? result.response : undefined,
     // enter acts on the shown rows when they are the response for the whole query, never on a dimmed older list;
     // otherwise it sends the query at once, or waits for it in flight, and hands open that response's rows.
     enter: (shown: () => void, open: (sessions: Session[]) => void) => {
@@ -2768,10 +2764,10 @@ function usePaletteSessions(query: string, sessions: boolean, entered: boolean) 
   const names = useSlackNames(useMemo(() => [...new Set(raw.flatMap(mentionIds))], [raw]));
   const byId = useMemo(() => new Map(rows.map((row, i) => [rowKey(row.id, row.rocketclaw), raw[i] === undefined ? "" : cleanText(raw[i], names).toLowerCase()])), [rows, raw, names]);
   const matches = useCallback((row: Session) => !free || !!byId.get(rowKey(row.id, row.rocketclaw))?.includes(free), [byId, free]);
-  const titled = useMemo(() => sessions ? rows.filter(matches) : rows, [rows, sessions, matches]);
-  const passed = useMemo(() => search.rows.filter(matches), [search.rows, matches]);
-  // A failed filtered search lists nothing rather than title matches that never passed its filters.
-  return { search, filtered, free, matches, rows: filtered && (search.response || search.error) ? passed : titled };
+  const { found, result, sent, error } = search;
+  const showMatches = !!(filtered && sent && result.query && (result.response || error));
+  const listed = useMemo(() => showMatches ? found.flatMap(({ session }) => matches(session) ? [session] : []) : sessions ? rows.filter(matches) : rows, [showMatches, found, sessions, rows, matches]);
+  return { search, filtered, free, matches, rows: listed };
 }
 
 // The keys of filter terms; the server reads the same keys.
