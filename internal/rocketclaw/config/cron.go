@@ -67,12 +67,12 @@ func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronj
 		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s frontmatter: unmarshal frontmatter yaml: %w", relativePath, err)
 	}
 
-	if raw.Schedule.values == nil {
+	if raw.Schedule == nil {
 		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s frontmatter: schedule is required", relativePath)
 	}
 
-	schedules := make([]CronSchedule, 0, len(raw.Schedule.values))
-	for _, value := range raw.Schedule.values {
+	schedules := make([]CronSchedule, 0, len(raw.Schedule))
+	for _, value := range raw.Schedule {
 		schedule, err := ParseCronSchedule(value)
 		if err != nil {
 			return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s schedule %q: %w", relativePath, value, err)
@@ -90,24 +90,24 @@ type cronFrontmatter struct {
 	Space    string                  `json:"space"`
 }
 
-type cronFrontmatterSchedule struct {
-	values []string
-}
+type cronFrontmatterSchedule []string
 
 func (s *cronFrontmatterSchedule) UnmarshalJSON(data []byte) error {
 	if strings.TrimSpace(string(data)) == "null" {
 		return nil
 	}
 
-	var single string
-	if err := json.Unmarshal(data, &single); err == nil {
-		s.values = []string{single}
+	if data[0] == '"' {
+		single := new(string)
+		_ = json.Unmarshal(data, single)
+		*s = cronFrontmatterSchedule{*single}
+
 		return nil
 	}
 
 	var list []string
 	if err := json.Unmarshal(data, &list); err == nil {
-		s.values = list
+		*s = list
 		return nil
 	}
 
