@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -81,7 +80,14 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		return nil, fmt.Errorf("web tabs: %w", err)
 	}
 
-	response.Shared = sharedTabs(slices.DeleteFunc(shared, func(tab backend.SharedTab) bool { return !limit.AllowsSpaceID(tab.Space) }))
+	response.Shared = []*SharedTab{}
+
+	for _, tab := range shared {
+		if limit.AllowsSpaceID(tab.Space) {
+			response.Shared = append(response.Shared, &SharedTab{Space: tab.Space, Path: tab.Path, Search: webSearchPage(tab.Search)})
+		}
+	}
+
 	response.Unshared = webSearchPage(unshared)
 	response.Closed = webTabs(closed)
 	response.Layout = &StripLayout{Folded: layout.Folded, Order: layout.Order}
@@ -183,15 +189,6 @@ func (s *Server) changeAttention(ctx context.Context, username string, change *A
 	}
 
 	return nil
-}
-
-func sharedTabs(shared []backend.SharedTab) []*SharedTab {
-	out := make([]*SharedTab, 0, len(shared))
-	for _, tab := range shared {
-		out = append(out, &SharedTab{Space: tab.Space, Path: tab.Path, Search: webSearchPage(tab.Search)})
-	}
-
-	return out
 }
 
 func tabState(state *backend.TabState) *TabState {
