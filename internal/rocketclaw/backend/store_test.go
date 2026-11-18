@@ -530,7 +530,7 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	content := protocol.InboundContent{
 		Text:               "write tests",
 		TextAttachments:    []string{"Slack text file attachment data.csv:\na,b", "Forwarded Slack thread:\noriginal author: original text"},
-		Attachments:        []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("acquired image")}},
+		Attachments:        []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: tinyPNG()}},
 		AttachmentPresence: protocol.AttachmentPresenceImages,
 		AttachmentWarnings: []string{"original warning"},
 	}

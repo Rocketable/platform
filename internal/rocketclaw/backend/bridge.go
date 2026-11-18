@@ -11,15 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/jpeg"
-	"image/png"
 	"io/fs"
 	"iter"
 	"log/slog"
 	"maps"
-	"math"
 	"mime"
 	"net/http"
 	"os"
@@ -46,8 +41,6 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	otelsemconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace/noop"
-	xdraw "golang.org/x/image/draw"
-	_ "golang.org/x/image/webp"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -69,18 +62,9 @@ const (
 	producerEffectsStep          = "/effects"
 	rocketclawConversationIDEnv  = "ROCKETCLAW_CONVERSATION_ID"
 	rocketclawMetadataEnvPrefix  = "ROCKETCLAW_METADATA_"
-
-	maxInboundAttachmentBytes          = 4 << 20
-	maxInboundAttachmentTotalBytes     = 16 << 20
-	maxInboundAttachmentResizeInput    = 16 << 20
-	maxInboundAttachmentResizeAttempts = 8
 )
 
 var errTurnInterrupted = errors.New("rocketcode turn interrupted")
-
-var errInboundAttachmentReductionFailed = errors.New("inbound attachment image reduction failed")
-
-var errInboundAttachmentReductionNotEnough = errors.New("inbound attachment image still exceeds size limit after reduction")
 
 type runtimeRestarter interface {
 	restart(string) string
@@ -1506,10 +1490,6 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 	slackChannel, slackMessageTS, slackThreadTS := "", "", ""
 	if reply := msg.SlackReply; reply != nil {
 		slackChannel, slackMessageTS, slackThreadTS = reply.ChannelID, reply.MessageTS, reply.ThreadTS
-	}
-
-	if prepare {
-		normalizeInboundAttachments(msg)
 	}
 
 	b.log.Info("starting rocketcode turn", "event", "turn_started", "conversation_id", b.config.ConversationID, "turn_id", turnID, "queue_item_id", request.queueItemID, "scheduled_message_id", request.scheduledMessageID, "source", msg.Source, "kind", msg.Kind, "text_len", len([]rune(msg.Text)), "attachment_count", len(msg.Attachments), "slack_channel", slackChannel, "slack_message_ts", slackMessageTS, "slack_thread_ts", slackThreadTS)
@@ -3438,231 +3418,6 @@ func attachmentFallback(msg *protocol.InboundMessage) string {
 	}
 
 	return fallback
-}
-
-func normalizeInboundAttachments(msg *protocol.InboundMessage) {
-	if len(msg.Attachments) == 0 {
-		return
-	}
-
-	msg.AttachmentPresence = protocol.AttachmentPresenceImages
-	attachments := make([]protocol.InboundAttachment, 0, len(msg.Attachments))
-	totalBytes := 0
-
-	for i := range msg.Attachments {
-		attachment := msg.Attachments[i]
-
-		name := cmp.Or(strings.TrimSpace(attachment.Name), fmt.Sprintf("attachment-%d", i+1))
-
-		data := attachment.Data
-
-		if len(data) == 0 {
-			msg.AttachmentWarnings = append(msg.AttachmentWarnings, "Skipped attachment "+name+" because it was empty.")
-			continue
-		}
-
-		mimeType := protocol.NormalizeMIMEType(http.DetectContentType(data))
-		if !slices.Contains([]string{"image/jpeg", "image/jpg", "image/png", "image/webp"}, mimeType) {
-			msg.AttachmentWarnings = append(msg.AttachmentWarnings, "Skipped attachment "+name+" because "+mimeType+" is not supported.")
-			continue
-		}
-
-		targetLimit := min(maxInboundAttachmentBytes, maxInboundAttachmentTotalBytes-totalBytes)
-		if targetLimit <= 0 {
-			msg.AttachmentWarnings = append(msg.AttachmentWarnings, "Skipped attachment "+name+" because the message exceeded the attachment size budget.")
-			continue
-		}
-
-		if len(data) > maxInboundAttachmentResizeInput {
-			msg.AttachmentWarnings = append(msg.AttachmentWarnings, "Skipped attachment "+name+" because it was too large to attempt size reduction.")
-			continue
-		}
-
-		data, mimeType, err := fitInboundImageWithinLimit(mimeType, data, targetLimit)
-		if err != nil {
-			msg.AttachmentWarnings = append(msg.AttachmentWarnings, "Skipped attachment "+name+" because "+inboundAttachmentReductionFailureReason(err, targetLimit)+".")
-			continue
-		}
-
-		totalBytes += len(data)
-		attachments = append(attachments, protocol.InboundAttachment{Name: name, MIMEType: mimeType, Data: data})
-	}
-
-	msg.Attachments = attachments
-}
-
-func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (transformedData []byte, transformedMIMEType string, err error) {
-	if len(data) <= targetLimit {
-		return slices.Clone(data), mimeType, nil
-	}
-
-	if mimeType == "image/png" {
-		transformed, err := resizePNGWithinLimit(data, targetLimit)
-		if err == nil {
-			return transformed, mimeType, nil
-		}
-
-		if !errors.Is(err, errInboundAttachmentReductionNotEnough) {
-			return nil, "", err
-		}
-	}
-
-	img, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, "", fmt.Errorf("%w: decode image: %w", errInboundAttachmentReductionFailed, err)
-	}
-
-	flattened := flattenInboundImageForJPEG(img)
-
-	encoder := inboundJPEGEncoder{}
-
-	candidate, candidateSize, err := encoder.encodeWithinLimit(flattened, targetLimit)
-	if err != nil {
-		return nil, "", err
-	}
-
-	if candidate == nil {
-		candidate, err = reduceResizedImageWithinLimit(flattened, candidateSize, targetLimit, encoder)
-		if err != nil {
-			return nil, "", err
-		}
-	}
-
-	return candidate, "image/jpeg", nil
-}
-
-func resizePNGWithinLimit(data []byte, targetLimit int) ([]byte, error) {
-	src, err := png.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("%w: decode png: %w", errInboundAttachmentReductionFailed, err)
-	}
-
-	encoded := encodeInboundPNG(src)
-
-	if len(encoded) <= targetLimit {
-		return encoded, nil
-	}
-
-	return reduceResizedImageWithinLimit(src, len(encoded), targetLimit, inboundPNGEncoder{})
-}
-
-type inboundImageEncoder interface {
-	encodeWithinLimit(image.Image, int) ([]byte, int, error)
-}
-
-func reduceResizedImageWithinLimit(src image.Image, currentSize, targetLimit int, encoder inboundImageEncoder) ([]byte, error) {
-	bounds := src.Bounds()
-
-	currentWidth, currentHeight := bounds.Dx(), bounds.Dy()
-	for range maxInboundAttachmentResizeAttempts {
-		if currentWidth <= 1 || currentHeight <= 1 {
-			break
-		}
-
-		nextWidth, nextHeight := nextImageResizeDimensions(currentWidth, currentHeight, currentSize, targetLimit)
-		if nextWidth >= currentWidth && nextHeight >= currentHeight {
-			break
-		}
-
-		resized := image.NewNRGBA(image.Rect(0, 0, nextWidth, nextHeight))
-		xdraw.CatmullRom.Scale(resized, resized.Bounds(), src, bounds, xdraw.Over, nil)
-
-		candidate, candidateSize, err := encoder.encodeWithinLimit(resized, targetLimit)
-		if err != nil {
-			return nil, err
-		}
-
-		if candidate != nil {
-			return candidate, nil
-		}
-
-		currentWidth, currentHeight, currentSize = nextWidth, nextHeight, candidateSize
-	}
-
-	return nil, errInboundAttachmentReductionNotEnough
-}
-
-func flattenInboundImageForJPEG(src image.Image) *image.NRGBA {
-	bounds := src.Bounds()
-
-	flattened := image.NewNRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, a := src.At(x, y).RGBA()
-			alpha := float64(a) / 0xffff
-			blend := func(channel uint32) uint8 {
-				return uint8(math.Round((float64(channel>>8) * alpha) + (255 * (1 - alpha))))
-			}
-			flattened.Set(x-bounds.Min.X, y-bounds.Min.Y, color.NRGBA{R: blend(r), G: blend(g), B: blend(b), A: 0xff})
-		}
-	}
-
-	return flattened
-}
-
-type inboundJPEGEncoder struct{}
-
-func (inboundJPEGEncoder) encodeWithinLimit(img image.Image, targetLimit int) (candidate []byte, candidateSize int, err error) {
-	bestSize := math.MaxInt
-
-	for quality := 95; quality >= 50; quality -= 5 {
-		var buffer bytes.Buffer
-		if err := jpeg.Encode(&buffer, img, &jpeg.Options{Quality: quality}); err != nil {
-			return nil, 0, fmt.Errorf("%w: encode jpeg: %w", errInboundAttachmentReductionFailed, fmt.Errorf("encode jpeg: %w", err))
-		}
-
-		bestSize = min(bestSize, buffer.Len())
-		if buffer.Len() <= targetLimit {
-			return buffer.Bytes(), buffer.Len(), nil
-		}
-	}
-
-	return nil, bestSize, nil
-}
-
-type inboundPNGEncoder struct{}
-
-func (inboundPNGEncoder) encodeWithinLimit(img image.Image, targetLimit int) (candidate []byte, candidateSize int, err error) {
-	encoded := encodeInboundPNG(img)
-
-	if len(encoded) <= targetLimit {
-		return encoded, len(encoded), nil
-	}
-
-	return nil, len(encoded), nil
-}
-
-func encodeInboundPNG(img image.Image) []byte {
-	var buffer bytes.Buffer
-
-	encoder := png.Encoder{CompressionLevel: png.BestCompression}
-	_ = encoder.Encode(&buffer, img)
-
-	return buffer.Bytes()
-}
-
-func nextImageResizeDimensions(currentWidth, currentHeight, currentSize, targetLimit int) (nextWidth, nextHeight int) {
-	scale := math.Sqrt(float64(targetLimit)/float64(currentSize)) * 0.92
-	if scale >= 1 {
-		scale = 0.92
-	}
-
-	nextWidth = min(max(1, int(math.Round(float64(currentWidth)*scale))), max(1, currentWidth-1))
-	nextHeight = min(max(1, int(math.Round(float64(currentHeight)*scale))), max(1, currentHeight-1))
-
-	return nextWidth, nextHeight
-}
-
-func inboundAttachmentReductionFailureReason(err error, targetLimit int) string {
-	if errors.Is(err, errInboundAttachmentReductionFailed) {
-		return "image reduction failed"
-	}
-
-	if targetLimit < maxInboundAttachmentBytes {
-		return "it still exceeded the remaining attachment budget after reduction"
-	}
-
-	return "it still exceeded the per-file size limit after reduction"
 }
 
 func attachmentsFromInbound(inbound []protocol.InboundAttachment) []harness.Attachment {

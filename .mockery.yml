@@ -43,9 +43,6 @@ packages:
       bridgeFactory:
         config:
           structname: bridgeFactoryMock
-      inboundImageEncoder:
-        config:
-          structname: inboundImageEncoderMock
       runLockWork:
         config:
           structname: runLockWorkMock
@@ -116,6 +113,9 @@ packages:
           structname: responseObserverMock
   github.com/Rocketable/platform/internal/rocketclaw/protocol:
     interfaces:
+      inboundImageEncoder:
+        config:
+          structname: inboundImageEncoderMock
       OutboundPublisher:
         config:
           dir: '{{.ConfigDir}}/internal/rocketclaw/backend'

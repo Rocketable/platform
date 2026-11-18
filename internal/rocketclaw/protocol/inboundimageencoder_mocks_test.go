@@ -2,7 +2,7 @@
 // github.com/vektra/mockery
 // template: matryer
 
-package backend
+package protocol
 
 import (
 	"image"

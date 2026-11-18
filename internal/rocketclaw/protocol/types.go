@@ -200,6 +200,8 @@ func SetInboundAllowedAgents(inbound *InboundMessage, agents []string) {
 }
 
 func NewInboundMessageFromContent(source Source, kind InboundKind, content *InboundContent, human bool) *InboundMessage {
+	normalizeInboundAttachments(content)
+
 	text := content.Text
 	if len(content.TextAttachments) > 0 {
 		attachmentText := strings.Join(content.TextAttachments, "\n\n")
@@ -220,9 +222,7 @@ func NewInboundMessageFromContent(source Source, kind InboundKind, content *Inbo
 	}
 
 	inbound.AttachmentPresence = content.AttachmentPresence
-	if len(content.Attachments) > 0 {
-		inbound.AttachmentPresence = AttachmentPresenceImages
-	} else if inbound.AttachmentPresence == AttachmentPresenceUnsupported && len(content.TextAttachments) > 0 {
+	if inbound.AttachmentPresence == AttachmentPresenceUnsupported && len(content.TextAttachments) > 0 {
 		inbound.AttachmentPresence = AttachmentPresenceNone
 	}
 
