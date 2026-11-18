@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -42,7 +43,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func emulatedRuntime(t *testing.T) *sandbox.Runtime {
+func emulatedRuntime(t *testing.T, logs io.Writer) *sandbox.Runtime {
 	t.Helper()
 
 	dir := os.Getenv("ROCKETCLAW_SANDBOX_DIR")
@@ -57,7 +58,7 @@ func emulatedRuntime(t *testing.T) *sandbox.Runtime {
 	stale := filepath.Join(dir, "rootfs-0000000000000000")
 	require.NoError(t, os.MkdirAll(filepath.Join(stale, "usr"), 0o755))
 
-	rt := sandbox.Bubblewrap{}.Prepare(t.Context(), dir, slog.New(slog.NewTextHandler(t.Output(), nil)))
+	rt := sandbox.Bubblewrap{}.Prepare(t.Context(), dir, slog.New(slog.NewTextHandler(io.MultiWriter(t.Output(), logs), nil)))
 
 	for rt.Err() == sandbox.ErrPreparing {
 		time.Sleep(time.Second)
@@ -72,12 +73,14 @@ func emulatedRuntime(t *testing.T) *sandbox.Runtime {
 type emulated struct {
 	sss   *sandboxedShellSystem
 	shell CustomShell
+	logs  *bytes.Buffer
 }
 
 func newEmulated(t *testing.T, commands, secrets map[string]string, targets []string, readOnly ...string) *emulated {
 	t.Helper()
 
-	rt := emulatedRuntime(t)
+	logs := &bytes.Buffer{}
+	rt := emulatedRuntime(t, logs)
 
 	workspace, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
@@ -105,6 +108,7 @@ func newEmulated(t *testing.T, commands, secrets map[string]string, targets []st
 	return &emulated{
 		sss:   newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=web:c1"}, rt),
 		shell: CustomShell{Emulated: true, Dir: folder, ReadOnly: readOnly, Commands: commands, Secrets: secrets, NetworkTargets: targets},
+		logs:  logs,
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -65,6 +66,7 @@ type prepared struct {
 	cgroup  string
 	state   string
 	seccomp []byte
+	log     *slog.Logger
 }
 
 func (rt *Runtime) Run(ctx context.Context, cmd *Command, host Host) (Result, error) {
@@ -75,8 +77,22 @@ func (rt *Runtime) Run(ctx context.Context, cmd *Command, host Host) (Result, er
 	return rt.run(ctx, cmd, host)
 }
 
+const limitReached = "emulated shell limit reached"
+
 func (rt *Runtime) run(ctx context.Context, cmd *Command, host Host) (Result, error) {
+	conversation := ""
+
+	for _, kv := range cmd.Env {
+		if id, ok := strings.CutPrefix(kv, "ROCKETCLAW_CONVERSATION_ID="); ok {
+			conversation = id
+		}
+	}
+
+	log := rt.p.log.With("conversation", conversation, "folder", cmd.Dir, "cwd", cmd.Cwd, "script_bytes", len(cmd.Script))
+
 	if len(cmd.Script) > scriptBytes {
+		log.Warn(limitReached, "limit", "script", "limit_bytes", scriptBytes)
+
 		return Result{}, fmt.Errorf("command of %d bytes exceeds %d", len(cmd.Script), scriptBytes)
 	}
 
@@ -89,6 +105,7 @@ func (rt *Runtime) run(ctx context.Context, cmd *Command, host Host) (Result, er
 	names := append([]string{Curl}, cmd.Commands...)
 
 	execID := "x-" + rand.Text()
+	log = log.With("exec", execID)
 
 	dir := filepath.Join(rt.p.state, execID)
 	if err := writeExecFiles(dir, execID, cmd.Script, names); err != nil {
@@ -119,6 +136,7 @@ func (rt *Runtime) run(ctx context.Context, cmd *Command, host Host) (Result, er
 		cgroup: rel,
 		names:  names,
 		host:   host,
+		log:    log,
 		out:    newBudget(outputBytes),
 		ln:     ln,
 		slots:  make(chan struct{}, hostConcurrency),
@@ -131,7 +149,7 @@ func (rt *Runtime) run(ctx context.Context, cmd *Command, host Host) (Result, er
 	go b.serve(ctx)
 	defer b.close()
 
-	return rt.sandbox(ctx, cmd, dir, cg, b.out)
+	return rt.sandbox(ctx, cmd, dir, cg, b.out, log)
 }
 
 func writeExecFiles(dir, execID, script string, names []string) error {
@@ -264,7 +282,7 @@ func memfd(name string, data []byte) (*os.File, error) {
 	return f, nil
 }
 
-func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *execCgroup, hostOut *budget) (Result, error) {
+func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *execCgroup, hostOut *budget, log *slog.Logger) (Result, error) {
 	argsFile, err := memfd("rocketclaw-bwrap-args", []byte(strings.Join(rt.bwrapArgs(cmd, dir), "\x00")+"\x00"))
 	if err != nil {
 		return Result{}, err
@@ -328,7 +346,14 @@ func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *ex
 		chunk := make([]byte, 32<<10)
 		for {
 			n, err := outR.Read(chunk)
-			output.Write(chunk[:out.take(n)])
+
+			got, crossed := out.take(n)
+			if crossed {
+				log.Warn(limitReached, "limit", "output", "limit_bytes", outputBytes)
+				close(out.over)
+			}
+
+			output.Write(chunk[:got])
 
 			if err != nil {
 				return
@@ -353,6 +378,8 @@ func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *ex
 	case <-exited:
 	case <-timer.C:
 		timedOut = true
+
+		log.Warn(limitReached, "limit", "timeout", "timeout", cmd.Timeout)
 	case <-ctx.Done():
 		timedOut = true
 	case <-out.over:
@@ -375,10 +402,19 @@ func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *ex
 
 	res := Result{Output: output.Bytes(), TimedOut: timedOut, Truncated: out.spent() || hostOut.spent()}
 
+	oomKills, processLimitHits := cg.limitEvents()
+	if oomKills > 0 {
+		log.Warn(limitReached, "limit", "memory", "limit_bytes", memoryBytes, "oom_kills", oomKills)
+	}
+
+	if processLimitHits > 0 {
+		log.Warn(limitReached, "limit", "processes", "limit_processes", tasks, "refused_forks", processLimitHits)
+	}
+
 	switch {
 	case res.Truncated:
 		res.Output = fmt.Appendf(res.Output, "\n[emulated shell: output stopped at %d MiB]\n", outputBytes>>20)
-	case cg.hitResourceLimit():
+	case oomKills > 0 || processLimitHits > 0:
 		res.Output = fmt.Appendf(res.Output, "\n[emulated shell: memory (%d MiB) or process (%d) limit reached]\n", memoryBytes>>20, tasks)
 	}
 

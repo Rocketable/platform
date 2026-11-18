@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -52,7 +53,7 @@ func TestPreparingRuntime(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorContains(t, err, "waiting for the sandbox")
 
-	require.Equal(t, 127, probeHost{}.Command(ctx, "deploy", nil, "/", nil, nil, nil), "the probe runs no host commands")
+	require.Equal(t, 127, probeHost{}.Command(ctx, slog.New(slog.DiscardHandler), "deploy", nil, "/", nil, nil, nil), "the probe runs no host commands")
 
 	turn := rt
 	rt.p.err = errors.New("no bubblewrap")

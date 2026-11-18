@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"slices"
@@ -26,6 +27,7 @@ type broker struct {
 	cgroup string
 	names  []string
 	host   Host
+	log    *slog.Logger
 	out    *budget
 	ln     *net.UnixListener
 	slots  chan struct{}
@@ -137,7 +139,12 @@ func (b *broker) handle(ctx context.Context, conn *net.UnixConn) {
 	b.mu.Unlock()
 
 	if n > hostInvocations {
+		if n == hostInvocations+1 {
+			b.log.Warn(limitReached, "limit", "host_command_calls", "command", name, "limit_calls", hostInvocations)
+		}
+
 		exit(w, 126, name+": too many host commands in one shell command")
+
 		return
 	}
 
@@ -217,6 +224,7 @@ func (b *broker) invoke(ctx context.Context, conn *net.UnixConn, r *wire.Reader,
 			switch body := f.GetBody().(type) {
 			case *wire.Frame_StdinChunk:
 				if total += len(body.StdinChunk); total > hostInputBytes {
+					b.log.Warn(limitReached, "limit", "host_command_input", "command", name, "limit_bytes", hostInputBytes, "received_bytes", total)
 					stdinW.CloseWithError(errors.New("host command input limit exceeded"))
 					cancel()
 
@@ -240,11 +248,12 @@ func (b *broker) invoke(ctx context.Context, conn *net.UnixConn, r *wire.Reader,
 		args[i] = string(a)
 	}
 
-	stdout := &frameWriter{w: w, inv: inv, out: b.out}
-	stderr := &frameWriter{w: w, stderr: true, inv: inv, out: b.out}
+	log := b.log.With("command", name)
+	stdout := &frameWriter{w: w, inv: inv, out: b.out, log: log}
+	stderr := &frameWriter{w: w, stderr: true, inv: inv, out: b.out, log: log}
 	result := make(chan int, 1)
 
-	go func() { result <- b.host.Command(ctx, name, args, string(start.GetCwd()), stdinR, stdout, stderr) }()
+	go func() { result <- b.host.Command(ctx, log, name, args, string(start.GetCwd()), stdinR, stdout, stderr) }()
 
 	select {
 	case code := <-result:
@@ -262,6 +271,7 @@ type frameWriter struct {
 	stderr bool
 	inv    *invocation
 	out    *budget
+	log    *slog.Logger
 }
 
 func (f *frameWriter) Write(p []byte) (int, error) {
@@ -272,7 +282,13 @@ func (f *frameWriter) Write(p []byte) (int, error) {
 			return written, err
 		}
 
-		chunk := p[:f.out.take(min(len(p), wire.ChunkSize))]
+		got, crossed := f.out.take(min(len(p), wire.ChunkSize))
+		if crossed {
+			f.log.Warn(limitReached, "limit", "host_command_output", "limit_bytes", outputBytes)
+			close(f.out.over)
+		}
+
+		chunk := p[:got]
 		if len(chunk) == 0 {
 			return written, errors.New("output limit exceeded")
 		}
@@ -302,19 +318,20 @@ type budget struct {
 
 func newBudget(n int) *budget { return &budget{remaining: n, over: make(chan struct{})} }
 
-func (b *budget) take(n int) int {
+func (b *budget) take(n int) (got int, crossed bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	got := min(n, b.remaining)
+	got = min(n, b.remaining)
 	b.remaining -= got
 
 	if got < n && !b.exceeded {
 		b.exceeded = true
-		close(b.over)
+
+		return got, true
 	}
 
-	return got
+	return got, false
 }
 
 func (b *budget) spent() bool {
