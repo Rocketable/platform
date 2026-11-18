@@ -411,7 +411,7 @@ github.com/modelcontextprotocol/go-sdk/internal/xcontext
 github.com/modelcontextprotocol/go-sdk/jsonrpc
 github.com/modelcontextprotocol/go-sdk/mcp
 github.com/modelcontextprotocol/go-sdk/oauthex
-# github.com/openai/openai-go/v3 v3.101.0
+# github.com/openai/openai-go/v3 v3.102.0
 ## explicit; go 1.26.0
 github.com/openai/openai-go/v3
 github.com/openai/openai-go/v3/auth
