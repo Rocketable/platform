@@ -3341,9 +3341,11 @@ type CodeModeCall struct {
 	Reason     string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
 	ReviewTurn string                 `protobuf:"bytes,7,opt,name=review_turn,json=reviewTurn,proto3" json:"review_turn,omitempty"`
 	// The actual call's existing bounded output summary; absent from permission-review plans.
-	Summary       string `protobuf:"bytes,8,opt,name=summary,proto3" json:"summary,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Summary               string   `protobuf:"bytes,8,opt,name=summary,proto3" json:"summary,omitempty"`
+	CreatedPullRequests   []string `protobuf:"bytes,9,rep,name=created_pull_requests,json=createdPullRequests,proto3" json:"created_pull_requests,omitempty"`
+	MentionedPullRequests []string `protobuf:"bytes,10,rep,name=mentioned_pull_requests,json=mentionedPullRequests,proto3" json:"mentioned_pull_requests,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *CodeModeCall) Reset() {
@@ -3423,6 +3425,20 @@ func (x *CodeModeCall) GetSummary() string {
 		return x.Summary
 	}
 	return ""
+}
+
+func (x *CodeModeCall) GetCreatedPullRequests() []string {
+	if x != nil {
+		return x.CreatedPullRequests
+	}
+	return nil
+}
+
+func (x *CodeModeCall) GetMentionedPullRequests() []string {
+	if x != nil {
+		return x.MentionedPullRequests
+	}
+	return nil
 }
 
 // Attachment download frames carry at most 256 KiB. History carries metadata only.
@@ -10577,7 +10593,7 @@ const file_web_proto_rawDesc = "" +
 	"\vreview_turn\x18\x1a \x01(\tR\n" +
 	"reviewTurn\x12%\n" +
 	"\x0escript_outcome\x18\x1b \x01(\tR\rscriptOutcomeB\x13\n" +
-	"\x11_reasoning_effortJ\x04\b\x02\x10\x03\"\xcb\x01\n" +
+	"\x11_reasoning_effortJ\x04\b\x02\x10\x03\"\xb7\x02\n" +
 	"\fCodeModeCall\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\targuments\x18\x02 \x01(\tR\targuments\x12\x16\n" +
@@ -10586,7 +10602,10 @@ const file_web_proto_rawDesc = "" +
 	"\x06reason\x18\x06 \x01(\tR\x06reason\x12\x1f\n" +
 	"\vreview_turn\x18\a \x01(\tR\n" +
 	"reviewTurn\x12\x18\n" +
-	"\asummary\x18\b \x01(\tR\asummaryJ\x04\b\x03\x10\x04\"\xcf\x01\n" +
+	"\asummary\x18\b \x01(\tR\asummary\x122\n" +
+	"\x15created_pull_requests\x18\t \x03(\tR\x13createdPullRequests\x126\n" +
+	"\x17mentioned_pull_requests\x18\n" +
+	" \x03(\tR\x15mentionedPullRequestsJ\x04\b\x03\x10\x04\"\xcf\x01\n" +
 	"\n" +
 	"Attachment\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
