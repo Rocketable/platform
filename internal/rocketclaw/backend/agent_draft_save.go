@@ -176,7 +176,7 @@ func (s *SessionService) SaveAgentDraft(ctx context.Context, rt agentDraftRuntim
 			return err
 		}
 
-		return staleAgentDraft(draft, variant, draft.Bases[agentDraftWorkspaceLayer], files[agentDraftWorkspaceLayer])
+		return staleAgentDraft(draft, variant, data, draft.Bases[agentDraftWorkspaceLayer], files[agentDraftWorkspaceLayer])
 	}
 
 	if err := changed(); err != nil {
@@ -354,16 +354,12 @@ func (s *SessionService) moveAgentDraft(ctx context.Context, id, author string, 
 	}
 }
 
-func staleAgentDraft(draft *AgentDraft, variant *AgentDraftVariant, base, live *string) error {
+func staleAgentDraft(draft *AgentDraft, variant *AgentDraftVariant, data []byte, base, live *string) error {
 	if sameAgentFile(live, base) {
 		return nil
 	}
 
-	return &AgentDraftSaveError{Problem: "The agent's file changed since this draft began: review the changes before saving.", Review: reviewAgentDraft(draft, variant, base, live)}
-}
-
-func reviewAgentDraft(draft *AgentDraft, variant *AgentDraftVariant, base, live *string) *AgentDraftReview {
-	review := &AgentDraftReview{Revision: draft.Revision, Base: base, Live: live, Draft: string(renderAgentDraftFile(draft.Mode, variant))}
+	review := &AgentDraftReview{Revision: draft.Revision, Base: base, Live: live, Draft: string(data)}
 	sides, modes := [3]AgentDraftVariant{2: *variant}, [3]harness.AgentMode{2: draft.Mode}
 
 	for i, file := range []*string{base, live} {
@@ -399,7 +395,7 @@ func reviewAgentDraft(draft *AgentDraft, variant *AgentDraftVariant, base, live 
 
 	review.Splices, _ = transformAgentDraftSplices(diffAgentDraftBody(sides[0].Body, sides[1].Body), diffAgentDraftBody(sides[0].Body, sides[2].Body), false)
 
-	return review
+	return &AgentDraftSaveError{Problem: "The agent's file changed since this draft began: review the changes before saving.", Review: review}
 }
 
 func sameAgentFile(a, b *string) bool {

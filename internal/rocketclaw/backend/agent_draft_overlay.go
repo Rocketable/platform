@@ -136,7 +136,7 @@ func (s *SessionService) saveAgentDraftToOverlay(ctx context.Context, rt agentDr
 			return false, fmt.Errorf("read staged agent: %w", err)
 		}
 
-		if err := staleAgentDraft(draft, variant, draft.Bases[overlay.Spec], live); err != nil {
+		if err := staleAgentDraft(draft, variant, data, draft.Bases[overlay.Spec], live); err != nil {
 			return false, err
 		}
 
