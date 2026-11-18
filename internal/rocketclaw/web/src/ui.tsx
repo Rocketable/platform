@@ -2107,10 +2107,10 @@ function useParkedTree({ state, pathname, shared, parked }: TabStoreValue) {
     const fold = `parked:@${section.name}`, shut = collapsed || (sections.length > 1 && (folds[fold] ?? false));
     const branches = section.spaces.flatMap((space) => {
       const id = `parked:${section.name}/${space.id}`, rank = (tab: Tab) => order.indexOf(`${id}\n${tab.path}`) + 1 || Infinity, closed = shut || (folds[id] ?? false);
-      const there = section.rows.filter((tab) => tab.space === space.id).toSorted((a, b) => rank(a) - rank(b) || 0);
-      return there.length ? [{ space, id, closed, there, shown: closed ? there.filter((tab) => section.name === here && tab.path === pathname) : there }] : [];
+      const there = section.rows.filter((tab) => tab.space === space.id).sort((a, b) => rank(a) - rank(b) || 0);
+      return there.length ? [{ space, id, closed, size: there.length, shown: closed ? there.filter((tab) => section.name === here && tab.path === pathname) : there }] : [];
     });
-    return { name: section.name, spaces: section.spaces, fold, shut, branches, count: branches.reduce((sum, branch) => sum + branch.there.length, 0) };
+    return { name: section.name, showSpaces: section.spaces.length > 1 && !shut, fold, shut, branches, count: branches.reduce((sum, branch) => sum + branch.size, 0) };
   });
   const visible = tree.flatMap((section) => section.branches.flatMap((branch) => branch.shown.map((tab) => ({ ...tab, server: section.name, branch: branch.id, key: `${section.name}\n${tab.path}` }))));
   return { tree, visible, collapsed, here, count: tree.reduce((sum, section) => sum + section.count, 0), stop: (visible.find((tab) => tab.server === here && tab.path === pathname) ?? visible[0])?.key };
@@ -2187,11 +2187,11 @@ function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: T
         {tree.length > 1 && !collapsed ? <button type="button" aria-expanded={!section.shut} aria-label={`Parked on ${serverLabel(section.name)}`} className={cn(header, "mt-1 h-7 rounded-md font-semibold text-foreground")} onClick={() => foldCard(section.fold, !section.shut)}>
           <ChevronDown aria-hidden="true" className={cn("size-3.5", section.shut && "-rotate-90")} />{serverLabel(section.name)}{sidebar.servers[section.name]?.offline ? <span className="font-normal">· offline</span> : null}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-muted px-1.5 text-center text-[11px]">{section.count}</span>
         </button> : null}
-        {section.branches.map(({ space, id, closed, there, shown }) => <Fragment key={space.id}>
-          {section.spaces.length > 1 && !section.shut ? <button type="button" aria-expanded={!closed} aria-label={`Parked in ${space.name}${tree.length > 1 ? ` on ${serverLabel(section.name)}` : ""}`} className={cn(header, "mt-1 h-6 rounded-t-md bg-muted/50")} onClick={() => foldCard(id, !closed)}>
-            {closed ? <Folder aria-hidden="true" className="size-3.5" /> : <FolderOpen aria-hidden="true" className="size-3.5" />}{space.name}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-background px-1.5 text-center text-[11px]">{there.length}</span><ChevronDown aria-hidden="true" className={cn("size-3.5", closed && "-rotate-90")} />
+        {section.branches.map(({ space, id, closed, size, shown }) => <Fragment key={space.id}>
+          {section.showSpaces ? <button type="button" aria-expanded={!closed} aria-label={`Parked in ${space.name}${tree.length > 1 ? ` on ${serverLabel(section.name)}` : ""}`} className={cn(header, "mt-1 h-6 rounded-t-md bg-muted/50")} onClick={() => foldCard(id, !closed)}>
+            {closed ? <Folder aria-hidden="true" className="size-3.5" /> : <FolderOpen aria-hidden="true" className="size-3.5" />}{space.name}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-background px-1.5 text-center text-[11px]">{size}</span><ChevronDown aria-hidden="true" className={cn("size-3.5", closed && "-rotate-90")} />
           </button> : null}
-          <div className={cn("flex flex-col [&_[role=tab]]:py-1", section.spaces.length > 1 && !section.shut && "rounded-b-md bg-muted/30 p-0.5")}>
+          <div className={cn("flex flex-col [&_[role=tab]]:py-1", section.showSpaces && "rounded-b-md bg-muted/30 p-0.5")}>
             {shown.map((tab) => <ParkedItem key={tab.path} tab={tab} server={section.name} here={here} space={space.name} active={section.name === here && tab.path === pathname} stop={stop === `${section.name}\n${tab.path}`} editing={section.name === here && tab.path === editing} endEdit={endEdit} close={() => close(tab.path)} openMenu={(anchor) => menuOf(tab, section.name, anchor)} />)}
           </div>
         </Fragment>)}
