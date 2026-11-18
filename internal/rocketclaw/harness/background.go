@@ -137,26 +137,25 @@ type backgroundWork struct {
 	raw      json.RawMessage
 	metadata toolCallMetadata
 	tc       toolCallContext
-	sink     *backgroundSink
 	items    chan ChatResponse
 }
 
 func (w *backgroundWork) Detach() bool {
-	w.sink.mu.Lock()
-	defer w.sink.mu.Unlock()
+	w.tc.sink.mu.Lock()
+	defer w.tc.sink.mu.Unlock()
 
-	w.sink.detached = w.sink.detached || !w.sink.settled
+	w.tc.sink.detached = w.tc.sink.detached || !w.tc.sink.settled
 
-	return w.sink.detached
+	return w.tc.sink.detached
 }
 
 func (w *backgroundWork) RunBackground(ctx context.Context) (string, error) {
-	ctx = context.WithValue(context.WithValue(ctx, toolCallContextKey{}, w.tc), backgroundSinkKey{}, w.sink)
+	ctx = context.WithValue(context.WithValue(ctx, toolCallContextKey{}, w.tc), backgroundSinkKey{}, w.tc.sink)
 
 	var group errgroup.Group
 
 	group.Go(func() error {
-		w.sink.forward(w.items)
+		w.tc.sink.forward(w.items)
 		return nil
 	})
 
@@ -249,9 +248,9 @@ func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *lo
 		}
 
 		parent, _ := ctx.Value(backgroundSinkKey{}).(*backgroundSink)
-		work := &backgroundWork{call: call, raw: raw, metadata: metadata, sink: &backgroundSink{parent: parent, output: output, detached: params.Background}, items: make(chan ChatResponse, cap(output))}
+		work := &backgroundWork{call: call, raw: raw, metadata: metadata, items: make(chan ChatResponse, cap(output))}
 		work.tc, _ = toolCallContextFrom(ctx)
-		work.tc.output, work.tc.sink = work.items, work.sink
+		work.tc.output, work.tc.sink = work.items, &backgroundSink{parent: parent, output: output, detached: params.Background}
 
 		result, err := f.backgroundJobs.Run(ctx, &job, work)
 		if err != nil {
