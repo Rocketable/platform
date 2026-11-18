@@ -4901,7 +4901,6 @@ function DelegationTranscript({ id, child }: { id: string; child: string }) {
   return <SidePanel label="Delegation" close={close}>{body}</SidePanel>;
 }
 
-// On desktop the pane opens by itself when the thread gains a pull request or one gets new commits.
 function ThreadPRPanel({ drafts, onDraftChange }: { drafts: Map<string, ComposerDraft>; onDraftChange: () => void }) {
   const id = pathSession(usePathname());
   const search = new URLSearchParams(useSearch());

@@ -568,7 +568,6 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     expect(await page.getByRole("dialog", { name: "Tabs", exact: true }).isVisible()).toBe(true);
     await page.waitForFunction((node: HTMLElement) => document.activeElement === node, await actions.elementHandle());
     expect(await composer.inputValue()).toBe("Draft still editable beside the PR pane");
-    // On desktop a PR a subagent of the thread has just created opens the closed pane on that PR; a mentioned PR does not.
     await page.keyboard.press("Escape");
     // The watch's first look sets what counts as new, so let it answer before the thread creates another PR.
     const subagentLook = () => page.waitForResponse((response: any) => response.url().includes("/api/History?pull-request-discovery") && response.request().postDataJSON().id === child);

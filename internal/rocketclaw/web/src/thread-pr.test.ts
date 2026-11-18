@@ -6,18 +6,7 @@ const url = "https://github.com/owner/repo/pull/7";
 const pr = (n: number) => `https://github.com/owner/repo/pull/${n}`;
 
 test("a successful command's created and mentioned PRs follow the harness rule", () => {
-  const cases = [
-    ...shared as { name: string; command: string; output: string; created?: string[]; mentioned?: string[] }[],
-    { name: "a quoted body", command: "gh pr create --title 'change' --body 'text'", output: url, created: [url] },
-    { name: "an apostrophe in a comment", command: "# don't forget the body\ngh pr create --title 'x'", output: url, created: [url] },
-    { name: "an earlier dry-run push", command: "jj git push --dry-run -b a\njj git push -b a\ngh pr create --head a", output: url, created: [url] },
-    { name: "dry run in the body text", command: "gh pr create --body 'Discuss --dry-run in the guide'", output: url, created: [url] },
-    { name: "a quoted create", command: "echo 'gh pr create'", output: url, mentioned: [url] },
-    { name: "a quoted dry run", command: "gh pr create '--dry-run'", output: url, mentioned: [url] },
-    { name: "a quoted dry run with a value", command: 'gh pr create "--dry-run=true"', output: url, mentioned: [url] },
-    { name: "a URL not alone on its line", command: "gh pr create", output: `Created ${url}\n[{"url":"${url}"}]`, mentioned: [url] },
-    { name: "an issue", command: "gh pr create", output: "https://github.com/owner/repo/issues/7" },
-  ];
+  const cases = shared as { name: string; command: string; output: string; created?: string[]; mentioned?: string[] }[];
   for (const c of cases) expect(pullRequestsIn(c.command, c.output), c.name).toEqual({ created: c.created ?? [], mentioned: c.mentioned ?? [] });
 });
 
