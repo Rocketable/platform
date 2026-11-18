@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -141,6 +142,8 @@ func (f *toolFactory) taskDescription() string {
 }
 
 func (f *toolFactory) availableSubagentsDescription() string {
+	const heading = "Available agent types and the tools they have access to:"
+
 	names := make([]string, 0, len(f.agents.Items))
 	for name := range f.agents.Items {
 		agent := f.agents.Items[name]
@@ -154,23 +157,18 @@ func (f *toolFactory) availableSubagentsDescription() string {
 	slices.Sort(names)
 
 	if len(names) == 0 {
-		return "Available agent types and the tools they have access to:\nNo agents are currently available."
+		return heading + "\nNo agents are currently available."
 	}
 
-	lines := []string{"Available agent types and the tools they have access to:"}
+	var description strings.Builder
+	description.WriteString(heading)
 
 	for _, name := range names {
-		agent := f.agents.Items[name]
-
-		description := agent.Description
-		if description == "" {
-			description = "This subagent should only be called manually by the user."
-		}
-
-		lines = append(lines, fmt.Sprintf("- %s: %s", name, description))
+		text := cmp.Or(f.agents.Items[name].Description, "This subagent should only be called manually by the user.")
+		fmt.Fprintf(&description, "\n- %s: %s", name, text)
 	}
 
-	return strings.Join(lines, "\n")
+	return description.String()
 }
 
 func (f *toolFactory) childSystemPrompt(agent *Agent) string {
