@@ -28,6 +28,8 @@ import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timel
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { BehaviorSettings } from "./behavior-settings";
 import { ThreadPRContent, ThreadPRWatch } from "./thread-pr-panel";
+import { SelectionQuote, type DiffNote, type PRComposer } from "./github-pr-preview";
+import type { GitHubPR } from "./github-pr";
 import { reportTyping, TypingPill } from "./typing";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -2433,7 +2435,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               </TabPane>
              </ServerGate></main>
               {showChat ? <><DelegationPanel id={route.id} /><SkillPanel /></> : null}
-              <ThreadPRPanel />
+              <ThreadPRPanel drafts={drafts} onDraftChange={onDraftChange} />
            </div>
           </div>
           </TabActions></SessionCommands></DraftScope>
@@ -3076,7 +3078,13 @@ const SessionRowContent = memo(function SessionRowContent({ session, age = relat
   </span>;
 });
 
-const remoteView = { route: "", shown: "", openPalette: () => {} };
+const inertView: Pick<Mounted, "openPalette" | "quotable" | "quote"> = { openPalette() {}, quotable: () => false, quote() {} };
+const remoteView = { route: "", shown: "", ...inertView, listeners: new Set<() => void>() };
+const announceRemoteView = () => remoteView.listeners.forEach((listener) => listener());
+const subscribeRemoteView = (listener: () => void) => {
+  remoteView.listeners.add(listener);
+  return () => void remoteView.listeners.delete(listener);
+};
 
 // OpenCode's composer is empty when its text holds only line breaks and zero-width spaces, as its own isEditorDomBlank
 // (oc/packages/app/src/composer/editor/dom.ts) decides; a mention pill's text counts.
@@ -3170,11 +3178,14 @@ function RemoteSession({ id }: { id: string }) {
     view.current.sessionID = sessionID;
     view.current.messageID = messageID;
     view.current.mounted.keep(open ? open.split("\n") : []);
-    Object.assign(remoteView, { route: id, shown: sessionID, openPalette: view.current.mounted.openPalette });
+    const { openPalette, quotable, quote } = view.current.mounted;
+    Object.assign(remoteView, { route: id, shown: sessionID, openPalette, quotable, quote });
+    announceRemoteView();
   });
   // The view opens on the session shown when it mounts; later sessions move it.
   const attach = useEffectEvent(({ mount }: OcModule) => {
     view.current = { mounted: mount(container.current!, { server, url: `${serverURL() || location.origin}/oc/${server}`, sessionID, messageID, navigation: { openSession, newSession, forkSession, closeTab, reportSession, messageLink } }), sessionID, messageID };
+    view.current.mounted.subscribeQuotable(announceRemoteView);
     show();
   });
   useEffect(() => {
@@ -3187,7 +3198,8 @@ function RemoteSession({ id }: { id: string }) {
       gone = true;
       view.current?.mounted.dispose();
       view.current = undefined;
-      Object.assign(remoteView, { route: "", shown: "", openPalette: () => {} });
+      Object.assign(remoteView, { route: "", shown: "", ...inertView });
+      announceRemoteView();
     };
   }, [ready, server, retries]);
   useEffect(() => show(), [id, sessionID, open, messageID]);
@@ -4890,19 +4902,57 @@ function DelegationTranscript({ id, child }: { id: string; child: string }) {
 }
 
 // On desktop the pane opens by itself when the thread gains a pull request or one gets new commits.
-function ThreadPRPanel() {
+function ThreadPRPanel({ drafts, onDraftChange }: { drafts: Map<string, ComposerDraft>; onDraftChange: () => void }) {
   const id = pathSession(usePathname());
   const search = new URLSearchParams(useSearch());
   const sidebar = useContext(Sidebar);
   const wide = useMedia("(min-width: 64rem)");
+  const { composer, added } = usePRComposer(id, drafts, onDraftChange, wide);
   if (!id) return null;
   const version = sidebar.rows.find((row) => row.id === id)?.updatedAt;
   const selected = search.get("pullRequests");
   const close = () => navigate(panelHref());
   return <>
     {wide ? <ThreadPRWatch key={id} id={id} version={version} /> : null}
-    {selected === null ? null : <SidePanel label="Pull requests" close={close}><ThreadPRContent key={`${id} ${selected}`} id={id} version={version} selected={selected} close={close} /></SidePanel>}
+    {selected === null ? null : <SidePanel label="Pull requests" close={close}>
+      <ThreadPRContent key={`${id} ${selected}`} id={id} version={version} selected={selected} close={close} composer={composer} />
+      {added ? <p key={added} role="status" className="shrink-0 border-t p-2 text-xs text-muted-foreground">Added to message</p> : null}
+    </SidePanel>}
   </>;
+}
+
+const pullRequestName = ({ owner, repo, number }: GitHubPR) => `${owner}/${repo}#${number}`;
+const openCodeComposer = (quotable: boolean): PRComposer => ({
+  status: quotable ? "ready" : "none",
+  quote: (reference, text) => remoteView.quote({ text, label: pullRequestName(reference), subject: `the description of pull request ${pullRequestName(reference)}` }),
+  add: (reference, { note, path, range, lines }) => remoteView.quote({ text: lines.join("\n"), comment: note, label: `${pullRequestName(reference)} ${path}:${range.start}-${range.end}`, subject: `pull request ${pullRequestName(reference)}, file ${path} lines ${range.start}-${range.end}` }),
+});
+
+function noteBlock({ note, path, range, lines }: DiffNote) {
+  const fence = "`".repeat(Math.max(3, ...lines.flatMap((line) => line.match(/`+/g) ?? []).map((run) => run.length + 1)));
+  return `${note}\n\n${path} lines ${range.start}-${range.end}\n${fence}diff\n${lines.join("\n")}\n${fence}`;
+}
+
+function usePRComposer(id: string, drafts: Map<string, ComposerDraft>, onDraftChange: () => void, wide: boolean): { composer: PRComposer; added: number } {
+  const quotable = useSyncExternalStore(subscribeRemoteView, () => remoteView.route === id && remoteView.quotable());
+  const [added, setAdded] = useState(0);
+  useEffect(() => {
+    if (!added) return;
+    const timer = setTimeout(() => setAdded(0), 4000);
+    return () => clearTimeout(timer);
+  }, [added]);
+  if (id.startsWith("opencode:")) return { composer: openCodeComposer(quotable), added };
+  const draft = drafts.get(id);
+  const append = (block: string) => {
+    const target = drafts.get(id)!;
+    target.text = appendBlock(target.text, block);
+    target.edit++;
+    if (wide) target.focus = (target.focus ?? 0) + 1;
+    else setAdded((count) => count + 1);
+    onDraftChange();
+  };
+  const busy = !draft || [draft.sending, draft.reverting, !draft.hydrated].some(Boolean);
+  return { composer: { status: busy ? "busy" : "ready", quote: (_, text) => append(quoteLines(text)), add: (_, note) => append(noteBlock(note)) }, added };
 }
 
 function SidePanel({ label, close, children }: { label: string; close: () => void; children: ReactNode }) {
@@ -5432,42 +5482,8 @@ function ModEnterKeys({ mac }: { mac: boolean }) {
   );
 }
 
-function SelectionQuote({ text, setText, messageInput, sending }: { text: string; setText: (value: string) => void; messageInput: React.RefObject<HTMLTextAreaElement | null>; sending: boolean }) {
-  const [quote, setQuote] = useState<{ left: number; top: number }>();
-  useEffect(() => {
-    const clear = () => setQuote(undefined);
-    const select = () => {
-      const selection = window.getSelection();
-      const transcript = document.getElementById("transcript-scroll");
-      if (sending || !selection?.rangeCount || !selection.toString().trim()) return clear();
-      const range = selection.getRangeAt(0);
-      if (!transcript?.contains(range.startContainer) || !transcript.contains(range.endContainer)) return clear();
-      const rect = range.getBoundingClientRect();
-      setQuote({ left: Math.max(8, Math.min(rect.left, window.innerWidth - 88)), top: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 44)) });
-    };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") clear(); };
-    document.addEventListener("selectionchange", select);
-    document.addEventListener("scroll", clear, true);
-    document.addEventListener("keydown", escape);
-    window.addEventListener("resize", clear);
-    return () => {
-      document.removeEventListener("selectionchange", select);
-      document.removeEventListener("scroll", clear, true);
-      document.removeEventListener("keydown", escape);
-      window.removeEventListener("resize", clear);
-    };
-  }, [sending]);
-  return quote && !sending ? <div className="fixed z-50" style={{ left: quote.left, top: quote.top }}>
-    <Button type="button" size="sm" onMouseDown={(event) => { if (event.button === 0) event.preventDefault(); }} onClick={() => {
-      // Read the selection now: a click can arrive before the last selectionchange has rendered.
-      const value = (text ? text + "\n\n" : "") + window.getSelection()!.toString().replace(/\r\n?/g, "\n").split("\n").map((line) => `> ${line}`).join("\n") + "\n\n";
-      flushSync(() => { setText(value); setQuote(undefined); });
-      window.getSelection()?.removeAllRanges();
-      messageInput.current!.focus();
-      messageInput.current!.setSelectionRange(value.length, value.length);
-    }}>Quote</Button>
-  </div> : null;
-}
+const quoteLines = (selected: string) => selected.replace(/\r\n?/g, "\n").split("\n").map((line) => `> ${line}`).join("\n");
+const appendBlock = (text: string, block: string) => (text ? text + "\n\n" : "") + block + "\n\n";
 
 function Composer({
   files,
@@ -5563,7 +5579,12 @@ function Composer({
   return (
     <div data-native-composer data-touch={touch} className="shrink-0">
       <div className="px-3 pb-3">
-      <SelectionQuote text={text} setText={setText} messageInput={messageInput} sending={sending} />
+      <SelectionQuote container={() => document.getElementById("transcript-scroll")} hidden={sending} quote={(selected) => {
+        const value = appendBlock(text, quoteLines(selected));
+        flushSync(() => setText(value));
+        messageInput.current!.focus();
+        messageInput.current!.setSelectionRange(value.length, value.length);
+      }} />
       <div className="relative mx-auto w-full max-w-3xl">
         {matches.length > 0 ? (
           <ul className="absolute inset-x-0 bottom-full z-10 mb-2 max-h-[50dvh] overflow-y-auto rounded-2xl border bg-popover text-popover-foreground shadow-md">

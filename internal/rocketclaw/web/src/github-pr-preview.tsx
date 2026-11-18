@@ -9,6 +9,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { SelectionSide } from "@pierre/diffs";
 import { GitHubError, githubPR, loadPR, loadPRFiles, type GitHubPR, type PRFile, type PullRequest } from "./github-pr";
 import type { OpenCodePRSource } from "./opencode-pr";
 import { MarkdownText, setPreference, usePreference } from "./transcript-text";
@@ -20,8 +21,49 @@ type Layout = (typeof layouts)[number];
 type PreviewResult = { pr?: PullRequest; files: PRFile[]; page: number; ended: boolean; loading: boolean; halted: boolean; error: string };
 const unread = { files: [], page: 0, ended: false, halted: false, error: "" };
 
+export type DiffNote = { note: string; path: string; range: { start: number; end: number; side: SelectionSide }; lines: string[] };
+export type PRComposer = { status: "ready" | "busy" | "none"; quote(reference: GitHubPR, text: string): void; add(reference: GitHubPR, note: DiffNote): void };
+const noComposer: PRComposer = { status: "none", quote() {}, add() {} };
+
 export function PrivatePreviewRoot(props: ComponentProps<"div">) {
   return <div {...props} className={cn(props.className, "ph-no-capture")} />;
+}
+
+export function SelectionQuote({ container, hidden, quote }: { container: () => Element | null; hidden: boolean; quote: (selected: string) => void }) {
+  const [at, setAt] = useState<{ left: number; top: number }>();
+  const select = useEffectEvent(() => {
+    const selection = window.getSelection();
+    const root = container();
+    if (hidden || !selection?.rangeCount || !selection.toString().trim()) return setAt(undefined);
+    const range = selection.getRangeAt(0);
+    if (!root?.contains(range.startContainer) || !root.contains(range.endContainer)) return setAt(undefined);
+    const rect = range.getBoundingClientRect();
+    setAt({ left: Math.max(8, Math.min(rect.left, window.innerWidth - 88)), top: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 44)) });
+  });
+  useEffect(() => {
+    const changed = () => select();
+    const clear = () => setAt(undefined);
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") clear(); };
+    document.addEventListener("selectionchange", changed);
+    document.addEventListener("scroll", clear, true);
+    document.addEventListener("keydown", escape);
+    window.addEventListener("resize", clear);
+    return () => {
+      document.removeEventListener("selectionchange", changed);
+      document.removeEventListener("scroll", clear, true);
+      document.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", clear);
+    };
+  }, []);
+  return at && !hidden ? <div className="fixed z-50" style={{ left: at.left, top: at.top }}>
+    <Button type="button" size="sm" onMouseDown={(event) => { if (event.button === 0) event.preventDefault(); }} onClick={() => {
+      // Read the selection now: a click can arrive before the last selectionchange has rendered.
+      const selected = window.getSelection()!.toString();
+      setAt(undefined);
+      window.getSelection()?.removeAllRanges();
+      quote(selected);
+    }}>Quote</Button>
+  </div> : null;
 }
 
 export function GitHubPRLink({ href, children }: { href: string | undefined; children: ReactNode }) {
@@ -114,7 +156,7 @@ function Preview({ reference, close }: { reference: GitHubPR; close: () => void 
     <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" disabled={state.result.loading} />} aria-label="Refresh" onClick={() => void state.load(false)}><RefreshCw /></TooltipTrigger><TooltipContent>Refresh</TooltipContent></Tooltip>
     <Button type="button" variant="outline" onClick={close}>Close preview</Button>
   </span>;
-  const body = <PreviewBody reference={reference} state={state} close={close} />;
+  const body = <PreviewBody reference={reference} state={state} close={close} composer={noComposer} />;
   if (layout === "Inline") return <span ref={inlineFocus} tabIndex={-1} role="region" aria-label="Pull request preview" className="ph-no-capture my-2 flex max-h-[80dvh] w-full min-w-0 flex-col gap-3 rounded-lg border bg-background p-3 font-sans text-sm font-normal whitespace-normal text-foreground" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); close(); } }}>
     <span className="font-medium">Pull request preview</span>{controls}{body}
   </span>;
@@ -127,12 +169,12 @@ function Preview({ reference, close }: { reference: GitHubPR; close: () => void 
   </DialogContent></Dialog>;
 }
 
-export function GitHubPRContent({ reference, source, refresh, close }: { reference: GitHubPR; source?: OpenCodePRSource; refresh: number; close: () => void }) {
+export function GitHubPRContent({ reference, source, refresh, close, composer }: { reference: GitHubPR; source?: OpenCodePRSource; refresh: number; close: () => void; composer: PRComposer }) {
   const state = usePreview(reference, source, refresh);
-  return <PreviewBody reference={reference} state={state} close={close} source={source} />;
+  return <PreviewBody reference={reference} state={state} close={close} source={source} composer={composer} />;
 }
 
-function PreviewBody({ reference, state, close, source }: { reference: GitHubPR; state: ReturnType<typeof usePreview>; close: () => void; source?: OpenCodePRSource }) {
+function PreviewBody({ reference, state, close, source, composer }: { reference: GitHubPR; state: ReturnType<typeof usePreview>; close: () => void; source?: OpenCodePRSource; composer: PRComposer }) {
   const { result, cancel } = state;
   const { pr } = result;
   return <span className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto break-words">
@@ -143,15 +185,16 @@ function PreviewBody({ reference, state, close, source }: { reference: GitHubPR;
       <Tooltip><TooltipTrigger render={<a href={`https://github.com/${reference.owner}/${reference.repo}/pull/${reference.number}`} target="_blank" rel="noopener noreferrer" className="flex min-w-0 items-center gap-1 hover:underline"><span className="truncate">{reference.owner}/{reference.repo} #{reference.number}</span><ExternalLink className="size-3 shrink-0" /></a>} /><TooltipContent>Open on GitHub</TooltipContent></Tooltip>
     </span>
     {!source && !result.loading && (!pr || Boolean(result.error)) && <TokenEntry state={state} />}
-    {pr && <PreviewDetails reference={reference} pr={pr} state={state} />}
+    {pr && <PreviewDetails reference={reference} pr={pr} state={state} composer={composer} />}
     {source && <span className="shrink-0 text-xs text-muted-foreground">Read with this OpenCode server's GitHub login.</span>}
   </span>;
 }
 
 // Visual reference: t3code apps/web/src/components/pullRequest/PullRequestDetailLayout.tsx
 // at 1d61dd3: title, actor/time, base ← head and counts above a segmented tab bar.
-function PreviewDetails({ reference, pr, state }: { reference: GitHubPR; pr: PullRequest; state: ReturnType<typeof usePreview> }) {
+function PreviewDetails({ reference, pr, state, composer }: { reference: GitHubPR; pr: PullRequest; state: ReturnType<typeof usePreview>; composer: PRComposer }) {
   const { result, load, idle, tab, setTab } = state;
+  const description = useRef<HTMLSpanElement>(null);
   const remaining = result.files.length < Math.min(pr.changed_files, 3000) && !result.ended;
   return <Tabs render={<span />} value={tab} onValueChange={(value) => setTab(String(value))} className="min-w-0 shrink-0">
     <PRHeader pr={pr} />
@@ -159,9 +202,12 @@ function PreviewDetails({ reference, pr, state }: { reference: GitHubPR; pr: Pul
       <TabsList render={<span />} aria-label="Pull request tabs"><TabsTrigger value="summary">Summary</TabsTrigger><TabsTrigger value="code">Code</TabsTrigger></TabsList>
       <span className="text-xs text-muted-foreground">{result.files.length} of {pr.changed_files} files loaded</span>
     </span>
-    <TabsContent render={<span />} value="summary" className="block overflow-auto"><span className="block py-3"><MarkdownText text={pr.body?.trim() ? pr.body : "_No description provided._"} repository={reference} /></span></TabsContent>
+    <TabsContent render={<span />} value="summary" className="block overflow-auto">
+      <span ref={description} className="block py-3"><MarkdownText text={pr.body?.trim() ? pr.body : "_No description provided._"} repository={reference} /></span>
+      <SelectionQuote container={() => description.current} hidden={composer.status !== "ready"} quote={(text) => composer.quote(reference, text)} />
+    </TabsContent>
     <TabsContent render={<span />} value="code" keepMounted className="flex min-h-0 min-w-0 flex-1 flex-col data-[hidden]:hidden">
-      <Suspense fallback={<span role="status">Loading diff viewer…</span>}>{result.files.length > 0 ? <PRCode files={result.files} more={remaining && idle ? () => void load(true) : undefined} /> : <span className="py-4 text-muted-foreground">No files loaded.</span>}</Suspense>
+      <Suspense fallback={<span role="status">Loading diff viewer…</span>}>{result.files.length > 0 ? <PRCode files={result.files} more={remaining && idle ? () => void load(true) : undefined} reference={reference} composer={composer} /> : <span className="py-4 text-muted-foreground">No files loaded.</span>}</Suspense>
     </TabsContent>
     <span className="flex shrink-0 flex-col gap-2 py-2 text-xs text-muted-foreground">
       <span>Patches may be incomplete. Open GitHub for the full diff.</span>
