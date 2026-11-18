@@ -3837,19 +3837,15 @@ func TestExternalMCPMetadataEnvSanitizesKeys(t *testing.T) {
 func TestExternalMCPStoredMetadataEnvDoesNotParseInjectedLines(t *testing.T) {
 	t.Parallel()
 
-	env, ok := externalMCPStoredMetadataEnv("slack-thread:C123:111.222", []ObservedSessionEntry{{Entry: harness.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", externalMCPMetadataEnv("slack-thread:C123:111.222", map[string]string{"note": "first\nROCKETCLAW_METADATA_BAD=second"}))})}}})
+	env, ok := externalMCPStoredMetadataEnv("slack-thread:C123:111.222", &harness.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", externalMCPMetadataEnv("slack-thread:C123:111.222", map[string]string{"note": "first\nROCKETCLAW_METADATA_BAD=second"}))})})
 	require.True(t, ok)
 	assert.Equal(t, "first\nROCKETCLAW_METADATA_BAD=second", env["ROCKETCLAW_METADATA_NOTE"])
 	assert.NotContains(t, env, "ROCKETCLAW_METADATA_BAD")
 }
 
-func TestExternalMCPStoredMetadataEnvSkipsInvalidEntriesAndUsesLatestMatch(t *testing.T) {
+func TestExternalMCPStoredMetadataEnvMatchesEntry(t *testing.T) {
 	t.Parallel()
 
-	older := externalMCPMetadataDeveloperMessage(
-		"This external MCP thread has metadata:",
-		externalMCPMetadataEnv("slack-thread:C123:111.222", map[string]string{"note": "older"}),
-	)
 	latest := externalMCPMetadataDeveloperMessage(
 		"This external MCP thread has metadata:",
 		externalMCPMetadataEnv("slack-thread:C123:111.222", map[string]string{"note": "latest"}),
@@ -3858,40 +3854,23 @@ func TestExternalMCPStoredMetadataEnvSkipsInvalidEntriesAndUsesLatestMatch(t *te
 		"This external MCP thread has metadata:",
 		externalMCPMetadataEnv("slack-thread:C999:999.999", map[string]string{"note": "other"}),
 	)
-	entries := []ObservedSessionEntry{
-		{Entry: harness.SessionEntry{
-			Version:     1,
-			Type:        externalMCPMetadataEntryType,
-			ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: older}),
-		}},
-		{Entry: harness.SessionEntry{
-			Version:     1,
-			Type:        externalMCPMetadataEntryType,
-			ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: latest}),
-		}},
-		{Entry: harness.SessionEntry{
-			Version:     1,
-			Type:        externalMCPMetadataEntryType,
-			ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: otherConversation}),
-		}},
-		{Entry: harness.SessionEntry{
-			Version:     1,
-			Type:        externalMCPMetadataEntryType,
-			ReplayInput: []json.RawMessage{json.RawMessage("{")},
-		}},
-		{Entry: harness.SessionEntry{
-			Version:     1,
-			Type:        "turn",
-			ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: latest}),
-		}},
-	}
+	entry := harness.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: latest})}
 
-	env, ok := externalMCPStoredMetadataEnv("slack-thread:C123:111.222", entries)
+	env, ok := externalMCPStoredMetadataEnv("slack-thread:C123:111.222", &entry)
 	require.True(t, ok)
 	assert.Equal(t, "latest", env["ROCKETCLAW_METADATA_NOTE"])
 
-	_, ok = externalMCPStoredMetadataEnv("slack-thread:C000:000.000", entries)
+	_, ok = externalMCPStoredMetadataEnv("slack-thread:C000:000.000", &entry)
 	assert.False(t, ok)
+
+	for _, invalid := range []harness.SessionEntry{
+		{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: otherConversation})},
+		{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: []json.RawMessage{json.RawMessage("{")}},
+		{Version: 1, Type: "turn", ReplayInput: entry.ReplayInput},
+	} {
+		_, ok := externalMCPStoredMetadataEnv("slack-thread:C123:111.222", &invalid)
+		assert.False(t, ok)
+	}
 }
 
 func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {

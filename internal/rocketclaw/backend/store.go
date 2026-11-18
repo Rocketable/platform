@@ -1467,11 +1467,8 @@ func (s *SessionService) newTurnID() string {
 	return fmt.Sprintf("turn-%d", s.lastTurnID)
 }
 
-func (s *SessionService) externalMCPMetadataEntry(ctx context.Context, conversationID string) (ObservedSessionEntry, bool, error) {
-	var (
-		entry ObservedSessionEntry
-		raw   string
-	)
+func (s *SessionService) externalMCPMetadataEntry(ctx context.Context, conversationID string) (*harness.SessionEntry, error) {
+	var raw string
 
 	err := s.db.QueryRowContext(ctx, `WITH shown AS (
     SELECT $1::text AS conversation_id UNION SELECT conversation_id FROM conversations WHERE reports_to = $1
@@ -1479,20 +1476,21 @@ func (s *SessionService) externalMCPMetadataEntry(ctx context.Context, conversat
 ), latest AS (
     SELECT max(e.id) AS id FROM shown s JOIN entries e USING (conversation_id) WHERE e.entry_json::jsonb->>'type' = 'mcp_external_metadata'
 )
-SELECT e.id, e.entry_json FROM latest l JOIN entries e USING (id)`, strings.TrimSpace(conversationID)).Scan(&entry.ID, &raw)
+SELECT e.entry_json FROM latest l JOIN entries e USING (id)`, strings.TrimSpace(conversationID)).Scan(&raw)
 	if err == sql.ErrNoRows {
-		return ObservedSessionEntry{}, false, nil
+		return nil, nil
 	}
 
 	if err != nil {
-		return ObservedSessionEntry{}, false, fmt.Errorf("read external MCP metadata entry: %w", err)
+		return nil, fmt.Errorf("read external MCP metadata entry: %w", err)
 	}
 
-	if err := json.Unmarshal([]byte(raw), &entry.Entry); err != nil {
-		return ObservedSessionEntry{}, false, fmt.Errorf("parse external MCP metadata entry: %w", err)
+	var entry harness.SessionEntry
+	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+		return nil, fmt.Errorf("parse external MCP metadata entry: %w", err)
 	}
 
-	return entry, true, nil
+	return &entry, nil
 }
 
 func (s *SessionService) setGoalStatus(conversationID, status, note string) (GoalState, error) {
