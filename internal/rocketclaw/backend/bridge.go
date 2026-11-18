@@ -3458,7 +3458,7 @@ func normalizeInboundAttachments(msg *protocol.InboundMessage) {
 
 		name := cmp.Or(strings.TrimSpace(attachment.Name), fmt.Sprintf("attachment-%d", i+1))
 
-		data := append([]byte(nil), attachment.Data...)
+		data := attachment.Data
 
 		if len(data) == 0 {
 			msg.AttachmentWarnings = append(msg.AttachmentWarnings, "Skipped attachment "+name+" because it was empty.")
@@ -3497,7 +3497,7 @@ func normalizeInboundAttachments(msg *protocol.InboundMessage) {
 
 func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (transformedData []byte, transformedMIMEType string, err error) {
 	if len(data) <= targetLimit {
-		return data, mimeType, nil
+		return slices.Clone(data), mimeType, nil
 	}
 
 	if mimeType == "image/png" {
