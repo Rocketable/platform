@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -426,11 +427,40 @@ func TestBashRefusalsAreTheSameForEveryShell(t *testing.T) {
 	}
 }
 
-func testShellTempConfig(t *testing.T, root *os.Root, outputDir string) shellTempConfig {
-	t.Helper()
+func TestBashOutputAllocationBudget(t *testing.T) {
+	cost := testing.Benchmark(BenchmarkBashOutput)
+	require.Positive(t, cost.N)
+	require.Less(t, cost.AllocedBytesPerOp(), int64(9<<20))
+}
+
+func BenchmarkBashOutput(b *testing.B) {
+	root, err := os.OpenRoot(b.TempDir())
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, root.Close()) })
+	require.NoError(b, root.Mkdir("shell-tmp", 0o700))
+
+	shellTemp := testShellTempConfig(b, root, filepath.Join(root.Name(), "shell-tmp"))
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{})
+	want := strings.Repeat("sample\n\x00", 1<<18)
+	require.NoError(b, root.WriteFile("input", []byte(want), 0o600))
+
+	shell := &CustomShell{}
+	params := bashParams{Command: "printf 'before\\n'; cat input >&2; printf 'after\\n'; exit 7"}
+	want = "before\n" + want + "after\n"
+
+	for b.Loop() {
+		got := sss.Bash(b.Context(), shell, params)
+		if got.Output != want || got.ErrorCode != "7" || got.Success {
+			b.Fatal("shell changed the output or exit status")
+		}
+	}
+}
+
+func testShellTempConfig(tb testing.TB, root *os.Root, outputDir string) shellTempConfig {
+	tb.Helper()
 
 	config, err := newShellTempConfig(root, outputDir)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	return config
 }
