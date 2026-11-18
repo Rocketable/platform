@@ -1631,7 +1631,7 @@ func TestShadowTerminalClosure(t *testing.T) {
 
 			switch scenario {
 			case "attachment fallback":
-				request.inbound.Attachments = []protocol.InboundAttachment{{Name: "bad.bin", MIMEType: "application/octet-stream", Data: []byte("unsupported")}}
+				request.inbound.AttachmentPresence = protocol.AttachmentPresenceImages
 			case "preparation error":
 				require.NoError(t, root.Remove(".rocketclaw/agents/main.md"))
 

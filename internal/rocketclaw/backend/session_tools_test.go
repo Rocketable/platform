@@ -988,6 +988,14 @@ func TestPausedMessagesPostAtOnce(t *testing.T) {
 	require.Len(t, attachments, 1)
 	assert.Equal(t, []string{"photo", "image/png"}, []string{attachments[0].ID, attachments[0].MIMEType}, "History shows the image")
 
+	require.NoError(t, rt.PostPausedMessage(ctx, pausedWebMessage(chat, "Ann", &protocol.InboundContent{Text: "the specials", Attachments: []protocol.InboundAttachment{{Name: "specials.png", MIMEType: "image/png", Data: []byte("not an image")}}})))
+	entries, err = nt.service.ObserveEntries(ctx, chat)
+	require.NoError(t, err)
+	assert.NotContains(t, string(entries[len(entries)-1].Entry.ReplayInput[0]), "input_image", "the agent never sees an unsupported file")
+	messages, err = replayInputMessages(entries[len(entries)-1].Entry.ReplayInput)
+	require.NoError(t, err)
+	assert.Equal(t, "the specials\n\nAttachment notes:\n- Skipped attachment specials.png because text/plain is not supported.", messages[0].text)
+
 	hits, err := nt.service.SearchMessages(ctx, "lunch at noon", nil)
 	require.NoError(t, err)
 	require.Len(t, hits, 1)

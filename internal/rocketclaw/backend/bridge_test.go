@@ -7,10 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/jpeg"
-	"image/png"
 	"io"
 	"iter"
 	"log/slog"
@@ -1615,285 +1611,8 @@ func TestAttachmentFallbackAndImageAttachments(t *testing.T) {
 	require.Equal(t, unsupportedFileFallback, final.Text)
 }
 
-func TestNormalizeInboundAttachmentsCentralizesModelPolicy(t *testing.T) {
-	t.Parallel()
-
-	msg := &protocol.InboundMessage{Attachments: []protocol.InboundAttachment{
-		{Name: " tiny.png ", MIMEType: "application/octet-stream", Data: tinyPNG()},
-		{Name: "not-image.png", MIMEType: "image/png", Data: []byte("not an image")},
-		{Name: "empty.png", MIMEType: "image/png"},
-		{Name: "photo.jpg", MIMEType: " Image/PNG; Charset=UTF-8 "},
-		{Name: "photo.jpg", MIMEType: " "},
-		{Name: "photo", MIMEType: " "},
-		{Name: " ", MIMEType: "image/png"},
-		{Name: "second.png", MIMEType: "image/jpeg", Data: tinyPNG()},
-	}}
-
-	normalizeInboundAttachments(msg)
-
-	assert.Equal(t, protocol.AttachmentPresenceImages, msg.AttachmentPresence)
-	assert.Equal(t, []protocol.InboundAttachment{
-		{Name: "tiny.png", MIMEType: "image/png", Data: tinyPNG()},
-		{Name: "second.png", MIMEType: "image/png", Data: tinyPNG()},
-	}, msg.Attachments)
-	assert.Equal(t, []string{
-		"Skipped attachment not-image.png because text/plain is not supported.",
-		"Skipped attachment empty.png because it was empty.",
-		"Skipped attachment photo.jpg because it was empty.",
-		"Skipped attachment photo.jpg because it was empty.",
-		"Skipped attachment photo because it was empty.",
-		"Skipped attachment attachment-7 because it was empty.",
-	}, msg.AttachmentWarnings)
-}
-
-func TestNormalizeInboundAttachmentsRejectsAttachmentsTooLargeToReduce(t *testing.T) {
-	t.Parallel()
-
-	msg := &protocol.InboundMessage{Attachments: []protocol.InboundAttachment{
-		{Name: "large.png", MIMEType: "image/png", Data: append(tinyPNG(), make([]byte, maxInboundAttachmentResizeInput)...)},
-	}}
-
-	normalizeInboundAttachments(msg)
-
-	assert.Empty(t, msg.Attachments)
-	assert.Equal(t, protocol.AttachmentPresenceImages, msg.AttachmentPresence)
-	assert.Equal(t, []string{"Skipped attachment large.png because it was too large to attempt size reduction."}, msg.AttachmentWarnings)
-}
-
-func TestReduceResizedImageWithinLimitReportsEncoderErrorsAndExhaustion(t *testing.T) {
-	t.Parallel()
-
-	img := image.NewNRGBA(image.Rect(0, 0, 4, 4))
-
-	_, err := reduceResizedImageWithinLimit(img, 1000, 1, &inboundImageEncoderMock{encodeWithinLimitFunc: func(image.Image, int) ([]byte, int, error) {
-		return nil, 0, assert.AnError
-	}})
-	require.ErrorIs(t, err, assert.AnError)
-
-	_, err = reduceResizedImageWithinLimit(img, 1000, 1, &inboundImageEncoderMock{encodeWithinLimitFunc: func(image.Image, int) ([]byte, int, error) {
-		return nil, 1000, nil
-	}})
-	require.ErrorIs(t, err, errInboundAttachmentReductionNotEnough)
-}
-
-func TestFitInboundImageWithinLimitLeavesSmallImageUnchanged(t *testing.T) {
-	t.Parallel()
-
-	data := encodeAttachmentTestPNG(t, newAttachmentTestImage(1, 1), png.BestCompression)
-
-	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/png", data, len(data))
-	require.NoError(t, err)
-	assert.Equal(t, data, transformed)
-	assert.Equal(t, "image/png", transformedMIMEType)
-}
-
-func TestFitInboundImageWithinLimitUsesLosslessPNGFirst(t *testing.T) {
-	t.Parallel()
-
-	img := newAttachmentTestImage(160, 160)
-	original := encodeAttachmentTestPNG(t, img, png.NoCompression)
-	target := len(encodeAttachmentTestPNG(t, img, png.BestCompression))
-	require.Greater(t, len(original), target)
-
-	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/png", original, target)
-	require.NoError(t, err)
-	assert.Equal(t, "image/png", transformedMIMEType)
-	assert.LessOrEqual(t, len(transformed), target)
-
-	originalConfig := decodeAttachmentTestImageConfig(t, original)
-	transformedConfig := decodeAttachmentTestImageConfig(t, transformed)
-	assert.Equal(t, originalConfig.Width, transformedConfig.Width)
-	assert.Equal(t, originalConfig.Height, transformedConfig.Height)
-}
-
-func TestFitInboundImageWithinLimitUsesSmallestSuccessfulJPEGChangeFirst(t *testing.T) {
-	t.Parallel()
-
-	img := newAttachmentTestImage(256, 256)
-	original := encodeAttachmentTestJPEG(t, img, 100)
-	target := 0
-
-	for quality := 95; quality >= 50; quality -= 5 {
-		candidateSize := len(encodeAttachmentTestJPEG(t, img, quality))
-		if candidateSize < len(original) {
-			target = candidateSize
-			break
-		}
-	}
-
-	require.NotZero(t, target)
-
-	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/jpeg", original, target)
-	require.NoError(t, err)
-	assert.Equal(t, "image/jpeg", transformedMIMEType)
-	assert.LessOrEqual(t, len(transformed), target)
-
-	originalConfig := decodeAttachmentTestImageConfig(t, original)
-	transformedConfig := decodeAttachmentTestImageConfig(t, transformed)
-	assert.Equal(t, originalConfig.Width, transformedConfig.Width)
-	assert.Equal(t, originalConfig.Height, transformedConfig.Height)
-}
-
-func TestFitInboundImageWithinLimitResizesPNG(t *testing.T) {
-	t.Parallel()
-
-	original := encodeAttachmentTestPNG(t, newAttachmentTestImage(400, 400), png.NoCompression)
-	target := 4096
-	require.Greater(t, len(original), target)
-
-	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/png", original, target)
-	require.NoError(t, err)
-	assert.Equal(t, "image/png", transformedMIMEType)
-	assert.LessOrEqual(t, len(transformed), target)
-
-	originalConfig := decodeAttachmentTestImageConfig(t, original)
-	transformedConfig := decodeAttachmentTestImageConfig(t, transformed)
-	assert.Less(t, transformedConfig.Width, originalConfig.Width)
-	assert.Less(t, transformedConfig.Height, originalConfig.Height)
-}
-
-func TestFitInboundImageWithinLimitFallsBackToJPEG(t *testing.T) {
-	t.Parallel()
-
-	original := encodeAttachmentTestPNG(t, newAttachmentTestImage(80, 80), png.NoCompression)
-	target := 1024
-	require.Greater(t, len(original), target)
-
-	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/webp", original, target)
-	require.NoError(t, err)
-	assert.Equal(t, "image/jpeg", transformedMIMEType)
-	assert.LessOrEqual(t, len(transformed), target)
-
-	cfg := decodeAttachmentTestImageConfig(t, transformed)
-	assert.NotZero(t, cfg.Width)
-	assert.NotZero(t, cfg.Height)
-
-	oversized := encodeAttachmentTestPNG(t, newAttachmentTestImage(65536, 1), png.NoCompression)
-	transformed, transformedMIMEType, err = fitInboundImageWithinLimit("image/webp", oversized, 1)
-	assert.Nil(t, transformed)
-	assert.Empty(t, transformedMIMEType)
-	require.ErrorIs(t, err, errInboundAttachmentReductionFailed)
-
-	errJPEGText := "jpeg: image is too large to encode"
-	require.EqualError(t, err, errInboundAttachmentReductionFailed.Error()+": "+strings.Repeat("encode jpeg: ", 2)+errJPEGText)
-	chain, ok := errors.AsType[interface {
-		Error() string
-		Unwrap() []error
-	}](err)
-	require.True(t, ok)
-	require.Len(t, chain.Unwrap(), 2)
-	assert.Same(t, errInboundAttachmentReductionFailed, chain.Unwrap()[0])
-	require.EqualError(t, chain.Unwrap()[1], "encode jpeg: "+errJPEGText)
-	require.EqualError(t, errors.Unwrap(chain.Unwrap()[1]), errJPEGText)
-}
-
-func TestFitInboundImageWithinLimitReportsDecodeFailure(t *testing.T) {
-	t.Parallel()
-
-	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/webp", []byte("not an image"), 1)
-	assert.Nil(t, transformed)
-	assert.Empty(t, transformedMIMEType)
-	assert.ErrorIs(t, err, errInboundAttachmentReductionFailed)
-}
-
-func TestFitInboundImageWithinLimitReportsPNGDecodeFailure(t *testing.T) {
-	t.Parallel()
-
-	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/png", []byte("not a png"), 1)
-	assert.Nil(t, transformed)
-	assert.Empty(t, transformedMIMEType)
-	assert.ErrorIs(t, err, errInboundAttachmentReductionFailed)
-}
-
-func TestResizePNGWithinLimitRejectsSinglePixelImageTooLargeForTarget(t *testing.T) {
-	t.Parallel()
-
-	original := encodeAttachmentTestPNG(t, newAttachmentTestImage(1, 1), png.NoCompression)
-
-	transformed, err := resizePNGWithinLimit(original, 1)
-	assert.Nil(t, transformed)
-	assert.ErrorIs(t, err, errInboundAttachmentReductionNotEnough)
-}
-
-func TestNextImageResizeDimensionsStillShrinksWhenEstimateWouldGrow(t *testing.T) {
-	t.Parallel()
-
-	nextWidth, nextHeight := nextImageResizeDimensions(2, 2, 100, 10000)
-
-	assert.Equal(t, 1, nextWidth)
-	assert.Equal(t, 1, nextHeight)
-}
-
-func TestInboundAttachmentReductionFailureReason(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, "image reduction failed", inboundAttachmentReductionFailureReason(errInboundAttachmentReductionFailed, maxInboundAttachmentBytes))
-	assert.Equal(t, "it still exceeded the remaining attachment budget after reduction", inboundAttachmentReductionFailureReason(errInboundAttachmentReductionNotEnough, 1))
-	assert.Equal(t, "it still exceeded the per-file size limit after reduction", inboundAttachmentReductionFailureReason(errInboundAttachmentReductionNotEnough, maxInboundAttachmentBytes))
-}
-
-func TestNormalizeInboundAttachmentsRejectsTotalBudgetOverflow(t *testing.T) {
-	t.Parallel()
-
-	data := append(tinyPNG(), make([]byte, maxInboundAttachmentBytes-len(tinyPNG()))...)
-	msg := &protocol.InboundMessage{Attachments: []protocol.InboundAttachment{
-		{Name: "one.png", MIMEType: "image/png", Data: data},
-		{Name: "two.png", MIMEType: "image/png", Data: data},
-		{Name: "three.png", MIMEType: "image/png", Data: data},
-		{Name: "four.png", MIMEType: "image/png", Data: data},
-		{MIMEType: "image/png", Data: data},
-	}}
-
-	normalizeInboundAttachments(msg)
-
-	require.Len(t, msg.Attachments, 4)
-	assert.Equal(t, []string{"Skipped attachment attachment-5 because the message exceeded the attachment size budget."}, msg.AttachmentWarnings)
-}
-
 func tinyPNG() []byte {
 	return []byte("\x89PNG\r\n\x1a\n")
-}
-
-func newAttachmentTestImage(width, height int) image.Image {
-	img := image.NewNRGBA(image.Rect(0, 0, width, height))
-	for y := range height {
-		for x := range width {
-			img.Set(x, y, color.NRGBA{R: uint8((x*31 + y*17) % 256), G: uint8((x*13 + y*29) % 256), B: uint8((x*7 + y*19) % 256), A: 0xff})
-		}
-	}
-
-	return img
-}
-
-func encodeAttachmentTestPNG(t *testing.T, img image.Image, level png.CompressionLevel) []byte {
-	t.Helper()
-
-	var buffer bytes.Buffer
-
-	encoder := png.Encoder{CompressionLevel: level, BufferPool: nil}
-	require.NoError(t, encoder.Encode(&buffer, img))
-
-	return buffer.Bytes()
-}
-
-func encodeAttachmentTestJPEG(t *testing.T, img image.Image, quality int) []byte {
-	t.Helper()
-
-	var buffer bytes.Buffer
-
-	options := jpeg.Options{Quality: quality}
-	require.NoError(t, jpeg.Encode(&buffer, img, &options))
-
-	return buffer.Bytes()
-}
-
-func decodeAttachmentTestImageConfig(t *testing.T, data []byte) image.Config {
-	t.Helper()
-
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
-	require.NoError(t, err)
-
-	return cfg
 }
 
 func TestModelResolverConfiguresOpenAI(t *testing.T) {
@@ -2346,7 +2065,7 @@ func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 		require.True(t, claimed)
 	}
 
-	waiting := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "source text", Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}}, true)
+	waiting := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "source text", Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: tinyPNG()}}}, true)
 	waiting.Metadata = map[string]string{"external_conversation_id": "external-1", protocol.InboundPrincipalMetadataKey: "U3"}
 	item = &protocol.ThreadQueueItem{ID: "q3", ConversationID: bridge.config.ConversationID, Message: "queue display", Principal: "U3", Inbound: waiting}
 	require.NoError(t, bridge.config.SessionService.PutThreadQueueItem(item.ID, item))
@@ -2358,7 +2077,7 @@ func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 	assert.Equal(t, protocol.InboundKindPrompt, inbound.Kind)
 	assert.Equal(t, "source text", inbound.Text)
 	assert.Equal(t, "external-1", inbound.Metadata["external_conversation_id"])
-	assert.Equal(t, []byte("image"), inbound.Attachments[0].Data)
+	assert.Equal(t, tinyPNG(), inbound.Attachments[0].Data)
 }
 
 func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -1694,8 +1695,8 @@ func TestRevertSavedAttachmentRetryIdentity(t *testing.T) {
 
 	s := newTestSessionService(t)
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "original", Attachments: []protocol.InboundAttachment{
-		{Name: "photo.png", MIMEType: "image/png", Data: []byte("image bytes")},
-		{Name: "notes.pdf", MIMEType: "application/pdf", Data: []byte("file bytes")},
+		{Name: "photo.png", MIMEType: "image/png", Data: append(tinyPNG(), "image bytes"...)},
+		{Name: "chart.png", MIMEType: "image/png", Data: append(tinyPNG(), "chart bytes"...)},
 	}}, true)
 	inbound.ConversationID, inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = "main", "original", "alice"
 	prompt := buildPrompt(inbound, nil, false)
@@ -1717,7 +1718,7 @@ func TestRevertSavedAttachmentRetryIdentity(t *testing.T) {
 		Header  string            `json:"prompt_header"`
 		InputID string            `json:"input_id"`
 	}{Type: "message", Role: "user", Header: header, InputID: "original", Content: []portableContent{
-		{Type: "input_text", Text: prompt}, {Type: "input_image", ImageURL: attachments[0].URL}, {Type: "input_file", FileData: attachments[1].URL, Filename: attachments[1].Filename},
+		{Type: "input_text", Text: prompt}, {Type: "input_image", ImageURL: attachments[0].URL}, {Type: "input_image", ImageURL: attachments[1].URL},
 	}})
 	require.NoError(t, err)
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
@@ -1727,7 +1728,34 @@ func TestRevertSavedAttachmentRetryIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, accepted)
 
-	inbound.Attachments[1].Data = []byte("different bytes")
+	inbound.Attachments[1].Data = append(tinyPNG(), "different bytes"...)
 	_, err = reconcileWebDB(t.Context(), s.db, inbound)
 	require.ErrorContains(t, err, "different content")
+}
+
+func TestRetriedSteerWithSkippedFileIsAcceptedAfterItsTurn(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"web-retry": KindWebChat})
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: discardPublisher{}, inputOpen: true, requestCh: make(chan bridgeRequest, 1), config: Config{ConversationID: "web-retry", SessionService: s}}
+	send := func() *protocol.InboundMessage {
+		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "see the file", Attachments: []protocol.InboundAttachment{{Name: "notes.png", MIMEType: "image/png", Data: []byte("not an image")}}}, true)
+		inbound.ConversationID = "web-retry"
+		inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = "steer-1", "alice"
+
+		return inbound
+	}
+
+	require.NoError(t, bridge.Submit(t.Context(), send()))
+	inputs := testDrainInputs(t, bridge, harness.TurnPhaseFinalAnswer)
+	require.Len(t, inputs, 1)
+	replay, err := harness.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{harness.PromptInputMessage(&inputs[0])})
+	require.NoError(t, err)
+	_, err = s.AppendEntryID(t.Context(), "web-retry", &harness.SessionEntry{Type: "turn", ReplayInput: replay})
+	require.NoError(t, err)
+
+	accepted, err := reconcileWebDB(t.Context(), s.db, send())
+	require.NoError(t, err)
+	require.True(t, accepted, "the same steer sent again after its turn is the one already taken")
 }

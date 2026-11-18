@@ -504,8 +504,9 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"web-drain": KindWebChat})
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), inputOpen: true, requestCh: make(chan bridgeRequest, 2), config: Config{ConversationID: "web-drain", SessionService: store}}
 
+	images := map[string][]byte{"first": tinyPNG(), "second": []byte("second")}
 	for _, text := range []string{"first", "second"} {
-		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper " + text, TextAttachments: []string{"attachment text"}, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
+		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper " + text, TextAttachments: []string{"attachment text"}, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: images[text]}}}, true)
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = "U1"
 		require.NoError(t, bridge.Submit(t.Context(), inbound))
 	}
@@ -519,8 +520,11 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 		require.Contains(t, inputs[i].Texts[0], "attachment text")
 		require.Contains(t, inputs[i].Texts[0], text)
 		require.Contains(t, inputs[i].Texts[0], "U1")
-		require.Equal(t, []harness.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"Zmlyc3Q=", "c2Vjb25k"}[i]}}, inputs[i].Attachments)
 	}
+
+	require.Equal(t, []harness.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64,iVBORw0KGgo="}}, inputs[0].Attachments)
+	require.Empty(t, inputs[1].Attachments, "a steer's unsupported file never reaches the model")
+	require.Contains(t, inputs[1].Texts[0], "Attachment notes:\n- Skipped attachment image.png because text/plain is not supported.")
 
 	require.True(t, bridge.inputOpen, "injected input reopens provider work")
 	require.Empty(t, testDrainInputs(t, drain, harness.TurnPhaseFinalAnswer))
@@ -547,7 +551,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		bridge.activeCompletion = active
 
 		for _, text := range []string{"first", "drop", "last"} {
-			inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, &protocol.InboundContent{Text: text, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
+			inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, &protocol.InboundContent{Text: text, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: append(tinyPNG(), text...)}}}, true)
 			inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: text + " author"}
 			inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: text}
 			require.NoError(t, bridge.Submit(t.Context(), inbound))
@@ -589,7 +593,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 
 		for i, text := range []string{"first", "last"} {
 			require.Contains(t, inputs[i].Texts[0], text+" author")
-			require.Equal(t, []harness.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"Zmlyc3Q=", "bGFzdA=="}[i]}}, inputs[i].Attachments)
+			require.Equal(t, []harness.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"iVBORw0KGgpmaXJzdA==", "iVBORw0KGgpsYXN0"}[i]}}, inputs[i].Attachments)
 		}
 
 		itemsAfter, err := manager.queueItems(conversationID)
@@ -642,7 +646,8 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		require.Equal(t, &harness.PromptInputDirectSkill{Name: "stop", Arguments: "\"typed args\"  Next"}, inputs[0].DirectSkill)
 		require.Contains(t, inputs[0].Texts[0], "original author")
 		require.Contains(t, inputs[0].Texts[0], "acquired text file\n\nacquired forwarded thread")
-		require.Equal(t, []harness.Attachment{{MIME: "image/png", Filename: "original.png", URL: "data:image/png;base64,b3JpZ2luYWw="}}, inputs[0].Attachments)
+		require.Empty(t, inputs[0].Attachments, "a promoted item's unsupported file never reaches the model")
+		require.Contains(t, inputs[0].Texts[0], "Attachment notes:\n- Skipped attachment original.png because text/plain is not supported.")
 		_, claimed, err := (stateDAO{db: store.db}).claimThreadQueueItem(t.Context(), conversationID, "q1")
 		require.NoError(t, err)
 		require.False(t, claimed, "normal consumption cannot claim the promoted enqueue")
@@ -883,7 +888,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	} {
 		for _, live := range []bool{false, true} {
 			id := fmt.Sprintf("edited-%d-%t", n, live)
-			content := protocol.InboundContent{Text: original.text, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}}
+			content := protocol.InboundContent{Text: original.text, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: tinyPNG()}}}
 			want := "$skill inspect exact\ntext"
 
 			if original.attachment != "" {
@@ -1119,7 +1124,7 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 	runTestManager(t, manager)
 	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store}
-	held := &protocol.ThreadQueueItem{ID: "held", Kind: protocol.InboundKindHeld, Message: "/keep this", Principal: "alice", Source: protocol.SourceWeb, Content: protocol.InboundContent{Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}}}
+	held := &protocol.ThreadQueueItem{ID: "held", Kind: protocol.InboundKindHeld, Message: "/keep this", Principal: "alice", Source: protocol.SourceWeb, Content: protocol.InboundContent{Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: tinyPNG()}}}}
 	require.NoError(t, rt.StashQueueItem(t.Context(), conversationID, held))
 	require.Empty(t, bridge.requestCh)
 	require.NoError(t, store.Stop())

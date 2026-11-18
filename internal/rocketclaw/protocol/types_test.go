@@ -14,26 +14,27 @@ func TestInboundAttachmentCopy(t *testing.T) {
 		require.Zero(t, inbound.AttachmentPresence)
 	}
 
+	image := []byte("\x89PNG\r\n\x1a\none")
 	content := InboundContent{Attachments: []InboundAttachment{
-		{Name: "one.png", MIMEType: "image/png", Data: []byte("one")},
+		{Name: "one.png", MIMEType: "image/png", Data: image},
 		{Name: "two.png", MIMEType: "image/png", Data: []byte("two")},
-		{Name: "nil.png", MIMEType: "image/png"},
 		{Name: "empty.png", MIMEType: "image/png", Data: []byte{}},
 	}}
-	content.Attachments = append(content.Attachments, make([]InboundAttachment, 10)...)
 	inbound := NewInboundMessageFromContent(SourceSlack, InboundKindPrompt, &content, true)
 
-	require.Len(t, inbound.Attachments, len(content.Attachments))
-	require.Equal(t, content.Attachments[:3], inbound.Attachments[:3])
-	require.Equal(t, InboundAttachment{Name: "empty.png", MIMEType: "image/png"}, inbound.Attachments[3])
+	normalized := []InboundAttachment{{Name: "one.png", MIMEType: "image/png", Data: image}}
+	warnings := []string{"Skipped attachment two.png because text/plain is not supported.", "Skipped attachment empty.png because it was empty."}
+
+	require.Equal(t, normalized, inbound.Attachments, "only what the model accepts enters")
+	require.Equal(t, warnings, inbound.AttachmentWarnings)
+	require.Equal(t, AttachmentPresenceImages, inbound.AttachmentPresence)
 	require.Equal(t, len(inbound.Attachments), cap(inbound.Attachments))
+	require.Equal(t, normalized, content.Attachments, "the content kept for later is the normalized one")
+	require.Equal(t, warnings, content.AttachmentWarnings)
 
-	inbound.Attachments[0].Name = "changed.png"
-	inbound.Attachments[0].MIMEType = "image/jpeg"
+	again := NewInboundMessageFromContent(SourceSlack, InboundKindPrompt, &content, true)
+	require.Equal(t, []any{normalized, warnings}, []any{again.Attachments, again.AttachmentWarnings}, "building again from normalized content changes nothing")
+
 	inbound.Attachments[0].Data[0] = 'X'
-	require.Equal(t, InboundAttachment{Name: "one.png", MIMEType: "image/png", Data: []byte("one")}, content.Attachments[0])
-
-	content.Attachments[1].Name = "changed.png"
-	content.Attachments[1].Data[0] = 'Y'
-	require.Equal(t, InboundAttachment{Name: "two.png", MIMEType: "image/png", Data: []byte("two")}, inbound.Attachments[1])
+	require.Equal(t, normalized, content.Attachments, "the message owns its bytes")
 }
