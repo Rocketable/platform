@@ -1388,6 +1388,19 @@ UNION SELECT continues FROM conversations WHERE conversation_id = $1 AND continu
 	}
 
 	if c.kind == pruneSticky {
+		if _, err := execState(ctx, tx, "enqueue expired sticky attachments", `WITH payloads AS NOT MATERIALIZED (
+    SELECT entry_json::text AS payload, NULL AS turn, entry_timestamp < $2 AS expired FROM entries WHERE conversation_id = ANY($1)
+    UNION ALL SELECT concat(message, content::text, inbound_json::text, outbound_json::text), id, phase = 'done' AND note IS DISTINCT FROM $3 AND created_at_unix_ns < $4 FROM turns WHERE conversation_id = ANY($1)
+    UNION ALL SELECT message, NULL, FALSE FROM schedules WHERE conversation_id = ANY($1)
+), expiring AS (
+    SELECT DISTINCT f.id, f.turn_id FROM attachments f JOIN payloads p ON p.expired AND (strpos(p.payload, f.id) > 0 OR p.turn = f.turn_id) WHERE f.conversation_id = ANY($1)
+), kept AS MATERIALIZED (
+    SELECT DISTINCT e.id FROM expiring e JOIN payloads p ON NOT p.expired AND (strpos(p.payload, e.id) > 0 OR p.turn = e.turn_id)
+), removed AS (DELETE FROM attachments f USING expiring e LEFT JOIN kept k USING (id) WHERE f.id = e.id AND k.id IS NULL RETURNING f.id)
+INSERT INTO pending_attachment_deletions (id) SELECT id FROM removed`, ids, cutoff.UTC().Format(time.RFC3339Nano), notePending, cutoff.UnixNano()); err != nil {
+			return 0, false, err
+		}
+
 		rows, err = execRows(ctx, tx, "prune old sticky messages", `DELETE FROM entries WHERE conversation_id = ANY($1) AND entry_timestamp < $2`, ids, cutoff.UTC().Format(time.RFC3339Nano))
 		if err != nil {
 			return 0, false, err
