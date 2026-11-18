@@ -344,6 +344,13 @@ func contextLengthExceededError() error {
 	return &openai.Error{Code: "context_length_exceeded", Message: "too large", StatusCode: http.StatusBadRequest, Request: req, Response: resp}
 }
 
+func cliProxyAPIClaudePromptTooLongError() error {
+	req := httptest.NewRequest(http.MethodPost, "http://localhost:8317/v1/responses", http.NoBody)
+	resp := &http.Response{StatusCode: http.StatusBadRequest, Status: "400 Bad Request", Request: req}
+
+	return &openai.Error{Type: "invalid_request_error", Message: "prompt is too long: 1202540 tokens > 1000000 maximum", StatusCode: http.StatusBadRequest, Request: req, Response: resp}
+}
+
 func testLooper(client responsesAPI) *looper {
 	var l looper
 
@@ -981,74 +988,80 @@ func TestLooperContinuesAfterCompactionOnlyResponse(t *testing.T) {
 }
 
 func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
-	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
-		compactionReplayInput("cmp-prior", "sealed-prior", "private-content-value"),
-		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
-		testInputMessage(responses.EasyInputMessageRole("assistant"), "old answer", ""),
-		testInputMessage(responses.EasyInputMessageRole("assistant"), "legacy answer", ""),
-	})
-	require.NoError(t, err)
+	for name, errContext := range map[string]error{
+		"openai context_length_exceeded":        contextLengthExceededError(),
+		"cliproxyapi claude prompt is too long": cliProxyAPIClaudePromptTooLongError(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+				compactionReplayInput("cmp-prior", "sealed-prior", "private-content-value"),
+				testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
+				testInputMessage(responses.EasyInputMessageRole("assistant"), "old answer", ""),
+				testInputMessage(responses.EasyInputMessageRole("assistant"), "legacy answer", ""),
+			})
+			require.NoError(t, err)
 
-	mock := mockResponses()
-	queueCompactResponses(mock, compactedResponse("cmp-old", "encrypted-old"))
+			mock := mockResponses()
+			queueCompactResponses(mock, compactedResponse("cmp-old", "encrypted-old"))
 
-	contextErr := contextLengthExceededError()
-	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ oai.ResponseObserver, _ ...option.RequestOption) (*responses.Response, error) {
-		if len(newParams(mock)) == 1 {
-			return nil, contextErr
-		}
+			mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ oai.ResponseObserver, _ ...option.RequestOption) (*responses.Response, error) {
+				if len(newParams(mock)) == 1 {
+					return nil, errContext
+				}
 
-		return responseWithMessage("resp-final", "answer"), nil
+				return responseWithMessage("resp-final", "answer"), nil
+			}
+			looper := testLooper(mock)
+			looper.agent.Name, looper.DisplayModel, looper.ReasoningEffort = "new", "work/model-b", "low"
+			sink := recordingJournal()
+			looper.Journal = sink
+			output := make(chan ChatResponse, 10)
+
+			input := make(chan PromptInput, 1)
+			input <- testPromptInput(PromptInputRoleUser, "new question", output)
+
+			close(input)
+
+			var saved []SessionEntry
+
+			err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{
+				{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Agent: "old", Model: "work/model-a", ReasoningEffort: new("high"), ReplayInput: replayInput[:3]},
+				{Version: 1, Type: "turn", ReplayInput: replayInput[3:]},
+			}), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+				saved = append(saved, *entry)
+
+				return nil
+			}}, make(chan os.Signal, 1))
+
+			require.NoError(t, err)
+			require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
+			require.Len(t, compactParams(mock), 1)
+			compactInput := marshalJSON(t, compactParams(mock)[0].Input.OfResponseInputItemArray)
+			require.Contains(t, compactInput, "sealed-prior")
+			require.NotContains(t, compactInput, "private-content-value")
+			require.NotContains(t, compactInput, "new question")
+			require.Len(t, newParams(mock), 2)
+			retryInput := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
+			require.Contains(t, retryInput, `"type":"compaction"`)
+			require.Contains(t, retryInput, "new question")
+			require.Len(t, saved, 1)
+			require.Contains(t, string(saved[0].ReplayInput[0]), `"type":"compaction"`)
+			require.Len(t, saved[0].ReplayInput, 6)
+
+			compacted := turnSaves(t, sink)[1].Record
+			for _, entry := range []SessionEntry{saved[0], compacted} {
+				require.Equal(t, "work/model-a", entry.AttributionAt(1).Model)
+				require.Equal(t, new("high"), entry.AttributionAt(2).ReasoningEffort)
+				require.Empty(t, entry.AttributionAt(3).Agent)
+				require.Empty(t, entry.AttributionAt(3).Model)
+				require.Nil(t, entry.AttributionAt(3).ReasoningEffort)
+				require.Equal(t, "work/model-b", entry.AttributionAt(4).Model)
+				require.Equal(t, new("low"), entry.AttributionAt(4).ReasoningEffort)
+			}
+
+			require.Equal(t, "work/model-b", saved[0].AttributionAt(5).Model)
+		})
 	}
-	looper := testLooper(mock)
-	looper.agent.Name, looper.DisplayModel, looper.ReasoningEffort = "new", "work/model-b", "low"
-	sink := recordingJournal()
-	looper.Journal = sink
-	output := make(chan ChatResponse, 10)
-
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "new question", output)
-
-	close(input)
-
-	var saved []SessionEntry
-
-	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{
-		{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Agent: "old", Model: "work/model-a", ReasoningEffort: new("high"), ReplayInput: replayInput[:3]},
-		{Version: 1, Type: "turn", ReplayInput: replayInput[3:]},
-	}), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
-		saved = append(saved, *entry)
-
-		return nil
-	}}, make(chan os.Signal, 1))
-
-	require.NoError(t, err)
-	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
-	require.Len(t, compactParams(mock), 1)
-	compactInput := marshalJSON(t, compactParams(mock)[0].Input.OfResponseInputItemArray)
-	require.Contains(t, compactInput, "sealed-prior")
-	require.NotContains(t, compactInput, "private-content-value")
-	require.NotContains(t, compactInput, "new question")
-	require.Len(t, newParams(mock), 2)
-	retryInput := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
-	require.Contains(t, retryInput, `"type":"compaction"`)
-	require.Contains(t, retryInput, "new question")
-	require.Len(t, saved, 1)
-	require.Contains(t, string(saved[0].ReplayInput[0]), `"type":"compaction"`)
-	require.Len(t, saved[0].ReplayInput, 6)
-
-	compacted := turnSaves(t, sink)[1].Record
-	for _, entry := range []SessionEntry{saved[0], compacted} {
-		require.Equal(t, "work/model-a", entry.AttributionAt(1).Model)
-		require.Equal(t, new("high"), entry.AttributionAt(2).ReasoningEffort)
-		require.Empty(t, entry.AttributionAt(3).Agent)
-		require.Empty(t, entry.AttributionAt(3).Model)
-		require.Nil(t, entry.AttributionAt(3).ReasoningEffort)
-		require.Equal(t, "work/model-b", entry.AttributionAt(4).Model)
-		require.Equal(t, new("low"), entry.AttributionAt(4).ReasoningEffort)
-	}
-
-	require.Equal(t, "work/model-b", saved[0].AttributionAt(5).Model)
 }
 
 func TestLooperKeepsChatGPTOverflowCompaction(t *testing.T) {
