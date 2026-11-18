@@ -2189,6 +2189,47 @@ test("with more than one space Parked is a tree whose spaces fold on their own a
   expect(await tree()).toEqual(["Parked in Main", "Bravo", "Parked in Ops"]);
 }));
 
+test("Parked rows move among their space's by dragging or Shift+Arrow, in an order saved for this person, and Parked resizes from its top edge", () => withPage({}, async (page, origin, _prompts, saved) => {
+  saved.spaces.push({ id: "ops", name: "Ops" });
+  saved.state = { ...saved.state, space: "main", tabs: [...["alpha", "foxtrot", "bravo", "charlie", "delta"].map((id) => ({ path: href(id), space: "main" })), { path: href("echo"), space: "ops" }] };
+  saved.attention = ["bravo", "charlie", "delta", "echo"].map((id) => ({ path: href(id), parked: true }));
+  const parked = page.getByRole("tablist", { name: "Parked tabs" }), row = (name: string) => parked.getByRole("tab", { name, exact: true });
+  const rows = () => parked.getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+  const placed = async (...ids: string[]) => {
+    await until(() => JSON.stringify(saved.layout?.order) === JSON.stringify(ids.map((id) => `parked:/main\n${href(id)}`)));
+    await parked.getByRole("tab").nth(ids.indexOf("delta")).filter({ hasText: "Delta" }).waitFor();
+  };
+  await page.goto(`${origin}${href("alpha")}`);
+  await page.getByRole("button", { name: "Parked", exact: true }).click();
+  await row("Echo").waitFor();
+  expect(await rows()).toEqual(["Bravo", "Charlie", "Delta", "Echo"]);
+
+  await row("Charlie").dragTo(row("Echo"));
+  await row("Delta").dragTo(row("Bravo"));
+  await placed("delta", "bravo", "charlie");
+  expect(await rows()).toEqual(["Delta", "Bravo", "Charlie", "Echo"]);
+  await row("Charlie").press("Shift+ArrowDown");
+  await row("Delta").press("Shift+ArrowDown");
+  await placed("bravo", "delta", "charlie");
+  expect([await rows(), await page.evaluate(() => document.activeElement?.getAttribute("aria-label"))]).toEqual([["Bravo", "Delta", "Charlie", "Echo"], "Delta"]);
+
+  const height = async () => (await parked.locator("xpath=..").boundingBox()).height, handle = page.getByRole("separator", { name: "Resize Parked" });
+  const before = await height(), edge = await handle.boundingBox();
+  await page.mouse.move(edge.x + 20, edge.y + 3);
+  await page.mouse.down();
+  await page.mouse.move(edge.x + 20, edge.y + 35);
+  await page.mouse.up();
+  const dragged = await height();
+  expect(dragged).toBeCloseTo(before - 32, -1);
+  await handle.press("ArrowUp");
+  expect(await height()).toBeCloseTo(dragged + 16, 0);
+
+  saved.attention.push({ path: href("foxtrot"), parked: true });
+  await page.reload();
+  await row("Foxtrot").waitFor();
+  expect([await rows(), await height()]).toEqual([["Bravo", "Delta", "Charlie", "Foxtrot", "Echo"], expect.closeTo(dragged + 16, 0)]);
+}));
+
 test("Parked also lists the Shared rows this person parked, which open in their space without a tab of their own", () => withPage({}, async (page, origin, _prompts, saved) => {
   saved.spaces.push({ id: "ops", name: "Ops" });
   saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }] };
