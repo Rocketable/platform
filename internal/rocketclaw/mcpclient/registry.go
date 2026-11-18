@@ -61,7 +61,6 @@ func (r Registry) Open() *Session {
 }
 
 type ToolInfo struct {
-	Server      string
 	Name        string
 	Description string
 	InputSchema map[string]any
@@ -88,7 +87,6 @@ func (s *Session) ListTools(ctx context.Context, server string) ([]ToolInfo, err
 
 		schema, _ := tool.InputSchema.(map[string]any)
 		out = append(out, ToolInfo{
-			Server:      server,
 			Name:        tool.Name,
 			Description: tool.Description,
 			InputSchema: schema,

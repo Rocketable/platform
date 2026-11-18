@@ -233,13 +233,13 @@ func listAllowedTools(ctx context.Context, session *mcpclient.Session, permissio
 			}
 
 			for _, info := range infos {
-				action, _ := permissions.Evaluate(mcpPermissionBucket, info.Server+"."+info.Name)
+				action, _ := permissions.Evaluate(mcpPermissionBucket, server+"."+info.Name)
 				if action != PermissionAllow && action != PermissionAuto {
 					continue
 				}
 
 				results[i].tools = append(results[i].tools, codemode.ToolDesc{
-					Server:      info.Server,
+					Server:      server,
 					Name:        info.Name,
 					Description: info.Description,
 					InputSchema: info.InputSchema,

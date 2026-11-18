@@ -205,7 +205,6 @@ func TestHTTPCallTool(t *testing.T) {
 
 	names := make([]string, 0, len(tools))
 	for _, tool := range tools {
-		assert.Equal(t, "demo", tool.Server)
 		names = append(names, tool.Name)
 		assert.NotNil(t, tool.InputSchema)
 	}
