@@ -21,13 +21,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const serialThreadBridgeDBEnv = "ROCKETCLAW_TEST_SERIAL_THREAD_BRIDGE_DATABASE_URL"
+
 func TestMain(m *testing.M) {
 	code := 0
 
 	err := func() (errResult error) {
+		if err := os.Unsetenv(serialThreadBridgeDBEnv); err != nil {
+			return fmt.Errorf("clear inherited thread bridge fixture: %w", err)
+		}
+
 		base := strings.TrimSpace(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
 		if base == "" || os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL") != "" {
 			code = m.Run()
+
+			if dsn := os.Getenv(serialThreadBridgeDBEnv); dsn != "" {
+				location, err := url.Parse(dsn)
+				if err != nil {
+					return fmt.Errorf("parse thread bridge fixture URL: %w", err)
+				}
+
+				cfg, err := pgx.ParseConfig(base)
+				if err != nil {
+					return fmt.Errorf("parse fixture database URL: %w", err)
+				}
+
+				return (&testSessionClone{location: location, adminConfig: cfg}).drop()
+			}
+
 			return nil
 		}
 
@@ -108,26 +129,10 @@ func newTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
 	require.NoError(t, err)
 
 	if _, err := root.Stat(".test-database-url"); errors.Is(err, os.ErrNotExist) {
-		template, err := url.Parse(os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL"))
+		clone, err := cloneTestSessionDatabase(t.Context())
 		require.NoError(t, err)
-		cfg, err := pgx.ParseConfig(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
-		require.NoError(t, err)
-
-		admin := stdlib.OpenDB(*cfg)
-
-		name := strings.TrimPrefix(template.Path, "/") + "_" + strings.ToLower(rand.Text())
-		_, err = admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE "+strings.TrimPrefix(template.Path, "/"))
-		require.NoError(t, errors.Join(err, admin.Close()))
-
-		t.Cleanup(func() {
-			db := stdlib.OpenDB(*cfg)
-			_, err := db.Exec("DROP DATABASE " + name)
-			require.NoError(t, errors.Join(err, db.Close()))
-		})
-
-		location := *template
-		location.Path = "/" + name
-		require.NoError(t, root.WriteFile(".test-database-url", []byte(location.String()), 0o600))
+		t.Cleanup(func() { require.NoError(t, clone.drop()) })
+		require.NoError(t, root.WriteFile(".test-database-url", []byte(clone.location.String()), 0o600))
 	} else {
 		require.NoError(t, err)
 	}
@@ -135,6 +140,48 @@ func newTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
 	require.NoError(t, root.Close())
 
 	return newColdTestSessionServiceAt(t, workspace)
+}
+
+type testSessionClone struct {
+	location    *url.URL
+	adminConfig *pgx.ConnConfig
+}
+
+func cloneTestSessionDatabase(ctx context.Context) (*testSessionClone, error) {
+	location, err := url.Parse(os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL"))
+	if err != nil {
+		return nil, fmt.Errorf("parse fixture template URL: %w", err)
+	}
+
+	cfg, err := pgx.ParseConfig(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
+	if err != nil {
+		return nil, fmt.Errorf("parse fixture database URL: %w", err)
+	}
+
+	template := strings.TrimPrefix(location.Path, "/")
+	name := template + "_" + strings.ToLower(rand.Text())
+	admin := stdlib.OpenDB(*cfg)
+
+	_, err = admin.ExecContext(ctx, "CREATE DATABASE "+name+" TEMPLATE "+template)
+	if err != nil {
+		return nil, errors.Join(err, admin.Close())
+	}
+
+	location.Path = "/" + name
+
+	clone := &testSessionClone{location: location, adminConfig: cfg}
+	if err := admin.Close(); err != nil {
+		return nil, errors.Join(err, clone.drop())
+	}
+
+	return clone, nil
+}
+
+func (c *testSessionClone) drop() error {
+	admin := stdlib.OpenDB(*c.adminConfig)
+	_, err := admin.Exec("DROP DATABASE " + strings.TrimPrefix(c.location.Path, "/"))
+
+	return errors.Join(err, admin.Close())
 }
 
 func TestMigratedTestDatabaseMatchesColdAndIsolatesClones(t *testing.T) {

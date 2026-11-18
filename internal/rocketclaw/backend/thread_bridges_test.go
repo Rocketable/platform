@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -690,8 +691,37 @@ func shortTempDir(t *testing.T) string {
 	return t.TempDir()
 }
 
+func newSerialThreadBridgeStore(t *testing.T) *SessionService {
+	t.Helper()
+
+	t.Setenv("ROCKETCLAW_TEST_SERIAL_THREAD_BRIDGE_OWNER", t.Name())
+
+	dsn := os.Getenv(serialThreadBridgeDBEnv)
+	if dsn == "" {
+		clone, err := cloneTestSessionDatabase(t.Context())
+		require.NoError(t, err)
+
+		dsn = clone.location.String()
+		if err := os.Setenv(serialThreadBridgeDBEnv, dsn); err != nil {
+			require.NoError(t, errors.Join(err, clone.drop()))
+		}
+	}
+
+	workspace := t.TempDir()
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	err = root.WriteFile(".test-database-url", []byte(dsn), 0o600)
+	require.NoError(t, errors.Join(err, root.Close()))
+
+	store := newColdTestSessionServiceAt(t, workspace)
+	_, err = store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations, schedules RESTART IDENTITY CASCADE`)
+	require.NoError(t, err)
+
+	return store
+}
+
 func TestPromotedAgentQueueItemStaysNonHuman(t *testing.T) {
-	store := newTestSessionService(t)
+	store := newSerialThreadBridgeStore(t)
 
 	const conversationID = "web:cron:digest"
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
@@ -762,7 +792,7 @@ func queueIDs(t *testing.T, store *SessionService, conversationID string) []stri
 }
 
 func TestWriteSessionDeliversByMode(t *testing.T) {
-	store := newTestSessionService(t)
+	store := newSerialThreadBridgeStore(t)
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
 
 	for _, tc := range []struct {
@@ -886,7 +916,7 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 }
 
 func TestWriteSessionStopRunsFirst(t *testing.T) {
-	store := newTestSessionService(t)
+	store := newSerialThreadBridgeStore(t)
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
 
 	const target = "web:target"
@@ -938,7 +968,7 @@ func TestWriteSessionStopRunsFirst(t *testing.T) {
 }
 
 func TestDeleteQueueItemSettlesReply(t *testing.T) {
-	store := newTestSessionService(t)
+	store := newSerialThreadBridgeStore(t)
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
 
 	const target = "web:target"
@@ -987,7 +1017,7 @@ func TestDeleteQueueItemSettlesReply(t *testing.T) {
 func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 	for _, writer := range []string{"agent", "person"} {
 		t.Run(writer, func(t *testing.T) {
-			store := newTestSessionService(t)
+			store := newSerialThreadBridgeStore(t)
 			manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
 
 			const target = "web:main/a"
@@ -1031,7 +1061,7 @@ func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 func TestWebWriteRunsReleasedRequestFirst(t *testing.T) {
 	for _, write := range []string{"message", "goal"} {
 		t.Run(write, func(t *testing.T) {
-			store := newTestSessionService(t)
+			store := newSerialThreadBridgeStore(t)
 			manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
 			runtime := &Runtime{Sessions: store, threads: manager}
 
@@ -1052,6 +1082,12 @@ func TestWebWriteRunsReleasedRequestFirst(t *testing.T) {
 			inbound.ConversationID, inbound.Metadata = target, map[string]string{protocol.InboundPrincipalMetadataKey: "alice"}
 
 			var writes errgroup.Group
+
+			t.Cleanup(func() {
+				close(bridge.stopCh)
+
+				_ = writes.Wait()
+			})
 
 			writes.Go(func() error {
 				if write == "goal" {
@@ -1086,7 +1122,7 @@ func TestWebWriteRunsReleasedRequestFirst(t *testing.T) {
 }
 
 func TestWriteSessionMutualWritesDoNotBlock(t *testing.T) {
-	store := newTestSessionService(t)
+	store := newSerialThreadBridgeStore(t)
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
 
 	for _, id := range []string{"web:a", "web:b"} {
