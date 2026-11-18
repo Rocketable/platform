@@ -1775,8 +1775,13 @@ func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, convers
 
 	var created time.Time
 
-	err = queryScalar(ctx, db, "read chat time", `SELECT CASE WHEN slack_thread ~ '^[0-9]+(\.[0-9]+)?$' THEN to_timestamp(slack_thread::numeric) ELSE created_at END
-FROM conversations WHERE conversation_id = $1 AND (listed AND retention = 'record' OR slack_thread ~ '^[0-9]+(\.[0-9]+)?$')`, &created, conversationID)
+	err = queryScalar(ctx, db, "read chat time", `WITH continued AS (
+    SELECT DISTINCT continues AS conversation_id FROM conversations WHERE continues = $1
+)
+SELECT CASE WHEN c.slack_thread ~ '^[0-9]+(\.[0-9]+)?$' THEN to_timestamp(c.slack_thread::numeric) ELSE c.created_at END
+FROM conversations c LEFT JOIN continued k USING (conversation_id)
+WHERE c.conversation_id = $1 AND (c.retention = 'record' AND (c.listed OR c.kind IN ('cron_run', 'one_off_cron_run') AND c.reports_to IS NULL AND k.conversation_id IS NULL)
+    OR c.slack_thread ~ '^[0-9]+(\.[0-9]+)?$')`, &created, conversationID)
 	if !errors.Is(err, sql.ErrNoRows) {
 		if err != nil {
 			return false, err

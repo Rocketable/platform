@@ -696,8 +696,7 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 			managed := protocol.SlackThreadConversationID("C1", slackTestTS(old))
 			private, orphan := "external_mcp:planner:private", "cron:daily:old"
 
-			recordTestConversations(t, store, "planner", map[string]ConversationKind{thread: KindSlackThread})
-			recordPrivateHistories(t, store, map[string]ConversationKind{orphan: KindCronRun})
+			recordTestConversations(t, store, "planner", map[string]ConversationKind{thread: KindSlackThread, orphan: KindCronRun})
 			require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: private, ManagedConversationID: managed}))
 
 			for _, conversationID := range []string{thread, managed, private, orphan} {
@@ -738,7 +737,7 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 
 			entries, err := store.ObserveEntries(ctx, orphan)
 			require.NoError(t, err)
-			require.Equal(t, tt.keep, len(entries) == 1, "private conversation")
+			require.Equal(t, tt.keep, len(entries) == 1, "standalone run")
 
 			var rows int
 			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*)`+testJobsSQL).Scan(&rows))
