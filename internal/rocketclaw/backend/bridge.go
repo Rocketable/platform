@@ -3466,7 +3466,7 @@ func normalizeInboundAttachments(msg *protocol.InboundMessage) {
 		}
 
 		mimeType := protocol.NormalizeMIMEType(http.DetectContentType(data))
-		if !slices.Contains([]string{"image/jpeg", "image/jpg", "image/png", "image/webp"}, protocol.NormalizeMIMEType(mimeType)) {
+		if !slices.Contains([]string{"image/jpeg", "image/jpg", "image/png", "image/webp"}, mimeType) {
 			msg.AttachmentWarnings = append(msg.AttachmentWarnings, "Skipped attachment "+name+" because "+mimeType+" is not supported.")
 			continue
 		}
@@ -3496,7 +3496,6 @@ func normalizeInboundAttachments(msg *protocol.InboundMessage) {
 }
 
 func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (transformedData []byte, transformedMIMEType string, err error) {
-	mimeType = protocol.NormalizeMIMEType(mimeType)
 	if len(data) <= targetLimit {
 		return data, mimeType, nil
 	}
