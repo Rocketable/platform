@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { githubPR, type PullRequest } from "./github-pr";
-import { GitHubPRContent, PrivatePreviewRoot } from "./github-pr-preview";
+import { GitHubPRContent, PrivatePreviewRoot, type PRComposer } from "./github-pr-preview";
 import { navigate, panelHref } from "./navigation";
 import { discoverOpenCodePR, readOpenCodePR } from "./opencode-pr";
 import { changedPR, loadThreadPRs, openCodePRAPI } from "./thread-pr";
@@ -49,7 +49,7 @@ export function ThreadPRWatch({ id, version }: { id: string; version?: string })
   return null;
 }
 
-export function ThreadPRContent({ id, version, selected, close }: { id: string; version?: string; selected?: string; close: () => void }) {
+export function ThreadPRContent({ id, version, selected, close, composer }: { id: string; version?: string; selected?: string; close: () => void; composer: PRComposer }) {
   const { found, checkout, remote, urls, mentioned, url, checkoutOnly, reference, source, loading, finding, setSelected } = useThreadPRs(id, version, selected);
   const checkoutError = checkout.error || checkout.data && "error" in checkout.data;
   const [refresh, setRefresh] = useState(0);
@@ -73,7 +73,7 @@ export function ThreadPRContent({ id, version, selected, close }: { id: string; 
       {!finding && !found.error && !checkoutError && !urls.length && <p role="status">No pull requests found for this thread.</p>}
       {reference && <>
         {checkoutOnly && <span className="shrink-0 truncate text-xs text-muted-foreground" title="Checkout results describe the folder's current branch, which other threads may share.">{`Current checkout · ${checkout.data?.branch}`}</span>}
-        {(!remote || source) && <GitHubPRContent key={JSON.stringify([url, source])} reference={reference} source={source} refresh={refresh} close={close} />}
+        {(!remote || source) && <GitHubPRContent key={JSON.stringify([url, source])} reference={reference} source={source} refresh={refresh} close={close} composer={composer} />}
       </>}
     </div>
   </div>;

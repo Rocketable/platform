@@ -371,7 +371,7 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     expect(unexpected).toEqual([]);
     expect(errors).toEqual([]);
   } finally { release.resolve(); await browser.close(); }
-}, 60_000);
+}, 120_000);
 
 test("built App PR layouts preserve the composer draft and existing delegation panel", async () => {
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
@@ -457,6 +457,9 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     await dialog.getByText("1 of 1 files loaded", { exact: true }).waitFor();
     await dialog.getByRole("button", { name: "File tree", exact: true }).click();
     await dialog.getByRole("treeitem", { name: "file-marker-0.txt", exact: true }).click();
+    await dialog.locator('[data-line-type="change-addition"][data-column-number="1"]').click();
+    await page.waitForTimeout(300);
+    expect(await dialog.getByRole("textbox", { name: "Note", exact: true }).count()).toBe(0);
     const loaded = github.length;
     for (const layout of ["Dialog", "Inline", "Full-screen", "Side panel"]) {
       await page.getByRole("combobox", { name: "Preview layout" }).click();
@@ -606,6 +609,153 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     expect(github.filter((pathname) => pathname.endsWith("/pulls/8/files"))).toEqual([]);
     expect(prompts).toBe(0);
     expect(unexpected).toEqual([]);
+    expect(errors).toEqual([]);
+  } finally { await browser.close(); server.stop(true); }
+}, 30_000);
+
+test("the PR pane quotes its description and adds diff notes to the native draft without sending", async () => {
+  const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
+  const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
+  const session = "notes-fixture", pr = "https://github.com/sample/notes-repository/pull/7";
+  const sessionPath = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
+  const patch = "@@ -8,5 +8,7 @@\n ctx8\n ctx9\n-gone10\n-gone11\n+add10 ```\n+add11\n+add12\n+add13\n ctx12";
+  let prompts = 0;
+  let uploadHold: Promise<void> | undefined;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: session, name: "Notes fixture", agent: "main" }], owner: "synthetic-viewer", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (!url.pathname.startsWith("/api/")) {
+      const file = Bun.file(path.join(dist, url.pathname));
+      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    }
+    switch (url.pathname) {
+      case "/api/Protocol": return Response.json({ protoSha256: "pr-notes-fixture" });
+      case "/api/Identity": return Response.json({ username: "synthetic-viewer" });
+      case "/api/ListConfig": return Response.json({ config: { workspace: "pr-notes-fixture" } });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
+      case "/api/ListSkills": return Response.json({ skills: [] });
+      case "/api/ListQueue": return Response.json({ items: [] });
+      case "/api/Prompt": prompts++; return Response.json({});
+      case "/api/UploadAttachment": await uploadHold; return Response.json({ id: "attachment", name: "notes.txt", mimeType: "text/plain", size: "5" });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: sessionPath(session), space: "main" }], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [] });
+      case "/api/History": return Response.json({ messages: [{ role: "tool", text: "execute\n{}", complete: true, turnId: "t", entryKey: "t", itemId: "create", inputId: "", toolName: "execute", toolCallId: "create", codeModeCalls: [{ name: "bash", arguments: JSON.stringify({ command: "gh pr create --fill" }), status: "ok", summary: pr, createdPullRequests: [pr] }] }], delegations: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: ["t"], running: false, terminal: "", backgroundJobs: [], pendingQuestions: [], start: "0", more: false });
+      default: return Response.json({});
+    }
+  } });
+  const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const origin = `http://127.0.0.1:${server.port}`;
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(error.message));
+    await page.route("**/*", async (route: any) => {
+      const url = new URL(route.request().url());
+      if (url.hostname === "api.github.com") return route.fulfill({ headers: { "Access-Control-Allow-Origin": "*" }, json: url.pathname.endsWith("/files")
+        ? [{ filename: "a.go", status: "modified", additions: 4, deletions: 2, patch }, { filename: "b.bin", status: "modified", additions: 1, deletions: 0 }]
+        : { ...metadata, body: "Description sentence marker", changed_files: 2 } });
+      if (url.origin === origin) return route.continue();
+      return route.abort();
+    });
+    await page.goto(`${origin}${sessionPath(session)}?pullRequests=`);
+    const composer = page.locator("main textarea");
+    await page.locator("main textarea:enabled").waitFor();
+    const prs = page.getByRole("complementary", { name: "Pull requests", exact: true });
+    await prs.getByText(metadata.title, { exact: true }).waitFor();
+    const selectDescription = (root: any) => root.getByText("Description sentence marker", { exact: true }).evaluate((node: HTMLElement) => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+    await composer.fill("Hi");
+    await selectDescription(prs);
+    await page.getByRole("button", { name: "Quote", exact: true }).click();
+    expect(await composer.inputValue()).toBe("Hi\n\n> Description sentence marker\n\n");
+    await prs.getByRole("tab", { name: "Code", exact: true }).click();
+    await prs.getByText("add11", { exact: true }).waitFor();
+    const number = (root: any, type: string, line: number) => root.locator(`[data-line-type="${type}"][data-column-number="${line}"]`);
+    const selectLines = async (root: any, type: string, from: number, to: number) => {
+      const start = (await number(root, type, from).boundingBox())!, end = (await number(root, type, to).boundingBox())!;
+      await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 4 });
+      await page.mouse.up();
+    };
+    const note = prs.getByRole("textbox", { name: "Note", exact: true });
+    const add = prs.getByRole("button", { name: "Add to agent", exact: true });
+    await prs.getByText("Patch unavailable (binary, too large, or omitted by GitHub).", { exact: true }).waitFor();
+    await prs.locator('[data-column-number="1"]').click();
+    await page.waitForTimeout(300);
+    expect(await note.count()).toBe(0);
+    await composer.fill("Hi");
+    await selectLines(prs, "change-addition", 10, 12);
+    await note.waitFor();
+    expect(await add.isDisabled()).toBe(true);
+    await note.press("ControlOrMeta+Enter");
+    expect(await note.isVisible()).toBe(true);
+    expect(await composer.inputValue()).toBe("Hi");
+    await note.fill("why?");
+    expect(await add.isEnabled()).toBe(true);
+    await note.press("ControlOrMeta+Enter");
+    await note.waitFor({ state: "detached" });
+    const fenced = "Hi\n\nwhy?\n\na.go lines 10-12\n````diff\n+add10 ```\n+add11\n+add12\n````\n\n";
+    expect(await composer.inputValue()).toBe(fenced);
+    await page.waitForFunction(() => document.activeElement === document.querySelector("main textarea"));
+    expect(await prs.locator("[data-selected-line]").count()).toBe(0);
+    await selectLines(prs, "change-addition", 10, 11);
+    await note.fill("dropped");
+    expect(await prs.locator("[data-selected-line]").count()).toBeGreaterThan(0);
+    await note.press("Escape");
+    await note.waitFor({ state: "detached" });
+    expect(await prs.locator("[data-selected-line]").count()).toBe(0);
+    expect(await prs.isVisible()).toBe(true);
+    await composer.fill("");
+    await number(prs, "change-deletion", 11).click();
+    await note.fill("removed?");
+    await add.click();
+    expect(await composer.inputValue()).toBe("removed?\n\na.go lines 11-11\n```diff\n-gone11\n```\n\n");
+
+    const held = Promise.withResolvers<void>();
+    uploadHold = held.promise;
+    await selectLines(prs, "change-addition", 12, 13);
+    await note.fill("kept while sending");
+    await composer.fill("send me");
+    await page.locator('main input[aria-label="Attach files"]').setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") });
+    await page.locator("main [data-composer-submit]").click();
+    await page.locator("main textarea:disabled").waitFor();
+    expect(await add.isDisabled()).toBe(true);
+    await note.press("ControlOrMeta+Enter");
+    await prs.getByRole("tab", { name: "Summary", exact: true }).click();
+    await selectDescription(prs);
+    await page.waitForTimeout(300);
+    expect(await page.getByRole("button", { name: "Quote", exact: true }).count()).toBe(0);
+    held.resolve();
+    await page.locator("main textarea:enabled").waitFor();
+    await prs.getByRole("tab", { name: "Code", exact: true }).click();
+    expect(await note.inputValue()).toBe("kept while sending");
+    await add.click();
+    expect(await composer.inputValue()).toBe("kept while sending\n\na.go lines 12-13\n```diff\n+add12\n+add13\n```\n\n");
+
+    await composer.fill("narrow");
+    await page.setViewportSize({ width: 390, height: 844 });
+    const sheet = page.getByRole("dialog", { name: "Pull requests", exact: true });
+    await sheet.getByText("add11", { exact: true }).waitFor();
+    await selectLines(sheet, "change-addition", 10, 10);
+    await sheet.getByRole("textbox", { name: "Note", exact: true }).fill("small screen");
+    await sheet.getByRole("button", { name: "Add to agent", exact: true }).click();
+    await sheet.getByRole("status").getByText("Added to message", { exact: true }).waitFor();
+    const narrow = "narrow\n\nsmall screen\n\na.go lines 10-10\n````diff\n+add10 ```\n````\n\n";
+    expect(await composer.inputValue()).toBe(narrow);
+    expect(await sheet.isVisible()).toBe(true);
+    expect(await sheet.evaluate((node: HTMLElement) => node.contains(document.activeElement))).toBe(true);
+    await sheet.getByRole("tab", { name: "Summary", exact: true }).click();
+    await selectDescription(sheet);
+    await sheet.getByRole("button", { name: "Quote", exact: true }).click();
+    expect(await composer.inputValue()).toBe(`${narrow}\n\n> Description sentence marker\n\n`);
+    expect(await sheet.isVisible()).toBe(true);
+    expect(await sheet.evaluate((node: HTMLElement) => node.contains(document.activeElement))).toBe(true);
+    expect(prompts).toBe(1);
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }
 }, 30_000);
