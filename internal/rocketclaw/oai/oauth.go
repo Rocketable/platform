@@ -570,25 +570,22 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if codexResponse && resp.StatusCode == http.StatusOK {
 		resp, err = codexStreamingResponse(req.Context(), resp)
 		if err != nil {
-			errStream := err
-			if streamErr, ok := errors.AsType[*codexStreamError](errStream); ok && strings.TrimSpace(streamErr.Code) == "context_length_exceeded" {
-				var retried bool
+			if errStream, ok := errors.AsType[*codexStreamError](err); ok && strings.TrimSpace(errStream.Code) == "context_length_exceeded" {
+				retryResp, errRetry := t.retryCodexAfterCompaction(req.Context(), activeReq, threshold)
+				if errRetry != nil {
+					return nil, fmt.Errorf("adapt Codex stream response after compaction retry: %w", errRetry)
+				}
 
-				resp, retried, err = t.retryCodexAfterCompaction(req.Context(), activeReq, threshold)
-				if retried {
-					if err != nil {
-						return nil, fmt.Errorf("adapt Codex stream response after compaction retry: %w", err)
-					}
-
-					return resp, nil
+				if retryResp != nil {
+					return retryResp, nil
 				}
 
 				return codexJSONResponse(req, http.StatusBadRequest, struct {
 					Error *codexStreamError `json:"error"`
-				}{streamErr}), nil
+				}{errStream}), nil
 			}
 
-			return nil, fmt.Errorf("adapt Codex stream response: %w", errStream)
+			return nil, fmt.Errorf("adapt Codex stream response: %w", err)
 		}
 
 		resp, err = t.codexCompaction(req.Context(), activeReq, resp, threshold)
@@ -940,14 +937,14 @@ func prependCodexOutput(resp *http.Response, item json.RawMessage) {
 	resp.ContentLength = int64(len(data))
 }
 
-func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Request, threshold *float64) (*http.Response, bool, error) {
+func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Request, threshold *float64) (*http.Response, error) {
 	if threshold == nil {
-		return nil, false, nil
+		return nil, nil
 	}
 
 	compactItem, ok, err := t.codexCompactItem(ctx, req)
 	if err != nil || !ok {
-		return nil, false, nil
+		return nil, nil
 	}
 
 	retryBody := requestFields(req)
@@ -968,21 +965,21 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 
 	resp, err := t.roundTrip(retry, "compacted_retry")
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return resp, true, nil
+		return resp, nil
 	}
 
 	resp, err = codexStreamingResponse(ctx, resp)
 	if err != nil {
-		return nil, true, err
+		return nil, err
 	}
 
 	prependCodexOutput(resp, compactItem)
 
-	return resp, true, nil
+	return resp, nil
 }
 
 func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (item json.RawMessage, ok bool, err error) {
