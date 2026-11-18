@@ -11,14 +11,23 @@ ZeroRevision == [base |-> 0, head |-> 0, count |-> 0]
 EmptyRequest == [phase |-> "idle", threadID |-> 1, origin |-> 1,
                  generation |-> 0, revision |-> ZeroRevision,
                  payload |-> ZeroRevision, aborted |-> FALSE]
-Created(t) == <<t, "created">>
 Checkout(t) == <<t, "checkout">>
-\* Finite evidence classes stand for status checks AND parser acceptance.
-Evidence(t, kind) == [pr |-> IF kind = "create" THEN Created(t) ELSE Checkout(t),
-    recordedSuccess |-> kind \in {"create", "view"},
-    parserAccepts |-> kind \in {"create", "failed"}]
-ProvenCreate(e) == e.recordedSuccess /\ e.parserAccepts
-Accepted(records) == {e.pr : e \in {r \in records : ProvenCreate(r)}}
+HistoryThread == 1
+Root == "thread"
+Sessions == {"thread", "subagent", "shadow", "nested"}
+Pages(s) == IF s = Root THEN 2 ELSE 1
+ChildLinks == {<<"thread", 1, "subagent">>, <<"thread", 2, "shadow">>,
+               <<"subagent", 1, "nested">>, <<"shadow", 1, "nested">>}
+Command(s, p, r, k, name) == [session |-> s, page |-> p, round |-> r, kind |-> k,
+                              pr |-> <<HistoryThread, name>>]
+Commands == {Command("thread", 1, 1, "create", "thread-create"),
+             Command("thread", 2, 1, "listing", "listed"),
+             Command("subagent", 1, 1, "failed", "failed"),
+             Command("shadow", 1, 2, "mention", "shadow-mention"),
+             Command("nested", 1, 2, "create", "nested-create")}
+CreatedEvidence == {c.pr : c \in {d \in Commands : d.kind = "create"}}
+AcceptedEvidence(r) == {c.pr : c \in {d \in Commands :
+    d.kind \in {"create", "mention"} /\ d.round <= r}}
 
 (* Each label is one await-free transition, not an entire async function.
    World actions are optional and finite. Worker actions are weakly fair.
@@ -30,8 +39,12 @@ variables
     alive = TRUE,
     thread = 1, source = 1, epoch = 0, moved = FALSE,
     serverRevision = ZeroRevision, revisionMoves = 0,
-    historyPhase = "page1", historyThread = 1, historyEpoch = 0,
-    gathered = {}, history = {}, everHistory = {}, owned = {},
+    historyEpoch = 0, look = 0,
+    frontier = {}, visited = {}, cursor = [s \in Sessions |-> 1],
+    reads = [s \in Sessions |-> 0], pending = {}, readFailed = FALSE,
+    created = {}, mentioned = {}, walkSettled = FALSE,
+    history = {}, everHistory = {}, listedCreated = {},
+    seenCreated = {}, looked = FALSE, opened = {},
     checkoutPhase = "pending", checkoutURL = {}, checkoutFailed = FALSE,
     metadata = ReaderCase, metadataThread = 1, metadataSource = 1,
     metadataRevision = ZeroRevision,
@@ -42,6 +55,17 @@ variables
     shellPhase = "pending", shellCancelled = FALSE,
     shellCreated = FALSE, shellKnown = FALSE, shellDeleted = FALSE,
     shellOutputReady = FALSE, shellCommitted = FALSE;
+
+define
+    LevelCommands == {c \in Commands : c.session \in frontier
+        /\ c.page = cursor[c.session] /\ c.round <= look}
+    NamedChildren == {link[3] : link \in {l \in ChildLinks : l[1] \in frontier
+        /\ l[2] = cursor[l[1]] /\ (Fault # "skip-child" \/ l[1] = Root)}}
+    Enqueued == IF Fault = "no-visited" THEN NamedChildren ELSE NamedChildren \ visited
+    WatchInput == CASE Fault = "mention-opens" -> history
+                    [] Fault = "own-checkout" -> listedCreated \cup checkoutURL
+                    [] OTHER -> listedCreated
+end define;
 
 process World = "world"
 begin
@@ -58,7 +82,7 @@ NavigateOrRefresh:
             else
                 \* ui.tsx ThreadPRContent key={id}: remount, not placeholder reuse.
                 thread := 2; source := 2;
-                history := {}; everHistory := {}; owned := {}; checkoutURL := {};
+                history := {}; everHistory := {}; listedCreated := {}; checkoutURL := {};
                 metadata := FALSE; patch := FALSE;
             end if;
             if ReaderCase /\ ~reloadStarted then
@@ -113,27 +137,64 @@ end process;
 
 fair process Discovery = "discovery-worker"
 begin
-HistoryAndCheckout:
+DiscoveryStart:
+    await DiscoveryCase;
+Looks:
+    while look < 2 do
+        look := look + 1;
+        frontier := {Root}; visited := {Root};
+        cursor := [s \in Sessions |-> 1]; reads := [s \in Sessions |-> 0];
+        created := {}; mentioned := {}; readFailed := FALSE; walkSettled := FALSE;
+ReadLevel:
+        while frontier # {} do
+            either
+                pending := LevelCommands
+                || reads := [s \in Sessions |-> IF s \in frontier THEN reads[s] + 1 ELSE reads[s]]
+                || cursor := [s \in Sessions |-> IF s \in Enqueued THEN 1
+                       ELSE IF s \in frontier THEN cursor[s] + 1 ELSE cursor[s]]
+                || visited := visited \cup Enqueued
+                || frontier := {s \in frontier : cursor[s] < Pages(s)} \cup Enqueued;
+            or
+                readFailed := TRUE || frontier := {};
+            end either;
+Classify:
+            while pending # {} do
+                with c \in pending do
+                    if c.kind = "create" then
+                        created := created \cup {c.pr};
+                    elsif c.kind = "mention" \/ Fault = "listing-listed" then
+                        mentioned := mentioned \cup {c.pr};
+                    end if;
+                    pending := pending \ {c};
+                end with;
+            end while;
+        end while;
+Commit:
+        if ~readFailed /\ historyEpoch = epoch then
+            history := created \cup mentioned;
+            everHistory := created \cup mentioned;
+            listedCreated := created;
+            walkSettled := TRUE;
+        end if;
+Watch:
+        if ~readFailed /\ historyEpoch = epoch then
+            if looked /\ WatchInput \ seenCreated # {} then
+                with url \in WatchInput \ seenCreated do
+                    opened := opened \cup {url};
+                end with;
+            end if;
+            seenCreated := seenCreated \cup WatchInput;
+            looked := TRUE;
+        end if;
+    end while;
+end process;
+
+fair process CheckoutWorker = "checkout-worker"
+begin
+CheckoutLookup:
     while TRUE do
         await DiscoveryCase;
         either
-            await historyPhase = "page1";
-            \* Abstract a successful recorded create command or script with an accepted URL.
-            gathered := Accepted({Evidence(historyThread, "create")});
-            historyPhase := "page2";
-        or
-            await historyPhase = "page2";
-            \* Page 2 also contains links/failed calls: no success evidence, no addition.
-            gathered := gathered \cup Accepted({Evidence(historyThread, k) :
-                k \in {"view", "failed", "mention"}});
-            historyPhase := "commit";
-        or
-            await historyPhase = "commit";
-            if historyEpoch = epoch then
-                history := gathered; everHistory := gathered; owned := gathered;
-            end if;
-            historyPhase := "done";
-        or
             await checkoutPhase = "pending";
             \* Resolving session.location and gh view are independent of history.
             either
@@ -147,10 +208,7 @@ HistoryAndCheckout:
             await checkoutPhase \in {"success", "failure", "none"};
             if historyEpoch = epoch then
                 if checkoutPhase = "success" then
-                    checkoutURL := {Checkout(historyThread)};
-                    if Fault = "own-checkout" then
-                        owned := owned \cup checkoutURL;
-                    end if;
+                    checkoutURL := {Checkout(HistoryThread)};
                 elsif checkoutPhase = "failure" then
                     checkoutFailed := TRUE;
                     if Fault = "drop-history" then history := {}; end if;
@@ -259,25 +317,40 @@ end process;
 end algorithm; *)
 
 \* BEGIN TRANSLATION
-VARIABLES alive, thread, source, epoch, moved, serverRevision, revisionMoves, 
-          historyPhase, historyThread, historyEpoch, gathered, history, 
-          everHistory, owned, checkoutPhase, checkoutURL, checkoutFailed, 
-          metadata, metadataThread, metadataSource, metadataRevision, patch, 
+VARIABLES pc, alive, thread, source, epoch, moved, serverRevision, 
+          revisionMoves, historyEpoch, look, frontier, visited, cursor, reads, 
+          pending, readFailed, created, mentioned, walkSettled, history, 
+          everHistory, listedCreated, seenCreated, looked, opened, 
+          checkoutPhase, checkoutURL, checkoutFailed, metadata, 
+          metadataThread, metadataSource, metadataRevision, patch, 
           patchSource, patchRevision, filesStarted, reloadStarted, 
           readerCancelled, loading, staleCommit, cancelledCommit, requests, 
           shellPhase, shellCancelled, shellCreated, shellKnown, shellDeleted, 
           shellOutputReady, shellCommitted
 
-vars == << alive, thread, source, epoch, moved, serverRevision, revisionMoves, 
-           historyPhase, historyThread, historyEpoch, gathered, history, 
-           everHistory, owned, checkoutPhase, checkoutURL, checkoutFailed, 
-           metadata, metadataThread, metadataSource, metadataRevision, patch, 
+(* define statement *)
+LevelCommands == {c \in Commands : c.session \in frontier
+    /\ c.page = cursor[c.session] /\ c.round <= look}
+NamedChildren == {link[3] : link \in {l \in ChildLinks : l[1] \in frontier
+    /\ l[2] = cursor[l[1]] /\ (Fault # "skip-child" \/ l[1] = Root)}}
+Enqueued == IF Fault = "no-visited" THEN NamedChildren ELSE NamedChildren \ visited
+WatchInput == CASE Fault = "mention-opens" -> history
+                [] Fault = "own-checkout" -> listedCreated \cup checkoutURL
+                [] OTHER -> listedCreated
+
+
+vars == << pc, alive, thread, source, epoch, moved, serverRevision, 
+           revisionMoves, historyEpoch, look, frontier, visited, cursor, 
+           reads, pending, readFailed, created, mentioned, walkSettled, 
+           history, everHistory, listedCreated, seenCreated, looked, opened, 
+           checkoutPhase, checkoutURL, checkoutFailed, metadata, 
+           metadataThread, metadataSource, metadataRevision, patch, 
            patchSource, patchRevision, filesStarted, reloadStarted, 
            readerCancelled, loading, staleCommit, cancelledCommit, requests, 
            shellPhase, shellCancelled, shellCreated, shellKnown, shellDeleted, 
            shellOutputReady, shellCommitted >>
 
-ProcSet == {"world"} \cup {"discovery-worker"} \cup {"reader-worker"} \cup {"shell-worker"}
+ProcSet == {"world"} \cup {"discovery-worker"} \cup {"checkout-worker"} \cup {"reader-worker"} \cup {"shell-worker"}
 
 Init == (* Global variables *)
         /\ alive = TRUE
@@ -287,13 +360,23 @@ Init == (* Global variables *)
         /\ moved = FALSE
         /\ serverRevision = ZeroRevision
         /\ revisionMoves = 0
-        /\ historyPhase = "page1"
-        /\ historyThread = 1
         /\ historyEpoch = 0
-        /\ gathered = {}
+        /\ look = 0
+        /\ frontier = {}
+        /\ visited = {}
+        /\ cursor = [s \in Sessions |-> 1]
+        /\ reads = [s \in Sessions |-> 0]
+        /\ pending = {}
+        /\ readFailed = FALSE
+        /\ created = {}
+        /\ mentioned = {}
+        /\ walkSettled = FALSE
         /\ history = {}
         /\ everHistory = {}
-        /\ owned = {}
+        /\ listedCreated = {}
+        /\ seenCreated = {}
+        /\ looked = FALSE
+        /\ opened = {}
         /\ checkoutPhase = "pending"
         /\ checkoutURL = {}
         /\ checkoutFailed = FALSE
@@ -318,133 +401,166 @@ Init == (* Global variables *)
         /\ shellDeleted = FALSE
         /\ shellOutputReady = FALSE
         /\ shellCommitted = FALSE
+        /\ pc = [self \in ProcSet |-> CASE self = "world" -> "NavigateOrRefresh"
+                                        [] self = "discovery-worker" -> "DiscoveryStart"
+                                        [] self = "checkout-worker" -> "CheckoutLookup"
+                                        [] self = "reader-worker" -> "RequestCompletion"
+                                        [] self = "shell-worker" -> "ShellAwaitBoundary"]
 
-World == /\ \/ /\ (DiscoveryCase \/ ReaderCase) /\ ~moved
-               /\ moved' = TRUE
-               /\ epoch' = epoch + 1
-               /\ IF Case = "source-change"
-                     THEN /\ source' = 2
-                          /\ IF Fault # "retain-source"
-                                THEN /\ metadata' = FALSE
-                                     /\ patch' = FALSE
-                                ELSE /\ TRUE
-                                     /\ UNCHANGED << metadata, patch >>
-                          /\ UNCHANGED << thread, history, everHistory, owned, 
-                                          checkoutURL >>
-                     ELSE /\ thread' = 2
-                          /\ source' = 2
-                          /\ history' = {}
-                          /\ everHistory' = {}
-                          /\ owned' = {}
-                          /\ checkoutURL' = {}
-                          /\ metadata' = FALSE
-                          /\ patch' = FALSE
-               /\ IF ReaderCase /\ ~reloadStarted
-                     THEN /\ reloadStarted' = TRUE
-                          /\ readerCancelled' = FALSE
-                          /\ loading' = (IF Case = "source-change" /\ Fault = "retain-source" THEN loading ELSE TRUE)
-                          /\ requests' =         [requests EXCEPT ![1].aborted = TRUE,
-                                         ![2] = [EmptyRequest EXCEPT !.phase = "metadata",
-                                             !.threadID = thread', !.origin = source', !.generation = epoch']]
-                     ELSE /\ requests' = [i \in 1..2 |-> [requests[i] EXCEPT !.aborted = TRUE]]
-                          /\ UNCHANGED << reloadStarted, readerCancelled, 
-                                          loading >>
-               /\ UNCHANGED <<alive, serverRevision, revisionMoves, filesStarted, shellCancelled>>
-            \/ /\ ReaderCase /\ metadata /\ ~filesStarted /\ ~readerCancelled
-               /\ filesStarted' = TRUE
-               /\ loading' = TRUE
-               /\ requests' =         [requests EXCEPT ![2].aborted = TRUE,
-                              ![1] = [EmptyRequest EXCEPT !.phase = "before",
-                                  !.threadID = thread, !.origin = source, !.generation = epoch,
-                                  !.revision = metadataRevision]]
-               /\ UNCHANGED <<alive, thread, source, epoch, moved, serverRevision, revisionMoves, history, everHistory, owned, checkoutURL, metadata, patch, reloadStarted, readerCancelled, shellCancelled>>
-            \/ /\ ReaderCase /\ ~reloadStarted /\ ~loading
-               /\ reloadStarted' = TRUE
-               /\ readerCancelled' = FALSE
-               /\ metadata' = FALSE
-               /\ patch' = FALSE
-               /\ loading' = TRUE
-               /\ requests' =         [requests EXCEPT ![1].aborted = TRUE,
-                              ![2] = [EmptyRequest EXCEPT !.phase = "metadata",
-                                  !.threadID = thread, !.origin = source, !.generation = epoch]]
-               /\ UNCHANGED <<alive, thread, source, epoch, moved, serverRevision, revisionMoves, history, everHistory, owned, checkoutURL, filesStarted, shellCancelled>>
-            \/ /\ ReaderCase /\ loading /\ ~readerCancelled
-               /\ readerCancelled' = TRUE
-               /\ loading' = FALSE
-               /\ requests' = [i \in 1..2 |-> [requests[i] EXCEPT !.aborted = TRUE]]
-               /\ UNCHANGED <<alive, thread, source, epoch, moved, serverRevision, revisionMoves, history, everHistory, owned, checkoutURL, metadata, patch, filesStarted, reloadStarted, shellCancelled>>
-            \/ /\ ReaderCase /\ revisionMoves < RevisionLimit
-               /\ \E coordinate \in {"base", "head", "count"}:
-                    serverRevision' = [serverRevision EXCEPT ![coordinate] = 1 - serverRevision[coordinate]]
-               /\ revisionMoves' = revisionMoves + 1
-               /\ UNCHANGED <<alive, thread, source, epoch, moved, history, everHistory, owned, checkoutURL, metadata, patch, filesStarted, reloadStarted, readerCancelled, loading, requests, shellCancelled>>
-            \/ /\ ShellCase /\ ~shellCancelled /\ shellPhase # "done"
-               /\ shellCancelled' = TRUE
-               /\ UNCHANGED <<alive, thread, source, epoch, moved, serverRevision, revisionMoves, history, everHistory, owned, checkoutURL, metadata, patch, filesStarted, reloadStarted, readerCancelled, loading, requests>>
-            \/ /\ Case = "browser-loss" /\ alive /\ shellKnown /\ ~shellDeleted
-               /\ alive' = FALSE
-               /\ UNCHANGED <<thread, source, epoch, moved, serverRevision, revisionMoves, history, everHistory, owned, checkoutURL, metadata, patch, filesStarted, reloadStarted, readerCancelled, loading, requests, shellCancelled>>
-            \/ /\ TRUE
-               /\ UNCHANGED <<alive, thread, source, epoch, moved, serverRevision, revisionMoves, history, everHistory, owned, checkoutURL, metadata, patch, filesStarted, reloadStarted, readerCancelled, loading, requests, shellCancelled>>
-         /\ UNCHANGED << historyPhase, historyThread, historyEpoch, gathered, 
-                         checkoutPhase, checkoutFailed, metadataThread, 
-                         metadataSource, metadataRevision, patchSource, 
-                         patchRevision, staleCommit, cancelledCommit, 
-                         shellPhase, shellCreated, shellKnown, shellDeleted, 
-                         shellOutputReady, shellCommitted >>
+NavigateOrRefresh == /\ pc["world"] = "NavigateOrRefresh"
+                     /\ \/ /\ (DiscoveryCase \/ ReaderCase) /\ ~moved
+                           /\ moved' = TRUE
+                           /\ epoch' = epoch + 1
+                           /\ IF Case = "source-change"
+                                 THEN /\ source' = 2
+                                      /\ IF Fault # "retain-source"
+                                            THEN /\ metadata' = FALSE
+                                                 /\ patch' = FALSE
+                                            ELSE /\ TRUE
+                                                 /\ UNCHANGED << metadata, 
+                                                                 patch >>
+                                      /\ UNCHANGED << thread, history, 
+                                                      everHistory, 
+                                                      listedCreated, 
+                                                      checkoutURL >>
+                                 ELSE /\ thread' = 2
+                                      /\ source' = 2
+                                      /\ history' = {}
+                                      /\ everHistory' = {}
+                                      /\ listedCreated' = {}
+                                      /\ checkoutURL' = {}
+                                      /\ metadata' = FALSE
+                                      /\ patch' = FALSE
+                           /\ IF ReaderCase /\ ~reloadStarted
+                                 THEN /\ reloadStarted' = TRUE
+                                      /\ readerCancelled' = FALSE
+                                      /\ loading' = (IF Case = "source-change" /\ Fault = "retain-source" THEN loading ELSE TRUE)
+                                      /\ requests' =         [requests EXCEPT ![1].aborted = TRUE,
+                                                     ![2] = [EmptyRequest EXCEPT !.phase = "metadata",
+                                                         !.threadID = thread', !.origin = source', !.generation = epoch']]
+                                 ELSE /\ requests' = [i \in 1..2 |-> [requests[i] EXCEPT !.aborted = TRUE]]
+                                      /\ UNCHANGED << reloadStarted, 
+                                                      readerCancelled, loading >>
+                           /\ UNCHANGED <<alive, serverRevision, revisionMoves, filesStarted, shellCancelled>>
+                        \/ /\ ReaderCase /\ metadata /\ ~filesStarted /\ ~readerCancelled
+                           /\ filesStarted' = TRUE
+                           /\ loading' = TRUE
+                           /\ requests' =         [requests EXCEPT ![2].aborted = TRUE,
+                                          ![1] = [EmptyRequest EXCEPT !.phase = "before",
+                                              !.threadID = thread, !.origin = source, !.generation = epoch,
+                                              !.revision = metadataRevision]]
+                           /\ UNCHANGED <<alive, thread, source, epoch, moved, serverRevision, revisionMoves, history, everHistory, listedCreated, checkoutURL, metadata, patch, reloadStarted, readerCancelled, shellCancelled>>
+                        \/ /\ ReaderCase /\ ~reloadStarted /\ ~loading
+                           /\ reloadStarted' = TRUE
+                           /\ readerCancelled' = FALSE
+                           /\ metadata' = FALSE
+                           /\ patch' = FALSE
+                           /\ loading' = TRUE
+                           /\ requests' =         [requests EXCEPT ![1].aborted = TRUE,
+                                          ![2] = [EmptyRequest EXCEPT !.phase = "metadata",
+                                              !.threadID = thread, !.origin = source, !.generation = epoch]]
+                           /\ UNCHANGED <<alive, thread, source, epoch, moved, serverRevision, revisionMoves, history, everHistory, listedCreated, checkoutURL, filesStarted, shellCancelled>>
+                        \/ /\ ReaderCase /\ loading /\ ~readerCancelled
+                           /\ readerCancelled' = TRUE
+                           /\ loading' = FALSE
+                           /\ requests' = [i \in 1..2 |-> [requests[i] EXCEPT !.aborted = TRUE]]
+                           /\ UNCHANGED <<alive, thread, source, epoch, moved, serverRevision, revisionMoves, history, everHistory, listedCreated, checkoutURL, metadata, patch, filesStarted, reloadStarted, shellCancelled>>
+                        \/ /\ ReaderCase /\ revisionMoves < RevisionLimit
+                           /\ \E coordinate \in {"base", "head", "count"}:
+                                serverRevision' = [serverRevision EXCEPT ![coordinate] = 1 - serverRevision[coordinate]]
+                           /\ revisionMoves' = revisionMoves + 1
+                           /\ UNCHANGED <<alive, thread, source, epoch, moved, history, everHistory, listedCreated, checkoutURL, metadata, patch, filesStarted, reloadStarted, readerCancelled, loading, requests, shellCancelled>>
+                        \/ /\ ShellCase /\ ~shellCancelled /\ shellPhase # "done"
+                           /\ shellCancelled' = TRUE
+                           /\ UNCHANGED <<alive, thread, source, epoch, moved, serverRevision, revisionMoves, history, everHistory, listedCreated, checkoutURL, metadata, patch, filesStarted, reloadStarted, readerCancelled, loading, requests>>
+                        \/ /\ Case = "browser-loss" /\ alive /\ shellKnown /\ ~shellDeleted
+                           /\ alive' = FALSE
+                           /\ UNCHANGED <<thread, source, epoch, moved, serverRevision, revisionMoves, history, everHistory, listedCreated, checkoutURL, metadata, patch, filesStarted, reloadStarted, readerCancelled, loading, requests, shellCancelled>>
+                        \/ /\ TRUE
+                           /\ UNCHANGED <<alive, thread, source, epoch, moved, serverRevision, revisionMoves, history, everHistory, listedCreated, checkoutURL, metadata, patch, filesStarted, reloadStarted, readerCancelled, loading, requests, shellCancelled>>
+                     /\ pc' = [pc EXCEPT !["world"] = "NavigateOrRefresh"]
+                     /\ UNCHANGED << historyEpoch, look, frontier, visited, 
+                                     cursor, reads, pending, readFailed, 
+                                     created, mentioned, walkSettled, 
+                                     seenCreated, looked, opened, 
+                                     checkoutPhase, checkoutFailed, 
+                                     metadataThread, metadataSource, 
+                                     metadataRevision, patchSource, 
+                                     patchRevision, staleCommit, 
+                                     cancelledCommit, shellPhase, shellCreated, 
+                                     shellKnown, shellDeleted, 
+                                     shellOutputReady, shellCommitted >>
 
-Discovery == /\ DiscoveryCase
-             /\ \/ /\ historyPhase = "page1"
-                   /\ gathered' = Accepted({Evidence(historyThread, "create")})
-                   /\ historyPhase' = "page2"
-                   /\ UNCHANGED <<history, everHistory, owned, checkoutPhase, checkoutURL, checkoutFailed>>
-                \/ /\ historyPhase = "page2"
-                   /\ gathered' = (        gathered \cup Accepted({Evidence(historyThread, k) :
-                                   k \in {"view", "failed", "mention"}}))
-                   /\ historyPhase' = "commit"
-                   /\ UNCHANGED <<history, everHistory, owned, checkoutPhase, checkoutURL, checkoutFailed>>
-                \/ /\ historyPhase = "commit"
-                   /\ IF historyEpoch = epoch
-                         THEN /\ history' = gathered
-                              /\ everHistory' = gathered
-                              /\ owned' = gathered
-                         ELSE /\ TRUE
-                              /\ UNCHANGED << history, everHistory, owned >>
-                   /\ historyPhase' = "done"
-                   /\ UNCHANGED <<gathered, checkoutPhase, checkoutURL, checkoutFailed>>
-                \/ /\ checkoutPhase = "pending"
-                   /\ \/ /\ checkoutPhase' = "success"
-                      \/ /\ checkoutPhase' = "failure"
-                      \/ /\ checkoutPhase' = "none"
-                   /\ UNCHANGED <<historyPhase, gathered, history, everHistory, owned, checkoutURL, checkoutFailed>>
-                \/ /\ checkoutPhase \in {"success", "failure", "none"}
-                   /\ IF historyEpoch = epoch
-                         THEN /\ IF checkoutPhase = "success"
-                                    THEN /\ checkoutURL' = {Checkout(historyThread)}
-                                         /\ IF Fault = "own-checkout"
-                                               THEN /\ owned' = (owned \cup checkoutURL')
-                                               ELSE /\ TRUE
-                                                    /\ owned' = owned
-                                         /\ UNCHANGED << history, 
-                                                         checkoutFailed >>
-                                    ELSE /\ IF checkoutPhase = "failure"
-                                               THEN /\ checkoutFailed' = TRUE
-                                                    /\ IF Fault = "drop-history"
-                                                          THEN /\ history' = {}
-                                                          ELSE /\ TRUE
-                                                               /\ UNCHANGED history
-                                               ELSE /\ TRUE
-                                                    /\ UNCHANGED << history, 
-                                                                    checkoutFailed >>
-                                         /\ UNCHANGED << owned, checkoutURL >>
-                         ELSE /\ TRUE
-                              /\ UNCHANGED << history, owned, checkoutURL, 
-                                              checkoutFailed >>
-                   /\ checkoutPhase' = "done"
-                   /\ UNCHANGED <<historyPhase, gathered, everHistory>>
+World == NavigateOrRefresh
+
+DiscoveryStart == /\ pc["discovery-worker"] = "DiscoveryStart"
+                  /\ DiscoveryCase
+                  /\ pc' = [pc EXCEPT !["discovery-worker"] = "Looks"]
+                  /\ UNCHANGED << alive, thread, source, epoch, moved, 
+                                  serverRevision, revisionMoves, historyEpoch, 
+                                  look, frontier, visited, cursor, reads, 
+                                  pending, readFailed, created, mentioned, 
+                                  walkSettled, history, everHistory, 
+                                  listedCreated, seenCreated, looked, opened, 
+                                  checkoutPhase, checkoutURL, checkoutFailed, 
+                                  metadata, metadataThread, metadataSource, 
+                                  metadataRevision, patch, patchSource, 
+                                  patchRevision, filesStarted, reloadStarted, 
+                                  readerCancelled, loading, staleCommit, 
+                                  cancelledCommit, requests, shellPhase, 
+                                  shellCancelled, shellCreated, shellKnown, 
+                                  shellDeleted, shellOutputReady, 
+                                  shellCommitted >>
+
+Looks == /\ pc["discovery-worker"] = "Looks"
+         /\ IF look < 2
+               THEN /\ look' = look + 1
+                    /\ frontier' = {Root}
+                    /\ visited' = {Root}
+                    /\ cursor' = [s \in Sessions |-> 1]
+                    /\ reads' = [s \in Sessions |-> 0]
+                    /\ created' = {}
+                    /\ mentioned' = {}
+                    /\ readFailed' = FALSE
+                    /\ walkSettled' = FALSE
+                    /\ pc' = [pc EXCEPT !["discovery-worker"] = "ReadLevel"]
+               ELSE /\ pc' = [pc EXCEPT !["discovery-worker"] = "Done"]
+                    /\ UNCHANGED << look, frontier, visited, cursor, reads, 
+                                    readFailed, created, mentioned, 
+                                    walkSettled >>
+         /\ UNCHANGED << alive, thread, source, epoch, moved, serverRevision, 
+                         revisionMoves, historyEpoch, pending, history, 
+                         everHistory, listedCreated, seenCreated, looked, 
+                         opened, checkoutPhase, checkoutURL, checkoutFailed, 
+                         metadata, metadataThread, metadataSource, 
+                         metadataRevision, patch, patchSource, patchRevision, 
+                         filesStarted, reloadStarted, readerCancelled, loading, 
+                         staleCommit, cancelledCommit, requests, shellPhase, 
+                         shellCancelled, shellCreated, shellKnown, 
+                         shellDeleted, shellOutputReady, shellCommitted >>
+
+ReadLevel == /\ pc["discovery-worker"] = "ReadLevel"
+             /\ IF frontier # {}
+                   THEN /\ \/ /\ /\ cursor' =       [s \in Sessions |-> IF s \in Enqueued THEN 1
+                                              ELSE IF s \in frontier THEN cursor[s] + 1 ELSE cursor[s]]
+                                 /\ frontier' = ({s \in frontier : cursor[s] < Pages(s)} \cup Enqueued)
+                                 /\ pending' = LevelCommands
+                                 /\ reads' = [s \in Sessions |-> IF s \in frontier THEN reads[s] + 1 ELSE reads[s]]
+                                 /\ visited' = (visited \cup Enqueued)
+                              /\ UNCHANGED readFailed
+                           \/ /\ /\ frontier' = {}
+                                 /\ readFailed' = TRUE
+                              /\ UNCHANGED <<visited, cursor, reads, pending>>
+                        /\ pc' = [pc EXCEPT !["discovery-worker"] = "Classify"]
+                   ELSE /\ pc' = [pc EXCEPT !["discovery-worker"] = "Commit"]
+                        /\ UNCHANGED << frontier, visited, cursor, reads, 
+                                        pending, readFailed >>
              /\ UNCHANGED << alive, thread, source, epoch, moved, 
-                             serverRevision, revisionMoves, historyThread, 
-                             historyEpoch, metadata, metadataThread, 
+                             serverRevision, revisionMoves, historyEpoch, look, 
+                             created, mentioned, walkSettled, history, 
+                             everHistory, listedCreated, seenCreated, looked, 
+                             opened, checkoutPhase, checkoutURL, 
+                             checkoutFailed, metadata, metadataThread, 
                              metadataSource, metadataRevision, patch, 
                              patchSource, patchRevision, filesStarted, 
                              reloadStarted, readerCancelled, loading, 
@@ -453,165 +569,321 @@ Discovery == /\ DiscoveryCase
                              shellKnown, shellDeleted, shellOutputReady, 
                              shellCommitted >>
 
-Reader == /\ ReaderCase /\ alive
-          /\ \E i \in 1..2:
-               /\ requests[i].phase \notin {"idle", "done"}
-               /\ IF requests[i].phase = "metadata"
-                     THEN /\ IF ~requests[i].aborted \/ Fault = "ignore-abort"
-                                THEN /\ staleCommit' = (           staleCommit \/ requests[i].generation # epoch
-                                                        \/ requests[i].threadID # thread \/ requests[i].origin # source)
-                                     /\ cancelledCommit' = (cancelledCommit \/ requests[i].aborted)
-                                     /\ metadata' = TRUE
-                                     /\ patch' = FALSE
-                                     /\ metadataThread' = requests[i].threadID
-                                     /\ metadataSource' = requests[i].origin
-                                     /\ metadataRevision' = serverRevision
-                                     /\ loading' = FALSE
-                                ELSE /\ TRUE
-                                     /\ UNCHANGED << metadata, metadataThread, 
-                                                     metadataSource, 
-                                                     metadataRevision, patch, 
-                                                     loading, staleCommit, 
-                                                     cancelledCommit >>
-                          /\ requests' = [requests EXCEPT ![i].phase = "done"]
-                          /\ UNCHANGED << patchSource, patchRevision >>
-                     ELSE /\ IF requests[i].phase = "before"
-                                THEN /\ IF serverRevision # requests[i].revision
-                                           THEN /\ requests' = [requests EXCEPT ![i].phase = "done"]
-                                                /\ IF ~requests'[i].aborted
-                                                      THEN /\ loading' = FALSE
-                                                      ELSE /\ TRUE
+Classify == /\ pc["discovery-worker"] = "Classify"
+            /\ IF pending # {}
+                  THEN /\ \E c \in pending:
+                            /\ IF c.kind = "create"
+                                  THEN /\ created' = (created \cup {c.pr})
+                                       /\ UNCHANGED mentioned
+                                  ELSE /\ IF c.kind = "mention" \/ Fault = "listing-listed"
+                                             THEN /\ mentioned' = (mentioned \cup {c.pr})
+                                             ELSE /\ TRUE
+                                                  /\ UNCHANGED mentioned
+                                       /\ UNCHANGED created
+                            /\ pending' = pending \ {c}
+                       /\ pc' = [pc EXCEPT !["discovery-worker"] = "Classify"]
+                  ELSE /\ pc' = [pc EXCEPT !["discovery-worker"] = "ReadLevel"]
+                       /\ UNCHANGED << pending, created, mentioned >>
+            /\ UNCHANGED << alive, thread, source, epoch, moved, 
+                            serverRevision, revisionMoves, historyEpoch, look, 
+                            frontier, visited, cursor, reads, readFailed, 
+                            walkSettled, history, everHistory, listedCreated, 
+                            seenCreated, looked, opened, checkoutPhase, 
+                            checkoutURL, checkoutFailed, metadata, 
+                            metadataThread, metadataSource, metadataRevision, 
+                            patch, patchSource, patchRevision, filesStarted, 
+                            reloadStarted, readerCancelled, loading, 
+                            staleCommit, cancelledCommit, requests, shellPhase, 
+                            shellCancelled, shellCreated, shellKnown, 
+                            shellDeleted, shellOutputReady, shellCommitted >>
+
+Commit == /\ pc["discovery-worker"] = "Commit"
+          /\ IF ~readFailed /\ historyEpoch = epoch
+                THEN /\ history' = (created \cup mentioned)
+                     /\ everHistory' = (created \cup mentioned)
+                     /\ listedCreated' = created
+                     /\ walkSettled' = TRUE
+                ELSE /\ TRUE
+                     /\ UNCHANGED << walkSettled, history, everHistory, 
+                                     listedCreated >>
+          /\ pc' = [pc EXCEPT !["discovery-worker"] = "Watch"]
+          /\ UNCHANGED << alive, thread, source, epoch, moved, serverRevision, 
+                          revisionMoves, historyEpoch, look, frontier, visited, 
+                          cursor, reads, pending, readFailed, created, 
+                          mentioned, seenCreated, looked, opened, 
+                          checkoutPhase, checkoutURL, checkoutFailed, metadata, 
+                          metadataThread, metadataSource, metadataRevision, 
+                          patch, patchSource, patchRevision, filesStarted, 
+                          reloadStarted, readerCancelled, loading, staleCommit, 
+                          cancelledCommit, requests, shellPhase, 
+                          shellCancelled, shellCreated, shellKnown, 
+                          shellDeleted, shellOutputReady, shellCommitted >>
+
+Watch == /\ pc["discovery-worker"] = "Watch"
+         /\ IF ~readFailed /\ historyEpoch = epoch
+               THEN /\ IF looked /\ WatchInput \ seenCreated # {}
+                          THEN /\ \E url \in WatchInput \ seenCreated:
+                                    opened' = (opened \cup {url})
+                          ELSE /\ TRUE
+                               /\ UNCHANGED opened
+                    /\ seenCreated' = (seenCreated \cup WatchInput)
+                    /\ looked' = TRUE
+               ELSE /\ TRUE
+                    /\ UNCHANGED << seenCreated, looked, opened >>
+         /\ pc' = [pc EXCEPT !["discovery-worker"] = "Looks"]
+         /\ UNCHANGED << alive, thread, source, epoch, moved, serverRevision, 
+                         revisionMoves, historyEpoch, look, frontier, visited, 
+                         cursor, reads, pending, readFailed, created, 
+                         mentioned, walkSettled, history, everHistory, 
+                         listedCreated, checkoutPhase, checkoutURL, 
+                         checkoutFailed, metadata, metadataThread, 
+                         metadataSource, metadataRevision, patch, patchSource, 
+                         patchRevision, filesStarted, reloadStarted, 
+                         readerCancelled, loading, staleCommit, 
+                         cancelledCommit, requests, shellPhase, shellCancelled, 
+                         shellCreated, shellKnown, shellDeleted, 
+                         shellOutputReady, shellCommitted >>
+
+Discovery == DiscoveryStart \/ Looks \/ ReadLevel \/ Classify \/ Commit
+                \/ Watch
+
+CheckoutLookup == /\ pc["checkout-worker"] = "CheckoutLookup"
+                  /\ DiscoveryCase
+                  /\ \/ /\ checkoutPhase = "pending"
+                        /\ \/ /\ checkoutPhase' = "success"
+                           \/ /\ checkoutPhase' = "failure"
+                           \/ /\ checkoutPhase' = "none"
+                        /\ UNCHANGED <<history, checkoutURL, checkoutFailed>>
+                     \/ /\ checkoutPhase \in {"success", "failure", "none"}
+                        /\ IF historyEpoch = epoch
+                              THEN /\ IF checkoutPhase = "success"
+                                         THEN /\ checkoutURL' = {Checkout(HistoryThread)}
+                                              /\ UNCHANGED << history, 
+                                                              checkoutFailed >>
+                                         ELSE /\ IF checkoutPhase = "failure"
+                                                    THEN /\ checkoutFailed' = TRUE
+                                                         /\ IF Fault = "drop-history"
+                                                               THEN /\ history' = {}
+                                                               ELSE /\ TRUE
+                                                                    /\ UNCHANGED history
+                                                    ELSE /\ TRUE
+                                                         /\ UNCHANGED << history, 
+                                                                         checkoutFailed >>
+                                              /\ UNCHANGED checkoutURL
+                              ELSE /\ TRUE
+                                   /\ UNCHANGED << history, checkoutURL, 
+                                                   checkoutFailed >>
+                        /\ checkoutPhase' = "done"
+                  /\ pc' = [pc EXCEPT !["checkout-worker"] = "CheckoutLookup"]
+                  /\ UNCHANGED << alive, thread, source, epoch, moved, 
+                                  serverRevision, revisionMoves, historyEpoch, 
+                                  look, frontier, visited, cursor, reads, 
+                                  pending, readFailed, created, mentioned, 
+                                  walkSettled, everHistory, listedCreated, 
+                                  seenCreated, looked, opened, metadata, 
+                                  metadataThread, metadataSource, 
+                                  metadataRevision, patch, patchSource, 
+                                  patchRevision, filesStarted, reloadStarted, 
+                                  readerCancelled, loading, staleCommit, 
+                                  cancelledCommit, requests, shellPhase, 
+                                  shellCancelled, shellCreated, shellKnown, 
+                                  shellDeleted, shellOutputReady, 
+                                  shellCommitted >>
+
+CheckoutWorker == CheckoutLookup
+
+RequestCompletion == /\ pc["reader-worker"] = "RequestCompletion"
+                     /\ ReaderCase /\ alive
+                     /\ \E i \in 1..2:
+                          /\ requests[i].phase \notin {"idle", "done"}
+                          /\ IF requests[i].phase = "metadata"
+                                THEN /\ IF ~requests[i].aborted \/ Fault = "ignore-abort"
+                                           THEN /\ staleCommit' = (           staleCommit \/ requests[i].generation # epoch
+                                                                   \/ requests[i].threadID # thread \/ requests[i].origin # source)
+                                                /\ cancelledCommit' = (cancelledCommit \/ requests[i].aborted)
+                                                /\ metadata' = TRUE
+                                                /\ patch' = FALSE
+                                                /\ metadataThread' = requests[i].threadID
+                                                /\ metadataSource' = requests[i].origin
+                                                /\ metadataRevision' = serverRevision
+                                                /\ loading' = FALSE
+                                           ELSE /\ TRUE
+                                                /\ UNCHANGED << metadata, 
+                                                                metadataThread, 
+                                                                metadataSource, 
+                                                                metadataRevision, 
+                                                                patch, loading, 
+                                                                staleCommit, 
+                                                                cancelledCommit >>
+                                     /\ requests' = [requests EXCEPT ![i].phase = "done"]
+                                     /\ UNCHANGED << patchSource, 
+                                                     patchRevision >>
+                                ELSE /\ IF requests[i].phase = "before"
+                                           THEN /\ IF serverRevision # requests[i].revision
+                                                      THEN /\ requests' = [requests EXCEPT ![i].phase = "done"]
+                                                           /\ IF ~requests'[i].aborted
+                                                                 THEN /\ loading' = FALSE
+                                                                 ELSE /\ TRUE
+                                                                      /\ UNCHANGED loading
+                                                      ELSE /\ requests' = [requests EXCEPT ![i].phase = "files"]
                                                            /\ UNCHANGED loading
-                                           ELSE /\ requests' = [requests EXCEPT ![i].phase = "files"]
-                                                /\ UNCHANGED loading
-                                     /\ UNCHANGED << patch, patchSource, 
-                                                     patchRevision, 
-                                                     staleCommit, 
-                                                     cancelledCommit >>
-                                ELSE /\ IF requests[i].phase = "files"
-                                           THEN /\ requests' = [requests EXCEPT ![i].payload = serverRevision,
-                                                                                ![i].phase = "after"]
                                                 /\ UNCHANGED << patch, 
                                                                 patchSource, 
                                                                 patchRevision, 
-                                                                loading, 
                                                                 staleCommit, 
                                                                 cancelledCommit >>
-                                           ELSE /\ IF requests[i].phase = "after"
-                                                      THEN /\ IF Fault # "skip-post" /\ serverRevision # requests[i].revision
-                                                                 THEN /\ requests' = [requests EXCEPT ![i].phase = "done"]
-                                                                      /\ IF ~requests'[i].aborted
-                                                                            THEN /\ loading' = FALSE
-                                                                            ELSE /\ TRUE
-                                                                                 /\ UNCHANGED loading
-                                                                 ELSE /\ requests' = [requests EXCEPT ![i].phase = "commit"]
-                                                                      /\ UNCHANGED loading
+                                           ELSE /\ IF requests[i].phase = "files"
+                                                      THEN /\ requests' = [requests EXCEPT ![i].payload = serverRevision,
+                                                                                           ![i].phase = "after"]
                                                            /\ UNCHANGED << patch, 
                                                                            patchSource, 
                                                                            patchRevision, 
+                                                                           loading, 
                                                                            staleCommit, 
                                                                            cancelledCommit >>
-                                                      ELSE /\ IF ~requests[i].aborted \/ Fault = "ignore-abort"
-                                                                 THEN /\ staleCommit' = (           staleCommit \/ requests[i].generation # epoch
-                                                                                         \/ requests[i].threadID # thread \/ requests[i].origin # source)
-                                                                      /\ cancelledCommit' = (cancelledCommit \/ requests[i].aborted)
-                                                                      /\ patch' = TRUE
-                                                                      /\ patchSource' = requests[i].origin
-                                                                      /\ patchRevision' = requests[i].payload
-                                                                      /\ loading' = FALSE
-                                                                 ELSE /\ TRUE
+                                                      ELSE /\ IF requests[i].phase = "after"
+                                                                 THEN /\ IF Fault # "skip-post" /\ serverRevision # requests[i].revision
+                                                                            THEN /\ requests' = [requests EXCEPT ![i].phase = "done"]
+                                                                                 /\ IF ~requests'[i].aborted
+                                                                                       THEN /\ loading' = FALSE
+                                                                                       ELSE /\ TRUE
+                                                                                            /\ UNCHANGED loading
+                                                                            ELSE /\ requests' = [requests EXCEPT ![i].phase = "commit"]
+                                                                                 /\ UNCHANGED loading
                                                                       /\ UNCHANGED << patch, 
                                                                                       patchSource, 
                                                                                       patchRevision, 
-                                                                                      loading, 
                                                                                       staleCommit, 
                                                                                       cancelledCommit >>
-                                                           /\ requests' = [requests EXCEPT ![i].phase = "done"]
-                          /\ UNCHANGED << metadata, metadataThread, 
-                                          metadataSource, metadataRevision >>
-          /\ UNCHANGED << alive, thread, source, epoch, moved, serverRevision, 
-                          revisionMoves, historyPhase, historyThread, 
-                          historyEpoch, gathered, history, everHistory, owned, 
-                          checkoutPhase, checkoutURL, checkoutFailed, 
-                          filesStarted, reloadStarted, readerCancelled, 
-                          shellPhase, shellCancelled, shellCreated, shellKnown, 
-                          shellDeleted, shellOutputReady, shellCommitted >>
+                                                                 ELSE /\ IF ~requests[i].aborted \/ Fault = "ignore-abort"
+                                                                            THEN /\ staleCommit' = (           staleCommit \/ requests[i].generation # epoch
+                                                                                                    \/ requests[i].threadID # thread \/ requests[i].origin # source)
+                                                                                 /\ cancelledCommit' = (cancelledCommit \/ requests[i].aborted)
+                                                                                 /\ patch' = TRUE
+                                                                                 /\ patchSource' = requests[i].origin
+                                                                                 /\ patchRevision' = requests[i].payload
+                                                                                 /\ loading' = FALSE
+                                                                            ELSE /\ TRUE
+                                                                                 /\ UNCHANGED << patch, 
+                                                                                                 patchSource, 
+                                                                                                 patchRevision, 
+                                                                                                 loading, 
+                                                                                                 staleCommit, 
+                                                                                                 cancelledCommit >>
+                                                                      /\ requests' = [requests EXCEPT ![i].phase = "done"]
+                                     /\ UNCHANGED << metadata, metadataThread, 
+                                                     metadataSource, 
+                                                     metadataRevision >>
+                     /\ pc' = [pc EXCEPT !["reader-worker"] = "RequestCompletion"]
+                     /\ UNCHANGED << alive, thread, source, epoch, moved, 
+                                     serverRevision, revisionMoves, 
+                                     historyEpoch, look, frontier, visited, 
+                                     cursor, reads, pending, readFailed, 
+                                     created, mentioned, walkSettled, history, 
+                                     everHistory, listedCreated, seenCreated, 
+                                     looked, opened, checkoutPhase, 
+                                     checkoutURL, checkoutFailed, filesStarted, 
+                                     reloadStarted, readerCancelled, 
+                                     shellPhase, shellCancelled, shellCreated, 
+                                     shellKnown, shellDeleted, 
+                                     shellOutputReady, shellCommitted >>
 
-Shell == /\ ShellCase /\ alive /\ shellPhase # "done"
-         /\ IF shellPhase = "pending"
-               THEN /\ shellPhase' = IF shellCancelled THEN "done" ELSE "sent"
-                    /\ UNCHANGED << shellCreated, shellKnown, shellDeleted, 
-                                    shellOutputReady, shellCommitted >>
-               ELSE /\ IF shellPhase = "sent"
-                          THEN /\ shellCreated' = TRUE
-                               /\ shellPhase' = "allocated"
-                               /\ UNCHANGED << shellKnown, shellDeleted, 
-                                               shellOutputReady, 
-                                               shellCommitted >>
-                          ELSE /\ IF shellPhase = "allocated"
-                                     THEN /\ IF Fault = "abort-create" /\ shellCancelled
-                                                THEN /\ shellPhase' = "done"
-                                                     /\ UNCHANGED shellKnown
-                                                ELSE /\ shellKnown' = TRUE
-                                                     /\ shellPhase' = "known"
-                                          /\ UNCHANGED << shellDeleted, 
-                                                          shellOutputReady, 
-                                                          shellCommitted >>
-                                     ELSE /\ IF shellPhase = "known"
-                                                THEN /\ shellPhase' = IF shellCancelled THEN "finally" ELSE "poll"
-                                                     /\ UNCHANGED << shellDeleted, 
-                                                                     shellOutputReady, 
-                                                                     shellCommitted >>
-                                                ELSE /\ IF shellPhase = "poll"
-                                                           THEN /\ IF shellCancelled
-                                                                      THEN /\ shellPhase' = "finally"
-                                                                      ELSE /\ \/ /\ shellPhase' = "output1"
-                                                                              \/ /\ shellPhase' = "finally"
-                                                                /\ UNCHANGED << shellDeleted, 
-                                                                                shellOutputReady, 
-                                                                                shellCommitted >>
-                                                           ELSE /\ IF shellPhase \in {"output1", "output2"}
-                                                                      THEN /\ IF shellCancelled
-                                                                                 THEN /\ shellPhase' = "finally"
-                                                                                      /\ UNCHANGED shellOutputReady
-                                                                                 ELSE /\ IF shellPhase = "output1"
-                                                                                            THEN /\ shellPhase' = "output2"
-                                                                                                 /\ UNCHANGED shellOutputReady
-                                                                                            ELSE /\ shellOutputReady' = TRUE
-                                                                                                 /\ shellPhase' = "finally"
-                                                                           /\ UNCHANGED << shellDeleted, 
-                                                                                           shellCommitted >>
-                                                                      ELSE /\ IF shellPhase = "finally"
-                                                                                 THEN /\ shellPhase' = (IF Fault = "skip-delete" THEN "done" ELSE "deleting")
-                                                                                      /\ UNCHANGED << shellDeleted, 
-                                                                                                      shellCommitted >>
-                                                                                 ELSE /\ shellDeleted' = (Case # "delete-failure")
-                                                                                      /\ shellCommitted' = (shellOutputReady /\ ~shellCancelled /\ shellDeleted')
-                                                                                      /\ shellPhase' = "done"
-                                                                           /\ UNCHANGED shellOutputReady
-                                          /\ UNCHANGED shellKnown
-                               /\ UNCHANGED shellCreated
-         /\ UNCHANGED << alive, thread, source, epoch, moved, serverRevision, 
-                         revisionMoves, historyPhase, historyThread, 
-                         historyEpoch, gathered, history, everHistory, owned, 
-                         checkoutPhase, checkoutURL, checkoutFailed, metadata, 
-                         metadataThread, metadataSource, metadataRevision, 
-                         patch, patchSource, patchRevision, filesStarted, 
-                         reloadStarted, readerCancelled, loading, staleCommit, 
-                         cancelledCommit, requests, shellCancelled >>
+Reader == RequestCompletion
 
-Next == World \/ Discovery \/ Reader \/ Shell
+ShellAwaitBoundary == /\ pc["shell-worker"] = "ShellAwaitBoundary"
+                      /\ ShellCase /\ alive /\ shellPhase # "done"
+                      /\ IF shellPhase = "pending"
+                            THEN /\ shellPhase' = IF shellCancelled THEN "done" ELSE "sent"
+                                 /\ UNCHANGED << shellCreated, shellKnown, 
+                                                 shellDeleted, 
+                                                 shellOutputReady, 
+                                                 shellCommitted >>
+                            ELSE /\ IF shellPhase = "sent"
+                                       THEN /\ shellCreated' = TRUE
+                                            /\ shellPhase' = "allocated"
+                                            /\ UNCHANGED << shellKnown, 
+                                                            shellDeleted, 
+                                                            shellOutputReady, 
+                                                            shellCommitted >>
+                                       ELSE /\ IF shellPhase = "allocated"
+                                                  THEN /\ IF Fault = "abort-create" /\ shellCancelled
+                                                             THEN /\ shellPhase' = "done"
+                                                                  /\ UNCHANGED shellKnown
+                                                             ELSE /\ shellKnown' = TRUE
+                                                                  /\ shellPhase' = "known"
+                                                       /\ UNCHANGED << shellDeleted, 
+                                                                       shellOutputReady, 
+                                                                       shellCommitted >>
+                                                  ELSE /\ IF shellPhase = "known"
+                                                             THEN /\ shellPhase' = IF shellCancelled THEN "finally" ELSE "poll"
+                                                                  /\ UNCHANGED << shellDeleted, 
+                                                                                  shellOutputReady, 
+                                                                                  shellCommitted >>
+                                                             ELSE /\ IF shellPhase = "poll"
+                                                                        THEN /\ IF shellCancelled
+                                                                                   THEN /\ shellPhase' = "finally"
+                                                                                   ELSE /\ \/ /\ shellPhase' = "output1"
+                                                                                           \/ /\ shellPhase' = "finally"
+                                                                             /\ UNCHANGED << shellDeleted, 
+                                                                                             shellOutputReady, 
+                                                                                             shellCommitted >>
+                                                                        ELSE /\ IF shellPhase \in {"output1", "output2"}
+                                                                                   THEN /\ IF shellCancelled
+                                                                                              THEN /\ shellPhase' = "finally"
+                                                                                                   /\ UNCHANGED shellOutputReady
+                                                                                              ELSE /\ IF shellPhase = "output1"
+                                                                                                         THEN /\ shellPhase' = "output2"
+                                                                                                              /\ UNCHANGED shellOutputReady
+                                                                                                         ELSE /\ shellOutputReady' = TRUE
+                                                                                                              /\ shellPhase' = "finally"
+                                                                                        /\ UNCHANGED << shellDeleted, 
+                                                                                                        shellCommitted >>
+                                                                                   ELSE /\ IF shellPhase = "finally"
+                                                                                              THEN /\ shellPhase' = (IF Fault = "skip-delete" THEN "done" ELSE "deleting")
+                                                                                                   /\ UNCHANGED << shellDeleted, 
+                                                                                                                   shellCommitted >>
+                                                                                              ELSE /\ shellDeleted' = (Case # "delete-failure")
+                                                                                                   /\ shellCommitted' = (shellOutputReady /\ ~shellCancelled /\ shellDeleted')
+                                                                                                   /\ shellPhase' = "done"
+                                                                                        /\ UNCHANGED shellOutputReady
+                                                       /\ UNCHANGED shellKnown
+                                            /\ UNCHANGED shellCreated
+                      /\ pc' = [pc EXCEPT !["shell-worker"] = "ShellAwaitBoundary"]
+                      /\ UNCHANGED << alive, thread, source, epoch, moved, 
+                                      serverRevision, revisionMoves, 
+                                      historyEpoch, look, frontier, visited, 
+                                      cursor, reads, pending, readFailed, 
+                                      created, mentioned, walkSettled, history, 
+                                      everHistory, listedCreated, seenCreated, 
+                                      looked, opened, checkoutPhase, 
+                                      checkoutURL, checkoutFailed, metadata, 
+                                      metadataThread, metadataSource, 
+                                      metadataRevision, patch, patchSource, 
+                                      patchRevision, filesStarted, 
+                                      reloadStarted, readerCancelled, loading, 
+                                      staleCommit, cancelledCommit, requests, 
+                                      shellCancelled >>
+
+Shell == ShellAwaitBoundary
+
+Next == World \/ Discovery \/ CheckoutWorker \/ Reader \/ Shell
 
 Spec == /\ Init /\ [][Next]_vars
         /\ WF_vars(Discovery)
+        /\ WF_vars(CheckoutWorker)
         /\ WF_vars(Reader)
         /\ WF_vars(Shell)
 
 \* END TRANSLATION
 
 VisiblePRs == history \cup checkoutURL
-OnlyProvenCreateOwned == owned \subseteq {Created(thread)}
-NoWrongThreadDiscovery == history \subseteq {Created(thread)}
+OpenedOnlyCreated == opened \subseteq CreatedEvidence
+ListedOnlyAccepted == history \subseteq AcceptedEvidence(2)
+ChildEvidenceListed == walkSettled /\ historyEpoch = epoch =>
+    AcceptedEvidence(look) \subseteq history
+EachSessionReadOnce == \A s \in Sessions : reads[s] <= Pages(s)
+NeverOpened == opened = {}
+NoWrongThreadDiscovery == (\A url \in history : url[1] = thread)
     /\ checkoutURL \subseteq {Checkout(thread)}
 HistorySurvivesCheckoutFailure == everHistory \subseteq VisiblePRs
 NoStaleCommit == ~staleCommit
@@ -627,6 +899,6 @@ ShellCancellationSettles == shellCancelled ~> (shellPhase = "done")
 NoCancelledShellCommit == shellCancelled => ~shellCommitted
 ReaderSettles == (\E i \in 1..2 : requests[i].phase \notin {"idle", "done"})
     ~> (\A i \in 1..2 : requests[i].phase \in {"idle", "done"})
-DiscoverySettles == <> (historyPhase = "done" /\ checkoutPhase = "done")
+DiscoverySettles == <> (pc["discovery-worker"] = "Done" /\ checkoutPhase = "done")
 NeverCancelled == ~shellCancelled
 =============================================================================
