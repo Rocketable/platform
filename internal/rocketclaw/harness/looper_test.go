@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1048,6 +1049,141 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	}
 
 	require.Equal(t, "work/model-b", saved[0].AttributionAt(5).Model)
+}
+
+func TestLooperKeepsChatGPTOverflowCompaction(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		kinds []string
+	)
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		body := string(data)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		switch {
+		case strings.Contains(body, "compaction_trigger"):
+			kinds = append(kinds, "compact")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"id\":\"cmp\",\"encrypted_content\":\"sealed\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"cmp_resp\",\"status\":\"completed\",\"output\":[]}}\n\n")
+		case strings.Contains(body, "HUGE_HISTORY"):
+			kinds = append(kinds, "overflow")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"too long\"}}}\n\n")
+		default:
+			kinds = append(kinds, "reply")
+			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_%d\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\",\"annotations\":[]}]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_%d\",\"status\":\"completed\",\"output\":[]}}\n\n", len(kinds), len(kinds))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	defaultTransport := http.DefaultTransport
+	http.DefaultTransport = server.Client().Transport
+
+	t.Cleanup(func() { http.DefaultTransport = defaultTransport })
+
+	workspace := t.TempDir()
+	require.NoError(t, oai.SaveTokenIn(workspace, ".rocketclaw", "openai", oai.Token{Access: "access", Refresh: "refresh", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+	client, err := oai.NewChatGPTClientIn(workspace, ".rocketclaw", "openai", slog.New(slog.DiscardHandler), option.WithBaseURL(server.URL))
+	require.NoError(t, err)
+
+	loop := testLooper(mockResponses())
+	loop.DisplayModel = "openai/gpt-6.1-sol"
+	loop.Client = responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
+
+	prior, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputMessage("user", "HUGE_HISTORY", "")})
+	require.NoError(t, err)
+
+	input := make(chan PromptInput, 2)
+	input <- testPromptInput(PromptInputRoleUser, "question one", make(chan ChatResponse, 16))
+
+	input <- testPromptInput(PromptInputRoleUser, "question two", make(chan ChatResponse, 16))
+
+	close(input)
+
+	err = loop.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: prior}}), &mockSessionWriter{AppendFunc: func(context.Context, *SessionEntry) error { return nil }}, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"overflow", "compact", "reply", "reply"}, kinds, "the second turn sends the compaction, not the history it replaced")
+}
+
+func TestLooperCompactsChatGPTHistoryInChunksWhenWholeCompactionOverflows(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		kinds   []string
+		replies []string
+	)
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		body := string(data)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		tooLong := strings.Count(body, "OLD_") == 10
+		compaction := strings.Contains(body, "compaction_trigger")
+
+		switch {
+		case r.URL.Path != "/responses":
+			kinds = append(kinds, r.URL.Path)
+
+			w.WriteHeader(http.StatusNotFound)
+		case tooLong:
+			kinds = append(kinds, fmt.Sprintf("overflow compaction=%t", compaction))
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"too long\"}}}\n\n")
+		case compaction:
+			kinds = append(kinds, "compact")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"id\":\"cmp\",\"encrypted_content\":\"sealed\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"cmp_resp\",\"status\":\"completed\",\"output\":[]}}\n\n")
+		default:
+			kinds = append(kinds, "reply")
+			replies = append(replies, body)
+			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_%d\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\",\"annotations\":[]}]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_%d\",\"status\":\"completed\",\"output\":[]}}\n\n", len(kinds), len(kinds))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	defaultTransport := http.DefaultTransport
+	http.DefaultTransport = server.Client().Transport
+
+	t.Cleanup(func() { http.DefaultTransport = defaultTransport })
+
+	workspace := t.TempDir()
+	require.NoError(t, oai.SaveTokenIn(workspace, ".rocketclaw", "openai", oai.Token{Access: "access", Refresh: "refresh", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+	client, err := oai.NewChatGPTClientIn(workspace, ".rocketclaw", "openai", slog.New(slog.DiscardHandler), option.WithBaseURL(server.URL))
+	require.NoError(t, err)
+
+	loop := testLooper(mockResponses())
+	loop.DisplayModel = "openai/gpt-6.1-sol"
+	loop.Client = responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
+
+	history := make([]responses.ResponseInputItemUnionParam, 10)
+	for i := range history {
+		history[i] = testInputMessage("user", fmt.Sprintf("OLD_%d", i), "")
+	}
+
+	prior, err := ReplayInputFromParams(history)
+	require.NoError(t, err)
+
+	input := make(chan PromptInput, 2)
+	input <- testPromptInput(PromptInputRoleUser, "question one", make(chan ChatResponse, 16))
+
+	input <- testPromptInput(PromptInputRoleUser, "question two", make(chan ChatResponse, 16))
+
+	close(input)
+
+	err = loop.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: prior}}), &mockSessionWriter{AppendFunc: func(context.Context, *SessionEntry) error { return nil }}, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"overflow compaction=false", "overflow compaction=true", "compact", "reply", "reply"}, kinds, "the harness compacts the oldest history after the whole-history compaction overflows")
+	require.Contains(t, replies[1], "sealed")
+	require.Contains(t, replies[1], "OLD_9")
+	require.NotContains(t, replies[1], "OLD_0", "the second turn sends the compaction, not the history it replaced")
 }
 
 func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {

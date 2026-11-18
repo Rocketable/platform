@@ -456,7 +456,8 @@ type transport struct {
 }
 
 type codexStreamError struct {
-	Code, Message string
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 func (e *codexStreamError) Error() string {
@@ -482,6 +483,28 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	codexPath := strings.TrimRight(cloned.URL.Path, "/")
 
 	codexResponse := strings.HasSuffix(codexPath, "/responses")
+
+	if strings.HasSuffix(codexPath, "/responses/compact") {
+		cloned.URL.Path = strings.TrimSuffix(codexPath, "/compact")
+		if _, err := cleanCodexRequest(cloned); err != nil {
+			return nil, err
+		}
+
+		item, ok, err := t.codexCompactItem(req.Context(), cloned)
+		if err != nil {
+			return nil, err
+		}
+
+		if !ok {
+			return codexJSONResponse(req, http.StatusBadRequest, struct {
+				Error *codexStreamError `json:"error"`
+			}{&codexStreamError{Message: "Codex compaction returned no compaction item"}}), nil
+		}
+
+		return codexJSONResponse(req, http.StatusOK, struct {
+			Output []json.RawMessage `json:"output"`
+		}{[]json.RawMessage{item}}), nil
+	}
 
 	var threshold *float64
 
@@ -559,6 +582,10 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 					return resp, nil
 				}
+
+				return codexJSONResponse(req, http.StatusBadRequest, struct {
+					Error *codexStreamError `json:"error"`
+				}{streamErr}), nil
 			}
 
 			return nil, fmt.Errorf("adapt Codex stream response: %w", errStream)
@@ -571,6 +598,12 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	return resp, nil
+}
+
+func codexJSONResponse(req *http.Request, status int, body any) *http.Response {
+	data, _ := json.Marshal(body)
+
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(data)), ContentLength: int64(len(data)), Request: req}
 }
 
 func (t *transport) roundTrip(req *http.Request, reason string) (*http.Response, error) {
@@ -883,14 +916,28 @@ func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp
 		return resp, nil
 	}
 
-	body["output"], _ = json.Marshal(append([]json.RawMessage{data}, output...))
+	prependCodexOutput(resp, data)
+
+	return resp, nil
+}
+
+func prependCodexOutput(resp *http.Response, item json.RawMessage) {
+	data, _ := io.ReadAll(resp.Body)
+
+	var body map[string]json.RawMessage
+
+	_ = json.Unmarshal(data, &body)
+
+	var output []json.RawMessage
+
+	_ = json.Unmarshal(body["output"], &output)
+
+	body["output"], _ = json.Marshal(append([]json.RawMessage{item}, output...))
 
 	data, _ = json.Marshal(body)
 
 	resp.Body = io.NopCloser(bytes.NewReader(data))
 	resp.ContentLength = int64(len(data))
-
-	return resp, nil
 }
 
 func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Request, threshold *float64) (*http.Response, bool, error) {
@@ -929,8 +976,13 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 	}
 
 	resp, err = codexStreamingResponse(ctx, resp)
+	if err != nil {
+		return nil, true, err
+	}
 
-	return resp, true, err
+	prependCodexOutput(resp, compactItem)
+
+	return resp, true, nil
 }
 
 func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (item json.RawMessage, ok bool, err error) {

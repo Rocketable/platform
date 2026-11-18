@@ -80,6 +80,8 @@ The ChatGPT Codex backend is not the public OpenAI API. It has no published cont
 
 The removed SDK pass-through was unreachable in ChatGPT mode. The looper calls `Client.Compact` only when `isContextLengthExceeded` sees an `*openai.Error` or a failed response with code `context_length_exceeded` (`internal/rocketclaw/harness/looper.go:1477`). ChatGPT Codex reports context overflow inside the stream, as observed here and as Codex itself expects; the transport turns it into a `codexStreamError` and recovers itself (`oauth.go:548-556`).
 
+That recovery compacts the whole input in one request, which can overflow too. Since 2026-11-17 the transport then returns an HTTP 400 with OpenAI's `context_length_exceeded` error body, so the looper's chunked fallback runs and calls `Client.Compact`. The transport answers that `/responses/compact` call itself with the `compaction_trigger` request above and returns the compaction item as the compacted output; nothing is sent to the retired route. `docs/verification/codex-context-overflow-compaction/` models both recoveries.
+
 ## Prevention
 
 - **Keep the two compaction contracts separate.** Providers whose `auth` is not `chatgpt` get a plain SDK client (`internal/rocketclaw/backend/model_resolver.go:90`). Their server honors `context_management` (`looper.go:1716-1719`) and still serves `/responses/compact` for the looper's overflow recovery; an OpenAI-compatible API-key provider returned 200 for both during this investigation, with the compacted context intact. Do not move API-key providers to `compaction_trigger`, and do not drop the harness's `/compact` handling because the oai comment says the route is gone. That comment is about the ChatGPT backend only.
