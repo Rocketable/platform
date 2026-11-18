@@ -201,6 +201,47 @@ function start() {
   return { web, calls, release, terminals, creates, entryFailures, typing, base: `http://127.0.0.1:${web.port}` };
 }
 
+test("remote diagrams and HTML find keep their content inside the view", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const { web, release, base } = start();
+  release();
+  fake.extraText = '[HTML preview](./preview.html)\n\n**Formatted text**\n\n```mermaid\nflowchart LR\nA["<b>Start</b>"] --> B[Finish]\nclick A "javascript:void(0)"\nclick B href "https://example.test/" _blank\n```';
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.goto(`${base}${route("opencode:box:ses_a")}`);
+    const view = page.locator("main [data-oc-view]");
+    await view.locator("strong").getByText("Formatted text").waitFor();
+    const diagram = view.locator('[data-component="markdown-mermaid"] svg');
+    await diagram.getByText("Finish", { exact: true }).waitFor();
+    await diagram.getByText("Start", { exact: true }).waitFor();
+    expect(await diagram.locator("script, image, img, foreignObject, [onerror], [onclick]").count()).toBe(0);
+    expect(await diagram.locator("a[href]").count()).toBe(1);
+    expect(await diagram.locator("a[href]").getAttribute("href")).toBe("https://example.test/");
+    expect(await diagram.locator("a[href]").getAttribute("target")).toBe("_blank");
+    expect(await diagram.locator("a[href]").getAttribute("rel")).toBe("noopener noreferrer");
+    expect(await diagram.getAttribute("role")).toBe("graphics-document document");
+
+    await view.getByText("HTML preview", { exact: true }).click();
+    const iframe = view.locator('iframe[title="preview.html"]');
+    await iframe.contentFrame().getByText("needle needle").waitFor();
+    expect(await iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(await iframe.evaluate((node: HTMLIFrameElement) => node.contentDocument === null)).toBe(true);
+    const outside = page.locator("#bottom-navigation button").first();
+    expect(await outside.evaluate((node: HTMLElement) =>
+      node.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true })),
+    )).toBe(true);
+    await iframe.contentFrame().getByText("needle needle").click();
+    await page.keyboard.press("ControlOrMeta+f");
+    const find = page.locator("[data-oc-portal]").getByPlaceholder("Find", { exact: true });
+    await find.fill("needle");
+    await page.locator("[data-oc-portal]").getByText("1/2", { exact: true }).waitFor();
+  } finally {
+    await browser.close();
+    web.stop(true);
+  }
+}, 20_000);
+
 async function until(check: () => boolean | Promise<boolean>) {
   for (let tries = 0; tries < 250; tries++) {
     if (await check()) return;

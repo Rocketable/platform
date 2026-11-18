@@ -1,4 +1,6 @@
-import { createMemo, createSignal, Match, on, onCleanup, Switch, untrack } from "solid-js"
+// rocketclaw: file find keys belong only to the mounted view (upstream packages/gui-plugins/src/file/view.tsx)
+import { inView, ViewContext } from "@rocketclaw/host/fences"
+import { createMemo, createSignal, Match, on, onCleanup, Switch, untrack, useContext } from "solid-js"
 import { Dynamic } from "solid-js/web"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import type { FileSearchHandle } from "@opencode/session-ui/file"
@@ -411,13 +413,15 @@ export function SessionFileView(props: { session: MountedSession; screen: Sessio
   })
 
   const previewFind = createPreviewFind({ root: () => state.root, active })
+  const view = useContext(ViewContext)
 
   // Mod+F finds in the shown file, or in its preview.
   makeEventListener(
     window,
     "keydown",
     (event: KeyboardEvent) => {
-      if (!active()) return
+      // rocketclaw: see the import (upstream packages/gui-plugins/src/file/view.tsx)
+      if (!active() || !inView(view, event.target)) return
 
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
 
