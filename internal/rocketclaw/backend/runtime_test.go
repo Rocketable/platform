@@ -857,7 +857,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"q1", "q2"}, []string{items[0].ID, items[1].ID})
 
-	require.NoError(t, rt.ReorderQueueItems(conversationID, []string{"q2", "q1", "missing"}))
+	require.NoError(t, rt.ReorderQueueItems(t.Context(), conversationID, []string{"q2", "q1", "missing"}))
 	items, err = rt.QueueItems(conversationID)
 	require.NoError(t, err)
 	require.Equal(t, []string{"q2", "q1"}, []string{items[0].ID, items[1].ID})
@@ -972,6 +972,45 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 		_, claimed, err := (stateDAO{db: store.db}).claimThreadQueueItem(t.Context(), conversationID, "race")
 		require.NoError(t, err)
 		require.False(t, claimed)
+	}
+}
+
+func TestRuntimeReorderQueueItemsIsAtomic(t *testing.T) {
+	t.Parallel()
+
+	for name, test := range map[string]struct {
+		ids  []string
+		want []string
+		fail bool
+	}{
+		"unlisted item keeps its place": {ids: []string{"q3", "q1"}, want: []string{"q3", "q2", "q1"}},
+		"failure changes nothing":       {ids: []string{"q3", "q2", "q1", "bad\x00"}, want: []string{"q1", "q2", "q3"}, fail: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newTestSessionService(t)
+			conversationID := protocol.SlackThreadConversationID("C123", "111.0")
+			require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+
+			for i, id := range []string{"q1", "q2", "q3"} {
+				require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Message: id, Source: protocol.SourceWeb, Position: i, StashAt: time.Unix(int64(i+1), 0).UTC()}))
+			}
+
+			err := (&Runtime{Sessions: store}).ReorderQueueItems(t.Context(), conversationID, test.ids)
+			require.Equal(t, test.fail, err != nil, err)
+
+			items, err := store.ThreadQueueForConversation(conversationID)
+			require.NoError(t, err)
+
+			ids, positions := make([]string, 0, len(items)), make([]int, 0, len(items))
+			for _, item := range items {
+				ids, positions = append(ids, item.ID), append(positions, item.Position)
+			}
+
+			require.Equal(t, test.want, ids)
+			require.Equal(t, []int{0, 1, 2}, positions)
+		})
 	}
 }
 

@@ -12,7 +12,10 @@ steers. Direct steers retain the client's `Prompt.message_id` as durable `input_
 pure-Web queued/stashed messages retain the supplied stable message ID (or a
 server-generated ID when omitted). History uses those IDs to move
 waiting inputs into chat in consumption order without matching text. Dropped items
-never run. Reorder writes persisted enqueue positions. Join sends only committed,
+never run. `ReorderQueue` saves the listed order in one transaction, with the
+request's context: listed items take the places listed items already hold, unlisted
+or hidden items keep theirs, unknown IDs are ignored, and a failure changes nothing.
+Join sends only committed,
 content-free conversation-change hints; it does not replay history or return output
 through Prompt's private response field. History accepts the last applied `revision`
 and returns changed entries, removed keys, the complete ordered key inventory, and
