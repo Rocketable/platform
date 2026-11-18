@@ -160,6 +160,11 @@ func (m *Manager) Stop(ctx context.Context) error {
 }
 
 func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, error) {
+	var (
+		job protocol.OneOffCronjob
+		err error
+	)
+
 	if strings.Contains(target, " · ") {
 		definitions, err := loadDefinitionsIn(m.cfg, m.runtimeDir)
 		if err != nil {
@@ -171,14 +176,8 @@ func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, erro
 			return protocol.OneOffCronjob{}, fmt.Errorf("load one-off cronjob: no routine %q", target)
 		}
 
-		job := definitions[i].job
-		job.Prompt = m.preparePrompt(job.Prompt)
-
-		return job, nil
-	}
-
-	job, err := config.LoadOneOffCronjob(m.workspace, m.runtimeDir, target)
-	if err != nil {
+		job = definitions[i].job
+	} else if job, err = config.LoadOneOffCronjob(m.workspace, m.runtimeDir, target); err != nil {
 		return protocol.OneOffCronjob{}, fmt.Errorf("load one-off cronjob: %w", err)
 	}
 
