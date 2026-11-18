@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/require"
 )
@@ -80,6 +84,36 @@ func TestScheduledCronOnlyRunsTurn(t *testing.T) {
 	require.ErrorIs(t, err, errRun)
 	require.Empty(t, result.ConversationID)
 	require.Equal(t, []string{"create:X", "run"}, operations)
+}
+
+func TestCronCompletionLogNamesWhetherTheRunReported(t *testing.T) {
+	store := webSessions(t)
+
+	for _, tc := range []struct {
+		destination, reply, outcome string
+		attachments                 []protocol.OutboundAttachment
+	}{
+		{reply: "report", outcome: "reported"},
+		{attachments: []protocol.OutboundAttachment{{Name: "chart.png"}}, outcome: "reported"},
+		{reply: " \n", outcome: "intentional_silence"},
+		{destination: "web-chat", reply: "report", outcome: "reported"},
+		{destination: "web-chat", outcome: "intentional_silence"},
+	} {
+		var logs bytes.Buffer
+
+		core := &BackendMock{
+			CreateConversationFunc: func(context.Context, protocol.Conversation) error { return nil },
+			RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
+				inbound.CompleteResponseWithAttachments(tc.reply, tc.attachments, nil)
+				return nil
+			},
+		}
+		cronjobs := cronfrontend.New(config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), ".", store, &cronRunner{backend: core}, slog.New(slog.NewJSONHandler(&logs, nil)))
+
+		_, err := cronjobs.RunOneOffCronjob(t.Context(), &protocol.OneOffCronjob{Agent: "job", Prompt: "prompt", RelativePath: "cron/daily.md", ConversationID: tc.destination})
+		require.NoError(t, err)
+		require.Contains(t, logs.String(), `"outcome":"`+tc.outcome+`"`, tc)
+	}
 }
 
 func TestCronRunStopsWhenDestinationFails(t *testing.T) {
