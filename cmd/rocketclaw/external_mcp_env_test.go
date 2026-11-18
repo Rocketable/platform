@@ -37,6 +37,10 @@ type externalMCPStarted struct {
 
 func (externalMCPAssembler) ValidateAssets(*config.Config, string) error { return nil }
 
+func (externalMCPAssembler) Gate(context.Context, *config.Config, *slog.Logger) (func() error, error) {
+	return func() error { return nil }, nil
+}
+
 func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 	events := rt.Subscribe(rt.RunCtx)
 	go func() {

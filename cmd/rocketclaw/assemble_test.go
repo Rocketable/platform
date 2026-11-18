@@ -45,7 +45,7 @@ func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 		RunCtx: ctx,
 	}
 	rt.ExternalMCPAgents = &mcpAgentIndex{cfg: rt.Cfg}
-	_, _, err := processAssembler{}.Assemble(rt)
+	_, _, err := (&processAssembler{}).Assemble(rt)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "start Slack connector")
 }
@@ -69,10 +69,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "agents"), 0o755))
 			require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\n---\n"), 0o600))
 
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", home)
-			t.Setenv("TS_CONTROL_URL", "http://127.0.0.1:1")
+			usePassingTailnet(t)
 
 			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 			require.NoError(t, err)
@@ -84,13 +81,15 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 				DatabaseURL: dsn,
 				Slack:       slack,
 				MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0", Users: map[string]string{"alice": "secret"}},
-				Web:         config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}},
+				Web:         config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test", AuthKey: "tskey-auth-test"}},
 			}
+			assembler := &processAssembler{}
 			require.NoError(t, backend.Run(t.Context(), cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), &FrontendAssemblerMock{
-				ValidateAssetsFunc: processAssembler{}.ValidateAssets,
+				GateFunc:           assembler.Gate,
+				ValidateAssetsFunc: assembler.ValidateAssets,
 				AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 					rt.RunCtx = ctx
-					done, stops, err := processAssembler{}.Assemble(rt)
+					done, stops, err := assembler.Assemble(rt)
 					require.NoError(t, err)
 					require.NotNil(t, done)
 					require.Len(t, stops, 4, "Slack, Cron, external MCP, and Web must all start")

@@ -46,7 +46,7 @@ func TestRunTurnSpanPreservesMaskingAndFailure(t *testing.T) {
 			}
 
 			questions := &webQuestions{store: nt.service, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}
-			bridge := NewConversation(config.NewLockedConfig(nt.cfg), finalsPublisher{finals: nt.finals}, &Config{ConversationID: nt.conversationID, Agent: "main", SessionService: nt.service, RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, UserQuestionAsker: questions}, slog.New(slog.DiscardHandler))
+			bridge := NewConversation(config.NewLockedConfig(nt.cfg), finalsPublisher{finals: nt.finals}, &Config{ConversationID: nt.conversationID, Agent: "main", SessionService: nt.service, RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, UserQuestionAsker: questions}, slog.New(slog.DiscardHandler))
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "private input", false)
 			inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}

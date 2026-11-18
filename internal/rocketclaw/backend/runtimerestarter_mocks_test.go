@@ -18,8 +18,8 @@ var _ runtimeRestarter = &runtimeRestarterMock{}
 //
 //		// make and configure a mocked runtimeRestarter
 //		mockedruntimeRestarter := &runtimeRestarterMock{
-//			restartFunc: func(s string) string {
-//				panic("mock out the restart method")
+//			RestartFunc: func(s string) string {
+//				panic("mock out the Restart method")
 //			},
 //		}
 //
@@ -28,48 +28,48 @@ var _ runtimeRestarter = &runtimeRestarterMock{}
 //
 //	}
 type runtimeRestarterMock struct {
-	// restartFunc mocks the restart method.
-	restartFunc func(s string) string
+	// RestartFunc mocks the Restart method.
+	RestartFunc func(s string) string
 
 	// calls tracks calls to the methods.
 	calls struct {
-		// restart holds details about calls to the restart method.
-		restart []struct {
+		// Restart holds details about calls to the Restart method.
+		Restart []struct {
 			// S is the s argument value.
 			S string
 		}
 	}
-	lockrestart sync.RWMutex
+	lockRestart sync.RWMutex
 }
 
-// restart calls restartFunc.
-func (mock *runtimeRestarterMock) restart(s string) string {
-	if mock.restartFunc == nil {
-		panic("runtimeRestarterMock.restartFunc: method is nil but runtimeRestarter.restart was just called")
+// Restart calls RestartFunc.
+func (mock *runtimeRestarterMock) Restart(s string) string {
+	if mock.RestartFunc == nil {
+		panic("runtimeRestarterMock.RestartFunc: method is nil but runtimeRestarter.Restart was just called")
 	}
 	callInfo := struct {
 		S string
 	}{
 		S: s,
 	}
-	mock.lockrestart.Lock()
-	mock.calls.restart = append(mock.calls.restart, callInfo)
-	mock.lockrestart.Unlock()
-	return mock.restartFunc(s)
+	mock.lockRestart.Lock()
+	mock.calls.Restart = append(mock.calls.Restart, callInfo)
+	mock.lockRestart.Unlock()
+	return mock.RestartFunc(s)
 }
 
-// restartCalls gets all the calls that were made to restart.
+// RestartCalls gets all the calls that were made to Restart.
 // Check the length with:
 //
-//	len(mockedruntimeRestarter.restartCalls())
-func (mock *runtimeRestarterMock) restartCalls() []struct {
+//	len(mockedruntimeRestarter.RestartCalls())
+func (mock *runtimeRestarterMock) RestartCalls() []struct {
 	S string
 } {
 	var calls []struct {
 		S string
 	}
-	mock.lockrestart.RLock()
-	calls = mock.calls.restart
-	mock.lockrestart.RUnlock()
+	mock.lockRestart.RLock()
+	calls = mock.calls.Restart
+	mock.lockRestart.RUnlock()
 	return calls
 }

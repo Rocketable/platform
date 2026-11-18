@@ -34,6 +34,8 @@ go run github.com/Rocketable/platform/cmd/rocketclaw@main
 
 Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or the older `femtoclaw.json`) from the current folder. That file holds setup and secrets: it points at the workspace and the database, holds the Slack, provider, and External MCP credentials, and turns on other integrations. Values can also come from AWS Secrets Manager. `rocketclaw run --aws-secrets-manager-arn ARN` merges that JSON secret over the file, and with it the file is optional: the secret alone can hold the whole configuration, and the workspace defaults to the current folder.
 
+`rocketclaw run` exits with code 0 after a shutdown signal, with 1 on an error, including a Web node that fails its startup check (see [Tailnet setup](#tailnet-setup)), and with 255 when it asks to be started again: after the `rocketclaw_restart` tool, or when the Web page stops serving while it runs. It does not start itself again.
+
 Behavior Settings live in PostgreSQL instead: `auto_approver_model`, `slack.channels`, `server_display_name`, `logging.level`, and `overlays`. The first start copies them from the file once every startup check passes. After that, RocketClaw ignores them in the file and logs a warning naming each one it ignored. The people named in the file's `web.admins` (their Tailscale logins, for example `"web": {"admins": ["alice@example.com"]}`) edit them on the Config page, one control per setting. A save is checked whole and applies to the running server at once, or is refused and changes nothing. Everyone else sees the page read-only.
 
 If the stored settings stop RocketClaw from starting (the error starts with `stored behavior settings:`), fix them in place with `psql` on the `database_url` database:
@@ -52,7 +54,7 @@ A workspace may contain `AGENTS.md` and `agents/`, `skills/`, `scripts/`, and `c
 
 ### Web page
 
-The web page is the main way to work with RocketClaw. It is built into RocketClaw, which joins your tailnet as its own Tailscale node (tsnet) and serves the page only there, over HTTPS on port 443 of the node's name, `https://<hostname>.<tailnet>.ts.net`. `web.tsnet` is required; see [Tailnet setup](#tailnet-setup). Over HTTPS, browsers carry every tab over one connection, so many open tabs never run out of connections. Links RocketClaw hands out use the node's HTTPS name; until the node serves, RocketClaw has no link to hand out. The browser tab reads `<name> - RocketClaw`, so several servers stay apart: `name` is `"server_display_name"` when set, else `web.tsnet.hostname`. A saved change shows on pages loaded after the save.
+The web page is the main way to work with RocketClaw. It is built into RocketClaw, which joins your tailnet as its own Tailscale node (tsnet) and serves the page only there, over HTTPS on port 443 of the node's name, `https://<hostname>.<tailnet>.ts.net`. `web.tsnet` is required; see [Tailnet setup](#tailnet-setup). Over HTTPS, browsers carry every tab over one connection, so many open tabs never run out of connections. Links RocketClaw hands out use the node's HTTPS name; until the node serves, RocketClaw has no link to hand out. RocketClaw does not start without the page: it brings the node up right after it takes its run lock, before anything else, and stops if the node cannot serve (see [Tailnet setup](#tailnet-setup)). If the page stops serving later, while RocketClaw runs, RocketClaw asks to be restarted: it stops its work as it does on shutdown and exits with code 255 (see [Getting started](#getting-started)), and its next start checks the node again. The browser tab reads `<name> - RocketClaw`, so several servers stay apart: `name` is `"server_display_name"` when set, else `web.tsnet.hostname`. A saved change shows on pages loaded after the save.
 
 RocketClaw identifies each browser by its Tailscale login, which the node looks up for each connection. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features.
 
@@ -87,14 +89,14 @@ Turn on MagicDNS and HTTPS certificates for the tailnet, then add `web.tsnet`:
 
 1. With RocketClaw stopped, run `rocketclaw ts login`. It prints a login link (and asks for device approval if your tailnet requires it), waits until the node is running, and exits. With `"auth_key": "tskey-auth-…"` under `web.tsnet`, it logs in with that key instead, and so does the server when the node is logged out. Prefer a single-use, pre-approved, tagged key; the key sits in the config file like other secrets.
 2. In the Tailscale admin console, confirm that the node appears in your own tailnet. The login link adds the node to whichever tailnet signs in with it.
-3. Start RocketClaw. It never prints a login link or waits for one: a logged-out node without a key only logs "Tailscale authentication unavailable", and RocketClaw runs without the web page until you log the node in and restart it.
+3. Start RocketClaw. It connects to the database and waits for its run lock, so that one RocketClaw at a time runs on a database. Right after it holds the lock, before migrating the database or starting anything else, it brings the node up, logging it in with `auth_key` when the node is logged out, and waits until the node runs, has an HTTPS name and listens on port 443. A node waiting for device approval is waited for, with a warning. If anything else stops it, RocketClaw releases the lock and exits with code 1 with an error that says what to fix: a node that needs a login (``run `rocketclaw ts login`, or set web.tsnet.auth_key to a valid key``), a tailnet without HTTPS names (`enable MagicDNS and HTTPS certificates in the Tailscale admin console`), or an error from the node itself. It never prints a login link.
 4. With Tailscale connected, open `https://<hostname>.<tailnet>.ts.net`.
 
 - Tag the node, for example `tag:rocketclaw` (the tailnet policy must list the tag under `tagOwners`). Add a tailnet rule that lets only named users reach it and lets it reach nothing. An untagged node acts as the Tailscale user who logged it in.
 - The node signs each browser in as its device's Tailscale user. It refuses tagged devices, and no request header can choose the user.
 - Node keys expire after 180 days unless the node is tagged or key expiry is disabled for it in the admin console. An expired node needs `rocketclaw ts login` again.
 - Turning on tailnet HTTPS publishes machine names, including this node's, in public certificate-transparency logs.
-- The node keeps its state outside the workspace, in `rocketclaw/tsnet-<hostname>` under the user config directory (`$XDG_CONFIG_HOME`, or `~/.config`). Tailscale's log upload is off.
+- The node keeps its state outside the workspace, in `rocketclaw/tsnet-<hostname>` under the user config directory (`$XDG_CONFIG_HOME`, or `~/.config`). The run lock keeps a second RocketClaw on the same database from starting its node, but nothing stops two RocketClaws on one machine with different databases and the same hostname from sharing this folder, and so the same node: give each its own hostname. Tailscale's log upload is off.
 - Never use `tailscale funnel`: it would put RocketClaw on the public internet.
 
 A browser on the RocketClaw machine uses the tsnet name too. Processes on a device signed in to Tailscale act as that device's user when they reach the node, so on an untagged machine signed in as the owner, local processes, including agent tools and MCP servers, can act as the owner. See the [transport README](internal/rocketclaw/frontend/rpc/README.md#identity-boundary) for the identity details.
@@ -545,7 +547,7 @@ Sign in per provider with `rocketclaw oai login [provider] [--headless]`. Use `r
 
 ## Data and storage
 
-- `database_url` sets the PostgreSQL database. Only one RocketClaw process uses a database at a time; others wait. RocketClaw upgrades the database schema at startup; a database last run by a version before v0.2.0 must be started with v0.2.0 first. Older RocketClaw versions refuse to start on an upgraded database, so you cannot roll back by swapping in an older binary.
+- `database_url` sets the PostgreSQL database. Only one RocketClaw process uses a database at a time; others wait, without changing the database. RocketClaw upgrades the database schema at startup, once it holds the database and its Web node is up; a database last run by a version before v0.2.0 must be started with v0.2.0 first. Older RocketClaw versions refuse to start on an upgraded database, so you cannot roll back by swapping in an older binary.
 - `attachments` sets where uploaded and generated files are kept. By default they go in `<workspace>/.rocketclaw/attachments`. You can pick another folder or an existing S3 bucket:
 
   ```json

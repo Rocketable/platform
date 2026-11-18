@@ -89,7 +89,7 @@ Reload rebuilds the live overlay clones. It is not interchangeable with Restart.
 
 ### Restart
 
-A process restart required when setup in the config file or AWS Secrets Manager changed. Behavior Settings, the overlay list included, apply on save and need no restart.
+A process restart required when setup in the config file or AWS Secrets Manager changed, or requested by RocketClaw itself when its Web page stops serving while it runs. The process exits with code 255 to be started again. Behavior Settings, the overlay list included, apply on save and need no restart.
 
 Restart is not a substitute for Reload when only overlay file contents changed.
 

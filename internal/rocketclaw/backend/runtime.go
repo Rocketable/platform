@@ -49,9 +49,18 @@ type Runtime struct {
 	threads    *threadBridgeManager
 	background *backgroundRegistry
 	questions  *webQuestions
+	shutdown   *runShutdown
 
 	eventsMu    sync.Mutex
 	subscribers map[chan protocol.Event]<-chan struct{}
+}
+
+func (r *Runtime) Restart(reason string) string {
+	if !r.shutdown.start(reason, true) {
+		r.Log.Warn("restart requested while shutdown already in progress", "reason", reason)
+	}
+
+	return "restart requested; runtime cancellation started"
 }
 
 func (r *Runtime) Reload(reason string) (string, error) {

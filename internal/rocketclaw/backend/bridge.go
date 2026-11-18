@@ -83,7 +83,7 @@ var errInboundAttachmentReductionFailed = errors.New("inbound attachment image r
 var errInboundAttachmentReductionNotEnough = errors.New("inbound attachment image still exceeds size limit after reduction")
 
 type runtimeRestarter interface {
-	restart(string) string
+	Restart(string) string
 }
 
 type Config struct {
@@ -2737,7 +2737,7 @@ func restartTool(requestRestart runtimeRestarter) harness.Tool {
 			return harness.ToolResult{}, err
 		}
 
-		return harness.TextToolResult(requestRestart.restart(reason)), nil
+		return harness.TextToolResult(requestRestart.Restart(reason)), nil
 	}}
 }
 

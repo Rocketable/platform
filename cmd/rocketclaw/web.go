@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs rpc.CronJobs) (func(context.Context) error, error) {
+func startWebRPC(rt *backend.Runtime, tailnet *tailnetNode, channels rpc.ChannelAgentChoices, cronjobs rpc.CronJobs) func(context.Context) error {
 	cfg := rt.Cfg.Clone()
 
 	listener := bufconn.Listen(1 << 20)
@@ -32,13 +32,7 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 
 	var serving errgroup.Group
 
-	closeTailnet, err := startTailnet(rt, cfg.Web.Tsnet, handler, &serving)
-	if err != nil {
-		_ = listener.Close()
-		_ = connection.Close()
-
-		return nil, fmt.Errorf("start Web Tailscale node: %w", err)
-	}
+	closeTailnet := serveTailnet(rt, tailnet, handler, &serving)
 
 	serving.Go(func() error {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
@@ -75,5 +69,5 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		}
 
 		return nil
-	}, nil
+	}
 }

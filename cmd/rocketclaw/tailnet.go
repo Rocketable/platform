@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,51 +21,45 @@ import (
 	"tailscale.com/tsnet"
 )
 
-func startTailnet(rt *backend.Runtime, tailnet *config.TsnetConfig, handler http.Handler, serving *errgroup.Group) (func() error, error) {
+func startTailnet(ctx context.Context, tailnet *config.TsnetConfig, log *slog.Logger) (*tailnetNode, error) {
 	node, err := newTailnetNode(tailnet)
 	if err != nil {
 		return nil, err
 	}
 
-	status, err := node.client.StatusWithoutPeers(context.Background())
-	if err != nil {
-		_ = node.server.Close()
-		return nil, fmt.Errorf("read Tailscale node status: %w", err)
+	if node.https, err = listenTailnet(ctx, node, tailnet.AuthKey, log); err != nil {
+		return nil, errors.Join(err, node.server.Close())
 	}
 
-	if status.BackendState == ipn.NeedsLogin.String() && tailnet.AuthKey == "" {
-		rt.Log.Warn(tailnetLoginNotice)
-		_ = node.server.Close()
+	return node, nil
+}
 
-		return func() error { return nil }, nil
+func serveTailnet(rt *backend.Runtime, node *tailnetNode, handler http.Handler, serving *errgroup.Group) func() error {
+	domains := node.server.CertDomains()
+	server := &http.Server{
+		Handler:   rpc.NewTailnetHandler(node.client, rt.Cfg.Clone().TrustedRocketClaws, handler),
+		TLSConfig: &tls.Config{GetCertificate: node.client.GetCertificate},
 	}
 
-	ctxUp, cancelUp := context.WithCancel(context.Background())
-	tailnetServer := &http.Server{Handler: handler, TLSConfig: &tls.Config{GetCertificate: node.client.GetCertificate}}
+	rt.Log.Info("started Web HTTPS on the tailnet", "domains", domains)
+
+	_ = rt.Cfg.Do(func(cfg *config.Config) error {
+		cfg.Web.Tsnet.Origin = "https://" + domains[0]
+		return nil
+	})
 
 	serving.Go(func() error {
-		err := serveTailnet(ctxUp, rt, node, tailnetServer)
-
-		switch {
-		case ctxUp.Err() != nil:
-		case errors.Is(err, errTailnetLogin):
-			rt.Log.Warn(tailnetLoginNotice)
-		default:
-			rt.Log.Warn("Web HTTPS on the tailnet stopped", "error", err)
+		if err := server.ServeTLS(node.https, "", ""); !errors.Is(err, http.ErrServerClosed) {
+			rt.Restart(fmt.Sprintf("Web HTTPS on the tailnet stopped: %v", err))
 		}
 
 		return nil
 	})
 
-	return func() error {
-		cancelUp()
-		return errors.Join(tailnetServer.Close(), node.server.Close())
-	}, nil
+	return server.Close
 }
 
-const tailnetLoginNotice = "Tailscale authentication unavailable, so Web HTTPS on the tailnet is off: run `rocketclaw ts login`, then restart RocketClaw"
-
-var errTailnetLogin = errors.New("tailscale node needs a login")
+var errTailnetLogin = errors.New("the Tailscale node needs a login: run `rocketclaw ts login`, or set web.tsnet.auth_key to a valid key")
 
 type tailnetBackendError string
 
@@ -72,6 +68,7 @@ func (e tailnetBackendError) Error() string { return "tailscale node: " + string
 type tailnetNode struct {
 	server *tsnet.Server
 	client *local.Client
+	https  net.Listener
 }
 
 func newTailnetNode(tailnet *config.TsnetConfig) (*tailnetNode, error) {
@@ -126,10 +123,19 @@ func tailnetWait(watcher *local.IPNBusWatcher) (tailnetStep, string, error) {
 	}
 }
 
-func serveTailnet(ctx context.Context, rt *backend.Runtime, node *tailnetNode, server *http.Server) error {
+func listenTailnet(ctx context.Context, node *tailnetNode, authKey string, log *slog.Logger) (net.Listener, error) {
+	status, err := node.client.StatusWithoutPeers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read Tailscale node status: %w", err)
+	}
+
+	if status.BackendState == ipn.NeedsLogin.String() && authKey == "" {
+		return nil, errTailnetLogin
+	}
+
 	watcher, err := node.client.WatchIPNBus(ctx, ipn.NotifyInitialState)
 	if err != nil {
-		return fmt.Errorf("watch Tailscale node: %w", err)
+		return nil, fmt.Errorf("watch Tailscale node: %w", err)
 	}
 
 	defer func() { _ = watcher.Close() }()
@@ -137,7 +143,7 @@ func serveTailnet(ctx context.Context, rt *backend.Runtime, node *tailnetNode, s
 	for {
 		step, _, err := tailnetWait(watcher)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if step == tailnetRunning {
@@ -145,38 +151,24 @@ func serveTailnet(ctx context.Context, rt *backend.Runtime, node *tailnetNode, s
 		}
 
 		if step == tailnetLogin {
-			return errTailnetLogin
+			return nil, errTailnetLogin
 		}
 
-		rt.Log.Warn("the Tailscale node waits for device approval in the admin console")
+		log.Warn("the Tailscale node waits for device approval in the admin console")
 	}
 
 	if _, err := node.server.Up(ctx); err != nil {
-		return fmt.Errorf("bring up Tailscale node: %w", err)
+		return nil, fmt.Errorf("bring up Tailscale node: %w", err)
 	}
 
-	domains := node.server.CertDomains()
-	if len(domains) == 0 {
-		return errors.New("tailscale node has no HTTPS name: enable MagicDNS and HTTPS in the admin console")
+	if len(node.server.CertDomains()) == 0 {
+		return nil, errors.New("the tailnet gives the Tailscale node no HTTPS name: enable MagicDNS and HTTPS certificates in the Tailscale admin console")
 	}
-
-	server.Handler = rpc.NewTailnetHandler(node.client, rt.Cfg.Clone().TrustedRocketClaws, server.Handler)
 
 	listener, err := node.server.Listen("tcp", ":443")
 	if err != nil {
-		return fmt.Errorf("listen for Web HTTPS on the tailnet: %w", err)
+		return nil, fmt.Errorf("listen for Web HTTPS on the tailnet: %w", err)
 	}
 
-	rt.Log.Info("started Web HTTPS on the tailnet", "domains", domains)
-
-	_ = rt.Cfg.Do(func(cfg *config.Config) error {
-		cfg.Web.Tsnet.Origin = "https://" + domains[0]
-		return nil
-	})
-
-	if err := server.ServeTLS(listener, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve Web HTTPS on the tailnet: %w", err)
-	}
-
-	return nil
+	return listener, nil
 }

@@ -72,6 +72,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	)
 
 	assembler := &frontendAssemblerMock{
+		GateFunc: passGate,
 		ValidateAssetsFunc: func(got *config.Config, runtimeDir string) error {
 			require.Equal(t, cfg, got)
 			require.True(t, runtimeDir == cfg.RuntimeDirName() || strings.HasPrefix(runtimeDir, cfg.RuntimeDirName()+"-reload-"))
@@ -103,7 +104,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			_, _, err = bridge.threads.createSession(rt.RunCtx, &threadStart{agent: "missing"}, nil, "", nil, nil)
 			require.ErrorContains(t, err, `agent "missing" is not configured`)
 
-			msg := bridge.config.RequestRestart.restart("test restart")
+			msg := bridge.config.RequestRestart.Restart("test restart")
 			require.Equal(t, "restart requested; runtime cancellation started", msg)
 			require.NoError(t, rt.RunCtx.Err(), "restart cancels work, not the run lock")
 
@@ -202,6 +203,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 		finals := make(chan string, 4)
 		copyDone := make(chan struct{})
 		assembler := &frontendAssemblerMock{
+			GateFunc:           passGate,
 			ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 			AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 				events := rt.Subscribe(rt.RunCtx)
@@ -384,6 +386,7 @@ func TestRunMergesStoredBehaviorSettings(t *testing.T) {
 		close(copyDone)
 
 		err := Run(t.Context(), cfg, slog.New(slog.NewTextHandler(&logs, nil)), level, &frontendAssemblerMock{
+			GateFunc:           passGate,
 			ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 			AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 				live = rt.Cfg.Clone()
@@ -516,6 +519,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 
 			stops := 0
 			assembler := &frontendAssemblerMock{
+				GateFunc:           passGate,
 				ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 				AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 					runtimes <- rt
@@ -617,6 +621,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 
 			go func() {
 				done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), &frontendAssemblerMock{
+					GateFunc:           passGate,
 					ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 					AssembleFunc: func(*Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 						return nil, nil, nil
@@ -645,9 +650,69 @@ func TestRunStopsOnInvalidFrontendAssets(t *testing.T) {
 	require.NoError(t, err)
 
 	errInvalid := errors.New("invalid cron")
-	assembler := &frontendAssemblerMock{ValidateAssetsFunc: func(*config.Config, string) error { return errInvalid }}
+	assembler := &frontendAssemblerMock{GateFunc: passGate, ValidateAssetsFunc: func(*config.Config, string) error { return errInvalid }}
 	require.ErrorIs(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), errInvalid)
 	assert.Empty(t, assembler.AssembleCalls())
+}
+
+func TestRunTakesTheLockThenGatesThenMigrates(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n"), 0o600))
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	db, err := openSessionDB(t.Context(), dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	migrated := func() bool {
+		var ledger *string
+		require.NoError(t, db.QueryRowContext(t.Context(), `SELECT to_regclass('pg_migrations')::text`).Scan(&ledger))
+
+		return ledger != nil
+	}
+
+	client, err := pglock.UnsafeNew(db, pglock.WithCustomTable(runLockTable), pglock.WithHeartbeatFrequency(0))
+	require.NoError(t, err)
+	require.NoError(t, client.TryCreateTable())
+	lock, err := client.Acquire(runLockName, pglock.FailIfLocked())
+	require.NoError(t, err)
+
+	errGate := errors.New("the Web node needs a login")
+	errInvalid := errors.New("invalid cron")
+	gate := errGate
+	assembler := &frontendAssemblerMock{
+		GateFunc: func(context.Context, *config.Config, *slog.Logger) (func() error, error) {
+			require.False(t, migrated(), "the gate runs before migrations")
+			return func() error { return nil }, gate
+		},
+		ValidateAssetsFunc: func(*config.Config, string) error { return errInvalid },
+	}
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}
+
+	ctxWait, cancelWait := context.WithTimeout(t.Context(), time.Second)
+	t.Cleanup(cancelWait)
+	require.ErrorIs(t, Run(ctxWait, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), pglock.ErrNotAcquired)
+	require.Empty(t, assembler.GateCalls(), "a process waiting for the run lock does not start its node")
+	require.False(t, migrated(), "a process waiting for the run lock does not migrate")
+
+	require.NoError(t, lock.Close())
+	require.ErrorIs(t, Run(t.Context(), cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), errGate)
+	require.False(t, migrated(), "a failed gate stops before migrations")
+
+	lock, err = client.Acquire(runLockName, pglock.FailIfLocked())
+	require.NoError(t, err, "a failed gate releases the run lock")
+	require.NoError(t, lock.Close())
+
+	gate = nil
+
+	require.ErrorIs(t, Run(t.Context(), cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), errInvalid)
+	require.True(t, migrated(), "a fresh database migrates once the gate passes")
+	require.Len(t, assembler.GateCalls(), 2)
 }
 
 func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
@@ -679,6 +744,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 	ctx, signal := context.WithCancel(t.Context())
 
 	assembler := &frontendAssemblerMock{
+		GateFunc:           passGate,
 		ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 		AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 			msg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "first message"}, true)
@@ -765,4 +831,8 @@ func TestPruneRocketcodeTempRemovesEntriesOlderThanCutoff(t *testing.T) {
 		require.NoError(t, err, dir)
 		assert.Zero(t, removed, dir)
 	}
+}
+
+func passGate(context.Context, *config.Config, *slog.Logger) (func() error, error) {
+	return func() error { return nil }, nil
 }

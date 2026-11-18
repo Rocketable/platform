@@ -84,7 +84,7 @@ func TestSpacePermissionsRealBrowser(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan *backend.Runtime)
-	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+	assembly := &mockFrontendAssembler{GateFunc: passGate, AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 		ready <- rt
 		return rt.RunCtx.Done(), nil, nil
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}

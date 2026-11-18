@@ -1295,7 +1295,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	)
 
 	manager = newThreadBridgeManager(config.NewLockedConfig(nt.cfg), nt.service, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
-		cfg.SessionService, cfg.RequestRestart, cfg.UserQuestionAsker = nt.service, &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, asker
+		cfg.SessionService, cfg.RequestRestart, cfg.UserQuestionAsker = nt.service, &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, asker
 		bridge := NewConversation(config.NewLockedConfig(nt.cfg), finalsPublisher{finals: nt.finals}, cfg, slog.New(slog.DiscardHandler))
 		bridge.threads, bridge.background = manager, registry
 

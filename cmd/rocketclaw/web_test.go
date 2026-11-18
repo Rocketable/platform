@@ -1,12 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +12,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -61,49 +57,8 @@ func webSessions(t *testing.T) *backend.SessionService {
 	return sessions
 }
 
-func isolateTailnet(t *testing.T) string {
-	t.Helper()
-
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", home)
-	t.Setenv("TS_CONTROL_URL", "http://127.0.0.1:1")
-
-	configDir, err := os.UserConfigDir()
-	require.NoError(t, err)
-
-	return configDir
-}
-
-func TestWebRPCTailnetNode(t *testing.T) {
-	configDir := isolateTailnet(t)
-
-	var logs bytes.Buffer
-
-	cfg := &config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}}}
-	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.NewTextHandler(&logs, nil)), Sessions: webSessions(t)}
-	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
-	require.NoError(t, err)
-	require.NoError(t, stop(t.Context()))
-	assert.Contains(t, logs.String(), "Tailscale authentication unavailable")
-	assert.NotContains(t, logs.String(), "login.tailscale.com")
-
-	logs.Reset()
-	cfg.Web.Tsnet.AuthKey = "tskey-auth-test"
-	rt.Cfg.Store(cfg)
-	stop, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
-	require.NoError(t, err)
-	require.NoError(t, stop(t.Context()))
-	assert.NotContains(t, logs.String(), "Tailscale authentication unavailable")
-
-	info, err := os.Stat(filepath.Join(configDir, "rocketclaw", "tsnet-rocketclaw-test"))
-	require.NoError(t, err)
-	require.Equal(t, os.ModeDir|0o700, info.Mode())
-	require.FileExists(t, filepath.Join(configDir, "rocketclaw", "tsnet-rocketclaw-test", "tailscaled.state"))
-}
-
-func TestWebRPCSyncsOpenCodeWithoutTailnetLogin(t *testing.T) {
-	isolateTailnet(t)
+func TestWebRPCSyncsOpenCode(t *testing.T) {
+	node := startTestTailnet(t)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if user, password, ok := r.BasicAuth(); !ok || user != "opencode" || password != "pw" {
@@ -129,8 +84,7 @@ func TestWebRPCSyncsOpenCodeWithoutTailnetLogin(t *testing.T) {
 
 	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}}, OpenCode: servers}
 	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Sessions: sessions}
-	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
-	require.NoError(t, err)
+	stop := startWebRPC(rt, node, &mockWebChannels{}, &mockWebCron{})
 
 	require.Eventually(t, func() bool {
 		for chat, err := range sessions.SidebarChats(t.Context(), "", &mockWebChannels{}, nil) {

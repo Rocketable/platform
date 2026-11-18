@@ -177,7 +177,7 @@ func TestAgentEditorRealBackendBrowser(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan *backend.Runtime)
 	releaseSave := make(chan struct{})
-	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+	assembly := &mockFrontendAssembler{GateFunc: passGate, AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 		ready <- rt
 		return rt.RunCtx.Done(), nil, nil
 	}, ValidateAssetsFunc: func(c *config.Config, stage string) error {

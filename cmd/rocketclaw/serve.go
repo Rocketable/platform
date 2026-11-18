@@ -106,7 +106,7 @@ func runServe(args []string, diagnosticsAddress string) error {
 		logger.Info("started private pprof HTTP", "address", listener.Addr().String())
 	}
 
-	if err := backend.Run(ctx, cfg, logger, level, processAssembler{}, sandbox.Bubblewrap{}); err != nil {
+	if err := backend.Run(ctx, cfg, logger, level, &processAssembler{}, sandbox.Bubblewrap{}); err != nil {
 		if errors.Is(err, backend.ErrRestartRequested) {
 			logger.Info("rocketclaw restart requested; exiting with code 255 for supervisor restart")
 			return exitCodeError(255)

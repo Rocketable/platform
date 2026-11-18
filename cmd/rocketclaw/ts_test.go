@@ -2,7 +2,7 @@ package main
 
 import (
 	"bufio"
-	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,13 +10,16 @@ import (
 	"net"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -38,24 +41,8 @@ func TestRunTS(t *testing.T) {
 }
 
 func TestTailnetLogin(t *testing.T) {
-	netns.SetEnabled(false)
-	t.Cleanup(func() { netns.SetEnabled(true) })
-
-	control := &testcontrol.Server{
-		DERPMap:        startTestDERP(t),
-		DNSConfig:      &tailcfg.DNSConfig{Proxied: true},
-		MagicDNSDomain: "tail-scale.ts.net",
-		RequireAuth:    true,
-		Logf:           logger.Discard,
-	}
-	control.HTTPTestServer = httptest.NewUnstartedServer(control)
-	control.HTTPTestServer.Start()
-	t.Cleanup(control.HTTPTestServer.Close)
-
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", home)
-	t.Setenv("TS_CONTROL_URL", control.HTTPTestServer.URL)
+	control := &testcontrol.Server{DNSConfig: &tailcfg.DNSConfig{Proxied: true}, MagicDNSDomain: "tail-scale.ts.net", RequireAuth: true}
+	useTestTailnet(t, control)
 
 	prepareOAIConfig(t)
 
@@ -70,16 +57,11 @@ func TestTailnetLogin(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(defaultConfigPath, data, 0o640))
 
-	var logs bytes.Buffer
+	tailnet := &config.TsnetConfig{Hostname: "rocketclaw-test"}
 
-	cfg := &config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}}}
-	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.NewTextHandler(&logs, nil)), Sessions: webSessions(t)}
-
-	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
-	require.NoError(t, err)
-	require.NoError(t, stop(t.Context()))
-	assert.Contains(t, logs.String(), "Tailscale authentication unavailable")
-	assert.NotContains(t, logs.String(), "/auth/", "the server never prints a login link")
+	_, err = startTailnet(t.Context(), tailnet, slog.New(slog.DiscardHandler))
+	require.ErrorIs(t, err, errTailnetLogin)
+	assert.NotContains(t, err.Error(), "/auth/", "the server never prints a login link")
 
 	reader, writer, err := os.Pipe()
 	require.NoError(t, err)
@@ -110,13 +92,87 @@ func TestTailnetLogin(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(rest), "Logged in as rocketclaw-test.tail-scale.ts.net. Start RocketClaw")
 
-	rt.Log = slog.New(slog.DiscardHandler)
-	stop, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
+	node, err := startTailnet(t.Context(), tailnet, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		return rt.Cfg.Clone().Web.Tsnet.Origin == "https://rocketclaw-test.tail-scale.ts.net"
-	}, 30*time.Second, 50*time.Millisecond, "the logged-in node serves its HTTPS name")
+
+	rt := &backend.Runtime{Cfg: config.NewLockedConfig(&config.Config{Web: config.WebConfig{Tsnet: tailnet}}), Log: slog.New(slog.DiscardHandler), Sessions: webSessions(t)}
+	stop := startWebRPC(rt, node, &mockWebChannels{}, &mockWebCron{})
+	require.Equal(t, "https://rocketclaw-test.tail-scale.ts.net", rt.Cfg.Clone().Web.Tsnet.Origin, "the logged-in node serves its HTTPS name")
 	require.NoError(t, stop(t.Context()))
+	require.NoError(t, node.server.Close())
+}
+
+func TestTailnetNodeState(t *testing.T) {
+	startTestTailnet(t)
+
+	configDir, err := os.UserConfigDir()
+	require.NoError(t, err)
+
+	dir := filepath.Join(configDir, "rocketclaw", "tsnet-rocketclaw-test")
+	info, err := os.Stat(dir)
+	require.NoError(t, err)
+	require.Equal(t, os.ModeDir|0o700, info.Mode())
+	require.FileExists(t, filepath.Join(dir, "tailscaled.state"))
+}
+
+func TestTailnetStopRestartsRocketClaw(t *testing.T) {
+	usePassingTailnet(t)
+
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\n---\n"), 0o600))
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	t.Cleanup(cancel)
+
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test", AuthKey: "tskey-auth-test"}}}
+	assembler := &processAssembler{}
+	require.ErrorIs(t, backend.Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), &FrontendAssemblerMock{
+		GateFunc:           assembler.Gate,
+		ValidateAssetsFunc: assembler.ValidateAssets,
+		AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+			done, stops, err := assembler.Assemble(rt)
+			require.NoError(t, assembler.tailnet.https.Close())
+
+			return done, stops, err
+		},
+	}, sandbox.None{}), backend.ErrRestartRequested)
+}
+
+func useTestTailnet(t *testing.T, control *testcontrol.Server) {
+	t.Helper()
+
+	netns.SetEnabled(false)
+	t.Cleanup(func() { netns.SetEnabled(true) })
+
+	control.DERPMap, control.Logf = startTestDERP(t), logger.Discard
+	control.HTTPTestServer = httptest.NewUnstartedServer(control)
+	control.HTTPTestServer.Start()
+	t.Cleanup(control.HTTPTestServer.Close)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("TS_CONTROL_URL", control.HTTPTestServer.URL)
+}
+
+func usePassingTailnet(t *testing.T) {
+	t.Helper()
+	useTestTailnet(t, &testcontrol.Server{DNSConfig: &tailcfg.DNSConfig{Proxied: true}, MagicDNSDomain: "tail-scale.ts.net"})
+}
+
+func startTestTailnet(t *testing.T) *tailnetNode {
+	t.Helper()
+	usePassingTailnet(t)
+
+	node, err := startTailnet(t.Context(), &config.TsnetConfig{Hostname: "rocketclaw-test", AuthKey: "tskey-auth-test"}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, node.server.Close()) })
+
+	return node
 }
 
 func startTestDERP(t *testing.T) *tailcfg.DERPMap {

@@ -285,7 +285,7 @@ func TestBridgeConsumedInputKeepsRawWebText(t *testing.T) {
 func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
-	tool := restartTool(&runtimeRestarterMock{restartFunc: func(string) string { return "" }})
+	tool := restartTool(&runtimeRestarterMock{RestartFunc: func(string) string { return "" }})
 
 	assert.Contains(t, tool.Description, "explicitly requested setup change")
 	assert.Contains(t, tool.Description, "rocketclaw.json")
@@ -314,7 +314,7 @@ func TestRestartToolCallsConfiguredRestart(t *testing.T) {
 
 	order := []string{}
 
-	tool := restartTool(&runtimeRestarterMock{restartFunc: func(reason string) string {
+	tool := restartTool(&runtimeRestarterMock{RestartFunc: func(reason string) string {
 		order = append(order, "restart:"+reason)
 		return "custom restart output"
 	}})
@@ -778,7 +778,7 @@ func newGoalAccountingTestBridge(t *testing.T) *Bridge {
 func TestRestartToolAcceptsEmptyOutputAndPropagatesErrors(t *testing.T) {
 	t.Parallel()
 
-	tool := restartTool(&runtimeRestarterMock{restartFunc: func(string) string { return "" }})
+	tool := restartTool(&runtimeRestarterMock{RestartFunc: func(string) string { return "" }})
 	result, err := tool.Call(t.Context(), []byte(`{"reason":"cron changed"}`), nil)
 	require.NoError(t, err)
 	assert.Empty(t, result.Output)
@@ -860,7 +860,7 @@ func TestPublishFinalPreservesTurnID(t *testing.T) {
 	bridge := new(Bridge)
 	bridge.bus = bus
 	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: store}
+	bridge.config = Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: store}
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	inbound.ConversationID = bridge.config.ConversationID
 	result := runResult{turnID: "turn-1", text: "hello back"}
@@ -892,7 +892,7 @@ func TestPublishFinalMarksCurrentGoalCompletion(t *testing.T) {
 	bridge := new(Bridge)
 	bridge.bus = bus
 	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: "thread-1", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: store}
+	bridge.config = Config{ConversationID: "thread-1", Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: store}
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "done", true)
 	inbound.ConversationID = "thread-1"
 	result := runResult{turnID: "turn-1", text: "done", goalCompleted: true}
@@ -919,7 +919,7 @@ func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
 	bridge := new(Bridge)
 	bridge.bus = bus
 	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: "thread-1", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: store}
+	bridge.config = Config{ConversationID: "thread-1", Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: store}
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "trailing message", true)
 	inbound.ConversationID = "thread-1"
 	result := runResult{turnID: "turn-2", text: "normal reply"}
@@ -933,7 +933,7 @@ func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 
 	bridge := new(Bridge)
 	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}}
+	bridge.config = Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}}
 	result := runResult{turnID: "turn-1", attachments: []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}}
 
 	for _, errDelivery := range []error{nil, errors.New("delivery failed")} {
@@ -1002,7 +1002,7 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
-	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
 	continuation := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	continuation.GoalAction = protocol.GoalActionContinue
 	require.NoError(t, handleTestInbound(t.Context(), bridge, &bridgeRequest{inbound: continuation}))
@@ -1053,7 +1053,7 @@ FROM turns WHERE conversation_id = $1 ORDER BY id`, "missing-agent reply state",
 func TestRocketCodeConfig(t *testing.T) {
 	t.Parallel()
 
-	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{AutoApproverModel: "gpt-5.4-mini"}), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, RequestReload: &runtimeReloaderMock{ReloadFunc: func(string) (string, error) {
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{AutoApproverModel: "gpt-5.4-mini"}), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, RequestReload: &runtimeReloaderMock{ReloadFunc: func(string) (string, error) {
 		return "rocketclaw runtime assets reloaded", nil
 	}}, SessionService: newTestSessionService(t)}}
 	cfg := bridge.rocketcodeConfig(t.TempDir(), nil, harness.Tool{Name: attachFilesToolName})
@@ -2373,7 +2373,7 @@ func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
 	bus := newTestBus()
 	bus.Close()
 
-	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.requestCh = make(chan bridgeRequest, 1)
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "changelog", false)
@@ -2439,7 +2439,7 @@ func TestBridgeDeletesScheduledMessageWhenTurnStarts(t *testing.T) {
 	bus := newTestBus()
 	bus.Close()
 
-	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.requestCh = make(chan bridgeRequest, 1)
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "later", false)
@@ -2475,7 +2475,7 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 		bus := newTestBus()
 		defer bus.Close()
 
-		bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
+		bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
 		bridge.requestCh = make(chan bridgeRequest, 1)
 		bridge.stopCh = make(chan struct{})
 
@@ -3878,7 +3878,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 
 	store := newTestSessionService(t)
 	bridge := new(Bridge)
-	bridge.config = Config{ConversationID: "thread-1", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: store}
+	bridge.config = Config{ConversationID: "thread-1", Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: store}
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	inbound.ConversationID = "thread-1"
@@ -4188,7 +4188,7 @@ func (nt *noteTest) run(t *testing.T, observe func(*protocol.OutboundMessage)) (
 		return nil
 	}}
 	manager = newThreadBridgeManager(config.NewLockedConfig(nt.cfg), nt.service, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
-		cfg.SessionService, cfg.RequestRestart = nt.service, &runtimeRestarterMock{restartFunc: func(string) string { return "" }}
+		cfg.SessionService, cfg.RequestRestart = nt.service, &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}
 		bridge := NewConversation(config.NewLockedConfig(nt.cfg), publisher, cfg, slog.New(slog.DiscardHandler))
 		bridge.threads, bridge.background = manager, registry
 
@@ -4967,7 +4967,7 @@ func TestTurnBoundPlatformTools(t *testing.T) {
 
 	origin := new(protocol.InboundMessage)
 	bridge := &Bridge{runtime: new(config.LockedConfig), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
-	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []harness.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{restartFunc: func(string) string { return "" }}), attachFilesTool(nil, &harness.CustomShell{}, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), sessionsWriteTool(bridge, origin, origin, "main", "main", harness.Agents{}), currentSessionIDTool("main")}, pageSpace{sessions: bridge.config.SessionService, agent: "main"}.nativeTools(nil, &harness.CustomShell{}))
+	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []harness.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{RestartFunc: func(string) string { return "" }}), attachFilesTool(nil, &harness.CustomShell{}, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), sessionsWriteTool(bridge, origin, origin, "main", "main", harness.Agents{}), currentSessionIDTool("main")}, pageSpace{sessions: bridge.config.SessionService, agent: "main"}.nativeTools(nil, &harness.CustomShell{}))
 
 	var bound []string
 

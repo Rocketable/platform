@@ -3,15 +3,19 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend"
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
 	slackconnector "github.com/Rocketable/platform/internal/rocketclaw/frontend/slack"
 )
 
-type processAssembler struct{}
+type processAssembler struct {
+	tailnet *tailnetNode
+}
 
 type slackFrontend interface {
 	ChannelAgentChoices(context.Context, string) ([]string, error)
@@ -54,7 +58,18 @@ func (inertSlack) Stop(context.Context) error {
 	return nil
 }
 
-func (processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+func (a *processAssembler) Gate(ctx context.Context, cfg *config.Config, log *slog.Logger) (func() error, error) {
+	node, err := startTailnet(ctx, cfg.Web.Tsnet, log)
+	if err != nil {
+		return nil, err
+	}
+
+	a.tailnet = node
+
+	return node.server.Close, nil
+}
+
+func (a *processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 	cfg := rt.Cfg.Clone()
 	var stops []func(context.Context) error
 
@@ -97,11 +112,7 @@ func (processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []func(c
 		stops = append(stops, startExternalMCPServer(rt.RunCtx, listener, cfg.MCPExternal.Users, agents, rt.Sessions, rt, rt.Log).Close)
 	}
 
-	stopWeb, err := startWebRPC(rt, slack, cronjobs)
-	if err != nil {
-		return nil, nil, err
-	}
-	stops = append(stops, stopWeb)
+	stops = append(stops, startWebRPC(rt, a.tailnet, slack, cronjobs))
 
 	rt.AttachSlack(slack)
 	slack.Start(rt.RunCtx)
