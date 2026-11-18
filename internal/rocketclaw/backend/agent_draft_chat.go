@@ -58,9 +58,9 @@ func (s *SessionService) SendAgentDraft(ctx context.Context, queue agentDraftQue
 		return "", nil, fmt.Errorf("lock agent draft test chat: %w", err)
 	}
 
-	captured := &protocol.InboundMessage{Metadata: map[string]string{}}
+	metadata := map[string]string{}
 
-	draft, live, err := s.CaptureAgentDraft(ctx, send.ID, captured)
+	draft, live, files, err := s.captureAgentDraft(ctx, send.ID, metadata)
 	if err != nil {
 		return "", nil, err
 	}
@@ -141,18 +141,16 @@ SELECT COALESCE(f.mcp, t.mcp) FROM this t LEFT JOIN first f ON true`, chat, stri
 		return chat, nil, &AgentDraftRefusedError{Restart: true, Problem: fmt.Sprintf("External MCP keeps %s at %q, the value this test chat's first message sent: restart the chat with the new metadata.", key, locked.Metadata[key])}
 	}
 
-	files, _ := agentDraftFiles(captured)
-
 	for _, problem := range problems {
 		if problem.Variant == "" {
-			delete(captured.Metadata, agentDraftLiveMetadataKey)
+			delete(metadata, agentDraftLiveMetadataKey)
 		} else {
 			delete(files, path.Join(draft.Name, problem.Variant+".md"))
 		}
 	}
 
 	data, _ := json.Marshal(files)
-	captured.Metadata[agentDraftFilesMetadataKey] = string(data)
+	metadata[agentDraftFilesMetadataKey] = string(data)
 
 	if fresh {
 		if err := s.startAgentDraftTestChat(ctx, draft, chat, send.Username); err != nil {
@@ -162,7 +160,7 @@ SELECT COALESCE(f.mcp, t.mcp) FROM this t LEFT JOIN first f ON true`, chat, stri
 
 	for i, text := range texts {
 		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: text}, true)
-		inbound.ConversationID, inbound.Metadata = chat, maps.Clone(captured.Metadata)
+		inbound.ConversationID, inbound.Metadata = chat, maps.Clone(metadata)
 		id := rand.Text()
 
 		if mcp.On {

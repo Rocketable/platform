@@ -229,7 +229,7 @@ Paths are under `internal/rocketclaw/` unless they start with `cmd/`.
 
 | Model step | Code |
 |---|---|
-| send gate, `Capture` | `backend/agent_draft_chat.go:SendAgentDraft`: advisory lock, `CaptureAgentDraft`, sticky check on every variant, `agentDraftPairsProblem`, `liveAgentDraftProblems`, `agentDraftRecord`, first-record query, mode and locked-key refusals, inbound built per text, `StashQueueItem`, record row |
+| send gate, `Capture` | `backend/agent_draft_chat.go:SendAgentDraft`: advisory lock, `captureAgentDraft`, sticky check on every variant, `agentDraftPairsProblem`, `liveAgentDraftProblems`, `agentDraftRecord`, first-record query, mode and locked-key refusals, inbound built per text, `StashQueueItem`, record row |
 | `PairsProblem` (PairsCheck) | `backend/agent_draft_chat.go:agentDraftPairsProblem` (variable names from `backend/bridge.go:externalMCPMetadataVariable`) |
 | `LockBroken` (NormalizedLocks) | `backend/agent_draft_chat.go:changedAgentDraftKey` |
 | `Inbound` (CidAfterPairs) | `backend/agent_draft_chat.go:SendAgentDraft` (pairs copied, then `external_conversation_id`); real path `cmd/rocketclaw/mcp.go` (same order) |

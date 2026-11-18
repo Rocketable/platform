@@ -23,7 +23,6 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"gopkg.in/yaml.v3"
 )
@@ -230,18 +229,18 @@ func (s *SessionService) LoadAgentDraft(ctx context.Context, id string) (*AgentD
 	return &draft, err
 }
 
-func (s *SessionService) CaptureAgentDraft(ctx context.Context, id string, inbound *protocol.InboundMessage) (*AgentDraft, *string, error) {
-	draft, err := s.LoadAgentDraft(ctx, id)
+func (s *SessionService) captureAgentDraft(ctx context.Context, id string, metadata map[string]string) (draft *AgentDraft, live *string, files map[string]string, err error) {
+	draft, err = s.LoadAgentDraft(ctx, id)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	live, _, err := s.agentLayerFiles(draft.Name)
+	live, _, err = s.agentLayerFiles(draft.Name)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	files := map[string]string{}
+	files = map[string]string{}
 
 	for i := range draft.Variants {
 		file := path.Join(draft.Name, draft.Variants[i].Name+".md")
@@ -252,14 +251,13 @@ func (s *SessionService) CaptureAgentDraft(ctx context.Context, id string, inbou
 		files[file] = string(renderAgentDraftFile(draft.Mode, &draft.Variants[i]))
 	}
 
-	data, _ := json.Marshal(files)
-	inbound.Metadata[agentDraftFilesMetadataKey], inbound.Metadata[inboundAgentMetadataKey] = string(data), draft.Name
+	metadata[inboundAgentMetadataKey] = draft.Name
 
 	if live != nil {
-		inbound.Metadata[agentDraftLiveMetadataKey] = *live
+		metadata[agentDraftLiveMetadataKey] = *live
 	}
 
-	return draft, live, nil
+	return draft, live, files, nil
 }
 
 func (s *SessionService) ListAgentDrafts(ctx context.Context) ([]AgentDraft, error) {
