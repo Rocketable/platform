@@ -201,10 +201,10 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 	require.Empty(t, matches)
 	require.Equal(t, []string{`Writer "One"`, "Writer Attachment", "Writer Two"}, filtered.Principals)
 
-	_, criteria, err := s.searchSessionsWithin(ctx, `principal:"Writer \"One\"" principal:"Writer Two"`, &sessionListParams{}, slack)
+	search, err := s.searchSessionsWithin(ctx, `principal:"Writer \"One\"" principal:"Writer Two"`, &sessionListParams{}, slack)
 	require.NoError(t, err)
-	require.Len(t, criteria, 1)
-	require.Equal(t, searchChatA, criteria[0].Chat.Session.Conversation.ID)
+	require.Len(t, search.Matches, 1)
+	require.Equal(t, searchChatA, search.Matches[0].Chat.Session.Conversation.ID)
 }
 
 func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
@@ -438,10 +438,10 @@ VALUES ('alice', $6, $1, now(), FALSE), ('alice', $7, $2, now(), TRUE), ('alice'
 		require.Equal(t, tc.ids, ids, "%s %s", tc.username, tc.query)
 	}
 
-	search, criteria, err := s.searchSessionsWithin(ctx, "is:unread", &sessionListParams{}, slack)
+	search, err := s.searchSessionsWithin(ctx, "is:unread", &sessionListParams{}, slack)
 	require.NoError(t, err)
 	require.Empty(t, search.Text, "is:unread is a filter for the agent tool too")
-	require.Empty(t, criteria, "the agent tool searches for no person")
+	require.Empty(t, search.Matches, "the agent tool searches for no person")
 }
 
 func TestSearchSessionsWorkTerms(t *testing.T) {
@@ -487,19 +487,19 @@ func TestSearchSessionsWorkTerms(t *testing.T) {
 		require.Equal(t, want, ids, query)
 	}
 
-	_, criteria, err := s.searchSessionsWithin(ctx, "is:waiting", &sessionListParams{}, slack)
+	search, err := s.searchSessionsWithin(ctx, "is:waiting", &sessionListParams{}, slack)
 	require.NoError(t, err)
-	require.Len(t, criteria, 1, "the agent tool reads the same terms")
-	require.Equal(t, searchChatW, criteria[0].Chat.Session.Conversation.ID)
+	require.Len(t, search.Matches, 1, "the agent tool reads the same terms")
+	require.Equal(t, searchChatW, search.Matches[0].Chat.Session.Conversation.ID)
 
 	since := strings.TrimSuffix(time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339Nano), "Z")
 	for query, want := range map[string][]string{"is:queued": {searchChatA, searchChatW}, "agent:main": {searchChatX, searchChatA}} {
-		_, criteria, err := s.searchSessionsWithin(ctx, query, &sessionListParams{Since: since}, slack)
+		search, err := s.searchSessionsWithin(ctx, query, &sessionListParams{Since: since}, slack)
 		require.NoError(t, err)
 
-		ids := make([]string, 0, len(criteria))
-		for i := range criteria {
-			ids = append(ids, criteria[i].Chat.Session.Conversation.ID)
+		ids := make([]string, 0, len(search.Matches))
+		for i := range search.Matches {
+			ids = append(ids, search.Matches[i].Chat.Session.Conversation.ID)
 		}
 
 		require.Equal(t, want, ids, "%s since 24h ago", query)
