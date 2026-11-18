@@ -164,7 +164,6 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 
 	registry := f.mcpRegistry
 	permissions := agent.Permission
-	serversCopy := slices.Clone(servers)
 	retainedRel := f.retainedRel
 
 	return map[string]looperTool{
@@ -199,7 +198,7 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 			VisibilitySubjects: []string{codeModeApproveSubject},
 			Subjects:           func(json.RawMessage) ([]string, error) { return []string{codeModeApproveSubject}, nil },
 			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				return callExecute(ctx, registry, permissions, serversCopy, retainedRel, raw)
+				return callExecute(ctx, registry, permissions, servers, retainedRel, raw)
 			},
 		}),
 	}
