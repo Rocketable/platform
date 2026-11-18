@@ -439,18 +439,16 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		response.Messages = append(response.Messages, messages...)
 	}
 
-	if request.GetBefore() > 0 {
-		return response, s.reviewRationales(ctx, response, view.Reviews)
-	}
-
-	for _, key := range slices.Sorted(maps.Keys(previous.Entries)) {
-		if _, exists := current.Entries[key]; !exists {
-			response.RemovedKeys = append(response.RemovedKeys, key)
+	if request.GetBefore() <= 0 {
+		for _, key := range slices.Sorted(maps.Keys(previous.Entries)) {
+			if _, exists := current.Entries[key]; !exists {
+				response.RemovedKeys = append(response.RemovedKeys, key)
+			}
 		}
-	}
 
-	data, _ = json.Marshal(current)
-	response.Revision = base64.RawURLEncoding.EncodeToString(data)
+		data, _ = json.Marshal(current)
+		response.Revision = base64.RawURLEncoding.EncodeToString(data)
+	}
 
 	return response, s.reviewRationales(ctx, response, view.Reviews)
 }
