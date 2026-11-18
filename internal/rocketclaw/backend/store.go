@@ -362,7 +362,9 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 		return fmt.Errorf("commit external MCP conversation cleanup: %w", err)
 	}
 
-	return s.removeHistoryFiles(ctx, ids)
+	s.removeHistoryFiles(ctx, ids)
+
+	return nil
 }
 
 func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversationID string, name *string) (bool, error) {
@@ -689,7 +691,9 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time,
 		}
 	}
 
-	return stats, errors.Join(errCombined, s.removeHistoryFiles(ctx, nil))
+	s.removeHistoryFiles(ctx, nil)
+
+	return stats, errCombined
 }
 
 func (s *SessionService) ObserveEntries(ctx context.Context, conversationID string) ([]ObservedSessionEntry, error) {
@@ -861,7 +865,9 @@ INSERT INTO pending_attachment_deletions (id) SELECT id FROM removed`, ids); err
 		return 0, fmt.Errorf("commit session deletion: %w", err)
 	}
 
-	return rows, s.removeHistoryFiles(ctx, ids)
+	s.removeHistoryFiles(ctx, ids)
+
+	return rows, nil
 }
 
 var (
@@ -1398,7 +1404,9 @@ UNION SELECT continues FROM conversations WHERE conversation_id = $1 AND continu
 		return 0, false, fmt.Errorf("commit state prune: %w", err)
 	}
 
-	return rows, true, s.removeHistoryFiles(ctx, ids)
+	s.removeHistoryFiles(ctx, ids)
+
+	return rows, true, nil
 }
 
 func sessionTags(ctx context.Context, db stateStoreDB, conversationID string) ([]string, error) {
@@ -1568,13 +1576,8 @@ func (s *SessionService) removeRetainedResults(conversationIDs ...string) error 
 	return nil
 }
 
-func (s *SessionService) removeHistoryFiles(ctx context.Context, ids []string) error {
-	blobs, err := queryStrings(ctx, s.db, `SELECT id FROM pending_attachment_deletions ORDER BY id`, "pending attachment deletions")
-	if err != nil {
-		return err
-	}
-
-	var errCombined error
+func (s *SessionService) removeHistoryFiles(ctx context.Context, ids []string) {
+	blobs, errCombined := queryStrings(ctx, s.db, `SELECT id FROM pending_attachment_deletions ORDER BY id`, "pending attachment deletions")
 
 	for _, id := range blobs {
 		if err := s.attachments.Delete(ctx, id); err != nil {
@@ -1586,7 +1589,9 @@ func (s *SessionService) removeHistoryFiles(ctx context.Context, ids []string) e
 		errCombined = errors.Join(errCombined, err)
 	}
 
-	return errors.Join(errCombined, s.removeRetainedResults(ids...))
+	if err := errors.Join(errCombined, s.removeRetainedResults(ids...)); err != nil {
+		s.log.Warn("remove deleted history files", "error", err)
+	}
 }
 
 func removeSessionEntryNUL(data []byte) []byte {

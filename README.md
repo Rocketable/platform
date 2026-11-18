@@ -556,7 +556,7 @@ Sign in per provider with `rocketclaw oai login [provider] [--headless]`. Use `r
   "attachments": {"driver": "s3", "bucket_arn": "arn:aws:s3:::rocketclaw-attachments"}
   ```
 
-  S3 uses the standard AWS credentials and region settings. Grant `s3:PutObject`, `s3:GetObject`, and `s3:DeleteObject` for attachments, plus `s3:DeleteObjectVersion` for a versioned bucket. Grant `s3:ListBucket` so deletion retries can distinguish missing files from denied access. RocketClaw does not create buckets or make files public.
+  S3 uses the standard AWS credentials and region settings. Grant `s3:PutObject`, `s3:GetObject`, and `s3:DeleteObject` for attachments, plus `s3:DeleteObjectVersion` for a versioned bucket. Grant `s3:ListBucket` so deletion retries can distinguish missing files from denied access. A file that cannot be deleted does not fail deleting or clearing its chat: RocketClaw logs a warning and tries again at the next deletion, clear, or hourly cleanup. RocketClaw does not create buckets or make files public.
 - Back up the database and the attachment storage together. Restoring only the database brings back references to files, not the files.
 - `.rocketclaw/` holds generated runtime files, such as cloned overlays, per-session temporary folders, and oversized command output. Do not treat it as source code.
 

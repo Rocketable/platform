@@ -1204,7 +1204,7 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 
 	t.Run("filesystem failure retry", func(t *testing.T) {
 		store, root := newShadowTestStore(t)
-		recordTestConversations(t, store, "other", map[string]ConversationKind{"parent": KindWebChat})
+		recordTestConversations(t, store, "other", map[string]ConversationKind{"parent": KindWebChat, "chat": KindWebChat})
 		require.NoError(t, store.SaveAttachment(t.Context(), "parent", "", &protocol.OutboundAttachment{ID: "blob", Name: "result", Data: []byte("bytes")}, false))
 		_, err := store.db.ExecContext(t.Context(), `ALTER TABLE conversations ADD CONSTRAINT reject_deletion_summary CHECK (conversation_id <> 'parent' OR preview IS NOT NULL) NOT VALID`)
 		require.NoError(t, err)
@@ -1223,8 +1223,14 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		path, err := filepath.Rel(root.Name(), storage.path)
 		require.NoError(t, err)
 		require.NoError(t, root.Rename(path, path+"-unavailable"))
+
+		var logs strings.Builder
+
+		store.log = slog.New(slog.NewTextHandler(&logs, nil))
 		_, err = store.DeleteSession(t.Context(), "parent")
-		require.ErrorIs(t, err, fs.ErrNotExist)
+		require.NoError(t, err, "the clear committed, so a stuck file does not fail it")
+		require.NoError(t, store.DeleteChat(t.Context(), "chat"), "a stuck file from another chat does not fail a later deletion")
+		require.Equal(t, 2, strings.Count(logs.String(), "open deleted attachment storage"), logs.String())
 		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM attachments`).Scan(&count))
 		require.Zero(t, count, "SQL ownership deletion committed despite storage failure")
 		pending, err := queryStrings(t.Context(), store.db, `SELECT id FROM pending_attachment_deletions`, "pending byte deletion")
@@ -1297,14 +1303,14 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		store.attachments = s3Attachments{bucket: "originals", client: s3.New(s3.Options{Region: "us-east-1", BaseEndpoint: new(server.URL), UsePathStyle: true, Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""), RetryMaxAttempts: 1})}
 		require.NoError(t, store.SaveAttachment(t.Context(), "parent", "", &protocol.OutboundAttachment{ID: "blob", Name: "result", Data: []byte("bytes")}, false))
 		_, err := store.DeleteSession(t.Context(), "parent")
-		require.Error(t, err)
+		require.NoError(t, err, "a denied HEAD after the commit keeps the file queued without failing the clear")
 		require.Equal(t, http.MethodPut, <-requests)
 		require.Equal(t, http.MethodHead, <-requests)
 		pending, err := queryStrings(t.Context(), store.db, `SELECT id FROM pending_attachment_deletions`, "failed S3 deletion")
 		require.NoError(t, err)
 		require.Equal(t, []string{"blob"}, pending, "403 is not proof that the bytes are absent")
 		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0), 0)
-		require.Error(t, err)
+		require.NoError(t, err)
 		require.Equal(t, http.MethodHead, <-requests)
 		require.Equal(t, http.MethodDelete, <-requests)
 		pending, err = queryStrings(t.Context(), store.db, `SELECT id FROM pending_attachment_deletions`, "failed S3 version deletion")
