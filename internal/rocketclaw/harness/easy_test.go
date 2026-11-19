@@ -15,10 +15,11 @@ const easyRequired = "mode: easy\nmodel: gpt-6.1-sol#high\nspace: Marketing\nwor
 func loadEasyTestAgent(t *testing.T, frontmatter string) (Agent, []error) {
 	t.Helper()
 
-	result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\n" + frontmatter + "\n---\nBody\n")}, AgentLoadConfig{
+	result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\n" + frontmatter + "\n---\nBody\n")}, &AgentLoadConfig{
 		MCPFacets:         map[string]map[string][]string{"s": {"read": {"list_*", "-list_secrets"}, "write": {"update_*"}, "sudo": {"*"}}, "t": {"read": {"get_*"}}},
 		Providers:         []string{"openai", "work"},
 		DecisionProviders: []string{"openai"},
+		OpenCodeServers:   []string{"local", "other"},
 		Skills: fstest.MapFS{
 			"marketing/seo/SKILL.md":      testMapFile("---\nname: seo\ndescription: SEO\n---\n"),
 			"marketing/team/ads/SKILL.md": testMapFile("---\nname: ads\ndescription: Ads\n---\n"),
@@ -58,6 +59,8 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 		{"tags without tags group", easyRequired + "\nrocketclaw: [sessions]\ntags: [[open, closed]]", "main.md: tags: required by the tags group in rocketclaw, and only with it"},
 		{"missing skill folder", easyRequired + "\nskills: [missing]", `main.md: skills: folder "missing" does not exist`},
 		{"unknown mcp server", easyRequired + "\nmcp: {unknown: [read]}", `main.md: mcp: server "unknown" is not configured`},
+		{"unknown opencode server", easyRequired + "\nopencode: [remote]", `main.md: opencode: server "remote" is not configured`},
+		{"opencode auto", easyRequired + "\nopencode: auto", "main.md: opencode: must be a list of servers"},
 		{"undefined mcp facet", easyRequired + "\nmcp: {t: [write]}", `main.md: mcp: server "t" has no "write" facet`},
 		{"wildcard target", easyRequired + "\nallowedNetworkTargets: ['*.googleapis.com']", "main.md: allowedNetworkTargets: *.googleapis.com: wildcards and CIDR ranges are not supported"},
 		{"CIDR target", easyRequired + "\nallowedNetworkTargets: [10.0.0.0/8]", "main.md: allowedNetworkTargets: 10.0.0.0/8: wildcards and CIDR ranges are not supported"},
@@ -230,7 +233,7 @@ func TestEasyAgentPermissions(t *testing.T) {
 		{"grep", "TODO", PermissionAuto},
 		{"webfetch", "https://example.com", PermissionAuto},
 		{"websearch", "*", PermissionAuto},
-		{"opencode", "local", PermissionAuto},
+		{"opencode", "local", PermissionDeny},
 		{"mcp", "s.update_x", PermissionDeny},
 		{"mcp", "t.get_x", PermissionDeny},
 		{"rocketclaw", codeModeApproveSubject, PermissionAuto},
@@ -300,6 +303,7 @@ func TestEasyAgentSections(t *testing.T) {
 			on:  [][2]string{{"mcp", "s.list_secrets"}, {"mcp", "s.other"}},
 			off: [][2]string{{"mcp", "t.get_x"}}},
 		{name: "no mcp", sections: "mcp: {}", off: [][2]string{{"mcp", "s.list_reports"}, {"mcp", "t.get_x"}}},
+		{name: "opencode server", sections: "opencode: [local]", on: [][2]string{{"opencode", "local"}}, off: [][2]string{{"opencode", "other"}}},
 		{name: "no subagents", sections: "subagents: []", off: [][2]string{{"task", "main"}}},
 		{name: "no recursion", sections: "maxRecursion: 0", off: [][2]string{{"task", "main"}}},
 		{name: "no decision models", off: [][2]string{{"decision", "openai/gpt-6-luna"}}},
@@ -334,6 +338,14 @@ func TestEasyAgentSections(t *testing.T) {
 		{Pattern: "s.list_*", Action: PermissionAuto, Except: []string{"s.list_secrets"}},
 		{Pattern: "s.update_*", Action: PermissionAuto},
 	}, agent.Permission.Buckets[slices.IndexFunc(agent.Permission.Buckets, func(bucket PermissionBucket) bool { return bucket.Name == mcpPermissionBucket })].Rules)
+
+	openCodeAPI := looperTool{Permission: "opencode", VisibilitySubjects: []string{"local", "other"}}
+
+	for sections, want := range map[string]bool{"": false, "\nopencode: []": false, "\nopencode: [other]": true} {
+		agent, errs := loadEasyTestAgent(t, easyRequired+sections)
+		require.Empty(t, errs)
+		require.Equal(t, want, toolVisible(&agent, "opencode_api", &openCodeAPI), sections)
+	}
 }
 
 func TestEasyApproverTools(t *testing.T) {

@@ -111,7 +111,7 @@ func (e *AgentMaxRecursionError) Unwrap() error {
 	return e.Err
 }
 
-func LoadAgents(fsys fs.FS, cfg AgentLoadConfig) AgentLoadResult {
+func LoadAgents(fsys fs.FS, cfg *AgentLoadConfig) AgentLoadResult {
 	result := AgentLoadResult{
 		Agents: Agents{Items: map[string]Agent{}},
 		Errors: nil,
@@ -182,7 +182,7 @@ func ParseModelRef(ref string) (model, effort string) {
 	return strings.TrimSpace(model), effort
 }
 
-func loadAgent(fsys fs.FS, filePath string, cfg AgentLoadConfig) (Agent, error) {
+func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error) {
 	data, err := fs.ReadFile(fsys, filePath)
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: read agent: %w", filePath, err)
@@ -301,7 +301,7 @@ type ApproverDecision struct {
 	Prompt        string  `yaml:"prompt"`
 }
 
-func parseAgentApprover(node *yaml.Node, agent *Agent, cfg AgentLoadConfig) error {
+func parseAgentApprover(node *yaml.Node, agent *Agent, cfg *AgentLoadConfig) error {
 	field := frontmatterField(node, "approver")
 	if field != nil && field.Kind != yaml.MappingNode {
 		return errors.New("approver: must be a mapping with only decision")
@@ -314,7 +314,7 @@ func parseAgentApprover(node *yaml.Node, agent *Agent, cfg AgentLoadConfig) erro
 	return parseApproverDecision(field, agent, cfg)
 }
 
-func parseApproverDecision(approver *yaml.Node, agent *Agent, cfg AgentLoadConfig) error {
+func parseApproverDecision(approver *yaml.Node, agent *Agent, cfg *AgentLoadConfig) error {
 	if approver == nil {
 		return nil
 	}
@@ -346,7 +346,7 @@ func parseApproverDecision(approver *yaml.Node, agent *Agent, cfg AgentLoadConfi
 	return checkDecisionModels(cfg, agent.ApproverDecision.Model)
 }
 
-func checkDecisionModels(cfg AgentLoadConfig, models ...string) error {
+func checkDecisionModels(cfg *AgentLoadConfig, models ...string) error {
 	for _, model := range models {
 		if provider, _, _ := strings.Cut(model, "/"); model != "" && !slices.Contains(cfg.DecisionProviders, provider) {
 			return fmt.Errorf("decision model %q: provider %q is not configured in decision", model, provider)
