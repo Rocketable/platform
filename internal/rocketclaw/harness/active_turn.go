@@ -1,9 +1,5 @@
 package harness
 
-import (
-	"slices"
-)
-
 type ReplayAttribution struct {
 	Start           int     `json:"start"`
 	End             int     `json:"end"`
@@ -29,11 +25,12 @@ func (e *SessionEntry) AttributionAt(index int) ReplayAttribution {
 	return ReplayAttribution{Agent: e.Agent, Model: e.Model, ReasoningEffort: e.ReasoningEffort}
 }
 
-func (e *SessionEntry) attributionRanges(offset int) []ReplayAttribution {
-	ranges := slices.Clone(e.ReplayAttribution)
+func (e *SessionEntry) appendAttributionRanges(ranges []ReplayAttribution, offset int) []ReplayAttribution {
+	start := len(ranges)
+	ranges = append(ranges, e.ReplayAttribution...)
 
 	ranges = append(ranges, ReplayAttribution{End: len(e.ReplayInput), Agent: e.Agent, Model: e.Model, ReasoningEffort: e.ReasoningEffort})
-	for i := range ranges {
+	for i := start; i < len(ranges); i++ {
 		ranges[i].Start += offset
 		ranges[i].End += offset
 	}

@@ -570,7 +570,7 @@ func (l *looper) Loop(
 
 			for i := range entries {
 				entry := &entries[i]
-				historyAttribution = append(historyAttribution, entry.attributionRanges(offset)...)
+				historyAttribution = entry.appendAttributionRanges(historyAttribution, offset)
 				offset += len(entry.ReplayInput)
 			}
 		}
@@ -632,7 +632,7 @@ func (l *looper) Loop(
 			return err
 		}
 
-		historyAttribution = append(historyAttribution, turn.attributionRanges(len(history))...)
+		historyAttribution = turn.appendAttributionRanges(historyAttribution, len(history))
 		history = append(history, items...)
 
 		for _, item := range rendered {
@@ -749,7 +749,7 @@ func (l *looper) runTurn(
 
 			params := l.buildParams(history)
 
-			attribution := append(slices.Clone(baseAttribution), record.attributionRanges(len(baseHistory))...)
+			attribution := record.appendAttributionRanges(slices.Clone(baseAttribution), len(baseHistory))
 			attributionEnd := len(baseHistory) + len(turnItems)
 
 			observer := &responseObservations{owner: observations, agent: record.Agent, model: record.Model}
