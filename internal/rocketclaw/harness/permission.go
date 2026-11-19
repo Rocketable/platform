@@ -79,6 +79,8 @@ func InterpolatePermissions(agent *Agent, env map[string]string) {
 	buckets := slices.Clone(agent.Permission.Buckets)
 	for i, bucket := range buckets {
 		kept := slices.Clone(bucket.Rules)[:0]
+
+	rules:
 		for _, rule := range bucket.Rules {
 			if matches := permissionEnvPattern.FindAllStringSubmatchIndex(rule.Pattern, -1); len(matches) > 0 {
 				segments := make([]ruleSegment, 0, 2*len(matches)+1)
@@ -99,8 +101,6 @@ func InterpolatePermissions(agent *Agent, env map[string]string) {
 				continue
 			}
 
-			dropped := false
-
 			for k, segment := range rule.segments {
 				if !segment.Literal {
 					continue
@@ -118,15 +118,10 @@ func InterpolatePermissions(agent *Agent, env map[string]string) {
 				}
 
 				if value == "" {
-					dropped = true
-					break
+					continue rules
 				}
 
 				rule.segments[k].Text = value
-			}
-
-			if dropped {
-				continue
 			}
 
 			rule.Pattern = joinRuleSegments(rule.segments)
