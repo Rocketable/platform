@@ -356,6 +356,25 @@ type sessionListSummary struct {
 	LastAssistantMessage string
 }
 
+const sessionListCandidatesSQL = `WITH RECURSIVE runs AS (
+    SELECT conversation_id, reports_to FROM conversations WHERE reports_to IS NOT NULL
+), viewed AS (
+    SELECT conversation_id, entry_timestamp FROM entries
+    UNION ALL SELECT r.reports_to, e.entry_timestamp FROM runs r JOIN entries e USING (conversation_id)
+    UNION ALL SELECT c.conversation_id, e.entry_timestamp FROM conversations c JOIN entries e ON e.conversation_id = c.continues
+    WHERE c.continues IS NOT NULL
+), recent AS (
+    SELECT conversation_id, MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") AS latest FROM viewed GROUP BY conversation_id
+    HAVING MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") >= $1 COLLATE "C"
+    AND ($2 = '' OR MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") < $2 COLLATE "C")
+), starts AS (
+    SELECT conversation_id AS id FROM recent
+), ` + ancestorsSQL + `, shadowed AS (
+    SELECT DISTINCT a.id AS conversation_id FROM ancestors a JOIN conversations b ON b.conversation_id = a.conversation_id WHERE b.shadow_parent IS NOT NULL
+)
+SELECT r.conversation_id FROM recent r LEFT JOIN shadowed s USING (conversation_id) WHERE s.conversation_id IS NULL
+ORDER BY r.latest DESC, r.conversation_id COLLATE "C" LIMIT $3`
+
 func listSessionsTool(service *SessionService, threads *threadBridgeManager) harness.Tool {
 	return harness.Tool{
 		Name: sessionsListToolName, Description: fmt.Sprintf("List durable conversations of this State Store, newest first. Supply all five fields: criteria, since (required), until (empty for no upper bound), limit (1 to %d) and include_message_preview. Returns TSV with a header, one session per row with entry counts, timestamps and optional message previews. "+
@@ -419,23 +438,7 @@ func listSessionsTool(service *SessionService, threads *threadBridgeManager) har
 			)
 
 			if criteria := strings.TrimSpace(params.Criteria); criteria == "" {
-				ids, err = queryStrings(ctx, service.db, `WITH RECURSIVE runs AS (
-    SELECT conversation_id, reports_to FROM conversations WHERE reports_to IS NOT NULL
-), viewed AS (
-    SELECT conversation_id, entry_timestamp FROM entries
-    UNION ALL SELECT r.reports_to, e.entry_timestamp FROM runs r JOIN entries e USING (conversation_id)
-    UNION ALL SELECT c.conversation_id, e.entry_timestamp FROM conversations c JOIN entries e ON e.conversation_id = c.continues
-    WHERE c.continues IS NOT NULL
-), starts AS (
-    SELECT DISTINCT conversation_id AS id FROM viewed
-), `+ancestorsSQL+`, shadowed AS (
-    SELECT DISTINCT a.id AS conversation_id FROM ancestors a JOIN conversations b ON b.conversation_id = a.conversation_id WHERE b.shadow_parent IS NOT NULL
-)
-SELECT v.conversation_id FROM viewed v LEFT JOIN shadowed s USING (conversation_id) WHERE s.conversation_id IS NULL
-GROUP BY v.conversation_id
-HAVING MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") >= $1 COLLATE "C"
-AND ($2 = '' OR MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") < $2 COLLATE "C")
-ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, v.conversation_id COLLATE "C" LIMIT $3`, "session tool candidates", params.Since, params.Until, params.Limit)
+				ids, err = queryStrings(ctx, service.db, sessionListCandidatesSQL, "session tool candidates", params.Since, params.Until, params.Limit)
 			} else {
 				threads.mu.Lock()
 				slack := threads.slackLookups

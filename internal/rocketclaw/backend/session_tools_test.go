@@ -255,6 +255,29 @@ func TestSessionToolsStoredContract(t *testing.T) {
 		}
 	}
 
+	_, err = service.db.ExecContext(t.Context(), `UPDATE conversations SET shadow_parent = 'exec:last' WHERE conversation_id = 'headed'`)
+	require.NoError(t, err)
+
+	var planJSON []byte
+
+	err = service.db.QueryRowContext(t.Context(), `EXPLAIN (ANALYZE, TIMING OFF, FORMAT JSON) `+sessionListCandidatesSQL,
+		"2026-09-24T12:00:00", "2026-09-24T13:00:00", 200).Scan(&planJSON)
+	require.NoError(t, err)
+
+	type step struct {
+		Name string  `json:"Subplan Name"`
+		Rows float64 `json:"Actual Rows"`
+	}
+
+	var plan []struct {
+		Plan struct {
+			Plans []step
+		}
+	}
+	require.NoError(t, json.Unmarshal(planJSON, &plan))
+	require.Len(t, plan, 1)
+	require.Contains(t, plan[0].Plan.Plans, step{Name: "CTE ancestors", Rows: 1})
+
 	first, latest := fmt.Sprintf("2026-09-24T13:00:00Z\tuser\tfirst\n2026-09-24T13:00:00Z\tassistant\t%s\n", "assistant"), fmt.Sprintf("2026-09-24T11:00:00Z\tuser\t  latest\\n user\\tΩ\\r\\\\  \n2026-09-24T11:00:00Z\tassistant\t%s\n", "assistant")
 	for _, tc := range []struct {
 		limit  int
