@@ -564,7 +564,7 @@ test("running tabs keep a reachable close control, and closing hands focus to th
   await tab("Delta").waitFor();
   expect(await names(page)).toEqual(["New session", "Alpha", "Bravo", "Charlie", "Delta", "Search"]);
   await page.mouse.move(640, 400);
-  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running, Background work running");
   const close = strip(page).getByRole("button", { name: "Close Delta" });
   expect(await close.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
   await close.focus();
@@ -687,8 +687,8 @@ test("tab status icons and running titles keep their layout and shimmer in both 
   await tab("Echo").and(page.locator('[aria-description$="Background work running"]')).waitFor();
   expect(await tab("Echo").getAttribute("aria-description")).toEndWith("Background work running");
   expect(await tab("Echo").locator("svg").getAttribute("class")).toContain("lucide-hourglass");
-  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
-  expect(await tab("Delta").locator("svg").getAttribute("class")).toContain("lucide-message-square");
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running, Background work running");
+  expect(await tab("Delta").locator("svg").getAttribute("class")).toContain("lucide-hourglass");
 
   await page.goto(`${origin}${href("hotel")}`);
   await tab("Hotel").and(page.locator('[aria-description$="Forked session"]')).waitFor();
@@ -703,8 +703,8 @@ test("with reduced motion a running tab's title shows a still gradient", () => w
   await tab("Alpha").waitFor();
   await page.goto(`${origin}${href("delta")}`);
   const title = tab("Delta").getByText("Delta", { exact: true });
-  await tab("Delta").and(page.locator('[aria-description$="Turn running"]')).waitFor();
-  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
+  await tab("Delta").and(page.locator('[aria-description$="Background work running"]')).waitFor();
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running, Background work running");
   expect(await animation(title)).toBe("none");
   expect(await gradient("Delta")).toStartWith("linear-gradient(");
   expect(await gradient("Alpha")).toBe("none");
@@ -925,12 +925,12 @@ test("tab groups take a name and color, collapse, adopt opened tabs, follow drag
   await openFromPalette(page, "Delta");
   await page.waitForURL(`**${href("delta")}`);
   expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Delta", "Charlie"]);
-  expect(await tab("Delta").getAttribute("aria-description")).toBe("Group Work, Space: Main, Turn running");
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Group Work, Space: Main, Turn running, Background work running");
   await tab("Charlie").dragTo(tab("Alpha"));
   expect(await order(page)).toEqual(["Work", "Charlie", "Alpha", "Bravo", "Delta"]);
   await menu(page, "Delta", "Remove from group");
   expect(await order(page)).toEqual(["Work", "Charlie", "Alpha", "Bravo", "Delta"]);
-  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running, Background work running");
   await tab("Alpha").dragTo(tab("Delta"));
   expect(await order(page)).toEqual(["Work", "Charlie", "Bravo", "Delta", "Alpha"]);
   expect(await tab("Alpha").getAttribute("aria-description")).toBe("Space: Main");
@@ -968,7 +968,7 @@ test("Cmd/Ctrl+click and Shift+click select tabs that the tab menu groups and un
   await tab("Bravo").click({ modifiers: ["Shift"] });
   expect(await page.evaluate(() => getSelection()!.toString())).toBe("");
   expect(await tab("Bravo").getAttribute("aria-description")).toBe("In selection, Space: Main");
-  expect(await tab("Delta").getAttribute("aria-description")).toBe("Group Blue group, Space: Main, Turn running");
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Group Blue group, Space: Main, Turn running, Background work running");
   // Work, emptied, stays where it was.
   await menu(page, "Bravo", "Add to group", "Blue group");
   expect(await order(page)).toEqual(["Work", "Blue group", "Delta", "Alpha", "Charlie", "Bravo"]);
@@ -2017,6 +2017,7 @@ test("Park until it is done is offered for a session, not a page, and parks the 
   await until(() => saved.sent.length === 1);
   expect(saved.sent[0]).toEqual({ paths: [href("alpha")], action: "PARK_UNTIL_DONE" });
   await parked.locator('[role="tab"][aria-label="Alpha"][aria-description$="Parked until it is done"]').waitFor();
+  expect(await parked.getByRole("tab", { name: "Alpha", exact: true }).locator("svg").getAttribute("class")).toContain("lucide-message-square");
 
   // Cmd/Ctrl+Shift+S parks the session in view the same way, and on a page parks nothing.
   await strip(page).getByRole("tab", { name: "Cron", exact: true }).click();
@@ -2092,6 +2093,7 @@ test("the palette offers the tab in view the same attention items, without Mute 
   expect(saved.sent[0]).toEqual({ paths: [href("alpha")], action: "PARK", until: await page.evaluate(() => new Date("2030-01-02T10:30").toISOString()) });
   const stated = await page.evaluate(() => `Parked until ${new Date("2030-01-02T10:30").toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`);
   await parked.locator(`[role="tab"][aria-label="Alpha"][aria-description$="${stated}"]`).waitFor();
+  expect(await parked.getByRole("tab", { name: "Alpha", exact: true }).locator("svg").getAttribute("class")).toContain("lucide-clock");
 }), 30_000);
 
 test("a Shared row offers the attention items as a tab of the person's own does, and stays in place when parked, dimmed only for the person who parked it", () => withPage({}, async (page, origin, _prompts, saved) => {

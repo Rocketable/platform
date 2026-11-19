@@ -2224,13 +2224,14 @@ function RemoteRow({ tab, view, ...props }: { tab: Tab; view?: ServerView } & Om
 // Marks a session waiting on this person's answer, in its tab, its collapsed group, and its session row.
 const needsYou = <span className="ml-auto shrink-0 rounded-full bg-amber-200 px-1.5 text-[10.5px]/4 font-semibold whitespace-nowrap text-amber-900 dark:bg-amber-800 dark:text-amber-50">Needs you</span>;
 
-// Waiting on this person's answer wins over the running turn that asks, which wins over background work, which
-// can wake the session after its turn. Only a turn not waiting on this person is working, so its title shimmers.
-// A chat whose agent is paused shows a pause glyph in place of the chat icon, else a forked session a fork glyph.
-function tabActivity(session: Session, unread: boolean) {
+// Waiting on this person's answer wins over the running turn that asks and over background work, such as a subagent
+// or a shell command. A park until a time or until unparked shows a clock, else background work an hourglass, also
+// while a turn runs. Only a turn not waiting on this person is working, so its title shimmers. A chat whose agent is
+// paused shows a pause glyph in place of the chat icon, else a forked session a fork glyph.
+function tabActivity(session: Session, unread: boolean, clocked: boolean) {
   const Chat = session.paused ? CirclePause : session.forkedFrom ? GitFork : MessageSquare;
-  const [activity, Icon] = session.asking ? ["Needs your answer", Chat] as const : session.running ? ["Turn running", Chat] as const : session.background ? ["Background work running", Hourglass] as const : ["", Chat] as const;
-  return [[session.forkedFrom && "Forked session", session.paused && "Agent paused", activity, unread && "Unread"].filter(Boolean).join(", "), Icon, session.running && !session.asking] as const;
+  const activity = session.asking ? ["Needs your answer"] : [session.running && "Turn running", session.background && "Background work running"];
+  return [[session.forkedFrom && "Forked session", session.paused && "Agent paused", ...activity, unread && "Unread"].filter(Boolean).join(", "), session.asking ? Chat : clocked ? Clock : session.background ? Hourglass : Chat, session.running && !session.asking] as const;
 }
 
 const tabLabel = (tab: Pick<Tab, "path" | "search">, session: Session, SessionIcon: typeof Search): [string, typeof Search] =>
@@ -2258,7 +2259,7 @@ function TabItem({ tab, description, detail, chosen, rule, active, stop, shared,
   // A tab of any kind waits while marked and not parked, by its session row or its location's row. A parked one is
   // dimmed; its park shows under its title.
   const mark = id ? rowAttention(session) : attentionOf(sidebar, tab.path), unread = !!mark?.unreadAt && !mark.parked, aside = timerText(mark);
-  const [activity, SessionIcon, working] = tabActivity(session, unread);
+  const [activity, SessionIcon, working] = tabActivity(session, unread, !!mark?.parked && !mark.untilDone);
   const [label, Icon] = tabLabel(tab, session, SessionIcon);
   const title = useTabTitle(tab.path, label);
   const ref = useRef<HTMLDivElement>(null);
