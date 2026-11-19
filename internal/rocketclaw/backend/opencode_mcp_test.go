@@ -127,9 +127,9 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 		assert.True(t, failed, out)
 	}
 
-	_, found, err := s.ConversationKind(ctx, "opencode:box:ses_lone")
+	kind, err := s.ConversationKind(ctx, "opencode:box:ses_lone")
 	require.NoError(t, err)
-	assert.False(t, found)
+	assert.Empty(t, kind)
 
 	spaces, err := s.Spaces(ctx)
 	require.NoError(t, err)

@@ -1555,12 +1555,12 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 	}
 
 	if source != "" && !run {
-		_, found, err := s.sessions.ConversationKind(ctx, source)
+		kind, err := s.sessions.ConversationKind(ctx, source)
 		if err != nil {
 			return nil, fmt.Errorf("read cron conversation: %w", err)
 		}
 
-		if !found {
+		if kind == "" {
 			return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.NotFound, "source cron run is not recorded"))
 		}
 
@@ -1979,7 +1979,7 @@ func (s *Server) reorderQueue(ctx context.Context, request *ReorderQueueRequest)
 }
 
 func (s *Server) queueKeptAsSent(ctx context.Context, id string) error {
-	kind, _, err := s.sessions.ConversationKind(ctx, id)
+	kind, err := s.sessions.ConversationKind(ctx, id)
 	if err != nil {
 		return fmt.Errorf("resolve web conversation kind: %w", err)
 	}
@@ -2087,7 +2087,7 @@ func (s *Server) answerQuestion(ctx context.Context, request *AnswerQuestionRequ
 }
 
 func (s *Server) promptable(ctx context.Context, id string) (backend.ConversationKind, error) {
-	kind, _, err := s.sessions.ConversationKind(ctx, id)
+	kind, err := s.sessions.ConversationKind(ctx, id)
 	if err != nil || kind == backend.KindRemote {
 		return kind, fmt.Errorf("web prompt: %w", cmp.Or(err, status.Error(codes.InvalidArgument, "remote OpenCode sessions are driven in their own frame")))
 	}
@@ -2131,12 +2131,12 @@ func (s *Server) visibleConversation(ctx context.Context, id string) error {
 		return fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "conversation ID is required"))
 	}
 
-	kind, found, err := s.sessions.ConversationKind(ctx, id)
+	kind, err := s.sessions.ConversationKind(ctx, id)
 	if err != nil {
 		return fmt.Errorf("resolve web conversation visibility: %w", err)
 	}
 
-	if !found {
+	if kind == "" {
 		return fmt.Errorf("web conversation: %w", status.Error(codes.NotFound, "conversation is not recorded"))
 	}
 
