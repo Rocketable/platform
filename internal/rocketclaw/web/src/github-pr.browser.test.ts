@@ -197,7 +197,7 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     await viewer().getByRole("treeitem", { name: "file-marker-0.txt", exact: true }).click();
     hold = "files";
     const beforePageCancel = await page.evaluate(() => (window as any).requestAborts);
-    await scrollPatch(true);
+    await viewer().getByRole("region", { name: "File patch", exact: true }).press("End");
     await pending.promise;
     await viewer().getByRole("button", { name: "Cancel", exact: true }).click();
     expect(await viewer().count()).toBe(1);
