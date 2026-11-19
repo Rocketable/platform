@@ -91,22 +91,20 @@ func (s *SessionService) AgentDraftLayers(ctx context.Context, id, variant, dest
 
 	report := &AgentDraftLayers{Layers: layers, Recreated: layers[0].File != nil && at < len(layers)-1, Next: string(renderAgentDraftFile(draft.Mode, &draft.Variants[i]))}
 
-	var replaced AgentLayer
-
 	for _, layer := range layers[at+1:] {
 		if layer.File != nil {
 			report.HiddenBy = layer.Layer
 		}
 	}
 
-	for _, layer := range layers[:at] {
+	for _, layer := range slices.Backward(layers[:at]) {
 		if layer.File != nil {
-			replaced = layer
-		}
-	}
+			if layers[at].File == nil || sameAgentFile(layers[at].File, layer.File) {
+				report.Replaces = layer.Layer
+			}
 
-	if replaced.File != nil && (layers[at].File == nil || sameAgentFile(layers[at].File, replaced.File)) {
-		report.Replaces = replaced.Layer
+			break
+		}
 	}
 
 	if at < len(layers)-1 {
