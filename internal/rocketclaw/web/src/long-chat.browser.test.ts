@@ -19,9 +19,10 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   let fullReads = 0, streamRequests = 0, firstReadArrived = false;
   const streamOpened = Promise.withResolvers<void>();
   let waitingFor = "Chromium launch";
+  let browserDisconnectedAtMs: number | null = null;
   const scroll: string[] = [], pageErrors: string[] = [], failedReads: string[] = [];
   onTestFinished(() => {
-    if (waitingFor) console.error("Long chat test state", JSON.stringify({ waitingFor, firstReadArrived, streamRequests, fullReads, pages, scroll, pageErrors, failedReads }));
+    if (waitingFor) console.error("Long chat test state", JSON.stringify({ waitingFor, browserDisconnectedAtMs, firstReadArrived, streamRequests, fullReads, pages, scroll, pageErrors, failedReads }));
   });
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
@@ -57,6 +58,9 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
+  browser.once("disconnected", () => {
+    browserDisconnectedAtMs = Math.round(performance.now() - startedAt);
+  });
   try {
     waitingFor = "navigation and loading placeholder";
     const page = await browser.newPage({ viewport: { width: 1100, height: 650 } });
@@ -153,6 +157,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     expect(await page.getByText(`assistant ${turns}`, { exact: true }).count()).toBe(1);
     expect(await page.locator("textarea").inputValue()).toBe(typed);
     waitingFor = `browser cleanup (started ${Math.round(performance.now() - startedAt)} ms into the test)`;
+    expect(browserDisconnectedAtMs, "Chromium disconnected before cleanup").toBeNull();
   } finally {
     await browser.close();
     server.stop(true);
