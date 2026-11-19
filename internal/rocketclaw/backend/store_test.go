@@ -698,6 +698,29 @@ func TestSlackChannelFacts(t *testing.T) {
 	assert.Equal(t, []string{"G1"}, ids)
 }
 
+func TestCronRunSourcesBoundsDeliveryRows(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	_, err := store.db.ExecContext(ctx, `INSERT INTO conversations
+    (conversation_id, agent, created_by, kind, listed, retention, reports_to, continues, cron_path, cron_run_at_unix_ns, revert_message_id)
+VALUES ('run', 'main', '', 'cron_run', FALSE, 'private', 'report', NULL, 'cron/report.md', 1, ''),
+       ('report', 'main', 'alice', 'web_chat', TRUE, 'record', NULL, DEFAULT, NULL, DEFAULT, '1:1'),
+       ('fork', 'main', 'alice', 'web_chat', TRUE, 'record', NULL, 'run', NULL, DEFAULT, '1:0');
+INSERT INTO entries (id, conversation_id, entry_json, entry_timestamp)
+SELECT n, 'run', '{}', '' FROM generate_series(1, 512) n;`)
+	require.NoError(t, err)
+
+	sources, err := store.CronRunSources(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []CronRunSource{{ConversationID: "report", SourceConversationID: "run", Run: protocol.CronRun{Path: "cron/report.md", At: time.Unix(0, 1).UTC()}}}, sources)
+
+	plan, err := queryStrings(ctx, store.db, `EXPLAIN (ANALYZE, TIMING OFF) `+cronRunSourcesSQL, "cron run sources plan")
+	require.NoError(t, err)
+	require.Regexp(t, `Append +\([^\n]+\(actual rows=3(?:\.0+)? loops=1\)`, strings.Join(plan, "\n"))
+}
+
 func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
 	t.Parallel()
 

@@ -1083,29 +1083,28 @@ type CronRunSource struct {
 	Run                  protocol.CronRun
 }
 
-func (s *SessionService) CronRunSources(ctx context.Context) ([]CronRunSource, error) {
-	return queryRows(ctx, s.db, `WITH runs AS (
-    SELECT conversation_id, reports_to, cron_path, cron_run_at_unix_ns FROM conversations WHERE kind IN ('cron_run', 'one_off_cron_run')
+const cronRunSourcesSQL = `WITH located AS (
+    SELECT conversation_id, reports_to, cron_path, cron_run_at_unix_ns FROM conversations
+    WHERE kind IN ('cron_run', 'one_off_cron_run') AND cron_path IS NOT NULL
+), firsts AS (
+    SELECT e.conversation_id, min(e.id) AS id FROM located r JOIN entries e USING (conversation_id) GROUP BY e.conversation_id
 ), deliveries AS (
-    SELECT e.id, e.conversation_id, e.conversation_id AS source FROM runs r JOIN entries e USING (conversation_id)
-    UNION ALL
-    SELECT e.id, r.reports_to, r.conversation_id FROM runs r JOIN entries e USING (conversation_id)
+    SELECT id, conversation_id, conversation_id AS source FROM firsts
+    UNION ALL SELECT e.id, r.reports_to, r.conversation_id FROM firsts e JOIN located r USING (conversation_id)
     WHERE r.reports_to IS NOT NULL
-    UNION ALL
-    SELECT e.id, c.conversation_id, c.continues FROM conversations c JOIN entries e ON e.conversation_id = c.continues
-), located AS (
-    -- A run whose start migration 051 could not read from its ID has no location and is left out.
-    SELECT conversation_id, cron_path, cron_run_at_unix_ns FROM runs WHERE cron_path IS NOT NULL
+    UNION ALL SELECT e.id, c.conversation_id, c.continues FROM firsts e JOIN conversations c ON c.continues = e.conversation_id
 )
-SELECT DISTINCT d.conversation_id, r.conversation_id, r.cron_path, r.cron_run_at_unix_ns FROM deliveries d
+SELECT d.conversation_id, r.conversation_id, r.cron_path, r.cron_run_at_unix_ns FROM deliveries d
 JOIN conversations c ON c.conversation_id = d.conversation_id JOIN located r ON r.conversation_id = d.source
-LEFT JOIN runs own ON own.conversation_id = d.conversation_id
 WHERE c.retention = 'record' AND (c.revert_message_id = '' OR d.id < split_part(c.revert_message_id, ':', 1)::bigint
         OR d.id = split_part(c.revert_message_id, ':', 1)::bigint AND split_part(c.revert_message_id, ':', 2)::integer > 0)
-    AND (d.conversation_id = d.source OR own.conversation_id IS NULL AND c.kind <> 'external_mcp_run')
+    AND (d.conversation_id = d.source OR c.kind NOT IN ('cron_run', 'one_off_cron_run', 'external_mcp_run'))
 UNION
 SELECT t.conversation_id, r.conversation_id, r.cron_path, r.cron_run_at_unix_ns FROM turns t JOIN located r USING (conversation_id) JOIN conversations c USING (conversation_id)
-WHERE c.retention = 'record' AND t.takes_lane AND (t.phase NOT IN ('waiting', 'done') OR t.terminal <> '')`, "cron run sources", func(row rowScanner) (CronRunSource, error) {
+WHERE c.retention = 'record' AND t.takes_lane AND (t.phase NOT IN ('waiting', 'done') OR t.terminal <> '')`
+
+func (s *SessionService) CronRunSources(ctx context.Context) ([]CronRunSource, error) {
+	return queryRows(ctx, s.db, cronRunSourcesSQL, "cron run sources", func(row rowScanner) (CronRunSource, error) {
 		var (
 			source CronRunSource
 			at     int64
