@@ -422,17 +422,19 @@ Help with guides and docs. École １２.
 `),
 	}, "/tmp/skills").Skills
 
+	agent := agentWithSkillPermission()
+
 	t.Run("returns all skills when query is empty", func(t *testing.T) {
 		require.Equal(t, strings.Join([]string{
 			"## Matching skills",
 			"- **docs-writer**: Write product documentation",
 			"- **git-release**: Create consistent releases and changelogs",
 			"- **release-notes**: Summarize merged PRs",
-		}, "\n"), loaded.Find("   "))
+		}, "\n"), loaded.FindAvailable("   ", agent))
 	})
 
 	t.Run("exact name match ranks first case insensitively", func(t *testing.T) {
-		got := loaded.Find("GIT-RELEASE")
+		got := loaded.FindAvailable("GIT-RELEASE", agent)
 		lines := strings.Split(got, "\n")
 		require.Equal(t, "## Matching skills", lines[0])
 		require.Equal(t, "- **git-release**: Create consistent releases and changelogs", lines[1])
@@ -456,12 +458,12 @@ Help with guides and docs. École １２.
 			"- **git-release**: Create consistent releases and changelogs",
 			"- **release-notes**: Summarize merged PRs",
 			"- **tag**: Summarize releases",
-		}, "\n"), skills.Find("release"))
+		}, "\n"), skills.FindAvailable("release", agent))
 	})
 
 	t.Run("matches description and content case insensitively", func(t *testing.T) {
 		for _, query := range []string{"GUIDES", " --GUIDES///DOCS?! ", " ÉCOLE---１２ ", "GUIDES\xffDOCS"} {
-			require.Equal(t, "## Matching skills"+"\n"+"- **docs-writer**: Write product documentation", loaded.Find(query), "query %q", query)
+			require.Equal(t, "## Matching skills"+"\n"+"- **docs-writer**: Write product documentation", loaded.FindAvailable(query, agent), "query %q", query)
 		}
 	})
 }

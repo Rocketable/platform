@@ -111,16 +111,15 @@ func LoadSkills(fsys fs.FS, root string) SkillLoadResult {
 	return result
 }
 
-func (s Skills) Find(query string) string {
-	if len(s.Items) == 0 {
+func (s Skills) FindAvailable(query string, agent *Agent) string {
+	list := s.Available(agent)
+	if len(list) == 0 {
 		return "No skills are currently available."
 	}
 
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return formatSkills("## Matching skills", slices.SortedFunc(maps.Values(s.Items), func(a, b Skill) int {
-			return strings.Compare(a.Name, b.Name)
-		}))
+		return formatSkills("## Matching skills", list)
 	}
 
 	normalizedQuery := strings.ToLower(query)
@@ -135,7 +134,7 @@ func (s Skills) Find(query string) string {
 
 	matches := []scoredSkill{}
 
-	for _, skill := range s.Items {
+	for _, skill := range list {
 		score := scoreSkill(normalizedQuery, tokens, &skill)
 		if score <= 0 {
 			continue
@@ -152,12 +151,11 @@ func (s Skills) Find(query string) string {
 		return cmp.Or(cmp.Compare(b.score, a.score), cmp.Compare(len(a.skill.Name), len(b.skill.Name)), strings.Compare(a.skill.Name, b.skill.Name))
 	})
 
-	ordered := make([]Skill, 0, len(matches))
-	for _, match := range matches {
-		ordered = append(ordered, match.skill)
+	for i, match := range matches {
+		list[i] = match.skill
 	}
 
-	return formatSkills("## Matching skills", ordered)
+	return formatSkills("## Matching skills", list[:len(matches)])
 }
 
 func (s Skills) Available(agent *Agent) []Skill {
@@ -185,15 +183,6 @@ func skillAllowedForAgent(skill *Skill, agent *Agent) bool {
 	decision := agent.Permission.evaluate("skill", skill.Name)
 
 	return decision.Action == permissionAllow
-}
-
-func (s Skills) FindAvailable(query string, agent *Agent) string {
-	items := map[string]Skill{}
-	for _, skill := range s.Available(agent) {
-		items[skill.Name] = skill
-	}
-
-	return (Skills{Root: s.Root, Items: items, Dirs: s.Dirs, fsys: s.fsys}).Find(query)
 }
 
 func (s Skills) withReadPermissions(root *os.Root, agents Agents) Agents {
