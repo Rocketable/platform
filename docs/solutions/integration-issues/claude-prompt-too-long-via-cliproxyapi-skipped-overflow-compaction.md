@@ -16,7 +16,7 @@ severity: high
 related_components:
   - internal/rocketclaw/backend
   - infrastructure
-retire_when: "router-for-me/CLIProxyAPI#7666 (or an equivalent fix) is merged and released, and the deployed CLIProxyAPI runs that release; check the PR, then send an over-limit Claude request to the proxy's /v1/responses and confirm the 400 body carries code context_length_exceeded"
+retire_when: "the deployed CLIProxyAPI returns code context_length_exceeded when Claude rejects a /v1/responses request as too long before the first streamed byte, through any upstream change; confirm by sending an over-limit Claude request to the deployed proxy's /v1/responses and checking the 400 body"
 tags:
   - context-overflow
   - compaction
@@ -57,7 +57,7 @@ The `provider request failed` log line does not show the provider's message eith
 
 ## Solution
 
-Two changes. The RocketClaw one is the workaround the user asked for, named so that it is obviously temporary:
+The fix is a RocketClaw workaround the user asked for, named so that it is obviously temporary:
 
 ```go
 func isContextLengthExceeded(err error) bool {
@@ -74,7 +74,7 @@ func workaroundCLIProxyAPIClaudePromptTooLongWithoutCodeRemoveOnceUpstreamFixed(
 
 (`internal/rocketclaw/harness/looper.go:1477-1491`.) All four overflow checks go through `isContextLengthExceeded`: the first request and the chunked retries, for both HTTP errors and failed responses (`looper.go:1211`, `:1285`, `:1369`, `:1399`). So this one change covers the first overflow and every retry after a partial compaction.
 
-The upstream fix is draft PR router-for-me/CLIProxyAPI#7666, from the fork `ucirello/CLIProxyAPI` into `dev` (the branch upstream merges into). It reuses the proxy's existing mid-stream mapping for errors returned before the first byte. Open as of 2026-11-18.
+An upstream fix was proposed as router-for-me/CLIProxyAPI#7666. It reused the proxy's existing mid-stream mapping for errors returned before the first byte, including Fast-mode responses the proxy passes through unchanged. It was closed without merging on 2026-11-19, so the workaround stays until CLIProxyAPI fixes this some other way.
 
 ## Why This Works
 
@@ -92,4 +92,4 @@ The recovery machinery was already correct for Claude: CLIProxyAPI serves `/v1/r
 - `docs/solutions/runtime-errors/chatgpt-codex-retired-responses-compact.md`: the same overflow recovery for ChatGPT sign-in providers. Its claim that API-key providers' servers honor `context_management` does not hold for Claude behind CLIProxyAPI.
 - `docs/solutions/architecture-patterns/per-provider-autocompaction-threshold.md`: where `compact_threshold` comes from. For Claude behind CLIProxyAPI, the threshold is sent but has no effect.
 - `docs/verification/codex-context-overflow-compaction/`: the formal model of the overflow recovery. This fix adds no transitions; it only lets one more error shape start the recovery.
-- router-for-me/CLIProxyAPI#7666 (upstream fix, draft), router-for-me/CLIProxyAPI#6869 (closed issue behind the mid-stream mapping it extends).
+- router-for-me/CLIProxyAPI#7666 (proposed upstream fix, closed without merging), router-for-me/CLIProxyAPI#6869 (closed issue behind the mid-stream mapping it extended).
