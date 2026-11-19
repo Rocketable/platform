@@ -111,7 +111,7 @@ func (*publicVoice) kind(eventType string) voiceEventKind {
 	}
 }
 
-func (*publicVoice) appends(id, text string) [][]byte {
+func (*publicVoice) appendMessages(dst [][]byte, id, text string) [][]byte {
 	message := struct {
 		Type         string  `json:"type"`
 		DelegationID *string `json:"delegation_id"`
@@ -122,16 +122,13 @@ func (*publicVoice) appends(id, text string) [][]byte {
 		message.DelegationID = &id
 	}
 
-	chunks := voiceChunks(text, 1500)
-	messages := make([][]byte, 0, len(chunks))
-
-	for _, chunk := range chunks {
+	for _, chunk := range voiceChunks(text, 1500) {
 		message.Content = chunk
 		data, _ := json.Marshal(message)
-		messages = append(messages, data)
+		dst = append(dst, data)
 	}
 
-	return messages
+	return dst
 }
 
 func (*publicVoice) line(said []voiceEvent, _ string) int { return len(said) - 1 }
