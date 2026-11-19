@@ -27,7 +27,7 @@ import (
 const (
 	openCodeSyncLimit    = 100
 	openCodeSyncInterval = 5 * time.Second
-	openCodePruneLimit   = 1_000_000
+	openCodePrunePage    = 2_000
 	openCodePruneEvery   = 24 * time.Hour
 	openCodeShellsEvery  = 15 * time.Minute
 )
@@ -524,19 +524,32 @@ func (s *SessionService) pruneOpenCode(ctx context.Context, name string, server 
 		return err
 	}
 
-	var sessions struct {
-		Data []openCodeSession `json:"data"`
-	}
-	if err := openCodeCall(ctx, name, server, http.MethodGet, fmt.Sprintf("/api/session?parentID=null&limit=%d", openCodePruneLimit), nil, &sessions); err != nil {
-		return err
+	ids := []string{}
+	path := fmt.Sprintf("/api/session?parentID=null&order=asc&limit=%d", openCodePrunePage)
+
+	for {
+		var page struct {
+			Data   []openCodeSession `json:"data"`
+			Cursor struct {
+				Next string `json:"next"`
+			} `json:"cursor"`
+		}
+		if err := openCodeCall(ctx, name, server, http.MethodGet, path, nil, &page); err != nil {
+			return err
+		}
+
+		for _, session := range page.Data {
+			ids = append(ids, "opencode:"+name+":"+session.ID)
+		}
+
+		if page.Cursor.Next == "" {
+			break
+		}
+
+		path = fmt.Sprintf("/api/session?limit=%d&cursor=%s", openCodePrunePage, url.QueryEscape(page.Cursor.Next))
 	}
 
-	ids := make([]string, 0, len(sessions.Data))
-	for _, session := range sessions.Data {
-		ids = append(ids, "opencode:"+name+":"+session.ID)
-	}
-
-	_, err := execState(ctx, s.db, "prune opencode sessions", `DELETE FROM conversations WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $3 AND $4`, name, ids, started, len(ids) < openCodePruneLimit)
+	_, err := execState(ctx, s.db, "prune opencode sessions", `DELETE FROM conversations WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $3`, name, ids, started)
 
 	return err
 }
