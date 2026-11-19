@@ -105,78 +105,68 @@ func customLooperTool(tool *Tool) (looperTool, error) {
 }
 
 func customToolParameters(parameters map[string]any) (map[string]any, error) {
-	if parameters == nil {
-		parameters = map[string]any{}
-	}
+	root := map[string]any{"type": "object"}
+	maps.Copy(root, parameters)
 
-	var normalize func(map[string]any) (map[string]any, error)
+	return normalizeOwnedToolSchema(root)
+}
 
-	normalize = func(schema map[string]any) (map[string]any, error) {
-		result := maps.Clone(schema)
-
-		properties, ok := result["properties"]
-		if ok && properties != nil {
-			typedProperties, ok := properties.(map[string]any)
-			if !ok {
-				return nil, errors.New("parameters.properties must be an object")
-			}
-
-			normalizedProperties := maps.Clone(typedProperties)
-			for name, property := range typedProperties {
-				propertySchema, ok := property.(map[string]any)
-				if !ok {
-					continue
-				}
-
-				normalizedProperty, err := normalize(propertySchema)
-				if err != nil {
-					return nil, err
-				}
-
-				normalizedProperties[name] = normalizedProperty
-			}
-
-			result["properties"] = normalizedProperties
+func normalizeOwnedToolSchema(result map[string]any) (map[string]any, error) {
+	properties, ok := result["properties"]
+	if ok && properties != nil {
+		typedProperties, ok := properties.(map[string]any)
+		if !ok {
+			return nil, errors.New("parameters.properties must be an object")
 		}
 
-		items, ok := result["items"].(map[string]any)
-		if ok {
-			normalizedItems, err := normalize(items)
+		normalizedProperties := maps.Clone(typedProperties)
+		for name, property := range typedProperties {
+			propertySchema, ok := property.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			normalizedProperty, err := normalizeOwnedToolSchema(maps.Clone(propertySchema))
 			if err != nil {
 				return nil, err
 			}
 
-			result["items"] = normalizedItems
+			normalizedProperties[name] = normalizedProperty
 		}
 
-		if result["type"] == "object" {
-			properties, ok := result["properties"]
-			if !ok || properties == nil {
-				properties = map[string]any{}
-				result["properties"] = properties
-			}
+		result["properties"] = normalizedProperties
+	}
 
-			typedProperties := properties.(map[string]any)
-
-			if _, ok := result["additionalProperties"]; !ok {
-				result["additionalProperties"] = false
-			}
-
-			required := slices.Sorted(maps.Keys(typedProperties))
-			if required == nil {
-				required = []string{}
-			}
-
-			result["required"] = required
+	items, ok := result["items"].(map[string]any)
+	if ok {
+		normalizedItems, err := normalizeOwnedToolSchema(maps.Clone(items))
+		if err != nil {
+			return nil, err
 		}
 
-		return result, nil
+		result["items"] = normalizedItems
 	}
 
-	result := maps.Clone(parameters)
-	if _, ok := result["type"]; !ok {
-		result["type"] = "object"
+	if result["type"] == "object" {
+		properties, ok := result["properties"]
+		if !ok || properties == nil {
+			properties = map[string]any{}
+			result["properties"] = properties
+		}
+
+		typedProperties := properties.(map[string]any)
+
+		if _, ok := result["additionalProperties"]; !ok {
+			result["additionalProperties"] = false
+		}
+
+		required := slices.Sorted(maps.Keys(typedProperties))
+		if required == nil {
+			required = []string{}
+		}
+
+		result["required"] = required
 	}
 
-	return normalize(result)
+	return result, nil
 }
