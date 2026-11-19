@@ -605,23 +605,20 @@ func (c *Config) validateRocketClaws() error {
 }
 
 func (c *Config) validatePermissions() error {
-	var seen []string
-
-	for _, login := range slices.Sorted(maps.Keys(c.Permissions)) {
+	logins := slices.Sorted(maps.Keys(c.Permissions))
+	for i, login := range logins {
 		spaces := c.Permissions[login]
 
 		switch {
 		case login == "" || strings.TrimSpace(login) != login:
 			return fmt.Errorf("permissions[%q]: login must not be blank or start or end with spaces", login)
-		case slices.ContainsFunc(seen, func(other string) bool { return strings.EqualFold(other, login) }):
+		case slices.ContainsFunc(logins[:i], func(other string) bool { return strings.EqualFold(other, login) }):
 			return fmt.Errorf("permissions[%q]: another entry has that login, ignoring case", login)
 		case len(spaces) == 0:
 			return fmt.Errorf("permissions[%q]: list at least one space", login)
 		case slices.ContainsFunc(spaces, func(space string) bool { return space == "" || strings.TrimSpace(space) != space }):
 			return fmt.Errorf("permissions[%q]: space names must not be blank or start or end with spaces", login)
 		}
-
-		seen = append(seen, login)
 	}
 
 	return nil
