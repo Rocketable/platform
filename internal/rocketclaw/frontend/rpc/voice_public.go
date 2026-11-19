@@ -122,8 +122,9 @@ func (*publicVoice) appendMessages(dst [][]byte, id, text string) [][]byte {
 		message.DelegationID = &id
 	}
 
-	for _, chunk := range voiceChunks(text, 1500) {
-		message.Content = chunk
+	for text != "" {
+		message.Content = voiceCut(text, 1500)
+		text = text[len(message.Content):]
 		data, _ := json.Marshal(message)
 		dst = append(dst, data)
 	}

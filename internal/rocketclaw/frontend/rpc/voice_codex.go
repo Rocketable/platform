@@ -105,18 +105,20 @@ func (*codexVoice) kind(eventType string) voiceEventKind {
 
 func (*codexVoice) appendMessages(dst [][]byte, id, text string) [][]byte {
 	message := struct {
-		Type             string         `json:"type"`
-		DelegationItemID string         `json:"delegation_item_id,omitempty"`
-		Channel          string         `json:"channel"`
-		Content          []voiceContent `json:"content"`
-	}{Type: "delegation.context.append", DelegationItemID: id, Channel: "speakable"}
+		Type             string          `json:"type"`
+		DelegationItemID string          `json:"delegation_item_id,omitempty"`
+		Channel          string          `json:"channel"`
+		Content          [1]voiceContent `json:"content"`
+	}{Type: "delegation.context.append", DelegationItemID: id, Channel: "speakable", Content: [1]voiceContent{{Type: "input_text"}}}
 
 	if id == "" {
 		message.Type = "session.context.append"
 	}
 
-	for _, chunk := range voiceChunks(text, 500) {
-		message.Content = []voiceContent{{Type: "input_text", Text: chunk}}
+	for text != "" {
+		chunk := voiceCut(text, 500)
+		text = text[len(chunk):]
+		message.Content[0].Text = chunk
 		data, _ := json.Marshal(message)
 		dst = append(dst, data)
 	}
