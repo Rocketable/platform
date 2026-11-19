@@ -331,6 +331,17 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 	sent, bobs := list(bob, deleted.Version)
 	require.Len(t, sent, 2, "another person's version gets every row")
 	require.Empty(t, bobs.Since)
+
+	owner, _, err := server.spaceLimit(ctx)
+	require.NoError(t, err)
+
+	listings := server.listings[owner]
+	fingerprints := listings[len(listings)-1].rows
+	server = New(server.backend, server.sessions, server.cfg, server.channels, server.cronjobs)
+	sent, fresh := list(ctx, unknown.Version)
+	require.ElementsMatch(t, []string{"chat-00", "chat-01"}, sent, "another server's version gets every row")
+	require.Empty(t, fresh.Since)
+	require.NotEqual(t, fingerprints, server.listings[owner][0].rows, "each server uses its own row fingerprints")
 }
 
 func TestQuietSessionRefreshSize(t *testing.T) {
