@@ -38,10 +38,10 @@ var _ channelFactsStore = &channelFactsStoreMock{}
 //			SlackChannelIDsFunc: func(ctx context.Context) ([]string, error) {
 //				panic("mock out the SlackChannelIDs method")
 //			},
-//			SlackThreadFunc: func(ctx context.Context, conversationID string) (string, string, error) {
+//			SlackThreadFunc: func(ctx context.Context, conversationID string) (string, string, bool, error) {
 //				panic("mock out the SlackThread method")
 //			},
-//			TurnProgressFunc: func(ctx context.Context, conversationID string, turnID string) (protocol.TurnProgress, error) {
+//			TurnProgressFunc: func(ctx context.Context, turnID string) (protocol.TurnProgress, error) {
 //				panic("mock out the TurnProgress method")
 //			},
 //			UpdateConversationDetailsFunc: func(ctx context.Context, conversationID string, name *string) (bool, error) {
@@ -70,10 +70,10 @@ type channelFactsStoreMock struct {
 	SlackChannelIDsFunc func(ctx context.Context) ([]string, error)
 
 	// SlackThreadFunc mocks the SlackThread method.
-	SlackThreadFunc func(ctx context.Context, conversationID string) (string, string, error)
+	SlackThreadFunc func(ctx context.Context, conversationID string) (string, string, bool, error)
 
 	// TurnProgressFunc mocks the TurnProgress method.
-	TurnProgressFunc func(ctx context.Context, conversationID string, turnID string) (protocol.TurnProgress, error)
+	TurnProgressFunc func(ctx context.Context, turnID string) (protocol.TurnProgress, error)
 
 	// UpdateConversationDetailsFunc mocks the UpdateConversationDetails method.
 	UpdateConversationDetailsFunc func(ctx context.Context, conversationID string, name *string) (bool, error)
@@ -138,8 +138,6 @@ type channelFactsStoreMock struct {
 		TurnProgress []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
-			// ConversationID is the conversationID argument value.
-			ConversationID string
 			// TurnID is the turnID argument value.
 			TurnID string
 		}
@@ -368,7 +366,7 @@ func (mock *channelFactsStoreMock) SlackChannelIDsCalls() []struct {
 }
 
 // SlackThread calls SlackThreadFunc.
-func (mock *channelFactsStoreMock) SlackThread(ctx context.Context, conversationID string) (string, string, error) {
+func (mock *channelFactsStoreMock) SlackThread(ctx context.Context, conversationID string) (string, string, bool, error) {
 	if mock.SlackThreadFunc == nil {
 		panic("channelFactsStoreMock.SlackThreadFunc: method is nil but channelFactsStore.SlackThread was just called")
 	}
@@ -404,23 +402,21 @@ func (mock *channelFactsStoreMock) SlackThreadCalls() []struct {
 }
 
 // TurnProgress calls TurnProgressFunc.
-func (mock *channelFactsStoreMock) TurnProgress(ctx context.Context, conversationID string, turnID string) (protocol.TurnProgress, error) {
+func (mock *channelFactsStoreMock) TurnProgress(ctx context.Context, turnID string) (protocol.TurnProgress, error) {
 	if mock.TurnProgressFunc == nil {
 		panic("channelFactsStoreMock.TurnProgressFunc: method is nil but channelFactsStore.TurnProgress was just called")
 	}
 	callInfo := struct {
-		Ctx            context.Context
-		ConversationID string
-		TurnID         string
+		Ctx    context.Context
+		TurnID string
 	}{
-		Ctx:            ctx,
-		ConversationID: conversationID,
-		TurnID:         turnID,
+		Ctx:    ctx,
+		TurnID: turnID,
 	}
 	mock.lockTurnProgress.Lock()
 	mock.calls.TurnProgress = append(mock.calls.TurnProgress, callInfo)
 	mock.lockTurnProgress.Unlock()
-	return mock.TurnProgressFunc(ctx, conversationID, turnID)
+	return mock.TurnProgressFunc(ctx, turnID)
 }
 
 // TurnProgressCalls gets all the calls that were made to TurnProgress.
@@ -428,14 +424,12 @@ func (mock *channelFactsStoreMock) TurnProgress(ctx context.Context, conversatio
 //
 //	len(mockedchannelFactsStore.TurnProgressCalls())
 func (mock *channelFactsStoreMock) TurnProgressCalls() []struct {
-	Ctx            context.Context
-	ConversationID string
-	TurnID         string
+	Ctx    context.Context
+	TurnID string
 } {
 	var calls []struct {
-		Ctx            context.Context
-		ConversationID string
-		TurnID         string
+		Ctx    context.Context
+		TurnID string
 	}
 	mock.lockTurnProgress.RLock()
 	calls = mock.calls.TurnProgress

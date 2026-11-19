@@ -510,12 +510,12 @@ test("the test chat answers in every column, labels versions, restarts, and pose
     await apply(echo.id, { kind: "set_field", variant: "b", key: "sticky", value: "maybe" });
     await send("fourth");
     await cell(4, "echo").getByText("gpt-a2 answer 4", { exact: false }).waitFor();
-    await cell(4, "echo/b").getByText("Not run. Shared chat: off, user or global.", { exact: true }).waitFor();
+    await cell(4, "echo/b").getByText("Not run. Shared chat: off, user, global or slack.", { exact: true }).waitFor();
 
     await apply(echo.id, { kind: "set_field", variant: "a", key: "sticky", value: "maybe" });
     await send("fifth");
     await chat.getByRole("alert").getByText("Fix the draft's settings before testing it.", { exact: false }).waitFor();
-    await chat.getByRole("alert").getByText("Shared chat: off, user or global.", { exact: false }).waitFor();
+    await chat.getByRole("alert").getByText("Shared chat: off, user, global or slack.", { exact: false }).waitFor();
     await Bun.sleep(500);
     expect(await row(5).count()).toBe(0);
     await apply(echo.id, { kind: "set_field", variant: "a", key: "sticky", value: "" });
@@ -965,9 +965,9 @@ test("saving picks a variant and a layer, warns, reviews live changes, and follo
     await apply(id, { kind: "set_field", variant: "a", key: "sticky", value: "maybe" });
     await choose(a, "Workspace");
     await dialog(a).getByRole("button", { name: "Save to workspace", exact: true }).click();
-    await a.getByRole("group", { name: "Shared chat", exact: true }).getByText("Not saved. Allowed: off, user or global.", { exact: true }).waitFor();
+    await a.getByRole("group", { name: "Shared chat", exact: true }).getByText("Not saved. Allowed: off, user, global or slack.", { exact: true }).waitFor();
     expect(await dialog(a).count()).toBe(0);
-    await a.getByRole("alert").getByText("Not saved. Fix the draft's settings before saving it. Shared chat: off, user or global.", { exact: true }).waitFor();
+    await a.getByRole("alert").getByText("Not saved. Fix the draft's settings before saving it. Shared chat: off, user, global or slack.", { exact: true }).waitFor();
 
     const hold = await call<{ id: string }>("CreateAgentDraft", { name: "hold", mode: "advanced" });
     await apply(hold.id, { kind: "edit_file", variant: "a", value: "---\nmodel: gpt-hold\n---\nHold.\n" });

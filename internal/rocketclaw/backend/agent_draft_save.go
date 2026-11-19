@@ -262,7 +262,7 @@ func (r *Runtime) ValidateAgentFile(name string, data []byte) error {
 	cfg := r.Cfg.Clone()
 
 	if err := skel.ValidateRuntimeAssetsWith(cfg.Workspace, cfg.Overlays, r.Log, map[string][]byte{path.Join("agents", name+".md"): data}, func(runtimeDir string) error {
-		if err := validateRuntimeAssets(r.Cfg, runtimeDir); err != nil {
+		if _, err := validateRuntimeAssets(r.Cfg, runtimeDir, r.Log); err != nil {
 			return err
 		}
 

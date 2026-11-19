@@ -188,7 +188,7 @@ func TestHTTPBoundary(t *testing.T) {
 func TestHTTPReload(t *testing.T) {
 	t.Parallel()
 
-	core := &mockBackend{SandboxErrorFunc: noSandboxError, ReloadFunc: func(reason string) (string, error) {
+	core := &mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning, ReloadFunc: func(reason string) (string, error) {
 		require.Equal(t, "updated assets", reason)
 		return "rocketclaw runtime assets reloaded", nil
 	}}

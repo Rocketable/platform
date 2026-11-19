@@ -173,8 +173,10 @@ session (`StickySessions`): the chat whose stored `sticky` value, set once at cr
 matches the agent's mode, created by the caller's login for `sticky: user`. A chat born
 `off` never counts. When one exists it
 returns that ID with `resumed` set and creates nothing. `RunCronJob` likewise runs a
-`sticky: global` agent's cron in that session, and refuses a `sticky: user` agent with
-`FailedPrecondition`.
+`sticky: global` agent's cron in that session, and refuses a `sticky: user` or
+`sticky: slack` agent with `FailedPrecondition`. A `sticky: slack` agent answers only in
+Slack: `ListAgents` and `CreateSession` leave it out of new sessions, while its Slack
+sessions still open and list it as their agent.
 A unique index allows one `user` chat per agent and login, and one `global` chat per
 agent. A concurrent first request waits for the other's insert and then finds that chat,
 so cron reports, due reminders and Web requests share one session rather than creating

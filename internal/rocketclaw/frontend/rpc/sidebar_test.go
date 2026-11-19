@@ -85,7 +85,7 @@ func sidebarChoicesFixture(tb testing.TB, count int) (*Server, context.Context) 
 		require.NoError(tb, err)
 	}
 
-	return New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{RenameThreadSessionFunc: func(context.Context, string, string) {}}, &mockCronJobs{}), metadata.NewIncomingContext(tb.Context(), tailnetUser("alice"))
+	return New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{RenameThreadSessionFunc: func(context.Context, string, string) {}}, &mockCronJobs{}), metadata.NewIncomingContext(tb.Context(), tailnetUser("alice"))
 }
 
 func TestSidebarFingerprintAllocationBudget(t *testing.T) {
@@ -130,7 +130,7 @@ func TestSidebarSendFailures(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer(grpc.MaxSendMsgSize(1))
-	New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error {
@@ -208,7 +208,7 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 
 		return handler(service, stream)
 	}))
-	core := &mockBackend{SandboxErrorFunc: noSandboxError, AgentPausedFunc: notPaused, RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
+	core := &mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning, AgentPausedFunc: notPaused, RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
 		if inbound.ConversationID != "slack-thread:C1:1.1" || inbound.Text != "send while listing" || inbound.Metadata[protocol.InboundPrincipalMetadataKey] != "alice" {
 			return fmt.Errorf("unexpected prompt during enumeration: %v", inbound)
 		}

@@ -109,13 +109,13 @@ func (r *Runtime) ContinueRun(ctx context.Context, run, conversationID string, s
 	return owner, r.threads.armSchedules(ctx, owner, schedules)
 }
 
-func (s *SessionService) SlackThread(ctx context.Context, conversationID string) (channelID, threadTS string, err error) {
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(max(slack_channel), ''), COALESCE(max(slack_thread), '') FROM conversations
-WHERE conversation_id = $1`, conversationID).Scan(&channelID, &threadTS); err != nil {
-		return "", "", fmt.Errorf("read Slack thread: %w", err)
+func (s *SessionService) SlackThread(ctx context.Context, conversationID string) (channelID, threadTS string, channelSession bool, err error) {
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(max(slack_channel), ''), COALESCE(max(slack_thread), ''), COALESCE(bool_or(kind = 'slack_thread' AND slack_thread IS NULL), FALSE)
+FROM conversations WHERE conversation_id = $1`, conversationID).Scan(&channelID, &threadTS, &channelSession); err != nil {
+		return "", "", false, fmt.Errorf("read Slack thread: %w", err)
 	}
 
-	return channelID, threadTS, nil
+	return channelID, threadTS, channelSession, nil
 }
 
 func (s *SessionService) CronRun(ctx context.Context, conversationID string) (path string, run bool, err error) {
@@ -580,6 +580,23 @@ func listedBackgroundJobs(jobs []backgroundJob, conversationID string) []protoco
 func (b *Bridge) Drain(ctx context.Context, responseID string, phase harness.TurnPhase, applied []string) ([]harness.PromptInput, error) {
 	if b.shadow {
 		return b.drainShadowInputs(ctx, responseID, phase, applied)
+	}
+
+	b.mu.Lock()
+	turnID, origin := b.activeTurnID, b.activeReply
+	b.mu.Unlock()
+
+	thread, err := b.moveRatcheted(ctx, turnID, origin, true)
+	if err != nil {
+		return nil, err
+	}
+
+	if thread != "" {
+		b.mu.Lock()
+		b.activeTurnCancel()
+		b.mu.Unlock()
+
+		return nil, turnMovedError{thread: thread}
 	}
 
 	b.mu.Lock()

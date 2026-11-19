@@ -15,6 +15,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
   let served: string | undefined = current;
   // Why emulated shells cannot run, as Identity reports it.
   let sandboxError = "";
+  let slackWarning: string | undefined;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -23,7 +24,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     if (!url.pathname.startsWith("/api/")) return served === undefined ? new Response("down", { status: 500 }) : new Response(served, { headers: { "Content-Type": "text/html" } });
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "web-update" });
-      case "/api/Identity": return Response.json({ username: "tester", sandboxError });
+      case "/api/Identity": return Response.json({ username: "tester", sandboxError, slackWarning });
       case "/api/ListConfig": return Response.json({ config: { workspace: "web-update" } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
@@ -100,6 +101,13 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     await alert.waitFor();
     sandboxError = "";
     await alert.waitFor({ state: "detached" });
+
+    const warning = "Slack channel #general uses agent assistant, which is not sticky: slack, so it does not answer mentions there.";
+    const slackAlert = page.getByRole("alert").filter({ hasText: warning });
+    slackWarning = warning;
+    await slackAlert.waitFor();
+    slackWarning = undefined;
+    await slackAlert.waitFor({ state: "detached" });
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

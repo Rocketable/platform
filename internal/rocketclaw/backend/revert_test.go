@@ -736,6 +736,7 @@ func TestClaimReleasesHeldRequestCaller(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, claimed)
 	assert.Same(t, callers["lunch?"], stale.completion, "the claiming turn answers the held request's caller")
+	endTestTurn(t, s, "main", stale.turnID, protocol.TerminalComplete)
 
 	own := bridgeRequest{inbound: pausedWebMessage("main", "Ann", &protocol.InboundContent{Text: "dinner?"}), queueItemID: "dinner?", completion: &turnCompletion{done: make(chan struct{})}}
 	claimed, err = bridge.activateInbound(ctx, &own)

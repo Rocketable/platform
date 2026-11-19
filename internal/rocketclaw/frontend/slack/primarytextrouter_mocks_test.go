@@ -21,8 +21,8 @@ var _ protocol.PrimaryTextRouter = &primaryTextRouterMock{}
 //
 //		// make and configure a mocked protocol.PrimaryTextRouter
 //		mockedPrimaryTextRouter := &primaryTextRouterMock{
-//			InterruptThreadFunc: func(target protocol.TextConversationTarget) (*protocol.InboundMessage, error) {
-//				panic("mock out the InterruptThread method")
+//			InterruptTurnFunc: func(ctx context.Context, turnID string) error {
+//				panic("mock out the InterruptTurn method")
 //			},
 //			MentionThreadFunc: func(target protocol.TextConversationTarget) (bool, bool, error) {
 //				panic("mock out the MentionThread method")
@@ -40,8 +40,8 @@ var _ protocol.PrimaryTextRouter = &primaryTextRouterMock{}
 //
 //	}
 type primaryTextRouterMock struct {
-	// InterruptThreadFunc mocks the InterruptThread method.
-	InterruptThreadFunc func(target protocol.TextConversationTarget) (*protocol.InboundMessage, error)
+	// InterruptTurnFunc mocks the InterruptTurn method.
+	InterruptTurnFunc func(ctx context.Context, turnID string) error
 
 	// MentionThreadFunc mocks the MentionThread method.
 	MentionThreadFunc func(target protocol.TextConversationTarget) (bool, bool, error)
@@ -54,10 +54,12 @@ type primaryTextRouterMock struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
-		// InterruptThread holds details about calls to the InterruptThread method.
-		InterruptThread []struct {
-			// Target is the target argument value.
-			Target protocol.TextConversationTarget
+		// InterruptTurn holds details about calls to the InterruptTurn method.
+		InterruptTurn []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// TurnID is the turnID argument value.
+			TurnID string
 		}
 		// MentionThread holds details about calls to the MentionThread method.
 		MentionThread []struct {
@@ -81,41 +83,45 @@ type primaryTextRouterMock struct {
 			ConversationID string
 		}
 	}
-	lockInterruptThread sync.RWMutex
-	lockMentionThread   sync.RWMutex
-	lockSubmitMention   sync.RWMutex
-	lockWebURL          sync.RWMutex
+	lockInterruptTurn sync.RWMutex
+	lockMentionThread sync.RWMutex
+	lockSubmitMention sync.RWMutex
+	lockWebURL        sync.RWMutex
 }
 
-// InterruptThread calls InterruptThreadFunc.
-func (mock *primaryTextRouterMock) InterruptThread(target protocol.TextConversationTarget) (*protocol.InboundMessage, error) {
-	if mock.InterruptThreadFunc == nil {
-		panic("primaryTextRouterMock.InterruptThreadFunc: method is nil but PrimaryTextRouter.InterruptThread was just called")
+// InterruptTurn calls InterruptTurnFunc.
+func (mock *primaryTextRouterMock) InterruptTurn(ctx context.Context, turnID string) error {
+	if mock.InterruptTurnFunc == nil {
+		panic("primaryTextRouterMock.InterruptTurnFunc: method is nil but PrimaryTextRouter.InterruptTurn was just called")
 	}
 	callInfo := struct {
-		Target protocol.TextConversationTarget
+		Ctx    context.Context
+		TurnID string
 	}{
-		Target: target,
+		Ctx:    ctx,
+		TurnID: turnID,
 	}
-	mock.lockInterruptThread.Lock()
-	mock.calls.InterruptThread = append(mock.calls.InterruptThread, callInfo)
-	mock.lockInterruptThread.Unlock()
-	return mock.InterruptThreadFunc(target)
+	mock.lockInterruptTurn.Lock()
+	mock.calls.InterruptTurn = append(mock.calls.InterruptTurn, callInfo)
+	mock.lockInterruptTurn.Unlock()
+	return mock.InterruptTurnFunc(ctx, turnID)
 }
 
-// InterruptThreadCalls gets all the calls that were made to InterruptThread.
+// InterruptTurnCalls gets all the calls that were made to InterruptTurn.
 // Check the length with:
 //
-//	len(mockedPrimaryTextRouter.InterruptThreadCalls())
-func (mock *primaryTextRouterMock) InterruptThreadCalls() []struct {
-	Target protocol.TextConversationTarget
+//	len(mockedPrimaryTextRouter.InterruptTurnCalls())
+func (mock *primaryTextRouterMock) InterruptTurnCalls() []struct {
+	Ctx    context.Context
+	TurnID string
 } {
 	var calls []struct {
-		Target protocol.TextConversationTarget
+		Ctx    context.Context
+		TurnID string
 	}
-	mock.lockInterruptThread.RLock()
-	calls = mock.calls.InterruptThread
-	mock.lockInterruptThread.RUnlock()
+	mock.lockInterruptTurn.RLock()
+	calls = mock.calls.InterruptTurn
+	mock.lockInterruptTurn.RUnlock()
 	return calls
 }
 

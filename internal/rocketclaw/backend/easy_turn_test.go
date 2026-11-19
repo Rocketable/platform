@@ -113,7 +113,7 @@ func TestEasyTurnShell(t *testing.T) {
 
 	stored := map[string]string{"arn:a": `{"SECRET_KEY":"s3cr3t"}`, "arn:review": `{"REVIEW_KEY":"r3v13w"}`}
 	fetcher := &secretFetcherMock{SecretStringFunc: func(_ context.Context, arn string) (string, error) { return stored[arn], nil }}
-	b := &Bridge{config: Config{Secrets: fetcher}}
+	b := &Bridge{config: Config{Secrets: fetcher}, parent: "web:parent"}
 
 	require.NoError(t, b.setEasyShell(t.Context(), cfg, agents, skills, "easy", turnEnv, "web:parent"))
 	require.Equal(t, t.Context(), fetcher.SecretStringCalls()[0].Ctx, "the turn's context stops the fetch")

@@ -933,6 +933,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 			items, err := store.ThreadQueueForConversation(conversationID)
 			require.NoError(t, err)
 			require.False(t, slices.ContainsFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == id }))
+			endTestTurn(t, store, conversationID, request.turnID, protocol.TerminalComplete)
 		}
 	}
 
@@ -972,6 +973,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 		_, claimed, err := (stateDAO{db: store.db}).claimThreadQueueItem(t.Context(), conversationID, "race")
 		require.NoError(t, err)
 		require.False(t, claimed)
+		endTestTurn(t, store, conversationID, request.turnID, protocol.TerminalComplete)
 	}
 }
 
@@ -1166,6 +1168,9 @@ func TestRuntimeQueueEditMakesTheEditorTheSender(t *testing.T) {
 		require.Equal(t, []any{protocol.SourceWeb, true}, []any{request.inbound.Source, request.inbound.Human})
 		require.Equal(t, `[Web principal="Bob"]`, reviewOriginHeader(request.inbound))
 		require.Equal(t, `[Web principal="Bob"]`+"\n\nfrom Bob", buildPrompt(request.inbound, &harness.Agent{Mode: harness.AgentModeEasy}, false))
+
+		_, err = store.db.ExecContext(t.Context(), `UPDATE turns SET phase = 'done' WHERE conversation_id = 'main'`)
+		require.NoError(t, err)
 	}
 }
 

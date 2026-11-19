@@ -788,7 +788,7 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 			"Only stop takes an empty prompt: it then just stops the turn and goal, queues nothing, and posts that this session stopped it into that session's transcript without starting a turn. " +
 			"The receiver is told this session and agent sent it and that its answer comes back here. Each call that returns a queue_item_id gets exactly one reply: when the target's turn that took prompt ends, or, for an empty-prompt stop, once the stopped turn is over, a <session_reply> note naming that queue_item_id arrives here with the outcome and that turn's final answer. A steer's answer covers the whole turn it joined. " +
 			"DO NOT wait, sleep, poll, or write again to get the reply: work on anything that does not depend on it, or end your response; you will be resumed when it arrives. " +
-			"Every call, including create and stop, fails before doing anything when the target agent's permission.rocketclaw." + recipientSetting + ", or an easy target's delegatedFrom, does not accept this agent. " +
+			"Every call, including create and stop, fails before doing anything when the target agent's permission.rocketclaw." + recipientSetting + ", or an easy target's delegatedFrom, does not accept this agent, except a write from a Slack channel's session into its own thread sessions. " +
 			"Returns JSON with outcome (created, steered, queued or stopped), session_id, url, queue_item_id (absent only for an empty-prompt stop when no turn was running, which gets no reply) and, for stop, turn_was_running. Share url so a person can open the session.",
 		Parameters: map[string]any{"properties": properties, "required": slices.Sorted(maps.Keys(properties))},
 		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
@@ -860,8 +860,17 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 
 				result.SessionID = start.conversationID
 			} else {
-				var targetAgent string
+				var (
+					targetAgent string
+					ownThread   bool
+				)
+
 				if targetAgent, err = b.config.SessionService.checkSessionTarget(ctx, self, origin.SyncDestination, input.SessionID); err == nil {
+					err = queryScalar(ctx, b.config.SessionService.db, "read own Thread Session", `SELECT count(*) > 0 FROM conversations s JOIN conversations t USING (kind, slack_channel, agent)
+WHERE s.conversation_id = $1 AND t.conversation_id = $2 AND s.kind = 'slack_thread' AND s.slack_thread IS NULL AND t.slack_thread IS NOT NULL AND t.agent = $3`, &ownThread, self, input.SessionID, agent.Name)
+				}
+
+				if err == nil && !ownThread {
 					err = checkRecipient(agents, targetAgent, agent.Name)
 				}
 

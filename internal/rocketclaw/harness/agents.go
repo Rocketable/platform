@@ -58,6 +58,7 @@ const (
 	AgentStickyOff    AgentSticky = ""
 	AgentStickyUser   AgentSticky = "user"
 	AgentStickyGlobal AgentSticky = "global"
+	AgentStickySlack  AgentSticky = "slack"
 )
 
 type Agents struct {
@@ -202,9 +203,9 @@ func loadAgent(fsys fs.FS, filePath string, cfg AgentLoadConfig) (Agent, error) 
 		return Agent{}, fmt.Errorf("%s: mode: must be easy or advanced", filePath)
 	}
 
-	sticky, ok := map[string]AgentSticky{"off": AgentStickyOff, "user": AgentStickyUser, "global": AgentStickyGlobal}[frontmatterValue(frontmatterNode, "sticky", "off")]
+	sticky, ok := map[string]AgentSticky{"off": AgentStickyOff, "user": AgentStickyUser, "global": AgentStickyGlobal, "slack": AgentStickySlack}[frontmatterValue(frontmatterNode, "sticky", "off")]
 	if !ok {
-		return Agent{}, fmt.Errorf("%s: sticky: must be off, user or global", filePath)
+		return Agent{}, fmt.Errorf("%s: sticky: must be off, user, global or slack", filePath)
 	}
 
 	name := strings.TrimSuffix(filePath, filepath.Ext(filePath))

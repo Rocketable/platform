@@ -486,27 +486,50 @@ func (r *Runtime) RunningAgent(conversationID string) string {
 	return running.activeAttribution.Agent
 }
 
+func slackSessionID(ctx context.Context, db stateStoreDB, channelID, threadTS, messageTS, agent string) (string, error) {
+	if messageTS == threadTS {
+		return "slack-channel:" + channelID + ":" + agent, nil
+	}
+
+	managed := protocol.SlackThreadConversationID(channelID, threadTS)
+
+	var continues bool
+	if err := queryScalar(ctx, db, "read Managed Slack Thread agent", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND agent = $2`, &continues, managed, agent); err != nil || continues {
+		return managed, err
+	}
+
+	return protocol.SlackThreadSessionID(channelID, threadTS, agent), nil
+}
+
 func (m *threadBridgeManager) MentionThread(target protocol.TextConversationTarget) (recorded, report bool, err error) {
-	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
+	managed := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
 
-	thread, recorded, err := m.store.Thread(conversationID)
+	thread, _, err := m.store.Thread(managed)
 	if err != nil {
 		return false, false, err
 	}
 
-	_, _, paired, err := m.store.ExternalMCPSessionByConversationID(conversationID)
+	_, _, paired, err := m.store.ExternalMCPSessionByConversationID(managed)
 	if err != nil {
 		return false, false, err
 	}
 
-	return recorded, thread.CreatedBy == ThreadCreatedByCron || paired, nil
+	report = thread.CreatedBy == ThreadCreatedByCron || paired
+	if target.Agent == "" {
+		return false, report, nil
+	}
+
+	conversationID, err := slackSessionID(context.Background(), m.store.db, target.ChannelID, target.ThreadID, target.MessageID, target.Agent)
+	if err != nil {
+		return false, false, err
+	}
+
+	_, recorded, err = m.store.Thread(conversationID)
+
+	return recorded, report, err
 }
 
 func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
-	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-	id := "slack:" + inbound.SlackReply.ChannelID + ":" + inbound.SlackReply.MessageTS
-	inbound.ConversationID, inbound.Metadata["web_message_id"] = conversationID, id
-
 	tx, err := m.store.beginStateTx(ctx, "Slack mention admission")
 	if err != nil {
 		return false, err
@@ -514,50 +537,87 @@ func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, t
 
 	defer func() { _ = tx.Rollback() }()
 
-	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
-		return false, err
+	mentions := []*protocol.InboundMessage{inbound}
+	if inbound.SlackRoot != nil {
+		mentions = []*protocol.InboundMessage{inbound.SlackRoot, inbound}
 	}
 
-	var (
-		seen     bool
-		position int
-	)
-	if err := tx.QueryRowContext(ctx, `WITH seen AS (
-    SELECT 1 FROM turns WHERE conversation_id = $1 AND takes_lane AND (input_id = $2 OR inbound_json->'Metadata'->>'web_message_id' = $2)
-    UNION ALL SELECT 1 FROM entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
-    WHERE e.conversation_id = $1 AND item->>'input_id' = $2 LIMIT 1
-), queued AS (
-    SELECT COALESCE(MAX(position), -1) + 1 AS position FROM turns WHERE conversation_id = $1 AND phase = 'waiting'
-)
-SELECT count(s.*) > 0, q.position FROM queued q LEFT JOIN seen s ON TRUE GROUP BY q.position`, conversationID, id).Scan(&seen, &position); err != nil {
-		return false, fmt.Errorf("read admitted Slack mention: %w", err)
-	}
-
-	if seen {
-		return false, nil
-	}
-
-	created, err := (stateDAO{db: tx}).createConversation(ctx, protocol.Conversation{ID: conversationID, Agent: agent}, conversationFacts{kind: KindSlackThread, slackChannel: target.ChannelID, slackThread: target.ThreadID}, harness.AgentStickyOff)
-	if err != nil {
-		return false, err
-	}
-
-	if created {
-		if _, err := m.store.reconcileShadows(ctx, tx, conversationID, agent); err != nil {
+	ids := make([]string, len(mentions))
+	for i, mention := range mentions {
+		if ids[i], err = slackSessionID(ctx, tx, target.ChannelID, target.ThreadID, mention.SlackReply.MessageTS, agent); err != nil {
 			return false, err
 		}
 	}
 
-	item := protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Message: inbound.Text, Principal: inbound.Metadata[protocol.InboundPrincipalMetadataKey], Kind: protocol.InboundKindEnqueue, Source: inbound.Source, Inbound: inbound, Position: position, StashAt: time.Now().UTC()}
-	if err := putThreadQueueItem(ctx, tx, id, &item); err != nil {
+	if err := lockHistories(ctx, tx, ids); err != nil {
 		return false, err
+	}
+
+	var (
+		admitted []string
+		accepted bool
+	)
+
+	for i, mention := range mentions {
+		id := "slack:" + mention.SlackReply.ChannelID + ":" + mention.SlackReply.MessageTS
+		mention.ConversationID, mention.Metadata["web_message_id"] = ids[i], id
+
+		var (
+			seen     bool
+			position int
+		)
+		if err := tx.QueryRowContext(ctx, `WITH channel AS (
+    SELECT conversation_id FROM conversations WHERE slack_channel = $3
+), seen AS (
+    SELECT 1 FROM turns t JOIN channel USING (conversation_id) WHERE t.takes_lane AND (t.input_id = $2 OR t.inbound_json->'Metadata'->>'web_message_id' = $2)
+    UNION ALL SELECT 1 FROM entries e JOIN channel USING (conversation_id) CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
+    WHERE item->>'input_id' = $2 LIMIT 1
+), queued AS (
+    SELECT COALESCE(MAX(position), -1) + 1 AS position FROM turns WHERE conversation_id = $1 AND phase = 'waiting'
+)
+SELECT count(s.*) > 0, q.position FROM queued q LEFT JOIN seen s ON TRUE GROUP BY q.position`, ids[i], id, target.ChannelID).Scan(&seen, &position); err != nil {
+			return false, fmt.Errorf("read admitted Slack mention: %w", err)
+		}
+
+		if accepted = !seen; seen {
+			continue
+		}
+
+		facts := conversationFacts{kind: KindSlackThread, slackChannel: target.ChannelID}
+		if mention.SlackReply.MessageTS != target.ThreadID {
+			facts.slackThread = target.ThreadID
+		}
+
+		created, err := (stateDAO{db: tx}).createConversation(ctx, protocol.Conversation{ID: ids[i], Agent: agent}, facts, harness.AgentStickyOff)
+		if err != nil {
+			return false, err
+		}
+
+		if created {
+			if _, err := m.store.reconcileShadows(ctx, tx, ids[i], agent); err != nil {
+				return false, err
+			}
+		}
+
+		item := protocol.ThreadQueueItem{ID: id, ConversationID: ids[i], Message: mention.Text, Principal: mention.Metadata[protocol.InboundPrincipalMetadataKey], Kind: protocol.InboundKindEnqueue, Source: mention.Source, Inbound: mention, Position: position, StashAt: time.Now().UTC()}
+		if err := putThreadQueueItem(ctx, tx, id, &item); err != nil {
+			return false, err
+		}
+
+		admitted = append(admitted, ids[i])
 	}
 
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit Slack mention admission: %w", err)
 	}
 
-	return true, m.PickLaterWork(ctx, conversationID)
+	var errPick error
+
+	for _, conversationID := range admitted {
+		errPick = errors.Join(errPick, m.PickLaterWork(ctx, conversationID))
+	}
+
+	return accepted, errPick
 }
 
 func (m *threadBridgeManager) WebURL(conversationID string) (string, error) {
@@ -569,17 +629,32 @@ func (m *threadBridgeManager) WebURL(conversationID string) (string, error) {
 	return origin + "/s/" + base64.RawURLEncoding.EncodeToString([]byte(conversationID)), nil
 }
 
-func (m *threadBridgeManager) InterruptThread(target protocol.TextConversationTarget) (*protocol.InboundMessage, error) {
-	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-	if conversationID == "" {
-		return nil, nil
+func (m *threadBridgeManager) InterruptTurn(ctx context.Context, turnID string) error {
+	var holderID string
+	if err := queryScalar(ctx, m.store.db, "query stopped turn holder", `SELECT COALESCE(max(conversation_id), '') FROM turns WHERE id = $1 AND phase = $2 AND takes_lane`, &holderID, turnID, turnRunning); err != nil || holderID == "" {
+		return err
 	}
 
-	if err := m.store.StopGoal(conversationID); err != nil {
-		return nil, fmt.Errorf("stop goal thread: %w", err)
+	holder, err := m.recordedBridge(ctx, holderID)
+	if err != nil {
+		return err
 	}
 
-	return m.InterruptConversation(conversationID), nil
+	holder.mu.Lock()
+	other := holder.activeTurnID != "" && holder.activeTurnID != turnID
+	holder.mu.Unlock()
+
+	if other {
+		return nil
+	}
+
+	if err := m.store.StopGoal(holderID); err != nil {
+		return fmt.Errorf("stop goal: %w", err)
+	}
+
+	holder.InterruptActiveTurn()
+
+	return nil
 }
 
 func (m *threadBridgeManager) StartQueuedConversations(ctx context.Context) error {
@@ -663,6 +738,10 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 	agent, ok := agents.Items[start.agent]
 	if !ok || strings.Contains(start.agent, "/") {
 		return "", false, fmt.Errorf("agent %q is not configured", start.agent)
+	}
+
+	if agent.Sticky == harness.AgentStickySlack {
+		return "", false, fmt.Errorf("agent %q is sticky: slack, so it answers only in Slack", start.agent)
 	}
 
 	start.conversationID = rand.Text()

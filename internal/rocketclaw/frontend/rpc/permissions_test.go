@@ -636,7 +636,7 @@ func TestRunCronJobFollowsStickyAgent(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(cfg.RuntimeDirName()+"/agents", 0o700))
 
-	for name, sticky := range map[string]string{"room": "global", "mine": "user", "plain": "off"} {
+	for name, sticky := range map[string]string{"room": "global", "mine": "user", "plain": "off", "channel": "slack"} {
 		require.NoError(t, root.WriteFile(cfg.RuntimeDirName()+"/agents/"+name+".md", []byte("---\nmodel: gpt-6.1-sol\nsticky: "+sticky+"\npermission: {}\n---\nHelp."), 0o600))
 	}
 
@@ -664,6 +664,8 @@ func TestRunCronJobFollowsStickyAgent(t *testing.T) {
 	require.NotEqual(t, "lobby", started.Id)
 	require.Equal(t, started.Id, <-ran)
 
-	_, err = server.runCronJob(alice, &RunCronJobRequest{Stem: "mine"})
-	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	for _, stem := range []string{"mine", "channel"} {
+		_, err = server.runCronJob(alice, &RunCronJobRequest{Stem: stem})
+		require.Equal(t, codes.FailedPrecondition, status.Code(err), stem)
+	}
 }

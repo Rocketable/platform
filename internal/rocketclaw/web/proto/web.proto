@@ -1069,7 +1069,7 @@ message IdentityRequest {}
 
 // sandbox_error is why emulated shells cannot run, empty when they can or no agent uses one. limited is set,
 // true, only for a person the config's permissions limit to their spaces.
-message IdentityResponse { string username = 1; string principal = 2; string sandbox_error = 3; optional bool limited = 4; }
+message IdentityResponse { string username = 1; string principal = 2; string sandbox_error = 3; optional bool limited = 4; optional string slack_warning = 5; }
 
 message ReloadRequest { string reason = 1; }
 

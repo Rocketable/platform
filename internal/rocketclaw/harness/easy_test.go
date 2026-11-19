@@ -41,6 +41,7 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 		{"sudo", easyRequired + "\nsudo: yes", "main.md: sudo: not an easy-mode key"},
 		{"relative shell", easyRequired + "\nshell: bash", "main.md: shell: must be an absolute path or emulated"},
 		{"sticky user routines", easyRequired + "\nsticky: user\nroutines: [30m]", "main.md: routines: a sticky: user agent cannot have routines"},
+		{"sticky slack routines", easyRequired + "\nsticky: slack\nroutines: [30m]", "main.md: routines: a sticky: slack agent cannot have routines"},
 		{"negative maxRecursion", easyRequired + "\nmaxRecursion: -1", "main.md: maxRecursion: must be an integer of 0 or more"},
 		{"unknown subagent provider", easyRequired + "\nsubagents: [nope/gpt-6]", `main.md: model "nope/gpt-6": provider "nope" is not configured`},
 		{"unknown subagent prefix provider", easyRequired + "\nsubagents: ['nope/*']", `main.md: model "nope/*": provider "nope" is not configured`},
@@ -85,7 +86,7 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 
 func TestLoadAgentSticky(t *testing.T) {
 	for _, required := range []string{"model: gpt-5.4", easyRequired} {
-		for line, want := range map[string]AgentSticky{"": AgentStickyOff, "\nsticky: off": AgentStickyOff, "\nsticky: user": AgentStickyUser, "\nsticky: global": AgentStickyGlobal} {
+		for line, want := range map[string]AgentSticky{"": AgentStickyOff, "\nsticky: off": AgentStickyOff, "\nsticky: user": AgentStickyUser, "\nsticky: global": AgentStickyGlobal, "\nsticky: slack": AgentStickySlack} {
 			agent, errs := loadEasyTestAgent(t, required+line)
 			require.Empty(t, errs)
 			require.Equal(t, want, agent.Sticky, required+line)
@@ -93,7 +94,7 @@ func TestLoadAgentSticky(t *testing.T) {
 
 		_, errs := loadEasyTestAgent(t, required+"\nsticky: [user]")
 		require.Len(t, errs, 1)
-		require.EqualError(t, errs[0], "main.md: sticky: must be off, user or global")
+		require.EqualError(t, errs[0], "main.md: sticky: must be off, user, global or slack")
 	}
 }
 

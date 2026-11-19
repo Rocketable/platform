@@ -52,7 +52,7 @@ func TestSessionOperationsRejectCanceledContext(t *testing.T) {
 			case "active turn":
 				_, err = store.HasActiveTurn(ctx, "chat")
 			case "Slack thread":
-				_, _, err = store.SlackThread(ctx, "chat")
+				_, _, _, err = store.SlackThread(ctx, "chat")
 			case "background jobs":
 				_, _, err = runtime.BackgroundJobs(ctx, "chat")
 			case "completion notes":

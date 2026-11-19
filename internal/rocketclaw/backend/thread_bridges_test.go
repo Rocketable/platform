@@ -145,7 +145,7 @@ func TestThreadBridgeManagerMentionThreadRecognizesReportThreads(t *testing.T) {
 		{name: "unknown thread", threadTS: "4.4"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			recorded, report, err := manager.MentionThread(slackTarget("C123", tt.threadTS))
+			recorded, report, err := manager.MentionThread(protocol.TextConversationTarget{ChannelID: "C123", ThreadID: tt.threadTS, Agent: "main"})
 			require.NoError(t, err)
 			assert.Equal(t, tt.recorded, recorded)
 			assert.Equal(t, tt.report, report)
@@ -157,9 +157,9 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	t.Parallel()
 
 	store := newWorkspaceSessionService(t)
-	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
+	conversationID := "slack-thread:D123:111.222:main"
 	target := slackTarget("D123", "111.222")
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{}), handling: true, inputOpen: true}
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: slackAgentRuntime(t), config: Config{ConversationID: conversationID, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{}), handling: true, inputOpen: true}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 
 	submitTo := func(manager *threadBridgeManager, text, messageTS string) bool {
@@ -174,9 +174,9 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	}
 	submit := func(text, messageTS string) bool { return submitTo(manager, text, messageTS) }
 
-	require.True(t, submit("first", "111.222"))
-	require.True(t, submit("second", "222.333"))
-	require.False(t, submit("first", "111.222"), "a redelivery while the mention waits")
+	require.True(t, submit("first", "222.333"))
+	require.True(t, submit("second", "333.444"))
+	require.False(t, submit("first", "222.333"), "a redelivery while the mention waits")
 
 	thread, recorded, err := store.Thread(conversationID)
 	require.NoError(t, err)
@@ -186,7 +186,7 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	queue, err := store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
 	require.Len(t, queue, 2)
-	assert.Equal(t, []string{"slack:D123:111.222", "slack:D123:222.333"}, []string{queue[0].ID, queue[1].ID})
+	assert.Equal(t, []string{"slack:D123:222.333", "slack:D123:333.444"}, []string{queue[0].ID, queue[1].ID})
 	assert.Equal(t, "first", queue[0].Inbound.Text)
 	assert.Equal(t, protocol.InboundKindEnqueue, queue[1].Kind, "a waiting mention lists as QUEUE")
 
@@ -194,38 +194,139 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	require.Len(t, bridge.requestCh, 1, "the first mention waits for the running turn to finish")
 
 	request := <-bridge.requestCh
-	assert.Equal(t, "slack:D123:111.222", request.queueItemID)
+	assert.Equal(t, "slack:D123:222.333", request.queueItemID)
 	assert.Equal(t, protocol.InboundKindPrompt, request.inbound.Kind)
 	assert.Equal(t, "main,planner", request.inbound.Metadata[protocol.InboundAllowedAgentsMetadataKey])
-	assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}, request.inbound.SlackReply)
+	assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}, request.inbound.SlackReply)
 
 	activated, err := bridge.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
 	require.True(t, activated)
-	require.False(t, submit("first", "111.222"), "a redelivery mid-turn")
+	require.False(t, submit("first", "222.333"), "a redelivery mid-turn")
 
 	restarted := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
-	require.False(t, submitTo(restarted, "first", "111.222"), "a redelivery after a restart, while the active turn waits to resume")
+	require.False(t, submitTo(restarted, "first", "222.333"), "a redelivery after a restart, while the active turn waits to resume")
 
 	entry := testSessionEntry("first", "answer")
 	entry.TurnID = request.turnID
-	entry.ReplayInput[0] = json.RawMessage(`{"type":"message","role":"user","input_id":"slack:D123:111.222","content":"first"}`)
+	entry.ReplayInput[0] = json.RawMessage(`{"type":"message","role":"user","input_id":"slack:D123:222.333","content":"first"}`)
 	_, err = store.finishTurn(t.Context(), request.turnID, &turnFinish{conversationID: strings.TrimSpace(conversationID), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(conversationID, "answer")})
 	require.NoError(t, err)
 	require.NoError(t, store.closeTurn(t.Context(), request.turnID))
-	require.False(t, submit("first", "111.222"), "a redelivery after its turn finished")
+	require.False(t, submit("first", "222.333"), "a redelivery after its turn finished")
 
 	queue, err = store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
 	require.Len(t, queue, 1)
-	assert.Equal(t, "slack:D123:222.333", queue[0].ID)
+	assert.Equal(t, "slack:D123:333.444", queue[0].ID)
+}
+
+func writeMainAgent(t *testing.T, workspace, sticky string) {
+	t.Helper()
+
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\nsticky: "+sticky+"\npermission: {}\n---\nPrompt\n")
+}
+
+func slackAgentRuntime(t *testing.T) *config.LockedConfig {
+	t.Helper()
+
+	workspace := t.TempDir()
+	writeMainAgent(t, workspace, "slack")
+
+	return config.NewLockedConfig(&config.Config{Workspace: workspace})
+}
+
+func requireQueueIDs(t *testing.T, store *SessionService, want map[string][]string) {
+	t.Helper()
+
+	for conversationID, ids := range want {
+		queue, err := store.ThreadQueueForConversation(conversationID)
+		require.NoError(t, err)
+
+		got := make([]string, len(queue))
+		for i := range queue {
+			got[i] = queue[i].ID
+		}
+
+		assert.ElementsMatch(t, ids, got, conversationID)
+	}
+}
+
+func TestSubmitMentionAdmitsEachSlackMessageOnceAcrossAgents(t *testing.T) {
+	t.Parallel()
+
+	store := newWorkspaceSessionService(t)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
+	runTestManager(t, manager)
+
+	for _, agent := range []string{"assistant", "slack"} {
+		for _, messageTS := range []string{"1.1", "2.2"} {
+			accepted, err := manager.SubmitMention(t.Context(), agent, slackTarget("D123", "1.1"), newThreadInboundMessage("hello", messageTS, "1.1"))
+			require.NoError(t, err)
+			assert.Equal(t, agent == "assistant", accepted, "message %s delivered while the channel's agent is %s", messageTS, agent)
+		}
+	}
+
+	requireQueueIDs(t, store, map[string][]string{
+		"slack-channel:D123:assistant": {"slack:D123:1.1"}, "slack-thread:D123:1.1:assistant": {"slack:D123:2.2"},
+		"slack-channel:D123:slack": nil, "slack-thread:D123:1.1:slack": nil,
+	})
+}
+
+func TestSubmitMentionAdmitsItsRootFirst(t *testing.T) {
+	t.Parallel()
+
+	store := newWorkspaceSessionService(t)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
+	runTestManager(t, manager)
+
+	mention := newThreadInboundMessage("in the thread", "2.2", "1.1")
+	mention.SlackRoot = newThreadInboundMessage("root", "1.1", "1.1")
+	accepted, err := manager.SubmitMention(t.Context(), "slack", slackTarget("D123", "1.1"), mention)
+	require.NoError(t, err)
+	require.True(t, accepted)
+
+	accepted, err = manager.SubmitMention(t.Context(), "slack", slackTarget("D123", "1.1"), newThreadInboundMessage("root", "1.1", "1.1"))
+	require.NoError(t, err)
+	assert.False(t, accepted, "Slack's later delivery of the root is not admitted again")
+
+	requireQueueIDs(t, store, map[string][]string{"slack-channel:D123:slack": {"slack:D123:1.1"}, "slack-thread:D123:1.1:slack": {"slack:D123:2.2"}})
+}
+
+func TestSlackThreadMentionContinuesManagedSlackThreadOfSameAgent(t *testing.T) {
+	t.Parallel()
+
+	store := newWorkspaceSessionService(t)
+	recordTestConversations(t, store, "slack", map[string]ConversationKind{protocol.SlackThreadConversationID("D123", "1.1"): KindSlackThread})
+	recordTestConversations(t, store, "assistant", map[string]ConversationKind{protocol.SlackThreadConversationID("D123", "3.3"): KindSlackThread})
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
+	runTestManager(t, manager)
+
+	for _, tt := range []struct {
+		threadTS, messageTS, session string
+		recorded                     bool
+	}{
+		{threadTS: "1.1", messageTS: "9.1", session: "slack-thread:D123:1.1", recorded: true},
+		{threadTS: "3.3", messageTS: "9.3", session: "slack-thread:D123:3.3:slack"},
+	} {
+		target := protocol.TextConversationTarget{ChannelID: "D123", MessageID: tt.messageTS, ThreadID: tt.threadTS, Agent: "slack"}
+		recorded, report, err := manager.MentionThread(target)
+		require.NoError(t, err)
+		assert.Equal(t, tt.recorded, recorded, tt.session)
+		assert.False(t, report)
+
+		accepted, err := manager.SubmitMention(t.Context(), "slack", target, newThreadInboundMessage("later", tt.messageTS, tt.threadTS))
+		require.NoError(t, err)
+		require.True(t, accepted)
+		requireQueueIDs(t, store, map[string][]string{tt.session: {"slack:D123:" + tt.messageTS}})
+	}
 }
 
 func TestThreadBridgeManagerSubmitMentionKeepsMentionForStoppedBridge(t *testing.T) {
 	t.Parallel()
 
 	store := newWorkspaceSessionService(t)
-	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
+	conversationID := "slack-channel:D123:main"
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, stopped: true}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 
@@ -345,26 +446,28 @@ func TestStartQueuedConversationsWakesEachRecordedConversationOnce(t *testing.T)
 	require.Len(t, manager.bridges, 2)
 }
 
-func TestThreadBridgeManagerInterruptSlackThreadInterruptsActiveTurn(t *testing.T) {
+func TestThreadBridgeManagerInterruptTurnInterruptsOnlyThatTurn(t *testing.T) {
 	t.Parallel()
 
 	store := newWorkspaceSessionService(t)
-	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
+	conversationID := "slack-thread:D123:111.222:main"
 	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "first", MaxTurns: 5}))
-
-	marker := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}
+	require.NoError(t, startTurnDB(t.Context(), store.db, "turn-1", conversationID, newThreadInboundMessage("hello", "111.222", "111.222")))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	bridge := &Bridge{activeReply: &protocol.InboundMessage{SlackReply: marker}, activeTurnCancel: cancel, activeTurnInterrupts: make(chan os.Signal, 1)}
+	bridge := &Bridge{activeTurnID: "turn-2", activeTurnCancel: cancel, activeTurnInterrupts: make(chan os.Signal, 1)}
 	manager := &threadBridgeManager{store: store, bridges: map[string]directBridge{conversationID: bridge}}
 
-	result, err := manager.InterruptThread(slackTarget("D123", "111.222"))
-	require.NoError(t, err)
-	assert.Equal(t, marker, result.SlackReply)
-	assert.Same(t, bridge.activeReply, result)
+	require.NoError(t, manager.InterruptTurn(t.Context(), "turn-0"))
+	require.NoError(t, manager.InterruptTurn(t.Context(), "turn-1"))
+	require.NoError(t, ctx.Err(), "neither a turn that is not running nor the holder's other turn is stopped")
+
+	bridge.activeTurnID = "turn-1"
+
+	require.NoError(t, manager.InterruptTurn(t.Context(), "turn-1"))
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
 	assert.Equal(t, os.Interrupt, <-bridge.activeTurnInterrupts)
 
@@ -447,7 +550,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(output.Output), &result))
 
 	conversationID := result.SessionID
-	_, slackThread, err := store.SlackThread(t.Context(), conversationID)
+	_, slackThread, _, err := store.SlackThread(t.Context(), conversationID)
 	require.NoError(t, err)
 
 	require.NotEmpty(t, conversationID)
@@ -574,6 +677,9 @@ func TestSessionsWriteRejectsUnavailableAgents(t *testing.T) {
 	write(cron, "job", "", `agent "job" is not configured`)
 	write(new(protocol.InboundMessage), "missing", "", `agent "missing" is not configured`)
 
+	writeAgent(t, workspace, "channel", "---\ndescription: Slack agent\nmodel: gpt-6.1-sol\nsticky: slack\n---\nPrompt\n")
+	write(new(protocol.InboundMessage), "main", "channel", `agent "channel" is sticky: slack, so it answers only in Slack`)
+
 	write(new(protocol.InboundMessage), "main", "", "the Web is not serving on the tailnet yet")
 
 	conversations, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations`, "conversations")
@@ -664,7 +770,7 @@ func submittedMessages(bridge *directBridgeMock) []*protocol.InboundMessage {
 
 func newThreadInboundMessage(text, messageTS, threadTS string) *protocol.InboundMessage {
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, text, true)
-	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: messageTS, ThreadTS: threadTS}
+	inbound.SlackReply, inbound.Metadata = &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: messageTS, ThreadTS: threadTS}, map[string]string{}
 
 	return inbound
 }

@@ -32,7 +32,9 @@ const (
 	slackTextLimit, slackBlockTextLimit = 3800, 3000
 	slackAdoptHistoryLimit              = 50
 	slackSessionTitleLimit              = 200
+	slackRootFirstWindow                = 10 * time.Minute
 	slackWorkingStateLifetime           = time.Hour
+	slackChannelReplyEvent              = "rocketclaw_channel_reply"
 )
 
 var errSlackDownloadLimitExceeded = errors.New("slack file download exceeded size limit")
@@ -99,10 +101,10 @@ type channelFactsStore interface {
 	ChannelFact(ctx context.Context, workspaceID, channelID string) (string, bool, error)
 	RecordChannelFact(ctx context.Context, workspaceID, channelID, name string, observedAt time.Time) error
 	SlackChannelIDs(ctx context.Context) ([]string, error)
-	SlackThread(ctx context.Context, conversationID string) (channelID, threadTS string, err error)
+	SlackThread(ctx context.Context, conversationID string) (channelID, threadTS string, channelSession bool, err error)
 	LoadTurnStep(ctx context.Context, conversationID, key string) (json.RawMessage, bool, error)
 	SaveTurnStep(ctx context.Context, conversationID, key string, value json.RawMessage) error
-	TurnProgress(ctx context.Context, conversationID, turnID string) (protocol.TurnProgress, error)
+	TurnProgress(ctx context.Context, turnID string) (protocol.TurnProgress, error)
 	UpdateConversationDetails(ctx context.Context, conversationID string, name *string) (bool, error)
 }
 
@@ -294,7 +296,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 	}
 
 	if !msg.Complete {
-		if _, live := c.sessions[msg.TurnID]; !live && c.mentionThread(ctx, msg) {
+		if _, threadTS := slackStatusThread(msg.SlackReply); c.sessions[msg.TurnID] == nil && threadTS != "" && c.mentionThread(ctx, msg) {
 			c.startSession(ctx, msg)
 		}
 
@@ -331,7 +333,16 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 		c.log.Warn("upload Slack response attachments", "error_type", fmt.Sprintf("%T", err))
 	}
 
-	c.finishResponse(ctx, msg, len(footer) > 0)
+	settle := len(footer) > 0
+
+	if msg.TurnID == "" && msg.Text == "" {
+		settle = false
+		if turnID, _ := c.sessionTurn(slackStatusThread(msg.SlackReply)); turnID == "" {
+			_, _, settle = c.mentionConversation(ctx, msg.ConversationID)
+		}
+	}
+
+	c.finishResponse(ctx, msg, settle)
 
 	return nil
 }
@@ -353,7 +364,7 @@ func (c *Connector) RenameThreadSession(ctx context.Context, conversationID, nam
 	}
 
 	channelID, threadTS, ok := c.mentionConversation(ctx, conversationID)
-	if !ok {
+	if !ok || threadTS == "" {
 		return
 	}
 
@@ -364,6 +375,20 @@ func (c *Connector) RenameThreadSession(ctx context.Context, conversationID, nam
 
 func slackReplyDestination(replyTarget *protocol.SlackReplyTarget) (channelID, threadTS string) {
 	return strings.TrimSpace(replyTarget.ChannelID), strings.TrimSpace(replyTarget.ThreadTS)
+}
+
+func slackStatusThread(replyTarget *protocol.SlackReplyTarget) (channelID, threadTS string) {
+	channelID, threadTS = slackReplyDestination(replyTarget)
+
+	return channelID, cmp.Or(threadTS, strings.TrimSpace(replyTarget.MessageTS))
+}
+
+func slackPlacement(threadTS string) slack.MsgOption {
+	if threadTS == "" {
+		return slack.MsgOptionMetadata(slack.SlackMetadata{EventType: slackChannelReplyEvent, EventPayload: map[string]any{}})
+	}
+
+	return slack.MsgOptionTS(threadTS)
 }
 
 func titledMessageLayout(header, text string) (blocks []slack.Block, overflow []string) {
@@ -407,7 +432,7 @@ func (c *Connector) mentionThread(ctx context.Context, msg *protocol.OutboundMes
 }
 
 func (c *Connector) mentionConversation(ctx context.Context, conversationID string) (channelID, threadTS string, ok bool) {
-	channelID, threadTS, err := c.facts.SlackThread(ctx, conversationID)
+	channelID, threadTS, channelSession, err := c.facts.SlackThread(ctx, conversationID)
 
 	report := false
 	if err == nil && threadTS != "" {
@@ -418,7 +443,7 @@ func (c *Connector) mentionConversation(ctx context.Context, conversationID stri
 		c.log.Warn("read Slack mention thread", "conversation_id", conversationID, "error", err)
 	}
 
-	return channelID, threadTS, err == nil && threadTS != "" && !report
+	return channelID, threadTS, err == nil && (threadTS != "" || channelSession) && !report
 }
 
 func (c *Connector) mentionFooter(ctx context.Context, msg *protocol.OutboundMessage) (string, []slack.Block) {
@@ -435,7 +460,7 @@ func (c *Connector) mentionFooter(ctx context.Context, msg *protocol.OutboundMes
 }
 
 func (c *Connector) startSession(ctx context.Context, msg *protocol.OutboundMessage) {
-	channelID, threadTS := slackReplyDestination(msg.SlackReply)
+	channelID, threadTS := slackStatusThread(msg.SlackReply)
 	session := &slackSession{conversationID: msg.ConversationID, channelID: channelID, threadTS: threadTS, processingSince: time.Now()}
 
 	c.sendStatus(ctx, session, slack.AgentSessionStatusProcessing)
@@ -448,7 +473,7 @@ func (c *Connector) pollSession(turnID string, session *slackSession) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	progress, err := c.facts.TurnProgress(ctx, session.conversationID, turnID)
+	progress, err := c.facts.TurnProgress(ctx, turnID)
 
 	c.responseMu.Lock()
 	defer c.responseMu.Unlock()
@@ -550,14 +575,14 @@ func (c *Connector) settleSession(ctx context.Context, channelID, threadTS strin
 	c.responseMu.Lock()
 	defer c.responseMu.Unlock()
 
-	if turnID, _ := c.sessionTurn(protocol.SlackThreadConversationID(channelID, threadTS)); turnID == "" {
+	if turnID, _ := c.sessionTurn(channelID, threadTS); turnID == "" {
 		c.setSessionStatus(ctx, &slack.AgentSessionSetStatusParameters{Status: slack.AgentSessionStatusActive, ChannelID: channelID, ThreadTS: threadTS})
 	}
 }
 
-func (c *Connector) sessionTurn(conversationID string) (string, *slackSession) {
+func (c *Connector) sessionTurn(channelID, threadTS string) (string, *slackSession) {
 	for id, session := range c.sessions {
-		if session.conversationID == conversationID {
+		if session.channelID == channelID && session.threadTS == threadTS {
 			return id, session
 		}
 	}
@@ -566,16 +591,22 @@ func (c *Connector) sessionTurn(conversationID string) (string, *slackSession) {
 }
 
 func (c *Connector) handleAgentSessionTitleChanged(ctx context.Context, ev *slackevents.AgentSessionTitleChangedEvent) {
-	channel, _, ok := c.socialModeChannel(ctx, ev.Channel)
+	channel, agent, ok := c.socialModeChannel(ctx, ev.Channel)
 	title := strings.TrimSpace(ev.Title)
 
 	if !ok || !c.socialModeAllowsUser(channel, ev.User) || title == "" {
 		return
 	}
 
-	conversationID := protocol.SlackThreadConversationID(ev.Channel, ev.ThreadTimestamp)
-	if _, err := c.facts.UpdateConversationDetails(ctx, conversationID, &title); err != nil {
-		c.log.Warn("name Web conversation after Slack session title", "conversation_id", conversationID, "error", err)
+	for _, conversationID := range []string{protocol.SlackThreadSessionID(ev.Channel, ev.ThreadTimestamp, agent), protocol.SlackThreadConversationID(ev.Channel, ev.ThreadTimestamp)} {
+		found, err := c.facts.UpdateConversationDetails(ctx, conversationID, &title)
+		if err != nil {
+			c.log.Warn("name Web conversation after Slack session title", "conversation_id", conversationID, "error", err)
+		}
+
+		if found || err != nil {
+			return
+		}
 	}
 }
 
@@ -689,6 +720,7 @@ func (c *Connector) refreshChannelFacts(ctx context.Context) error {
 type slackPosting struct {
 	ChannelID string `json:"channel_id"`
 	ThreadTS  string `json:"thread_ts"`
+	Oldest    string `json:"oldest"`
 }
 
 func (c *Connector) postOnce(ctx context.Context, conversationID, key, channelID, threadTS string, options ...slack.MsgOption) (protocol.TextConversationTarget, error) {
@@ -729,18 +761,14 @@ func (c *Connector) postOnce(ctx context.Context, conversationID, key, channelID
 		}
 	}
 
-	posting = slackPosting{ChannelID: channelID, ThreadTS: threadTS}
+	posting = slackPosting{ChannelID: channelID, ThreadTS: threadTS, Oldest: fmt.Sprintf("%d.000000", time.Now().Add(-time.Minute).Unix())}
 
 	marker, _ = json.Marshal(posting)
 	if err := c.facts.SaveTurnStep(ctx, conversationID, key+"/posting", marker); err != nil {
 		return target, fmt.Errorf("record Slack posting marker: %w", err)
 	}
 
-	if threadTS != "" {
-		options = append(options, slack.MsgOptionTS(threadTS))
-	}
-
-	postedChannelID, ts, err := c.api.PostMessageContext(ctx, channelID, options...)
+	postedChannelID, ts, err := c.api.PostMessageContext(ctx, channelID, append(options, slackPlacement(threadTS))...)
 	if err != nil {
 		return target, fmt.Errorf("post Slack message: %w", err)
 	}
@@ -762,7 +790,22 @@ func (c *Connector) findPosted(ctx context.Context, posting *slackPosting, block
 	cursor := ""
 
 	for {
-		messages, more, next, err := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{ChannelID: posting.ChannelID, Timestamp: posting.ThreadTS, Cursor: cursor})
+		var (
+			messages []slack.Message
+			more     bool
+			next     string
+			err      error
+			history  *slack.GetConversationHistoryResponse
+		)
+
+		if posting.ThreadTS == "" {
+			if history, err = c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{ChannelID: posting.ChannelID, Oldest: posting.Oldest, Cursor: cursor}); err == nil {
+				messages, more, next = history.Messages, history.HasMore, history.ResponseMetaData.NextCursor
+			}
+		} else {
+			messages, more, next, err = c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{ChannelID: posting.ChannelID, Timestamp: posting.ThreadTS, Cursor: cursor})
+		}
+
 		if err != nil {
 			return "", fmt.Errorf("find posted Slack message: %w", err)
 		}
@@ -819,8 +862,7 @@ func (c *Connector) sendTitledResponse(ctx context.Context, msg *protocol.Outbou
 func (c *Connector) finishResponse(ctx context.Context, msg *protocol.OutboundMessage, mention bool) {
 	c.endSession(ctx, msg.TurnID, cmp.Or(msg.Terminal, protocol.TerminalComplete))
 
-	if mention {
-		channelID, threadTS := slackReplyDestination(msg.SlackReply)
+	if channelID, threadTS := slackStatusThread(msg.SlackReply); mention && threadTS != "" {
 		c.setSessionStatus(ctx, &slack.AgentSessionSetStatusParameters{Status: slack.AgentSessionStatusActive, ChannelID: channelID, ThreadTS: threadTS})
 	}
 }
@@ -850,12 +892,7 @@ func (c *Connector) uploadResponseAttachments(ctx context.Context, channelID, th
 func (c *Connector) postResponseChunks(ctx context.Context, channelID, threadTS string, chunks []string) error {
 	posted := make([]string, 0, len(chunks))
 	for i := range chunks {
-		options := []slack.MsgOption{slack.MsgOptionText(chunks[i], false)}
-		if threadTS != "" {
-			options = append(options, slack.MsgOptionTS(threadTS))
-		}
-
-		_, postedTS, err := c.api.PostMessageContext(ctx, channelID, options...)
+		_, postedTS, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(chunks[i], false), slackPlacement(threadTS))
 		if err != nil {
 			for _, ts := range slices.Backward(posted) {
 				if _, _, errDelete := c.api.DeleteMessageContext(ctx, channelID, ts); errDelete != nil {
@@ -999,8 +1036,7 @@ func (c *Connector) handleAgentSessionStopped(ctx context.Context, ev *slackeven
 	c.responseMu.Lock()
 	defer c.responseMu.Unlock()
 
-	conversationID := protocol.SlackThreadConversationID(ev.Channel, ev.ThreadTimestamp)
-	turnID, session := c.sessionTurn(conversationID)
+	turnID, session := c.sessionTurn(ev.Channel, ev.ThreadTimestamp)
 	stopped := ""
 
 	if turnID != "" {
@@ -1010,16 +1046,16 @@ func (c *Connector) handleAgentSessionStopped(ctx context.Context, ev *slackeven
 
 		if ok && c.socialModeAllowsUser(channel, ev.User) && pressedDuringTurn {
 			c.responseMu.Unlock()
-			_, err := c.threadRouter.InterruptThread(protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: ev.ThreadTimestamp})
+			err := c.threadRouter.InterruptTurn(ctx, turnID)
 			c.responseMu.Lock()
 
 			if err != nil {
-				c.log.Error("interrupt Slack thread on Stop", "conversation_id", conversationID, "turn_id", turnID, "error", err)
+				c.log.Error("interrupt Slack turn on Stop", "channel", ev.Channel, "thread_ts", ev.ThreadTimestamp, "turn_id", turnID, "error", err)
 			} else {
 				stopped = turnID
 			}
 
-			turnID, session = c.sessionTurn(conversationID)
+			turnID, session = c.sessionTurn(ev.Channel, ev.ThreadTimestamp)
 		}
 	}
 
@@ -1065,7 +1101,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		return
 	}
 
-	target := protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}
+	target := protocol.TextConversationTarget{ChannelID: ev.Channel, MessageID: ev.TimeStamp, ThreadID: threadTS, Agent: agent}
 
 	recorded, report, err := c.threadRouter.MentionThread(target)
 	if err != nil {
@@ -1079,7 +1115,10 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	replyTarget := &protocol.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS}
 
-	var history string
+	var (
+		history string
+		root    *slack.Message
+	)
 
 	if inThread && !recorded {
 		messages, ok := c.slackThreadReplies(ctx, ev.Channel, threadTS)
@@ -1088,15 +1127,17 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 			return
 		}
 
-		if slices.ContainsFunc(messages, func(message slack.Message) bool { return message.Timestamp == threadTS && message.User == c.botUserID }) {
+		if slices.ContainsFunc(messages, func(message slack.Message) bool {
+			return message.Timestamp == threadTS && message.User == c.botUserID && message.Metadata.EventType != slackChannelReplyEvent
+		}) {
 			return
 		}
 
-		history = slackAdoptHistory(messages, ev.TimeStamp)
+		history, root = slackAdoptHistory(messages, ev.TimeStamp), c.recentRootMention(channel, ev.TimeStamp, threadTS, messages)
 	}
 
 	c.responseMu.Lock()
-	if turnID, _ := c.sessionTurn(protocol.SlackThreadConversationID(ev.Channel, threadTS)); turnID == "" {
+	if turnID, _ := c.sessionTurn(ev.Channel, threadTS); turnID == "" {
 		c.setSessionStatus(ctx, &slack.AgentSessionSetStatusParameters{Status: slack.AgentSessionStatusProcessing, ChannelID: ev.Channel, ThreadTS: threadTS, Title: slackTruncatedText(strings.TrimSpace(text), slackSessionTitleLimit), InitiatorUserID: ev.User})
 	}
 	c.responseMu.Unlock()
@@ -1109,13 +1150,13 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		content.TextAttachments = append(content.TextAttachments, history)
 	}
 
-	inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &content, true)
-	if principal, name, email := c.slackPrincipal(ctx, ev.User); principal != "" {
-		inbound.Metadata[protocol.InboundPrincipalMetadataKey], inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey] = principal, name, email
-	}
+	inbound := c.mentionInbound(ctx, channel, ev.User, &content, new(*replyTarget))
 
-	inbound.SlackReply = new(*replyTarget)
-	protocol.SetInboundAllowedAgents(inbound, c.socialModeAgents(channel))
+	if root != nil {
+		rootContent := protocol.InboundContent{Text: c.stripSlackBotMention(root.Text)}
+		rootContent.Attachments, rootContent.TextAttachments, rootContent.AttachmentPresence, rootContent.AttachmentWarnings = c.downloadSlackAttachments(ctx, root.Files)
+		inbound.SlackRoot = c.mentionInbound(ctx, channel, root.User, &rootContent, &protocol.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: threadTS, ThreadTS: threadTS})
+	}
 
 	accepted, err := c.threadRouter.SubmitMention(ctx, agent, target, inbound)
 	if err != nil || !accepted {
@@ -1136,6 +1177,36 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	if accepted {
 		c.log.Info("accepted Slack mention", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "text_len", len(text), "attachment_count", len(content.Attachments))
 	}
+}
+
+func (c *Connector) recentRootMention(channel, mentionTS, threadTS string, messages []slack.Message) *slack.Message {
+	i := slices.IndexFunc(messages, func(message slack.Message) bool { return message.Timestamp == threadTS })
+	if i < 0 {
+		return nil
+	}
+
+	root := &messages[i]
+	postedAt, _ := strconv.ParseFloat(threadTS, 64)
+	mentionedAt, _ := strconv.ParseFloat(mentionTS, 64)
+
+	if mentionedAt-postedAt > slackRootFirstWindow.Seconds() || root.BotID != "" || !strings.Contains(root.Text, "<@"+c.botUserID+">") ||
+		len(c.stripSlackBotMention(root.Text))+len(root.Files) == 0 || !c.socialModeAllowsUser(channel, root.User) {
+		return nil
+	}
+
+	return root
+}
+
+func (c *Connector) mentionInbound(ctx context.Context, channel, user string, content *protocol.InboundContent, replyTarget *protocol.SlackReplyTarget) *protocol.InboundMessage {
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, content, true)
+	if principal, name, email := c.slackPrincipal(ctx, user); principal != "" {
+		inbound.Metadata[protocol.InboundPrincipalMetadataKey], inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey] = principal, name, email
+	}
+
+	inbound.SlackReply = replyTarget
+	protocol.SetInboundAllowedAgents(inbound, c.socialModeAgents(channel))
+
+	return inbound
 }
 
 func (c *Connector) replyMentionFailure(ctx context.Context, replyTarget *protocol.SlackReplyTarget, text string) {
@@ -1195,7 +1266,7 @@ func (c *Connector) slackThreadReplies(ctx context.Context, channelID, threadTS 
 		cursor   string
 	)
 	for {
-		page, hasMore, nextCursor, err := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{ChannelID: channelID, Timestamp: threadTS, Cursor: cursor, Limit: 200})
+		page, hasMore, nextCursor, err := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{ChannelID: channelID, Timestamp: threadTS, Cursor: cursor, Limit: 200, IncludeAllMetadata: true})
 		if err != nil || (hasMore && nextCursor == "") {
 			return nil, false
 		}

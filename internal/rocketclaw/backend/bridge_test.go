@@ -243,6 +243,7 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, admitted)
 	require.Empty(t, bus.outbound)
+	endTestTurn(t, store, conversationID, request.turnID, protocol.TerminalComplete)
 
 	slackQueued := protocol.ThreadQueueItem{ID: "slack-next", ConversationID: conversationID, Source: protocol.SourceSlack, Kind: protocol.InboundKindEnqueue, Message: "already visible", Principal: "bob"}
 	require.NoError(t, store.PutThreadQueueItem(slackQueued.ID, &slackQueued))
@@ -481,7 +482,7 @@ func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "A", Principal: "U1", StashAt: stashAt, Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Date(2000, 1, 1, 12, 5, 0, 0, time.UTC)}))
 
-	bridge := &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+	bridge := &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler), runtime: slackAgentRuntime(t), config: Config{ConversationID: conversationID, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
 	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	require.Len(t, bridge.requestCh, 1)
@@ -997,7 +998,7 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindWebChat})
 	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
 	continuation := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	continuation.GoalAction = protocol.GoalActionContinue
@@ -2157,7 +2158,7 @@ func TestBridgeDeletesScheduledMessageWhenTurnStarts(t *testing.T) {
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindWebChat})
 	require.NoError(t, service.PutScheduledMessage("schedule-1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "later", DueAt: time.Now().UTC()}))
 
 	bus := newTestBus()
@@ -2193,7 +2194,7 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 		workspace := t.TempDir()
 		service := newTestSessionServiceAt(t, workspace)
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-		recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
+		recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindWebChat})
 		require.NoError(t, service.PutScheduledMessage("schedule-1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "later", DueAt: time.Now().UTC(), Recurring: true, Interval: time.Minute}))
 
 		bus := newTestBus()
@@ -3138,7 +3139,7 @@ func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
+	writeMainAgent(t, workspace, "slack")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	service, err := NewSessionService(workspace)
@@ -3247,7 +3248,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: work/model-a\nreasoningEffort: high\npermission: {}\n---\nPrompt\n")
-	writeAgent(t, workspace, "reviewer", "---\ndescription: Reviewer\nmodel: work/model-b\nreasoningEffort: low\nadditionalInstructions: Reply in one sentence.\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "reviewer", "---\ndescription: Reviewer\nmodel: work/model-b\nreasoningEffort: low\nadditionalInstructions: Reply in one sentence.\nsticky: slack\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -3856,6 +3857,7 @@ type noteTest struct {
 	conversationID string
 	requests       chan string
 	finals         chan *protocol.OutboundMessage
+	logs           *lockedBuffer
 }
 
 type noteTestResponder func(w http.ResponseWriter, r *http.Request, n int, body string)
@@ -3889,7 +3891,7 @@ func newNoteTest(t *testing.T, respond noteTestResponder) *noteTest {
 	writeAgent(t, workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission: {}\n---\nResearch\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
-	nt := &noteTest{service: newTestSessionServiceAt(t, workspace), conversationID: protocol.SlackThreadConversationID("C123", "111.222"), requests: make(chan string, 16), finals: make(chan *protocol.OutboundMessage, 16)}
+	nt := &noteTest{service: newTestSessionServiceAt(t, workspace), conversationID: protocol.SlackThreadConversationID("C123", "111.222"), requests: make(chan string, 16), finals: make(chan *protocol.OutboundMessage, 16), logs: new(lockedBuffer)}
 
 	var (
 		mu    sync.Mutex
@@ -3936,7 +3938,7 @@ func (nt *noteTest) run(t *testing.T, observe func(*protocol.OutboundMessage)) (
 	}}
 	manager = newThreadBridgeManager(config.NewLockedConfig(nt.cfg), nt.service, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 		cfg.SessionService, cfg.RequestRestart = nt.service, &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}
-		bridge := NewConversation(config.NewLockedConfig(nt.cfg), publisher, cfg, slog.New(slog.DiscardHandler))
+		bridge := NewConversation(config.NewLockedConfig(nt.cfg), publisher, cfg, slog.New(slog.NewTextHandler(nt.logs, nil)))
 		bridge.threads, bridge.background = manager, registry
 
 		return bridge
@@ -4116,6 +4118,40 @@ func TestBackgroundNotesWakeIdleConversation(t *testing.T) {
 	items, err := harness.ReplayInputToParams(entries[0].Entry.ReplayInput)
 	require.NoError(t, err)
 	assert.Equal(t, "turn-1/call/b turn-1/call/a", items[0].OfMessage.ExtraFields()["input_id"], "the Web finds the turn's notes by their job IDs")
+}
+
+func TestChannelQuietFollowsWhatStartedTheTurn(t *testing.T) {
+	t.Parallel()
+
+	nt := newNoteTest(t, answerNoteTest)
+	manager, _ := nt.run(t, ignoreOutbound)
+	bridge := nt.bridge(t, manager, nt.conversationID)
+
+	goal := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.", false)
+	goal.GoalAction = protocol.GoalActionContinue
+
+	for name, tt := range map[string]struct {
+		inbound *protocol.InboundMessage
+		quiet   bool
+	}{
+		"Slack mention": {inbound: nt.slackPrompt("ask")},
+		"Web input":     {inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "ask", true)},
+		"agent write":   {inbound: agentWrite("ask")},
+		"scheduled":     {inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "due", false), quiet: true},
+		"goal":          {inbound: goal, quiet: true},
+	} {
+		assert.Equal(t, tt.quiet, bridge.newOutboundMessage(tt.inbound, "turn-1", "", true).ChannelQuiet, name)
+	}
+
+	reply := testReply(nt.conversationID, "call-1", "web:target")
+	createTestBackgroundJob(t, nt.service, reply)
+	finishTestBackgroundJob(t, nt.service, reply, backgroundCompleted, true)
+	manager.noteReady(nt.conversationID)
+	assert.True(t, readFinal(t, nt.finals).ChannelQuiet, "a wake for session replies alone stays quiet")
+
+	nt.addNote(t, nt.conversationID, "turn-1/call/a", nt.slackPrompt("run the tests"))
+	manager.noteReady(nt.conversationID)
+	assert.False(t, readFinal(t, nt.finals).ChannelQuiet, "a Background Job wake posts")
 }
 
 func TestBackgroundNoteEntersRunningTurn(t *testing.T) {

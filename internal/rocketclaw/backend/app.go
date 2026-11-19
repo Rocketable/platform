@@ -192,7 +192,8 @@ func (s *lockedRun) serve(runCtx context.Context) error {
 		return err
 	}
 
-	if err := s.startWithBehavior(runCtx, cfg); err != nil {
+	slackWarnings, err := s.startWithBehavior(runCtx, cfg)
+	if err != nil {
 		return err
 	}
 
@@ -238,7 +239,7 @@ func (s *lockedRun) serve(runCtx context.Context) error {
 		Sessions:          rocketcodeSessions,
 		ExternalMCPAgents: inertRefresher{}, CronJobs: inertRefresher{}, Assemble: s.assemble, sandboxes: s.sandboxes,
 		TextRouter: threadBridges, threads: threadBridges, background: background,
-		questions: questions, shutdown: shutdown,
+		questions: questions, shutdown: shutdown, slackWarnings: slackWarnings,
 	}
 
 	rt.prepareSandbox()
@@ -389,18 +390,19 @@ func (f conversationFactory) newBridge(cfg *Config) directBridge {
 	return bridge
 }
 
-func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config) error {
+func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config) ([]slackAgentWarning, error) {
 	stored, found, err := s.sessions.behaviorSettings(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if !found {
-		if err := s.startWith(cfg); err != nil {
-			return err
+		warnings, err := s.startWith(cfg)
+		if err != nil {
+			return nil, err
 		}
 
-		return putBehaviorSettings(ctx, s.sessions.db, new(cfg.Behavior()))
+		return warnings, putBehaviorSettings(ctx, s.sessions.db, new(cfg.Behavior()))
 	}
 
 	if ignored := setBehaviorFields(new(cfg.Behavior())); len(ignored) > 0 {
@@ -409,34 +411,36 @@ func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config) e
 
 	cfg.SetBehavior(&stored)
 
-	if err := s.startWith(cfg); err != nil {
-		return fmt.Errorf("stored behavior settings: %w", err)
+	warnings, err := s.startWith(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("stored behavior settings: %w", err)
 	}
 
-	return nil
+	return warnings, nil
 }
 
-func (s *lockedRun) startWith(cfg *config.Config) error {
+func (s *lockedRun) startWith(cfg *config.Config) ([]slackAgentWarning, error) {
 	if err := cfg.ValidateBehavior(); err != nil {
-		return fmt.Errorf("validate behavior settings: %w", err)
+		return nil, fmt.Errorf("validate behavior settings: %w", err)
 	}
 
 	s.sessions.definitions.Store(cfg)
 	SetLogLevel(s.logLevel, cfg.Logging.Level)
 
 	if err := skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, s.logger); err != nil {
-		return fmt.Errorf("sync rocketclaw skeleton: %w", err)
+		return nil, fmt.Errorf("sync rocketclaw skeleton: %w", err)
 	}
 
-	if err := validateRuntimeAssets(s.sessions.definitions, cfg.RuntimeDirName()); err != nil {
-		return err
+	warnings, err := validateRuntimeAssets(s.sessions.definitions, cfg.RuntimeDirName(), s.logger)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := s.assemble.ValidateAssets(cfg, cfg.RuntimeDirName()); err != nil {
-		return fmt.Errorf("validate frontend assets: %w", err)
+		return nil, fmt.Errorf("validate frontend assets: %w", err)
 	}
 
-	return nil
+	return warnings, nil
 }
 
 func setBehaviorFields(b *config.Behavior) []string {
@@ -470,19 +474,26 @@ func SetLogLevel(level *slog.LevelVar, text string) {
 	}
 }
 
-func validateRuntimeAssets(cfg *config.LockedConfig, runtimeDir string) error {
+type slackAgentWarning struct {
+	channel, agent string
+}
+
+func validateRuntimeAssets(cfg *config.LockedConfig, runtimeDir string, logger *slog.Logger) ([]slackAgentWarning, error) {
 	agents, _, err := LoadRuntimeDefinitions(cfg, runtimeDir)
 	if err != nil {
-		return fmt.Errorf("validate rocketcode definitions: %w", err)
+		return nil, fmt.Errorf("validate rocketcode definitions: %w", err)
 	}
+
+	var warnings []slackAgentWarning
 
 	for _, channel := range cfg.Clone().Slack.Channels {
 		for _, name := range channel.Agents {
-			if agents.Items[name].Sticky != harness.AgentStickyOff {
-				return fmt.Errorf("slack channel %s agent %s must use sticky: off", channel.Channel, name)
+			if agents.Items[name].Sticky != harness.AgentStickySlack {
+				logger.Warn("slack channel agent is not sticky: slack", "channel", channel.Channel, "agent", name)
+				warnings = append(warnings, slackAgentWarning{channel: channel.Channel, agent: name})
 			}
 		}
 	}
 
-	return nil
+	return warnings, nil
 }

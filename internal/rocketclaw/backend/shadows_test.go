@@ -387,7 +387,7 @@ func TestShadowImplicitCreation(t *testing.T) {
 	require.NoError(t, store.UpsertThread("cron:private", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{ManagedConversationID: "visible", PrivateConversationID: "mcp:private", Agent: "main"}))
 
-	conversation := protocol.SlackThreadConversationID("C1", "1.1")
+	conversation := "slack-channel:C1:main"
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversation, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), handling: true}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	inbound := newThreadInboundMessage("mention", "1.1", "1.1")

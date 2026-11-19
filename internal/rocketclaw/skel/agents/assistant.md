@@ -1,5 +1,5 @@
 ---
-description: Assistant for Slack mentions and External MCP conversations
+description: Assistant for External MCP conversations
 model: gpt-6.1-sol#high
 sudo: yes
 ---

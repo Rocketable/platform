@@ -741,7 +741,7 @@ func TestSessionsWriteToolDescription(t *testing.T) {
 		"Only stop takes an empty prompt: it then just stops the turn and goal, queues nothing, and posts that this session stopped it into that session's transcript without starting a turn. "+
 		"The receiver is told this session and agent sent it and that its answer comes back here. Each call that returns a queue_item_id gets exactly one reply: when the target's turn that took prompt ends, or, for an empty-prompt stop, once the stopped turn is over, a <session_reply> note naming that queue_item_id arrives here with the outcome and that turn's final answer. A steer's answer covers the whole turn it joined. "+
 		"DO NOT wait, sleep, poll, or write again to get the reply: work on anything that does not depend on it, or end your response; you will be resumed when it arrives. "+
-		"Every call, including create and stop, fails before doing anything when the target agent's permission.rocketclaw.rocketclaw_sessions_recipient, or an easy target's delegatedFrom, does not accept this agent. "+
+		"Every call, including create and stop, fails before doing anything when the target agent's permission.rocketclaw.rocketclaw_sessions_recipient, or an easy target's delegatedFrom, does not accept this agent, except a write from a Slack channel's session into its own thread sessions. "+
 		"Returns JSON with outcome (created, steered, queued or stopped), session_id, url, queue_item_id (absent only for an empty-prompt stop when no turn was running, which gets no reply) and, for stop, turn_was_running. Share url so a person can open the session.", write.Description)
 
 	mode, err := json.Marshal(write.Parameters["properties"].(map[string]any)["mode"])
@@ -1166,6 +1166,84 @@ func TestSessionsWriteRecipients(t *testing.T) {
 
 	for target, accepted := range map[string]int{"lead": 1, "open": 3, "main": 3, "root": 0, "admin": 1, "easyopen": 3, "easyclosed": 0, "easylead": 1} {
 		assert.Len(t, queueIDs(t, store, "web:"+target), accepted, target)
+	}
+}
+
+func TestSessionsWriteChannelSessionWritesItsOwnThreads(t *testing.T) {
+	t.Parallel()
+
+	const ownThread = "slack-thread:D123:1.1:main"
+
+	outputs := make(chan string, 1)
+
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if strings.Contains(body, `"model":"review-model"`) {
+			_, _ = fmt.Fprintf(w, `{"id":"resp_review","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_review","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%q,"annotations":[]}]}]}`, `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"Requested."}`)
+			return
+		}
+
+		var request struct {
+			Input []struct{ Type, Output string }
+		}
+		if err := json.Unmarshal([]byte(body), &request); err != nil {
+			t.Error(err)
+			return
+		}
+
+		switch last := request.Input[len(request.Input)-1]; {
+		case last.Type == "function_call_output":
+			outputs <- last.Output
+
+			answerNoteTest(w, r, n, body)
+		case strings.Contains(body, "function_call_output"), strings.Contains(body, "for the thread"):
+			answerNoteTest(w, r, n, body)
+		default:
+			writeExecuteCall(t, w, "write", "def main():\n    return rocketclaw_sessions_write(session_id="+strconv.Quote(ownThread)+", mode=\"enqueue\", prompt=\"for the thread\", title=\"\", agent=\"\")\n")
+		}
+	})
+	for _, agent := range []string{"main", "job"} {
+		writeAgent(t, nt.cfg.Workspace, agent, "---\ndescription: Agent\nmodel: gpt-6.1-sol\nsticky: slack\nsudo: yes\n---\nPrompt\n")
+	}
+
+	nt.cfg.AutoApproverModel = "review-model"
+	nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Origin: "https://rc.example"}}
+	manager, _ := nt.run(t, ignoreOutbound)
+
+	recordSlackSession(t, nt.service, ownThread, "D123", "1.1")
+	recordSlackSession(t, nt.service, testChannelSession, "D123", "")
+	recordSlackSession(t, nt.service, "slack-channel:D9:main", "D9", "")
+	recordTestConversations(t, nt.service, "main", map[string]ConversationKind{"web:caller": KindWebChat, "external_mcp:caller": KindExternalMCPRun})
+
+	_, err := nt.service.recordConversation(t.Context(), &protocol.Conversation{ID: "slack-channel:D123:job", Agent: "job"}, conversationFacts{kind: KindSlackThread, slackChannel: "D123"}, harness.AgentStickyOff)
+	require.NoError(t, err)
+
+	for i, tt := range []struct {
+		name, sender, agent string
+		slack, accepted     bool
+	}{
+		{name: "its own Channel Session", sender: testChannelSession, agent: "main", slack: true, accepted: true},
+		{name: "its Channel Session in another channel", sender: "slack-channel:D9:main", agent: "main", slack: true},
+		{name: "a Web session", sender: "web:caller", agent: "main"},
+		{name: "an External MCP session", sender: "external_mcp:caller", agent: "main"},
+		{name: "another agent's Channel Session", sender: "slack-channel:D123:job", agent: "job", slack: true},
+	} {
+		inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "write", true)
+		if tt.slack {
+			inbound = newThreadInboundMessage("write", "5.5", "5.5")
+		}
+
+		_, err := runTestTurn(t.Context(), nt.bridge(t, manager, tt.sender), inbound, "turn-"+strconv.Itoa(i))
+		require.NoError(t, err, tt.name)
+
+		for len(nt.requests) > 0 {
+			<-nt.requests
+		}
+
+		if output := <-outputs; tt.accepted {
+			assert.Contains(t, output, `"outcome":"queued"`, "a sudo agent with no recipients setting accepts a write from %s", tt.name)
+		} else {
+			assert.Contains(t, output, fmt.Sprintf("agent %q does not accept writes from agent %q (permission.rocketclaw.%s)", "main", tt.agent, recipientSetting), "a write from %s is refused", tt.name)
+		}
 	}
 }
 
@@ -1729,10 +1807,11 @@ func TestChildConversationsKeepSlackChannel(t *testing.T) {
 	require.NoError(t, (&Bridge{config: Config{ConversationID: thread + "/call-1", SessionService: store}}).AppendChildEntry(t.Context(), harness.ChildKey{Path: "/call-2-review-0a1b2c3d", Turn: "turn-2", Call: "call-2"}, testSessionEntry("review", "allowed")))
 
 	for _, child := range []string{thread + "/call-1", thread + "/call-1/call-2-review-0a1b2c3d"} {
-		channel, slackThread, err := store.SlackThread(t.Context(), child)
+		channel, slackThread, channelSession, err := store.SlackThread(t.Context(), child)
 		require.NoError(t, err)
 		assert.Equal(t, "C1", channel, child)
 		assert.Empty(t, slackThread, "only the Slack thread itself is one")
+		assert.False(t, channelSession, "a child with the channel and no thread is not a Channel Session")
 	}
 }
 

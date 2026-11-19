@@ -320,6 +320,10 @@ func (s *Server) identity(ctx context.Context) (*IdentityResponse, error) {
 		response.Limited = new(true)
 	}
 
+	if warning := s.backend.SlackWarning(); warning != "" {
+		response.SlackWarning = &warning
+	}
+
 	return response, nil
 }
 
