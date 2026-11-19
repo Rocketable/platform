@@ -1608,7 +1608,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 	thread, ok, err := store.Thread(activeOldThread)
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByCron}, thread)
+	assert.Equal(t, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByCron, sticky: harness.AgentStickySlack}, thread)
 	assert.Contains(t, threadIDs, activeOldThread)
 	assert.Contains(t, threadIDs, newThread)
 	assert.Contains(t, threadIDs, boundaryThread)

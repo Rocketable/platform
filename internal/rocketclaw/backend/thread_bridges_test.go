@@ -181,7 +181,7 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	thread, recorded, err := store.Thread(conversationID)
 	require.NoError(t, err)
 	require.True(t, recorded)
-	assert.Equal(t, ThreadState{Agent: "main"}, thread)
+	assert.Equal(t, ThreadState{Agent: "main", sticky: harness.AgentStickySlack}, thread)
 
 	queue, err := store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)

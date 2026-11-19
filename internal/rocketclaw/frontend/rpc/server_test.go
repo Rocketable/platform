@@ -1204,7 +1204,7 @@ func TestSessionEntries(t *testing.T) {
 
 		require.Equal(t, "C1", channel)
 
-		return channelTitle, []string{"planner", "main"}, nil
+		return channelTitle, []string{"planner", "main", "planner-slack", "main-slack"}, nil
 	}
 	channels.SlackTagsMatchingFunc = func(context.Context, string) []string { return nil }
 	cronRan := make(chan struct{}, 2)
@@ -2318,13 +2318,20 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	historyBefore, err := sessions.ObserveEntries(ctx, "empty-web")
 	require.NoError(t, err)
 
-	for _, selectedID := range []string{created.Id, "empty-web", id} {
-		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: selectedID, Text: "/agent planner"})
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main-slack.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: slack\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner-slack.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: slack\nspace: Billing\n---\nHelp."), 0o600))
+
+	channelChoices = []string{"main", "planner", "planner-slack"}
+	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/agent planner"})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "a Slack thread refuses an agent that is not sticky: slack, even one its channel lists")
+
+	for selectedID, agent := range map[string]string{created.Id: "planner", "empty-web": "planner", id: "planner-slack"} {
+		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: selectedID, Text: "/agent " + agent})
 		require.NoError(t, err)
 		selected, found, err := sessions.Thread(selectedID)
 		require.NoError(t, err)
 		require.True(t, found)
-		require.Equal(t, "planner", selected.Agent)
+		require.Equal(t, agent, selected.Agent)
 	}
 
 	channelChoices = []string{"main"}
@@ -2395,28 +2402,28 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 
 	choices, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
 	require.NoError(t, err)
-	require.Equal(t, "planner", choices.CurrentAgent)
-	require.Len(t, choices.Agents, 1, "a planner thread offers only Billing agents, though its channel also allows main")
-	require.Equal(t, "planner", choices.Agents[0].Name)
+	require.Equal(t, "planner-slack", choices.CurrentAgent)
+	require.Len(t, choices.Agents, 1, "a Billing Slack thread offers only Billing sticky: slack agents, though its channel also allows planner and main-slack")
+	require.Equal(t, "planner-slack", choices.Agents[0].Name)
 	require.Len(t, channels.ChannelAgentChoicesCalls(), channelCalls)
 
 	sidebarPolicy := channels.SidebarChannelAgentChoicesFunc
-	channels.SidebarChannelAgentChoicesFunc = func(context.Context, string) (string, []string, error) { return "triage", []string{"main"}, nil }
+	channels.SidebarChannelAgentChoicesFunc = func(context.Context, string) (string, []string, error) { return "triage", []string{"main-slack"}, nil }
 	choices, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
 	require.NoError(t, err)
 	require.Len(t, choices.Agents, 1)
-	require.Equal(t, "main", choices.Agents[0].Name)
+	require.Equal(t, "main-slack", choices.Agents[0].Name)
 
 	channels.SidebarChannelAgentChoicesFunc = sidebarPolicy
 
-	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md")))
+	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "planner-slack.md")))
 
 	choices, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
 	require.NoError(t, err)
 	require.Len(t, choices.Agents, 1)
-	require.Equal(t, "main", choices.Agents[0].Name)
-	require.Equal(t, "planner", choices.CurrentAgent, "stored current agent survives removal from the loaded choices")
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-6.1-sol\nspace: Billing\n---\nHelp."), 0o600))
+	require.Equal(t, "main-slack", choices.Agents[0].Name)
+	require.Equal(t, "planner-slack", choices.CurrentAgent, "stored current agent survives removal from the loaded choices")
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner-slack.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: slack\nspace: Billing\n---\nHelp."), 0o600))
 
 	for _, hidden := range []string{"private-X", "cron:cron/daily.md:20000102T030405.000000006Z:a", "one-off-cron:cron/daily.md:20000102T030405.000000006Z:b"} {
 		_, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: hidden})
@@ -2429,12 +2436,12 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		require.NotEqual(t, "private-X", session.Id)
 	}
 
-	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/agent main"})
+	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/agent main-slack"})
 	require.ErrorContains(t, err, "Slack unavailable")
 	unchanged, found, err := sessions.Thread(id)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, "planner", unchanged.Agent, "failed live authorization must not switch the agent")
+	require.Equal(t, "planner-slack", unchanged.Agent, "failed live authorization must not switch the agent")
 
 	historyAfter, err := sessions.ObserveEntries(ctx, "empty-web")
 	require.NoError(t, err)
