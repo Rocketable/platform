@@ -65,7 +65,7 @@ func emulatedRuntime(t *testing.T, logs io.Writer) *sandbox.Runtime {
 	})
 
 	for rt.Err() == sandbox.ErrPreparing {
-		time.Sleep(time.Second)
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	require.NoError(t, rt.Err())
@@ -110,7 +110,7 @@ func newEmulated(t *testing.T, commands, secrets map[string]string, targets []st
 	shellTemp := testShellTempConfig(t, root, filepath.Join(workspace, ".tmp"))
 
 	return &emulated{
-		sss:   newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=web:c1"}, rt),
+		sss:   newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=web:c1", "GORACE=" + os.Getenv("GORACE") + " atexit_sleep_ms=0"}, rt),
 		shell: CustomShell{Emulated: true, Dir: folder, ReadOnly: readOnly, Commands: commands, Secrets: secrets, NetworkTargets: targets},
 		logs:  logs,
 	}
