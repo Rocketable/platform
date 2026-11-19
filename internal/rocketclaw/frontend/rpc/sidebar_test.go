@@ -420,4 +420,24 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 
 	_, _, sessions = list(&ListSessionsRequest{})
 	require.Equal(t, []bool{false, true}, []bool{sessions["chat-00"].AutoPark, sessions["chat-01"].AutoPark})
+
+	unfollowed := func(done *ListSessionsResponse) map[string]bool {
+		out := map[string]bool{}
+		for _, tab := range done.Tabs {
+			out[tab.Path] = tab.Unfollowed
+		}
+
+		return out
+	}
+
+	require.NoError(t, server.changeAttention(ctx, "alice", &AttentionChange{Paths: []string{path("chat-00"), pages[2]}, Action: AttentionAction_UNFOLLOW}))
+
+	_, done, sessions = list(&ListSessionsRequest{})
+	require.Equal(t, []bool{true, false}, []bool{sessions["chat-00"].Unfollowed, sessions["chat-01"].Unfollowed})
+	require.Equal(t, []bool{true, false}, []bool{unfollowed(done)[pages[2]], unfollowed(done)[pages[3]]})
+
+	require.NoError(t, server.changeAttention(ctx, "alice", &AttentionChange{Paths: []string{pages[2]}, Action: AttentionAction_FOLLOW}))
+
+	_, done, _ = list(&ListSessionsRequest{Since: done.Version})
+	require.Equal(t, map[string]bool{pages[2]: false}, unfollowed(done), "following again resends the row")
 }

@@ -19,12 +19,13 @@ TLC = $(JAVA) -cp $(TOOLS) tlc2.TLC -workers auto -noGenerateSpecTE -metadir $(W
 # The design as built, checked in two small worlds, as both at once would take too long: one browser window and a tab
 # the person closes and opens again, and two windows with the tab open. Each must keep every requirement, and reach
 # every state its _POSSIBLE line names. fail-old-turn-end runs the replaced rule and must find DoneEndsOnlyWhenIdle
-# violated: TLC exits 12 or 13 and names it, so a parse error never counts as the expected failure.
+# violated, and fail-follow-ignored a server that ignores Follow and must find NoMarkWhileUnfollowed violated: TLC
+# exits 12 or 13 and names it, so a parse error never counts as the expected failure.
 CHECKS = one-window two-windows
 
-.PHONY: all translate $(CHECKS) fail-old-turn-end
+.PHONY: all translate $(CHECKS) fail-old-turn-end fail-follow-ignored
 
-all: $(CHECKS) fail-old-turn-end
+all: $(CHECKS) fail-old-turn-end fail-follow-ignored
 
 # The translator leaves a .old backup beside the file it translates, so it translates a copy in WORK.
 translate: $(TOOLS)
@@ -40,6 +41,10 @@ $(CHECKS): translate
 fail-old-turn-end: translate
 	@$(TLC) -config old-turn-end.cfg TabAttention.tla > $(WORK)/old-turn-end.log 2>&1; status=$$?; cat $(WORK)/old-turn-end.log; \
 	{ test $$status -eq 12 || test $$status -eq 13; } && grep -q 'Invariant DoneEndsOnlyWhenIdle is violated' $(WORK)/old-turn-end.log
+
+fail-follow-ignored: translate
+	@$(TLC) -config follow-ignored.cfg TabAttention.tla > $(WORK)/follow-ignored.log 2>&1; status=$$?; cat $(WORK)/follow-ignored.log; \
+	{ test $$status -eq 12 || test $$status -eq 13; } && grep -q 'Invariant NoMarkWhileUnfollowed is violated' $(WORK)/follow-ignored.log
 
 $(TOOLS):
 	mkdir -p $(dir $@)

@@ -262,7 +262,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	done := &ListSessionsResponse{UpstreamSuccess: true, Version: listing.version}
 
 	for i := range tabs {
-		tab := &TabAttention{Path: tabs[i].Path}
+		tab := &TabAttention{Path: tabs[i].Path, Unfollowed: tabs[i].Unfollowed}
 		if tab.UnreadAt, tab.Quiet, tab.Parked, tab.Until, tab.Note = webAttention(&tabs[i]); changed(since.tabs, listing.tabs, tab.Path, tab) {
 			done.Tabs = append(done.Tabs, tab)
 		}
@@ -317,7 +317,7 @@ func sidebarSession(chat *backend.SidebarChat) *Session {
 	}
 
 	session.UnreadAt, session.MarkedUnread, session.Parked, session.Until, session.Note = webAttention(&row.Attention)
-	session.UntilDone, session.AutoPark = row.Attention.UntilDone, row.AutoPark
+	session.UntilDone, session.AutoPark, session.Unfollowed = row.Attention.UntilDone, row.AutoPark, row.Attention.Unfollowed
 
 	return session
 }

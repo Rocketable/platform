@@ -81,6 +81,8 @@ message Session {
   bool paused = 39;
   // A person started the session in the Web and nothing outside reports into it, so its agent can pause.
   bool pausable = 40;
+  // The caller unfollowed its tab: the server marks it unread for them only when they mark it themselves.
+  bool unfollowed = 41;
 }
 
 // TabAttention is the caller's attention on a tab location that is not a session, as a Session row carries a
@@ -93,6 +95,8 @@ message TabAttention {
   string until = 5;
   // With a mark, the notification text the server wrote.
   string note = 6;
+  // The caller unfollowed it: the server marks it unread for them only when they mark it themselves.
+  bool unfollowed = 7;
 }
 
 // What a conversation is, as RocketClaw records it when it creates the conversation.
@@ -1196,6 +1200,10 @@ enum AttentionAction {
   STOP_AUTO_PARK = 6;
   // Sent says the caller sent each session a prompt: those they auto-park park until they are done.
   SENT = 7;
+  // Unfollow keeps the server from marking the tab unread for the caller and clears its mark; follow undoes it. Both
+  // keep its park.
+  FOLLOW = 8;
+  UNFOLLOW = 9;
 }
 
 // AttentionChange does action to the caller's attention on the tab locations paths. until is an RFC 3339 time.

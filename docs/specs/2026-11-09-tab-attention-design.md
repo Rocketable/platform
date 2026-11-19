@@ -422,6 +422,17 @@ parks, instead of the session-list check, so parks end with no window open and o
 `DoneEndsOnlyWhenIdle`, adds `IdleEndsDone` and `QuestionRestores`, and `fail-old-turn-end` shows the earlier rule
 breaking the new invariant. One-window passes with 1,391,092 states, two-windows with 1,560,139.
 
+**Changed (2026-11-19): a person can unfollow a tab.** Each person chooses per tab, Shared rows included, whether the
+server marks it for them; every tab starts followed. On an unfollowed tab the server writes no mark for a turn end, a
+question, news, a finished search, a cron run, a stored page or a park's end, and a question leaves its park alone; a
+failed turn, the idle loop and a timer still end a park, without a mark. Unfollowing clears the mark and keeps the
+park, its timer and the park a question ended; Mark as unread still works. This brings back a per-tab choice the
+"What's removed" list below retired with Mute, with a narrower meaning: it decides only whether the server marks the
+tab. The plan is `docs/plans/2026-11-19-1133-feat-card-folding-shared-group-follow-plan.md`; the model adds
+`FollowGates`, `MaxFollowMoves` and the invariants `NoMarkWhileUnfollowed`, `NoPopWhileUnfollowed` and
+`QuestionLeavesUnfollowedPark`, and `fail-follow-ignored` shows a server that ignores Follow breaking the first. One-window
+passes with 6,771,964 states, two-windows with 7,654,433.
+
 ## Limits and open points
 
 - **Pop-ups reach you only while a RocketClaw window is open.** The app has no push service or service worker, and

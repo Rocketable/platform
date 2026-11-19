@@ -7,7 +7,7 @@ export type CodeModeCall = { name: string; arguments?: string; status?: "running
 export type BackgroundJob = { jobId: string; kind: string; state: string; label: string; toolCallId: string; subagentKey: string; stoppedBy: string; hidden: boolean; note: string };
 export type PendingQuestion = { id: string; question: string; details: string; options: { label: string; value: string; description: string }[]; multiple: boolean };
 export type QueueItem = { id: string; text: string; editText?: string; attachments?: Attachment[]; delivery?: PromptDelivery; principal?: string };
-export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; running?: boolean; background?: boolean; paused?: boolean; pausable?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean; spaceId?: string; reply?: string; model?: string; kind?: ConversationKind; remoteSessionId?: string; label?: string; unreadAt?: string; markedUnread?: boolean; parked?: boolean; until?: string; untilDone?: boolean; note?: string; autoPark?: boolean; asking?: boolean; stateSince?: string; rocketclaw?: string };
+export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; running?: boolean; background?: boolean; paused?: boolean; pausable?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean; spaceId?: string; reply?: string; model?: string; kind?: ConversationKind; remoteSessionId?: string; label?: string; unreadAt?: string; markedUnread?: boolean; parked?: boolean; until?: string; untilDone?: boolean; note?: string; autoPark?: boolean; unfollowed?: boolean; asking?: boolean; stateSince?: string; rocketclaw?: string };
 export type ConversationKind = "WEB_CHAT" | "SLACK_THREAD" | "CRON_RUN" | "ONE_OFF_CRON_RUN" | "EXTERNAL_MCP_RUN" | "SUBAGENT" | "REVIEW" | "SHADOW" | "REMOTE_OPENCODE";
 // Remote OpenCode servers with their origins, and the tags people may set on their sessions.
 export type Remote = { servers: Record<string, string>; agentTags: Record<string, string[]> };
@@ -22,8 +22,8 @@ export type SearchMessagesResponse = { matches?: MessageMatch[]; tagIds?: string
 export type SearchSessionsResponse = { terms: { key: string; text: string; start: number; end: number }[]; text: string; needle: string; matches: { conversationId: string; field: string; text: string; rocketclaw?: string }[]; messages: MessageMatch[]; mentionIds: string[]; principals?: string[] };
 // A tab location's attention, as a session row carries its session's: a mark, quiet when it raises no notification, a
 // park, the one timer, and the notification text the server wrote. A row with only its path says the location has none.
-export type TabAttention = { path: string; unreadAt?: string; quiet?: boolean; parked?: boolean; until?: string; untilDone?: boolean; note?: string; autoPark?: boolean };
-export type AttentionAction = "MARK_READ" | "MARK_UNREAD" | "PARK" | "PARK_UNTIL_DONE" | "UNPARK" | "AUTO_PARK" | "STOP_AUTO_PARK";
+export type TabAttention = { path: string; unreadAt?: string; quiet?: boolean; parked?: boolean; until?: string; untilDone?: boolean; note?: string; autoPark?: boolean; unfollowed?: boolean };
+export type AttentionAction = "MARK_READ" | "MARK_UNREAD" | "PARK" | "PARK_UNTIL_DONE" | "UNPARK" | "AUTO_PARK" | "STOP_AUTO_PARK" | "FOLLOW" | "UNFOLLOW";
 // A listing leaves out default values: its first message carries owner, the server metadata and the person's tab-state
 // revision, the completion upstreamSuccess, version, the attention rows of tabs that are not sessions, and, when sent
 // since a held version, that version, the IDs removed since, and only the tab rows changed since.

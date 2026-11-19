@@ -23,7 +23,7 @@ func attentionOf(t *testing.T, s *SessionService, username, path string) string 
     CASE WHEN parked THEN 'parked' END, CASE WHEN until = 'infinity' THEN 'until=done' WHEN until > now() THEN 'until=soon' WHEN until IS NOT NULL THEN 'until=due' END,
     CASE WHEN worked THEN 'worked' END,
     CASE WHEN NOT resumes THEN NULL WHEN resume_until IS NULL THEN 'resume=unpark' WHEN resume_until = 'infinity' THEN 'resume=done' WHEN resume_until > now() THEN 'resume=soon' ELSE 'resume=past' END,
-    NULLIF('note=' || note, 'note='))
+    NULLIF('note=' || note, 'note='), CASE WHEN unfollowed THEN 'unfollowed' END)
 FROM web_tab_attention WHERE username = $1 AND path = $2`, "attention", username, path)
 	require.NoError(t, err)
 
@@ -135,9 +135,10 @@ func TestAttentionMatrix(t *testing.T) {
 	}
 
 	type seeded struct {
-		mark   string
-		parked bool
-		timer  time.Duration
+		mark       string
+		parked     bool
+		timer      time.Duration
+		unfollowed bool
 	}
 
 	for name, tc := range map[string]struct {
@@ -176,6 +177,18 @@ func TestAttentionMatrix(t *testing.T) {
 		"tab closes parked without a time": {tab: true, seeded: seeded{mark: "loud", parked: true}, do: closeTab, want: "old"},
 		"tab closes parked with a time":    {tab: true, seeded: seeded{parked: true, timer: time.Hour}, do: closeTab, want: "read parked until=soon"},
 		"tab opens again with its mark":    {tab: true, seeded: seeded{mark: "loud"}, do: reopenTab, want: "old quiet"},
+		"unfollow":                         {do: act(AttentionUnfollow, nil), want: "read unfollowed"},
+		"unfollow clears a mark":           {seeded: seeded{mark: "loud"}, do: act(AttentionUnfollow, nil), want: "read unfollowed"},
+		"unfollow keeps a timed park":      {seeded: seeded{mark: "quiet", parked: true, timer: time.Hour}, do: act(AttentionUnfollow, nil), want: "read parked until=soon unfollowed"},
+		"unfollow keeps a question's park": {seeded: seeded{mark: "quiet", parked: true, timer: time.Hour}, do: then(mark(question), tick, act(AttentionUnfollow, nil)), want: "read resume=soon unfollowed"},
+		"turn end while unfollowed":        {seeded: seeded{unfollowed: true}, do: mark(turnEnd), want: "read unfollowed"},
+		"question while unfollowed":        {seeded: seeded{unfollowed: true}, do: mark(question), want: "read unfollowed"},
+		"question on an unfollowed park":   {seeded: seeded{parked: true, timer: time.Hour, unfollowed: true}, do: mark(question), want: "read parked until=soon unfollowed"},
+		"park time due while unfollowed":   {seeded: seeded{parked: true, timer: -time.Minute, unfollowed: true}, do: tick, want: "read unfollowed"},
+		"mark as unread while unfollowed":  {seeded: seeded{unfollowed: true}, do: act(AttentionUnread, nil), want: "new quiet unfollowed"},
+		"follow":                           {seeded: seeded{unfollowed: true}, do: act(AttentionFollow, nil), want: "none"},
+		"follow keeps a park":              {seeded: seeded{parked: true, timer: time.Hour, unfollowed: true}, do: act(AttentionFollow, nil), want: "read parked until=soon"},
+		"follow, then a turn end":          {seeded: seeded{unfollowed: true}, do: then(act(AttentionFollow, nil), mark(turnEnd)), want: "new note=news"},
 	} {
 		for location, path := range map[string]string{"session": "/s/" + base64.RawURLEncoding.EncodeToString([]byte("web:attention")), "page": "/cron"} {
 			t.Run(name+" on a "+location, func(t *testing.T) {
@@ -194,9 +207,9 @@ VALUES ($1, 0, CASE WHEN $3::float8 > 0 THEN $2 ELSE '' END, now() - make_interv
 				}
 
 				if tc.seeded != (seeded{}) {
-					_, err := service.db.ExecContext(ctx, `INSERT INTO web_tab_attention (username, path, conversation_id, unread_at, quiet, parked, until)
-VALUES ($1, $2, NULLIF($3, ''), CASE WHEN $4 <> '' THEN now() - interval '1 day' END, $4 = 'quiet', $5, CASE WHEN $6::float8 <> 0 THEN now() + make_interval(secs => $6::float8) END)`,
-						username, path, TabConversation(path), tc.seeded.mark, tc.seeded.parked, tc.seeded.timer.Seconds())
+					_, err := service.db.ExecContext(ctx, `INSERT INTO web_tab_attention (username, path, conversation_id, unread_at, quiet, parked, until, unfollowed)
+VALUES ($1, $2, NULLIF($3, ''), CASE WHEN $4 <> '' THEN now() - interval '1 day' END, $4 = 'quiet', $5, CASE WHEN $6::float8 <> 0 THEN now() + make_interval(secs => $6::float8) END, $7)`,
+						username, path, TabConversation(path), tc.seeded.mark, tc.seeded.parked, tc.seeded.timer.Seconds(), tc.seeded.unfollowed)
 					require.NoError(t, err)
 				}
 

@@ -204,6 +204,10 @@ const (
 	AttentionAction_STOP_AUTO_PARK AttentionAction = 6
 	// Sent says the caller sent each session a prompt: those they auto-park park until they are done.
 	AttentionAction_SENT AttentionAction = 7
+	// Unfollow keeps the server from marking the tab unread for the caller and clears its mark; follow undoes it. Both
+	// keep its park.
+	AttentionAction_FOLLOW   AttentionAction = 8
+	AttentionAction_UNFOLLOW AttentionAction = 9
 )
 
 // Enum value maps for AttentionAction.
@@ -217,6 +221,8 @@ var (
 		5: "AUTO_PARK",
 		6: "STOP_AUTO_PARK",
 		7: "SENT",
+		8: "FOLLOW",
+		9: "UNFOLLOW",
 	}
 	AttentionAction_value = map[string]int32{
 		"MARK_READ":       0,
@@ -227,6 +233,8 @@ var (
 		"AUTO_PARK":       5,
 		"STOP_AUTO_PARK":  6,
 		"SENT":            7,
+		"FOLLOW":          8,
+		"UNFOLLOW":        9,
 	}
 )
 
@@ -386,7 +394,9 @@ type Session struct {
 	// Someone paused the agent: messages sent here start no turn until someone resumes it.
 	Paused bool `protobuf:"varint,39,opt,name=paused,proto3" json:"paused,omitempty"`
 	// A person started the session in the Web and nothing outside reports into it, so its agent can pause.
-	Pausable      bool `protobuf:"varint,40,opt,name=pausable,proto3" json:"pausable,omitempty"`
+	Pausable bool `protobuf:"varint,40,opt,name=pausable,proto3" json:"pausable,omitempty"`
+	// The caller unfollowed its tab: the server marks it unread for them only when they mark it themselves.
+	Unfollowed    bool `protobuf:"varint,41,opt,name=unfollowed,proto3" json:"unfollowed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -645,6 +655,13 @@ func (x *Session) GetPausable() bool {
 	return false
 }
 
+func (x *Session) GetUnfollowed() bool {
+	if x != nil {
+		return x.Unfollowed
+	}
+	return false
+}
+
 // TabAttention is the caller's attention on a tab location that is not a session, as a Session row carries a
 // session's. A row with only its path says the location no longer has one.
 type TabAttention struct {
@@ -655,7 +672,9 @@ type TabAttention struct {
 	Parked   bool                   `protobuf:"varint,4,opt,name=parked,proto3" json:"parked,omitempty"`
 	Until    string                 `protobuf:"bytes,5,opt,name=until,proto3" json:"until,omitempty"`
 	// With a mark, the notification text the server wrote.
-	Note          string `protobuf:"bytes,6,opt,name=note,proto3" json:"note,omitempty"`
+	Note string `protobuf:"bytes,6,opt,name=note,proto3" json:"note,omitempty"`
+	// The caller unfollowed it: the server marks it unread for them only when they mark it themselves.
+	Unfollowed    bool `protobuf:"varint,7,opt,name=unfollowed,proto3" json:"unfollowed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -730,6 +749,13 @@ func (x *TabAttention) GetNote() string {
 		return x.Note
 	}
 	return ""
+}
+
+func (x *TabAttention) GetUnfollowed() bool {
+	if x != nil {
+		return x.Unfollowed
+	}
+	return false
 }
 
 type HistoryRequest struct {
@@ -10330,7 +10356,7 @@ const file_web_proto_rawDesc = "" +
 	"\x05since\x18\x02 \x01(\tR\x05since\x12\x12\n" +
 	"\x04hold\x18\x03 \x01(\bR\x04hold\x12\x1f\n" +
 	"\vsame_origin\x18\x04 \x01(\bR\n" +
-	"sameOrigin\"\xab\a\n" +
+	"sameOrigin\"\xcb\a\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -10370,15 +10396,21 @@ const file_web_proto_rawDesc = "" +
 	"until_done\x18% \x01(\bR\tuntilDone\x12\x1b\n" +
 	"\tauto_park\x18& \x01(\bR\bautoPark\x12\x16\n" +
 	"\x06paused\x18' \x01(\bR\x06paused\x12\x1a\n" +
-	"\bpausable\x18( \x01(\bR\bpausableJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\t\x10\n" +
-	"J\x04\b\v\x10\fJ\x04\b\f\x10\rJ\x04\b\x1d\x10\x1eJ\x04\b\x1f\x10 J\x04\b \x10!R\x0eallowed_agentsR\x06pinned\"\x97\x01\n" +
+	"\bpausable\x18( \x01(\bR\bpausable\x12\x1e\n" +
+	"\n" +
+	"unfollowed\x18) \x01(\bR\n" +
+	"unfollowedJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\t\x10\n" +
+	"J\x04\b\v\x10\fJ\x04\b\f\x10\rJ\x04\b\x1d\x10\x1eJ\x04\b\x1f\x10 J\x04\b \x10!R\x0eallowed_agentsR\x06pinned\"\xb7\x01\n" +
 	"\fTabAttention\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1b\n" +
 	"\tunread_at\x18\x02 \x01(\tR\bunreadAt\x12\x14\n" +
 	"\x05quiet\x18\x03 \x01(\bR\x05quiet\x12\x16\n" +
 	"\x06parked\x18\x04 \x01(\bR\x06parked\x12\x14\n" +
 	"\x05until\x18\x05 \x01(\tR\x05until\x12\x12\n" +
-	"\x04note\x18\x06 \x01(\tR\x04note\"\xba\x01\n" +
+	"\x04note\x18\x06 \x01(\tR\x04note\x12\x1e\n" +
+	"\n" +
+	"unfollowed\x18\a \x01(\bR\n" +
+	"unfollowed\"\xba\x01\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
 	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\x12\x1a\n" +
@@ -11149,7 +11181,7 @@ const file_web_proto_rawDesc = "" +
 	"\x13VoiceSettingsAction\x12\b\n" +
 	"\x04READ\x10\x00\x12\n" +
 	"\n" +
-	"\x06UPDATE\x10\x03\"\x04\b\x01\x10\x01\"\x04\b\x02\x10\x02*\x05START*\x05RESET*\x89\x01\n" +
+	"\x06UPDATE\x10\x03\"\x04\b\x01\x10\x01\"\x04\b\x02\x10\x02*\x05START*\x05RESET*\xa3\x01\n" +
 	"\x0fAttentionAction\x12\r\n" +
 	"\tMARK_READ\x10\x00\x12\x0f\n" +
 	"\vMARK_UNREAD\x10\x01\x12\b\n" +
@@ -11159,7 +11191,10 @@ const file_web_proto_rawDesc = "" +
 	"\x0fPARK_UNTIL_DONE\x10\x04\x12\r\n" +
 	"\tAUTO_PARK\x10\x05\x12\x12\n" +
 	"\x0eSTOP_AUTO_PARK\x10\x06\x12\b\n" +
-	"\x04SENT\x10\a2\xa9\x1e\n" +
+	"\x04SENT\x10\a\x12\n" +
+	"\n" +
+	"\x06FOLLOW\x10\b\x12\f\n" +
+	"\bUNFOLLOW\x10\t2\xa9\x1e\n" +
 	"\x03Web\x126\n" +
 	"\x10UploadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment(\x01\x128\n" +
 	"\x12DownloadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment0\x01\x12E\n" +
