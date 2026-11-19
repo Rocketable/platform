@@ -127,7 +127,9 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
     await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
     await pane.getByText("Remote private PR marker", { exact: true }).waitFor();
     await pane.getByRole("combobox", { name: "Thread pull request" }).click();
-    expect(await page.getByRole("option").allTextContents()).toEqual(["sample/fixture-repository-marker #7", "sample/fixture-repository-marker #9"]);
+    const options = page.getByRole("option");
+    await options.first().waitFor();
+    expect(await options.allTextContents()).toEqual(["sample/fixture-repository-marker #7", "sample/fixture-repository-marker #9"]);
     await page.keyboard.press("Escape");
     const selectDescription = () => pane.getByText("Private description marker", { exact: true }).evaluate((node: HTMLElement) => {
       const range = document.createRange();
