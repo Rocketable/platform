@@ -1,21 +1,35 @@
 import { expect, test } from "bun:test";
+import { isDeepStrictEqual } from "node:util";
 import type { AgentDraft, AgentDraftView } from "./types";
 
 type Body = { op: { kind: string }; id?: string; limit?: number };
-type Route = { fetch(): Promise<object>; fulfill(options: object): Promise<void>; continue(): Promise<void>; request(): { postDataJSON(): Body } };
+type RoutedRequest = {
+  url(): string;
+  method(): string;
+  postData(): string | null;
+  postDataJSON(): Body;
+  existingResponse(): { status(): number; text(): Promise<string> } | null;
+  failure(): { errorText: string } | null;
+  timing(): { responseEnd: number };
+};
+type Route = { fetch(): Promise<object>; fulfill(options: object): Promise<void>; continue(): Promise<void>; request(): RoutedRequest };
 type Routed = { route(url: RegExp, handler: (route: Route) => Promise<void>): Promise<void>; unroute(url: RegExp): Promise<void> };
+type HeldRequest = { request: RoutedRequest; routeError?: string };
 
-async function hold(page: Routed, url: RegExp, { respond = false, count = Infinity, only = () => true }: { respond?: boolean; count?: number; only?: (body: Body) => boolean } = {}) {
+async function hold(page: Routed, url: RegExp, { respond = false, count = Infinity, only = () => true, onHeld }: { respond?: boolean; count?: number; only?: (request: RoutedRequest) => boolean; onHeld?: (entry: HeldRequest) => void } = {}) {
   let release = () => {}, held = 0;
   const gate = new Promise<void>((resolve) => { release = resolve; }), handled: Promise<void>[] = [];
   await page.route(url, async (route) => {
-    if (!only(route.request().postDataJSON()) || held++ >= count) return await route.continue().catch(() => {});
+    const request = route.request();
+    if (!only(request) || held++ >= count) return await route.continue().catch(() => {});
+    const observation: HeldRequest = { request };
     const answered = (async () => {
       const response = respond ? await route.fetch() : undefined;
       await gate;
       await (response ? route.fulfill({ response }) : route.continue());
-    })().catch(() => {});
+    })().catch((error: unknown) => { observation.routeError = String(error); });
     handled.push(answered);
+    onHeld?.(observation);
     await answered;
   });
   return async () => {
@@ -393,6 +407,51 @@ test("the test chat answers in every column, labels versions, restarts, and pose
       await message.fill(text);
       await chat.getByRole("button", { name: button, exact: true }).click();
     };
+    const checkHeld = async (rpc: "DraftPrompt" | "RestartDraftChat", expected: { id: string; text: string } | { id: string; replay: string[]; replayEarlier: boolean }, check: (release: () => Promise<void>) => Promise<void>) => {
+      const url = `${alice}/api/${rpc}`, requests: RoutedRequest[] = [], intercepted: HeldRequest[] = [];
+      const reached = Promise.withResolvers<RoutedRequest>();
+      const matches = (request: RoutedRequest) => request.url() === url && request.method() === "POST" && isDeepStrictEqual(request.postDataJSON(), expected);
+      const track = (request: RoutedRequest) => { if (request.url() === url) requests.push(request); };
+      page.on("request", track);
+      try {
+        const release = await hold(page, new RegExp(`/api/${rpc}$`), {
+          only: matches,
+          onHeld: (entry) => {
+            intercepted.push(entry);
+            reached.resolve(entry.request);
+          },
+        });
+        const arrived = page.waitForRequest(async (request: RoutedRequest) => matches(request) && request === await reached.promise);
+        await Promise.all([arrived, check(async () => {
+          await arrived;
+          await release();
+        })]);
+        const held: { method: string; body: unknown; routeError?: string }[] = intercepted.map(({ request, routeError }) => ({
+          method: request.method(), body: request.postDataJSON(), routeError,
+        }));
+        expect(held).toEqual([
+          { method: "POST", body: expected, routeError: undefined },
+        ]);
+      } catch (cause) {
+        const traffic = await Promise.all([...new Set([...requests, ...intercepted.map(({ request }) => request)])].map(async (request) => {
+          const match = intercepted.find((entry) => entry.request === request);
+          const response = request.existingResponse();
+          return {
+            method: request.method(), body: request.postData(), intercepted: !!match, routeError: match?.routeError,
+            status: response?.status(), response: response && request.timing().responseEnd >= 0 ? await response.text().catch(String) : null,
+            failure: request.failure()?.errorText,
+          };
+        }));
+        const dom = await chat.evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => ({
+          text: node.innerText,
+          composer: node.querySelector("textarea")?.value,
+          disabled: [...node.querySelectorAll("button:disabled")].map((button) => button.textContent),
+        }))).catch(String);
+        throw new Error(`${rpc}: held request and chat state: ${JSON.stringify({ expected, traffic, dom, pageErrors: errors })}`, { cause });
+      } finally {
+        page.off("request", track);
+      }
+    };
 
     const echo = await call<{ id: string }>("CreateAgentDraft", { name: "echo", mode: "advanced" });
     await apply(echo.id, { kind: "edit_file", variant: "a", value: "---\nmodel: gpt-a\n---\nHelp.\n" });
@@ -472,12 +531,13 @@ test("the test chat answers in every column, labels versions, restarts, and pose
     await Bun.sleep(300);
     await release();
     await labelled(" Be brief.");
-    release = await hold(page, /\/api\/DraftPrompt$/);
-    await send("brief again");
-    await message.fill("still typing");
-    await release();
-    await cell(2, "echo").getByText("gpt-a2 answer 2", { exact: false }).waitFor();
-    expect(await message.inputValue()).toBe("still typing");
+    await checkHeld("DraftPrompt", { id: echo.id, text: "brief again" }, async (release) => {
+      await send("brief again");
+      await message.fill("still typing");
+      await release();
+      await cell(2, "echo").getByText("gpt-a2 answer 2", { exact: false }).waitFor();
+      expect(await message.inputValue()).toBe("still typing");
+    });
     release = await typed(" Really.");
     await chat.getByRole("button", { name: "Restart & replay", exact: true }).click();
     await Bun.sleep(300);
@@ -518,7 +578,10 @@ test("the test chat answers in every column, labels versions, restarts, and pose
     }
 
     const replayed = (await read(queue.id)).testChat;
-    release = await hold(page, /\/api\/History$/, { only: (body) => body.id === replayed && !!body.limit });
+    release = await hold(page, /\/api\/History$/, { only: (request) => {
+      const body = request.postDataJSON();
+      return body.id === replayed && !!body.limit;
+    } });
     await send("three");
     await until("the turn starts", async () => (await call<{ messages: { role: string; text: string }[] }>("History", { id: replayed })).messages.some((line) => line.role === "user" && line.text === "three"));
     await Bun.sleep(2500);
@@ -533,14 +596,15 @@ test("the test chat answers in every column, labels versions, restarts, and pose
     await release();
 
     const restarting = (await read(queue.id)).testChat;
-    release = await hold(page, /\/api\/RestartDraftChat$/);
-    await chat.getByRole("button", { name: "Restart & replay", exact: true }).click();
-    for (const name of ["Restart", "Restart & replay"]) await chat.getByRole("button", { name, exact: true, disabled: true }).waitFor();
-    await release();
-    await until("a new chat", async () => (await read(queue.id)).testChat !== restarting);
-    await cell(3, "queue").getByText("gpt-held answer 3", { exact: false }).waitFor();
-    await chat.getByRole("button", { name: "Restart & replay", exact: true, disabled: false }).waitFor();
-    expect(await row(4).count()).toBe(0);
+    await checkHeld("RestartDraftChat", { id: queue.id, replay: [], replayEarlier: true }, async (release) => {
+      await chat.getByRole("button", { name: "Restart & replay", exact: true }).click();
+      for (const name of ["Restart", "Restart & replay"]) await chat.getByRole("button", { name, exact: true, disabled: true }).waitFor();
+      await release();
+      await until(`a new chat to replace ${restarting}`, async () => (await read(queue.id)).testChat !== restarting);
+      await cell(3, "queue").getByText("gpt-held answer 3", { exact: false }).waitFor();
+      await chat.getByRole("button", { name: "Restart & replay", exact: true, disabled: false }).waitFor();
+      expect(await row(4).count()).toBe(0);
+    });
 
     const support = await call<{ id: string }>("CreateAgentDraft", { name: "support-bot", copy: true });
     await page.goto(`${alice}/agents/drafts/${support.id}`);
