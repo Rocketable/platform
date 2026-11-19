@@ -299,11 +299,7 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 
 	_ = group.Wait()
 
-	if errWin != nil {
-		return nil, errWin
-	}
-
-	return winner, nil
+	return winner, errWin
 }
 
 func callBranch(ctx context.Context, name string, callable starlark.Value, args starlark.Tuple, slots *semaphore.Weighted, key string) (starlark.Value, error) {
@@ -318,16 +314,13 @@ func callBranch(ctx context.Context, name string, callable starlark.Value, args 
 	thread.SetLocal(localKey, key+name+"/")
 
 	value, err := starlark.Call(thread, callable, args, nil)
-	if err != nil {
-		if errCtx := context.Cause(ctx); errCtx != nil {
-			return nil, fmt.Errorf("branch context: %w", errCtx)
-		}
 
-		return nil, fmt.Errorf("branch call: %w", err)
+	if errCtx := context.Cause(ctx); errCtx != nil {
+		return nil, fmt.Errorf("branch context: %w", errCtx)
 	}
 
-	if err := context.Cause(ctx); err != nil {
-		return nil, fmt.Errorf("branch context: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("branch call: %w", err)
 	}
 
 	return value, nil
