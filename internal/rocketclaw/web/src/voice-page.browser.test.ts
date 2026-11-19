@@ -6,7 +6,12 @@ const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
 type Probe = { locks: number; mics: number; heard: number; audio?: HTMLMediaElement };
-type TransportProbe = { peer?: RTCPeerConnection; channel?: RTCDataChannel & { spoke?: boolean }; arrived?: RTCDataChannelState };
+type TransportProbe = {
+  peer?: RTCPeerConnection;
+  channel?: RTCDataChannel & { spoke?: boolean };
+  arrived?: RTCDataChannelState;
+  channelAtCaptionTrigger?: RTCDataChannelState | "unannounced" | "not invoked";
+};
 
 test("Voice page calls each person's sticky session of a sticky: user agent, keeps settings on the server, and the composer toggle ends its call on leaving the session", async () => {
   const { chromium: engine } = await import(playwright!);
@@ -95,7 +100,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
       if (voiceFails) return Response.json({ code: 9, message: "provider has no usable voice credentials" }, { status: 400 });
       const answer = await openai.evaluate(async (offer: string) => {
         const pc = new RTCPeerConnection(), counts = window as unknown as { closes?: number; messages?: number };
-        Object.assign(window, { peer: pc });
+        Object.assign(window, { peer: pc, channelAtCaptionTrigger: "not invoked" });
         pc.ondatachannel = ({ channel }) => {
           Object.assign(window, { channel, arrived: channel.readyState });
           channel.onmessage = () => { counts.messages = (counts.messages ?? 0) + 1; };
@@ -131,7 +136,8 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     page.on("dialog", (dialog: { message(): string; accept(): Promise<void> }) => { alerts.push(dialog.message()); void dialog.accept(); });
     // Chrome drops what reaches the page's channel before it reports open, so OpenAI speaks first only after that.
     await page.exposeFunction("channelOpened", () => openai.evaluate(async () => {
-      const fake = window as unknown as { channel?: RTCDataChannel & { spoke?: boolean } };
+      const fake = window as unknown as TransportProbe;
+      if (fake.channelAtCaptionTrigger === "not invoked") fake.channelAtCaptionTrigger = fake.channel?.readyState ?? "unannounced";
       while (!fake.channel || fake.channel.spoke || fake.channel.readyState !== "open") await new Promise((resolve) => setTimeout(resolve, 10));
       fake.channel.spoke = true;
       for (const event of [{ type: "session.started" }, { type: "session.input_transcript.delta", delta: "Hello" }, { type: "session.input_transcript.delta", delta: " there" }, { type: "session.output_transcript.delta", delta: "Hi!" }]) fake.channel.send(JSON.stringify(event));
@@ -240,7 +246,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     } catch (error) {
       console.error("Voice transcript wait failed", error, JSON.stringify({ calls, spoken, errors }));
       const transport = async () => {
-        const { peer, channel, arrived } = window as unknown as TransportProbe;
+        const { peer, channel, arrived, channelAtCaptionTrigger } = window as unknown as TransportProbe;
         const stats: object[] = [];
         (await peer?.getStats())?.forEach((report) => {
           if (["transport", "data-channel", "candidate-pair"].includes(report.type)) stats.push(report);
@@ -249,7 +255,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
           connection: peer?.connectionState, signaling: peer?.signalingState,
           ice: peer?.iceConnectionState, gathering: peer?.iceGatheringState,
           sctp: peer?.sctp?.state, dtls: peer?.sctp?.transport.state,
-          channel: channel?.readyState, arrived, id: channel?.id, spoke: channel?.spoke,
+          channel: channel?.readyState, arrived, channelAtCaptionTrigger, id: channel?.id, spoke: channel?.spoke,
           bufferedAmount: channel?.bufferedAmount, stats,
         };
       };
