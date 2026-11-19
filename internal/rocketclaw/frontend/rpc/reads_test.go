@@ -123,26 +123,30 @@ UNION ALL SELECT format('tab %s unread=%s', path, unread_at IS NOT NULL) FROM we
 	httpServer := startHTTPTestServer(t, connection)
 
 	for _, tc := range []struct {
-		header, value, query string
-		want                 []string
+		header http.Header
+		query  string
+		code   int
+		want   []string
 	}{
-		{"Sec-Fetch-Site", "cross-site", "viewing=/s/eA", marked},
-		{"Origin", "https://elsewhere.example", "viewing=/s/eA", marked},
-		{"Sec-Fetch-Site", "same-origin", "viewing=/s/eA", []string{"alice viewing=/s/eA", "tab /cron unread=t", "tab /s/eA unread=f"}},
-		{"Sec-Fetch-Site", "same-origin", "viewing=/s/eA&hold", []string{"alice viewing=/s/eA", "tab /cron unread=t", "tab /s/eA unread=t"}},
+		{http.Header{"Sec-Fetch-Site": {"cross-site"}}, "viewing=/s/eA", http.StatusForbidden, marked},
+		{http.Header{"Origin": {"https://elsewhere.example"}}, "viewing=/s/eA", http.StatusForbidden, marked},
+		{http.Header{"Sec-Fetch-Site": {"cross-site"}, "Sec-Fetch-Mode": {"navigate"}}, "viewing=/s/eA", http.StatusOK, marked},
+		{http.Header{"Sec-Fetch-Site": {"same-origin"}}, "viewing=/s/eA", http.StatusOK, []string{"alice viewing=/s/eA", "tab /cron unread=t", "tab /s/eA unread=f"}},
+		{http.Header{"Sec-Fetch-Site": {"same-origin"}}, "viewing=/s/eA&hold", http.StatusOK, []string{"alice viewing=/s/eA", "tab /cron unread=t", "tab /s/eA unread=t"}},
 	} {
 		mark()
 
 		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, httpServer.URL+"/api/ListSessions?"+tc.query, http.NoBody)
 		require.NoError(t, err)
-		request.Header.Set(tc.header, tc.value)
+
+		request.Header = tc.header
 
 		response, err := httpServer.Client().Do(request)
 		require.NoError(t, err)
 		_, err = io.Copy(io.Discard, response.Body)
 		require.NoError(t, err)
 		require.NoError(t, response.Body.Close())
-		require.Equal(t, http.StatusOK, response.StatusCode)
-		assert.ElementsMatch(t, tc.want, reads(), "%s: %s, %s", tc.header, tc.value, tc.query)
+		require.Equal(t, tc.code, response.StatusCode)
+		assert.ElementsMatch(t, tc.want, reads(), "%v, %s", tc.header, tc.query)
 	}
 }

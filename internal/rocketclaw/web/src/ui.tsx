@@ -3949,7 +3949,7 @@ function MessageAttachment({ file, conversationId }: { file: NonNullable<Line["a
   const url = file.file ? preview : `${serverURL()}/api/DownloadAttachment?${new URLSearchParams({ conversationId, id: file.id })}`;
   const image = /^image\/(png|jpeg|gif|webp|avif)$/.test(file.mimeType);
   return <Attachment orientation={image ? "vertical" : "horizontal"}>
-    <AttachmentMedia variant={image ? "image" : "icon"}>{image ? <img src={url} alt={file.name} loading="lazy" /> : <FileIcon />}</AttachmentMedia>
+    <AttachmentMedia variant={image ? "image" : "icon"}>{image ? <img src={url} alt={file.name} crossOrigin="anonymous" loading="lazy" /> : <FileIcon />}</AttachmentMedia>
     <AttachmentContent><AttachmentTitle>{file.name}</AttachmentTitle><AttachmentDescription>{file.size ?? "0"} bytes{file.originalUnverified ? " · Original unverified" : ""}</AttachmentDescription></AttachmentContent>
     <AttachmentActions><AttachmentAction role="link" nativeButton={false} render={<a href={file.file ? url : `${url}&download=1`} download={file.name} aria-label={`Download ${file.name}`} />} aria-label={`Download ${file.name}`}><Download /></AttachmentAction></AttachmentActions>
   </Attachment>;

@@ -185,6 +185,54 @@ func TestHTTPBoundary(t *testing.T) {
 	}
 }
 
+func TestHTTPRefusesOtherSites(t *testing.T) {
+	t.Parallel()
+
+	connection, err := grpc.NewClient("unix:"+testSocketPath(t), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	handler := NewHTTPHandler(connection, new(config.LockedConfig), "")
+
+	const download = "/api/DownloadAttachment?id=file"
+
+	fetched := func(site, mode, dest, origin string) http.Header {
+		header := http.Header{"Sec-Fetch-Site": {site}, "Sec-Fetch-Mode": {mode}, "Sec-Fetch-Dest": {dest}}
+		if origin != "" {
+			header.Set("Origin", origin)
+		}
+
+		return header
+	}
+
+	for _, tt := range []struct {
+		name, method, path string
+		header             http.Header
+		code               int
+	}{
+		{"cross-site fetch", http.MethodGet, "/api/ListSessions", fetched("cross-site", "cors", "empty", "https://evil.example"), http.StatusForbidden},
+		{"cross-site event stream", http.MethodGet, "/stream?id=chat", fetched("cross-site", "cors", "empty", "https://evil.example"), http.StatusForbidden},
+		{"cross-site image", http.MethodGet, download, fetched("cross-site", "no-cors", "image", ""), http.StatusForbidden},
+		{"same-site image", http.MethodGet, download, fetched("same-site", "no-cors", "image", ""), http.StatusForbidden},
+		{"opaque origin fetch", http.MethodGet, download, fetched("cross-site", "cors", "empty", "null"), http.StatusForbidden},
+		{"other origin without fetch metadata", http.MethodGet, download, http.Header{"Origin": {"https://evil.example"}}, http.StatusForbidden},
+		{"cross-site form post", http.MethodPost, "/api/Prompt", fetched("cross-site", "navigate", "document", "https://evil.example"), http.StatusForbidden},
+		{"same-origin image", http.MethodGet, download, fetched("same-origin", "no-cors", "image", ""), http.StatusBadRequest},
+		{"same origin without fetch metadata", http.MethodGet, download, http.Header{"Origin": {"http://example.com"}}, http.StatusBadRequest},
+		{"typed address", http.MethodGet, download, fetched("none", "navigate", "document", ""), http.StatusBadRequest},
+		{"cross-site link", http.MethodGet, download, fetched("cross-site", "navigate", "document", ""), http.StatusBadRequest},
+		{"no fetch metadata", http.MethodGet, download, http.Header{}, http.StatusBadRequest},
+		{"hosted page asset", http.MethodGet, "/pages-raw/main/app.js", fetched("cross-site", "no-cors", "script", ""), http.StatusServiceUnavailable},
+	} {
+		request := httptest.NewRequest(tt.method, tt.path, http.NoBody)
+		request.Header = tt.header
+
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		require.Equal(t, tt.code, response.Code, tt.name)
+	}
+}
+
 func TestHTTPReload(t *testing.T) {
 	t.Parallel()
 

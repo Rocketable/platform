@@ -33,6 +33,8 @@ import (
 func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serverName string) http.Handler {
 	mux := http.NewServeMux()
 	protection := http.NewCrossOriginProtection()
+	protection.AddInsecureBypassPattern("/pages-raw/")
+
 	app := web.Handler(cfg, serverName)
 
 	var gzipWriters sync.Pool
@@ -170,7 +172,23 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 		})
 	}
 
-	return protection.Handler(mux)
+	return refuseOtherSites(protection, mux)
+}
+
+func refuseOtherSites(protection *http.CrossOriginProtection, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		checked := *r
+		if r.Header.Get("Sec-Fetch-Mode") != "navigate" {
+			checked.Method = http.MethodPost
+		}
+
+		if err := protection.Check(&checked); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func servePage(connection *grpc.ClientConn, app http.Handler) http.HandlerFunc {

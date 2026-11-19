@@ -94,6 +94,7 @@ Turn on MagicDNS and HTTPS certificates for the tailnet, then add `web.tsnet`:
 
 - Tag the node, for example `tag:rocketclaw` (the tailnet policy must list the tag under `tagOwners`). Add a tailnet rule that lets only named users reach it and lets it reach nothing. An untagged node acts as the Tailscale user who logged it in.
 - The node signs each browser in as its device's Tailscale user. It refuses tagged devices, and no request header can choose the user.
+- The node refuses every request that a page from another site makes in your browser, reads and images included, except from the [remote RocketClaws](#remote-rocketclaws) it trusts. Opening a RocketClaw address as a page still works from anywhere: a link, a bookmark, the address bar, or another site's frame, which shows the page but cannot read it. Hosted Pages' own files are the other exception: any page can still load them as images, scripts, or styles, because a hosted page runs sandboxed and the browser counts it as another site even on RocketClaw's own address.
 - Node keys expire after 180 days unless the node is tagged or key expiry is disabled for it in the admin console. An expired node needs `rocketclaw ts login` again.
 - Turning on tailnet HTTPS publishes machine names, including this node's, in public certificate-transparency logs.
 - The node keeps its state outside the workspace, in `rocketclaw/tsnet-<hostname>` under the user config directory (`$XDG_CONFIG_HOME`, or `~/.config`). The run lock keeps a second RocketClaw on the same database from starting its node, but nothing stops two RocketClaws on one machine with different databases and the same hostname from sharing this folder, and so the same node: give each its own hostname. Tailscale's log upload is off.
@@ -122,7 +123,7 @@ Names use only `a-z`, `0-9`, and `-`, and each URL or trusted address is an `htt
 - The browser calls each remote directly, and the remote signs you in with your own Tailscale login, so you act as yourself with that remote's agents and accounts.
 - A remote must serve its tsnet name over HTTPS, run a RocketClaw version with this feature, and trust the local page. Otherwise the page shows it as unavailable, with its address. A remote that stops answering keeps its chats listed, greyed out, until it answers again. A remote on another version keeps working with a notice, and some actions may fail.
 
-Each RocketClaw's tsnet listener accepts these calls only from the pages its `trusted_rocketclaws` lists, because the remote signs in whoever's browser opened the page: any page it trusted could act as that person. Other pages, including other pages on the same tailnet, get no access.
+Each RocketClaw's tsnet listener accepts these calls only from the pages its `trusted_rocketclaws` lists, because the remote signs in whoever's browser opened the page: any page it trusted could act as that person. Other pages, including other pages on the same tailnet, get no access, not even to read.
 
 #### Space permissions
 

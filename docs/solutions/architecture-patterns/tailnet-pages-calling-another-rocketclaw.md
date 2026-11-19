@@ -1,7 +1,7 @@
 ---
 title: A Web Page That Calls Another RocketClaw Must Read Its Refusals and Pin Its Server
 date: 2026-10-30
-last_updated: 2026-10-31
+last_updated: 2026-11-19
 category: docs/solutions/architecture-patterns/
 module: internal/rocketclaw/frontend/rpc
 problem_type: architecture_decision
@@ -30,6 +30,7 @@ Review found three things that look right in isolation and break across servers,
 ## Guidance
 
 - **Trust listed pages, never a whole tailnet.** The handler first trusted any `https` page whose host ended in the tailnet's MagicDNS suffix, or that sat at a Tailscale IP, so remotes needed no setup. But the tailnet listener signs a caller in by the device the request comes from, not by anything the page holds. Any page a server trusts, opened in a person's browser, therefore acts as that person on that server, and every page served from the tailnet would qualify, including one Tailscale Funnel exposes to the internet. A server now trusts an origin only when it matches an entry of `trusted_rocketclaws` exactly; an empty list trusts none. Keep the check an exact match: a suffix, a pattern, or a lookup that admits pages nobody listed brings the problem back.
+- **Load a remote's files by CORS.** The Web refuses every request from another site that is not a navigation, reads included, and a trusted page is recognized only by its `Origin`. A plain `<img src>` sends no `Origin`, so the remote refuses it as another site's: give such elements `crossorigin="anonymous"`, as the attachment images do. Hosted page frames are navigations and need nothing.
 - **Set the CORS headers before any refusal.** The handler first set `Access-Control-Allow-Origin` only after `WhoIs` signed the caller in. A refused caller's 401 then carried no CORS header, so the browser hid it and `fetch` threw a `TypeError`. The page could not tell "you are refused" from "the server is down", so it greyed the rows instead of clearing them. The trust check now runs first. Preflight is still answered only after sign-in.
 - **Pin the server before any `await`.** `rpc` defaults to the page's current server, `server()`, read from the URL. Code that runs after an `await`, or a save queue that keeps flushing after its component unmounted, can read a different server once the person moved to another one. Tab saves would then post one server's tabs to the other. Capture the server once per mount and pass it explicitly (`tabsCall(name, ...)`, `mutations.tabs(input, name)`, and the `sync` ref in `useTabs`). Query keys that belong to a named server start with `{ server }` (`queryKeyHash` in `api.ts`).
 - **Gather per-server views by nesting providers, not by reporting up.** A per-server child that pushes its view to the parent in an effect trips react-doctor's `no-pass-data-to-parent` and `no-prop-callback-in-effect`. Taking the server name as a prop trips `no-adjust-state-on-prop-change` on the list's existing reset effect, even though the component is keyed by that name. `SidebarOwner` instead nests one `ServerName.Provider` + `ServerSessions` per server. Each adds its view to the map it got from outside, and `SidebarMerge` reads the full map, so data only flows down.
