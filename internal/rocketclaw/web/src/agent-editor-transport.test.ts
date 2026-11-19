@@ -8,7 +8,7 @@ type RoutedRequest = {
   method(): string;
   postData(): string | null;
   postDataJSON(): Body;
-  existingResponse(): { status(): number; text(): Promise<string> } | null;
+  existingResponse(): { status(): number; text(): Promise<string>; json(): Promise<unknown> } | null;
   failure(): { errorText: string } | null;
   timing(): { responseEnd: number };
 };
@@ -399,8 +399,19 @@ test("the test chat answers in every column, labels versions, restarts, and pose
     const read = async (id: string) => (await call<AgentDraftView>("GetAgentDraft", { id, since: "1" })).draft;
     const apply = async (id: string, op: object) => (await call<{ revision: string }>("ApplyAgentDraftOp", { id, op: { baseRevision: (await read(id)).revision, opId: crypto.randomUUID(), ...op } })).revision;
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+    const reads: { at: number; request: RoutedRequest }[] = [];
+    const frames: { at: number; conversationId: string; revision: string }[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
-    page.on("request", (request: { url(): string }) => { const url = new URL(request.url()); if (url.pathname === "/stream") streams.push(url.searchParams.get("id")!); });
+    page.on("request", (request: RoutedRequest) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/stream") streams.push(url.searchParams.get("id")!);
+      if (url.pathname === "/api/History") reads.push({ at: Date.now(), request });
+    });
+    const network = await page.context().newCDPSession(page);
+    network.on("Network.eventSourceMessageReceived", ({ eventName, data }: { eventName: string; data: string }) => {
+      if (eventName === "message") frames.push({ at: Date.now(), ...JSON.parse(data) as { conversationId: string; revision: string } });
+    });
+    await network.send("Network.enable");
     const chat = page.getByRole("region", { name: "Test chat" });
     const row = (n: number) => chat.getByRole("region", { name: `Message ${n}`, exact: true });
     const cell = (n: number, column: string) => row(n).getByRole("region", { name: `${column} answer`, exact: true });
@@ -544,12 +555,24 @@ test("the test chat answers in every column, labels versions, restarts, and pose
     await checkHeld("DraftPrompt", { id: echo.id, text: "brief again" }, async (release) => {
       await send("brief again");
       await message.fill("still typing");
+      const releasedAt = Date.now();
       await release();
       await cell(2, "echo").getByText("gpt-a2 answer 2", { exact: false }).waitFor().catch(async (cause: unknown) => {
         const history = await call<HistoryView>("History", { id: briefChat }).then(({ messages, running, terminal }) => ({
           running, terminal, messages: messages.map(({ role, text, turnId, complete }) => ({ role, text, turnId, complete })),
         })).catch(String);
-        throw new Error(`Held DraftPrompt did not render Message 2; server history for ${briefChat}: ${JSON.stringify(history)}`, { cause });
+        const browserHistory = await Promise.all(reads.filter(({ request }) => request.postDataJSON().id === briefChat).map(async ({ at, request }) => {
+          const response = request.existingResponse(), status = response?.status();
+          const reply = response && request.timing().responseEnd >= 0 ? await (status === 200
+            ? response.json().then((value) => {
+              const { revision, reset, entryKeys, replacedKeys, removedKeys, messages, running } = value as HistoryView;
+              return { revision, reset, entryKeys, replacedKeys, removedKeys, running, messages: messages.map(({ role, text, turnId, entryKey, inputId, complete }) => ({ role, text, turnId, entryKey, inputId, complete })) };
+            })
+            : response.text()).catch(String) : null;
+          return { msFromRelease: at - releasedAt, request: request.postDataJSON(), status, failure: request.failure()?.errorText, reply };
+        }));
+        const transcriptFrames = frames.filter(({ conversationId }) => conversationId === briefChat).map(({ at, revision }) => ({ msFromRelease: at - releasedAt, revision }));
+        throw new Error(`Held DraftPrompt did not render Message 2 for ${briefChat}: ${JSON.stringify({ history, transcriptFrames, browserHistory })}`, { cause });
       });
       expect(await message.inputValue()).toBe("still typing");
       return briefChat;
