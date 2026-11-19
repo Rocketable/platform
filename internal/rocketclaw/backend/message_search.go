@@ -66,14 +66,13 @@ func messageSearchText(ctx context.Context, db stateStoreDB, producer string, re
 				shown = make([]string, len(content))
 				for part := range content {
 					if content[part].Type == "output_text" {
-						shown[part] = content[part].Text
+						shown[part] = strings.ReplaceAll(content[part].Text, "\x00", "")
 					}
 				}
 			}
 		}
 
 		for part, text := range shown {
-			text = strings.ReplaceAll(text, "\x00", "")
 			if strings.TrimSpace(text) != "" || principal != "" {
 				lines = append(lines, fmt.Sprintf("%d %d %s", i, part, searchJSON([4]string{role, principal, text, strings.ToLower(text)})))
 			}
