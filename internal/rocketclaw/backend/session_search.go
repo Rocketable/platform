@@ -520,8 +520,15 @@ func (s *SessionService) searchDefinitions(ctx context.Context, terms []SearchTe
 	return agents, spaces, nil
 }
 
+const sandboxedAgentsSQL = `WITH continuations AS MATERIALIZED (
+    SELECT conversation_id, continues FROM conversations WHERE continues IS NOT NULL
+)
+SELECT reports_to, agent FROM conversations WHERE reports_to IS NOT NULL
+UNION
+SELECT c.conversation_id, r.agent FROM continuations c JOIN conversations r ON r.conversation_id = c.continues`
+
 func (s *SessionService) sandboxedAgents(ctx context.Context, sandboxed map[string][]string) error {
-	return readRows(ctx, s.db, `SELECT reports_to, agent FROM conversations WHERE reports_to IS NOT NULL UNION SELECT c.conversation_id, r.agent FROM conversations c JOIN conversations r ON r.conversation_id = c.continues`, "sandboxed agents", func(row rowScanner) error {
+	return readRows(ctx, s.db, sandboxedAgentsSQL, "sandboxed agents", func(row rowScanner) error {
 		var chat, agent string
 		if err := row.Scan(&chat, &agent); err != nil {
 			return fmt.Errorf("scan sandboxed agent: %w", err)

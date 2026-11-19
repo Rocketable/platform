@@ -320,6 +320,25 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 	}
 }
 
+func TestSearchSessionsAgentContinuationPlan(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	_, err := store.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, continues)
+SELECT 'chat-' || n, 'main', 'alice', 'web_chat', TRUE, CASE WHEN n = 2 THEN 'chat-1' END
+FROM generate_series(1, 8192) n;
+ANALYZE conversations;`)
+	require.NoError(t, err)
+
+	plan, err := queryStrings(ctx, store.db, `EXPLAIN (GENERIC_PLAN) `+sandboxedAgentsSQL, "agent continuation plan")
+	require.NoError(t, err)
+
+	text := strings.Join(plan, "\n")
+	require.Regexp(t, `Index Scan using conversations_continues\b[^\n]+ rows=1 width=`, text)
+	require.Contains(t, text, "CTE Scan on continuations")
+}
+
 func TestSearchSessionsFreeTextFields(t *testing.T) {
 	t.Parallel()
 
