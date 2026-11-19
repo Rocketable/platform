@@ -187,7 +187,7 @@ The model-facing tool through which an agent delegates a prompt to another agent
 
 ### Easy Agent
 
-An agent whose file sets `mode: easy`. A section its file leaves out turns on everything in it, except MCP, which stays off until its file names an MCP Facet; a section it writes turns on only what it lists, and everything on is reviewed by the agent's own approver. Its shell commands run in its own folder, in the Emulated Shell unless its file names a wrapper program, and it gets only the commands, secrets, MCP tools, skills, models, and Routines its file names.
+An agent whose file sets `mode: easy`. A section its file leaves out turns on everything in it, except MCP, which stays off until its file names an MCP Facet, and OpenCode servers, which it reaches only when its file names them; a section it writes turns on only what it lists, and everything on is reviewed by the agent's own approver. Its shell commands run in its own folder, in the Emulated Shell unless its file names a wrapper program, and it gets only the commands, secrets, MCP tools, OpenCode servers, skills, models, and Routines its file names.
 
 ### Sticky Session
 

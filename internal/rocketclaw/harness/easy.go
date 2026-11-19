@@ -27,6 +27,7 @@ type AgentLoadConfig struct {
 	MCPFacets         map[string]map[string][]string
 	Providers         []string
 	DecisionProviders []string
+	OpenCodeServers   []string
 	Skills            fs.FS
 }
 
@@ -62,7 +63,7 @@ func easySubagents(node *yaml.Node) ([]string, error) {
 	return subagents, nil
 }
 
-func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
+func compileEasyAgent(agent *Agent, cfg *AgentLoadConfig) error {
 	node, keys := agent.FrontmatterNode, easyKeys()
 	if err := checkKeys(node, "", "not an easy-mode key", keys[""]...); err != nil {
 		return err
@@ -169,12 +170,25 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 	return compileEasyPermissions(agent, cfg)
 }
 
-func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) error {
+func compileEasyPermissions(agent *Agent, cfg *AgentLoadConfig) error {
 	agent.Permission = PermissionSet{Easy: true}
 	permission := &agent.Permission
 
-	for _, bucket := range []string{"bash", "read", "edit", "glob", "grep", "webfetch", "websearch", "opencode"} {
+	for _, bucket := range []string{"bash", "read", "edit", "glob", "grep", "webfetch", "websearch"} {
 		_ = permission.Set(bucket, "*", PermissionAuto)
+	}
+
+	var servers []string
+	if field := frontmatterField(agent.FrontmatterNode, "opencode"); field != nil && (field.Kind != yaml.SequenceNode || field.Decode(&servers) != nil) {
+		return errors.New("opencode: must be a list of servers")
+	}
+
+	for _, server := range servers {
+		if !slices.Contains(cfg.OpenCodeServers, server) {
+			return fmt.Errorf("opencode: server %q is not configured", server)
+		}
+
+		_ = permission.Set("opencode", server, PermissionAuto)
 	}
 
 	_ = permission.Set("rocketclaw", codeModeApproveSubject, PermissionAuto)
@@ -191,7 +205,7 @@ func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) error {
 	return compileEasyDecision(agent, cfg, permission)
 }
 
-func compileEasyApprover(agent *Agent, cfg AgentLoadConfig) error {
+func compileEasyApprover(agent *Agent, cfg *AgentLoadConfig) error {
 	var offUnlessListed yaml.Node
 
 	_ = yaml.Unmarshal([]byte("{rocketclaw: [], skills: [], allowedNetworkTargets: []}"), &offUnlessListed)
@@ -232,7 +246,7 @@ func compileEasyApprover(agent *Agent, cfg AgentLoadConfig) error {
 	return nil
 }
 
-func compileEasySections(agent *Agent, cfg AgentLoadConfig, action PermissionAction) error {
+func compileEasySections(agent *Agent, cfg *AgentLoadConfig, action PermissionAction) error {
 	node, permission := agent.FrontmatterNode, &agent.Permission
 
 	if field := frontmatterField(node, "secretsARN"); field != nil && field.Decode(&agent.SecretsARN) != nil {
@@ -322,7 +336,7 @@ func compileEasySections(agent *Agent, cfg AgentLoadConfig, action PermissionAct
 	return nil
 }
 
-func compileEasyDecision(agent *Agent, cfg AgentLoadConfig, permission *PermissionSet) error {
+func compileEasyDecision(agent *Agent, cfg *AgentLoadConfig, permission *PermissionSet) error {
 	field := frontmatterField(agent.FrontmatterNode, "decision")
 	if field != nil && field.Kind != yaml.SequenceNode {
 		return errors.New("decision: must be a list of provider/model names")
@@ -396,7 +410,7 @@ func checkKeys(node *yaml.Node, prefix, problem string, keys ...string) error {
 
 func easyKeys() map[string][]string {
 	return map[string][]string{
-		"": {"mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN", "shell", "commands", "mcp", "rocketclaw",
+		"": {"mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN", "shell", "commands", "mcp", "opencode", "rocketclaw",
 			"tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema", "sticky", "decision"},
 		"approver":          {"model", "prompt", "decision", "secretsARN", "commands", "mcp", "rocketclaw", "tags", "skills", "allowedNetworkTargets"},
 		"approver.decision": {"model", "minConfidence", "prompt"},

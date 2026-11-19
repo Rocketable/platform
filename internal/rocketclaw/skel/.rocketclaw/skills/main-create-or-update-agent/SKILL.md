@@ -349,6 +349,7 @@ Keys:
 - `secretsARN`: Secrets Manager ARNs, fetched each turn, given only to `commands` programs and the ``!`…` `` lines in the body and in loaded skills
 - `commands`: map from command name to the host command line it runs
 - `mcp`: a map from server to a list of its facets, such as `{demo: [read]}`; facets come from `mcp_servers.<name>.tools` in `rocketclaw.json` (use `main-update-rocketclaw-json`); left out or `{}` means no MCP tools, unlike the other sections; `auto` and an unknown server or facet fail loading
+- `opencode`: a list of OpenCode servers configured under `opencode` in `rocketclaw.json`, such as `[build-box]`, that the `opencode_api` tool may call, each call reviewed; it can run commands and change files, settings and credentials there, so add a server only when the human asks for it by name; left out or `[]` means no `opencode_api` tool, unlike the other sections; `auto` and an unknown server fail loading
 - `rocketclaw`: `[]` for none, or a list of the groups `sessions`, `pages`, `tags`, `background`, `restart`; default all five
 - `tags`: tag groups as a list of lists; when `rocketclaw` is a list, `tags` and its `tags` group need each other
 - `skills`: `[]` for none, or folders under `skills/`; a missing folder fails loading; default all skills
