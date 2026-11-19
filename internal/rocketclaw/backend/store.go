@@ -1981,10 +1981,15 @@ func holdRunLock(ctx context.Context, db *sql.DB, work runLockWork) error {
 		return fmt.Errorf("acquire rocketclaw run lock: %w", err)
 	}
 
-	err := client.Do(ctx, runLockName, func(lockCtx context.Context, _ *pglock.Lock) error {
+	var owner string
+
+	err := client.Do(ctx, runLockName, func(lockCtx context.Context, lock *pglock.Lock) error {
+		owner = lock.Owner()
 		return work.Run(lockCtx)
 	})
-	if err != nil {
+
+	_, errRelease := db.ExecContext(context.WithoutCancel(ctx), `DELETE FROM `+runLockTable+` WHERE name = $1 AND owner = $2`, runLockName, owner)
+	if err := errors.Join(err, errRelease); err != nil {
 		return fmt.Errorf("%w", err)
 	}
 
