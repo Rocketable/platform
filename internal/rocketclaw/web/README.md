@@ -752,7 +752,8 @@ active tab.
   session and sessions no Web user may open cannot be shared. Each server has
   one **Shared** card, which has no **…** menu and lists every space's Shared tabs
   in your own order, newly added ones last, under a grey pill naming the space
-  when the server has more than one space; it is hidden while the server has
+  when the server has more than one space. Clicking a pill folds that space's
+  rows for you, like a tab group, except the one in view. The card is hidden while the server has
   no Shared tabs. A tab can be in Shared and among your own tabs
   at once, and both rows light up while it is open. Opening a Shared row adds no
   tab of your own and opens it in its space. Shared rows show a people
