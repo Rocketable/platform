@@ -714,6 +714,7 @@ test("the PR pane quotes its description and adds diff notes to the native draft
     await note.fill("removed?");
     await add.click();
     expect(await composer.inputValue()).toBe("removed?\n\na.go lines 11-11\n```diff\n-gone11\n```\n\n");
+    await prs.locator("[data-line-annotation]").waitFor({ state: "detached" });
 
     const held = Promise.withResolvers<void>();
     uploadHold = held.promise;
