@@ -286,10 +286,12 @@ test("two people co-edit a draft live in the Form and the File, with history and
     await until("0.7 is stored", async () => await setting("temperature") === "0.7");
     await retype("temperature: 0.7", "temperature: 0.5");
     await Bun.sleep(500);
+    await a.getByRole("tab", { name: "Form", exact: true }).click();
+    await others.getByText("temperature: 0.7", { exact: true }).waitFor();
     await release();
     await until("0.5 is back", async () => await setting("temperature") === "0.5");
+    await others.getByText("temperature: 0.5", { exact: true }).waitFor();
 
-    await a.getByRole("tab", { name: "Form", exact: true }).click();
     release = await hold(a, /\/api\/(ApplyAgentDraftOp|GetAgentDraft)$/, { respond: true });
     await a.getByRole("textbox", { name: "Description", exact: true }).fill("by-alice");
     await until("alice's description is stored", async () => await setting("description") === "by-alice");
