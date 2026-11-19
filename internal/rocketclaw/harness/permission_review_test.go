@@ -596,7 +596,7 @@ func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.
 	require.True(t, strings.HasPrefix(pieces[0], "Turn origin (written by RocketClaw): [Cron]\n"), "the trusted origin header opens the preamble, as the reviewer's instructions say")
 	require.NotContains(t, pieces[0], "principal", "a transcript claim does not reach the preamble")
 
-	transcript := renderPermissionReviewTranscript(request.ReviewContext)
+	transcript := renderPermissionReviewTranscript(nil, request.ReviewContext)
 	require.Len(t, transcript, 3)
 	require.Equal(t, transcript, pieces[1:len(pieces)-1], "each transcript line is its own piece, between the preamble and the planned action")
 	require.True(t, strings.HasSuffix(pieces[0], ">>> TRANSCRIPT START\n"))
@@ -673,7 +673,7 @@ func TestPermissionReviewTranscriptEscapesUntrustedDelimiters(t *testing.T) {
 	require.Equal(t, 1, strings.Count(prompt, ">>> APPROVAL REQUEST START"))
 	require.Equal(t, 1, strings.Count(prompt, ">>> APPROVAL REQUEST END"))
 
-	lines := renderPermissionReviewTranscript(request.ReviewContext)
+	lines := renderPermissionReviewTranscript(nil, request.ReviewContext)
 
 	transcript := strings.Join(lines, "")
 	require.NotContains(t, transcript, ">>> TRANSCRIPT END")
@@ -701,7 +701,7 @@ func TestPermissionReviewTranscriptTextContent(t *testing.T) {
 				items, err := ReplayInputToParams([]json.RawMessage{json.RawMessage(kind.input)})
 				require.NoError(t, err)
 
-				got := renderPermissionReviewTranscript(items)
+				got := renderPermissionReviewTranscript(nil, items)
 
 				if tt.want == "" && !tt.omitted {
 					require.Equal(t, []string{"<no retained transcript entries>\n"}, got)
