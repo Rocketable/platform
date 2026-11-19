@@ -154,15 +154,23 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     expect(await page.getByText("user 20", { exact: true }).count()).toBe(0);
 
     waitingFor = "linked turn in the viewport";
-    await page.evaluate(() => {
+    const linkedTurnInViewport = await page.evaluateHandle(() => {
       history.pushState(null, "", "/s/bG9uZw?message=5%3A0");
       window.dispatchEvent(new PopStateEvent("popstate"));
+      let lastPosition: string | undefined;
+      return () => {
+        const viewport = document.querySelector("#transcript-scroll")?.getBoundingClientRect();
+        const target = document.querySelector('[data-message-id="5:0"]')?.getBoundingClientRect();
+        const inViewport = !!viewport && !!target && target.bottom > viewport.top && target.top < viewport.bottom;
+        const position = !viewport ? "no viewport" : !target ? "not rendered" : inViewport ? "in viewport" : "outside viewport";
+        if (position !== lastPosition) {
+          console.debug("long-chat-scroll linked turn", position, viewport?.top, viewport?.bottom, target?.top, target?.bottom);
+          lastPosition = position;
+        }
+        return inViewport;
+      };
     });
-    await page.waitForFunction(() => {
-      const viewport = document.querySelector("#transcript-scroll")?.getBoundingClientRect();
-      const target = document.querySelector('[data-message-id="5:0"]')?.getBoundingClientRect();
-      return !!viewport && !!target && target.bottom > viewport.top && target.top < viewport.bottom;
-    });
+    await page.waitForFunction((inViewport: () => boolean) => inViewport(), linkedTurnInViewport);
     expect(pages[1]).toEqual({ before: "21", from: "5", limit: undefined });
     waitingFor = "earlier history error";
     await page.getByText("Earlier history unavailable", { exact: true }).waitFor();
