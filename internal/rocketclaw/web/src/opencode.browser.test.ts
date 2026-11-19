@@ -338,8 +338,15 @@ test("a message link opens a remote session at that prompt, also when the sessio
     await visit(link("msg_ses_a_1"));
     await until(shown("msg_ses_a_1"));
     await visit(link("msg_ses_a_3"));
-    await until(shown("msg_ses_a_3"));
-    expect(await shown("msg_ses_a_1")()).toBe(false);
+    await until(() => view.evaluate((root: HTMLElement) => {
+      const viewport = root.querySelector('[data-slot="session-timeline-visible"]')?.getBoundingClientRect();
+      const header = root.querySelector("[data-session-title]")?.getBoundingClientRect();
+      const oldPrompt = root.querySelector("#message-msg_ses_a_1")?.getBoundingClientRect();
+      const target = root.querySelector("#message-msg_ses_a_3")?.getBoundingClientRect();
+      return !!viewport && !!header && !!target &&
+        Math.abs(target.top - header.bottom) <= 1 && target.top < viewport.bottom &&
+        (!oldPrompt || oldPrompt.bottom <= viewport.top || oldPrompt.top >= viewport.bottom);
+    }));
     await visit(route("opencode:box:ses_a"));
     await Bun.sleep(500);
     expect(await shown("msg_ses_a_3")()).toBe(true);
