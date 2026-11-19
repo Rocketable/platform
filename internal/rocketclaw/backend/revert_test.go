@@ -28,6 +28,7 @@ func TestRevertQueueAdmissionAndRetry(t *testing.T) {
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
 	id, err := s.AppendEntryID(ctx, "main", testSessionEntry("abandoned", "answer"))
 	require.NoError(t, err)
+	require.NoError(t, s.PutThreadQueueItem("stashed-before", &protocol.ThreadQueueItem{ID: "stashed-before", ConversationID: "main", Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindHeld, Message: "for later"}))
 
 	marker := fmt.Sprintf("%d:0", id)
 	_, _, err = stageRevertDB(ctx, s.db, "main", marker)
@@ -48,7 +49,8 @@ func TestRevertQueueAdmissionAndRetry(t *testing.T) {
 
 	queue, err := s.ThreadQueueForConversation("main")
 	require.NoError(t, err)
-	require.Len(t, queue, 1)
+	require.Len(t, queue, 2, "rolling back keeps earlier stashes")
+	require.Equal(t, "stashed-before", queue[0].ID)
 
 	item.Message = "conflicting"
 	require.ErrorContains(t, rt.StashQueueItem(ctx, "main", &item), "different content")
