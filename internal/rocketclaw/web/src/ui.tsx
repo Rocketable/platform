@@ -2113,8 +2113,8 @@ function useParkedTree({ state, pathname, shared, parked }: TabStoreValue) {
     const branches = section.spaces.flatMap((space) => {
       const id = `parked:${section.name}/${space.id}`, rank = (tab: Tab) => order.indexOf(`${id}\n${tab.path}`) + 1 || Infinity, closed = shut || (folds[id] ?? false);
       const there = section.rows.filter((tab) => tab.space === space.id).sort((a, b) => rank(a) - rank(b) || 0);
-      const shown = closed ? there.filter((tab) => section.name === here && tab.path === pathname) : there, seen = new Set(shown);
-      return there.length ? [{ space, id, closed, size: there.length, shown, asking: there.some((tab) => asks.has(tab.path) && !seen.has(tab)) }] : [];
+      const active = (tab: Tab) => section.name === here && tab.path === pathname, shown = closed ? there.filter(active) : there;
+      return there.length ? [{ space, id, closed, size: there.length, shown, asking: closed && there.some((tab) => asks.has(tab.path) && !active(tab)) }] : [];
     });
     return { name: section.name, showSpaces: section.spaces.length > 1 && !shut, fold, shut, branches, count: branches.reduce((sum, branch) => sum + branch.size, 0), asking: branches.some((branch) => branch.asking) };
   });
