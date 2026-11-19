@@ -2582,21 +2582,30 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await attachmentPage.getByRole("button", { name: "Remove keep.bin", exact: true }).waitFor();
     expect(await attachmentPage.locator("textarea").inputValue()).toBe("  exact file draft\n");
     expect(ctrl.attachmentPrompts.length).toBe(beforeUploadDispatch);
+    const acceptedAttachments = attachmentPage.waitForResponse((response: { url(): string; ok(): boolean; request(): { postDataJSON(): { attachmentIds?: string[] } } }) =>
+      response.url().endsWith("/api/Prompt") && response.ok() && !!response.request().postDataJSON().attachmentIds?.length);
     uploadHold.resolve();
     ctrl.holdUpload = false;
+    await acceptedAttachments;
     await attachmentPage.getByRole("button", { name: "Remove keep.bin", exact: true }).waitFor({ state: "hidden" });
-    expect(ctrl.attachmentPrompts.at(-1)).toMatchObject({ text: "  exact file draft\n", delivery: "STEER" });
-    const sentAttachments = ctrl.attachmentPrompts.at(-1)!.attachmentIds!.map((id) => uploadedFiles.find(({ meta }) => meta.id === id)!.meta);
+    expect(ctrl.attachmentPrompts).toHaveLength(beforeUploadDispatch + 1);
+    const sentPrompt = ctrl.attachmentPrompts[beforeUploadDispatch];
+    expect(sentPrompt).toMatchObject({ text: "  exact file draft\n", delivery: "STEER" });
+    const sentAttachments = sentPrompt.attachmentIds!.map((id) => uploadedFiles.find(({ meta }) => meta.id === id)!.meta);
     expect(sentAttachments.map(({ name }) => name)).toEqual(["keep.bin", "drop.bin"]);
     expect(sentAttachments.map(({ id }) => [...uploadedFiles.find(({ meta }) => meta.id === id)!.data])).toEqual([[0, 255, 1, 2], [3, 4, 0, 255]]);
     await attachmentPage.getByRole("link", { name: "Download keep.bin", exact: true }).waitFor();
     await attachmentPage.getByRole("link", { name: "Download drop.bin", exact: true }).waitFor();
     expect(await attachmentPage.getByRole("link", { name: "Download keep.bin", exact: true }).evaluate(async (link: HTMLAnchorElement) => [...new Uint8Array(await (await fetch(link.href)).arrayBuffer())])).toEqual([0, 255, 1, 2]);
     expect(await attachmentPage.getByText("exact file draft", { exact: true }).count()).toBe(1);
-    ctrl.history.push({ entryKey: "uploaded", itemId: "uploaded:0", inputId: ctrl.attachmentPrompts.at(-1)!.messageId, role: "user", text: "  exact file draft\n", turnId: "", complete: true, attachments: sentAttachments });
+    ctrl.history.push({ entryKey: "uploaded", itemId: "uploaded:0", inputId: sentPrompt.messageId, role: "user", text: "  exact file draft\n", turnId: "", complete: true, attachments: sentAttachments });
     ctrl.running = true;
     await goToSession(attachmentPage, "Most recent message");
     await attachmentPage.goBack();
+    await attachmentPage.waitForFunction(() => ["keep.bin", "drop.bin"].every((name) => {
+      const links = document.querySelectorAll(`#transcript-scroll a[aria-label="Download ${name}"]`);
+      return links.length === 1 && links[0].getAttribute("href")?.startsWith("/api/DownloadAttachment?conversationId=visible-files&");
+    }));
     await attachmentPage.getByRole("link", { name: "Download keep.bin", exact: true }).waitFor();
     expect(await attachmentPage.getByText("exact file draft", { exact: true }).count()).toBe(1);
     // The active turn makes Enter queue; the in-flight lock prevents a second upload/send.
