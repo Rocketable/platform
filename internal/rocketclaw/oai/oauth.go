@@ -490,7 +490,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 
-		item, ok, err := t.codexCompactItem(req.Context(), cloned)
+		item, ok, err := t.codexCompactItem(req.Context(), cloned, requestFields(cloned))
 		if err != nil {
 			return nil, err
 		}
@@ -904,7 +904,7 @@ func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp
 		}
 	}
 
-	data, ok, err := t.codexCompactItem(ctx, req)
+	data, ok, err := t.codexCompactItem(ctx, req, requestFields(req))
 	if err != nil {
 		return nil, err
 	}
@@ -942,12 +942,12 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 		return nil, nil
 	}
 
-	compactItem, ok, err := t.codexCompactItem(ctx, req)
+	retryBody := requestFields(req)
+
+	compactItem, ok, err := t.codexCompactItem(ctx, req, retryBody)
 	if err != nil || !ok {
 		return nil, nil
 	}
-
-	retryBody := requestFields(req)
 
 	retryItem := compactItem
 	if item, ok := cleanCodexInputItem(compactItem, false); ok {
@@ -982,8 +982,7 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 	return resp, nil
 }
 
-func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (item json.RawMessage, ok bool, err error) {
-	compactSource := requestFields(req)
+func (t *transport) codexCompactItem(ctx context.Context, req *http.Request, compactSource map[string]json.RawMessage) (item json.RawMessage, ok bool, err error) {
 	if codexInputHasUnansweredFunctionCall(compactSource["input"]) {
 		return nil, false, nil
 	}
