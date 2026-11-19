@@ -6,6 +6,7 @@ const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
 test("long chats open at the newest turns, load earlier ones near the top, and load linked older messages", async () => {
+  const startedAt = performance.now();
   const { chromium: engine } = await import(playwright!);
   const turns = 120;
   const entry = (n: number) => [
@@ -151,7 +152,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     expect(await page.getByText("user 5", { exact: true }).count()).toBe(1);
     expect(await page.getByText(`assistant ${turns}`, { exact: true }).count()).toBe(1);
     expect(await page.locator("textarea").inputValue()).toBe(typed);
-    waitingFor = "browser cleanup";
+    waitingFor = `browser cleanup (started ${Math.round(performance.now() - startedAt)} ms into the test)`;
   } finally {
     await browser.close();
     server.stop(true);
