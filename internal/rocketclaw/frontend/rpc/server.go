@@ -591,12 +591,10 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 			event.MessageId = fmt.Sprintf("%d:%d", entry.ID, i)
 		}
 
-		texts, err := event.publicText(identity.Content, identity.ID, identity.Status, progress, entry, producer)
+		messages, err = event.appendPublicText(messages, identity.Content, identity.ID, identity.Status, progress, entry, producer)
 		if err != nil {
 			return nil, err
 		}
-
-		messages = append(messages, texts...)
 	}
 
 	messages = fallbackProgress(entry, progress, replayText, replayResults, replayCalls, conversationID, cronTrace, messages)
@@ -623,9 +621,9 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 	return messages, nil
 }
 
-func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus string, progress []harness.PublicProgress, entry *backend.ObservedSessionEntry, producer string) ([]*TranscriptEvent, error) {
+func (e *TranscriptEvent) appendPublicText(dst []*TranscriptEvent, content json.RawMessage, id, messageStatus string, progress []harness.PublicProgress, entry *backend.ObservedSessionEntry, producer string) ([]*TranscriptEvent, error) {
 	if e.Role != "assistant" || id == "" || len(content) == 0 {
-		return []*TranscriptEvent{e}, nil
+		return append(dst, e), nil
 	}
 
 	if content[0] == '"' {
@@ -636,19 +634,17 @@ func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus 
 			e.publicProgress(&progress[overlap], entry, producer)
 		}
 
-		return []*TranscriptEvent{e}, nil
+		return append(dst, e), nil
 	}
 
 	if content[0] != '[' {
-		return []*TranscriptEvent{e}, nil
+		return append(dst, e), nil
 	}
 
 	var parts []struct{ Type, Text string }
 	if err := json.Unmarshal(content, &parts); err != nil {
 		return nil, fmt.Errorf("decode history output text: %w", err)
 	}
-
-	var messages []*TranscriptEvent
 
 	for index, part := range parts {
 		if part.Type != "output_text" || strings.TrimSpace(part.Text) == "" {
@@ -670,10 +666,10 @@ func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus 
 			}
 		}
 
-		messages = append(messages, text)
+		dst = append(dst, text)
 	}
 
-	return messages, nil
+	return dst, nil
 }
 
 func fallbackProgress(entry *backend.ObservedSessionEntry, progress []harness.PublicProgress, replayText, replayResults, replayCalls map[string]bool, conversationID string, cronTrace bool, messages []*TranscriptEvent) []*TranscriptEvent {
