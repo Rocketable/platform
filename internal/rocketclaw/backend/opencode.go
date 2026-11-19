@@ -339,21 +339,20 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 				} `json:"data"`
 			}
 
-			reply = new("")
+			var text strings.Builder
 
 			if openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(session.ID)+"/message?type=assistant&order=desc&limit=1", nil, &messages) == nil {
-				var texts []string
-
 				for _, message := range messages.Data {
 					for _, part := range message.Content {
 						if part.Type == "text" {
-							texts = append(texts, part.Text)
+							text.WriteString(part.Text)
+							text.WriteByte('\n')
 						}
 					}
 				}
-
-				*reply = strings.Join(texts, "\n")
 			}
+
+			reply = new(strings.TrimSuffix(text.String(), "\n"))
 		}
 
 		ids, titles, directories, agents, models = append(ids, id), append(titles, session.Title), append(directories, session.Location.Directory), append(agents, session.Agent), append(models, session.model())
