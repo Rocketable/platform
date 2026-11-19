@@ -355,7 +355,7 @@ func handOff(t *testing.T, peer *voicePeer, id, text string) {
 }
 
 func spoken(id, text string) string {
-	return string((&publicVoice{}).appends(id, text)[0])
+	return string((&publicVoice{}).appendMessages(nil, id, text)[0])
 }
 
 func (h *voiceHarness) messages(t *testing.T) []*TranscriptEvent {

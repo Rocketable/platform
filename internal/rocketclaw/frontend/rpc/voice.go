@@ -515,7 +515,7 @@ func (c *voiceCall) update(snapshot voiceSnapshot) {
 }
 
 func (c *voiceCall) send(id, text string) {
-	c.unsent = append(c.unsent, c.dialect.appends(id, text)...)
+	c.unsent = c.dialect.appendMessages(c.unsent, id, text)
 	c.flush()
 }
 

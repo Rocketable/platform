@@ -103,7 +103,7 @@ func (*codexVoice) kind(eventType string) voiceEventKind {
 	}
 }
 
-func (*codexVoice) appends(id, text string) [][]byte {
+func (*codexVoice) appendMessages(dst [][]byte, id, text string) [][]byte {
 	message := struct {
 		Type             string         `json:"type"`
 		DelegationItemID string         `json:"delegation_item_id,omitempty"`
@@ -115,16 +115,13 @@ func (*codexVoice) appends(id, text string) [][]byte {
 		message.Type = "session.context.append"
 	}
 
-	chunks := voiceChunks(text, 500)
-	messages := make([][]byte, 0, len(chunks))
-
-	for _, chunk := range chunks {
+	for _, chunk := range voiceChunks(text, 500) {
 		message.Content = []voiceContent{{Type: "input_text", Text: chunk}}
 		data, _ := json.Marshal(message)
-		messages = append(messages, data)
+		dst = append(dst, data)
 	}
 
-	return messages
+	return dst
 }
 
 func (*codexVoice) line(said []voiceEvent, role string) int {

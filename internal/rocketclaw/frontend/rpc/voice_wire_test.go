@@ -190,7 +190,7 @@ func TestVoiceWireRoundTrip(t *testing.T) {
 
 			assert.Equal(t, tc.want, got)
 
-			for _, message := range append(d.appends("d1", "Done."), []byte(voiceCloseMessage)) {
+			for _, message := range append(d.appendMessages(nil, "d1", "Done."), []byte(voiceCloseMessage)) {
 				require.NoError(t, conn.WriteMessage(websocket.TextMessage, message))
 			}
 
@@ -239,7 +239,7 @@ func TestVoiceAppends(t *testing.T) {
 		{"chatgpt", "", "Ship?", []string{`{"type":"session.context.append","channel":"speakable","content":[{"type":"input_text","text":"Ship?"}]}`}},
 		{"api_key", "", "Ship?", []string{`{"type":"session.commentary.append","delegation_id":null,"content":"Ship?"}`}},
 	} {
-		got := map[string]voiceDialect{"api_key": &publicVoice{}, "chatgpt": newCodexVoice()}[tc.auth].appends(tc.id, tc.text)
+		got := map[string]voiceDialect{"api_key": &publicVoice{}, "chatgpt": newCodexVoice()}[tc.auth].appendMessages(nil, tc.id, tc.text)
 		require.Len(t, got, len(tc.want), tc.text)
 
 		for i, want := range tc.want {

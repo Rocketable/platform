@@ -87,7 +87,7 @@ type voiceDialect interface {
 	sideband(id string) string
 	hangup(ctx context.Context, header http.Header, id string) error
 	kind(eventType string) voiceEventKind
-	appends(id, text string) [][]byte
+	appendMessages(dst [][]byte, id, text string) [][]byte
 	line(said []voiceEvent, role string) int
 }
 

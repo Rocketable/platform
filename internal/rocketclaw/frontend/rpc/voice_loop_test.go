@@ -306,18 +306,18 @@ func TestVoiceLoopReplies(t *testing.T) {
 
 		expect(voiceSnapshot{turns: turns, questions: []protocol.AskUserQuestionRequest{ship}},
 			slices.Concat(
-				dialect.appends("d7", "I need your input. Please respond in the app.\n\nShip?\nOptions: Yes, No"),
-				dialect.appends("d2", strings.Repeat("a", 3960)),
-				dialect.appends("d3", "Done."),
-				dialect.appends("d4", voiceLongReply),
-				dialect.appends("d5", "Both."),
+				dialect.appendMessages(nil, "d7", "I need your input. Please respond in the app.\n\nShip?\nOptions: Yes, No"),
+				dialect.appendMessages(nil, "d2", strings.Repeat("a", 3960)),
+				dialect.appendMessages(nil, "d3", "Done."),
+				dialect.appendMessages(nil, "d4", voiceLongReply),
+				dialect.appendMessages(nil, "d5", "Both."),
 			)...)
 		require.Len(t, stream.SendMsgCalls(), 1, "what was typed before the call mutes nothing")
 		assert.Equal(t, strings.Repeat("b", 3961), stream.SendMsgCalls()[0].M.(*VoiceEvent).GetReply())
 
 		later := []voiceTurn{{key: "t6", inputs: []string{"d7"}, reply: "Stale."}, {key: "t7", inputs: []string{"typed-during"}, reply: "Typed reply."}}
 		expect(voiceSnapshot{turns: slices.Concat(turns, later), questions: []protocol.AskUserQuestionRequest{ship, deploy}},
-			dialect.appends("d7", "I need your input. Please respond in the app.\n\nDeploy?\nTo production.")...)
+			dialect.appendMessages(nil, "d7", "I need your input. Please respond in the app.\n\nDeploy?\nTo production.")...)
 		expect(voiceSnapshot{turns: slices.Concat(turns, later)})
 		require.Len(t, stream.SendMsgCalls(), 2)
 		assert.True(t, stream.SendMsgCalls()[1].M.(*VoiceEvent).GetTyped())
@@ -395,7 +395,7 @@ func TestVoiceLoopResendsAfterDrop(t *testing.T) {
 		synctest.Wait()
 
 		reply := voiceSnapshot{turns: []voiceTurn{{key: "t1", inputs: []string{"d1"}, reply: strings.Repeat("a", 500) + strings.Repeat("b", 500) + "c"}}}
-		chunks := dialect.appends("d1", reply.turns[0].reply)
+		chunks := dialect.appendMessages(nil, "d1", reply.turns[0].reply)
 		require.Len(t, chunks, 3)
 
 		snapshots <- reply
