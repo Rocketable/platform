@@ -85,8 +85,13 @@ func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (
 		return slices.Clone(data), mimeType, nil
 	}
 
+	var img image.Image
 	if mimeType == "image/png" {
-		transformed, err := resizePNGWithinLimit(data, targetLimit)
+		if img, err = png.Decode(bytes.NewReader(data)); err != nil {
+			return nil, "", fmt.Errorf("%w: decode png: %w", errInboundAttachmentReductionFailed, err)
+		}
+
+		transformed, err := resizePNGWithinLimit(img, targetLimit)
 		if err == nil {
 			return transformed, mimeType, nil
 		}
@@ -94,10 +99,7 @@ func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (
 		if !errors.Is(err, errInboundAttachmentReductionNotEnough) {
 			return nil, "", err
 		}
-	}
-
-	img, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
+	} else if img, _, err = image.Decode(bytes.NewReader(data)); err != nil {
 		return nil, "", fmt.Errorf("%w: decode image: %w", errInboundAttachmentReductionFailed, err)
 	}
 
@@ -120,12 +122,7 @@ func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (
 	return candidate, "image/jpeg", nil
 }
 
-func resizePNGWithinLimit(data []byte, targetLimit int) ([]byte, error) {
-	src, err := png.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("%w: decode png: %w", errInboundAttachmentReductionFailed, err)
-	}
-
+func resizePNGWithinLimit(src image.Image, targetLimit int) ([]byte, error) {
 	encoded := encodeInboundPNG(src)
 
 	if len(encoded) <= targetLimit {

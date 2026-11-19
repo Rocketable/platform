@@ -207,9 +207,7 @@ func TestFitInboundImageWithinLimitReportsPNGDecodeFailure(t *testing.T) {
 func TestResizePNGWithinLimitRejectsSinglePixelImageTooLargeForTarget(t *testing.T) {
 	t.Parallel()
 
-	original := encodeAttachmentTestPNG(t, newAttachmentTestImage(1, 1), png.NoCompression)
-
-	transformed, err := resizePNGWithinLimit(original, 1)
+	transformed, err := resizePNGWithinLimit(newAttachmentTestImage(1, 1), 1)
 	assert.Nil(t, transformed)
 	assert.ErrorIs(t, err, errInboundAttachmentReductionNotEnough)
 }
