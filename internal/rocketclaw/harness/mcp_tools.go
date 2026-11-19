@@ -843,14 +843,12 @@ func codeModeHostInputSchema(name string, def *responses.FunctionToolParam) map[
 		return nil
 	}
 
-	params := maps.Clone(def.Parameters)
-
-	props, _ := params["properties"].(map[string]any)
+	props, _ := def.Parameters["properties"].(map[string]any)
 	if props == nil {
-		return params
+		return maps.Clone(def.Parameters)
 	}
 
-	required := codeModeHostRequiredFields(name, params)
+	required := codeModeHostRequiredFields(name, def.Parameters)
 
 	return map[string]any{
 		"type":                 "object",
