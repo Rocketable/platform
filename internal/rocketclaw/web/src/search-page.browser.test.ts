@@ -823,7 +823,8 @@ test("newer search replaces an in-flight search and retries errors", async () =>
   const { chromium: engine } = await import(playwright!);
   const started = Promise.withResolvers<void>();
   const delayed = Promise.withResolvers<void>();
-  const searches: string[] = [];
+  const submitted = Promise.withResolvers<void>();
+  const searches: Pick<SearchInput, "query" | "entered" | "fresh">[] = [];
   let fail = true;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
@@ -834,13 +835,16 @@ test("newer search replaces an in-flight search and retries errors", async () =>
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "search" } });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [] });
     if (url.pathname === "/api/SearchSessions") {
-      const { query } = await request.json() as { query: string };
-      searches.push(query);
+      const { query, entered, fresh } = await request.json() as SearchInput;
+      searches.push({ query, entered, fresh });
       if (query === "old") { started.resolve(); await delayed.promise; }
-      if (query === "new" && fail) return Response.json({ message: "Try again", code: 13 }, { status: 500 });
+      if (query === "new" && fail) {
+        await submitted.promise;
+        return Response.json({ message: "Try again", code: 13 }, { status: 500 });
+      }
       return Response.json(response(query, [{ conversationId: "chat", field: "" }], [], { messages: [{ conversationId: "chat", message: { messageId: "1:0", role: "user", text: `Match ${query}`, complete: true } }] }));
     }
-    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: `/s/${btoa("chat").replaceAll("=", "")}`, space: "main" }], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));
     return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
@@ -858,12 +862,14 @@ test("newer search replaces an in-flight search and retries errors", async () =>
       } });
     });
     await page.goto(`http://127.0.0.1:${server.port}/search`);
+    await page.getByRole("tablist", { name: "Main tabs" }).getByRole("tab", { name: "A chat", exact: true }).waitFor();
     const search = page.getByRole("textbox", { name: "Search sessions" });
     await search.fill("old");
     await started.promise;
     expect(await page.getByRole("status").filter({ hasText: "Searching…" }).count()).toBe(1);
     await search.fill("new");
     await search.press("Enter");
+    submitted.resolve();
     await page.getByRole("alert").getByRole("button", { name: "Retry" }).waitFor();
     expect(await page.evaluate(() => Reflect.get(window, "abortedSearches") as string[])).toContain("old");
     expect(await page.getByLabel("Search results").getByRole("link").count()).toBe(0);
@@ -871,17 +877,18 @@ test("newer search replaces an in-flight search and retries errors", async () =>
     fail = false;
     await page.getByRole("button", { name: "Retry" }).click();
     await page.getByRole("link", { name: /Match new/ }).waitFor();
-    expect(searches).toEqual(["old", "new", "new"]);
+    expect(searches).toEqual(["old", "new", "new"].map((query) => ({ query, entered: true })));
     expect(await page.getByLabel("Search results").getByText("Match old").count()).toBe(0);
     for (let i = 1; i <= 7; i++) {
       await search.fill("x".repeat(i));
       await page.waitForTimeout(180);
     }
-    expect(searches.slice(3).some((query) => query.length < 7)).toBe(true);
+    expect(searches.slice(3).some(({ query }) => query.length < 7)).toBe(true);
     await page.waitForTimeout(300);
-    expect(searches.at(-1)).toBe("xxxxxxx");
+    expect(searches.at(-1)?.query).toBe("xxxxxxx");
   } finally {
     delayed.resolve();
+    submitted.resolve();
     await browser.close();
     server.stop(true);
   }
