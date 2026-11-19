@@ -1006,12 +1006,12 @@ func agentDraftProblem(variant string, mode harness.AgentMode, message string) A
 }
 
 func agentSettingHelp(key string, mode harness.AgentMode) (*harness.AgentSetting, bool) {
-	settings := harness.AgentSettingsFor(mode)
-	if i := slices.IndexFunc(settings, func(setting harness.AgentSetting) bool { return setting.Key == key }); i >= 0 {
+	settings := harness.AgentSettings()
+	if i := slices.IndexFunc(settings, func(field harness.AgentSetting) bool { return field.Key == key && slices.Contains(field.Modes, mode) }); i >= 0 {
 		return &settings[i], true
 	}
 
-	return nil, slices.ContainsFunc(harness.AgentSettings(), func(setting harness.AgentSetting) bool { return setting.Key == key })
+	return nil, slices.ContainsFunc(settings, func(field harness.AgentSetting) bool { return field.Key == key })
 }
 
 func scanAgentDraft(row rowScanner) (AgentDraft, error) {
