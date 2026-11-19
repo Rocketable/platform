@@ -2388,7 +2388,7 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 
 		w.Header().Set("Retry-After", "2")
 		w.Header().Set("X-Request-ID", "req-rate")
-		http.Error(w, `{"error":{"message":"blocked"}}`, status)
+		http.Error(w, `{"error":{"message":"prompt is too long: 1202540 tokens > 1000000 maximum","type":"invalid_request_error","code":"context_length_exceeded"}}`, status)
 	}))
 	t.Cleanup(server.Close)
 
@@ -2407,8 +2407,13 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = client.Responses.New(context.Background(), params)
-	require.Error(t, err)
+	errAPI, ok := errors.AsType[*openai.Error](err)
+	require.True(t, ok)
+	assert.Equal(t, "context_length_exceeded", errAPI.Code, "the SDK still reads the error body the log read first")
 	assert.Contains(t, logs.String(), "provider request failed")
+	assert.Contains(t, logs.String(), `"provider_error_type":"invalid_request_error"`)
+	assert.Contains(t, logs.String(), `"provider_error_code":"context_length_exceeded"`)
+	assert.Contains(t, logs.String(), `"provider_error_message":"prompt is too long: 1202540 tokens`)
 	assert.Contains(t, logs.String(), `"status":429`)
 	assert.Contains(t, logs.String(), `"event":"provider_sdk_attempt"`)
 	assert.Contains(t, logs.String(), `"outcome":"http_error"`)

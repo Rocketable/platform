@@ -1,14 +1,18 @@
 package backend
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net/http"
 	"strings"
+	"testing/iotest"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -163,6 +167,23 @@ func (r *modelResolver) options(origin harness.ProviderOrigin) []option.RequestO
 		}
 
 		attrs := append(providerLogAttrs(req, resp, status, time.Since(startedAt), err, boundary), "provider", origin.Provider, "model", origin.Model)
+		if resp != nil && (status < http.StatusOK || status >= http.StatusMultipleChoices) {
+			body, errRead := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			if errRead != nil {
+				resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), iotest.ErrReader(errRead)))
+			}
+
+			var payload struct {
+				Error struct{ Type, Code, Message string }
+			}
+			if json.Unmarshal(body, &payload) == nil {
+				attrs = append(attrs, "provider_error_type", payload.Error.Type, "provider_error_code", payload.Error.Code, "provider_error_message", payload.Error.Message)
+			}
+		}
+
 		if status < 200 || status >= 300 || err != nil {
 			r.log.Error("provider request failed", attrs...)
 		} else {
