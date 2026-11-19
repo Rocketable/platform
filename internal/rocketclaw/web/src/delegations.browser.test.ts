@@ -355,8 +355,35 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
         return input;
       };
     }) : null;
+    const desktopReview = width === 1280 ? await page.evaluateHandle(() => {
+      const listeners = new AbortController();
+      const options = { capture: true, signal: listeners.signal };
+      const clicks: { target: string | null; href: string | null; point: [number, number]; panelHeight: string | undefined; scrollTop: number | undefined }[] = [];
+      const navigation: string[] = [];
+      document.addEventListener("click", (event) => {
+        if (!event.isTrusted || !(event.target instanceof Element)) return;
+        const link = document.querySelector<HTMLElement>('main a[aria-label="Open permission review"][href*="&answer=t-diff"]');
+        clicks.push({
+          target: event.target.closest("[data-slot]")?.getAttribute("data-slot") ?? event.target.tagName,
+          href: event.target.closest("a")?.getAttribute("href") ?? null,
+          point: [event.clientX, event.clientY],
+          panelHeight: link?.closest<HTMLElement>('[data-slot="trace-collapsible-content"]')?.style.getPropertyValue("--collapsible-panel-height"),
+          scrollTop: link?.closest('[data-slot="message-scroller-viewport"]')?.scrollTop,
+        });
+      }, options);
+      window.addEventListener("popstate", () => navigation.push(location.search), options);
+      return () => {
+        listeners.abort();
+        return { clicks, navigation, url: location.href };
+      };
+    }) : null;
     await diff.locator('> [data-slot="trace-collapsible-trigger"]').click();
     await diff.getByRole("link", { name: "Open permission review", exact: true }).click();
+    if (desktopReview) {
+      const observed = await desktopReview.evaluate((read: () => { url: string }) => read());
+      await desktopReview.dispose();
+      if (new URL(observed.url).searchParams.get("answer") !== "t-diff") console.info("Desktop diff permission review did not navigate", observed);
+    }
     if (diffInput) {
       const input = await diffInput.evaluate((read: () => unknown) => read());
       await diffInput.dispose();
