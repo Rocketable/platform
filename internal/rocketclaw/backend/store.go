@@ -756,7 +756,7 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, err
 	}
 
-	kind, _, err := s.ConversationKind(ctx, conversationID)
+	kind, err := s.ConversationKind(ctx, conversationID)
 	if err != nil {
 		return 0, err
 	}

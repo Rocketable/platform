@@ -839,9 +839,8 @@ func TestSlackThreadsMigration(t *testing.T) {
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	for id, want := range map[string]ConversationKind{"mcp": KindWebChat, "cron": KindWebChat, "mention": KindSlackThread} {
-		kind, ok, err := store.ConversationKind(ctx, id)
+		kind, err := store.ConversationKind(ctx, id)
 		require.NoError(t, err)
-		require.True(t, ok)
 		require.Equal(t, want, kind, id)
 
 		_, thread, err := store.SlackThread(ctx, id)

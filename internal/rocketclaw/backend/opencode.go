@@ -608,7 +608,7 @@ func AgentTags(agents harness.Agents) map[string][]string {
 }
 
 func (s *SessionService) ToggleManualTag(ctx context.Context, agents harness.Agents, id, tag string) error {
-	kind, _, err := s.ConversationKind(ctx, id)
+	kind, err := s.ConversationKind(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -639,17 +639,17 @@ func (s *SessionService) ToggleManualTag(ctx context.Context, agents harness.Age
 	return err
 }
 
-func (s *SessionService) ConversationKind(ctx context.Context, id string) (kind ConversationKind, found bool, err error) {
+func (s *SessionService) ConversationKind(ctx context.Context, id string) (kind ConversationKind, err error) {
 	err = s.db.QueryRowContext(ctx, `SELECT kind FROM conversations WHERE conversation_id = $1`, id).Scan(&kind)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
+		return "", nil
 	}
 
 	if err != nil {
-		return "", false, fmt.Errorf("read conversation kind: %w", err)
+		return "", fmt.Errorf("read conversation kind: %w", err)
 	}
 
-	return kind, true, nil
+	return kind, nil
 }
 
 var ErrTagNotAllowed = errors.New("the session's agent does not allow this tag")

@@ -221,9 +221,8 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneWebChat(t *testing.T) {
 		assert.Equal(t, session.ManagedConversationID, turn.SyncDestination)
 	}
 
-	kind, ok, err := store.ConversationKind(t.Context(), session.ManagedConversationID)
+	kind, err := store.ConversationKind(t.Context(), session.ManagedConversationID)
 	require.NoError(t, err)
-	require.True(t, ok)
 	assert.Equal(t, backend.KindWebChat, kind)
 
 	thread, ok, err := store.Thread(session.ManagedConversationID)
@@ -418,9 +417,9 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantBinding, ok)
 
-			_, ok, err = store.ConversationKind(t.Context(), managed)
+			kind, err := store.ConversationKind(t.Context(), managed)
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantBinding, ok, "a refused first prompt leaves no Web chat behind")
+			assert.Equal(t, tt.wantBinding, kind != "", "a refused first prompt leaves no Web chat behind")
 		})
 	}
 }

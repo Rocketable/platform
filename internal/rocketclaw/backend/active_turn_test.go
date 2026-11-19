@@ -801,7 +801,7 @@ func TestResumedCronRowOpensReportChat(t *testing.T) {
 	require.True(t, recorded)
 	assert.Equal(t, ThreadState{Agent: "job", CreatedBy: ThreadCreatedByCron}, thread, "the report chat runs the cron's agent")
 
-	kind, _, err := service.ConversationKind(t.Context(), destination)
+	kind, err := service.ConversationKind(t.Context(), destination)
 	require.NoError(t, err)
 	assert.Equal(t, KindWebChat, kind)
 

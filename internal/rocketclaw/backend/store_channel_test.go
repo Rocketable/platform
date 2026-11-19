@@ -52,9 +52,8 @@ func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "managed-agent", thread.Agent)
 
-	kind, ok, err := store.ConversationKind(t.Context(), "chat-1")
+	kind, err := store.ConversationKind(t.Context(), "chat-1")
 	require.NoError(t, err)
-	require.True(t, ok)
 	assert.Equal(t, KindWebChat, kind, "an External MCP session shows in a Web chat")
 
 	err = store.RegisterExternalMCPConversation("existing", "other-managed", &ExternalMCPSessionState{Agent: "other-private", PrivateConversationID: "external_mcp:private-2", ManagedConversationID: "chat-2", OriginPairs: map[string]string{"topic": "replacement"}})
