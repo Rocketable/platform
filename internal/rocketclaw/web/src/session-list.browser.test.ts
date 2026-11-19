@@ -3200,7 +3200,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await authorPage.locator("textarea").fill("Unlabeled while identity refreshes");
     await authorPage.getByLabel("Send", { exact: true }).click();
     await ctrl.promptStarted.promise;
-    expect(await authorChat.locator('[data-slot="bubble-content"]').filter({ hasText: "Unlabeled while identity refreshes" }).locator('[data-slot="message-author"]').count()).toBe(0);
+    const provisionalBubble = authorChat.locator('[data-slot="bubble-content"]').filter({ hasText: "Unlabeled while identity refreshes" });
+    await provisionalBubble.waitFor();
+    expect(await provisionalBubble.locator('[data-slot="message-author"]').count()).toBe(0);
     const identityRefreshed = authorPage.waitForResponse("**/api/Identity");
     refreshing.resolve();
     await identityRefreshed;
@@ -3208,15 +3210,23 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     promptHold.resolve("");
     ctrl.holdPrompt = false;
     await authorPage.locator("textarea").fill("$handoff");
+    const releaseHandoffIdentity = Promise.withResolvers<void>();
+    const handoffIdentityStatus = "Identity refreshed for handoff";
+    await authorPage.route("**/api/Identity", async (route: { fulfill(options: { json: object }): Promise<void> }) => {
+      await releaseHandoffIdentity.promise;
+      await route.fulfill({ json: { username: ctrl.username, principal: ctrl.principal, sandboxError: handoffIdentityStatus } });
+    });
     await authorPage.getByLabel("Send", { exact: true }).click();
     const handoffDialog = authorPage.getByRole("dialog", { name: "Session handoff", exact: true });
-    await handoffDialog.getByRole("button", { name: "Start new session", exact: true }).waitFor();
+    const startHandoff = handoffDialog.getByRole("button", { name: "Start new session", exact: true });
+    await startHandoff.waitFor();
+    releaseHandoffIdentity.resolve();
+    await authorPage.getByText(handoffIdentityStatus, { exact: true }).waitFor();
     ctrl.history = [];
     ctrl.queue = [];
     ctrl.holdPrompt = true;
     promptHold = Promise.withResolvers();
-    await authorPage.waitForResponse("**/api/Identity");
-    await handoffDialog.getByRole("button", { name: "Start new session", exact: true }).click();
+    await startHandoff.click();
     await authorPage.waitForURL("**/s/d2ViLXNlc3Npb246bmV3");
     const handoffBubble = authorPage.locator('[data-slot="bubble-content"]').filter({ hasText: "Handoff document" });
     await handoffBubble.locator('[data-slot="message-author"]').waitFor();
