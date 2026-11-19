@@ -916,6 +916,17 @@ func TestHoldRunLockWaitsForReleaseOrCancellation(t *testing.T) {
 	require.NoError(t, lock.Close())
 	require.ErrorIs(t, holdRunLock(t.Context(), service.db, work), errWork)
 	require.Len(t, work.RunCalls(), 1)
+
+	for i := range 200 {
+		require.ErrorIs(t, holdRunLock(t.Context(), service.db, &runLockWorkMock{RunFunc: func(context.Context) error {
+			time.Sleep(time.Duration(i%40) * 50 * time.Microsecond)
+			return errWork
+		}}), errWork)
+
+		lock, err := client.Acquire(runLockName, pglock.FailIfLocked())
+		require.NoError(t, err, "the run lock is free once holdRunLock returns, even when the work ends during its first heartbeat")
+		require.NoError(t, lock.Close())
+	}
 }
 
 func TestHoldRunLockAllowsSessionServiceWhileHeld(t *testing.T) {
