@@ -45,7 +45,22 @@ func (s *SessionService) SaveAttachment(ctx context.Context, conversationID, tur
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit attachment: %w", err)
+		return fmt.Errorf("commit attachment: %w", errors.Join(err, s.discardUnsavedAttachment(context.WithoutCancel(ctx), id)))
+	}
+
+	return nil
+}
+
+func (s *SessionService) discardUnsavedAttachment(ctx context.Context, id string) error {
+	var saved bool
+	if err := queryScalar(ctx, s.db, "check unsaved attachment", `SELECT count(*) > 0 FROM attachments WHERE id = $1`, &saved, id); err != nil || saved {
+		return err
+	}
+
+	if errDelete := s.attachments.Delete(ctx, id); errDelete != nil {
+		if _, errQueue := s.db.ExecContext(ctx, `INSERT INTO pending_attachment_deletions (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, id); errQueue != nil {
+			return errors.Join(errDelete, errQueue)
+		}
 	}
 
 	return nil
