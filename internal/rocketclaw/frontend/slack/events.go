@@ -47,11 +47,9 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 							break
 						}
 					}
-
-					event.Acknowledgement <- err
-				} else {
-					event.Acknowledgement <- nil
 				}
+
+				event.Acknowledgement <- err
 
 				continue
 			}
