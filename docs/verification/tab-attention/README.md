@@ -18,7 +18,7 @@ make -C docs/verification/tab-attention fail-old-turn-end   # the replaced rule 
 ```
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256
-`e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`. The tools, the translator's copy, Java's
+`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`. The tools, the translator's copy, Java's
 temporary files, TLC's working files and each check's log go to the repository root's
 `.tmp/verification/tab-attention/`. A check passes only when TLC exits 0 and reports
 `Model checking completed. No error has been found.` `fail-old-turn-end` passes only when TLC exits 12 or 13 and
@@ -68,6 +68,8 @@ The release now serves a rebuilt `tla2tools.jar` under the same v1.8.0 tag, whic
 used a local copy of the pinned jar, whose SHA-256 matches `TLA_SHA256` and whose manifest names revision `d8fb231`.
 Both new liveness properties were also checked for teeth on throwaway copies: with the idle end disabled, TLC finds
 `IdleEndsDone` violated, and with the restore disabled, `QuestionRestores`.
+
+Rerun 2026-11-18 after the `tla2tools.jar` pin moved to build `bc1b506` (one upstream commit, "Fix races in TLCSet/TLCGet with multiple workers"): TLC `2026.11.15.002146 (rev: bc1b506)`, OpenJDK 21.0.13 on linux/aarch64; `make -k` exited 0.
 
 ## Limits
 

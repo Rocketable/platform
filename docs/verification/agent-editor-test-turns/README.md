@@ -21,7 +21,7 @@ make -C docs/verification/agent-editor-test-turns replay-skips-queued
 ```
 
 Requires Java 11+, `curl`, `shasum` and Make. The runner downloads tla2tools v1.8.0 and checks SHA-256
-`e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`. Tools, the translator's scratch copy,
+`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`. Tools, the translator's scratch copy,
 Java temp files, TLC metadata and every log and counterexample trace go to the repository root's
 `.tmp/run/agent-editor-test-turns/`. A passing check needs exit 0 and `Model checking completed. No error has
 been found.`; a negative check needs exit 12 or 13 and its exact `EXPECTED_<check>` message, so a parse
@@ -169,6 +169,8 @@ prefixes up to the first counterexample and vary slightly between runs with two 
 
 TLC banner: `TLC2 Version 2026.11.06.222357 (rev: d8fb231)` from the pinned v1.8.0 artifact. Java: OpenJDK
 21.0.13.0.3, aarch64. Other models were running on the same machine, so times are rough.
+
+Rerun 2026-11-18 after the `tla2tools.jar` pin moved to build `bc1b506` (one upstream commit, "Fix races in TLCSet/TLCGet with multiple workers"): TLC `2026.11.15.002146 (rev: bc1b506)`, OpenJDK 21.0.13 on linux/aarch64; `make -k` exited 0.
 
 ### Bound choices
 

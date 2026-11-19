@@ -15,7 +15,7 @@ make -C docs/verification/typing built    # one check
 ```
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256
-`e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`. The tools, the translator's copy, Java's
+`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`. The tools, the translator's copy, Java's
 temporary files, TLC's working files and each check's log go to the repository root's `.tmp/verification/typing/`.
 A passing check needs TLC exit 0 and `Model checking completed. No error has been found.`; a check that must fail
 needs TLC exit 12 (safety) or 13 (liveness) and its named violation, so a parse or tool error never counts.
@@ -83,6 +83,8 @@ one TLC worker its first counterexample is the full buffer; with a larger buffer
 2026-11-13, on arm64 (12 workers), OpenJDK 21.0.13, TLC `2026.11.06.222357 (rev: d8fb231)`,
 `pcal.trans` 1.12: every check matched its expected outcome; `make` took 17 s with the tools already downloaded.
 Translating changed nothing in `Typing.tla`.
+
+Rerun 2026-11-18 after the `tla2tools.jar` pin moved to build `bc1b506` (one upstream commit, "Fix races in TLCSet/TLCGet with multiple workers"): TLC `2026.11.15.002146 (rev: bc1b506)`, OpenJDK 21.0.13 on linux/aarch64; `make -k` exited 0.
 
 ## Limits
 
