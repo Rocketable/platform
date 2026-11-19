@@ -40,18 +40,21 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     page.on("pageerror", (error: Error) => errors.push(error.message));
     let loads = 0;
     page.on("load", () => loads++);
-    // A tab that becomes visible checks the index page again; wait for that answer to render.
-    const recheck = async () => {
-      const response = page.waitForResponse((r: { url(): string; request(): { resourceType(): string } }) => new URL(r.url()).pathname === "/" && r.request().resourceType() === "fetch");
-      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange", { bubbles: true })));
-      await (await response).finished();
+    const waitForIndexCheck = async () => {
+      await page.waitForEvent("requestfinished", (request: { url(): string; resourceType(): string }) => new URL(request.url()).pathname === "/" && request.resourceType() === "fetch");
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    };
+    const recheck = async () => {
+      await Promise.all([
+        waitForIndexCheck(),
+        page.evaluate(() => document.dispatchEvent(new Event("visibilitychange", { bubbles: true }))),
+      ]);
     };
     const notice = page.getByText("A new version of RocketClaw is available.", { exact: true });
     const refresh = page.getByRole("button", { name: "Refresh", exact: true });
     // Narrow screens keep the tabs in a drawer behind the footer's Show sidebar button.
     const tabs = width < 768 ? page.getByRole("button", { name: "Show sidebar", exact: true }) : page.getByRole("tablist", { name: "Main tabs" }).locator("..");
-    await page.goto(`http://127.0.0.1:${server.port}/`);
+    await Promise.all([waitForIndexCheck(), page.goto(`http://127.0.0.1:${server.port}/`)]);
     await tabs.waitFor();
 
     await recheck();
@@ -87,9 +90,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     expect(loads).toBe(1);
 
     served = current;
-    const reloaded = page.waitForEvent("load");
-    await refresh.click();
-    await reloaded;
+    await Promise.all([page.waitForEvent("load"), waitForIndexCheck(), refresh.click()]);
     await tabs.waitFor();
     await recheck();
     expect(await notice.count()).toBe(0);
