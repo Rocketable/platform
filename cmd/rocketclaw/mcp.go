@@ -124,9 +124,9 @@ func startExternalMCPServer(
 
 		if !ok {
 			session.PrivateConversationID = "external_mcp:" + session.Agent + ":" + rand.Text()
-			session.ManagedConversationID = rand.Text()
+			session.ManagedConversationID, session.OriginPairs = rand.Text(), metadata
 
-			if err := store.RegisterExternalMCPConversation(externalConversationID, session.Agent, &backend.ExternalMCPSessionState{Agent: session.Agent, PrivateConversationID: session.PrivateConversationID, ManagedConversationID: session.ManagedConversationID, OriginPairs: metadata}); err != nil {
+			if err := store.RegisterExternalMCPConversation(externalConversationID, session.Agent, &session); err != nil {
 				return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP conversation: %w", err)
 			}
 
