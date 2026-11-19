@@ -3061,14 +3061,6 @@ func replayInputMessages(raw []json.RawMessage) ([]replayInputMessage, error) {
 }
 
 func ReplayInputMessageRoleText(item *responses.ResponseInputItemUnionParam, raw json.RawMessage) (role, text string, ok bool, err error) {
-	defer func() {
-		if item.OfMessage != nil && (role == "user" || role == "developer") {
-			if header, _ := item.OfMessage.ExtraFields()["prompt_header"].(string); header != "" {
-				text = strings.TrimPrefix(text, header+"\n\n")
-			}
-		}
-	}()
-
 	if item.OfMessage != nil && item.OfMessage.Role == "assistant" && len(item.OfMessage.Content.OfInputItemContentList) > 0 {
 		var output responses.ResponseOutputMessageParam
 		if err := json.Unmarshal(raw, &output); err != nil {
@@ -3094,11 +3086,10 @@ func ReplayInputMessageRoleText(item *responses.ResponseInputItemUnionParam, raw
 
 	switch {
 	case item.OfMessage != nil:
-		if len(item.OfMessage.Content.OfInputItemContentList) == 0 {
-			return string(item.OfMessage.Role), item.OfMessage.Content.OfString.Value, true, nil
-		}
-
 		role, content = string(item.OfMessage.Role), item.OfMessage.Content.OfInputItemContentList
+		if len(content) == 0 {
+			text = item.OfMessage.Content.OfString.Value
+		}
 	case item.OfInputMessage != nil:
 		role, content = item.OfInputMessage.Role, item.OfInputMessage.Content
 	default:
@@ -3111,7 +3102,15 @@ func ReplayInputMessageRoleText(item *responses.ResponseInputItemUnionParam, raw
 		}
 	}
 
-	return role, message.String(), true, nil
+	text = cmp.Or(text, message.String())
+
+	if item.OfMessage != nil && (role == "user" || role == "developer") {
+		if header, _ := item.OfMessage.ExtraFields()["prompt_header"].(string); header != "" {
+			text = strings.TrimPrefix(text, header+"\n\n")
+		}
+	}
+
+	return role, text, true, nil
 }
 
 const defaultReplyInstruction = "Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."
