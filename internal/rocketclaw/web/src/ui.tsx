@@ -2003,11 +2003,14 @@ function SharedCard({ tabs, label, waiting, folds, editing, setEditing, setMenu,
   const lists = state.spaces.flatMap((space) => { const paths = tabs.sharedIn(space.id); return paths.length ? [{ space, paths }] : []; });
   const { work, asking, running } = cardWork(tabs.name, lists.flatMap((list) => list.paths), rows, waiting);
   const active = (space: string, path: string) => tabs.viewed && space === state.space && path === pathname;
-  const shown = lists.map(({ space, paths }) => ({ space, paths: folded ? paths.filter((path) => work.has(path) || active(space.id, path)) : paths })).filter((list) => list.paths.length);
+  const many = state.spaces.length > 1, shown = lists.flatMap(({ space, paths }) => {
+    const closed = many && (folds[`${key}/${space.id}`] ?? false), kept = folded ? paths.filter((path) => work.has(path) || active(space.id, path)) : paths;
+    return kept.length ? [{ space, closed, unread: closed && kept.some((path) => work.has(path) && !active(space.id, path)), paths: closed ? kept.filter((path) => active(space.id, path)) : kept }] : [];
+  });
   const rowOf = (node: Element) => node.closest<HTMLElement>("[data-shared]")?.dataset.shared?.split("\n") ?? [];
   const listed = shown.flatMap(({ space, paths }) => paths.map((path) => ({ space: space.id, path }))), stop = listed.find((row) => active(row.space, row.path)) ?? listed[0];
   return <div data-card-key={key} className={cardClass(false)}>
-    <CardHeading cardKey={key} icon={[Users, Users]} name="Shared" server={label} count={work.size} asking={asking} running={running} folded={folded} onFold={() => foldCard(key, !folded)} move={(step) => move(key, step)} />
+    <CardHeading cardKey={key} icon={[FolderOpen, Folder]} name="Shared" server={label} count={work.size} asking={asking} running={running} folded={folded} onFold={() => foldCard(key, !folded)} move={(step) => move(key, step)} />
     {shown.length ? <div role="tablist" aria-label={`Shared tabs${suffix}`} aria-orientation="vertical" className="flex flex-col gap-0.5 rounded-md [&_[role=tab]]:py-1"
       onKeyDown={(event) => {
         const target = event.target as HTMLElement;
@@ -2023,8 +2026,10 @@ function SharedCard({ tabs, label, waiting, folds, editing, setEditing, setMenu,
         const [space, from] = event.dataTransfer.getData(sharedDrag).split("\n"), [there, to] = rowOf(event.target as Element);
         if (to && there === space) tabs.moveShared(from, to);
       }}>
-      {shown.map(({ space, paths }) => <Fragment key={space.id}>
-        {state.spaces.length > 1 ? <span className={cn("mt-1 ml-1.5 w-fit max-w-48 truncate rounded-full px-2 py-0.5 text-xs font-medium text-black", groupColors.Grey)}>{space.name}</span> : null}
+      {shown.map(({ space, closed, unread, paths }) => <Fragment key={space.id}>
+        {many ? <button type="button" aria-expanded={!closed} aria-label={`Shared in ${space.name}`} className="mt-1 flex h-7 w-fit min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => foldCard(`${key}/${space.id}`, !closed)}>
+          <span className={cn("max-w-48 truncate rounded-full px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium", groupColors.Grey)}>{space.name}</span>
+        </button> : null}
         {paths.map((path) => <div key={path} data-shared={`${space.id}\n${path}`}>
           <TabItem tab={{ path, search: sharedTab(tabs.shared, space.id, path)?.search }} shared space={space.id} open={() => tabs.go(path, space.id, true)} description={`Shared, Space: ${space.name}${label && `, ${label}`}`} chosen={false} rule="Grey" active={active(space.id, path)} stop={stop?.space === space.id && stop.path === path} editing={editing === `shared:${path}`} endEdit={() => setEditing(undefined)} openMenu={(anchor) => setMenu({ path, anchor, space: space.id, shared: true })} />
         </div>)}

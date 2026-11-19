@@ -1805,12 +1805,18 @@ test("a space another person deletes is left as if this window deleted it", () =
   expect(await page.locator("[data-tab-lists] button[aria-description][aria-expanded]").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Shared", "Main"]);
 }), 30_000);
 
-test("the Shared card lists every space's Shared tabs under its name, folds for this person on every page, a space returns to its last Shared tab, and a deleted space's Shared tabs join the first space's", () => withPage({}, async (page, origin, _prompts, saved) => {
-  const fold = page.getByRole("button", { name: "Shared", exact: true }), pills = () => page.locator('[role="tablist"][aria-label="Shared tabs"] > span').allInnerTexts();
+test("the Shared card lists every space's Shared tabs under its name, which folds them, folds for this person on every page, a space returns to its last Shared tab, and a deleted space's Shared tabs join the first space's", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const fold = page.getByRole("button", { name: "Shared", exact: true }), pills = () => page.locator('[role="tablist"][aria-label="Shared tabs"] > button').allInnerTexts(), main = page.getByRole("button", { name: "Shared in Main", exact: true });
   saved.spaces.push({ id: "ops", name: "Ops" });
   saved.shared = [{ space: "main", path: href("alpha") }, { space: "ops", path: href("delta") }, { space: "main", path: href("bravo") }, { space: "ops", path: href("alpha") }];
   await openSaved(page, origin, href("charlie"), "Charlie", saved);
   expect([await pills(), await sharedNames(page)]).toEqual([["Main", "Ops"], ["Alpha", "Bravo", "Delta", "Alpha"]]);
+  await main.click();
+  await main.and(page.locator('[aria-expanded="false"]')).waitFor();
+  expect([await pills(), await sharedNames(page)]).toEqual([["Main", "Ops"], ["Delta", "Alpha"]]);
+  await until(() => saved.layout?.folded?.["#shared/main"] === true);
+  await main.click();
+  await main.and(page.locator('[aria-expanded="true"]')).waitFor();
   await shared(page).getByRole("tab", { name: "Alpha", exact: true }).first().click();
   await page.waitForURL(`**${href("alpha")}`);
   await fold.click();
