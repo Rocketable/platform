@@ -490,12 +490,12 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 
-		item, ok, err := t.codexCompactItem(req.Context(), cloned, requestFields(cloned))
+		item, err := t.codexCompactItem(req.Context(), cloned, requestFields(cloned))
 		if err != nil {
 			return nil, err
 		}
 
-		if !ok {
+		if item == nil {
 			return codexJSONResponse(req, http.StatusBadRequest, struct {
 				Error *codexStreamError `json:"error"`
 			}{&codexStreamError{Message: "Codex compaction returned no compaction item"}}), nil
@@ -904,16 +904,14 @@ func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp
 		}
 	}
 
-	data, ok, err := t.codexCompactItem(ctx, req, requestFields(req))
+	item, err := t.codexCompactItem(ctx, req, requestFields(req))
 	if err != nil {
 		return nil, err
 	}
 
-	if !ok {
-		return resp, nil
+	if item != nil {
+		prependCodexOutput(resp, item)
 	}
-
-	prependCodexOutput(resp, data)
 
 	return resp, nil
 }
@@ -944,8 +942,8 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 
 	retryBody := requestFields(req)
 
-	compactItem, ok, err := t.codexCompactItem(ctx, req, retryBody)
-	if err != nil || !ok {
+	compactItem, err := t.codexCompactItem(ctx, req, retryBody)
+	if err != nil || compactItem == nil {
 		return nil, nil
 	}
 
@@ -982,9 +980,9 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 	return resp, nil
 }
 
-func (t *transport) codexCompactItem(ctx context.Context, req *http.Request, compactSource map[string]json.RawMessage) (item json.RawMessage, ok bool, err error) {
+func (t *transport) codexCompactItem(ctx context.Context, req *http.Request, compactSource map[string]json.RawMessage) (json.RawMessage, error) {
 	if codexInputHasUnansweredFunctionCall(compactSource["input"]) {
-		return nil, false, nil
+		return nil, nil
 	}
 
 	var input []json.RawMessage
@@ -1007,22 +1005,22 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request, com
 
 	compactResp, err := t.roundTrip(compactReq, "compaction")
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
 	defer func() { _ = compactResp.Body.Close() }()
 
 	if compactResp.StatusCode != http.StatusOK {
-		return nil, false, nil
+		return nil, nil
 	}
 
 	streamed, err := codexStreamingResponse(WithResponseObserver(ctx, InertResponseObserver{}), compactResp)
 	if _, failed := errors.AsType[*codexStreamError](err); failed {
-		return nil, false, nil
+		return nil, nil
 	}
 
 	if err != nil {
-		return nil, false, fmt.Errorf("read Codex compact response: %w", err)
+		return nil, fmt.Errorf("read Codex compact response: %w", err)
 	}
 
 	data, _ = io.ReadAll(streamed.Body)
@@ -1032,7 +1030,7 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request, com
 		Output []map[string]json.RawMessage `json:"output"`
 	}
 	if err := json.Unmarshal(data, &compactBody); err != nil {
-		return nil, false, fmt.Errorf("parse Codex compact response: %w", err)
+		return nil, fmt.Errorf("parse Codex compact response: %w", err)
 	}
 
 	for _, item := range compactBody.Output {
@@ -1049,10 +1047,10 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request, com
 
 		data, _ = json.Marshal(item)
 
-		return data, true, nil
+		return data, nil
 	}
 
-	return nil, false, nil
+	return nil, nil
 }
 
 func codexInputHasUnansweredFunctionCall(data json.RawMessage) bool {
