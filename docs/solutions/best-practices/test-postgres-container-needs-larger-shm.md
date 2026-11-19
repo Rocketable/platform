@@ -1,7 +1,7 @@
 ---
 title: The Test PostgreSQL Container Needs a Larger /dev/shm
 date: 2026-10-08
-last_updated: 2026-11-09
+last_updated: 2026-11-19
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/backend
 problem_type: developer_experience
@@ -53,7 +53,7 @@ export ROCKETCLAW_TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5543
 
 As of this writing, neither of the repo's own container setups sets it:
 
-- `make test` in `internal/rocketclaw` (target `coverage-profile` in `internal/rocketclaw/Makefile`) runs `docker run -d ... postgres:$latest` with no `--shm-size` when `ROCKETCLAW_TEST_DATABASE_URL` is unset.
+- `make test` in `internal/rocketclaw` (target `coverage-profile` in `internal/rocketclaw/Makefile`) runs `docker run -d --pull=always ... postgres:latest` with no `--shm-size` when `ROCKETCLAW_TEST_DATABASE_URL` is unset.
 - Each `rocketclaw` shard in `.github/workflows/test.yml` starts its own `docker run -d --name postgres ... postgres:18` with no `--shm-size`.
 
 If either path starts failing with shared-memory errors, add `--shm-size=1g` there. Do not lower test parallelism or retry flaky tests to work around it.

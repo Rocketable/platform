@@ -106,14 +106,13 @@ coverage-profile:
 	pkill -P 1 -f 'ms-playwright/[c]hromium' || true; \
 	trap cleanup EXIT INT TERM; \
 	if [ -z "$${ROCKETCLAW_TEST_DATABASE_URL:-}" ]; then \
-		latest=$$(curl -fsSL https://www.postgresql.org/versions.json | jq -r '[.[] | select(.supported) | .major] | max_by(tonumber)'); \
-		name=$$(docker run -d \
+		name=$$(docker run -d --pull=always \
 			-e POSTGRES_HOST_AUTH_METHOD=trust \
 			-e POSTGRES_USER=postgres \
 			-e POSTGRES_PASSWORD=postgres \
 			-e POSTGRES_DB=rocketclaw_test \
 			-p 127.0.0.1::5432 \
-			postgres:$$latest); \
+			postgres:latest); \
 		port=$$(docker port "$$name" 5432/tcp); \
 		port=$${port##*:}; \
 		i=0; \
