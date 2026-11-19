@@ -741,9 +741,11 @@ test("an unread tab shows a bold title", () => withPage({}, async (page, origin,
   const weight = (name: string) => tab(name).getByText(name, { exact: true }).evaluate((title: HTMLElement) => getComputedStyle(title).fontWeight);
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
   await openSaved(page, origin, href("foxtrot"), "Foxtrot", saved);
+  const description = "Space: Main, Turn running, Unread";
+  await tab("Foxtrot").and(page.locator(`[aria-description="${description}"]`)).waitFor();
   expect(await weight("Foxtrot")).toBe("700");
   expect(await weight("Alpha")).toBe("400");
-  expect(await tab("Foxtrot").getAttribute("aria-description")).toBe("Space: Main, Turn running, Unread");
+  expect(await tab("Foxtrot").getAttribute("aria-description")).toBe(description);
 
   // A collapsed group holding an unread tab shows a bold name.
   const header = strip(page).getByRole("button", { name: "Work", exact: true });
