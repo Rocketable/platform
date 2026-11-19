@@ -6,7 +6,7 @@ const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
 type Behavior = { auto_approver_model: string; logging: { level: string }; slack: { channels: unknown[] } };
-const initial = { auto_approver_model: "old-model", slack: { channels: [{ channel: "#general", agents: ["main"], allowed_user_ids: ["U0"] }] }, server_display_name: "", logging: { level: "info" }, overlays: null, future: 1 };
+const initial = { auto_approver_model: "old-model", slack: { channels: [{ channel: "#general", agents: ["main"], allowed_user_ids: ["U0"] }] }, logging: { level: "info" }, overlays: null, future: 1 };
 const view = (behavior: Behavior, canEdit: boolean) => ({ workspace: "config", autoApproverModel: behavior.auto_approver_model, loggingLevel: behavior.logging.level, canEdit, behaviorJson: canEdit ? JSON.stringify(behavior) : undefined });
 
 test("only admins edit the behavior settings, and the view changes only with the server's answer", async () => {

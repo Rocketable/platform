@@ -448,7 +448,6 @@ func setBehaviorFields(b *config.Behavior) []string {
 	}{
 		{"auto_approver_model", b.AutoApproverModel != ""},
 		{"slack.channels", b.Slack.Channels != nil},
-		{"server_display_name", b.ServerDisplayName != ""},
 		{"logging.level", b.Logging.Level != ""},
 		{"overlays", b.Overlays != nil},
 	} {

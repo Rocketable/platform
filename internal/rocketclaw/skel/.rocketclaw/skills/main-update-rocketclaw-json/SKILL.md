@@ -6,7 +6,7 @@ description: Use this skill to inspect or update setup fields of rocketclaw.json
 
 Use this skill whenever the human wants to inspect or modify setup fields of `rocketclaw.json` in the current working directory.
 
-This skill covers setup fields only. These fields are Behavior Settings, stored in PostgreSQL and edited by a Web admin (a user listed in `web.admins`) on the Web Config page: `auto_approver_model`, `slack.channels`, `server_display_name`, `logging.level`, and `overlays`. After the first start, RocketClaw ignores their copies in `rocketclaw.json`, so editing them in the file changes nothing and reading them from the file can be stale. The Web Config page shows their live values. When the human asks for a change to one of them, do not edit the file: tell the human to make the change on the Web Config page, where a save applies at once without a restart.
+This skill covers setup fields only. These fields are Behavior Settings, stored in PostgreSQL and edited by a Web admin (a user listed in `web.admins`) on the Web Config page: `auto_approver_model`, `slack.channels`, `logging.level`, and `overlays`. After the first start, RocketClaw ignores their copies in `rocketclaw.json`, so editing them in the file changes nothing and reading them from the file can be stale. The Web Config page shows their live values. When the human asks for a change to one of them, do not edit the file: tell the human to make the change on the Web Config page, where a save applies at once without a restart.
 
 This skill exists to shorten the learning loop around routine rocketclaw configuration changes.
 

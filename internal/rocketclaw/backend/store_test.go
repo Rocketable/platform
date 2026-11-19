@@ -2372,7 +2372,7 @@ func TestBehaviorSettingsRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, found)
 
-	cfg := &config.Config{AutoApproverModel: "gpt-b", Overlays: []string{"https://example.com/overlay.git"}, ServerDisplayName: "Ops", Logging: config.LoggingConfig{Level: "warn"},
+	cfg := &config.Config{AutoApproverModel: "gpt-b", Overlays: []string{"https://example.com/overlay.git"}, Logging: config.LoggingConfig{Level: "warn"},
 		Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}}}
 
 	for _, model := range []string{"gpt-a", "gpt-c"} {

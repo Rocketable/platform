@@ -130,8 +130,7 @@ func TestEmbeddedFileCaching(t *testing.T) {
 }
 
 func TestServerNameTitle(t *testing.T) {
-	cfg := new(config.LockedConfig)
-	handler := Handler(cfg, "lab <1>")
+	handler := Handler(new(config.LockedConfig), "lab <1>")
 
 	for _, path := range []string{"/", "/s/conversation"} {
 		response := httptest.NewRecorder()
@@ -140,12 +139,6 @@ func TestServerNameTitle(t *testing.T) {
 		require.Contains(t, response.Body.String(), "<title>lab &lt;1&gt; - RocketClaw</title>")
 		require.NotEmpty(t, response.Header().Get("ETag"))
 	}
-
-	cfg.Store(&config.Config{ServerDisplayName: "live"})
-
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", http.NoBody))
-	require.Contains(t, response.Body.String(), "<title>live - RocketClaw</title>")
 }
 
 func TestCompressedFileAllocations(t *testing.T) {

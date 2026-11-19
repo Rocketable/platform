@@ -47,23 +47,22 @@ type Behavior struct {
 	Slack             struct {
 		Channels []SlackChannelConfig `json:"channels"`
 	} `json:"slack"`
-	ServerDisplayName string        `json:"server_display_name"`
-	Logging           LoggingConfig `json:"logging"`
-	Overlays          []string      `json:"overlays"`
+	Logging  LoggingConfig `json:"logging"`
+	Overlays []string      `json:"overlays"`
 }
 
 func (c *Config) Behavior() Behavior {
 	var b Behavior
 
 	b.AutoApproverModel, b.Slack.Channels = c.AutoApproverModel, c.Slack.Channels
-	b.ServerDisplayName, b.Logging, b.Overlays = c.ServerDisplayName, c.Logging, c.Overlays
+	b.Logging, b.Overlays = c.Logging, c.Overlays
 
 	return b
 }
 
 func (c *Config) SetBehavior(b *Behavior) {
 	c.AutoApproverModel, c.Slack.Channels = b.AutoApproverModel, b.Slack.Channels
-	c.ServerDisplayName, c.Logging, c.Overlays = b.ServerDisplayName, b.Logging, b.Overlays
+	c.Logging, c.Overlays = b.Logging, b.Overlays
 }
 
 const DefaultRuntimeDir = ".rocketclaw"

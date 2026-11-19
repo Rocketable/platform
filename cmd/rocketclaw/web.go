@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -24,7 +25,7 @@ func startWebRPC(rt *backend.Runtime, tailnet *tailnetNode, channels rpc.Channel
 			return listener.DialContext(ctx)
 		}))
 	handler := http.NewServeMux()
-	handler.Handle("/", rpc.NewHTTPHandler(connection, rt.Cfg, cfg.Web.Tsnet.Hostname))
+	handler.Handle("/", rpc.NewHTTPHandler(connection, rt.Cfg, cmp.Or(cfg.ServerDisplayName, cfg.Web.Tsnet.Hostname)))
 	handler.Handle("/opencode/{name}/mcp", http.NewCrossOriginProtection().Handler(rt.OpenCodeMCP()))
 	server := grpc.NewServer()
 	web := rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs)
