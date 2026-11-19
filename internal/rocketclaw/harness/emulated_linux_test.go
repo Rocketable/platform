@@ -210,6 +210,7 @@ func TestEmulatedShellHostCommands(t *testing.T) {
 		"hostname": "cat /proc/sys/kernel/hostname",
 		"my-cmd":   "printf dashed",
 		"copy":     "cat",
+		"drain":    "cat > /dev/null",
 		"killed":   "kill -9 $$",
 	}, nil, nil)
 
@@ -223,7 +224,7 @@ func TestEmulatedShellHostCommands(t *testing.T) {
 	require.False(t, got.Success)
 	require.Contains(t, got.Output, `"rocketclaw-x": names are`)
 
-	e.sandboxedOK(t, "head -c 17000000 /dev/zero | copy > /dev/null 2>&1; echo $?", "126\n")
+	e.sandboxedOK(t, "head -c 17000000 /dev/zero | drain > /dev/null 2>&1; echo $?", "126\n")
 	e.ok(t, "killed; echo $?", "137\n")
 
 	e.ok(t, `coproc S { stream; }; echo abc >&"${S[1]}"; read -r l <&"${S[0]}"; echo "got $l"`, "got ABC\n")
