@@ -164,7 +164,7 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 
 func (s *SessionService) SidebarChats(ctx context.Context, username string, slack slackLookup, chats []string) iter.Seq2[SidebarChat, error] {
 	return func(yield func(SidebarChat, error) bool) {
-		rooms := make(map[string]SidebarChat)
+		rooms := make(map[string]string)
 
 		for row, err := range s.sidebarSessions(ctx, username, chats) {
 			var chat SidebarChat
@@ -179,7 +179,7 @@ func (s *SessionService) SidebarChats(ctx context.Context, username string, slac
 	}
 }
 
-func sidebarChat(ctx context.Context, slack slackLookup, rooms map[string]SidebarChat, row *SidebarSession) (SidebarChat, error) {
+func sidebarChat(ctx context.Context, slack slackLookup, rooms map[string]string, row *SidebarSession) (SidebarChat, error) {
 	chat := SidebarChat{Session: *row, Cron: row.Origin.Run != nil && row.Origin.Binding.ManagedConversationID != row.Origin.ConversationID}
 	if chat.Cron {
 		name, _, _ := strings.Cut(row.Origin.Run.Path, ".md#")
@@ -192,27 +192,28 @@ func sidebarChat(ctx context.Context, slack slackLookup, rooms map[string]Sideba
 			return SidebarChat{}, err
 		}
 
-		chat.Room = room.Room
+		chat.Room = room
 	}
 
 	return chat, nil
 }
 
-func sidebarRoom(ctx context.Context, slack slackLookup, rooms map[string]SidebarChat, channel string) (SidebarChat, error) {
-	room, loaded := rooms[channel]
-	if !loaded {
-		var err error
-		if room.Room, _, err = slack.SidebarChannelAgentChoices(ctx, channel); err != nil {
-			return SidebarChat{}, fmt.Errorf("resolve sidebar room: %w", err)
-		}
-
-		rooms[channel] = room
+func sidebarRoom(ctx context.Context, slack slackLookup, rooms map[string]string, channel string) (string, error) {
+	if room, loaded := rooms[channel]; loaded {
+		return room, nil
 	}
+
+	room, _, err := slack.SidebarChannelAgentChoices(ctx, channel)
+	if err != nil {
+		return "", fmt.Errorf("resolve sidebar room: %w", err)
+	}
+
+	rooms[channel] = room
 
 	return room, nil
 }
 
-func (s *SessionService) searchCandidates(ctx context.Context, slack slackLookup, rooms map[string]SidebarChat, needle string) ([]string, error) {
+func (s *SessionService) searchCandidates(ctx context.Context, slack slackLookup, rooms map[string]string, needle string) ([]string, error) {
 	patterns := []string{containsPattern(needle)}
 
 	if i := strings.IndexFunc(needle, func(r rune) bool { return r >= utf8.RuneSelf }); i >= 0 {
@@ -237,7 +238,7 @@ func (s *SessionService) searchCandidates(ctx context.Context, slack slackLookup
 			return nil, err
 		}
 
-		if strings.Contains(strings.ToLower(room.Room), needle) {
+		if strings.Contains(strings.ToLower(room), needle) {
 			matched = append(matched, channel)
 		}
 	}
@@ -330,7 +331,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 		sandboxed  = make(map[string][]string)
 	)
 
-	rooms := make(map[string]SidebarChat)
+	rooms := make(map[string]string)
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.Go(func() (err error) {
 		principals, search.Principals, err = s.messagePrincipals(groupCtx)
