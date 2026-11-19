@@ -21,7 +21,7 @@ make -C docs/verification/agent-pause goal     # one check
 ```
 
 Needs Java 11+, `curl`, `shasum`, `perl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and checks its
-SHA-256 `e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`. Tools, the translator's scratch copy,
+SHA-256 `7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`. Tools, the translator's scratch copy,
 Java's temporary files, TLC metadata and every log (with full counterexample traces) live under the repository
 root's `.tmp/run/agent-pause-model/`. Each TLC run is killed after 600 seconds, which fails its check; passing
 checks use 4 workers, must-fail checks one, so their first counterexample is the same on every run. A passing check
@@ -157,6 +157,8 @@ check ran through `make -C docs/verification/agent-pause <check>`, one after ano
 `.tmp/run/agent-pause-model/<check>.log` and `make-<check>.out`). Passes used 4 workers, must-fail checks one. There
 are no state constraints, sampling or simulation: a pass explores the whole finite graph, and a failure stops at its
 first counterexample, so its counts are an explored prefix.
+
+Rerun 2026-11-18 after the `tla2tools.jar` pin moved to build `bc1b506` (one upstream commit, "Fix races in TLCSet/TLCGet with multiple workers"): TLC `2026.11.15.002146 (rev: bc1b506)`, OpenJDK 21.0.13 on linux/aarch64; `make -k` exited 0.
 
 Required, the code as built (`Mutation = "none"`); each printed `Model checking completed. No error has been found.`:
 

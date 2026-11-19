@@ -40,7 +40,7 @@ make -C docs/verification/codex-context-overflow-compaction fixed    # one check
 ```
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256
-`e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`, as the other models here do. The tools, the
+`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`, as the other models here do. The tools, the
 translator's copy, Java's temporary files, TLC's working files and each check's log go to the repository root's
 `.tmp/verification/codex-context-overflow-compaction/`. A passing check needs TLC exit 0 and `Model checking
 completed. No error has been found.`; a check that must fail needs TLC exit 12 (safety) or 13 (liveness) and its named
@@ -152,6 +152,8 @@ recovers a request; `chunkRecovered` is ghost state).
 Recorded 2026-11-17 on Linux (aarch64, 16 cores), OpenJDK 21.0.13.0.3, TLC `2026.11.06.222357 (rev: d8fb231)`,
 `pcal.trans` 1.12, one TLC worker. `make` ran every check in about 10 s with the tools in place. Every check matched
 its expected outcome.
+
+Rerun 2026-11-18 after the `tla2tools.jar` pin moved to build `bc1b506` (one upstream commit, "Fix races in TLCSet/TLCGet with multiple workers"): TLC `2026.11.15.002146 (rev: bc1b506)`, OpenJDK 21.0.13 on linux/aarch64; `make -k` exited 0.
 
 | Check | Shape | Expected | Result | Generated / distinct states | Depth |
 |---|---|---|---|---:|---:|

@@ -22,7 +22,7 @@ make -C docs/verification/agent-editor-coediting reject-drops-queue
 
 Requires Java 11+, `curl`, `shasum` and Make. The runner downloads
 `tla2tools.jar` v1.8.0 and verifies SHA-256
-`e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`, the same
+`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`, the same
 artifact as `../thread-pr/Makefile`. Tools, the translator's scratch copy, Java
 temporary files, TLC metadata and every log and trace go to repository-root
 `.tmp/run/agent-editor-coediting/`, never `docs/`. A passing check needs TLC
@@ -149,6 +149,8 @@ OtherOps 1, SeedLen 2, Keys `{k1, k2}`, Mode `split`, FileBody `splices`,
 FileRebase `fromtext`, SetMode `pendingwins`, FormEdits `{body, set}`,
 Assistant off, DiffCap 0, RejectFile on (one refused File submit), OnReject
 `drophead`. With FileClients `{}` both clients get OtherOps edits.
+
+Rerun 2026-11-18 after the `tla2tools.jar` pin moved to build `bc1b506` (one upstream commit, "Fix races in TLCSet/TLCGet with multiple workers"): TLC `2026.11.15.002146 (rev: bc1b506)`, OpenJDK 21.0.13 on linux/aarch64; `make -k` exited 0.
 
 | Check (`.cfg`) | Constants beyond as built | Expected | Actual | Distinct states | Depth | Time |
 | --- | --- | --- | --- | ---: | ---: | ---: |

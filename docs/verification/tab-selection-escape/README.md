@@ -16,7 +16,7 @@ make -C docs/verification/tab-selection-escape fixed      # one check
 ```
 
 Requires Java 11 or newer, `curl`, `shasum` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies
-SHA-256 `e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`. The tools, the translator's copy, Java's
+SHA-256 `7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`. The tools, the translator's copy, Java's
 temporary files, TLC's metadata and each check's log go to the repository root's `.tmp/run/tab-selection-escape-model/`.
 A passing check must exit 0 and print `Model checking completed. No error has been found.`; a check that must fail must
 exit 12 or 13 and print its named violation, so a parse error never counts as an expected failure.
@@ -85,6 +85,8 @@ safety property depends on the menu taking focus.
 2026-11-17, `make -C docs/verification/tab-selection-escape`, one TLC worker, 1 GiB heap. OpenJDK 21.0.13.0.3, TLC
 `2026.11.06.222357 (rev: d8fb231)`, `pcal.trans` 1.12. `make` exited 0 in 7.3 s, translation included; each TLC run
 reported finishing in at most 1 s.
+
+Rerun 2026-11-18 after the `tla2tools.jar` pin moved to build `bc1b506` (one upstream commit, "Fix races in TLCSet/TLCGet with multiple workers"): TLC `2026.11.15.002146 (rev: bc1b506)`, OpenJDK 21.0.13 on linux/aarch64; `make -k` exited 0.
 
 | Check | Outcome | Exit | Generated / distinct states | Depth |
 | --- | --- | ---: | ---: | ---: |

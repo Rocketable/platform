@@ -22,18 +22,11 @@ make -C docs/verification/thread-pr aba
 Requires Java 11+, `curl`, `shasum`, and Make. The runner downloads the same
 v1.8.0 tools artifact and verifies the same SHA-256 as
 `../tab-attention/Makefile`:
-`e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`.
+`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`.
 The local Java used for the recorded run was OpenJDK 21.0.13.0.3. The pinned
 artifact's TLC banner reported `2026.11.06.222357 (rev: d8fb231)`.
 
-On 2026-11-18 a fresh download of the v1.8.0 jar no longer matched the pin
-(SHA-256 `7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`,
-`master` revision `bc1b506`, one commit after `d8fb231`). The recorded run used
-a copy of the pinned jar kept under the repository's `.tmp/`, which the
-Makefile's checksum check accepted. The pin was not moved: that needs the
-re-pinning steps in `docs/packs/formal-modeling/stateful-design.md` and a change
-to every model's Makefile at once. On a machine without a cached pinned jar,
-`make` stops at the checksum check until that is done.
+Rerun 2026-11-18 after the `tla2tools.jar` pin moved to build `bc1b506` (one upstream commit, "Fix races in TLCSet/TLCGet with multiple workers"): TLC `2026.11.15.002146 (rev: bc1b506)`, OpenJDK 21.0.13 on linux/aarch64; `make -k` exited 0.
 
 All tools, translator scratch copies/backups, Java temporary files, TLC metadata,
 and full logs/counterexample traces go to **repository-root

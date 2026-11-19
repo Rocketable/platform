@@ -27,7 +27,7 @@ make -C docs/verification/agent-editor-save claim-reply-lost
 
 You need Java 11+, `curl`, `shasum` and Make. The runner downloads `tla2tools.jar`
 v1.8.0, verifies SHA-256
-`e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`, and keeps the
+`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`, and keeps the
 tools, the translator's scratch copy, Java temporary files, TLC metadata and every
 log and trace under the repository root's `.tmp/run/agent-editor-save/`. A passing
 check needs TLC exit 0 and `Model checking completed. No error has been found.`. A
@@ -208,6 +208,8 @@ Expected violations:
 Versions: the TLC banner read `TLC2 Version 2026.11.06.222357 (rev: d8fb231)` and
 the translator `pcal.trans Version 1.12 of 01 July 2024`, both from the pinned
 v1.8.0 jar. Java was OpenJDK 21.0.13.0.3, on aarch64.
+
+Rerun 2026-11-18 after the `tla2tools.jar` pin moved to build `bc1b506` (one upstream commit, "Fix races in TLCSet/TLCGet with multiple workers"): TLC `2026.11.15.002146 (rev: bc1b506)`, OpenJDK 21.0.13 on linux/aarch64; `make -k` exited 0.
 
 ## Accepted limits
 
