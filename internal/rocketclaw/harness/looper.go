@@ -1344,12 +1344,12 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 			return nil, fmt.Errorf("compact context after context_length_exceeded: %w", err)
 		}
 
-		compactedInput, err := compactedOutputToReplayParams(compacted.Output)
+		recoveredHistory, err := compactedOutputToReplayParams(compacted.Output)
 		if err != nil {
 			return nil, fmt.Errorf("convert compacted response: %w", err)
 		}
 
-		recoveredHistory := append(append([]responses.ResponseInputItemUnionParam{}, compactedInput...), original[end:]...)
+		recoveredHistory = append(recoveredHistory, original[end:]...)
 		retryParams := *params
 
 		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: recoveredHistory}
