@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { isDeepStrictEqual } from "node:util";
-import type { AgentDraft, AgentDraftView } from "./types";
+import type { AgentDraft, AgentDraftView, DraftPromptResponse } from "./types";
 
 type Body = { op: { kind: string }; id?: string; limit?: number };
 type RoutedRequest = {
@@ -409,7 +409,7 @@ test("the test chat answers in every column, labels versions, restarts, and pose
       await message.fill(text);
       await chat.getByRole("button", { name: button, exact: true }).click();
     };
-    const checkHeld = async (rpc: "DraftPrompt" | "RestartDraftChat", expected: { id: string; text: string } | { id: string; replay: string[]; replayEarlier: boolean }, check: (release: () => Promise<void>) => Promise<void>) => {
+    const checkHeld = async (rpc: "DraftPrompt" | "RestartDraftChat", expected: { id: string; text: string } | { id: string; replay: string[]; replayEarlier: boolean }, check: (release: () => Promise<void>) => Promise<string | undefined>) => {
       const url = `${alice}/api/${rpc}`, requests: RoutedRequest[] = [], intercepted: HeldRequest[] = [];
       const reached = Promise.withResolvers<RoutedRequest>();
       const matches = (request: RoutedRequest) => request.url() === url && request.method() === "POST" && isDeepStrictEqual(request.postDataJSON(), expected);
@@ -424,10 +424,17 @@ test("the test chat answers in every column, labels versions, restarts, and pose
           },
         });
         const arrived = page.waitForRequest(async (request: RoutedRequest) => matches(request) && request === await reached.promise);
-        await Promise.all([arrived, check(async () => {
+        const accepted = page.waitForResponse(async (response: { url(): string; request(): RoutedRequest }) => response.url() === url && response.request() === await arrived).then(async (response: { status(): number; json(): Promise<unknown> }) => {
+          expect(response.status(), `${rpc} response status`).toBe(200);
+          const reply = await response.json() as DraftPromptResponse;
+          expect(reply, `${rpc} reply`).toMatchObject({ refused: "", restart: false });
+          return reply.testChat;
+        });
+        const [acknowledged, persisted] = await Promise.all([accepted, check(async () => {
           await arrived;
           await release();
         })]);
+        expect(acknowledged, `${rpc} response chat ID (expected the persisted chat ID)`).toBe(persisted);
         const held: { method: string; body: unknown; routeError?: string }[] = intercepted.map(({ request, routeError }) => ({
           method: request.method(), body: request.postDataJSON(), routeError,
         }));
@@ -525,20 +532,22 @@ test("the test chat answers in every column, labels versions, restarts, and pose
     };
     const labelled = async (text: string) => {
       await until("the edit is stored", async () => (await read(echo.id)).variants[0].body.endsWith(text));
-      const { ops } = await call<AgentDraftView>("GetAgentDraft", { id: echo.id, since: "1" });
+      const { draft, ops } = await call<AgentDraftView>("GetAgentDraft", { id: echo.id, since: "1" });
       await cell(1, "echo").getByText(`r${ops.filter((op) => op.kind === "edit_body").at(-1)!.revision}`, { exact: true }).waitFor();
+      return draft.testChat;
     };
     let release = await typed(" Be brief.");
     await send("brief");
     await Bun.sleep(300);
     await release();
-    await labelled(" Be brief.");
+    const briefChat = await labelled(" Be brief.");
     await checkHeld("DraftPrompt", { id: echo.id, text: "brief again" }, async (release) => {
       await send("brief again");
       await message.fill("still typing");
       await release();
       await cell(2, "echo").getByText("gpt-a2 answer 2", { exact: false }).waitFor();
       expect(await message.inputValue()).toBe("still typing");
+      return briefChat;
     });
     release = await typed(" Really.");
     await chat.getByRole("button", { name: "Restart & replay", exact: true }).click();
@@ -612,6 +621,7 @@ test("the test chat answers in every column, labels versions, restarts, and pose
       await cell(3, "queue").getByText("gpt-held answer 3", { exact: false }).waitFor();
       await chat.getByRole("button", { name: "Restart & replay", exact: true, disabled: false }).waitFor();
       expect(await row(4).count()).toBe(0);
+      return observed;
     });
 
     const support = await call<{ id: string }>("CreateAgentDraft", { name: "support-bot", copy: true });
