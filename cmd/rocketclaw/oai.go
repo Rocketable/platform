@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -130,17 +129,18 @@ func runOAIList(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}
-	providers := maps.Collect(maps.All(cfg.Providers))
-	providers["openai"] = cfg.OpenAI
+	names := cfg.ProviderNames()
+	slices.Sort(names)
 	var output strings.Builder
-	for _, name := range slices.Sorted(maps.Keys(providers)) {
+	for _, name := range names {
 		present, err := oai.HasTokenIn(cfg.Workspace, cfg.RuntimeDirName(), name)
 		if err != nil {
 			return err
 		}
 		marker := map[string]string{"openai": " (default)"}[name]
 		credentials := map[bool]string{false: "missing", true: "present"}[present]
-		fmt.Fprintf(&output, "%s%s\t%s\t%s\n", name, marker, providers[name].Auth, credentials)
+		provider, _ := cfg.Provider(name)
+		fmt.Fprintf(&output, "%s%s\t%s\t%s\n", name, marker, provider.Auth, credentials)
 	}
 	return printStdout(output.String(), "oai list")
 }
