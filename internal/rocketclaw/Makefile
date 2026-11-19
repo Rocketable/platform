@@ -113,7 +113,7 @@ coverage-profile:
 			-e POSTGRES_PASSWORD=postgres \
 			-e POSTGRES_DB=rocketclaw_test \
 			-p 127.0.0.1::5432 \
-			postgres:$$latest); \
+			postgres:$$latest -c fsync=off); \
 		port=$$(docker port "$$name" 5432/tcp); \
 		port=$${port##*:}; \
 		i=0; \

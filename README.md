@@ -612,3 +612,5 @@ go test ./...
 `make build` builds RocketClaw and funneld. The RocketClaw step rebuilds the web frontend with Bun before building `bin/rocketclaw`. The built frontend in `internal/rocketclaw/internal/web/dist/` is committed, so a Go-only build does not need Bun. When you change `internal/rocketclaw/web/`, commit the rebuilt `dist/` files too.
 
 `make test` in `internal/rocketclaw` starts PostgreSQL in Docker, or uses `ROCKETCLAW_TEST_DATABASE_URL` if set. It runs the Go tests once with race detection and coverage, then the emulated shell's acceptance tests (`make sandbox-test`, which need Linux with bubblewrap, mmdebstrap and a delegated cgroup), and enforces the fixed `COVERAGE_REQUIRED` minimum in its Makefile on both together, as CI does. Generated protobuf code (`*.pb.go`) does not count toward the total. GitHub Actions tests against PostgreSQL 18.
+
+The disposable PostgreSQL containers started by `make test` and CI disable disk sync (`fsync=off`). Tests do not change this setting on a database supplied through `ROCKETCLAW_TEST_DATABASE_URL`.
