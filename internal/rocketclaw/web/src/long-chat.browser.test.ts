@@ -1,9 +1,15 @@
-import { expect, onTestFinished, test } from "bun:test";
+import { afterEach, expect, onTestFinished, test } from "bun:test";
 import path from "node:path";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
+let reportPendingBrowserClose: (() => void) | undefined;
+
+afterEach(() => {
+  reportPendingBrowserClose?.();
+  reportPendingBrowserClose = undefined;
+});
 
 test("long chats open at the newest turns, load earlier ones near the top, and load linked older messages", async () => {
   const startedAt = performance.now();
@@ -20,6 +26,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   const streamOpened = Promise.withResolvers<void>();
   let waitingFor = "Chromium launch";
   let browserDisconnectedAtMs: number | null = null;
+  let pageClosedAtMs: number | null = null;
   const streamAbortedAtMs: number[] = [];
   const scroll: string[] = [], pageErrors: string[] = [], failedReads: string[] = [];
   onTestFinished(() => {
@@ -68,6 +75,9 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   try {
     waitingFor = "navigation and loading placeholder";
     const page = await browser.newPage({ viewport: { width: 1100, height: 650 } });
+    page.once("close", () => {
+      pageClosedAtMs = Math.round(performance.now() - startedAt);
+    });
     page.on("pageerror", (error: Error) => pageErrors.push(error.message));
     page.on("requestfailed", (request: { url(): string; postData(): string | null; failure(): { errorText: string } }) => {
       const url = new URL(request.url());
@@ -163,7 +173,15 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     waitingFor = `browser cleanup (started ${Math.round(performance.now() - startedAt)} ms into the test)`;
     expect(browserDisconnectedAtMs, "Chromium disconnected before cleanup").toBeNull();
   } finally {
-    await browser.close();
+    const closeStartedAtMs = Math.round(performance.now() - startedAt);
+    reportPendingBrowserClose = () => {
+      console.error("Long chat browser.close still pending", JSON.stringify({ closeStartedAtMs, pageClosedAtMs, browserDisconnectedAtMs, pendingRequests: server.pendingRequests }));
+    };
+    try {
+      await browser.close();
+    } finally {
+      reportPendingBrowserClose = undefined;
+    }
     server.stop(true);
   }
   waitingFor = "";
