@@ -340,8 +340,28 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     await page.goBack();
     await panel.waitFor({ state: "detached" });
     const diff = row("call-a", "bash · git diff");
+    const diffInput = width === 390 ? await page.evaluateHandle(() => {
+      const input: { type: string; target: string | null; answer: string | null }[] = [];
+      const listeners = new AbortController();
+      for (const type of ["pointerdown", "pointerup", "click"]) {
+        document.addEventListener(type, (event) => {
+          const link = event.target instanceof Element ? event.target.closest("a") : null;
+          const target = event.target instanceof Element ? event.target.closest("[data-slot]") : null;
+          input.push({ type, target: link?.getAttribute("aria-label") ?? target?.getAttribute("data-slot") ?? null, answer: link ? new URL(link.href).searchParams.get("answer") : null });
+        }, { capture: true, signal: listeners.signal });
+      }
+      return () => {
+        listeners.abort();
+        return input;
+      };
+    }) : null;
     await diff.locator('> [data-slot="trace-collapsible-trigger"]').click();
     await diff.getByRole("link", { name: "Open permission review", exact: true }).click();
+    if (diffInput) {
+      const input = await diffInput.evaluate((read: () => unknown) => read());
+      await diffInput.dispose();
+      expect(input, `Pointer events before opening review answer 24:1; URL after click: ${page.url()}`).toContainEqual({ type: "click", target: "Open permission review", answer: "t-diff" });
+    }
     console.info("Waiting for permission review answer", {
       expected: "24:1",
       elapsedMs: performance.now() - started,
