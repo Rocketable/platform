@@ -1415,7 +1415,7 @@ function useTabs() {
     // Close, the attention items, the group commands, and the moves act on paths, the selected tabs of space; view is
     // this server's.
     commands: (path: string, view: SidebarView, paths = new Set([path]), space = state.tabs.find((item) => item.path === path)?.space ?? state.space): TabCommand[] => {
-      const tab = state.tabs.find((item) => item.path === path), selected = state.tabs.filter((item) => paths.has(item.path)), there = tabsOf(space), inShared = sharedIn(space).includes(path);
+      const tab = state.tabs.find((item) => item.path === path), there = tabsOf(space), inShared = sharedIn(space).includes(path);
       const id = pathSession(path);
       const birthSpace = paths.size === 1 && id ? view.rows.find((row) => row.id === id && rowPath(row) === path)?.spaceId : undefined;
       const birth = state.spaces.find((item) => item.id === birthSpace);
@@ -1428,26 +1428,31 @@ function useTabs() {
       const share = inShared ? [{ key: "unshare", label: "Remove from Shared", run: () => void tabsCall(name, { unshare: { space, path } }, keep).catch(() => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] })) }]
         : path === "/" ? [] : [{ key: "share", label: "Add to Shared", run: () => sharing.mutate({ share: { space, path, search: tab?.search } }) }];
       const source = sharedTab(shared, space, path)?.search ?? tab?.search;
+      const selected = tab || !inShared ? state.tabs.filter((item) => paths.has(item.path)) : [{ path, space, search: source }];
       const copy = viewed && isSearch(path) ? [{ key: "duplicate", label: "Duplicate", run: () => addSearch({ ...source!, name: `${searchTitle(source)} copy` }, inShared) }] : [];
       const attention = attentionItems(view, path, paths, attend, setPicking), closing = { key: "close", label: "Close", run: () => close([...paths]) };
       // The tab in view copies its whole address, with the view state in its query and fragment.
       const link = { key: "link", label: "Copy link", run: () => void copyText(viewed && path === pagePath() ? window.location.href : window.location.origin + serverPath(path, name), document.body) };
-      // A parked tab's menu has none of the strip's commands but Close.
-      if (!shownOf(space).some((item) => item.path === path)) return [...tab ? [closing] : [], link, ...share, ...copy, ...attention];
+      const adopt = (tabs: Tab[]) => [...tabs, ...selected.filter((item) => !tabs.some((other) => other.path === item.path))];
+      const grouping: TabCommand[] = [
+        { key: "group-new", label: "Add to new group", sub: { menu: "Add to group", label: "New group" }, run: () => {
+          const id = crypto.getRandomValues(new Uint32Array(2)).join("-");
+          setState((current) => ({ ...current, groups: [...current.groups, { id, name: "", color: Object.keys(groupColors)[groupsOf(space).length % Object.keys(groupColors).length] }] }));
+          update((tabs) => join(adopt(tabs).map((item) => paths.has(item.path) ? { ...item, group: id } : item), keeper(id), id, space));
+          setEditor({ id, open: true });
+        } },
+        ...groupsOf(space).filter((group) => selected.some((item) => item.group !== group.id)).map((group) => ({ key: `group-${group.id}`, label: `Add to group "${groupName(group)}"`, sub: { menu: "Add to group", label: groupName(group) }, run: () => update((tabs) => selected.reduce((joined, item) => join(joined, item.path, group.id, space), adopt(tabs))) })),
+        ...selected.some((item) => item.group) ? [{ key: "group-remove", label: "Remove from group", run: () => regroup((item) => paths.has(item.path)) }] : [],
+      ];
+      // A parked tab's menu has none of the strip's commands but Close; a Shared row this person has no tab of can join
+      // their tabs in a group.
+      if (!shownOf(space).some((item) => item.path === path)) return [...tab ? [closing] : [], link, ...share, ...copy, ...attention, ...!tab && inShared && !parked.has(path) ? grouping : []];
       return [
         closing,
         { key: "close-others", label: "Close others", run: () => close(there.flatMap((item) => item.path === path ? [] : [item.path]), path) },
         { key: "close-right", label: "Close to the right", run: () => close(there.slice(there.findIndex((item) => item.path === path) + 1).map((item) => item.path), path) },
         { key: "close-all", label: "Close all", run: () => close(there.map((item) => item.path)) },
-        link, ...share, ...copy, ...attention,
-        { key: "group-new", label: "Add to new group", sub: { menu: "Add to group", label: "New group" }, run: () => {
-          const id = crypto.getRandomValues(new Uint32Array(2)).join("-");
-          setState((current) => ({ ...current, groups: [...current.groups, { id, name: "", color: Object.keys(groupColors)[groupsOf(space).length % Object.keys(groupColors).length] }] }));
-          update((tabs) => join(tabs.map((item) => paths.has(item.path) ? { ...item, group: id } : item), keeper(id), id, space));
-          setEditor({ id, open: true });
-        } },
-        ...groupsOf(space).filter((group) => selected.some((item) => item.group !== group.id)).map((group) => ({ key: `group-${group.id}`, label: `Add to group "${groupName(group)}"`, sub: { menu: "Add to group", label: groupName(group) }, run: () => update((tabs) => selected.reduce((joined, item) => join(joined, item.path, group.id, space), tabs)) })),
-        ...selected.some((item) => item.group) ? [{ key: "group-remove", label: "Remove from group", run: () => regroup((item) => paths.has(item.path)) }] : [],
+        link, ...share, ...copy, ...attention, ...grouping,
         // A session moved to another space can go back to the space it was born in.
         ...birth && birth.id !== tab?.space ? [{ key: "restore", label: `Restore to "${birth.name}"`, run: () => moveTo(paths, birth.id) }] : [],
         ...state.spaces.filter((item) => item.id !== space).map((item) => ({ key: `space-${item.id}`, label: `Move to "${item.name}"`, sub: { menu: "Move to space", label: item.name }, run: () => moveTo(paths, item.id) })),
@@ -1692,12 +1697,12 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
 }
 
 // Sessions and Search pages can be renamed from their tab, and a Search page from its Shared row, which otherwise offers
-// only its Copy link, Shared, Duplicate and attention items. A session's own tab on the page's server can also delete
+// only its Copy link, Shared, Duplicate, attention and group items. A session's own tab on the page's server can also delete
 // it.
 function menuItems(tabs: TabStoreValue, menu: CardMenu, view: SidebarView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
   const renaming = targets.size === 1 && (isSearch(menu.path) || (pathSession(menu.path) && !menu.shared)) ? [{ key: "rename", label: isSearch(menu.path) ? "Rename search" : "Rename session", run: rename }] : [];
   const session = tabs.viewed && targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === pathSession(menu.path)) : undefined;
-  return [...renaming, ...menu.shared ? tabs.commands(menu.path, view, undefined, menu.space).filter(({ key }) => /^(link|unshare|duplicate|read|unread|park|unpark)/.test(key)) : tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
+  return [...renaming, ...menu.shared ? tabs.commands(menu.path, view, undefined, menu.space).filter(({ key }) => /^(link|unshare|duplicate|read|unread|park|unpark|group)/.test(key)) : tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
 }
 
 const pullRequestItems = (menu: { path: string; shared?: boolean }, single: boolean, name: string): TabCommand[] =>

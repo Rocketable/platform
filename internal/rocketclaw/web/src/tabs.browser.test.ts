@@ -1314,7 +1314,12 @@ test("Search pages are tabs of their own: renamed in place, shared as one page, 
   await until(() => JSON.stringify(saved.shared[0].search?.searches.map((item) => item.query)) === JSON.stringify(["rollback", "other person", "mine"]));
   // Taken out of Shared, the page as saved stays as this person's own, with their own searches there, so nothing anyone
   // added is lost.
-  expect(await sharedMenu(page, "Prod deploys")).toEqual(["Rename search", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park"]);
+  expect(await sharedMenu(page, "Prod deploys")).toEqual(["Rename search", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park", "—", "Add to group"]);
+  await page.getByRole("menuitem", { name: "Add to group", exact: true }).click();
+  await page.getByRole("menuitem", { name: "New group", exact: true }).click();
+  await page.getByRole("textbox", { name: "Group name" }).waitFor();
+  await page.keyboard.press("Escape");
+  await sharedMenu(page, "Prod deploys");
   await page.getByRole("menuitem", { name: "Remove from Shared", exact: true }).click();
   await row("Prod deploys").waitFor({ state: "detached" });
   await tab("Prod deploys").waitFor();
@@ -1322,9 +1327,6 @@ test("Search pages are tabs of their own: renamed in place, shared as one page, 
   await page.waitForFunction(() => (document.querySelector('main input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "mine");
 
   // Grouped, then moved to another space, the page keeps its name and searches, also after reload.
-  await menu(page, "Prod deploys", "Add to group", "New group");
-  await page.getByRole("textbox", { name: "Group name" }).waitFor();
-  await page.keyboard.press("Escape");
   expect(await tab("Prod deploys").getAttribute("aria-description")).toMatch(/^Group /);
   await newSpace(page, "Ops");
   await chooseSpace(page, "Main", "menuitemradio");
@@ -1692,7 +1694,7 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
 
   // A Shared row has no close button, offers no closing, ignores middle-clicks, and takes no drops of this person's tabs.
   expect(await shared(page).getByRole("button", { name: "Close Alpha" }).count()).toBe(0);
-  expect(await sharedMenu(page, "Alpha")).toEqual(["Pull requests", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
+  expect(await sharedMenu(page, "Alpha")).toEqual(["Pull requests", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "—", "Add to group"]);
   await page.keyboard.press("Escape");
   await page.getByRole("menu").waitFor({ state: "hidden" });
   await row("Alpha").click({ button: "middle" });
@@ -2102,9 +2104,9 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   saved.state = { ...saved.state, tabs: [{ path: href("alpha"), space: "main" }], space: "main" };
   saved.shared = [{ space: "main", path: href("bravo") }, { space: "main", path: "/search/d", search: { name: "Ops", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" } }];
   await page.goto(`${origin}${href("alpha")}`);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "—", "Add to group"]);
   await close();
-  expect(await sharedMenu(page, "Ops")).toEqual(["Rename search", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park"]);
+  expect(await sharedMenu(page, "Ops")).toEqual(["Rename search", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park", "—", "Add to group"]);
   await close();
 
   await shared(page).getByRole("tab", { name: "Bravo", exact: true }).click({ button: "right" });
@@ -2117,6 +2119,19 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   saved.attention = [];
   await row("Bravo").and(page.locator('[aria-description="Shared, Space: Main"]')).waitFor();
   expect(await opacity(href("bravo"))).toBe("1");
+
+  await sharedMenu(page, "Ops");
+  for (const item of ["Add to group", "New group"]) await page.getByRole("menuitem", { name: item, exact: true }).click();
+  await page.getByRole("textbox", { name: "Group name" }).waitFor();
+  await page.keyboard.press("Escape");
+  await sharedMenu(page, "Bravo");
+  for (const item of ["Add to group", "Grey group"]) await page.getByRole("menuitem", { name: item, exact: true }).click();
+  await strip(page).getByRole("tab", { name: "Bravo", exact: true }).waitFor();
+  expect([await names(page), await sharedNames(page)]).toEqual([["Alpha", "Ops", "Bravo"], ["Bravo", "Ops"]]);
+  await until(() => {
+    const [ops, bravo] = ["/search/d", href("bravo")].map((path) => saved.state.tabs.find((item) => item.path === path));
+    return !!ops?.group && bravo?.group === ops.group && ops.search?.name === "Ops";
+  });
 }), 30_000);
 
 // The new-chat Transcript stays mounted, hidden, on other pages; its creation must not pull the person off the page they chose.
