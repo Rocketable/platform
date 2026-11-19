@@ -1593,37 +1593,32 @@ func providerRetryDelay(resp *http.Response, attempt int) time.Duration {
 		return wait
 	}
 
-	found := false
-	headerWait := time.Duration(0)
+	headerWait := -time.Nanosecond
 
 	if millis, errParse := strconv.ParseFloat(resp.Header.Get("Retry-After-Ms"), 64); errParse == nil && millis >= 0 && millis == millis {
-		if delay := time.Duration(millis * float64(time.Millisecond)); delay >= headerWait {
+		if delay := time.Duration(millis * float64(time.Millisecond)); delay > headerWait {
 			headerWait = delay
-			found = true
 		}
 	}
 
 	for _, header := range []string{"X-RateLimit-Reset-Requests", "X-RateLimit-Reset-Tokens"} {
-		if delay, errParse := time.ParseDuration(resp.Header.Get(header)); errParse == nil && delay >= headerWait {
+		if delay, errParse := time.ParseDuration(resp.Header.Get(header)); errParse == nil && delay > headerWait {
 			headerWait = delay
-			found = true
 		}
 	}
 
 	retryAfter := resp.Header.Get("Retry-After")
 	if seconds, errParse := strconv.ParseFloat(retryAfter, 64); errParse == nil && seconds >= 0 && seconds == seconds {
-		if delay := time.Duration(seconds * float64(time.Second)); delay >= headerWait {
+		if delay := time.Duration(seconds * float64(time.Second)); delay > headerWait {
 			headerWait = delay
-			found = true
 		}
 	} else if when, errParse := time.Parse(time.RFC1123, retryAfter); errParse == nil {
-		if delay := time.Until(when); delay >= headerWait {
+		if delay := time.Until(when); delay > headerWait {
 			headerWait = delay
-			found = true
 		}
 	}
 
-	if found {
+	if headerWait >= 0 {
 		return headerWait
 	}
 
