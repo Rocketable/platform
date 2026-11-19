@@ -420,7 +420,7 @@ func TestAgentDraftLayers(t *testing.T) {
 	store := newTestSessionServiceAt(t, workspace)
 	overlays := []string{filepath.Join(workspace, "team.git") + "@main", filepath.Join(workspace, "more.git")}
 	store.definitions = config.NewLockedConfig(&config.Config{Workspace: workspace, Overlays: overlays})
-	team := skel.OverlayInfos(workspace, config.DefaultRuntimeDir, overlays)[0].ClonePath
+	team := skel.OverlayInfos(filepath.Join(workspace, config.DefaultRuntimeDir), overlays)[0].ClonePath
 	builtin := skel.BuiltinAgent("main")
 
 	writeAgentFile(t, team, "triage", "team triage")

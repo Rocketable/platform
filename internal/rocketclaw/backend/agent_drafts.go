@@ -554,7 +554,7 @@ func (s *SessionService) agentLayerFiles(name string) (effective *string, bases 
 		}
 
 		layers := map[string]string{agentDraftWorkspaceLayer: ""}
-		for _, overlay := range skel.OverlayInfos("", cfg.RuntimeDirName(), cfg.Overlays) {
+		for _, overlay := range skel.OverlayInfos(cfg.RuntimeDirName(), cfg.Overlays) {
 			layers[overlay.Spec] = overlay.ClonePath
 		}
 

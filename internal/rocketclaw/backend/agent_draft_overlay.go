@@ -47,7 +47,7 @@ func (s *SessionService) CheckAgentDraftMerge(ctx context.Context, rt agentDraft
 	}
 
 	pending, cfg := draft.Pending, s.definitions.Clone()
-	overlays := skel.OverlayInfos("", cfg.RuntimeDirName(), cfg.Overlays)
+	overlays := skel.OverlayInfos(cfg.RuntimeDirName(), cfg.Overlays)
 	at := slices.IndexFunc(overlays, func(overlay skel.OverlayInfo) bool { return overlay.Spec == pending.Destination })
 
 	var state string

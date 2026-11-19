@@ -2512,7 +2512,7 @@ func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mc
 }
 
 func appendOverlayPromptToAgent(agents harness.Agents, agentName string, cfg *config.Config) {
-	section := overlayPromptSection(cfg, skel.OverlayInfos(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays))
+	section := overlayPromptSection(cfg, skel.OverlayInfos(filepath.Join(cfg.Workspace, cfg.RuntimeDirName()), cfg.Overlays))
 	if section == "" {
 		return
 	}

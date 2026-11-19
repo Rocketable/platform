@@ -75,7 +75,7 @@ func SyncEffectiveRuntimeAssets(workspace, target string, overlays []string, log
 		return fmt.Errorf("sync embedded rocketclaw runtime assets %s: %w", agentsRoot, err)
 	}
 
-	overlayInfos := overlayInfosIn(target, overlays)
+	overlayInfos := OverlayInfos(target, overlays)
 	if err := reconcileGitOverlays(target, overlayInfos, logger); err != nil {
 		return fmt.Errorf("reconcile configured rocketclaw overlays: %w", err)
 	}
@@ -477,11 +477,7 @@ func isRuntimeScriptSymlink(workspace, path string) bool {
 	return false
 }
 
-func OverlayInfos(workspace, runtimeDir string, overlays []string) []OverlayInfo {
-	return overlayInfosIn(filepath.Join(workspace, runtimeDir), overlays)
-}
-
-func overlayInfosIn(target string, overlays []string) []OverlayInfo {
+func OverlayInfos(target string, overlays []string) []OverlayInfo {
 	infos := make([]OverlayInfo, 0, len(overlays))
 	for _, spec := range overlays {
 		spec = strings.TrimSpace(spec)
