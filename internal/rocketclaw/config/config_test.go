@@ -451,14 +451,19 @@ func TestValidateMCPServers(t *testing.T) {
 				"git-hub":             {Command: "npx"},
 				"sequentialthinking":  {Command: "npx"},
 				"Sequential-Thinking": {URL: "https://example.com/mcp"},
-				"my_server.v2":        {Command: "npx"},
 			},
 			want: map[string]MCPServerConfig{
 				"git-hub":             {Command: "npx"},
 				"sequentialthinking":  {Command: "npx"},
 				"Sequential-Thinking": {URL: "https://example.com/mcp"},
-				"my_server.v2":        {Command: "npx"},
 			},
+		},
+		{
+			name: "dotted name",
+			servers: map[string]MCPServerConfig{
+				"my_server.v2": {Command: "npx"},
+			},
+			wantErr: `mcp_servers["my_server.v2"]: name must not contain "."`,
 		},
 		{
 			name: "bad url scheme",
@@ -502,27 +507,41 @@ func TestValidateMCPServers(t *testing.T) {
 			},
 		},
 		{
-			name: "tool in both groups",
+			name: "overlapping facets",
 			servers: map[string]MCPServerConfig{
-				"reports": {Command: "npx", Tools: MCPToolGroups{Read: []string{"list_*"}, Write: []string{"list_x"}}},
-			},
-			wantErr: `mcp_servers["reports"]: tools.read "list_*" and tools.write "list_x" match the same tool`,
-		},
-		{
-			name: "shared pattern",
-			servers: map[string]MCPServerConfig{
-				"reports": {Command: "npx", Tools: MCPToolGroups{Read: []string{"get_*", "*_report"}, Write: []string{"*_report"}}},
-			},
-			wantErr: `mcp_servers["reports"]: tools.read "*_report" and tools.write "*_report" match the same tool`,
-		},
-		{
-			name: "disjoint tool groups",
-			servers: map[string]MCPServerConfig{
-				"reports": {Command: "npx", Tools: MCPToolGroups{Read: []string{"list_*", "get_report"}, Write: []string{"update_*", "delete_report"}}},
+				"reports": {Command: "npx", Tools: map[string][]string{"read": {"list_*", "get_report", "-get_secret_*"}, "write": {"list_x", "update_*"}, "sudo": {"*"}, "one-off_2": {"report/v?"}}},
 			},
 			want: map[string]MCPServerConfig{
-				"reports": {Command: "npx", Tools: MCPToolGroups{Read: []string{"list_*", "get_report"}, Write: []string{"update_*", "delete_report"}}},
+				"reports": {Command: "npx", Tools: map[string][]string{"read": {"list_*", "get_report", "-get_secret_*"}, "write": {"list_x", "update_*"}, "sudo": {"*"}, "one-off_2": {"report/v?"}}},
 			},
+		},
+		{
+			name: "facet name with a space",
+			servers: map[string]MCPServerConfig{
+				"reports": {Command: "npx", Tools: map[string][]string{"read only": {"list_*"}}},
+			},
+			wantErr: `mcp_servers["reports"]: tools["read only"]: facet names use only letters, digits, "_" and "-"`,
+		},
+		{
+			name: "dotted facet name",
+			servers: map[string]MCPServerConfig{
+				"reports": {Command: "npx", Tools: map[string][]string{"read.all": {"list_*"}}},
+			},
+			wantErr: `mcp_servers["reports"]: tools["read.all"]: facet names use only letters, digits, "_" and "-"`,
+		},
+		{
+			name: "pattern with interpolation",
+			servers: map[string]MCPServerConfig{
+				"reports": {Command: "npx", Tools: map[string][]string{"read": {"list_*", "-${ROCKETCLAW_PRINCIPAL_ID}"}}},
+			},
+			wantErr: `mcp_servers["reports"]: tools["read"]: pattern "-${ROCKETCLAW_PRINCIPAL_ID}" may use only tool-name characters, "*" and "?"`,
+		},
+		{
+			name: "pattern with a space",
+			servers: map[string]MCPServerConfig{
+				"reports": {Command: "npx", Tools: map[string][]string{"read": {"list reports"}}},
+			},
+			wantErr: `mcp_servers["reports"]: tools["read"]: pattern "list reports" may use only tool-name characters, "*" and "?"`,
 		},
 		{
 			name:    "omitted",
@@ -665,6 +684,17 @@ func TestLoadOmitsMCPServers(t *testing.T) {
 	}`)
 
 	assert.Nil(t, cfg.MCPServers)
+}
+
+func TestLoadMCPServerFacets(t *testing.T) {
+	cfg := loadTestConfig(t, `{
+	  "workspace": ".",
+	  "openai": {"api_key": "test-key"},
+	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
+	  "mcp_servers": {"gog": {"command": "gog", "tools": {"read": ["drive_search", "docs_get"], "write": ["docs_write"]}}}
+	}`)
+
+	assert.Equal(t, map[string]map[string][]string{"gog": {"read": {"drive_search", "docs_get"}, "write": {"docs_write"}}}, cfg.MCPFacets())
 }
 
 func TestLoadNormalizesOverlays(t *testing.T) {

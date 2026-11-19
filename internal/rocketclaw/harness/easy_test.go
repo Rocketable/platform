@@ -16,7 +16,7 @@ func loadEasyTestAgent(t *testing.T, frontmatter string) (Agent, []error) {
 	t.Helper()
 
 	result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\n" + frontmatter + "\n---\nBody\n")}, AgentLoadConfig{
-		MCPToolGroups:     map[string]map[string][]string{"s": {"read": {"list_*"}, "write": {"update_*"}}, "t": {"read": {"get_*"}}},
+		MCPFacets:         map[string]map[string][]string{"s": {"read": {"list_*", "-list_secrets"}, "write": {"update_*"}, "sudo": {"*"}}, "t": {"read": {"get_*"}}},
 		Providers:         []string{"openai", "work"},
 		DecisionProviders: []string{"openai"},
 		Skills: fstest.MapFS{
@@ -58,7 +58,7 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 		{"tags without tags group", easyRequired + "\nrocketclaw: [sessions]\ntags: [[open, closed]]", "main.md: tags: required by the tags group in rocketclaw, and only with it"},
 		{"missing skill folder", easyRequired + "\nskills: [missing]", `main.md: skills: folder "missing" does not exist`},
 		{"unknown mcp server", easyRequired + "\nmcp: {unknown: [read]}", `main.md: mcp: server "unknown" is not configured`},
-		{"undefined mcp group", easyRequired + "\nmcp: {t: [write]}", `main.md: mcp: server "t" has no "write" tool group`},
+		{"undefined mcp facet", easyRequired + "\nmcp: {t: [write]}", `main.md: mcp: server "t" has no "write" facet`},
 		{"wildcard target", easyRequired + "\nallowedNetworkTargets: ['*.googleapis.com']", "main.md: allowedNetworkTargets: *.googleapis.com: wildcards and CIDR ranges are not supported"},
 		{"CIDR target", easyRequired + "\nallowedNetworkTargets: [10.0.0.0/8]", "main.md: allowedNetworkTargets: 10.0.0.0/8: wildcards and CIDR ranges are not supported"},
 		{"target with methods", easyRequired + "\nallowedNetworkTargets: [{target: api.example.com, methods: [GET]}]", "main.md: allowedNetworkTargets: must be auto or a list of strings"},
@@ -70,7 +70,7 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 		{"approver background group", easyRequired + "\napprover: {rocketclaw: [sessions, background]}", "main.md: approver.rocketclaw: an approver cannot use the background group"},
 		{"approver unknown rocketclaw group", easyRequired + "\napprover: {rocketclaw: [chat]}", `main.md: approver.rocketclaw: unknown group "chat"`},
 		{"approver missing skill folder", easyRequired + "\napprover: {skills: [missing]}", `main.md: approver.skills: folder "missing" does not exist`},
-		{"approver undefined mcp group", easyRequired + "\napprover: {mcp: {t: [write]}}", `main.md: approver.mcp: server "t" has no "write" tool group`},
+		{"approver undefined mcp facet", easyRequired + "\napprover: {mcp: {t: [write]}}", `main.md: approver.mcp: server "t" has no "write" facet`},
 		{"approver wildcard target", easyRequired + "\napprover: {allowedNetworkTargets: ['*.googleapis.com']}", "main.md: approver.allowedNetworkTargets: *.googleapis.com: wildcards and CIDR ranges are not supported"},
 		{"approver reserved command name", easyRequired + "\napprover: {commands: {curl: /usr/bin/curl}}", "main.md: approver.commands: curl is the emulated shell's own"},
 		{"approver secrets not a list", easyRequired + "\napprover: {secretsARN: arn::one}", "main.md: approver.secretsARN: must be a list of ARNs"},
@@ -231,8 +231,8 @@ func TestEasyAgentPermissions(t *testing.T) {
 		{"webfetch", "https://example.com", PermissionAuto},
 		{"websearch", "*", PermissionAuto},
 		{"opencode", "local", PermissionAuto},
-		{"mcp", "s.update_x", PermissionAuto},
-		{"mcp", "t.anything", PermissionAuto},
+		{"mcp", "s.update_x", PermissionDeny},
+		{"mcp", "t.get_x", PermissionDeny},
 		{"rocketclaw", codeModeApproveSubject, PermissionAuto},
 		{"rocketclaw", "load_agents_md", PermissionDeny},
 		{"rocketclaw", "rocketclaw_sessions", PermissionAuto},
@@ -264,7 +264,7 @@ func TestEasyAgentPermissions(t *testing.T) {
 	}
 
 	require.ElementsMatch(t, []string{"skill *", "task main"}, allowed)
-	require.Equal(t, []string{"s", "t"}, visibleMCPServers(agent.Permission, []string{"s", "t"}))
+	require.Empty(t, visibleMCPServers(agent.Permission, []string{"s", "t"}))
 	require.NotContains(t, permissionPrompt(agent.Permission), "Sudo Mode")
 
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": agent}})
@@ -293,11 +293,11 @@ func TestEasyAgentSections(t *testing.T) {
 			on:  [][2]string{{"skill", "seo"}, {"skill", "ads"}},
 			off: [][2]string{{"skill", "support"}}},
 		{name: "no skills", sections: "skills: []", off: [][2]string{{"skill", "seo"}, {"skill", "support"}}},
-		{name: "mcp read group", sections: "mcp: {s: [read]}",
+		{name: "mcp read facet", sections: "mcp: {s: [read]}",
 			on:  [][2]string{{"mcp", "s.list_reports"}},
-			off: [][2]string{{"mcp", "s.update_x"}, {"mcp", "s.other"}, {"mcp", "t.get_x"}}},
-		{name: "mcp server auto", sections: "mcp: {s: auto}",
-			on:  [][2]string{{"mcp", "s.other"}, {"mcp", "s.update_x"}},
+			off: [][2]string{{"mcp", "s.list_secrets"}, {"mcp", "s.update_x"}, {"mcp", "s.other"}, {"mcp", "t.get_x"}}},
+		{name: "mcp overlapping facets", sections: "mcp: {s: [read, sudo]}",
+			on:  [][2]string{{"mcp", "s.list_secrets"}, {"mcp", "s.other"}},
 			off: [][2]string{{"mcp", "t.get_x"}}},
 		{name: "no mcp", sections: "mcp: {}", off: [][2]string{{"mcp", "s.list_reports"}, {"mcp", "t.get_x"}}},
 		{name: "no subagents", sections: "subagents: []", off: [][2]string{{"task", "main"}}},
@@ -326,6 +326,14 @@ func TestEasyAgentSections(t *testing.T) {
 	agent, errs := loadEasyTestAgent(t, easyRequired+"\nmcp: {}")
 	require.Empty(t, errs)
 	require.Empty(t, visibleMCPServers(agent.Permission, []string{"s", "t"}))
+
+	agent, errs = loadEasyTestAgent(t, easyRequired+"\nmcp: {s: [write, read]}")
+	require.Empty(t, errs)
+	require.Equal(t, []string{"s"}, visibleMCPServers(agent.Permission, []string{"s", "t"}))
+	require.Equal(t, []PermissionRule{
+		{Pattern: "s.list_*", Action: PermissionAuto, Except: []string{"s.list_secrets"}},
+		{Pattern: "s.update_*", Action: PermissionAuto},
+	}, agent.Permission.Buckets[slices.IndexFunc(agent.Permission.Buckets, func(bucket PermissionBucket) bool { return bucket.Name == mcpPermissionBucket })].Rules)
 }
 
 func TestEasyApproverTools(t *testing.T) {
@@ -340,8 +348,8 @@ func TestEasyApproverTools(t *testing.T) {
 		{name: "listed sections", approver: "rocketclaw: [sessions, tags]\ntags: [[red, green]]\nskills: [marketing]\nmcp: {s: [read]}\nallowedNetworkTargets: [api.stripe.com]\ncommands: {lookup: ./lookup}",
 			on:  [][2]string{{"rocketclaw", "rocketclaw_sessions"}, {"skill", "seo"}, {"skill", "ads"}, {"mcp", "s.list_reports"}, {"webfetch", "https://api.stripe.com"}, {"bash", "lookup 42"}},
 			off: [][2]string{{"rocketclaw", "rocketclaw_restart"}, {"rocketclaw", "rocketclaw_store"}, {"skill", "support"}, {"mcp", "s.update_x"}, {"mcp", "t.get_x"}, {"edit", "notes.md"}}},
-		{name: "auto sections", approver: "rocketclaw: auto\nskills: auto\nmcp: auto\nallowedNetworkTargets: auto",
-			on:  [][2]string{{"rocketclaw", "rocketclaw_sessions"}, {"rocketclaw", "rocketclaw_kv_store"}, {"skill", "support"}, {"mcp", "t.anything"}, {"webfetch", "https://example.com"}},
+		{name: "auto sections", approver: "rocketclaw: auto\nskills: auto\nallowedNetworkTargets: auto",
+			on:  [][2]string{{"rocketclaw", "rocketclaw_sessions"}, {"rocketclaw", "rocketclaw_kv_store"}, {"skill", "support"}, {"webfetch", "https://example.com"}},
 			off: [][2]string{{"bash", "ls"}, {"rocketclaw", "rocketclaw_restart"}, {"rocketclaw", AllowBackgroundSubject}}},
 		{name: "no commands and no targets", approver: "commands: {}\nallowedNetworkTargets: []",
 			off: [][2]string{{"bash", "ls"}, {"webfetch", "https://example.com"}}},
@@ -394,8 +402,8 @@ approver:
 	require.Equal(t, map[string]string{"deploy": "./deploy"}, agent.Commands)
 	require.Nil(t, agent.NetworkTargets)
 
-	action, _ := agent.Permission.Evaluate("mcp", "t.anything")
-	require.Equal(t, PermissionAuto, action, "the agent's own sections still default to everything, reviewed")
+	action, _ := agent.Permission.Evaluate("mcp", "t.get_x")
+	require.Equal(t, PermissionDeny, action, "outside MCP tools stay off unless the agent's file names their facets")
 
 	unlisted, errs := loadEasyTestAgent(t, easyRequired+"\napprover: {commands: {lookup: ./lookup}}")
 	require.Empty(t, errs)

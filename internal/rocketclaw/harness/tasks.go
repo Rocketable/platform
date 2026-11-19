@@ -75,7 +75,7 @@ func (f *toolFactory) taskTool() looperTool {
 func (f *toolFactory) taskDescription() string {
 	var selection, available string
 	if f.agent.Mode == AgentModeEasy {
-		selection = "When using the Task tool, you must specify a model parameter, one of the models listed below, to select which model runs the subagent, and a tools parameter: null to give it all of your tools, or the names of the ones it may use, MCP tools as server.tool. A listed entry ending in * stands for every model whose name, #effort included, starts with the text before the *; name a concrete model in its place."
+		selection = "When using the Task tool, you must specify a model parameter, one of the models listed below, to select which model runs the subagent, and a tools parameter: null to give it all of your tools, outside MCP tools included, or the names of the ones it may use, which leaves out every outside MCP tool. A listed entry ending in * stands for every model whose name, #effort included, starts with the text before the *; name a concrete model in its place."
 		available = "Available models:\n- " + strings.Join(f.agent.Subagents, "\n- ")
 	} else {
 		selection = "When using the Task tool, you must specify a subagent_type parameter to select which agent type to use."
@@ -267,9 +267,8 @@ func (f *toolFactory) subagentWrite(ctx context.Context, params *taskParams) (Su
 	for _, name := range params.Tools {
 		_, tool := tc.looper.Tools[name]
 		_, host := tc.looper.CodeModeHosts[name]
-		action, _ := tc.looper.Permissions.Evaluate(mcpPermissionBucket, name)
 
-		if !tool && !host && (!strings.Contains(name, ".") || strings.ContainsAny(name, "*?") || action == PermissionDeny) {
+		if !tool && !host {
 			return SubagentWrite{}, fmt.Errorf("tool %q is not one of your tools", name)
 		}
 	}

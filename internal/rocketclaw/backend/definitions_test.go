@@ -144,7 +144,7 @@ func TestLoadRocketCodeDefinitionsEasy(t *testing.T) {
 		require.NoError(t, root.WriteFile(name, []byte(content), 0o644))
 	}
 
-	cfg := &config.Config{Workspace: workspace, MCPServers: map[string]config.MCPServerConfig{"s": {Command: "s", Tools: config.MCPToolGroups{Read: []string{"list_*"}, Write: []string{"update_*"}}}}}
+	cfg := &config.Config{Workspace: workspace, MCPServers: map[string]config.MCPServerConfig{"s": {Command: "s", Tools: map[string][]string{"read": {"list_*"}, "write": {"update_*"}}}}}
 	agents, skills, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(cfg), config.DefaultRuntimeDir, nil)
 	require.NoError(t, err)
 
@@ -235,9 +235,7 @@ func TestSessionTagsExistingPermissions(t *testing.T) {
   task:
     "*": allow
     "main": deny
-    "cron": deny
-  mcp:
-    "context7.*": allow`} {
+    "cron": deny`} {
 		t.Run(permission, func(t *testing.T) {
 			workspace := t.TempDir()
 			root, err := os.OpenRoot(workspace)
@@ -284,7 +282,6 @@ func TestSessionTagsExistingPermissions(t *testing.T) {
 				{"task", "helper", harness.PermissionAllow},
 				{"task", "main", harness.PermissionDeny},
 				{"task", "cron", harness.PermissionDeny},
-				{"mcp", "context7.query", harness.PermissionAllow},
 				{"rocketclaw_tags", setTagToolName, harness.PermissionAllow},
 				{"rocketclaw_tags", getTagsToolName, harness.PermissionAllow},
 			} {

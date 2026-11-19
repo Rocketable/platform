@@ -6386,7 +6386,7 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
     label: channel.channel ?? "",
     detail: channel.agents ?? [],
   }));
-  const servers: ConfigItem[] = (view.mcpServers ?? []).map((server) => ({ key: server, label: server }));
+  const servers: ConfigItem[] = (view.mcpServerFacets ?? []).map(({ server = "", facets }) => ({ key: server, label: server, detail: facets }));
   const limited = identity.data?.limited;
   return (
     <>

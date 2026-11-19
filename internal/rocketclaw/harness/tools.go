@@ -191,15 +191,8 @@ func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, err
 
 	if agent.Tools != nil {
 		restricted := *agent
-		rules := []PermissionRule{{Pattern: "*", Action: PermissionDeny}}
-
-		for _, name := range agent.Tools {
-			if action, _ := agent.Permission.Evaluate(mcpPermissionBucket, name); strings.Contains(name, ".") {
-				rules = append(rules, PermissionRule{Pattern: name, Action: action})
-			}
-		}
-
-		restricted.Permission.Buckets = append(slices.Clip(agent.Permission.Buckets), PermissionBucket{Name: mcpPermissionBucket, Rules: rules})
+		restricted.Permission.Buckets = append(slices.DeleteFunc(slices.Clone(agent.Permission.Buckets), func(bucket PermissionBucket) bool { return bucket.Name == mcpPermissionBucket }),
+			PermissionBucket{Name: mcpPermissionBucket, Rules: []PermissionRule{{Pattern: "*", Action: PermissionDeny}}})
 		agent = &restricted
 	}
 

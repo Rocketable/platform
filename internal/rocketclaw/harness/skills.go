@@ -354,12 +354,22 @@ func permissionPrompt(permissions PermissionSet) string {
 				}
 			}
 
-			lines = append(lines, "- "+action+" `"+inlineCode.Replace(rule.Pattern)+"`.")
+			line := "- " + action + " `" + inlineCode.Replace(rule.Pattern) + "`"
+			if len(rule.Except) > 0 {
+				excepts := make([]string, len(rule.Except))
+				for i, except := range rule.Except {
+					excepts[i] = "`" + inlineCode.Replace(except) + "`"
+				}
+
+				line += " except " + strings.Join(excepts, ", ")
+			}
+
+			lines = append(lines, line+".")
 		}
 	}
 
 	if permissions.Sudo {
-		lines = append(lines, "", "## Sudo Mode", "", "Every tool is available. Any call no rule above covers requires automatic approval.")
+		lines = append(lines, "", "## Sudo Mode", "", "Every tool is available except outside MCP tools, which follow the Mcp rules above. Any call no rule above covers requires automatic approval.")
 	}
 
 	if len(lines) == 0 {

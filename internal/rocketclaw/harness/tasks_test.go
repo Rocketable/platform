@@ -564,7 +564,7 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 }
 
 func TestEasyTaskDelegatesByModel(t *testing.T) {
-	agent, errs := loadEasyTestAgent(t, easyRequired+"\nsubagents: [gpt-6-luna, gpt-6.1-sol#high]")
+	agent, errs := loadEasyTestAgent(t, easyRequired+"\nsubagents: [gpt-6-luna, gpt-6.1-sol#high]\nmcp: {s: [read]}")
 	require.Empty(t, errs)
 
 	sessions := answeringSessions(map[string][]SessionEntry{}, false)
@@ -590,20 +590,20 @@ func TestEasyTaskDelegatesByModel(t *testing.T) {
 	require.NotContains(t, schema, "subagent_type")
 	require.Contains(t, tools["task"].Definition.Description.Value, "Available models:\n- gpt-6-luna\n- gpt-6.1-sol#high")
 
-	err := task(&agent, "call-1", args("gpt-6-luna", `["bash","s.list_reports"]`, ""))
+	err := task(&agent, "call-1", args("gpt-6-luna", `["bash"]`, ""))
 	require.NoError(t, err)
 	err = task(&agent, "call-2", args("gpt-6.1-sol#high", "null", ""))
 	require.NoError(t, err)
 
 	writes := sessions.WriteSubagentCalls()
 	require.Len(t, writes, 2)
-	require.Equal(t, []any{"main", "main", "gpt-6-luna", []string{"bash", "s.list_reports"}}, []any{writes[0].Write.Agent, writes[0].Write.Delegator, writes[0].Write.Model, writes[0].Write.Tools})
+	require.Equal(t, []any{"main", "main", "gpt-6-luna", []string{"bash"}}, []any{writes[0].Write.Agent, writes[0].Write.Delegator, writes[0].Write.Model, writes[0].Write.Tools})
 	require.Equal(t, []any{"gpt-6.1-sol#high", []string(nil)}, []any{writes[1].Write.Model, writes[1].Write.Tools}, "null gives every tool of the parent")
 
 	for _, tc := range []struct{ name, args, want string }{
 		{"unlisted model", args("gpt-7", "null", ""), `model "gpt-7" is not one of this agent's subagent models: gpt-6-luna, gpt-6.1-sol#high`},
 		{"tool the parent lacks", args("gpt-6-luna", `["bash","rocketclaw_restart"]`, ""), `tool "rocketclaw_restart" is not one of your tools`},
-		{"MCP wildcard", args("gpt-6-luna", `["s.*"]`, ""), `tool "s.*" is not one of your tools`},
+		{"MCP tool", args("gpt-6-luna", `["s.list_reports"]`, ""), `tool "s.list_reports" is not one of your tools`},
 	} {
 		err := task(&agent, "call-3", tc.args)
 		require.ErrorContains(t, err, tc.want, tc.name)
@@ -623,16 +623,15 @@ func TestEasyTaskDelegatesByModel(t *testing.T) {
 	require.Equal(t, SubagentWrite{Key: ChildKey{Path: writes[0].Write.Key.Path, Turn: "turn-call-5", Call: "call-5"}, CallKey: "turn-call-5/call/call-5", Agent: "main", Delegator: "main", Prompt: "look", Mode: ContinueEnqueue, Model: "gpt-6.1-sol#high", Tools: []string{"bash"}}, *sessions.WriteSubagentCalls()[2].Write)
 
 	subagent := agent
-	subagent.Tools = []string{"bash", "s.list_reports"}
+	subagent.Tools = []string{"bash"}
 	loop, err := factory.newLooper(&subagent, "")
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{executeToolName, loadExecuteResultToolName}, slices.Collect(maps.Keys(loop.Tools)))
 	require.Equal(t, []string{"bash"}, slices.Collect(maps.Keys(loop.CodeModeHosts)))
+	require.Empty(t, visibleMCPServers(loop.Permissions, []string{"s", "t"}), "a tools list gives the subagent no outside MCP tools")
 
-	for subject, want := range map[string]PermissionAction{"s.list_reports": PermissionAuto, "s.update_x": PermissionDeny, "t.get_x": PermissionDeny} {
-		action, _ := loop.Permissions.Evaluate(mcpPermissionBucket, subject)
-		require.Equal(t, want, action, subject)
-	}
+	action, _ := loop.Permissions.Evaluate(mcpPermissionBucket, "s.list_reports")
+	require.Equal(t, PermissionDeny, action)
 
 	subagent.Tools = []string{"task", "bash"}
 	err = task(&subagent, "call-6", args("gpt-6-luna", "null", ""))
@@ -642,6 +641,7 @@ func TestEasyTaskDelegatesByModel(t *testing.T) {
 	loop, err = factory.newLooper(&agent, "")
 	require.NoError(t, err)
 	require.Subset(t, slices.Collect(maps.Keys(loop.CodeModeHosts)), []string{"bash", "read"}, "without a list the subagent has every tool")
+	require.Equal(t, []string{"s"}, visibleMCPServers(loop.Permissions, []string{"s", "t"}), "and its agent's facets")
 }
 
 func TestEasyTaskNeedsSubagentsAndDepth(t *testing.T) {

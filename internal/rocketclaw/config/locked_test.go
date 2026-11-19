@@ -16,7 +16,7 @@ func TestLockedConfig(t *testing.T) {
 		Decision:    map[DecisionProvider]DecisionProviderConfig{DecisionTypeSafe: {APIKey: "invented"}},
 		RocketClaws: map[string]RemoteRocketClawConfig{"work": {URL: "https://work.example.ts.net"}},
 		MCPExternal: MCPExternalConfig{Users: map[string]string{"alice": "invented"}},
-		MCPServers:  map[string]MCPServerConfig{"tools": {Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}}},
+		MCPServers:  map[string]MCPServerConfig{"tools": {Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}, Tools: map[string][]string{"read": {"list_*"}}}},
 		Slack:       SlackConfig{Channels: []SlackChannelConfig{{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}}},
 		Permissions: map[string][]string{"alice": {"Ops"}},
 		Web:         WebConfig{Admins: []string{"alice"}, Tsnet: &TsnetConfig{Hostname: "rocketclaw", Tags: []string{"tag:rocketclaw"}, Origin: "https://rocketclaw.example.ts.net"}},
@@ -31,7 +31,7 @@ func TestLockedConfig(t *testing.T) {
 		snapshot.RocketClaws["work"] = RemoteRocketClawConfig{URL: "changed"}
 		snapshot.MCPExternal.Users["alice"] = "changed"
 		server := snapshot.MCPServers["tools"]
-		server.Args[0], server.Env["KEY"], server.Headers["HEADER"] = "changed", "changed", "changed"
+		server.Args[0], server.Env["KEY"], server.Headers["HEADER"], server.Tools["read"][0] = "changed", "changed", "changed", "changed"
 		snapshot.Slack.Channels[0].Channel = "changed"
 		snapshot.Slack.Channels[0].Agents[0] = "changed"
 		snapshot.Slack.Channels[0].AllowedUserIDs[0] = "changed"
@@ -47,7 +47,7 @@ func TestLockedConfig(t *testing.T) {
 	require.Equal(t, "invented", snapshot.Decision[DecisionTypeSafe].APIKey)
 	require.Equal(t, "https://work.example.ts.net", snapshot.RocketClaws["work"].URL)
 	require.Equal(t, map[string]string{"alice": "invented"}, snapshot.MCPExternal.Users)
-	require.Equal(t, MCPServerConfig{Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}}, snapshot.MCPServers["tools"])
+	require.Equal(t, MCPServerConfig{Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}, Tools: map[string][]string{"read": {"list_*"}}}, snapshot.MCPServers["tools"])
 	require.Equal(t, SlackChannelConfig{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}, snapshot.Slack.Channels[0])
 	require.Equal(t, map[string][]string{"alice": {"Ops"}}, snapshot.Permissions)
 	require.Equal(t, []string{"alice"}, snapshot.Web.Admins)

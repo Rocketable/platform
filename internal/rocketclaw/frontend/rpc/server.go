@@ -1253,7 +1253,11 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 			Workspace: cfg.Workspace, Overlays: cfg.Overlays,
 			LoggingLevel: cfg.Logging.Level, AutoApproverModel: cfg.AutoApproverModel,
 			InstrumentationEnabled: cfg.PostHog.ProjectToken != "", McpExternal: cfg.MCPExternal.Enabled,
-			McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)), Providers: cfg.ProviderNames(), CanEdit: slices.Contains(cfg.Web.Admins, username),
+			Providers: cfg.ProviderNames(), CanEdit: slices.Contains(cfg.Web.Admins, username),
+		}
+
+		for _, server := range slices.Sorted(maps.Keys(cfg.MCPServers)) {
+			view.McpServerFacets = append(view.McpServerFacets, &ConfigMCPServer{Server: server, Facets: slices.Sorted(maps.Keys(cfg.MCPServers[server].Tools))})
 		}
 	}
 

@@ -32,9 +32,10 @@ func TestSpacePermissions(t *testing.T) {
 
 	cfg := &config.Config{
 		DatabaseURL: dsn, Workspace: t.TempDir(), Permissions: map[string][]string{"alice@example.com": {"Ops"}},
-		OpenCode: map[string]config.OpenCodeConfig{"box": {URL: "https://box.example"}},
-		Slack:    config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main-agent", "ops-agent", "loose"}}}},
-		Web:      config.WebConfig{Admins: []string{"alice@example.com"}},
+		OpenCode:   map[string]config.OpenCodeConfig{"box": {URL: "https://box.example"}},
+		Slack:      config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main-agent", "ops-agent", "loose"}}}},
+		Web:        config.WebConfig{Admins: []string{"alice@example.com"}},
+		MCPServers: map[string]config.MCPServerConfig{"tickets": {URL: "https://tickets.example", Tools: map[string][]string{"read": {"list_*"}}}},
 	}
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
@@ -313,7 +314,7 @@ func TestSpacePermissions(t *testing.T) {
 
 	for ctx, want := range map[context.Context]*ConfigView{
 		alice: {TailscaleUser: "alice@example.com", SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"ops-agent"}}}},
-		bob:   {Workspace: cfg.Workspace, Providers: []string{"openai"}, TailscaleUser: "bob@example.com", SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main-agent", "ops-agent", "loose"}}}},
+		bob:   {Workspace: cfg.Workspace, McpServerFacets: []*ConfigMCPServer{{Server: "tickets", Facets: []string{"read"}}}, Providers: []string{"openai"}, TailscaleUser: "bob@example.com", SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main-agent", "ops-agent", "loose"}}}},
 	} {
 		view, err := server.listConfig(ctx)
 		require.NoError(t, err)

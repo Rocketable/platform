@@ -2089,7 +2089,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	emptyConfig, err := invoke[ListConfigResponse](ctx, connection, "ListConfig", &ListConfigRequest{})
 	require.NoError(t, err)
 	require.Empty(t, emptyConfig.Config.Overlays)
-	require.Empty(t, emptyConfig.Config.McpServers)
+	require.Empty(t, emptyConfig.Config.McpServerFacets)
 
 	for _, method := range []string{"ListConfig", "ListSkills"} {
 		_, err = invoke[ListConfigResponse](t.Context(), connection, method, &ListConfigRequest{})
@@ -2103,15 +2103,15 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	cfg.Providers = map[string]config.OpenAIConfig{"work": {APIKey: "secret-work-key", APIBaseURL: "https://secret-work"}, "anthropic": {APIKey: "secret-anthropic-key"}}
 	cfg.Slack.BotToken, cfg.Slack.AppToken = "secret-bot-token", "secret-app-token"
 	cfg.MCPServers = map[string]config.MCPServerConfig{
-		"zeta":  {URL: "https://secret-endpoint", Headers: map[string]string{"Authorization": "secret-header"}},
-		"alpha": {Command: "secret-command", Args: []string{"secret-argument"}, Env: map[string]string{"TOKEN": "secret-server-env"}},
+		"zeta":  {URL: "https://secret-endpoint", Headers: map[string]string{"Authorization": "secret-header"}, Tools: map[string][]string{"sudo": {"secret-*"}}},
+		"alpha": {Command: "secret-command", Args: []string{"secret-argument"}, Env: map[string]string{"TOKEN": "secret-server-env"}, Tools: map[string][]string{"write": {"secret-write"}, "read": {"secret-read"}}},
 	}
 	server.cfg.Store(cfg)
 
 	view, err := invoke[ListConfigResponse](ctx, connection, "ListConfig", &ListConfigRequest{})
 	require.NoError(t, err)
 
-	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-6.1-sol", InstrumentationEnabled: true, McpExternal: true, TailscaleUser: "alice", Providers: []string{"anthropic", "work", "openai"}}
+	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServerFacets: []*ConfigMCPServer{{Server: "alpha", Facets: []string{"read", "write"}}, {Server: "zeta", Facets: []string{"sudo"}}}, LoggingLevel: "info", AutoApproverModel: "gpt-6.1-sol", InstrumentationEnabled: true, McpExternal: true, TailscaleUser: "alice", Providers: []string{"anthropic", "work", "openai"}}
 	require.True(t, proto.Equal(wantConfig, view.Config), "unexpected config view: %v", view.Config)
 	encodedView, err := proto.Marshal(view)
 	require.NoError(t, err)

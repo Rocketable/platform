@@ -187,7 +187,7 @@ The model-facing tool through which an agent delegates a prompt to another agent
 
 ### Easy Agent
 
-An agent whose file sets `mode: easy`. A section its file leaves out turns on everything in it, a section it writes turns on only what it lists, and everything on is reviewed by the agent's own approver. Its shell commands run in its own folder, in the Emulated Shell unless its file names a wrapper program, and it gets only the commands, secrets, MCP tools, skills, models, and Routines its file names.
+An agent whose file sets `mode: easy`. A section its file leaves out turns on everything in it, except MCP, which stays off until its file names an MCP Facet; a section it writes turns on only what it lists, and everything on is reviewed by the agent's own approver. Its shell commands run in its own folder, in the Emulated Shell unless its file names a wrapper program, and it gets only the commands, secrets, MCP tools, skills, models, and Routines its file names.
 
 ### Sticky Session
 
@@ -321,6 +321,11 @@ Its subagents run as child sessions on that server that record it as their paren
 The MCP server RocketClaw serves for each configured OpenCode coding server, through which an agent in a Remote OpenCode Session reads and changes that session's tags and publishes its Hosted Pages.
 
 Each tool call acts on the Remote OpenCode Session that made it, or for a subagent's call on the nearest ancestor RocketClaw keeps a copy of, and is refused when there is none. RocketClaw adds the bridge to the coding server itself, one folder at a time: before relaying a person's message from the Web it adds it to that session's folder, so the turn the message starts already has the tools, and each sync adds it to every folder the server has open that lacks it. An addition lasts only until the server restarts or closes that folder, and the next message or sync adds it again.
+
+### MCP Facet
+
+A named slice of one configured outside MCP server's tools, such as `read`, `write`, or `sudo`, defined by tool-name patterns. Agents reach outside MCP tools only through the facets their files name, and sudo agents through every facet; a tool in no facet is reachable by no agent.
+*Avoid:* tool group
 
 ### Pull Requests Pane
 

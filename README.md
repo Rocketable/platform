@@ -280,7 +280,7 @@ One more setting controls who may write into an agent's sessions:
 
 Name each tool under `permission.rocketclaw`. Wildcards such as `"*"` and the short form `rocketclaw: allow` are not accepted there.
 
-To give one agent every tool and feature, including ones added later, set `sudo: yes` in its frontmatter (`true`, `1`, `on` or `yes`; `false`, `0`, `off` or `no` turn it off). Sudo replaces the agent's `permission` block: every call goes to the guardian for review first, including each `execute` script and every call inside it. Skills, `task` delegation, `ask_user_question`, `rocketclaw_update_goal`, `rocketclaw_attach_files_to_response`, scheduled messages and `rocketclaw_reload` run without review. Web search runs on the provider and is never reviewed. Session tag groups still go under `permission.rocketclaw.rocketclaw_set_tag`, and `permission.rocketclaw.rocketclaw_sessions_recipient` may stay too. Sudo does not lift `.env` blocking, workspace confinement, or `maxRecursion`, and it does not pass to subagents.
+To give one agent every tool and feature, including ones added later, set `sudo: yes` in its frontmatter (`true`, `1`, `on` or `yes`; `false`, `0`, `off` or `no` turn it off). Sudo replaces the agent's `permission` block: every call goes to the guardian for review first, including each `execute` script and every call inside it. Its outside MCP tools are every [facet](#outside-mcp-tools) of every configured server; a tool in no facet stays out of reach. Skills, `task` delegation, `ask_user_question`, `rocketclaw_update_goal`, `rocketclaw_attach_files_to_response`, scheduled messages and `rocketclaw_reload` run without review. Web search runs on the provider and is never reviewed. Session tag groups still go under `permission.rocketclaw.rocketclaw_set_tag`, and `permission.rocketclaw.rocketclaw_sessions_recipient` may stay too. Sudo does not lift `.env` blocking, workspace confinement, or `maxRecursion`, and it does not pass to subagents.
 
 ```yaml
 sudo: yes
@@ -327,6 +327,53 @@ Permission reviews also receive the current turn's submitted input and incorpora
 
 The complete input evidence is included even when the transcript still contains the same text. Large inputs therefore increase both review prompt size and checkpoint writes; compaction does not reduce this evidence.
 
+### Outside MCP tools
+
+`mcp_servers` in `rocketclaw.json` lists the outside MCP servers agents may call from `execute` scripts. Each server sets either `command` (with optional `args`, `env` and `cwd`, run on the host) or `url` (with optional `headers`), and names its facets under `tools`: named slices of its tools that agents are granted by name. Server names use letters, digits, `_` and `-`.
+
+```json
+"mcp_servers": {
+  "stripe": {
+    "url": "https://mcp.stripe.com",
+    "headers": {"Authorization": {"aws": {"arn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:stripe", "key": "bearer"}}},
+    "tools": {
+      "read": ["list_*", "get_*", "retrieve_balance", "-get_secret_*"],
+      "write": ["create_*", "update_*"],
+      "sudo": ["*"]
+    }
+  }
+}
+```
+
+- A facet is a list of tool names. `*` stands for any text and `?` for one character; there are no regular expressions. An entry starting with `-` removes the tools it matches from that facet, wherever it sits in the list. Facet names use letters, digits, `_` and `-`, and facets may overlap.
+- A tool in no facet is reachable by no agent, sudo agents included.
+- Credentials in `env` and `headers` can come from AWS Secrets Manager with the `{"aws": ...}` reference described in [Getting started](#getting-started). For the same reason, a server whose only facet is named `aws` fails to load; name it otherwise.
+
+Agents get outside MCP tools only by naming a server and its facets. A file that names none gets none.
+
+- An easy agent lists facets: `mcp: {stripe: [read, write]}`. Its approver uses `approver.mcp` the same way.
+- An advanced agent gives each facet a level under `permission`: `allow` runs the facet's tools without review, and `auto` sends each call to the reviewer. When a tool sits in several granted facets, the more careful level wins.
+
+  ```yaml
+  permission:
+    mcp:
+      stripe: {read: allow, write: auto}
+  ```
+
+- A sudo agent gets every facet of every server, reviewed.
+- A `task` subagent started with a `tools` list gets no outside MCP tools; one started with `tools: null` keeps its agent's facets.
+
+An unknown server or facet fails agent loading, and one agent file that fails to load stops RocketClaw from starting.
+
+Release note for MCP facets:
+
+- **Breaking:** an easy agent whose file leaves out `mcp:` no longer gets every MCP tool; it gets none. `mcp: auto` and `{server: auto}` fail to load; list facets instead.
+- **Breaking:** advanced agents' raw `mcp` rules such as `"memory.*": allow`, a scalar `mcp: allow`, and `deny` or `auto(name)` levels fail to load. Define facets on the server and grant them as `{server: {facet: allow|auto}}`.
+- **Breaking:** sudo agents get only tools in some facet. Give a server a facet such as `all: ["*"]` to keep every tool.
+- **Breaking:** `task` no longer accepts MCP tools by `server.tool` name, and a `tools` list leaves out every MCP tool.
+- `tools.read` and `tools.write` keep working as two facets named `read` and `write`, and may now overlap. Server names may no longer contain `.`.
+- Fix agent files before upgrading and keep the old ones for a rollback: the new release refuses old-form files and the old release refuses new-form ones.
+
 ### Agent editor
 
 The Agents page in the Web page has **Create New Agent** and, on each agent, **Edit**. They open the agent editor, where you pick an easy or advanced agent, fill in its settings and instructions with plain-language help, talk to it before it is saved, compare variants and the live agent side by side, and get suggestions from an assistant. Drafts are stored on the server, and teammates who open a draft's link edit it with you live. Only people with no space limits can use the editor, because a draft can give itself any permission and its test chats run real tools.
@@ -352,9 +399,9 @@ Cron files and routines follow their agent. Each run of a `global` agent, from a
 
 An agent file with `mode: easy` uses a shorter format. Leaving `mode` out, or `mode: advanced`, keeps the format described above; any other value fails to load. The rules of an easy file:
 
-- A section left out, or set to `auto`, turns on everything in it. A section written out turns on only what it lists.
+- A section left out, or set to `auto`, turns on everything in it. A section written out turns on only what it lists. `mcp` is the exception: it turns on only the [facets](#outside-mcp-tools) it lists, and nothing when left out.
 - Everything turned on is reviewed before it runs by the agent's approver: the guardian, on `approver.model` when set, with `approver.prompt` added to its rules. `approver.decision` (`model`, `minConfidence`, `prompt`) sets the decision model asked first and its own rules. With `approver.prompt` set and no `approver.decision.prompt`, reviews are never pre-gated; write the rules in both to pre-gate them. As under `sudo`, skills, `task`, web search and the default-on RocketClaw tools (reload, scheduled messages, attaching files, goal updates and questions) run without review, and so does the `decision` tool for the models the `decision` list names.
-- The approver works in the agent's `workingDirectory` and kind of shell, and has no `workingDirectory` of its own. Its `read`, `glob` and `grep` see that folder as the agent's do, not the workspace. It has only those three tools unless `approver` gives it more, with the keys the agent itself uses: `rocketclaw`, `tags`, `skills`, `mcp`, `allowedNetworkTargets`, `commands` and `secretsARN`. They are written and checked exactly as the agent's are, with three differences. A key left out of `approver` turns on nothing, where the same key left out of the agent turns on everything. Nothing reviews the approver: whatever its keys turn on runs at once. And `approver.rocketclaw` takes only `sessions`, `pages` and `tags`; `background` and `restart` fail to load. `tags` are set on the chat it is reviewing. Its `sessions` writes go out under the name `guardian`, so an agent whose `delegatedFrom` is a list must name `guardian` to accept them. `commands` gives it a shell with those commands, which get only the approver's own `secretsARN`, never the agent's. `allowedNetworkTargets` gives it `webfetch` and sets what that shell's `curl` reaches; left out, the shell reaches no network. It uses its tools only while it reviews: a review the decision model settles first never reaches them.
+- The approver works in the agent's `workingDirectory` and kind of shell, and has no `workingDirectory` of its own. Its `read`, `glob` and `grep` see that folder as the agent's do, not the workspace. It has only those three tools unless `approver` gives it more, with the keys the agent itself uses: `rocketclaw`, `tags`, `skills`, `mcp`, `allowedNetworkTargets`, `commands` and `secretsARN`. They are written and checked exactly as the agent's are, with three differences. A key left out of `approver` turns on nothing, where the same key left out of the agent turns on everything, except `mcp`, which stays off for both. Nothing reviews the approver: whatever its keys turn on runs at once. And `approver.rocketclaw` takes only `sessions`, `pages` and `tags`; `background` and `restart` fail to load. `tags` are set on the chat it is reviewing. Its `sessions` writes go out under the name `guardian`, so an agent whose `delegatedFrom` is a list must name `guardian` to accept them. `commands` gives it a shell with those commands, which get only the approver's own `secretsARN`, never the agent's. `allowedNetworkTargets` gives it `webfetch` and sets what that shell's `curl` reaches; left out, the shell reaches no network. It uses its tools only while it reviews: a review the decision model settles first never reaches them.
 - An `execute` script is reviewed once, whole, before it runs, and that approves every call it makes: its calls are not reviewed again. The approver sees the script's code but not the values it reads or fetches while it runs. A call the file does not turn on is still refused.
 - `model`, `space` and `workingDirectory` are required. A misspelled or unknown key fails to load, and so do the advanced keys `description`, `reasoningEffort`, `verbosity`, `permission`, `sudo`, `guardrail` and `additionalInstructions`.
 - The body is the agent's whole instructions. Easy agents never load `AGENTS.md` and get no reply-style line; write ``!`cat AGENTS.md` `` in the body to include it.
@@ -426,7 +473,7 @@ How an easy agent runs:
 - The emulated shell sees only the turn's `ROCKETCLAW_*` variables. The programs `commands` starts run in host bash with RocketClaw's environment plus the `secretsARN` secrets. Each secret is a JSON object of string values, and each key becomes one variable. Secrets are fetched on every turn; a failure fails the turn and names the ARN and key.
 - ``!`…` `` lines in the body and in the `SKILL.md` of a skill the agent loads run in host bash, from the workspace, with the secrets. A skill's lines run before the model's arguments go in, so text the model passes never runs. Those in a routine's instruction run in the agent's own shell, from the `workingDirectory`, as `bash` calls do: in the emulated shell, or through a wrapper with RocketClaw's environment and `ROCKETCLAW_ENVIRONMENT` but not the secrets.
 - `allowedNetworkTargets` limits `webfetch` with exactly the rules the shell's `curl` follows: both use the same client.
-- `task` takes a `model` from `subagents` and the `tools` the subagent gets, `null` for all of the parent's. An entry ending in `*`, such as `anthropic/*`, allows every model whose name, `#effort` included, starts with the text before the `*`; a `*` anywhere else fails loading. The subagent runs the parent's own file, with the same folder, approver and secrets. Advanced agents cannot `task` an easy agent; they write to its sessions with `rocketclaw_sessions`, which `delegatedFrom` limits.
+- `task` takes a `model` from `subagents` and the `tools` the subagent gets, `null` for all of the parent's; a list leaves out every outside MCP tool. An entry ending in `*`, such as `anthropic/*`, allows every model whose name, `#effort` included, starts with the text before the `*`; a `*` anywhere else fails loading. The subagent runs the parent's own file, with the same folder, approver and secrets. Advanced agents cannot `task` an easy agent; they write to its sessions with `rocketclaw_sessions`, which `delegatedFrom` limits.
 - Each routine runs the agent on a schedule written as in a cron file, with its instruction, or with `Scheduled run (<schedule>).` for a bare schedule. It reports like a cron job, in the agent's `space`. The Cron page lists it as `<agent> · <schedule>`, and `cron:<agent>` finds its runs. Schedules repeat; `rocketclaw_schedule_message` sends a single future run. A cron file cannot name an easy agent. Renaming the agent file leaves earlier routine runs under the old name.
 - A shadow must use its parent's mode; one that does not is dropped with a warning. An easy shadow needs the same required keys, and its `space` may differ. Routine runs get no shadows, and a shadow's own `routines` never run.
 
