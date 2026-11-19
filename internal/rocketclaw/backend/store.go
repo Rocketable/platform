@@ -1190,7 +1190,7 @@ running AS (
 ), everyone AS (
     SELECT auto_park FROM web_tab_states WHERE username = $6
 ), reads AS (
-    SELECT conversation_id, unread_at, quiet, parked, NULLIF(until, 'infinity') AS until, until = 'infinity' AS until_done, note, auto_park
+    SELECT conversation_id, unread_at, quiet, parked, unfollowed, NULLIF(until, 'infinity') AS until, until = 'infinity' AS until_done, note, auto_park
     FROM web_tab_attention WHERE username = $6 AND conversation_id IS NOT NULL
 ), local AS (
 SELECT
@@ -1220,6 +1220,7 @@ SELECT
     u.unread_at,
     COALESCE(u.quiet, FALSE) AS quiet,
     COALESCE(u.parked, FALSE) AS parked,
+    COALESCE(u.unfollowed, FALSE) AS unfollowed,
     u.until,
     COALESCE(u.until_done, FALSE) AS until_done,
     COALESCE(u.note, '') AS note,
@@ -1241,7 +1242,7 @@ WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY(
 ), remote AS (
 SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, FALSE AS paused, FALSE AS pausable, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
     o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at, COALESCE(u.quiet, FALSE),
-    COALESCE(u.parked, FALSE), u.until, COALESCE(u.until_done, FALSE), COALESCE(u.note, ''), COALESCE(u.auto_park, e.auto_park, TRUE),
+    COALESCE(u.parked, FALSE), COALESCE(u.unfollowed, FALSE), u.until, COALESCE(u.until_done, FALSE), COALESCE(u.note, ''), COALESCE(u.auto_park, e.auto_park, TRUE),
     0, FALSE AS queued, FALSE AS external_mcp, 0,
     '', '', '', 'null'::jsonb, '', '', '', NULL::bigint, FALSE
 FROM conversations o
@@ -1270,13 +1271,13 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			origin         chatOriginScan
 		)
 
-		dest := make([]any, 0, 44)
+		dest := make([]any, 0, 45)
 
 		for rows.Next() {
 			var row SidebarSession
 
 			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Paused, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
-				&row.Attention.Parked, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &since, &row.Queued, &row.External, &arrived)
+				&row.Attention.Parked, &row.Attention.Unfollowed, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &since, &row.Queued, &row.External, &arrived)
 			if err := origin.read(rows, &row.Origin, dest...); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return

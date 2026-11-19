@@ -604,7 +604,10 @@ active tab.
   notification. It comes back by itself, bold with a notification, when its
   time is up (“Park ended”), when the turn it waited for ends (the reply's own
   notification), or when its agent asks you a question, within a poll, also
-  when you had closed it. A parked Shared row stays
+  when you had closed it; on a tab you unfollowed a question leaves the park
+  alone, and a park that ends brings no mark or notification. Folded, Parked's
+  header, a server and a space say **Needs you** while a row they hide asks
+  you something. A parked Shared row stays
   where it is, dimmed for you alone; Parked also lists a parked Shared row,
   which opens in its space without a tab of your own. Screen readers hear “Parked”, “Parked
   until …”, or “Parked until it is done”. Close others, Close to the right,
@@ -622,6 +625,16 @@ active tab.
   wins over the Config choice. Both are yours alone and kept by the server, so
   they follow you to every device. A message queued behind a running turn
   parks until that turn ends, not until its own does.
+- **Follow.** Every tab starts followed. Its menu, Shared and parked rows
+  included, ends the attention items with **Unfollow**, or **Follow** once you
+  unfollowed it; with several tabs selected, Unfollow acts on the followed
+  ones. On a tab you unfollowed the server marks nothing for you: no turn end,
+  question, finished search, cron run, stored page, or park's end turns it
+  bold, counts it, or notifies. Unfollowing clears its bold and keeps its
+  park; following again brings back nothing missed. **Mark as unread** still
+  works on it, and an agent asking on it still shows **Needs you**, which does
+  not count. Your choice is yours alone, kept by the server, and follows you to
+  every device.
 - **Attention follows you.** Bold and parks are yours alone, kept by the
   server for every kind of tab, so they show on every device. Closing a tab
   keeps its mark, a park with a time, and a park until it is done; closing a
@@ -663,7 +676,8 @@ active tab.
   (below): the server keeps one list, oldest first, starting with **Main**, and
   names are unique ignoring case. Every tab
   belongs to one space. The strip is one list of cards from every RocketClaw
-  server: each server's Shared card (see Shared below) and one card per space.
+  server: one card per space, which holds that space's Shared tabs (see Shared
+  below) above your own.
   You put the cards in your own order: drag a card's title onto another card,
   above or below its middle, or press Shift+ArrowUp or Shift+ArrowDown on the
   title. A card you have not placed yet, such as a new space's, comes last, in
@@ -675,16 +689,19 @@ active tab.
   page you are on; only the current space's card is tinted. Its title shows an
   open folder, or a closed one while the card is folded, its name, "· offline"
   while its server does not answer, a spinner while a turn runs in one of its
-  tabs, and a blue count of its tabs waiting for you; clicking the title folds
+  tabs, and a blue count of its tabs, its Shared rows included, waiting for
+  you; a tab that asks you something without being unread does not add to the
+  count. Clicking the title folds
   or unfolds the card. After the title come **Needs you** while one of its
   sessions asks you something, and a **…** button for the space's actions. Its
-  body holds the space's tabs and groups, which work as described above in every
+  body holds the space's Shared group, then its tabs and groups, which work as described above in every
   card, another server's included: open, close, select, reorder within the
   card, and take their full menu. Double-clicking a card's empty area starts a
   new session in its space. Changes to another server's cards save on that
   server, and opening one of its tabs moves the page to that server. Every
-  card starts unfolded; a folded card lists only its tabs that wait for you or
-  ask you something, and the tab in view. Your card order, your order of parked
+  card starts unfolded; a folded card lists only the tab in view, when it is
+  one of the card's, under its group's header or the Shared pill, which still
+  go bold and say **Needs you** for the tabs the fold hides. Your card order, your order of parked
   tabs, and which cards and
   Parked branches are folded are saved on the local server, so they are the same
   on every server's page and every device. The **…** menu offers **Go to
@@ -750,12 +767,13 @@ active tab.
   menu and the command palette offer **Add to Shared** and **Remove from
   Shared**; both change the tab's space's Shared tabs for everyone in the
   space, one tab at a time, so two people's changes never undo each other. New
-  session and sessions no Web user may open cannot be shared. Each server has
-  one **Shared** card, which has no **…** menu and lists every space's Shared tabs
-  in your own order, newly added ones last, under a grey pill naming the space
-  when the server has more than one space. Clicking a pill folds that space's
-  rows for you, like a tab group, except the one in view. The card is hidden while the server has
-  no Shared tabs. A tab can be in Shared and among your own tabs
+  session and sessions no Web user may open cannot be shared. Each space's card
+  lists its Shared tabs first, in your own order, newly added ones last, under a
+  grey **Shared** pill. Clicking the pill folds those rows for you, like a tab
+  group, except the one in view; folded, the pill goes bold while a hidden row
+  waits for you and says **Needs you** while one asks you something. Whether it
+  is folded is saved with your card layout. The group is hidden while the space
+  has no Shared tabs. A tab can be in Shared and among your own tabs
   at once, and both rows light up while it is open. Opening a Shared row adds no
   tab of your own and opens it in its space. Shared rows show a people
   icon instead of a close button, and their menu offers only **Copy link**,
@@ -767,8 +785,7 @@ active tab.
   Shared rows never drop on each other. Otherwise the keyboard treats them as
   tabs: Cmd/Ctrl+[ and ] step through the current space's Shared rows and then
   your own tabs, each tab once, and arrows, Home, and End cross between the
-  lists. Your Shared order follows you across devices. The Shared card folds
-  and moves like any card. When the Shared tab you are viewing is removed, the window
+  lists. Your Shared order follows you across devices. When the Shared tab you are viewing is removed, the window
   enters its space as it does for a tab closed elsewhere. Other people's changes arrive
   when a window regains focus. Deleting a space moves its Shared tabs into the
   first remaining space's, and deleting a session takes it out of every Shared

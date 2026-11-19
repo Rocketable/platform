@@ -19,6 +19,7 @@ type Attention struct {
 	Path          string
 	UnreadAt      time.Time
 	Quiet, Parked bool
+	Unfollowed    bool
 	Until         time.Time
 	UntilDone     bool
 	Note          string
@@ -34,6 +35,8 @@ const (
 	AttentionUnpark        AttentionAction = "unpark"
 	AttentionAutoPark      AttentionAction = "auto_park"
 	AttentionNoAutoPark    AttentionAction = "no_auto_park"
+	AttentionFollow        AttentionAction = "follow"
+	AttentionUnfollow      AttentionAction = "unfollow"
 	AttentionSent          AttentionAction = "sent"
 )
 
@@ -56,6 +59,7 @@ const markTabsSQL = `, strongest AS (
         unread_at = COALESCE(excluded.unread_at, a.unread_at),
         quiet = CASE WHEN excluded.unread_at IS NULL THEN a.quiet ELSE a.parked END,
         note = CASE WHEN excluded.unread_at IS NULL THEN a.note ELSE excluded.note END
+    WHERE NOT a.unfollowed
     RETURNING a.path
 )`
 
@@ -225,20 +229,22 @@ ON CONFLICT (username) DO UPDATE SET revision = web_tab_states.revision`, userna
     WHERE (l.conversation_id = '' AND $4::text NOT IN ('park_done', 'auto_park', 'no_auto_park') OR c.conversation_id IS NOT NULL)
         AND (NOT $6 OR COALESCE(o.auto_park, e.auto_park))
 )
-INSERT INTO web_tab_attention AS a (username, path, conversation_id, unread_at, quiet, parked, until, auto_park)
+INSERT INTO web_tab_attention AS a (username, path, conversation_id, unread_at, quiet, parked, until, auto_park, unfollowed)
 SELECT $1, path, conversation_id, CASE WHEN $4::text = 'unread' THEN now() END, $4::text = 'unread', $4::text IN ('park', 'park_done'),
-    CASE $4::text WHEN 'park' THEN $5::timestamptz WHEN 'park_done' THEN 'infinity' END, CASE $4::text WHEN 'auto_park' THEN TRUE WHEN 'no_auto_park' THEN FALSE END
+    CASE $4::text WHEN 'park' THEN $5::timestamptz WHEN 'park_done' THEN 'infinity' END, CASE $4::text WHEN 'auto_park' THEN TRUE WHEN 'no_auto_park' THEN FALSE END,
+    $4::text = 'unfollow'
 FROM locations ORDER BY path
 ON CONFLICT (username, path) DO UPDATE SET
-    unread_at = CASE $4::text WHEN 'read' THEN NULL WHEN 'unread' THEN now() ELSE a.unread_at END,
+    unread_at = CASE $4::text WHEN 'read' THEN NULL WHEN 'unfollow' THEN NULL WHEN 'unread' THEN now() ELSE a.unread_at END,
     quiet = CASE $4::text WHEN 'unread' THEN TRUE WHEN 'park' THEN a.quiet OR a.unread_at IS NOT NULL
         WHEN 'park_done' THEN a.quiet OR a.unread_at IS NOT NULL ELSE a.quiet END,
-    note = CASE $4::text WHEN 'unread' THEN '' ELSE a.note END,
+    note = CASE WHEN $4::text IN ('unread', 'unfollow') THEN '' ELSE a.note END,
     parked = CASE $4::text WHEN 'park' THEN TRUE WHEN 'park_done' THEN TRUE WHEN 'unpark' THEN FALSE ELSE a.parked END,
-    until = CASE WHEN $4::text IN ('read', 'unread', 'auto_park', 'no_auto_park') THEN a.until ELSE excluded.until END,
+    until = CASE WHEN $4::text IN ('park', 'park_done', 'unpark') THEN excluded.until ELSE a.until END,
     auto_park = COALESCE(excluded.auto_park, a.auto_park),
+    unfollowed = CASE $4::text WHEN 'unfollow' THEN TRUE WHEN 'follow' THEN FALSE ELSE a.unfollowed END,
     worked = a.worked AND $4::text NOT IN ('park', 'park_done'),
-    resumes = a.resumes AND $4::text IN ('auto_park', 'no_auto_park')
+    resumes = a.resumes AND $4::text IN ('auto_park', 'no_auto_park', 'follow', 'unfollow')
 WHERE CASE $4::text WHEN 'unread' THEN a.unread_at IS NULL AND NOT a.parked WHEN 'unpark' THEN a.parked ELSE TRUE END
 RETURNING a.path`, "change attention", username, paths, conversations, string(action), until, sent)
 	if err != nil {
@@ -246,7 +252,7 @@ RETURNING a.path`, "change attention", username, paths, conversations, string(ac
 	}
 
 	if _, err := execState(ctx, tx, "delete idle attention", `DELETE FROM web_tab_attention
-WHERE username = $1 AND path = ANY($2) AND unread_at IS NULL AND NOT parked AND until IS NULL AND auto_park IS NULL AND NOT resumes`, username, changed); err != nil {
+WHERE username = $1 AND path = ANY($2) AND unread_at IS NULL AND NOT parked AND until IS NULL AND auto_park IS NULL AND NOT resumes AND NOT unfollowed`, username, changed); err != nil {
 		return err
 	}
 
@@ -384,8 +390,8 @@ FROM web_tab_states WHERE username = $1 FOR UPDATE`, username).Scan(&viewing)
     SELECT path FROM web_tab_attention WHERE username = $1 AND until <= now() ORDER BY path FOR UPDATE SKIP LOCKED
 )
 UPDATE web_tab_attention a SET parked = FALSE, until = NULL, worked = a.worked AND a.resumes,
-    unread_at = CASE WHEN a.path = $2 THEN a.unread_at ELSE now() END, quiet = a.quiet AND a.path = $2,
-    note = CASE WHEN a.path = $2 OR a.unread_at >= a.until THEN a.note ELSE 'Park ended' END
+    unread_at = CASE WHEN a.path = $2 OR a.unfollowed THEN a.unread_at ELSE now() END, quiet = a.quiet AND (a.path = $2 OR a.unfollowed),
+    note = CASE WHEN a.path = $2 OR a.unfollowed OR a.unread_at >= a.until THEN a.note ELSE 'Park ended' END
 FROM due d WHERE a.username = $1 AND a.path = d.path AND a.until <= now()
 RETURNING a.path`, "wake tab timers", username, viewing)
 	if err != nil {
@@ -451,14 +457,14 @@ ON CONFLICT (username) DO UPDATE SET auto_park = excluded.auto_park`, username, 
 }
 
 func (s *SessionService) TabAttention(ctx context.Context, username string) ([]Attention, error) {
-	return queryRows(ctx, s.db, `SELECT path, unread_at, quiet, parked, until, note FROM web_tab_attention
+	return queryRows(ctx, s.db, `SELECT path, unread_at, quiet, parked, unfollowed, until, note FROM web_tab_attention
 WHERE username = $1 AND conversation_id IS NULL ORDER BY path`, "tab attention", func(row rowScanner) (Attention, error) {
 		var (
 			attention     Attention
 			unread, until sql.NullTime
 		)
 
-		if err := row.Scan(&attention.Path, &unread, &attention.Quiet, &attention.Parked, &until, &attention.Note); err != nil {
+		if err := row.Scan(&attention.Path, &unread, &attention.Quiet, &attention.Parked, &attention.Unfollowed, &until, &attention.Note); err != nil {
 			return Attention{}, fmt.Errorf("read tab attention: %w", err)
 		}
 

@@ -49,12 +49,17 @@
      one a person prompted does. FALSE is the OpenCode sync, which turns an idle marker
      into readers only through the stamped prompts before it.
    - EndsAtIdle: a park until it is done ends once its session is idle after a turn ended, or at a
-     failed turn. FALSE is the earlier rule: any turn end or news on the session ends it. *)
+     failed turn. FALSE is the earlier rule: any turn end or news on the session ends it.
+   - FollowGates: the server writes no mark on a tab the person unfollowed, and a question leaves
+     its park alone. FALSE is a server that ignores Follow. The person may Follow or Unfollow up
+     to MaxFollowMoves times, and the tab may start either way, as an unfollowed start is an
+     Unfollow before anything happens. *)
 EXTENDS Naturals
 
 CONSTANTS Windows, MaxTime, MaxEvents, MaxTabMoves,
           ServerOwnsPark, ClientFiltersPark, SameFeed, JobChecksTimer, QuietMarks, QuietKeepsMark,
-          SharedQuiet, TabPresence, DeferStale, ReopenQuiets, QuestionOnClosed, WakeReaches, EndsAtIdle
+          SharedQuiet, TabPresence, DeferStale, ReopenQuiets, QuestionOnClosed, WakeReaches, EndsAtIdle,
+          FollowGates, MaxFollowMoves
 
 None   == [kind |-> "none", at |-> 0]
 \* A park until the session is idle after its work, which no clock ends: it has no time and no job.
@@ -91,24 +96,33 @@ variables
     poppedSettled = FALSE, \* ghost: a pop-up was raised for a settled mark
     poppedNoTab = FALSE,   \* ghost: a pop-up was raised while the person had no tab
     staleFire = FALSE,     \* ghost: a timer job acted after its timer was replaced or cancelled
-    earlyEnd = FALSE;      \* ghost: a park until it is done ended while the session was busy, not by a failure or a question
+    earlyEnd = FALSE,      \* ghost: a park until it is done ended while the session was busy, not by a failure or a question
+    followed \in BOOLEAN,  \* the person follows the tab
+    followMoves = 0,       \* Follow and Unfollow choices made so far
+    markedUnfollowed = FALSE,     \* ghost: the server wrote a mark while the person did not follow the tab
+    poppedUnfollowed = FALSE,     \* ghost: a pop-up was raised while the person did not follow the tab
+    unfollowedParkBroken = FALSE; \* ghost: a question ended a park while the person did not follow the tab
 
 define
     Bold == unreadAt # 0 /\ ~parked
     ParkChoices   == {None, Done} \cup {[kind |-> "park", at |-> a] : a \in (now + 1)..MaxTime}
+    \* The server marks nothing for this person.
+    Silent == FollowGates /\ ~followed
 end define;
 
 \* A new mark on a session that is not parked, for a person who has the tab or not. A quiet
 \* one never owes a pop-up, and one written while the person has no tab must never pop up,
-\* also once it is back.
-macro Write(isQuiet, tab) begin
+\* also once it is back. byServer tells a mark the server writes from one the person sets.
+macro Write(isQuiet, tab, byServer) begin
     seq := seq + 1 || unreadAt := seq + 1 || quiet := isQuiet
-        || owed := owed \/ (~isQuiet /\ tab) || settled := IF tab THEN settled ELSE seq + 1;
+        || owed := owed \/ (~isQuiet /\ tab) || settled := IF tab THEN settled ELSE seq + 1
+        || markedUnfollowed := markedUnfollowed \/ (byServer /\ ~followed);
 end macro;
 
 \* A new mark on a parked session. It must never pop up.
 macro ParkedWrite() begin
-    seq := seq + 1 || unreadAt := seq + 1 || quiet := QuietMarks || settled := seq + 1;
+    seq := seq + 1 || unreadAt := seq + 1 || quiet := QuietMarks || settled := seq + 1
+        || markedUnfollowed := markedUnfollowed \/ ~followed;
 end macro;
 
 macro Clear() begin
@@ -140,12 +154,12 @@ PersonActs:
                         || earlyEnd := earlyEnd \/ (more /\ ~failed);
                 end if;
                 if failed then resume := Off end if;
-                if ~woke \/ WakeReaches then
+                if (~woke \/ WakeReaches) /\ ~Silent then
                     if ~viewing /\ parked then
                         happened := TRUE;
                         if ~ServerOwnsPark then ParkedWrite() end if;
                     elsif ~viewing then
-                        Write(FALSE, hasTab);
+                        Write(FALSE, hasTab, TRUE);
                     end if;
                 end if;
             end with;
@@ -157,19 +171,21 @@ PersonActs:
                 timer := [kind |-> "park", at |-> now] || jobs := jobs \cup {[kind |-> "park", at |-> now]}
                     || earlyEnd := earlyEnd \/ busy;
             end if;
-            if parked then
+            if Silent then
+                skip;
+            elsif parked then
                 happened := TRUE;
                 if ~ServerOwnsPark then ParkedWrite() end if;
             else
-                Write(FALSE, hasTab);
+                Write(FALSE, hasTab, TRUE);
             end if;
         or
             \* Something new that only turns the tab bold for this person, with no pop-up: they see
             \* the tab only in a Shared group. It never unparks, also when it is an agent's question.
-            await SharedQuiet /\ hasTab /\ seq < MaxEvents /\ ~viewing;
+            await SharedQuiet /\ hasTab /\ seq < MaxEvents /\ ~viewing /\ ~Silent;
             if ~parked then
                 if unreadAt = 0 then
-                    Write(TRUE, TRUE);
+                    Write(TRUE, TRUE, TRUE);
                 elsif ~QuietKeepsMark then
                     seq := seq + 1 || unreadAt := seq + 1 || quiet := TRUE;
                 end if;
@@ -181,22 +197,27 @@ PersonActs:
             end if;
         or
             \* A running turn's agent asks. A question breaks a park, and the server remembers the park it
-            \* ended; on a closed tab as QuestionOnClosed says.
+            \* ended; on a closed tab as QuestionOnClosed says. A tab the person does not follow keeps its
+            \* park and gets no mark.
             await busy /\ seq < MaxEvents /\ ~asking;
             asking := TRUE;
-            if parked /\ QuestionOnClosed = "due" then
+            if Silent then
+                skip;
+            elsif parked /\ QuestionOnClosed = "due" then
                 timer := [kind |-> "park", at |-> now] || jobs := jobs \cup {[kind |-> "park", at |-> now]}
-                    || resume := IF resume = Off THEN timer ELSE resume;
+                    || resume := IF resume = Off THEN timer ELSE resume
+                    || unfollowedParkBroken := unfollowedParkBroken \/ ~followed;
                 if ~viewing then ParkedWrite() end if;
             elsif ~hasTab /\ parked /\ QuestionOnClosed = "keep" then
                 ParkedWrite();
             else
                 if ~hasTab /\ parked /\ QuestionOnClosed = "restore" then
                     hasTab := TRUE || tabRev := tabRev + 1;
-                    Write(FALSE, TRUE);
+                    Write(FALSE, TRUE, TRUE);
                 elsif ~viewing then
-                    Write(FALSE, hasTab);
+                    Write(FALSE, hasTab, TRUE);
                 end if;
+                unfollowedParkBroken := unfollowedParkBroken \/ (parked /\ ~followed);
                 parked := FALSE || happened := FALSE || timer := None;
             end if;
         or
@@ -206,7 +227,7 @@ PersonActs:
         or
             \* Marking the tab, unread or read, is the person's own choice: the park a question ended stays ended.
             await hasTab /\ seq < MaxEvents /\ unreadAt = 0 /\ ~parked;
-            Write(TRUE, TRUE);
+            Write(TRUE, TRUE, FALSE);
             hold := viewing || resume := Off;
         or
             await hasTab /\ unreadAt # 0;
@@ -232,7 +253,7 @@ PersonActs:
         or
             \* Unparking leaves what happened bold, without a pop-up.
             await hasTab /\ parked;
-            if ServerOwnsPark /\ happened /\ unreadAt = 0 /\ ~viewing then Write(TRUE, TRUE) end if;
+            if ServerOwnsPark /\ happened /\ unreadAt = 0 /\ ~viewing /\ ~Silent then Write(TRUE, TRUE, TRUE) end if;
             parked := FALSE || happened := FALSE || timer := None || resume := Off;
         or
             \* Closing keeps the mark, a timed park and a park until it is done; it ends a park until
@@ -246,6 +267,15 @@ PersonActs:
             \* Opening the tab again shows the mark it kept, bold; when the reopen settles it, quietly.
             await TabPresence /\ ~hasTab;
             hasTab := TRUE || tabRev := tabRev + 1 || quiet := IF ReopenQuiets /\ unreadAt # 0 THEN TRUE ELSE quiet;
+        or
+            \* Unfollowing clears the mark and keeps any park, its timer and the park a question ended.
+            await hasTab /\ followed /\ followMoves < MaxFollowMoves;
+            followed := FALSE || followMoves := followMoves + 1 || hold := FALSE;
+            Clear();
+        or
+            \* Following again brings back nothing that was missed.
+            await hasTab /\ ~followed /\ followMoves < MaxFollowMoves;
+            followed := TRUE || followMoves := followMoves + 1;
         end either;
     end while;
 end process;
@@ -260,7 +290,7 @@ Ticks:
 end process;
 
 \* The server runs a due timer job: the tab wakes, turns bold and pops up, and a closed tab comes
-\* back.
+\* back. A tab the person does not follow wakes without a mark.
 fair process TimerJobs = <<"timers">>
 begin
 JobRuns:
@@ -270,7 +300,7 @@ JobRuns:
             jobs := jobs \ {j};
             if ~JobChecksTimer \/ j = timer then
                 staleFire := staleFire \/ j # timer;
-                if ~viewing then Write(FALSE, TRUE) end if;
+                if ~viewing /\ ~Silent then Write(FALSE, TRUE, TRUE) end if;
                 timer := None || parked := FALSE || happened := FALSE || hasTab := TRUE
                     || tabRev := IF hasTab THEN tabRev ELSE tabRev + 1;
             end if;
@@ -323,7 +353,8 @@ RowsPoll:
             if SameFeed then parkView[w] := parked end if;
             owed := owed /\ ~pop || poppedParked := poppedParked \/ (pop /\ parked)
                 || poppedSettled := poppedSettled \/ (pop /\ unreadAt <= settled)
-                || poppedNoTab := poppedNoTab \/ (pop /\ ~hasTab);
+                || poppedNoTab := poppedNoTab \/ (pop /\ ~hasTab)
+                || poppedUnfollowed := poppedUnfollowed \/ (pop /\ ~followed);
         end with;
     end while;
 end process;
@@ -354,17 +385,23 @@ end algorithm; *)
 VARIABLES now, seq, unreadAt, quiet, hold, parked, happened, timer, jobs, 
           asking, busy, worked, resume, viewing, hasTab, tabRev, lastStamp, 
           parkView, tabView, knownRev, owed, settled, poppedParked, 
-          poppedSettled, poppedNoTab, staleFire, earlyEnd
+          poppedSettled, poppedNoTab, staleFire, earlyEnd, followed, 
+          followMoves, markedUnfollowed, poppedUnfollowed, 
+          unfollowedParkBroken
 
 (* define statement *)
 Bold == unreadAt # 0 /\ ~parked
 ParkChoices   == {None, Done} \cup {[kind |-> "park", at |-> a] : a \in (now + 1)..MaxTime}
 
+Silent == FollowGates /\ ~followed
+
 
 vars == << now, seq, unreadAt, quiet, hold, parked, happened, timer, jobs, 
            asking, busy, worked, resume, viewing, hasTab, tabRev, lastStamp, 
            parkView, tabView, knownRev, owed, settled, poppedParked, 
-           poppedSettled, poppedNoTab, staleFire, earlyEnd >>
+           poppedSettled, poppedNoTab, staleFire, earlyEnd, followed, 
+           followMoves, markedUnfollowed, poppedUnfollowed, 
+           unfollowedParkBroken >>
 
 ProcSet == {<<"person">>} \cup {<<"clock">>} \cup {<<"timers">>} \cup {<<"idle">>} \cup {<<"restore">>} \cup ({<<"rows", w>> : w \in Windows}) \cup ({<<"tabs", w>> : w \in Windows}) \cup ({<<"reload", w>> : w \in Windows})
 
@@ -396,10 +433,15 @@ Init == (* Global variables *)
         /\ poppedNoTab = FALSE
         /\ staleFire = FALSE
         /\ earlyEnd = FALSE
+        /\ followed \in BOOLEAN
+        /\ followMoves = 0
+        /\ markedUnfollowed = FALSE
+        /\ poppedUnfollowed = FALSE
+        /\ unfollowedParkBroken = FALSE
 
 Person == /\ \/ /\ ~busy
                 /\ busy' = TRUE
-                /\ UNCHANGED <<seq, unreadAt, quiet, hold, parked, happened, timer, jobs, asking, worked, resume, viewing, hasTab, tabRev, owed, settled, earlyEnd>>
+                /\ UNCHANGED <<seq, unreadAt, quiet, hold, parked, happened, timer, jobs, asking, worked, resume, viewing, hasTab, tabRev, owed, settled, earlyEnd, followed, followMoves, markedUnfollowed, unfollowedParkBroken>>
              \/ /\ busy /\ seq < MaxEvents
                 /\ \E woke \in BOOLEAN:
                      \E more \in BOOLEAN:
@@ -417,11 +459,12 @@ Person == /\ \/ /\ ~busy
                                THEN /\ resume' = Off
                                ELSE /\ TRUE
                                     /\ UNCHANGED resume
-                         /\ IF ~woke \/ WakeReaches
+                         /\ IF (~woke \/ WakeReaches) /\ ~Silent
                                THEN /\ IF ~viewing /\ parked
                                           THEN /\ happened' = TRUE
                                                /\ IF ~ServerOwnsPark
-                                                     THEN /\ /\ quiet' = QuietMarks
+                                                     THEN /\ /\ markedUnfollowed' = (markedUnfollowed \/ ~followed)
+                                                             /\ quiet' = QuietMarks
                                                              /\ seq' = seq + 1
                                                              /\ settled' = seq + 1
                                                              /\ unreadAt' = seq + 1
@@ -429,10 +472,12 @@ Person == /\ \/ /\ ~busy
                                                           /\ UNCHANGED << seq, 
                                                                           unreadAt, 
                                                                           quiet, 
-                                                                          settled >>
+                                                                          settled, 
+                                                                          markedUnfollowed >>
                                                /\ owed' = owed
                                           ELSE /\ IF ~viewing
-                                                     THEN /\ /\ owed' = (owed \/ (~FALSE /\ hasTab))
+                                                     THEN /\ /\ markedUnfollowed' = (markedUnfollowed \/ (TRUE /\ ~followed))
+                                                             /\ owed' = (owed \/ (~FALSE /\ hasTab))
                                                              /\ quiet' = FALSE
                                                              /\ seq' = seq + 1
                                                              /\ settled' = IF hasTab THEN settled ELSE seq + 1
@@ -442,12 +487,14 @@ Person == /\ \/ /\ ~busy
                                                                           unreadAt, 
                                                                           quiet, 
                                                                           owed, 
-                                                                          settled >>
+                                                                          settled, 
+                                                                          markedUnfollowed >>
                                                /\ UNCHANGED happened
                                ELSE /\ TRUE
                                     /\ UNCHANGED << seq, unreadAt, quiet, 
-                                                    happened, owed, settled >>
-                /\ UNCHANGED <<hold, parked, viewing, hasTab, tabRev>>
+                                                    happened, owed, settled, 
+                                                    markedUnfollowed >>
+                /\ UNCHANGED <<hold, parked, viewing, hasTab, tabRev, followed, followMoves, unfollowedParkBroken>>
              \/ /\ seq < MaxEvents /\ ~viewing /\ (hasTab \/ (parked /\ timer = Done))
                 /\ IF parked /\ timer = Done /\ ~EndsAtIdle
                       THEN /\ /\ earlyEnd' = (earlyEnd \/ busy)
@@ -455,28 +502,37 @@ Person == /\ \/ /\ ~busy
                               /\ timer' = [kind |-> "park", at |-> now]
                       ELSE /\ TRUE
                            /\ UNCHANGED << timer, jobs, earlyEnd >>
-                /\ IF parked
-                      THEN /\ happened' = TRUE
-                           /\ IF ~ServerOwnsPark
-                                 THEN /\ /\ quiet' = QuietMarks
+                /\ IF Silent
+                      THEN /\ TRUE
+                           /\ UNCHANGED << seq, unreadAt, quiet, happened, 
+                                           owed, settled, markedUnfollowed >>
+                      ELSE /\ IF parked
+                                 THEN /\ happened' = TRUE
+                                      /\ IF ~ServerOwnsPark
+                                            THEN /\ /\ markedUnfollowed' = (markedUnfollowed \/ ~followed)
+                                                    /\ quiet' = QuietMarks
+                                                    /\ seq' = seq + 1
+                                                    /\ settled' = seq + 1
+                                                    /\ unreadAt' = seq + 1
+                                            ELSE /\ TRUE
+                                                 /\ UNCHANGED << seq, unreadAt, 
+                                                                 quiet, 
+                                                                 settled, 
+                                                                 markedUnfollowed >>
+                                      /\ owed' = owed
+                                 ELSE /\ /\ markedUnfollowed' = (markedUnfollowed \/ (TRUE /\ ~followed))
+                                         /\ owed' = (owed \/ (~FALSE /\ hasTab))
+                                         /\ quiet' = FALSE
                                          /\ seq' = seq + 1
-                                         /\ settled' = seq + 1
+                                         /\ settled' = IF hasTab THEN settled ELSE seq + 1
                                          /\ unreadAt' = seq + 1
-                                 ELSE /\ TRUE
-                                      /\ UNCHANGED << seq, unreadAt, quiet, 
-                                                      settled >>
-                           /\ owed' = owed
-                      ELSE /\ /\ owed' = (owed \/ (~FALSE /\ hasTab))
-                              /\ quiet' = FALSE
-                              /\ seq' = seq + 1
-                              /\ settled' = IF hasTab THEN settled ELSE seq + 1
-                              /\ unreadAt' = seq + 1
-                           /\ UNCHANGED happened
-                /\ UNCHANGED <<hold, parked, asking, busy, worked, resume, viewing, hasTab, tabRev>>
-             \/ /\ SharedQuiet /\ hasTab /\ seq < MaxEvents /\ ~viewing
+                                      /\ UNCHANGED happened
+                /\ UNCHANGED <<hold, parked, asking, busy, worked, resume, viewing, hasTab, tabRev, followed, followMoves, unfollowedParkBroken>>
+             \/ /\ SharedQuiet /\ hasTab /\ seq < MaxEvents /\ ~viewing /\ ~Silent
                 /\ IF ~parked
                       THEN /\ IF unreadAt = 0
-                                 THEN /\ /\ owed' = (owed \/ (~TRUE /\ TRUE))
+                                 THEN /\ /\ markedUnfollowed' = (markedUnfollowed \/ (TRUE /\ ~followed))
+                                         /\ owed' = (owed \/ (~TRUE /\ TRUE))
                                          /\ quiet' = TRUE
                                          /\ seq' = seq + 1
                                          /\ settled' = IF TRUE THEN settled ELSE seq + 1
@@ -488,7 +544,8 @@ Person == /\ \/ /\ ~busy
                                             ELSE /\ TRUE
                                                  /\ UNCHANGED << seq, unreadAt, 
                                                                  quiet >>
-                                      /\ UNCHANGED << owed, settled >>
+                                      /\ UNCHANGED << owed, settled, 
+                                                      markedUnfollowed >>
                            /\ UNCHANGED happened
                       ELSE /\ happened' = TRUE
                            /\ IF ~ServerOwnsPark /\ unreadAt = 0
@@ -499,70 +556,90 @@ Person == /\ \/ /\ ~busy
                                  ELSE /\ TRUE
                                       /\ UNCHANGED << seq, unreadAt, quiet, 
                                                       settled >>
-                           /\ owed' = owed
-                /\ UNCHANGED <<hold, parked, timer, jobs, asking, busy, worked, resume, viewing, hasTab, tabRev, earlyEnd>>
+                           /\ UNCHANGED << owed, markedUnfollowed >>
+                /\ UNCHANGED <<hold, parked, timer, jobs, asking, busy, worked, resume, viewing, hasTab, tabRev, earlyEnd, followed, followMoves, unfollowedParkBroken>>
              \/ /\ busy /\ seq < MaxEvents /\ ~asking
                 /\ asking' = TRUE
-                /\ IF parked /\ QuestionOnClosed = "due"
-                      THEN /\ /\ jobs' = (jobs \cup {[kind |-> "park", at |-> now]})
-                              /\ resume' = (IF resume = Off THEN timer ELSE resume)
-                              /\ timer' = [kind |-> "park", at |-> now]
-                           /\ IF ~viewing
-                                 THEN /\ /\ quiet' = QuietMarks
-                                         /\ seq' = seq + 1
-                                         /\ settled' = seq + 1
-                                         /\ unreadAt' = seq + 1
-                                 ELSE /\ TRUE
-                                      /\ UNCHANGED << seq, unreadAt, quiet, 
-                                                      settled >>
-                           /\ UNCHANGED << parked, happened, hasTab, tabRev, 
-                                           owed >>
-                      ELSE /\ IF ~hasTab /\ parked /\ QuestionOnClosed = "keep"
-                                 THEN /\ /\ quiet' = QuietMarks
-                                         /\ seq' = seq + 1
-                                         /\ settled' = seq + 1
-                                         /\ unreadAt' = seq + 1
-                                      /\ UNCHANGED << parked, happened, timer, 
-                                                      hasTab, tabRev, owed >>
-                                 ELSE /\ IF ~hasTab /\ parked /\ QuestionOnClosed = "restore"
-                                            THEN /\ /\ hasTab' = TRUE
-                                                    /\ tabRev' = tabRev + 1
-                                                 /\ /\ owed' = (owed \/ (~FALSE /\ TRUE))
-                                                    /\ quiet' = FALSE
+                /\ IF Silent
+                      THEN /\ TRUE
+                           /\ UNCHANGED << seq, unreadAt, quiet, parked, 
+                                           happened, timer, jobs, resume, 
+                                           hasTab, tabRev, owed, settled, 
+                                           markedUnfollowed, 
+                                           unfollowedParkBroken >>
+                      ELSE /\ IF parked /\ QuestionOnClosed = "due"
+                                 THEN /\ /\ jobs' = (jobs \cup {[kind |-> "park", at |-> now]})
+                                         /\ resume' = (IF resume = Off THEN timer ELSE resume)
+                                         /\ timer' = [kind |-> "park", at |-> now]
+                                         /\ unfollowedParkBroken' = (unfollowedParkBroken \/ ~followed)
+                                      /\ IF ~viewing
+                                            THEN /\ /\ markedUnfollowed' = (markedUnfollowed \/ ~followed)
+                                                    /\ quiet' = QuietMarks
                                                     /\ seq' = seq + 1
-                                                    /\ settled' = IF TRUE THEN settled ELSE seq + 1
+                                                    /\ settled' = seq + 1
                                                     /\ unreadAt' = seq + 1
-                                            ELSE /\ IF ~viewing
-                                                       THEN /\ /\ owed' = (owed \/ (~FALSE /\ hasTab))
+                                            ELSE /\ TRUE
+                                                 /\ UNCHANGED << seq, unreadAt, 
+                                                                 quiet, 
+                                                                 settled, 
+                                                                 markedUnfollowed >>
+                                      /\ UNCHANGED << parked, happened, hasTab, 
+                                                      tabRev, owed >>
+                                 ELSE /\ IF ~hasTab /\ parked /\ QuestionOnClosed = "keep"
+                                            THEN /\ /\ markedUnfollowed' = (markedUnfollowed \/ ~followed)
+                                                    /\ quiet' = QuietMarks
+                                                    /\ seq' = seq + 1
+                                                    /\ settled' = seq + 1
+                                                    /\ unreadAt' = seq + 1
+                                                 /\ UNCHANGED << parked, 
+                                                                 happened, 
+                                                                 timer, hasTab, 
+                                                                 tabRev, owed, 
+                                                                 unfollowedParkBroken >>
+                                            ELSE /\ IF ~hasTab /\ parked /\ QuestionOnClosed = "restore"
+                                                       THEN /\ /\ hasTab' = TRUE
+                                                               /\ tabRev' = tabRev + 1
+                                                            /\ /\ markedUnfollowed' = (markedUnfollowed \/ (TRUE /\ ~followed))
+                                                               /\ owed' = (owed \/ (~FALSE /\ TRUE))
                                                                /\ quiet' = FALSE
                                                                /\ seq' = seq + 1
-                                                               /\ settled' = IF hasTab THEN settled ELSE seq + 1
+                                                               /\ settled' = IF TRUE THEN settled ELSE seq + 1
                                                                /\ unreadAt' = seq + 1
-                                                       ELSE /\ TRUE
-                                                            /\ UNCHANGED << seq, 
-                                                                            unreadAt, 
-                                                                            quiet, 
-                                                                            owed, 
-                                                                            settled >>
-                                                 /\ UNCHANGED << hasTab, 
-                                                                 tabRev >>
-                                      /\ /\ happened' = FALSE
-                                         /\ parked' = FALSE
-                                         /\ timer' = None
-                           /\ UNCHANGED << jobs, resume >>
-                /\ UNCHANGED <<hold, busy, worked, viewing, earlyEnd>>
+                                                       ELSE /\ IF ~viewing
+                                                                  THEN /\ /\ markedUnfollowed' = (markedUnfollowed \/ (TRUE /\ ~followed))
+                                                                          /\ owed' = (owed \/ (~FALSE /\ hasTab))
+                                                                          /\ quiet' = FALSE
+                                                                          /\ seq' = seq + 1
+                                                                          /\ settled' = IF hasTab THEN settled ELSE seq + 1
+                                                                          /\ unreadAt' = seq + 1
+                                                                  ELSE /\ TRUE
+                                                                       /\ UNCHANGED << seq, 
+                                                                                       unreadAt, 
+                                                                                       quiet, 
+                                                                                       owed, 
+                                                                                       settled, 
+                                                                                       markedUnfollowed >>
+                                                            /\ UNCHANGED << hasTab, 
+                                                                            tabRev >>
+                                                 /\ unfollowedParkBroken' = (unfollowedParkBroken \/ (parked /\ ~followed))
+                                                 /\ /\ happened' = FALSE
+                                                    /\ parked' = FALSE
+                                                    /\ timer' = None
+                                      /\ UNCHANGED << jobs, resume >>
+                /\ UNCHANGED <<hold, busy, worked, viewing, earlyEnd, followed, followMoves>>
              \/ /\ asking
                 /\ asking' = FALSE
-                /\ UNCHANGED <<seq, unreadAt, quiet, hold, parked, happened, timer, jobs, busy, worked, resume, viewing, hasTab, tabRev, owed, settled, earlyEnd>>
+                /\ UNCHANGED <<seq, unreadAt, quiet, hold, parked, happened, timer, jobs, busy, worked, resume, viewing, hasTab, tabRev, owed, settled, earlyEnd, followed, followMoves, markedUnfollowed, unfollowedParkBroken>>
              \/ /\ hasTab /\ seq < MaxEvents /\ unreadAt = 0 /\ ~parked
-                /\ /\ owed' = (owed \/ (~TRUE /\ TRUE))
+                /\ /\ markedUnfollowed' = (markedUnfollowed \/ (FALSE /\ ~followed))
+                   /\ owed' = (owed \/ (~TRUE /\ TRUE))
                    /\ quiet' = TRUE
                    /\ seq' = seq + 1
                    /\ settled' = IF TRUE THEN settled ELSE seq + 1
                    /\ unreadAt' = seq + 1
                 /\ /\ hold' = viewing
                    /\ resume' = Off
-                /\ UNCHANGED <<parked, happened, timer, jobs, asking, busy, worked, viewing, hasTab, tabRev, earlyEnd>>
+                /\ UNCHANGED <<parked, happened, timer, jobs, asking, busy, worked, viewing, hasTab, tabRev, earlyEnd, followed, followMoves, unfollowedParkBroken>>
              \/ /\ hasTab /\ unreadAt # 0
                 /\ /\ owed' = FALSE
                    /\ quiet' = FALSE
@@ -570,18 +647,18 @@ Person == /\ \/ /\ ~busy
                 /\ /\ happened' = FALSE
                    /\ hold' = FALSE
                    /\ resume' = Off
-                /\ UNCHANGED <<seq, parked, timer, jobs, asking, busy, worked, viewing, hasTab, tabRev, settled, earlyEnd>>
+                /\ UNCHANGED <<seq, parked, timer, jobs, asking, busy, worked, viewing, hasTab, tabRev, settled, earlyEnd, followed, followMoves, markedUnfollowed, unfollowedParkBroken>>
              \/ /\ hasTab /\ ~viewing
                 /\ /\ happened' = FALSE
                    /\ viewing' = TRUE
                 /\ /\ owed' = FALSE
                    /\ quiet' = FALSE
                    /\ unreadAt' = 0
-                /\ UNCHANGED <<seq, hold, parked, timer, jobs, asking, busy, worked, resume, hasTab, tabRev, settled, earlyEnd>>
+                /\ UNCHANGED <<seq, hold, parked, timer, jobs, asking, busy, worked, resume, hasTab, tabRev, settled, earlyEnd, followed, followMoves, markedUnfollowed, unfollowedParkBroken>>
              \/ /\ viewing
                 /\ /\ hold' = FALSE
                    /\ viewing' = FALSE
-                /\ UNCHANGED <<seq, unreadAt, quiet, parked, happened, timer, jobs, asking, busy, worked, resume, hasTab, tabRev, owed, settled, earlyEnd>>
+                /\ UNCHANGED <<seq, unreadAt, quiet, parked, happened, timer, jobs, asking, busy, worked, resume, hasTab, tabRev, owed, settled, earlyEnd, followed, followMoves, markedUnfollowed, unfollowedParkBroken>>
              \/ /\ hasTab /\ ~parked
                 /\ \E t \in ParkChoices:
                      /\ happened' = FALSE
@@ -593,21 +670,23 @@ Person == /\ \/ /\ ~busy
                      /\ settled' = (IF unreadAt # 0 THEN unreadAt ELSE settled)
                      /\ timer' = t
                      /\ worked' = FALSE
-                /\ UNCHANGED <<seq, unreadAt, hold, asking, busy, viewing, hasTab, tabRev, earlyEnd>>
+                /\ UNCHANGED <<seq, unreadAt, hold, asking, busy, viewing, hasTab, tabRev, earlyEnd, followed, followMoves, markedUnfollowed, unfollowedParkBroken>>
              \/ /\ hasTab /\ parked
-                /\ IF ServerOwnsPark /\ happened /\ unreadAt = 0 /\ ~viewing
-                      THEN /\ /\ owed' = (owed \/ (~TRUE /\ TRUE))
+                /\ IF ServerOwnsPark /\ happened /\ unreadAt = 0 /\ ~viewing /\ ~Silent
+                      THEN /\ /\ markedUnfollowed' = (markedUnfollowed \/ (TRUE /\ ~followed))
+                              /\ owed' = (owed \/ (~TRUE /\ TRUE))
                               /\ quiet' = TRUE
                               /\ seq' = seq + 1
                               /\ settled' = IF TRUE THEN settled ELSE seq + 1
                               /\ unreadAt' = seq + 1
                       ELSE /\ TRUE
-                           /\ UNCHANGED << seq, unreadAt, quiet, owed, settled >>
+                           /\ UNCHANGED << seq, unreadAt, quiet, owed, settled, 
+                                           markedUnfollowed >>
                 /\ /\ happened' = FALSE
                    /\ parked' = FALSE
                    /\ resume' = Off
                    /\ timer' = None
-                /\ UNCHANGED <<hold, jobs, asking, busy, worked, viewing, hasTab, tabRev, earlyEnd>>
+                /\ UNCHANGED <<hold, jobs, asking, busy, worked, viewing, hasTab, tabRev, earlyEnd, followed, followMoves, unfollowedParkBroken>>
              \/ /\ TabPresence /\ hasTab /\ tabRev < 2 * MaxTabMoves
                 /\ IF parked /\ timer = None
                       THEN /\ /\ happened' = FALSE
@@ -623,14 +702,27 @@ Person == /\ \/ /\ ~busy
                    /\ owed' = FALSE
                    /\ tabRev' = tabRev + 1
                    /\ viewing' = FALSE
-                /\ UNCHANGED <<seq, unreadAt, quiet, timer, jobs, asking, busy, worked, settled, earlyEnd>>
+                /\ UNCHANGED <<seq, unreadAt, quiet, timer, jobs, asking, busy, worked, settled, earlyEnd, followed, followMoves, markedUnfollowed, unfollowedParkBroken>>
              \/ /\ TabPresence /\ ~hasTab
                 /\ /\ hasTab' = TRUE
                    /\ quiet' = (IF ReopenQuiets /\ unreadAt # 0 THEN TRUE ELSE quiet)
                    /\ tabRev' = tabRev + 1
-                /\ UNCHANGED <<seq, unreadAt, hold, parked, happened, timer, jobs, asking, busy, worked, resume, viewing, owed, settled, earlyEnd>>
+                /\ UNCHANGED <<seq, unreadAt, hold, parked, happened, timer, jobs, asking, busy, worked, resume, viewing, owed, settled, earlyEnd, followed, followMoves, markedUnfollowed, unfollowedParkBroken>>
+             \/ /\ hasTab /\ followed /\ followMoves < MaxFollowMoves
+                /\ /\ followMoves' = followMoves + 1
+                   /\ followed' = FALSE
+                   /\ hold' = FALSE
+                /\ /\ owed' = FALSE
+                   /\ quiet' = FALSE
+                   /\ unreadAt' = 0
+                /\ UNCHANGED <<seq, parked, happened, timer, jobs, asking, busy, worked, resume, viewing, hasTab, tabRev, settled, earlyEnd, markedUnfollowed, unfollowedParkBroken>>
+             \/ /\ hasTab /\ ~followed /\ followMoves < MaxFollowMoves
+                /\ /\ followMoves' = followMoves + 1
+                   /\ followed' = TRUE
+                /\ UNCHANGED <<seq, unreadAt, quiet, hold, parked, happened, timer, jobs, asking, busy, worked, resume, viewing, hasTab, tabRev, owed, settled, earlyEnd, markedUnfollowed, unfollowedParkBroken>>
           /\ UNCHANGED << now, lastStamp, parkView, tabView, knownRev, 
-                          poppedParked, poppedSettled, poppedNoTab, staleFire >>
+                          poppedParked, poppedSettled, poppedNoTab, staleFire, 
+                          poppedUnfollowed >>
 
 Clock == /\ now < MaxTime
          /\ now' = now + 1
@@ -638,22 +730,26 @@ Clock == /\ now < MaxTime
                          jobs, asking, busy, worked, resume, viewing, hasTab, 
                          tabRev, lastStamp, parkView, tabView, knownRev, owed, 
                          settled, poppedParked, poppedSettled, poppedNoTab, 
-                         staleFire, earlyEnd >>
+                         staleFire, earlyEnd, followed, followMoves, 
+                         markedUnfollowed, poppedUnfollowed, 
+                         unfollowedParkBroken >>
 
 TimerJobs == /\ \E j \in jobs:
                   /\ j.at <= now
                   /\ jobs' = jobs \ {j}
                   /\ IF ~JobChecksTimer \/ j = timer
                         THEN /\ staleFire' = (staleFire \/ j # timer)
-                             /\ IF ~viewing
-                                   THEN /\ /\ owed' = (owed \/ (~FALSE /\ TRUE))
+                             /\ IF ~viewing /\ ~Silent
+                                   THEN /\ /\ markedUnfollowed' = (markedUnfollowed \/ (TRUE /\ ~followed))
+                                           /\ owed' = (owed \/ (~FALSE /\ TRUE))
                                            /\ quiet' = FALSE
                                            /\ seq' = seq + 1
                                            /\ settled' = IF TRUE THEN settled ELSE seq + 1
                                            /\ unreadAt' = seq + 1
                                    ELSE /\ TRUE
                                         /\ UNCHANGED << seq, unreadAt, quiet, 
-                                                        owed, settled >>
+                                                        owed, settled, 
+                                                        markedUnfollowed >>
                              /\ /\ happened' = FALSE
                                 /\ hasTab' = TRUE
                                 /\ parked' = FALSE
@@ -662,11 +758,13 @@ TimerJobs == /\ \E j \in jobs:
                         ELSE /\ TRUE
                              /\ UNCHANGED << seq, unreadAt, quiet, parked, 
                                              happened, timer, hasTab, tabRev, 
-                                             owed, settled, staleFire >>
+                                             owed, settled, staleFire, 
+                                             markedUnfollowed >>
              /\ UNCHANGED << now, hold, asking, busy, worked, resume, viewing, 
                              lastStamp, parkView, tabView, knownRev, 
                              poppedParked, poppedSettled, poppedNoTab, 
-                             earlyEnd >>
+                             earlyEnd, followed, followMoves, poppedUnfollowed, 
+                             unfollowedParkBroken >>
 
 IdleEnds == /\ EndsAtIdle /\ parked /\ timer = Done /\ worked /\ ~busy
             /\ /\ jobs' = (jobs \cup {[kind |-> "park", at |-> now]})
@@ -675,7 +773,9 @@ IdleEnds == /\ EndsAtIdle /\ parked /\ timer = Done /\ worked /\ ~busy
                             asking, busy, worked, resume, viewing, hasTab, 
                             tabRev, lastStamp, parkView, tabView, knownRev, 
                             owed, settled, poppedParked, poppedSettled, 
-                            poppedNoTab, staleFire, earlyEnd >>
+                            poppedNoTab, staleFire, earlyEnd, followed, 
+                            followMoves, markedUnfollowed, poppedUnfollowed, 
+                            unfollowedParkBroken >>
 
 Restores == /\ resume # Off /\ ~asking /\ ~parked
             /\ IF resume.kind = "park" /\ resume.at <= now
@@ -693,7 +793,9 @@ Restores == /\ resume # Off /\ ~asking /\ ~parked
             /\ UNCHANGED << now, seq, unreadAt, hold, asking, busy, worked, 
                             viewing, hasTab, tabRev, lastStamp, parkView, 
                             tabView, knownRev, poppedParked, poppedSettled, 
-                            poppedNoTab, staleFire, earlyEnd >>
+                            poppedNoTab, staleFire, earlyEnd, followed, 
+                            followMoves, markedUnfollowed, poppedUnfollowed, 
+                            unfollowedParkBroken >>
 
 Rows(self) == /\ LET w == self[2] IN
                    LET stale == DeferStale /\ knownRev[self[2]] < tabRev IN
@@ -712,10 +814,13 @@ Rows(self) == /\ LET w == self[2] IN
                             /\ poppedNoTab' = (poppedNoTab \/ (pop /\ ~hasTab))
                             /\ poppedParked' = (poppedParked \/ (pop /\ parked))
                             /\ poppedSettled' = (poppedSettled \/ (pop /\ unreadAt <= settled))
+                            /\ poppedUnfollowed' = (poppedUnfollowed \/ (pop /\ ~followed))
               /\ UNCHANGED << now, seq, unreadAt, quiet, hold, parked, 
                               happened, timer, jobs, asking, busy, worked, 
                               resume, viewing, hasTab, tabRev, tabView, 
-                              knownRev, settled, staleFire, earlyEnd >>
+                              knownRev, settled, staleFire, earlyEnd, followed, 
+                              followMoves, markedUnfollowed, 
+                              unfollowedParkBroken >>
 
 Tabs(self) == /\ ~SameFeed
               /\ parkView' = [parkView EXCEPT ![self[2]] = parked]
@@ -723,7 +828,9 @@ Tabs(self) == /\ ~SameFeed
                               happened, timer, jobs, asking, busy, worked, 
                               resume, viewing, hasTab, tabRev, lastStamp, 
                               tabView, knownRev, owed, settled, poppedParked, 
-                              poppedSettled, poppedNoTab, staleFire, earlyEnd >>
+                              poppedSettled, poppedNoTab, staleFire, earlyEnd, 
+                              followed, followMoves, markedUnfollowed, 
+                              poppedUnfollowed, unfollowedParkBroken >>
 
 Reload(self) == /\ TabPresence /\ <<tabView[self[2]], knownRev[self[2]]>> # <<hasTab, tabRev>>
                 /\ tabView' = [tabView EXCEPT ![self[2]] = hasTab]
@@ -733,7 +840,9 @@ Reload(self) == /\ TabPresence /\ <<tabView[self[2]], knownRev[self[2]]>> # <<ha
                                 resume, viewing, hasTab, tabRev, lastStamp, 
                                 parkView, owed, settled, poppedParked, 
                                 poppedSettled, poppedNoTab, staleFire, 
-                                earlyEnd >>
+                                earlyEnd, followed, followMoves, 
+                                markedUnfollowed, poppedUnfollowed, 
+                                unfollowedParkBroken >>
 
 Next == Person \/ Clock \/ TimerJobs \/ IdleEnds \/ Restores
            \/ (\E self \in {<<"rows", w>> : w \in Windows}: Rows(self))
@@ -766,6 +875,8 @@ TypeOK ==
     /\ parkView \in [Windows -> BOOLEAN]
     /\ tabView \in [Windows -> BOOLEAN]
     /\ knownRev \in [Windows -> 0..2 * MaxTabMoves]
+    /\ {followed, markedUnfollowed, poppedUnfollowed, unfollowedParkBroken} \subseteq BOOLEAN
+    /\ followMoves \in 0..MaxFollowMoves
 
 \* 4: a parked session doesn't bother the person.
 NoPopWhileParked == ~poppedParked
@@ -795,6 +906,15 @@ NoUntimedParkClosed == (parked /\ timer = None) => hasTab
 
 \* A mark held for the session in view only exists while viewing it.
 HoldOnlyInView == hold => viewing
+
+\* The server writes no mark on a tab the person does not follow; only a mark they set themselves.
+NoMarkWhileUnfollowed == ~markedUnfollowed
+
+\* A tab the person does not follow never pops up.
+NoPopWhileUnfollowed == ~poppedUnfollowed
+
+\* A question leaves the park of a tab the person does not follow alone.
+QuestionLeavesUnfollowedPark == ~unfollowedParkBroken
 
 \* 1: anything that needs the person raises a pop-up, unless they handle it first.
 NoLostPop == owed ~> ~owed
@@ -836,4 +956,10 @@ FailureEndsDonePark == timer = Done /\ busy' /\ ~asking' /\ timer'.kind = "park"
 
 \* The server puts back the park a question ended (a step).
 ParkRestored == resume # Off /\ ~parked /\ parked'
+
+\* An agent asks on a parked tab the person does not follow.
+UnfollowedParkAsked == parked /\ ~followed /\ asking
+
+\* A window pops up for a tab the person followed again.
+PopsAfterRefollow == Pops /\ followed /\ followMoves > 0
 =================================================================================

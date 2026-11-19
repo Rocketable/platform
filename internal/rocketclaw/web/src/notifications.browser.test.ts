@@ -394,7 +394,7 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
     await page.evaluate(() => (window.notes[2] as unknown as Notification).onclick!(new Event("click")));
     await page.waitForURL((url: URL) => url.pathname === "/search/d");
     await page.locator('button[aria-current="true"][aria-label="Team"]').waitFor();
-    expect(await page.getByRole("tablist", { name: "Shared tabs" }).getByRole("tab", { name: "Ops", exact: true }).getAttribute("aria-selected")).toBe("true");
+    expect(await page.getByRole("tablist", { name: "Team Shared tabs" }).getByRole("tab", { name: "Ops", exact: true }).getAttribute("aria-selected")).toBe("true");
     await polls();
     expect(state.tabs.map((tab) => tab.path)).not.toContain("/search/d");
     expect(await page.getByRole("tablist", { name: "Team tabs" }).locator('[data-tab="/search/d"]').count()).toBe(0);

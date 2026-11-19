@@ -95,6 +95,7 @@ describe("session list reconciliation", () => {
     expect(listedTabs(tabs, { tabs: [{ path: "/pages/b" }, { path: "/search/c", unreadAt: "3", note: "Search finished" }, { path: "/cron/d", unreadAt: "4" }], since: "v1" }))
       .toEqual([{ path: "/cron/a", unreadAt: "1" }, { path: "/search/c", unreadAt: "3", note: "Search finished" }, { path: "/cron/d", unreadAt: "4" }]);
     expect(listedTabs(tabs, { tabs: [{ path: "/cron/d", unreadAt: "4" }] }), "a listing since nothing held sent every row").toEqual([{ path: "/cron/d", unreadAt: "4" }]);
+    expect(listedTabs(tabs, { tabs: [{ path: "/cron/a", unfollowed: true }], since: "v1" }), "an unfollowed row stays without a mark").toContainEqual({ path: "/cron/a", unfollowed: true });
   });
 
   test("orders rows by the server's rule", () => {

@@ -156,6 +156,7 @@ func (s *Server) changeAttention(ctx context.Context, username string, change *A
 		AttentionAction_MARK_READ: backend.AttentionRead, AttentionAction_MARK_UNREAD: backend.AttentionUnread, AttentionAction_PARK: backend.AttentionPark,
 		AttentionAction_UNPARK: backend.AttentionUnpark, AttentionAction_PARK_UNTIL_DONE: backend.AttentionParkUntilDone,
 		AttentionAction_AUTO_PARK: backend.AttentionAutoPark, AttentionAction_STOP_AUTO_PARK: backend.AttentionNoAutoPark, AttentionAction_SENT: backend.AttentionSent,
+		AttentionAction_FOLLOW: backend.AttentionFollow, AttentionAction_UNFOLLOW: backend.AttentionUnfollow,
 	}[change.Action]
 	if !ok {
 		return fmt.Errorf("web tab attention: %w", status.Error(codes.InvalidArgument, "unknown attention action"))

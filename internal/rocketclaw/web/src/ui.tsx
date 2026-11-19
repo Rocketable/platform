@@ -1503,7 +1503,7 @@ function useTabsOf() {
 type Mark = TabAttention & { server: string; row?: Session };
 const marksOf = (server: string, view: SidebarView): Mark[] => [...view.rows.flatMap((row) => row.unreadAt ? [{ ...rowAttention(row), path: rowPath(row), server, row }] : []), ...(view.marks ?? []).flatMap((mark) => mark.unreadAt ? [{ ...mark, server }] : [])];
 // A session row's attention, which carries its quiet flag as markedUnread.
-const rowAttention = (row: Session): Omit<TabAttention, "path"> => ({ unreadAt: row.unreadAt, quiet: row.markedUnread, parked: row.parked, until: row.until, untilDone: row.untilDone, note: row.note, autoPark: row.autoPark });
+const rowAttention = (row: Session): Omit<TabAttention, "path"> => ({ unreadAt: row.unreadAt, quiet: row.markedUnread, parked: row.parked, until: row.until, untilDone: row.untilDone, note: row.note, autoPark: row.autoPark, unfollowed: row.unfollowed });
 // A tab location's attention on its server: its session row's, else its own row's.
 function attentionOf(view: Pick<SidebarView, "rows" | "marks"> | undefined, path: string): Omit<TabAttention, "path"> | undefined {
   const id = pathSession(path), row = id ? view?.rows.find((item) => item.id === id) : undefined;
@@ -1515,7 +1515,7 @@ function attentionOf(view: Pick<SidebarView, "rows" | "marks"> | undefined, path
 type TabCommand = { key: string; label: string; sub?: { menu: string; label: string }; run: () => void };
 // A tab menu draws a line between its sections, as a macOS menu does: renaming, closing, sharing, attention, grouping and
 // moving, then deleting. Its items come in that order.
-const menuSections = [/^rename/, /^close/, /^(link|share|unshare|duplicate)/, /^(read|unread|park|unpark)/, /^(group|restore|space)/, /^delete/];
+const menuSections = [/^rename/, /^close/, /^(link|share|unshare|duplicate)/, /^(read|unread|park|unpark|follow|unfollow)/, /^(group|restore|space)/, /^delete/];
 const menuSection = (key: string) => menuSections.findIndex((pattern) => pattern.test(key));
 // A submenu draws its lines the same way: Park's are Until it is done, its times, then Until I unpark.
 const submenuSections = [/^park-done$/, /^park-/];
@@ -1536,6 +1536,7 @@ function attentionItems(view: SidebarView | undefined, path: string, targets: It
   const paths = [...targets].filter((item) => item !== "/"), of = (item: string) => attentionOf(view, item) ?? {};
   if (!view || view.offline || view.foreign || !paths.length) return [];
   const bold = paths.filter((item) => of(item).unreadAt && !of(item).parked), read = paths.filter((item) => !of(item).unreadAt && !of(item).parked);
+  const followed = paths.filter((item) => !of(item).unfollowed);
   const sessions = paths.every((item) => pathSession(item));
   return [
     ...bold.length ? [{ key: "read", label: "Mark as read", run: () => send(bold, "MARK_READ") }] : [],
@@ -1549,6 +1550,7 @@ function attentionItems(view: SidebarView | undefined, path: string, targets: It
     ],
     // A session's tab can park until it is done whenever this person sends it a prompt.
     ...sessions ? [of(path).autoPark ? { key: "park-auto", label: "Stop auto-parking", run: () => send(paths, "STOP_AUTO_PARK") } : { key: "park-auto", label: "Auto-park when I send", run: () => send(paths, "AUTO_PARK") }] : [],
+    followed.length ? { key: "unfollow", label: "Unfollow", run: () => send(followed, "UNFOLLOW") } : { key: "follow", label: "Follow", run: () => send(paths, "FOLLOW") },
   ];
 }
 
@@ -1702,7 +1704,7 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
 function menuItems(tabs: TabStoreValue, menu: CardMenu, view: SidebarView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
   const renaming = targets.size === 1 && (isSearch(menu.path) || (pathSession(menu.path) && !menu.shared)) ? [{ key: "rename", label: isSearch(menu.path) ? "Rename search" : "Rename session", run: rename }] : [];
   const session = tabs.viewed && targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === pathSession(menu.path)) : undefined;
-  return [...renaming, ...menu.shared ? tabs.commands(menu.path, view, undefined, menu.space).filter(({ key }) => /^(link|unshare|duplicate|read|unread|park|unpark|group)/.test(key)) : tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
+  return [...renaming, ...menu.shared ? tabs.commands(menu.path, view, undefined, menu.space).filter(({ key }) => /^(link|unshare|duplicate|read|unread|park|unpark|follow|unfollow|group)/.test(key)) : tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
 }
 
 const pullRequestItems = (menu: { path: string; shared?: boolean }, single: boolean, name: string): TabCommand[] =>
@@ -1722,12 +1724,11 @@ const selected = (node: RefObject<HTMLElement | null>, card?: string) => (card &
 // What a drag started on: a card's tabs and groups move only within it, and a card, as "card:" and its key, among cards.
 let dragging = "";
 
-// A card's work: its tabs waiting for this person or asking them something, whether any of them asks, and whether a turn
-// runs in any of its tabs.
+// A card's work: its tabs waiting for this person, whether any of its tabs asks them something, and whether a turn runs
+// in any of its tabs.
 function cardWork(name: string, paths: string[], rows: Session[], waiting: Set<string>) {
-  const asking = new Set(rows.flatMap((row) => row.asking ? [rowPath(row)] : [])), all = new Set(paths);
-  const work = new Set(paths.filter((path) => waiting.has(rowKey(path, name)) || asking.has(path)));
-  return { work, asking: [...work].some((path) => asking.has(path)), running: rows.some((row) => row.running && !row.asking && all.has(rowPath(row))) };
+  const all = new Set(paths);
+  return { unread: new Set(paths.filter((path) => waiting.has(rowKey(path, name)))), asking: rows.some((row) => row.asking && all.has(rowPath(row))), running: rows.some((row) => row.running && !row.asking && all.has(rowPath(row))) };
 }
 
 // The strip lists the cards of every server, then Parked, which stays at the bottom with its own scroll. The page's
@@ -1767,7 +1768,7 @@ function ServerScope({ tabs, children }: { tabs: TabStoreValue; children: ReactN
   return <Sidebar.Provider value={value}><TabStore.Provider value={tabs}>{children}</TabStore.Provider></Sidebar.Provider>;
 }
 
-// Every server's Shared card and space cards, in this person's order: dragging a card's title onto another card, or
+// Every server's space cards, in this person's order: dragging a card's title onto another card, or
 // Shift+Arrow on it, moves it there, and a card not yet placed comes last, in its server's order. A server whose tabs
 // have not arrived says why instead, and its cards keep their places.
 function Cards({ stores, newChat }: { stores: TabStoreValue[]; newChat: () => void }) {
@@ -1775,7 +1776,7 @@ function Cards({ stores, newChat }: { stores: TabStoreValue[]; newChat: () => vo
   const [menu, setMenu] = useState<CardMenu & { server: string }>(), [editing, setEditing] = useState<{ server: string; key: string }>(), [renaming, setRenaming] = useState<{ server: string; space: string }>();
   const [picked, setPicked] = useState<Picked>({ at: "", card: "", paths: new Set() }), focusing = useRef("");
   const loaded = stores.filter((tabs) => tabs.viewed || tabs.state.owner !== undefined), order = layout.order ?? [];
-  const entries = loaded.flatMap((tabs): { key: string; tabs: TabStoreValue; space?: Space }[] => [...tabs.state.spaces.some((space) => tabs.sharedIn(space.id).length) ? [{ key: `${tabs.name}#shared`, tabs }] : [], ...tabs.state.spaces.map((space) => ({ key: `${tabs.name}/${space.id}`, tabs, space }))]);
+  const entries = loaded.flatMap((tabs) => tabs.state.spaces.map((space) => ({ key: `${tabs.name}/${space.id}`, tabs, space })));
   const rank = (key: string) => order.indexOf(key) + 1 || Infinity, sorted = entries.toSorted((a, b) => rank(a.key) - rank(b.key));
   const place = (from: string, to: string, after: boolean) => {
     const keys = [...new Set([...order, ...sorted.map((entry) => entry.key)])].filter((key) => key !== from);
@@ -1808,7 +1809,7 @@ function Cards({ stores, newChat }: { stores: TabStoreValue[]; newChat: () => vo
       place(from, target.dataset.cardKey!, event.clientY > box.top + box.height / 2);
     }}>
     {sorted.map((entry) => <ServerScope key={entry.key} tabs={entry.tabs}>
-      {entry.space ? <SpaceCard space={entry.space} {...cardFor(entry.tabs)} /> : <SharedCard {...cardFor(entry.tabs)} />}
+      <SpaceCard space={entry.space} {...cardFor(entry.tabs)} />
     </ServerScope>)}
     {stores.filter((tabs) => !tabs.viewed && tabs.state.owner === undefined).map((tabs) => <ServerStatus key={tabs.name} name={tabs.name} />)}
     {loaded.map((tabs) => <ServerScope key={tabs.name} tabs={tabs}>
@@ -1854,18 +1855,19 @@ function CardHeading({ cardKey, icon, name, server, current, title, count, askin
 
 // A space's card, the same whichever space is current and on whichever server's page: the current space's is tinted, and
 // its title is marked current. With more than one server its title names the server too. Every card starts unfolded;
-// folded, it lists only its tabs that wait for this person or ask them something, and the tab in view.
+// folded, it lists only the tab in view.
 function SpaceCard({ space, ...card }: Card & { space: Space }) {
   const { tabs, label, waiting, folds, renaming, setRenaming, move } = card, { rows } = useContext(Sidebar), key = `${tabs.name}/${space.id}`;
-  const strip = tabs.stripOf(space.id), { work, asking, running } = cardWork(tabs.name, strip.flatMap((tab) => isKeeper(tab) ? [] : [tab.path]), rows, waiting);
-  const folded = folds[key] ?? false, listed = folded ? strip.filter((tab) => work.has(tab.path) || tab.path === tabs.pathname) : strip;
+  const strip = tabs.stripOf(space.id), shared = tabs.sharedIn(space.id), { unread, asking, running } = cardWork(tabs.name, [...shared, ...strip.flatMap((tab) => isKeeper(tab) ? [] : [tab.path])], rows, waiting);
+  const folded = folds[key] ?? false, listed = folded ? strip.filter((tab) => tab.path === tabs.pathname) : strip;
   const current = tabs.viewed && space.id === tabs.state.space;
   return <div data-card-key={key} className={cardClass(current)}>
-    <CardHeading cardKey={key} icon={[FolderOpen, Folder]} name={space.name} server={label} current={current} count={work.size} asking={asking} running={running} folded={folded} onFold={() => foldCard(key, !folded)} move={(step) => move(key, step)}
+    <CardHeading cardKey={key} icon={[FolderOpen, Folder]} name={space.name} server={label} current={current} count={unread.size} asking={asking} running={running} folded={folded} onFold={() => foldCard(key, !folded)} move={(step) => move(key, step)}
       title={renaming === space.id ? <SpaceName name={space.name} rename={(value) => tabs.renameSpace(space.id, value)} done={() => setRenaming(undefined)} /> : undefined}>
       <SpaceActions tabs={tabs} space={space} label={`${space.name} space actions${label && ` on ${label}`}`} renaming={renaming === space.id} rename={setRenaming} />
     </CardHeading>
-    <CardTabs {...card} space={space} listed={listed} />
+    <SharedGroup {...card} space={space} paths={shared} folded={folded} />
+    <CardTabs {...card} space={space} strip={strip} listed={listed} />
   </div>;
 }
 
@@ -1900,7 +1902,7 @@ function SpaceActions({ tabs, space, label, renaming, rename }: { tabs: TabStore
 
 // A card's tabs: its groups, each under its name, and its tabs, which open, close, select, reorder by dragging within the
 // card or by Shift+Arrow, and take their menu. Double-clicking its empty space starts a session in its space.
-function CardTabs({ tabs, space, listed, label, picked, setPicked, menu, setMenu, newChat, waiting, editing, setEditing, refocus }: Card & { space: Space; listed: Tab[] }) {
+function CardTabs({ tabs, space, strip, listed, label, picked, setPicked, menu, setMenu, newChat, waiting, editing, setEditing, refocus }: Card & { space: Space; strip: Tab[]; listed: Tab[] }) {
   const { pathname } = tabs, key = `${tabs.name}/${space.id}`, selection = selectionIn(tabs, picked, space.id);
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   const groupOf = (tab: Tab) => tabs.state.groups.find((item) => item.id === tab.group);
@@ -1958,7 +1960,7 @@ function CardTabs({ tabs, space, listed, label, picked, setPicked, menu, setMenu
     {listed.flatMap((tab, index) => {
       const group = groupOf(tab), head = group && listed[index - 1]?.group !== group.id;
       return [
-        head ? <GroupHeader key={group.id} tabs={tabs} group={group} listed={listed} waiting={waiting} /> : null,
+        head ? <GroupHeader key={group.id} tabs={tabs} group={group} strip={strip} listed={listed} waiting={waiting} /> : null,
         <CardEntry key={tab.path} tabs={tabs} tab={tab} group={group} listed={listed} space={space} label={label} chosen={tab.path !== pathname && selection.has(tab.path)} stop={tab.path === stop} editing={editing} setEditing={setEditing} setMenu={setMenu} refocus={refocus} />,
       ];
     })}
@@ -1978,12 +1980,12 @@ function CardEntry({ tab, group, listed, space, label, chosen, stop, tabs, editi
     open={() => tabs.go(tab.path, space.id)} close={() => { flushSync(() => tabs.close([tab.path])); refocus(space.id); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor, space: space.id })} />;
 }
 
-// A collapsed group's name goes bold, like an unread tab's title, while any of its tabs waits for this person, and it
-// says it needs you while any of their sessions waits on this person's answer. Shift+Arrow moves the group past the tab
-// or group next to it, and its menu key or right-click opens its editor.
-function GroupHeader({ tabs, group, listed, waiting }: { tabs: TabStoreValue; group: TabGroup; listed: Tab[]; waiting: Set<string> }) {
-  const { rows } = useContext(Sidebar), hidden = new Set(group.collapsed ? listed.flatMap((item) => item.group === group.id && !isKeeper(item) ? [item.path] : []) : []);
-  const unread = [...hidden].some((path) => waiting.has(rowKey(path, tabs.name))), asking = hidden.size > 0 && rows.some((row) => row.asking && hidden.has(rowPath(row)));
+// A collapsed group's name, or a group's in a folded card, goes bold, like an unread tab's title, while any of its hidden
+// tabs waits for this person, and it says it needs you while any of their sessions waits on this person's answer.
+// Shift+Arrow moves the group past the tab or group next to it, and its menu key or right-click opens its editor.
+function GroupHeader({ tabs, group, strip, listed, waiting }: { tabs: TabStoreValue; group: TabGroup; strip: Tab[]; listed: Tab[]; waiting: Set<string> }) {
+  const { rows } = useContext(Sidebar), shown = new Set(listed.map((item) => item.path));
+  const { unread, asking } = cardWork(tabs.name, strip.flatMap((item) => item.group === group.id && !isKeeper(item) && (group.collapsed || !shown.has(item.path)) ? [item.path] : []), rows, waiting);
   const openEditor = () => tabs.setEditor({ id: group.id, open: true });
   return <div data-group={group.id} draggable className="flex shrink-0 items-center pt-1" onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
     <button type="button" aria-expanded={!group.collapsed} aria-label={groupName(group)} className="flex h-7 min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => tabs.edit(group.id, { collapsed: !group.collapsed })}
@@ -1996,54 +1998,42 @@ function GroupHeader({ tabs, group, listed, waiting }: { tabs: TabStoreValue; gr
         flushSync(() => tabs.moveGroup(group.id, neighbor.path));
         button.focus();
       }}>
-      <span className={cn("rounded-full", group.name ? cn("max-w-48 truncate px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium") : "size-3", groupColors[group.color])}>{group.name}</span>
+      <span className={cn("rounded-full", group.name ? cn("max-w-48 truncate px-2 py-0.5 text-xs text-black", unread.size ? "font-bold" : "font-medium") : "size-3", groupColors[group.color])}>{group.name}</span>
     </button>
     {asking ? needsYou : null}
     <button type="button" aria-label={`Edit ${groupName(group)}`} className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={openEditor}><Ellipsis className="size-3.5" /></button>
   </div>;
 }
 
-// A server's Shared card lists every space's Shared tabs, the same for everyone, in this person's order, under their
-// space's name when the server has more than one space, and hides while there are none. Its rows open in their space
-// without a tab of their own; only their menu changes them for everyone, and dragging one onto another of its space, or
-// Shift+Arrow, reorders it for this person alone.
-function SharedCard({ tabs, label, waiting, folds, editing, setEditing, setMenu, move }: Card) {
-  const { rows } = useContext(Sidebar), { state, pathname } = tabs, suffix = label && ` on ${label}`, key = `${tabs.name}#shared`, folded = folds[key] ?? false;
-  const lists = state.spaces.flatMap((space) => { const paths = tabs.sharedIn(space.id); return paths.length ? [{ space, paths }] : []; });
-  const { work, asking, running } = cardWork(tabs.name, lists.flatMap((list) => list.paths), rows, waiting);
-  const active = (space: string, path: string) => tabs.viewed && space === state.space && path === pathname;
-  const many = state.spaces.length > 1, shown = lists.flatMap(({ space, paths }) => {
-    const closed = many && (folds[`${key}/${space.id}`] ?? false), kept = folded ? paths.filter((path) => work.has(path) || active(space.id, path)) : paths;
-    return kept.length ? [{ space, closed, unread: closed && kept.some((path) => work.has(path) && !active(space.id, path)), paths: closed ? kept.filter((path) => active(space.id, path)) : kept }] : [];
-  });
-  const rowOf = (node: Element) => node.closest<HTMLElement>("[data-shared]")?.dataset.shared?.split("\n") ?? [];
-  const listed = shown.flatMap(({ space, paths }) => paths.map((path) => ({ space: space.id, path }))), stop = listed.find((row) => active(row.space, row.path)) ?? listed[0];
-  return <div data-card-key={key} className={cardClass(false)}>
-    <CardHeading cardKey={key} icon={[FolderOpen, Folder]} name="Shared" server={label} count={work.size} asking={asking} running={running} folded={folded} onFold={() => foldCard(key, !folded)} move={(step) => move(key, step)} />
-    {shown.length ? <div role="tablist" aria-label={`Shared tabs${suffix}`} aria-orientation="vertical" className="flex flex-col gap-0.5 rounded-md [&_[role=tab]]:py-1"
-      onKeyDown={(event) => {
-        const target = event.target as HTMLElement;
-        if (target.role !== "tab" || (event.key !== "Enter" && event.key !== " ")) return tabKeys(event, pathname, (path, anchor) => setMenu({ path, anchor, space: rowOf(anchor as Element)[0], shared: true }), tabs.moveShared);
-        event.preventDefault();
-        target.click();
-      }}
-      onDragStart={(event) => { dragging = key; event.dataTransfer.setData(sharedDrag, rowOf(event.target as Element).join("\n")); }}
-      onDragOver={(event) => { if (dragging === key) event.preventDefault(); }}
-      onDragEnd={() => { dragging = ""; }}
-      onDrop={(event) => {
-        if (dragging !== key) return;
-        const [space, from] = event.dataTransfer.getData(sharedDrag).split("\n"), [there, to] = rowOf(event.target as Element);
-        if (to && there === space) tabs.moveShared(from, to);
-      }}>
-      {shown.map(({ space, closed, unread, paths }) => <Fragment key={space.id}>
-        {many ? <button type="button" aria-expanded={!closed} aria-label={`Shared in ${space.name}`} className="mt-1 flex h-7 w-fit min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => foldCard(`${key}/${space.id}`, !closed)}>
-          <span className={cn("max-w-48 truncate rounded-full px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium", groupColors.Grey)}>{space.name}</span>
-        </button> : null}
-        {paths.map((path) => <div key={path} data-shared={`${space.id}\n${path}`}>
-          <TabItem tab={{ path, search: sharedTab(tabs.shared, space.id, path)?.search }} shared space={space.id} open={() => tabs.go(path, space.id, true)} description={`Shared, Space: ${space.name}${label && `, ${label}`}`} chosen={false} rule="Grey" active={active(space.id, path)} stop={stop?.space === space.id && stop.path === path} editing={editing === `shared:${path}`} endEdit={() => setEditing(undefined)} openMenu={(anchor) => setMenu({ path, anchor, space: space.id, shared: true })} />
-        </div>)}
-      </Fragment>)}
-    </div> : null}
+function SharedGroup({ tabs, space, paths, folded, label, waiting, folds, editing, setEditing, setMenu }: Pick<Card, "tabs" | "label" | "waiting" | "folds" | "editing" | "setEditing" | "setMenu"> & { space: Space; paths: string[]; folded: boolean }) {
+  const { rows } = useContext(Sidebar), { state, pathname } = tabs, key = `${tabs.name}#shared/${space.id}`, closed = folds[key] ?? false;
+  const active = (path: string) => tabs.viewed && space.id === state.space && path === pathname, listed = folded || closed ? paths.filter(active) : paths;
+  if (!paths.length || (folded && !listed.length)) return null;
+  const { unread, asking } = cardWork(tabs.name, folded || closed ? paths.filter((path) => !active(path)) : [], rows, waiting);
+  const rowOf = (node: Element) => node.closest<HTMLElement>("[data-shared]")?.dataset.shared, stop = listed.find(active) ?? listed[0];
+  return <div role="tablist" aria-label={`${space.name} Shared tabs${label && ` on ${label}`}`} aria-orientation="vertical" className="flex flex-col gap-0.5 rounded-md [&_[role=tab]]:py-1"
+    onKeyDown={(event) => {
+      const target = event.target as HTMLElement;
+      if (target.role !== "tab" || (event.key !== "Enter" && event.key !== " ")) return tabKeys(event, pathname, (path, anchor) => setMenu({ path, anchor, space: space.id, shared: true }), tabs.moveShared);
+      event.preventDefault();
+      target.click();
+    }}
+    onDragStart={(event) => { dragging = key; event.dataTransfer.setData(sharedDrag, rowOf(event.target as Element)!); }}
+    onDragOver={(event) => { if (dragging === key) event.preventDefault(); }}
+    onDragEnd={() => { dragging = ""; }}
+    onDrop={(event) => {
+      const to = rowOf(event.target as Element);
+      if (dragging === key && to) tabs.moveShared(event.dataTransfer.getData(sharedDrag), to);
+    }}>
+    <div className="flex shrink-0 items-center pt-1">
+      <button type="button" aria-expanded={!closed} aria-label={`Shared in ${space.name}`} className="flex h-7 w-fit min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => foldCard(key, !closed)}>
+        <span className={cn("rounded-full px-2 py-0.5 text-xs text-black", unread.size ? "font-bold" : "font-medium", groupColors.Grey)}>Shared</span>
+      </button>
+      {asking ? needsYou : null}
+    </div>
+    {listed.map((path) => <div key={path} data-shared={path}>
+      <TabItem tab={{ path, search: sharedTab(tabs.shared, space.id, path)?.search }} shared space={space.id} open={() => tabs.go(path, space.id, true)} description={`Shared, Space: ${space.name}${label && `, ${label}`}`} chosen={false} rule="Grey" active={active(path)} stop={path === stop} editing={editing === `shared:${path}`} endEdit={() => setEditing(undefined)} openMenu={(anchor) => setMenu({ path, anchor, space: space.id, shared: true })} />
+    </div>)}
   </div>;
 }
 
@@ -2119,12 +2109,14 @@ function useParkedTree({ state, pathname, shared, parked }: TabStoreValue) {
   const collapsed = state.groups.find((group) => group.id === "parked")?.collapsed ?? true;
   const tree = sections.map((section) => {
     const fold = `parked:@${section.name}`, shut = collapsed || (sections.length > 1 && (folds[fold] ?? false));
+    const asks = new Set((servers[section.name]?.rows ?? []).flatMap((row) => row.asking ? [rowPath(row)] : []));
     const branches = section.spaces.flatMap((space) => {
       const id = `parked:${section.name}/${space.id}`, rank = (tab: Tab) => order.indexOf(`${id}\n${tab.path}`) + 1 || Infinity, closed = shut || (folds[id] ?? false);
       const there = section.rows.filter((tab) => tab.space === space.id).sort((a, b) => rank(a) - rank(b) || 0);
-      return there.length ? [{ space, id, closed, size: there.length, shown: closed ? there.filter((tab) => section.name === here && tab.path === pathname) : there }] : [];
+      const shown = closed ? there.filter((tab) => section.name === here && tab.path === pathname) : there, seen = new Set(shown);
+      return there.length ? [{ space, id, closed, size: there.length, shown, asking: there.some((tab) => asks.has(tab.path) && !seen.has(tab)) }] : [];
     });
-    return { name: section.name, showSpaces: section.spaces.length > 1 && !shut, fold, shut, branches, count: branches.reduce((sum, branch) => sum + branch.size, 0) };
+    return { name: section.name, showSpaces: section.spaces.length > 1 && !shut, fold, shut, branches, count: branches.reduce((sum, branch) => sum + branch.size, 0), asking: branches.some((branch) => branch.asking) };
   });
   const visible = tree.flatMap((section) => section.branches.flatMap((branch) => branch.shown.map((tab) => ({ ...tab, server: section.name, branch: branch.id, key: `${section.name}\n${tab.path}` }))));
   return { tree, visible, collapsed, here, count: tree.reduce((sum, section) => sum + section.count, 0), stop: (visible.find((tab) => tab.server === here && tab.path === pathname) ?? visible[0])?.key };
@@ -2179,6 +2171,7 @@ function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: T
     <button type="button" aria-expanded={!collapsed} className="flex h-7 w-fit shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => fold("parked", !collapsed)}>
       <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium text-black", groupColors.Grey)}><SquareParking aria-hidden="true" className="size-3" />Parked</span>
       <span aria-hidden="true" className="text-xs text-muted-foreground">{count}</span>
+      {collapsed && tree.some((section) => section.asking) ? needsYou : null}
     </button>
     <div ref={list} role="tablist" aria-label="Parked tabs" aria-orientation="vertical" className="flex flex-col gap-0.5"
       onClickCapture={(event) => {
@@ -2199,11 +2192,11 @@ function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: T
       }}>
       {tree.map((section) => <Fragment key={section.name}>
         {tree.length > 1 && !collapsed ? <button type="button" aria-expanded={!section.shut} aria-label={`Parked on ${serverLabel(section.name)}`} className={cn(header, "mt-1 h-7 rounded-md font-semibold text-foreground")} onClick={() => foldCard(section.fold, !section.shut)}>
-          <ChevronDown aria-hidden="true" className={cn("size-3.5", section.shut && "-rotate-90")} />{serverLabel(section.name)}{sidebar.servers[section.name]?.offline ? <span className="font-normal">· offline</span> : null}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-muted px-1.5 text-center text-[11px]">{section.count}</span>
+          <ChevronDown aria-hidden="true" className={cn("size-3.5", section.shut && "-rotate-90")} />{serverLabel(section.name)}{sidebar.servers[section.name]?.offline ? <span className="font-normal">· offline</span> : null}{section.shut && section.asking ? needsYou : null}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-muted px-1.5 text-center text-[11px]">{section.count}</span>
         </button> : null}
-        {section.branches.map(({ space, id, closed, size, shown }) => <Fragment key={space.id}>
+        {section.branches.map(({ space, id, closed, size, shown, asking }) => <Fragment key={space.id}>
           {section.showSpaces ? <button type="button" aria-expanded={!closed} aria-label={`Parked in ${space.name}${tree.length > 1 ? ` on ${serverLabel(section.name)}` : ""}`} className={cn(header, "mt-1 h-6 rounded-t-md bg-muted/50")} onClick={() => foldCard(id, !closed)}>
-            {closed ? <Folder aria-hidden="true" className="size-3.5" /> : <FolderOpen aria-hidden="true" className="size-3.5" />}{space.name}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-background px-1.5 text-center text-[11px]">{size}</span><ChevronDown aria-hidden="true" className={cn("size-3.5", closed && "-rotate-90")} />
+            {closed ? <Folder aria-hidden="true" className="size-3.5" /> : <FolderOpen aria-hidden="true" className="size-3.5" />}{space.name}{asking ? needsYou : null}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-background px-1.5 text-center text-[11px]">{size}</span><ChevronDown aria-hidden="true" className={cn("size-3.5", closed && "-rotate-90")} />
           </button> : null}
           <div className={cn("flex flex-col [&_[role=tab]]:py-1", section.showSpaces && "rounded-b-md bg-muted/30 p-0.5")}>
             {shown.map((tab) => <ParkedItem key={tab.path} tab={tab} server={section.name} here={here} space={space.name} active={section.name === here && tab.path === pathname} stop={stop === `${section.name}\n${tab.path}`} editing={section.name === here && tab.path === editing} endEdit={endEdit} close={() => close(tab.path)} openMenu={(anchor) => menuOf(tab, section.name, anchor)} />)}
