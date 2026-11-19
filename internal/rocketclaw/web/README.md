@@ -585,7 +585,8 @@ active tab.
   parks the session in view that way, and on any other tab does nothing. A parked tab
   leaves the strip for the **Parked** section
   at the bottom, which lists your parked tabs from every space, each with when
-  its park ends, and its header counts them. It folds like a card, starts folded, and folded still shows
+  its park ends, and its header counts them. A session parked until a time or until
+  you unpark it shows a clock in place of its icon, unless it asks you a question. It folds like a card, starts folded, and folded still shows
   the tab in view. Unfolded, it is as tall as its rows need, up to a third of
   the strip; drag its top edge, or focus the edge and press Up/Down, to change
   that limit, which is kept in this browser. With more than one space it is a tree: each space with
@@ -776,10 +777,11 @@ active tab.
   title stays in place. With reduced motion the title shows a still gradient
   that fades toward its end. Screen readers hear “Turn running” in the tab's
   description.
-- **Background work** that can wake an idle session swaps the tab's chat icon for an
-  hourglass: a running Background Job, its own or that of a hidden run reporting to it, or a
+- **Background work** swaps the tab's chat icon for an hourglass, also while a turn
+  runs: a running Background Job, its own or that of a hidden run reporting to it, or a
   remote OpenCode session's running child session (a background subagent) or shell command.
-  A running turn keeps the chat icon. Screen readers hear “Background work running”.
+  Screen readers hear “Background work running”. A question waiting on this person
+  keeps the chat icon.
 - **Unread** tabs show a bold title, and any kind of tab can be unread. The
   server marks a tab when something new happens on it: for a session, a turn
   ends, finished, failed, or stopped, or the agent starts asking a question;
