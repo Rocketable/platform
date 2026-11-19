@@ -222,9 +222,10 @@ using the existing Slack channel policy for Slack Y. Each agent carries its `sti
 value and the caller's `sticky_session`, so the New session picker can open it. Session
 rows do not repeat the agent choices. `/agent name` persists selection and updates the
 live bridge without resetting history; private producer X cannot be selected. Removed
-choices are not re-added merely because they remain the current selection. A session
-whose agent is sticky offers only that agent, and any other session offers no sticky
-agent (`sameSticky`), in `ListAgents` and to `/agent`; `ForkSession` refuses a sticky
+choices are not re-added merely because they remain the current selection. A Slack
+session offers only `sticky: slack` agents; any other session whose agent is sticky
+offers only that agent, and the rest offer no sticky agent (`sameKind`), in `ListAgents`
+and to `/agent`; `ForkSession` refuses a sticky
 agent's session with `FailedPrecondition`.
 
 `ListConfig` exposes only the retained `ConfigView` fields: workspace, overlays,

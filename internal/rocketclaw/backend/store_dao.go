@@ -241,7 +241,7 @@ SELECT r.target, t.agent FROM run r JOIN conversations t ON t.conversation_id = 
 func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error) {
 	var thread ThreadState
 
-	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by, COALESCE(parent_conversation_id, ''), CASE WHEN sticky = 'off' THEN '' ELSE sticky END
+	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by, COALESCE(parent_conversation_id, ''), CASE WHEN kind = 'slack_thread' THEN 'slack' WHEN sticky = 'off' THEN '' ELSE sticky END
 FROM conversations WHERE conversation_id = $1 AND retention = 'record'`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &thread.CreatedBy, &thread.parent, &thread.sticky)
 	if err == sql.ErrNoRows {
 		return ThreadState{}, false, nil
