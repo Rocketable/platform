@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -866,6 +867,83 @@ func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
 	assert.False(t, slices.ContainsFunc(rows, func(row SidebarSession) bool {
 		return row.Conversation.ID == oldest || row.Conversation.ID == "opencode:box:ses_never_listed"
 	}))
+}
+
+func TestPruneOpenCodeListsEveryPageFirst(t *testing.T) {
+	t.Parallel()
+
+	for _, failing := range []int{0, 2} {
+		t.Run(strconv.Itoa(failing), func(t *testing.T) {
+			t.Parallel()
+
+			s := newOpenCodeTestService(t, "box")
+			ctx := t.Context()
+
+			sessions := make([]openCodeSession, 2*openCodePrunePage+1)
+			for i := range sessions {
+				sessions[i] = openCodeTestSession(fmt.Sprintf("ses_%05d", i), "", "/srv", int64(i+1))
+			}
+
+			key := func(session openCodeSession) string { return fmt.Sprintf("%020d %s", session.Time.Updated, session.ID) }
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				query := r.URL.Query()
+
+				if limit, _ := strconv.Atoi(query.Get("limit")); requests == failing || limit > openCodePrunePage {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+
+				order, anchor := cmp.Or(query.Get("order"), "desc"), ""
+				if cursor := query.Get("cursor"); cursor != "" {
+					order, anchor, _ = strings.Cut(cursor, " ")
+				}
+
+				listed := slices.SortedFunc(slices.Values(sessions), func(a, b openCodeSession) int { return strings.Compare(key(a), key(b)) })
+				if order == "desc" {
+					slices.Reverse(listed)
+				}
+
+				listed = slices.DeleteFunc(listed, func(session openCodeSession) bool {
+					return anchor != "" && ((order != "asc" || key(session) <= anchor) && (order != "desc" || key(session) >= anchor))
+				})
+				listed = listed[:min(len(listed), openCodePrunePage)]
+
+				response := map[string]any{"data": listed, "cursor": map[string]string{}}
+				if len(listed) > 0 {
+					response["cursor"] = map[string]string{"next": order + " " + key(listed[len(listed)-1])}
+				}
+
+				_ = json.NewEncoder(w).Encode(response)
+
+				if requests == 1 {
+					sessions[openCodePrunePage].Time.Updated = int64(len(sessions) + 1)
+				}
+			}))
+			t.Cleanup(server.Close)
+
+			_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session)
+SELECT 'opencode:box:' || id, '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now() - interval '1 minute', id FROM unnest($1::text[]) AS id`,
+				[]string{sessions[openCodePrunePage].ID, sessions[len(sessions)-1].ID, "ses_gone"})
+			require.NoError(t, err)
+
+			kept := []string{"opencode:box:" + sessions[openCodePrunePage].ID, "opencode:box:" + sessions[len(sessions)-1].ID}
+
+			errPrune := s.pruneOpenCode(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "pw"})
+			if failing > 0 {
+				require.Error(t, errPrune)
+
+				kept = append(kept, "opencode:box:ses_gone")
+			} else {
+				require.NoError(t, errPrune)
+			}
+
+			ids, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE server = 'box' ORDER BY 1`, "pruned rows")
+			require.NoError(t, err)
+			assert.Equal(t, kept, ids)
+		})
+	}
 }
 
 func TestToggleManualTag(t *testing.T) {
