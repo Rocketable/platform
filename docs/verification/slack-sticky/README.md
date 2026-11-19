@@ -5,16 +5,13 @@ Sessions, Thread Sessions, and the `slack_respond_in_thread` ratchet. **It does 
 means the properties hold for the finite worlds below, under the assumptions below. The step table maps each model
 step to the code that will build it, or to the current code it changes.
 
-**Gate status: NOT VERIFIED for the one-day duplicate window.** On 2026-11-19 the model gained the `Window` process. Its two new must-fail checks, `short-window` and `witness-expiry`, each found their violation, but the full rerun of every check had not finished when this was committed. The results below predate the `Window` process.
-
-**Earlier gate status: VERIFIED** for the finite worlds below. On 2026-11-18, one `make -k` run of the final model exited 0:
+**Gate status: VERIFIED** for the finite worlds below. On 2026-11-19, one `make -k` run of the final model exited 0:
 
 - every required check finished with `Model checking completed. No error has been found.`;
-- every must-fail check failed with its named violation (19 of 19).
+- every must-fail check failed with its named violation (21 of 21).
 
 The checks used TLC2 2026.11.15.002146 (rev `bc1b506`) and OpenJDK 21.0.13 on linux/aarch64, with 16 cores. The last
-run followed the update that checks the thread hold when a turn fires, adds Web input into a Thread Session (item 8),
-and offers the tool only on turns a Slack mention started. No product
+run followed the update that bounds the duplicate check to the last day of saved history (the `Window` process). No product
 code exists yet. The model gates building it.
 
 ## Run
@@ -274,17 +271,17 @@ Required (must pass):
 
 | Check | World | Properties | Distinct states | Depth | Time |
 | --- | --- | --- | --- | --- | --- |
-| `safety` | roots 1, 2; thread mention 3; Web input 8 into its Thread Session; each mention delivered up to twice; 2 tool-call steps; 1 crash | all invariants | 4,636,106 | 49 | 2m24s |
-| `sources` | root 1, Web 4, agent write 5, thread write 7; 2 tool-call steps; 1 crash | all invariants | 53,027 | 45 | 2s |
-| `stops` | roots 1, 2; thread mention 3; 2 Stops; 1 crash | all invariants | 893,474 | 38 | 20s |
-| `config` | 2 agents; root 1, thread mention 3; up to twice; agent switch; sticky flip; 1 crash | all invariants | 56,296 | 28 | 2s |
-| `replies` | root 2; mention 6 under its reply; up to twice; 2 tool-call steps; 1 crash | all invariants | 5,228 | 26 | 0s |
-| `liveness-thread` | root 1, thread mention 3, Web input 8; up to twice; 1 Stop; 1 crash | all invariants and liveness | 73,138 | 36 | 1m20s |
-| `liveness-channel` | roots 1, 2; 1 Stop; 1 crash | all invariants and liveness | 26,722 | 28 | 18s |
-| `liveness-web` | root 1, Web 4; 1 crash | all invariants and liveness | 1,611 | 27 | 1s |
-| `liveness-agent` | root 1, agent write 5, thread write 7; 1 crash | all invariants and liveness | 2,788 | 32 | 2s |
-| `liveness-config` | 2 agents; root 1, thread mention 3; up to twice; agent switch; sticky flip | all invariants and liveness | 12,560 | 28 | 13s |
-| `liveness-replies` | root 2, mention 6; up to twice; 2 tool-call steps; 1 crash | all invariants and liveness | 5,228 | 26 | 5s |
+| `safety` | roots 1, 2; thread mention 3; Web input 8 into its Thread Session; each mention delivered up to twice; 2 tool-call steps; 1 crash | all invariants | 12,668,403 | 52 | 9m03s |
+| `sources` | root 1, Web 4, agent write 5, thread write 7; 2 tool-call steps; 1 crash | all invariants | 106,052 | 46 | 6s |
+| `stops` | roots 1, 2; thread mention 3; 2 Stops; 1 crash | all invariants | 5,146,716 | 41 | 2m11s |
+| `config` | 2 agents; root 1, thread mention 3; up to twice; agent switch; sticky flip; 1 crash | all invariants | 105,206 | 30 | 3s |
+| `replies` | root 2; mention 6 under its reply; up to twice; 2 tool-call steps; 1 crash | all invariants | 11,414 | 28 | 0s |
+| `liveness-thread` | root 1, thread mention 3, Web input 8; up to twice; 1 Stop; 1 crash | all invariants and liveness | 133,620 | 38 | 2m23s |
+| `liveness-channel` | roots 1, 2; 1 Stop; 1 crash | all invariants and liveness | 104,946 | 30 | 1m41s |
+| `liveness-web` | root 1, Web 4; 1 crash | all invariants and liveness | 3,220 | 28 | 2s |
+| `liveness-agent` | root 1, agent write 5, thread write 7; 1 crash | all invariants and liveness | 5,574 | 33 | 5s |
+| `liveness-config` | 2 agents; root 1, thread mention 3; up to twice; agent switch; sticky flip | all invariants and liveness | 23,302 | 30 | 22s |
+| `liveness-replies` | root 2, mention 6; up to twice; 2 tool-call steps; 1 crash | all invariants and liveness | 11,414 | 28 | 9s |
 
 Liveness is checked in smaller worlds than safety. The two first liveness worlds tried both ran out of time at 1800
 seconds, and neither found a violation before stopping:
@@ -300,25 +297,27 @@ Must fail (each found its violation; the counterexample trace is in `.tmp/run/sl
 
 | Check | What is turned off, or kept from today's code | Violation | States | Depth |
 | --- | --- | --- | --- | --- |
-| `no-ratchet` | one model step calls true and false, and the last call wins | `RatchetHonored` | 26 | 8 |
-| `volatile-ratchet` | a returned true is kept only in memory until the move; a crash forgets it | `RatchetHonored` | 78 | 9 |
-| `split-move` | the channel note is written after the move commits; a crash loses it | `ChannelKnowsThread` | 197 | 15 |
-| `no-hold` | no hold check when a Thread Session's turn fires: a thread mention runs while its root waits | `HeldUntilRootSettles` | 7 | 3 |
-| `no-root-first` | Slack delivers the thread mention first and the root is not admitted first | `HeldUntilRootSettles` | 6 | 3 |
-| `per-conv-dedup` | **today:** dedup within one conversation; the agent changes between two deliveries | `OneAdmission` | 10 | 4 |
-| `thread-only-lookup` | **today:** `findPosted` searches only thread replies; a crash after a top-level post | `OneReply` | 72 | 9 |
-| `legacy-report` | **today:** a bot-rooted thread is a Report Thread; a mention under a reply | `MentionsAnswered` | 50 | 14 |
-| `no-start-check` | no `sticky: slack` check when the turn fires; the agent is not `sticky: slack` then | `OnlySlackAgentsRun` | 6 | 4 |
-| `key-without-agent` | the Channel Session key leaves out the agent; the channel's agent changes | `SessionAgentFixed` | 183 | 8 |
-| `stop-by-conv` | **today:** a Stop interrupts whatever its conversation runs when it lands | `StopPrecise` | 251 | 10 |
-| `settle-after-close` | the status settles from memory after the row closes; a crash in between | `StatusClears` | 147 | 14 |
-| `no-footer-switch` | a moved turn's footer still opens the Channel Session | `FooterMatchesSession` | 25 | 9 |
-| `no-wake-on-release` | a root's end clears its thread's hold but wakes nothing | `Settles` | 314 | 23 |
-| `witness-move-held` | witness: a moved turn finishes after a crash, then the held mention runs | `NoMoveThenHeld` | 1,127 | 21 |
-| `witness-reply-thread` | witness: a mention under a top-level reply is answered | `NoReplyThread` | 105 | 16 |
-| `witness-web-held` | witness: Web input sent to a held Thread Session waits, then runs after the root's move | `NoWebHeldAfterMove` | 915 | 29 |
-| `witness-stop-moved` | witness: a Stop ends a moved turn | `NoStopAfterMove` | 121 | 13 |
-| `witness-ignored` | witness: a turn fires while its agent is not `sticky: slack`, and is ignored | `NoIgnoredAtPick` | 19 | 6 |
+| `no-ratchet` | one model step calls true and false, and the last call wins | `RatchetHonored` | 47 | 8 |
+| `volatile-ratchet` | a returned true is kept only in memory until the move; a crash forgets it | `RatchetHonored` | 139 | 9 |
+| `split-move` | the channel note is written after the move commits; a crash loses it | `ChannelKnowsThread` | 392 | 16 |
+| `no-hold` | no hold check when a Thread Session's turn fires: a thread mention runs while its root waits | `HeldUntilRootSettles` | 8 | 3 |
+| `no-root-first` | Slack delivers the thread mention first and the root is not admitted first | `HeldUntilRootSettles` | 7 | 3 |
+| `per-conv-dedup` | **today:** dedup within one conversation; the agent changes between two deliveries | `OneAdmission` | 11 | 4 |
+| `thread-only-lookup` | **today:** `findPosted` searches only thread replies; a crash after a top-level post | `OneReply` | 129 | 9 |
+| `legacy-report` | **today:** a bot-rooted thread is a Report Thread; a mention under a reply | `MentionsAnswered` | 99 | 15 |
+| `no-start-check` | no `sticky: slack` check when the turn fires; the agent is not `sticky: slack` then | `OnlySlackAgentsRun` | 9 | 4 |
+| `key-without-agent` | the Channel Session key leaves out the agent; the channel's agent changes | `SessionAgentFixed` | 405 | 8 |
+| `stop-by-conv` | **today:** a Stop interrupts whatever its conversation runs when it lands | `StopPrecise` | 574 | 10 |
+| `settle-after-close` | the status settles from memory after the row closes; a crash in between | `StatusClears` | 292 | 15 |
+| `no-footer-switch` | a moved turn's footer still opens the Channel Session | `FooterMatchesSession` | 46 | 9 |
+| `no-wake-on-release` | a root's end clears its thread's hold but wakes nothing | `Settles` | 884 | 25 |
+| `witness-move-held` | witness: a moved turn finishes after a crash, then the held mention runs | `NoMoveThenHeld` | 3,041 | 21 |
+| `witness-reply-thread` | witness: a mention under a top-level reply is answered | `NoReplyThread` | 299 | 16 |
+| `witness-web-held` | witness: Web input sent to a held Thread Session waits, then runs after the root's move | `NoWebHeldAfterMove` | 2,634 | 29 |
+| `witness-stop-moved` | witness: a Stop ends a moved turn | `NoStopAfterMove` | 236 | 13 |
+| `witness-ignored` | witness: a turn fires while its agent is not `sticky: slack`, and is ignored | `NoIgnoredAtPick` | 35 | 6 |
+| `short-window` | the duplicate check's window is shorter than Slack's redeliveries | `OneAdmission` | 8 | 4 |
+| `witness-expiry` | witness: an admission record drops out of the window | `NoExpiry` | 18 | 4 |
 
 Four of the must-fail checks keep a behavior today's code has (marked **today**). Each of the four needs a change
 before `sticky: slack` ships.
