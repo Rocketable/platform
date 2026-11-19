@@ -49,9 +49,12 @@ func TestAttachmentStorage(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
-			if driver == config.S3Attachments {
-				var mu sync.Mutex
+			var (
+				mu         sync.Mutex
+				cancelSave context.CancelFunc = func() {}
+			)
 
+			if driver == config.S3Attachments {
 				objects := map[string][]byte{}
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					assert.Contains(t, r.Header.Get("Authorization"), "/us-east-1/s3/aws4_request")
@@ -84,6 +87,20 @@ func TestAttachmentStorage(t *testing.T) {
 						}
 
 						_, _ = w.Write(data)
+					case http.MethodHead:
+						cancelSave()
+
+						if _, exists := objects[r.URL.Path]; !exists {
+							w.WriteHeader(http.StatusNotFound)
+						}
+					case http.MethodDelete:
+						if strings.HasSuffix(r.URL.Path, "undeletable") {
+							w.WriteHeader(http.StatusServiceUnavailable)
+							return
+						}
+
+						delete(objects, r.URL.Path)
+						w.WriteHeader(http.StatusNoContent)
 					default:
 						t.Errorf("unexpected S3 request: %s", r.Method)
 						w.WriteHeader(http.StatusMethodNotAllowed)
@@ -135,6 +152,48 @@ func TestAttachmentStorage(t *testing.T) {
 			require.Equal(t, []byte("original"), original)
 			_, err = service.attachments.Get(t.Context(), "missing")
 			require.Error(t, err)
+
+			_, err = service.db.ExecContext(t.Context(), `CREATE FUNCTION reject_attachment_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'attachment commit unavailable'; END $$;
+CREATE CONSTRAINT TRIGGER reject_attachment_commit AFTER INSERT ON attachments DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.id LIKE 'uncommitted%') EXECUTE FUNCTION reject_attachment_commit()`)
+			require.NoError(t, err)
+
+			uncommitted, queued := []string{"uncommitted"}, []string(nil)
+			if driver == config.S3Attachments {
+				uncommitted, queued = append(uncommitted, "uncommitted-undeletable"), []string{"uncommitted-undeletable"}
+			}
+
+			for _, id := range uncommitted {
+				ctx, cancel := context.WithCancel(t.Context())
+
+				mu.Lock()
+				cancelSave = cancel
+				mu.Unlock()
+
+				err = service.SaveAttachment(ctx, "producer", "", &protocol.OutboundAttachment{ID: id, Name: id, Data: []byte(id)}, true)
+				require.ErrorContains(t, err, "attachment commit unavailable")
+				_, err = service.AttachmentMetadata(t.Context(), "producer", id, false)
+				require.ErrorIs(t, err, sql.ErrNoRows)
+			}
+
+			_, err = service.attachments.Get(t.Context(), "uncommitted")
+			require.Error(t, err, "a failed commit must not leave the stored file behind")
+
+			require.NoError(t, service.SaveAttachment(t.Context(), "producer", "", &protocol.OutboundAttachment{ID: "committed", Name: "committed", Data: []byte("committed")}, true))
+			require.NoError(t, service.discardUnsavedAttachment(t.Context(), "committed"))
+			kept, err := service.attachments.Get(t.Context(), "committed")
+			require.NoError(t, err, "a commit error after the row landed must keep its file")
+			require.Equal(t, []byte("committed"), kept)
+
+			_, err = service.db.ExecContext(t.Context(), `ALTER TABLE attachments RENAME TO attachments_unavailable`)
+			require.NoError(t, err)
+			require.ErrorContains(t, service.discardUnsavedAttachment(t.Context(), "committed"), "check unsaved attachment")
+			kept, err = service.attachments.Get(t.Context(), "committed")
+			require.NoError(t, err, "an unconfirmed failure must keep the file")
+			require.Equal(t, []byte("committed"), kept)
+
+			pending, err := queryStrings(t.Context(), service.db, `SELECT id FROM pending_attachment_deletions`, "pending attachment deletions")
+			require.NoError(t, err)
+			require.Equal(t, queued, pending)
 		})
 	}
 }
