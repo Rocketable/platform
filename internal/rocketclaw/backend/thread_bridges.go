@@ -660,7 +660,8 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 		return "", false, fmt.Errorf("load configured agents: %w", err)
 	}
 
-	if !slices.Contains(agents.PrimaryNames(), start.agent) {
+	agent, ok := agents.Items[start.agent]
+	if !ok || strings.Contains(start.agent, "/") {
 		return "", false, fmt.Errorf("agent %q is not configured", start.agent)
 	}
 
@@ -671,9 +672,8 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 		return "", false, err
 	}
 
-	sticky := agents.Items[start.agent].Sticky
-	if sticky != harness.AgentStickyOff {
-		start.conversationID, resumed, err = m.store.CreateStickyConversation(ctx, protocol.Conversation{ID: start.conversationID, Agent: start.agent, CreatedBy: string(start.createdBy), Space: agents.Items[start.agent].Space}, sticky)
+	if agent.Sticky != harness.AgentStickyOff {
+		start.conversationID, resumed, err = m.store.CreateStickyConversation(ctx, protocol.Conversation{ID: start.conversationID, Agent: start.agent, CreatedBy: string(start.createdBy), Space: agent.Space}, agent.Sticky)
 		if err != nil {
 			return "", false, fmt.Errorf("persist sticky Web session: %w", err)
 		}
@@ -690,7 +690,7 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 		return "", false, err
 	}
 
-	if sticky == harness.AgentStickyOff {
+	if agent.Sticky == harness.AgentStickyOff {
 		if err := m.store.UpsertThread(start.conversationID, thread); err != nil {
 			m.mu.Lock()
 			delete(m.bridges, start.conversationID)
