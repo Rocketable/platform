@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
 import path from "node:path";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
@@ -15,11 +15,17 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   const view = (first: number, last: number, extra: object) => ({ messages: Array.from({ length: last - first + 1 }, (_, i) => entry(first + i)).flat(), origin: "", delegations: [], revision: "", reset: true, replacedKeys: [], removedKeys: [], entryKeys: Array.from({ length: last - first + 1 }, (_, i) => String(first + i)), running: false, terminal: "", start: String(first), more: first > 1, ...extra });
   const pages: { before?: string; from?: string; limit?: number }[] = [];
   const opened = Promise.withResolvers<void>();
-  let fullReads = 0;
+  let fullReads = 0, streamRequests = 0, firstReadArrived = false;
   const streamOpened = Promise.withResolvers<void>();
+  let waitingFor = "Chromium launch";
+  const scroll: string[] = [], pageErrors: string[] = [], failedReads: string[] = [];
+  onTestFinished(() => {
+    if (waitingFor) console.error("Long chat test state", JSON.stringify({ waitingFor, firstReadArrived, streamRequests, fullReads, pages, scroll, pageErrors, failedReads }));
+  });
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") {
+      streamRequests++;
       setTimeout(streamOpened.resolve, 200);
       return new Response(new ReadableStream({ start(controller) { controller.enqueue(`data: ${JSON.stringify({ conversationId: "long", revision: "" })}\n\n`); } }), { headers: { "Content-Type": "text/event-stream" } });
     }
@@ -32,6 +38,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     if (url.pathname === "/api/History" && url.searchParams.has("pull-request-discovery")) return Response.json({ messages: [], more: false });
     if (url.pathname === "/api/History") {
       const input = await request.json() as { revision?: string; limit?: number; before?: string; from?: string };
+      if (!input.before && !input.revision) firstReadArrived = true;
       await opened.promise;
       if (!input.before && !input.revision) {
         fullReads++;
@@ -50,13 +57,24 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
+    waitingFor = "navigation and loading placeholder";
     const page = await browser.newPage({ viewport: { width: 1100, height: 650 } });
+    page.on("pageerror", (error: Error) => pageErrors.push(error.message));
+    page.on("requestfailed", (request: { url(): string; postData(): string | null; failure(): { errorText: string } }) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/History" && !url.searchParams.has("pull-request-discovery")) failedReads.push(`${request.postData()}: ${request.failure().errorText}`);
+    });
+    page.on("console", (message: { text(): string }) => {
+      const text = message.text();
+      if (text.startsWith("long-chat-scroll ")) scroll.push(text);
+    });
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: 8 });
     await page.goto(`http://127.0.0.1:${server.port}/s/bG9uZw`);
     // A slow first read shows that the chat is loading, not an empty chat.
     await page.getByText("Loading conversation…").waitFor();
     expect(await page.getByText("Send a message to start the conversation.").count()).toBe(0);
+    waitingFor = "newest turns";
     opened.resolve();
     await page.getByText(`assistant ${turns}`).waitFor();
     expect(await page.locator('[data-slot="message"][data-message-id]').count()).toBe(100);
@@ -65,6 +83,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
 
     // Typing redraws only the composer; redrawing a long transcript per keystroke made input lag.
     // Background polls may still redraw it a few times, so this bounds the count well below one per key.
+    waitingFor = "typing in the composer";
     await page.evaluate(() => {
       const probe = window as unknown as { transcriptRenders: number };
       probe.transcriptRenders = 0;
@@ -74,12 +93,20 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
           probe.transcriptRenders++;
         }
       };
+      const viewport = document.querySelector("#transcript-scroll")!;
+      document.addEventListener("wheel", (event) => {
+        console.debug("long-chat-scroll wheel", viewport.contains(event.target as Node), viewport.scrollTop);
+        viewport.addEventListener("scroll", () => {
+          console.debug("long-chat-scroll position", viewport.scrollTop, viewport.clientHeight, viewport.scrollHeight);
+        }, { once: true });
+      }, { capture: true, once: true, passive: true });
     });
     const typed = "typing in a long chat redraws only the composer";
     await page.locator("textarea").pressSequentially(typed);
     expect(await page.locator("textarea").inputValue()).toBe(typed);
     expect(await page.evaluate(() => (window as unknown as { transcriptRenders: number }).transcriptRenders)).toBeLessThan(typed.length / 2);
     // Naming a tab group redraws only its field too; tab state belongs to the whole app.
+    waitingFor = "creating and naming a tab group";
     await page.getByRole("tab", { name: "Long chat", exact: true }).click({ button: "right" });
     await page.getByRole("menuitem", { name: "Add to group" }).click();
     await page.getByRole("menuitem", { name: "New group" }).click();
@@ -93,8 +120,10 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: named, exact: true }).waitFor();
 
+    waitingFor = "hover and wheel on transcript";
     await page.locator("#transcript-scroll").hover();
     await page.mouse.wheel(0, -100_000);
+    waitingFor = "earlier turns after scrolling";
     await page.getByText("user 21", { exact: true }).waitFor({ state: "attached" });
     expect(pages).toEqual([{ before: "71", limit: 50 }]);
     // The turns already on screen stay put; the page grows above them.
@@ -105,6 +134,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     })).toBe(true);
     expect(await page.getByText("user 20", { exact: true }).count()).toBe(0);
 
+    waitingFor = "linked turn in the viewport";
     await page.evaluate(() => {
       history.pushState(null, "", "/s/bG9uZw?message=5%3A0");
       window.dispatchEvent(new PopStateEvent("popstate"));
@@ -115,15 +145,18 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
       return !!viewport && !!target && target.bottom > viewport.top && target.top < viewport.bottom;
     });
     expect(pages[1]).toEqual({ before: "21", from: "5", limit: undefined });
+    waitingFor = "earlier history error";
     await page.getByText("Earlier history unavailable", { exact: true }).waitFor();
     expect(pages[2]).toEqual({ before: "5", from: undefined, limit: 50 });
     expect(await page.getByText("user 5", { exact: true }).count()).toBe(1);
     expect(await page.getByText(`assistant ${turns}`, { exact: true }).count()).toBe(1);
     expect(await page.locator("textarea").inputValue()).toBe(typed);
+    waitingFor = "browser cleanup";
   } finally {
     await browser.close();
     server.stop(true);
   }
+  waitingFor = "";
 }, 30_000);
 
 test("a chat that doesn't exist says so instead of loading forever", async () => {
