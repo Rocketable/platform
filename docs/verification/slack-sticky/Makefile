@@ -27,7 +27,7 @@ PASS := safety sources stops config replies liveness-thread liveness-channel liv
 # witness showing a path the passes cover is reachable.
 NEGATIVE := no-ratchet volatile-ratchet split-move no-hold no-root-first per-conv-dedup thread-only-lookup \
 	legacy-report no-start-check key-without-agent stop-by-conv settle-after-close no-footer-switch no-wake-on-release \
-	witness-move-held witness-reply-thread witness-web-held witness-stop-moved witness-ignored
+	witness-move-held witness-reply-thread witness-web-held witness-stop-moved witness-ignored short-window witness-expiry
 EXPECTED_no-ratchet := Invariant RatchetHonored is violated.
 EXPECTED_volatile-ratchet := Invariant RatchetHonored is violated.
 EXPECTED_split-move := Temporal property ChannelKnowsThread was violated.
@@ -47,6 +47,8 @@ EXPECTED_witness-reply-thread := Invariant NoReplyThread is violated.
 EXPECTED_witness-web-held := Invariant NoWebHeldAfterMove is violated.
 EXPECTED_witness-stop-moved := Invariant NoStopAfterMove is violated.
 EXPECTED_witness-ignored := Invariant NoIgnoredAtPick is violated.
+EXPECTED_short-window := Invariant OneAdmission is violated.
+EXPECTED_witness-expiry := Invariant NoExpiry is violated.
 
 .NOTPARALLEL:
 .PHONY: all check translate tools $(PASS) $(NEGATIVE)

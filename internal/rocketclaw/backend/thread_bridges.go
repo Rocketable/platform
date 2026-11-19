@@ -558,6 +558,8 @@ func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, t
 		accepted bool
 	)
 
+	recent := strings.TrimSuffix(time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339Nano), "Z")
+
 	for i, mention := range mentions {
 		id := "slack:" + mention.SlackReply.ChannelID + ":" + mention.SlackReply.MessageTS
 		mention.ConversationID, mention.Metadata["web_message_id"] = ids[i], id
@@ -571,11 +573,11 @@ func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, t
 ), seen AS (
     SELECT 1 FROM turns t JOIN channel USING (conversation_id) WHERE t.takes_lane AND (t.input_id = $2 OR t.inbound_json->'Metadata'->>'web_message_id' = $2)
     UNION ALL SELECT 1 FROM entries e JOIN channel USING (conversation_id) CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
-    WHERE item->>'input_id' = $2 LIMIT 1
+    WHERE rtrim(e.entry_timestamp, 'Z') COLLATE "C" > $4 COLLATE "C" AND item->>'input_id' = $2 LIMIT 1
 ), queued AS (
     SELECT COALESCE(MAX(position), -1) + 1 AS position FROM turns WHERE conversation_id = $1 AND phase = 'waiting'
 )
-SELECT count(s.*) > 0, q.position FROM queued q LEFT JOIN seen s ON TRUE GROUP BY q.position`, ids[i], id, target.ChannelID).Scan(&seen, &position); err != nil {
+SELECT count(s.*) > 0, q.position FROM queued q LEFT JOIN seen s ON TRUE GROUP BY q.position`, ids[i], id, target.ChannelID, recent).Scan(&seen, &position); err != nil {
 			return false, fmt.Errorf("read admitted Slack mention: %w", err)
 		}
 

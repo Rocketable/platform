@@ -5,7 +5,9 @@ Sessions, Thread Sessions, and the `slack_respond_in_thread` ratchet. **It does 
 means the properties hold for the finite worlds below, under the assumptions below. The step table maps each model
 step to the code that will build it, or to the current code it changes.
 
-**Gate status: VERIFIED** for the finite worlds below. On 2026-11-18, one `make -k` run of the final model exited 0:
+**Gate status: NOT VERIFIED for the one-day duplicate window.** On 2026-11-19 the model gained the `Window` process. Its two new must-fail checks, `short-window` and `witness-expiry`, each found their violation, but the full rerun of every check had not finished when this was committed. The results below predate the `Window` process.
+
+**Earlier gate status: VERIFIED** for the finite worlds below. On 2026-11-18, one `make -k` run of the final model exited 0:
 
 - every required check finished with `Model checking completed. No error has been found.`;
 - every must-fail check failed with its named violation (19 of 19).
@@ -103,6 +105,12 @@ These are design choices the model makes, and each one is checked:
    so a duplicate delivery after the channel's agent changed would otherwise land in another session.
 
    Counterexample: `per-conv-dedup`, which is today's per-conversation query.
+
+   The check reads saved history from the last day only (the `Window` process). Time is not modeled, so the window's
+   length is an assumption: a day outlasts Slack's redeliveries (about 5 minutes) and the 10-minute root-first window.
+   The model lets an admission record drop out only once no delivery can name its mention again.
+
+   Counterexample: `short-window`, where a record may drop out at any time. Witness: `witness-expiry`.
 6. **A thread under the bot's own top-level reply is a Thread Session, not a Report Thread.** The root must carry a
    Slack-side mark, such as message metadata, because the posting record in `steps` is gone once the turn closes.
 
@@ -174,6 +182,8 @@ The model's actors, each one a PlusCal process:
 - **`StopPress`** (a person; not fair) records the turn the in-memory session showed. **`StopDeliver`** interrupts
   later.
 - **`Config`** (not fair): changes the channel's agent, and flips an agent's `sticky: slack`.
+- **`Window`** (not fair): an admission record drops out of the duplicate check's one-day window, once Slack can no
+  longer deliver its mention or, for a root, a mention in its thread.
 - **`Lifecycle`** (not fair): up to `MaxCrashes` crashes. Each one is a crash plus restart in one step.
   - Kept: the database (conversations, queues, turn rows, the Step Journal, posting markers, notes) and Slack.
   - Lost: memory (wakes, shown statuses, in-flight posts, settle flags, pending events).
@@ -200,7 +210,7 @@ Slack call, or one critical section.
 
 | Step | Code (planned, or today's code it changes) | Boundary |
 | --- | --- | --- |
-| `Slack` admission | `handleAppMentionEvent` → `SubmitMention` (`frontend/slack/connector.go`, `backend/thread_bridges.go`). New: route to the Channel or Thread Session key, root first, dedup by `slack:<ch>:<ts>` across the channel's conversations, status shown | one "Slack mention admission" transaction (both items for root first) plus the status call |
+| `Slack` admission | `handleAppMentionEvent` → `SubmitMention` (`frontend/slack/connector.go`, `backend/thread_bridges.go`). New: route to the Channel or Thread Session key, root first, dedup by `slack:<ch>:<ts>` across the channel's conversations (queued and running turns, and the last day of saved history), status shown | one "Slack mention admission" transaction (both items for root first) plus the status call |
 | pick | `Bridge.pickLaterWork` → `activateInbound`/`claimQueueItem` (`backend/bridge.go`). New, in `activateInbound` for new turns: the thread hold (the request stays waiting), the running-row lane check, and the one `sticky: slack` check, ignoring with a warning. A resumed turn (`headRequest`) is not checked again | "turn start" transaction |
 | root post | Web input mirrored at the top of the channel through `postOnce` (`frontend/slack/events.go`) | marker, Slack post, record |
 | status | `startSession` → `setSessionStatus` on the turn's thread | Slack call |
@@ -249,6 +259,7 @@ reachable:
 - `NoWebHeldAfterMove`: Web input sent to a held Thread Session waits, and runs after the root's turn moved there.
 - `NoStopAfterMove`: a Stop ends a turn that has moved.
 - `NoIgnoredAtPick`: a turn that fires while its agent is not `sticky: slack` is ignored.
+- `NoExpiry`: an admission record drops out of the duplicate check's window.
 
 ## Results
 
