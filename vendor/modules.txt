@@ -645,7 +645,7 @@ golang.org/x/crypto/nacl/box
 golang.org/x/crypto/nacl/secretbox
 golang.org/x/crypto/poly1305
 golang.org/x/crypto/salsa20/salsa
-# golang.org/x/exp v0.0.0-20261118212433-45f410233ff9
+# golang.org/x/exp v0.0.0-20261118215729-2791e4028fd4
 ## explicit; go 1.26.0
 golang.org/x/exp/constraints
 golang.org/x/exp/maps
@@ -726,10 +726,10 @@ golang.zx2c4.com/wintun
 # golang.zx2c4.com/wireguard/windows v1.1.1
 ## explicit; go 1.25.0
 golang.zx2c4.com/wireguard/windows/tunnel/winipcfg
-# google.golang.org/genproto/googleapis/api v0.0.0-20261118205021-e6950dcf398d
+# google.golang.org/genproto/googleapis/api v0.0.0-20261118221215-c8830f628b3f
 ## explicit; go 1.26.0
 google.golang.org/genproto/googleapis/api/httpbody
-# google.golang.org/genproto/googleapis/rpc v0.0.0-20261118205021-e6950dcf398d
+# google.golang.org/genproto/googleapis/rpc v0.0.0-20261118221215-c8830f628b3f
 ## explicit; go 1.26.0
 google.golang.org/genproto/googleapis/rpc/status
 # google.golang.org/grpc v1.85.0
@@ -844,7 +844,7 @@ google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# gvisor.dev/gvisor v0.0.0-20261118200533-28bfe04a0888
+# gvisor.dev/gvisor v0.0.0-20261118230523-349d2cab766a
 ## explicit; go 1.27.3
 gvisor.dev/gvisor/pkg/atomicbitops
 gvisor.dev/gvisor/pkg/bits
