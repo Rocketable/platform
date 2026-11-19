@@ -399,6 +399,8 @@ test("the test chat answers in every column, labels versions, restarts, and pose
     const read = async (id: string) => (await call<AgentDraftView>("GetAgentDraft", { id, since: "1" })).draft;
     const apply = async (id: string, op: object) => (await call<{ revision: string }>("ApplyAgentDraftOp", { id, op: { baseRevision: (await read(id)).revision, opId: crypto.randomUUID(), ...op } })).revision;
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+    const keepInterceptionEnabled = `${alice}/test/keep-interception-enabled`;
+    await page.route(keepInterceptionEnabled, (route: Route) => route.continue());
     const reads: { at: number; request: RoutedRequest }[] = [];
     const frames: { at: number; conversationId: string; revision: string }[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
