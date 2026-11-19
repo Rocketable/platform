@@ -439,9 +439,13 @@ func TestRunMergesStoredBehaviorSettings(t *testing.T) {
 	require.Equal(t, slog.LevelInfo, got.level, "the stored logging.level replaces the file's")
 	require.Contains(t, got.logs, `level=WARN msg="ignoring behavior settings in the config file; the stored behavior settings apply" fields="[auto_approver_model slack.channels logging.level]"`)
 
-	got, err = start(setupOnly)
+	_, err = store.db.ExecContext(t.Context(), `UPDATE behavior_settings SET document = document || '{"server_display_name": "stored"}'::jsonb`)
+	require.NoError(t, err)
+
+	got, err = start(func(cfg *config.Config) { cfg.ServerDisplayName = "file" })
 	require.NoError(t, err)
 	require.Equal(t, imported.Slack.Channels, got.live.Slack.Channels, "a setup-only file serves the stored Slack channels")
+	require.Equal(t, "file", got.live.ServerDisplayName, "server_display_name comes only from the file")
 	require.NotContains(t, got.logs, "ignoring behavior settings")
 
 	invalid := imported

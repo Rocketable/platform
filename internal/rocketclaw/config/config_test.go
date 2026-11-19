@@ -76,7 +76,6 @@ func TestBehaviorRoundTrip(t *testing.T) {
 	document := `{
 	  "auto_approver_model": "work/gpt-6.1-sol",
 	  "slack": {"channels": [{"channel": "#ops", "agents": ["main"], "allowed_user_ids": ["U123"]}]},
-	  "server_display_name": "home lab",
 	  "logging": {"level": "warn"},
 	  "overlays": ["github.com/rocketable/overlay1@main"]
 	}`

@@ -12,7 +12,6 @@ type Channel = { channel: string; agents?: string[]; allowed_user_ids?: string[]
 type Behavior = {
   auto_approver_model: string;
   slack: { channels: Channel[] | null };
-  server_display_name: string;
   logging: { level: string };
   overlays: string[] | null;
 };
@@ -53,7 +52,6 @@ function BehaviorFields({ draft, disabled, onChange }: { draft: Behavior; disabl
       </Group>
       <Group title="Server">
         <Setting label="Auto-approver model"><Input aria-label="Auto-approver model" className="w-64" placeholder="Default" value={draft.auto_approver_model} onChange={(event) => onChange({ auto_approver_model: event.target.value })} /></Setting>
-        <Setting label="Display name"><Input aria-label="Display name" className="w-64" value={draft.server_display_name} onChange={(event) => onChange({ server_display_name: event.target.value })} /></Setting>
         <Setting label="Log level"><Choice label="Log level" value={draft.logging.level} options={levels} disabled={disabled} onPick={(level) => onChange({ logging: { ...draft.logging, level } })} /></Setting>
       </Group>
       <Group title="Overlays">

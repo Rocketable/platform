@@ -2,7 +2,6 @@ package web
 
 import (
 	"bytes"
-	"cmp"
 	"compress/gzip"
 	"crypto/sha256"
 	"embed"
@@ -41,8 +40,8 @@ func Handler(cfg *config.LockedConfig, serverName string) http.Handler {
 		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/search", "/voice", "/pages", "/shortcuts", "/closed"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/search/") || strings.HasPrefix(r.URL.Path, "/s/") || strings.HasPrefix(r.URL.Path, "/r/") || strings.HasPrefix(r.URL.Path, "/oc/") || strings.HasPrefix(r.URL.Path, "/skills/") || strings.HasPrefix(r.URL.Path, "/agents/") || strings.HasPrefix(r.URL.Path, "/pages/") || strings.HasPrefix(r.URL.Path, "/cron/") {
 			live, index := cfg.Clone(), string(page)
 
-			if name := cmp.Or(live.ServerDisplayName, serverName); name != "" {
-				index = strings.Replace(index, "<title>RocketClaw</title>", "<title>"+html.EscapeString(name)+" - RocketClaw</title>", 1)
+			if serverName != "" {
+				index = strings.Replace(index, "<title>RocketClaw</title>", "<title>"+html.EscapeString(serverName)+" - RocketClaw</title>", 1)
 			}
 
 			if live.PostHog.ProjectToken != "" {
