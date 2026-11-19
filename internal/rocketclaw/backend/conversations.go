@@ -586,7 +586,7 @@ func (b *Bridge) Drain(ctx context.Context, responseID string, phase harness.Tur
 		return slices.DeleteFunc(snapshot.Inputs, func(input harness.PromptInput) bool { return slices.Contains(applied, input.ID) }), nil
 	}
 
-	inputs := slices.Clone(snapshot.Inputs)
+	inputs := snapshot.Inputs
 	segment := shadowStepSegment(applied, snapshot.Resets)
 
 	notes, err := claimBackgroundNotes(context.WithoutCancel(ctx), tx, b.config.ConversationID, b.activeTurnID, true)
