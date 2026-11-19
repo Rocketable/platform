@@ -593,15 +593,10 @@ type openCodeTitle struct {
 	Title string `json:"title"`
 }
 
-func AgentTags(agents harness.Agents) map[string][]string {
-	tags := make(map[string][]string, len(agents.Items))
-
-	for name := range agents.Items {
-		agent := agents.Items[name]
-		if groups, _ := agentTagGroups(&agent); len(groups) > 0 {
-			tags[name] = slices.Sorted(slices.Values(slices.Concat(groups...)))
-		}
-	}
+func AgentTagChoices(agent *harness.Agent) []string {
+	groups, _ := agentTagGroups(agent)
+	tags := slices.Concat(groups...)
+	slices.Sort(tags)
 
 	return tags
 }

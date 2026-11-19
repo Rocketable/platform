@@ -206,9 +206,10 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		}
 	}
 
-	for agent, tags := range backend.AgentTags(definitions) {
-		if limit.AllowsAgent(agent) {
-			first.AgentTags[agent] = &TagChoices{Tags: tags}
+	for name := range definitions.Items {
+		agent := definitions.Items[name]
+		if tags := backend.AgentTagChoices(&agent); len(tags) > 0 && limit.AllowsAgent(name) {
+			first.AgentTags[name] = &TagChoices{Tags: tags}
 		}
 	}
 
