@@ -900,7 +900,7 @@ test("tab groups take a name and color, collapse, adopt opened tabs, follow drag
   // The new group holds its place with a placeholder among its tabs.
   await until(() => saved.state.groups.some((group) => group.name === "Work") && saved.state.tabs.filter((tab) => tab.group).map((tab) => tab.path).toSorted().join() === [href("alpha"), href("bravo"), `group:${saved.state.groups[0].id}`].toSorted().join());
   await page.reload();
-  await tab("Charlie").waitFor();
+  await tab("Alpha").waitFor();
   expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Charlie"]);
   await strip(page).getByRole("button", { name: "Edit Work", exact: true }).click();
   expect(await field.inputValue()).toBe("Work");
