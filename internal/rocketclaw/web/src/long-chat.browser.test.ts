@@ -20,14 +20,18 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   const streamOpened = Promise.withResolvers<void>();
   let waitingFor = "Chromium launch";
   let browserDisconnectedAtMs: number | null = null;
+  const streamAbortedAtMs: number[] = [];
   const scroll: string[] = [], pageErrors: string[] = [], failedReads: string[] = [];
   onTestFinished(() => {
-    if (waitingFor) console.error("Long chat test state", JSON.stringify({ waitingFor, browserDisconnectedAtMs, firstReadArrived, streamRequests, fullReads, pages, scroll, pageErrors, failedReads }));
+    if (waitingFor) console.error("Long chat test state", JSON.stringify({ waitingFor, browserDisconnectedAtMs, firstReadArrived, streamRequests, streamAbortedAtMs, fullReads, pages, scroll, pageErrors, failedReads }));
   });
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") {
       streamRequests++;
+      request.signal.addEventListener("abort", () => {
+        streamAbortedAtMs.push(Math.round(performance.now() - startedAt));
+      }, { once: true });
       setTimeout(streamOpened.resolve, 200);
       return new Response(new ReadableStream({ start(controller) { controller.enqueue(`data: ${JSON.stringify({ conversationId: "long", revision: "" })}\n\n`); } }), { headers: { "Content-Type": "text/event-stream" } });
     }
