@@ -6,6 +6,7 @@ module: internal/rocketclaw/web
 problem_type: developer_experience
 component: development_workflow
 severity: medium
+last_updated: 2026-11-18
 applies_when:
   - A Web build or test run leaves a file named core in internal/rocketclaw/web
   - The built stylesheet name in internal/rocketclaw/internal/web/dist/index.html changes although no Web source changed
@@ -26,7 +27,7 @@ tags:
 
 ## Context
 
-The built Web bundle in `internal/rocketclaw/internal/web/dist` is committed. Every Web build rewrites it: `build.ts` empties `dist` (`build.ts:7`), runs Tailwind over `app/globals.css` (`build.ts:10`) and names the stylesheet after a hash of its content (`build.ts:16`). `make lint` and `make test` both rebuild it (the `web-assets` target in `internal/rocketclaw/Makefile`, which `lint` and `generate` depend on; `internal/rocketclaw/web/Makefile:39`).
+The built Web bundle in `internal/rocketclaw/internal/web/dist` is committed. Every Web build rewrites it: `build.ts` empties `dist` (`build.ts:8`), runs Tailwind over `app/globals.css` (`build.ts:22`) and names the stylesheet after a hash of its content (`build.ts:28`). `make lint` and `make test` both rebuild it (the `web-assets` target in `internal/rocketclaw/Makefile`, which `lint` and `generate` depend on; `internal/rocketclaw/web/Makefile:39`).
 
 While re-checking each commit of the sticky-sessions PR (#999), this went wrong twice in one session:
 
@@ -39,7 +40,7 @@ The fix both times was to delete the dump and put the known-good `dist` back. Af
 
 **Tailwind reads every file under `internal/rocketclaw/web`, not just `src/`.** `internal/rocketclaw/web/app/globals.css` starts with a plain `@import "tailwindcss";` (`app/globals.css:1`) and has no `@source` lines. The build runs from `internal/rocketclaw/web`, so Tailwind's automatic source detection starts there. Asking Tailwind 4.3.5's own scanner (`@tailwindcss/oxide` `Scanner`) which files it reads in this tree lists 97: `src/` and `app/`, plus `README.md`, `Makefile`, `go.mod`, `proto/`, `build.ts`, `index.html` and the JSON configs (paths relative to `internal/rocketclaw/web`). In the tests below it also read a binary file named `core`, which has no extension.
 
-**Chromium crash dumps land in exactly that folder.** The Web browser tests run `bun test` from `internal/rocketclaw/web`. So do the Go real-browser tests, through `runWebTest`, which sets `web.Dir = "../../web"` (`internal/rocketclaw/frontend/rpc/server_test.go:4048`). Both dumps in this session were written there.
+**Chromium crash dumps land in exactly that folder.** The Web browser tests run `bun test` from `internal/rocketclaw/web`. So do the Go real-browser tests, through `runWebTest`, which sets `web.Dir = "../../web"` (`internal/rocketclaw/frontend/rpc/server_test.go:4094`). Both dumps in this session were written there.
 
 **Measured on Tailwind 4.3.5 (scratch copies only):**
 
@@ -60,7 +61,7 @@ That shows a stray `core` in this folder is enough to change the stylesheet and 
 find internal/rocketclaw/web -path '*/node_modules' -prune -o -name core -type f -print
 ```
 
-If one is there, delete it and build again. A stylesheet name of 15 hex characters is fine: `build.ts:16` prints the hash with `toString(16)`, which drops leading zeros.
+If one is there, delete it and build again. A stylesheet name of 15 hex characters is fine: `build.ts:28` prints the hash with `toString(16)`, which drops leading zeros.
 
 **Build and test on a new commit, never on the commit being checked.** jj snapshots the working copy at the start of almost every command. With @ on a real commit, whatever the run leaves behind becomes part of that commit: a rebuilt `dist`, a lint autofix, or any dump under the size limit.
 

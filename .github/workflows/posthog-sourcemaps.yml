@@ -1,0 +1,39 @@
+name: Upload PostHog source maps
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - name: Save the JavaScript embedded in the release tag
+        run: |
+          mkdir -p .tmp/posthog-release
+          cp internal/rocketclaw/internal/web/dist/assets/*.js .tmp/posthog-release/
+      - name: Generate source maps
+        working-directory: internal/rocketclaw/web
+        env:
+          TMPDIR: ${{ github.workspace }}/.tmp
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - name: Verify the JavaScript matches the release
+        run: diff --brief --recursive --exclude='*.map' .tmp/posthog-release .tmp/posthog-sourcemaps
+      - name: Upload matching source maps
+        env:
+          npm_config_cache: ${{ github.workspace }}/.tmp/npm
+          POSTHOG_CLI_HOST: ${{ vars.POSTHOG_CLI_HOST || 'https://us.posthog.com' }}
+          POSTHOG_CLI_PROJECT_ID: ${{ vars.POSTHOG_PROJECT_ID }}
+          POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
+        run: npx --yes @posthog/cli@0.20.1 sourcemap upload --directory .tmp/posthog-sourcemaps

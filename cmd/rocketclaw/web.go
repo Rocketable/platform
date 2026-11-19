@@ -4,14 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -26,7 +33,7 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 	handler := http.NewServeMux()
 	handler.Handle("/", rpc.NewHTTPHandler(connection, rt.Cfg, cfg.Web.Tsnet.Hostname))
 	handler.Handle("/opencode/{name}/mcp", http.NewCrossOriginProtection().Handler(rt.OpenCodeMCP()))
-	server := grpc.NewServer()
+	server := grpc.NewServer(grpc.UnaryInterceptor(traceWebRPC(cfg.PostHog.TimingSampleRate)))
 	web := rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs)
 	web.Register(server)
 
@@ -76,4 +83,24 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 
 		return nil
 	}, nil
+}
+
+func traceWebRPC(sampleRate float64) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if rand.Float64() >= sampleRate {
+			return handler(ctx, request)
+		}
+
+		_, span := otel.Tracer("rocketclaw/web").Start(ctx, strings.TrimPrefix(info.FullMethod, "/"), trace.WithSpanKind(trace.SpanKindServer))
+		defer span.End()
+
+		response, err := handler(ctx, request)
+		span.SetAttributes(attribute.Int("rpc.grpc.status_code", int(status.Code(err))))
+
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+
+		return response, err
+	}
 }
