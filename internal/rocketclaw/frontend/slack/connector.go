@@ -979,7 +979,7 @@ func (c *Connector) handleEventsAPI(ctx context.Context, event socketmode.Event)
 		payload = event.Request.Payload
 	}
 
-	forward, _ := nativeSlackForward(payload)
+	forward := nativeSlackForward(payload)
 
 	switch ev := eventsAPIEvent.InnerEvent.Data.(type) {
 	case *slackevents.ChannelRenameEvent:
@@ -1344,10 +1344,10 @@ func (c *Connector) slackPrincipal(ctx context.Context, userID string) (principa
 	return name + " (" + userID + ")", name, user.Profile.Email
 }
 
-func nativeSlackForward(payload json.RawMessage) (slackNativeForward, bool) {
+func nativeSlackForward(payload json.RawMessage) slackNativeForward {
 	var raw rawSlackEventsPayload
 	if json.Unmarshal(payload, &raw) != nil {
-		return slackNativeForward{}, false
+		return slackNativeForward{}
 	}
 
 	var forward slackNativeForward
@@ -1411,7 +1411,7 @@ func nativeSlackForward(payload json.RawMessage) (slackNativeForward, bool) {
 		forward.channelID, forward.threadTS = "", ""
 	}
 
-	return forward, len(forward.previews) > 0
+	return forward
 }
 
 func (c *Connector) addSlackForward(ctx context.Context, content *protocol.InboundContent, forward slackNativeForward) {
