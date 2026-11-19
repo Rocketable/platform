@@ -90,8 +90,8 @@ func (s *SessionService) SendAgentDraft(ctx context.Context, queue agentDraftQue
 		return "", nil, err
 	}
 
-	if own := slices.DeleteFunc(slices.Clone(problems), func(problem AgentDraftProblem) bool { return problem.Variant != draft.Variants[0].Name }); len(own) > 0 {
-		return draft.TestChat, nil, &AgentDraftRefusedError{Problem: "Fix the draft's settings before testing it.", Problems: own}
+	if i := slices.IndexFunc(problems, func(problem AgentDraftProblem) bool { return problem.Variant == draft.Variants[0].Name }); i >= 0 {
+		return draft.TestChat, nil, &AgentDraftRefusedError{Problem: "Fix the draft's settings before testing it.", Problems: problems[i : i+1 : i+1]}
 	}
 
 	if mcp.On && slices.ContainsFunc(draft.Variants, func(variant AgentDraftVariant) bool { return !agentDraftStickyOff(variant.Settings) }) {
