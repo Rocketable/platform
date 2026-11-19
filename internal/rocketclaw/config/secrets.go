@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	errIncompleteARN      = errors.New("must be a complete secretsmanager ARN")
+	errIncompleteARN      = errors.New("must be a secretsmanager ARN like arn:aws:secretsmanager:REGION:ACCOUNT:secret:NAME, with or without the random suffix AWS adds to NAME")
 	errSecretKeyMissing   = errors.New("key not found")
 	errSecretKeyNotString = errors.New("key is not a string")
 	errSecretKeyName      = errors.New("key is not an environment variable name")
