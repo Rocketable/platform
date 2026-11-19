@@ -129,9 +129,11 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   // an empty space, which it enters on arrival.
   observed.stage = "enter spaces";
   const enter = async (space: string, server: string) => {
-    await page.getByRole("button", { name: `${space} space actions on ${server}`, exact: true }).click();
-    await page.getByRole("menuitem", { name: "Go to space", exact: true }).click();
-    await page.getByRole("menu").waitFor({ state: "hidden" });
+    const name = `${space} space actions on ${server}`;
+    await page.getByRole("button", { name, exact: true }).click();
+    const menu = page.getByRole("menu", { name, exact: true });
+    await menu.getByRole("menuitem", { name: "Go to space", exact: true }).click();
+    await menu.waitFor({ state: "hidden" });
   };
   await page.evaluate(async () => { await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ createSpace: "Side" }) }); });
   await page.evaluate(async (url: string) => { await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ createSpace: "Billing" }) }); }, remote);
