@@ -2612,6 +2612,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(ctrl.attachmentPrompts.at(-1)?.delivery).toBe("QUEUE");
     expect(await attachmentPage.getByRole("region", { name: "Messages", exact: true }).getByRole("link", { name: "Download queued.bin", exact: true }).count()).toBe(0);
     expect(Buffer.from(uploadedFiles.at(-1)!.data).toString()).toBe("queue");
+    await attachmentPage.getByRole("button", { name: "Remove queued.bin", exact: true }).waitFor({ state: "detached" });
     const queuedComposerEnabled = await attachmentPage.locator("textarea").isEnabled();
     if (!queuedComposerEnabled) console.error("Queued attachment composer disabled after dispatch", await attachmentPage.evaluate(() => {
       const textarea = document.querySelector("textarea");
