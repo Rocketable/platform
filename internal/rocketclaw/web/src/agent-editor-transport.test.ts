@@ -602,7 +602,13 @@ test("the test chat answers in every column, labels versions, restarts, and pose
       await chat.getByRole("button", { name: "Restart & replay", exact: true }).click();
       for (const name of ["Restart", "Restart & replay"]) await chat.getByRole("button", { name, exact: true, disabled: true }).waitFor();
       await release();
-      await until(`a new chat to replace ${restarting}`, async () => (await read(queue.id)).testChat !== restarting);
+      let observed: string | undefined;
+      await until("a new persisted test chat", async () => {
+        observed = (await read(queue.id)).testChat;
+        return !!observed && observed !== restarting;
+      }).catch((cause) => {
+        throw new Error(`Restart & replay: draft ${queue.id} last reported test chat ${JSON.stringify(observed)}; expected a non-empty ID different from ${JSON.stringify(restarting)}`, { cause });
+      });
       await cell(3, "queue").getByText("gpt-held answer 3", { exact: false }).waitFor();
       await chat.getByRole("button", { name: "Restart & replay", exact: true, disabled: false }).waitFor();
       expect(await row(4).count()).toBe(0);
