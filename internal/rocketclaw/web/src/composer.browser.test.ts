@@ -173,6 +173,8 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
     page.on("dialog", (dialog: { message: () => string; dismiss: () => Promise<void> }) => { dialogs.push(dialog.message()); void dialog.dismiss(); });
     await page.goto(`http://127.0.0.1:${server.port}/s/${Buffer.from("paused").toString("base64url")}`);
     const input = page.locator("textarea"), transcript = page.locator("#transcript-scroll"), send = page.getByRole("button", { name: "Send", exact: true });
+    const waitForPrompt = (text: string) => page.waitForResponse((response: { url(): string; request(): { postDataJSON(): { text: string } } }) =>
+      response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === text);
     // The pause toggle sits with Send, as a button that stays pressed while the agent is paused.
     const toggle = page.locator('[data-slot="composer-delivery"]').getByRole("button", { name: "Pause agent", exact: true });
     await page.locator("textarea:enabled").waitFor();
@@ -193,8 +195,10 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
 
     // On an idle chat the message shows at once and nothing works on it.
     await input.fill("Lunch at noon?");
+    const lunch = waitForPrompt("Lunch at noon?");
     await send.click();
     await transcript.getByText("Lunch at noon?", { exact: true }).waitFor();
+    await lunch;
     expect(prompts.at(-1)).toMatchObject({ text: "Lunch at noon?", delivery: "STEER" });
     expect(await page.getByText("Working…", { exact: true }).count()).toBe(0);
     await mkdir(shots, { recursive: true });
@@ -212,9 +216,11 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
     const steer = page.locator('[data-slot="composer-delivery"]').getByRole("button", { name: "Steer", exact: true });
     expect(await steer.count()).toBe(0);
     expect(await toggle.getAttribute("aria-pressed")).toBe("true");
+    const followUp = waitForPrompt("While the reply runs");
     await send.click();
     await transcript.getByText("While the reply runs", { exact: true }).waitFor();
     expect(await page.getByRole("region", { name: "Pending steers" }).count()).toBe(0);
+    await followUp;
     expect(prompts.at(-1)).toMatchObject({ text: "While the reply runs", delivery: "STEER" });
     expect(await working.count()).toBe(1);
 
@@ -225,8 +231,10 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
     await card.getByText("Which venue?").waitFor();
     expect(await input.getAttribute("placeholder")).toBe("Message the people here");
     await input.fill("Cafe works for me");
+    const cafe = waitForPrompt("Cafe works for me");
     await send.click();
     await transcript.getByText("Cafe works for me", { exact: true }).waitFor();
+    await cafe;
     expect(prompts.at(-1)).toMatchObject({ text: "Cafe works for me", delivery: "STEER" });
     expect(answers).toEqual([]);
     expect(await card.isVisible()).toBe(true);
