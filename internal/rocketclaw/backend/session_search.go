@@ -328,7 +328,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 		found      []MessageSearchHit
 		mentions   map[string]string
 		chats      []string
-		sandboxed  = make(map[string][]string)
+		sandboxed  map[string][]string
 	)
 
 	rooms := make(map[string]string)
@@ -338,7 +338,11 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 		return err
 	})
 
-	group.Go(func() error { return s.sandboxedAgents(groupCtx, search.Terms, sandboxed) })
+	if slices.ContainsFunc(search.Terms, func(term SearchTerm) bool { return term.Key == keyAgent }) {
+		sandboxed = make(map[string][]string)
+
+		group.Go(func() error { return s.sandboxedAgents(groupCtx, sandboxed) })
+	}
 
 	if scope == SearchMessages && search.Needle != "" {
 		group.Go(func() (err error) {
@@ -516,11 +520,7 @@ func (s *SessionService) searchDefinitions(ctx context.Context, terms []SearchTe
 	return agents, spaces, nil
 }
 
-func (s *SessionService) sandboxedAgents(ctx context.Context, terms []SearchTerm, sandboxed map[string][]string) error {
-	if !slices.ContainsFunc(terms, func(term SearchTerm) bool { return term.Key == keyAgent }) {
-		return nil
-	}
-
+func (s *SessionService) sandboxedAgents(ctx context.Context, sandboxed map[string][]string) error {
 	return readRows(ctx, s.db, `SELECT reports_to, agent FROM conversations WHERE reports_to IS NOT NULL UNION SELECT c.conversation_id, r.agent FROM conversations c JOIN conversations r ON r.conversation_id = c.continues`, "sandboxed agents", func(row rowScanner) error {
 		var chat, agent string
 		if err := row.Scan(&chat, &agent); err != nil {
