@@ -207,7 +207,7 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	restarted := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
 	require.False(t, submitTo(restarted, "first", "222.333"), "a redelivery after a restart, while the active turn waits to resume")
 
-	entry := testSessionEntry("first", "answer")
+	entry := testSessionEntryAt(time.Now(), "first")
 	entry.TurnID = request.turnID
 	entry.ReplayInput[0] = json.RawMessage(`{"type":"message","role":"user","input_id":"slack:D123:222.333","content":"first"}`)
 	_, err = store.finishTurn(t.Context(), request.turnID, &turnFinish{conversationID: strings.TrimSpace(conversationID), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(conversationID, "answer")})
@@ -219,6 +219,12 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, queue, 1)
 	assert.Equal(t, "slack:D123:333.444", queue[0].ID)
+
+	for _, age := range []time.Duration{time.Hour, 25 * time.Hour} {
+		_, err = store.db.ExecContext(t.Context(), `UPDATE entries SET entry_timestamp = $2 WHERE conversation_id = $1`, conversationID, time.Now().Add(-age).UTC().Format(time.RFC3339Nano))
+		require.NoError(t, err)
+		require.Equal(t, age > 24*time.Hour, submit("first", "222.333"), "only the last day of saved history marks a redelivery, age %s", age)
+	}
 }
 
 func writeMainAgent(t *testing.T, workspace, sticky string) {

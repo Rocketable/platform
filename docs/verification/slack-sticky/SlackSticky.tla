@@ -27,7 +27,7 @@ CONSTANTS Agents, InitAgent, Roots, ThreadMentions, WebItems, AgentItems, ReplyM
 
 Mutations == {"none", "no-ratchet", "volatile-ratchet", "split-move", "no-hold", "no-root-first", "per-conv-dedup",
               "thread-only-lookup", "legacy-report", "no-start-check", "key-without-agent", "stop-by-conv",
-              "settle-after-close", "no-footer-switch", "no-wake-on-release"}
+              "settle-after-close", "no-footer-switch", "no-wake-on-release", "short-window"}
 
 ASSUME InitAgent \in Agents
 ASSUME Roots \subseteq {1, 2} /\ ThreadMentions \subseteq {3} /\ WebItems \subseteq {4} /\ AgentItems \subseteq {5}
@@ -105,10 +105,12 @@ variables
     crashes = 0,
     \* Ghosts for the properties.
     asked = [i \in Items |-> FALSE],
-    badStart = FALSE, stoppedWrong = FALSE, clobber = FALSE, earlyThread = FALSE, webHeld = FALSE;
+    badStart = FALSE, stoppedWrong = FALSE, clobber = FALSE, earlyThread = FALSE, webHeld = FALSE, expired = FALSE;
 
 define
     Seen(i, k) == IF Mutation = "per-conv-dedup" THEN <<i, k>> \in seen ELSE \E x \in seen : x[1] = i
+    \* No delivery can name mention i again: Slack is done with it, and with every mention that admits it as a root.
+    Quiet(i) == delivered[i] = 1 + Dups /\ (i = ThreadOf => \A m \in ThreadMentions : delivered[m] = 1 + Dups)
     \* The root mention t still belongs to a channel turn: admitted, not finished, not moved.
     RootUnsettled(t) == t \in Roots /\ phase[t] \in {"waiting", "running", "delivering"} /\ movedTo[t] = NoKey
     \* For the ghost: the same, or not yet admitted at all.
@@ -172,6 +174,8 @@ define
     NoStopAfterMove == ~(\E i \in Items : phase[i] = "stopped" /\ movedTo[i] # NoKey)
     \* A turn fired while its agent was not sticky: slack, and was ignored.
     NoIgnoredAtPick == ~(\E i \in Items : phase[i] = "ignored" /\ admits[i] = 1)
+    \* An admission record dropped out of the duplicate check's window.
+    NoExpiry == ~expired
 
     \* Liveness, under the fairness in the Spec: everything but people, configuration and crashes is weakly fair.
     \* Every queued item finishes.
@@ -395,6 +399,19 @@ Deliver:
     end while;
 end process;
 
+\* The duplicate check reads only the last day of saved history, so an admission record drops out of it. A day
+\* outlasts Slack's redeliveries and the root-first window, so a record drops out only once its mention is Quiet.
+process Window = Proc("window")
+begin
+Expire:
+    while TRUE do
+        with x \in {r \in seen : Mutation = "short-window" \/ Quiet(r[1])} do
+            seen := seen \ {x};
+            expired := TRUE;
+        end with;
+    end while;
+end process;
+
 \* Web input and other sessions' agents write into sessions they can see.
 fair process Submit = Proc("submit")
 begin
@@ -492,10 +509,12 @@ VARIABLES cfg, slack, cfgLeft, kindLeft, exists, convAgent, queue, active,
           notes, seen, admits, rec, delivered, sent, replyLoc, replyFooter, 
           status, stopsLeft, wake, shown, inflight, settled, noteDue, 
           settleDue, stopEv, crashes, asked, badStart, stoppedWrong, clobber, 
-          earlyThread, webHeld
+          earlyThread, webHeld, expired
 
 (* define statement *)
 Seen(i, k) == IF Mutation = "per-conv-dedup" THEN <<i, k>> \in seen ELSE \E x \in seen : x[1] = i
+
+Quiet(i) == delivered[i] = 1 + Dups /\ (i = ThreadOf => \A m \in ThreadMentions : delivered[m] = 1 + Dups)
 
 RootUnsettled(t) == t \in Roots /\ phase[t] \in {"waiting", "running", "delivering"} /\ movedTo[t] = NoKey
 
@@ -560,6 +579,8 @@ NoStopAfterMove == ~(\E i \in Items : phase[i] = "stopped" /\ movedTo[i] # NoKey
 
 NoIgnoredAtPick == ~(\E i \in Items : phase[i] = "ignored" /\ admits[i] = 1)
 
+NoExpiry == ~expired
+
 
 
 Settles == \A i \in Items : phase[i] = "waiting" ~> phase[i] \in Final
@@ -576,9 +597,9 @@ vars == << cfg, slack, cfgLeft, kindLeft, exists, convAgent, queue, active,
            notes, seen, admits, rec, delivered, sent, replyLoc, replyFooter, 
            status, stopsLeft, wake, shown, inflight, settled, noteDue, 
            settleDue, stopEv, crashes, asked, badStart, stoppedWrong, clobber, 
-           earlyThread, webHeld >>
+           earlyThread, webHeld, expired >>
 
-ProcSet == (Keys) \cup {Proc("settler")} \cup {Proc("slack")} \cup {Proc("submit")} \cup {Proc("stoppress")} \cup {Proc("stopdeliver")} \cup {Proc("config")} \cup {Proc("lifecycle")}
+ProcSet == (Keys) \cup {Proc("settler")} \cup {Proc("slack")} \cup {Proc("window")} \cup {Proc("submit")} \cup {Proc("stoppress")} \cup {Proc("stopdeliver")} \cup {Proc("config")} \cup {Proc("lifecycle")}
 
 Init == (* Global variables *)
         /\ cfg = InitAgent
@@ -621,6 +642,7 @@ Init == (* Global variables *)
         /\ clobber = FALSE
         /\ earlyThread = FALSE
         /\ webHeld = FALSE
+        /\ expired = FALSE
 
 Lane(self) == /\ \/ /\ exists[self] /\ wake[self] /\ active[self] = 0
                     /\ IF Held(self) \/ queue[self] = <<>>
@@ -767,7 +789,7 @@ Lane(self) == /\ \/ /\ exists[self] /\ wake[self] /\ active[self] = 0
               /\ UNCHANGED << cfg, slack, cfgLeft, kindLeft, convAgent, 
                               agentOf, home, seen, admits, delivered, 
                               stopsLeft, stopEv, crashes, stoppedWrong, 
-                              webHeld >>
+                              webHeld, expired >>
 
 Settler == /\ settleDue # {}
            /\ \E t \in settleDue:
@@ -782,7 +804,7 @@ Settler == /\ settleDue # {}
                            rec, delivered, sent, replyLoc, replyFooter, 
                            stopsLeft, wake, shown, inflight, settled, noteDue, 
                            stopEv, crashes, asked, badStart, stoppedWrong, 
-                           clobber, earlyThread, webHeld >>
+                           clobber, earlyThread, webHeld, expired >>
 
 Slack == /\ \E m \in {x \in Mentions : delivered[x] < 1 + Dups /\ Visible(x)}:
               /\ delivered' = [delivered EXCEPT ![m] = delivered[m] + 1]
@@ -819,7 +841,18 @@ Slack == /\ \E m \in {x \in Mentions : delivered[x] < 1 + Dups /\ Visible(x)}:
                          thread, calls, movedTo, notes, rec, sent, replyLoc, 
                          replyFooter, stopsLeft, shown, inflight, settled, 
                          noteDue, settleDue, stopEv, crashes, asked, badStart, 
-                         stoppedWrong, clobber, earlyThread, webHeld >>
+                         stoppedWrong, clobber, earlyThread, webHeld, expired >>
+
+Window == /\ \E x \in {r \in seen : Mutation = "short-window" \/ Quiet(r[1])}:
+               /\ seen' = seen \ {x}
+               /\ expired' = TRUE
+          /\ UNCHANGED << cfg, slack, cfgLeft, kindLeft, exists, convAgent, 
+                          queue, active, phase, outcome, agentOf, home, rootTs, 
+                          thread, calls, movedTo, notes, admits, rec, 
+                          delivered, sent, replyLoc, replyFooter, status, 
+                          stopsLeft, wake, shown, inflight, settled, noteDue, 
+                          settleDue, stopEv, crashes, asked, badStart, 
+                          stoppedWrong, clobber, earlyThread, webHeld >>
 
 Submit == /\ \E i \in {x \in WebItems \cup AgentItems \cup ThreadWrites \cup ThreadWeb : phase[x] = "new"}:
                \E k \in CASE i \in ThreadWrites -> UNION {notes[c] : c \in Keys}
@@ -837,7 +870,7 @@ Submit == /\ \E i \in {x \in WebItems \cup AgentItems \cup ThreadWrites \cup Thr
                           admits, rec, delivered, sent, replyLoc, replyFooter, 
                           status, stopsLeft, shown, inflight, settled, noteDue, 
                           settleDue, stopEv, crashes, asked, badStart, 
-                          stoppedWrong, clobber, earlyThread >>
+                          stoppedWrong, clobber, earlyThread, expired >>
 
 StopPress == /\ stopsLeft > 0
              /\ \E e \in {x \in Items \X Keys : active[x[2]] = x[1] /\ phase[x[1]] = "running" /\ shown[x[1]]
@@ -851,7 +884,7 @@ StopPress == /\ stopsLeft > 0
                              replyFooter, status, wake, shown, inflight, 
                              settled, noteDue, settleDue, crashes, asked, 
                              badStart, stoppedWrong, clobber, earlyThread, 
-                             webHeld >>
+                             webHeld, expired >>
 
 StopDeliver == /\ \E e \in stopEv:
                     /\ \E tk \in IF Mutation = "stop-by-conv" THEN {e[2]}
@@ -869,7 +902,8 @@ StopDeliver == /\ \E e \in stopEv:
                                rec, delivered, sent, replyLoc, replyFooter, 
                                status, stopsLeft, wake, shown, inflight, 
                                settled, noteDue, settleDue, crashes, asked, 
-                               badStart, clobber, earlyThread, webHeld >>
+                               badStart, clobber, earlyThread, webHeld, 
+                               expired >>
 
 Config == /\ \/ /\ cfgLeft > 0
                 /\ \E a \in Agents \ {cfg}:
@@ -887,7 +921,7 @@ Config == /\ \/ /\ cfgLeft > 0
                           replyFooter, status, stopsLeft, wake, shown, 
                           inflight, settled, noteDue, settleDue, stopEv, 
                           crashes, asked, badStart, stoppedWrong, clobber, 
-                          earlyThread, webHeld >>
+                          earlyThread, webHeld, expired >>
 
 Lifecycle == /\ crashes < MaxCrashes
              /\ crashes' = crashes + 1
@@ -907,10 +941,10 @@ Lifecycle == /\ crashes < MaxCrashes
                              rootTs, calls, movedTo, notes, seen, admits, rec, 
                              delivered, sent, replyLoc, replyFooter, status, 
                              stopsLeft, asked, badStart, stoppedWrong, clobber, 
-                             earlyThread, webHeld >>
+                             earlyThread, webHeld, expired >>
 
-Next == Settler \/ Slack \/ Submit \/ StopPress \/ StopDeliver \/ Config
-           \/ Lifecycle
+Next == Settler \/ Slack \/ Window \/ Submit \/ StopPress \/ StopDeliver
+           \/ Config \/ Lifecycle
            \/ (\E self \in Keys: Lane(self))
 
 Spec == /\ Init /\ [][Next]_vars
