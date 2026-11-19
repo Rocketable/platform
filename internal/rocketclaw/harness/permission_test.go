@@ -71,6 +71,12 @@ func TestInterpolatePermissions(t *testing.T) {
 		require.Equal(t, PermissionDeny, denied.Permission.evaluate("bash", "intercom-write --conversation apple note").Action, "a deny rule without its variable denies as if it were *")
 	}
 
+	facet := Agent{Permission: parsePermissionYAML(t, `mcp: {demo: {all: allow}}`)}
+	facet.Permission.Buckets[0].Rules[0].Except = []string{"demo.secret_*"}
+	InterpolatePermissions(&facet, map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"})
+	require.Equal(t, PermissionDeny, facet.Permission.evaluate("mcp", "demo.secret_key").Action, "an interpolated agent keeps its facet removals")
+	require.Equal(t, PermissionAllow, facet.Permission.evaluate("mcp", "demo.list").Action)
+
 	unchanged := Agent{Permission: parsePermissionYAML(t, `edit: {"$ROCKETCLAW_X/${OTHER}/${ROCKETCLAW_X:-fallback}": allow}`)}
 	before := unchanged
 	InterpolatePermissions(&unchanged, nil)
@@ -190,17 +196,17 @@ websearch: allow
 		"rocketclaw: {rocketclaw_sessions: all}":            `unknown permission action "all"`,
 		"rocketclaw: {rocketclaw_sessions_write: children}": `unknown permission action "children"`,
 	} {
-		_, err := parsePermissionNode(parseYAMLNode(t, input))
+		_, err := parsePermissionNode(parseYAMLNode(t, input), nil)
 		require.ErrorContains(t, err, want)
 	}
 
 	for _, value := range []string{`allow`, `deny`, `auto`, `"true"`, `null`, `1`, `[]`, `{}`} {
-		_, err := parsePermissionNode(parseYAMLNode(t, `rocketclaw: {load_agents_md: `+value+`}`))
+		_, err := parsePermissionNode(parseYAMLNode(t, `rocketclaw: {load_agents_md: `+value+`}`), nil)
 		require.ErrorContains(t, err, "load_agents_md must be a boolean")
 	}
 
 	for _, value := range []string{`auto`, `auto(reviewer)`, `true`, `[]`} {
-		_, err := parsePermissionNode(parseYAMLNode(t, `rocketclaw: {allow_background: `+value+`}`))
+		_, err := parsePermissionNode(parseYAMLNode(t, `rocketclaw: {allow_background: `+value+`}`), nil)
 		require.ErrorContains(t, err, "allow_background must be allow or deny")
 	}
 }
@@ -216,7 +222,7 @@ func TestParsePermissionAuto(t *testing.T) {
 		`bash: {"*": auto(foo}`,
 		`bash: {"*": auto(foo))}`,
 	} {
-		_, err := parsePermissionNode(parseYAMLNode(t, input))
+		_, err := parsePermissionNode(parseYAMLNode(t, input), nil)
 		require.ErrorContains(t, err, "malformed permission action")
 	}
 }
@@ -284,6 +290,34 @@ func TestPermissionSetEvaluate(t *testing.T) {
 			require.Equal(t, tt.matched, matched)
 		})
 	}
+
+	t.Run("rule exceptions win regardless of order", func(t *testing.T) {
+		removalFirst := PermissionSet{Buckets: []PermissionBucket{{Name: "mcp", Rules: []PermissionRule{{Pattern: "s.*", Action: PermissionAllow, Except: []string{"s.delete_*"}}}}}}
+		overlapping := PermissionSet{Buckets: []PermissionBucket{{Name: "mcp", Rules: []PermissionRule{
+			{Pattern: "s.*", Action: PermissionAllow, Except: []string{"s.p*"}},
+			{Pattern: "s.*", Action: PermissionAllow, Except: []string{"s.q*"}},
+		}}}}
+		fallsThrough := PermissionSet{Buckets: []PermissionBucket{{Name: "mcp", Rules: []PermissionRule{
+			{Pattern: "s.*", Action: PermissionAllow},
+			{Pattern: "s.*", Action: PermissionAuto, Except: []string{"s.list_*"}},
+		}}}}
+
+		for _, tc := range []struct {
+			permissions PermissionSet
+			subject     string
+			action      PermissionAction
+		}{
+			{removalFirst, "s.delete_x", PermissionDeny},
+			{removalFirst, "s.list_x", PermissionAllow},
+			{overlapping, "s.p1", PermissionAllow},
+			{overlapping, "s.q1", PermissionAllow},
+			{fallsThrough, "s.list_x", PermissionAllow},
+			{fallsThrough, "s.update_x", PermissionAuto},
+		} {
+			action, _ := tc.permissions.Evaluate("mcp", tc.subject)
+			require.Equal(t, tc.action, action, tc.subject)
+		}
+	})
 
 	t.Run("sudo", func(t *testing.T) {
 		sudo := PermissionSet{Sudo: true}
@@ -392,7 +426,10 @@ func TestBashPermissionSubjects(t *testing.T) {
 func parsePermissionYAML(t *testing.T, text string) PermissionSet {
 	t.Helper()
 
-	permissions, err := parsePermissionNode(parseYAMLNode(t, text))
+	permissions, err := parsePermissionNode(parseYAMLNode(t, text), map[string]map[string][]string{
+		"demo": {"all": {"*"}, "checked": {"checked"}, "risky": {"risky"}},
+		"acme": {"echo": {"echo"}},
+	})
 	require.NoError(t, err)
 
 	return permissions

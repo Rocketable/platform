@@ -221,6 +221,10 @@ price, context size and effort levels, each linking to slopalytics to compare. A
 model name can be typed. **Test** sends one small paid request to that model, only
 when clicked, and says "Works" or shows the provider's error.
 
+**MCP servers.** The `mcp`, `approver.mcp` and `permission.mcp` settings list the
+configured MCP servers with their facet names, the only names those settings
+accept. The Config page shows the same list.
+
 **Test chat.** One message goes to every variant, and to the live agent when
 editing an existing one, and the answers line up side by side under it. Each
 answer names the version that gave it and fades once its column changes. The page

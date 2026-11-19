@@ -7,7 +7,7 @@ const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
 type Behavior = { auto_approver_model: string; logging: { level: string }; slack: { channels: unknown[] } };
 const initial = { auto_approver_model: "old-model", slack: { channels: [{ channel: "#general", agents: ["main"], allowed_user_ids: ["U0"] }] }, logging: { level: "info" }, overlays: null, future: 1 };
-const view = (behavior: Behavior, canEdit: boolean) => ({ workspace: "config", autoApproverModel: behavior.auto_approver_model, loggingLevel: behavior.logging.level, canEdit, behaviorJson: canEdit ? JSON.stringify(behavior) : undefined });
+const view = (behavior: Behavior, canEdit: boolean) => ({ workspace: "config", autoApproverModel: behavior.auto_approver_model, loggingLevel: behavior.logging.level, canEdit, behaviorJson: canEdit ? JSON.stringify(behavior) : undefined, mcpServerFacets: [{ server: "alpha", facets: ["read", "write"] }, { server: "zeta", facets: ["sudo"] }] });
 
 test("only admins edit the behavior settings, and the view changes only with the server's answer", async () => {
   const { chromium: engine } = await import(playwright!);
@@ -55,6 +55,8 @@ test("only admins edit the behavior settings, and the view changes only with the
 
     await page.goto(`http://127.0.0.1:${server.port}/config`);
     await page.getByText("old-model", { exact: true }).waitFor();
+    const servers = page.locator("section").filter({ has: page.getByRole("heading", { name: "MCP", exact: true }) }).getByRole("listitem");
+    expect(await servers.evaluateAll((items: HTMLElement[]) => items.map((item) => [...item.children].map((chip) => chip.textContent)))).toEqual([["alpha", "read", "write"], ["zeta", "sudo"]]);
     expect(await edit.count()).toBe(0);
     expect(await model.count()).toBe(0);
 

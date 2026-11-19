@@ -471,13 +471,10 @@ func TestMCPServerVisibility(t *testing.T) {
 		name, rules string
 		want        []string
 	}{
-		{"server wildcard", `mcp: {"demo.*": allow}`, []string{"demo", "demo"}},
-		{"auto exact tool", `mcp: {"acme.echo": auto}`, []string{"acme"}},
-		{"bare server", `mcp: {"demo": allow}`, []string{"demo", "demo"}},
-		{"all servers", `mcp: {"*": allow}`, []string{"demo", "acme", "demo", "hidden"}},
-		{"wildcard server", `mcp: {"*.echo": auto}`, []string{"demo", "acme", "demo", "hidden"}},
-		{"blank pattern", `mcp: {"   ": allow}`, []string{"demo", "acme", "demo", "hidden"}},
-		{"mixed rules", "read: {'*': allow}\nmcp: {'demo.other': deny, 'acme.echo': auto, 'demo.echo': allow, 'demo.*': allow, '*': deny}", []string{"demo", "acme", "demo"}},
+		{"allowed facet", `mcp: {demo: {all: allow}}`, []string{"demo", "demo"}},
+		{"auto facet", `mcp: {acme: {echo: auto}}`, []string{"acme"}},
+		{"both servers", `mcp: {demo: {checked: auto}, acme: {echo: allow}}`, []string{"demo", "acme", "demo"}},
+		{"other buckets", "read: {'*': allow}\nmcp: {acme: {echo: auto}}", []string{"acme"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			permissions := parsePermissionYAML(t, tc.rules)
@@ -490,7 +487,7 @@ func TestMCPServerVisibility(t *testing.T) {
 		})
 	}
 
-	assert.Equal(t, []string{"demo", "acme"}, visibleMCPServers(PermissionSet{Sudo: true}, []string{"demo", "acme"}))
+	assert.Empty(t, visibleMCPServers(PermissionSet{Sudo: true}, []string{"demo", "acme"}))
 
 	prompt := codeModeSystemPrompt(nil, []string{"demo"})
 	assert.Contains(t, prompt, "demo")
@@ -533,7 +530,7 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 		})
 	})
 	reg := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
-	permissions := parsePermissionYAML(t, "mcp: {'demo.*': allow}")
+	permissions := parsePermissionYAML(t, "mcp: {demo: {all: allow}}")
 	factory := &toolFactory{mcpRegistry: reg, baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, nil), spillRel: defaultSpillRel, promptExpansion: promptExpansionEnvironment{root: root}}
 	loop := testLooper(mockResponses())
 	loop.agent = Agent{Name: "main", Permission: permissions}
@@ -1050,11 +1047,12 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 	base := makeSandboxedTools(&sandboxedFileSystem{root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}))
 	base["emit"], base["probe"] = emit, probe
 
-	const rules = "rocketclaw: {code_mode_approve: auto}\nbash: {'*': allow, 'rm *': deny}\nread: allow\nemit: allow\nprobe: auto\nmcp: {'demo.*': allow, 'demo.checked': auto, 'demo.risky': auto"
+	const rules = "rocketclaw: {code_mode_approve: auto}\nbash: {'*': allow, 'rm *': deny}\nread: allow\nemit: allow\nprobe: auto\nmcp: {demo: {all: allow, checked: auto, risky: auto}}"
 
-	loop.agent = Agent{Name: "main", Permission: parsePermissionYAML(t, rules+"}")}
+	loop.agent = Agent{Name: "main", Permission: parsePermissionYAML(t, rules)}
 	loop.Tools, loop.CodeModeHosts = (&toolFactory{mcpRegistry: reg, baseTools: base}).assembleTools(&loop.agent)
-	loop.Permissions = parsePermissionYAML(t, rules+", 'demo.danger': deny}")
+	loop.Permissions = parsePermissionYAML(t, rules)
+	require.NoError(t, loop.Permissions.Deny("mcp", "demo.danger"))
 	loop.observations = &turnObservations{journal: InertJournal{}, turnID: "turn"}
 	loop.PermissionReviewer = &mockPermissionReviewer{reviewPermissionFunc: func(_ context.Context, request *permissionReviewRequest) permissionReviewDecision {
 		switch {

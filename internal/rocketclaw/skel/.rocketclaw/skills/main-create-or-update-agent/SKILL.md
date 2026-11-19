@@ -64,7 +64,7 @@ Built-in permission buckets:
 - `task`: subagent names for the `task` tool only
 - `decision`: `provider/model` names the Code Mode `decision` tool may call, such as `"typesafe/*": allow`; scripts call `decision(model=..., state={...}, questions={...}, images=[...])` inside `execute`, where images are workspace files the agent may `read`; the tool exists only when `decision` providers are configured in `rocketclaw.json`
 - `read` / `edit` / `glob` / `grep` / `webfetch` / `bash`: same subjects as before; unlock nested builtins inside Code Mode `execute` (not separate top-level tools)
-- `mcp`: outbound MCP as `server.tool` or wildcards such as `demo.*`; unlocks Code Mode `execute` MCP builtins when a matching configured `mcp_servers` name is granted
+- `mcp`: outbound MCP by facet, a map from a configured `mcp_servers` name to a map from one of its facets (`mcp_servers.<name>.tools` in `rocketclaw.json`) to `allow` or `auto`; unlocks Code Mode `execute` MCP builtins for the granted facets' tools. When granted facets overlap, the more careful level wins. Raw tool names, wildcards, `deny`, and `auto(<agent>)` fail loading, and so does an unknown server or facet
 - `rocketclaw`: exact RocketClaw tool and setting names only; a wildcard key such as `"*"` or `rocketclaw_sessions_*`, or the scalar form `rocketclaw: allow`, fails agent loading
 - `rocketclaw.code_mode_approve`: optional whole-script Code Mode approval before `execute` runs; `allow` by default, independent of other RocketClaw rules and nested tool grants
 - `rocketclaw.allow_background`: `allow` lets the agent run `execute` scripts and `task` subagents in the background, steer, queue behind, or stop a running subagent through `task`'s `continue`, and gives it `rocketclaw_stop_background_job`; only `allow` or `deny`, `deny` by default, independent of other RocketClaw rules
@@ -157,13 +157,12 @@ permission:
     "reviewer": allow
     "test-*": allow
   mcp:
-    "demo.*": allow
-    "demo.danger": deny
+    demo: {read: allow, write: auto}
   decision:
     "typesafe/*": allow
 ```
 
-If the agent needs no tools, omit the `permission` block. Outbound MCP tools stay omitted until `permission.mcp` grants a configured server.
+If the agent needs no tools, omit the `permission` block. Outbound MCP tools stay omitted until `permission.mcp` grants a facet of a configured server. A `sudo` agent gets every facet of every server, reviewed. A tool in no facet is reachable by no agent; if the agent needs one, add it to a facet with `main-update-rocketclaw-json`.
 
 ## Reviews and decision models
 
@@ -349,7 +348,7 @@ Keys:
 - `decision`: decision models the Code Mode `decision` tool may call, each `provider/model` with its provider configured under `decision`; calls run without review; default no `decision` tool
 - `secretsARN`: Secrets Manager ARNs, fetched each turn, given only to `commands` programs and the ``!`…` `` lines in the body and in loaded skills
 - `commands`: map from command name to the host command line it runs
-- `mcp`: `{}` for none, or a map from server to `auto` or tool groups `[read]` or `[read, write]`; groups come from `mcp_servers.<name>.tools` in `rocketclaw.json` (use `main-update-rocketclaw-json`); an unknown server or group fails loading
+- `mcp`: a map from server to a list of its facets, such as `{demo: [read]}`; facets come from `mcp_servers.<name>.tools` in `rocketclaw.json` (use `main-update-rocketclaw-json`); left out or `{}` means no MCP tools, unlike the other sections; `auto` and an unknown server or facet fail loading
 - `rocketclaw`: `[]` for none, or a list of the groups `sessions`, `pages`, `tags`, `background`, `restart`; default all five
 - `tags`: tag groups as a list of lists; when `rocketclaw` is a list, `tags` and its `tags` group need each other
 - `skills`: `[]` for none, or folders under `skills/`; a missing folder fails loading; default all skills

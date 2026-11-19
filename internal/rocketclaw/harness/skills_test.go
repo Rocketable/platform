@@ -321,6 +321,15 @@ func TestPermissionPrompt(t *testing.T) {
 		require.NotContains(t, prompt, "## Permission Wildcard Rules")
 	})
 
+	t.Run("renders rule exceptions and sudo MCP limits", func(t *testing.T) {
+		prompt := permissionPrompt(PermissionSet{Sudo: true, Buckets: []PermissionBucket{{Name: "mcp", Rules: []PermissionRule{
+			{Pattern: "*", Action: permissionDeny},
+			{Pattern: "s.*", Action: permissionAuto, Except: []string{"s.delete_*", "s.get_secret"}},
+		}}}})
+		require.Contains(t, prompt, "## Mcp Permissions\n\nRules are listed in order. The last matching rule wins.\n\n- Deny `*`.\n- Require automatic approval for `s.*` except `s.delete_*`, `s.get_secret`.")
+		require.Contains(t, prompt, "## Sudo Mode\n\nEvery tool is available except outside MCP tools, which follow the Mcp rules above. Any call no rule above covers requires automatic approval.")
+	})
+
 	t.Run("preserves deny then allow exception", func(t *testing.T) {
 		permissions := parsePermissionYAML(t, "edit: {'*': allow, '.tmp/*': deny, '.tmp/banana/note.txt': allow}\nbash: deny")
 		prompt := permissionPrompt(permissions)

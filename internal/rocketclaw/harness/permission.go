@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,6 +35,7 @@ type PermissionRule struct {
 	Pattern  string
 	Action   PermissionAction
 	Reviewer string
+	Except   []string
 
 	segments []ruleSegment
 }
@@ -134,7 +136,7 @@ func InterpolatePermissions(agent *Agent, env map[string]string) {
 	agent.Permission.Buckets = buckets
 }
 
-func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
+func parsePermissionNode(node *yaml.Node, facets map[string]map[string][]string) (PermissionSet, error) {
 	if node == nil || node.Kind == 0 {
 		return PermissionSet{Buckets: nil}, nil
 	}
@@ -147,7 +149,7 @@ func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 
 		return PermissionSet{Buckets: nil}, nil
 	case yaml.MappingNode:
-		buckets := []PermissionBucket{}
+		permissions := PermissionSet{Buckets: []PermissionBucket{}}
 
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			key := node.Content[i].Value
@@ -155,6 +157,27 @@ func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 			bucketName, err := normalizePermissionName(key)
 			if err != nil {
 				return PermissionSet{}, err
+			}
+
+			if bucketName == mcpPermissionBucket {
+				var grant map[string]map[string]PermissionAction
+				if node.Content[i+1].Kind != yaml.MappingNode || node.Content[i+1].Decode(&grant) != nil {
+					return PermissionSet{}, fmt.Errorf("permission %q: must be a map from server to a map from facet to allow or auto", key)
+				}
+
+				for _, server := range slices.Sorted(maps.Keys(grant)) {
+					for _, facet := range slices.Sorted(maps.Keys(grant[server])) {
+						if level := grant[server][facet]; level != PermissionAllow && level != PermissionAuto {
+							return PermissionSet{}, fmt.Errorf("permission %q: server %q facet %q: level must be allow or auto", key, server, facet)
+						}
+					}
+				}
+
+				if err := compileMCPGrant(&permissions, facets, grant); err != nil {
+					return PermissionSet{}, fmt.Errorf("permission %q: %w", key, err)
+				}
+
+				continue
 			}
 
 			if bucketName == "websearch" && node.Content[i+1].Kind == yaml.MappingNode {
@@ -166,10 +189,10 @@ func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 				return PermissionSet{}, fmt.Errorf("permission %q: %w", key, err)
 			}
 
-			buckets = append(buckets, PermissionBucket{Name: bucketName, Rules: rules})
+			permissions.Buckets = append(permissions.Buckets, PermissionBucket{Name: bucketName, Rules: rules})
 		}
 
-		return PermissionSet{Buckets: buckets}, nil
+		return permissions, nil
 	case yaml.DocumentNode, yaml.SequenceNode, yaml.AliasNode:
 	}
 
@@ -315,7 +338,7 @@ func (ps *PermissionSet) Deny(permission, pattern string) error {
 	return ps.Set(permission, pattern, PermissionDeny)
 }
 
-func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction) error {
+func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction, except ...string) error {
 	if _, _, err := parsePermissionAction(string(action)); err != nil {
 		return err
 	}
@@ -325,7 +348,7 @@ func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction
 		return err
 	}
 
-	rule := PermissionRule{Pattern: expandPermissionPattern(bucketName, pattern), Action: action}
+	rule := PermissionRule{Pattern: expandPermissionPattern(bucketName, pattern), Action: action, Except: except}
 
 	for i := range ps.Buckets {
 		if ps.Buckets[i].Name == bucketName {
@@ -426,7 +449,7 @@ func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, s
 				matches = permissionWildcardMatch(input, pattern, segments...)
 			}
 
-			if !matches {
+			if !matches || slices.ContainsFunc(rule.Except, func(except string) bool { return permissionWildcardMatch(input, except) }) {
 				continue
 			}
 

@@ -86,6 +86,67 @@ func testMapFileMode(mode fs.FileMode, data string) *fstest.MapFile {
 	return &fstest.MapFile{Data: []byte(data), Mode: mode, ModTime: time.Time{}, Sys: nil}
 }
 
+func TestAgentMCPFacets(t *testing.T) {
+	cfg := AgentLoadConfig{MCPFacets: map[string]map[string][]string{
+		"stripe": {"read": {"list_*", "get_*", "retrieve_balance", "-get_secret_*"}, "write": {"create_*", "update_*"}, "sudo": {"*"}},
+		"memory": {"read": {"read_*", "search_*"}},
+	}}
+	load := func(t *testing.T, frontmatter string) (Agent, []error) {
+		t.Helper()
+
+		result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\nmodel: gpt-5.4\n" + frontmatter + "\n---\nPrompt\n")}, cfg)
+
+		return result.Agents.Items["main"], result.Errors
+	}
+
+	accountant, errs := load(t, "permission:\n  mcp: {stripe: {read: allow, write: auto}}")
+	require.Empty(t, errs)
+	overlapping, errs := load(t, "permission:\n  mcp: {stripe: {read: allow, sudo: auto}}")
+	require.Empty(t, errs)
+	sudo, errs := load(t, "sudo: true")
+	require.Empty(t, errs)
+	none, errs := load(t, "permission:\n  read: allow")
+	require.Empty(t, errs)
+
+	for _, tc := range []struct {
+		name    string
+		agent   Agent
+		subject string
+		want    PermissionAction
+	}{
+		{"read facet runs unreviewed", accountant, "stripe.list_invoices", PermissionAllow},
+		{"write facet is reviewed", accountant, "stripe.create_refund", PermissionAuto},
+		{"ungranted facet", accountant, "stripe.delete_customer", PermissionDeny},
+		{"removed from its facet", accountant, "stripe.get_secret_key", PermissionDeny},
+		{"ungranted server", accountant, "memory.read_graph", PermissionDeny},
+		{"more careful level wins", overlapping, "stripe.list_invoices", PermissionAuto},
+		{"sudo gets every facet", sudo, "stripe.delete_customer", PermissionAuto},
+		{"sudo gets other servers' facets", sudo, "memory.read_graph", PermissionAuto},
+		{"sudo cannot reach unfaceted tools", sudo, "memory.delete_entities", PermissionDeny},
+		{"no grant", none, "stripe.list_invoices", PermissionDeny},
+	} {
+		action, _ := tc.agent.Permission.Evaluate(mcpPermissionBucket, tc.subject)
+		require.Equal(t, tc.want, action, tc.name)
+	}
+
+	require.Equal(t, []string{"stripe"}, visibleMCPServers(accountant.Permission, []string{"memory", "stripe"}))
+	require.Equal(t, []string{"memory", "stripe"}, visibleMCPServers(sudo.Permission, []string{"memory", "stripe"}))
+	require.Empty(t, visibleMCPServers(none.Permission, []string{"memory", "stripe"}))
+
+	for _, tc := range []struct{ name, frontmatter, want string }{
+		{"scalar grant", "permission:\n  mcp: allow", `main.md: parse permission: permission "mcp": must be a map from server to a map from facet to allow or auto`},
+		{"raw tool rule", "permission:\n  mcp: {\"memory.*\": allow}", `main.md: parse permission: permission "mcp": must be a map from server to a map from facet to allow or auto`},
+		{"deny level", "permission:\n  mcp: {stripe: {read: deny}}", `main.md: parse permission: permission "mcp": server "stripe" facet "read": level must be allow or auto`},
+		{"named reviewer", "permission:\n  mcp: {stripe: {read: auto(guardian)}}", `main.md: parse permission: permission "mcp": server "stripe" facet "read": level must be allow or auto`},
+		{"unknown facet", "permission:\n  mcp: {stripe: {admin: allow}}", `main.md: parse permission: permission "mcp": server "stripe" has no "admin" facet`},
+		{"unknown server", "permission:\n  mcp: {github: {read: allow}}", `main.md: parse permission: permission "mcp": server "github" is not configured`},
+	} {
+		_, errs := load(t, tc.frontmatter)
+		require.Len(t, errs, 1, tc.name)
+		require.EqualError(t, errs[0], tc.want, tc.name)
+	}
+}
+
 func TestLoadAgents(t *testing.T) {
 	t.Run("loads only immediate shadows of matching parent files", func(t *testing.T) {
 		root, err := os.OpenRoot(t.TempDir())
@@ -391,7 +452,7 @@ Prompt
 
 			want := []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}
 			if sudo {
-				want = []PermissionBucket{{Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}
+				want = []PermissionBucket{{Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "mcp", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}
 			}
 
 			require.Equal(t, want, permission.Buckets, value)

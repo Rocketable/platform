@@ -136,27 +136,22 @@ type MCPExternalConfig struct {
 }
 
 type MCPServerConfig struct {
-	Command string            `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	Cwd     string            `json:"cwd,omitempty"`
-	URL     string            `json:"url,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Tools   MCPToolGroups     `json:"tools,omitzero"`
+	Command string              `json:"command,omitempty"`
+	Args    []string            `json:"args,omitempty"`
+	Env     map[string]string   `json:"env,omitempty"`
+	Cwd     string              `json:"cwd,omitempty"`
+	URL     string              `json:"url,omitempty"`
+	Headers map[string]string   `json:"headers,omitempty"`
+	Tools   map[string][]string `json:"tools,omitempty"`
 }
 
-type MCPToolGroups struct {
-	Read  []string `json:"read,omitempty"`
-	Write []string `json:"write,omitempty"`
-}
-
-func (c *Config) MCPToolGroups() map[string]map[string][]string {
-	groups := make(map[string]map[string][]string, len(c.MCPServers))
+func (c *Config) MCPFacets() map[string]map[string][]string {
+	facets := make(map[string]map[string][]string, len(c.MCPServers))
 	for name := range c.MCPServers {
-		groups[name] = map[string][]string{"read": c.MCPServers[name].Tools.Read, "write": c.MCPServers[name].Tools.Write}
+		facets[name] = c.MCPServers[name].Tools
 	}
 
-	return groups
+	return facets
 }
 
 func (c *Config) ProviderNames() []string {
@@ -522,6 +517,10 @@ func (c *Config) validateMCPServers() error {
 			return fmt.Errorf("mcp_servers[%q]: %w", name, err)
 		}
 
+		if strings.Contains(name, ".") {
+			return fmt.Errorf(`mcp_servers[%q]: name must not contain "."`, name)
+		}
+
 		server := c.MCPServers[name]
 		server.Command = strings.TrimSpace(server.Command)
 		server.URL = strings.TrimSpace(server.URL)
@@ -537,13 +536,14 @@ func (c *Config) validateMCPServers() error {
 			}
 		}
 
-		for _, read := range server.Tools.Read {
-			for _, write := range server.Tools.Write {
-				readWrite, _ := filepath.Match(read, write)
-				writeRead, _ := filepath.Match(write, read)
+		for _, facet := range slices.Sorted(maps.Keys(server.Tools)) {
+			if facet == "" || strings.Trim(facet, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" {
+				return fmt.Errorf(`mcp_servers[%q]: tools[%q]: facet names use only letters, digits, "_" and "-"`, name, facet)
+			}
 
-				if readWrite || writeRead {
-					return fmt.Errorf("mcp_servers[%q]: tools.read %q and tools.write %q match the same tool", name, read, write)
+			for _, pattern := range server.Tools[facet] {
+				if tool := strings.TrimPrefix(pattern, "-"); tool == "" || strings.Trim(tool, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./*?") != "" {
+					return fmt.Errorf(`mcp_servers[%q]: tools[%q]: pattern %q may use only tool-name characters, "*" and "?"`, name, facet, pattern)
 				}
 			}
 		}

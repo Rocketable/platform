@@ -2939,7 +2939,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 }
 
 func loadAgentDefinitions(agentsFS, skillsFS fs.FS, cfg *config.Config) (harness.Agents, error) {
-	result := harness.LoadAgents(agentsFS, harness.AgentLoadConfig{MCPToolGroups: cfg.MCPToolGroups(), Providers: cfg.ProviderNames(), DecisionProviders: cfg.DecisionProviderNames(), Skills: skillsFS})
+	result := harness.LoadAgents(agentsFS, harness.AgentLoadConfig{MCPFacets: cfg.MCPFacets(), Providers: cfg.ProviderNames(), DecisionProviders: cfg.DecisionProviderNames(), Skills: skillsFS})
 
 	for name := range result.Agents.Items {
 		agent := result.Agents.Items[name]

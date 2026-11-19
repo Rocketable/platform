@@ -260,10 +260,8 @@ func loadAgent(fsys fs.FS, filePath string, cfg AgentLoadConfig) (Agent, error) 
 	}
 
 	if sudo {
-		agent.Permission.Sudo = true
-		_ = agent.Permission.Allow("skill", "*")
-		_ = agent.Permission.Allow("task", "*")
-	} else if agent.Permission, err = parsePermissionNode(frontmatterField(frontmatterNode, "permission")); err != nil {
+		agent.Permission = sudoPermissions(cfg.MCPFacets)
+	} else if agent.Permission, err = parsePermissionNode(frontmatterField(frontmatterNode, "permission"), cfg.MCPFacets); err != nil {
 		return Agent{}, fmt.Errorf("%s: parse permission: %w", filePath, err)
 	}
 
@@ -393,6 +391,25 @@ func decodeAgentFrontmatter(frontmatterText []byte) (map[string]any, *yaml.Node,
 	}
 
 	return frontmatter, node.Content[0], nil
+}
+
+func sudoPermissions(facets map[string]map[string][]string) PermissionSet {
+	permissions := PermissionSet{Sudo: true}
+	_ = permissions.Allow("skill", "*")
+	_ = permissions.Allow("task", "*")
+	_ = permissions.Deny(mcpPermissionBucket, "*")
+
+	everyFacet := map[string]map[string]PermissionAction{}
+	for server := range facets {
+		everyFacet[server] = map[string]PermissionAction{}
+		for facet := range facets[server] {
+			everyFacet[server][facet] = PermissionAuto
+		}
+	}
+
+	_ = compileMCPGrant(&permissions, facets, everyFacet)
+
+	return permissions
 }
 
 func frontmatterField(frontmatter *yaml.Node, key string) *yaml.Node {

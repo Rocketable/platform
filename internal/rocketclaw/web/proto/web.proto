@@ -582,12 +582,18 @@ message ConfigChannel {
   repeated string agents = 2;
 }
 
+message ConfigMCPServer {
+  string server = 1;
+  repeated string facets = 2;
+}
+
 message ConfigView {
   string workspace = 1;
   repeated string overlays = 2;
-  reserved 3;
+  reserved 3, 5;
+  reserved "mcp_servers";
   repeated ConfigChannel slack_channels = 4;
-  repeated string mcp_servers = 5;
+  repeated ConfigMCPServer mcp_server_facets = 15;
   string logging_level = 6;
   string auto_approver_model = 7;
   bool instrumentation_enabled = 8;

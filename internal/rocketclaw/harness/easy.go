@@ -24,7 +24,7 @@ const (
 func (m AgentMode) Valid() bool { return m == AgentModeEasy || m == AgentModeAdvanced }
 
 type AgentLoadConfig struct {
-	MCPToolGroups     map[string]map[string][]string
+	MCPFacets         map[string]map[string][]string
 	Providers         []string
 	DecisionProviders []string
 	Skills            fs.FS
@@ -194,7 +194,7 @@ func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) error {
 func compileEasyApprover(agent *Agent, cfg AgentLoadConfig) error {
 	var offUnlessListed yaml.Node
 
-	_ = yaml.Unmarshal([]byte("{mcp: {}, rocketclaw: [], skills: [], allowedNetworkTargets: []}"), &offUnlessListed)
+	_ = yaml.Unmarshal([]byte("{rocketclaw: [], skills: [], allowedNetworkTargets: []}"), &offUnlessListed)
 
 	approver := embeddedGuardianAgent()
 	approver.Mode, approver.WorkingDirectory = AgentModeEasy, agent.WorkingDirectory
@@ -244,39 +244,28 @@ func compileEasySections(agent *Agent, cfg AgentLoadConfig, action PermissionAct
 	}
 
 	field := frontmatterField(node, "mcp")
-	if field == nil || field.Kind == yaml.ScalarNode && field.Value == "auto" {
-		_ = permission.Set("mcp", "*", action)
-	} else if field.Kind != yaml.MappingNode {
-		return errors.New("mcp: must be auto or a map from server to auto or tool groups")
+	if field != nil && field.Kind != yaml.MappingNode {
+		return errors.New("mcp: must be a map from server to a list of facets")
 	}
+
+	grant := map[string]map[string]PermissionAction{}
 
 	for i := 0; field != nil && i+1 < len(field.Content); i += 2 {
 		server := field.Content[i].Value
 
-		groups, ok := cfg.MCPToolGroups[server]
-		if !ok {
-			return fmt.Errorf("mcp: server %q is not configured", server)
+		var facets []string
+		if field.Content[i+1].Kind != yaml.SequenceNode || field.Content[i+1].Decode(&facets) != nil {
+			return fmt.Errorf("mcp.%s: must be a list of facets", server)
 		}
 
-		names, err := easyList(field.Content[i+1], "mcp."+server)
-		if err != nil {
-			return err
+		grant[server] = map[string]PermissionAction{}
+		for _, facet := range facets {
+			grant[server][facet] = action
 		}
+	}
 
-		if names == nil {
-			_ = permission.Set("mcp", server+".*", action)
-		}
-
-		for _, name := range names {
-			patterns := groups[name]
-			if len(patterns) == 0 {
-				return fmt.Errorf("mcp: server %q has no %q tool group", server, name)
-			}
-
-			for _, pattern := range patterns {
-				_ = permission.Set("mcp", server+"."+pattern, action)
-			}
-		}
+	if err := compileMCPGrant(permission, cfg.MCPFacets, grant); err != nil {
+		return fmt.Errorf("mcp: %w", err)
 	}
 
 	rocketclawGroups := map[string][][2]string{

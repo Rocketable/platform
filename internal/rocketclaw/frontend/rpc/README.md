@@ -229,7 +229,7 @@ and to `/agent`; `ForkSession` refuses a sticky
 agent's session with `FailedPrecondition`.
 
 `ListConfig` exposes only the retained `ConfigView` fields: workspace, overlays,
-channel agent choices, MCP server names, logging level,
+channel agent choices, MCP server names with their facet names (never their tool patterns), logging level,
 auto-approver model, enabled flags, and `providers`, the configured provider
 names (always including `openai`) that the agent editor's model picker offers.
 The server never lists a provider's models. It never serializes credentials, database

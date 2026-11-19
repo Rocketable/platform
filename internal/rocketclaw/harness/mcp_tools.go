@@ -29,40 +29,54 @@ const (
 	codeModeRawStringRule     = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in "...". Inside that string, bash(command=...) takes r'''...''' only, not Starlark "..." or '...'. r"..." is raw but single-line; a real newline needs r'''...'''. Example execute argument: {"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
 )
 
-func ruleMatchesMCPServer(pattern, server string) bool {
-	pattern = strings.TrimSpace(pattern)
-	if pattern == "" || pattern == "*" {
-		return true
+func compileMCPGrant(permission *PermissionSet, facets map[string]map[string][]string, grant map[string]map[string]PermissionAction) error {
+	for _, level := range []PermissionAction{PermissionAllow, PermissionAuto} {
+		for _, server := range slices.Sorted(maps.Keys(grant)) {
+			configured, ok := facets[server]
+			if !ok {
+				return fmt.Errorf("server %q is not configured", server)
+			}
+
+			for _, facet := range slices.Sorted(maps.Keys(grant[server])) {
+				patterns, ok := configured[facet]
+				if !ok {
+					return fmt.Errorf("server %q has no %q facet", server, facet)
+				}
+
+				if grant[server][facet] != level {
+					continue
+				}
+
+				var includes, excepts []string
+
+				for _, pattern := range patterns {
+					if tool, removal := strings.CutPrefix(pattern, "-"); removal {
+						excepts = append(excepts, server+"."+tool)
+					} else {
+						includes = append(includes, server+"."+pattern)
+					}
+				}
+
+				for _, include := range includes {
+					_ = permission.Set(mcpPermissionBucket, include, level, excepts...)
+				}
+			}
+		}
 	}
 
-	name, _, ok := strings.Cut(pattern, ".")
-	if !ok {
-		return name == server
-	}
-
-	return name == server || name == "*"
+	return nil
 }
 
 func visibleMCPServers(permissions PermissionSet, servers []string) []string {
-	if permissions.Sudo {
-		return servers
-	}
-
 	var visible []string
 
 	for _, server := range servers {
-	buckets:
-		for _, bucket := range permissions.Buckets {
-			if bucket.Name != mcpPermissionBucket {
-				continue
-			}
-
-			for _, rule := range bucket.Rules {
-				if (rule.Action == PermissionAllow || rule.Action == PermissionAuto) && ruleMatchesMCPServer(rule.Pattern, server) {
-					visible = append(visible, server)
-					break buckets
-				}
-			}
+		if slices.ContainsFunc(permissions.Buckets, func(bucket PermissionBucket) bool {
+			return bucket.Name == mcpPermissionBucket && slices.ContainsFunc(bucket.Rules, func(rule PermissionRule) bool {
+				return (rule.Action == PermissionAllow || rule.Action == PermissionAuto) && strings.HasPrefix(rule.Pattern, server+".")
+			})
+		}) {
+			visible = append(visible, server)
 		}
 	}
 

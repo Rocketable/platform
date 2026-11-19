@@ -47,7 +47,7 @@ func TestRocketcodeConfigIncludesMCPServers(t *testing.T) {
 				Cwd:     "demo-dir",
 				URL:     "http://127.0.0.1:9",
 				Headers: map[string]string{"Authorization": "test-token"},
-				Tools:   config.MCPToolGroups{Read: []string{"list_*"}, Write: []string{"update_*"}},
+				Tools:   map[string][]string{"read": {"list_*"}, "write": {"update_*"}},
 			},
 		},
 	}
