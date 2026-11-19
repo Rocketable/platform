@@ -26,7 +26,6 @@ type printer struct {
 	pending []string
 	flat    bool
 	stop    bool
-	wide    bool
 	comment bool
 }
 
@@ -68,7 +67,7 @@ func (p *printer) write(s string) {
 
 		p.col += utf8.RuneCountInString(s)
 		if p.col > formatWidth {
-			p.wide, p.stop = true, true
+			p.stop = true
 		}
 
 		return
@@ -151,7 +150,7 @@ func (p *printer) measure(render func(*printer)) (wide, comment bool) {
 
 	render(&q)
 
-	return q.wide, q.comment
+	return q.col > formatWidth, q.comment
 }
 
 func (p *printer) stmts(list []syntax.Stmt) {
