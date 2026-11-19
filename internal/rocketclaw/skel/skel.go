@@ -378,7 +378,7 @@ func syncScriptSymlinkGitExclude(workspace string, generated []string, logger *s
 	inBlock := false
 	lines := strings.Split(string(data), "\n")
 
-	kept := make([]string, 0, len(lines))
+	kept := lines[:0]
 	for _, line := range lines {
 		switch {
 		case line == scriptSymlinkExcludeBegin:
