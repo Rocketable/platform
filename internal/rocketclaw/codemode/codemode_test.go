@@ -146,6 +146,20 @@ func TestRunMainReturnsDictJSON(t *testing.T) {
 	}
 }
 
+func TestRunJSONModule(t *testing.T) {
+	got, err := Run(t.Context(), `def main():
+    data = json.decode('{"scores":[2,3]}')
+    return json.encode({"total": data["scores"][0] + data["scores"][1]})
+`, nil, allowAll, nilCall, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if want := `{"total":5}`; got != want {
+		t.Fatalf("Run() = %q, want %q", got, want)
+	}
+}
+
 func TestRunRejectsInvalidProgram(t *testing.T) {
 	for _, tc := range []struct {
 		name, source, want string
@@ -369,6 +383,7 @@ func TestRunRejectsHostToolNames(t *testing.T) {
 	}{
 		{"empty name", []HostTool{{CallValue: nilCallHost}}, "host tool name is required"},
 		{"MCP collision", []HostTool{{Name: "demo_echo", CallValue: nilCallHost}}, `builtin name collision "demo_echo"`},
+		{"JSON collision", []HostTool{{Name: "json", CallValue: nilCallHost}}, `builtin name collision "json"`},
 		{"concurrency collision", []HostTool{{Name: "gather", CallValue: nilCallHost}}, `builtin name collision "gather"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

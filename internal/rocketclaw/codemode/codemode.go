@@ -88,7 +88,9 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 
 	concurrency := concurrencyBuiltins()
 
-	predeclared := make(starlark.StringDict, len(catalog)+len(host)+len(concurrency))
+	predeclared := make(starlark.StringDict, 1+len(catalog)+len(host)+len(concurrency))
+
+	predeclared["json"] = starjson.Module
 	for name, tool := range catalog {
 		predeclared[name] = newKwargsValueBuiltin(name, tool.InputSchema, func(ctx context.Context, callArgs map[string]any) (starlark.Value, error) {
 			if err := decide(ctx, tool.Server+"."+tool.Name, callArgs); err != nil {
