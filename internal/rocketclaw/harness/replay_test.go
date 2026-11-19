@@ -95,6 +95,27 @@ func TestReplayInputPreservesCompactionPayload(t *testing.T) {
 	require.JSONEq(t, string(raw[0]), string(got[0]))
 }
 
+func TestReplayInputSkipsRoundTripForIdenticalBytes(t *testing.T) {
+	stored, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		PromptInputMessage(&PromptInput{Role: PromptInputRoleUser, Texts: []string{"Write a note about spring."}}),
+	})
+	require.NoError(t, err)
+
+	spaced := []json.RawMessage{append([]byte("{ "), stored[0][1:]...)}
+
+	canonical := testing.AllocsPerRun(20, func() {
+		if _, err := ReplayInputToParams(stored); err != nil {
+			t.Fatal(err)
+		}
+	})
+	noncanonical := testing.AllocsPerRun(20, func() {
+		if _, err := ReplayInputToParams(spaced); err != nil {
+			t.Fatal(err)
+		}
+	})
+	require.Less(t, canonical, noncanonical)
+}
+
 func TestReplayInputDecodeErrors(t *testing.T) {
 	for _, tt := range []struct {
 		name, raw, kind, operation string

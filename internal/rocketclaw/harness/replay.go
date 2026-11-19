@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -148,9 +149,11 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("marshal SDK replay input: %w", err)}
 		}
 
-		var roundTrip responses.ResponseInputItemUnionParam
-		if err := json.Unmarshal(data, &roundTrip); err != nil {
-			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("round-trip SDK replay input: %w", err)}
+		if !bytes.Equal(data, raw[i]) {
+			var roundTrip responses.ResponseInputItemUnionParam
+			if err := json.Unmarshal(data, &roundTrip); err != nil {
+				return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("round-trip SDK replay input: %w", err)}
+			}
 		}
 
 		items = append(items, item)
