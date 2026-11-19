@@ -333,6 +333,7 @@ func composeSystemPromptWithSkills(base string, skills Skills, agent *Agent) str
 
 func permissionPrompt(permissions PermissionSet) string {
 	lines := []string{}
+	inlineCode := strings.NewReplacer("\r", " ", "\n", " ", "`", "\\`")
 
 	for _, bucket := range permissions.Buckets {
 		if bucket.Name == "*" || bucket.Name == "rocketclaw_tags" {
@@ -348,8 +349,25 @@ func permissionPrompt(permissions PermissionSet) string {
 			name = strings.ToUpper(name[:1]) + name[1:]
 		}
 
-		lines = append(lines, "## "+name+" Permissions", "")
-		lines = append(lines, permissionRuleLines(bucket.Rules)...)
+		lines = append(lines, "## "+name+" Permissions", "", "Rules are listed in order. The last matching rule wins.", "")
+
+		for _, rule := range bucket.Rules {
+			var action string
+
+			switch rule.Action {
+			case permissionAllow:
+				action = "Allow"
+			case permissionDeny:
+				action = "Deny"
+			case permissionAuto:
+				action = "Require automatic approval for"
+				if rule.Reviewer != "" {
+					action = "Require automatic approval by `" + inlineCode.Replace(rule.Reviewer) + "` for"
+				}
+			}
+
+			lines = append(lines, "- "+action+" `"+inlineCode.Replace(rule.Pattern)+"`.")
+		}
 	}
 
 	if permissions.Sudo {
@@ -371,32 +389,6 @@ func permissionPrompt(permissions PermissionSet) string {
 	)
 
 	return strings.Join(lines, "\n")
-}
-
-func permissionRuleLines(rules []PermissionRule) []string {
-	inlineCode := strings.NewReplacer("\r", " ", "\n", " ", "`", "\\`")
-	lines := make([]string, 2, 2+len(rules))
-	lines[0] = "Rules are listed in order. The last matching rule wins."
-
-	for _, rule := range rules {
-		var action string
-
-		switch rule.Action {
-		case permissionAllow:
-			action = "Allow"
-		case permissionDeny:
-			action = "Deny"
-		case permissionAuto:
-			action = "Require automatic approval for"
-			if rule.Reviewer != "" {
-				action = "Require automatic approval by `" + inlineCode.Replace(rule.Reviewer) + "` for"
-			}
-		}
-
-		lines = append(lines, "- "+action+" `"+inlineCode.Replace(rule.Pattern)+"`.")
-	}
-
-	return lines
 }
 
 func loadSkill(fsys fs.FS, filePath string) (Skill, error) {
