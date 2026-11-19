@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,8 +14,16 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
@@ -97,4 +106,51 @@ func TestWebRPCSyncsOpenCode(t *testing.T) {
 	}, 10*time.Second, 50*time.Millisecond)
 
 	require.NoError(t, stop(t.Context()))
+}
+
+func TestTraceWebRPC(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		require.NoError(t, provider.Shutdown(context.Background()))
+	})
+
+	handle := func(fail bool) grpc.UnaryHandler {
+		return func(ctx context.Context, _ any) (any, error) {
+			require.False(t, trace.SpanContextFromContext(ctx).IsValid())
+
+			if fail {
+				return nil, status.Error(codes.NotFound, "missing")
+			}
+
+			return "reply", nil
+		}
+	}
+
+	for _, rate := range []float64{0, 1} {
+		reply, err := traceWebRPC(rate)(t.Context(), nil, &grpc.UnaryServerInfo{FullMethod: "/rpc.Web/History"}, handle(false))
+		require.NoError(t, err)
+		require.Equal(t, "reply", reply)
+
+		_, err = traceWebRPC(rate)(t.Context(), nil, &grpc.UnaryServerInfo{FullMethod: "/rpc.Web/Prompt"}, handle(true))
+		require.Equal(t, codes.NotFound, status.Code(err))
+	}
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 2)
+
+	for i, want := range []struct {
+		name   string
+		code   codes.Code
+		status otelcodes.Code
+	}{{"rpc.Web/History", codes.OK, otelcodes.Unset}, {"rpc.Web/Prompt", codes.NotFound, otelcodes.Error}} {
+		require.Equal(t, want.name, spans[i].Name())
+		require.Equal(t, trace.SpanKindServer, spans[i].SpanKind())
+		require.Equal(t, want.status, spans[i].Status().Code)
+		require.Contains(t, spans[i].Attributes(), attribute.Int("rpc.grpc.status_code", int(want.code)))
+	}
 }
