@@ -8,7 +8,7 @@ const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 type Probe = { locks: number; mics: number; heard: number; audio?: HTMLMediaElement };
 type TransportProbe = {
   peer?: RTCPeerConnection;
-  channel?: RTCDataChannel & { spoke?: boolean };
+  channel?: RTCDataChannel & { spoke?: boolean; openEvents: number[]; initialMessagesQueued?: number; messagesDispatched?: number };
   arrived?: RTCDataChannelState;
   channelAtCaptionTrigger?: RTCDataChannelState | "unannounced" | "not invoked";
 };
@@ -102,7 +102,9 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
         const pc = new RTCPeerConnection(), counts = window as unknown as { closes?: number; messages?: number };
         Object.assign(window, { peer: pc, channelAtCaptionTrigger: "not invoked" });
         pc.ondatachannel = ({ channel }) => {
-          Object.assign(window, { channel, arrived: channel.readyState });
+          const observed = Object.assign(channel, { openEvents: [] as number[], initialMessagesQueued: 0 });
+          Object.assign(window, { channel: observed, arrived: channel.readyState });
+          channel.addEventListener("open", ({ timeStamp }) => observed.openEvents.push(performance.timeOrigin + timeStamp));
           channel.onmessage = () => { counts.messages = (counts.messages ?? 0) + 1; };
           channel.onclose = () => { counts.closes = (counts.closes ?? 0) + 1; };
         };
@@ -139,15 +141,29 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
       const fake = window as unknown as TransportProbe;
       if (fake.channelAtCaptionTrigger === "not invoked") fake.channelAtCaptionTrigger = fake.channel?.readyState ?? "unannounced";
       while (!fake.channel || fake.channel.spoke || fake.channel.readyState !== "open") await new Promise((resolve) => setTimeout(resolve, 10));
-      fake.channel.spoke = true;
-      for (const event of [{ type: "session.started" }, { type: "session.input_transcript.delta", delta: "Hello" }, { type: "session.input_transcript.delta", delta: " there" }, { type: "session.output_transcript.delta", delta: "Hi!" }]) fake.channel.send(JSON.stringify(event));
+      const { channel } = fake;
+      channel.spoke = true;
+      const events = [
+        { type: "session.started" },
+        { type: "session.input_transcript.delta", delta: "Hello" },
+        { type: "session.input_transcript.delta", delta: " there" },
+        { type: "session.output_transcript.delta", delta: "Hi!" },
+      ];
+      for (const [index, event] of events.entries()) {
+        channel.send(JSON.stringify(event));
+        channel.initialMessagesQueued = index + 1;
+      }
     }));
     await page.addInitScript(() => {
       const createDataChannel = RTCPeerConnection.prototype.createDataChannel;
       RTCPeerConnection.prototype.createDataChannel = function (...args) {
-        const channel = createDataChannel.apply(this, args);
+        const channel = Object.assign(createDataChannel.apply(this, args), { openEvents: [] as number[], messagesDispatched: 0 });
         Object.assign(window, { peer: this, channel });
-        channel.addEventListener("open", () => void (window as unknown as { channelOpened(): Promise<void> }).channelOpened());
+        channel.addEventListener("open", ({ timeStamp }) => {
+          channel.openEvents.push(performance.timeOrigin + timeStamp);
+          void (window as unknown as { channelOpened(): Promise<void> }).channelOpened();
+        });
+        channel.addEventListener("message", () => { channel.messagesDispatched++; });
         return channel;
       };
     });
@@ -256,6 +272,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
           ice: peer?.iceConnectionState, gathering: peer?.iceGatheringState,
           sctp: peer?.sctp?.state, dtls: peer?.sctp?.transport.state,
           channel: channel?.readyState, arrived, channelAtCaptionTrigger, id: channel?.id, spoke: channel?.spoke,
+          openEvents: channel?.openEvents, initialMessagesQueued: channel?.initialMessagesQueued, messagesDispatched: channel?.messagesDispatched,
           bufferedAmount: channel?.bufferedAmount, stats,
         };
       };
