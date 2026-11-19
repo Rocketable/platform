@@ -218,21 +218,15 @@ func pullRequestsIn(command, output string) (created, mentioned []string) {
 	}
 
 	if creates := createCommands(code); creates > 0 && !pullRequestDryRun.MatchString(code) {
-		var others []string
+		var named []string
 
 		for _, segment := range shellSegments(command) {
 			if createCommands(shellCode(segment)) == 0 {
-				others = append(others, segment)
-			}
-		}
-
-		otherScript := strings.Join(others, "\n")
-
-		var named []string
-
-		for _, number := range pullRequestNumber.FindAllStringSubmatchIndex(otherScript, -1) {
-			if number[3] == len(otherScript) || strings.IndexByte("\t\n\f\r );&|/\"'", otherScript[number[3]]) >= 0 {
-				named = append(named, otherScript[number[2]:number[3]])
+				for _, number := range pullRequestNumber.FindAllStringSubmatchIndex(segment, -1) {
+					if number[3] == len(segment) || strings.IndexByte("\t\n\f\r );&|/\"'", segment[number[3]]) >= 0 {
+						named = append(named, segment[number[2]:number[3]])
+					}
+				}
 			}
 		}
 
