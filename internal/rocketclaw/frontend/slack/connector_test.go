@@ -2061,10 +2061,10 @@ func TestNativeForwardRequiresAllMarkersAndAgreeingSource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			forward, ok := nativeSlackForward(json.RawMessage(tt.payload))
-			require.Equal(t, tt.want, ok)
+			forward := nativeSlackForward(json.RawMessage(tt.payload))
+			require.Equal(t, tt.want, len(forward.previews) > 0)
 
-			if ok {
+			if tt.want {
 				require.Equal(t, []string{"preview"}, forward.previews)
 
 				assert.Equal(t, tt.channelID, forward.channelID)
@@ -2138,8 +2138,7 @@ func TestNativeForwardDeduplicatesMatchingPreviewsAndKeepsConflictsWithoutSource
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			forward, ok := nativeSlackForward(json.RawMessage(tt.payload))
-			require.True(t, ok)
+			forward := nativeSlackForward(json.RawMessage(tt.payload))
 			require.Equal(t, tt.wantPreviews, forward.previews)
 			require.Equal(t, tt.wantSource, forward.channelID != "")
 		})
@@ -2153,8 +2152,7 @@ func TestNativeForwardPermalinkTimestampConflictMakesNoAPICall(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	forward, ok := nativeSlackForward(json.RawMessage(`{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"100.1","from_url":"https://x.slack.com/archives/C1/p200100","text":"preview"}]}}`))
-	require.True(t, ok)
+	forward := nativeSlackForward(json.RawMessage(`{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"100.1","from_url":"https://x.slack.com/archives/C1/p200100","text":"preview"}]}}`))
 
 	content := protocol.InboundContent{}
 	connector.addSlackForward(t.Context(), &content, forward)
@@ -2173,8 +2171,7 @@ func TestNativeForwardConflictingAttachmentsMakeNoSourceCalls(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	forward, ok := nativeSlackForward(json.RawMessage(`{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"1.1","text":"first"},{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C2","ts":"2.2","fallback":"second"}]}}`))
-	require.True(t, ok)
+	forward := nativeSlackForward(json.RawMessage(`{"event":{"attachments":[{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C1","ts":"1.1","text":"first"},{"is_thread_root_unfurl":true,"is_msg_unfurl":true,"is_share":true,"channel_id":"C2","ts":"2.2","fallback":"second"}]}}`))
 
 	content := protocol.InboundContent{}
 	connector.addSlackForward(t.Context(), &content, forward)
