@@ -1,7 +1,7 @@
 ---
 title: Frontend RPC Browser Tests Fail Without Their Setup, and That Blocks Verification
 date: 2026-10-29
-last_updated: 2026-11-15
+last_updated: 2026-11-19
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/frontend/rpc
 problem_type: developer_experience
@@ -12,7 +12,7 @@ applies_when:
   - Running RocketClaw tests from a fresh JJ workspace
   - internal/rocketclaw/frontend/rpc tests fail inside a bun test step while the rest of the suite passes
   - A worker or reviewer is about to call a frontend/rpc failure an unrelated environment problem
-  - About to run make lint or make generate while another test run uses the same workspace
+  - About to run make vendor or go generate while another test run uses the same workspace
   - Tests run with a long TMPDIR, such as one under a deeply nested workspace
 symptoms:
   - "bun test output in frontend/rpc says Could not resolve \"@tanstack/react-query\" (web packages not installed)"
@@ -60,23 +60,23 @@ All paths are under `internal/rocketclaw/frontend/rpc/`. These tests need two th
 
 Unix socket paths are limited to 108 bytes on Linux. The socket helper appends `rpc-<random>/s` beneath `TMPDIR` (`testSocketPath`, `server_test.go:4068`–`4079`), and Chromium puts its `SingletonSocket` there too, so a long `TMPDIR`, such as one under a deeply nested workspace's `.tmp/`, makes RPC socket binds fail with `invalid argument` and Chromium abort with `Socket path too long`. Keep `TMPDIR` short.
 
-`vendor/` is a separate trap. `make lint` and `make generate` depend on the `vendor` target, which runs `go mod tidy` and `go mod vendor` and so deletes and rewrites `vendor/`. Two make runs in one workspace share the same `vendor/`. Some tests also run the Go toolchain mid-run: `buildStdioHelper` calls `go build` (`internal/rocketclaw/mcpclient/registry_test.go:351`, `:354`). A test run that started cleanly can break when another run rewrites `vendor/` under it. Root `make test` orders its own steps for this reason (`Makefile:1`–`5` at the repository root).
+`vendor/` is a separate trap. `make vendor` runs `go mod tidy` and `go mod vendor` and so deletes and rewrites `vendor/`. Two make runs in one workspace share the same `vendor/`. Some tests also run the Go toolchain mid-run: `buildStdioHelper` calls `go build` (`internal/rocketclaw/mcpclient/registry_test.go:351`, `:354`). A test run that started cleanly can break when another run rewrites `vendor/` under it. `go generate`, which `make test` runs first, deletes and rewrites the mocks and the built bundles the same way.
 
 On the session write replies work (PR #765), three workers in a row called these failures "an environment problem, not this change", and one edit inside `TestSessionEntries` was compiled but never ran.
 
 ## Guidance
 
 - **Do what CI does.** Run `bun install --frozen-lockfile` in `internal/rocketclaw/web` (`.github/workflows/test.yml:120`). Install `playwright-core` and Chromium and export both variables, as the "Install Playwright and Chromium for browser tests" step does (`test.yml:130`–`138`). `go test` also needs `ROCKETCLAW_TEST_DATABASE_URL` (`internal/rocketclaw/backend/harnessbridgetest/database.go:18`–`21`).
-- **Never run `make lint` or `make generate` alongside another test run in the same workspace.** That means no parallel tool calls, no background jobs, and no worker running one while the coordinator runs the other. `make test` already runs `generate` and `lint` before its tests.
+- **Never run `make vendor` or `go generate` alongside another test run in the same workspace.** That means no parallel tool calls, no background jobs, and no worker running one while the coordinator runs the other. `make test` already runs `go generate` and `lint` before its tests.
 - **Treat these failures as blocking.** A `frontend/rpc` failure from missing setup means the browser tests did not run. Fix the setup and rerun before you report the change as verified. Put this rule in worker instructions.
 
 Read the errors this way:
 
 | Error | Cause | Can still happen when |
 |---|---|---|
-| `Could not resolve "@tanstack/react-query"` (or another web package) in a `bun test` step | No `internal/rocketclaw/web/node_modules` | A fresh workspace runs `go test` before `bun install`, or a focused `make` target that does not build `web-assets` |
+| `Could not resolve "@tanstack/react-query"` (or another web package) in a `bun test` step | No `internal/rocketclaw/web/node_modules` | A fresh workspace runs `go test` before `bun install`, or a focused run without `go generate ./internal/rocketclaw/internal/web` |
 | `Cannot find package 'undefined'` in a `bun test` step | `ROCKETCLAW_PLAYWRIGHT_MODULE` is unset where the tests ran | Tests run without CI's Playwright step |
-| `not marked as explicit in vendor/modules.txt`, or `open ../../../vendor/...: no such file or directory` | `make lint` or `make generate` rewrote `vendor/` during the test run | Any platform, when those targets overlap another test run in the same workspace. Wait for it to finish and rerun |
+| `not marked as explicit in vendor/modules.txt`, or `open ../../../vendor/...: no such file or directory` | `make vendor` rewrote `vendor/` during the test run | Any platform, when those targets overlap another test run in the same workspace. Wait for it to finish and rerun |
 | Chromium `SingletonSocket` path too long, or RPC `listen unix ...: bind: invalid argument` | Temporary socket pathname is too long | `TMPDIR` sits under a long workspace path |
 
 The `vendor/modules.txt` message points at `go.mod`, but nothing is wrong with it. Do not "fix" `go.mod`.

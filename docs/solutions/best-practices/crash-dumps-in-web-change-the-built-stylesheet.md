@@ -26,7 +26,7 @@ tags:
 
 ## Context
 
-The built Web bundle in `internal/rocketclaw/internal/web/dist` is committed. Every Web build rewrites it: `build.ts` empties `dist` (`build.ts:7`), runs Tailwind over `app/globals.css` (`build.ts:10`) and names the stylesheet after a hash of its content (`build.ts:16`). `make lint` and `make test` both rebuild it (the `web-assets` target in `internal/rocketclaw/Makefile`, which `lint` and `generate` depend on; `internal/rocketclaw/web/Makefile:39`).
+The built Web bundle in `internal/rocketclaw/internal/web/dist` is committed. Every Web build rewrites it: `build.ts` empties `dist` (`build.ts:7`), runs Tailwind over `app/globals.css` (`build.ts:10`) and names the stylesheet after a hash of its content (`build.ts:16`). `go generate ./internal/rocketclaw/internal/web` rebuilds it, and `make test` runs that first (in `internal/rocketclaw/Makefile` and `internal/rocketclaw/web/Makefile:37`).
 
 While re-checking each commit of the sticky-sessions PR (#999), this went wrong twice in one session:
 

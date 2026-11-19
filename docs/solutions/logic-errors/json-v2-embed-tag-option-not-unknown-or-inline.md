@@ -40,7 +40,7 @@ In Go 1.27's stable `encoding/json/v2`, the struct-tag option that collects the 
 
 ## What Didn't Work
 
-- **Trusting lint.** `make lint` runs golangci-lint v2.15.0 (`internal/rocketclaw/Makefile:28`), which includes staticcheck from `honnef.co/go/tools` v0.8.2. Its struct-tag check, SA5008, lists `inline` and `unknown` as valid json options (`staticcheck/sa5008/jsonv2.go:144-145` in that module), while it does flag an unknown option such as `bogus`. So lint confirms the old names rather than catching them. Upstream `master` of `dominikh/go-tools` still accepts both, as of this writing.
+- **Trusting lint.** `make lint` runs golangci-lint v2.15.0 (`internal/rocketclaw/Makefile:16`), which includes staticcheck from `honnef.co/go/tools` v0.8.2. Its struct-tag check, SA5008, lists `inline` and `unknown` as valid json options (`staticcheck/sa5008/jsonv2.go:144-145` in that module), while it does flag an unknown option such as `bogus`. So lint confirms the old names rather than catching them. Upstream `master` of `dominikh/go-tools` still accepts both, as of this writing.
 - **Running the package tests by themselves.** `go test ./internal/rocketclaw/frontend/rpc/` without `ROCKETCLAW_TEST_DATABASE_URL` fails on the missing database, so the failures look like setup noise and the real check waits for `make test`, which starts its own Postgres.
 - **Suspecting a tool rewrite.** The first guess at the cause was that `golangci-lint --fix` had rewritten the tag. It had not. The tag was simply not an option Go 1.27 knows.
 - **Searching `go doc encoding/json/v2` for "unknown".** That finds only the prose about "unknown members" and `RejectUnknownMembers`. The option list under "JSON Representation of Go structs" names `embed`, which is the actual clue.

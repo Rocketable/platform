@@ -23,6 +23,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 )
 
+//go:generate sh -c "cd ../../web && bun install --frozen-lockfile && bun run build"
+//go:generate sh -c "cd ../../oc && bun install --frozen-lockfile && OPENCODE_CHANNEL=prod bun --bun vite build"
 //go:embed dist all:oc-dist
 var assets embed.FS
 

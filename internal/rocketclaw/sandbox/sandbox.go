@@ -1,6 +1,6 @@
 package sandbox
 
-//go:generate make -C .. sandbox-rootfs-update
+//go:generate go run ./rootfs
 
 import (
 	"context"

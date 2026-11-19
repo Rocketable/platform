@@ -1,2 +1,2 @@
-build-rocketclaw: make build
+build-rocketclaw: go build -o ./bin/rocketclaw ../../cmd/rocketclaw
 rocketclaw:       ./bin/rocketclaw

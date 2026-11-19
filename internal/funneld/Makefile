@@ -8,9 +8,6 @@ test: lint
 	go test ../../cmd/funneld ./...
 	$(MAKE) check-cloc-budget
 
-build: lint
-	go build -o ../../bin/funneld ../../cmd/funneld
-
 cloc:
 	@printf "Go cloc (cmd/funneld and internal/funneld)\n"
 	@set -eu; \

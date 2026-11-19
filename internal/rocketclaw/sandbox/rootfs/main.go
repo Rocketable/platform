@@ -1,7 +1,7 @@
 //go:build linux
 
 // Command rootfs moves the emulated shell's guest image to the newest Ubuntu archive snapshot. `go generate
-// ./internal/rocketclaw/sandbox` runs it, through make. It builds the image for
+// ./internal/rocketclaw/sandbox` runs it. It builds the image for
 // amd64 and arm64 with mmdebstrap (qemu-user emulation runs the other architecture) in a temporary folder.
 // When a package version changed, it writes the snapshot to snapshot.gen.go, the versions to
 // packages.<arch>.lock, and an SBOM per architecture beside this file; otherwise it changes nothing, so hosts

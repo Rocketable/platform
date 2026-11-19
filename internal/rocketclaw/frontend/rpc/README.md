@@ -620,15 +620,15 @@ Stored facts do not grant permission: action authorization still uses live check
 
 Build the browser assets before compiling Go. Frontend source lives in `internal/rocketclaw/web/`;
 the build writes compiled assets to `internal/rocketclaw/internal/web/dist/`,
-which Go embeds in the binary. `make build`, `make lint`, and `make test` build
-these assets as a prerequisite. Bun 1.4.4 or newer is needed for builds and tests,
+which Go embeds in the binary. `go generate ./internal/rocketclaw/internal/web`
+builds them, and `make test` runs it first. Bun 1.4.4 or newer is needed for builds and tests,
 but the deployed binary needs no Bun or Next.js process.
 
 From the repository root:
 
 ```sh
 export TMPDIR="$PWD/.tmp"
-(cd internal/rocketclaw/web && bun install --frozen-lockfile && bun run build)
+go generate ./internal/rocketclaw/internal/web
 go run ./cmd/rocketclaw
 ```
 
@@ -834,7 +834,7 @@ Use a dedicated test PostgreSQL database, never a production database. Each run
 creates an isolated schema via the existing test helper.
 
 In a fresh workspace, build the web assets once with
-`make -C internal/rocketclaw web-assets`. Then run `go test` with a test database
+`go generate ./internal/rocketclaw/internal/web`. Then run `go test` with a test database
 of your own:
 
 ```sh

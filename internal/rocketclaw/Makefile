@@ -12,23 +12,8 @@ vendor: .FORCE
 	go mod tidy
 	go mod vendor
 
-web-assets: .FORCE
-	cd web && bun install --frozen-lockfile && bun run build
-
-oc-assets: .FORCE
-	cd oc && bun install --frozen-lockfile && $(MAKE) build
-
-generate: web-assets oc-assets vendor
-	go generate ./skel ../../cmd/rocketclaw
-
-sandbox-rootfs-update:
-	go run ./sandbox/rootfs
-
-lint: web-assets vendor
+lint:
 	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run --fix ./...
-
-build: generate lint
-	CGO_ENABLED=0 go build -o ../../bin/rocketclaw ../../cmd/rocketclaw
 
 SANDBOX_TEST_DIR ?= $(abspath ../../.tmp)/sandbox-test
 SANDBOX_PACKAGE_CACHE ?= $(SANDBOX_TEST_DIR)/packages
@@ -64,7 +49,9 @@ cloc:
 	printf "%-18s %s\n" "test cloc:" "$$go_test_cloc"; \
 	printf "%-18s %s\n" "total cloc:" "$$go_total_cloc"
 
-test: generate lint
+test:
+	go generate ./internal/web ./frontend/rpc ./sandbox/wire ../../cmd/rocketclaw
+	$(MAKE) lint
 	$(MAKE) check-code-metrics
 
 tests: test
@@ -134,7 +121,7 @@ deploy:
 	target=$$(lsof -a -p "$$pid" -d txt -Fn | awk '/^n/ { print substr($$0, 2); exit }'); \
 	[ -n "$$target" ] || { printf "deploy failed: unable to find running rocketclaw path for pid %s\n" "$$pid"; exit 1; }; \
 	printf "deploying rocketclaw to %s (pid %s)\n" "$$target" "$$pid"; \
-	$(MAKE) build; \
+	go build -o ./bin/rocketclaw ../../cmd/rocketclaw; \
 	mv ./bin/rocketclaw "$$target"; \
 	kill "$$pid"
 

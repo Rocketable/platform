@@ -1,11 +1,10 @@
 
 
 test:
-	cd internal/rocketclaw; $(MAKE) generate lint
 	$(MAKE) -j 2 test-rocketclaw test-others
 
 test-rocketclaw:
-	cd internal/rocketclaw; $(MAKE) check-code-metrics
+	cd internal/rocketclaw; $(MAKE) test
 
 test-others:
 	cd internal/funneld; $(MAKE) test
@@ -13,10 +12,6 @@ test-others:
 lint:
 	cd internal/rocketclaw; $(MAKE) lint
 	cd internal/funneld; $(MAKE) lint
-
-build:
-	cd internal/rocketclaw; $(MAKE) build
-	cd internal/funneld; $(MAKE) build
 
 cloc:
 	cd internal/rocketclaw; $(MAKE) cloc

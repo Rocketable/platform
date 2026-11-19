@@ -69,7 +69,7 @@ So after a `--fix` run, check the whole literal, not just the word the finding n
 
 The broken query was in production code, and every `ListSessions` call would have failed, leaving the Web sidebar empty. Lint gave no warning. The breakage was caught only because tests that run the real sidebar query against PostgreSQL ran after lint. Committing straight after `make lint` would have committed the broken query, leaving CI's database tests as the only catch.
 
-CI does not catch this either. The `checks` job in `.github/workflows/test.yml` runs the same `--fix` target (`test.yml:63`), and its check that the tree is unchanged (`test.yml:60`) runs before lint. So a repeat in a committed literal is fixed only inside the CI checkout and never fails the job. A local `make lint` or `make test`, though, edits your working copy.
+CI does not catch this either. The `checks` job in `.github/workflows/test.yml` runs the same `--fix` target (`test.yml:71`), and its check that the tree is unchanged (`test.yml:68`) runs before lint. So a repeat in a committed literal is fixed only inside the CI checkout and never fails the job. A local `make lint` or `make test`, though, edits your working copy.
 
 A check that would stop this was not added here, because it needs a CI or Makefile change, or a linter-settings change that needs approval:
 
