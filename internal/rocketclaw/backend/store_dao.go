@@ -1411,24 +1411,22 @@ FROM calls ORDER BY key`, "turn steps", func(row rowScanner) (protocol.TurnStep,
 		return protocol.TurnProgress{}, fmt.Errorf("read turn progress: %w", err)
 	}
 
-	states := map[string]harness.PublicProgressState{}
+	states := map[string]protocol.TurnStepState{}
 
 	observed := harness.PublicProgressFromTrace(trace)
 	for i := range observed {
-		states[observed[i].ID] = observed[i].State
+		switch observed[i].State {
+		case harness.PublicProgressCompleted, harness.PublicProgressBackground:
+			states[observed[i].ID] = protocol.TurnStepDone
+		case harness.PublicProgressFailed, harness.PublicProgressBlocked, harness.PublicProgressStopped:
+			states[observed[i].ID] = protocol.TurnStepFailed
+		case harness.PublicProgressWorking, harness.PublicProgressReview:
+			delete(states, observed[i].ID)
+		}
 	}
 
 	for i := range progress.Steps {
-		switch states[progress.Steps[i].ID] {
-		case harness.PublicProgressCompleted, harness.PublicProgressBackground:
-			progress.Steps[i].State = protocol.TurnStepDone
-		case harness.PublicProgressFailed, harness.PublicProgressBlocked, harness.PublicProgressStopped:
-			progress.Steps[i].State = protocol.TurnStepFailed
-		case harness.PublicProgressWorking, harness.PublicProgressReview:
-			progress.Steps[i].State = protocol.TurnStepRunning
-		default:
-			progress.Steps[i].State = protocol.TurnStepRunning
-		}
+		progress.Steps[i].State = cmp.Or(states[progress.Steps[i].ID], protocol.TurnStepRunning)
 	}
 
 	return progress, nil
