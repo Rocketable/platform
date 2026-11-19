@@ -12,7 +12,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
-	"hash/fnv"
+	"hash/maphash"
 	"log/slog"
 	"maps"
 	"net/url"
@@ -60,8 +60,9 @@ type Server struct {
 	voiceMu    sync.Mutex
 	voiceCalls map[string]*context.CancelCauseFunc
 
-	listingsMu sync.Mutex
-	listings   map[string][]sessionListing
+	listingSeed maphash.Seed
+	listingsMu  sync.Mutex
+	listings    map[string][]sessionListing
 
 	typingMu       sync.Mutex
 	typingWatchers map[string]map[chan *TypingEvent]string
@@ -98,7 +99,7 @@ type CronJobs interface {
 }
 
 func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, runs: map[string][]*searchRun{}, voiceCalls: map[string]*context.CancelCauseFunc{}, listings: map[string][]sessionListing{}, typingWatchers: map[string]map[chan *TypingEvent]string{}, typingNewest: map[string]map[[2]string]uint32{}}
+	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, runs: map[string][]*searchRun{}, voiceCalls: map[string]*context.CancelCauseFunc{}, listingSeed: maphash.MakeSeed(), listings: map[string][]sessionListing{}, typingWatchers: map[string]map[chan *TypingEvent]string{}, typingNewest: map[string]map[[2]string]uint32{}}
 }
 
 func (s *Server) ListSessionEntries(ctx context.Context, request *SessionEntriesRequest) (*ListSessionEntriesResponse, error) {
@@ -231,9 +232,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 
 	changed := func(seen, fingerprints map[string]uint64, key string, row proto.Message) bool {
 		encoded, _ = proto.MarshalOptions{Deterministic: true}.MarshalAppend(encoded[:0], row)
-		fingerprint := fnv.New64a()
-		_, _ = fingerprint.Write(encoded)
-		fingerprints[key] = fingerprint.Sum64()
+		fingerprints[key] = maphash.Bytes(s.listingSeed, encoded)
 		last, ok := seen[key]
 
 		return !ok || last != fingerprints[key]
