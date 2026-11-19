@@ -446,6 +446,11 @@ func TestTailnetCrossSitePages(t *testing.T) {
 		require.Equal(t, "same-origin", reached.Get("Sec-Fetch-Site"))
 	}
 
+	image := http.Header{"Sec-Fetch-Site": {"same-site"}, "Sec-Fetch-Mode": {"cors"}, "Sec-Fetch-Dest": {"image"}}
+	require.Equal(t, http.StatusBadRequest, serve(trusted, http.MethodGet, "/api/DownloadAttachment?id=file", "100.64.0.1:41641", page, image).Code)
+	image.Set("Sec-Fetch-Mode", "no-cors")
+	require.Equal(t, http.StatusForbidden, serve(trusted, http.MethodGet, "/api/DownloadAttachment?id=file", "100.64.0.1:41641", "", image).Code)
+
 	refused := serve(trusted, http.MethodPost, "/api/Identity", "100.64.0.3:41641", page, http.Header{})
 	require.Equal(t, http.StatusUnauthorized, refused.Code)
 	require.Equal(t, page, refused.Header().Get("Access-Control-Allow-Origin"))

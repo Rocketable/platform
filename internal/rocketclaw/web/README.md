@@ -447,8 +447,12 @@ that server's own path, so `/r/work/s/<id>` is chat `<id>` on `work`.
 prefix, and `navigate` and `Link` keep the page's server unless told another.
 Under a remote, every RPC, the session stream, uploads, downloads, Voice, hosted
 page frames and the OpenCode view use that remote's origin, and the remote
-signs the browser in itself. Query keys belong to the page's server unless they
-start with `{ server }`.
+signs the browser in itself. A remote serves only requests from other sites that
+name the trusted page in `Origin` (or navigate to it), so every call to a remote
+is a `fetch`, `EventSource` or WebSocket, attachment images load with
+`crossorigin="anonymous"`, and hosted page frames, being navigations, need
+neither. Query keys belong to the page's server unless they start with
+`{ server }`.
 
 The session list polls each server on its own schedule and merges their rows by
 recency; a row is its chat on its server. `viewing` goes only to the page's

@@ -188,7 +188,8 @@ with the caller's attention on it: `unread_at` (empty once read), `marked_unread
 and `note` (the notification text a timer wrote).
 Its `viewing` field names the location of the caller's focused tab, of any kind,
 such as `/s/<id>` or `/cron`. The HTTP adapter sets `same_origin` only for
-same-origin requests, and only such a request, before the listing, records the
+same-origin requests (the only other requests that reach it are links another
+site opens), and only such a request, before the listing, records the
 view and clears that location's mark unless `hold` is set and the mark is quiet.
 Parks end on the server, not in this call: a loop in the web process wakes every
 person's parks that came due, and a closed tab whose park ended goes back where
@@ -675,9 +676,18 @@ ranges before the entry snapshot. Join carries no transcript content or executio
 attribution; clients read these through History. Saved copy locators survive
 source-row retention without exposing source or destination IDs in the transcript.
 
-RocketClaw accepts browser connections only on its tsnet node. HTTP mutations and
-uploads reject cross-origin browser requests using Go's `CrossOriginProtection`;
-tailnet identity never grants cross-origin authority.
+RocketClaw accepts browser connections only on its tsnet node. `NewHTTPHandler`
+refuses with 403 every browser request from another site, reads included, by the
+rule Go's `CrossOriginProtection` applies to mutations: `Sec-Fetch-Site` is
+`same-origin` or `none`, or, without it, `Origin` is absent or this host.
+`same-site` counts as another site, since RocketClaw is one origin. The rule
+spares only navigations (`Sec-Fetch-Mode: navigate`) that are not mutations, so
+links, bookmarks and typed addresses open from anywhere, and every `GET` under
+`/pages-raw/`, because a hosted page runs in an opaque origin and the browser sends
+even its own files' requests as `cross-site`; any site can load those files as
+subresources. A hosted page's own calls to the API are refused. Requests without
+these headers, such as non-browser clients, pass. Tailnet identity never grants
+cross-origin authority.
 
 Identity comes only from the node's WhoIs of the connection. The handler ignores
 `X-Forwarded-For`, `X-Real-IP`, `Tailscale-User-*`, and client-supplied principal
@@ -752,7 +762,9 @@ with `204`, echoing the requested method and headers, and sets
 `CrossOriginProtection`, the `ListSessions` same-origin rule and the OpenCode relay's
 origin check treat the call as same-origin. So a trusted page's session list polls
 also wake that server's timers. The caller is still the person on the
-connection. The OpenCode relay
+connection. Only a request that sends `Origin` is recognized as the trusted page's:
+a plain `<img>` sends none, so it counts as another site's and is refused, and the
+Web loads a remote's attachment images with `crossorigin`. The OpenCode relay
 drops OpenCode's own `Access-Control-Allow-Origin`, which would otherwise duplicate
 this one.
 

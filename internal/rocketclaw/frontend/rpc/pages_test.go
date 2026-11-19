@@ -203,11 +203,12 @@ func TestPagesRealBrowser(t *testing.T) {
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
 	rt := <-ready
-	probe := `<script>(async () => {
+	probe := `<script src="probe.js"></script><script>(async () => {
 		await fetch("/api/Identity", { method: "POST", mode: "no-cors", body: "{}" });
 		window.result = await fetch("/api/ListSessions").then((response) => response.text(), (error) => error.name);
 	})();</script>`
 	require.NoError(t, rt.Sessions.PutPage(ctx, &backend.Page{Agent: "main", Kind: backend.PageFile, Name: "probe.html", ContentType: "text/html", Body: []byte(probe)}))
+	require.NoError(t, rt.Sessions.PutPage(ctx, &backend.Page{Agent: "main", Kind: backend.PageFile, Name: "probe.js", ContentType: "text/javascript", Body: []byte(`window.asset = "loaded";`)}))
 
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
@@ -231,7 +232,7 @@ func TestPagesRealBrowser(t *testing.T) {
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.Header.Get("Origin") != "null" {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || r.Header.Get("Origin") != "null" {
 			handler.ServeHTTP(w, r)
 			return
 		}
@@ -250,5 +251,5 @@ func TestPagesRealBrowser(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	require.Equal(t, []int{http.StatusForbidden, http.StatusForbidden}, answers)
+	require.Equal(t, []int{http.StatusForbidden, http.StatusForbidden, http.StatusForbidden, http.StatusForbidden}, answers)
 }

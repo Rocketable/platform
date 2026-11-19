@@ -35,6 +35,7 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await page.clock.install();
   await page.goto(`${local}/r/work/`);
   await page.getByRole("textbox").fill("Remote question");
+  await page.getByLabel("Attach files", { exact: true }).setInputFiles({ name: "dot.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64") });
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await page.locator("#transcript-scroll").getByText("Remote reply", { exact: true }).waitFor();
   const chat = new URL(page.url()).pathname;
@@ -124,6 +125,7 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await page.waitForURL((url: URL) => url.pathname === chat);
   await page.locator("#transcript-scroll").getByText("Remote reply", { exact: true }).first().waitFor();
   await chatTab.getByRole("tab", { selected: true }).waitFor();
+  await page.waitForFunction(() => (document.querySelector('#transcript-scroll img[alt="dot.png"]') as HTMLImageElement | null)?.naturalWidth === 1);
 
   // A space's card enters it, saving it as the current space: on this server, and on a remote, whose page opens even in
   // an empty space, which it enters on arrival.
