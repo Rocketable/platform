@@ -94,6 +94,7 @@
   "agent_editor_model": "",
   "posthog": {
     "project_token": "",
-    "host": "https://us.i.posthog.com"
+    "host": "https://us.i.posthog.com",
+    "timing_sample_rate": 0.1
   }
 }

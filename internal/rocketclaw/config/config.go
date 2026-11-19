@@ -241,8 +241,9 @@ func (c *Config) Provider(name string) (OpenAIConfig, bool) {
 }
 
 type PostHogConfig struct {
-	ProjectToken string `json:"project_token,omitempty"`
-	Host         string `json:"host,omitempty"`
+	ProjectToken     string  `json:"project_token,omitempty"`
+	Host             string  `json:"host,omitempty"`
+	TimingSampleRate float64 `json:"timing_sample_rate"`
 }
 
 func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error) {
@@ -286,7 +287,7 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 
 	data, _ = json.Marshal(resolved)
 
-	var cfg Config
+	cfg := Config{PostHog: PostHogConfig{TimingSampleRate: 0.1}}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config JSON: %w", err)
 	}
@@ -583,6 +584,10 @@ func (c *Config) validatePostHog() error {
 	c.PostHog.Host = strings.TrimRight(cmp.Or(c.PostHog.Host, "https://us.i.posthog.com"), "/")
 	if c.PostHog.ProjectToken != "" && !strings.HasPrefix(c.PostHog.ProjectToken, "phc_") {
 		return errors.New("posthog.project_token must be a public project token (phc_...), never a personal API key")
+	}
+
+	if c.PostHog.TimingSampleRate < 0 || c.PostHog.TimingSampleRate > 1 {
+		return errors.New("posthog.timing_sample_rate must be between 0 and 1")
 	}
 
 	return nil

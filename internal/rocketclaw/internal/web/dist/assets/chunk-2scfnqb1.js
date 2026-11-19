@@ -1,0 +1,7 @@
+!function(){try{var n=(new Error).stack;n&&((globalThis._posthogChunkIds=globalThis._posthogChunkIds||{})[n]="2F4B64BF9DAD79C164756E2164756E21")}catch(e){}}();
+import{w,ot,be,un,en,st,tn,ct,nn,Xe,kt,lt,fn,wt,bn,an,pn,dt,mn,hn,Bn,An,yn,kn,vt,rn,wn,vn,_t,ut,pt,_n,En,gn,Ie,In,Cn,Sn,Qn,xn,Fn,on}from"./main-kms4zpn1.js";export{w as ShikiError,mn as addClassToHast,be as applyColorReplacements,pt as codeToHast,gn as codeToHtml,ut as codeToTokens,_t as codeToTokensBase,dt as codeToTokensWithThemes,Qn as createBundledHighlighter,on as createCssVariablesTheme,Ie as createHighlighterCore,In as createHighlighterCoreSync,hn as createPositionConverter,bn as createShikiInternal,fn as createShikiInternalSync,lt as createShikiPrimitive,wt as createShikiPrimitiveAsync,Fn as createSingletonShorthands,kn as flatTokenVariants,an as getLastGrammarState,Sn as getSingletonHighlighterCore,vt as getTokenStyleObject,Bn as guessEmbeddedLanguages,En as hastToHtml,ct as isNoneTheme,st as isPlainLang,tn as isSpecialLang,nn as isSpecialTheme,xn as makeSingletonHighlighter,Cn as makeSingletonHighlighterCore,en as normalizeGetter,kt as normalizeTheme,ot as resolveColorReplacements,Xe as splitLines,An as splitToken,yn as splitTokens,rn as stringifyTokenStyle,un as toArray,vn as tokenizeAnsiWithTheme,pn as tokenizeWithTheme,_n as tokensToHast,wn as transformerDecorations};
+
+//# debugId=2F4B64BF9DAD79C164756E2164756E21
+//# sourceMappingURL=chunk-2scfnqb1.js.map
+
+//# chunkId=2F4B64BF9DAD79C164756E2164756E21
