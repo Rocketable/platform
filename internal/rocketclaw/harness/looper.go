@@ -546,7 +546,7 @@ func (l *looper) Loop(
 
 		turnOutput := line.Responses
 
-		if strings.Join(line.Texts, "") == "" && len(line.Attachments) == 0 && line.DirectSkill == nil {
+		if cmp.Or(line.Texts...) == "" && len(line.Attachments) == 0 && line.DirectSkill == nil {
 			close(turnOutput)
 
 			continue
@@ -700,7 +700,7 @@ func (l *looper) runTurn(
 		recordSpanError(span, err)
 		span.span.SetAttributes(attribute.String("rocketcode.response_id", record.ResponseID))
 
-		if assistantOutputText(rendered) != "" {
+		if hasAssistantOutput(rendered) {
 			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue))
 		}
 
