@@ -48,12 +48,10 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 		return 0, errSlackDownloadLimitExceeded
 	}
 
-	if len(p) > remaining {
-		_, _ = b.data.Write(p[:remaining])
-		return remaining, errSlackDownloadLimitExceeded
+	n, _ := b.data.Write(p[:min(len(p), remaining)])
+	if n < len(p) {
+		return n, errSlackDownloadLimitExceeded
 	}
-
-	n, _ := b.data.Write(p)
 
 	return n, nil
 }
