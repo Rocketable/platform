@@ -76,7 +76,7 @@ func (s *SessionService) AgentDraftLayers(ctx context.Context, id, variant, dest
 
 	cfg := s.definitions.Clone()
 	layers := []AgentLayer{{Layer: agentDraftBuiltinLayer, File: skel.BuiltinAgent(draft.Name)}}
-	overlays := skel.OverlayInfos("", cfg.RuntimeDirName(), cfg.Overlays)
+	overlays := skel.OverlayInfos(cfg.RuntimeDirName(), cfg.Overlays)
 
 	for _, overlay := range overlays {
 		layers = append(layers, AgentLayer{Layer: overlay.Spec, Ref: overlay.Ref, File: bases[overlay.Spec]})
@@ -118,7 +118,7 @@ func (s *SessionService) AgentDraftLayers(ctx context.Context, id, variant, dest
 
 func (s *SessionService) SaveAgentDraft(ctx context.Context, rt agentDraftRuntime, save *AgentDraftSave) (AgentDraftSaveState, error) {
 	cfg := s.definitions.Clone()
-	overlays := skel.OverlayInfos("", cfg.RuntimeDirName(), cfg.Overlays)
+	overlays := skel.OverlayInfos(cfg.RuntimeDirName(), cfg.Overlays)
 	at := slices.IndexFunc(overlays, func(overlay skel.OverlayInfo) bool { return overlay.Spec == save.Destination })
 
 	if save.Destination != agentDraftWorkspaceLayer && at < 0 {

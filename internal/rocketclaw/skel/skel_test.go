@@ -302,7 +302,7 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "scripts", "tool.sh"), []byte("local script"), 0o644))
 
 	require.NoError(t, SyncInWithOverlays(workspace, targetRoot, []string{repo}, testLogger()))
-	overlayInfo := OverlayInfos(workspace, targetRoot, []string{repo})[0]
+	overlayInfo := OverlayInfos(filepath.Join(workspace, targetRoot), []string{repo})[0]
 	assert.DirExists(t, filepath.Join(overlayInfo.ClonePath, ".git"))
 	assert.FileExists(t, filepath.Join(overlayInfo.ClonePath, "agents", "main.md"))
 
@@ -607,7 +607,7 @@ func TestOverlayInfosParsesGitSpec(t *testing.T) {
 		{spec: "github.com/rocketable/overlay @ main ", wantURL: "https://github.com/rocketable/overlay", wantRef: "main"},
 	} {
 		t.Run(tt.spec, func(t *testing.T) {
-			infos := OverlayInfos("workspace", targetRoot, []string{tt.spec})
+			infos := OverlayInfos(filepath.Join("workspace", targetRoot), []string{tt.spec})
 			require.Len(t, infos, 1)
 			assert.Equal(t, tt.wantURL, infos[0].URL)
 			assert.Equal(t, tt.wantRef, infos[0].Ref)
@@ -617,7 +617,7 @@ func TestOverlayInfosParsesGitSpec(t *testing.T) {
 
 func TestOverlayInfos(t *testing.T) {
 	workspace := string(filepath.Separator) + "workspace"
-	infos := OverlayInfos(workspace, targetRoot, []string{" github.com/rocketable/overlay@main ", ""})
+	infos := OverlayInfos(filepath.Join(workspace, targetRoot), []string{" github.com/rocketable/overlay@main ", ""})
 
 	require.Len(t, infos, 1)
 	assert.Equal(t, "github.com/rocketable/overlay@main", infos[0].Spec)

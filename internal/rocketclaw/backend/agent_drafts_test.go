@@ -526,7 +526,7 @@ func TestAgentDraftRecordsLayerBases(t *testing.T) {
 	overlay := "github.com/acme/team@main"
 	store.definitions = config.NewLockedConfig(&config.Config{Workspace: workspace, Overlays: []string{overlay}})
 
-	clone := skel.OverlayInfos(workspace, config.DefaultRuntimeDir, []string{overlay})[0].ClonePath
+	clone := skel.OverlayInfos(filepath.Join(workspace, config.DefaultRuntimeDir), []string{overlay})[0].ClonePath
 	require.NoError(t, os.MkdirAll(filepath.Join(clone, "agents"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(clone, "agents", "triage.md"), []byte("team triage"), 0o600))
 

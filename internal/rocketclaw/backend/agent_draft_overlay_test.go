@@ -132,7 +132,7 @@ func (o *agentDraftOverlay) requireShallowRuntimeClone(t *testing.T) {
 	t.Helper()
 
 	cfg := o.ds.rt.Cfg.Clone()
-	require.FileExists(t, filepath.Join(skel.OverlayInfos(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays)[0].ClonePath, ".git", "shallow"))
+	require.FileExists(t, filepath.Join(skel.OverlayInfos(filepath.Join(cfg.Workspace, cfg.RuntimeDirName()), cfg.Overlays)[0].ClonePath, ".git", "shallow"))
 }
 
 func TestSaveAgentDraftPushesToOverlay(t *testing.T) {
