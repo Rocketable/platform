@@ -313,7 +313,7 @@ UPDATE entries e SET entry_json = $2, search_text = k.search_text FROM kept k WH
 		}
 	}
 
-	if _, err := db.ExecContext(ctx, `DELETE FROM turns WHERE conversation_id = $1 AND phase = 'waiting' AND source = $2`, conversationID, protocol.SourceWeb); err != nil {
+	if _, err := db.ExecContext(ctx, `DELETE FROM turns WHERE conversation_id = $1 AND phase = 'waiting' AND source = $2 AND reason <> $3`, conversationID, protocol.SourceWeb, waitStashed); err != nil {
 		return fmt.Errorf("prune reverted human queue: %w", err)
 	}
 
