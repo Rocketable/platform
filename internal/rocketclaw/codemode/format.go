@@ -189,36 +189,31 @@ func (p *printer) list(left string, items []syntax.Expr, right string, kind clos
 
 	p.write(left)
 
-	if !broken {
-		for i, item := range items {
-			if i > 0 {
-				p.write(", ")
-			}
-
-			p.node(item)
-		}
-
-		if kind == commaWhenSingle && len(items) == 1 {
-			p.write(",")
-		}
-
-		p.write(right)
-
-		return
+	if broken {
+		p.indent++
 	}
 
-	p.indent++
-	for _, item := range items {
-		p.newline()
+	for i, item := range items {
+		if broken {
+			p.newline()
+		} else if i > 0 {
+			p.write(", ")
+		}
+
 		p.node(item)
 
-		if kind != noComma {
+		if broken && kind != noComma {
 			p.write(",")
 		}
 	}
 
-	p.indent--
-	p.newline()
+	if broken {
+		p.indent--
+		p.newline()
+	} else if kind == commaWhenSingle && len(items) == 1 {
+		p.write(",")
+	}
+
 	p.write(right)
 }
 
