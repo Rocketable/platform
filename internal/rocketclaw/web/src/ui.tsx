@@ -1414,7 +1414,9 @@ function useTabs() {
     // this server's.
     commands: (path: string, view: SidebarView, paths = new Set([path]), space = state.tabs.find((item) => item.path === path)?.space ?? state.space): TabCommand[] => {
       const tab = state.tabs.find((item) => item.path === path), selected = state.tabs.filter((item) => paths.has(item.path)), there = tabsOf(space), inShared = sharedIn(space).includes(path);
-      const birth = paths.size === 1 && state.spaces.find((item) => item.id === view.rows.find((row) => rowPath(row) === path)?.spaceId);
+      const id = pathSession(path);
+      const birthSpace = paths.size === 1 && id ? view.rows.find((row) => row.id === id && rowPath(row) === path)?.spaceId : undefined;
+      const birth = state.spaces.find((item) => item.id === birthSpace);
       // Shared changes act on this one tab, for everyone.
       // Taking a Search page out of Shared keeps the page it held, as the server returns it, as this person's own, with
       // any searches of their own page there, so nobody's searches are lost.

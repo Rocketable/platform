@@ -752,6 +752,14 @@ test("Cmd+P draws large session lists only as scrolling and keyboard navigation 
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
+    await page.addInitScript(() => {
+      const encode = window.btoa, unrelated: string[] = [];
+      Object.assign(window, { unrelated });
+      window.btoa = (id) => {
+        if (id === "report-599") unrelated.push(id);
+        return encode(id);
+      };
+    });
     await page.goto(origin);
     await page.getByRole("button", { name: "Search sessions and commands", exact: true }).waitFor();
     await page.keyboard.press("Control+p");
@@ -764,6 +772,7 @@ test("Cmd+P draws large session lists only as scrolling and keyboard navigation 
     const buttons = palette.locator("li > button");
     expect(await buttons.count()).toBe(50);
     expect(await palette.locator('[data-slot="session-title"]').allTextContents()).toEqual(rows.slice(0, 50).map(({ name }) => name));
+    expect(await page.evaluate(() => Reflect.get(window, "unrelated"))).toEqual([]);
     await input.press("ArrowUp"); // Wrap past both hand-offs to the last session, without dropping choices.
     await page.keyboard.press("ArrowUp");
     await page.keyboard.press("ArrowUp");
