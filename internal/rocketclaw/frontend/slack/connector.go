@@ -1217,7 +1217,7 @@ func (c *Connector) slackThreadReplies(ctx context.Context, channelID, threadTS 
 func slackAdoptHistory(messages []slack.Message, hailTS string) string {
 	var texts []string
 
-	for i := range messages {
+	for i := len(messages) - 1; i >= 0 && len(texts) < slackAdoptHistoryLimit; i-- {
 		if strings.TrimSpace(messages[i].Timestamp) == hailTS {
 			continue
 		}
@@ -1230,9 +1230,7 @@ func slackAdoptHistory(messages []slack.Message, hailTS string) string {
 		texts = append(texts, text)
 	}
 
-	if len(texts) > slackAdoptHistoryLimit {
-		texts = texts[len(texts)-slackAdoptHistoryLimit:]
-	}
+	slices.Reverse(texts)
 
 	packed := strings.Join(texts, "\n")
 	if len(packed) > protocol.MaxInboundTextAttachmentBytes {
