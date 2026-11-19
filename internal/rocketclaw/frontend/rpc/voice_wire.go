@@ -260,17 +260,6 @@ func voiceSeed(history []*TranscriptEvent) []voiceItem {
 	return items
 }
 
-func voiceChunks(text string, limit int) []string {
-	var chunks []string
-
-	for text != "" {
-		chunk := voiceCut(text, limit)
-		text, chunks = text[len(chunk):], append(chunks, chunk)
-	}
-
-	return chunks
-}
-
 func voiceCut(text string, limit int) string {
 	n := min(limit, len(text))
 	for n < len(text) && !utf8.RuneStart(text[n]) {
