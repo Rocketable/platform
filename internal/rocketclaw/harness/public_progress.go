@@ -457,17 +457,6 @@ func (o *turnObservations) replaceResponse(ctx context.Context, parentID string,
 		return o.err
 	}
 
-	belongs := func(raw json.RawMessage) bool {
-		items := PublicProgressFromTrace([]json.RawMessage{raw})
-		return len(items) == 1 && (items[0].Kind == PublicProgressText || items[0].Kind == PublicProgressThinking) && items[0].ParentID == parentID
-	}
-	index := slices.IndexFunc(o.trace, belongs)
-
-	trace := slices.DeleteFunc(slices.Clone(o.trace), belongs)
-	if index < 0 {
-		index = len(trace)
-	}
-
 	var records []json.RawMessage
 
 	for i := range progress {
@@ -475,7 +464,16 @@ func (o *turnObservations) replaceResponse(ctx context.Context, parentID string,
 		records = append(records, raw)
 	}
 
-	trace = slices.Insert(trace, index, records...)
+	trace := make([]json.RawMessage, 0, len(o.trace))
+	for _, raw := range o.trace {
+		if items := PublicProgressFromTrace([]json.RawMessage{raw}); len(items) == 1 && (items[0].Kind == PublicProgressText || items[0].Kind == PublicProgressThinking) && items[0].ParentID == parentID {
+			trace, records = append(trace, records...), nil
+		} else {
+			trace = append(trace, raw)
+		}
+	}
+
+	trace = append(trace, records...)
 	if slices.EqualFunc(trace, o.trace, func(a, b json.RawMessage) bool { return bytes.Equal(a, b) }) {
 		return nil
 	}
