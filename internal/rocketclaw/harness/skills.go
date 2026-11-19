@@ -66,9 +66,7 @@ func LoadSkills(fsys fs.FS, root string) SkillLoadResult {
 		Errors: nil,
 	}
 
-	var paths []string
-
-	dirs := map[string]struct{}{}
+	paths := []string{}
 
 	err := fs.WalkDir(fsys, ".", func(filePath string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -81,7 +79,6 @@ func LoadSkills(fsys fs.FS, root string) SkillLoadResult {
 		}
 
 		paths = append(paths, filePath)
-		dirs[path.Dir(filePath)] = struct{}{}
 
 		return nil
 	})
@@ -91,7 +88,9 @@ func LoadSkills(fsys fs.FS, root string) SkillLoadResult {
 
 	sort.Strings(paths)
 
-	for _, filePath := range paths {
+	for i, filePath := range paths {
+		paths[i] = path.Dir(filePath)
+
 		skill, err := loadSkill(fsys, filePath)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
@@ -105,8 +104,8 @@ func LoadSkills(fsys fs.FS, root string) SkillLoadResult {
 		result.Skills.Items[skill.Name] = skill
 	}
 
-	result.Skills.Dirs = slices.AppendSeq(make([]string, 0, len(dirs)), maps.Keys(dirs))
-	slices.Sort(result.Skills.Dirs)
+	slices.Sort(paths)
+	result.Skills.Dirs = slices.Clip(slices.Compact(paths))
 
 	return result
 }
