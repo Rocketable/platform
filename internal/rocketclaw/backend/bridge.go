@@ -3084,16 +3084,16 @@ func ReplayInputMessageRoleText(item *responses.ResponseInputItemUnionParam, raw
 		item = &responses.ResponseInputItemUnionParam{OfOutputMessage: &output}
 	}
 
-	if item.OfOutputMessage != nil {
-		var text strings.Builder
+	var message strings.Builder
 
+	if item.OfOutputMessage != nil {
 		for _, part := range item.OfOutputMessage.Content {
 			if part.OfOutputText != nil {
-				text.WriteString(part.OfOutputText.Text)
+				message.WriteString(part.OfOutputText.Text)
 			}
 		}
 
-		return "assistant", text.String(), true, nil
+		return "assistant", message.String(), true, nil
 	}
 
 	var content responses.ResponseInputMessageContentListParam
@@ -3111,15 +3111,13 @@ func ReplayInputMessageRoleText(item *responses.ResponseInputItemUnionParam, raw
 		return "", "", false, nil
 	}
 
-	parts := make([]string, 0, len(content))
 	for i := range content {
-		text := content[i].GetText()
-		if text != nil {
-			parts = append(parts, *text)
+		if text := content[i].GetText(); text != nil {
+			message.WriteString(*text)
 		}
 	}
 
-	return role, strings.Join(parts, ""), true, nil
+	return role, message.String(), true, nil
 }
 
 const defaultReplyInstruction = "Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."
