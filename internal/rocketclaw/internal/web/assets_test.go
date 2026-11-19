@@ -187,14 +187,14 @@ func BenchmarkServeCompressedFile(b *testing.B) {
 
 func TestBrowserBootstrap(t *testing.T) {
 	remotes := map[string]config.RemoteRocketClawConfig{"work": {URL: "https://rocketclaw.tail1234.ts.net"}, "lab": {URL: "https://lab.tail1234.ts.net"}}
-	cfg := config.NewLockedConfig(&config.Config{PostHog: config.PostHogConfig{ProjectToken: "phc_test", Host: "https://us.i.posthog.com"}, RocketClaws: remotes})
+	cfg := config.NewLockedConfig(&config.Config{PostHog: config.PostHogConfig{ProjectToken: "phc_test", Host: "https://us.i.posthog.com", TimingSampleRate: 0.25}, RocketClaws: remotes})
 	handler := Handler(cfg, "")
 
 	for _, path := range []string{"/", "/s/conversation", "/search"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, http.NoBody))
 		require.Equal(t, http.StatusOK, response.Code)
-		require.Contains(t, response.Body.String(), `<script id="posthog-config" type="application/json">{"project_token":"phc_test","host":"https://us.i.posthog.com"}</script>`)
+		require.Contains(t, response.Body.String(), `<script id="posthog-config" type="application/json">{"project_token":"phc_test","host":"https://us.i.posthog.com","timing_sample_rate":0.25}</script>`)
 		require.Contains(t, response.Body.String(), `<script id="rocketclaws" type="application/json">[{"name":"lab","url":"https://lab.tail1234.ts.net"},{"name":"work","url":"https://rocketclaw.tail1234.ts.net"}]</script>`)
 	}
 

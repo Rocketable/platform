@@ -49,6 +49,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	assert.Equal(t, "rocketclaw", cfg.Web.Tsnet.Hostname)
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
 	assert.Empty(t, cfg.Logging.Level)
+	assert.InDelta(t, 0.1, cfg.PostHog.TimingSampleRate, 0)
 	require.NoError(t, cfg.ValidateBehavior())
 	assert.Equal(t, "debug", cfg.Logging.Level)
 }
@@ -57,9 +58,11 @@ func TestLoadAcceptsSetupOnlyFile(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "openai": {"api_key": "test-key"},
 	  "slack": {"bot_token": "xoxb-test", "app_token": "xapp-test"},
-	  "web": {"admins": ["alice@example.com"], "tsnet": {}}
+	  "web": {"admins": ["alice@example.com"], "tsnet": {}},
+	  "posthog": {"timing_sample_rate": 0}
 	}`)
 
+	assert.Zero(t, cfg.PostHog.TimingSampleRate)
 	assert.Empty(t, cfg.Slack.Channels)
 	assert.Equal(t, []string{"alice@example.com"}, cfg.Web.Admins)
 	require.EqualError(t, cfg.ValidateBehavior(), "slack.channels is required")
@@ -386,7 +389,10 @@ func TestValidatePostHog(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 	assert.Equal(t, "https://eu.i.posthog.com", cfg.PostHog.Host)
 
-	cfg.PostHog.ProjectToken = "phx_personal"
+	cfg.PostHog.TimingSampleRate = 1.5
+	require.ErrorContains(t, cfg.Validate(), "posthog.timing_sample_rate must be between 0 and 1")
+
+	cfg.PostHog = PostHogConfig{ProjectToken: "phx_personal"}
 	require.ErrorContains(t, cfg.Validate(), "posthog.project_token must be a public project token")
 }
 

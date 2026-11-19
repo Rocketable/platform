@@ -582,21 +582,29 @@ Set a PostHog project token to send data to PostHog Cloud. Leave it out to send 
 {
   "posthog": {
     "project_token": "phc_...",
-    "host": "https://us.i.posthog.com"
+    "host": "https://us.i.posthog.com",
+    "timing_sample_rate": 0.1
   }
 }
 ```
 
 `host` defaults to US Cloud; use `https://eu.i.posthog.com` for EU Cloud. Only a public project token (`phc_...`) is accepted, because the browser receives it. Never use a personal API key here.
 
+`timing_sample_rate` is the share of page visits and Web requests that send the timings below. It defaults to `0.1` (10%); `0` turns timings off, and `1` sends all of them. Errors are never sampled. Restart RocketClaw and reload the browser after changing it.
+
 With a token, RocketClaw sends:
 
 - Every log line at info level or above as an event. The event is named by the line's `event` field, such as `turn_started` or `cron_completed`, or else by its message, such as `rocketclaw health`. All of the line's fields become event properties.
 - Warnings and errors to Error Tracking, with the stack of the code that logged them.
 - Browser page views, clicks, heatmaps, Web Vitals, JavaScript errors, and session replays. Replays record typed text, console logs, and network requests in full, and each browser is identified by its Web username.
+- Failed Web requests and session list streams as browser errors, with the request's name in the `rpc` property. Cancelled requests are not reported.
+- Browser timings, from sampled page visits: `web_request` for each request the page makes to the server (`rpc`, `outcome` of `done`, `failed` or `aborted`, `remote`, and `duration_ms`), `web_navigation` for the time from a screen change to the next paint, and `web_long_frame` for each main-thread stall over 50 ms in Chromium, with the script that caused it (`script_invoker`, such as `INPUT.oninput`, `script_source`, `script_function`, and `script_char_position`), and `web_interaction` for each keypress or click that took 50 ms or more until the next paint (`interaction`, `duration_ms`, `input_delay_ms`, `processing_ms`, `target_tag`, and `target_label`, the element's `aria-label`). The two-second background refreshes (`Protocol`, `Identity`, `ListAgents`, `ListQueue`, and `Tabs`) are not timed. Every browser event, including Web Vitals, carries `page_type`, the screen with its IDs left out, such as `/s/:id`, and `timing_sampled`, true on events from sampled page visits.
+- A server span named `rpc.Web/<Method>` for each sampled Web request, with its duration and `rpc.grpc.status_code`, in distributed tracing.
 - Traces of agent turns, model calls, and tools. They go to PostHog's AI Observability (model, tokens, and latency for each model call) and to its distributed tracing. Each trace belongs to the person who sent the turn: their email when known, else their principal name. Turns nobody sent, such as cron jobs, have no person. Traces never include the text of prompts, conversation history, tool arguments, replies, or tool results: each of those reads `__REDACTED__`.
 
 To get console logs and network requests in replays, also turn them on in the PostHog project settings.
+
+Every frontend build tags each JavaScript file with a chunk ID and writes its source map to `.tmp/posthog-sourcemaps/`; RocketClaw does not serve the maps. When a GitHub release is published, the `Upload PostHog source maps` workflow rebuilds the frontend at the release tag, checks that the JavaScript matches the committed build, and uploads the maps, so browser error stack traces point to `internal/rocketclaw/web/src/`. It needs the repository secret `POSTHOG_CLI_API_KEY` (a personal API key with the `error_tracking:write` and `organization:read` scopes), the variable `POSTHOG_PROJECT_ID`, and, for EU Cloud, the variable `POSTHOG_CLI_HOST` set to `https://eu.posthog.com`.
 
 ## Repository layout
 
