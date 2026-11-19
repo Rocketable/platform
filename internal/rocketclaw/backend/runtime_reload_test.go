@@ -20,14 +20,14 @@ func TestRuntimeReload(t *testing.T) {
 
 	for _, scenario := range []string{"success", "invalid-agent", "invalid-frontend", "refresh-failure", "cron-refresh-failure"} {
 		t.Run(scenario, func(t *testing.T) {
-			cfg := &config.Config{Workspace: t.TempDir()}
+			cfg := &config.Config{Workspace: t.TempDir(), Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}}}}}
 			root, err := os.OpenRoot(cfg.Workspace)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
 			require.NoError(t, root.Mkdir("agents", 0o755))
 
 			const (
-				oldAgent = "---\ndescription: Original\nmodel: test-model\n---\nOriginal prompt\n"
+				oldAgent = "---\ndescription: Original\nmodel: test-model\nsticky: slack\n---\nOriginal prompt\n"
 				newAgent = "---\ndescription: Updated\nmodel: test-model\n---\nUpdated prompt\n"
 			)
 
@@ -87,8 +87,10 @@ func TestRuntimeReload(t *testing.T) {
 				require.Equal(t, oldAgent, string(live))
 				require.Empty(t, refresh.RefreshCalls())
 				require.Empty(t, cron.RefreshCalls())
+				require.Empty(t, rt.SlackWarning())
 			} else {
 				require.Equal(t, newAgent, string(live))
+				require.Equal(t, "Slack channel #ops uses agent main, which is not sticky: slack, so it does not answer mentions there.", rt.SlackWarning())
 				require.Len(t, refresh.RefreshCalls(), 1)
 
 				cronCalls := 1
@@ -208,12 +210,14 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 		require.Equal(t, before, rt.Cfg.Clone().Behavior(), tt.name)
 		require.Equal(t, before, stored(), tt.name)
 		require.Equal(t, oldAgent, liveAgent("main.md"), tt.name)
+		require.Empty(t, rt.SlackWarning(), tt.name)
 	}
 
 	require.Empty(t, refresh.RefreshCalls())
 
 	saved := edit(func(b *config.Behavior) { b.AutoApproverModel, b.Logging.Level = "gpt-b", "warn" })
 	require.NoError(t, rt.SaveBehavior(saved))
+	require.Equal(t, "Slack channel @ uses agent main, which is not sticky: slack, so it does not answer mentions there. Slack channel #cron uses agent main, which is not sticky: slack, so it does not answer mentions there.", rt.SlackWarning())
 	require.Equal(t, "gpt-b", rt.Cfg.Clone().AutoApproverModel)
 	require.Equal(t, rt.Cfg.Clone().Behavior(), stored())
 	require.Equal(t, slog.LevelWarn, rt.logLevel.Level())

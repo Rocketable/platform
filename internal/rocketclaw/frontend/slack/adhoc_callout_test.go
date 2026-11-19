@@ -3,6 +3,7 @@ package slackconnector
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -130,15 +131,63 @@ func TestHandleAppMentionEventAdoptsBareThreadMention(t *testing.T) {
 	assert.NotContains(t, started[0].Inbound.Text, "<@U999>")
 }
 
-func TestHandleAppMentionEventIgnoresThreadUnderBotRoot(t *testing.T) {
-	for name, root := range map[string]string{"cron report": "🔁 nightly.md | main", "External MCP relay": "📡 MCP request | ext-1 | main"} {
-		t.Run(name, func(t *testing.T) {
+func TestHandleAppMentionEventAdmitsRecentRootMentionFirst(t *testing.T) {
+	for _, tt := range []struct {
+		name, threadTS string
+		first          bool
+	}{
+		{name: "root posted a moment earlier", threadTS: "171234.0001", first: true},
+		{name: "root posted more than ten minutes earlier", threadTS: "170000.0001"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			router := newMentionRouter(false)
+
+			server := newAdhocSlackServer(t, "random", []map[string]any{
+				{"ts": tt.threadTS, "user": "U123", "text": "<@U999> root ask"},
+				{"ts": "171234.9999", "user": "U123", "text": "<@U999> in the thread"},
+			})
+			defer server.Close()
+
+			ev := newThreadMention("<@U999> in the thread")
+			ev.ThreadTimeStamp = tt.threadTS
+			newAdhocConnector(server.URL, router).handleAppMentionEvent(t.Context(), ev, slackNativeForward{})
+
+			started := router.SubmitMentionCalls()
+			require.Len(t, started, 1)
+			assert.Contains(t, started[0].Inbound.Text, "root ask", "the thread's earlier messages are adopted")
+
+			root := started[0].Inbound.SlackRoot
+			if !tt.first {
+				assert.Nil(t, root)
+				return
+			}
+
+			require.NotNil(t, root)
+			assert.Equal(t, "root ask", root.Text)
+			assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: tt.threadTS, ThreadTS: tt.threadTS}, root.SlackReply)
+		})
+	}
+}
+
+func TestHandleAppMentionEventThreadUnderBotRoot(t *testing.T) {
+	mark := map[string]any{"event_type": slackChannelReplyEvent, "event_payload": map[string]any{}}
+
+	for _, tt := range []struct {
+		name, root string
+		metadata   map[string]any
+		admitted   bool
+	}{
+		{name: "cron report", root: "🔁 nightly.md | main"},
+		{name: "External MCP relay", root: "📡 MCP request | ext-1 | main"},
+		{name: "Channel Session answer", root: "💬 main", metadata: mark, admitted: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
 			var writes []string
 
 			router := newMentionRouter(false)
 
 			server := newAdhocSlackServer(t, "random", []map[string]any{
-				{"ts": "171234.0001", "user": "U999", "bot_id": "B999", "text": root},
+				{"ts": "171234.0001", "user": "U999", "bot_id": "B999", "text": tt.root, "metadata": tt.metadata},
 				{"ts": "171234.9999", "user": "U123", "text": "<@U999> why did this fail?"},
 			}, &writes)
 			defer server.Close()
@@ -146,8 +195,17 @@ func TestHandleAppMentionEventIgnoresThreadUnderBotRoot(t *testing.T) {
 			connector := newAdhocConnector(server.URL, router)
 			connector.handleAppMentionEvent(context.Background(), newThreadMention("<@U999> why did this fail?"), slackNativeForward{})
 
-			assert.Empty(t, router.SubmitMentionCalls())
-			assert.Empty(t, writes)
+			if !tt.admitted {
+				assert.Empty(t, router.SubmitMentionCalls(), "a thread under an unmarked bot root is a Report Thread")
+				assert.Empty(t, writes)
+
+				return
+			}
+
+			started := router.SubmitMentionCalls()
+			require.Len(t, started, 1, "a thread under a Channel Session answer is a Thread Session")
+			assert.Equal(t, "171234.0001", started[0].Target.ThreadID)
+			assert.Contains(t, started[0].Inbound.Text, tt.root, "the answer is adopted as thread history")
 		})
 	}
 }
@@ -288,7 +346,16 @@ func newAdhocSlackServer(t *testing.T, channelName string, replies []map[string]
 				return
 			}
 
-			writeJSON(t, w, map[string]any{"ok": true, "messages": replies, "has_more": false})
+			messages := replies
+			if r.FormValue("include_all_metadata") != "1" {
+				messages = make([]map[string]any, len(replies))
+				for i, reply := range replies {
+					messages[i] = maps.Clone(reply)
+					delete(messages[i], "metadata")
+				}
+			}
+
+			writeJSON(t, w, map[string]any{"ok": true, "messages": messages, "has_more": false})
 		case "/chat.postMessage":
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
 		case "/agents.sessions.setStatus":

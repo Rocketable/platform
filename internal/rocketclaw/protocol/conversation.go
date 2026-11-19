@@ -49,9 +49,13 @@ func SlackThreadConversationID(channelID, threadTS string) string {
 	return "slack-thread:" + channelID + ":" + threadTS
 }
 
+func SlackThreadSessionID(channelID, threadTS, agent string) string {
+	return SlackThreadConversationID(channelID, threadTS) + ":" + agent
+}
+
 type PrimaryTextRouter interface {
 	MentionThread(target TextConversationTarget) (recorded, report bool, err error)
 	SubmitMention(ctx context.Context, agent string, target TextConversationTarget, inbound *InboundMessage) (bool, error)
-	InterruptThread(target TextConversationTarget) (*InboundMessage, error)
+	InterruptTurn(ctx context.Context, turnID string) error
 	WebURL(conversationID string) (string, error)
 }

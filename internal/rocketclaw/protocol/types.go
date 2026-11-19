@@ -112,6 +112,7 @@ type InboundMessage struct {
 	RequireOutputDecision bool
 	Cronjob               *CronjobMessage
 	OriginHeader          string
+	SlackRoot             *InboundMessage `json:"-"`
 
 	responseInit, responseOnce sync.Once
 	responseCh                 chan InboundResponse
@@ -119,7 +120,7 @@ type InboundMessage struct {
 
 type SlackReplyTarget struct{ ChannelID, MessageTS, ThreadTS string }
 
-type TextConversationTarget struct{ ChannelID, MessageID, ThreadID string }
+type TextConversationTarget struct{ ChannelID, MessageID, ThreadID, Agent string }
 
 type TurnProgress struct {
 	Running, Asking bool
@@ -183,6 +184,7 @@ type OutboundMessage struct {
 	GoalTurn, GoalComplete, GoalActive bool
 	GoalTurnNumber, GoalMaxTurns       int
 	Terminal                           Terminal
+	ChannelQuiet                       bool
 }
 
 func NewInboundMessage(source Source, kind InboundKind, text string, human bool) *InboundMessage {

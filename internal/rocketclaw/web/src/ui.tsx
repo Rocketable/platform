@@ -31,6 +31,7 @@ import { ThreadPRContent, ThreadPRWatch } from "./thread-pr-panel";
 import { SelectionQuote, type DiffNote, type PRComposer } from "./github-pr-preview";
 import type { GitHubPR } from "./github-pr";
 import { reportTyping, TypingPill } from "./typing";
+import { SlackWarning } from "./slack-warning";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -549,11 +550,12 @@ function WebAppUpdate() {
     return response.text();
   }, refetchInterval: 60_000, retry: false });
   const updated = index.data !== undefined && !(index.data.includes(script) && index.data.includes(styles));
-  const sandboxError = useQuery({ ...queries.identity(), refetchInterval: 2000, retry: false }).data?.sandboxError ?? "";
-  return <div className={cn("flex shrink-0 items-center gap-3 pr-12 pl-3 text-sm", (updated || sandboxError !== "") && "border-b bg-muted py-1.5")}>
+  const { sandboxError = "", slackWarning = "" } = useQuery({ ...queries.identity(), refetchInterval: 2000, retry: false }).data ?? {};
+  return <div className={cn("flex shrink-0 items-center gap-3 pr-12 pl-3 text-sm", (updated || sandboxError !== "" || slackWarning !== "") && "border-b bg-muted py-1.5")}>
     <p role="status">{updated ? "A new version of RocketClaw is available." : ""}</p>
     {updated ? <Button size="sm" onClick={() => window.location.reload()}>Refresh</Button> : null}
     {sandboxError !== "" ? <p role="alert">{sandboxError}</p> : null}
+    <SlackWarning text={slackWarning} />
   </div>;
 }
 

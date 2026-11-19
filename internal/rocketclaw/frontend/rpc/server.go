@@ -1089,8 +1089,8 @@ func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*R
 		return nil, fmt.Errorf("run web cron job: %w", status.Error(codes.PermissionDenied, "this cron or its agent is outside your spaces"))
 	}
 
-	if agents.Items[job.Agent].Sticky == harness.AgentStickyUser {
-		return nil, fmt.Errorf("run web cron job: %w", status.Error(codes.FailedPrecondition, "a cron cannot run a sticky: user agent"))
+	if sticky := agents.Items[job.Agent].Sticky; sticky == harness.AgentStickyUser || sticky == harness.AgentStickySlack {
+		return nil, fmt.Errorf("run web cron job: %w", status.Errorf(codes.FailedPrecondition, "a cron cannot run a sticky: %s agent", sticky))
 	}
 
 	conversation := protocol.Conversation{ID: rand.Text(), Agent: job.Agent, CreatedBy: principal, Space: space}
@@ -1378,7 +1378,9 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 
 	response := &ListAgentsResponse{}
 
-	allowed := definitions.PrimaryNames()
+	allowed := slices.DeleteFunc(definitions.PrimaryNames(), func(name string) bool {
+		return id == "" && definitions.Items[name].Sticky == harness.AgentStickySlack
+	})
 
 	if id != "" {
 		if err := s.visibleConversation(ctx, id); err != nil {
@@ -1392,7 +1394,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 
 		response.CurrentAgent = thread.Agent
 
-		channel, _, err := s.sessions.SlackThread(ctx, id)
+		channel, _, _, err := s.sessions.SlackThread(ctx, id)
 		if err != nil {
 			return nil, fmt.Errorf("read web Slack thread: %w", err)
 		}
@@ -1501,9 +1503,11 @@ func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) 
 		return nil, fmt.Errorf("load web agents: %w", err)
 	}
 
-	choices := slices.DeleteFunc(definitions.PrimaryNames(), func(name string) bool { return !limit.AllowsAgent(name) })
+	choices := slices.DeleteFunc(definitions.PrimaryNames(), func(name string) bool {
+		return !limit.AllowsAgent(name) || id == "" && definitions.Items[name].Sticky == harness.AgentStickySlack
+	})
 
-	channel, _, err := s.sessions.SlackThread(ctx, id)
+	channel, _, _, err := s.sessions.SlackThread(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("read web Slack thread: %w", err)
 	}

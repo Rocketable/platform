@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -103,7 +104,7 @@ func TestLoadRocketCodeDefinitionsSudo(t *testing.T) {
 
 	for subject, want := range map[string]harness.PermissionAction{
 		reloadToolName: harness.PermissionAllow, scheduleMessageToolName: harness.PermissionAllow, attachFilesToolName: harness.PermissionAllow,
-		updateGoalToolName: harness.PermissionAllow, askUserQuestionToolName: harness.PermissionAllow,
+		updateGoalToolName: harness.PermissionAllow, askUserQuestionToolName: harness.PermissionAllow, respondInThreadToolName: harness.PermissionAllow,
 		restartToolName: harness.PermissionAuto, sessionsWriteToolName: harness.PermissionAuto, sessionsListToolName: harness.PermissionAuto,
 	} {
 		action, _ := tagged.Permission.Evaluate("rocketclaw", subject)
@@ -148,7 +149,7 @@ func TestLoadRocketCodeDefinitionsEasy(t *testing.T) {
 	require.NoError(t, err)
 
 	open, none, grouped := agents.Items["open"], agents.Items["none"], agents.Items["grouped"]
-	for _, subject := range []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName} {
+	for _, subject := range []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName, respondInThreadToolName} {
 		requireRocketClawPermissionAction(t, open.Permission, subject, harness.PermissionAllow)
 		requireRocketClawPermissionAction(t, none.Permission, subject, harness.PermissionAllow)
 	}
@@ -453,21 +454,28 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 
 	writeAgent(t, workspace, "personal", "---\nmodel: gpt-6.1-sol\nsticky: user\n---\nPrompt\n")
 	writeAgent(t, workspace, "shared", "---\nmodel: gpt-6.1-sol\nsticky: global\n---\nPrompt\n")
+	writeAgent(t, workspace, "channel", "---\nmodel: gpt-6.1-sol\nsticky: slack\n---\nPrompt\n")
 	t.Run("MCP offers only non-sticky agents", func(t *testing.T) {
 		externalAgents, err := ExternalMCPAgentsIn(config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir)
 		require.NoError(t, err)
 		require.Equal(t, []string{"assistant", "helper", "restricted"}, externalAgents)
 	})
 
-	for _, name := range []string{"assistant", "helper", "personal", "shared"} {
+	for _, name := range []string{"channel", "helper", "personal", "shared"} {
 		t.Run("Slack "+name, func(t *testing.T) {
-			cfg := &config.Config{Workspace: workspace, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"assistant", name}}}}}
+			cfg := &config.Config{Workspace: workspace, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"channel", name}}}}}
 
-			err := validateRuntimeAssets(config.NewLockedConfig(cfg), config.DefaultRuntimeDir)
-			if name == "assistant" || name == "helper" {
-				require.NoError(t, err)
+			var logs bytes.Buffer
+
+			warnings, err := validateRuntimeAssets(config.NewLockedConfig(cfg), config.DefaultRuntimeDir, slog.New(slog.NewTextHandler(&logs, nil)))
+			require.NoError(t, err)
+
+			if name == "channel" {
+				require.Empty(t, warnings)
+				require.Empty(t, logs.String())
 			} else {
-				require.ErrorContains(t, err, "slack channel #ops agent "+name+" must use sticky: off")
+				require.Equal(t, []slackAgentWarning{{channel: "#ops", agent: name}}, warnings)
+				require.Contains(t, logs.String(), `level=WARN msg="slack channel agent is not sticky: slack" channel=#ops agent=`+name+"\n")
 			}
 		})
 	}

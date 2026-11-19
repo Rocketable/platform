@@ -64,7 +64,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	core := &mockBackend{SandboxErrorFunc: noSandboxError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil },
+	core := &mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil },
 		ValidateAgentFileFunc: func(string, []byte) error { return nil },
 		PromoteQueueItemFunc:  func(context.Context, string, string) (bool, error) { return true, nil },
 		DeleteQueueItemFunc:   func(context.Context, string, string) (bool, error) { return true, nil },
@@ -296,7 +296,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 	sent, err := invoke[DraftPromptResponse](bob, connection, "DraftPrompt", &DraftPromptRequest{Id: probe.Id, Text: "hello"})
 	require.NoError(t, err)
 
-	notRun := []*AgentDraftProblem{{Variant: "b", Key: "sticky", Sentence: "off, user or global."}}
+	notRun := []*AgentDraftProblem{{Variant: "b", Key: "sticky", Sentence: "off, user, global or slack."}}
 	require.True(t, proto.Equal(&DraftPromptResponse{TestChat: sent.TestChat, Problems: notRun}, sent), "%v", sent)
 	require.NotEmpty(t, sent.TestChat)
 

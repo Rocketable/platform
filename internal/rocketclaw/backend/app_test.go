@@ -426,6 +426,7 @@ func TestRunMergesStoredBehaviorSettings(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "gpt-a", got.live.AutoApproverModel)
 	require.Equal(t, slog.LevelInfo, got.level)
+	require.Equal(t, 1, strings.Count(got.logs, `level=WARN msg="slack channel agent is not sticky: slack" channel=@ agent=assistant`+"\n"), "a channel whose agent is not sticky: slack starts with one warning: %s", got.logs)
 
 	imported, found := stored()
 	require.True(t, found)
@@ -477,7 +478,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 		t.Run(fmt.Sprintf("background=%v", background), func(t *testing.T) {
 			workspace := t.TempDir()
 			require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-			require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "waiter.md"), []byte("---\ndescription: Waiter\nmodel: gpt-6.1-sol\npermission:\n  bash:\n    \"*\": allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "waiter.md"), []byte("---\ndescription: Waiter\nmodel: gpt-6.1-sol\nsticky: slack\npermission:\n  bash:\n    \"*\": allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n"), 0o600))
 			started, finished, pid := filepath.Join(workspace, "started"), filepath.Join(workspace, "done"), filepath.Join(workspace, "pid")
 			sleep := map[bool]string{false: "2", true: "60"}[background]
 			waiting, ended := filepath.Join(workspace, "waiting"), filepath.Join(workspace, "ended")
@@ -568,7 +569,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 					return err == nil
 				}, 10*time.Second, 10*time.Millisecond)
 				require.Eventually(t, func() bool {
-					active, err := rt.Sessions.HasActiveTurn(t.Context(), protocol.SlackThreadConversationID("C123", "111.0"))
+					active, err := rt.Sessions.HasActiveTurn(t.Context(), "slack-channel:C123:waiter")
 					return err == nil && !active
 				}, 10*time.Second, 10*time.Millisecond)
 				require.NoError(t, os.WriteFile(ended, nil, 0o600))
@@ -601,7 +602,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 			assert.Equal(t, 1, stops)
 
 			if !background {
-				assert.Contains(t, logs.String(), `msg="shutdown waiting for running tool calls" component=thread_bridges conversation_id=slack-thread:C123:111.0`)
+				assert.Contains(t, logs.String(), `msg="shutdown waiting for running tool calls" component=thread_bridges conversation_id=slack-channel:C123:waiter`)
 				return
 			}
 
@@ -634,7 +635,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 			}()
 
 			require.Eventually(t, func() bool {
-				jobs, err := store.backgroundJobs(t.Context(), protocol.SlackThreadConversationID("C123", "111.0"))
+				jobs, err := store.backgroundJobs(t.Context(), "slack-channel:C123:waiter")
 				return err == nil && len(jobs) == 1 && jobs[0].status == backgroundKilled && jobs[0].noteState == notePending && !jobs[0].wake
 			}, 10*time.Second, 10*time.Millisecond, "the next start reports the script killed, for the next turn")
 			signal()
@@ -724,7 +725,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\nsticky: slack\npermission: {}\n---\nPrompt\n"), 0o600))
 
 	bodies := make(chan string, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

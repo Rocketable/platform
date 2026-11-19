@@ -110,8 +110,8 @@ func TestStartEventsAcknowledgesDeliveryFailureAfterAborting(t *testing.T) {
 
 func TestStartEventsAcknowledgesThreadLookupFailure(t *testing.T) {
 	connector := newTestConnector("http://127.0.0.1")
-	connector.facts.(*channelFactsStoreMock).SlackThreadFunc = func(context.Context, string) (string, string, error) {
-		return "", "", assert.AnError
+	connector.facts.(*channelFactsStoreMock).SlackThreadFunc = func(context.Context, string) (string, string, bool, error) {
+		return "", "", false, assert.AnError
 	}
 	event := protocol.Event{Message: &protocol.OutboundMessage{ConversationID: "slack-thread:C123:111.0", TurnID: "turn-1", Text: "answer", Complete: true}, Acknowledgement: make(chan error, 1)}
 	backend := &backendMock{SubscribeFunc: func(context.Context) iter.Seq[protocol.Event] {
@@ -141,4 +141,67 @@ func TestStartEventsAcknowledgesConsumedInputFailure(t *testing.T) {
 	connector := newTestConnector(server.URL)
 	<-connector.StartEvents(t.Context(), backend)
 	require.ErrorContains(t, <-event.Acknowledgement, "channel_not_found")
+}
+
+func TestStartEventsPostsChannelSessionTurnsAtTheTop(t *testing.T) {
+	var (
+		posted []url.Values
+		writes []string
+	)
+
+	server := newSlackStackTestServer(t, &posted, &writes)
+	defer server.Close()
+
+	var linked []string
+
+	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), &primaryTextRouterMock{WebURLFunc: func(conversationID string) (string, error) {
+		linked = append(linked, conversationID)
+		return testFooterLink, nil
+	}})
+
+	const channelSession = "slack-channel:C123:main"
+
+	mirror := protocol.NewOutboundMessage(channelSession, "")
+	mirror.ConsumedID, mirror.ConsumedText, mirror.ConsumedRawText, mirror.ConsumedSource = "web-input", "from the Web", "from the Web", protocol.SourceWeb
+	mention := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
+	turn := func(turnID, text string, reply *protocol.SlackReplyTarget, quiet, complete bool) *protocol.OutboundMessage {
+		return &protocol.OutboundMessage{ConversationID: channelSession, TurnID: turnID, Agent: "main", Text: text, Complete: complete, Terminal: protocol.TerminalComplete, SlackReply: protocol.Clone(reply), ChannelQuiet: quiet}
+	}
+	messages := []*protocol.OutboundMessage{
+		mirror,
+		turn("turn-web", "web answer", nil, false, true),
+		turn("turn-mention", "", mention, false, false),
+		turn("turn-mention", "mention answer", mention, false, true),
+		turn("turn-job", "job answer", nil, false, true),
+		turn("turn-reply", "", mention, true, false),
+		turn("turn-reply", "reply answer", mention, true, true),
+		{ConversationID: channelSession + "/call-1", TurnID: "turn-sub", Text: "subagent answer", Complete: true},
+	}
+
+	events := make([]protocol.Event, len(messages))
+	for i, message := range messages {
+		events[i] = protocol.Event{Message: message, Acknowledgement: make(chan error, 1)}
+	}
+
+	<-connector.StartEvents(t.Context(), &backendMock{SubscribeFunc: func(context.Context) iter.Seq[protocol.Event] { return slices.Values(events) }})
+
+	for _, event := range events {
+		require.NoError(t, <-event.Acknowledgement)
+	}
+
+	texts := make([]string, len(posted))
+	for i, post := range posted {
+		texts[i] = post.Get("text")
+
+		assert.Equal(t, "C123", post.Get("channel"))
+		assert.Empty(t, post.Get("thread_ts"), "posted at the top of the channel")
+		assert.JSONEq(t, `{"event_type":"rocketclaw_channel_reply","event_payload":{}}`, post.Get("metadata"))
+	}
+
+	assert.Equal(t, []string{"📡 web\nfrom the Web", "web answer", "mention answer", "job answer"}, texts, "session-reply wakes and subagents post nothing")
+
+	footer, _ := slackContextTexts(t, posted[1].Get("blocks"))
+	assert.Equal(t, []string{"main · done · <" + testFooterLink + "|Open in Web>"}, footer)
+	assert.Equal(t, []string{channelSession, channelSession, channelSession}, linked, "each footer links the Channel Session")
+	assert.Equal(t, []string{"/agents.sessions.setStatus processing 111.222", "/agents.sessions.setStatus active 111.222"}, writes, "the status shows on the mention's thread")
 }

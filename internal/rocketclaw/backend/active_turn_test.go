@@ -558,6 +558,681 @@ func newTestBridgeManager(t *testing.T, cfg *config.LockedConfig, service *Sessi
 	return manager, runTestManager(t, manager)
 }
 
+func newSlackSessionTest(t *testing.T, sticky string) (rt *Runtime, requests chan string, finals chan *protocol.OutboundMessage, logs *lockedBuffer) {
+	t.Helper()
+
+	newBridge, service, requests, finals := newResumeTestBridges(t, true)
+	cfg := newBridge().runtime
+	writeMainAgent(t, cfg.Clone().Workspace, sticky)
+
+	logs = new(lockedBuffer)
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	manager := newThreadBridgeManager(cfg, service, logger, &bridgeFactoryMock{newBridgeFunc: func(bridgeCfg *Config) directBridge {
+		bridgeCfg.SessionService = service
+		return NewConversation(cfg, finalsPublisher{finals: finals}, bridgeCfg, logger)
+	}})
+
+	runTestManager(t, manager)
+
+	return &Runtime{Sessions: service, threads: manager, Cfg: cfg}, requests, finals, logs
+}
+
+func TestSlackChannelSessionHoldsThreadUntilRootCloses(t *testing.T) {
+	t.Parallel()
+
+	rt, requests, finals, _ := newSlackSessionTest(t, "slack")
+	submit := func(inbound, root *protocol.InboundMessage) {
+		t.Helper()
+
+		inbound.SlackRoot = root
+		accepted, err := rt.threads.SubmitMention(t.Context(), "main", slackTarget("D123", inbound.SlackReply.ThreadTS), inbound)
+		require.NoError(t, err)
+		require.True(t, accepted)
+	}
+
+	submit(newThreadInboundMessage("in the thread", "2.2", "1.1"), newThreadInboundMessage("first root", "1.1", "1.1"))
+	assert.Contains(t, <-requests, "first root", "the root delivered after its thread mention runs first, in the Channel Session")
+
+	_, recorded, err := rt.Sessions.Thread("slack-channel:D123:main")
+	require.NoError(t, err)
+	require.True(t, recorded)
+
+	submit(newThreadInboundMessage("second root", "3.3", "3.3"), nil)
+
+	web := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "from web", true)
+	web.ConversationID, web.Metadata = "slack-thread:D123:1.1:main", map[string]string{}
+	require.NoError(t, rt.RunTurn(t.Context(), web))
+	require.Never(t, func() bool { return len(requests) > 0 }, 300*time.Millisecond, 10*time.Millisecond, "the second root waits behind the first, and the thread waits for its root")
+
+	rt.threads.InterruptConversation("slack-channel:D123:main")
+	assert.Equal(t, protocol.TerminalStopped, readFinal(t, finals).Terminal)
+
+	bodies := []string{<-requests, <-requests, <-requests}
+	mention := slices.IndexFunc(bodies, func(body string) bool {
+		return strings.Contains(body, "in the thread") && !strings.Contains(body, "from web")
+	})
+	assert.Greater(t, slices.IndexFunc(bodies, func(body string) bool { return strings.Contains(body, "from web") }), mention, "the thread runs its mention, then the Web input")
+	assert.GreaterOrEqual(t, mention, 0)
+	assert.True(t, slices.ContainsFunc(bodies, func(body string) bool { return strings.Contains(body, "second root") }))
+}
+
+func TestSlackSessionTurnOfAgentNoLongerStickySlackDoesNotRun(t *testing.T) {
+	t.Parallel()
+
+	rt, requests, finals, logs := newSlackSessionTest(t, "off")
+
+	inbound := newThreadInboundMessage("hello", "1.1", "1.1")
+	accepted, err := rt.threads.SubmitMention(t.Context(), "main", slackTarget("D123", "1.1"), inbound)
+	require.NoError(t, err)
+	require.True(t, accepted, "admission does not check the agent")
+
+	settled := readFinal(t, finals)
+	assert.Equal(t, protocol.OutboundMessage{ConversationID: "slack-channel:D123:main", Complete: true, SlackReply: inbound.SlackReply}, *settled, "the Slack status settles without a reply")
+	assert.Empty(t, requests)
+	assert.Empty(t, runningTestTurns(t, rt.Sessions))
+
+	queue, err := rt.Sessions.ThreadQueueForConversation("slack-channel:D123:main")
+	require.NoError(t, err)
+	assert.Empty(t, queue, "the row closes")
+
+	accepted, err = rt.threads.SubmitMention(t.Context(), "main", slackTarget("D123", "1.1"), newThreadInboundMessage("hello", "1.1", "1.1"))
+	require.NoError(t, err)
+	assert.False(t, accepted, "a Slack retry of the skipped message is not admitted again")
+
+	mention := newThreadInboundMessage("in the thread", "2.2", "1.1")
+	mention.SlackRoot = newThreadInboundMessage("hello", "1.1", "1.1")
+	accepted, err = rt.threads.SubmitMention(t.Context(), "main", slackTarget("D123", "1.1"), mention)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	assert.Equal(t, "slack-thread:D123:1.1:main", readFinal(t, finals).ConversationID)
+
+	skipped := `level=WARN msg="Slack session turn skipped because its agent is not sticky: slack" component=rocketcode conversation_id=slack-channel:D123:main agent=main`
+	assert.Equal(t, 1, strings.Count(logs.String(), skipped), "the root delivered with its thread mention is not admitted again")
+
+	note := testBackgroundJob(testChannelSession, "turn-1/call/a")
+	createTestBackgroundJob(t, rt.Sessions, note)
+	finishTestBackgroundJob(t, rt.Sessions, note, backgroundCompleted, true)
+	require.NoError(t, rt.threads.PickLaterWork(t.Context(), testChannelSession))
+	assert.Equal(t, testChannelSession, readFinal(t, finals).ConversationID)
+	assert.Equal(t, []string{"turn-1/call/a pending false"}, noteStates(t, rt.Sessions), "a skipped wake leaves its notes for the next turn")
+}
+
+func TestResumedSlackSessionTurnRunsAfterAgentLeavesStickySlack(t *testing.T) {
+	t.Parallel()
+
+	rt, requests, _, _ := newSlackSessionTest(t, "off")
+	recordTestConversations(t, rt.Sessions, "main", map[string]ConversationKind{"slack-thread:D123:1.1:main": KindSlackThread})
+	seedActiveTurn(t, rt.Sessions, "slack-thread:D123:1.1:main", "turn-resumed", nil)
+
+	require.NoError(t, rt.threads.StartActiveTurns(t.Context()))
+	assert.Contains(t, <-requests, "seed")
+}
+
+const (
+	testChannelSession = "slack-channel:D123:main"
+	testThreadSession  = "slack-thread:D123:1.1:main"
+	moveScript         = "def main():\n    return slack_respond_in_thread(in_thread=True)\n"
+	summaryInstruction = `"instructions":"You summarize`
+	testSummary        = "Ann asked for the invoice total, which is 42."
+)
+
+func newMoveTest(t *testing.T, respond noteTestResponder) (nt *noteTest, manager *threadBridgeManager, shutdown func()) {
+	t.Helper()
+
+	nt = newNoteTest(t, respond)
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\nsticky: slack\npermission:\n  bash: allow\n---\nPrompt\n")
+	nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Origin: "https://rc.example"}}
+	manager, shutdown = nt.run(t, ignoreOutbound)
+
+	return nt, manager, shutdown
+}
+
+func writeExecuteCall(t *testing.T, w http.ResponseWriter, callID, code string) {
+	t.Helper()
+
+	data, err := json.Marshal(map[string]string{"code": code, "description": callID})
+	require.NoError(t, err)
+	_, err = fmt.Fprintf(w, `{"id":%q,"object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":%q,"type":"function_call","status":"completed","call_id":%q,"name":"execute","arguments":%q}]}`, "resp_"+callID, "fc_"+callID, callID, string(data))
+	require.NoError(t, err)
+}
+
+func moveResponder(t *testing.T, script string, answer noteTestResponder) noteTestResponder {
+	t.Helper()
+
+	return func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		switch {
+		case strings.Contains(body, summaryInstruction):
+			writeRawRunMessage(t, w, "summary", "summary", testSummary)
+		case strings.Contains(body, "function_call_output"):
+			answer(w, r, n, body)
+		default:
+			writeExecuteCall(t, w, "move", script)
+		}
+	}
+}
+
+func submitRootMention(t *testing.T, manager *threadBridgeManager, text, ts string) {
+	t.Helper()
+
+	accepted, err := manager.SubmitMention(t.Context(), "main", slackTarget("D123", ts), newThreadInboundMessage(text, ts, ts))
+	require.NoError(t, err)
+	require.True(t, accepted)
+}
+
+func recordSlackSession(t *testing.T, service *SessionService, conversationID, channel, thread string) {
+	t.Helper()
+
+	_, err := service.recordConversation(t.Context(), &protocol.Conversation{ID: conversationID, Agent: "main"}, conversationFacts{kind: KindSlackThread, slackChannel: channel, slackThread: thread}, harness.AgentStickyOff)
+	require.NoError(t, err)
+}
+
+func seedChannelHistory(t *testing.T, service *SessionService) {
+	t.Helper()
+
+	recordSlackSession(t, service, testChannelSession, "D123", "")
+	_, err := service.AppendEntryID(t.Context(), testChannelSession, testSessionEntry("what is the invoice total?", "It is 42."))
+	require.NoError(t, err)
+}
+
+func entryMessages(t *testing.T, service *SessionService, conversationID string) []string {
+	t.Helper()
+
+	entries, err := service.ObserveEntries(t.Context(), conversationID)
+	require.NoError(t, err)
+
+	var texts []string
+
+	for i := range entries {
+		messages, err := replayInputMessages(entries[i].Entry.ReplayInput)
+		require.NoError(t, err)
+
+		for _, message := range messages {
+			texts = append(texts, message.role+": "+message.text)
+		}
+	}
+
+	return texts
+}
+
+func TestSlackRespondInThreadMovesTurnIntoThreadSession(t *testing.T) {
+	t.Parallel()
+
+	resumed := make(chan string, 1)
+	nt, manager, _ := newMoveTest(t, moveResponder(t, "def main():\n    rocketclaw_attach_files_to_response(attachments=[{\"path\": \"\", \"name\": \"report.txt\", \"mime_type\": \"text/plain\", \"content\": \"report\", \"content_base64\": \"\"}])\n    return slack_respond_in_thread(in_thread=True)\n",
+		func(w http.ResponseWriter, r *http.Request, n int, body string) {
+			resumed <- body
+
+			answerNoteTest(w, r, n, body)
+		}))
+	seedChannelHistory(t, nt.service)
+
+	submitRootMention(t, manager, "summarize the release", "1.1")
+	final := readFinal(t, nt.finals)
+	assert.Equal(t, testThreadSession, final.ConversationID, "the answer is delivered for the Thread Session and nothing for the Channel Session")
+	assert.Equal(t, "answer", final.Text)
+	require.Len(t, final.Attachments, 1)
+	assert.Equal(t, "report.txt", final.Attachments[0].Name, "a file attached before the move goes out with the answer")
+
+	body := <-resumed
+	assert.Contains(t, body, testSummary)
+	assert.Contains(t, body, "summarize the release")
+	assert.NotContains(t, body, "what is the invoice total?", "the thread starts from a summary of the channel, not its history")
+	nt.waitIdle(t, manager, testThreadSession)
+
+	var thread string
+	require.NoError(t, nt.service.db.QueryRowContext(t.Context(), `SELECT concat_ws(' ', kind, slack_channel, slack_thread, agent) FROM conversations WHERE conversation_id = $1`, testThreadSession).Scan(&thread))
+	assert.Equal(t, "slack_thread D123 1.1 main", thread, "the move creates the missing Thread Session")
+
+	texts := entryMessages(t, nt.service, testThreadSession)
+	require.GreaterOrEqual(t, len(texts), 3)
+	assert.Contains(t, texts[0], "developer: ")
+	assert.Contains(t, texts[0], testSummary, "the summary comes first")
+	assert.Contains(t, texts[1], "summarize the release", "then the trigger")
+	assert.Equal(t, "assistant: answer", texts[len(texts)-1], "then the turn's work")
+
+	channel := entryMessages(t, nt.service, testChannelSession)
+	assert.Contains(t, channel[len(channel)-1], strconv.Quote(testThreadSession)+" (https://rc.example/s/", "the Channel Session's history names the Thread Session and its link")
+	assert.Empty(t, testTurnStepKeys(t, nt.service, testChannelSession), "nothing of the turn is left under the Channel Session")
+	assert.Empty(t, nt.finals)
+}
+
+func TestSlackRespondInThreadPlacesTheAnswer(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct{ name, script, answeredIn string }{
+		{name: "false twice answers at the top", script: "def main():\n    slack_respond_in_thread(in_thread=False)\n    return slack_respond_in_thread(in_thread=False)\n", answeredIn: testChannelSession},
+		{name: "true and false in parallel move the turn", script: "def main():\n    return gather([lambda: slack_respond_in_thread(in_thread=False), lambda: slack_respond_in_thread(in_thread=True)])\n", answeredIn: testThreadSession},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			nt, manager, _ := newMoveTest(t, moveResponder(t, tt.script, answerNoteTest))
+			submitRootMention(t, manager, "hello", "1.1")
+			assert.Equal(t, tt.answeredIn, readFinal(t, nt.finals).ConversationID)
+
+			_, recorded, err := nt.service.Thread(testThreadSession)
+			require.NoError(t, err)
+			assert.Equal(t, tt.answeredIn == testThreadSession, recorded)
+		})
+	}
+}
+
+func TestChannelSessionTakesNextMentionWhileMovedTurnRuns(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	moved := moveResponder(t, moveScript, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+
+		answerNoteTest(w, r, n, body)
+	})
+	nt, manager, _ := newMoveTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if strings.Contains(body, "second ask") || strings.Contains(body, "in the thread") {
+			answerNoteTest(w, r, n, body)
+			return
+		}
+
+		moved(w, r, n, body)
+	})
+
+	submitRootMention(t, manager, "first ask", "1.1")
+	accepted, err := manager.SubmitMention(t.Context(), "main", slackTarget("D123", "1.1"), newThreadInboundMessage("in the thread", "2.2", "1.1"))
+	require.NoError(t, err)
+	require.True(t, accepted)
+	submitRootMention(t, manager, "second ask", "3.3")
+	assert.Equal(t, testChannelSession, readFinal(t, nt.finals).ConversationID, "the next mention is answered at the top while the moved turn still runs")
+	close(release)
+
+	for range 2 {
+		assert.Equal(t, testThreadSession, readFinal(t, nt.finals).ConversationID, "the waiting Thread Session resumes the moved turn, then takes its own mention")
+	}
+}
+
+func TestMovedTurnSurvivesCrashesAroundTheMove(t *testing.T) {
+	t.Parallel()
+
+	summaryCrash, threadCrash, starts := make(chan struct{}, 1), make(chan struct{}, 1), make(chan struct{}, 4)
+
+	summaryCrash <- struct{}{}
+
+	threadCrash <- struct{}{}
+
+	crashOnce := func(crash chan struct{}, r *http.Request) bool {
+		select {
+		case <-crash:
+			<-r.Context().Done()
+			return true
+		default:
+			return false
+		}
+	}
+
+	nt, manager, shutdown := newMoveTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		switch {
+		case strings.Contains(body, summaryInstruction):
+			if !crashOnce(summaryCrash, r) {
+				writeRawRunMessage(t, w, "summary", "summary", testSummary)
+			}
+		case strings.Contains(body, "from web"):
+			answerNoteTest(w, r, n, body)
+		case strings.Contains(body, "function_call_output"):
+			if !crashOnce(threadCrash, r) {
+				writeRawRunMessage(t, w, "moved", "moved", "moved answer")
+			}
+		default:
+			starts <- struct{}{}
+
+			writeExecuteCall(t, w, "move", moveScript)
+		}
+	})
+	seedChannelHistory(t, nt.service)
+
+	runningIn := func() []string {
+		ids, err := queryStrings(t.Context(), nt.service.db, `SELECT conversation_id || ' ' || id FROM turns WHERE phase = 'running' AND takes_lane`, "running turns")
+		require.NoError(t, err)
+
+		return ids
+	}
+
+	submitRootMention(t, manager, "summarize the release", "1.1")
+	nt.request(t)
+	assert.Contains(t, nt.request(t), summaryInstruction)
+	shutdown()
+
+	running := runningIn()
+	require.Len(t, running, 1)
+	turnID := strings.TrimPrefix(running[0], testChannelSession+" ")
+	assert.Equal(t, testChannelSession+" "+turnID, running[0], "a crash before the move commit leaves the turn in the Channel Session")
+	assert.Contains(t, testTurnStepKeys(t, nt.service, testChannelSession), turnID+"/respond-in-thread")
+
+	_, recorded, err := nt.service.Thread(testThreadSession)
+	require.NoError(t, err)
+	assert.False(t, recorded)
+
+	_, shutdown = nt.restart(t)
+	assert.Contains(t, nt.request(t), summaryInstruction, "the resumed turn moves at its next Drain")
+	assert.Contains(t, nt.request(t), "function_call_output")
+	shutdown()
+	assert.Equal(t, []string{testThreadSession + " " + turnID}, runningIn(), "a crash after the move commit leaves the turn in the Thread Session")
+
+	manager, _ = nt.run(t, ignoreOutbound)
+	web := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "from web", true)
+	web.ConversationID, web.Metadata = testThreadSession, map[string]string{}
+	require.NoError(t, (&Runtime{Sessions: nt.service, threads: manager, Cfg: config.NewLockedConfig(nt.cfg)}).RunTurn(t.Context(), web))
+
+	final := readFinal(t, nt.finals)
+	assert.Equal(t, []string{testThreadSession, turnID, "moved answer"}, []string{final.ConversationID, final.TurnID, final.Text}, "the moved turn resumes in the Thread Session before the Web input")
+	assert.Contains(t, nt.request(t), "function_call_output")
+	assert.Contains(t, nt.request(t), "moved answer", "the Web input runs after the moved turn and sees its answer")
+	assert.Equal(t, testThreadSession, readFinal(t, nt.finals).ConversationID)
+	assert.Len(t, starts, 1, "the triggering call never runs again")
+}
+
+func TestSlackRespondInThreadMovesWithoutSummaryWhenItFails(t *testing.T) {
+	t.Parallel()
+
+	nt, manager, _ := newMoveTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if strings.Contains(body, summaryInstruction) {
+			http.Error(w, `{"error":{"message":"summary model unavailable"}}`, http.StatusBadRequest)
+			return
+		}
+
+		moveResponder(t, moveScript, answerNoteTest)(w, r, n, body)
+	})
+	seedChannelHistory(t, nt.service)
+
+	submitRootMention(t, manager, "summarize the release", "1.1")
+	assert.Equal(t, testThreadSession, readFinal(t, nt.finals).ConversationID)
+	nt.waitIdle(t, manager, testThreadSession)
+	assert.Contains(t, entryMessages(t, nt.service, testThreadSession)[0], "summarize the release", "no summary entry")
+	assert.Contains(t, nt.logs.String(), `level=WARN msg="summarize the Channel Session for its Thread Session"`)
+}
+
+func TestStopAfterRespondInThreadStopsTurnInThreadSession(t *testing.T) {
+	t.Parallel()
+
+	nt, manager, _ := newMoveTest(t, moveResponder(t, "def main():\n    slack_respond_in_thread(in_thread=True)\n    return bash(command=r'''sleep 30''')\n", answerNoteTest))
+
+	submitRootMention(t, manager, "hello", "1.1")
+	require.Eventually(t, func() bool {
+		return slices.ContainsFunc(testTurnStepKeys(t, nt.service, testChannelSession), func(key string) bool { return strings.HasSuffix(key, "/respond-in-thread") })
+	}, 10*time.Second, 10*time.Millisecond)
+	manager.InterruptConversation(testChannelSession)
+
+	final := readFinal(t, nt.finals)
+	assert.Equal(t, []string{testThreadSession, string(protocol.TerminalStopped)}, []string{final.ConversationID, string(final.Terminal)}, "the stopped final is delivered for the Thread Session")
+	nt.waitIdle(t, manager, testThreadSession)
+	assert.Empty(t, runningTestTurns(t, nt.service))
+
+	for len(nt.finals) > 0 {
+		assert.NotEqual(t, testChannelSession, readFinal(t, nt.finals).ConversationID, "nothing for the Channel Session")
+	}
+}
+
+func TestSlackStopStopsOnlyTheTurnItShowed(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	nt, manager, _ := newMoveTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		switch {
+		case strings.Contains(body, summaryInstruction):
+			writeRawRunMessage(t, w, "summary", "summary", testSummary)
+		case strings.Contains(body, "second ask"):
+			select {
+			case <-release:
+				answerNoteTest(w, r, n, body)
+			case <-r.Context().Done():
+			}
+		case strings.Contains(body, "function_call_output"):
+			<-r.Context().Done()
+		default:
+			writeExecuteCall(t, w, "move", moveScript)
+		}
+	})
+	runningIn := func(conversationID string) []string {
+		ids, err := queryStrings(t.Context(), nt.service.db, `SELECT id FROM turns WHERE conversation_id = $1 AND phase = 'running' AND takes_lane`, "running turns", conversationID)
+		require.NoError(t, err)
+
+		return ids
+	}
+
+	submitRootMention(t, manager, "first ask", "1.1")
+	nt.request(t)
+	assert.Contains(t, nt.request(t), "function_call_output", "the moved turn runs in the Thread Session")
+	submitRootMention(t, manager, "second ask", "3.3")
+	nt.request(t)
+
+	moved, next := runningIn(testThreadSession), runningIn(testChannelSession)
+	require.Len(t, moved, 1)
+	require.Len(t, next, 1)
+
+	require.NoError(t, manager.InterruptTurn(t.Context(), moved[0]))
+
+	final := readFinal(t, nt.finals)
+	assert.Equal(t, []string{testThreadSession, moved[0], string(protocol.TerminalStopped)}, []string{final.ConversationID, final.TurnID, string(final.Terminal)}, "the Stop ends the moved turn in its Thread Session")
+	require.Eventually(t, func() bool { return len(runningIn(testThreadSession)) == 0 }, 10*time.Second, 10*time.Millisecond)
+	assert.Equal(t, next, runningIn(testChannelSession), "the Channel Session's next turn keeps running")
+
+	require.NoError(t, manager.InterruptTurn(t.Context(), moved[0]))
+	assert.Equal(t, next, runningIn(testChannelSession), "a Stop for a turn that already ended stops nothing")
+
+	close(release)
+
+	final = readFinal(t, nt.finals)
+	assert.Equal(t, []string{testChannelSession, next[0], string(protocol.TerminalComplete)}, []string{final.ConversationID, final.TurnID, string(final.Terminal)})
+}
+
+func TestBackgroundNoteConsumedBeforeMoveIsNotOfferedAgain(t *testing.T) {
+	t.Parallel()
+
+	later := make(chan string, 1)
+	nt, manager, shutdown := newMoveTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		switch {
+		case strings.Contains(body, "second ask") && strings.Contains(body, "function_call_output"):
+			later <- body
+
+			answerNoteTest(w, r, n, body)
+		case !strings.Contains(body, "function_call_output"):
+			writeExecuteCall(t, w, "check", "def main():\n    return \"checked\"\n")
+		case strings.Contains(body, "in_thread=True"):
+			answerNoteTest(w, r, n, body)
+		default:
+			writeExecuteCall(t, w, "move", moveScript)
+		}
+	})
+
+	recordSlackSession(t, nt.service, testChannelSession, "D123", "")
+	job := testBackgroundJob(testChannelSession, "job-1")
+	createTestBackgroundJob(t, nt.service, job)
+	finishTestBackgroundJob(t, nt.service, job, backgroundCompleted, false)
+
+	submitRootMention(t, manager, "first ask", "1.1")
+	assert.Equal(t, testThreadSession, readFinal(t, nt.finals).ConversationID)
+	nt.waitIdle(t, manager, testThreadSession)
+	assert.Equal(t, []string{"job-1 consumed false"}, noteStates(t, nt.service))
+	shutdown()
+
+	manager, _ = nt.restart(t)
+	submitRootMention(t, manager, "second ask", "2.2")
+	assert.NotContains(t, <-later, `id="job-1"`, "the consumed note is not offered again")
+	assert.Equal(t, testChannelSession, readFinal(t, nt.finals).ConversationID)
+}
+
+func TestMovedEasyTurnKeepsItsWorkingDirectory(t *testing.T) {
+	t.Parallel()
+
+	nt := newNoteTest(t, func(w http.ResponseWriter, _ *http.Request, _ int, body string) {
+		switch {
+		case strings.Contains(body, "You are judging one planned coding-agent action."):
+			writeRawRunMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
+		case !strings.Contains(body, "function_call_output"):
+			writeExecuteCall(t, w, "write", "def main():\n    bash(command=r'''printf '%s%s' ban ana > note.txt''')\n    return slack_respond_in_thread(in_thread=True)\n")
+		case strings.Contains(body, "banana"):
+			writeRawRunMessage(t, w, "found", "found", "found")
+		case strings.Contains(body, "in_thread=True") && !strings.Contains(body, "cat note.txt"):
+			writeExecuteCall(t, w, "read", "def main():\n    return bash(command=r'''cat note.txt''')\n")
+		default:
+			writeRawRunMessage(t, w, "missing", "missing", "missing")
+		}
+	})
+	wrapper := filepath.Join(nt.cfg.Workspace, "wrap.sh")
+	require.NoError(t, os.WriteFile(wrapper, []byte("#!/bin/sh\nexec /bin/sh -c \"$1\"\n"), 0o755))
+	writeAgent(t, nt.cfg.Workspace, "main", "---\nmode: easy\nmodel: gpt-6.1-sol\nsticky: slack\nspace: Ops\nworkingDirectory: "+filepath.Join(nt.cfg.Workspace, "data", "$ROCKETCLAW_CONVERSATION_ID")+"\nshell: "+wrapper+"\n---\nPrompt\n")
+	nt.cfg.AutoApproverModel, nt.cfg.Web = "gpt-review", config.WebConfig{Tsnet: &config.TsnetConfig{Origin: "https://rc.example"}}
+	manager, _ := nt.run(t, ignoreOutbound)
+
+	submitRootMention(t, manager, "write it down", "1.1")
+	final := readFinal(t, nt.finals)
+	assert.Equal(t, []string{testThreadSession, "found"}, []string{final.ConversationID, final.Text}, "the moved turn reads the file it wrote in the Channel Session's folder")
+}
+
+func TestSlackRespondInThreadOfferedOnlyOnChannelSessionMentions(t *testing.T) {
+	t.Parallel()
+
+	nt := newNoteTest(t, answerNoteTest)
+	writeMainAgent(t, nt.cfg.Workspace, "slack")
+	manager, _ := nt.run(t, ignoreOutbound)
+	(&Runtime{threads: manager}).AttachSlack(&slackLookupMock{SidebarChannelAgentChoicesFunc: func(_ context.Context, channel string) (string, []string, error) {
+		return "room-" + channel, nil, nil
+	}})
+
+	wake := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "ask", false)
+	wake.Metadata = map[string]string{backgroundNotesMetadataKey: "job-1"}
+
+	for i, tt := range []struct {
+		name, channel, thread string
+		inbound               *protocol.InboundMessage
+		goal, subagent        bool
+		offered               bool
+	}{
+		{name: "Slack mention in a Channel Session", channel: "D1", inbound: newThreadInboundMessage("ask", "1.1", "1.1"), offered: true},
+		{name: "Slack mention in a Thread Session", channel: "D2", thread: "1.1", inbound: newThreadInboundMessage("ask", "2.2", "1.1")},
+		{name: "goal turn", channel: "D3", inbound: newThreadInboundMessage("ask", "1.1", "1.1"), goal: true},
+		{name: "Web input", channel: "D4", inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "ask", true)},
+		{name: "wake turn", channel: "D5", inbound: wake},
+		{name: "agent write", channel: "D6", inbound: agentWrite("ask")},
+		{name: "subagent", channel: "D7", inbound: newThreadInboundMessage("ask", "1.1", "1.1"), subagent: true},
+	} {
+		conversation := "slack-channel:" + tt.channel + ":main"
+		if tt.thread != "" {
+			conversation = "slack-thread:" + tt.channel + ":" + tt.thread + ":main"
+		}
+
+		recordSlackSession(t, nt.service, conversation, tt.channel, tt.thread)
+
+		bridge := nt.bridge(t, manager, conversation)
+		if tt.subagent {
+			require.NoError(t, nt.service.startSubagent(t.Context(), conversation, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-0", Call: "call-1"}, Agent: "main"}))
+
+			managed, err := manager.ensureThreadBridge(t.Context(), conversation+"/call-1", ThreadState{Agent: "main", parent: conversation})
+			require.NoError(t, err)
+
+			bridge = managed.(*Bridge)
+		}
+
+		if tt.goal {
+			require.NoError(t, nt.service.BeginGoal(conversation, &GoalState{Objective: "ship it"}))
+		}
+
+		_, err := runTestTurn(t.Context(), bridge, tt.inbound, "turn-"+strconv.Itoa(i))
+		require.NoError(t, err, tt.name)
+
+		request := nt.request(t)
+		assert.Equal(t, tt.offered, strings.Contains(request, "slack_respond_in_thread("), tt.name)
+		assert.Equal(t, tt.offered, strings.Contains(request, "Slack channel #room-"+tt.channel+" (ID "+tt.channel+")"), "%s: the turn knows its channel", tt.name)
+		assert.Equal(t, tt.offered, strings.Contains(request, "Each mention is one person's request"), "%s: the turn knows the placement rule", tt.name)
+	}
+}
+
+func TestMoveTurnRekeysTheTurnWhileRootFirstAdmissionRuns(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
+	runTestManager(t, manager)
+
+	ctx := t.Context()
+	recordSlackSession(t, store, testChannelSession, "D123", "")
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"web:caller": KindWebChat})
+
+	root := newThreadInboundMessage("root", "1.1", "1.1")
+	root.Metadata["web_message_id"] = "slack:D123:1.1"
+	require.NoError(t, startTurnDB(ctx, store.db, "turn-1", testChannelSession, root))
+
+	reply := testReply("web:caller", "turn-9/call/steer", testChannelSession)
+	createTestBackgroundJob(t, store, reply)
+
+	job, note := testBackgroundJob(testChannelSession, "turn-1/call/job"), testBackgroundJob(testChannelSession, "note-1")
+	createTestBackgroundJob(t, store, job)
+	createTestBackgroundJob(t, store, note)
+	finishTestBackgroundJob(t, store, note, backgroundCompleted, false)
+	_, err := store.db.ExecContext(ctx, `UPDATE turns SET claimed_by = 'turn-1' WHERE input_id = 'note-1'`)
+	require.NoError(t, err)
+
+	for key, value := range map[string]string{"turn-1/replay_input/0000000000": `{}`, "turn-1/respond-in-thread": `true`, "turn-1/call/job/host/1": `{}`, "turn-1/steers": `[{"id":"` + reply.jobID + `"}]`} {
+		require.NoError(t, store.SaveTurnStep(ctx, testChannelSession, key, json.RawMessage(value)))
+	}
+
+	attachment := protocol.OutboundAttachment{ID: "a-1", Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}
+	require.NoError(t, store.SaveAttachment(ctx, testChannelSession, "turn-1", &attachment, false))
+	require.NoError(t, store.startSubagent(ctx, testChannelSession, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "main"}))
+
+	tx, err := store.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, lockSessionHistory(ctx, tx, testChannelSession))
+
+	var group errgroup.Group
+
+	group.Go(func() error {
+		return store.moveTurn(ctx, "turn-1", testChannelSession, protocol.Conversation{ID: testThreadSession, Agent: "main"}, conversationFacts{kind: KindSlackThread, slackChannel: "D123", slackThread: "1.1"}, "summary of the channel", "moved note")
+	})
+
+	mention := newThreadInboundMessage("in the thread", "2.2", "1.1")
+	mention.SlackRoot = newThreadInboundMessage("root", "1.1", "1.1")
+
+	group.Go(func() error {
+		_, err := manager.SubmitMention(ctx, "main", slackTarget("D123", "1.1"), mention)
+		return err
+	})
+
+	require.Eventually(t, func() bool {
+		blocked, err := queryStrings(ctx, store.db, `SELECT pid::text FROM pg_stat_activity WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0`, "blocked transactions")
+		return err == nil && len(blocked) == 2
+	}, 10*time.Second, 10*time.Millisecond)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, group.Wait(), "both transactions finish")
+
+	_, err = store.finishTurn(ctx, "turn-1", &turnFinish{conversationID: testChannelSession, outbound: protocol.NewOutboundMessage(testChannelSession, "late")})
+	require.Error(t, err, "a late finish from the Channel Session does not close the moved turn")
+
+	rows, err := queryStrings(ctx, store.db, `SELECT concat_ws(' ', 'turn', conversation_id, COALESCE(NULLIF(input_id, ''), id), phase, inbound_json->>'ConversationID') FROM turns WHERE takes_lane
+UNION ALL SELECT concat_ws(' ', 'job', conversation_id, input_id, note, reply_target) FROM turns WHERE NOT takes_lane
+UNION ALL SELECT concat_ws(' ', 'step', conversation_id, key) FROM steps
+UNION ALL SELECT concat_ws(' ', 'attachment', conversation_id, turn_id) FROM attachments
+UNION ALL SELECT concat_ws(' ', 'child', conversation_id, parent_conversation_id) FROM conversations WHERE parent_conversation_id IS NOT NULL
+UNION ALL SELECT concat_ws(' ', 'running', conversation_id) FROM conversations WHERE running`, "moved rows")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{
+		"turn " + testThreadSession + " turn-1 running " + testThreadSession,
+		"turn " + testThreadSession + " slack:D123:2.2 waiting " + testThreadSession,
+		"job web:caller " + reply.jobID + " none " + testThreadSession,
+		"job " + testChannelSession + " turn-1/call/job none",
+		"job " + testChannelSession + " note-1 consumed",
+		"step " + testThreadSession + " turn-1/replay_input/0000000000",
+		"step " + testThreadSession + " turn-1/steers",
+		"step " + testChannelSession + " turn-1/call/job/host/1",
+		"attachment " + testThreadSession + " turn-1",
+		"child " + testChannelSession + "/call-1 " + testThreadSession,
+		"running " + testThreadSession,
+	}, rows)
+	assert.Equal(t, []string{"developer: summary of the channel"}, entryMessages(t, store, testThreadSession))
+	assert.Equal(t, []string{"developer: moved note"}, entryMessages(t, store, testChannelSession))
+}
+
 func TestOverdueScheduledTurnRunsOnceAfterRestart(t *testing.T) {
 	t.Parallel()
 
@@ -1144,7 +1819,7 @@ BEGIN
 END $$;
 CREATE VIEW conversations AS
 SELECT conversation_id, revert_message_id, paused, reports_to, unavailable_producer(producer_inbound_json) AS producer_inbound_json,
-    shadow_parent, running, preview, last_updated, parent_conversation_id, call_id FROM unavailable_conversations`)
+    shadow_parent, running, preview, last_updated, parent_conversation_id, call_id, kind, slack_channel, slack_thread FROM unavailable_conversations`)
 				require.NoError(t, err)
 
 				bridge.armScheduledMessage("", &protocol.ScheduledMessageState{ConversationID: "cron:pending", DueAt: time.Now().Add(-time.Minute)})
@@ -2675,7 +3350,7 @@ func TestTurnProgress(t *testing.T) {
 	}, OutputTrace: []json.RawMessage{progress("call-1", "completed"), progress("call-2", "completed"), progress("call-3", "blocked"), progress("call-4", "working")}}))
 	require.NoError(t, s.SaveTurnStep(ctx, "chat", "turn-1/call/q"+webQuestionStep, json.RawMessage(`{}`)))
 
-	got, err := s.TurnProgress(ctx, "chat", "turn-1")
+	got, err := s.TurnProgress(ctx, "turn-1")
 	require.NoError(t, err)
 	assert.Equal(t, protocol.TurnProgress{Running: true, Asking: true, Steps: []protocol.TurnStep{
 		{ID: "call-1", Title: "Run login scenario", State: protocol.TurnStepDone},
@@ -2685,15 +3360,23 @@ func TestTurnProgress(t *testing.T) {
 	}}, got, "a call with no progress record yet is running")
 
 	require.NoError(t, s.SaveTurnStep(ctx, "chat", "turn-1/call/q/answer", json.RawMessage(`{}`)))
-	got, err = s.TurnProgress(ctx, "chat", "turn-1")
+	got, err = s.TurnProgress(ctx, "turn-1")
 	require.NoError(t, err)
 	assert.False(t, got.Asking, "an answered question no longer waits")
+
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"thread": KindSlackThread})
+	_, err = s.db.ExecContext(ctx, `WITH moved_steps AS (UPDATE steps SET conversation_id = 'thread' WHERE conversation_id = 'chat') UPDATE turns SET conversation_id = 'thread' WHERE id = 'turn-1'`)
+	require.NoError(t, err)
+	got, err = s.TurnProgress(ctx, "turn-1")
+	require.NoError(t, err)
+	assert.Len(t, got.Steps, 4, "the progress follows the turn into the conversation that now holds it")
+	assert.True(t, got.Running)
 
 	_, err = s.db.ExecContext(ctx, `UPDATE turns SET phase = 'done' WHERE id = 'turn-1'`)
 	require.NoError(t, err)
 
 	for _, turnID := range []string{"turn-1", "turn-2"} {
-		got, err = s.TurnProgress(ctx, "chat", turnID)
+		got, err = s.TurnProgress(ctx, turnID)
 		require.NoError(t, err)
 		assert.Equal(t, protocol.TurnProgress{}, got)
 	}

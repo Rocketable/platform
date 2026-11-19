@@ -390,7 +390,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
         (9007199254741001, 'chat', '{"type":"turn","replay_input":[{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\n  /skill exact\n"},{"type":"message","role":"assistant","content":"answer"}]}', '')`)
 	require.NoError(t, err)
 
-	engine := &mockBackend{SandboxErrorFunc: noSandboxError}
+	engine := &mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}
 	server := &Server{sessions: sessions, cfg: config.NewLockedConfig(cfg), backend: engine}
 	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	initial, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1})

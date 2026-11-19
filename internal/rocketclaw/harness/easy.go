@@ -146,8 +146,8 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 	}
 
 	if field := frontmatterField(node, "routines"); field != nil {
-		if agent.Sticky == AgentStickyUser {
-			return errors.New("routines: a sticky: user agent cannot have routines")
+		if slices.Contains([]AgentSticky{AgentStickyUser, AgentStickySlack}, agent.Sticky) {
+			return fmt.Errorf("routines: a sticky: %s agent cannot have routines", agent.Sticky)
 		}
 
 		if field.Kind != yaml.SequenceNode {

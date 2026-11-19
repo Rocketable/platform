@@ -652,6 +652,7 @@ func TestValidateRuntimeDefinitionsRefusesBadRoutines(t *testing.T) {
 		{"phrase", easyRoutineAgent + "  - every 30min\n---\nPrompt\n", "", `agents/marketing.md: routines: schedule "every 30min": invalid cron expression`},
 		{"cron file for an easy agent", easyRoutineAgent + "  - 30m\n---\nPrompt\n", "---\nschedule: 1h\nagent: marketing\n---\nBody\n", "cron/daily.md: agent marketing is an easy agent"},
 		{"cron file for a sticky: user agent", "---\nmodel: gpt-6.1-sol\nsticky: user\n---\nPrompt\n", "---\nschedule: 1h\nagent: marketing\n---\nBody\n", "cron/daily.md: agent marketing is sticky: user; a cron cannot run it"},
+		{"cron file for a sticky: slack agent", "---\nmodel: gpt-6.1-sol\nsticky: slack\n---\nPrompt\n", "---\nschedule: 1h\nagent: marketing\n---\nBody\n", "cron/daily.md: agent marketing is sticky: slack; a cron cannot run it"},
 		{"global cron in another space", "---\nmodel: gpt-6.1-sol\nsticky: global\nspace: Marketing\n---\nPrompt\n", "---\nschedule: 1h\nagent: marketing\nspace: Finance\n---\nBody\n", "cron/daily.md: sticky: global agent marketing requires the cron to use its space Marketing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

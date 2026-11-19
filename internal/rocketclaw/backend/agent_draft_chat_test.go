@@ -184,7 +184,7 @@ func TestAgentDraftChatWebMessages(t *testing.T) {
 
 	dt.edit(t, &AgentDraftOp{Kind: AgentDraftSetField, Variant: "a", Key: "sticky", Value: "maybe"})
 	refusal := ct.refused(t, "MSG-0")
-	require.Equal(t, []AgentDraftProblem{{Variant: "a", Key: "sticky", Sentence: "off, user or global."}}, refusal.Problems)
+	require.Equal(t, []AgentDraftProblem{{Variant: "a", Key: "sticky", Sentence: "off, user, global or slack."}}, refusal.Problems)
 	require.False(t, refusal.Restart)
 
 	dt.edit(t, &AgentDraftOp{Kind: AgentDraftSetField, Variant: "a", Key: "sticky"})
@@ -193,7 +193,7 @@ func TestAgentDraftChatWebMessages(t *testing.T) {
 	revB := dt.revision
 	chat, problems, err := ct.send(t, false, "MSG-1")
 	require.NoError(t, err)
-	require.Equal(t, []AgentDraftProblem{{Variant: "b", Key: "sticky", Sentence: "off, user or global."}}, problems)
+	require.Equal(t, []AgentDraftProblem{{Variant: "b", Key: "sticky", Sentence: "off, user, global or slack."}}, problems)
 
 	request := ct.collect(t, "COL-A/MSG-1")["COL-A/MSG-1"]
 	require.Contains(t, request, `[Web principal="Alice"`)
@@ -212,7 +212,7 @@ func TestAgentDraftChatWebMessages(t *testing.T) {
 	messages := ct.messages(t, chat)
 	require.Len(t, messages, 3)
 	require.Equal(t, AgentDraftMessage{InputID: messages[0].InputID, Text: "MSG-1", Labels: map[string]int64{"a": revA, "b": revB},
-		NotRun: []AgentDraftProblem{{Variant: "b", Key: "sticky", Sentence: "off, user or global."}}}, messages[0])
+		NotRun: []AgentDraftProblem{{Variant: "b", Key: "sticky", Sentence: "off, user, global or slack."}}}, messages[0])
 	require.Equal(t, AgentDraftMessage{InputID: messages[2].InputID, Text: "MSG-2", Labels: map[string]int64{"a": revA, "b": dt.revision}}, messages[2])
 
 	dt.edit(t, &AgentDraftOp{Kind: AgentDraftRemoveVariant, Variant: "b"})

@@ -52,6 +52,7 @@ const (
 	askUserQuestionToolName        = "ask_user_question"
 	scheduleMessageToolName        = "rocketclaw_schedule_message"
 	resetScheduledMessagesToolName = "rocketclaw_reset_scheduled_messages"
+	respondInThreadToolName        = "slack_respond_in_thread"
 
 	internalErrorResponse        = "I hit an internal error while waiting for rocketcode."
 	wakeRetryNotice              = "I will keep retrying and post the background result here when it arrives."
@@ -60,11 +61,21 @@ const (
 	defaultQueueSize             = 128
 	externalMCPMetadataEntryType = "mcp_external_metadata"
 	producerEffectsStep          = "/effects"
+	respondInThreadStep          = "/respond-in-thread"
 	rocketclawConversationIDEnv  = "ROCKETCLAW_CONVERSATION_ID"
 	rocketclawMetadataEnvPrefix  = "ROCKETCLAW_METADATA_"
 )
 
 var errTurnInterrupted = errors.New("rocketcode turn interrupted")
+
+type turnMovedError struct {
+	thread  string
+	stopped bool
+}
+
+func (e turnMovedError) Error() string {
+	return "rocketcode turn moved into " + e.thread
+}
 
 type runtimeRestarter interface {
 	Restart(string) string
@@ -900,12 +911,8 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 
 	agent := owner.agentSnapshot()
 
-	if request.queueItemID != "" && request.producer == nil && request.inbound.GoalAction != protocol.GoalActionKickoff {
-		goal, found, err := b.config.SessionService.Goal(b.config.ConversationID)
-		if held := found && goal.Status == GoalStatusActive && !request.released; err != nil || held {
-			b.log.Info("queue activation unavailable", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "queue_item_id", request.queueItemID, "goal_active", held, "error_type", fmt.Sprintf("%T", err))
-			return false, err
-		}
+	if held, err := b.goalHoldsQueue(request); err != nil || held {
+		return false, err
 	}
 
 	ctx = context.WithoutCancel(ctx)
@@ -920,9 +927,16 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 		return false, err
 	}
 
-	var marker string
+	var (
+		marker                string
+		slackSession, blocked bool
+	)
 
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(revert_message_id), '') FROM conversations WHERE conversation_id = $1`, owner.config.ConversationID).Scan(&marker)
+	err = tx.QueryRowContext(ctx, `WITH `+rootUnsettledSQL+`, lane AS (
+    SELECT count(*) > 0 AS busy FROM turns WHERE conversation_id = $1 AND phase = 'running' AND takes_lane
+)
+SELECT COALESCE(max(c.revert_message_id), ''), COALESCE(bool_or(c.kind = 'slack_thread'), FALSE), u.held OR l.busy
+FROM unsettled u CROSS JOIN lane l LEFT JOIN conversations c ON c.conversation_id = $1 GROUP BY u.held, l.busy`, owner.config.ConversationID).Scan(&marker, &slackSession, &blocked)
 	if err != nil {
 		return false, fmt.Errorf("read activation cutoff: %w", err)
 	}
@@ -937,6 +951,11 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 		err = queryScalar(ctx, tx, "check taken active turn", `SELECT COUNT(*) > 0 FROM turns WHERE id = $1 AND (phase = $2 OR $3)`, &taken, request.turnID, turnRunning, request.delivery != nil)
 
 		return taken, err
+	}
+
+	if blocked {
+		b.log.Info("turn start unavailable", "event", "queue_blocked", "conversation_id", owner.config.ConversationID, "queue_item_id", request.queueItemID, "blocker", "root_or_running_turn")
+		return false, nil
 	}
 
 	turnID := b.config.SessionService.newTurnID()
@@ -976,6 +995,12 @@ UPDATE turns SET id = $3, phase = $4, reason = NULL WHERE conversation_id = $1 A
 		}
 	}
 
+	if slackSession {
+		if skipped, err := owner.skipUnstickyTurn(ctx, tx, request, agent, turnID); err != nil || skipped {
+			return false, err
+		}
+	}
+
 	if err := owner.admitShadowInputs(ctx, tx, request, agent, turnID); err != nil {
 		return false, err
 	}
@@ -1003,6 +1028,52 @@ UPDATE turns SET id = $3, phase = $4, reason = NULL WHERE conversation_id = $1 A
 	return true, nil
 }
 
+func (b *Bridge) goalHoldsQueue(request *bridgeRequest) (bool, error) {
+	if request.queueItemID == "" || request.producer != nil || request.inbound.GoalAction == protocol.GoalActionKickoff {
+		return false, nil
+	}
+
+	goal, found, err := b.config.SessionService.Goal(b.config.ConversationID)
+	held := found && goal.Status == GoalStatusActive && !request.released
+
+	if err != nil || held {
+		b.log.Info("queue activation unavailable", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "queue_item_id", request.queueItemID, "goal_active", held, "error_type", fmt.Sprintf("%T", err))
+	}
+
+	return held, err
+}
+
+func (b *Bridge) skipUnstickyTurn(ctx context.Context, tx *sql.Tx, request *bridgeRequest, agent, turnID string) (bool, error) {
+	agents, _, err := LoadRuntimeDefinitions(b.runtime, b.runtime.Clone().RuntimeDirName())
+	if err != nil || agents.Items[agent].Sticky == harness.AgentStickySlack {
+		return false, err
+	}
+
+	b.log.Warn("Slack session turn skipped because its agent is not sticky: slack", "conversation_id", b.config.ConversationID, "agent", agent, "turn_id", turnID, "queue_item_id", request.queueItemID)
+
+	if _, err := execState(ctx, tx, "close skipped Slack turn", `WITH released AS (
+    UPDATE turns SET claimed_by = '', wake = FALSE WHERE conversation_id = $2 AND claimed_by = $1 AND note = $3
+)
+UPDATE turns SET phase = $4 WHERE id = $1`, turnID, b.config.ConversationID, notePending, turnDone); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit skipped Slack turn: %w", err)
+	}
+
+	b.wakeHeldThreads(ctx, request.inbound.SlackReply)
+
+	settled := protocol.NewOutboundMessage(b.config.ConversationID, "")
+	settled.Complete, settled.SlackReply = true, request.inbound.SlackReply
+
+	if err := b.bus.PublishOutbound(ctx, settled); err != nil {
+		return true, fmt.Errorf("publish skipped Slack turn: %w", err)
+	}
+
+	return true, nil
+}
+
 func (b *Bridge) takeHeldCaller(request *bridgeRequest) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1024,6 +1095,33 @@ func (b *Bridge) takeHeldCaller(request *bridgeRequest) {
 	}
 }
 
+const rootUnsettledSQL = `thread AS (
+    SELECT slack_channel, 'slack:' || slack_channel || ':' || slack_thread AS root FROM conversations
+    WHERE conversation_id = $1 AND kind = 'slack_thread' AND slack_thread IS NOT NULL
+), unsettled AS (
+    SELECT count(*) > 0 AS held FROM thread h
+    JOIN conversations c ON c.slack_channel = h.slack_channel AND c.kind = 'slack_thread' AND c.slack_thread IS NULL
+    JOIN turns t ON t.conversation_id = c.conversation_id AND t.input_id = h.root WHERE t.phase <> 'done'
+)`
+
+func (b *Bridge) wakeHeldThreads(ctx context.Context, reply *protocol.SlackReplyTarget) {
+	if reply == nil {
+		return
+	}
+
+	threads, err := queryStrings(ctx, b.config.SessionService.db, `WITH channel AS (
+    SELECT slack_channel FROM conversations WHERE conversation_id = $1 AND kind = 'slack_thread' AND slack_thread IS NULL
+)
+SELECT c.conversation_id FROM conversations c JOIN channel USING (slack_channel) WHERE c.kind = 'slack_thread' AND c.slack_thread = $2 ORDER BY 1`, "held thread sessions", b.config.ConversationID, reply.ThreadTS)
+	for _, conversationID := range threads {
+		err = errors.Join(err, b.threads.PickLaterWork(ctx, conversationID))
+	}
+
+	if err != nil {
+		b.log.Error("wake thread sessions after their root", "conversation_id", b.config.ConversationID, "error", err)
+	}
+}
+
 func claimWakeNotes(ctx context.Context, tx stateStoreDB, conversationID, turnID string, inbound *protocol.InboundMessage) (bool, error) {
 	notes, err := claimBackgroundNotes(ctx, tx, conversationID, turnID, false)
 	if err != nil || !slices.ContainsFunc(notes, func(note backgroundJob) bool { return note.wake && !note.wakeAfter.After(time.Now()) }) {
@@ -1040,13 +1138,16 @@ func claimWakeNotes(ctx context.Context, tx stateStoreDB, conversationID, turnID
 	}
 
 	inbound.Metadata = map[string]string{backgroundNotesMetadataKey: strings.Join(ids, " ")}
+	if !slices.ContainsFunc(notes, func(note backgroundJob) bool { return note.kind != turnReply }) {
+		inbound.Metadata[sessionRepliesMetadataKey] = "true"
+	}
 
 	return true, nil
 }
 
 func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 	b.mu.Lock()
-	stopped, notesOpen, mutation := b.stopped, b.notesOpen, b.historyMutation
+	stopped, notesOpen, mutation, turnID := b.stopped, b.notesOpen, b.historyMutation, b.activeTurnID
 	busy := fromTimer && b.handling
 	b.timerWaiting = b.timerWaiting || busy
 	b.mu.Unlock()
@@ -1078,14 +1179,17 @@ func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 		return nil
 	}
 
-	var private, producing bool
+	var private, blocked, resume bool
 	if err := b.config.SessionService.db.QueryRowContext(ctx, `WITH self AS (
     SELECT count(*) > 0 AS private FROM conversations WHERE conversation_id = $1 AND producer_inbound_json IS NOT NULL
 ), producing AS (
     SELECT count(*) > 0 AS producing FROM turns a JOIN conversations c ON c.conversation_id = a.conversation_id
     WHERE a.phase NOT IN ('waiting', 'done') AND a.takes_lane AND c.reports_to = $1
-)
-SELECT s.private, p.producing FROM self s CROSS JOIN producing p`, b.config.ConversationID).Scan(&private, &producing); err != nil {
+), lane AS (
+    SELECT count(*) > 0 AS running, COALESCE(bool_or(id <> $2), FALSE) AS idle FROM turns WHERE conversation_id = $1 AND phase = 'running' AND takes_lane
+), `+rootUnsettledSQL+`
+SELECT s.private, p.producing OR u.held OR l.running, l.idle AND NOT (p.producing OR u.held)
+FROM self s CROSS JOIN producing p CROSS JOIN unsettled u CROSS JOIN lane l`, b.config.ConversationID, turnID).Scan(&private, &blocked, &resume); err != nil {
 		return fmt.Errorf("check later-work producer delivery: %w", err)
 	}
 
@@ -1095,7 +1199,11 @@ SELECT s.private, p.producing FROM self s CROSS JOIN producing p`, b.config.Conv
 		}
 	}
 
-	if producing {
+	if resume {
+		return b.resumeRunningTurn(ctx)
+	}
+
+	if blocked {
 		return nil
 	}
 
@@ -1168,6 +1276,15 @@ SELECT s.private, p.producing FROM self s CROSS JOIN producing p`, b.config.Conv
 	}
 
 	return b.submitDueScheduled(ctx, head.ScheduledID, &head.Scheduled, now)
+}
+
+func (b *Bridge) resumeRunningTurn(ctx context.Context) error {
+	head, found, err := b.headRequest(ctx)
+	if err != nil || !found {
+		return err
+	}
+
+	return b.enqueue(ctx, &head, "resume running turn")
 }
 
 func (b *Bridge) handoffProducer(ctx context.Context) error {
@@ -1543,6 +1660,10 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 			return fmt.Errorf("leave turn %q for restart: %w", turnID, errors.Join(protocol.ErrBridgeStopped, errTurn))
 		}
 
+		if moved, ok := errors.AsType[turnMovedError](errTurn); ok {
+			return b.handOver(ctx, msg.SlackReply, moved)
+		}
+
 		if errors.Is(errTurn, errTurnInterrupted) {
 			result = runResult{turnID: turnID}
 			errPublish := b.finish(ctx, request, &finish, &result, protocol.TerminalStopped)
@@ -1569,6 +1690,113 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 		errLog = errGoal
 		return errGoal
 	}
+
+	return nil
+}
+
+func (b *Bridge) moveRatcheted(ctx context.Context, turnID string, origin *protocol.InboundMessage, summarize bool) (string, error) {
+	store, quiet := b.config.SessionService, context.WithoutCancel(ctx)
+
+	_, ratcheted, err := store.LoadTurnStep(quiet, b.config.ConversationID, turnID+respondInThreadStep)
+	if err != nil {
+		return "", inputPersistenceError{cause: err}
+	}
+
+	if !ratcheted {
+		return "", nil
+	}
+
+	reply, agent := origin.SlackReply, b.agentSnapshot()
+
+	thread, err := slackSessionID(quiet, store.db, reply.ChannelID, reply.MessageTS, "", agent)
+	if err != nil {
+		return "", inputPersistenceError{cause: err}
+	}
+
+	summary := ""
+	if summarize {
+		if summary = b.channelSummary(ctx, turnID); ctx.Err() != nil {
+			return "", fmt.Errorf("summarize before moving turn %q: %w", turnID, ctx.Err())
+		}
+	}
+
+	note := "The previous request moved into Thread Session " + strconv.Quote(thread)
+	if url, err := b.threads.WebURL(thread); err == nil {
+		note += " (" + url + ")"
+	}
+
+	note += ", the conversation of the Slack thread under its mention, where it continues and its answer posts. You can write there with rocketclaw_sessions."
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.historyMutation {
+		return "", nil
+	}
+
+	if err := store.moveTurn(quiet, turnID, b.config.ConversationID, protocol.Conversation{ID: thread, Agent: agent}, conversationFacts{kind: KindSlackThread, slackChannel: reply.ChannelID, slackThread: reply.MessageTS}, summary, note); err != nil {
+		return "", inputPersistenceError{cause: err}
+	}
+
+	b.inputOpen, b.notesOpen = false, false
+
+	return thread, nil
+}
+
+func (b *Bridge) channelSummary(ctx context.Context, turnID string) string {
+	runtimeCfg := b.runtime.Clone()
+
+	var (
+		anchor     int64
+		transcript strings.Builder
+	)
+
+	agents, _, err := LoadRuntimeDefinitions(b.runtime, runtimeCfg.RuntimeDirName())
+	if err == nil {
+		err = queryScalar(ctx, b.config.SessionService.db, "read turn history anchor", `SELECT history_anchor_id FROM turns WHERE id = $1`, &anchor, turnID)
+	}
+
+	entries, errEntries := b.config.SessionService.ObserveEntries(ctx, b.config.ConversationID)
+	err = errors.Join(err, errEntries)
+
+	for i := range entries {
+		if entries[i].ID > anchor {
+			break
+		}
+
+		messages, errMessages := replayInputMessages(entries[i].Entry.ReplayInput)
+		err = errors.Join(err, errMessages)
+
+		for _, message := range messages {
+			fmt.Fprintf(&transcript, "%s: %s\n", message.role, message.text)
+		}
+	}
+
+	summary := ""
+	if agent := agents.Items[b.agentSnapshot()]; err == nil && transcript.Len() > 0 {
+		if summary, err = harness.GenerateSummary(ctx, newModelResolver(runtimeCfg, b.log), agent.Model, agent.ReasoningEffort, transcript.String()); err == nil {
+			summary = "This request came from Channel Session " + strconv.Quote(b.config.ConversationID) + ", the Slack channel's own conversation. Its earlier history, summarized:\n" + summary
+		}
+	}
+
+	if err != nil {
+		b.log.Warn("summarize the Channel Session for its Thread Session", "conversation_id", b.config.ConversationID, "turn_id", turnID, "error", err)
+	}
+
+	return summary
+}
+
+func (b *Bridge) handOver(ctx context.Context, reply *protocol.SlackReplyTarget, moved turnMovedError) error {
+	if moved.stopped {
+		thread, err := b.threads.recordedBridge(ctx, moved.thread)
+		if err != nil {
+			return err
+		}
+
+		thread.InterruptActiveTurn()
+	}
+
+	b.wakeHeldThreads(ctx, reply)
 
 	return nil
 }
@@ -1671,8 +1899,14 @@ func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *
 
 	msg.CompleteResponseWithAttachments(outbound.Text, outbound.Attachments, nil)
 
-	if err := b.config.SessionService.closeTurn(context.WithoutCancel(ctx), request.turnID); err != nil || msg.SyncDestination == "" || retry > 1 && msg.Metadata[backgroundNotesMetadataKey] != "" {
+	if err := b.config.SessionService.closeTurn(context.WithoutCancel(ctx), request.turnID); err != nil {
 		return err
+	}
+
+	b.wakeHeldThreads(context.WithoutCancel(ctx), msg.SlackReply)
+
+	if msg.SyncDestination == "" || retry > 1 && msg.Metadata[backgroundNotesMetadataKey] != "" {
+		return nil
 	}
 
 	reply := protocol.CloneOutboundMessage(outbound)
@@ -1942,12 +2176,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		agents.Items[agentName] = agent
 	}
 
-	shellTempRel := rocketcodeShellTempRel(runtimeCfg.RuntimeDirName(), b.config.ConversationID)
-	if err := root.MkdirAll(shellTempRel, 0o700); err != nil {
-		return runResult{}, fmt.Errorf("create rocketcode shell temp dir: %w", err)
-	}
-
-	shellTempDir, conversationID := filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), strings.TrimSpace(b.config.ConversationID)
+	conversationID := strings.TrimSpace(b.config.ConversationID)
 
 	var (
 		shellEnv     map[string]string
@@ -1978,6 +2207,40 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			return runResult{}, err
 		}
 	}
+
+	var channel string
+
+	if msg.Source == protocol.SourceSlack && !msg.GoalTurn {
+		slackChannel, _, channelSession, err := b.config.SessionService.SlackThread(ctx, b.config.ConversationID)
+		if err != nil {
+			return runResult{}, err
+		}
+
+		if channelSession {
+			channel = slackChannel
+		}
+	}
+
+	if channel != "" && !captured {
+		b.threads.mu.Lock()
+		slack := b.threads.slackLookups
+		b.threads.mu.Unlock()
+
+		name, _, err := slack.SidebarChannelAgentChoices(ctx, channel)
+		if err != nil {
+			return runResult{}, fmt.Errorf("read Slack channel name: %w", err)
+		}
+
+		note := "This is the Channel Session of Slack channel #" + name + " (ID " + channel + "). Your answer posts at the top of the channel. Each mention is one person's request. To answer in the mention's thread instead, call slack_respond_in_thread(true) in its own execute call before other work."
+		snapshot.ContextEntries = append(snapshot.ContextEntries, harness.SessionEntry{Version: 1, ReplayInput: replayInputForMessage("developer", note)})
+	}
+
+	shellTempRel := rocketcodeShellTempRel(runtimeCfg.RuntimeDirName(), b.shellEnvFor(shellEnv)[rocketclawConversationIDEnv])
+	if err := root.MkdirAll(shellTempRel, 0o700); err != nil {
+		return runResult{}, fmt.Errorf("create rocketcode shell temp dir: %w", err)
+	}
+
+	shellTempDir := filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel))
 
 	providerLog := b.log.With("conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName, "source", string(msg.Source), "kind", string(msg.Kind), "human", msg.Human, "goal_turn", msg.GoalTurn, "attachment_count", len(msg.Attachments))
 	resolver := newModelResolver(runtimeCfg, providerLog)
@@ -2061,6 +2324,10 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	if msg.Human && msg.Source == protocol.SourceWeb {
 		customTools = append(customTools, askUserQuestionTool(b.config.UserQuestionAsker, msg))
+	}
+
+	if channel != "" {
+		customTools = append(customTools, respondInThreadTool(b.config.SessionService, b.config.ConversationID, turnID))
 	}
 
 	customTools = append(customTools, sessionsWriteTool(b, origin, msg, rootAgent, self, agents))
@@ -2270,7 +2537,16 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	b.log.Info("rocketcode looper returned", "event", "generation_finished", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(looperStarted).Milliseconds(), "interrupted", interrupted, "failed", err != nil, "error_type", fmt.Sprintf("%T", err))
 
+	if moved, ok := errors.AsType[turnMovedError](err); ok {
+		moved.stopped = interrupted
+		return result, moved
+	}
+
 	if interrupted {
+		if thread, errMove := b.moveRatcheted(ctx, turnID, msg, false); errMove != nil || thread != "" {
+			return result, cmp.Or[error](errMove, turnMovedError{thread: thread, stopped: true})
+		}
+
 		return result, errTurnInterrupted
 	}
 
@@ -2613,7 +2889,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 	skillsRoot := filepath.Join(cfg.Workspace, runtimeDir, "skills")
 	skillResult := harness.LoadSkills(skillsFS, skillsRoot)
 
-	tools := []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName}
+	tools := []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName, respondInThreadToolName}
 
 	for name := range agents.Items {
 		agent := agents.Items[name]
@@ -2952,6 +3228,36 @@ func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.Inbound
 	}}
 }
 
+func respondInThreadTool(store *SessionService, conversationID, turnID string) harness.Tool {
+	return harness.Tool{Name: respondInThreadToolName, Resumable: true, TurnBound: true, Description: "Choose where your answer to this Slack mention goes. With in_thread false, or if you never call this tool, your answer posts at the top of the channel. The first call with in_thread true is final: the rest of this turn moves into the Slack thread of the mention, where the conversation continues and your answer posts, and later calls change nothing. Call it with true in its own execute call before other work, because the move happens when that execute call returns.", Permission: "rocketclaw", VisibilitySubjects: []string{respondInThreadToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{respondInThreadToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"in_thread": map[string]any{"type": "boolean"}}, "required": []string{"in_thread"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
+		var input struct {
+			InThread bool `json:"in_thread"`
+		}
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return harness.ToolResult{}, fmt.Errorf("parse thread choice: %w", err)
+		}
+
+		var err error
+
+		moved, key := input.InThread, turnID+respondInThreadStep
+		if moved {
+			err = store.SaveTurnStep(ctx, conversationID, key, json.RawMessage("true"))
+		} else {
+			_, moved, err = store.LoadTurnStep(ctx, conversationID, key)
+		}
+
+		if err != nil {
+			return harness.ToolResult{}, err
+		}
+
+		if moved {
+			return harness.TextToolResult("The rest of this turn now runs in the Thread Session of the mention's Slack thread, and your answer posts there."), nil
+		}
+
+		return harness.TextToolResult("Your answer stays at the top of the channel."), nil
+	}}
+}
+
 func updateGoalTool(store *SessionService, conversationID string) harness.Tool {
 	return harness.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use progress when reporting continuing progress, complete when the goal is achieved, or blocked when progress cannot continue.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusProgress, GoalStatusComplete, GoalStatusBlocked}}, "note": map[string]any{"type": "string", "description": "Status note for the goal update. Use this to explain what is going on, what changed, what you are thinking, where the goal is heading next, what was completed, or what is blocking progress. It should mirror the substance of the visible Progress summary."}}, "required": []string{"status"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		var input struct {
@@ -3021,6 +3327,8 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 		}
 
 		outbound.GoalActive = outbound.GoalTurn && statusActive && (!accounted || goal.MaxTurns <= 0 || goal.TurnsUsed+1 < goal.MaxTurns)
+		outbound.ChannelQuiet = outbound.GoalTurn || msg.Metadata[sessionRepliesMetadataKey] != "" ||
+			msg.Source == protocol.SourceSystem && msg.Metadata[protocol.InboundSenderSessionMetadataKey] == "" && msg.Metadata[backgroundNotesMetadataKey] == ""
 
 		outbound.SlackReply = protocol.Clone(msg.SlackReply)
 	}

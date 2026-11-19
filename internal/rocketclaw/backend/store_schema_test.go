@@ -843,7 +843,7 @@ func TestSlackThreadsMigration(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, kind, id)
 
-		_, thread, err := store.SlackThread(ctx, id)
+		_, thread, _, err := store.SlackThread(ctx, id)
 		require.NoError(t, err)
 		require.Equal(t, want == KindSlackThread, thread != "", "only a mention thread still posts to Slack: %s", id)
 	}

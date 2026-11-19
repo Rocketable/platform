@@ -263,7 +263,7 @@ func (s *SessionService) StickySessions(ctx context.Context, username string, ag
 			user = append(user, name)
 		case harness.AgentStickyGlobal:
 			global = append(global, name)
-		case harness.AgentStickyOff:
+		case harness.AgentStickyOff, harness.AgentStickySlack:
 		}
 	}
 
@@ -1357,21 +1357,23 @@ func (s *SessionService) HasActiveTurn(ctx context.Context, conversationID strin
 	return active, nil
 }
 
-func (s *SessionService) TurnProgress(ctx context.Context, conversationID, turnID string) (protocol.TurnProgress, error) {
+func (s *SessionService) TurnProgress(ctx context.Context, turnID string) (protocol.TurnProgress, error) {
 	var (
-		progress protocol.TurnProgress
-		raw      []byte
+		progress       protocol.TurnProgress
+		conversationID string
+		raw            []byte
 	)
 
 	rowID, _, _ := strings.Cut(turnID, "/")
 
-	err := s.db.QueryRowContext(ctx, `WITH questions AS (
-    SELECT count(*) AS waiting FROM steps q
+	err := s.db.QueryRowContext(ctx, `WITH turn AS (
+    SELECT conversation_id, phase NOT IN ('waiting', 'done') AS running, COALESCE(output_trace_json::text, '[]') AS trace FROM turns WHERE id = $1
+), questions AS (
+    SELECT count(*) AS waiting FROM turn t JOIN steps q ON q.conversation_id = t.conversation_id
     LEFT JOIN steps a ON a.conversation_id = q.conversation_id AND a.key = left(q.key, -length('`+webQuestionStep+`')) || '/answer'
-    WHERE q.conversation_id = $1 AND q.key LIKE '%`+webQuestionStep+`' AND a.key IS NULL
+    WHERE q.key LIKE '%`+webQuestionStep+`' AND a.key IS NULL
 )
-SELECT t.phase NOT IN ('waiting', 'done'), q.waiting > 0, COALESCE(t.output_trace_json::text, '[]')
-FROM turns t CROSS JOIN questions q WHERE t.conversation_id = $1 AND t.id = $2`, conversationID, rowID).Scan(&progress.Running, &progress.Asking, &raw)
+SELECT t.conversation_id, t.running, q.waiting > 0, t.trace FROM turn t CROSS JOIN questions q`, rowID).Scan(&conversationID, &progress.Running, &progress.Asking, &raw)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && !progress.Running {
 		return protocol.TurnProgress{}, nil
 	}
@@ -1458,14 +1460,12 @@ func (s *SessionService) finishTurn(ctx context.Context, turnID string, finish *
 		return nil, fmt.Errorf("lock comparison settlement: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE shadow_turns SET input_closed = TRUE,
-terminal = CASE WHEN terminal <> '' THEN terminal WHEN (child_turn_id = '' AND jsonb_array_length(inputs) = 0) OR $3 = 'stopped' THEN $3 ELSE terminal END
-WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2`, finish.conversationID, turnID, cmp.Or(finish.outbound.Terminal, protocol.TerminalComplete)); err != nil {
+	if _, err := tx.ExecContext(ctx, closeMirroredInputSQL, finish.conversationID, turnID, cmp.Or(finish.outbound.Terminal, protocol.TerminalComplete)); err != nil {
 		return nil, inputPersistenceError{cause: fmt.Errorf("close mirrored input: %w", err)}
 	}
 
 	moved, err := execRows(ctx, tx, "finish active turn", `UPDATE turns SET phase = $2, terminal = $4, updated_at_unix_ns = $5, outbound_json = $3::json
-WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntryNUL(outbound)), finish.terminal, timeUnixNano(time.Now()), turnRunning)
+WHERE id = $1 AND phase = $6 AND conversation_id = $7`, turnID, turnDelivering, string(removeSessionEntryNUL(outbound)), finish.terminal, timeUnixNano(time.Now()), turnRunning, finish.conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1571,6 +1571,84 @@ SELECT COALESCE(MIN(wake_attempts), 0) FROM released`, finish.conversationID, tu
 	s.jobs.turnFinished(owners)
 
 	return finish.outbound, nil
+}
+
+const closeMirroredInputSQL = `UPDATE shadow_turns SET input_closed = TRUE,
+terminal = CASE WHEN terminal <> '' THEN terminal WHEN (child_turn_id = '' AND jsonb_array_length(inputs) = 0) OR $3 = 'stopped' THEN $3 ELSE terminal END
+WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2`
+
+func (s *SessionService) moveTurn(ctx context.Context, turnID, channel string, thread protocol.Conversation, facts conversationFacts, summary, note string) error {
+	tx, err := s.beginStateTx(ctx, "turn move")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockHistories(ctx, tx, []string{channel, thread.ID}); err != nil {
+		return err
+	}
+
+	created, err := (stateDAO{db: tx}).createConversation(ctx, thread, facts, harness.AgentStickyOff)
+	if err != nil {
+		return err
+	}
+
+	if created {
+		if _, err := s.reconcileShadows(ctx, tx, thread.ID, thread.Agent); err != nil {
+			return err
+		}
+	}
+
+	if err := lockSessionHistory(ctx, tx, thread.ID); err != nil {
+		return err
+	}
+
+	for id, text := range map[string]string{thread.ID: summary, channel: note} {
+		if text == "" {
+			continue
+		}
+
+		if _, err := appendSessionEntryDB(ctx, tx, id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: replayInputForMessage("developer", text)}); err != nil {
+			return err
+		}
+	}
+
+	if _, err := execState(ctx, tx, "move turn", `WITH `+unownedStepsSQL+`, inputs AS (
+    SELECT inbound_json->'Metadata'->>'web_message_id' AS id FROM turns WHERE id = $2
+    UNION ALL SELECT jsonb_array_elements_text(value::jsonb->'applied_input_ids') FROM steps WHERE conversation_id = $1 AND key = $2
+    UNION ALL SELECT jsonb_array_elements(value::jsonb)->>'id' FROM steps WHERE conversation_id = $1 AND key = $2 || '/steers'
+), anchor AS (
+    SELECT COALESCE(max(id), 0) AS id FROM entries WHERE conversation_id = $4
+), moved_turn AS (
+    UPDATE turns t SET conversation_id = $4, history_anchor_id = a.id, inbound_json = jsonb_set(t.inbound_json::jsonb, '{ConversationID}', to_jsonb($4::text))::json
+    FROM anchor a WHERE t.id = $2 AND t.conversation_id = $1
+), moved_steps AS (
+    UPDATE steps t SET conversation_id = $4 FROM unowned_steps u
+    WHERE (t.conversation_id, t.key) = (u.conversation_id, u.key) AND t.conversation_id = $1 AND (t.key = $2 OR starts_with(t.key, $2 || '/')) AND t.key <> $2 || $5
+), ratchet AS (
+    DELETE FROM steps WHERE conversation_id = $1 AND key = $2 || $5
+), moved_attachments AS (
+    UPDATE attachments SET conversation_id = $4 WHERE conversation_id = $1 AND turn_id = $2
+), children AS (
+    UPDATE conversations SET parent_conversation_id = $4 WHERE parent_conversation_id = $1 AND call_turn = $2
+), replies AS (
+    UPDATE turns r SET reply_target = $4 FROM inputs i WHERE r.kind = 'reply' AND r.phase = 'running' AND r.reply_target = $1 AND r.input_id = i.id
+), notes AS (
+    UPDATE turns SET note = $6 WHERE conversation_id = $1 AND claimed_by = $2 AND note = $7
+), closed AS (`+closeMirroredInputSQL+`)
+SELECT 1`, channel, turnID, protocol.TerminalComplete, thread.ID, respondInThreadStep, noteConsumed, notePending); err != nil {
+		return err
+	}
+
+	if err := recordRunning(ctx, tx, []string{channel, thread.ID}); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit turn move: %w", err)
+	}
+
+	return nil
 }
 
 func (s *SessionService) markTurnEnd(ctx context.Context, tx *sql.Tx, turnID string, finish *turnFinish) error {
@@ -1750,11 +1828,13 @@ func appendQueriedEntries(ctx context.Context, db stateStoreDB, conversationID, 
 	return len(entries), nil
 }
 
-const deleteUnownedStepsSQL = `WITH unowned_steps AS (
+const unownedStepsSQL = `unowned_steps AS (
     SELECT s.conversation_id, s.key FROM steps s LEFT JOIN turns j ON j.conversation_id = s.conversation_id
         AND NOT j.takes_lane AND j.phase = 'running' AND starts_with(j.input_id, $2 || '/') AND starts_with(s.key, j.input_id || '/')
     WHERE starts_with(s.key, $2) AND j.id IS NULL
-)
+)`
+
+const deleteUnownedStepsSQL = `WITH ` + unownedStepsSQL + `
 DELETE FROM steps t USING unowned_steps u WHERE (t.conversation_id, t.key) = (u.conversation_id, u.key) AND `
 
 func recordRunning(ctx context.Context, db stateStoreDB, ids []string) error {

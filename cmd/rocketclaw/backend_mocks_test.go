@@ -90,6 +90,9 @@ var _ frontend.Backend = &BackendMock{}
 //			SetAgentPausedFunc: func(context1 context.Context, s string, s1 string, b bool) error {
 //				panic("mock out the SetAgentPaused method")
 //			},
+//			SlackWarningFunc: func() string {
+//				panic("mock out the SlackWarning method")
+//			},
 //			StageRevertFunc: func(context1 context.Context, s string, s1 string) (string, string, error) {
 //				panic("mock out the StageRevert method")
 //			},
@@ -183,6 +186,9 @@ type BackendMock struct {
 
 	// SetAgentPausedFunc mocks the SetAgentPaused method.
 	SetAgentPausedFunc func(context1 context.Context, s string, s1 string, b bool) error
+
+	// SlackWarningFunc mocks the SlackWarning method.
+	SlackWarningFunc func() string
 
 	// StageRevertFunc mocks the StageRevert method.
 	StageRevertFunc func(context1 context.Context, s string, s1 string) (string, string, error)
@@ -379,6 +385,9 @@ type BackendMock struct {
 			// B is the b argument value.
 			B bool
 		}
+		// SlackWarning holds details about calls to the SlackWarning method.
+		SlackWarning []struct {
+		}
 		// StageRevert holds details about calls to the StageRevert method.
 		StageRevert []struct {
 			// Context1 is the context1 argument value.
@@ -457,6 +466,7 @@ type BackendMock struct {
 	lockSandboxError            sync.RWMutex
 	lockSaveBehavior            sync.RWMutex
 	lockSetAgentPaused          sync.RWMutex
+	lockSlackWarning            sync.RWMutex
 	lockStageRevert             sync.RWMutex
 	lockStartGoal               sync.RWMutex
 	lockStashQueueItem          sync.RWMutex
@@ -1290,6 +1300,33 @@ func (mock *BackendMock) SetAgentPausedCalls() []struct {
 	mock.lockSetAgentPaused.RLock()
 	calls = mock.calls.SetAgentPaused
 	mock.lockSetAgentPaused.RUnlock()
+	return calls
+}
+
+// SlackWarning calls SlackWarningFunc.
+func (mock *BackendMock) SlackWarning() string {
+	if mock.SlackWarningFunc == nil {
+		panic("BackendMock.SlackWarningFunc: method is nil but Backend.SlackWarning was just called")
+	}
+	callInfo := struct {
+	}{}
+	mock.lockSlackWarning.Lock()
+	mock.calls.SlackWarning = append(mock.calls.SlackWarning, callInfo)
+	mock.lockSlackWarning.Unlock()
+	return mock.SlackWarningFunc()
+}
+
+// SlackWarningCalls gets all the calls that were made to SlackWarning.
+// Check the length with:
+//
+//	len(mockedBackend.SlackWarningCalls())
+func (mock *BackendMock) SlackWarningCalls() []struct {
+} {
+	var calls []struct {
+	}
+	mock.lockSlackWarning.RLock()
+	calls = mock.calls.SlackWarning
+	mock.lockSlackWarning.RUnlock()
 	return calls
 }
 

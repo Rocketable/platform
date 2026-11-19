@@ -49,7 +49,10 @@ type backgroundNotes interface {
 	InterruptConversation(conversationID string) *protocol.InboundMessage
 }
 
-const backgroundNotesMetadataKey = "background_job_ids"
+const (
+	backgroundNotesMetadataKey = "background_job_ids"
+	sessionRepliesMetadataKey  = "session_replies_only"
+)
 
 func backgroundNote(job *backgroundJob) string {
 	if job.kind == turnReply {

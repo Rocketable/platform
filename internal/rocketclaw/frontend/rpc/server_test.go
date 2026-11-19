@@ -176,7 +176,7 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 			require.NoError(t, err)
 
 			transport := grpc.NewServer()
-			New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+			New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 			var serving errgroup.Group
 			serving.Go(func() error { return transport.Serve(listener) })
@@ -245,8 +245,10 @@ func TestTailnetIdentity(t *testing.T) {
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
+	var slackWarning string
+
 	transport := grpc.NewServer()
-	New(&mockBackend{SandboxErrorFunc: noSandboxError}, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: func() string { return slackWarning }}, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -256,20 +258,25 @@ func TestTailnetIdentity(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
+	const warning = "Slack channel #general uses agent assistant, which is not sticky: slack, so it does not answer mentions there."
+
 	for _, tt := range []struct {
-		name     string
-		who      *apitype.WhoIsResponse
-		err      error
-		identity string
+		name         string
+		who          *apitype.WhoIsResponse
+		err          error
+		slackWarning string
+		identity     string
 	}{
-		{"user", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoë@example.com", DisplayName: "Zoë Ørsted 日本"}}, nil, `{"username":"zoë@example.com","principal":"Zoë Ørsted 日本","sandboxError":""}`},
-		{"blank display", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoë@example.com", DisplayName: " "}}, nil, `{"username":"zoë@example.com","principal":"zoë@example.com","sandboxError":""}`},
-		{"tagged", &apitype.WhoIsResponse{Node: &tailcfg.Node{Tags: []string{"tag:server"}}, UserProfile: &tailcfg.UserProfile{LoginName: "tagged-devices"}}, nil, ""},
-		{"empty login", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{DisplayName: "Nobody"}}, nil, ""},
-		{"unknown", nil, local.ErrPeerNotFound, ""},
-		{"error", nil, errors.New("LocalAPI unavailable"), ""},
+		{"user", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoë@example.com", DisplayName: "Zoë Ørsted 日本"}}, nil, "", `{"username":"zoë@example.com","principal":"Zoë Ørsted 日本","sandboxError":""}`},
+		{"slack warning", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoë@example.com", DisplayName: "Zoë"}}, nil, warning, `{"username":"zoë@example.com","principal":"Zoë","sandboxError":"","slackWarning":"` + warning + `"}`},
+		{"blank display", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoë@example.com", DisplayName: " "}}, nil, "", `{"username":"zoë@example.com","principal":"zoë@example.com","sandboxError":""}`},
+		{"tagged", &apitype.WhoIsResponse{Node: &tailcfg.Node{Tags: []string{"tag:server"}}, UserProfile: &tailcfg.UserProfile{LoginName: "tagged-devices"}}, nil, "", ""},
+		{"empty login", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{DisplayName: "Nobody"}}, nil, "", ""},
+		{"unknown", nil, local.ErrPeerNotFound, "", ""},
+		{"error", nil, errors.New("LocalAPI unavailable"), "", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			slackWarning = tt.slackWarning
 			whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) { return tt.who, tt.err }}
 
 			next := NewHTTPHandler(connection, new(config.LockedConfig), "")
@@ -351,7 +358,7 @@ func TestTestModel(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -390,7 +397,7 @@ func TestTailnetCrossSitePages(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{SandboxErrorFunc: noSandboxError}, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -1070,6 +1077,7 @@ func TestSessionEntries(t *testing.T) {
 
 	core := &mockBackend{
 		SandboxErrorFunc:       noSandboxError,
+		SlackWarningFunc:       noSlackWarning,
 		BackgroundJobsFunc:     withoutBackgroundJobs().BackgroundJobsFunc,
 		PendingQuestionsFunc:   withoutBackgroundJobs().PendingQuestionsFunc,
 		SubscribeFunc:          rt.Subscribe,
@@ -2369,7 +2377,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.NoError(t, err)
 
 	for _, session := range listedSessions.Sessions {
-		channel, _, err := sessions.SlackThread(ctx, session.Id)
+		channel, _, _, err := sessions.SlackThread(ctx, session.Id)
 		require.NoError(t, err)
 
 		switch channel {
@@ -2715,7 +2723,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		webID := ids[0]
 		require.Equal(t, "web:"+undelivered, webID)
-		_, slackThread, err := sessions.SlackThread(ctx, webID)
+		_, slackThread, _, err := sessions.SlackThread(ctx, webID)
 		require.NoError(t, err)
 		require.Empty(t, slackThread)
 
@@ -3996,6 +4004,60 @@ func TestContinueCronRun(t *testing.T) {
 	})
 }
 
+func TestStickySlackAgentsAnswerOnlyInSlackSessions(t *testing.T) {
+	t.Parallel()
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	root, err := os.OpenRoot(cfg.Workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
+
+	for name, sticky := range map[string]string{"main": "off", "channel": "slack"} {
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: "+sticky+"\npermission: {}\n---\nHelp."), 0o600))
+	}
+
+	const slackSession = "slack-thread:C1:1.1"
+	openTestTurns(t, dsn).RecordSlackThread(t, sessions, slackSession, backend.ThreadState{Agent: "channel"})
+
+	core := withoutBackgroundJobs()
+	core.CreateConversationFunc = func(context.Context, protocol.Conversation) error { return nil }
+	server := New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{
+		SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) { return "support", []string{"channel"}, nil },
+	}, &mockCronJobs{})
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
+
+	offered := func(id string) (current string, names []string) {
+		t.Helper()
+
+		listed, err := server.listAgents(ctx, id)
+		require.NoError(t, err)
+
+		for _, agent := range listed.Agents {
+			names = append(names, agent.Name)
+		}
+
+		return listed.CurrentAgent, names
+	}
+
+	current, names := offered("")
+	require.Empty(t, current)
+	require.Equal(t, []string{"main"}, names, "a new session is not offered a sticky: slack agent")
+
+	_, err = server.createSession(ctx, &CreateSessionRequest{Agent: "channel"})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
+
+	current, names = offered(slackSession)
+	require.Equal(t, "channel", current)
+	require.Equal(t, []string{"channel"}, names, "the Slack session still opens with its agent")
+}
+
 func TestRoutineCronJobs(t *testing.T) {
 	t.Parallel()
 
@@ -4043,6 +4105,7 @@ func TestRoutineCronJobs(t *testing.T) {
 func withoutBackgroundJobs() *mockBackend {
 	return &mockBackend{
 		SandboxErrorFunc:     noSandboxError,
+		SlackWarningFunc:     noSlackWarning,
 		BackgroundJobsFunc:   func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return nil, false, nil },
 		PendingQuestionsFunc: func(context.Context, string) ([]protocol.AskUserQuestionRequest, error) { return nil, nil },
 	}
@@ -4200,6 +4263,7 @@ func TestBackgroundJobRPCs(t *testing.T) {
 	}
 	core := &mockBackend{
 		SandboxErrorFunc:     noSandboxError,
+		SlackWarningFunc:     noSlackWarning,
 		BackgroundJobsFunc:   func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return listed, true, nil },
 		PendingQuestionsFunc: withoutBackgroundJobs().PendingQuestionsFunc,
 		CompletionNotesFunc: func(_ context.Context, _ string, jobIDs []string) (jobs []protocol.BackgroundJob, _ error) {
@@ -4373,5 +4437,7 @@ func TestQuestionRPCs(t *testing.T) {
 }
 
 func noSandboxError() string { return "" }
+
+func noSlackWarning() string { return "" }
 
 func notPaused(context.Context, string) (bool, error) { return false, nil }

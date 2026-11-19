@@ -15,8 +15,8 @@ func (inertThreadRouter) MentionThread(protocol.TextConversationTarget) (recorde
 func (inertThreadRouter) SubmitMention(context.Context, string, protocol.TextConversationTarget, *protocol.InboundMessage) (bool, error) {
 	return false, errors.New("slack thread routing is not configured")
 }
-func (inertThreadRouter) InterruptThread(protocol.TextConversationTarget) (*protocol.InboundMessage, error) {
-	return nil, errors.New("slack thread routing is not configured")
+func (inertThreadRouter) InterruptTurn(context.Context, string) error {
+	return errors.New("slack thread routing is not configured")
 }
 func (inertThreadRouter) WebURL(string) (string, error) {
 	return "", errors.New("web links are not configured")

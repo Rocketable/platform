@@ -21,14 +21,14 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 		for event := range events {
 			message := event.Message
 
-			channelID, threadTS, err := c.facts.SlackThread(ctx, message.ConversationID)
+			channelID, threadTS, channelSession, err := c.facts.SlackThread(ctx, message.ConversationID)
 			if err != nil {
 				event.Acknowledgement <- err
 				continue
 			}
 
 			if message.ConsumedID != "" {
-				if threadTS != "" && message.ConsumedSource == protocol.SourceWeb && message.ConsumedText != "" {
+				if (threadTS != "" || channelSession) && message.ConsumedSource == protocol.SourceWeb && message.ConsumedText != "" {
 					text := message.ConsumedRawText
 					if strings.TrimSpace(text) == "" && message.ConsumedText != text {
 						text = "(attachments)"
@@ -41,7 +41,7 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 							slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, chunk, false, false), nil, nil),
 						}
 
-						_, _, err = c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText("📡 web\n"+chunk, false), slack.MsgOptionTS(threadTS), slack.MsgOptionBlocks(blocks...), slack.MsgOptionDisableMarkdown(), slack.MsgOptionParse(false))
+						_, _, err = c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText("📡 web\n"+chunk, false), slackPlacement(threadTS), slack.MsgOptionBlocks(blocks...), slack.MsgOptionDisableMarkdown(), slack.MsgOptionParse(false))
 						if err != nil {
 							err = fmt.Errorf("send Slack web input: %w", err)
 							break
@@ -58,7 +58,7 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 
 			switch {
 			case message.ConversationID == "":
-			case threadTS != "":
+			case threadTS != "" || channelSession && !message.ChannelQuiet:
 				if message.SlackReply == nil {
 					message.SlackReply = &protocol.SlackReplyTarget{MessageTS: threadTS}
 				}

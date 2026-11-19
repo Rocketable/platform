@@ -8899,6 +8899,7 @@ type IdentityResponse struct {
 	Principal     string                 `protobuf:"bytes,2,opt,name=principal,proto3" json:"principal,omitempty"`
 	SandboxError  string                 `protobuf:"bytes,3,opt,name=sandbox_error,json=sandboxError,proto3" json:"sandbox_error,omitempty"`
 	Limited       *bool                  `protobuf:"varint,4,opt,name=limited,proto3,oneof" json:"limited,omitempty"`
+	SlackWarning  *string                `protobuf:"bytes,5,opt,name=slack_warning,json=slackWarning,proto3,oneof" json:"slack_warning,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8959,6 +8960,13 @@ func (x *IdentityResponse) GetLimited() bool {
 		return *x.Limited
 	}
 	return false
+}
+
+func (x *IdentityResponse) GetSlackWarning() string {
+	if x != nil && x.SlackWarning != nil {
+		return *x.SlackWarning
+	}
+	return ""
 }
 
 type ReloadRequest struct {
@@ -10997,14 +11005,16 @@ const file_web_proto_rawDesc = "" +
 	"\x14DeleteSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x17\n" +
 	"\x15DeleteSessionResponse\"\x11\n" +
-	"\x0fIdentityRequest\"\x9c\x01\n" +
+	"\x0fIdentityRequest\"\xd8\x01\n" +
 	"\x10IdentityResponse\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1c\n" +
 	"\tprincipal\x18\x02 \x01(\tR\tprincipal\x12#\n" +
 	"\rsandbox_error\x18\x03 \x01(\tR\fsandboxError\x12\x1d\n" +
-	"\alimited\x18\x04 \x01(\bH\x00R\alimited\x88\x01\x01B\n" +
+	"\alimited\x18\x04 \x01(\bH\x00R\alimited\x88\x01\x01\x12(\n" +
+	"\rslack_warning\x18\x05 \x01(\tH\x01R\fslackWarning\x88\x01\x01B\n" +
 	"\n" +
-	"\b_limited\"'\n" +
+	"\b_limitedB\x10\n" +
+	"\x0e_slack_warning\"'\n" +
 	"\rReloadRequest\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\"*\n" +
 	"\x0eReloadResponse\x12\x18\n" +

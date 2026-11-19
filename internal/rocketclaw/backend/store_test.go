@@ -1407,7 +1407,7 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		if index == 0 {
 			require.Equal(t, 2, bindings, "history-only clear preserves bindings")
 
-			bridge := &Bridge{config: Config{ConversationID: id, Agent: "main", SessionService: store}, log: store.log}
+			bridge := &Bridge{config: Config{ConversationID: id, Agent: "main", SessionService: store}, log: store.log, runtime: slackAgentRuntime(t)}
 			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "future", true)}
 			admitted, err := bridge.activateInbound(t.Context(), &request)
 			require.NoError(t, err)
@@ -2795,7 +2795,7 @@ func TestConversationKindsAtCreation(t *testing.T) {
 	ctx := t.Context()
 	runtime := &Runtime{Sessions: store}
 	run, oneOff := "cron:cron/daily.md:20261019T120000.000000001Z:RUN", "one-off-cron:cron/once.md:20261019T130000.000000001Z:ONE"
-	slack := protocol.SlackThreadConversationID("C1", "1.1")
+	slack := "slack-channel:C1:main"
 
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "web", Agent: "main", CreatedBy: "alice"}))
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "job", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/daily.md"}}))

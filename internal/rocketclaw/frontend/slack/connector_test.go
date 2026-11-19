@@ -1383,6 +1383,32 @@ func TestSendResponseMentionFooter(t *testing.T) {
 	}
 }
 
+func TestSendResponseSettlesStatusOfTurnThatDidNotRun(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		live   bool
+		writes []string
+	}{
+		{name: "nothing runs in the thread", writes: []string{"/agents.sessions.setStatus active 111.222"}},
+		{name: "another turn runs in the thread", live: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var writes []string
+
+			server := newAdhocSlackServer(t, "random", nil, &writes)
+			defer server.Close()
+
+			connector := newAdhocConnector(server.URL, newMentionRouter(true))
+			if tt.live {
+				connector.sessions["turn-2"] = &slackSession{channelID: "C123", threadTS: "111.222", poll: time.NewTimer(time.Hour)}
+			}
+
+			require.NoError(t, connector.SendResponse(t.Context(), &protocol.OutboundMessage{ConversationID: "slack-thread:C123:111.222:main", Complete: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}}))
+			assert.Equal(t, tt.writes, writes)
+		})
+	}
+}
+
 func TestSendResponseFooterOnlyPostsOncePerTurn(t *testing.T) {
 	var posted []url.Values
 
@@ -1449,6 +1475,74 @@ func TestSendResponseFooterOnlyPostsOncePerTurn(t *testing.T) {
 
 	require.NoError(t, connector.SendResponse(t.Context(), unposted))
 	require.Len(t, posted, 2)
+}
+
+func TestSendResponseFindsLostTopLevelPostInChannelHistory(t *testing.T) {
+	var (
+		posted  []url.Values
+		oldests []string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			posted = append(posted, cloneValues(r.PostForm))
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+		case "/conversations.history":
+			oldests = append(oldests, r.PostForm.Get("oldest"))
+
+			if r.PostForm.Get("cursor") == "" {
+				writeJSON(t, w, map[string]any{"ok": true, "has_more": true, "response_metadata": map[string]any{"next_cursor": "next"}, "messages": []map[string]any{
+					{"ts": "555.2", "blocks": []map[string]any{{"type": "context", "block_id": "turn-0/answer", "elements": []map[string]any{}}}},
+				}})
+
+				return
+			}
+
+			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{
+				{"ts": "555.1", "blocks": []map[string]any{{"type": "context", "block_id": "turn-1/answer", "elements": []map[string]any{}}}},
+			}})
+		case "/agents.sessions.setStatus":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	steps := map[string]json.RawMessage{}
+	final := protocol.NewOutboundMessage("slack-channel:C123:main", "answer")
+	final.TurnID, final.Agent, final.Complete, final.Terminal = "turn-1", "main", true, protocol.TerminalComplete
+	final.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222"}
+	send := func() {
+		connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), &primaryTextRouterMock{WebURLFunc: func(string) (string, error) { return testFooterLink, nil }})
+		connector.facts = newTestTurnSteps(t, final.ConversationID, steps)
+		require.NoError(t, connector.SendResponse(t.Context(), protocol.CloneOutboundMessage(final)))
+	}
+
+	before := time.Now()
+
+	send()
+	require.Len(t, posted, 1)
+	assert.Empty(t, posted[0].Get("thread_ts"))
+
+	var marker slackPosting
+	require.NoError(t, json.Unmarshal(steps["turn-1/answer/posting"], &marker))
+
+	oldest, err := strconv.ParseFloat(marker.Oldest, 64)
+	require.NoError(t, err)
+	assert.Less(t, oldest, float64(before.Unix()), "the marker records a lower time bound")
+
+	delete(steps, "turn-1/answer")
+	send()
+	assert.Len(t, posted, 1, "the lost top-level post is found in the channel history, not posted again")
+	assert.Equal(t, []string{marker.Oldest, marker.Oldest}, oldests)
+	assert.Contains(t, string(steps["turn-1/answer"]), "555.1", "the found post is recorded")
 }
 
 type agentSessionCalls struct {
@@ -1565,8 +1659,7 @@ func newProgressConnector(t *testing.T, serverURL string, progress *protocol.Tur
 	t.Helper()
 
 	connector := newTestConnectorWithOptions(serverURL, testSocialChannels(), newFooterRouter(t, false, nil))
-	connector.facts.(*channelFactsStoreMock).TurnProgressFunc = func(_ context.Context, conversationID, turnID string) (protocol.TurnProgress, error) {
-		assert.Equal(t, "slack-thread:C123:111.222", conversationID)
+	connector.facts.(*channelFactsStoreMock).TurnProgressFunc = func(_ context.Context, turnID string) (protocol.TurnProgress, error) {
 		assert.Equal(t, "turn-1", turnID)
 
 		return *progress, nil
@@ -1650,7 +1743,7 @@ func TestMentionTurnPollRenewsAndEndsStaleSession(t *testing.T) {
 
 	facts := connector.facts.(*channelFactsStoreMock)
 	read := facts.TurnProgressFunc
-	facts.TurnProgressFunc = func(context.Context, string, string) (protocol.TurnProgress, error) {
+	facts.TurnProgressFunc = func(context.Context, string) (protocol.TurnProgress, error) {
 		return protocol.TurnProgress{}, assert.AnError
 	}
 
@@ -1707,6 +1800,41 @@ func TestMentionTurnPollsUntilItEnds(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 	assert.LessOrEqual(t, len(facts.TurnProgressCalls()), polls+1, "an ended turn stops polling")
+}
+
+func newChannelSessionTurn(turnID string) *protocol.OutboundMessage {
+	msg := newMentionThreadTurn(turnID, "")
+	msg.ConversationID, msg.SlackReply.ThreadTS = "slack-channel:C123:main", ""
+
+	return msg
+}
+
+func TestChannelTurnStatusFollowsItsMove(t *testing.T) {
+	server, calls := newAgentSessionServer(t, "")
+	progress := protocol.TurnProgress{Running: true}
+	connector := newProgressConnector(t, server.URL, &progress)
+	connector.threadRouter = &primaryTextRouterMock{
+		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, false, nil },
+		WebURLFunc:        func(string) (string, error) { return testFooterLink, nil },
+	}
+
+	require.NoError(t, connector.SendResponse(t.Context(), newChannelSessionTurn("turn-1")))
+
+	session := connector.sessions["turn-1"]
+	connector.pollSession("turn-1", session)
+
+	resumed := newMentionThreadTurn("turn-1", "")
+	resumed.ConversationID = "slack-thread:C123:111.222:main"
+	require.NoError(t, connector.SendResponse(t.Context(), resumed))
+	connector.pollSession("turn-1", session)
+	assert.Same(t, session, connector.sessions["turn-1"], "the moved turn keeps its session")
+
+	final := newMentionThreadTurn("turn-1", protocol.TerminalComplete)
+	final.ConversationID, final.Text = resumed.ConversationID, "moved answer"
+	require.NoError(t, connector.SendResponse(t.Context(), final))
+
+	assert.Equal(t, []string{"processing C123 111.222", "active C123 111.222"}, calls.statuses, "the status stays processing across the move and settles when the moved turn ends")
+	assert.Empty(t, connector.sessions)
 }
 
 func TestSendResponseFinalJournalFailures(t *testing.T) {
@@ -1789,20 +1917,32 @@ func TestAgentSessionTitleChangedNamesWebConversation(t *testing.T) {
 	server, _ := newAgentSessionServer(t, "")
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, false, nil))
 	facts := connector.facts.(*channelFactsStoreMock)
-	facts.UpdateConversationDetailsFunc = func(context.Context, string, *string) (bool, error) { return true, nil }
+	facts.UpdateConversationDetailsFunc = func(_ context.Context, id string, _ *string) (bool, error) {
+		return id == "slack-thread:C123:333.444", nil
+	}
 
 	for _, ev := range []slackevents.AgentSessionTitleChangedEvent{
 		{Channel: "C123", ThreadTimestamp: "111.222", User: "U123", Title: " Login checks "},
 		{Channel: "C123", ThreadTimestamp: "111.222", User: "U999", Title: "Someone else"},
 		{Channel: "C123", ThreadTimestamp: "111.222", User: "U123", Title: " "},
+		{Channel: "C123", ThreadTimestamp: "333.444", User: "U123", Title: "Older thread"},
 	} {
 		connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(&ev))
 	}
 
 	calls := facts.UpdateConversationDetailsCalls()
-	require.Len(t, calls, 1)
-	assert.Equal(t, "slack-thread:C123:111.222", calls[0].ConversationID)
-	assert.Equal(t, "Login checks", *calls[0].Name)
+	named := make([]string, 0, len(calls))
+
+	for _, call := range calls {
+		named = append(named, call.ConversationID+" "+*call.Name)
+	}
+
+	assert.Equal(t, []string{
+		"slack-thread:C123:111.222:social Login checks",
+		"slack-thread:C123:111.222 Login checks",
+		"slack-thread:C123:333.444:social Older thread",
+		"slack-thread:C123:333.444 Older thread",
+	}, named, "a Thread Session is named by its agent-specific ID, falling back to an older Managed Slack Thread")
 }
 
 func TestAgentSessionStoppedEvent(t *testing.T) {
@@ -1816,6 +1956,7 @@ func TestAgentSessionStoppedEvent(t *testing.T) {
 		{name: "allowlisted press", user: "U123", before: []*protocol.OutboundMessage{newMentionThreadTurn("turn-1", "")}, interrupts: 1, want: "active"},
 		{name: "press by someone not allowlisted", user: "U999", before: []*protocol.OutboundMessage{newMentionThreadTurn("turn-1", "")}, want: "processing"},
 		{name: "nothing running", user: "U123", want: "active"},
+		{name: "Channel Session turn shown on its mention", user: "U123", before: []*protocol.OutboundMessage{newChannelSessionTurn("turn-1")}, interrupts: 1, want: "active"},
 		{name: "late press after a newer mention turn started", user: "U123", before: []*protocol.OutboundMessage{newMentionThreadTurn("turn-1", "")}, after: []*protocol.OutboundMessage{
 			newMentionThreadTurn("turn-1", protocol.TerminalComplete), newMentionThreadTurn("turn-2", ""),
 		}, want: "processing"},
@@ -1827,13 +1968,13 @@ func TestAgentSessionStoppedEvent(t *testing.T) {
 
 			interrupts := 0
 			router := newFooterRouter(t, false, nil)
-			router.InterruptThreadFunc = func(target protocol.TextConversationTarget) (*protocol.InboundMessage, error) {
+			router.InterruptTurnFunc = func(_ context.Context, turnID string) error {
 				interrupts++
 
-				assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.222"}, target)
+				assert.Equal(t, "turn-1", turnID)
 				assert.NoError(t, connector.SendResponse(t.Context(), newMentionThreadTurn("turn-1", protocol.TerminalStopped)))
 
-				return nil, nil
+				return nil
 			}
 			connector = newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
 
@@ -2499,7 +2640,7 @@ func TestHandleAppMentionEventIgnoresReportThread(t *testing.T) {
 	}
 
 	require.Len(t, router.MentionThreadCalls(), 2)
-	assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "171234.5678"}, router.MentionThreadCalls()[0].Target)
+	assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C123", MessageID: "171235.0001", ThreadID: "171234.5678", Agent: "social"}, router.MentionThreadCalls()[0].Target)
 	assert.Empty(t, posted)
 	assert.Empty(t, reactions)
 }
@@ -2548,7 +2689,7 @@ func TestHandleAppMentionEventQueuesMentionInKnownThread(t *testing.T) {
 	calls := router.SubmitMentionCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, "social", calls[0].Agent)
-	assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "171234.5678"}, calls[0].Target)
+	assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C123", MessageID: "171235.0001", ThreadID: "171234.5678", Agent: "social"}, calls[0].Target)
 
 	inbound := calls[0].Inbound
 	assert.Equal(t, protocol.InboundKindPrompt, inbound.Kind)
@@ -2806,19 +2947,24 @@ func newTestChannelFacts() *channelFactsStoreMock {
 		ChannelFactFunc:       func(context.Context, string, string) (string, bool, error) { return "", false, nil },
 		RecordChannelFactFunc: func(context.Context, string, string, string, time.Time) error { return nil },
 		SlackChannelIDsFunc:   func(context.Context) ([]string, error) { return nil, nil },
-		SlackThreadFunc: func(_ context.Context, id string) (string, string, error) {
+		SlackThreadFunc: func(_ context.Context, id string) (string, string, bool, error) {
+			if rest, ok := strings.CutPrefix(id, "slack-channel:"); ok {
+				channel, _, _ := strings.Cut(rest, ":")
+				return channel, "", !strings.Contains(id, "/"), nil
+			}
+
 			rest, ok := strings.CutPrefix(id, "slack-thread:")
 			if !ok {
-				return "", "", nil
+				return "", "", false, nil
 			}
 
 			channel, thread, _ := strings.Cut(rest, ":")
 
-			return channel, thread, nil
+			return channel, strings.Split(thread, ":")[0], false, nil
 		},
 		LoadTurnStepFunc: func(context.Context, string, string) (json.RawMessage, bool, error) { return nil, false, nil },
 		SaveTurnStepFunc: func(context.Context, string, string, json.RawMessage) error { return nil },
-		TurnProgressFunc: func(context.Context, string, string) (protocol.TurnProgress, error) {
+		TurnProgressFunc: func(context.Context, string) (protocol.TurnProgress, error) {
 			return protocol.TurnProgress{Running: true}, nil
 		},
 	}

@@ -38,4 +38,5 @@ type Backend interface {
 	PendingQuestions(context.Context, string) ([]protocol.AskUserQuestionRequest, error)
 	AnswerQuestion(context.Context, string, string, protocol.AskUserQuestionAnswer) error
 	SandboxError() string
+	SlackWarning() string
 }

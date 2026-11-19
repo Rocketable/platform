@@ -50,7 +50,7 @@ SQL
 
 Deleting the row (`DELETE FROM behavior_settings`) makes the next start import from the file again, but it discards every edit made on the Web, so use it only as a last resort.
 
-A workspace may contain `AGENTS.md` and `agents/`, `skills/`, `scripts/`, and `cron/` folders. RocketClaw ships three agents: `main`, a `sudo: yes`, `sticky: global` agent with one shared session; `assistant`, a `sudo: yes`, `sticky: off` agent for Slack channels and External MCP, which accept only `sticky: off` agents (see [Sticky agents](#sticky-agents)); and `voice`.
+A workspace may contain `AGENTS.md` and `agents/`, `skills/`, `scripts/`, and `cron/` folders. RocketClaw ships three agents: `main`, a `sudo: yes`, `sticky: global` agent with one shared session; `assistant`, a `sudo: yes`, `sticky: off` agent for External MCP, which accepts only `sticky: off` agents; `slack`, the same assistant as a `sticky: slack` agent for Slack channels (see [Sticky agents](#sticky-agents)); and `voice`.
 
 ### Web page
 
@@ -184,6 +184,14 @@ Release note for Slack agent sessions:
 - While a Web question waits, the thread shows that it needs someone.
 - A turn that runs scripts or subagents posts one checklist of them, edited as they finish.
 - Subscribe the app to `agent_session_title_changed`: session titles now follow Web chat names both ways.
+
+Release note for Slack sessions:
+
+- Only `sticky: slack` agents answer in Slack. Point each Slack channel at one, such as the shipped `slack` agent. A channel whose agent is not `sticky: slack` logs a warning, shows a warning strip in Web, and ignores mentions; startup and reload no longer fail for it.
+- A channel keeps one Channel Session with its agent. A mention at the top of the channel is answered at the top of the channel, and a busy Channel Session makes the next mention wait.
+- The agent can call `slack_respond_in_thread(true)` to move the rest of its turn into the mention's thread, which gets its own Thread Session. The Channel Session records the thread's session ID.
+- A mention in a thread, including a thread under the agent's own answer, goes to that thread's Thread Session. It waits while the thread's root mention is still being handled in the channel.
+- Existing Slack threads keep their history and continue when their agent is the channel's agent.
 
 Release note for mention-only Slack:
 
@@ -332,10 +340,11 @@ Saving writes one variant to the workspace's `agents/` folder, or to a Git overl
 - `off`, or left out: every new session starts fresh.
 - `user`: one session per person, by Tailscale login. A new Web session with the agent opens the person's existing one instead.
 - `global`: one session for everyone, for multiplayer work. A new Web session with the agent opens the existing one, whoever started it.
+- `slack`: the agent answers only in Slack. Each Slack channel it serves has one Channel Session, answered at the top of the channel, and each thread has one Thread Session. A turn started by a mention at the top of the channel can call `slack_respond_in_thread`; the first `true` moves the rest of the turn into the mention's thread for good. The agent is not offered for new Web sessions, cron, routines, External MCP or Voice, but its sessions open in Web. Whether the agent is `sticky: slack` is checked when each turn starts; a turn whose agent no longer is logs a warning and does not run.
 
 Any other value stops the agent from loading. Each chat records when it is created whether it is a sticky chat, and that never changes. The existing session is the chat created as that agent's sticky chat: the person's own, by login, for `user`, or the one shared chat for `global`. A chat created any other way, including one created before the agent became sticky, never becomes it. A new one starts only when there is none, and the database allows only one, so simultaneous requests or cron runs open the same session. An existing sticky chat stays in its current space even if the agent's configured space changes. The Web page warns with an alert when it opens the existing session, both when you pick the agent on New session and when your first message goes there. `/agent` switches a session only to an agent of the kind the session was born as: an ordinary session to `sticky: off` agents, a `user` session to `user` agents the person has no sticky session with yet, and a `global` session to `global` agents without a shared session yet. This holds even after the session's own agent changes its setting. A sticky agent's session cannot be forked. A sticky agent is a top-level agent: it can delegate, including to itself when its permissions allow, but no other agent runs it with the `task` tool or names it as a permission reviewer. Other agents reach it by writing to its session with the session tools. New Web sessions resume (New session, its voice button, Handoff's new session, and the Voice page). Session-tool creation also reuses the sticky chat, without renaming it; a personal sticky request without an identifiable person is refused, never assigned by display name.
 
-Slack threads and External MCP conversations allow only `sticky: off` agents, including agents that omit the setting. Each keeps its separate history. A sticky agent listed in Slack's channel configuration fails startup or reload validation; External MCP does not offer or accept sticky agents. Neither source joins a sticky chat.
+Slack answers only with `slack` agents (below). External MCP conversations allow only `sticky: off` agents, including agents that omit the setting; External MCP does not offer or accept sticky agents. Each keeps its separate history, and neither joins a Web sticky chat.
 
 Cron files and routines follow their agent. Each run of a `global` agent, from a cron file, an easy agent's `routines`, or the Cron page's Run now, reports into the agent's session instead of a chat of its own, opening that session when there is none. A global agent's cron must use the agent's space; an explicit different space fails loading. A run has no person to own a `user` session, so a `user` agent cannot be scheduled: a cron file naming it, or `routines` on it, fail loading, and Run now refuses it. The Voice page offers only `sticky: user` agents (see [Voice](#voice)).
 

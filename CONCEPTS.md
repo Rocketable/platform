@@ -6,13 +6,21 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 
 ### Managed Slack Thread
 
-A Slack thread that RocketClaw persists as a conversation owned by a selected agent. In Slack, only mentions start its turns; replies without a mention start nothing.
+A Slack thread that RocketClaw persists as a conversation owned by a selected agent. In Slack, only mentions start its turns; replies without a mention start nothing. Since `sticky: slack`, a Managed Slack Thread is a Thread Session; one created earlier keeps its history and continues when its agent is the channel's agent.
 
 A Managed Slack Thread has one active turn at a time. A mention received during that turn waits in the Thread Queue and runs as the next turn; it never steers. Web can also work in the conversation: Web input it consumes and every reply are posted into the thread. A second Slack delivery of an accepted mention is not a new send. While any of its turns runs, whichever surface started it, Slack shows the thread as working, or as needing someone while the turn waits for an answer in Web, and an allowlisted user's Stop in Slack ends that turn; besides the turn's checklist and any Web input it consumes, nothing is posted until its answer arrives as a new reply.
 
+### Channel Session
+
+The one conversation a `sticky: slack` agent keeps for a Slack channel. Root Slack Mentions queue into it and are answered at the top of the channel. A turn in it may call `slack_respond_in_thread`, and the first `true` moves the rest of that turn into the Thread Session of the mention's thread; the Channel Session gets a note with that session's ID and takes its next request as soon as that tool call returns.
+
+### Thread Session
+
+The conversation a `sticky: slack` agent keeps for one Slack thread. Mentions in the thread queue into it and are answered in the thread, including threads under the agent's own top-level answers. It starts no turn while the thread's root mention still waits or runs in a Channel Session, whatever sent the work, Web input included; when that root turn ends or moves, the Thread Session is woken to run what waited.
+
 ### Root Slack Mention
 
-An authorized Slack app mention at a channel's top level. It starts a new Managed Slack Thread whose first turn is the mention. A bare Root Slack Mention with no text, file, or forward is ignored.
+An authorized Slack app mention at a channel's top level. It queues into the channel's Channel Session and is answered at the top of the channel, unless its turn moves into the mention's thread. A bare Root Slack Mention with no text, file, or forward is ignored.
 
 ### Adhoc Callout
 
@@ -26,7 +34,7 @@ A configured Slack channel entry named `@` that supplies agents and an allowlist
 
 ### Report Thread
 
-A Slack thread an earlier version posted a cron report or an External MCP session into: its conversation, now a Web chat created by cron or bound to the session, or an unrecorded thread whose root RocketClaw's own bot posted. The last case covers threads whose record expired.
+A Slack thread an earlier version posted a cron report or an External MCP session into: its conversation, now a Web chat created by cron or bound to the session, or an unrecorded thread whose root RocketClaw's own bot posted without the mark Channel Session answers carry. The last case covers threads whose record expired; a thread under a Channel Session answer is a Thread Session, not a Report Thread.
 
 A Report Thread is read-only. RocketClaw ignores every reply and mention in it, showing no working state and posting no reply, and posts nothing more into it. Read-only means RocketClaw ignores input, not that Slack locks the thread. Work on it continues in Web.
 
@@ -34,9 +42,9 @@ A Report Thread is read-only. RocketClaw ignores every reply and mention in it, 
 
 The durable, per-conversation list of work waiting to run as later turns: accepted Slack mentions, work queued or stashed from Web, messages another session's agent sends, External MCP prompts that arrive while the conversation's turn is active, and prompts a parent sends into its Subagent Session.
 
-Each item is a waiting turn of its conversation, queued, stashed, or held, keyed by its input ID; starting it makes it the running turn. Saved items that never started run after a restart without another incoming message. An agent-written item carries its sender, the sending session and agent, shown where a person's Principal would be; it is never a person's input, even after a person promotes it, until a person edits it. Editing any item makes it the editor's Web input, with the editor as its Principal, and keeps its place, attachments, delivery, and routing. Only a person stashes items. An agent may also stop the running turn: its stop goes ahead of every earlier item, and a stop without a prompt adds no item, only a line in the transcript naming the sender once the stopped turn has saved. A session write from another session's agent is refused before it adds or stops anything when the receiving agent's recipient setting does not accept the writing agent. When the turn that took such an item ends, or a person removes the item, the writing session gets a reply Completion Note.
+Each item is a waiting turn of its conversation, queued, stashed, or held, keyed by its input ID; starting it makes it the running turn. A held item waits only until the next message, goal, or agent write sent to its conversation releases it. Saved items that never started run after a restart without another incoming message. An agent-written item carries its sender, the sending session and agent, shown where a person's Principal would be; it is never a person's input, even after a person promotes it, until a person edits it. Editing any item makes it the editor's Web input, with the editor as its Principal, and keeps its place, attachments, delivery, and routing. Only a person stashes items. An agent may also stop the running turn: its stop goes ahead of every earlier item, and a stop without a prompt adds no item, only a line in the transcript naming the sender once the stopped turn has saved. A session write from another session's agent is refused before it adds or stops anything when the receiving agent's recipient setting does not accept the writing agent. A Channel Session writing into a Thread Session of its own channel and agent is always accepted. When the turn that took such an item ends, or a person removes the item, the writing session gets a reply Completion Note.
 
-A Slack mention is accepted at most once per conversation, keyed by its Slack message. Web shows the items together with the conversation's scheduled messages and can promote or remove them, and also pop or reorder agent-written items; Slack is not told. After a turn ends, a still-continuing goal wins the next slot; otherwise the next item is the first ready one, where a queued item is ready in its place and a scheduled message at its due time. A not-yet-due scheduled item blocks later items until it runs or is cancelled.
+A Slack mention is accepted at most once across its channel's conversations, keyed by its Slack message. Web shows the items together with the conversation's scheduled messages and can promote or remove them, and also pop or reorder agent-written items; Slack is not told. After a turn ends, a still-continuing goal wins the next slot; otherwise the next item is the first ready one, where a queued item is ready in its place and a scheduled message at its due time. A not-yet-due scheduled item blocks later items until it runs or is cancelled.
 
 ## Prompt Provenance
 
@@ -183,7 +191,7 @@ An agent whose file sets `mode: easy`. A section its file leaves out turns on ev
 
 ### Sticky Session
 
-The one Web session a sticky agent keeps: per person for `sticky: user`, matched by login rather than display name, and one for everyone for `sticky: global`. Each chat records at creation whether it is born sticky, and that never changes; a chat born `off` never becomes a Sticky Session. A new Web session or session-tool creation resumes the agent's Sticky Session and starts one only when there is none. A personal sticky request without an identifiable person is refused. A `global` agent's cron and Routine runs report into its Sticky Session, opening it when there is none; a `user` agent cannot be scheduled. The chat stays in its original space, cannot be forked, and keeps its row while messages older than 90 days expire. A session switches only to agents of the kind it was born as, skipping agents that already have that kind of session for its person, or for everyone with `global`. A sticky agent is top-level: it may delegate, including to itself, but no other agent delegates to it or names it as a permission reviewer. Slack threads and External MCP conversations use only sticky: off agents and keep separate histories. The Voice page calls only sticky: user agents, each on the person's own Sticky Session.
+The one Web session a sticky agent keeps: per person for `sticky: user`, matched by login rather than display name, and one for everyone for `sticky: global`. Each chat records at creation whether it is born sticky, and that never changes; a chat born `off` never becomes a Sticky Session. A new Web session or session-tool creation resumes the agent's Sticky Session and starts one only when there is none. A personal sticky request without an identifiable person is refused. A `global` agent's cron and Routine runs report into its Sticky Session, opening it when there is none; a `user` agent cannot be scheduled. The chat stays in its original space, cannot be forked, and keeps its row while messages older than 90 days expire. A session switches only to agents of the kind it was born as, skipping agents that already have that kind of session for its person, or for everyone with `global`. A sticky agent is top-level: it may delegate, including to itself, but no other agent delegates to it or names it as a permission reviewer. Slack conversations use only `sticky: slack` agents, checked when each turn fires; External MCP conversations use only sticky: off agents; both keep separate histories. The Voice page calls only sticky: user agents, each on the person's own Sticky Session.
 
 ### Routine
 
