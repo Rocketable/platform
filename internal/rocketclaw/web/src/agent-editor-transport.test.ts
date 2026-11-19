@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { isDeepStrictEqual } from "node:util";
-import type { AgentDraft, AgentDraftView, DraftPromptResponse } from "./types";
+import type { AgentDraft, AgentDraftView, DraftPromptResponse, HistoryView } from "./types";
 
 type Body = { op: { kind: string }; id?: string; limit?: number };
 type RoutedRequest = {
@@ -545,7 +545,12 @@ test("the test chat answers in every column, labels versions, restarts, and pose
       await send("brief again");
       await message.fill("still typing");
       await release();
-      await cell(2, "echo").getByText("gpt-a2 answer 2", { exact: false }).waitFor();
+      await cell(2, "echo").getByText("gpt-a2 answer 2", { exact: false }).waitFor().catch(async (cause: unknown) => {
+        const history = await call<HistoryView>("History", { id: briefChat }).then(({ messages, running, terminal }) => ({
+          running, terminal, messages: messages.map(({ role, text, turnId, complete }) => ({ role, text, turnId, complete })),
+        })).catch(String);
+        throw new Error(`Held DraftPrompt did not render Message 2; server history for ${briefChat}: ${JSON.stringify(history)}`, { cause });
+      });
       expect(await message.inputValue()).toBe("still typing");
       return briefChat;
     });
