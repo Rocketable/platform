@@ -2656,9 +2656,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await attachmentPage.waitForURL(`${origin}/`);
     expect(await attachmentPage.getByRole("button", { name: "Remove reset.bin", exact: true }).count()).toBe(0);
     await attachmentPage.locator('input[type="file"]').setInputFiles({ name: "home.bin", mimeType: "application/octet-stream", buffer: Buffer.from("home") });
+    ctrl.promptStarted = Promise.withResolvers();
     await attachmentPage.getByRole("button", { name: "Send", exact: true }).click();
     await attachmentPage.waitForURL("**/s/d2ViLXNlc3Npb246bmV3");
     await attachmentPage.getByRole("button", { name: "Remove home.bin", exact: true }).waitFor({ state: "hidden" });
+    await ctrl.promptStarted.promise;
     expect(ctrl.createdAgents.at(-1)).toBe("main");
     expect(ctrl.attachmentPrompts.at(-1)).toMatchObject({ id: "web-session:new", text: "", delivery: "STEER" });
     await attachmentPage.close();
