@@ -33,10 +33,8 @@ lint:
 	files=$$(find src app \( -name '*.tsx' -o -name '*.jsx' \) | sort); \
 	bunx react-doctor@latest --no-telemetry --blocking warning --no-color $$files
 
-build:
-	bun run build
-
-test: build
+test:
+	go -C .. generate ./internal/web
 	@set -eu; \
 	cleanup() { pkill -P 1 -f 'ms-playwright/[c]hromium' || true; }; \
 	cleanup; \
@@ -45,4 +43,4 @@ test: build
 	go -C .. test ./frontend/rpc -run 'Test(PublicProgressRealBrowser|RevertRealBackendBrowser|ShadowsRealBackendBrowser|SessionEntries|SidebarHTTPStreamsBeforeGoTailAndCancels|PagesRealBrowser|ReloadRealBackendBrowser|RemoteRocketClawRealBrowser|AgentEditorRealBackendBrowser)$$' -count=1
 	$(MAKE) check-cloc-budget
 
-.PHONY: cloc check-cloc-budget lint build test
+.PHONY: cloc check-cloc-budget lint test

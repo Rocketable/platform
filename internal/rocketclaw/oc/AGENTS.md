@@ -13,8 +13,10 @@ upstream's tagged v2 releases. The root `AGENTS.md` also applies here.
   `manifest.json`, `Makefile`, `go.mod`, `.gitignore`, `package.json`, `bun.lock`, `tsconfig.json`, and
   `vite.config.ts`. Upstream's per-package `tsconfig.json` and `bunfig.toml` files are not copied. The root
   `tsconfig.json` and the `Makefile` test flags replace them.
-- The built UI goes to `../internal/web/oc-dist/` and is committed. Rebuild it with `make build` after every
-  change here, and commit it with the change.
+- The built UI goes to `../internal/web/oc-dist/` and is committed. Rebuild it with
+  `go generate ./internal/rocketclaw/internal/web` from the repository root after every change here, and
+  commit it with the change. It runs Vite under Bun, so the output does not vary with the installed Node
+  version, with `OPENCODE_CHANNEL=prod`, which `packages/app/vite.js` reads.
 
 ## Editing copied upstream code
 
@@ -60,7 +62,8 @@ checkout.
    when it is a unit test of a copied module; skip paths in `deleted`.
 4. Update `package.json` versions and `patches/` from the new tag's `bun.lock` and patches, run
    `bun install`, and update `tsconfig.json` `paths` when `exports` changed.
-5. Set `tag` and `commit` in the manifest, then run `make lint test build` and commit the rebuilt
+5. Set `tag` and `commit` in the manifest, run `make lint test`, rebuild with
+   `go generate ./internal/rocketclaw/internal/web` from the repository root, and commit the rebuilt
    `oc-dist`.
 
 ## Rules

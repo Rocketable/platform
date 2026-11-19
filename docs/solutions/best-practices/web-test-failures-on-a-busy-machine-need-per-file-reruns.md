@@ -37,7 +37,7 @@ tags:
 
 ## Context
 
-`make test` in `internal/rocketclaw/web` builds the bundle, then runs every test file except the `*-transport.test.ts` ones, **four files at a time**, largest file first: `-exec ls -S {} + | xargs -n 1 -P 4 bun test` (`internal/rocketclaw/web/Makefile:39`–`46`). Each `bun test <file>` prints its own `src/<file>.test.ts:` header, its results and its summary. All four write to the same output, so their lines interleave.
+`make test` in `internal/rocketclaw/web` builds the bundle, then runs every test file except the `*-transport.test.ts` ones, **four files at a time**, largest file first: `-exec ls -S {} + | xargs -n 1 -P 4 bun test` (`internal/rocketclaw/web/Makefile:36`–`44`). Each `bun test <file>` prints its own `src/<file>.test.ts:` header, its results and its summary. All four write to the same output, so their lines interleave.
 
 PR #1115 (the Web typing indicator) ran `make lint` and `make test` in `internal/rocketclaw/web` on a machine shared with other agents' test runs. Load averages were 11 to 17 (`uptime` at 17:24: `13.47 16.82 18.63`; at 19:52: `12.23 11.29 11.48`).
 
@@ -64,7 +64,7 @@ Under load the same test ran 3 to 8 times slower. The one failure in an isolated
 
 **3. Editing files during a background run invalidated that run.** Verification started at 19:03. At 19:05, while it was still running, `typing.tsx` and `ui.tsx` were edited, and `bun run build` and `make lint` ran in `internal/rocketclaw/web`. Each step of that run reads the tree when it gets there. Its Go tests, its build and its Web tests could each have seen a different version, and nothing in its result would say which one.
 
-**4. Stopping the wrapper script did not stop the run, and the half-stopped run broke OpenCode tests.** `pkill -f verify-rebased.sh` (a scratch wrapper around `make test`) ended the script with exit 143. Its repository-root `make test` kept running until it was killed with `kill`. In `internal/rocketclaw/Makefile`, `test` depends on `generate`, which runs `oc-assets`. That is a Vite build whose output directory is the committed `internal/rocketclaw/internal/web/oc-dist`, with `emptyOutDir: true` (`internal/rocketclaw/oc/vite.config.ts:49`–`50`). The build was stopped partway, which left `oc-dist` partly rewritten: `jj status` counted 1,085 `oc-dist` entries, and `ls oc-dist/_assets` listed 573 entries, where the commit has 1,657 files. The OpenCode browser tests serve that directory (`src/opencode.browser.test.ts:9`). The next one failed after 1 s with `ENOENT … oc-dist/_assets/preload-helper-u7OfE_hN.js`, then with the same `Target page, context or browser has been closed` message the time-outs print. The first check had missed this damage: `jj status | grep -v dist/` hides `oc-dist/` too.
+**4. Stopping the wrapper script did not stop the run, and the half-stopped run broke OpenCode tests.** `pkill -f verify-rebased.sh` (a scratch wrapper around `make test`) ended the script with exit 143. Its repository-root `make test` kept running until it was killed with `kill`. In `internal/rocketclaw/Makefile`, `test` starts with `go generate`, which builds OpenCode's UI. That is a Vite build whose output directory is the committed `internal/rocketclaw/internal/web/oc-dist`, with `emptyOutDir: true` (`internal/rocketclaw/oc/vite.config.ts:49`–`50`). The build was stopped partway, which left `oc-dist` partly rewritten: `jj status` counted 1,085 `oc-dist` entries, and `ls oc-dist/_assets` listed 573 entries, where the commit has 1,657 files. The OpenCode browser tests serve that directory (`src/opencode.browser.test.ts:9`). The next one failed after 1 s with `ENOENT … oc-dist/_assets/preload-helper-u7OfE_hN.js`, then with the same `Target page, context or browser has been closed` message the time-outs print. The first check had missed this damage: `jj status | grep -v dist/` hides `oc-dist/` too.
 
 The branch changed no OpenCode code, so `jj restore --from @- internal/rocketclaw/internal/web/oc-dist` was correct. It printed `Added 1084 files, modified 1 files`, and the 93 focused tests passed.
 
@@ -107,7 +107,7 @@ jj status | grep -c 'internal/web/oc-dist/'
 jj status | grep 'internal/web/dist/'
 ```
 
-Other workspaces' runs share the machine, so stop only your own. If `oc-dist` changed and your change does not touch `internal/rocketclaw/oc`, put back the committed copy from the commit your work sits on: `jj restore --from @- internal/rocketclaw/internal/web/oc-dist`. If your change does touch `internal/rocketclaw/oc`, rebuild it with `make -C internal/rocketclaw oc-assets` and let the build finish. Filter `jj status` with `grep -v 'internal/web/dist/'`, not `grep -v dist/`.
+Other workspaces' runs share the machine, so stop only your own. If `oc-dist` changed and your change does not touch `internal/rocketclaw/oc`, put back the committed copy from the commit your work sits on: `jj restore --from @- internal/rocketclaw/internal/web/oc-dist`. If your change does touch `internal/rocketclaw/oc`, rebuild it with `go generate ./internal/rocketclaw/internal/web` and let the build finish. Filter `jj status` with `grep -v 'internal/web/dist/'`, not `grep -v dist/`.
 
 Not done here, because it changes the Makefile: labelling each line with its file would remove the wrong-header problem at its source. One option is `xargs -0 -n 1 -P 4 bash -o pipefail -c 'bun test "$1" 2>&1 | sed "s|^|$1: |"' _`. It needs `pipefail`, or `sed`'s exit status would replace `bun test`'s and failures would pass. This has not been tried. Whoever owns the Web Makefile can decide.
 
@@ -119,7 +119,7 @@ Each of these failures is cheap to misread. A wrong file mapping produces a clea
 
 - Before reporting a Web change as verified after a `make test` run that failed only on unrelated tests.
 - Whenever a (fail) line from the Web suite has to be traced to a file.
-- Before stopping a background `make test`, `make generate` or a wrapper script around them, and after any run that was stopped.
+- Before stopping a background `make test`, `go generate` or a wrapper script around them, and after any run that was stopped.
 - When OpenCode browser tests fail with ENOENT on an `oc-dist` asset.
 
 ## Examples

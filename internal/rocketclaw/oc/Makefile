@@ -11,11 +11,6 @@ cloc:
 lint:
 	bunx tsc --noEmit
 
-# OPENCODE_CHANNEL is read by packages/app/vite.js; Bun runs Vite so the output does not vary with the
-# installed Node version.
-build:
-	OPENCODE_CHANNEL=prod bun --bun vite build
-
 # Each package's flags and preloads follow its upstream package.json test scripts and bunfig.toml.
 test:
 	cd packages/app && bun test --conditions=solid --only-failures --isolate --preload ../ui/test/solid-jsx.ts --preload ./happydom.ts ./src
@@ -28,4 +23,4 @@ test:
 	cd packages/util && bun test --only-failures
 	bun test --conditions=browser --isolate --preload ./host/test/solid-dom.ts --preload ./packages/app/happydom.ts host
 
-.PHONY: cloc lint build test
+.PHONY: cloc lint test
