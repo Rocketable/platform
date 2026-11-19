@@ -659,7 +659,7 @@ func applyAgentDraftVariantOp(draft *AgentDraft, op *AgentDraftOp) error {
 				return &AgentDraftOpError{Problem: "The change is outside the instructions."}
 			}
 
-			text = slices.Concat(text[:splice.At], []rune(splice.Insert), text[splice.At+splice.Remove:])
+			text = slices.Replace(text, splice.At, splice.At+splice.Remove, []rune(splice.Insert)...)
 		}
 
 		draft.Variants[i].Body = string(text)
