@@ -832,10 +832,10 @@ func (c *Connector) sendGoalTurnResponse(ctx context.Context, msg *protocol.Outb
 
 	if msg.GoalComplete {
 		if posted.ThreadID != "" {
-			c.addReaction(ctx, &protocol.SlackReplyTarget{ChannelID: posted.ChannelID, MessageTS: posted.ThreadID, ThreadTS: posted.ThreadID}, slackGoalCompleteReaction, "add Slack goal complete root reaction")
+			c.addGoalCompleteReaction(ctx, posted.ChannelID, posted.ThreadID, "add Slack goal complete root reaction")
 		}
 
-		c.addReaction(ctx, &protocol.SlackReplyTarget{ChannelID: posted.ChannelID, MessageTS: posted.MessageID, ThreadTS: posted.ThreadID}, slackGoalCompleteReaction, "add Slack goal complete last reaction")
+		c.addGoalCompleteReaction(ctx, posted.ChannelID, posted.MessageID, "add Slack goal complete last reaction")
 	}
 
 	return nil
@@ -1067,13 +1067,13 @@ func (c *Connector) handleAgentSessionStopped(ctx context.Context, ev *slackeven
 	c.sendStatus(ctx, session, session.status)
 }
 
-func (c *Connector) addReaction(ctx context.Context, replyTarget *protocol.SlackReplyTarget, reaction, logMessage string) {
-	if replyTarget == nil || strings.TrimSpace(replyTarget.ChannelID) == "" || strings.TrimSpace(replyTarget.MessageTS) == "" {
+func (c *Connector) addGoalCompleteReaction(ctx context.Context, channelID, messageTS, logMessage string) {
+	if strings.TrimSpace(channelID) == "" || strings.TrimSpace(messageTS) == "" {
 		return
 	}
 
-	if err := c.api.AddReactionContext(ctx, reaction, slack.NewRefToMessage(replyTarget.ChannelID, replyTarget.MessageTS)); err != nil {
-		c.log.Warn(logMessage, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS, "error", err)
+	if err := c.api.AddReactionContext(ctx, slackGoalCompleteReaction, slack.NewRefToMessage(channelID, messageTS)); err != nil {
+		c.log.Warn(logMessage, "channel", channelID, "message_ts", messageTS, "error", err)
 	}
 }
 
