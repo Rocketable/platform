@@ -448,7 +448,7 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 	m.wg.Wait()
 }
 
-func TestLoadDefinitionRejectsInvalidFrontmatter(t *testing.T) {
+func TestParseCronDefinitionRejectsInvalidFrontmatter(t *testing.T) {
 	tests := []struct {
 		name string
 		data string
@@ -469,43 +469,43 @@ func TestLoadDefinitionRejectsInvalidFrontmatter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := loadDefinition([]byte(tt.data), "cron/test.md")
+			_, _, err := config.ParseCronDefinition([]byte(tt.data), "cron/test.md")
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("loadDefinition error = %v; want containing %q", err, tt.want)
+				t.Fatalf("ParseCronDefinition error = %v; want containing %q", err, tt.want)
 			}
 		})
 	}
 }
 
-func TestLoadDefinitionLeavesNonStringAgentForValidation(t *testing.T) {
-	def, err := loadDefinition([]byte("---\nschedule: 1h\nagent: 7\n---\nBody"), "cron/test.md")
+func TestParseCronDefinitionLeavesNonStringAgentForValidation(t *testing.T) {
+	job, _, err := config.ParseCronDefinition([]byte("---\nschedule: 1h\nagent: 7\n---\nBody"), "cron/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if def.job.Agent != "7" {
-		t.Fatalf("definition agent = %q; want 7", def.job.Agent)
+	if job.Agent != "7" {
+		t.Fatalf("definition agent = %q; want 7", job.Agent)
 	}
 }
 
-func TestLoadDefinitionDefaultsBlankAgent(t *testing.T) {
-	defEmpty, err := loadDefinition([]byte("---\nschedule: []\n---\nBody"), "cron/test.md")
+func TestParseCronDefinitionDefaultsBlankAgent(t *testing.T) {
+	_, schedules, err := config.ParseCronDefinition([]byte("---\nschedule: []\n---\nBody"), "cron/test.md")
 	require.NoError(t, err)
-	require.NotNil(t, defEmpty.schedules)
-	require.Empty(t, defEmpty.schedules)
+	require.NotNil(t, schedules)
+	require.Empty(t, schedules)
 
-	def, err := loadDefinition([]byte("---\nschedule: 1h\nagent: '  \t  '\n---\nBody"), "cron/test.md")
+	job, _, err := config.ParseCronDefinition([]byte("---\nschedule: 1h\nagent: '  \t  '\n---\nBody"), "cron/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if def.job.Agent != "main" {
-		t.Fatalf("definition agent = %q; want main", def.job.Agent)
+	if job.Agent != "main" {
+		t.Fatalf("definition agent = %q; want main", job.Agent)
 	}
 
-	defNull, err := loadDefinition([]byte("---\nschedule: 1h\nagent: null\n---\nBody"), "cron/test.md")
+	job, _, err = config.ParseCronDefinition([]byte("---\nschedule: 1h\nagent: null\n---\nBody"), "cron/test.md")
 	require.NoError(t, err)
-	require.Equal(t, "main", defNull.job.Agent)
+	require.Equal(t, "main", job.Agent)
 }
 
 func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
