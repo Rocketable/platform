@@ -602,12 +602,33 @@ func TestSearchSessionsMessageHits(t *testing.T) {
 			hits = append(hits, hit.Text)
 		}
 
+		if tc.hits == nil {
+			require.Nil(t, search.Hits, tc.query)
+		}
+
 		require.True(t, slices.Equal(tc.hits, hits), "%s: hits %q", tc.query, hits)
 		require.Equal(t, tc.mentions, search.MentionIDs, tc.query)
 		require.True(t, slices.Equal(tc.want, matches), "%s: %q", tc.query, matches)
 	}
 
 	require.Equal(t, "ada", slack.SlackTagsMatchingCalls()[len(slack.SlackTagsMatchingCalls())-1].S)
+}
+
+func TestPassingHitsReuseFoundHits(t *testing.T) {
+	found := make([]MessageSearchHit, 1024)
+	for i := range found {
+		found[i] = MessageSearchHit{ConversationID: "garden", Text: strconv.Itoa(i)}
+	}
+
+	want := slices.Clone(found)
+	hits := map[string]bool{"garden": false}
+
+	var kept []MessageSearchHit
+
+	require.Zero(t, testing.AllocsPerRun(100, func() { kept = passingHits(found, hits) }))
+	require.Same(t, &found[0], &kept[0])
+	require.Equal(t, want, kept)
+	require.Equal(t, map[string]bool{"garden": true}, hits)
 }
 
 func TestSearchSessionsSortOrder(t *testing.T) {
