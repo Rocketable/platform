@@ -19,6 +19,8 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -851,7 +853,22 @@ func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
 	fake.sessions = fake.sessions[:openCodeSyncLimit]
 	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET synced_at = now() - interval '1 minute' WHERE kind = 'remote'`)
 	require.NoError(t, err)
+
+	pg, err := pgx.ParseConfig(s.definitions.Clone().DatabaseURL)
+	require.NoError(t, err)
+
+	trace := &openCodeSyncRowTrace{rows: -1}
+	pg.Tracer = trace
+	db := stdlib.OpenDB(*pg)
+	original := s.db
+	s.db = db
+
+	t.Cleanup(func() {
+		s.db = original
+		require.NoError(t, db.Close())
+	})
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	assert.Equal(t, int64(len(fake.sessions)), trace.rows)
 
 	rows := remoteSidebar(t, s)
 	i := slices.IndexFunc(rows, func(row SidebarSession) bool { return row.Conversation.ID == oldest })
@@ -867,6 +884,52 @@ func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
 	assert.False(t, slices.ContainsFunc(rows, func(row SidebarSession) bool {
 		return row.Conversation.ID == oldest || row.Conversation.ID == "opencode:box:ses_never_listed"
 	}))
+}
+
+type openCodeSyncRowTrace struct{ rows int64 }
+
+type openCodeSyncQueryKey struct{}
+
+func (trace *openCodeSyncRowTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.HasPrefix(data.SQL, "SELECT conversation_id, running, asking, last_updated") {
+		return context.WithValue(ctx, openCodeSyncQueryKey{}, true)
+	}
+
+	return ctx
+}
+
+func (trace *openCodeSyncRowTrace) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	if ctx.Value(openCodeSyncQueryKey{}) == true {
+		trace.rows = data.CommandTag.RowsAffected()
+	}
+}
+
+func BenchmarkSyncOpenCodeWindow(b *testing.B) {
+	service, err := NewSessionService(b.TempDir())
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, service.Stop()) })
+	ctx := b.Context()
+
+	fake := &fakeOpenCode{}
+	for i := range openCodeSyncLimit {
+		fake.sessions = append(fake.sessions, openCodeTestSession(fmt.Sprintf("ses_recent_%03d", i), "", "/srv", int64(10_000-i)))
+	}
+
+	_, err = service.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, last_updated, synced_at)
+SELECT 'opencode:box:ses_older_' || i, '', '', 'remote', FALSE, 'remote', 'box', 'ses_older_' || i, to_timestamp(1), now()
+FROM generate_series(1, 1024) AS series(i)`)
+	require.NoError(b, err)
+
+	server := httptest.NewServer(fake)
+	b.Cleanup(server.Close)
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
+	shells := &openCodeShells{}
+	require.NoError(b, service.syncOpenCode(ctx, "box", box, shells))
+	b.ReportAllocs()
+
+	for b.Loop() {
+		require.NoError(b, service.syncOpenCode(ctx, "box", box, shells))
+	}
 }
 
 func TestPruneOpenCodeListsEveryPageFirst(t *testing.T) {

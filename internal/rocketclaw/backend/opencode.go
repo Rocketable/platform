@@ -227,15 +227,25 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		return err
 	}
 
+	roots := make(map[string]bool, len(sessions.Data))
+
+	var ids []string
+
+	ids = slices.Grow(ids, len(sessions.Data))
+	for _, session := range sessions.Data {
+		roots[session.ID] = true
+		ids = append(ids, "opencode:"+name+":"+session.ID)
+	}
+
 	type storedSession struct {
 		ran, asking bool
 		updated     time.Time
 		through     int64
 	}
 
-	stored := map[string]storedSession{}
+	stored := make(map[string]storedSession, len(ids))
 
-	if err := readRows(ctx, s.db, `SELECT conversation_id, running, asking, last_updated, COALESCE(read_through, 0) FROM conversations WHERE server = $1`, "stored opencode sessions", func(row rowScanner) error {
+	if err := readRows(ctx, s.db, `SELECT conversation_id, running, asking, last_updated, COALESCE(read_through, 0) FROM conversations WHERE server = $1 AND conversation_id = ANY($2::text[])`, "stored opencode sessions", func(row rowScanner) error {
 		var (
 			id      string
 			session storedSession
@@ -247,14 +257,11 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		stored[id] = session
 
 		return nil
-	}, name); err != nil {
+	}, name, ids); err != nil {
 		return err
 	}
 
-	roots, owners := map[string]bool{}, map[string]bool{}
-	for _, session := range sessions.Data {
-		roots[session.ID] = true
-	}
+	owners := map[string]bool{}
 
 	for id := range active.Data {
 		if !roots[id] {
@@ -279,18 +286,18 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	}
 
 	var (
-		ids, titles, directories, agents, models, remotes []string
-		updated                                           []time.Time
-		running, backgrounds, askings                     []bool
-		replies                                           []*string
-		oldest                                            time.Time
-		cursors                                           []*int64
-		markedIDs, markedUsers, ended                     []string
-		markedWaking, failures                            []bool
+		titles, directories, agents, models, remotes []string
+		updated                                      []time.Time
+		running, backgrounds, askings                []bool
+		replies                                      []*string
+		oldest                                       time.Time
+		cursors                                      []*int64
+		markedIDs, markedUsers, ended                []string
+		markedWaking, failures                       []bool
 	)
 
-	for _, session := range sessions.Data {
-		id := "opencode:" + name + ":" + session.ID
+	for i, session := range sessions.Data {
+		id := ids[i]
 		oldest = time.UnixMilli(session.Time.Updated).UTC()
 		_, busy := active.Data[session.ID]
 		last := stored[id]
@@ -355,7 +362,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 			reply = new(strings.TrimSuffix(text.String(), "\n"))
 		}
 
-		ids, titles, directories, agents, models = append(ids, id), append(titles, session.Title), append(directories, session.Location.Directory), append(agents, session.Agent), append(models, session.model())
+		titles, directories, agents, models = append(titles, session.Title), append(directories, session.Location.Directory), append(agents, session.Agent), append(models, session.model())
 		updated, running, replies = append(updated, oldest), append(running, busy), append(replies, reply)
 		backgrounds, remotes, cursors = append(backgrounds, background[session.ID]), append(remotes, session.ID), append(cursors, cursor)
 		askings = append(askings, asking[session.ID])
