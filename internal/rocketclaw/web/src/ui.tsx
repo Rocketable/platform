@@ -1698,10 +1698,11 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
   } else rendered[position].focus();
 }
 
-function menuItems(tabs: TabStoreValue, menu: CardMenu, view: SidebarView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
-  const search = isSearch(menu.path);
-  const renaming = (search ? targets.size === 1 : pathSession(menu.path) && (menu.shared || targets.size === 1)) ? [{ key: "rename", label: search ? "Rename search" : "Rename session", run: rename }] : [];
-  const session = tabs.viewed && targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === pathSession(menu.path)) : undefined;
+function menuItems(tabs: TabStoreValue, menu: CardMenu, view: ServerView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
+  const search = isSearch(menu.path), id = pathSession(menu.path);
+  const regenerate = { key: "rename-title", label: "Regenerate title", run: () => void mutations.updateSession({ id, name: "", server: tabs.name }).then(view.invalidateQueries, () => undefined) };
+  const renaming = (search ? targets.size === 1 : id && (menu.shared || targets.size === 1)) ? [{ key: "rename", label: search ? "Rename search" : "Rename session", run: rename }, ...search ? [] : [regenerate]] : [];
+  const session = tabs.viewed && targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === id) : undefined;
   return [...renaming, ...menu.shared ? tabs.commands(menu.path, view, undefined, menu.space).filter(({ key }) => /^(link|unshare|duplicate|read|unread|park|unpark|follow|unfollow|group)/.test(key)) : tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
 }
 

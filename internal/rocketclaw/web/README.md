@@ -493,7 +493,8 @@ active tab.
   tab, or use the **…** button on the active tab (for touch) to reach Close,
   Close others, Close to the right, and Close all. Session tabs also offer **Rename session**, which edits the name in
   the tab itself: Enter or clicking away saves and Escape cancels. A blank name
-  generates a new title from the conversation, as **Regenerate title** does.
+  generates a new title from the conversation, as **Regenerate title** does; the
+  menu offers **Regenerate title** right below Rename session too.
   Session tabs also offer **Delete session**, as
   does the command palette for the current session; it asks first and then
   closes the tab. A remote session is deleted on its OpenCode server; a RocketClaw
