@@ -389,7 +389,7 @@ An agent's JSON key-value entries, which the agent reads and writes and its Host
 
 ### Page Index
 
-The list of Hosted Pages a Web space shows: HTML pages of agents whose space matches the space's name, ignoring case, plus agents with no space, except for a person with a Space Limit, and HTML pages of remote OpenCode sessions in that space.
+The list of every HTML Hosted Page a person may open, the same in every Web space, grouped under the name of each page's space, with pages of agents with no space under "No space". A person with a Space Limit sees only their spaces' pages.
 
 ## Process layout
 

@@ -3281,25 +3281,24 @@ function HostedPage({ page }: { page: string }) {
   return <iframe ref={frame} title={pageLabel(page)} sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads" className="min-h-0 w-full flex-1 border-0" src={`${serverURL()}/pages-raw/${page}#rc=${token}`} />;
 }
 
-// The current space's pages and spaceless agents' pages, which the server lists by agent and path. Each links
-// under this space's name, which pageSpace gives a "-" link.
 function PageIndex({ show }: { show: boolean }) {
   const pages = useQuery({ ...queries.pages(), staleTime: 10_000, enabled: show });
-  const inSpace = useInSpace();
   const { state } = useContext(TabActions);
-  const rows = (pages.data ?? []).filter(inSpace);
   if (!show) return null;
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
       <PageTitle>Pages</PageTitle>
       {pages.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
       {pages.error ? <p className="text-sm text-destructive">{pages.error.message}</p> : null}
-      {pages.isSuccess && rows.length === 0 ? <p className="text-sm text-muted-foreground">No pages in this space</p> : null}
-      <ul className="flex flex-col gap-1">
-        {rows.map((page) => <li key={`${page.agent}/${page.path}`}>
-          <Link href={pageSpace(state, `/pages/-/${encodeURIComponent(page.agent)}/${page.path.split("/").map(encodeURIComponent).join("/")}`)[0]} className="block break-words py-1 text-sm hover:underline">{page.agent} · {page.path}</Link>
-        </li>)}
-      </ul>
+      {pages.data?.length === 0 ? <p className="text-sm text-muted-foreground">No pages</p> : null}
+      {[...Map.groupBy(pages.data ?? [], (page) => page.space ?? "")].toSorted(([a], [b]) => a.localeCompare(b)).map(([space, rows]) => <section key={space} className="flex flex-col gap-1">
+        <h2 className="text-xs font-medium text-muted-foreground">{space || "No space"}</h2>
+        <ul className="flex flex-col gap-1">
+          {rows.map((page) => <li key={`${page.agent}/${page.path}`}>
+            <Link href={pageSpace(state, `/pages/${encodeURIComponent(space || "-")}/${encodeURIComponent(page.agent)}/${page.path.split("/").map(encodeURIComponent).join("/")}`)[0]} className="block break-words py-1 text-sm hover:underline">{page.agent} · {page.path}</Link>
+          </li>)}
+        </ul>
+      </section>)}
     </div>
   );
 }
