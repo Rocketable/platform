@@ -1,10 +1,12 @@
 package rpc
 
 import (
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"iter"
 	"log/slog"
 	"net"
@@ -183,7 +185,13 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		build.Dir = "../../web"
 		output, err := build.CombinedOutput()
 		require.NoError(t, err, "%s", output)
-		html, err := os.ReadFile("../../internal/web/dist/index.html")
+		stored, err := os.Open("../../internal/web/dist/index.html.gz")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, stored.Close()) })
+
+		unpacked, err := gzip.NewReader(stored)
+		require.NoError(t, err)
+		html, err := io.ReadAll(unpacked)
 		require.NoError(t, err)
 
 		html = regexp.MustCompile(`<script type="module" src="[^"]+"></script>`).ReplaceAll(html, []byte(`<script type="module" src="/current.js"></script>`))

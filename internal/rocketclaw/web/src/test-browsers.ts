@@ -1,6 +1,7 @@
 // Every bun test run preloads this (bunfig.toml). It closes each browser a test launched once the test
 // ends, timed out or not: bun skips a timed-out test's finally blocks, and a browser left open outlives bun.
 import { afterEach } from "bun:test";
+import { readFileSync } from "node:fs";
 
 // Unit tests run page code without a page; it reads the local server's root page as its address.
 globalThis.location ??= new URL("http://localhost/") as unknown as Location;
@@ -19,4 +20,8 @@ if (playwright) {
     await Promise.all([...open].map((browser) => browser.close()));
     open.clear();
   });
+}
+
+export function unpacked(file: string) {
+  return new Response(Bun.gunzipSync(readFileSync(`${file}.gz`)), { headers: { "Content-Type": Bun.file(file).type } });
 }

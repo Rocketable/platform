@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
@@ -18,8 +19,8 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname.startsWith("/pages-raw/")) return new Response(script, { headers: { "Content-Type": "text/html", "Content-Security-Policy": "sandbox allow-scripts allow-popups allow-forms allow-modals allow-downloads" } });
     if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+      const file = path.join(dist, url.pathname);
+      return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
     }
     const input = await request.json().catch(() => ({})) as { agent: string; path: string; data: boolean; state?: typeof saved.state };
     switch (url.pathname) {

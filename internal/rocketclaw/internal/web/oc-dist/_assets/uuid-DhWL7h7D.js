@@ -1,1 +1,0 @@
-var e=()=>Math.random().toString(16).slice(2);function t(){let t=globalThis.crypto;if(!t||typeof t.randomUUID!=`function`||typeof globalThis.isSecureContext==`boolean`&&!globalThis.isSecureContext)return e();try{return t.randomUUID()}catch{return e()}}export{t};

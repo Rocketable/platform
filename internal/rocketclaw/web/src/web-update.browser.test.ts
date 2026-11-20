@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
@@ -8,7 +9,7 @@ const shots = path.resolve(import.meta.dir, "../../../../.tmp/web-screenshots");
 
 for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update bar at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
-  const current = await Bun.file(path.join(dist, "index.html")).text();
+  const current = await unpacked(path.join(dist, "index.html")).text();
   const script = current.match(/src="(\/assets\/main-[^"]+)"/)![1];
   const styles = current.match(/href="(\/assets\/styles-[^"]+)"/)![1];
   // The index page the server answers with; undefined answers HTTP 500.
@@ -20,7 +21,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname.startsWith("/assets/")) return new Response(Bun.file(path.join(dist, url.pathname)));
+    if (url.pathname.startsWith("/assets/")) return unpacked(path.join(dist, url.pathname));
     if (!url.pathname.startsWith("/api/")) return served === undefined ? new Response("down", { status: 500 }) : new Response(served, { headers: { "Content-Type": "text/html" } });
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "web-update" });

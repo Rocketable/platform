@@ -1,1 +1,0 @@
-function e(e){return`--${e===`token`?`diffs-token`:`diffs`}-`}export{e as t};

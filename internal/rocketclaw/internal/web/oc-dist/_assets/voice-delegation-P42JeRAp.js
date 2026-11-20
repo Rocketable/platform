@@ -1,2 +1,0 @@
-import{An as e,Cr as t,Zn as n,ar as r,in as i,kn as a,xs as o}from"./dist-glumLiLK.js";var s=n(r(e({instruction:a,transcript_delta:t(i(a)),voice:t(a)})));function c(e){if(!e.startsWith(`Voice delegation.`)&&!e.startsWith(`Voice delegation (continued).`))return;let t=e.indexOf(`
-`);if(t===-1)return;let n=o(s(e.slice(t+1).replace(/(\s*\nAttached file: `[^\n]*`)+\s*$/,``))),r=n?.instruction.trim();if(r)return e.slice(0,t)===`Voice delegation.`&&!n?.transcript_delta?{instruction:r,framing:void 0}:{instruction:r,framing:n?.voice?.trim()||void 0}}export{c as t};

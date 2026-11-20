@@ -1,1 +1,0 @@
-import{t as e}from"./core-BXqU3ikT.js";var t=e.define(`browser`);export{t};

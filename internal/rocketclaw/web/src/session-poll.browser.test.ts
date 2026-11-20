@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { once } from "node:events";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 import type { SavedListing } from "./session-list";
 import type { Session, SessionBatch } from "./types";
 
@@ -33,8 +34,8 @@ test("session list polls ask for changes since the version they hold", async () 
       return new Response([{ owner: "tester" }, ...sessions.map((session) => ({ sessions: [session] })), done].map((batch) => `data: ${JSON.stringify(batch)}\n\n`).join("") + "event: complete\ndata: {}\n\n", { headers: { "Content-Type": "text/event-stream" } });
     }
     if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+      const file = path.join(dist, url.pathname);
+      return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
     }
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "poll" });

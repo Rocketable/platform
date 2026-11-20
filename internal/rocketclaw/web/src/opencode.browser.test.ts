@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 import type { Session } from "./types";
 import { linked, fetch as openCode, reset, server as fake } from "../../oc/host/test/server";
 
@@ -209,7 +210,7 @@ function start() {
           return new Response("unavailable", { status: 503 });
         }
       }
-      return new Response(Bun.file(path.join(ocDist, url.pathname.slice("/oc-ui/".length))));
+      return unpacked(path.join(ocDist, url.pathname.slice("/oc-ui/".length)));
     }
     if (url.pathname === "/stream") {
       calls.push({ path: url.pathname, body: { id: url.searchParams.get("id") ?? "" } });
@@ -226,9 +227,9 @@ function start() {
     }
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, opencodeServers: { box }, agentTags: { main: { tags: ["customer"] } } })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      if (await file.exists()) return new Response(file);
-      const index = await Bun.file(path.join(dist, "index.html")).text();
+      const file = path.join(dist, url.pathname);
+      if (await Bun.file(`${file}.gz`).exists()) return unpacked(file);
+      const index = await unpacked(path.join(dist, "index.html")).text();
       return new Response(index, { headers: { "Content-Type": "text/html" } });
     }
     const input = await request.json() as { id?: string; [key: string]: unknown };

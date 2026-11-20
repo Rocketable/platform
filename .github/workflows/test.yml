@@ -238,8 +238,6 @@ jobs:
         working-directory: internal/rocketclaw/web
       - *playwright-cache
       - *playwright
-      - run: bun run build
-        working-directory: internal/rocketclaw/web
       # Transport tests need the live PostgreSQL/provider fixtures owned by Go, so the rocketclaw job runs them.
       # Every shard computes the same split: heaviest file first, each to the least-loaded shard, weighed by
       # its CI seconds in .github/web-test-seconds.tsv (an unlisted file weighs 1). A stale list only unbalances.

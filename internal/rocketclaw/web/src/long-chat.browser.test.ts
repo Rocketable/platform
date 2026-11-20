@@ -1,5 +1,6 @@
 import { afterEach, expect, onTestFinished, test } from "bun:test";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
@@ -65,8 +66,8 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     }
     if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
-    const file = Bun.file(path.join(dist, url.pathname));
-    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    const file = path.join(dist, url.pathname);
+    return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   browser.once("disconnected", () => {
@@ -208,8 +209,8 @@ test("a chat that doesn't exist says so instead of loading forever", async () =>
     if (url.pathname === "/api/History") return Response.json({ code: 5, message: "web conversation: conversation is not recorded" }, { status: 404 });
     if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
-    const file = Bun.file(path.join(dist, url.pathname));
-    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    const file = path.join(dist, url.pathname);
+    return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
