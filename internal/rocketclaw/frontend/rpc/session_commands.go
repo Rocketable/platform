@@ -96,8 +96,8 @@ func (s *Server) forkSession(ctx context.Context, request *ForkSessionRequest) (
 		return nil, fmt.Errorf("fork web session: %w", err)
 	}
 
-	event, err := s.inputEvent(ctx, id, prompt)
-	if err != nil {
+	event := &TranscriptEvent{Role: "user", Text: prompt}
+	if err := s.projectInputEvent(ctx, id, event); err != nil {
 		return nil, err
 	}
 
@@ -124,8 +124,8 @@ func (s *Server) stageRevert(ctx context.Context, request *StageRevertRequest) (
 		return response, nil
 	}
 
-	response.Prompt, err = s.inputEvent(ctx, request.Id, text)
-	if err != nil {
+	response.Prompt = &TranscriptEvent{Role: "user", Text: text}
+	if err := s.projectInputEvent(ctx, request.Id, response.Prompt); err != nil {
 		return nil, err
 	}
 

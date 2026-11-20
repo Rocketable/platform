@@ -1645,8 +1645,8 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, "ship it\n\n"+reference, goalInbounds[0].Text)
 		require.Equal(t, "alice", goalInbounds[0].Metadata[protocol.InboundPrincipalMetadataKey])
 		require.Equal(t, "goal-message", goalInbounds[0].Metadata["web_message_id"])
-		restored, err := server.inputEvent(ctx, id, goalInbounds[0].Metadata["web_goal_prompt"])
-		require.NoError(t, err)
+		restored := &TranscriptEvent{Role: "user", Text: goalInbounds[0].Metadata["web_goal_prompt"]}
+		require.NoError(t, server.projectInputEvent(ctx, id, restored))
 		require.Equal(t, " /Goal maxTurns: 2 ship it", restored.Text)
 		require.Len(t, restored.Attachments, 1)
 		require.Equal(t, file.ID, restored.Attachments[0].Id)

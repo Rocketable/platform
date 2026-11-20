@@ -563,8 +563,7 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 		}
 
 		if event.Role == "user" {
-			event, err = s.savedInputEvent(ctx, producer, event)
-			if err != nil {
+			if err := s.projectInputEvent(ctx, producer, event); err != nil {
 				return nil, err
 			}
 		}
@@ -833,39 +832,29 @@ func (e *TranscriptEvent) attribute(snapshot harness.ReplayAttribution, source, 
 	}
 }
 
-func (s *Server) savedInputEvent(ctx context.Context, producer string, saved *TranscriptEvent) (*TranscriptEvent, error) {
-	event, err := s.inputEvent(ctx, producer, saved.Text)
+func (s *Server) projectInputEvent(ctx context.Context, id string, event *TranscriptEvent) error {
+	text, stored, err := s.sessions.InputAttachments(ctx, id, event.Text)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("strip input attachments: %w", err)
 	}
 
-	event.Header, event.InputId, event.Principal = saved.Header, saved.InputId, saved.Principal
+	event.Text, event.Attachments, event.Complete = text, nil, false
+	for i := range stored {
+		event.Attachments = append(event.Attachments, attachmentMetadata(id, &stored[i]))
+	}
+
 	if event.InputId == "" || event.Header != "[System]" && !strings.HasPrefix(event.Header, "[System ") {
-		return event, nil
+		return nil
 	}
 
-	notes, err := s.backend.CompletionNotes(ctx, producer, strings.Fields(event.InputId))
+	notes, err := s.backend.CompletionNotes(ctx, id, strings.Fields(event.InputId))
 	if err != nil {
-		return nil, fmt.Errorf("read web completion notes: %w", err)
+		return fmt.Errorf("read web completion notes: %w", err)
 	}
 
 	event.CompletionNotes = backgroundJobs(notes)
 
-	return event, nil
-}
-
-func (s *Server) inputEvent(ctx context.Context, id, text string) (*TranscriptEvent, error) {
-	text, stored, err := s.sessions.InputAttachments(ctx, id, text)
-	if err != nil {
-		return nil, fmt.Errorf("strip input attachments: %w", err)
-	}
-
-	var attachments []*Attachment
-	for i := range stored {
-		attachments = append(attachments, attachmentMetadata(id, &stored[i]))
-	}
-
-	return &TranscriptEvent{Role: "user", Text: text, Attachments: attachments}, nil
+	return nil
 }
 
 func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessage) (*TranscriptEvent, error) {
@@ -1887,8 +1876,8 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 			text = inbound.Text
 		}
 
-		input, err := s.inputEvent(ctx, request.Id, text)
-		if err != nil {
+		input := &TranscriptEvent{Role: "user", Text: text}
+		if err := s.projectInputEvent(ctx, request.Id, input); err != nil {
 			return nil, err
 		}
 
