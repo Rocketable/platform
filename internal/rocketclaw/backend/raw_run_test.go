@@ -23,6 +23,22 @@ func writeRawRunFunctionCall(t *testing.T, w http.ResponseWriter, responseID, na
 	require.NoError(t, err)
 }
 
+func requestSystemPrompt(body []byte) string {
+	var request struct {
+		Input []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"input"`
+	}
+
+	var prompt string
+	if json.Unmarshal(body, &request) == nil && len(request.Input) > 0 && request.Input[0].Role == "developer" {
+		_ = json.Unmarshal(request.Input[0].Content, &prompt)
+	}
+
+	return prompt
+}
+
 func writeRawRunMessage(t *testing.T, w http.ResponseWriter, responseID, messageID, text string) {
 	t.Helper()
 

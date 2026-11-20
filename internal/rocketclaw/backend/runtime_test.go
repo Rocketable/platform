@@ -1359,7 +1359,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 				} `json:"continue"`
 			}{Description: "research", Prompt: "research the flaky test", SubagentType: "researcher"})
 			_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_e","name":"execute","arguments":%q},{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_t","name":"task","arguments":%q}]}`, execute, task)
-		case strings.Contains(body, `"instructions":"Research`):
+		case strings.Contains(body, `"input":[{"content":"Research`):
 			select {
 			case <-release:
 			case <-r.Context().Done():

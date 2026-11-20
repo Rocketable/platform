@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,7 +21,7 @@ func TestAgentDraftAssistant(t *testing.T) {
 
 	type modelRequest struct {
 		Model        string            `json:"model"`
-		Instructions string            `json:"instructions"`
+		Instructions string            `json:"-"`
 		Tools        []json.RawMessage `json:"tools"`
 		Input        json.RawMessage   `json:"input"`
 		Text         struct {
@@ -34,8 +35,11 @@ func TestAgentDraftAssistant(t *testing.T) {
 	answers, requests := make(chan string, 1), make(chan modelRequest, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request modelRequest
-		assert.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 
+		data, _ := io.ReadAll(r.Body)
+		assert.NoError(t, json.Unmarshal(data, &request))
+
+		request.Instructions = requestSystemPrompt(data)
 		requests <- request
 
 		w.Header().Set("Content-Type", "application/json")

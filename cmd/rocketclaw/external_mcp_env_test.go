@@ -70,10 +70,11 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Instructions string `json:"instructions"`
-			Input        []struct {
-				Type   string `json:"type"`
-				Output string `json:"output"`
+			Input []struct {
+				Type    string          `json:"type"`
+				Output  string          `json:"output"`
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
 			} `json:"input"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -85,8 +86,13 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 
-		if !strings.Contains(body.Instructions, "Planner prompt") || strings.Contains(body.Instructions, "Intruder prompt") {
-			t.Errorf("the turn did not run as planner: %s", body.Instructions)
+		var instructions string
+		if len(body.Input) > 0 && body.Input[0].Role == "developer" {
+			_ = json.Unmarshal(body.Input[0].Content, &instructions)
+		}
+
+		if !strings.Contains(instructions, "Planner prompt") || strings.Contains(instructions, "Intruder prompt") {
+			t.Errorf("the turn did not run as planner: %s", instructions)
 		}
 
 		response := `{"id":"resp_done","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_done","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"done","annotations":[]}]}]}`

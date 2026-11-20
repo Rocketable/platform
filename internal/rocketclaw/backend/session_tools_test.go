@@ -69,8 +69,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 				}
 
 				var body struct {
-					Instructions string `json:"instructions"`
-					Tools        []struct {
+					Tools []struct {
 						Name       string          `json:"name"`
 						Parameters json.RawMessage `json:"parameters"`
 					} `json:"tools"`
@@ -79,7 +78,9 @@ func TestSessionTagToolsBridge(t *testing.T) {
 						Output string `json:"output"`
 					} `json:"input"`
 				}
-				if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+
+				data, _ := io.ReadAll(r.Body)
+				if !assert.NoError(t, json.Unmarshal(data, &body)) {
 					return
 				}
 
@@ -88,7 +89,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 						assert.NotEqual(t, name, tool.Name, "tag tools run only inside execute")
 					}
 
-					assert.Equal(t, configured, strings.Contains(body.Instructions, name))
+					assert.Equal(t, configured, strings.Contains(requestSystemPrompt(data), name))
 				}
 
 				outputs = nil
@@ -1456,9 +1457,9 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 			woke <- body
 
 			writeRawRunMessage(t, w, "resp", "msg", "billing noted")
-		case strings.Contains(body, `"instructions":"Research`) && strings.Contains(body, "function_call_output"):
+		case strings.Contains(body, `"input":[{"content":"Research`) && strings.Contains(body, "function_call_output"):
 			writeRawRunMessage(t, w, "resp", "msg", "asked ops")
-		case strings.Contains(body, `"instructions":"Research`):
+		case strings.Contains(body, `"input":[{"content":"Research`):
 			writeRawRunFunctionCall(t, w, "write", "execute", struct {
 				Code string `json:"code"`
 			}{"def main():\n    return rocketclaw_sessions_write(session_id='web:ops', mode='enqueue', prompt='summarize billing', title='', agent='')\n"})
@@ -1487,7 +1488,7 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 	close(rootDone)
 
 	body := nextReplyBody(t, woke)
-	assert.Contains(t, body, `"instructions":"Research`, "the helper's own session takes the note")
+	assert.Contains(t, body, `"input":[{"content":"Research`, "the helper's own session takes the note")
 	assert.Contains(t, lastRequestMessage(t, body), "billing is fine")
 
 	report := nextReplyBody(t, reported)

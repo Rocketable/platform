@@ -948,9 +948,23 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 		retryItem = item
 	}
 
-	input, _ := json.Marshal([]json.RawMessage{retryItem})
+	var input []json.RawMessage
 
-	retryBody["input"] = input
+	_ = json.Unmarshal(retryBody["input"], &input)
+
+	var first struct {
+		Role string `json:"role"`
+	}
+	if len(input) > 0 {
+		_ = json.Unmarshal(input[0], &first)
+	}
+
+	systemItems := 0
+	if first.Role == "developer" {
+		systemItems = 1
+	}
+
+	retryBody["input"], _ = json.Marshal(append(input[:systemItems], retryItem))
 
 	data, _ := json.Marshal(retryBody)
 

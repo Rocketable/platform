@@ -1373,7 +1373,7 @@ func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
 
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexFailedStream("context_length_exceeded", "Your input exceeds the context window of this model. Please adjust your input and try again."))), Header: make(http.Header)}, nil
 		case 2:
-			require.JSONEq(t, `{"instructions":"","input":[{"encrypted_content":"sealed","id":"cmp_1","type":"compaction"}],"model":"gpt-6.1-sol","store":false,"stream":true}`, string(data))
+			require.JSONEq(t, `{"instructions":"","input":[{"content":"system rules","role":"developer","type":"message"},{"encrypted_content":"sealed","id":"cmp_1","type":"compaction"}],"model":"gpt-6.1-sol","store":false,"stream":true}`, string(data))
 
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexStream(`{"id":"resp","output":[]}`, `{"id":"msg","type":"message"}`))), Header: make(http.Header)}, nil
 		default:
@@ -1395,7 +1395,7 @@ func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
 			return nil
 		},
 	}
-	req := requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-6.1-sol","store":false,"context_management":[{"type":"compaction","compact_threshold":10}],"input":[{"id":"item-1","type":"message"}]}`)
+	req := requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-6.1-sol","store":false,"context_management":[{"type":"compaction","compact_threshold":10}],"input":[{"content":"system rules","role":"developer","type":"message"},{"id":"item-1","type":"message"}]}`)
 	req = req.WithContext(WithResponseObserver(req.Context(), observer))
 	req.Header.Set("X-Stainless-Retry-Count", "2")
 	resp, err := transport.RoundTrip(req)

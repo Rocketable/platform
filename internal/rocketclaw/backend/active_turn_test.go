@@ -2627,7 +2627,7 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		switch {
-		case strings.Contains(body, `"instructions":"Research`):
+		case strings.Contains(body, `"input":[{"content":"Research`):
 			select {
 			case <-cut:
 				<-r.Context().Done()
@@ -2687,7 +2687,7 @@ func TestCrashDuringForegroundTaskRunsSubagentOnce(t *testing.T) {
 
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		switch {
-		case strings.Contains(body, `"instructions":"Research`):
+		case strings.Contains(body, `"input":[{"content":"Research`):
 			select {
 			case <-cut:
 				<-r.Context().Done()
@@ -2834,7 +2834,7 @@ func TestTaskRunsSubagentAsSession(t *testing.T) {
 	held := make(chan struct{}, 1)
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		switch {
-		case strings.Contains(body, `"instructions":"Research`) && strings.Contains(body, "check again"):
+		case strings.Contains(body, `"input":[{"content":"Research`) && strings.Contains(body, "check again"):
 			if strings.Contains(body, "also the logs") {
 				_, err := w.Write([]byte(`{"id":"resp","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"noting the logs","annotations":[]}]}]}`))
 				assert.NoError(t, err)
@@ -2847,10 +2847,10 @@ func TestTaskRunsSubagentAsSession(t *testing.T) {
 			<-release
 
 			writeRawRunMessage(t, w, "resp", "msg", "checked")
-		case strings.Contains(body, `"instructions":"Research`) && strings.Contains(body, "function_call_output"):
+		case strings.Contains(body, `"input":[{"content":"Research`) && strings.Contains(body, "function_call_output"):
 			assert.Contains(t, body, `"output":"`+protocol.SlackThreadConversationID("C123", "111.222")+`"`, "a subagent's current session is its top-level session")
 			writeRawRunMessage(t, w, "resp", "msg", "found it")
-		case strings.Contains(body, `"instructions":"Research`):
+		case strings.Contains(body, `"input":[{"content":"Research`):
 			assert.NotContains(t, body, `"name":"task"`, "the subagent is at its top-level agent's recursion limit")
 			writeRawRunFunctionCall(t, w, "current", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_current_id()\n"}`))
 		case !strings.Contains(body, "function_call_output"):
@@ -2946,9 +2946,9 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 		switch {
 		case n == 0:
 			<-r.Context().Done()
-		case strings.Contains(body, `"instructions":"Research`) && strings.Contains(body, "parent work") && !strings.Contains(body, "next work"):
+		case strings.Contains(body, `"input":[{"content":"Research`) && strings.Contains(body, "parent work") && !strings.Contains(body, "next work"):
 			writeRawRunMessage(t, w, "resp", "msg", "parent work done")
-		case !strings.Contains(body, `"instructions":"Research`) && !strings.Contains(body, "function_call_output"):
+		case !strings.Contains(body, `"input":[{"content":"Research`) && !strings.Contains(body, "function_call_output"):
 			writeRawRunFunctionCall(t, w, "resp", "task", map[string]any{"description": "more", "prompt": "parent work", "subagent_type": "researcher", "continue": map[string]string{"session_id": "/a", "mode": "enqueue"}})
 		default:
 			answerNoteTest(w, r, n, body)
@@ -3051,7 +3051,7 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 				default:
 				}
 
-				research, text := strings.Contains(body, `"instructions":"Research`), "found it"
+				research, text := strings.Contains(body, `"input":[{"content":"Research`), "found it"
 
 				switch {
 				case research && strings.Contains(body, "<subagent id="):
@@ -3169,9 +3169,9 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 					reviews <- body
 
 					writeRawRunMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
-				case strings.Contains(body, `"instructions":"Research`) && strings.Contains(body, "function_call_output"):
+				case strings.Contains(body, `"input":[{"content":"Research`) && strings.Contains(body, "function_call_output"):
 					writeRawRunMessage(t, w, "resp", "msg", "done")
-				case strings.Contains(body, `"instructions":"Research`):
+				case strings.Contains(body, `"input":[{"content":"Research`):
 					select {
 					case helper <- body:
 					default:
@@ -3271,7 +3271,7 @@ func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 			}
 
 			nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
-				if (strings.Contains(body, `"instructions":"Research`) || strings.Contains(body, `"instructions":"Lead`)) && !strings.Contains(body, "function_call_output") {
+				if (strings.Contains(body, `"input":[{"content":"Research`) || strings.Contains(body, `"input":[{"content":"Lead`)) && !strings.Contains(body, "function_call_output") {
 					select {
 					case <-rootDone:
 					case <-r.Context().Done():
@@ -3280,17 +3280,17 @@ func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 				}
 
 				switch {
-				case strings.Contains(body, `"instructions":"Research`) && strings.Contains(body, "function_call_output"):
+				case strings.Contains(body, `"input":[{"content":"Research`) && strings.Contains(body, "function_call_output"):
 					results <- body
 
 					writeRawRunMessage(t, w, "resp", "msg", "done")
-				case strings.Contains(body, `"instructions":"Research`):
+				case strings.Contains(body, `"input":[{"content":"Research`):
 					writeRawRunFunctionCall(t, w, "act", "execute", struct {
 						Code string `json:"code"`
 					}{"def main():\n    return '[' + " + tc.call + " + ']'\n"})
-				case strings.Contains(body, `"instructions":"Lead`) && strings.Contains(body, "function_call_output"):
+				case strings.Contains(body, `"input":[{"content":"Lead`) && strings.Contains(body, "function_call_output"):
 					writeRawRunMessage(t, w, "lead", "msg", "led")
-				case strings.Contains(body, `"instructions":"Lead`):
+				case strings.Contains(body, `"input":[{"content":"Lead`):
 					writeRawRunFunctionCall(t, w, "lead", "task", map[string]any{"description": "act", "prompt": "act for me", "subagent_type": "researcher"})
 				case !strings.Contains(body, "function_call_output"):
 					writeRawRunFunctionCall(t, w, "resp", "task", map[string]any{"description": "act", "prompt": "act for me", "subagent_type": map[bool]string{false: "researcher", true: "lead"}[tc.nested], "background": background})
