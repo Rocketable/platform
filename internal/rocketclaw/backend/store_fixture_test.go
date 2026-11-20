@@ -108,26 +108,7 @@ func newTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
 	require.NoError(t, err)
 
 	if _, err := root.Stat(".test-database-url"); errors.Is(err, os.ErrNotExist) {
-		template, err := url.Parse(os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL"))
-		require.NoError(t, err)
-		cfg, err := pgx.ParseConfig(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
-		require.NoError(t, err)
-
-		admin := stdlib.OpenDB(*cfg)
-
-		name := strings.TrimPrefix(template.Path, "/") + "_" + strings.ToLower(rand.Text())
-		_, err = admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE "+strings.TrimPrefix(template.Path, "/"))
-		require.NoError(t, errors.Join(err, admin.Close()))
-
-		t.Cleanup(func() {
-			db := stdlib.OpenDB(*cfg)
-			_, err := db.Exec("DROP DATABASE " + name)
-			require.NoError(t, errors.Join(err, db.Close()))
-		})
-
-		location := *template
-		location.Path = "/" + name
-		require.NoError(t, root.WriteFile(".test-database-url", []byte(location.String()), 0o600))
+		require.NoError(t, root.WriteFile(".test-database-url", []byte(cloneMigratedTestDatabase(t)), 0o600))
 	} else {
 		require.NoError(t, err)
 	}
@@ -135,6 +116,32 @@ func newTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
 	require.NoError(t, root.Close())
 
 	return newColdTestSessionServiceAt(t, workspace)
+}
+
+func cloneMigratedTestDatabase(t *testing.T) string {
+	t.Helper()
+
+	location, err := url.Parse(os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL"))
+	require.NoError(t, err)
+	cfg, err := pgx.ParseConfig(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
+	require.NoError(t, err)
+
+	admin := stdlib.OpenDB(*cfg)
+
+	template := strings.TrimPrefix(location.Path, "/")
+	name := template + "_" + strings.ToLower(rand.Text())
+	_, err = admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE "+template)
+	require.NoError(t, errors.Join(err, admin.Close()))
+
+	t.Cleanup(func() {
+		db := stdlib.OpenDB(*cfg)
+		_, err := db.Exec("DROP DATABASE " + name)
+		require.NoError(t, errors.Join(err, db.Close()))
+	})
+
+	location.Path = "/" + name
+
+	return location.String()
 }
 
 func TestMigratedTestDatabaseMatchesColdAndIsolatesClones(t *testing.T) {
