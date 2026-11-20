@@ -192,7 +192,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		}
 	}
 
-	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	definitions, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return fmt.Errorf("load web agents: %w", err)
 	}
