@@ -515,8 +515,6 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	activeReq := cloned
-
 	resp, err := t.roundTrip(cloned, "initial")
 	if err != nil {
 		return nil, err
@@ -548,16 +546,14 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 
-		retry := cloned.Clone(req.Context())
-		retry.Body = retryBody
-		setCodexHeaders(retry, token, t.sessionID)
+		cloned = cloned.Clone(req.Context())
+		cloned.Body = retryBody
+		setCodexHeaders(cloned, token, t.sessionID)
 
-		resp, err = t.roundTrip(retry, "authorization_retry")
+		resp, err = t.roundTrip(cloned, "authorization_retry")
 		if err != nil {
 			return nil, err
 		}
-
-		activeReq = retry
 
 		if resp.StatusCode == http.StatusUnauthorized {
 			_, _ = io.Copy(io.Discard, resp.Body)
@@ -571,7 +567,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp, err = codexStreamingResponse(req.Context(), resp)
 		if err != nil {
 			if errStream, ok := errors.AsType[*codexStreamError](err); ok && strings.TrimSpace(errStream.Code) == "context_length_exceeded" {
-				retryResp, errRetry := t.retryCodexAfterCompaction(req.Context(), activeReq, threshold)
+				retryResp, errRetry := t.retryCodexAfterCompaction(req.Context(), cloned, threshold)
 				if errRetry != nil {
 					return nil, fmt.Errorf("adapt Codex stream response after compaction retry: %w", errRetry)
 				}
@@ -588,7 +584,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, fmt.Errorf("adapt Codex stream response: %w", err)
 		}
 
-		resp, err = t.codexCompaction(req.Context(), activeReq, resp, threshold)
+		resp, err = t.codexCompaction(req.Context(), cloned, resp, threshold)
 		if err != nil {
 			return nil, fmt.Errorf("compact Codex response: %w", err)
 		}
