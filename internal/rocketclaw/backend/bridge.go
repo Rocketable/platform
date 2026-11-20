@@ -1932,21 +1932,18 @@ func (b *Bridge) openCronReport(ctx context.Context, outbound *protocol.Outbound
 		return fmt.Errorf("load cron agents: %w", err)
 	}
 
-	space := cmp.Or(outbound.Cronjob.Space, agents.Items[outbound.Cronjob.Agent].Space)
-	destination := protocol.Conversation{ID: "web:" + b.config.ConversationID, Agent: outbound.Cronjob.Agent, CreatedBy: string(ThreadCreatedByCron), Space: space}
+	agent := agents.Items[outbound.Cronjob.Agent]
+	destination := protocol.Conversation{ID: "web:" + b.config.ConversationID, Agent: outbound.Cronjob.Agent, CreatedBy: string(ThreadCreatedByCron), Space: cmp.Or(outbound.Cronjob.Space, agent.Space)}
 	facts := conversationFacts{kind: KindWebChat, cronRun: b.config.ConversationID}
 
-	sticky := agents.Items[destination.Agent].Sticky
-	if sticky != harness.AgentStickyOff {
+	if agent.Sticky != harness.AgentStickyOff {
 		destination.ID, facts.cronRun = rand.Text(), ""
 	}
 
 	ctx = context.WithoutCancel(ctx)
-	if _, err := b.config.SessionService.recordConversation(ctx, &destination, facts, sticky); err != nil {
+	if _, err := b.config.SessionService.recordConversation(ctx, &destination, facts, agent.Sticky); err != nil {
 		return fmt.Errorf("record cron report chat: %w", err)
 	}
-
-	destinationID := destination.ID
 
 	tx, err := b.config.SessionService.beginStateTx(ctx, "cron destination binding")
 	if err != nil {
@@ -1954,11 +1951,11 @@ func (b *Bridge) openCronReport(ctx context.Context, outbound *protocol.Outbound
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := lockHistories(ctx, tx, []string{b.config.ConversationID, destinationID}); err != nil {
+	if err := lockHistories(ctx, tx, []string{b.config.ConversationID, destination.ID}); err != nil {
 		return err
 	}
 
-	destinationID, schedules, err := (stateDAO{db: tx}).bindRun(ctx, b.config.ConversationID, destinationID)
+	destinationID, schedules, err := (stateDAO{db: tx}).bindRun(ctx, b.config.ConversationID, destination.ID)
 	if err != nil {
 		return err
 	}
