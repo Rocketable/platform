@@ -96,7 +96,7 @@ func TestRevertSettlesAndPreservesWaitingWork(t *testing.T) {
 
 	steer := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "waiting steer"}, true)
 	steer.ConversationID, steer.Metadata["web_message_id"], steer.Metadata[protocol.InboundPrincipalMetadataKey] = "main", "steer", "alice"
-	fresh, err := rt.admitWeb(t.Context(), b, &bridgeRequest{inbound: steer}, protocol.GoalRequest{})
+	fresh, err := rt.admitWeb(t.Context(), b, steer, protocol.GoalRequest{})
 	require.NoError(t, err)
 	require.True(t, fresh)
 
@@ -107,7 +107,7 @@ func TestRevertSettlesAndPreservesWaitingWork(t *testing.T) {
 	channel.ConversationID, channel.Metadata["web_message_id"] = "main", "channel"
 	channelDone := &turnCompletion{done: make(chan struct{})}
 	channelRequest := bridgeRequest{inbound: channel, completion: channelDone}
-	fresh, err = rt.admitWeb(t.Context(), b, &channelRequest, protocol.GoalRequest{})
+	fresh, err = rt.admitWeb(t.Context(), b, channel, protocol.GoalRequest{})
 	require.NoError(t, err)
 	require.True(t, fresh)
 
@@ -1513,7 +1513,7 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 			rt := &Runtime{Sessions: s}
 			replacement := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindHeld, &protocol.InboundContent{Text: "edited"}, true)
 			replacement.ConversationID, replacement.Metadata["web_message_id"] = "main", "replacement"
-			fresh, err := rt.admitWeb(ctx, b, &bridgeRequest{inbound: replacement}, protocol.GoalRequest{})
+			fresh, err := rt.admitWeb(ctx, b, replacement, protocol.GoalRequest{})
 			require.ErrorContains(t, err, failure.want)
 			require.False(t, fresh)
 			require.NoError(t, s.db.QueryRowContext(ctx, snapshot).Scan(&after))
@@ -1552,7 +1552,7 @@ func TestRevertStorageFailuresAreNotEmptySuccess(t *testing.T) {
 	require.ErrorContains(t, rt.StashQueueItem(ctx, "main", &protocol.ThreadQueueItem{Source: protocol.SourceWeb}), "database is closed")
 	_, err = rt.mutateWebQueue(ctx, "main", "new", protocol.InboundKindSteer)
 	require.ErrorContains(t, err, "database is closed")
-	_, err = rt.admitWeb(ctx, b, &bridgeRequest{inbound: inbound}, protocol.GoalRequest{})
+	_, err = rt.admitWeb(ctx, b, inbound, protocol.GoalRequest{})
 	require.ErrorContains(t, err, "database is closed")
 
 	completion := &turnCompletion{done: make(chan struct{})}

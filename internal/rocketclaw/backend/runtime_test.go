@@ -1043,7 +1043,7 @@ func TestRuntimeQueueEditRunsWithTurnAgent(t *testing.T) {
 			inbound.ConversationID, inbound.Metadata["web_message_id"] = "main", "queued"
 			inbound.Metadata[inboundAgentMetadataKey] = test.override
 			request := bridgeRequest{inbound: inbound, completion: &turnCompletion{done: make(chan struct{})}}
-			fresh, err := rt.admitWeb(t.Context(), bridge, &request, protocol.GoalRequest{})
+			fresh, err := rt.admitWeb(t.Context(), bridge, inbound, protocol.GoalRequest{})
 			require.NoError(t, err)
 			require.True(t, fresh)
 
@@ -1090,7 +1090,7 @@ func TestRuntimeQueueEditRejectsPreservedSteer(t *testing.T) {
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "original steer"}, true)
 	inbound.ConversationID, inbound.Metadata["web_message_id"] = "main", "steer"
 	request := bridgeRequest{inbound: inbound, queueItemID: "steer"}
-	fresh, err := rt.admitWeb(t.Context(), bridge, &request, protocol.GoalRequest{})
+	fresh, err := rt.admitWeb(t.Context(), bridge, inbound, protocol.GoalRequest{})
 	require.NoError(t, err)
 	require.True(t, fresh)
 	require.NoError(t, bridge.enqueue(t.Context(), &request, "pending steer"))

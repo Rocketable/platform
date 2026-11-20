@@ -776,8 +776,7 @@ func (r *Runtime) mutateWebQueue(ctx context.Context, conversationID, id string,
 	return true, err
 }
 
-func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, request *bridgeRequest, goal protocol.GoalRequest) (fresh bool, err error) {
-	inbound := request.inbound
+func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, inbound *protocol.InboundMessage, goal protocol.GoalRequest) (fresh bool, err error) {
 	if inbound.Metadata["web_message_id"] == "" {
 		if inbound.Metadata == nil {
 			inbound.Metadata = make(map[string]string)

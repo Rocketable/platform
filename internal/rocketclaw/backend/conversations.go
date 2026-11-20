@@ -188,7 +188,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 		}
 
 		if eligible {
-			fresh, err := r.admitWeb(ctx, bridge, &request, protocol.GoalRequest{})
+			fresh, err := r.admitWeb(ctx, bridge, inbound, protocol.GoalRequest{})
 			if err != nil || !fresh {
 				return err
 			}
@@ -246,9 +246,7 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 
 			inbound.Metadata["web_goal"] = string(data)
 
-			request := bridgeRequest{inbound: inbound}
-
-			fresh, err := r.admitWeb(ctx, bridge, &request, goal)
+			fresh, err := r.admitWeb(ctx, bridge, inbound, goal)
 			if err != nil || !fresh {
 				return err
 			}
@@ -487,16 +485,12 @@ func (r *Runtime) StashQueueItem(ctx context.Context, conversationID string, ite
 				inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.ID, item.Principal
 			}
 
-			request := bridgeRequest{inbound: inbound}
-
-			fresh, err := r.admitWeb(ctx, bridge, &request, protocol.GoalRequest{})
+			fresh, err := r.admitWeb(ctx, bridge, inbound, protocol.GoalRequest{})
 			if err != nil || !fresh || item.Kind == protocol.InboundKindHeld {
 				return err
 			}
 
-			request.queueItemID = item.ID
-
-			return bridge.enqueue(ctx, &request, "enqueue Web prompt")
+			return bridge.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "enqueue Web prompt")
 		}
 	}
 
