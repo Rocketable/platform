@@ -1674,6 +1674,24 @@ test("a change made from tabs older than another window's save keeps both", () =
   expect(saved.refused).toBe(1);
 }), 30_000);
 
+test("a session can be renamed in Shared without opening a personal tab", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const path = href("bravo");
+  saved.spaces.push({ id: "ops", name: "Ops" });
+  saved.shared = [{ space: "main", path }, { space: "ops", path }];
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  expect(await sharedMenu(page, "Bravo")).toContain("Rename session");
+  await page.getByRole("menuitem", { name: "Rename session", exact: true }).click();
+  const input = shared(page).getByRole("textbox", { name: "Session name" });
+  await input.waitFor();
+  expect(await page.getByRole("textbox", { name: "Session name" }).count()).toBe(1);
+  await input.fill("Renamed session");
+  await input.press("Enter");
+  for (const space of ["Main", "Ops"]) await shared(page, space).getByRole("tab", { name: "Renamed session", exact: true }).waitFor();
+  expect(await names(page)).toEqual(["Alpha"]);
+  expect(saved.shared).toEqual([{ space: "main", path }, { space: "ops", path }]);
+  expect(new URL(page.url()).pathname).toBe(href("alpha"));
+}), 30_000);
+
 test("Shared hides while empty, takes tabs from the tab menu, highlights both copies, and changes only through its menu", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true }), row = (name: string) => shared(page).getByRole("tab", { name, exact: true });
   const header = page.getByRole("button", { name: "Shared in Main", exact: true }), commands = page.getByRole("dialog", { name: "Run command" });
@@ -1708,7 +1726,7 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
 
   // A Shared row has no close button, offers no closing, ignores middle-clicks, and takes no drops of this person's tabs.
   expect(await shared(page).getByRole("button", { name: "Close Alpha" }).count()).toBe(0);
-  expect(await sharedMenu(page, "Alpha")).toEqual(["Pull requests", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "Unfollow", "—", "Add to group"]);
+  expect(await sharedMenu(page, "Alpha")).toEqual(["Pull requests", "—", "Rename session", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "Unfollow", "—", "Add to group"]);
   await page.keyboard.press("Escape");
   await page.getByRole("menu").waitFor({ state: "hidden" });
   await row("Alpha").click({ button: "middle" });
@@ -2117,7 +2135,7 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   saved.state = { ...saved.state, tabs: [{ path: href("alpha"), space: "main" }], space: "main" };
   saved.shared = [{ space: "main", path: href("bravo") }, { space: "main", path: "/search/d", search: { name: "Ops", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" } }];
   await page.goto(`${origin}${href("alpha")}`);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "Unfollow", "—", "Add to group"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Rename session", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "Unfollow", "—", "Add to group"]);
   await close();
   expect(await sharedMenu(page, "Ops")).toEqual(["Rename search", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park", "Unfollow", "—", "Add to group"]);
   await close();
@@ -2126,7 +2144,7 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   for (const item of ["Park", "Until I unpark"]) await page.getByRole("menuitem", { name: item, exact: true }).click();
   await row("Bravo").and(page.locator('[aria-description="Shared, Space: Main, Parked"]')).waitFor();
   expect([await sharedNames(page), await opacity(href("bravo")), await names(page)]).toEqual([["Bravo", "Ops"], "0.6", ["Alpha"]]);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Rename session", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow"]);
   await close();
   // Another person's session list carries none of this person's parks, so for them the row is as it was.
   saved.attention = [];

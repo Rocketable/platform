@@ -1698,11 +1698,9 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
   } else rendered[position].focus();
 }
 
-// Sessions and Search pages can be renamed from their tab, and a Search page from its Shared row, which otherwise offers
-// only its Copy link, Shared, Duplicate, attention and group items. A session's own tab on the page's server can also delete
-// it.
-function menuItems(tabs: TabStoreValue, menu: CardMenu, view: SidebarView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
-  const renaming = targets.size === 1 && (isSearch(menu.path) || (pathSession(menu.path) && !menu.shared)) ? [{ key: "rename", label: isSearch(menu.path) ? "Rename search" : "Rename session", run: rename }] : [];
+function menuItems(tabs: TabStoreValue, menu: CardMenu, view: SidebarView, targets: Set<string>, renameSession: boolean, rename: () => void, remove: (id: string) => void) {
+  const search = isSearch(menu.path);
+  const renaming = (search ? targets.size === 1 : renameSession && pathSession(menu.path) && (menu.shared || targets.size === 1)) ? [{ key: "rename", label: search ? "Rename search" : "Rename session", run: rename }] : [];
   const session = tabs.viewed && targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === pathSession(menu.path)) : undefined;
   return [...renaming, ...menu.shared ? tabs.commands(menu.path, view, undefined, menu.space).filter(({ key }) => /^(link|unshare|duplicate|read|unread|park|unpark|follow|unfollow|group)/.test(key)) : tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
 }
@@ -2032,7 +2030,7 @@ function SharedGroup({ tabs, space, paths, folded, label, waiting, folds, editin
       {asking ? needsYou : null}
     </div>
     {listed.map((path) => <div key={path} data-shared={path}>
-      <TabItem tab={{ path, search: sharedTab(tabs.shared, space.id, path)?.search }} shared space={space.id} open={() => tabs.go(path, space.id, true)} description={`Shared, Space: ${space.name}${label && `, ${label}`}`} chosen={false} rule="Grey" active={active(path)} stop={path === stop} editing={editing === `shared:${path}`} endEdit={() => setEditing(undefined)} openMenu={(anchor) => setMenu({ path, anchor, space: space.id, shared: true })} />
+      <TabItem tab={{ path, search: sharedTab(tabs.shared, space.id, path)?.search }} shared space={space.id} open={() => tabs.go(path, space.id, true)} description={`Shared, Space: ${space.name}${label && `, ${label}`}`} chosen={false} rule="Grey" active={active(path)} stop={path === stop} editing={editing === `shared:${space.id}:${path}`} endEdit={() => setEditing(undefined)} openMenu={(anchor) => setMenu({ path, anchor, space: space.id, shared: true })} />
     </div>)}
   </div>;
 }
@@ -2041,7 +2039,7 @@ function SharedGroup({ tabs, space, paths, folded, label, waiting, folds, editin
 function CardMenuPopup({ tabs, menu, setMenu, picked, setEditing, node }: { tabs: TabStoreValue; menu?: CardMenu; setMenu: (menu?: CardMenu & { server: string }) => void; picked: Picked; setEditing: (key?: string) => void; node: RefObject<HTMLDivElement | null> }) {
   const view = useContext(Sidebar), { setCommand } = useContext(SessionCommands);
   const selection = menu ? selectionIn(tabs, picked, menu.space) : new Set<string>(), targets = menu && !selection.has(menu.path) ? new Set([menu.path]) : selection;
-  const items = !menu ? [] : [...pullRequestItems(menu, targets.size === 1, tabs.name), ...menuItems(tabs, menu, view, targets, () => setEditing(`${menu.shared ? "shared:" : ""}${menu.path}`), (id) => setCommand({ mode: "delete", source: id }))];
+  const items = !menu ? [] : [...pullRequestItems(menu, targets.size === 1, tabs.name), ...menuItems(tabs, menu, view, targets, true, () => setEditing(menu.shared ? `shared:${menu.space}:${menu.path}` : menu.path), (id) => setCommand({ mode: "delete", source: id }))];
   // Only this person's tabs leave their card; Shared rows stay where they are.
   return <TabMenu items={items} anchor={menu?.anchor} close={() => setMenu(undefined)} refocus={(key) => !menu?.shared && /^(close|park|unpark)/.test(key) ? selected(node, menu && `${tabs.name}/${menu.space}`) ?? true : true} />;
 }
@@ -2153,7 +2151,7 @@ function ParkedBox({ collapsed, children }: { collapsed: boolean; children: Reac
 function ParkedSection({ tabs }: { tabs: TabStoreValue }) {
   const [menu, setMenu] = useState<ParkedMenu>(), [editing, setEditing] = useState<string>(), list = useRef<HTMLDivElement>(null), sidebar = useContext(Sidebar), { setCommand } = useContext(SessionCommands);
   const send = (server: string): Attend => (paths, action, until) => void tabsCall(server, { attention: { paths, action, until } }).then(sidebar.servers[server].invalidateQueries, () => undefined);
-  const items = !menu ? [] : menu.server === tabs.name ? [...pullRequestItems(menu, true, menu.server), ...menuItems(tabs, menu, sidebar, new Set([menu.path]), () => setEditing(menu.path), (id) => setCommand({ mode: "delete", source: id }))]
+  const items = !menu ? [] : menu.server === tabs.name ? [...pullRequestItems(menu, true, menu.server), ...menuItems(tabs, menu, sidebar, new Set([menu.path]), !menu.shared, () => setEditing(menu.path), (id) => setCommand({ mode: "delete", source: id }))]
     : [...pullRequestItems(menu, true, menu.server), ...attentionItems(sidebar.servers[menu.server], menu.path, [menu.path], send(menu.server), tabs.setPicking)];
   return <TabStore.Provider value={tabs}>
     <ParkedTabs tabs={tabs} list={list} editing={editing} endEdit={() => setEditing(undefined)} openMenu={setMenu} close={(path) => { flushSync(() => tabs.close([path])); selected(list)?.focus(); }} />
