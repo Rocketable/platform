@@ -31,22 +31,18 @@ func startTailnet(ctx context.Context, tailnet *config.TsnetConfig, log *slog.Lo
 		return nil, errors.Join(err, node.server.Close())
 	}
 
+	tailnet.Origin = "https://" + node.server.CertDomains()[0]
+
 	return node, nil
 }
 
 func serveTailnet(rt *backend.Runtime, node *tailnetNode, handler http.Handler, serving *errgroup.Group) func() error {
-	domains := node.server.CertDomains()
 	server := &http.Server{
 		Handler:   rpc.NewTailnetHandler(node.client, rt.Cfg.Clone().TrustedRocketClaws, handler),
 		TLSConfig: &tls.Config{GetCertificate: node.client.GetCertificate},
 	}
 
-	rt.Log.Info("started Web HTTPS on the tailnet", "domains", domains)
-
-	_ = rt.Cfg.Do(func(cfg *config.Config) error {
-		cfg.Web.Tsnet.Origin = "https://" + domains[0]
-		return nil
-	})
+	rt.Log.Info("started Web HTTPS on the tailnet", "domains", node.server.CertDomains())
 
 	serving.Go(func() error {
 		if err := server.ServeTLS(node.https, "", ""); !errors.Is(err, http.ErrServerClosed) {

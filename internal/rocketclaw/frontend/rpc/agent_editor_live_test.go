@@ -165,6 +165,7 @@ func TestAgentEditorRealBackendBrowser(t *testing.T) {
 
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Permissions: map[string][]string{"bob": {"Ops"}}, AgentEditorModel: "gpt-editor", Overlays: []string{"github.com/acme/team"},
 		OpenAI:    config.OpenAIConfig{APIKey: "key", APIBaseURL: strings.Replace(openai.URL, "http://", "ws://", 1)},
+		Web:       config.WebConfig{Tsnet: &config.TsnetConfig{Origin: "https://rocketclaw.example.test"}},
 		Providers: map[string]config.OpenAIConfig{"work": {APIKey: "key", APIBaseURL: work.URL, Auth: "api_key"}}, Slack: liveSlack()}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)

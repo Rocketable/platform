@@ -2829,7 +2829,7 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 		"- Commit and push overlay repository changes before reload or restart.",
 		"- Uncommitted, untracked, or unconfigured files under "+filepath.Join(cfg.RuntimeDirName(), "overlays")+" may be discarded on startup/restart.",
 		"- Do not treat generated effective files under "+filepath.Join(cfg.RuntimeDirName(), "agents")+", "+filepath.Join(cfg.RuntimeDirName(), "skills")+", "+filepath.Join(cfg.RuntimeDirName(), "cron")+", or "+filepath.Join(cfg.RuntimeDirName(), "scripts")+" as source of truth.",
-		"- Reload RocketClaw after already-configured overlay source changes so overlays are fetched and merged again; the overlay list itself is a Behavior Setting an admin edits on the Web Config page.",
+		"- Reload RocketClaw after already-configured overlay source changes so overlays are fetched and merged again. To change which overlays are configured, an admin opens Settings ("+cfg.Web.Tsnet.Origin+"/config) → Behavior settings → Edit → Overlays and saves.",
 		"- Local workspace agents/, skills/, cron/, and scripts/ override configured overlays.",
 	)
 
