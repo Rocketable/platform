@@ -22,10 +22,8 @@ func LoadOneOffCronjob(workspace, runtimeDir, target string) (protocol.OneOffCro
 		return protocol.OneOffCronjob{}, errors.New("cron target must be a top-level cron stem; nested paths are not allowed")
 	}
 
-	name := target
-	if before, ok := strings.CutSuffix(name, ".md"); ok {
-		name = before
-	} else if filepath.Ext(name) != "" {
+	name, hasMarkdown := strings.CutSuffix(target, ".md")
+	if !hasMarkdown && filepath.Ext(name) != "" {
 		return protocol.OneOffCronjob{}, errors.New("cron target must omit extensions other than .md")
 	}
 
