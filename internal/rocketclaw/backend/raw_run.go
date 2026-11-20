@@ -20,7 +20,7 @@ type RawRunProgress struct {
 	Cronjob         *protocol.CronjobMessage
 }
 
-func prepareRocketCode(locked *config.LockedConfig, agent string, logger *slog.Logger) (*os.Root, harness.Agents, harness.Skills, *modelResolver, error) {
+func prepareRocketCode(locked *config.LockedConfig, agent string) (*os.Root, harness.Agents, harness.Skills, *modelResolver, error) {
 	cfg := locked.Clone()
 
 	root, err := os.OpenRoot(cfg.Workspace)
@@ -36,7 +36,7 @@ func prepareRocketCode(locked *config.LockedConfig, agent string, logger *slog.L
 
 	appendOverlayPromptToAgent(agents, agent, cfg)
 
-	return root, agents, skills, newModelResolver(cfg, logger), nil
+	return root, agents, skills, newModelResolver(cfg, slog.New(slog.DiscardHandler)), nil
 }
 
 func rocketcodeSpillDir(cfg *config.Config) string {

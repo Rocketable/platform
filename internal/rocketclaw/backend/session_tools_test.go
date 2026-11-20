@@ -114,7 +114,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 			defer server.Close()
 
 			cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
-			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler))
+			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main")
 
 			require.NoError(t, err)
 			defer func() { require.NoError(t, root.Close()) }()
@@ -634,7 +634,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 			cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "review-model"}
-			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler))
+			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main")
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
 			require.NoError(t, root.MkdirAll("shell", 0o700))
@@ -1114,7 +1114,7 @@ func TestSessionsWriteRecipients(t *testing.T) {
 
 		senderCfg := *cfg
 		senderCfg.OpenAI = config.OpenAIConfig{APIBaseURL: server.URL}
-		root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(&senderCfg), sender, slog.New(slog.DiscardHandler))
+		root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(&senderCfg), sender)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
 
