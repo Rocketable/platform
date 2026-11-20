@@ -1,17 +1,20 @@
 package backend
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -151,7 +154,46 @@ func TestChatOriginFactsAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkChatOriginFacts)
 	require.Positive(t, result.N)
 	require.Less(t, result.AllocedBytesPerOp(), int64(7<<20), "benchmark: %s  %s", result, result.MemString())
-	require.Less(t, result.AllocsPerOp(), int64(752), "benchmark: %s  %s", result, result.MemString())
+
+	if assert.Less(t, result.AllocsPerOp(), int64(752), "benchmark: %s  %s", result, result.MemString()) {
+		return
+	}
+
+	runtime.GC()
+	runtime.GC()
+
+	var records []runtime.MemProfileRecord
+
+	n, ok := runtime.MemProfile(nil, true)
+	for !ok {
+		records = make([]runtime.MemProfileRecord, n+50)
+		n, ok = runtime.MemProfile(records, true)
+	}
+
+	records = slices.DeleteFunc(records[:n], func(record runtime.MemProfileRecord) bool {
+		return record.AllocObjects == 0 || record.AllocBytes != 8192*record.AllocObjects
+	})
+	slices.SortFunc(records, func(a, b runtime.MemProfileRecord) int { return cmp.Compare(b.AllocObjects, a.AllocObjects) })
+
+	t.Logf("8 KiB allocation samples by call site (cumulative since process start, including setup; sample rate %d bytes):", runtime.MemProfileRate)
+
+	for i := range min(5, len(records)) {
+		record := &records[i]
+
+		var stack []string
+
+		frames := runtime.CallersFrames(record.Stack())
+		for range 10 {
+			frame, more := frames.Next()
+			stack = append(stack, frame.Function)
+
+			if !more {
+				break
+			}
+		}
+
+		t.Logf("%d: %s", record.AllocObjects, strings.Join(stack, " <- "))
+	}
 }
 
 func BenchmarkChatOriginFacts(b *testing.B) {
