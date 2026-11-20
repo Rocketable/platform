@@ -61,6 +61,8 @@ func TestAttentionMatrix(t *testing.T) {
 
 	ctx := t.Context()
 	soon := time.Now().Add(time.Hour)
+	service := newTestSessionService(t)
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"web:attention": KindWebChat})
 
 	type step func(t *testing.T, service *SessionService, username, path string)
 
@@ -192,13 +194,11 @@ func TestAttentionMatrix(t *testing.T) {
 	} {
 		for location, path := range map[string]string{"session": "/s/" + base64.RawURLEncoding.EncodeToString([]byte("web:attention")), "page": "/cron"} {
 			t.Run(name+" on a "+location, func(t *testing.T) {
-				t.Parallel()
-
-				service := newTestSessionService(t)
-				recordTestConversations(t, service, "main", map[string]ConversationKind{"web:attention": KindWebChat})
+				_, err := service.db.ExecContext(t.Context(), `TRUNCATE web_tab_attention, web_tab_states, web_tabs, web_closed_tabs, web_tab_groups`)
+				require.NoError(t, err)
 
 				username := name + " " + location
-				_, err := service.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, viewing, viewed_at)
+				_, err = service.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, viewing, viewed_at)
 VALUES ($1, 0, CASE WHEN $3::float8 > 0 THEN $2 ELSE '' END, now() - make_interval(secs => $3::float8))`, username, path, tc.viewed.Seconds())
 				require.NoError(t, err)
 
