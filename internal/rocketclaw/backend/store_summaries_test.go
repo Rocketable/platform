@@ -467,7 +467,11 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	got[1].Tags = []string{"internal"}
 	rows, err := service.sidebarRows(t.Context(), "", nil)
 	require.NoError(t, err)
-	require.Equal(t, got, rows, "tag-only changes do not affect sidebar activity")
+	require.Len(t, rows, len(got))
+
+	for i, row := range rows {
+		require.Equal(t, got[i], *row, "tag-only changes do not affect sidebar activity")
+	}
 
 	_, found, err := service.Thread("empty")
 	require.NoError(t, err)
@@ -532,6 +536,21 @@ func TestSidebarSessionsAllocationBudgets(t *testing.T) {
 	result = testing.Benchmark(BenchmarkSidebarSessionTags)
 	require.Positive(t, result.N)
 	require.Less(t, result.AllocedBytesPerOp(), int64(4<<20))
+	result = testing.Benchmark(BenchmarkSidebarSearchRows)
+	require.Positive(t, result.N)
+	require.Less(t, result.AllocedBytesPerOp(), int64(2<<20))
+}
+
+func BenchmarkSidebarSearchRows(b *testing.B) {
+	service := sidebarWorkFixture(b)
+
+	b.ResetTimer()
+
+	for b.Loop() {
+		rows, err := service.sidebarRows(b.Context(), "", nil)
+		require.NoError(b, err)
+		require.Len(b, rows, 1000)
+	}
 }
 
 func BenchmarkSidebarSessionTags(b *testing.B) {
@@ -627,7 +646,7 @@ func TestSidebarSessionsWorkTimes(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, rows, 1)
 
-		return rows[0]
+		return *rows[0]
 	}
 
 	mcp := row("mcp")
