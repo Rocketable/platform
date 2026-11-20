@@ -185,21 +185,19 @@ func skillAllowedForAgent(skill *Skill, agent *Agent) bool {
 }
 
 func (s Skills) withReadPermissions(root *os.Root, agents Agents) Agents {
-	hasAllowedSkill := false
+	var dirs map[string]skillReadDir
 
+findAllowedSkill:
 	for name := range agents.Items {
 		agent := agents.Items[name]
-		if len(s.Available(&agent)) > 0 {
-			hasAllowedSkill = true
-			break
+		for _, skill := range s.Items {
+			if skillAllowedForAgent(&skill, &agent) {
+				dirs = s.readableDirs(root)
+				break findAllowedSkill
+			}
 		}
 	}
 
-	if !hasAllowedSkill {
-		return agents
-	}
-
-	dirs := s.readableDirs(root)
 	if len(dirs) == 0 {
 		return agents
 	}
