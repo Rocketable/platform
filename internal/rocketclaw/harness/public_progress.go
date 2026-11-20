@@ -390,31 +390,17 @@ func (o *turnObservations) observe(ctx context.Context, progress *PublicProgress
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	return o.observeLocked(ctx, progress)
+	return o.observeLocked(ctx, progress, nil)
 }
 
 func (o *turnObservations) finishCall(ctx context.Context, progress *PublicProgress, state PublicProgressState) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	snapshot := *progress
-	traced := PublicProgressFromTrace(o.trace)
-
-	for i := range traced {
-		if traced[i].ID == progress.ID && traced[i].ParentID == progress.ParentID {
-			snapshot = traced[i]
-			break
-		}
-	}
-
-	snapshot.SubagentKey = cmp.Or(snapshot.SubagentKey, progress.SubagentKey)
-
-	snapshot.State = state
-
-	return o.observeLocked(ctx, &snapshot)
+	return o.observeLocked(ctx, progress, &state)
 }
 
-func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicProgress) error {
+func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicProgress, finalState *PublicProgressState) error {
 	if o.closed {
 		return nil
 	}
@@ -424,25 +410,36 @@ func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicPr
 	}
 
 	snapshot := *progress
-	raw, _ := json.Marshal(publicProgressTrace{Type: "rocketcode_public_progress", Progress: snapshot})
-	trace := slices.Clone(o.trace)
+	index := len(o.trace)
 
-	for i := range trace {
-		items := PublicProgressFromTrace(trace[i : i+1])
-		if len(items) != 1 || items[0].ID != snapshot.ID || items[0].ParentID != snapshot.ParentID {
-			continue
+	var existing PublicProgress
+
+	for i := range o.trace {
+		items := PublicProgressFromTrace(o.trace[i : i+1])
+		if len(items) == 1 && items[0].ID == progress.ID && items[0].ParentID == progress.ParentID {
+			existing, index = items[0], i
+			break
 		}
-
-		if existing := items[0]; existing == snapshot || existing.State == PublicProgressBackground {
-			return nil
-		}
-
-		trace[i] = raw
-
-		return o.saveTraceLocked(ctx, trace)
 	}
 
-	return o.saveTraceLocked(ctx, append(trace, raw))
+	if finalState != nil {
+		if index < len(o.trace) {
+			snapshot = existing
+		}
+
+		snapshot.SubagentKey = cmp.Or(snapshot.SubagentKey, progress.SubagentKey)
+		snapshot.State = *finalState
+	}
+
+	if index < len(o.trace) && (existing == snapshot || existing.State == PublicProgressBackground) {
+		return nil
+	}
+
+	trace := make([]json.RawMessage, max(len(o.trace), index+1))
+	copy(trace, o.trace)
+	trace[index], _ = json.Marshal(publicProgressTrace{Type: "rocketcode_public_progress", Progress: snapshot})
+
+	return o.saveTraceLocked(ctx, trace)
 }
 
 func (o *turnObservations) replaceResponse(ctx context.Context, parentID string, progress []PublicProgress) error {
