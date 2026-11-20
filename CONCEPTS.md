@@ -348,7 +348,7 @@ Another RocketClaw server declared in the local server's configuration, whose ch
 
 The Space a session was born in.
 
-It is its agent's space, or for a cron's sessions the cron's, else the cron agent's, else for a Web session, or a remote OpenCode session created from the Web, the space the person was in; a forked remote session takes its source's. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report chats, have none.
+It is its agent's space, or for a cron's sessions the cron's, else the cron agent's, else for a Web session, or a remote OpenCode session created from the Web, the space the person was in; a forked remote session takes its source's. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Moving a tab changes only that person's tabs, except a remote OpenCode session's Hosted Page tab, whose move changes the session's Birth Space for everyone. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report chats, have none.
 
 ### Space Limit
 
@@ -388,7 +388,7 @@ A file an agent published, served by RocketClaw under a URL that names the agent
 
 It belongs to the agent, not to a space: when the agent's space changes, its pages move with it and links under the old space name redirect. Only people the Web admits can open one, and a person with a Space Limit only when the page's space is in it. Page scripts run walled off from RocketClaw and can only read their own agent's Page Data.
 
-An agent in a remote OpenCode session publishes through its coding server's MCP bridge instead. Such a page belongs to that session, which stands in for the agent: it lives in the session's Birth Space, and it is deleted with the session's RocketClaw copy or with that space. A session with no Birth Space cannot publish pages.
+An agent in a remote OpenCode session publishes through its coding server's MCP bridge instead. Such a page belongs to that session, which stands in for the agent: it lives in the session's Birth Space, and it is deleted with the session's RocketClaw copy or with that space. A session with no Birth Space cannot publish pages. Moving one of its pages' tabs to another space in the Web moves the session's Birth Space there, so all its pages follow.
 
 ### Page Data
 

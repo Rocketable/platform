@@ -423,6 +423,11 @@ func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversa
 	return rows > 0, nil
 }
 
+func (s *SessionService) MoveConversation(ctx context.Context, conversationID, spaceID string) error {
+	_, err := execState(ctx, s.db, "move conversation", `UPDATE conversations SET space_id = $2 WHERE conversation_id = $1`, conversationID, spaceID)
+	return err
+}
+
 func (s *SessionService) ExternalMCPSession(externalConversationID string) (ExternalMCPSessionState, bool, error) {
 	return stateDAO{db: s.db}.externalMCPSession(context.Background(), externalConversationID)
 }

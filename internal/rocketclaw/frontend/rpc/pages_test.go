@@ -164,6 +164,19 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 		{Agent: "reporter/review", Space: "Ops Team", Path: "a b/c.html"},
 	}}, listed), "unexpected pages: %v", listed)
 
+	tabs, err := invoke[TabsResponse](ctx, connection, "Tabs", &TabsRequest{CreateSpace: "Ruzuku"})
+	require.NoError(t, err)
+	_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", &UpdateSessionRequest{Id: "opencode:box:ses_a", SpaceId: &tabs.Spaces[len(tabs.Spaces)-1].Id})
+	require.NoError(t, err)
+
+	data, err = invoke[Page](ctx, connection, "GetPage", &PageRequest{Agent: "opencode:box:ses_a", Path: "rows", Data: true})
+	require.NoError(t, err)
+	require.Equal(t, "Ruzuku", data.Space)
+
+	moved := httptest.NewRecorder()
+	admitted.ServeHTTP(moved, httptest.NewRequest(http.MethodGet, "/pages/Billing/opencode%3Abox%3Ases_a/index.html", http.NoBody))
+	require.Equal(t, "/pages/Ruzuku/opencode%3Abox%3Ases_a/index.html", moved.Header().Get("Location"))
+
 	_, err = invoke[Page](t.Context(), connection, "GetPage", &PageRequest{Agent: "reporter", Path: "x.html"})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 	_, err = invoke[ListPagesResponse](t.Context(), connection, "ListPages", &ListPagesRequest{})
