@@ -100,15 +100,6 @@ func backgroundNote(job *backgroundJob) string {
 	return fmt.Sprintf("<subagent id=%q state=%q description=%q continue=%q>\n%s\n</subagent>", job.jobID, job.status, job.label, job.subagentKey, body)
 }
 
-func backgroundNotesText(notes []backgroundJob) string {
-	texts := make([]string, len(notes))
-	for i := range notes {
-		texts[i] = backgroundNote(&notes[i])
-	}
-
-	return strings.Join(texts, "\n\n")
-}
-
 func systemPromptInput(id, text string) harness.PromptInput {
 	header := provenanceHeader(&promptProvenance{origin: "System"})
 	return harness.PromptInput{ID: id, Texts: []string{header + "\n\n" + text}, Header: header}

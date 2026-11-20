@@ -1528,7 +1528,14 @@ func (b *Bridge) wakePrompt(ctx context.Context, msg *protocol.InboundMessage) e
 		return err
 	}
 
-	msg.Text = backgroundNotesText(notes)
+	var prompt strings.Builder
+
+	for i := range notes {
+		prompt.WriteString(backgroundNote(&notes[i]))
+		prompt.WriteString("\n\n")
+	}
+
+	msg.Text = strings.TrimSuffix(prompt.String(), "\n\n")
 
 	return nil
 }
