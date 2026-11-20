@@ -270,7 +270,7 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 			return nil, err
 		}
 
-		root = mergeJSON(root, secret).(map[string]any)
+		mergeJSON(root, secret)
 	}
 
 	resolved, err := resolveAWS(context.Background(), root, fetcher)
