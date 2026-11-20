@@ -948,7 +948,7 @@ FROM unsettled u CROSS JOIN lane l LEFT JOIN conversations c ON c.conversation_i
 	if request.turnID != "" {
 		var taken bool
 
-		err = queryScalar(ctx, tx, "check taken active turn", `SELECT COUNT(*) > 0 FROM turns WHERE id = $1 AND (phase = $2 OR $3)`, &taken, request.turnID, turnRunning, request.delivery != nil)
+		err = queryScalar(ctx, tx, "check taken active turn", `SELECT COUNT(*) > 0 FROM turns WHERE id = $1 AND conversation_id = $2 AND (phase = $3 OR $4)`, &taken, request.turnID, owner.config.ConversationID, turnRunning, request.delivery != nil)
 
 		return taken, err
 	}
