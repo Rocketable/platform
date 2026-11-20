@@ -142,7 +142,10 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
     frame.src = src;
     document.body.append(frame);
   }))), framed);
-  expect(other.frames().slice(1).map((frame: { url(): string }) => frame.url())).toEqual(framed.map(() => "chrome-error://chromewebdata/"));
+  const frameURLs = await Promise.all(other.frames().slice(1).map(
+    (frame: { evaluate(readURL: () => string): Promise<string> }) => frame.evaluate(() => location.href),
+  ));
+  expect(frameURLs).toEqual(framed.map(() => "chrome-error://chromewebdata/"));
   expect(await other.evaluate((src: string) => new Promise((resolve) => {
     const image = new Image();
     image.onload = image.onerror = () => resolve(image.naturalWidth);
