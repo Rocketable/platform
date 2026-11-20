@@ -395,27 +395,24 @@ func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config, s
 		return "", err
 	}
 
-	if !found {
-		warnings, err := s.startWith(cfg, sessions)
-		if err != nil {
-			return "", err
+	if found {
+		if ignored := setBehaviorFields(new(cfg.Behavior())); len(ignored) > 0 {
+			s.logger.Warn("ignoring behavior settings in the config file; the stored behavior settings apply", "fields", ignored)
 		}
 
-		return warnings, putBehaviorSettings(ctx, sessions.db, new(cfg.Behavior()))
+		cfg.SetBehavior(&stored)
 	}
-
-	if ignored := setBehaviorFields(new(cfg.Behavior())); len(ignored) > 0 {
-		s.logger.Warn("ignoring behavior settings in the config file; the stored behavior settings apply", "fields", ignored)
-	}
-
-	cfg.SetBehavior(&stored)
 
 	warnings, err := s.startWith(cfg, sessions)
-	if err != nil {
+	if err != nil && found {
 		return "", fmt.Errorf("stored behavior settings: %w", err)
 	}
 
-	return warnings, nil
+	if err != nil || found {
+		return warnings, err
+	}
+
+	return warnings, putBehaviorSettings(ctx, sessions.db, new(cfg.Behavior()))
 }
 
 func (s *lockedRun) startWith(cfg *config.Config, sessions *SessionService) (string, error) {
