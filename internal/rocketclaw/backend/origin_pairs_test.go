@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -149,8 +150,8 @@ func TestChatOriginFactsAllocationBudget(t *testing.T) {
 
 	result := testing.Benchmark(BenchmarkChatOriginFacts)
 	require.Positive(t, result.N)
-	require.Less(t, result.AllocedBytesPerOp(), int64(7<<20))
-	require.Less(t, result.AllocsPerOp(), int64(752))
+	require.Less(t, result.AllocedBytesPerOp(), int64(7<<20), "benchmark: %s  %s", result, result.MemString())
+	require.Less(t, result.AllocsPerOp(), int64(752), "benchmark: %s  %s", result, result.MemString())
 }
 
 func BenchmarkChatOriginFacts(b *testing.B) {
@@ -169,6 +170,9 @@ func BenchmarkChatOriginFacts(b *testing.B) {
 
 	b.ReportAllocs()
 
+	var start, end runtime.MemStats
+	runtime.ReadMemStats(&start)
+
 	for b.Loop() {
 		var rows []ChatOriginFacts
 
@@ -183,6 +187,16 @@ func BenchmarkChatOriginFacts(b *testing.B) {
 		for i := range rows {
 			facts := &rows[i]
 			require.Equal(b, map[string]string{"example": values[facts.ConversationID]}, facts.Binding.OriginPairs)
+		}
+	}
+
+	runtime.ReadMemStats(&end)
+	b.ReportMetric(float64(end.NumGC-start.NumGC), "gc-cycles/run")
+
+	for i, class := range &end.BySize {
+		if class.Size == 8192 {
+			b.ReportMetric(float64(class.Mallocs-start.BySize[i].Mallocs), "8KiB-class-allocs/run")
+			break
 		}
 	}
 }
