@@ -412,13 +412,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 		}
 	}
 
-	for _, hit := range found {
-		if _, passed := hits[hit.ConversationID]; passed {
-			hits[hit.ConversationID] = true
-			search.Hits = append(search.Hits, hit)
-		}
-	}
-
+	search.Hits = passingHits(found, hits)
 	search.MentionIDs = MentionedIDs(search.Hits, mentions)
 
 	for _, withHits := range []bool{true, false} {
@@ -470,6 +464,23 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 	search.sortMatches()
 
 	return search, nil
+}
+
+func passingHits(found []MessageSearchHit, hits map[string]bool) []MessageSearchHit {
+	kept := slices.DeleteFunc(found, func(hit MessageSearchHit) bool {
+		if _, passed := hits[hit.ConversationID]; !passed {
+			return true
+		}
+
+		hits[hit.ConversationID] = true
+
+		return false
+	})
+	if len(kept) != len(found) {
+		kept = append([]MessageSearchHit(nil), kept...)
+	}
+
+	return kept
 }
 
 func readChats(candidates []string, hits []MessageSearchHit) []string {
