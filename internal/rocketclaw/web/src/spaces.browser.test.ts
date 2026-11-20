@@ -604,7 +604,7 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
     return got;
   };
   const fromShared = await lines(() => row("Alpha").click({ button: "right" }));
-  expect(fromShared).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Close", "Close others", "Close to the right", "Close all", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "Unfollow", "—", "Add to group", "—", "Delete session"]);
+  expect(fromShared).toEqual(["Pull requests and issues", "—", "Rename session", "Regenerate title", "—", "Close", "Close others", "Close to the right", "Close all", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "Unfollow", "—", "Add to group", "—", "Delete session"]);
   expect([await lines(() => tab("Alpha").click({ button: "right" })), await lines(() => page.getByRole("banner").getByRole("button", { name: "Page actions", exact: true }).click())]).toEqual([fromShared, fromShared]);
   await row("Alpha").click({ button: "middle" });
   await tab("Bravo").dragTo(row("Alpha"));
@@ -631,11 +631,11 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
   expect(await names(page)).toEqual(["New session", "Alpha"]);
   expect(await row("Bravo").getAttribute("aria-selected")).toBe("true");
   await shared(page).getByRole("button", { name: "Tab actions", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
-  await page.getByRole("complementary", { name: "Pull requests", exact: true }).getByText("No pull requests found for this thread.", { exact: true }).waitFor();
+  await page.getByRole("menuitem", { name: "Pull requests and issues", exact: true }).click();
+  await page.getByRole("complementary", { name: "Pull requests and issues", exact: true }).getByText("No pull requests or issues found for this thread.", { exact: true }).waitFor();
   expect(new URL(page.url()).pathname).toBe(href("bravo"));
   expect(await names(page)).toEqual(["New session", "Alpha"]);
-  await page.getByRole("button", { name: "Close pull requests", exact: true }).click();
+  await page.getByRole("button", { name: "Close pull requests and issues", exact: true }).click();
   await page.keyboard.press("Control+Shift+p");
   await commands.getByRole("button", { name: "Tabs: Remove from Shared", exact: true }).waitFor();
   expect(await commands.getByRole("button", { name: "Tabs: Close", exact: true }).count()).toBe(0);
@@ -1012,7 +1012,7 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   saved.state = { ...saved.state, tabs: [{ path: href("alpha"), space: "main" }], space: "main" };
   saved.shared = [{ space: "main", path: href("bravo") }, { space: "main", path: "/search/d", search: { name: "Ops", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" } }];
   await page.goto(`${origin}${href("alpha")}`);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "Unfollow", "—", "Add to group", "—", "Delete session"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests and issues", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "Unfollow", "—", "Add to group", "—", "Delete session"]);
   await close();
   expect(await sharedMenu(page, "Ops")).toEqual(["Rename search", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park", "Unfollow", "—", "Add to group"]);
   await close();
@@ -1021,7 +1021,7 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   for (const item of ["Park", "Until I unpark"]) await page.getByRole("menuitem", { name: item, exact: true }).click();
   await row("Bravo").and(page.locator('[aria-description="Shared, Space: Main, Parked"]')).waitFor();
   expect([await sharedNames(page), await opacity(href("bravo")), await names(page)]).toEqual([["Bravo", "Ops"], "0.6", ["Alpha"]]);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group", "—", "Delete session"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests and issues", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group", "—", "Delete session"]);
   await close();
   // Another person's session list carries none of this person's parks, so for them the row is as it was.
   saved.attention = [];
@@ -1354,7 +1354,7 @@ test("Parked also lists the Shared rows this person parked, which open in their 
     waitingFor = "Hotel's menu to offer Rename session";
     await original.click({ button: "right" });
     await page.getByRole("menuitem").first().waitFor();
-    expect(await menuLines(page)).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group", "Move to space", "—", "Delete session"]);
+    expect(await menuLines(page)).toEqual(["Pull requests and issues", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group", "Move to space", "—", "Delete session"]);
     await page.getByRole("menuitem", { name: "Rename session", exact: true }).click();
     waitingFor = "Parked to show Renamed hotel";
     const input = parked.getByRole("textbox", { name: "Session name" });
@@ -1554,7 +1554,7 @@ test("with parked tabs on more than one RocketClaw, Parked is a tree of servers 
       step("open India menu");
       await parked.getByRole("tab", { name: "India", exact: true }).click({ button: "right" });
       await page.getByRole("menuitem").first().waitFor();
-      expect(await menuLines(page)).toEqual(["Pull requests", "—", "Unpark", "Auto-park when I send", "Unfollow"]);
+      expect(await menuLines(page)).toEqual(["Pull requests and issues", "—", "Unpark", "Auto-park when I send", "Unfollow"]);
       step("click Unpark");
       await page.getByRole("menuitem", { name: "Unpark", exact: true }).click();
       step("wait for remote Unpark");

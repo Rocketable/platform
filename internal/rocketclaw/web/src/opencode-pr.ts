@@ -59,7 +59,7 @@ export async function discoverOpenCodePR(api: string, sessionID: string, signal:
 }
 
 export async function readOpenCodePR<T>(source: OpenCodePRSource, endpoint: string, signal: AbortSignal): Promise<T> {
-  if (!/^repos\/[a-z\d][a-z\d-]*\/(?!\.{1,2}\/)[a-z\d_.-]+\/pulls\/[1-9]\d*(?:\/files\?per_page=100&page=[1-9]\d*)?$/i.test(endpoint)) throw new Error("Invalid GitHub pull request reference.");
+  if (!/^repos\/[a-z\d][a-z\d-]*\/(?!\.{1,2}\/)[a-z\d_.-]+\/(?:pulls\/[1-9]\d*(?:\/files\?per_page=100&page=[1-9]\d*)?|issues\/[1-9]\d*(?:\/comments\?per_page=100&page=[1-9]\d*)?)$/i.test(endpoint)) throw new Error("Invalid GitHub reference.");
   try {
     const result = await run(source, `gh api --hostname github.com --method GET '${endpoint}'`, signal);
     if (result.exit !== 0) throw new Error(unavailable);

@@ -334,9 +334,11 @@ Each tool call acts on the Remote OpenCode Session that made it, or for a subage
 A named slice of one Outside MCP Server's tools, such as `read`, `write`, or `sudo`, defined by tool-name patterns. Agents reach outside MCP tools only through the facets their files name, and sudo agents through every facet; a tool in no facet is reachable by no agent.
 *Avoid:* tool group
 
-### Pull Requests Pane
+### Pull Requests and Issues Pane
 
 The pane beside a conversation that lists the GitHub pull requests the conversation created or mentioned and lets a person read them without leaving the conversation. On desktop it opens by itself only on a pull request the conversation in view created: one just created, or one whose head commit moved.
+
+It also lists GitHub issue links from messages in the conversation and its child sessions. An issue never opens the pane by itself. Its preview shows the description and comments; it does not write to GitHub.
 
 The conversation here is its whole session tree: its subagents' sessions at any depth and, for RocketClaw's own sessions, its Shadow Sessions. A pull request counts as created when a successful create command, not a dry run, printed its link alone on a line; when a command prints more such links than it ran create commands, none counts as created. Any other pull request link in a successful command's output counts as mentioned, except output of a command that lists or searches pull requests or calls the GitHub API, which counts for nothing. Mentioned pull requests are listed after created ones and marked as mentioned. A Remote OpenCode Session also shows the current checkout's pull request, found from the branch the session folder is on, or from its nearest bookmark when the folder has no current branch, as in a jj workspace; that reflects the folder's state, not proof the conversation made it, since several sessions may share a folder. A folder that is not a repository, or where neither a branch nor a bookmark can be named, has no current checkout pull request, which is not an error. The pane reports a GitHub login problem only for other checkout failures.
 

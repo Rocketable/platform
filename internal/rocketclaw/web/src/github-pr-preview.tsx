@@ -187,7 +187,7 @@ function PreviewBody({ reference, state, close, source, composer }: { reference:
       {pr && <PRStatus pr={pr} />}
       <Tooltip><TooltipTrigger render={<a href={`https://github.com/${reference.owner}/${reference.repo}/pull/${reference.number}`} target="_blank" rel="noopener noreferrer" className="flex min-w-0 items-center gap-1 hover:underline"><span className="truncate">{reference.owner}/{reference.repo} #{reference.number}</span><ExternalLink className="size-3 shrink-0" /></a>} /><TooltipContent>Open on GitHub</TooltipContent></Tooltip>
     </span>
-    {!source && !result.loading && (!pr || Boolean(result.error)) && <TokenEntry state={state} />}
+    {!source && !result.loading && (!pr || Boolean(result.error)) && <TokenEntry credential={state.credential} setCredential={state.setCredential} onUseToken={(token) => void state.load(false, token)} permission="Pull requests" />}
     {pr && <PreviewDetails reference={reference} pr={pr} state={state} composer={composer} />}
   </span>;
 }
@@ -233,11 +233,10 @@ function PRHeader({ pr }: { pr: PullRequest }) {
   </span>;
 }
 
-function TokenEntry({ state }: { state: ReturnType<typeof usePreview> }) {
-  const { load, credential, setCredential } = state;
+export function TokenEntry({ credential, setCredential, onUseToken, permission }: { credential: string; setCredential: (value: string) => void; onUseToken: (value: string) => void; permission: "Pull requests" | "Issues" }) {
   return <span className="flex flex-col gap-2">
-       <span>Private PR or rate limited? Use your own fine-grained token with Pull requests: read for private access or a higher request quota. It stays in this open preview only; closing or navigating away clears it.</span>
-      {window.isSecureContext ? <><Input type="password" aria-label="Personal read token" autoComplete="off" value={credential} onChange={(event) => setCredential(event.target.value)} />
-        <Button type="button" variant="outline" disabled={!credential} onClick={() => void load(false, credential)}>Use token</Button></> : <span>Token entry requires a secure browser context with a trusted certificate. Open this app over HTTPS.</span>}
+       <span>Use your own fine-grained token with {permission}: read for private access or a higher request quota. It stays in this open preview only; closing or navigating away clears it.</span>
+       {window.isSecureContext ? <><Input type="password" aria-label="Personal read token" autoComplete="off" value={credential} onChange={(event) => setCredential(event.target.value)} />
+          <Button type="button" variant="outline" disabled={!credential} onClick={() => onUseToken(credential)}>Use token</Button></> : <span>Token entry requires a secure browser context with a trusted certificate. Open this app over HTTPS.</span>}
   </span>;
 }

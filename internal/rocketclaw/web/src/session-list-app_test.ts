@@ -319,7 +319,7 @@ export async function appScenario(part: "lists" | "composer") {
       };
       await page.goto(origin);
       await page.emulateMedia({ colorScheme: "dark" });
-      await page.getByRole("button", { name: "Show pull requests", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Show pull requests and issues", exact: true }).waitFor();
       expect(await page.locator("#bottom-navigation").getByRole("button", { name: /^Theme/ }).count()).toBe(0);
       await page.waitForFunction(() => document.documentElement.classList.contains("dark"));
       await theme("Light");

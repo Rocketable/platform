@@ -366,9 +366,9 @@ const pullRequestComponents: Components = {
 const pullRequestSchema = { ...defaultSchema, attributes: { ...defaultSchema.attributes, blockquote: [...defaultSchema.attributes!.blockquote!, ["dataAlert", ...Object.keys(alertBorders)]] } };
 
 // A line starting with <!here> or <!subteam^…> would otherwise be an HTML block that hides its Markdown.
-export function MarkdownText({ text, repository }: { text: string; repository?: GitHubPR }) {
+export function MarkdownText({ text, repository, hideImages = false }: { text: string; repository?: GitHubPR; hideImages?: boolean }) {
   const escaped = text.replaceAll(/<(?=!(?:here|channel|everyone|subteam\^)[^<>\n]*>)/g, "\\<");
   return <div className={repository ? "markdown break-words [&_p]:whitespace-normal" : "markdown break-words"}>{repository
-    ? <Markdown remarkPlugins={[remarkGfm, remarkGitHubAlerts, remarkBreaks, [remarkGitHubReferences, repository]]} rehypePlugins={[rehypeRaw, [rehypeSanitize, pullRequestSchema]]} components={pullRequestComponents}>{escaped}</Markdown>
+    ? <Markdown remarkPlugins={[remarkGfm, remarkGitHubAlerts, remarkBreaks, [remarkGitHubReferences, repository]]} rehypePlugins={[rehypeRaw, [rehypeSanitize, pullRequestSchema]]} components={hideImages ? { ...pullRequestComponents, img: ({ alt }) => alt } : pullRequestComponents}>{escaped}</Markdown>
     : <Markdown remarkPlugins={[remarkGfm, remarkSlackTags]} components={markdownComponents}>{escaped}</Markdown>}</div>;
 }
