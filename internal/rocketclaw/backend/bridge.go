@@ -2021,12 +2021,9 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, request *bridgeRequest) err
 		return nil
 	}
 
-	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.\n\n"+goalSteeringPrompt(&goal), false)
-	inbound.GoalAction, inbound.OriginHeader = protocol.GoalActionContinue, goal.Origin
-	inbound.ConversationID = b.config.ConversationID
-	inbound.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: goal.PrincipalName, protocol.InboundPrincipalEmailMetadataKey: goal.PrincipalEmail}
+	inbound := goalContinuation(b.config.ConversationID, &goal)
+	inbound.Text += "\n\n" + goalSteeringPrompt(&goal)
 
-	inbound.SlackReply = &protocol.SlackReplyTarget{}
 	if msg != nil && msg.SlackReply != nil {
 		*inbound.SlackReply = *msg.SlackReply
 	}
