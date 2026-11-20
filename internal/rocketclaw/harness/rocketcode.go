@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -275,11 +274,6 @@ func NewWithModelResolver(
 		return nil, fmt.Errorf("initialize prompt expansion: %w", err)
 	}
 
-	rootInstructions, err := loadRootInstructions(root)
-	if err != nil {
-		return nil, err
-	}
-
 	workspaceInstructions := fmt.Sprintf("<current-workspace>\nWorkspace root: %s\n</current-workspace>", promptExpansion.hostDir)
 
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, "high"))
@@ -301,7 +295,6 @@ func NewWithModelResolver(
 
 	factory := &toolFactory{
 		resolver:                  resolver,
-		rootInstructions:          strings.TrimSpace(rootInstructions),
 		workspaceInstructions:     workspaceInstructions,
 		autoApproverModel:         cmp.Or(config.AutoApproverModel, defaultOpenAIModel),
 		autoApproverDecisionModel: config.AutoApproverDecisionModel,
@@ -368,28 +361,4 @@ func validateAutoPermissionReviewers(agents Agents) error {
 	}
 
 	return nil
-}
-
-func loadRootInstructions(root *os.Root) (string, error) {
-	file, err := root.Open("AGENTS.md")
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-
-		return "", fmt.Errorf("open AGENTS.md: %w", err)
-	}
-
-	defer func() { _ = file.Close() }()
-
-	data, err := io.ReadAll(file)
-	if err != nil {
-		return "", fmt.Errorf("read AGENTS.md: %w", err)
-	}
-
-	if len(data) == 0 {
-		return "", nil
-	}
-
-	return "Instructions from: AGENTS.md\n" + string(data), nil
 }

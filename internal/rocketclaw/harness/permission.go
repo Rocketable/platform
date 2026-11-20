@@ -230,29 +230,11 @@ func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule,
 
 			value := node.Content[i+1]
 
-			actionValue := value.Value
-
-			if permission == "rocketclaw" && node.Content[i].Value == "load_agents_md" {
-				if value.Kind != yaml.ScalarNode || value.ShortTag() != "!!bool" {
-					return nil, errors.New("load_agents_md must be a boolean")
-				}
-
-				var load bool
-				if err := value.Decode(&load); err != nil {
-					return nil, fmt.Errorf("load_agents_md: %w", err)
-				}
-
-				actionValue = string(permissionDeny)
-				if load {
-					actionValue = string(permissionAllow)
-				}
-			}
-
-			if permission == "rocketclaw" && node.Content[i].Value == AllowBackgroundSubject && (value.Kind != yaml.ScalarNode || (actionValue != string(permissionAllow) && actionValue != string(permissionDeny))) {
+			if permission == "rocketclaw" && node.Content[i].Value == AllowBackgroundSubject && (value.Kind != yaml.ScalarNode || (value.Value != string(permissionAllow) && value.Value != string(permissionDeny))) {
 				return nil, errors.New("allow_background must be allow or deny")
 			}
 
-			action, reviewer, err := parsePermissionAction(actionValue)
+			action, reviewer, err := parsePermissionAction(value.Value)
 			if err != nil {
 				return nil, fmt.Errorf("pattern %q: %w", node.Content[i].Value, err)
 			}
@@ -415,7 +397,7 @@ func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, s
 		decision.Action = permissionAuto
 	}
 
-	if permission == "rocketclaw" && (subject == codeModeApproveSubject && !ps.Sudo || subject == "load_agents_md") {
+	if permission == "rocketclaw" && subject == codeModeApproveSubject && !ps.Sudo {
 		decision.Action = permissionAllow
 	}
 

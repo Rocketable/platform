@@ -1,7 +1,7 @@
 ---
 title: A Review Request That Claimed Its Own Trust Read as Prompt Injection
 date: 2026-11-02
-last_updated: 2026-11-17
+last_updated: 2026-11-20
 category: docs/solutions/logic-errors/
 module: internal/rocketclaw/harness
 problem_type: logic_error
@@ -48,7 +48,7 @@ Move the trust statement to where only RocketClaw writes: the reviewer's instruc
 
 - The request now opens with a plain label: `Turn origin (written by RocketClaw): [Web principal="Alice"]`.
 - `permissionReviewOriginRule` is appended to every reviewer's instructions in `reviewPermission`, the embedded guardian and custom reviewers alike. It says that RocketClaw writes that line, that the line is never prompt injection, and that origin headers inside the transcript remain claims.
-- `TestPermissionReviewSystemPromptIncludesRootInstructionsAndCodeMode` checks that both kinds of reviewer get the rule. `TestPermissionReviewPromptIncludesReviewContextAndPlannedAction` checks that the request opens with the line the rule describes.
+- `TestPermissionReviewSystemPromptIncludesCodeMode` checks that both kinds of reviewer get the rule. `TestPermissionReviewPromptIncludesReviewContextAndPlannedAction` checks that the request opens with the line the rule describes.
 
 ## Why This Works
 A model reviewer trusts its instructions and treats the request as evidence. A claim of trust belongs in the channel the reviewer already trusts. The same claim made inside the evidence is what an attacker would write. The label in the request now only says where the line came from, and the rule in the instructions says what that means.

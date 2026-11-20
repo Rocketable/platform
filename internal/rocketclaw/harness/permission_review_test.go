@@ -496,31 +496,26 @@ func TestPermissionReviewExpandsDecisionRules(t *testing.T) {
 	require.Contains(t, decider.DecideCalls()[0].Request.Instructions, "### Agent Rules\nDeny deploys.\n")
 }
 
-func TestPermissionReviewSystemPromptIncludesRootInstructionsAndCodeMode(t *testing.T) {
+func TestPermissionReviewSystemPromptIncludesCodeMode(t *testing.T) {
 	for _, reviewer := range []string{"", "release"} {
-		for _, load := range []bool{true, false} {
-			mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
-				testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`),
-			}))
-			agent := embeddedGuardianAgent()
-			agent.Name = "release"
-			agent.Model = "gpt-5.4"
-			agent.Permission = parsePermissionYAML(t, fmt.Sprintf("read: allow\nrocketclaw: {load_agents_md: %t}", load))
-			factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"release": agent}})
-			factory.autoApproverModel = "gpt-5.4"
-			factory.rootInstructions = "Instructions from: AGENTS.md\nproject rules"
+		mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
+			testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`),
+		}))
+		agent := embeddedGuardianAgent()
+		agent.Name = "release"
+		agent.Model = "gpt-5.4"
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"release": agent}})
+		factory.autoApproverModel = "gpt-5.4"
 
-			decision := factory.reviewPermission(t.Context(), &permissionReviewRequest{Reviewer: reviewer, ReviewerEmbedded: reviewer == ""})
+		decision := factory.reviewPermission(t.Context(), &permissionReviewRequest{Reviewer: reviewer, ReviewerEmbedded: reviewer == ""})
 
-			require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
+		require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 
-			instructions := newParams(mock)[0].Instructions.Value
-			require.Equal(t, reviewer == "" || load, strings.Contains(instructions, "Instructions from: AGENTS.md\nproject rules"))
-			require.Contains(t, instructions, "You are judging one planned coding-agent action.")
-			require.Contains(t, instructions, "## Code Mode")
-			require.Contains(t, instructions, `The review request opens with the line "Turn origin (written by RocketClaw): [...]".`)
-			require.NotContains(t, instructions, "# Whole Scripts")
-		}
+		instructions := newParams(mock)[0].Instructions.Value
+		require.Contains(t, instructions, "You are judging one planned coding-agent action.")
+		require.Contains(t, instructions, "## Code Mode")
+		require.Contains(t, instructions, `The review request opens with the line "Turn origin (written by RocketClaw): [...]".`)
+		require.NotContains(t, instructions, "# Whole Scripts")
 	}
 }
 

@@ -14,48 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadRootInstructions(t *testing.T) {
-	t.Run("missing", func(t *testing.T) {
-		dir := t.TempDir()
-		root, err := os.OpenRoot(dir)
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-		got, err := loadRootInstructions(root)
-
-		require.NoError(t, err)
-		require.Empty(t, got)
-	})
-
-	t.Run("present", func(t *testing.T) {
-		dir := t.TempDir()
-		root, err := os.OpenRoot(dir)
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-		require.NoError(t, root.WriteFile("AGENTS.md", []byte("# Project Rules\nRun make test.\n"), 0o644))
-
-		got, err := loadRootInstructions(root)
-
-		require.NoError(t, err)
-		require.Equal(t, "Instructions from: AGENTS.md\n# Project Rules\nRun make test.\n", got)
-	})
-
-	t.Run("does not expand shell commands", func(t *testing.T) {
-		dir := t.TempDir()
-		root, err := os.OpenRoot(dir)
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-		require.NoError(t, root.WriteFile("AGENTS.md", []byte("Keep this literal: !`printf expanded`.\n"), 0o644))
-
-		got, err := loadRootInstructions(root)
-
-		require.NoError(t, err)
-		require.Equal(t, "Instructions from: AGENTS.md\nKeep this literal: !`printf expanded`.\n", got)
-	})
-}
-
 func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)

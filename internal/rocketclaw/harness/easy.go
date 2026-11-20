@@ -192,7 +192,6 @@ func compileEasyPermissions(agent *Agent, cfg *AgentLoadConfig) error {
 	}
 
 	_ = permission.Set("rocketclaw", codeModeApproveSubject, PermissionAuto)
-	_ = permission.Deny("rocketclaw", "load_agents_md")
 
 	if len(agent.Subagents) > 0 && *agent.MaxRecursion > 0 {
 		_ = permission.Allow("task", agent.Name)
