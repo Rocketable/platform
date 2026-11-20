@@ -67,6 +67,8 @@ func (e *openCodeError) Error() string {
 }
 
 type openCodeShells struct {
+	lastPruned time.Time
+
 	mu      sync.Mutex
 	running map[string]string
 }
@@ -184,8 +186,6 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedCon
 	ticker := time.NewTicker(openCodeSyncInterval)
 	defer ticker.Stop()
 
-	pruned := make(map[string]time.Time, len(servers))
-
 	for {
 		origin := cfg.Clone().Web.Tsnet.Origin
 
@@ -194,8 +194,8 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedCon
 				addOpenCodeBridges(ctx, origin, name, server)
 			}
 
-			if time.Since(pruned[name]) >= openCodePruneEvery && s.pruneOpenCode(ctx, name, server) == nil {
-				pruned[name] = time.Now()
+			if time.Since(shells[name].lastPruned) >= openCodePruneEvery && s.pruneOpenCode(ctx, name, server) == nil {
+				shells[name].lastPruned = time.Now()
 			}
 		}
 
