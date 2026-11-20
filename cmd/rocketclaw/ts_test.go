@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -38,28 +37,21 @@ func TestRunTS(t *testing.T) {
 	assert.Contains(t, captureStdout(t, func() error { return runTS(nil) }), "rocketclaw ts login")
 	require.EqualError(t, runTS([]string{"logout"}), `unknown ts command "logout"`)
 	require.EqualError(t, runTS([]string{"login", "extra"}), "ts login takes no arguments")
+
+	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{"web": {"tsnet": {"hostname": "Bad_Host"}}}`), 0o600))
+	require.ErrorContains(t, runTS([]string{"login"}), "load runtime config: web.tsnet.hostname must use only a-z, 0-9 and -")
 }
 
 func TestTailnetLogin(t *testing.T) {
 	control := &testcontrol.Server{DNSConfig: &tailcfg.DNSConfig{Proxied: true}, MagicDNSDomain: "tail-scale.ts.net", RequireAuth: true}
 	useTestTailnet(t, control)
 
-	prepareOAIConfig(t)
-
-	var file map[string]any
-
-	data, err := os.ReadFile(defaultConfigPath)
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(data, &file))
-
-	file["web"] = map[string]any{"tsnet": map[string]any{"hostname": "rocketclaw-test"}}
-	data, err = json.Marshal(file)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(defaultConfigPath, data, 0o640))
+	t.Chdir(t.TempDir())
+	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{"web": {"tsnet": {"hostname": "rocketclaw-test"}}}`), 0o600))
 
 	tailnet := &config.TsnetConfig{Hostname: "rocketclaw-test"}
 
-	_, err = startTailnet(t.Context(), tailnet, slog.New(slog.DiscardHandler))
+	_, err := startTailnet(t.Context(), tailnet, slog.New(slog.DiscardHandler))
 	require.ErrorIs(t, err, errTailnetLogin)
 	assert.NotContains(t, err.Error(), "/auth/", "the server never prints a login link")
 

@@ -198,6 +198,10 @@ type OpenAIConfig struct {
 	PromptCacheMarkersRelativePosition *int   `json:"prompt_cache_markers_relative_position,omitempty"`
 }
 
+func (c *OpenAIConfig) AuthMode() string {
+	return cmp.Or(strings.TrimSpace(cmp.Or(c.Auth, c.LegacyAuth)), "api_key")
+}
+
 type DecisionProvider string
 
 const (
@@ -294,18 +298,10 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 
 	cfg.Workspace = filepath.Clean(cfg.Workspace)
 
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-
 	return &cfg, nil
 }
 
-func (c *Config) Validate() error {
-	if _, _, err := c.AttachmentLocation(); err != nil {
-		return err
-	}
-
+func (c *Config) ValidateTsnet() error {
 	tsnet := c.Web.Tsnet
 	if tsnet == nil {
 		return errors.New("web.tsnet is required: the Web is served only on the tailnet")
@@ -314,6 +310,18 @@ func (c *Config) Validate() error {
 	tsnet.Hostname = cmp.Or(tsnet.Hostname, "rocketclaw")
 	if strings.Trim(tsnet.Hostname, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || slices.ContainsFunc(tsnet.Tags, func(tag string) bool { return !strings.HasPrefix(tag, "tag:") }) {
 		return errors.New(`web.tsnet.hostname must use only a-z, 0-9 and -, and each web.tsnet.tags entry must start with "tag:"`)
+	}
+
+	return nil
+}
+
+func (c *Config) Validate() error {
+	if _, _, err := c.AttachmentLocation(); err != nil {
+		return err
+	}
+
+	if err := c.ValidateTsnet(); err != nil {
+		return err
 	}
 
 	if c.Workspace == "" {
@@ -430,11 +438,9 @@ func normalizeOpenAIModel(field, model string) (string, error) {
 }
 
 func normalizeOpenAIConfig(field string, cfg *OpenAIConfig) error {
-	switch strings.TrimSpace(cmp.Or(cfg.Auth, cfg.LegacyAuth)) {
-	case "", "api_key":
-		cfg.Auth = "api_key"
-	case "chatgpt":
-		cfg.Auth = "chatgpt"
+	switch mode := cfg.AuthMode(); mode {
+	case "api_key", "chatgpt":
+		cfg.Auth = mode
 	default:
 		return fmt.Errorf("%s.auth must be api_key or chatgpt", field)
 	}
