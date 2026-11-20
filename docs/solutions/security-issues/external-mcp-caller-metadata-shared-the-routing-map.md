@@ -1,6 +1,7 @@
 ---
 title: External MCP caller metadata shared the map RocketClaw reads for routing
 date: 2026-10-31
+last_updated: 2026-11-20
 category: docs/solutions/security-issues/
 module: cmd/rocketclaw
 problem_type: security_issue
@@ -105,3 +106,4 @@ The old guard asked "which keys are dangerous?", and that list could never be co
 - `docs/solutions/security-issues/easy-agent-folder-checks-must-compare-real-paths.md`: another security fix from the easy-mode work (PR #822), where a check compared values from two different spaces (real paths and names).
 - Plan: `docs/plans/2026-10-31-1317-fix-easy-mode-follow-ups-plan.md` (KTD3 covers the migration). Decisions: `docs/specs/2026-10-31-easy-mode-follow-ups-design.md`.
 - `CONCEPTS.md`: External MCP Metadata, External MCP Session.
+- `docs/solutions/architecture-patterns/mcp-servers-see-only-their-turn-because-each-execute-starts-them.md`: these untrusted values also leave the process, to outside MCP servers as environment variables and `X-Rocketclaw-*` headers. It explains why the merge there drops `ROCKETCLAW_*` config keys without breaking the "no `delete` after merging input" rule above.

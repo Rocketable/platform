@@ -40,12 +40,29 @@ type Registry struct {
 	servers   map[string]ServerConfig
 }
 
-func New(workspace string, servers map[string]ServerConfig) Registry {
+func New(workspace string, servers map[string]ServerConfig, sessionEnv map[string]string) Registry {
 	cloned := make(map[string]ServerConfig, len(servers))
 	for name, cfg := range servers {
-		cfg.Args = slices.Clone(cfg.Args)
-		cfg.Env = maps.Clone(cfg.Env)
-		cfg.Headers = maps.Clone(cfg.Headers)
+		env := make(map[string]string, len(cfg.Env)+len(sessionEnv))
+		for key, val := range cfg.Env {
+			if !strings.HasPrefix(key, "ROCKETCLAW_") {
+				env[key] = val
+			}
+		}
+
+		headers := make(map[string]string, len(cfg.Headers)+len(sessionEnv))
+		for key, val := range cfg.Headers {
+			if !strings.HasPrefix(http.CanonicalHeaderKey(key), "X-Rocketclaw-") {
+				headers[key] = val
+			}
+		}
+
+		for key, val := range sessionEnv {
+			env[key] = val
+			headers["X-"+strings.ReplaceAll(key, "_", "-")] = val
+		}
+
+		cfg.Args, cfg.Env, cfg.Headers = slices.Clone(cfg.Args), env, headers
 		cloned[name] = cfg
 	}
 
