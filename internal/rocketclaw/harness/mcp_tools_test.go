@@ -19,6 +19,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,7 +67,7 @@ func TestMCPToolsOmitsWithoutAllow(t *testing.T) {
 
 	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
 		"demo": {URL: "http://127.0.0.1:9"},
-	})
+	}, nil)
 
 	factory := &toolFactory{mcpRegistry: reg, baseTools: makeSandboxedTools(nil, nil)}
 	assert.Nil(t, factory.mcpToolsFor(&Agent{}, nil))
@@ -465,7 +466,7 @@ func TestMCPServerVisibility(t *testing.T) {
 	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
 		"demo": {URL: "http://127.0.0.1:9"},
 		"acme": {URL: "http://127.0.0.1:9"},
-	})
+	}, nil)
 
 	for _, tc := range []struct {
 		name, rules string
@@ -499,7 +500,7 @@ func TestExecuteExactToolGrant(t *testing.T) {
 
 	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
 		"github": {URL: "http://127.0.0.1:9"},
-	})
+	}, nil)
 
 	var permissions PermissionSet
 	require.NoError(t, permissions.Allow("mcp", "github.create_issue"))
@@ -529,7 +530,7 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: full}}}, nil, nil
 		})
 	})
-	reg := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
+	reg := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}}, nil)
 	permissions := parsePermissionYAML(t, "mcp: {demo: {all: allow}}")
 	factory := &toolFactory{mcpRegistry: reg, baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, nil), spillRel: defaultSpillRel, promptExpansion: promptExpansionEnvironment{root: root}}
 	loop := testLooper(mockResponses())
@@ -714,7 +715,7 @@ func TestExecuteSearchAndRun(t *testing.T) {
 		})
 	})
 
-	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
+	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{"demo": {URL: url}}, nil)
 
 	var permissions PermissionSet
 	require.NoError(t, permissions.Allow("mcp", "demo.*"))
@@ -750,6 +751,37 @@ func TestExecuteSearchAndRun(t *testing.T) {
 
 	_, err = run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return demo_danger()\n"}`), nil, emptyToolCallMetadata())
 	require.Error(t, err)
+}
+
+func TestExecuteSendsShellEnvToMCPServers(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	url := startRocketCodeMCPHTTPServer(t, func(server *mcp.Server) {
+		mcp.AddTool(server, &mcp.Tool{Name: "whoami"}, func(_ context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: req.Extra.Header.Get("X-Rocketclaw-Metadata-Intercom-Conversation-Id")}}}, nil, nil
+		})
+	})
+
+	var permissions PermissionSet
+	require.NoError(t, permissions.Allow("rocketclaw", codeModeApproveSubject))
+	require.NoError(t, permissions.Allow("mcp", "demo.*"))
+
+	client := openai.NewClient()
+	config := testWorkspaceConfig(t, dir)
+	config.ShellEnv = map[string]string{"ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID": "123"}
+	config.MCPWorkspace, config.MCPServers = dir, map[string]mcpclient.ServerConfig{"demo": {URL: url}}
+	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: permissions}}}, Skills{Items: map[string]Skill{}}, "main")
+	require.NoError(t, err)
+
+	loop.observations = &turnObservations{journal: InertJournal{}}
+	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: loop, observations: loop.observations})
+
+	result, err := loop.Tools[executeToolName].Call(ctx, json.RawMessage(`{"code":"def main():\n    return demo_whoami()\n"}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	assert.Equal(t, "123", result.Output)
 }
 
 func TestCodeModeSearchOpenCodeShape(t *testing.T) {
@@ -800,7 +832,7 @@ func TestToolsForIncludesExecuteWhenConfigured(t *testing.T) {
 
 	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
 		"demo": {URL: "http://127.0.0.1:9"},
-	})
+	}, nil)
 
 	var permissions PermissionSet
 	require.NoError(t, permissions.Allow("mcp", "demo.*"))
@@ -1008,7 +1040,7 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 			})
 		}
 	})
-	reg := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
+	reg := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}}, nil)
 
 	loop := testLooper(mockResponses())
 	outputs := map[string]string{"long": "x" + strings.Repeat("é", 150), "nul": "a\x00" + strings.Repeat("b", 2000), "invalid": "\xff" + strings.Repeat("c", 1024)}

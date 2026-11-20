@@ -136,6 +136,13 @@ Host tools inside the script return full strings to the script. Only the string 
 
 A sandbox capability the Code Mode script can call directly, as opposed to a model-facing tool such as Execute. Host tools include filesystem, shell, fetch, and RocketClaw's own tools.
 
+### Outside MCP Server
+
+An MCP server the operator configures for agents to call from Execute, reached only through its MCP Facets; RocketClaw is its client, the reverse of an External MCP Session, where RocketClaw is the server.
+*Avoid:* outbound MCP server
+
+It receives the same session values the turn's shell sees, which its configuration cannot set or override. A local server starts for each Execute call and stops when the call ends, so it only ever holds one turn's values; sharing one server across turns or conversations would hand one's values to another.
+
 ### Emulated Shell
 
 An agent's opt-in shell mode, the default for an Easy Agent, in which its shell commands run in real Bash inside a Linux sandbox instead of host bash.
@@ -248,7 +255,7 @@ A conversation an outside MCP client drives by sending prompts under its own con
 
 ### External MCP Metadata
 
-The key-value pairs an External MCP caller attaches to its session, which the agent sees both as a message in its context and as environment variables for its tools.
+The key-value pairs an External MCP caller attaches to its session, which the agent sees both as a message in its context and as environment variables for its tools. Outside MCP Servers get the same values: local ones as environment variables, remote ones as request headers.
 
 The session's first turn records the pairs, together with the conversation's identity, in its Private Producer Conversation; later turns keep the recorded values and see new keys for that turn only. Turns in the session's Web chat read the same recorded pairs, with the conversation identity naming the chat, and a Subagent Session's turns read those of the top-level session and turn it works for, with its own conversation identity. The pairs are untrusted and kept apart from the routing and provenance facts RocketClaw records on a prompt, so whatever keys a caller sends, it cannot choose the agent, pose as a sender, or change how the turn is queued.
 
@@ -324,7 +331,7 @@ Each tool call acts on the Remote OpenCode Session that made it, or for a subage
 
 ### MCP Facet
 
-A named slice of one configured outside MCP server's tools, such as `read`, `write`, or `sudo`, defined by tool-name patterns. Agents reach outside MCP tools only through the facets their files name, and sudo agents through every facet; a tool in no facet is reachable by no agent.
+A named slice of one Outside MCP Server's tools, such as `read`, `write`, or `sudo`, defined by tool-name patterns. Agents reach outside MCP tools only through the facets their files name, and sudo agents through every facet; a tool in no facet is reachable by no agent.
 *Avoid:* tool group
 
 ### Pull Requests Pane

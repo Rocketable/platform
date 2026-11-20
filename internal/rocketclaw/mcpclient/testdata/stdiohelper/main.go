@@ -17,6 +17,7 @@ func main() {
 		payload, _ := json.Marshal(map[string]string{
 			"message": in.Message,
 			"env":     os.Getenv("MCPCLIENT_MARKER"),
+			"case":    os.Getenv("ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID"),
 			"marker":  string(marker),
 		})
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(payload)}}}, nil, nil

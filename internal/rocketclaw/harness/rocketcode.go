@@ -299,7 +299,7 @@ func NewWithModelResolver(
 
 	maps.Copy(baseTools, customTools)
 
-	mcpRegistry := mcpclient.New(config.MCPWorkspace, config.MCPServers)
+	mcpRegistry := mcpclient.New(config.MCPWorkspace, config.MCPServers, config.ShellEnv)
 
 	factory := &toolFactory{
 		resolver:                  resolver,

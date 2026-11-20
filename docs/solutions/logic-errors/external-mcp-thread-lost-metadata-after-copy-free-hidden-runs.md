@@ -1,6 +1,7 @@
 ---
 title: An External MCP Chat Lost Its Metadata When Hidden Runs Stopped Copying History
 date: 2026-10-22
+last_updated: 2026-11-20
 category: docs/solutions/logic-errors/
 module: internal/rocketclaw/backend
 problem_type: logic_error
@@ -50,7 +51,7 @@ WITH shown AS (
 ), latest AS (
     SELECT max(e.id) AS id FROM shown s JOIN entries e USING (conversation_id) WHERE e.entry_json::jsonb->>'type' = 'mcp_external_metadata'
 )
-SELECT e.id, e.entry_json FROM latest l JOIN entries e USING (id)
+SELECT e.entry_json FROM latest l JOIN entries e USING (id)
 ```
 
 In this session's runs with realistic data (thousands of threads, each with a metadata row), the plan probed `session_entries_mcp_metadata` once per shown conversation with `Index Cond: (conversation_id = ...)`. With only three metadata rows, Postgres chose a bitmap scan over the whole partial index instead. The plan test now seeds 4,096 thread metadata rows, and asserts the index is used, no Sort orders the entries (only the few candidate conversation IDs may be sorted), and no `Filter:` reads `entry_json`.
@@ -63,7 +64,7 @@ Fixed in PR #613, released in v0.2.1.
 
 An External MCP call runs in a private conversation and sets `SyncDestination` to the chat it reports to, a Slack thread when this was written and a Web chat since (`submitExternalMCPInput` in `cmd/rocketclaw/mcp.go`). Starting that turn records that chat as the run's `reports_to` (`startTurnDB`, `internal/rocketclaw/backend/store_dao.go`). The run's first turn writes the `mcp_external_metadata` entry into the run's own conversation.
 
-Before 77fabe81 that entry was also copied into the thread, so a lookup of the thread's own rows found it. After 77fabe81 the thread shows the run's entries through `reports_to` and holds no copy. A turn in the thread then found no metadata, so `if foundMetadata || origin.Source == protocol.SourceExternalMCP` (in `turnShellEnv`) was false for any turn not sourced from External MCP (a Web message in the thread's conversation, for example), and the whole metadata block was skipped. Searching the shown set restores exactly what the thread's history already displays.
+Before 77fabe81 that entry was also copied into the thread, so a lookup of the thread's own rows found it. After 77fabe81 the thread shows the run's entries through `reports_to` and holds no copy. A turn in the thread then found no metadata, so `if metadataEntry != nil || origin.Source == protocol.SourceExternalMCP` (in `turnShellEnv`) was false for any turn not sourced from External MCP (a Web message in the thread's conversation, for example), and the whole metadata block was skipped. Searching the shown set restores exactly what the thread's history already displays.
 
 ## Prevention
 
@@ -78,3 +79,4 @@ Before 77fabe81 that entry was also copied into the thread, so a lookup of the t
 - `CONCEPTS.md`: External MCP Metadata, Private Producer Conversation, Report Thread, State Store
 - Plan: `docs/plans/2026-10-19-1213-refactor-state-store-consolidation-plan.md` (introduced the copy-free model)
 - Plan: `docs/plans/2026-10-19-2107-feat-principal-env-vars-plan.md` (same environment variables)
+- `docs/solutions/architecture-patterns/mcp-servers-see-only-their-turn-because-each-execute-starts-them.md`: outside MCP servers started from a turn's Execute calls get the same variables, so a turn that loses them loses them there too.
