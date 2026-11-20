@@ -144,7 +144,7 @@ func (s *SessionService) saveAgentDraftToOverlay(ctx context.Context, rt agentDr
 			return false, err
 		}
 
-		unchanged := sameAgentFile(live, new(string(data)))
+		unchanged := sameAgentFile(live, &pending.File)
 		if unchanged && save.PullRequest {
 			return false, &AgentDraftSaveError{Problem: "Branch " + branch + " of " + overlay.Spec + " already has this file, so a pull request would have nothing to commit."}
 		}
@@ -158,7 +158,7 @@ func (s *SessionService) saveAgentDraftToOverlay(ctx context.Context, rt agentDr
 			staged, err = agentDraftCommand(ctx, dir, "git", "cat-file", "blob", ":"+file)
 		}
 
-		if err == nil && staged != string(data) {
+		if err == nil && staged != pending.File {
 			err = &AgentDraftSaveError{Problem: "Git would commit other bytes than the checked file, so nothing was pushed."}
 		}
 
