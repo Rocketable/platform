@@ -3281,6 +3281,7 @@ function HostedPage({ page }: { page: string }) {
     return () => removeEventListener("message", read);
   }, [agent, token]);
   if (!page) return null;
+  if (/\.pdf$/i.test(page)) return <p className="m-auto p-4 text-sm"><a href={`${serverURL()}/pages-raw/${page}`} target="_blank" rel="noopener noreferrer" className="underline">Open PDF</a></p>;
   return <iframe ref={frame} title={pageLabel(page)} sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads" className="min-h-0 w-full flex-1 border-0" src={`${serverURL()}/pages-raw/${page}#rc=${token}`} />;
 }
 
