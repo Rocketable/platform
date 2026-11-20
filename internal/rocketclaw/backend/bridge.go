@@ -2296,6 +2296,10 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	agent := agents.Items[agentName]
 
 	customTools := append(sessionTagTools(b.config.SessionService, tagConversationID), currentSessionIDTool(self))
+	if agents.Items[rootAgent].Space == "" {
+		customTools = append(customTools, sessionsMoveTool(b.config.SessionService, self))
+	}
+
 	if b.parent == "" {
 		customTools = append(customTools, b.scheduleMessageTool(origin), b.resetScheduledMessagesTool(origin))
 	}

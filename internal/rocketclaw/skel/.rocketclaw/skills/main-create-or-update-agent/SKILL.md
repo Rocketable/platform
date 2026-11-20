@@ -81,7 +81,7 @@ If the human wants whole-script review rather than just reviews of nested calls,
 
 If the human wants the agent to leave long scripts or subagents running while the conversation moves on, set `permission.rocketclaw.allow_background: allow`. Omit it otherwise. Any value other than `allow` or `deny` fails agent loading. Background work cannot ask questions, attach files, or restart RocketClaw.
 
-If the human wants the agent to read other conversations, start Web sessions, or send messages into other sessions, set `permission.rocketclaw.rocketclaw_sessions`. This one key offers `rocketclaw_sessions_list`, `rocketclaw_sessions_get`, `rocketclaw_sessions_current_id`, `rocketclaw_sessions_get_url`, and `rocketclaw_sessions_write`:
+If the human wants the agent to read other conversations, start Web sessions, or send messages into other sessions, set `permission.rocketclaw.rocketclaw_sessions`. This one key offers `rocketclaw_sessions_list`, `rocketclaw_sessions_get`, `rocketclaw_sessions_current_id`, `rocketclaw_sessions_get_url`, and `rocketclaw_sessions_write`, plus `rocketclaw_sessions_move`, which moves the agent's own session to another space for everyone, when the agent has no `space:`:
 
 - `auto` or `auto(<agent-name>)`: every read and write is reviewed first; writes reach any chat Web lists, including Slack threads RocketClaw manages
 - `allow`: the same, without review

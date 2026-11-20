@@ -732,6 +732,54 @@ func TestSessionsGetURLTool(t *testing.T) {
 	}
 }
 
+func TestSessionsMoveTool(t *testing.T) {
+	t.Parallel()
+
+	for _, space := range []string{"", "space: Billing\n"} {
+		t.Run("space="+strings.TrimSpace(space), func(t *testing.T) {
+			t.Parallel()
+
+			nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+				if n > 0 {
+					answerNoteTest(w, r, n, body)
+
+					return
+				}
+
+				writeRawRunFunctionCall(t, w, "move", "execute", struct {
+					Code string `json:"code"`
+				}{"def main():\n    return rocketclaw_sessions_move(space='ops')\n"})
+			})
+			writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\n"+space+"permission:\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nPrompt\n")
+			require.NoError(t, nt.service.CreateSpace(t.Context(), "Ops"))
+
+			manager, _ := nt.run(t, ignoreOutbound)
+			require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "move to ops", true)))
+			readFinalFor(t, nt.finals, nt.conversationID)
+			nt.waitIdle(t, manager, nt.conversationID)
+
+			first, last := <-nt.requests, <-nt.requests
+			assert.Equal(t, space == "", strings.Contains(first, "- rocketclaw_sessions_move("), "only an agent without a space of its own is offered the move")
+
+			moved, err := queryStrings(t.Context(), nt.service.db, `SELECT COALESCE(s.name, '') FROM conversations c LEFT JOIN web_spaces s ON s.id = c.space_id WHERE c.conversation_id = $1`, "session space", nt.conversationID)
+			require.NoError(t, err)
+
+			if space != "" {
+				assert.Contains(t, last, "undefined: rocketclaw_sessions_move")
+				assert.NotEqual(t, []string{"Ops"}, moved)
+
+				return
+			}
+
+			assert.Contains(t, last, "moved this session to Ops")
+			assert.Equal(t, []string{"Ops"}, moved, "the space is matched ignoring case and becomes the session's Birth Space")
+
+			_, err = sessionsMoveTool(nt.service, nt.conversationID).Call(t.Context(), json.RawMessage(`{"space":"nowhere"}`), nil)
+			require.EqualError(t, err, `no space is named "nowhere"; the spaces are "Main", "Ops"`)
+		})
+	}
+}
+
 func TestSessionsWriteToolDescription(t *testing.T) {
 	write := sessionsWriteTool(new(Bridge), new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:sender", harness.Agents{})
 
