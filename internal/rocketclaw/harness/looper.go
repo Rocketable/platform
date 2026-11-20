@@ -1719,13 +1719,7 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 		}
 	}
 
-	var input responses.ResponseNewParamsInputUnion
-
-	input.OfInputItemList = history
-
-	var params responses.ResponseNewParams
-
-	params.Input = input
+	params := responses.ResponseNewParams{Input: responses.ResponseNewParamsInputUnion{OfInputItemList: history}}
 	params.Model = l.ProviderOrigin.Model
 	params.Store = openai.Bool(false)
 	params.ContextManagement = []responses.ResponseNewParamsContextManagement{{
@@ -1740,11 +1734,7 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 	}
 
 	if l.ReasoningEffort != "" {
-		var reasoning shared.ReasoningParam
-
-		reasoning.Effort = l.ReasoningEffort
-		reasoning.Summary = shared.ReasoningSummaryAuto
-		params.Reasoning = reasoning
+		params.Reasoning = shared.ReasoningParam{Effort: l.ReasoningEffort, Summary: shared.ReasoningSummaryAuto}
 	}
 
 	if l.Verbosity != "" || l.ResponseFormat.GetType() != nil {
@@ -1766,10 +1756,7 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 				definition.Strict = openai.Bool(true)
 			}
 
-			var toolParam responses.ToolUnionParam
-
-			toolParam.OfFunction = &definition
-			params.Tools = append(params.Tools, toolParam)
+			params.Tools = append(params.Tools, responses.ToolUnionParam{OfFunction: &definition})
 		}
 	}
 
