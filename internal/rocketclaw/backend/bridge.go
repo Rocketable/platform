@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"crypto/rand"
@@ -3176,7 +3175,7 @@ func outboundAttachment(root *os.Root, shell *harness.CustomShell, input *outbou
 	name = cmp.Or(name, "attachment")
 	mimeType = cmp.Or(mimeType, mime.TypeByExtension(filepath.Ext(name)), http.DetectContentType(data))
 
-	return protocol.OutboundAttachment{Name: name, MIMEType: protocol.NormalizeMIMEType(mimeType), Data: bytes.Clone(data)}, nil
+	return protocol.OutboundAttachment{Name: name, MIMEType: protocol.NormalizeMIMEType(mimeType), Data: data}, nil
 }
 
 func (b *Bridge) resetScheduledMessagesTool(origin *protocol.InboundMessage) harness.Tool {
