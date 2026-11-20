@@ -44,10 +44,9 @@ func Handler(cfg *config.LockedConfig, serverName string) http.Handler {
 	tags := map[string]string{}
 	_ = fs.WalkDir(assets, ".", func(name string, entry fs.DirEntry, _ error) error {
 		if !entry.IsDir() {
-			file, _ := assets.Open(name)
-			hash := sha256.New()
-			_, _ = io.Copy(hash, file)
-			tags[name] = hex.EncodeToString(hash.Sum(nil)[:8])
+			data, _ := assets.ReadFile(name)
+			sum := sha256.Sum256(data)
+			tags[name] = hex.EncodeToString(sum[:8])
 		}
 
 		return nil
