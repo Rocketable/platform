@@ -471,7 +471,7 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 				require.Empty(t, warnings)
 				require.Empty(t, logs.String())
 			} else {
-				require.Equal(t, []slackAgentWarning{{channel: "#ops", agent: name}}, warnings)
+				require.Equal(t, "Slack channel #ops uses agent "+name+", which is not sticky: slack, so it does not answer mentions there.", warnings)
 				require.Contains(t, logs.String(), `level=WARN msg="slack channel agent is not sticky: slack" channel=#ops agent=`+name+"\n")
 			}
 		})

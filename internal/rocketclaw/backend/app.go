@@ -191,7 +191,7 @@ func (s *lockedRun) serve(runCtx context.Context, rocketcodeSessions *SessionSer
 		return err
 	}
 
-	slackWarnings, err := s.startWithBehavior(runCtx, cfg, rocketcodeSessions)
+	slackWarningText, err := s.startWithBehavior(runCtx, cfg, rocketcodeSessions)
 	if err != nil {
 		return err
 	}
@@ -238,7 +238,7 @@ func (s *lockedRun) serve(runCtx context.Context, rocketcodeSessions *SessionSer
 		Sessions:          rocketcodeSessions,
 		ExternalMCPAgents: inertRefresher{}, CronJobs: inertRefresher{}, Assemble: s.assemble, sandboxes: s.sandboxes,
 		TextRouter: threadBridges, threads: threadBridges, background: background,
-		questions: questions, shutdown: shutdown, slackWarnings: slackWarnings,
+		questions: questions, shutdown: shutdown, slackWarningText: slackWarningText,
 	}
 
 	rt.prepareSandbox()
@@ -389,16 +389,16 @@ func (f conversationFactory) newBridge(cfg *Config) directBridge {
 	return bridge
 }
 
-func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config, sessions *SessionService) ([]slackAgentWarning, error) {
+func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config, sessions *SessionService) (string, error) {
 	stored, found, err := sessions.behaviorSettings(ctx)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	if !found {
 		warnings, err := s.startWith(cfg, sessions)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 
 		return warnings, putBehaviorSettings(ctx, sessions.db, new(cfg.Behavior()))
@@ -412,31 +412,31 @@ func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config, s
 
 	warnings, err := s.startWith(cfg, sessions)
 	if err != nil {
-		return nil, fmt.Errorf("stored behavior settings: %w", err)
+		return "", fmt.Errorf("stored behavior settings: %w", err)
 	}
 
 	return warnings, nil
 }
 
-func (s *lockedRun) startWith(cfg *config.Config, sessions *SessionService) ([]slackAgentWarning, error) {
+func (s *lockedRun) startWith(cfg *config.Config, sessions *SessionService) (string, error) {
 	if err := cfg.ValidateBehavior(); err != nil {
-		return nil, fmt.Errorf("validate behavior settings: %w", err)
+		return "", fmt.Errorf("validate behavior settings: %w", err)
 	}
 
 	sessions.definitions.Store(cfg)
 	SetLogLevel(s.logLevel, cfg.Logging.Level)
 
 	if err := skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, s.logger); err != nil {
-		return nil, fmt.Errorf("sync rocketclaw skeleton: %w", err)
+		return "", fmt.Errorf("sync rocketclaw skeleton: %w", err)
 	}
 
 	warnings, err := validateRuntimeAssets(sessions.definitions, cfg.RuntimeDirName(), s.logger)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	if err := s.assemble.ValidateAssets(cfg, cfg.RuntimeDirName()); err != nil {
-		return nil, fmt.Errorf("validate frontend assets: %w", err)
+		return "", fmt.Errorf("validate frontend assets: %w", err)
 	}
 
 	return warnings, nil
@@ -473,26 +473,22 @@ func SetLogLevel(level *slog.LevelVar, text string) {
 	}
 }
 
-type slackAgentWarning struct {
-	channel, agent string
-}
-
-func validateRuntimeAssets(cfg *config.LockedConfig, runtimeDir string, logger *slog.Logger) ([]slackAgentWarning, error) {
+func validateRuntimeAssets(cfg *config.LockedConfig, runtimeDir string, logger *slog.Logger) (string, error) {
 	agents, _, err := LoadRuntimeDefinitions(cfg, runtimeDir)
 	if err != nil {
-		return nil, fmt.Errorf("validate rocketcode definitions: %w", err)
+		return "", fmt.Errorf("validate rocketcode definitions: %w", err)
 	}
 
-	var warnings []slackAgentWarning
+	var warnings []string
 
 	for _, channel := range cfg.Clone().Slack.Channels {
 		for _, name := range channel.Agents {
 			if agents.Items[name].Sticky != harness.AgentStickySlack {
 				logger.Warn("slack channel agent is not sticky: slack", "channel", channel.Channel, "agent", name)
-				warnings = append(warnings, slackAgentWarning{channel: channel.Channel, agent: name})
+				warnings = append(warnings, fmt.Sprintf("Slack channel %s uses agent %s, which is not sticky: slack, so it does not answer mentions there.", channel.Channel, name))
 			}
 		}
 	}
 
-	return warnings, nil
+	return strings.Join(warnings, " "), nil
 }
