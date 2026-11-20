@@ -1081,7 +1081,11 @@ func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T)
 	workspace := t.TempDir()
 	agents := harness.Agents{Items: map[string]harness.Agent{"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "base prompt", Location: "", Permission: harness.PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}}}
 
-	appendOverlayPromptToAgent(agents, "main", &config.Config{Workspace: workspace, Overlays: []string{"github.com/rocketable/overlay@main"}})
+	appendOverlayPromptToAgent(agents, "main", &config.Config{
+		Workspace: workspace,
+		Overlays:  []string{"github.com/rocketable/overlay@main"},
+		Web:       config.WebConfig{Tsnet: &config.TsnetConfig{Origin: "https://rocketclaw.example.test"}},
+	})
 
 	prompt := agents.Items["main"].Prompt
 	assert.Contains(t, prompt, "base prompt\n\n## Runtime Overlays")
@@ -1091,6 +1095,7 @@ func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T)
 	assert.Contains(t, prompt, "Ref: main")
 	assert.Contains(t, prompt, filepath.Join(workspace, ".rocketclaw", "overlays", "github.com-rocketable-overlay-main"))
 	assert.Contains(t, prompt, "Uncommitted, untracked, or unconfigured files")
+	assert.Contains(t, prompt, "Settings (https://rocketclaw.example.test/config) → Behavior settings → Edit → Overlays")
 }
 
 func TestBridgeSubmitAfterStopStoresRequestDurably(t *testing.T) {

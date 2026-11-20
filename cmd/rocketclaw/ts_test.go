@@ -94,10 +94,10 @@ func TestTailnetLogin(t *testing.T) {
 
 	node, err := startTailnet(t.Context(), tailnet, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
+	require.Equal(t, "https://rocketclaw-test.tail-scale.ts.net", tailnet.Origin, "the logged-in node serves its HTTPS name")
 
 	rt := &backend.Runtime{Cfg: config.NewLockedConfig(&config.Config{Web: config.WebConfig{Tsnet: tailnet}}), Log: slog.New(slog.DiscardHandler), Sessions: webSessions(t)}
 	stop := startWebRPC(rt, node, &mockWebChannels{}, &mockWebCron{})
-	require.Equal(t, "https://rocketclaw-test.tail-scale.ts.net", rt.Cfg.Clone().Web.Tsnet.Origin, "the logged-in node serves its HTTPS name")
 	require.NoError(t, stop(t.Context()))
 	require.NoError(t, node.server.Close())
 }
