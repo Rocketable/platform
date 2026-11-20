@@ -379,9 +379,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
       };
     }) : null;
     await diff.locator('> [data-slot="trace-collapsible-trigger"]').click();
-    if (width === 1280) {
-      await diff.locator('> [data-slot="trace-collapsible-content"][data-open][style*="--collapsible-panel-height: auto"]').waitFor();
-    }
+    await diff.locator('> [data-slot="trace-collapsible-content"][data-open][style*="--collapsible-panel-height: auto"]').waitFor();
     await diff.getByRole("link", { name: "Open permission review", exact: true }).click();
     if (desktopReview) {
       const observed = await desktopReview.evaluate((read: () => { url: string }) => read());
