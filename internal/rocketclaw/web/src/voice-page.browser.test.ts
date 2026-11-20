@@ -7,11 +7,12 @@ const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
 type Probe = { locks: number; mics: number; heard: number; audio?: HTMLMediaElement };
+type CaptionWaitState = RTCDataChannelState | "unannounced" | "already sent";
 type TransportProbe = {
   peer?: RTCPeerConnection;
-  channel?: RTCDataChannel & { spoke?: boolean; openEvents: number[]; initialMessagesQueued?: number; messagesDispatched?: number };
-  arrived?: RTCDataChannelState;
-  channelAtCaptionTrigger?: RTCDataChannelState | "unannounced" | "not invoked";
+  channel?: RTCDataChannel & { spoke?: boolean; openEvents: number[]; initialMessagesQueued?: number; messagesDispatched?: [number, string][] };
+  arrival?: [number, RTCDataChannelState];
+  captionWait?: [number, CaptionWaitState][];
 };
 
 test("Voice page calls each person's sticky session of a sticky: user agent, keeps settings on the server, and the composer toggle ends its call on leaving the session", async () => {
@@ -101,10 +102,10 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
       if (voiceFails) return Response.json({ code: 9, message: "provider has no usable voice credentials" }, { status: 400 });
       const answer = await openai.evaluate(async (offer: string) => {
         const pc = new RTCPeerConnection(), counts = window as unknown as { closes?: number; messages?: number };
-        Object.assign(window, { peer: pc, channelAtCaptionTrigger: "not invoked" });
+        Object.assign(window, { peer: pc, captionWait: [] });
         pc.ondatachannel = ({ channel }) => {
           const observed = Object.assign(channel, { openEvents: [] as number[], initialMessagesQueued: 0 });
-          Object.assign(window, { channel: observed, arrived: channel.readyState });
+          Object.assign(window, { channel: observed, arrival: [performance.timeOrigin + performance.now(), channel.readyState] });
           channel.addEventListener("open", ({ timeStamp }) => observed.openEvents.push(performance.timeOrigin + timeStamp));
           channel.onmessage = () => { counts.messages = (counts.messages ?? 0) + 1; };
           channel.onclose = () => { counts.closes = (counts.closes ?? 0) + 1; };
@@ -140,9 +141,14 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     // Chrome drops what reaches the page's channel before it reports open, so OpenAI speaks first only after that.
     await page.exposeFunction("channelOpened", () => openai.evaluate(async () => {
       const fake = window as unknown as TransportProbe;
-      if (fake.channelAtCaptionTrigger === "not invoked") fake.channelAtCaptionTrigger = fake.channel?.readyState ?? "unannounced";
-      while (!fake.channel || fake.channel.spoke || fake.channel.readyState !== "open") await new Promise((resolve) => setTimeout(resolve, 10));
-      const { channel } = fake;
+      const history = fake.captionWait!;
+      const waiting = () => {
+        const state = fake.channel?.spoke ? "already sent" : fake.channel?.readyState ?? "unannounced";
+        if (history.at(-1)?.[1] !== state) history.push([performance.timeOrigin + performance.now(), state]);
+        return state !== "open";
+      };
+      while (waiting()) await new Promise((resolve) => setTimeout(resolve, 10));
+      const channel = fake.channel!;
       channel.spoke = true;
       const events = [
         { type: "session.started" },
@@ -158,13 +164,13 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     await page.addInitScript(() => {
       const createDataChannel = RTCPeerConnection.prototype.createDataChannel;
       RTCPeerConnection.prototype.createDataChannel = function (...args) {
-        const channel = Object.assign(createDataChannel.apply(this, args), { openEvents: [] as number[], messagesDispatched: 0 });
+        const channel = Object.assign(createDataChannel.apply(this, args), { openEvents: [] as number[], messagesDispatched: [] as [number, string][] });
         Object.assign(window, { peer: this, channel });
         channel.addEventListener("open", ({ timeStamp }) => {
           channel.openEvents.push(performance.timeOrigin + timeStamp);
           void (window as unknown as { channelOpened(): Promise<void> }).channelOpened();
         });
-        channel.addEventListener("message", () => { channel.messagesDispatched++; });
+        channel.addEventListener("message", ({ data, timeStamp }) => channel.messagesDispatched.push([performance.timeOrigin + timeStamp, String(data)]));
         return channel;
       };
     });
@@ -263,7 +269,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     } catch (error) {
       console.error("Voice transcript wait failed", error, JSON.stringify({ calls, spoken, errors }));
       const transport = async () => {
-        const { peer, channel, arrived, channelAtCaptionTrigger } = window as unknown as TransportProbe;
+        const { peer, channel, arrival, captionWait } = window as unknown as TransportProbe;
         const stats: object[] = [];
         (await peer?.getStats())?.forEach((report) => {
           if (["transport", "data-channel", "candidate-pair"].includes(report.type)) stats.push(report);
@@ -272,20 +278,19 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
           connection: peer?.connectionState, signaling: peer?.signalingState,
           ice: peer?.iceConnectionState, gathering: peer?.iceGatheringState,
           sctp: peer?.sctp?.state, dtls: peer?.sctp?.transport.state,
-          channel: channel?.readyState, arrived, channelAtCaptionTrigger, id: channel?.id, spoke: channel?.spoke,
+          channel: channel?.readyState, arrival, captionWait, id: channel?.id, spoke: channel?.spoke,
           openEvents: channel?.openEvents, initialMessagesQueued: channel?.initialMessagesQueued, messagesDispatched: channel?.messagesDispatched,
           bufferedAmount: channel?.bufferedAmount, stats,
         };
       };
-      await Promise.all([
+      const snapshots = await Promise.allSettled([
         status.allTextContents(),
         page.getByLabel("Transcript", { exact: true }).locator("p").allTextContents(),
         page.evaluate(transport),
         openai.evaluate(transport),
-      ]).then(
-        ([status, transcript, browser, openai]) => console.error("Voice transcript snapshot", JSON.stringify({ status, transcript, browser, openai })),
-        (errSnapshot) => console.error("Voice transcript snapshot failed", errSnapshot),
-      );
+      ]);
+      const [state, transcript, app, provider] = snapshots.map((result) => result.status === "fulfilled" ? result.value : { error: String(result.reason) });
+      console.error("Voice transcript snapshot", JSON.stringify({ status: state, transcript, browser: app, openai: provider }));
       throw error;
     }
     expect(await page.getByLabel("Transcript", { exact: true }).locator("p").allTextContents()).toEqual(["You: Hello there", "Voice: Hi!"]);
