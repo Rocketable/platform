@@ -712,9 +712,7 @@ func (l *looper) runTurn(
 	defer func() {
 		cancel(nil)
 
-		if errWait := group.Wait(); errWait != nil {
-			cancel(errWait)
-		}
+		_ = group.Wait()
 	}()
 
 	if interrupts != nil {
