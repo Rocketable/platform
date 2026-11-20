@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { isDeepStrictEqual } from "node:util";
-import type { AgentDraft, AgentDraftView, DraftPromptResponse, HistoryView } from "./types";
+import type { AgentDraft, AgentDraftView, DraftPromptResponse, HistoryView, QueueItem } from "./types";
 
 type Body = { op: { kind: string }; id?: string; limit?: number };
 type RoutedRequest = {
@@ -387,8 +387,8 @@ test("the test chat answers in every column, labels versions, restarts, and pose
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
   try {
     const errors: string[] = [], streams: string[] = [];
-    const call = async <T>(method: string, data: object) => {
-      const response = await fetch(`${alice}/api/${method}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
+    const call = async <T>(method: string, data: object, signal?: AbortSignal) => {
+      const response = await fetch(`${alice}/api/${method}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data), signal });
       expect(response.status).toBe(200);
       return await response.json() as T;
     };
@@ -396,7 +396,8 @@ test("the test chat answers in every column, labels versions, restarts, and pose
       for (const deadline = Date.now() + 20_000; !await check();) if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`); else await Bun.sleep(100);
     };
     expect((await fetch(`${alice}/test/unlimit`, { method: "POST" })).ok).toBe(true);
-    const read = async (id: string) => (await call<AgentDraftView>("GetAgentDraft", { id, since: "1" })).draft;
+    const readDraft = (id: string, signal?: AbortSignal) => call<AgentDraftView>("GetAgentDraft", { id, since: "1" }, signal);
+    const read = async (id: string) => (await readDraft(id)).draft;
     const apply = async (id: string, op: object) => (await call<{ revision: string }>("ApplyAgentDraftOp", { id, op: { baseRevision: (await read(id)).revision, opId: crypto.randomUUID(), ...op } })).revision;
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
     const keepInterceptionEnabled = `${alice}/test/keep-interception-enabled`;
@@ -560,9 +561,16 @@ test("the test chat answers in every column, labels versions, restarts, and pose
       const releasedAt = Date.now();
       await release();
       await cell(2, "echo").getByText("gpt-a2 answer 2", { exact: false }).waitFor().catch(async (cause: unknown) => {
-        const history = await call<HistoryView>("History", { id: briefChat }).then(({ messages, running, terminal }) => ({
-          running, terminal, messages: messages.map(({ role, text, turnId, complete }) => ({ role, text, turnId, complete })),
-        })).catch(String);
+        const signal = AbortSignal.timeout(1_000);
+        const [history, saved, queued] = await Promise.all([
+          call<HistoryView>("History", { id: briefChat }, signal).then(({ messages, running, terminal }) => ({
+            running, terminal, messages: messages.map(({ role, text, turnId, inputId, complete }) => ({ role, text, turnId, inputId, complete })),
+          })).catch(String),
+          readDraft(echo.id, signal).then(({ draft, messages }) => ({
+            chat: draft.testChat, revision: draft.revision, inputIds: (messages ?? []).map(({ inputId }) => inputId),
+          })).catch(String),
+          call<{ items?: QueueItem[] }>("ListQueue", { id: briefChat }, signal).then(({ items }) => (items ?? []).map(({ id, text }) => ({ id, text }))).catch(String),
+        ]);
         const browserHistory = await Promise.all(reads.filter(({ request }) => request.postDataJSON().id === briefChat).map(async ({ at, request }) => {
           const response = request.existingResponse(), status = response?.status();
           const reply = response && request.timing().responseEnd >= 0 ? await (status === 200
@@ -574,7 +582,7 @@ test("the test chat answers in every column, labels versions, restarts, and pose
           return { msFromRelease: at - releasedAt, request: request.postDataJSON(), status, failure: request.failure()?.errorText, reply };
         }));
         const transcriptFrames = frames.filter(({ conversationId }) => conversationId === briefChat).map(({ at, revision }) => ({ msFromRelease: at - releasedAt, revision }));
-        throw new Error(`Held DraftPrompt did not render Message 2 for ${briefChat}: ${JSON.stringify({ history, transcriptFrames, browserHistory })}`, { cause });
+        throw new Error(`Held DraftPrompt did not render Message 2 for ${briefChat}: ${JSON.stringify({ saved, queued, history, transcriptFrames, browserHistory })}`, { cause });
       });
       expect(await message.inputValue()).toBe("still typing");
       return briefChat;
@@ -641,17 +649,20 @@ test("the test chat answers in every column, labels versions, restarts, and pose
       await chat.getByRole("button", { name: "Restart & replay", exact: true }).click();
       for (const name of ["Restart", "Restart & replay"]) await chat.getByRole("button", { name, exact: true, disabled: true }).waitFor();
       await release();
-      let observed: string | undefined;
+      let observed: AgentDraftView | undefined;
       await until("a new persisted test chat", async () => {
-        observed = (await read(queue.id)).testChat;
-        return !!observed && observed !== restarting;
+        observed = await readDraft(queue.id);
+        const id = observed.draft.testChat;
+        return !!id && id !== restarting;
       }).catch((cause) => {
-        throw new Error(`Restart & replay: draft ${queue.id} last reported test chat ${JSON.stringify(observed)}; expected a non-empty ID different from ${JSON.stringify(restarting)}`, { cause });
+        const latest = observed?.draft;
+        const chatChanges = observed?.ops.filter(({ kind }) => kind === "set_test_chat").map(({ revision, value }) => ({ revision, chat: value }));
+        throw new Error(`Restart & replay: draft ${queue.id} expected a non-empty chat ID different from ${JSON.stringify(restarting)}; observed ${JSON.stringify({ chat: latest?.testChat, revision: latest?.revision, chatChanges })}`, { cause });
       });
       await cell(3, "queue").getByText("gpt-held answer 3", { exact: false }).waitFor();
       await chat.getByRole("button", { name: "Restart & replay", exact: true, disabled: false }).waitFor();
       expect(await row(4).count()).toBe(0);
-      return observed;
+      return observed?.draft.testChat;
     });
 
     const support = await call<{ id: string }>("CreateAgentDraft", { name: "support-bot", copy: true });
