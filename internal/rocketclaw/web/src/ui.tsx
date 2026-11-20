@@ -1451,7 +1451,7 @@ function useTabs() {
       // The tab in view copies its whole address, with the view state in its query and fragment.
       const link = { key: "link", label: "Copy link", run: () => void copyText(viewed && path === pagePath() ? window.location.href : window.location.origin + serverPath(path, name), document.body) };
       const adopt = (tabs: Tab[]) => [...tabs, ...selected.filter((item) => !tabs.some((other) => other.path === item.path))];
-      const grouping: TabCommand[] = [
+      const placing: TabCommand[] = [
         { key: "group-new", label: "Add to new group", sub: { menu: "Add to group", label: "New group" }, run: () => {
           const id = crypto.getRandomValues(new Uint32Array(2)).join("-");
           setState((current) => ({ ...current, groups: [...current.groups, { id, name: "", color: Object.keys(groupColors)[groupsOf(space).length % Object.keys(groupColors).length] }] }));
@@ -1460,22 +1460,26 @@ function useTabs() {
         } },
         ...groupsOf(space).filter((group) => selected.some((item) => item.group !== group.id)).map((group) => ({ key: `group-${group.id}`, label: `Add to group "${groupName(group)}"`, sub: { menu: "Add to group", label: groupName(group) }, run: () => update((tabs) => selected.reduce((joined, item) => join(joined, item.path, group.id, space), adopt(tabs))) })),
         ...selected.some((item) => item.group) ? [{ key: "group-remove", label: "Remove from group", run: () => regroup((item) => paths.has(item.path)) }] : [],
+        // A session moved to another space can go back to the space it was born in.
+        ...birth && birth.id !== (tab?.space ?? space) ? [{ key: "restore", label: `Restore to "${birth.name}"`, run: () => {
+          update(adopt);
+          moveTo(paths, birth.id);
+        } }] : [],
+        ...state.spaces.filter((item) => item.id !== space).map((item) => ({ key: `space-${item.id}`, label: `Move to "${item.name}"`, sub: { menu: "Move to space", label: item.name }, run: () => {
+          update(adopt);
+          moveTo(paths, item.id);
+          movePages([...paths], item);
+        } })),
       ];
       // A parked tab's menu has none of the strip's commands but Close; a Shared row, parked or not, can join this
-      // person's tabs in a group.
-      if (!shownOf(space).some((item) => item.path === path)) return [...tab ? [closing] : [], link, ...share, ...copy, ...attention, ...inShared ? grouping : []];
+      // person's tabs in a group or another space.
+      if (!shownOf(space).some((item) => item.path === path)) return [...tab ? [closing] : [], link, ...share, ...copy, ...attention, ...inShared ? placing : []];
       return [
         closing,
         { key: "close-others", label: "Close others", run: () => close(there.flatMap((item) => item.path === path ? [] : [item.path]), path) },
         { key: "close-right", label: "Close to the right", run: () => close(there.slice(there.findIndex((item) => item.path === path) + 1).map((item) => item.path), path) },
         { key: "close-all", label: "Close all", run: () => close(there.map((item) => item.path)) },
-        link, ...share, ...copy, ...attention, ...grouping,
-        // A session moved to another space can go back to the space it was born in.
-        ...birth && birth.id !== tab?.space ? [{ key: "restore", label: `Restore to "${birth.name}"`, run: () => moveTo(paths, birth.id) }] : [],
-        ...state.spaces.filter((item) => item.id !== space).map((item) => ({ key: `space-${item.id}`, label: `Move to "${item.name}"`, sub: { menu: "Move to space", label: item.name }, run: () => {
-          moveTo(paths, item.id);
-          movePages([...paths], item);
-        } })),
+        link, ...share, ...copy, ...attention, ...placing,
       ];
     },
     newInGroup,
@@ -1726,7 +1730,7 @@ function menuItems(tabs: TabStoreValue, menu: CardMenu, view: ServerView, target
   const regenerate = { key: "rename-title", label: "Regenerate title", run: () => void queryClient.getMutationCache().build(queryClient, { mutationKey: ["regenerateTitle"], mutationFn: mutations.updateSession }).execute({ id, name: "", server: tabs.name }).then(view.invalidateQueries, () => undefined) };
   const renaming = (search ? targets.size === 1 : id && (menu.shared || targets.size === 1)) ? [{ key: "rename", label: search ? "Rename search" : "Rename session", run: rename }, ...search ? [] : [regenerate]] : [];
   const session = tabs.viewed && targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === id) : undefined;
-  return [...renaming, ...menu.shared ? tabs.commands(menu.path, view, undefined, menu.space).filter(({ key }) => /^(link|unshare|duplicate|read|unread|park|unpark|follow|unfollow|group)/.test(key)) : tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
+  return [...renaming, ...menu.shared ? tabs.commands(menu.path, view, undefined, menu.space).filter(({ key }) => /^(link|unshare|duplicate|read|unread|park|unpark|follow|unfollow|group|restore|space)/.test(key)) : tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
 }
 
 const pullRequestItems = (menu: { path: string; shared?: boolean }, single: boolean, name: string): TabCommand[] =>

@@ -739,7 +739,9 @@ active tab.
   another space switches to that space. The tab menu's **Move to space** submenu
   lists each other space, and moving the active tab follows it; the command
   palette offers the same moves as **Tabs: Move to "<space>"**. Moving a tab is
-  your own: it moves only in your tabs. Deleting a space moves its tabs to the
+  your own: it moves only in your tabs. A Shared row's menu offers it too: it
+  moves your own tab of that location, adding one if you have none, and the row
+  stays in Shared. Deleting a space moves its tabs to the
   first space; the last space cannot be deleted. Close others, Close to the
   right, and Close all act only within the tab's space, and Cmd/Ctrl+[ and ]
   only within the current space. Screen readers hear each tab's group, if any,
