@@ -1125,10 +1125,9 @@ func (s *Server) conversationTitle(ctx context.Context, id string) (string, erro
 		return "", err
 	}
 
-	var (
-		first  string
-		recent []string
-	)
+	var first string
+
+	var recent strings.Builder
 
 	for _, message := range history.Messages {
 		text := strings.TrimSpace(message.Text)
@@ -1138,7 +1137,9 @@ func (s *Server) conversationTitle(ctx context.Context, id string) (string, erro
 		case first == "" && message.Role == "user":
 			first = text
 		default:
-			recent = append(recent, map[string]string{"user": "User", "assistant": "Assistant"}[message.Role]+": "+text)
+			recent.WriteString(map[string]string{"user": "User: ", "assistant": "Assistant: "}[message.Role])
+			recent.WriteString(text)
+			recent.WriteString("\n\n")
 		}
 	}
 
@@ -1146,7 +1147,7 @@ func (s *Server) conversationTitle(ctx context.Context, id string) (string, erro
 		return "", nil
 	}
 
-	title, err := backend.GenerateTitle(ctx, s.cfg.Clone(), first, strings.Join(recent, "\n\n"))
+	title, err := backend.GenerateTitle(ctx, s.cfg.Clone(), first, strings.TrimSuffix(recent.String(), "\n\n"))
 	if err != nil {
 		return "", fmt.Errorf("regenerate web session title: %w", err)
 	}
