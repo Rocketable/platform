@@ -12,10 +12,16 @@ import (
 const genericAbortedToolOutputText = "tool call aborted because the runtime stopped before the call completed. Side effects may have partially occurred. Inspect the current environment before deciding whether to retry or continue."
 
 func projectReplayForOpenAI(items []responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam {
-	projected := make([]responses.ResponseInputItemUnionParam, 0, len(items))
+	projected := make([]responses.ResponseInputItemUnionParam, len(items))
 	for i := range items {
 		item := items[i]
-		if item.OfMessage != nil {
+		if compaction := item.OfCompaction; compaction != nil {
+			item = responses.ResponseInputItemUnionParam{OfCompaction: &responses.ResponseCompactionItemParam{
+				EncryptedContent: compaction.EncryptedContent,
+				ID:               compaction.ID,
+				Type:             compaction.Type,
+			}}
+		} else if item.OfMessage != nil {
 			message := *item.OfMessage
 			extra := maps.Clone(message.ExtraFields())
 			delete(extra, "prompt_header")
@@ -25,17 +31,7 @@ func projectReplayForOpenAI(items []responses.ResponseInputItemUnionParam) []res
 			item.OfMessage = &message
 		}
 
-		if item.OfCompaction == nil {
-			projected = append(projected, item)
-			continue
-		}
-
-		compaction := responses.ResponseCompactionItemParam{
-			EncryptedContent: item.OfCompaction.EncryptedContent,
-			ID:               item.OfCompaction.ID,
-			Type:             item.OfCompaction.Type,
-		}
-		projected = append(projected, responses.ResponseInputItemUnionParam{OfCompaction: &compaction})
+		projected[i] = item
 	}
 
 	return projected
