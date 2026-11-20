@@ -194,8 +194,8 @@ func TestPermissionReviewIncludesChildContext(t *testing.T) {
 	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true})
 
 	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
-	require.Equal(t, responses.EasyInputMessageRoleDeveloper, newParams(mock)[0].Input.OfInputItemList[0].OfMessage.Role)
-	require.Equal(t, "This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\"", newParams(mock)[0].Input.OfInputItemList[0].OfMessage.Content.OfString.Value)
+	require.Equal(t, responses.EasyInputMessageRoleDeveloper, newParams(mock)[0].Input.OfInputItemList[1].OfMessage.Role)
+	require.Equal(t, "This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\"", newParams(mock)[0].Input.OfInputItemList[1].OfMessage.Content.OfString.Value)
 }
 
 func TestPermissionReviewUsesAgentApprover(t *testing.T) {
@@ -227,7 +227,7 @@ func TestPermissionReviewUsesAgentApprover(t *testing.T) {
 			require.Equal(t, tc.model, newParams(mock)[0].Model)
 			require.Equal(t, tc.effort, string(newParams(mock)[0].Reasoning.Effort))
 
-			instructions := newParams(mock)[0].Instructions.Value
+			instructions := systemPrompt(t, &newParams(mock)[0])
 			require.Contains(t, instructions, "### Data Exfiltration", "the built-in rules stay")
 			require.Contains(t, instructions, `"risk_level": "low" | "medium" | "high" | "critical"`, "the answer contract stays")
 
@@ -285,7 +285,7 @@ func TestPermissionReviewRunsApproverTools(t *testing.T) {
 			require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome, decision.Rationale)
 			require.Len(t, newParams(mock), len(replies))
 
-			instructions := newParams(mock)[0].Instructions.Value
+			instructions := systemPrompt(t, &newParams(mock)[0])
 			require.Equal(t, tc.offered, strings.Contains(instructions, "- rocketclaw_sessions_list("), "the reviewer is offered only what its own sections turn on")
 			require.Contains(t, instructions, "### Agent Rules\nDeny writes.\n")
 
@@ -441,7 +441,7 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 			require.Equal(t, cmp.Or(tc.reviewer, "guardian"), saved[0].Agent)
 
 			if tc.wantGuardian {
-				instructions := newParams(mock)[0].Instructions.Value
+				instructions := systemPrompt(t, &newParams(mock)[0])
 				require.NotContains(t, instructions, "Deny deploys on Fridays.")
 				require.Equal(t, 1, strings.Count(instructions, "# Turn Origin"))
 				require.Equal(t, agent.Mode == AgentModeEasy, strings.Contains(instructions, "# Whole Scripts"))
@@ -511,7 +511,7 @@ func TestPermissionReviewSystemPromptIncludesCodeMode(t *testing.T) {
 
 		require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 
-		instructions := newParams(mock)[0].Instructions.Value
+		instructions := systemPrompt(t, &newParams(mock)[0])
 		require.Contains(t, instructions, "You are judging one planned coding-agent action.")
 		require.Contains(t, instructions, "## Code Mode")
 		require.Contains(t, instructions, `The review request opens with the line "Turn origin (written by RocketClaw): [...]".`)

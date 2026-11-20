@@ -1335,7 +1335,10 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 }
 
 func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, observer oai.ResponseObserver, errOriginal error, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
-	original := params.Input.OfInputItemList
+	system, original := params.Input.OfInputItemList[:0], params.Input.OfInputItemList
+	if l.SystemPrompt != "" {
+		system, original = original[:1], original[1:]
+	}
 
 	blocks := compactionBlocks(original)
 	if len(blocks) < 2 {
@@ -1350,9 +1353,8 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 		end := blocks[compactedBlocks-1]
 
 		compactParams := responses.ResponseCompactParams{
-			Model:        responses.ResponseCompactParamsModel(params.Model),
-			Instructions: params.Instructions,
-			Input:        responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: original[:end]},
+			Model: responses.ResponseCompactParamsModel(params.Model),
+			Input: responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: params.Input.OfInputItemList[:len(system)+end]},
 		}
 
 		compacted, err := l.Client.Compact(ctx, &compactParams)
@@ -1360,7 +1362,23 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 			return nil, fmt.Errorf("compact context after context_length_exceeded: %w", err)
 		}
 
-		recoveredHistory, err := compactedOutputToReplayParams(compacted.Output)
+		output := compacted.Output
+		if len(system) > 0 {
+			output = slices.DeleteFunc(slices.Clone(output), func(item responses.ResponseOutputItemUnion) bool {
+				if item.Type != "message" || item.Role != "developer" {
+					return false
+				}
+
+				var text strings.Builder
+				for i := range item.Content {
+					text.WriteString(item.Content[i].Text)
+				}
+
+				return text.String() == l.SystemPrompt
+			})
+		}
+
+		recoveredHistory, err := compactedOutputToReplayParams(output)
 		if err != nil {
 			return nil, fmt.Errorf("convert compacted response: %w", err)
 		}
@@ -1368,7 +1386,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 		recoveredHistory = append(recoveredHistory, original[end:]...)
 		retryParams := *params
 
-		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: projectReplayForOpenAI(recoveredHistory)}
+		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: append(slices.Clone(system), projectReplayForOpenAI(recoveredHistory)...)}
 		if err := checkpointCompacted(recoveredHistory, len(original)-end); err != nil {
 			return nil, fmt.Errorf("checkpoint compacted response input: %w", err)
 		}
@@ -1729,6 +1747,10 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 		}
 	}
 
+	if l.SystemPrompt != "" {
+		history = append([]responses.ResponseInputItemUnionParam{inputMessageParam(responses.EasyInputMessageRoleDeveloper, easyInputStringContent(l.SystemPrompt))}, history...)
+	}
+
 	params := responses.ResponseNewParams{Input: responses.ResponseNewParamsInputUnion{OfInputItemList: history}}
 	params.Model = l.ProviderOrigin.Model
 	params.Store = openai.Bool(false)
@@ -1739,9 +1761,6 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 	params.Include = []responses.ResponseIncludable{reasoningEncryptedContent}
 
 	params.ParallelToolCalls = openai.Bool(true)
-	if l.SystemPrompt != "" {
-		params.Instructions = openai.String(l.SystemPrompt)
-	}
 
 	if l.ReasoningEffort != "" {
 		params.Reasoning = shared.ReasoningParam{Effort: l.ReasoningEffort, Summary: shared.ReasoningSummaryAuto}

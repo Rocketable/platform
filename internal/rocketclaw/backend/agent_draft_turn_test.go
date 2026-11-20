@@ -51,8 +51,7 @@ func startAgentDraftTest(t *testing.T, agents map[string]string, answer func(w h
 		data, _ := io.ReadAll(r.Body)
 
 		var request struct {
-			Instructions string `json:"instructions"`
-			Input        []struct {
+			Input []struct {
 				Role    string          `json:"role"`
 				Content json.RawMessage `json:"content"`
 			} `json:"input"`
@@ -70,7 +69,7 @@ func startAgentDraftTest(t *testing.T, agents map[string]string, answer func(w h
 
 		w.Header().Set("Content-Type", "application/json")
 
-		switch column := regexp.MustCompile(`COL-\w+`).FindString(request.Instructions); {
+		switch column := regexp.MustCompile(`COL-\w+`).FindString(requestSystemPrompt(data)); {
 		case strings.Contains(string(data), "You are judging one planned coding-agent action."):
 			writeRawRunMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
 		case column == "":

@@ -189,6 +189,16 @@ func newParams(mock *mockResponsesAPI) []responses.ResponseNewParams {
 	return out
 }
 
+func systemPrompt(t *testing.T, params *responses.ResponseNewParams) string {
+	t.Helper()
+	require.False(t, params.Instructions.Valid())
+
+	message := params.Input.OfInputItemList[0].OfMessage
+	require.Equal(t, responses.EasyInputMessageRoleDeveloper, message.Role)
+
+	return message.Content.OfString.Value
+}
+
 func compactParams(mock *mockResponsesAPI) []responses.ResponseCompactParams {
 	calls := mock.CompactCalls()
 
@@ -585,7 +595,7 @@ func TestLooperReloadsSessionWithCurrentRuntimeConfig(t *testing.T) {
 
 	call := newParams(mock)[0]
 	require.Equal(t, openai.ChatModelGPT6Luna, call.Model)
-	require.Equal(t, "current system prompt", call.Instructions.Value)
+	require.Equal(t, "current system prompt", systemPrompt(t, &call))
 	require.False(t, call.Store.Value)
 	require.True(t, call.ParallelToolCalls.Value)
 	require.Len(t, call.ContextManagement, 1)
@@ -594,7 +604,7 @@ func TestLooperReloadsSessionWithCurrentRuntimeConfig(t *testing.T) {
 	require.Equal(t, []responses.ResponseIncludable{reasoningEncryptedContent}, call.Include)
 	require.Equal(t, shared.ReasoningEffort("high"), call.Reasoning.Effort)
 
-	items := call.Input.OfInputItemList
+	items := call.Input.OfInputItemList[1:]
 	require.Len(t, items, 4)
 	require.Contains(t, marshalJSON(t, items[0]), `"content":"earlier question"`)
 	require.Contains(t, marshalJSON(t, items[0]), `"role":"user"`)
@@ -1002,7 +1012,10 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 			require.NoError(t, err)
 
 			mock := mockResponses()
-			queueCompactResponses(mock, compactedResponse("cmp-old", "encrypted-old"))
+			compactResponse := compactedResponse("cmp-old", "encrypted-old")
+			echo := responses.ResponseOutputItemUnion{Type: "message", Role: "developer", Content: []responses.ResponseOutputMessageContentUnion{{Type: "input_text", Text: "system rules"}}}
+			compactResponse.Output = append([]responses.ResponseOutputItemUnion{echo}, compactResponse.Output...)
+			queueCompactResponses(mock, compactResponse)
 
 			mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ oai.ResponseObserver, _ ...option.RequestOption) (*responses.Response, error) {
 				if len(newParams(mock)) == 1 {
@@ -1013,6 +1026,7 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 			}
 			looper := testLooper(mock)
 			looper.agent.Name, looper.DisplayModel, looper.ReasoningEffort = "new", "work/model-b", "low"
+			looper.SystemPrompt = "system rules"
 			sink := recordingJournal()
 			looper.Journal = sink
 			output := make(chan ChatResponse, 10)
@@ -1036,17 +1050,24 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
 			require.Len(t, compactParams(mock), 1)
-			compactInput := marshalJSON(t, compactParams(mock)[0].Input.OfResponseInputItemArray)
+			require.False(t, compactParams(mock)[0].Instructions.Valid())
+			require.JSONEq(t, `{"content":"system rules","role":"developer","type":"message"}`, marshalJSON(t, compactParams(mock)[0].Input.OfResponseInputItemArray[0]))
+			compactInput := marshalJSON(t, compactParams(mock)[0].Input.OfResponseInputItemArray[1:])
 			require.Contains(t, compactInput, "sealed-prior")
 			require.NotContains(t, compactInput, "private-content-value")
 			require.NotContains(t, compactInput, "new question")
+			require.NotContains(t, compactInput, "system rules")
 			require.Len(t, newParams(mock), 2)
-			retryInput := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
+			require.Equal(t, "system rules", systemPrompt(t, &newParams(mock)[1]))
+			retryInput := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList[1:])
 			require.Contains(t, retryInput, `"type":"compaction"`)
 			require.Contains(t, retryInput, "new question")
+			require.NotContains(t, retryInput, "system rules")
+			require.NotContains(t, retryInput, `"role":"developer"`)
 			require.Len(t, saved, 1)
 			require.Contains(t, string(saved[0].ReplayInput[0]), `"type":"compaction"`)
 			require.Len(t, saved[0].ReplayInput, 6)
+			require.NotContains(t, marshalJSON(t, saved[0].ReplayInput), "system rules")
 
 			compacted := turnSaves(t, sink)[1].Record
 			for _, entry := range []SessionEntry{saved[0], compacted} {

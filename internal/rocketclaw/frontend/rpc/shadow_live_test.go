@@ -64,6 +64,11 @@ func TestShadowsRealBackendBrowser(t *testing.T) {
 			return
 		}
 
+		if !assert.NotEmpty(t, request.Input) || !assert.Contains(t, string(request.Input[0]), `"role":"developer"`, "the system prompt is not the first input item") {
+			return
+		}
+
+		request.Input = request.Input[1:]
 		requests <- request
 
 		switch request.Model {

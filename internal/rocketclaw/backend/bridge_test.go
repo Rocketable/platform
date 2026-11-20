@@ -1172,7 +1172,9 @@ func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 			requests++
 
 			var body map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+
+			data, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(data, &body); err != nil {
 				t.Error(err)
 				http.Error(w, err.Error(), http.StatusBadRequest)
 
@@ -1189,7 +1191,7 @@ func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 			case 2:
 				assert.Equal(t, "child", provider)
 				assert.Equal(t, "helper-model", body["model"])
-				assert.Contains(t, fmt.Sprint(body["instructions"]), "Helper prompt")
+				assert.Contains(t, requestSystemPrompt(data), "Helper prompt")
 				assert.Contains(t, fmt.Sprint(body), "delegated prompt")
 				writeRawRunMessage(t, w, "resp_2", "msg_2", "child response")
 			case 3:
@@ -2688,6 +2690,16 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 			return
 		}
 
+		if len(requestBody.Input) == 0 || requestBody.Input[0].Role != "developer" {
+			errRequest = assert.AnError
+
+			http.Error(w, "the system prompt is not the first input item", http.StatusBadRequest)
+
+			return
+		}
+
+		requestBody.Input = requestBody.Input[1:]
+
 		if requestBody.Model == "gpt-5.4-mini" {
 			var messages []string
 
@@ -2898,6 +2910,16 @@ Request: $ARGUMENTS
 
 			return
 		}
+
+		if len(requestBody.Input) == 0 || !strings.HasPrefix(string(requestBody.Input[0].Content), `"Prompt\n`) {
+			errRequest = assert.AnError
+
+			http.Error(w, "the system prompt is not the first input item", http.StatusBadRequest)
+
+			return
+		}
+
+		requestBody.Input = requestBody.Input[1:]
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`))
@@ -3489,9 +3511,11 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 	_, err = runTestTurn(context.Background(), bridge, msg, "turn-1")
 	require.NoError(t, err)
 	require.NoError(t, errRequest)
-	require.NotEmpty(t, requestBody.Input)
+	require.Greater(t, len(requestBody.Input), 1)
 	assert.Equal(t, "developer", requestBody.Input[0].Role)
-	assert.Equal(t, "RocketClaw goal state:\nStatus: progress\nLast reported note:\npatched parser; checking connectors", requestBody.Input[0].Content)
+	assert.True(t, strings.HasPrefix(requestBody.Input[0].Content, "Prompt\n"))
+	assert.Equal(t, "developer", requestBody.Input[1].Role)
+	assert.Equal(t, "RocketClaw goal state:\nStatus: progress\nLast reported note:\npatched parser; checking connectors", requestBody.Input[1].Content)
 
 	for i := range requestBody.Input {
 		if requestBody.Input[i].Role == "assistant" {
@@ -3555,8 +3579,9 @@ func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 	_, err = runTestTurn(context.Background(), bridge, msg, "turn-1")
 	require.NoError(t, err)
 	require.NoError(t, errRequest)
-	require.NotEmpty(t, requestBody.Input)
-	assert.Equal(t, "user", requestBody.Input[0].Role)
+	require.Greater(t, len(requestBody.Input), 1)
+	assert.Equal(t, "developer", requestBody.Input[0].Role)
+	assert.Equal(t, "user", requestBody.Input[1].Role)
 }
 
 func TestExternalMCPMetadataDeveloperMessageSorted(t *testing.T) {

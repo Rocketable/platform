@@ -467,14 +467,14 @@ func TestSteerSwitchesRunningSessionType(t *testing.T) {
 				})
 			}
 
-			require.Contains(t, requests[0].Instructions.Value, "CHILD PROMPT")
+			require.Contains(t, systemPrompt(t, &requests[0]), "CHILD PROMPT")
 			require.Equal(t, "gpt-5.4", requests[0].Model)
 			require.True(t, probes(&requests[0]))
 			require.Equal(t, []string{"child"}, probedBy, "the step already running keeps its type")
 			require.Contains(t, marshalJSON(t, requests[1].Input), "review it instead")
 
 			for _, request := range requests[1:] {
-				require.Contains(t, request.Instructions.Value, tc.prompt)
+				require.Contains(t, systemPrompt(t, &request), tc.prompt)
 				require.Equal(t, tc.model, request.Model)
 				require.Equal(t, tc.probes, probes(&request))
 			}

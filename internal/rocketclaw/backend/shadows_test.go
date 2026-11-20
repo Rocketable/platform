@@ -696,7 +696,7 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 	type providerRequest struct {
 		Model        string            `json:"model"`
 		Input        []json.RawMessage `json:"input"`
-		Instructions string            `json:"instructions"`
+		Instructions string            `json:"-"`
 	}
 
 	requests := make(chan providerRequest, 8)
@@ -707,11 +707,20 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 		}
 
 		var request providerRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+
+		data, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(data, &request); err != nil {
 			t.Error(err)
 			return
 		}
 
+		request.Instructions = requestSystemPrompt(data)
+		if request.Instructions == "" {
+			t.Error("the system prompt is not the first input item")
+			return
+		}
+
+		request.Input = request.Input[1:]
 		requests <- request
 
 		if request.Model == "gpt-parent" && len(request.Input) == 1 {
@@ -880,6 +889,13 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 					t.Error(err)
 					return
 				}
+
+				if len(request.Input) == 0 || !strings.Contains(string(request.Input[0]), `"role":"developer"`) {
+					t.Error("the system prompt is not the first input item")
+					return
+				}
+
+				request.Input = request.Input[1:]
 
 				select {
 				case <-held:
@@ -1489,7 +1505,12 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 			return
 		}
 
-		requests <- request.Input
+		if len(request.Input) == 0 || !strings.Contains(string(request.Input[0]), `"role":"developer"`) {
+			t.Error("the system prompt is not the first input item")
+			return
+		}
+
+		requests <- request.Input[1:]
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, `{"id":"resp","status":"completed","output":[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)

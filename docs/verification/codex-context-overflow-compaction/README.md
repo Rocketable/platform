@@ -6,7 +6,11 @@ short. The transport in `internal/rocketclaw/oai/oauth.go` emulates the Response
 - (a) `codexCompaction`: after a successful reply whose token total reaches the request's `compact_threshold`, it
   compacts the request's input and prepends the compaction item to the reply's `output`.
 - (b) `retryCodexAfterCompaction`: when the stream fails with `context_length_exceeded`, it compacts the request's
-  whole input and retries with only the compaction item.
+  whole input and retries with only the compaction item behind the leading developer message that carries the system
+  prompt.
+
+The system prompt goes in front of every request and is never part of the saved history, so the model counts it in
+neither the history nor a compaction item; keeping it on path (b)'s retry adds no transition.
 
 The harness (`internal/rocketclaw/harness/looper.go`) saves every output item of a reply (`appendProviderReplay`) and
 sends only the history from the latest compaction item on (`pruneHistoryBeforeLatestCompaction`). So history shrinks
@@ -62,7 +66,7 @@ stateDiagram-v2
   state "Request: S plus the step's input" as Request
   state "Reply received" as Reply
   state "Compacting the request's whole input, path (b)" as Compacting
-  state "Retry with only the compaction item" as Retry
+  state "Retry with the system prompt and the compaction item" as Retry
   state "Harness compacts the oldest k chunks, path (c)" as Chunked
   state "Retry with compaction plus the newer history" as ChunkRetry
   state "Turn failed" as Failed
