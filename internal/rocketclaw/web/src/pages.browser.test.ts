@@ -17,7 +17,7 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname.startsWith("/pages-raw/")) return new Response(script, { headers: { "Content-Type": "text/html", "Content-Security-Policy": "sandbox allow-scripts allow-popups allow-forms allow-modals allow-downloads" } });
+    if (url.pathname.startsWith("/pages-raw/")) return new Response(url.pathname.endsWith(".pdf") ? "%PDF-1.4" : script, { headers: { "Content-Type": url.pathname.endsWith(".pdf") ? "application/pdf" : "text/html", "Content-Security-Policy": "sandbox allow-scripts allow-popups allow-forms allow-modals allow-downloads" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = path.join(dist, url.pathname);
       return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
@@ -139,6 +139,19 @@ test("a sandboxed page reads its agent's Page Data only with its token and from 
   expect(reads).toHaveLength(2);
   expect(reads).toEqual(expect.arrayContaining([{ agent: "reporter", path: "revenue", data: true }, { agent: "reporter", path: "missing", data: true }]));
   expect(await page.evaluate(() => (window as any).replies.filter((reply: object) => "value" in reply || "error" in reply))).toEqual([]);
+}), 60_000);
+
+test("a PDF page, which Chrome refuses to show in a sandboxed frame, opens in its own tab", () => withPage(["Main"], async (page, origin) => {
+  await page.goto(`${origin}/pages/-/reporter/q3/report.pdf`);
+  const link = page.getByRole("link", { name: "Open PDF", exact: true });
+  expect(await link.getAttribute("href")).toBe("/pages-raw/reporter/q3/report.pdf");
+  expect(await page.locator("iframe").count()).toBe(0);
+  const [opened] = await Promise.all([page.waitForEvent("popup"), link.click()]);
+  await opened.waitForLoadState();
+  expect(opened.url()).toBe(`${origin}/pages-raw/reporter/q3/report.pdf`);
+  const viewer = () => opened.frames().some((frame: any) => frame.url().startsWith("chrome-extension://"));
+  for (let tries = 0; tries < 50 && !viewer(); tries++) await opened.waitForTimeout(100);
+  expect(viewer()).toBe(true);
 }), 60_000);
 
 for (const width of [1280, 320]) test(`the Page Index lists every space's pages under their space and opens them at ${width}px`, () => withPage(["Billing"], async (page, origin) => {
