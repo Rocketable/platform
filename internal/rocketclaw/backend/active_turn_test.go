@@ -820,7 +820,7 @@ func TestSlackRespondInThreadPlacesTheAnswer(t *testing.T) {
 func TestChannelSessionTakesNextMentionWhileMovedTurnRuns(t *testing.T) {
 	t.Parallel()
 
-	release := make(chan struct{})
+	allowMove, release := make(chan struct{}), make(chan struct{})
 	moved := moveResponder(t, moveScript, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		select {
 		case <-release:
@@ -836,19 +836,40 @@ func TestChannelSessionTakesNextMentionWhileMovedTurnRuns(t *testing.T) {
 			return
 		}
 
+		if strings.Contains(body, "first ask") && !strings.Contains(body, "function_call_output") {
+			select {
+			case <-allowMove:
+			case <-r.Context().Done():
+				return
+			}
+		}
+
 		moved(w, r, n, body)
 	})
 
 	submitRootMention(t, manager, "first ask", "1.1")
+	require.Contains(t, nt.request(t), "first ask")
+	channel := nt.bridge(t, manager, testChannelSession)
+	stale, found, err := channel.headRequest(t.Context())
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NoError(t, channel.enqueue(t.Context(), &stale, "resume running turn before it moves"))
+
 	accepted, err := manager.SubmitMention(t.Context(), "main", slackTarget("D123", "1.1"), newThreadInboundMessage("in the thread", "2.2", "1.1"))
 	require.NoError(t, err)
 	require.True(t, accepted)
 	submitRootMention(t, manager, "second ask", "3.3")
-	assert.Equal(t, testChannelSession, readFinal(t, nt.finals).ConversationID, "the next mention is answered at the top while the moved turn still runs")
+	close(allowMove)
+
+	final := readFinal(t, nt.finals)
+	assert.Equal(t, testChannelSession, final.ConversationID, "the next mention is answered at the top while the moved turn still runs")
+	assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "3.3", ThreadTS: "3.3"}, final.SlackReply)
 	close(release)
 
-	for range 2 {
-		assert.Equal(t, testThreadSession, readFinal(t, nt.finals).ConversationID, "the waiting Thread Session resumes the moved turn, then takes its own mention")
+	for _, ts := range []string{"1.1", "2.2"} {
+		final := readFinal(t, nt.finals)
+		assert.Equal(t, testThreadSession, final.ConversationID, "the waiting Thread Session resumes the moved turn, then takes its own mention")
+		assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: ts, ThreadTS: "1.1"}, final.SlackReply)
 	}
 }
 
