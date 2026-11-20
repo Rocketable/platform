@@ -353,6 +353,8 @@ and other sessions' pickers offer no sticky agent.
 A tab runs one call at a time, and each person has one live call: starting voice
 anywhere else, on any conversation, ends their older call with "Voice moved to another
 device or tab." Other people's calls, even on the same conversation, keep running.
+A message the caller types mutes the voice until it answers new speech; other
+people's messages in the chat leave the call alone.
 A call also ends when the page closes or stays hidden for 30 seconds. There are no
 idle or no-speech timers. A hand-off the agent could not accept shows a notice, and
 the call continues.

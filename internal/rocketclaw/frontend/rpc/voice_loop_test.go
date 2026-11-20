@@ -304,7 +304,8 @@ func TestVoiceLoopReplies(t *testing.T) {
 			{key: "t5", inputs: []string{"d5", "d6"}, reply: "Both."},
 		}
 
-		expect(voiceSnapshot{turns: turns, questions: []protocol.AskUserQuestionRequest{ship}},
+		typedBy := map[string]string{"typed": "alice", "typed-during": "alice", "bob-typed": "bob", "bob-steer": "bob"}
+		expect(voiceSnapshot{turns: turns, questions: []protocol.AskUserQuestionRequest{ship}, typedBy: typedBy},
 			slices.Concat(
 				dialect.appendMessages(nil, "d7", "I need your input. Please respond in the app.\n\nShip?\nOptions: Yes, No"),
 				dialect.appendMessages(nil, "d2", strings.Repeat("a", 3960)),
@@ -316,9 +317,9 @@ func TestVoiceLoopReplies(t *testing.T) {
 		assert.Equal(t, strings.Repeat("b", 3961), stream.SendMsgCalls()[0].M.(*VoiceEvent).GetReply())
 
 		later := []voiceTurn{{key: "t6", inputs: []string{"d7"}, reply: "Stale."}, {key: "t7", inputs: []string{"typed-during"}, reply: "Typed reply."}}
-		expect(voiceSnapshot{turns: slices.Concat(turns, later), questions: []protocol.AskUserQuestionRequest{ship, deploy}},
+		expect(voiceSnapshot{turns: slices.Concat(turns, later), questions: []protocol.AskUserQuestionRequest{ship, deploy}, typedBy: typedBy},
 			dialect.appendMessages(nil, "d7", "I need your input. Please respond in the app.\n\nDeploy?\nTo production.")...)
-		expect(voiceSnapshot{turns: slices.Concat(turns, later)})
+		expect(voiceSnapshot{turns: slices.Concat(turns, later), typedBy: typedBy})
 		require.Len(t, stream.SendMsgCalls(), 2)
 		assert.True(t, stream.SendMsgCalls()[1].M.(*VoiceEvent).GetTyped())
 
@@ -327,11 +328,22 @@ func TestVoiceLoopReplies(t *testing.T) {
 		assert.Equal(t, voiceDelegation("user: go", "user: go"), engine.StashQueueItemCalls()[7].ThreadQueueItem.Message)
 		assert.Empty(t, engine.AnswerQuestionCalls())
 
+		handOff("d9")
+
+		colleague := voiceSnapshot{turns: slices.Concat(turns, later, []voiceTurn{
+			{key: "t8", inputs: []string{"d8"}, reply: "Still read."},
+			{key: "t9", inputs: []string{"bob-typed"}, reply: "Bob's reply."},
+			{key: "t10", inputs: []string{"d9", "bob-steer"}, reply: "Read anyway."},
+		}), typedBy: typedBy}
+		expect(colleague, slices.Concat(dialect.appendMessages(nil, "d8", "Still read."), dialect.appendMessages(nil, "d9", "Read anyway."))...)
+		expect(colleague)
+		assert.Len(t, stream.SendMsgCalls(), 2, "another person's messages cancel and mute nothing")
+
 		cancel(nil)
 
 		_, data, err := peer.ReadMessage()
 		require.NoError(t, err)
-		assert.JSONEq(t, voiceCloseMessage, string(data), "nothing else was sent")
+		assert.JSONEq(t, voiceCloseMessage, string(data), "each reply is read once")
 		require.NoError(t, peer.WriteMessage(websocket.TextMessage, []byte(`{"type":"session.closed"}`)))
 		assert.Equal(t, voiceEndError("stopped"), wait())
 	})

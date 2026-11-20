@@ -57,7 +57,7 @@ type voiceTurn struct {
 type voiceSnapshot struct {
 	turns     []voiceTurn
 	questions []protocol.AskUserQuestionRequest
-	voice     map[string]bool
+	typedBy   map[string]string
 }
 
 const voiceLongReply = "That answer is too long to read aloud. It is shown on the screen."
@@ -481,7 +481,7 @@ func (c *voiceCall) update(snapshot voiceSnapshot) {
 
 	for _, turn := range snapshot.turns {
 		for _, id := range turn.inputs {
-			if !c.seen[id] && !snapshot.voice[id] {
+			if !c.seen[id] && snapshot.typedBy[id] == c.principal {
 				clear(live)
 
 				typed = typed || during && !c.inputs[id]
@@ -496,7 +496,7 @@ func (c *voiceCall) update(snapshot voiceSnapshot) {
 	}
 
 	for _, turn := range snapshot.turns {
-		if len(turn.inputs) == 0 || !live[turn.inputs[len(turn.inputs)-1]] || turn.reply == "" || c.reported[turn.key] {
+		if !slices.ContainsFunc(turn.inputs, func(id string) bool { return live[id] }) || turn.reply == "" || c.reported[turn.key] {
 			continue
 		}
 
@@ -598,7 +598,7 @@ func (c *voiceCall) forward(ctx context.Context, snapshots chan<- voiceSnapshot)
 }
 
 func (c *voiceCall) snapshot(ctx context.Context, root *os.Root, from int64, limit int) (voiceSnapshot, int64, error) {
-	snapshot := voiceSnapshot{voice: map[string]bool{}}
+	snapshot := voiceSnapshot{typedBy: map[string]string{}}
 
 	view, err := c.server.sessions.ObserveHistory(ctx, c.conversationID, "", from, 0, limit, &backend.HistoryInventory{})
 	if err != nil {
@@ -619,7 +619,9 @@ func (c *voiceCall) snapshot(ctx context.Context, root *os.Root, from int64, lim
 			switch {
 			case message.Role == "user" && message.Principal != "":
 				turn.inputs = append(turn.inputs, message.InputId)
-				snapshot.voice[message.InputId] = strings.Contains(message.Header, " media=Voice")
+				if !strings.Contains(message.Header, " media=Voice") {
+					snapshot.typedBy[message.InputId] = message.Principal
+				}
 			case message.Role == "assistant" && message.Complete && !entry.Active:
 				turn.reply = message.Text
 			}

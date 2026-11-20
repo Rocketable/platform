@@ -580,8 +580,10 @@ Nothing is sent to the voice model while the agent works. When a turn this call
 handed off finishes, its final reply is sent once, as written, unless it is over
 3,960 bytes (about 990 tokens). Then, as Codex shows such a reply on screen, the
 browser gets it in a `reply` event and the voice model hears that it is on the
-screen. A user message typed during the call cancels the
-reply of every earlier hand-off, as Codex does; only a later hand-off speaks again. It
+screen. A user message the caller types during the call, matched by the principal
+in its prompt header, cancels the reply of every earlier hand-off, as Codex does;
+only a later hand-off speaks again. Other people's messages cancel nothing, even when
+they join the turn holding this call's hand-off. It
 also sends the browser a `typed` event: the browser mutes the voice model at once and
 unmutes it when the model begins a reply after the person spoke again, as Codex
 suppresses its speaker. Each pending
