@@ -11,13 +11,11 @@ import (
 	"io"
 	"io/fs"
 	"maps"
-	"mime"
 	"net/http"
 	"path"
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -25,16 +23,37 @@ import (
 
 //go:generate sh -c "cd ../../web && bun install --frozen-lockfile && bun run build"
 //go:generate sh -c "cd ../../oc && bun install --frozen-lockfile && OPENCODE_CHANNEL=prod bun --bun vite build"
+//go:generate go run gzip.go dist oc-dist
 //go:embed dist all:oc-dist
 var assets embed.FS
 
 func Handler(cfg *config.LockedConfig, serverName string) http.Handler {
-	files, _ := fs.Sub(assets, "dist")
-	ocFiles, _ := fs.Sub(assets, "oc-dist")
+	contentTypes := map[string]string{
+		".aac":   "audio/aac",
+		".css":   "text/css; charset=utf-8",
+		".html":  "text/html; charset=utf-8",
+		".js":    "text/javascript; charset=utf-8",
+		".svg":   "image/svg+xml",
+		".ttf":   "font/ttf",
+		".txt":   "text/plain; charset=utf-8",
+		".wasm":  "application/wasm",
+		".woff":  "font/woff",
+		".woff2": "font/woff2",
+	}
 
-	page, _ := fs.ReadFile(files, "index.html")
+	tags := map[string]string{}
+	_ = fs.WalkDir(assets, ".", func(name string, entry fs.DirEntry, _ error) error {
+		if !entry.IsDir() {
+			file, _ := assets.Open(name)
+			hash := sha256.New()
+			_, _ = io.Copy(hash, file)
+			tags[name] = hex.EncodeToString(hash.Sum(nil)[:8])
+		}
 
-	var gzipWriters sync.Pool
+		return nil
+	})
+
+	page := unpack("dist/index.html.gz")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
@@ -66,67 +85,57 @@ func Handler(cfg *config.LockedConfig, serverName string) http.Handler {
 				index = strings.Replace(index, "</head>", `<script id="rocketclaws" type="application/json">`+string(data)+`</script></head>`, 1)
 			}
 
-			serveFile(w, r, "index.html", []byte(index), "assets", &gzipWriters)
+			sum := sha256.Sum256([]byte(index))
+			serveFile(w, r, contentTypes[".html"], hex.EncodeToString(sum[:8]), strings.NewReader(index))
 
 			return
 		}
 
-		root, name, immutable := files, strings.TrimPrefix(r.URL.Path, "/"), "assets"
+		root, name, immutable := "dist/", strings.TrimPrefix(r.URL.Path, "/"), "assets"
 		if ocName, ok := strings.CutPrefix(r.URL.Path, "/oc-ui/"); ok {
-			root, name, immutable = ocFiles, ocName, "_assets"
+			root, name, immutable = "oc-dist/", ocName, "_assets"
 		}
 
-		data, err := fs.ReadFile(root, name)
-		if err != nil {
+		stored := root + name + ".gz"
+
+		tag, ok := tags[stored]
+		if !ok {
 			http.NotFound(w, r)
 
 			return
 		}
 
-		serveFile(w, r, name, data, immutable, &gzipWriters)
+		if path.Dir(name) == immutable && hashed.MatchString(path.Base(name)) {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
+
+		w.Header().Add("Vary", "Accept-Encoding")
+
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			serveFile(w, r, contentTypes[path.Ext(name)], tag, bytes.NewReader(unpack(stored)))
+
+			return
+		}
+
+		file, _ := assets.Open(stored)
+
+		w.Header().Set("Content-Encoding", "gzip")
+		serveFile(w, r, contentTypes[path.Ext(name)], tag+"-gzip", file.(io.ReadSeeker))
 	})
 }
 
 var hashed = regexp.MustCompile(`-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$`)
 
-func serveFile(w http.ResponseWriter, r *http.Request, name string, data []byte, immutable string, writers *sync.Pool) {
-	if path.Dir(name) == immutable && hashed.MatchString(path.Base(name)) {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	}
+func unpack(name string) []byte {
+	file, _ := assets.Open(name)
+	reader, _ := gzip.NewReader(file)
+	data, _ := io.ReadAll(reader)
 
-	contentType := mime.TypeByExtension(path.Ext(name))
-	if contentType == "" {
-		contentType = http.DetectContentType(data)
-	}
+	return data
+}
 
+func serveFile(w http.ResponseWriter, r *http.Request, contentType, tag string, content io.ReadSeeker) {
 	w.Header().Set("Content-Type", contentType)
-
-	sum := sha256.Sum256(data)
-	tag := hex.EncodeToString(sum[:8])
-
-	if slices.ContainsFunc([]string{"text/", "javascript", "json", "svg", "wasm", "font/ttf", "font/otf"}, func(kind string) bool { return strings.Contains(contentType, kind) }) {
-		w.Header().Add("Vary", "Accept-Encoding")
-
-		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-			var compressed bytes.Buffer
-
-			writer, ok := writers.Get().(*gzip.Writer)
-			if !ok {
-				writer = gzip.NewWriter(io.Discard)
-			}
-
-			writer.Reset(&compressed)
-			_, _ = writer.Write(data)
-			_ = writer.Close()
-			writer.Reset(io.Discard)
-			writers.Put(writer)
-
-			data, tag = compressed.Bytes(), tag+"-gzip"
-
-			w.Header().Set("Content-Encoding", "gzip")
-		}
-	}
-
 	w.Header().Set("ETag", `"`+tag+`"`)
-	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(data))
+	http.ServeContent(w, r, "", time.Time{}, content)
 }

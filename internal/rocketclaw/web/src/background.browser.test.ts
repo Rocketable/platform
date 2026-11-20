@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 import { timelineLevels } from "./timeline-detail";
 import type { BackgroundJob, TranscriptEvent } from "./types";
 
@@ -26,8 +27,8 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); notify = (data) => controller.enqueue(`data: ${data}\n\n`); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", agent: "main", running: true }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+      const file = path.join(dist, url.pathname);
+      return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
     }
     const input = await request.json() as { id: string; revision?: string; before?: string };
     switch (url.pathname) {

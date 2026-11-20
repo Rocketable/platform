@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 import type { SearchPage, StripLayout, TabAttention } from "./types";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
@@ -92,10 +93,10 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
       return new Response(`data: ${JSON.stringify({ sessions: listed, owner: "tester", upstreamSuccess: true, tabs })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     }
     if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      if (await file.exists()) return new Response(file);
+      const file = path.join(dist, url.pathname);
+      if (await Bun.file(`${file}.gz`).exists()) return unpacked(file);
       // Named like the Go handler names a server's page.
-      const index = (await Bun.file(path.join(dist, "index.html")).text()).replace("<title>RocketClaw</title>", "<title>lab - RocketClaw</title>");
+      const index = (await unpacked(path.join(dist, "index.html")).text()).replace("<title>RocketClaw</title>", "<title>lab - RocketClaw</title>");
       return new Response(index, { headers: { "Content-Type": "text/html" } });
     }
     const input = await request.json().catch(() => ({})) as { id: string; text: string; name: string; query: string; agent?: string } & Parameters<typeof tabsCall>[1];

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 import type { TranscriptEvent } from "./types";
 
 // OpenCode V2 packages/app/src/session/revert.ts and
@@ -15,8 +16,8 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", name: "Chat", agent: "main" }], owner: username, upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+      const file = path.join(dist, url.pathname);
+      return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
     }
     const input = await request.json() as { id: string; messageId?: string; text?: string };
     switch (url.pathname) {
@@ -275,8 +276,8 @@ test("revert an unsaved latest turn by input ID", async () => {
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", name: "Chat", agent: "main" }], owner: "alice", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+      const file = path.join(dist, url.pathname);
+      return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
     }
     const input = await request.json() as { messageId?: string };
     switch (url.pathname) {

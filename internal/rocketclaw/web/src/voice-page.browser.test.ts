@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
@@ -125,8 +126,8 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
       return Response.json({ spaces: [{ id: "main", name: "Main" }], state: tabs[username] });
     }
     if (url.pathname.startsWith("/api/")) return Response.json({});
-    const file = Bun.file(path.join(dist, url.pathname));
-    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    const file = path.join(dist, url.pathname);
+    return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
   } });
   const origin = `http://127.0.0.1:${server.port}`;
   try {

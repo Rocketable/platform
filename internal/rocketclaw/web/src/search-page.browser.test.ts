@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
@@ -63,8 +64,8 @@ function serve(rows: object[], search: (input: SearchInput) => Promise<object> |
     }
     if (url.pathname === "/api/Tabs") return tabs.reply(request);
     if (url.pathname.startsWith("/api/")) return Response.json({});
-    const file = Bun.file(path.join(dist, url.pathname));
-    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    const file = path.join(dist, url.pathname);
+    return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
   } });
   return { server, paths, tabs, origin: `http://127.0.0.1:${server.port}` };
 }
@@ -107,8 +108,8 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     }
     if (url.pathname === "/api/Tabs") return api.reply(request);
     if (url.pathname.startsWith("/api/")) return Response.json({});
-    const file = Bun.file(path.join(dist, url.pathname));
-    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    const file = path.join(dist, url.pathname);
+    return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
@@ -846,8 +847,8 @@ test("newer search replaces an in-flight search and retries errors", async () =>
     }
     if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: `/s/${btoa("chat").replaceAll("=", "")}`, space: "main" }], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
-    const file = Bun.file(path.join(dist, url.pathname));
-    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    const file = path.join(dist, url.pathname);
+    return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
@@ -1084,8 +1085,8 @@ test("message matches jump after history loads and last close returns to the las
     }
     if (url.pathname === "/api/Tabs") return api.reply(request);
     if (url.pathname.startsWith("/api/")) return Response.json({});
-    const file = Bun.file(path.join(dist, url.pathname));
-    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    const file = path.join(dist, url.pathname);
+    return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
@@ -1194,8 +1195,8 @@ test("search formats rows, windows around matches, and resolves tag names", asyn
     }
     if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
-    const file = Bun.file(path.join(dist, url.pathname));
-    return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    const file = path.join(dist, url.pathname);
+    return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 import type { Attachment, PromptDelivery, QueueItem, Session, SessionBatch, TranscriptEvent } from "./types";
 import { RPCError } from "./api";
 import { timelineLevels } from "./timeline-detail";
@@ -189,7 +190,7 @@ test("sidebar listing objects stay separate from older clients' row arrays", asy
     }
     if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
-    return new Response(Bun.file(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html")));
+    return unpacked(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html"));
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
@@ -232,7 +233,7 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
     const { chromium: engine } = await import(playwright!);
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
       const url = new URL(request.url);
-      if (!url.pathname.startsWith("/api/")) return new Response(Bun.file(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html")));
+      if (!url.pathname.startsWith("/api/")) return unpacked(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html"));
       if (url.pathname === "/api/ListSessions") return new Response('data: {"sessions":[],"owner":"tester","upstreamSuccess":true}\n\nevent: complete\ndata: {}\n\n', { headers: { "Content-Type": "text/event-stream" } });
       if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
       if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "command-hints" });
@@ -337,7 +338,7 @@ test("room autocomplete keeps selections and full labels on each search surface"
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
-    if (!url.pathname.startsWith("/api/")) return new Response(Bun.file(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html")));
+    if (!url.pathname.startsWith("/api/")) return unpacked(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html"));
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "room-search" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }, { name: "other" }] });
@@ -441,7 +442,7 @@ test("actual App renders independent public lifecycle and reconnect replacements
   const build = await Bun.build({ entrypoints: ["./src/main.tsx"], target: "browser", define: { "process.env.NODE_ENV": '"production"' } });
   expect(build.success).toBe(true);
   const script = await build.outputs[0].text();
-  const html = (await Bun.file(path.join(dist, "index.html")).text()).replace(/<script type="module" src="[^"]+"><\/script>/, '<script type="module" src="/current.js"></script>');
+  const html = (await unpacked(path.join(dist, "index.html")).text()).replace(/<script type="module" src="[^"]+"><\/script>/, '<script type="module" src="/current.js"></script>');
   const { chromium: engine } = await import(playwright!);
   let running = true;
   let revision = 0;
@@ -455,7 +456,7 @@ test("actual App renders independent public lifecycle and reconnect replacements
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { stream.resolve(controller); controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "public", agent: "main", title: "Public progress" }], owner: "alice", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
-      if (url.pathname.startsWith("/assets/")) return new Response(Bun.file(path.join(dist, url.pathname)));
+      if (url.pathname.startsWith("/assets/")) return unpacked(path.join(dist, url.pathname));
       return new Response(html, { headers: { "Content-Type": "text/html" } });
     }
     const input = await request.json() as { revision?: string; text?: string };
@@ -650,8 +651,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       return new Response(imageBytes, { headers: { "Content-Type": image.mimeType, "Content-Disposition": `${url.searchParams.has("download") ? "attachment" : "inline"}; filename="${image.name}"` } });
     }
     if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() && url.pathname !== "/" ? file : Bun.file(path.join(dist, "index.html")));
+      const file = path.join(dist, url.pathname);
+      return unpacked(await Bun.file(`${file}.gz`).exists() && url.pathname !== "/" ? file : path.join(dist, "index.html"));
     }
     const input = await req.json() as { id: string; revision?: string; query: string; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string };
     try {
@@ -3266,8 +3267,8 @@ test("session titles and turn-rail previews format tags and markup", async () =>
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "alert", preview, agent: "main" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+      const file = path.join(dist, url.pathname);
+      return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
     }
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "sidebar-format" });

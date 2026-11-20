@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 import { listSessions } from "./api";
 import type { Session, TranscriptEvent } from "./types";
 
@@ -78,8 +79,8 @@ test("transcript and entry HTTP proxy reach Go", async () => {
   const web = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const target = new URL(request.url);
     if (target.pathname.startsWith("/api/") || target.pathname === "/stream") return fetch(new Request(new URL(target.pathname + target.search, url), request), { decompress: false });
-    const file = Bun.file(path.join(dist, target.pathname));
-    return new Response(await file.exists() && target.pathname !== "/" ? file : Bun.file(path.join(dist, "index.html")));
+    const file = path.join(dist, target.pathname);
+    return unpacked(await Bun.file(`${file}.gz`).exists() && target.pathname !== "/" ? file : path.join(dist, "index.html"));
   } });
   const { chromium } = await import(playwrightModule);
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM });

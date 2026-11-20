@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
+import { unpacked } from "./test-browsers";
 import postcss from "postcss";
 import tailwind from "@tailwindcss/postcss";
 import type { SavedTabs, TranscriptEvent } from "./types";
@@ -391,8 +392,8 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: session, name: "Preview fixture", agent: "main", updatedAt }, { id: other, name: "Other fixture", agent: "main" }], owner: "synthetic-viewer", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+      const file = path.join(dist, url.pathname);
+      return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
     }
     const input = request.method === "POST" ? await request.json() as { id: string; state?: SavedTabs["state"] } : { id: "" };
     switch (url.pathname) {
@@ -625,8 +626,8 @@ test("the PR pane quotes its description and adds diff notes to the native draft
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: session, name: "Notes fixture", agent: "main" }], owner: "synthetic-viewer", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+      const file = path.join(dist, url.pathname);
+      return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
     }
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "pr-notes-fixture" });

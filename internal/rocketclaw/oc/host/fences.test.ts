@@ -68,13 +68,15 @@ describe("the CSS fence (KTD15)", () => {
 
 describe("the committed build", () => {
   const dist = new URL("../../internal/web/oc-dist/", import.meta.url).pathname
-  const files = [...new Glob("**/*").scanSync(dist)]
-  const sheets = files.filter((file) => file.endsWith(".css")).map((file) => Bun.file(dist + file).text())
+  const files = [...new Glob("**/*.gz").scanSync(dist)].map((file) => file.replace(/\.gz$/, ""))
+  const read = async (file: string) =>
+    new TextDecoder().decode(Bun.gunzipSync(await Bun.file(`${dist}${file}.gz`).bytes()))
+  const sheets = files.filter((file) => file.endsWith(".css")).map(read)
 
   test("ships the mount entry and no page of its own", async () => {
     expect(files).toContain("_assets/index.js")
     expect(files.filter((file) => file.endsWith(".html"))).toEqual([])
-    expect(await Bun.file(`${dist}_assets/index.js`).text()).toContain("export{")
+    expect(await read("_assets/index.js")).toContain("export{")
   })
 
   test("no rule selects outside the view, and no width media query is left", async () => {
@@ -115,7 +117,7 @@ describe("the committed build", () => {
 
   test("quote backgrounds keep shadow-local selectors in diffs without styling selection across the view", async () => {
     const scripts = (
-      await Promise.all(files.filter((file) => file.endsWith(".js")).map((file) => Bun.file(dist + file).text()))
+      await Promise.all(files.filter((file) => file.endsWith(".js")).map(read))
     ).join("\n")
 
     expect(scripts.includes(".timeline-quote-highlight-relative {")).toBe(true)

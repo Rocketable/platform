@@ -1,1 +1,0 @@
-import{r as e,t}from"./core-BXqU3ikT.js";var n=t.define(`file.tree`),r=t.define(`file.openInApp`),i=e.define(`file.viewer`);export{i as n,r,n as t};

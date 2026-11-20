@@ -304,7 +304,8 @@ pauses while reverted and may resume when the cutoff clears.
 
 The frontend is a client-side React SPA. Bun builds static assets directly into
 `../internal/web/dist/`: `index.html`, hashed JavaScript and
-CSS, and a self-hosted Inter font. `cmd/rocketclaw` embeds and serves that directory
+CSS, and a self-hosted Inter font, each stored gzipped as `<name>.gz` by
+`go generate`. `cmd/rocketclaw` embeds and serves that directory
 alongside the Go HTTP API. Production needs no Bun, Node, or Next server.
 
 See [Web conversation transport](../frontend/rpc/README.md)
