@@ -532,6 +532,9 @@ func TestSidebarSessionsAllocationBudgets(t *testing.T) {
 	result = testing.Benchmark(BenchmarkSidebarSessionTags)
 	require.Positive(t, result.N)
 	require.Less(t, result.AllocedBytesPerOp(), int64(4<<20))
+	result = testing.Benchmark(BenchmarkUnfilteredSessionSearch)
+	require.Positive(t, result.N)
+	require.Less(t, result.AllocedBytesPerOp(), int64(1_650_000), "unfiltered session search")
 }
 
 func BenchmarkSidebarSessionTags(b *testing.B) {

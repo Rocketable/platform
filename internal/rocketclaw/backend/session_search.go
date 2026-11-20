@@ -393,6 +393,9 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 	}
 
 	var listed []SidebarChat
+	if len(search.Terms) == 0 {
+		listed = make([]SidebarChat, 0, len(rows))
+	}
 
 	hits := make(map[string]bool)
 
@@ -435,41 +438,49 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 				continue
 			}
 
-			label := row.Label()
-			_, origin := DecideOrigin(&row.Origin)
-
-			var preview string
-			if row.Summary != nil {
-				preview = row.Summary.LastMessage
-			}
-
 			match := SessionMatch{Chat: *chat}
-
-			for _, field := range []struct {
-				name SessionField
-				text string
-			}{{fieldName, row.Name}, {fieldRoom, chat.Room}, {fieldAgent, row.Conversation.Agent}, {fieldSession, label}, {fieldOrigin, origin}} {
-				if search.Needle != "" && strings.Contains(strings.ToLower(field.text), search.Needle) {
-					match.Field, match.Text = field.name, field.text
-					break
-				}
+			if match.findField(search.Needle, withHits) {
+				search.Matches = append(search.Matches, match)
 			}
-
-			if match.Field == "" && !withHits {
-				if !strings.Contains(strings.ToLower(row.Name+" "+chat.Room+" "+preview+" "+row.Conversation.Agent+" "+label+" "+row.Server+" "+row.Directory), search.Needle) {
-					continue
-				}
-
-				match.Field, match.Text = fieldPreview, cmp.Or(preview, label)
-			}
-
-			search.Matches = append(search.Matches, match)
 		}
 	}
 
 	search.sortMatches()
 
 	return search, nil
+}
+
+func (match *SessionMatch) findField(needle string, withHits bool) bool {
+	row := &match.Chat.Session
+	label := row.Label()
+	_, origin := DecideOrigin(&row.Origin)
+
+	for _, field := range []struct {
+		name SessionField
+		text string
+	}{{fieldName, row.Name}, {fieldRoom, match.Chat.Room}, {fieldAgent, row.Conversation.Agent}, {fieldSession, label}, {fieldOrigin, origin}} {
+		if needle != "" && strings.Contains(strings.ToLower(field.text), needle) {
+			match.Field, match.Text = field.name, field.text
+			return true
+		}
+	}
+
+	if withHits {
+		return true
+	}
+
+	var preview string
+	if row.Summary != nil {
+		preview = row.Summary.LastMessage
+	}
+
+	if !strings.Contains(strings.ToLower(row.Name+" "+match.Chat.Room+" "+preview+" "+row.Conversation.Agent+" "+label+" "+row.Server+" "+row.Directory), needle) {
+		return false
+	}
+
+	match.Field, match.Text = fieldPreview, cmp.Or(preview, label)
+
+	return true
 }
 
 func readChats(candidates []string, hits []MessageSearchHit) []string {

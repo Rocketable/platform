@@ -644,6 +644,35 @@ func TestSearchSessionsSortOrder(t *testing.T) {
 	}
 }
 
+func BenchmarkUnfilteredSessionSearch(b *testing.B) {
+	service, err := NewSessionService(b.TempDir())
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, service.Stop()) })
+
+	const chats = 256
+
+	ctx := b.Context()
+
+	for i := range chats {
+		id := fmt.Sprintf("session-%03d", i)
+		require.NoError(b, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		_, err := service.AppendEntryID(ctx, id, testSessionEntry("project notes", "draft reply"))
+		require.NoError(b, err)
+	}
+
+	search, err := service.SearchSessions(ctx, "", "project", SearchMessages, noSlackLookups{})
+	require.NoError(b, err)
+	require.Len(b, search.Matches, chats)
+	require.Len(b, search.Hits, chats)
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		_, err := service.SearchSessions(ctx, "", "project", SearchMessages, noSlackLookups{})
+		require.NoError(b, err)
+	}
+}
+
 func TestSpaceLimit(t *testing.T) {
 	t.Parallel()
 
