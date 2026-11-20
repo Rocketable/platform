@@ -159,8 +159,7 @@ SELECT COALESCE(f.mcp, t.mcp) FROM this t LEFT JOIN first f ON true`, chat, stri
 	}
 
 	for i, text := range texts {
-		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: text}, true)
-		inbound.ConversationID, inbound.Metadata = chat, maps.Clone(metadata)
+		inbound := &protocol.InboundMessage{Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue, Text: text, Human: true, ConversationID: chat, Metadata: maps.Clone(metadata)}
 		id := rand.Text()
 
 		if mcp.On {
