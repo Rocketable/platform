@@ -269,8 +269,8 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	}
 
 	s.listingsMu.Lock()
-	s.listings[owner] = append(s.listings[owner], listing)
-	s.listings[owner] = s.listings[owner][max(0, len(s.listings[owner])-sessionListingsKept):]
+	listings := s.listings[owner]
+	s.listings[owner] = append(slices.Delete(listings, 0, max(0, len(listings)+1-sessionListingsKept)), listing)
 	s.listingsMu.Unlock()
 
 	if since.version != "" {

@@ -335,7 +335,17 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 	owner, _, err := server.spaceLimit(ctx)
 	require.NoError(t, err)
 
+	firstSlot := &server.listings[owner][0]
+	_, last := list(ctx, full.Version)
+	require.Equal(t, full.Version, last.Since, "the oldest retained version still works")
+	sent, evicted := list(ctx, full.Version)
+	require.ElementsMatch(t, []string{"chat-00", "chat-01"}, sent, "an evicted version gets every row")
+	require.Empty(t, evicted.Since)
+
 	listings := server.listings[owner]
+	require.Len(t, listings, sessionListingsKept)
+	require.Same(t, firstSlot, &listings[0], "eviction must not leave old snapshots before the slice")
+
 	fingerprints := listings[len(listings)-1].rows
 	server = New(server.backend, server.sessions, server.cfg, server.channels, server.cronjobs)
 	sent, fresh := list(ctx, unknown.Version)
