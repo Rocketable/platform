@@ -3,6 +3,9 @@ package backend
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -129,10 +132,25 @@ func externalOriginAllocationCheck(tb testing.TB) func() {
 }
 
 func TestChatOriginFactsAllocationBudget(t *testing.T) {
+	if os.Getenv("ROCKETCLAW_TEST_CHAT_ORIGIN_ALLOCATIONS") != "1" {
+		executable := filepath.Join(t.TempDir(), "backend.test")
+		build := exec.CommandContext(t.Context(), "go", "test", "-c", "-race=false", "-cover=false", "-o", executable, ".")
+		output, err := build.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+
+		cmd := exec.CommandContext(t.Context(), executable, "-test.run=^"+t.Name()+"$", "-test.cpu=1", "-test.benchtime=32x")
+
+		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_CHAT_ORIGIN_ALLOCATIONS=1", "GOGC=100", "GOMEMLIMIT=off")
+		output, err = cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+
+		return
+	}
+
 	result := testing.Benchmark(BenchmarkChatOriginFacts)
 	require.Positive(t, result.N)
 	require.Less(t, result.AllocedBytesPerOp(), int64(7<<20))
-	require.Less(t, result.AllocsPerOp(), int64(860))
+	require.Less(t, result.AllocsPerOp(), int64(752))
 }
 
 func BenchmarkChatOriginFacts(b *testing.B) {
