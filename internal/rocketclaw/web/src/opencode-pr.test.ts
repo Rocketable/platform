@@ -27,7 +27,7 @@ test("discovers the checkout PR through the configured server's gh login, withou
   } finally { globalThis.fetch = original; }
 });
 
-test("does not attach a PR that finished before the session existed; distinguishes no PR from failed access", async () => {
+test("does not attach a PR that finished before the session existed; distinguishes no PR, including a folder with no repository or branch, from failed access", async () => {
   const original = globalThis.fetch;
   let exit = 0, outputFailure = false, output = JSON.stringify({ url: "https://github.com/owner/repo/pull/7", headRefName: "feature", mergedAt: "2026-01-01T00:00:00Z" });
   globalThis.fetch = (async (input, init) => {
@@ -41,6 +41,7 @@ test("does not attach a PR that finished before the session existed; distinguish
     expect((await discoverOpenCodePR("https://web.test/oc/box/api", "ses_one", new AbortController().signal)).url).toBeNull();
     exit = 1; output = "no pull requests found for branch \"feature\"";
     expect((await discoverOpenCodePR("https://web.test/oc/box/api", "ses_one", new AbortController().signal)).url).toBeNull();
+    for (output of ["fatal: not a git repository (or any of the parent directories): .git\nfailed to run git: fatal: not a git repository (or any of the parent directories): .git\n", "could not determine current branch: failed to run git: not on any branch\n"]) expect(await discoverOpenCodePR("https://web.test/oc/box/api", "ses_one", new AbortController().signal)).toEqual({ api: "https://web.test/oc/box/api", directory: "/work", url: null, branch: "" });
     output = "private-marker: please run gh auth login";
     expect(await discoverOpenCodePR("https://web.test/oc/box/api", "ses_one", new AbortController().signal)).toEqual({ api: "https://web.test/oc/box/api", directory: "/work", url: null, branch: "", error: "Could not read GitHub using this OpenCode server's gh login." });
     outputFailure = true; exit = 0;

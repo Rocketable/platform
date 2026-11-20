@@ -43,7 +43,7 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
       if (request.request().method() === "POST") {
         const body = request.request().postDataJSON(); commands.push(body);
         const command = body.command as string;
-        const output = command.includes("gh pr view") ? checkoutUnavailable ? "could not determine current branch" : JSON.stringify({ url: `https://github.com/sample/fixture-repository-marker/pull/${{ "/repo/child": 8, "/repo/next": 9 }[body.cwd as string] ?? 7}`, headRefName: "feature/pr-pane", mergedAt: null, closedAt: null })
+        const output = command.includes("gh pr view") ? checkoutUnavailable ? "To get started with GitHub CLI, please run:  gh auth login" : JSON.stringify({ url: `https://github.com/sample/fixture-repository-marker/pull/${{ "/repo/child": 8, "/repo/next": 9 }[body.cwd as string] ?? 7}`, headRefName: "feature/pr-pane", mergedAt: null, closedAt: null })
           : command.includes("/files?") ? JSON.stringify([{ filename: "private-file-marker.ts", status: "modified", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+private-patch-marker <script>text only</script>" }])
           : JSON.stringify({ title: command.includes("/pulls/8") ? "Second thread PR marker" : "Remote private PR marker", body: "Private description marker", state: "open", draft: true, merged: false, changed_files: 1, user: { login: "demo-author" }, updated_at: "2026-11-12T12:00:00Z", additions: 1, deletions: 0, head: { sha: "head", ref: "feature/pr-reader" }, base: { sha: "base", ref: "main" } });
         const id = `sh_pr_${outputs.size}`; outputs.set(id, output);
