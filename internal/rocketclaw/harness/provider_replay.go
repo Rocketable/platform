@@ -114,7 +114,7 @@ func (e *SessionEntry) forProvider(provider string) error {
 			summaryTexts = texts
 		}
 
-		for _, text := range nonblankText(summaryTexts) {
+		for _, text := range summaryTexts {
 			message := responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleAssistant)
 			message.OfMessage.Type = "message"
 			items = append(items, message)
@@ -147,13 +147,13 @@ func compactionText(raw json.RawMessage) ([]string, error) {
 		return nil, fmt.Errorf("compaction content: %w", err)
 	}
 
-	if texts = nonblankText(texts); len(texts) == 0 {
+	if len(texts) == 0 {
 		if texts, err = readableText(item.Summary); err != nil {
 			return nil, fmt.Errorf("compaction summary: %w", err)
 		}
 	}
 
-	return nonblankText(texts), nil
+	return texts, nil
 }
 
 type replayMessage struct {
@@ -344,7 +344,7 @@ func readableText(raw json.RawMessage) ([]string, error) {
 			return nil, fmt.Errorf("decode string: %w", err)
 		}
 
-		return []string{text}, nil
+		return nonblankText([]string{text}), nil
 	}
 
 	decode := func(part json.RawMessage) (string, error) {
@@ -371,7 +371,7 @@ func readableText(raw json.RawMessage) ([]string, error) {
 	switch raw[0] {
 	case '{':
 		text, err := decode(raw)
-		return []string{text}, err
+		return nonblankText([]string{text}), err
 	case '[':
 		var parts []json.RawMessage
 		if err := json.Unmarshal(raw, &parts); err != nil {
@@ -388,7 +388,7 @@ func readableText(raw json.RawMessage) ([]string, error) {
 			texts[i] = text
 		}
 
-		return texts, nil
+		return nonblankText(texts), nil
 	default:
 		return nil, errors.New("expected string, text object, or text array")
 	}
