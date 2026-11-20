@@ -2835,14 +2835,14 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 
 func loadRocketCodeDefinitionsIn(root *os.Root, locked *config.LockedConfig, runtimeDir string, layer map[string]string) (agents harness.Agents, skills harness.Skills, err error) {
 	err = locked.Do(func(cfg *config.Config) error {
-		agents, skills, err = readRocketCodeDefinitionsIn(root, cfg, runtimeDir, layer)
+		agents, skills, err = readRocketCodeDefinitionsIn(root, cfg, runtimeDir, layer, true)
 		return err
 	})
 
 	return agents, skills, err
 }
 
-func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir string, layer map[string]string) (harness.Agents, harness.Skills, error) {
+func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir string, layer map[string]string, includeSkills bool) (harness.Agents, harness.Skills, error) {
 	rootFS := root.FS()
 
 	agentsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(runtimeDir, "agents")))
@@ -2887,8 +2887,10 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 		return harness.Agents{}, harness.Skills{}, err
 	}
 
-	skillsRoot := filepath.Join(cfg.Workspace, runtimeDir, "skills")
-	skillResult := harness.LoadSkills(skillsFS, skillsRoot)
+	var skills harness.Skills
+	if includeSkills {
+		skills = harness.LoadSkills(skillsFS, filepath.Join(cfg.Workspace, runtimeDir, "skills")).Skills
+	}
 
 	tools := []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName, respondInThreadToolName}
 
@@ -2936,7 +2938,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 		agents.Items[name] = agent
 	}
 
-	return agents, skillResult.Skills, nil
+	return agents, skills, nil
 }
 
 func loadAgentDefinitions(agentsFS, skillsFS fs.FS, cfg *config.Config) (harness.Agents, error) {
@@ -2974,6 +2976,22 @@ func LoadRuntimeDefinitions(cfg *config.LockedConfig, runtimeDir string) (harnes
 	defer func() { _ = root.Close() }()
 
 	return loadRocketCodeDefinitionsIn(root, cfg, runtimeDir, nil)
+}
+
+func LoadRuntimeAgents(cfg *config.LockedConfig, runtimeDir string) (agents harness.Agents, err error) {
+	root, err := os.OpenRoot(cfg.Clone().Workspace)
+	if err != nil {
+		return harness.Agents{}, fmt.Errorf("open workspace root: %w", err)
+	}
+
+	defer func() { _ = root.Close() }()
+
+	err = cfg.Do(func(current *config.Config) error {
+		agents, _, err = readRocketCodeDefinitionsIn(root, current, runtimeDir, nil, false)
+		return err
+	})
+
+	return agents, err
 }
 
 func ExternalMCPAgentsIn(cfg *config.LockedConfig, runtimeDir string) ([]string, error) {

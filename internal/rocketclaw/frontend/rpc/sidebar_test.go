@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -108,6 +109,65 @@ func BenchmarkSidebarFingerprints(b *testing.B) {
 	for b.Loop() {
 		require.NoError(b, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(any) error { return nil }}))
 	}
+}
+
+func TestListSessionsHeaderDoesNotLoadSkillCatalog(t *testing.T) {
+	server, root := sidebarHeaderFixture(t)
+	withoutSkills := testing.AllocsPerRun(20, func() { sidebarHeader(t, server) })
+
+	addSidebarSkills(t, root)
+
+	withSkills := testing.AllocsPerRun(20, func() { sidebarHeader(t, server) })
+	require.LessOrEqual(t, withSkills, withoutSkills+32, "unrelated skills should not add work before the session list starts")
+}
+
+func BenchmarkListSessionsHeader(b *testing.B) {
+	server, root := sidebarHeaderFixture(b)
+	addSidebarSkills(b, root)
+
+	for b.Loop() {
+		sidebarHeader(b, server)
+	}
+}
+
+func sidebarHeaderFixture(tb testing.TB) (*Server, *os.Root) {
+	tb.Helper()
+	cfg := &config.Config{Workspace: tb.TempDir()}
+	root, err := os.OpenRoot(cfg.Workspace)
+	require.NoError(tb, err)
+	tb.Cleanup(func() { require.NoError(tb, root.Close()) })
+	require.NoError(tb, root.MkdirAll(".rocketclaw/agents", 0o700))
+	require.NoError(tb, root.MkdirAll(".rocketclaw/skills", 0o700))
+	require.NoError(tb, root.WriteFile(".rocketclaw/agents/example.md", []byte("---\nmodel: example-model\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[draft, ready]]\n---\nHelp."), 0o600))
+
+	return &Server{cfg: config.NewLockedConfig(cfg), sessions: new(backend.SessionService)}, root
+}
+
+func addSidebarSkills(tb testing.TB, root *os.Root) {
+	tb.Helper()
+
+	for i := range 16 {
+		name := fmt.Sprintf("example-%d", i)
+		dir := ".rocketclaw/skills/" + name
+		require.NoError(tb, root.MkdirAll(dir, 0o700))
+		require.NoError(tb, root.WriteFile(dir+"/SKILL.md", []byte("---\nname: "+name+"\ndescription: Example skill\n---\nHelp."), 0o600))
+	}
+}
+
+func sidebarHeader(tb testing.TB, server *Server) {
+	tb.Helper()
+	ctx := metadata.NewIncomingContext(tb.Context(), tailnetUser("alice"))
+	err := server.listSessions(&ListSessionsRequest{}, &mockServerStream{
+		ContextFunc: func() context.Context { return ctx },
+		SendMsgFunc: func(message any) error {
+			first := message.(*ListSessionsResponse)
+			require.Equal(tb, "alice", first.Owner)
+			require.ElementsMatch(tb, []string{"draft", "ready"}, first.AgentTags["example"].GetTags())
+
+			return io.EOF
+		},
+	})
+	require.ErrorIs(tb, err, io.EOF)
 }
 
 func TestSidebarSendFailures(t *testing.T) {
