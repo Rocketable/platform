@@ -748,6 +748,10 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 
 	ctx, signal := context.WithCancel(t.Context())
 
+	var startupMu sync.Mutex
+
+	lastStep := "Slack mention submission not started"
+
 	assembler := &frontendAssemblerMock{
 		GateFunc:           passGate,
 		ValidateAssetsFunc: func(*config.Config, string) error { return nil },
@@ -755,7 +759,16 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 			msg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "first message"}, true)
 			msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
 
+			startupMu.Lock()
+			lastStep = "submitting the Slack mention"
+			startupMu.Unlock()
+
 			accepted, err := rt.TextRouter.SubmitMention(rt.RunCtx, "main", protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}, msg)
+
+			startupMu.Lock()
+			lastStep = fmt.Sprintf("SubmitMention returned accepted=%t, error=%v", accepted, err)
+			startupMu.Unlock()
+
 			if err != nil {
 				return nil, nil, fmt.Errorf("submit startup message: %w", err)
 			}
@@ -785,7 +798,10 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 	case err := <-done:
 		t.Fatalf("Run returned before the startup message ran: %v", err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("the startup Slack message never ran")
+		startupMu.Lock()
+		step := lastStep
+		startupMu.Unlock()
+		t.Fatalf("timed out waiting for the fake model request; last observed step: %s", step)
 	}
 
 	assert.Len(t, assembler.AssembleCalls(), 1)
