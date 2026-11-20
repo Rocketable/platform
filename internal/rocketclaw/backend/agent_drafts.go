@@ -730,20 +730,16 @@ func diffAgentDraftBody(from, to string) []AgentDraftSplice {
 		last := len(splices) - 1
 		open := last >= 0 && splices[last].At+utf8.RuneCountInString(splices[last].Insert) == at
 
-		switch {
-		case e.insert < 0 && open:
-			splices[last].Remove++
-		case e.insert < 0:
-			splices = append(splices, AgentDraftSplice{At: at, Remove: 1})
-		case open:
-			splices[last].Insert += string(e.insert)
-		default:
-			splices = append(splices, AgentDraftSplice{At: at, Insert: string(e.insert)})
+		if !open {
+			splices = append(splices, AgentDraftSplice{At: at})
+			last++
 		}
 
 		if e.insert < 0 {
+			splices[last].Remove++
 			shift--
 		} else {
+			splices[last].Insert += string(e.insert)
 			shift++
 		}
 	}
