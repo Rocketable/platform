@@ -50,7 +50,20 @@ SQL
 
 Deleting the row (`DELETE FROM behavior_settings`) makes the next start import from the file again, but it discards every edit made on the Web, so use it only as a last resort.
 
+A failed overlay download also stops RocketClaw from starting, with an error that names the overlay as written in the list and shows Git's message; that error does not start with `stored behavior settings:`. Check the network, the Git credentials, and the ref. Only when the overlay address itself is wrong does the fix belong in the stored settings, with the `psql` steps above.
+
 A workspace may contain `AGENTS.md` and `agents/`, `skills/`, `scripts/`, and `cron/` folders. RocketClaw ships four agents: `main`, a `sudo: yes`, `sticky: global` agent with one shared session; `assistant`, a `sudo: yes`, `sticky: off` agent for External MCP, which accepts only `sticky: off` agents; `slack`, the same assistant as a `sticky: slack` agent for Slack channels (see [Sticky agents](#sticky-agents)); and `voice`. At every start, RocketClaw copies each built-in agent file into the workspace's `agents/` folder only when that file is missing: your edits to them stay, and a deleted one comes back.
+
+### Overlays
+
+The `overlays` setting lists Git repositories that add agents, skills, cron jobs, and scripts to RocketClaw. Each entry is a Git address, optionally followed by `@<ref>`:
+
+- The address is `github.com/org/repo` (RocketClaw adds `https://`), `https://…`, `git@host:org/repo.git`, `ssh://…`, or a local path. Prefer an absolute path: Git reads a `./` or `../` path from the overlay's download folder under `.rocketclaw/overlays/`, not from the workspace.
+- The ref is a branch, a tag, or a full commit hash. Without one, RocketClaw takes the repository's default branch. A ref cannot contain `/`: `github.com/org/repo@feature/x` is read as one address, and its download fails.
+
+From each overlay RocketClaw takes only `agents/`, `skills/`, `cron/`, and `scripts/`. It stacks the layers in this order: the built-in files first, then the overlays in list order, then the workspace's own folders last. A file in a later layer replaces the same file in an earlier one.
+
+RocketClaw downloads every overlay fresh, as a shallow Git fetch into `.rocketclaw/overlays/`, at every start or restart, every reload (including the one after an agent editor save), and every Config page save that changes the overlay list. A failed download at startup stops RocketClaw (see [Getting started](#getting-started)). A failed download during a reload or a save leaves the copies in use in place, and that reload or save fails with the error. Each download replaces the previous copy, so an edit made inside `.rocketclaw/overlays/` is lost unless it was pushed to the overlay's repository.
 
 ### Web page
 

@@ -2823,7 +2823,7 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 		"To update an overlay:",
 		"- Edit the listed clone path when the requested change belongs to that overlay.",
 		"- Commit and push overlay repository changes before reload or restart.",
-		"- Uncommitted, untracked, or unconfigured files under "+filepath.Join(cfg.RuntimeDirName(), "overlays")+" may be discarded on startup/restart.",
+		"- Every clone under "+filepath.Join(cfg.RuntimeDirName(), "overlays")+" is replaced by a fresh download on every startup, restart, reload, agent editor save, and overlay list save; anything not pushed is lost.",
 		"- Do not treat generated effective files under "+filepath.Join(cfg.RuntimeDirName(), "agents")+", "+filepath.Join(cfg.RuntimeDirName(), "skills")+", "+filepath.Join(cfg.RuntimeDirName(), "cron")+", or "+filepath.Join(cfg.RuntimeDirName(), "scripts")+" as source of truth.",
 		"- Reload RocketClaw after already-configured overlay source changes so overlays are fetched and merged again. To change which overlays are configured, an admin opens Settings ("+cfg.Web.Tsnet.Origin+"/config) → Behavior settings → Edit → Overlays and saves.",
 		"- Local workspace agents/, skills/, cron/, and scripts/ override configured overlays.",

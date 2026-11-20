@@ -244,7 +244,8 @@ open card. Anyone on the draft can accept or reject it; the assistant never save
 and never runs tools.
 
 **Saving.** **Save…** saves one variant to one place: the workspace's `agents/`
-folder or a Git overlay from `rocketclaw.json`. The dialog lists the layers with
+folder or one of the Git overlays in the overlay list, a Behavior Setting edited
+on the Config page. The dialog lists the layers with
 the one that wins on top, says which provides the agent now, and warns when a
 later layer hides the destination or when the save replaces a built-in or overlay
 agent whose updates then stop reaching this workspace. It shows the file the save

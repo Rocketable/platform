@@ -456,6 +456,14 @@ func TestRunMergesStoredBehaviorSettings(t *testing.T) {
 	_, err = start(setupOnly)
 	require.ErrorContains(t, err, "stored behavior settings: validate behavior settings: slack.channels[].agents is required")
 
+	unreachable := imported
+	unreachable.Overlays = []string{filepath.Join(workspace, "missing-overlay") + "@main"}
+	require.NoError(t, putBehaviorSettings(t.Context(), store.db, &unreachable))
+
+	_, err = start(setupOnly)
+	require.ErrorContains(t, err, `apply configured rocketclaw overlay "`+unreachable.Overlays[0]+`": git fetch`)
+	require.NotContains(t, err.Error(), "stored behavior settings:", "a failed overlay download is not a stored settings problem")
+
 	_, err = store.db.ExecContext(t.Context(), `UPDATE behavior_settings SET document = '{"slack": []}'::jsonb`)
 	require.NoError(t, err)
 
