@@ -834,7 +834,7 @@ function TabDrawer({ medium, open, toggle, children }: ReturnType<typeof useTabS
     };
   }, [medium, open]);
   if (medium) return null;
-  return <><TabTitle /><Drawer.Root open={open} onOpenChange={toggle} swipeDirection="left">
+  return <Drawer.Root open={open} onOpenChange={toggle} swipeDirection="left">
     <Drawer.Portal>
       <Drawer.Backdrop className="fixed inset-0 z-50 bg-black/10 opacity-[calc(1-var(--drawer-swipe-progress))] transition-opacity duration-200 data-swiping:duration-0 data-starting-style:opacity-0 data-ending-style:opacity-0 supports-backdrop-filter:backdrop-blur-xs" />
       <Drawer.Viewport className="fixed inset-0 z-50 flex">
@@ -849,18 +849,23 @@ function TabDrawer({ medium, open, toggle, children }: ReturnType<typeof useTabS
         </Drawer.Popup>
       </Drawer.Viewport>
     </Drawer.Portal>
-  </Drawer.Root></>;
+  </Drawer.Root>;
 }
 
-// Narrow screens keep the tabs in the drawer, so the active tab's name, as its tab shows it, heads the page.
 function TabTitle() {
-  const { state, shared, pathname } = useContext(TabActions), id = pathSession(pathname);
-  const session = useContext(Sidebar).rows.find((row) => row.id === id) ?? { id };
-  const search = (state.tabs.find((tab) => tab.path === pathname) ?? sharedTab(shared, state.space, pathname))?.search;
-  const [label, Icon] = tabLabel({ path: pathname, search }, session, MessageSquare);
+  const tabs = useContext(TabActions), { state, shared, pathname } = tabs, id = pathSession(pathname), view = useContext(Sidebar), { setCommand } = useContext(SessionCommands);
+  const session = view.rows.find((row) => row.id === id) ?? { id };
+  const own = state.tabs.find((tab) => tab.path === pathname), tab = own ?? sharedTab(shared, state.space, pathname);
+  const [label, Icon] = tabLabel({ path: pathname, search: tab?.search }, session, MessageSquare);
   const title = useCleanText(label);
+  const [anchor, setAnchor] = useState<MenuAnchor>(), [editing, setEditing] = useState("");
+  const menu = anchor && { path: pathname, anchor, space: state.space, shared: !own };
+  const items = menu ? [...pullRequestItems(menu, true, tabs.name), ...menuItems(tabs, menu, view, new Set([pathname]), () => setEditing(pathname), (doomed) => setCommand({ mode: "delete", source: doomed }))] : [];
   return <header className="flex shrink-0 items-center gap-2 border-b px-4 py-1.5 text-sm">
-    <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /><span className="truncate font-semibold">{title}</span>
+    <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+    {editing === pathname ? <TabRename session={session} tab={{ path: pathname, search: tab?.search }} shared={!own} space={state.space} placeholder={title} endEdit={() => setEditing("")} /> : <span className="truncate font-semibold">{title}</span>}
+    {tab ? <button type="button" aria-label="Page actions" className="-my-0.5 flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={(event) => setAnchor(event.currentTarget)}><Ellipsis className="size-3.5" /></button> : null}
+    <TabMenu items={items} anchor={anchor} close={() => setAnchor(undefined)} refocus={() => true} />
   </header>;
 }
 
@@ -2476,7 +2481,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
           <TabDrawer {...sidebar}><TabStrip tabs={tabs} newChat={newChat} /></TabDrawer>
           <div className="flex min-h-0 min-w-0 flex-1">
             {sidebar.medium ? <ResizableAside side="tabs" id="tab-sidebar" className={cn("border-r", !sidebar.open && "hidden")}><TabStrip tabs={tabs} newChat={newChat} /></ResizableAside> : null}
-            <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}><ServerGate>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]"><TabTitle />
+            <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col", command?.target && "pt-[min(75dvh,30rem)]")}><ServerGate>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}
               {route.timeline ? <CronTimeline key={route.timeline} stem={route.timeline} /> : null}
@@ -2494,7 +2500,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
                   <Transcript id={conversation.id} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => { tabs.create(id); setConversation((current) => ({ ...current, created: id })); }} />
                 </MessageScrollerProvider>
               </TabPane>
-             </ServerGate></main>
+             </ServerGate></main></div>
               {showChat ? <><DelegationPanel id={route.id} /><SkillPanel /></> : null}
               <ThreadPRPanel drafts={drafts} onDraftChange={onDraftChange} />
            </div>
