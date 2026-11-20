@@ -1,6 +1,6 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, queryOptions, useQueries, useQuery, useMutation, useIsMutating } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, queryOptions, useQueries, useQuery, useMutation, useIsMutating, useMutationState } from "@tanstack/react-query";
 import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
 import { Drawer } from "@base-ui/react/drawer";
@@ -1700,7 +1700,7 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
 
 function menuItems(tabs: TabStoreValue, menu: CardMenu, view: ServerView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
   const search = isSearch(menu.path), id = pathSession(menu.path);
-  const regenerate = { key: "rename-title", label: "Regenerate title", run: () => void mutations.updateSession({ id, name: "", server: tabs.name }).then(view.invalidateQueries, () => undefined) };
+  const regenerate = { key: "rename-title", label: "Regenerate title", run: () => void queryClient.getMutationCache().build(queryClient, { mutationKey: ["regenerateTitle"], mutationFn: mutations.updateSession }).execute({ id, name: "", server: tabs.name }).then(view.invalidateQueries, () => undefined) };
   const renaming = (search ? targets.size === 1 : id && (menu.shared || targets.size === 1)) ? [{ key: "rename", label: search ? "Rename search" : "Rename session", run: rename }, ...search ? [] : [regenerate]] : [];
   const session = tabs.viewed && targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === id) : undefined;
   return [...renaming, ...menu.shared ? tabs.commands(menu.path, view, undefined, menu.space).filter(({ key }) => /^(link|unshare|duplicate|read|unread|park|unpark|follow|unfollow|group)/.test(key)) : tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
@@ -2226,11 +2226,12 @@ const needsYou = <span className="ml-auto shrink-0 rounded-full bg-amber-200 px-
 // Waiting on this person's answer wins over the running turn that asks and over background work, such as a subagent
 // or a shell command. A park until a time or until unparked shows a clock, else background work an hourglass, also
 // while a turn runs. Only a turn not waiting on this person is working, so its title shimmers. A chat whose agent is
-// paused shows a pause glyph in place of the chat icon, else a forked session a fork glyph.
-function tabActivity(session: Session, unread: boolean, clocked: boolean) {
+// paused shows a pause glyph in place of the chat icon, else a forked session a fork glyph. A title being regenerated
+// spins in place of every other glyph and shimmers.
+function tabActivity(session: Session, unread: boolean, clocked: boolean, regenerating: boolean) {
   const Chat = session.paused ? CirclePause : session.forkedFrom ? GitFork : MessageSquare;
   const activity = session.asking ? ["Needs your answer"] : [session.running && "Turn running", session.background && "Background work running"];
-  return [[session.forkedFrom && "Forked session", session.paused && "Agent paused", ...activity, unread && "Unread"].filter(Boolean).join(", "), session.asking ? Chat : clocked ? Clock : session.background ? Hourglass : Chat, session.running && !session.asking] as const;
+  return [[session.forkedFrom && "Forked session", session.paused && "Agent paused", regenerating && "Regenerating title", ...activity, unread && "Unread"].filter(Boolean).join(", "), regenerating ? LoaderCircle : session.asking ? Chat : clocked ? Clock : session.background ? Hourglass : Chat, regenerating || (session.running && !session.asking)] as const;
 }
 
 const tabLabel = (tab: Pick<Tab, "path" | "search">, session: Session, SessionIcon: typeof Search): [string, typeof Search] =>
@@ -2258,18 +2259,19 @@ function TabItem({ tab, description, detail, chosen, rule, active, stop, shared,
   // A tab of any kind waits while marked and not parked, by its session row or its location's row. A parked one is
   // dimmed; its park shows under its title.
   const mark = id ? rowAttention(session) : attentionOf(sidebar, tab.path), unread = !!mark?.unreadAt && !mark.parked, aside = timerText(mark);
-  const [activity, SessionIcon, working] = tabActivity(session, unread, !!mark?.parked && !mark.untilDone);
+  const regenerating = useMutationState({ filters: { mutationKey: ["regenerateTitle"], status: "pending", predicate: (mutation) => (mutation.state.variables as { id: string }).id === id } }).length > 0;
+  const [activity, SessionIcon, working] = tabActivity(session, unread, !!mark?.parked && !mark.untilDone, regenerating);
   const [label, Icon] = tabLabel(tab, session, SessionIcon);
   const title = useTabTitle(tab.path, label);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
-  return <div data-tab={tab.path} data-running={working} data-asking={!!session.asking} data-unread={unread} draggable={!editing} className={cn("group flex shrink-0 items-center rounded-md", active ? "bg-sidebar-row-active" : "hover:bg-accent", { "bg-accent": chosen, "opacity-60": mark?.parked || offline })}
+  return <div data-tab={tab.path} data-running={working} data-regenerating={regenerating} data-asking={!!session.asking} data-unread={unread} draggable={!editing} className={cn("group flex shrink-0 items-center rounded-md", active ? "bg-sidebar-row-active" : "hover:bg-accent", { "bg-accent": chosen, "opacity-60": mark?.parked || offline })}
     onContextMenu={(event) => { event.preventDefault(); openMenu({ getBoundingClientRect: () => DOMRect.fromRect({ x: event.clientX, y: event.clientY }) }); }}>
     {rule && <span className={cn("pointer-events-none my-1.5 ml-1 w-0.5 shrink-0 self-stretch", groupColors[rule])} />}
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className="flex min-w-0 flex-1" />}>
       <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={[description, activity, aside, offline && "Server offline"].filter(Boolean).join(", ")} tabIndex={stop ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) open(); }}>
-        <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 self-start" />
+        <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 self-start motion-safe:group-data-[regenerating=true]:animate-spin" />
         <span className="flex min-w-0 flex-1 flex-col"><span className="flex min-w-0 items-center gap-1.5">
           {editing ? <TabRename session={session} tab={tab} shared={shared} space={space} placeholder={title} endEdit={endEdit} /> : <><span className="truncate group-data-[unread=true]:font-bold group-data-[asking=true]:font-semibold group-data-[asking=true]:text-amber-600 dark:group-data-[asking=true]:text-amber-300 motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>{session.asking ? needsYou : null}</>}
         </span><span aria-hidden="true" className="truncate text-xs text-muted-foreground empty:hidden">{[detail, aside].filter(Boolean).join(" · ")}</span></span>

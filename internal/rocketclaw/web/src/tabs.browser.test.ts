@@ -25,7 +25,7 @@ type SharedTab = { space: string; path: string; search?: SearchPage };
 const plain = (page?: SearchPage) => JSON.stringify(page ? [page.name ?? "", page.searches.map(({ id, name, query }) => [id, name ?? "", query]), page.active] : null);
 type Change = { paths: string[]; action: string; until?: string };
 // attention is this person's attention on each tab location, sent is every attention change, and polls counts session lists.
-type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; layout?: StripLayout; attention: TabAttention[]; sent: Change[]; polls: number; autoPark?: boolean; deletes: string[] };
+type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; layout?: StripLayout; attention: TabAttention[]; sent: Change[]; polls: number; autoPark?: boolean; deletes: string[]; titleGate?: Promise<unknown> };
 
 // Mirrors the server's Tabs call: it saves the state or the layout, changes one space, adds, removes, or edits Shared tabs, or changes
 // attention, then answers with every space, the saved state, every space's Shared tabs in order, and the layout.
@@ -100,6 +100,7 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
       return new Response(index, { headers: { "Content-Type": "text/html" } });
     }
     const input = await request.json().catch(() => ({})) as { id: string; text: string; name: string; query: string; agent?: string } & Parameters<typeof tabsCall>[1];
+    if (url.pathname === "/api/UpdateSession" && !input.name) await saved.titleGate;
     if (url.pathname === "/api/UpdateSession") sessions.find((row) => row.id === input.id)!.name = input.name || "Regenerated";
     switch (url.pathname) {
       case "/api/Identity": return Response.json({ username: "tester" });
@@ -526,8 +527,13 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   await field.fill("Renamed");
   await page.getByPlaceholder("Message or /command").click();
   await tab("Renamed").waitFor();
+  const { promise: titleGate, resolve: releaseTitle } = Promise.withResolvers();
+  saved.titleGate = titleGate;
   await menu(page, "Renamed", "Regenerate title");
+  await tab("Renamed").and(page.locator('[aria-description*="Regenerating title"]')).waitFor();
+  releaseTitle(undefined);
   await tab("Regenerated").waitFor();
+  expect(await tab("Regenerated").getAttribute("aria-description")).not.toContain("Regenerating title");
 
   const box = await strip(page).boundingBox();
   await strip(page).dblclick({ position: { x: box.width / 2, y: box.height - 2 } });
