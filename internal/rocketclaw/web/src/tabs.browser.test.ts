@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
 import path from "node:path";
 import { unpacked } from "./test-browsers";
 import type { SearchPage, StripLayout, TabAttention } from "./types";
@@ -2415,9 +2415,48 @@ test("with other RocketClaws the strip lists every server's space cards, each wi
     await page.waitForURL(`**/r/work${href("juliet")}`);
     await page.locator(`button${current}[aria-label="Home · work"]`).waitFor();
     expect([await titles(), await rows("Ops tabs on 127.0.0.1"), saved.layout?.folded]).toEqual([order, [], { "/ops": true }]);
+    const snapshotPrefix = "work strip reload: ";
+    let workTabs = "work tablist not rendered", restored = false;
+    const requests = new Map<object, string>();
+    page.on("request", (request: { url(): string }) => {
+      if (/\/api\/(Identity|Tabs|ListSessions)$/.test(request.url())) requests.set(request, `${request.url()} pending`);
+    });
+    page.on("response", (response: { request(): object; url(): string; status(): number }) => {
+      if (requests.has(response.request())) requests.set(response.request(), `${response.url()} ${response.status()}`);
+    });
+    page.on("requestfailed", (request: { url(): string; failure(): { errorText: string } }) => {
+      if (requests.has(request)) requests.set(request, `${request.url()} ${request.failure().errorText}`);
+    });
+    page.on("console", (message: { text(): string }) => {
+      if (message.text().startsWith(snapshotPrefix)) workTabs = message.text().slice(snapshotPrefix.length);
+    });
+    onTestFinished(() => {
+      if (!restored) console.error("Juliet did not return on work after clearing local storage and reloading", { url: page.url(), workTabs, requests: [...requests.values()], remoteTabs: remote.saved.state.tabs, layout: saved.layout });
+    });
+    await page.addInitScript((prefix: string) => {
+      let previous = "";
+      const render = new MutationObserver(() => {
+        const strip = document.querySelector("[data-tab-lists]");
+        if (!strip) return;
+        render.disconnect();
+        const snapshot = () => {
+          const lists = [...strip.querySelectorAll('[role="tablist"][data-card^="work/"]')].map((list) => ({
+            name: list.getAttribute("aria-label"),
+            tabs: [...list.querySelectorAll('[role="tab"]')].map((tab) => tab.getAttribute("aria-label")),
+          }));
+          const current = JSON.stringify(lists);
+          if (current !== previous) console.debug(prefix + (previous = current));
+        };
+        new MutationObserver(snapshot).observe(strip, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label"] });
+        snapshot();
+      });
+      render.observe(document, { childList: true, subtree: true });
+    }, snapshotPrefix);
     await page.evaluate(() => localStorage.clear());
+    requests.clear();
     await page.reload();
     await list("Home tabs on work").getByRole("tab", { name: "Juliet", exact: true }).waitFor();
+    restored = true;
     expect([await titles(), await title("Ops · 127.0.0.1").getAttribute("aria-expanded")]).toEqual([order, "false"]);
   } finally {
     remote.server.stop(true);
