@@ -439,6 +439,12 @@
   }
 }
 
+@media (hover: hover) {
+  [data-slot="message"]:focus-within:not(:focus, :has(:focus)) > [data-slot="message-content"] > [data-slot="message-actions"] {
+    visibility: visible;
+  }
+}
+
 @layer components {
   .markdown > * + * {
     @apply mt-2;
