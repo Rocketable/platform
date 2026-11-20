@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -83,7 +82,7 @@ func (s *SessionService) ProposeAgentDraftChanges(ctx context.Context, id, usern
 
 	fmt.Fprintf(&input, "\n# Request\n%s\n", ask.Request)
 
-	root, agents, skills, resolver, err := prepareRocketCode(s.definitions, "main", slog.New(slog.DiscardHandler))
+	root, agents, skills, resolver, err := prepareRocketCode(s.definitions, "main")
 	if err != nil {
 		return nil, err
 	}

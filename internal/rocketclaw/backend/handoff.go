@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +15,7 @@ import (
 )
 
 func GenerateHandoff(ctx context.Context, locked *config.LockedConfig, agent, transcript string) (document string, err error) {
-	root, agents, skills, resolver, err := prepareRocketCode(locked, agent, slog.New(slog.DiscardHandler))
+	root, agents, skills, resolver, err := prepareRocketCode(locked, agent)
 	if err != nil {
 		return "", err
 	}
