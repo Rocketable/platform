@@ -1,6 +1,7 @@
 ---
 title: "Claude's \"prompt is too long\" Through CLIProxyAPI Had No Error Code, So a Full Chat Never Compacted"
 date: 2026-11-18
+last_updated: 2026-11-20
 category: docs/solutions/integration-issues/
 module: internal/rocketclaw/harness
 problem_type: integration_issue
@@ -45,7 +46,7 @@ A Claude chat on Wallace stopped accepting messages. Its history had passed Clau
 
 RocketClaw sends requests to every provider in the OpenAI Responses format, using the openai-go SDK. On Wallace, the named providers (`anthropic`, `anthropic-approver`, `xai`, `openai-subscription`) point at CLIProxyAPI on `http://localhost:8317/v1`, which translates each request for the upstream model. Only the default `openai` provider calls an OpenAI-compatible endpoint directly. The SDK's `(*Error).Error()` prints only the status and the label "OpenAI API error" (`vendor/github.com/openai/openai-go/v3/internal/apierror/apierror.go:44-52`). Its `Code`, `Type`, and `Message` fields are not in the string. **"OpenAI API error" in a RocketClaw turn names the SDK, not the provider.** The overflow recovery also stays on the failing provider: it calls `l.Client.Compact` with the same client and `params.Model` (`internal/rocketclaw/harness/looper.go:1336-1342`).
 
-The `provider request failed` log line does not show the provider's message either. It is written by HTTP middleware (`internal/rocketclaw/backend/model_resolver.go:146-174`) whose attributes are status, timing, and request IDs (`internal/rocketclaw/backend/bridge.go:2326-2345`). This session saw "prompt is too long" only by sending a request to the proxy directly.
+When this happened, the `provider request failed` log line did not show the provider's message either, so this session saw "prompt is too long" only by sending a request to the proxy directly. The line now carries it: the HTTP middleware decodes a non-2xx JSON error body and adds `provider_error_type`, `provider_error_code`, and `provider_error_message` (`internal/rocketclaw/backend/model_resolver.go:179-184`) to the status, timing, and request IDs (`internal/rocketclaw/backend/bridge.go:2596-2637`).
 
 ## What Didn't Work
 
@@ -85,7 +86,7 @@ The recovery machinery was already correct for Claude: CLIProxyAPI serves `/v1/r
 - **Regression test:** `TestLooperCompactsAndRetriesContextLengthExceeded` (`internal/rocketclaw/harness/looper_test.go:990`) now runs once with OpenAI's coded error and once with `cliProxyAPIClaudePromptTooLongError` (`looper_test.go:347`), the proxy's uncoded shape. The new subtest failed before the fix with the production error.
 - **Removing the workaround:** when `retire_when` holds, delete the workaround function, its call in `isContextLengthExceeded`, and the `cliproxyapi claude prompt is too long` subtest. Then confirm with an over-limit request through the deployed proxy that the 400 carries `code: context_length_exceeded`.
 - **Still open: Claude chats do not compact at the Autocompaction Threshold.** After this fix, a Claude chat behind CLIProxyAPI compacts only when it hits the 1M limit, so turns near the limit resend about a million tokens. Per this session's estimate, a chat stays near 900k after recovery because only the oldest tenth is compacted. Options are to have RocketClaw request compaction itself (as `codexCompaction` already does for ChatGPT sign-in), or to have the proxy forward `compact_threshold` for Claude. Both are open design decisions.
-- **Diagnosis shortcut:** for any `OpenAI API error: <status>` on a non-OpenAI provider, check the deployed `api_base_url` for that provider and reproduce against it directly to see the error body. The RocketClaw log line will not show it. Logging the decoded error type and message there would have shown "prompt is too long" immediately (proposal; product code).
+- **Diagnosis shortcut:** for any `OpenAI API error: <status>` on a non-OpenAI provider, check the deployed `api_base_url` for that provider and reproduce against it directly to see the error body. On a deployment that predates the middleware's `provider_error_message` attribute, the RocketClaw log line will not show it; on current code it does.
 
 ## Related Issues
 

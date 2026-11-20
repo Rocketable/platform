@@ -13,6 +13,10 @@ sends only the history from the latest compaction item on (`pruneHistoryBeforeLa
 only when the compaction item reaches the reply's `output`. Path (a) does that; path (b), as built, returns the retried
 reply without it. `Fixed` switches path (b) between the two shapes:
 
+(A `/responses/compact` window from an API-key provider can keep items in front of its compaction item, and the
+harness keeps those too. Every compaction on these ChatGPT-login paths returns the compaction item alone, so the model
+is unaffected.)
+
 - `Fixed = FALSE`, as built: the retried reply is returned alone, and the harness keeps the full history.
 - `Fixed = TRUE`: the compaction item is prepended to the retried reply's `output`, as path (a) does.
 

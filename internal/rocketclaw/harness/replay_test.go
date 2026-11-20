@@ -23,7 +23,7 @@ func TestResponseOutputReplayText(t *testing.T) {
 			name:          "empty message",
 			input:         `{"type":"message","id":"msg"}`,
 			want:          `{"type":"message","id":"msg","role":"assistant","content":""}`,
-			wantCompacted: `{"type":"message","role":"user","content":""}`,
+			wantCompacted: `{"type":"message"}`,
 		},
 		{
 			name:          "reasoning keeps every summary part",
@@ -84,10 +84,11 @@ func TestResponseOutputReplayText(t *testing.T) {
 }
 
 func TestReplayInputPreservesCompactionPayload(t *testing.T) {
-	raw := []json.RawMessage{json.RawMessage(`{"content":"summary","summary":{"text":"summary"},"recent":[{"id":"msg-1"}],"encrypted_content":"encrypted","id":"cmp-1","type":"compaction"}`)}
+	raw := []json.RawMessage{json.RawMessage(`{"content":"summary","summary":{"text":"summary"},"recent":[{"id":"msg-1"}],"kept":2,"encrypted_content":"encrypted","id":"cmp-1","type":"compaction"}`)}
 
 	params, err := ReplayInputToParams(raw)
 	require.NoError(t, err)
+	require.Equal(t, 2, params[0].OfCompaction.ExtraFields()["kept"])
 
 	got, err := ReplayInputFromParams(params)
 	require.NoError(t, err)

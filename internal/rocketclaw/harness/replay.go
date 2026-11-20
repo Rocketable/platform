@@ -117,6 +117,7 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 				Content *string          `json:"content"`
 				Summary *json.RawMessage `json:"summary"`
 				Recent  *json.RawMessage `json:"recent"`
+				Kept    *int             `json:"kept"`
 			}
 			if err := json.Unmarshal(raw[i], &stored); err != nil {
 				return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("decode compaction replay extras: %w", err)}
@@ -133,6 +134,10 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 
 			if stored.Recent != nil {
 				extra["recent"] = *stored.Recent
+			}
+
+			if stored.Kept != nil {
+				extra["kept"] = *stored.Kept
 			}
 
 			if len(extra) > 0 {
