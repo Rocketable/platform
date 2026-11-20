@@ -366,7 +366,7 @@ github.com/jsimonetti/rtnetlink/internal/unix
 # github.com/kamstrup/intmap v0.5.2
 ## explicit; go 1.23
 github.com/kamstrup/intmap
-# github.com/klauspost/compress v1.20.4
+# github.com/klauspost/compress v1.20.5
 ## explicit; go 1.25
 github.com/klauspost/compress
 github.com/klauspost/compress/fse
@@ -645,7 +645,7 @@ golang.org/x/crypto/nacl/box
 golang.org/x/crypto/nacl/secretbox
 golang.org/x/crypto/poly1305
 golang.org/x/crypto/salsa20/salsa
-# golang.org/x/exp v0.0.0-20261119141654-b15d094f3610
+# golang.org/x/exp v0.0.0-20261120130654-b6de8d37927a
 ## explicit; go 1.26.0
 golang.org/x/exp/constraints
 golang.org/x/exp/maps
@@ -844,7 +844,7 @@ google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# gvisor.dev/gvisor v0.0.0-20261120014517-ab10cdc55600
+# gvisor.dev/gvisor v0.0.0-20261120093554-bcda51de39fc
 ## explicit; go 1.27.3
 gvisor.dev/gvisor/pkg/atomicbitops
 gvisor.dev/gvisor/pkg/bits

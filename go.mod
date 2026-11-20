@@ -92,7 +92,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.4 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.2 // indirect
 	github.com/kamstrup/intmap v0.5.2 // indirect
-	github.com/klauspost/compress v1.20.4 // indirect
+	github.com/klauspost/compress v1.20.5 // indirect
 	github.com/lib/pq v1.12.3 // indirect
 	github.com/mdlayher/netlink v1.11.2 // indirect
 	github.com/mdlayher/socket v0.8.0 // indirect
@@ -122,7 +122,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb // indirect
-	golang.org/x/exp v0.0.0-20261119141654-b15d094f3610 // indirect
+	golang.org/x/exp v0.0.0-20261120130654-b6de8d37927a // indirect
 	golang.org/x/oauth2 v0.38.0 // indirect
 	golang.org/x/term v0.48.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
@@ -130,5 +130,5 @@ require (
 	golang.zx2c4.com/wireguard/windows v1.1.1 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20261118221215-c8830f628b3f // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261118221215-c8830f628b3f // indirect
-	gvisor.dev/gvisor v0.0.0-20261120014517-ab10cdc55600 // indirect
+	gvisor.dev/gvisor v0.0.0-20261120093554-bcda51de39fc // indirect
 )
