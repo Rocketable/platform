@@ -57,7 +57,7 @@ const sessionHistorySQL = `RECURSIVE starts AS (
     SELECT e.id, e.conversation_id, e.entry_json, TRUE FROM reporting_runs r JOIN entries e USING (conversation_id) CROSS JOIN viewer v
     WHERE v.readable
 ), attributed_rows AS (
-    SELECT id, entry_json::text AS entry_json, entry_json::jsonb AS entry, reported AS synced,
+    SELECT id, entry_json, entry_json::jsonb AS entry, reported AS synced,
         CASE WHEN reported THEN conversation_id ELSE '' END AS source_conversation_id
     FROM viewed_rows
 ), physical_entries AS (
@@ -103,7 +103,7 @@ func revertBoundary(ctx context.Context, db stateStoreDB, conversationID, messag
 	var raw string
 
 	err := db.QueryRowContext(ctx, `WITH `+sessionHistorySQL+`
-SELECT entry_json, synced FROM physical_entries WHERE id = $2`, conversationID, id).Scan(&raw, &entry.Synced)
+SELECT entry_json::text, synced FROM physical_entries WHERE id = $2`, conversationID, id).Scan(&raw, &entry.Synced)
 	if errors.Is(err, sql.ErrNoRows) {
 		return entry, 0, ErrRevertMessageGone
 	}

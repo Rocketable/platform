@@ -428,6 +428,10 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT pg_typeof(entry_json)::text FROM entries WHERE id = $1`, id1).Scan(&columnType))
 	require.Equal(t, "json", columnType)
 
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `WITH `+sessionHistorySQL+`
+SELECT pg_typeof(entry_json)::text FROM effective_entries WHERE id = $2`, "main", id1).Scan(&columnType))
+	require.Equal(t, "json", columnType)
+
 	for _, raw := range []string{`{`, `{"text":"\u0000"}`, `{"text":"\ud800"}`, `{"text":"\udc00"}`} {
 		_, err := service.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', $1, '')`, raw)
 		require.Error(t, err)
