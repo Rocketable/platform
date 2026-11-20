@@ -73,6 +73,9 @@ test("a loud mark the server sets raises one desktop notification per window, a 
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors: string[] = [];
+    let pageCrashed = false, contextClosed = false;
+    page.on("crash", () => { pageCrashed = true; });
+    page.context().on("close", () => { contextClosed = true; });
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.addInitScript(stubNotifications);
     await page.clock.install();
@@ -84,7 +87,15 @@ test("a loud mark the server sets raises one desktop notification per window, a 
       const seen = viewing.length;
       while (viewing.length < seen + 2) {
         const asked = viewing.length;
-        await page.clock.fastForward(2000);
+        try {
+          await page.clock.fastForward(2000);
+        } catch (error) {
+          console.error("Notification poll clock advance failed", {
+            browserConnected: browser.isConnected(), contextClosed, pageClosed: page.isClosed(), pageCrashed,
+            expectedPolls: seen + 2, observedPolls: viewing.length, lastViewing: viewing.at(-1), pageErrors: errors,
+          });
+          throw error;
+        }
         for (const started = Date.now(); viewing.length === asked && Date.now() - started < 300;) await Bun.sleep(10);
       }
       await Bun.sleep(100);
