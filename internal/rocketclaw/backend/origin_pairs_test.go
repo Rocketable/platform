@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -151,7 +152,12 @@ func TestChatOriginFactsAllocationBudget(t *testing.T) {
 		return
 	}
 
-	result := testing.Benchmark(BenchmarkChatOriginFacts)
+	var result testing.BenchmarkResult
+
+	synctest.Test(t, func(*testing.T) {
+		result = testing.Benchmark(BenchmarkChatOriginFacts)
+	})
+
 	require.Positive(t, result.N)
 	require.Less(t, result.AllocedBytesPerOp(), int64(7<<20), "benchmark: %s  %s", result, result.MemString())
 
