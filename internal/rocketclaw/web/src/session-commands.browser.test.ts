@@ -174,16 +174,51 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.mouse.move(0, 0);
     await page.locator("textarea").focus();
     await copyButton.waitFor({ state: "hidden" });
-    await headerMessage.focus();
-    await copyButton.waitFor();
-    await page.keyboard.press("Tab");
-    expect(await headerMessage.getByRole("button", { name: "Copy link", exact: true }).evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
-    await page.keyboard.press("Tab");
-    expect(await copyButton.evaluate((node: HTMLElement) => ({
-      copyFocused: node === document.activeElement,
-      activeElement: document.activeElement?.outerHTML,
-      expectedButton: node.outerHTML,
-    }))).toMatchObject({ copyFocused: true });
+    const focusTrace = width === 1280 ? await headerMessage.evaluateHandle((message: HTMLElement) => {
+      const original = [message, ...message.querySelectorAll("[data-slot=message-actions] button")];
+      const label = (node: EventTarget | null) => node instanceof Element
+        ? node.getAttribute("aria-label") ?? node.getAttribute("data-message-id") ?? node.tagName
+        : null;
+      const events: unknown[] = [];
+      const listeners = new AbortController();
+      const detached = () => original.filter((node) => !node.isConnected).map(label);
+      for (const type of ["keydown", "keyup", "focusin", "focusout"]) {
+        document.addEventListener(type, (event) => {
+          if (event instanceof KeyboardEvent && event.key !== "Tab") return;
+          events.push({
+            type, target: label(event.target), related: event instanceof FocusEvent ? label(event.relatedTarget) : null,
+            focusVisible: event.target instanceof Element && event.target.matches(":focus-visible"), detached: detached(),
+          });
+        }, { capture: true, signal: listeners.signal });
+      }
+      return {
+        read: () => {
+          const actions = document.querySelector('[data-message-id="1:0"] [data-slot="message-actions"]');
+          return { events, detached: detached(), active: label(document.activeElement), windowFocused: document.hasFocus(), visibility: actions && getComputedStyle(actions).visibility };
+        },
+        stop: () => listeners.abort(),
+      };
+    }) : undefined;
+    try {
+      await headerMessage.focus();
+      await copyButton.waitFor();
+      await page.keyboard.press("Tab");
+      expect(await headerMessage.getByRole("button", { name: "Copy link", exact: true }).evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
+      await page.keyboard.press("Tab");
+      if (focusTrace) expect(await copyButton.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
+      else expect(await copyButton.evaluate((node: HTMLElement) => ({
+        copyFocused: node === document.activeElement,
+        activeElement: document.activeElement?.outerHTML,
+        expectedButton: node.outerHTML,
+      }))).toMatchObject({ copyFocused: true });
+    } catch (error) {
+      const trace = await focusTrace?.evaluate((probe: { read(): unknown }) => probe.read()).catch(() => undefined);
+      if (trace) throw new Error(`Desktop message-action focus: ${JSON.stringify(trace)}`, { cause: error });
+      throw error;
+    } finally {
+      await focusTrace?.evaluate((probe: { stop(): void }) => probe.stop()).catch(() => {});
+      await focusTrace?.dispose().catch(() => {});
+    }
     const composer = page.locator("textarea");
     await composer.fill("/fork");
     await page.getByRole("button", { name: "Send", exact: true }).click();
