@@ -1078,7 +1078,7 @@ func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T)
 	assert.Contains(t, prompt, "Git URL: https://github.com/rocketable/overlay")
 	assert.Contains(t, prompt, "Ref: main")
 	assert.Contains(t, prompt, filepath.Join(workspace, ".rocketclaw", "overlays", "github.com-rocketable-overlay-main"))
-	assert.Contains(t, prompt, "Uncommitted, untracked, or unconfigured files")
+	assert.Contains(t, prompt, "- Every clone under "+filepath.Join(".rocketclaw", "overlays")+" is replaced by a fresh download on every startup, restart, reload, agent editor save, and overlay list save; anything not pushed is lost.")
 	assert.Contains(t, prompt, "Settings (https://rocketclaw.example.test/config) → Behavior settings → Edit → Overlays")
 }
 

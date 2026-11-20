@@ -403,11 +403,16 @@ func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config, s
 		cfg.SetBehavior(&stored)
 	}
 
-	warnings, err := s.startWith(cfg, sessions)
-	if err != nil && found {
-		return "", fmt.Errorf("stored behavior settings: %w", err)
+	if err := cfg.ValidateBehavior(); err != nil {
+		err = fmt.Errorf("validate behavior settings: %w", err)
+		if found {
+			err = fmt.Errorf("stored behavior settings: %w", err)
+		}
+
+		return "", err
 	}
 
+	warnings, err := s.startWith(cfg, sessions)
 	if err != nil || found {
 		return warnings, err
 	}
@@ -416,10 +421,6 @@ func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config, s
 }
 
 func (s *lockedRun) startWith(cfg *config.Config, sessions *SessionService) (string, error) {
-	if err := cfg.ValidateBehavior(); err != nil {
-		return "", fmt.Errorf("validate behavior settings: %w", err)
-	}
-
 	sessions.definitions.Store(cfg)
 	SetLogLevel(s.logLevel, cfg.Logging.Level)
 
