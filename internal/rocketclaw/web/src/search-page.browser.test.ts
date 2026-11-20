@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
 import path from "node:path";
 import { unpacked } from "./test-browsers";
 
@@ -1111,6 +1111,13 @@ test("message matches jump after history loads and last close returns to the las
       const target = [...document.querySelectorAll('[data-message-id="one-u1"]')].find((node) => node.getBoundingClientRect().bottom > viewport.top && node.getBoundingClientRect().top < viewport.bottom);
       return !!target;
     });
+    const savedBeforeReload = api.tabs();
+    let clickingRestoredSearchTab = false;
+    onTestFinished(() => {
+      if (clickingRestoredSearchTab) console.error('Could not click the restored "one" tab in Main tabs', JSON.stringify({
+        url: page.url(), savedBeforeReload, savedAtFailure: api.tabs(),
+      }));
+    });
     await page.reload();
     await page.waitForFunction(() => {
       const viewport = document.querySelector("#transcript-scroll")?.getBoundingClientRect();
@@ -1120,7 +1127,9 @@ test("message matches jump after history loads and last close returns to the las
     await page.getByRole("button", { name: "sandboxed" }).click();
     // The Search page's tab, titled by its query, returns to it.
     const searchTab = page.getByRole("tablist", { name: "Main tabs" }).getByRole("tab", { name: "one", exact: true });
+    clickingRestoredSearchTab = true;
     await searchTab.click();
+    clickingRestoredSearchTab = false;
     await page.getByRole("link", { name: /one user 1/ }).click();
     await page.waitForFunction(() => document.querySelector('[data-message-id="one-u1"]')?.getBoundingClientRect().height !== 0);
     expect(await page.getByRole("button", { name: "sandboxed" }).getAttribute("aria-pressed")).toBe("true");
