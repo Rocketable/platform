@@ -141,7 +141,7 @@ test("a sandboxed page reads its agent's Page Data only with its token and from 
   expect(await page.evaluate(() => (window as any).replies.filter((reply: object) => "value" in reply || "error" in reply))).toEqual([]);
 }), 60_000);
 
-for (const width of [1280, 320]) test(`the Page Index lists this space's and spaceless agents' pages and opens them at ${width}px`, () => withPage(["Billing"], async (page, origin) => {
+for (const width of [1280, 320]) test(`the Page Index lists every space's pages under their space and opens them at ${width}px`, () => withPage(["Billing"], async (page, origin) => {
   // Narrow screens keep the tabs in a drawer, opened to find the tab and closed again.
   const opened = async (name: string) => {
     if (width === 320) await page.getByRole("button", { name: "Show sidebar", exact: true }).click();
@@ -154,7 +154,9 @@ for (const width of [1280, 320]) test(`the Page Index lists this space's and spa
   await opened("Pages");
   const links = page.locator("main").getByRole("link");
   await links.first().waitFor();
-  expect(await links.allInnerTexts()).toEqual(["main · index.html", "reporter · index.html", "reporter · q3/report.html"]);
+  expect(await page.locator("main").getByRole("heading", { level: 2 }).allInnerTexts()).toEqual(["No space", "Billing", "Ops"]);
+  expect(await links.allInnerTexts()).toEqual(["main · index.html", "reporter · index.html", "reporter · q3/report.html", "ops-bot · index.html"]);
+  expect(await links.filter({ hasText: "ops-bot" }).getAttribute("href")).toBe("/pages/Ops/ops-bot/index.html");
   for (const box of await links.evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getBoundingClientRect().right))) expect(box).toBeLessThanOrEqual(width);
   await links.filter({ hasText: "reporter · q3/report.html" }).click();
   await page.waitForURL(`${origin}/pages/Billing/reporter/q3/report.html`);
