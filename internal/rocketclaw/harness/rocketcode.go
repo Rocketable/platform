@@ -258,8 +258,7 @@ func NewWithModelResolver(
 		return nil, errors.New("child sessions are required")
 	}
 
-	activeAgent, hasActiveAgent := agents.Items[defaultAgent]
-	if !hasActiveAgent {
+	if _, ok := agents.Items[defaultAgent]; !ok {
 		return nil, fmt.Errorf("missing required default agent %q", defaultAgent)
 	}
 
@@ -267,7 +266,7 @@ func NewWithModelResolver(
 
 	agents = skills.withReadPermissions(root, agents)
 
-	activeAgent = agents.Items[defaultAgent]
+	activeAgent := agents.Items[defaultAgent]
 
 	sb := config.Sandbox
 
@@ -284,7 +283,6 @@ func NewWithModelResolver(
 	workspaceInstructions := fmt.Sprintf("<current-workspace>\nWorkspace root: %s\n</current-workspace>", promptExpansion.hostDir)
 
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, "high"))
-	agentForTools := &activeAgent
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
 
 	baseTools, shellSystem := newSandboxedTools(root, spillRel, shellTemp, shellEnv, &sb)
@@ -313,7 +311,7 @@ func NewWithModelResolver(
 		parallelToolCalls:         config.ParallelToolCalls,
 		expandPromptShellCommands: config.ExpandPromptShellCommands,
 		promptExpansion:           promptExpansion,
-		agent:                     agentForTools,
+		agent:                     &activeAgent,
 		recursionRemaining:        activeAgent.MaxRecursion,
 		agents:                    agents,
 		skills:                    skills,
@@ -330,7 +328,7 @@ func NewWithModelResolver(
 		mcpRegistry:               mcpRegistry,
 	}
 
-	looper, err := factory.newLooper(agentForTools, factory.sessionSystemPrompt(context.Background(), agentForTools))
+	looper, err := factory.newLooper(&activeAgent, factory.sessionSystemPrompt(context.Background(), &activeAgent))
 	if err != nil {
 		return nil, fmt.Errorf("agent %q model: %w", activeAgent.Name, err)
 	}
