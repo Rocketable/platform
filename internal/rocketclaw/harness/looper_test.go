@@ -1064,6 +1064,59 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	}
 }
 
+func TestLooperKeepsTheItemsTheCompactEndpointRetains(t *testing.T) {
+	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRole("user"), "earlier question", ""),
+		testInputMessage(responses.EasyInputMessageRole("assistant"), "earlier answer", ""),
+	})
+	require.NoError(t, err)
+
+	var compacted responses.CompactedResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"resp-compact","object":"response.compaction","output":[
+		{"id":"msg_000","type":"message","status":"completed","role":"user","content":[{"type":"input_text","text":"earlier question"},{"type":"input_image","image_url":"data:image/png;base64,AAAA","detail":"auto"}]},
+		{"id":"cmp-new","type":"compaction","encrypted_content":"encrypted-new"}]}`), &compacted))
+
+	mock := mockResponses()
+	queueCompactResponses(mock, &compacted)
+
+	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ oai.ResponseObserver, _ ...option.RequestOption) (*responses.Response, error) {
+		if len(newParams(mock)) == 1 {
+			return nil, contextLengthExceededError()
+		}
+
+		return responseWithMessage("resp-final", "answer"), nil
+	}
+
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "new question", output)
+
+	close(input)
+
+	var saved []SessionEntry
+
+	err = testLooper(mock).Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: replayInput}}), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+		saved = append(saved, *entry)
+
+		return nil
+	}}, make(chan os.Signal, 1))
+	require.NoError(t, err)
+
+	keptMessage := `{"content":[{"text":"earlier question","type":"input_text"},{"detail":"auto","image_url":"data:image/png;base64,AAAA","type":"input_image"}],"role":"user","type":"message"}`
+	retry := newParams(mock)[1].Input.OfInputItemList
+	require.JSONEq(t, keptMessage, marshalJSON(t, retry[0]))
+	require.JSONEq(t, `{"encrypted_content":"encrypted-new","id":"cmp-new","type":"compaction"}`, marshalJSON(t, retry[1]))
+
+	require.Len(t, saved, 1)
+	require.JSONEq(t, keptMessage, string(saved[0].ReplayInput[0]))
+	require.JSONEq(t, `{"encrypted_content":"encrypted-new","id":"cmp-new","kept":1,"type":"compaction"}`, string(saved[0].ReplayInput[1]))
+
+	reloaded, err := ReplayInputToParams(saved[0].ReplayInput)
+	require.NoError(t, err)
+	require.JSONEq(t, keptMessage, marshalJSON(t, pruneHistoryBeforeLatestCompaction(reloaded)[0]))
+}
+
 func TestLooperKeepsChatGPTOverflowCompaction(t *testing.T) {
 	var (
 		mu    sync.Mutex
@@ -1432,6 +1485,9 @@ func TestPruneHistoryBeforeLatestCompaction(t *testing.T) {
 		responses.ResponseInputItemParamOfCompaction("second"),
 		responses.ResponseInputItemParamOfMessage("new", responses.EasyInputMessageRole("user")),
 	}
+	window := slices.Clone(items)
+	window[3] = compactionReplayInput("second", "sealed", "")
+	window[3].OfCompaction.SetExtraFields(map[string]any{"kept": 1})
 
 	for _, tt := range []struct {
 		name  string
@@ -1444,6 +1500,7 @@ func TestPruneHistoryBeforeLatestCompaction(t *testing.T) {
 		{name: "first item", items: items[1:3]},
 		{name: "last item", items: items[:4], start: 3},
 		{name: "latest compaction", items: items, start: 3},
+		{name: "items the compaction kept", items: window, start: 2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			pruned := pruneHistoryBeforeLatestCompaction(tt.items)

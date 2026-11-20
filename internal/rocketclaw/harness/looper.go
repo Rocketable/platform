@@ -1368,7 +1368,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 		recoveredHistory = append(recoveredHistory, original[end:]...)
 		retryParams := *params
 
-		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: recoveredHistory}
+		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: projectReplayForOpenAI(recoveredHistory)}
 		if err := checkpointCompacted(recoveredHistory, len(original)-end); err != nil {
 			return nil, fmt.Errorf("checkpoint compacted response input: %w", err)
 		}
@@ -1464,27 +1464,37 @@ func compactionBlocks(items []responses.ResponseInputItemUnionParam) []int {
 
 func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion) ([]responses.ResponseInputItemUnionParam, error) {
 	input := make([]responses.ResponseInputItemUnionParam, 0, len(items))
+	latestCompaction := -1
+
 	for i := range items {
 		switch items[i].Type {
 		case "message":
-			role := strings.TrimSpace(items[i].Role)
-			if role == "" {
-				role = "user"
-			}
-
-			message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: easyInputStringContent(responseItemText(&items[i])), Type: "message"}
-			if items[i].Phase != "" {
-				message.Phase = responses.EasyInputMessagePhase(items[i].Phase)
+			var message responses.EasyInputMessageParam
+			if items[i].Role == "assistant" {
+				message = responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleAssistant, Content: easyInputStringContent(responseItemText(&items[i])), Type: "message"}
+				if items[i].Phase != "" {
+					message.Phase = responses.EasyInputMessagePhase(items[i].Phase)
+				}
+			} else if err := json.Unmarshal([]byte(items[i].RawJSON()), &message); err != nil {
+				return nil, fmt.Errorf("decode compacted %s message: %w", items[i].Role, err)
 			}
 
 			input = append(input, responses.ResponseInputItemUnionParam{OfMessage: &message})
 		case "compaction", "compaction_summary":
+			latestCompaction = len(input)
 			input = append(input, compactionReplayInput(items[i].ID, items[i].EncryptedContent, responseItemText(&items[i])))
 		case "reasoning":
 			input = append(input, reasoningReplayInput(items[i].ID, items[i].Summary, items[i].EncryptedContent))
 		default:
 			return nil, fmt.Errorf("unsupported compacted output item kind %q", items[i].Type)
 		}
+	}
+
+	if latestCompaction > 0 {
+		compaction := input[latestCompaction].OfCompaction
+		extra := map[string]any{"kept": latestCompaction}
+		maps.Copy(extra, compaction.ExtraFields())
+		compaction.SetExtraFields(extra)
 	}
 
 	return input, nil
@@ -1773,8 +1783,9 @@ func (l *looper) compactThreshold() int64 {
 
 func pruneHistoryBeforeLatestCompaction(items []responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam {
 	for i := range slices.Backward(items) {
-		if items[i].OfCompaction != nil {
-			return items[i:]
+		if compaction := items[i].OfCompaction; compaction != nil {
+			kept, _ := compaction.ExtraFields()["kept"].(int)
+			return items[max(i-kept, 0):]
 		}
 	}
 
