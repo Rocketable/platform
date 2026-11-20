@@ -310,6 +310,46 @@ func TestSessionToolsStoredContract(t *testing.T) {
 	require.Equal(t, "timestamp\trole\tcontent\n2026-09-24T12:00:00Z\tuser\t[Slack principal=\"Operator\"]\\n\\nsend it\n2026-09-24T12:00:00Z\tuser\tno header\n", result.Output)
 }
 
+func TestSessionTranscriptRowAllocations(t *testing.T) {
+	escape := strings.NewReplacer("\\", "\\\\", "\t", "\\t", "\r", "\\r", "\n", "\\n")
+	role, body := "role\twith\ttabs", strings.Repeat("sample transcript text\n", 4096)
+	want := "2031-09-17T09:30:00Z\trole\\twith\\ttabs\t" + strings.Repeat("sample transcript text\\n", 4096) + "\n"
+
+	var got, escapedRole, escapedBody string
+
+	rowAllocations := testing.AllocsPerRun(100, func() {
+		var output strings.Builder
+		writeSessionTranscriptRow(&output, escape, "2031-09-17T09:30:00Z", role, body)
+		got = output.String()
+	})
+	escapeAllocations := testing.AllocsPerRun(100, func() {
+		escapedRole, escapedBody = escape.Replace(role), escape.Replace(body)
+	})
+
+	require.Equal(t, want, got)
+	require.Equal(t, want, "2031-09-17T09:30:00Z\t"+escapedRole+"\t"+escapedBody+"\n")
+	require.LessOrEqual(t, rowAllocations, escapeAllocations+1)
+}
+
+func BenchmarkSessionTranscriptRows(b *testing.B) {
+	escape := strings.NewReplacer("\\", "\\\\", "\t", "\\t", "\r", "\\r", "\n", "\\n")
+
+	for _, fixture := range []struct{ name, body string }{
+		{"short", "example message"},
+		{"long_plain", strings.Repeat("example message without escapes ", 32768)},
+		{"long_multiline", strings.Repeat("example message with\nline breaks\tand tabs ", 32768)},
+	} {
+		b.Run(fixture.name, func(b *testing.B) {
+			for b.Loop() {
+				var output strings.Builder
+				for range 10 {
+					writeSessionTranscriptRow(&output, escape, "2031-09-17T09:30:00Z", "assistant", fixture.body)
+				}
+			}
+		})
+	}
+}
+
 func TestSessionToolsTimePrecisionAndDurations(t *testing.T) {
 	t.Parallel()
 

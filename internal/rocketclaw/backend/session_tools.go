@@ -1032,7 +1032,7 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 						case "", "message", "function_call", "function_call_output", "reasoning", "compaction":
 						default:
 							role, text := storedEventLine(kind, raw)
-							fmt.Fprintf(&output, "%s\t%s\t%s\n", timestamp, role, escape.Replace(text))
+							writeSessionTranscriptRow(&output, escape, timestamp, role, text)
 
 							continue
 						}
@@ -1052,7 +1052,7 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 								err = errReplay.Cause
 							}
 
-							fmt.Fprintf(&output, "%s\tevent\t%s\n", timestamp, escape.Replace(fmt.Sprintf("[entry %d %s item %d: stored event not decoded: %v]", observations[i].ID, [...]string{"replay_input", "output_trace"}[s], j, err)))
+							writeSessionTranscriptRow(&output, escape, timestamp, "event", fmt.Sprintf("[entry %d %s item %d: stored event not decoded: %v]", observations[i].ID, [...]string{"replay_input", "output_trace"}[s], j, err))
 
 							continue
 						}
@@ -1101,7 +1101,7 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 							role, text = "event", "["+kind+": stored event not rendered]"
 						}
 
-						fmt.Fprintf(&output, "%s\t%s\t%s\n", timestamp, escape.Replace(role), escape.Replace(text))
+						writeSessionTranscriptRow(&output, escape, timestamp, role, text)
 					}
 				}
 			}
@@ -1113,6 +1113,17 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 			return sessionToolComparisonResult(ctx, service.db, params.ConversationID, params.BeforeEntryID, &output)
 		},
 	}
+}
+
+func writeSessionTranscriptRow(output *strings.Builder, escape *strings.Replacer, timestamp, role, text string) {
+	role, text = escape.Replace(role), escape.Replace(text)
+	output.Grow(len(timestamp) + len(role) + len(text) + 3)
+	output.WriteString(timestamp)
+	output.WriteByte('\t')
+	output.WriteString(role)
+	output.WriteByte('\t')
+	output.WriteString(text)
+	output.WriteByte('\n')
 }
 
 func sessionToolComparisonResult(ctx context.Context, db stateStoreDB, id string, before int64, output *strings.Builder) (harness.ToolResult, error) {
