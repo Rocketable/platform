@@ -569,7 +569,7 @@ test("running tabs keep a reachable close control, and closing hands focus to th
   await tab("Delta").waitFor();
   expect(await names(page)).toEqual(["New session", "Alpha", "Bravo", "Charlie", "Delta", "Search"]);
   await page.mouse.move(640, 400);
-  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running, Background work running");
+  await tab("Delta").and(page.locator('[aria-description="Space: Main, Turn running, Background work running"]')).waitFor();
   const close = strip(page).getByRole("button", { name: "Close Delta" });
   expect(await close.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
   await close.focus();
