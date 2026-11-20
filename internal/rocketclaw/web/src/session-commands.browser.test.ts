@@ -175,9 +175,10 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.locator("textarea").focus();
     await copyButton.waitFor({ state: "hidden" });
     const focusTrace = width === 1280 ? await headerMessage.evaluateHandle((message: HTMLElement) => {
-      const original = [message, ...message.querySelectorAll("[data-slot=message-actions] button")];
+      const actions = message.querySelector("[data-slot=message-actions]")!;
+      const original = [message, actions, ...actions.querySelectorAll("button")];
       const label = (node: EventTarget | null) => node instanceof Element
-        ? node.getAttribute("aria-label") ?? node.getAttribute("data-message-id") ?? node.tagName
+        ? node.getAttribute("aria-label") ?? node.getAttribute("data-message-id") ?? node.getAttribute("data-slot") ?? node.tagName
         : null;
       const events: unknown[] = [];
       const listeners = new AbortController();
@@ -185,17 +186,24 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       for (const type of ["keydown", "keyup", "focusin", "focusout"]) {
         document.addEventListener(type, (event) => {
           if (event instanceof KeyboardEvent && event.key !== "Tab") return;
+          const related = event instanceof FocusEvent ? event.relatedTarget : null;
           events.push({
-            type, target: label(event.target), related: event instanceof FocusEvent ? label(event.relatedTarget) : null,
-            focusVisible: event.target instanceof Element && event.target.matches(":focus-visible"), detached: detached(),
+            type, target: label(event.target), related: label(related), active: label(document.activeElement),
+            focusVisible: event.target instanceof Element && event.target.matches(":focus-visible"),
+            relatedFocusVisible: related instanceof Element && related.matches(":focus-visible"),
+            messageFocusVisible: message.matches(":focus-visible"), messageFocusWithin: message.matches(":focus-within"),
+            messageHovered: message.matches(":hover"),
+            documentVisibility: document.visibilityState, detached: detached(),
+            actionsVisibility: type === "keyup" ? getComputedStyle(actions).visibility : undefined,
           });
         }, { capture: true, signal: listeners.signal });
       }
       return {
-        read: () => {
-          const actions = document.querySelector('[data-message-id="1:0"] [data-slot="message-actions"]');
-          return { events, detached: detached(), active: label(document.activeElement), windowFocused: document.hasFocus(), visibility: actions && getComputedStyle(actions).visibility };
-        },
+        read: () => ({
+          events, detached: detached(), active: label(document.activeElement), windowFocused: document.hasFocus(),
+          documentVisibility: document.visibilityState, canHover: matchMedia("(hover: hover)").matches,
+          actionsVisibility: getComputedStyle(actions).visibility,
+        }),
         stop: () => listeners.abort(),
       };
     }) : undefined;
