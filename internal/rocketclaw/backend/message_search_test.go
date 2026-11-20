@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand/v2"
 	"slices"
@@ -700,6 +701,46 @@ func TestSearchMessagesMatchesLowercasedSubstrings(t *testing.T) {
 	}
 }
 
+func TestMessageSearchDecodeAllocationBudget(t *testing.T) {
+	lines := messageSearchDecodeFixture()
+
+	var decoder messageSearchDecoder
+
+	require.Less(t, testing.AllocsPerRun(10, func() {
+		for i, line := range lines {
+			replay, fields, err := decoder.decode(line)
+			if err != nil || replay != i || fields[0] != "user" || !strings.HasPrefix(fields[2], "Sample") || !strings.EqualFold(fields[3], fields[2]) {
+				t.Fatalf("decode line %d: replay=%d, error=%v", i, replay, err)
+			}
+		}
+	}), float64(len(lines)*10))
+}
+
+func BenchmarkMessageSearchDecode(b *testing.B) {
+	lines := messageSearchDecodeFixture()
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		var decoder messageSearchDecoder
+		for _, line := range lines {
+			if _, _, err := decoder.decode(line); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+func messageSearchDecodeFixture() []string {
+	lines := make([]string, 24)
+	for i := range lines {
+		text := strings.Repeat("Sample text with \"quotes\", \\ and ☀\n", i+1)
+		lines[i] = fmt.Sprintf("%d %d %s\n", i, i+1, searchJSON([4]string{"user", "", text, strings.ToLower(text)}))
+	}
+
+	return lines
+}
+
 func TestSearchMessagesShowsWhatHistoryShows(t *testing.T) {
 	t.Parallel()
 
@@ -767,6 +808,7 @@ func TestSearchMessagesShowsWhatHistoryShows(t *testing.T) {
 	require.NoError(t, err)
 	_, err = s.SearchMessages(ctx, "needle", nil)
 	require.ErrorContains(t, err, "decode message search text")
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 }
 
 func TestSearchMessagesMatchesGoReference(t *testing.T) {

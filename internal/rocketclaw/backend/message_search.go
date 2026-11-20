@@ -3,6 +3,8 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"maps"
@@ -250,6 +252,28 @@ type MessageSearchHit struct {
 	MessageID                  string
 }
 
+type messageSearchDecoder struct {
+	input  strings.Reader
+	values jsontext.Decoder
+}
+
+func (d *messageSearchDecoder) decode(line string) (replay int, fields [4]string, err error) {
+	var part int
+
+	d.input.Reset(line)
+	d.values.Reset(&d.input, json.DefaultOptionsV1())
+	err = errors.Join(jsonv2.UnmarshalDecode(&d.values, &replay), jsonv2.UnmarshalDecode(&d.values, &part), jsonv2.UnmarshalDecode(&d.values, &fields))
+	d.input.Reset("")
+
+	if err != nil {
+		replay, part, fields = 0, 0, [4]string{}
+		values := json.NewDecoder(strings.NewReader(line))
+		err = errors.Join(values.Decode(&replay), values.Decode(&part), values.Decode(&fields))
+	}
+
+	return replay, fields, err
+}
+
 func (s *SessionService) SearchMessages(ctx context.Context, needle string, tagPrefixes []string) ([]MessageSearchHit, error) {
 	needles := append([]string{needle}, tagPrefixes...)
 
@@ -260,7 +284,10 @@ func (s *SessionService) SearchMessages(ctx context.Context, needle string, tagP
 		patterns[i] = containsPattern(encoded[i])
 	}
 
-	var hits []MessageSearchHit
+	var (
+		hits    []MessageSearchHit
+		decoder messageSearchDecoder
+	)
 
 	err := s.readParallelRows(ctx, searchMessagesSQL, "message search", func(row rowScanner) error {
 		var (
@@ -277,13 +304,8 @@ func (s *SessionService) SearchMessages(ctx context.Context, needle string, tagP
 				continue
 			}
 
-			var (
-				replay, part int
-				fields       [4]string
-			)
-
-			values := json.NewDecoder(strings.NewReader(line))
-			if err := errors.Join(values.Decode(&replay), values.Decode(&part), values.Decode(&fields)); err != nil {
+			replay, fields, err := decoder.decode(line)
+			if err != nil {
 				return fmt.Errorf("decode message search text: %w", err)
 			}
 
