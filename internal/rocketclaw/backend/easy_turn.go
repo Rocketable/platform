@@ -25,12 +25,12 @@ func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents ha
 		return nil
 	}
 
-	selfEnv := maps.Collect(maps.All(turnEnv))
 	if b.parent != "" {
-		selfEnv[rocketclawConversationIDEnv] = self
+		turnEnv = maps.Collect(maps.All(turnEnv))
+		turnEnv[rocketclawConversationIDEnv] = self
 	}
 
-	folder, err := resolveWorkingDirectory(cfg, agent.WorkingDirectory, selfEnv)
+	folder, err := resolveWorkingDirectory(cfg, agent.WorkingDirectory, turnEnv)
 	if err != nil {
 		return err
 	}
