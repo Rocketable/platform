@@ -1,3 +1,4 @@
+import type { QueryStatus } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import { RPCError, sse } from "./api";
 import { serverURL } from "./navigation";
@@ -63,6 +64,10 @@ export function useVoice() {
 export function voiceChoice(agent?: Agent, voice = "") {
   const voices = agent?.voices ?? [];
   return voices.includes(voice) ? voice : voices[0] ?? "";
+}
+
+export function voiceInputsPending(choices: QueryStatus, identity: QueryStatus, settings: QueryStatus) {
+  return choices === "pending" || identity === "pending" || (identity === "success" && settings === "pending");
 }
 
 // stopVoice hangs up this tab's call, or clears a shown error.

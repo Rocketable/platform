@@ -412,7 +412,21 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
       return rows.some((row) => row.text === "keep my unsent draft" && row.files[0]?.file instanceof File);
     })) await Bun.sleep(10);
     await page.setViewportSize({ width: 390, height: 844 }); // Phones get the composer toggle too.
-    await page.goto(origin);
+    await page.goto("about:blank");
+    reading = Promise.withResolvers();
+    try {
+      await Promise.all([
+        page.waitForRequest((request: { url(): string; frame(): { url(): string }; postDataJSON(): { action?: string } | null }) =>
+          request.url() === `${origin}/api/VoiceSettings` && !request.postDataJSON()?.action &&
+          request.frame() === page.mainFrame() && request.frame().url() === `${origin}/`),
+        page.goto(origin),
+      ]);
+      await picker.and(page.locator(":enabled")).waitFor();
+      expect(await toggle.isDisabled()).toBe(true);
+    } finally {
+      reading.resolve();
+      reading = undefined;
+    }
     await toggle.click(); // A new session's toggle with sticky main resumes its session, says so, then calls on it.
     await page.waitForURL(sessionURL("voice-1"));
     await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Message or /command"]')?.value === "keep my unsent draft");
