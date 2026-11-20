@@ -136,10 +136,11 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 
 		if tc.contentType != "" {
 			require.Equal(t, http.Header{
-				"Content-Type":            {tc.contentType},
-				"Content-Security-Policy": {"sandbox allow-scripts allow-popups allow-forms allow-modals allow-downloads"},
-				"X-Content-Type-Options":  {"nosniff"},
-				"Cache-Control":           {"no-store"},
+				"Content-Type":                 {tc.contentType},
+				"Content-Security-Policy":      {"frame-ancestors 'self'", "sandbox allow-scripts allow-popups allow-forms allow-modals allow-downloads"},
+				"Cross-Origin-Resource-Policy": {"cross-origin"},
+				"X-Content-Type-Options":       {"nosniff"},
+				"Cache-Control":                {"no-store"},
 			}, response.Header(), tc.path)
 		}
 	}

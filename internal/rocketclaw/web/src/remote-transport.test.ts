@@ -126,6 +126,29 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await page.locator("#transcript-scroll").getByText("Remote reply", { exact: true }).first().waitFor();
   await chatTab.getByRole("tab", { selected: true }).waitFor();
   await page.waitForFunction(() => (document.querySelector('#transcript-scroll img[alt="dot.png"]') as HTMLImageElement | null)?.naturalWidth === 1);
+  const attachment = (await page.locator('#transcript-scroll img[alt="dot.png"]').getAttribute("src"))!;
+
+  observed.stage = "remote hosted page";
+  await page.goto(`${local}/r/work/pages/-/scout/index.html`);
+  await page.locator("main iframe").contentFrame().getByText("Remote reply page", { exact: true }).waitFor();
+
+  observed.stage = "another site";
+  const other = await context.newPage();
+  await other.goto(`${local.replace("//local.", "//other.")}/test/other-site`);
+  const framed = [`${remote}/pages-raw/scout/index.html`, `${remote}/`];
+  await other.evaluate((sources: string[]) => Promise.all(sources.map((src) => new Promise((resolve) => {
+    const frame = document.createElement("iframe");
+    frame.onload = resolve;
+    frame.src = src;
+    document.body.append(frame);
+  }))), framed);
+  expect(other.frames().slice(1).map((frame: { url(): string }) => frame.url())).toEqual(framed.map(() => "chrome-error://chromewebdata/"));
+  expect(await other.evaluate((src: string) => new Promise((resolve) => {
+    const image = new Image();
+    image.onload = image.onerror = () => resolve(image.naturalWidth);
+    image.src = src;
+  }), attachment)).toBe(0);
+  await other.close();
 
   // A space's card enters it, saving it as the current space: on this server, and on a remote, whose page opens even in
   // an empty space, which it enters on arrival.

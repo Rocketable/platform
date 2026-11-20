@@ -150,7 +150,7 @@ func TestOpenCodeProxy(t *testing.T) {
 	assert.Equal(t, "pw", fake.auth, "the proxy adds the password")
 	assert.Empty(t, fake.cookie, "RocketClaw's cookies never reach OpenCode")
 	assert.Empty(t, response.Header().Values("Set-Cookie"), "OpenCode never sets cookies on RocketClaw's origin")
-	assert.Equal(t, "sandbox", response.Header().Get("Content-Security-Policy"))
+	assert.Contains(t, response.Header().Values("Content-Security-Policy"), "sandbox")
 	assert.Equal(t, "nosniff", response.Header().Get("X-Content-Type-Options"))
 
 	for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
@@ -161,7 +161,7 @@ func TestOpenCodeProxy(t *testing.T) {
 	response = serve(http.MethodPost, "/oc/box/api/denied", "alice", nil)
 	assert.Equal(t, http.StatusUnauthorized, response.Code)
 	assert.Empty(t, response.Header().Get("WWW-Authenticate"), "the browser never prompts for OpenCode's password")
-	assert.Equal(t, "sandbox", response.Header().Get("Content-Security-Policy"))
+	assert.Contains(t, response.Header().Values("Content-Security-Policy"), "sandbox")
 
 	before := len(fake.calls)
 

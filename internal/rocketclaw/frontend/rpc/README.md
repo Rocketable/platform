@@ -689,6 +689,21 @@ subresources. A hosted page's own calls to the API are refused. Requests without
 these headers, such as non-browser clients, pass. Tailnet identity never grants
 cross-origin authority.
 
+The tailnet handler adds two headers to every answer but the OpenCode MCP
+bridge's. `Content-Security-Policy: frame-ancestors 'self'`, followed by each
+`trusted_rocketclaws` origin, lets only RocketClaw and the pages it trusts frame
+it, hosted pages included; navigations into frames from anywhere else are still
+admitted but not shown. A hosted page's own origin is opaque and never matches
+`'self'`, so it cannot frame its own files. No `X-Frame-Options` is sent: it cannot
+list origins, and every browser that reads `frame-ancestors` ignores it.
+`Cross-Origin-Resource-Policy: same-origin` keeps another site's `no-cors` loads
+from reading an answer, which covers browsers that send no `Sec-Fetch-Site`, such
+as Safari before 16.4, where an `<img>` of an attachment sends no `Origin` either
+and so passes the rule above. CORS requests, such as a trusted page's `fetch` and
+`crossorigin` images, are not subject to it. Files under `/pages-raw/` answer
+`cross-origin` instead, so a hosted page, from its opaque origin, still loads them.
+Handlers that set their own `Content-Security-Policy` add it beside this one.
+
 Identity comes only from the node's WhoIs of the connection. The handler ignores
 `X-Forwarded-For`, `X-Real-IP`, `Tailscale-User-*`, and client-supplied principal
 headers.

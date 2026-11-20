@@ -87,6 +87,10 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 			t.Fatalf("start %q fixture before readiness: %v", reply, running.Wait())
 		}
 
+		for _, agent := range agents {
+			require.NoError(t, rt.Sessions.PutPage(ctx, &backend.Page{Agent: agent, Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>" + reply + " page</p>")}))
+		}
+
 		var waking errgroup.Group
 		waking.Go(func() error { rt.Sessions.WakeParks(ctx); return nil })
 		t.Cleanup(func() { cancel(); require.NoError(t, waking.Wait()) })
@@ -149,6 +153,14 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 			panic(http.ErrAbortHandler)
 		}
 
+		if r.URL.Path == "/api/DownloadAttachment" {
+			for name := range r.Header {
+				if strings.HasPrefix(name, "Sec-Fetch-") {
+					r.Header.Del(name)
+				}
+			}
+		}
+
 		handler.ServeHTTP(w, r)
 	}))
 	t.Cleanup(remote.Close)
@@ -157,6 +169,11 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 	localRPC, _ := serve("Local reply")
 	web := versioned("local", signedIn("alice", NewHTTPHandler(localRPC, config.NewLockedConfig(&config.Config{RocketClaws: remotes}), "")))
 	local := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/test/other-site" {
+			_, _ = w.Write([]byte("<!doctype html><title>Another site</title>"))
+			return
+		}
+
 		if r.URL.Path == "/test/view-expired" {
 			var stale bool
 
