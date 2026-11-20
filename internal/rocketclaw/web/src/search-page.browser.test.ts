@@ -898,12 +898,10 @@ test("typing reuses message results and new replies preserve selected text", asy
   const { chromium: engine } = await import(playwright!);
   const text = "needle " + "fixture text ".repeat(2048);
   const rows = Array.from({ length: 64 }, (_, i) => ({ id: `result-${i}`, name: `Result ${i}`, agent: "main" }));
-  const requests: { query: string; messages?: boolean }[] = [];
   const held = Promise.withResolvers<void>();
   const started = Promise.withResolvers<void>();
   const polling = Promise.withResolvers<void>();
   const { server, origin } = serve(rows, async (input) => {
-    requests.push(input);
     if (input.query === "needle xyz") { started.resolve(); await held.promise; }
     const matches = input.query === "needle" ? rows : rows.slice(0, 1);
     return response(input.query, matches.map(({ id }) => ({ conversationId: id, field: "" })), [], {
@@ -913,14 +911,29 @@ test("typing reuses message results and new replies preserve selected text", asy
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
+    const typingTime = Date.UTC(2026, 0, 1);
+    await page.clock.install({ time: typingTime - 30_000 });
     let listings = 0;
     await page.route((url: URL) => url.pathname === "/api/ListSessions", (route: { continue(): Promise<void> }) => {
       if (++listings === 1) return route.continue();
       // Hold refreshes until page close: new sidebar rows legitimately rebuild results.
       polling.resolve();
     });
+    await page.route("**/api/Tabs", async (route: { continue(): Promise<void> }) => {
+      await polling.promise;
+      await route.continue();
+    }, { times: 1 });
     await page.addInitScript((text: string) => {
-      Object.assign(window, { messageSplits: 0 });
+      const searchRequests: SearchInput[] = [];
+      const fetch = window.fetch;
+      Object.assign(window, {
+        messageSplits: 0,
+        searchRequests,
+        fetch(input: RequestInfo | URL, init?: RequestInit) {
+          if (String(input).endsWith("/api/SearchSessions")) searchRequests.push(JSON.parse(init!.body as string));
+          return fetch(input, init);
+        },
+      });
       const split = String.prototype.split;
       Object.defineProperty(String.prototype, "split", { value: function(this: string, separator: string | RegExp, limit?: number) {
         if (String(this) === text) Reflect.set(window, "messageSplits", Reflect.get(window, "messageSplits") + 1);
@@ -930,33 +943,25 @@ test("typing reuses message results and new replies preserve selected text", asy
     await page.goto(`${origin}/search?q=needle`);
     const search = page.getByRole("textbox", { name: "Search sessions" });
     const results = page.getByLabel("Search results");
+    const requests = (): Promise<SearchInput[]> => page.evaluate(() => Reflect.get(window, "searchRequests"));
     await results.getByRole("group", { name: "Result 63", exact: true }).waitFor();
-    await polling.promise;
     expect(listings).toBeGreaterThan(1);
     expect(await results.getByRole("group").count()).toBe(64);
     expect(await results.locator('a[href*="?message="]').count()).toBe(64);
     expect(await results.locator("mark").count()).toBe(64);
     expect(await page.evaluate(() => Reflect.get(window, "messageSplits"))).toBeGreaterThan(0);
+    await page.clock.pauseAt(typingTime);
     await page.evaluate(() => Reflect.set(window, "messageSplits", 0));
     await search.press("End");
-    await search.pressSequentially(" xyz", { delay: 140 });
+    for (const key of " xyz") {
+      await search.pressSequentially(key);
+      await page.clock.runFor(140);
+    }
     expect(await search.inputValue()).toBe("needle xyz");
     expect(await page.evaluate(() => Reflect.get(window, "messageSplits"))).toBe(0);
-    try {
-      expect(requests.map(({ query }) => query)).toEqual(["needle"]);
-    } catch (error) {
-      console.info("Typing search request failure before Enter", JSON.stringify({
-        requests,
-        browser: await search.evaluate((input: HTMLInputElement) => ({
-          query: input.value, selection: [input.selectionStart, input.selectionEnd], focused: document.activeElement === input,
-          messageSplits: Reflect.get(window, "messageSplits"), resultGroups: document.querySelectorAll('[aria-label="Search results"] [role="group"]').length,
-          now: performance.now(), timeOrigin: performance.timeOrigin,
-          searches: performance.getEntriesByType("resource").filter((entry) => new URL(entry.name).pathname === "/api/SearchSessions")
-            .map(({ startTime, duration }) => ({ startTime, duration })),
-        })).catch((failure: unknown) => ({ unavailable: String(failure) })),
-      }));
-      throw error;
-    }
+    const initial = { query: "needle", messages: true, tab: "/search", searchId: expect.any(String), entered: true };
+    const beforeEnter = await requests();
+    expect(beforeEnter).toEqual([initial]);
     await search.press("Enter");
     await started.promise;
     expect(await results.getByRole("group").count()).toBe(64);
@@ -965,7 +970,8 @@ test("typing reuses message results and new replies preserve selected text", asy
     await results.getByRole("link", { name: "Assistant needle xyz replacement", exact: true }).waitFor();
     expect(await results.getByRole("group").count()).toBe(1);
     expect(await results.locator("mark").allTextContents()).toEqual(["needle xyz"]);
-    expect(requests.map(({ query }) => query)).toEqual(["needle", "needle xyz"]);
+    await page.clock.runFor(250);
+    expect(await requests()).toEqual([initial, { ...initial, query: "needle xyz", searchId: beforeEnter[0].searchId }]);
     await page.keyboard.type("new");
     expect(await search.inputValue()).toBe("new");
   } finally {
