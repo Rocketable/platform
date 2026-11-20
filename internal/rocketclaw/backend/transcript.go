@@ -100,7 +100,7 @@ func observeTranscriptDB(ctx context.Context, db stateStoreDB, conversationID st
     SELECT a.conversation_id, a.id, json_agg(i.value ORDER BY i.key) AS replay FROM shown_turns a JOIN live_replays USING (id)
     JOIN steps i ON i.conversation_id = a.conversation_id AND starts_with(i.key, a.id || '/replay_input/') GROUP BY a.conversation_id, a.id
 ), transcript AS (
-    SELECT e.id, e.entry_json, e.source_conversation_id, e.synced,
+    SELECT e.id, e.entry_json::text AS entry_json, e.source_conversation_id, e.synced,
         FALSE AS active, COALESCE(a.terminal, '') AS terminal, 0::bigint AS checkpoint_timestamp, '' AS turn_id, 0 AS checkpoint, e.id AS position, e.revert_index, e.marker,
         COALESCE(e.entry->>'turn_id', '') AS entry_turn
     FROM effective_entries e LEFT JOIN shadow_turns t
