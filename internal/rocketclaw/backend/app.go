@@ -412,32 +412,28 @@ func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config, s
 		return "", err
 	}
 
-	warnings, err := s.startWith(cfg, sessions)
-	if err != nil || found {
-		return warnings, err
-	}
-
-	return warnings, putBehaviorSettings(ctx, sessions.db, new(cfg.Behavior()))
-}
-
-func (s *lockedRun) startWith(cfg *config.Config, sessions *SessionService) (string, error) {
 	sessions.definitions.Store(cfg)
 	SetLogLevel(s.logLevel, cfg.Logging.Level)
 
-	if err := skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, s.logger); err != nil {
+	runtimeDir := cfg.RuntimeDirName()
+	if err := skel.SyncInWithOverlays(cfg.Workspace, runtimeDir, cfg.Overlays, s.logger); err != nil {
 		return "", fmt.Errorf("sync rocketclaw skeleton: %w", err)
 	}
 
-	warnings, err := validateRuntimeAssets(sessions.definitions, cfg.RuntimeDirName(), s.logger)
+	warnings, err := validateRuntimeAssets(sessions.definitions, runtimeDir, s.logger)
 	if err != nil {
 		return "", err
 	}
 
-	if err := s.assemble.ValidateAssets(cfg, cfg.RuntimeDirName()); err != nil {
+	if err := s.assemble.ValidateAssets(cfg, runtimeDir); err != nil {
 		return "", fmt.Errorf("validate frontend assets: %w", err)
 	}
 
-	return warnings, nil
+	if found {
+		return warnings, nil
+	}
+
+	return warnings, putBehaviorSettings(ctx, sessions.db, new(cfg.Behavior()))
 }
 
 func setBehaviorFields(b *config.Behavior) []string {
