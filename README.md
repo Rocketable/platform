@@ -32,7 +32,7 @@ See [LICENSE](LICENSE) for the full license terms.
 go run github.com/Rocketable/platform/cmd/rocketclaw@main
 ```
 
-Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or the older `femtoclaw.json`) from the current folder. That file holds setup and secrets: it points at the workspace and the database, holds the Slack, provider, and External MCP credentials, and turns on other integrations. Values can also come from AWS Secrets Manager. Any value can be written as `{"aws": {"arn": "ARN", "key": "KEY"}}`, and RocketClaw replaces it with the string under `KEY` in that JSON secret. So `aws` is a reserved name: every object whose only key is `aws` is read as such a reference. A map with a single entry named `aws`, such as one MCP server or provider called `aws`, fails to load with `aws object requires arn and key`; give it another name. `rocketclaw run --aws-secrets-manager-arn ARN` merges that JSON secret over the file, and with it the file is optional: the secret alone can hold the whole configuration, and the workspace defaults to the current folder.
+Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or the older `femtoclaw.json`) from the current folder. When `femtoclaw.json` exists, RocketClaw uses it, even if `rocketclaw.json` is there too, and its runtime folder is `<workspace>/.femtoclaw` instead of `<workspace>/.rocketclaw`. The file holds setup and secrets: it points at the workspace and the database, holds the Slack, provider, and External MCP credentials, and turns on other integrations. Values can also come from AWS Secrets Manager. Any value can be written as `{"aws": {"arn": "ARN", "key": "KEY"}}`, and RocketClaw replaces it with the string under `KEY` in that JSON secret. So `aws` is a reserved name: every object whose only key is `aws` is read as such a reference. A map with a single entry named `aws`, such as one MCP server or provider called `aws`, fails to load with `aws object requires arn and key`; give it another name. `rocketclaw run --aws-secrets-manager-arn ARN` merges that JSON secret over the file, and with it the file is optional: the secret alone can hold the whole configuration, and the workspace defaults to the current folder.
 
 `rocketclaw run` exits with code 0 after a shutdown signal, with 1 on an error, including a Web node that fails its startup check (see [Tailnet setup](#tailnet-setup)), and with 255 when it asks to be started again: after the `rocketclaw_restart` tool, or when the Web page stops serving while it runs. It does not start itself again.
 
@@ -50,7 +50,7 @@ SQL
 
 Deleting the row (`DELETE FROM behavior_settings`) makes the next start import from the file again, but it discards every edit made on the Web, so use it only as a last resort.
 
-A workspace may contain `AGENTS.md` and `agents/`, `skills/`, `scripts/`, and `cron/` folders. RocketClaw ships three agents: `main`, a `sudo: yes`, `sticky: global` agent with one shared session; `assistant`, a `sudo: yes`, `sticky: off` agent for External MCP, which accepts only `sticky: off` agents; `slack`, the same assistant as a `sticky: slack` agent for Slack channels (see [Sticky agents](#sticky-agents)); and `voice`.
+A workspace may contain `AGENTS.md` and `agents/`, `skills/`, `scripts/`, and `cron/` folders. RocketClaw ships four agents: `main`, a `sudo: yes`, `sticky: global` agent with one shared session; `assistant`, a `sudo: yes`, `sticky: off` agent for External MCP, which accepts only `sticky: off` agents; `slack`, the same assistant as a `sticky: slack` agent for Slack channels (see [Sticky agents](#sticky-agents)); and `voice`. At every start, RocketClaw copies each built-in agent file into the workspace's `agents/` folder only when that file is missing: your edits to them stay, and a deleted one comes back.
 
 ### Web page
 
@@ -124,6 +124,16 @@ Names use only `a-z`, `0-9`, and `-`, and each URL or trusted address is an `htt
 - A remote must serve its tsnet name over HTTPS, run a RocketClaw version with this feature, and trust the local page. Otherwise the page shows it as unavailable, with its address. A remote that stops answering keeps its chats listed, greyed out, until it answers again. A remote on another version keeps working with a notice, and some actions may fail.
 
 Each RocketClaw's tsnet listener accepts these calls only from the pages its `trusted_rocketclaws` lists, because the remote signs in whoever's browser opened the page: any page it trusted could act as that person. Other pages, including other pages on the same tailnet, get no access, not even to read.
+
+#### OpenCode servers
+
+The web page can also start and open sessions on OpenCode servers. Name each server under `opencode` in the config file:
+
+```json
+"opencode": {"devbox": {"url": "http://devbox.example.ts.net:4096", "password": "set-me"}}
+```
+
+`opencode.<name>.url` is the server's `http` or `https` address, and `opencode.<name>.password` is required: RocketClaw signs in to the server as the user `opencode` with that password. Names use only letters, digits, `_`, `-`, and `.`. Changes take effect on restart. Agents call these servers with the `opencode_api` tool, under the `opencode` permission; an easy agent lists the ones it may call under `opencode` (see [Easy mode agents](#easy-mode-agents)).
 
 #### Space permissions
 
@@ -501,6 +511,7 @@ allowedNetworkTargets: # or auto, the default
 - Each command is limited to 256 MiB of memory, 64 processes, one CPU, 16 MiB of output, files of 256 MiB and responses of 10 MiB, with the `bash` tool's timeout. A command stopped by a limit says so at the end of its output. Background jobs end with the command.
 - RocketClaw runs on Linux, amd64 or arm64, only. The host needs `bwrap` (bubblewrap), unprivileged user namespaces (on Ubuntu 23.10 and later, an AppArmor profile that allows them for `/usr/bin/bwrap`), and cgroup v2 with the service started under `Delegate=yes`. The first start with an emulated agent builds the Ubuntu image under the runtime folder, which takes a minute or two and needs `mmdebstrap` and a subordinate uid range for RocketClaw's user (`/etc/subuid`, from the `uidmap` package); startup does not wait, the Web interface shows the sandbox as preparing, and commands wait for it. While Ubuntu's archive is unreachable or failing, the build keeps trying, after 30 seconds and then twice as long each time up to every 15 minutes; the Web shows the last failure and the next try, and the server log has each failure in full. Later starts reuse the image. The image is pinned to one archive snapshot (`internal/rocketclaw/sandbox/snapshot.gen.go`) and release, with every package version in `packages.<arch>.lock` beside it, and a build whose packages differ is refused.
 - To take Ubuntu's latest security updates, run `go generate ./internal/rocketclaw/sandbox` and commit what it changes. It moves to the newest archive snapshot, builds the image for amd64 and arm64, and rewrites the snapshot, the locks and the SBOMs, unless no package changed, in which case it changes nothing. It takes minutes. Each RocketClaw builds the new image at its next start. A new Ubuntu release is a change of `suite` in `rootfs_linux.go`, then the same command. If anything is missing, the Web interface shows why and nothing runs outside the sandbox.
+- Two environment variables speed up image builds, both when RocketClaw builds its image and in `go generate`: `ROCKETCLAW_SANDBOX_PACKAGE_MIRROR` names an Ubuntu apt mirror to download packages from first, with the pinned snapshot as the fallback for any package it cannot serve (the package lists always come from the snapshot); `ROCKETCLAW_SANDBOX_PACKAGE_CACHE` names a folder that keeps downloaded packages and package lists between builds, and after each successful build drops the packages that image did not install. `make sandbox-test` keeps its cache in the repository's `.tmp/sandbox-test/packages` and passes `SANDBOX_TEST_PACKAGE_MIRROR` on as the mirror.
 - In a Docker container, the sandbox also needs, beyond `bubblewrap`, `mmdebstrap` and `uidmap` in the image and a subordinate uid range for RocketClaw's user: `--cap-add SYS_ADMIN` and `--security-opt apparmor=unconfined`, `seccomp=unconfined` and `systempaths=unconfined` (bubblewrap's mounts, `pivot_root` and `/proc`, which Docker's defaults deny); an entrypoint that, as root, remounts `/sys/fs/cgroup` read-write, moves the container's processes into a leaf cgroup, enables `cpu`, `memory` and `pids`, and hands a sibling cgroup to RocketClaw's user before starting it there; on an Ubuntu host, the AppArmor profile for `/usr/bin/bwrap`; and the runtime folder's `sandbox` on a case-sensitive local filesystem.
 
 An easy mode agent uses the emulated shell unless its `shell` names the absolute path of a wrapper program; the differences are listed under [Easy mode agents](#easy-mode-agents).
@@ -598,6 +609,8 @@ The agent editor's assistant runs on `main`'s model. To give it another one, set
 
 Web sessions get their titles from `openai/gpt-6-luna#low`: a person's first Web message names an unnamed session, and **Regenerate title** names it again from the conversation. To use another model, set `"title_model"` in `rocketclaw.json` the same way.
 
+The guardian, the built-in reviewer that `auto` permissions and `sudo` agents send calls to, runs on `auto_approver_model`, a Behavior Setting (see [Getting started](#getting-started)), written as `gpt-6-luna` or `work/gpt-6-luna`. Left empty, it uses `gpt-6-luna` on `openai`. An easy agent's `approver.model` replaces it for that agent's reviews, and a custom reviewer (`auto(name)`) runs on its own agent's model instead.
+
 Set `prompt_cache_markers_relative_position` (a negative number) only on a provider that accepts Anthropic `cache_control` markers, such as CLIProxyAPI in front of Claude. RocketClaw then marks one text piece of the last request message, counted from the end: `-2` marks the piece before the last. Automatic permission reviews send the planned action as the last piece, so `-2` lets the next review reuse the cached transcript. Leave it unset for OpenAI and other providers that reject unknown fields.
 
 `auth` sets how a provider signs in: `api_key` (the default) uses `api_key`, and `chatgpt` uses a ChatGPT login. The older name `rocketcode_auth` still works; `auth` wins when both are set.
@@ -620,6 +633,7 @@ Sign in per provider with `rocketclaw oai login [provider] [--headless]`. Use `r
   S3 uses the standard AWS credentials and region settings. Grant `s3:PutObject`, `s3:GetObject`, and `s3:DeleteObject` for attachments, plus `s3:DeleteObjectVersion` for a versioned bucket. Grant `s3:ListBucket` so deletion retries can distinguish missing files from denied access. RocketClaw does not create buckets or make files public.
 - Back up the database and the attachment storage together. Restoring only the database brings back references to files, not the files.
 - `.rocketclaw/` holds generated runtime files, such as cloned overlays, per-session temporary folders, and oversized command output. Do not treat it as source code.
+- At every start, RocketClaw empties the runtime folder (`.rocketclaw/`, or `.femtoclaw/` with `femtoclaw.json`) and builds it again. It keeps only `.rocketcode`, `attachments`, `sandbox`, `uploads`, `auth.json`, `auth.json.lock`, entries whose names start with `.auth.json-`, and `overlays`. Anything else, including files you put there by hand, is deleted.
 
 ## Monitoring and profiling
 
