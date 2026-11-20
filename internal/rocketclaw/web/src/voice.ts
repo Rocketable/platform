@@ -30,6 +30,7 @@ const lost = "Connection to RocketClaw ended.";
 const reconnecting = "Reconnecting to the agent…";
 const audioLost = "Voice call failed: audio connection lost.", timedOut = "Voice connection timed out.";
 const networkLosses = [lost, endings.lost, audioLost, timedOut];
+const reconnectLimit = 15 * 60_000, gaveUp = `Call ended: could not reconnect for ${reconnectLimit / 60_000} minutes.`;
 class VoiceFailure extends Error {}
 
 let view: VoiceView = { state: "idle", conversationId: "", error: "", notice: "", captions: [] };
@@ -133,8 +134,9 @@ export async function startVoice(conversationId: string, voice = "") {
     // Stop during the permission prompt: finally releases the microphone.
     if (abort.signal.aborted) return;
     // A network loss, or a data channel still closed 20 s after the answer, restarts the call
-    // on the same microphone after a wait that doubles up to 10 s, until it is hung up.
-    let wait = 1_000;
+    // on the same microphone after a wait that doubles up to 10 s, until it is hung up or
+    // has stayed lost for reconnectLimit.
+    let wait = 1_000, outage = 0;
     for (;;) {
       const attempt = new AbortController(), signal = AbortSignal.any([abort.signal, attempt.signal]);
       const fail = (message: string) => attempt.abort(new VoiceFailure(message));
@@ -217,9 +219,11 @@ export async function startVoice(conversationId: string, voice = "") {
       clearTimeout(opening);
       if (abort.signal.aborted || !networkLosses.includes(error)) return;
       if (!ticking) {
+        outage = Date.now();
         tone(sound, 660, 440);
         ticking = setInterval(() => tone(sound, 880), 5_000);
       }
+      if (Date.now() - outage >= reconnectLimit) throw new VoiceFailure(gaveUp);
       set({ state: "reconnecting", notice: "" });
       await new Promise((resolve) => {
         setTimeout(resolve, wait);

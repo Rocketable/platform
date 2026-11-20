@@ -200,6 +200,47 @@ test("a call reconnects on the same microphone after each network loss, with cue
   } finally { jest.useRealTimers(); }
 });
 
+async function failTriesUntil(time: number) {
+  while (Date.now() < time) {
+    const count = wires.length;
+    jest.advanceTimersByTime(10_000);
+    await until(() => wires.length > count);
+    wires.at(-1)!.close();
+    await until(() => peers.at(-1)!.closed);
+  }
+}
+
+test("a call keeps reconnecting until 15 minutes pass without coming back, then ends with a message", async () => {
+  const { done, peer } = await live("conversation");
+  jest.useFakeTimers();
+  try {
+    let lostAt = Date.now();
+    peer.connectionState = "failed";
+    peer.onconnectionstatechange!();
+    await until(() => voiceView().state === "reconnecting");
+    await failTriesUntil(lostAt + 14 * 60_000);
+    const tries = wires.length;
+    jest.advanceTimersByTime(10_000);
+    await until(() => wires.length > tries);
+    wires.at(-1)!.push({ answer: { sdp: "answer-sdp", route: "public" } });
+    await until(() => peers.at(-1)!.remote);
+    peers.at(-1)!.channel.onopen!();
+    expect(voiceView()).toMatchObject({ state: "live", error: "" });
+
+    lostAt = Date.now();
+    wires.at(-1)!.push({ ended: { reason: "lost" } });
+    await until(() => voiceView().state === "reconnecting");
+    await failTriesUntil(lostAt + 15 * 60_000 - 10_000);
+    expect(voiceView()).toMatchObject({ state: "reconnecting", error: "" });
+    await failTriesUntil(lostAt + 15 * 60_000);
+    expect(voiceView()).toMatchObject({ state: "error", error: "Call ended: could not reconnect for 15 minutes.", notice: "" });
+    await done;
+    const requests = wires.length;
+    jest.advanceTimersByTime(60_000);
+    expect({ requests: wires.length, micStopped: tracks[0].stopped }).toEqual({ requests, micStopped: true });
+  } finally { jest.useRealTimers(); }
+});
+
 test("notices show during a call, newest first, and clear when it ends", async () => {
   const { done, wire, peer } = await live("conversation");
   wire.push({ notice: "The agent could not accept that request. Try again." });

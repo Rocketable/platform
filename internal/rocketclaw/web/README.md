@@ -362,13 +362,16 @@ audio connection fails, the page loses RocketClaw, RocketClaw loses OpenAI, or t
 audio is not up 20 seconds after OpenAI answers) starts a new call on the same
 conversation and microphone instead of ending. The first try comes 1 second
 later, and each failed try doubles the wait, up to 10 seconds, until it comes
-back or is hung up; the status reads "Reconnecting…" meanwhile. A falling two-note
+back, is hung up, or gives up; the status reads "Reconnecting…" meanwhile. A falling two-note
 tone marks the loss, a short tick plays every 5 seconds while reconnecting, and a
 rising two-note tone marks the call coming back. Each new call is a fresh OpenAI
 call that starts from the conversation's recent messages, so talk never handed off
-to the agent is not carried over. Other failures, such as another device taking
-the call, OpenAI ending it, or a refused credential, end the call with a message
-and are not retried.
+to the agent is not carried over. A try that fails 15 minutes or more after the
+loss, with the call not back since, gives up: the call ends with "Call ended:
+could not reconnect for 15 minutes.", so a call forgotten during an outage stops.
+A call that comes back counts the 15 minutes again from its next loss. Other
+failures, such as another device taking the call, OpenAI ending it, or a refused
+credential, end the call with a message and are not retried.
 
 The agent's final reply to a hand-off is spoken once, as written. A reply over
 about 990 tokens is not spoken: the voice says it is on the screen, and the Voice
