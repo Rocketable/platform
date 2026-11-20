@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
 import path from "node:path";
 import { unpacked } from "./test-browsers";
 import type { Attachment, PromptDelivery, QueueItem, Session, SessionBatch, TranscriptEvent } from "./types";
@@ -518,6 +518,8 @@ test("actual App renders independent public lifecycle and reconnect replacements
 
 test("actual App restores, merges, isolates and keeps composer independent", async () => {
   const started = Date.now();
+  let reportHeldLinkWait: (() => void) | undefined;
+  onTestFinished(() => reportHeldLinkWait?.());
   const { chromium: engine } = await import(playwright!);
   let identityHold = Promise.withResolvers<void>();
   let promptHold = Promise.withResolvers<string>();
@@ -2848,12 +2850,28 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       const originalQueue = JSON.stringify(ctrl.queue);
       const queuePage = await browser.newPage({ viewport: { width, height: 640 } });
       const mutations: string[] = [];
+      const queueRead: { requests: number; response?: { status: number; targetAttachments?: string[] | "row missing"; error?: string } } = { requests: 0 };
       queuePage.on("request", (request: { url(): string }) => {
+        if (request.url().endsWith("/api/ListQueue")) queueRead.requests++;
         if (/\/api\/(Prompt|PopQueueItem|SteerQueueItem|RemoveQueueItem|EditQueueItem|ReorderQueue)$/.test(request.url())) mutations.push(request.url());
+      });
+      queuePage.on("response", async (response: { url(): string; status(): number; json(): Promise<{ items?: QueueItem[] }> }) => {
+        if (!response.url().endsWith("/api/ListQueue")) return;
+        const observed: NonNullable<typeof queueRead.response> = { status: response.status() };
+        queueRead.response = observed;
+        try {
+          const { items } = await response.json();
+          const row = items?.find(({ id }) => id === "expand-target");
+          observed.targetAttachments = row ? row.attachments?.map(({ name }) => name) ?? [] : "row missing";
+        } catch (error) { observed.error = String(error); }
       });
       await queuePage.goto(`${origin}/s/${Buffer.from(`queue-expansion-${width}-${count}`).toString("base64url")}`);
       const target = queuePage.locator('[data-queue-id="expand-target"]');
+      reportHeldLinkWait = () => console.error("Expected a visible Download held.txt link in queue row expand-target", {
+        width, count, url: queuePage.url(), queueRead,
+      });
       await target.getByRole("link", { name: "Download held.txt", exact: true }).waitFor();
+      reportHeldLinkWait = undefined;
       expect(await target.getByRole("button", { name: "Edit", exact: true }).count()).toBe(1);
       const attachmentHref = await target.getByRole("link").getAttribute("href");
       await queuePage.locator("textarea").fill("Draft stays here");
