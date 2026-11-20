@@ -1,4 +1,5 @@
 import { serverURL } from "./navigation";
+import { githubIssue } from "./github-pr";
 import type { HistoryView } from "./types";
 
 const unreadable = "Could not read this thread's pull requests.";
@@ -48,8 +49,15 @@ export function openCodePRAPI(id: string) {
   return { api: `${serverURL()}/oc/${encodeURIComponent(name)}/api`, sessionID: session.join(":") };
 }
 
-type OpenCodeMessage = { type: string; command?: string; status?: string; exit?: number; output?: { output: string }; content?: { type: string; name?: string; state?: { status: string; input: { command?: string }; metadata?: { exit?: number; exitCode?: number }; content: { type: string; text?: string }[] } }[] };
-type SessionPRs = { found: { created: string[]; mentioned: string[] }[]; children: string[] };
+type OpenCodeMessage = { type: string; text?: string; payload?: { text?: string }; command?: string; status?: string; exit?: number; output?: { output: string }; content?: { type: string; text?: string; name?: string; state?: { status: string; input: { command?: string }; metadata?: { exit?: number; exitCode?: number }; content: { type: string; text?: string }[] } }[] };
+type SessionPRs = { found: { created: string[]; mentioned: string[] }[]; children: string[]; issues: Set<string> };
+
+function collectIssues(issues: Set<string>, text = "") {
+  for (const match of text.matchAll(/(?:^|[\s([<|"'])((?:https:\/\/github\.com)\/[a-z\d-]+\/[a-z\d_.-]+\/issues\/[1-9]\d*)(?=\/?(?:$|[\s?#.,;:!)\]>"']))/gi)) {
+    const ref = githubIssue(match[1]);
+    if (ref) issues.add(`https://github.com/${ref.owner.toLowerCase()}/${ref.repo.toLowerCase()}/issues/${ref.number}`);
+  }
+}
 
 async function openCodeList<T>(url: string, first: Record<string, string>, signal: AbortSignal) {
   const items: T[] = [];
@@ -71,25 +79,29 @@ async function openCodeSessionPRs(api: string, session: string, signal: AbortSig
     openCodeList<{ id: string }>(`${api}/session`, { parentID: session, order: "asc" }, signal),
   ]);
   const found: SessionPRs["found"] = [];
+  const issues = new Set<string>();
   for (const message of messages) {
+    if (message.type === "user") collectIssues(issues, message.payload?.text ?? message.text);
     if (message.type === "shell" && message.status === "exited" && message.exit === 0 && message.command && message.output) found.push(pullRequestsIn(message.command, message.output.output));
     for (const part of message.content ?? []) {
+      if (message.type === "assistant" && part.type === "text") collectIssues(issues, part.text);
       const tool = part.state;
       if (part.type !== "tool" || !["bash", "shell"].includes(part.name ?? "") || tool?.status !== "completed" || (tool.metadata?.exit ?? tool.metadata?.exitCode) !== 0 || !tool.input.command) continue;
       found.push(pullRequestsIn(tool.input.command, tool.content.filter((item) => item.type === "text").map((item) => item.text).join("\n")));
     }
   }
-  return { found, children: children.map((child) => child.id) };
+  return { found, children: children.map((child) => child.id), issues };
 }
 
 async function nativeSessionPRs(session: string, signal: AbortSignal): Promise<SessionPRs> {
-  const result: SessionPRs = { found: [], children: [] };
+  const result: SessionPRs = { found: [], children: [], issues: new Set() };
   let cursor: string | undefined;
   do {
     const response = await fetch(`${serverURL()}/api/History?pull-request-discovery=1`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: session, before: cursor, limit: 200 }) });
     if (!response.ok) throw new Error(unreadable);
     const page = await response.json() as HistoryView;
     for (const message of page.messages) {
+      if (message.role === "user" || message.role === "assistant") collectIssues(result.issues, message.text);
       if (message.delegation) result.children.push(message.delegation);
       for (const call of message.codeModeCalls ?? []) {
         if (call.name !== "bash" || call.status !== "ok") continue;
@@ -109,11 +121,12 @@ export async function loadThreadPRs(id: string, signal: AbortSignal) {
   try {
     const remote = id.startsWith("opencode:") ? openCodePRAPI(id) : undefined;
     const start = remote ? remote.sessionID : id;
-    const created = new Set<string>(), mentioned = new Set<string>(), visited = new Set([start]);
+    const created = new Set<string>(), mentioned = new Set<string>(), issues = new Set<string>(), visited = new Set([start]);
     for (let sessions = [start]; sessions.length;) {
       const level = await Promise.all(sessions.map((session) => remote ? openCodeSessionPRs(remote.api, session, signal) : nativeSessionPRs(session, signal)));
       sessions = [];
-      for (const { found, children } of level) {
+      for (const { found, children, issues: foundIssues } of level) {
+        for (const url of foundIssues) issues.add(url);
         for (const prs of found) {
           for (const url of prs.created) created.add(url);
           for (const url of prs.mentioned) mentioned.add(url);
@@ -124,7 +137,7 @@ export async function loadThreadPRs(id: string, signal: AbortSignal) {
         }
       }
     }
-    return { created: [...created], mentioned: [...mentioned].filter((url) => !created.has(url)) };
+    return { created: [...created], mentioned: [...mentioned].filter((url) => !created.has(url)), issues: [...issues] };
   } catch {
     signal.throwIfAborted();
     throw new Error(unreadable);
