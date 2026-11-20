@@ -2317,6 +2317,7 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
   await handle.press("ArrowUp");
   expect(await height()).toBeCloseTo(dragged + 16, 0);
 
+  await until(() => saved.state.groups.some(({ id, collapsed }) => id === "parked" && collapsed === false));
   saved.attention.push({ path: href("foxtrot"), parked: true });
   await page.reload();
   await row("Foxtrot").waitFor();
