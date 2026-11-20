@@ -79,31 +79,30 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 
 	for _, route := range []string{"GET /api/ListSessions", "GET /stream", "GET /typing", "GET /api/DownloadAttachment", "POST /api/UploadAttachment", "POST /api/Voice"} {
 		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
-			method := strings.TrimPrefix(r.URL.Path, "/api/")
+			method, query, required := strings.TrimPrefix(r.URL.Path, "/api/"), url.Values(nil), ""
+			if method != "Voice" {
+				query = r.URL.Query()
+			}
 
-			var (
-				request  proto.Message
-				response proto.Message = &ListSessionsResponse{}
-				required string
-			)
+			var request, response proto.Message
 
 			switch method {
 			default:
 				post := *r
 				post.Method = http.MethodPost
 
-				list := &ListSessionsRequest{Since: r.URL.Query().Get("since")}
+				list := &ListSessionsRequest{Since: query.Get("since")}
 				if protection.Check(&post) == nil {
-					list.Viewing, list.Hold, list.SameOrigin = r.URL.Query().Get("viewing"), r.URL.Query().Has("hold"), true
+					list.Viewing, list.Hold, list.SameOrigin = query.Get("viewing"), query.Has("hold"), true
 				}
 
-				request = list
+				request, response = list, &ListSessionsResponse{}
 			case "/stream":
-				method, request, response, required = "Join", &JoinRequest{Id: r.URL.Query().Get("id")}, &ConversationChange{}, "id"
+				method, request, response, required = "Join", &JoinRequest{Id: query.Get("id")}, &ConversationChange{}, "id"
 			case "/typing":
-				method, request, response, required = "WatchTyping", &WatchTypingRequest{Id: r.URL.Query().Get("id")}, &TypingEvent{}, "id"
+				method, request, response, required = "WatchTyping", &WatchTypingRequest{Id: query.Get("id")}, &TypingEvent{}, "id"
 			case "DownloadAttachment", "UploadAttachment":
-				request = &Attachment{ConversationId: r.URL.Query().Get("conversationId"), Id: r.URL.Query().Get("id"), Name: r.URL.Query().Get("name")}
+				request = &Attachment{ConversationId: query.Get("conversationId"), Id: query.Get("id"), Name: query.Get("name")}
 				response, required = &Attachment{}, map[string]string{"DownloadAttachment": "conversationId id", "UploadAttachment": "conversationId name"}[method]
 			case "Voice":
 				request, response = &VoiceRequest{}, &VoiceEvent{}
@@ -114,7 +113,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 			}
 
 			for name := range strings.FieldsSeq(required) {
-				if !r.URL.Query().Has(name) {
+				if !query.Has(name) {
 					httpRPCError(w, status.Errorf(codes.InvalidArgument, "%s is required", name))
 					return
 				}
@@ -164,7 +163,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 			}
 
 			if method == "DownloadAttachment" {
-				httpDownload(w, r, stream, response.(*Attachment))
+				httpDownload(w, stream, response.(*Attachment), query.Get("download") == "1")
 				return
 			}
 
@@ -302,14 +301,14 @@ func httpUpload(body io.Reader, stream grpc.ClientStream) error {
 	}
 }
 
-func httpDownload(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream, file *Attachment) {
+func httpDownload(w http.ResponseWriter, stream grpc.ClientStream, file *Attachment, forced bool) {
 	contentType, _, errMIME := mime.ParseMediaType(file.MimeType)
 	if errMIME != nil {
 		contentType = "application/octet-stream"
 	}
 
 	disposition := "attachment"
-	if r.URL.Query().Get("download") != "1" && slices.Contains([]string{"image/jpeg", "image/png", "image/gif", "image/webp", "image/avif"}, contentType) {
+	if !forced && slices.Contains([]string{"image/jpeg", "image/png", "image/gif", "image/webp", "image/avif"}, contentType) {
 		disposition = "inline"
 	}
 
