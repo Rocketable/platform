@@ -23,10 +23,7 @@ func (s *SessionService) Changes(ctx context.Context, conversationID string) ite
 
 			return
 		}
-		defer func() {
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-			_ = conn.Close()
-		}()
+		defer func() { _ = conn.Raw(func(any) error { return driver.ErrBadConn }) }()
 
 		var channel string
 
