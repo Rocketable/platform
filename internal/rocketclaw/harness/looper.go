@@ -700,7 +700,9 @@ func (l *looper) runTurn(
 		recordSpanError(span, err)
 		span.span.SetAttributes(attribute.String("rocketcode.response_id", record.ResponseID))
 
-		if hasAssistantOutput(rendered) {
+		if slices.ContainsFunc(rendered, func(item ChatResponse) bool {
+			return item.Kind == ChatResponseAssistantMessage && strings.TrimSpace(item.Text) != ""
+		}) {
 			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue))
 		}
 

@@ -2,8 +2,6 @@ package harness
 
 import (
 	"context"
-	"slices"
-	"strings"
 
 	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
@@ -109,10 +107,4 @@ func (o ObservabilityConfig) startToolSpan(ctx context.Context, name, callID, pe
 	}
 
 	return o.startSpan(ctx, "rocketcode.tool."+name, semconv.SpanKindTool, attrs...)
-}
-
-func hasAssistantOutput(items []ChatResponse) bool {
-	return slices.ContainsFunc(items, func(item ChatResponse) bool {
-		return item.Kind == ChatResponseAssistantMessage && strings.TrimSpace(item.Text) != ""
-	})
 }
