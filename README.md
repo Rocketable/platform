@@ -52,7 +52,7 @@ Deleting the row (`DELETE FROM behavior_settings`) makes the next start import f
 
 A failed overlay download also stops RocketClaw from starting, with an error that names the overlay as written in the list and shows Git's message; that error does not start with `stored behavior settings:`. Check the network, the Git credentials, and the ref. Only when the overlay address itself is wrong does the fix belong in the stored settings, with the `psql` steps above.
 
-A workspace may contain `AGENTS.md` and `agents/`, `skills/`, `scripts/`, and `cron/` folders. RocketClaw ships four agents: `main`, a `sudo: yes`, `sticky: global` agent with one shared session; `assistant`, a `sudo: yes`, `sticky: off` agent for External MCP, which accepts only `sticky: off` agents; `slack`, the same assistant as a `sticky: slack` agent for Slack channels (see [Sticky agents](#sticky-agents)); and `voice`. At every start, RocketClaw copies each built-in agent file into the workspace's `agents/` folder only when that file is missing: your edits to them stay, and a deleted one comes back.
+A workspace may contain `agents/`, `skills/`, `scripts/`, and `cron/` folders. RocketClaw ships four agents: `main`, a `sudo: yes`, `sticky: global` agent with one shared session; `assistant`, a `sudo: yes`, `sticky: off` agent for External MCP, which accepts only `sticky: off` agents; `slack`, the same assistant as a `sticky: slack` agent for Slack channels (see [Sticky agents](#sticky-agents)); and `voice`. At every start, RocketClaw copies each built-in agent file into the workspace's `agents/` folder only when that file is missing: your edits to them stay, and a deleted one comes back.
 
 ### Overlays
 
@@ -269,13 +269,7 @@ On shutdown, tool calls already running finish and are saved, and background job
 
 Each agent file must set `model` to a real model name, such as `gpt-6.1-sol` or `work/gpt-6.1-sol` (see [Models and providers](#models-and-providers)).
 
-The root `AGENTS.md` goes into every agent's instructions. To leave it out for one agent, add this to that agent's frontmatter:
-
-```yaml
-permission:
-  rocketclaw:
-    load_agents_md: false
-```
+RocketClaw does not read the workspace's `AGENTS.md` by itself. To give an agent its contents, write ``!`cat AGENTS.md` `` in the agent's body.
 
 For the `bash` tool, RocketClaw checks every command in a script on its own, and each command must be allowed. When several rules match, the last one wins. Scripts it cannot parse are refused, even with `bash: allow`.
 
@@ -430,7 +424,7 @@ An agent file with `mode: easy` uses a shorter format. Leaving `mode` out, or `m
 - The approver works in the agent's `workingDirectory` and kind of shell, and has no `workingDirectory` of its own. Its `read`, `glob` and `grep` see that folder as the agent's do, not the workspace. It has only those three tools unless `approver` gives it more, with the keys the agent itself uses: `rocketclaw`, `tags`, `skills`, `mcp`, `allowedNetworkTargets`, `commands` and `secretsARN`. They are written and checked exactly as the agent's are, with three differences. A key left out of `approver` turns on nothing, where the same key left out of the agent turns on everything, except `mcp`, which stays off for both. Nothing reviews the approver: whatever its keys turn on runs at once. And `approver.rocketclaw` takes only `sessions`, `pages` and `tags`; `background` and `restart` fail to load. `tags` are set on the chat it is reviewing. Its `sessions` writes go out under the name `guardian`, so an agent whose `delegatedFrom` is a list must name `guardian` to accept them. `commands` gives it a shell with those commands, which get only the approver's own `secretsARN`, never the agent's. `allowedNetworkTargets` gives it `webfetch` and sets what that shell's `curl` reaches; left out, the shell reaches no network. It uses its tools only while it reviews: a review the decision model settles first never reaches them.
 - An `execute` script is reviewed once, whole, before it runs, and that approves every call it makes: its calls are not reviewed again. The approver sees the script's code but not the values it reads or fetches while it runs. A call the file does not turn on is still refused.
 - `model`, `space` and `workingDirectory` are required. A misspelled or unknown key fails to load, and so do the advanced keys `description`, `reasoningEffort`, `verbosity`, `permission`, `sudo`, `guardrail` and `additionalInstructions`.
-- The body is the agent's whole instructions. Easy agents never load `AGENTS.md` and get no reply-style line; write ``!`cat AGENTS.md` `` in the body to include it.
+- The body is the agent's whole instructions. Easy agents get no reply-style line.
 
 ```yaml
 ---

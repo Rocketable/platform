@@ -237,7 +237,6 @@ func TestEasyAgentPermissions(t *testing.T) {
 		{"mcp", "s.update_x", PermissionDeny},
 		{"mcp", "t.get_x", PermissionDeny},
 		{"rocketclaw", codeModeApproveSubject, PermissionAuto},
-		{"rocketclaw", "load_agents_md", PermissionDeny},
 		{"rocketclaw", "rocketclaw_sessions", PermissionAuto},
 		{"rocketclaw", "rocketclaw_kv_store", PermissionAuto},
 		{"rocketclaw", "rocketclaw_list", PermissionAuto},
@@ -271,7 +270,6 @@ func TestEasyAgentPermissions(t *testing.T) {
 	require.NotContains(t, permissionPrompt(agent.Permission), "Sudo Mode")
 
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": agent}})
-	factory.rootInstructions = "ROOT AGENTS.md RULES"
 	model, hosts := factory.assembleTools(&agent)
 
 	require.Subset(t, slices.Collect(maps.Keys(model)), []string{"skill", "task", executeToolName})

@@ -241,7 +241,7 @@ Account for these rocketcode runtime facts when designing agent instructions and
 - The shell tool statically denies common direct env-file and external-path attempts such as `cat .env`, `cat ../outside`, and `cd /tmp`, but this is only a preflight guardrail, not an OS-enforced shell sandbox for dynamically generated paths.
 - `task` subagents never get `ask_user_question`, whatever their permissions.
 - Each `task` subagent runs as a session of its own, hidden from the sidebar, with its own permissions and Background Jobs; its `rocketclaw_sessions_write` and session tags act for its top-level session, but replies to its writes come back to the subagent itself. When a reply or one of its own Background Jobs wakes a subagent after its `task` call returned, its new answer reaches its parent as a note.
-- Prompt shell expansion with ``!`command` `` works in agent bodies, routine instructions, the `SKILL.md` of loaded skills, and approver prompts. Lines inside `AGENTS.md` and in the arguments passed to a skill stay literal.
+- Prompt shell expansion with ``!`command` `` works in agent bodies, routine instructions, the `SKILL.md` of loaded skills, and approver prompts. RocketClaw does not read `AGENTS.md` by itself; write ``!`cat AGENTS.md` `` in the body to include it. A command's output and the arguments passed to a skill stay literal.
 - Prompt shell expansion runs from the workspace root and captures stdout only. The default runner uses `/bin/bash`, ignores `$SHELL`, and disables startup files and inherited shell functions/options. For an agent that sets `shell`, these lines run through that shell instead.
 
 ## Name and path handling
@@ -377,7 +377,7 @@ commands:
 
 With these, `pr view 12 --json title | jq -r .title` runs `gh pr view 12 --json title` on the host and filters it in the shell, and `restart api && pr comment 12 --body "api restarted"` runs the second call only when the first succeeds.
 
-The body is the agent's whole instructions: easy agents never load `AGENTS.md`, and their tools see only `workingDirectory`. ``!`…` `` lines in the body run in host bash from the workspace, so end the body with ``!`cat MEMORY.md` `` instead of the `MEMORY.md` instruction, and add ``!`cat AGENTS.md` `` when the human wants it included.
+The body is the agent's whole instructions, and easy agents' tools see only `workingDirectory`. ``!`…` `` lines in the body run in host bash from the workspace, so end the body with ``!`cat MEMORY.md` `` instead of the `MEMORY.md` instruction, and add ``!`cat AGENTS.md` `` when the human wants it included.
 
 ``!`…` `` lines also work in `approver.prompt` and `approver.decision.prompt`, for example to load rules from a file. They run in host bash from the workspace without the agent's secrets, run again on every review, so a slow one slows every review, and expand to empty text when they fail, which drops the rule without warning. Write such a prompt as a block scalar (`prompt: |`). YAML reads a value that starts with `!` as a tag: ``prompt: !`cat rules.md` `` fails to load, and `prompt: !foo bar` loads silently as `bar`.
 

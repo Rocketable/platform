@@ -200,11 +200,6 @@ websearch: allow
 		require.ErrorContains(t, err, want)
 	}
 
-	for _, value := range []string{`allow`, `deny`, `auto`, `"true"`, `null`, `1`, `[]`, `{}`} {
-		_, err := parsePermissionNode(parseYAMLNode(t, `rocketclaw: {load_agents_md: `+value+`}`), nil)
-		require.ErrorContains(t, err, "load_agents_md must be a boolean")
-	}
-
 	for _, value := range []string{`auto`, `auto(reviewer)`, `true`, `[]`} {
 		_, err := parsePermissionNode(parseYAMLNode(t, `rocketclaw: {allow_background: `+value+`}`), nil)
 		require.ErrorContains(t, err, "allow_background must be allow or deny")
@@ -254,10 +249,6 @@ func TestPermissionSetEvaluate(t *testing.T) {
 		matched                         bool
 	}{
 		{name: "default deny", yaml: `tools: {current_time: allow}`, permission: "tools", subject: "restart", action: PermissionDeny, matched: false},
-		{name: "root instructions default on", yaml: `{}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: false},
-		{name: "root instructions enabled", yaml: `rocketclaw: {load_agents_md: true}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: true},
-		{name: "root instructions disabled", yaml: `rocketclaw: {load_agents_md: false}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionDeny, matched: true},
-		{name: "root instructions last exact rule wins", yaml: `rocketclaw: {load_agents_md: false, load_agents_md: true}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: true},
 		{name: "background default off", yaml: `{}`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: false},
 		{name: "background enabled", yaml: `rocketclaw: {allow_background: allow}`, permission: "rocketclaw", subject: "allow_background", action: PermissionAllow, matched: true},
 		{name: "background disabled", yaml: `rocketclaw: {allow_background: deny}`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: true},
@@ -333,7 +324,6 @@ func TestPermissionSetEvaluate(t *testing.T) {
 			{"rocketclaw", "rocketclaw_restart", PermissionAuto},
 			{"rocketclaw", "allow_background", PermissionAuto},
 			{"rocketclaw", "code_mode_approve", PermissionAuto},
-			{"rocketclaw", "load_agents_md", PermissionAllow},
 			{"rocketclaw", "rocketclaw_reload", PermissionAllow},
 		} {
 			action, _ := sudo.Evaluate(tc.permission, tc.subject)

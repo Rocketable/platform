@@ -172,23 +172,13 @@ func (f *toolFactory) availableSubagentsDescription() string {
 }
 
 func (f *toolFactory) childSystemPrompt(agent *Agent) string {
-	rootInstructions := ""
-	if agent.Permission.evaluate("rocketclaw", "load_agents_md").Action == permissionAllow {
-		rootInstructions = f.rootInstructions
-	}
-
-	return strings.TrimSpace(strings.TrimSpace(rootInstructions+"\n\n"+f.workspaceInstructions) + "\n\n" + agent.Prompt)
+	return strings.TrimSpace(f.workspaceInstructions + "\n\n" + agent.Prompt)
 }
 
 func (f *toolFactory) sessionSystemPrompt(ctx context.Context, agent *Agent) string {
 	expandAgentPrompt(ctx, agent, f.expandPromptShellCommands.PrimaryPrompts, &f.promptExpansion)
 
-	rootInstructions := ""
-	if agent.Permission.evaluate("rocketclaw", "load_agents_md").Action == permissionAllow {
-		rootInstructions = f.rootInstructions
-	}
-
-	return strings.TrimSpace(agent.Prompt + "\n\n" + strings.TrimSpace(rootInstructions+"\n\n"+f.workspaceInstructions))
+	return strings.TrimSpace(agent.Prompt + "\n\n" + f.workspaceInstructions)
 }
 
 func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata toolCallMetadata) (string, error) {

@@ -220,7 +220,7 @@ func TestLoadRocketCodeDefinitionsEasy(t *testing.T) {
 func TestSessionTagsExistingPermissions(t *testing.T) {
 	t.Parallel()
 
-	for _, permission := range []string{"allow", "rocketclaw: {load_agents_md: false}", "rocketclaw: {rocketclaw_set_tag: deny, rocketclaw_get_tags: allow}", `rocketclaw:
+	for _, permission := range []string{"allow", "rocketclaw: {rocketclaw_set_tag: deny, rocketclaw_get_tags: allow}", `rocketclaw:
     rocketclaw_set_tag:
       - ["red", "yellow", "green"]
   webfetch: allow
@@ -256,12 +256,6 @@ func TestSessionTagsExistingPermissions(t *testing.T) {
 			if !strings.Contains(permission, "\n    rocketclaw_set_tag:") {
 				require.Empty(t, groups)
 				require.NotContains(t, agent.Prompt, setTagToolName)
-
-				if strings.Contains(permission, "load_agents_md") {
-					action, matched := agent.Permission.Evaluate("rocketclaw", "load_agents_md")
-					require.True(t, matched)
-					require.Equal(t, harness.PermissionDeny, action)
-				}
 
 				return
 			}
