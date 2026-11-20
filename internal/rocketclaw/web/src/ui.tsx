@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCError } from "./api";
 import { draftContent } from "./drafts";
-import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
+import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceInputsPending, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
 import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
@@ -6232,12 +6232,13 @@ function VoiceToggle({ sessionId, agent, sending, call }: { sessionId: string; a
   const choices = useQuery(queries.agents({ conversationId: sessionId }));
   const identity = useQuery(queries.identity());
   const settings = useQuery({ ...queries.voiceSettings(identity.data?.username ?? ""), enabled: identity.isSuccess });
+  const loadingVoice = voiceInputsPending(choices.status, identity.status, settings.status);
   const speaker = voiceChoice(choices.data?.agents.find((item) => item.name === (sessionId ? choices.data?.currentAgent : agent)), settings.data?.voice);
   // The session pane stays mounted on page routes, so leaving the session ends its call as unmounting does.
   useEffect(() => () => { if (voiceView().conversationId === sessionId) stopVoice(); }, [route.id, sessionId]);
   return <>
     <span aria-live="polite" title={notice} className="hidden max-w-48 truncate text-xs text-muted-foreground empty:absolute sm:inline">{notice}</span>
-    <Tooltip><TooltipTrigger render={<Button type="button" variant={calling ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-7" disabled={!calling && sending} />} aria-label="Voice call" aria-pressed={calling} onMouseDown={(event) => event.preventDefault()} onClick={() => void (calling ? stopVoice() : call(speaker))}>
+    <Tooltip><TooltipTrigger render={<Button type="button" variant={calling ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-7" disabled={!calling && (sending || loadingVoice)} />} aria-label="Voice call" aria-pressed={calling} onMouseDown={(event) => event.preventDefault()} onClick={() => void (calling ? stopVoice() : call(speaker))}>
       {state === "connecting" ? <LoaderCircle className="animate-spin" /> : calling ? <MicOff /> : <Mic />}
     </TooltipTrigger><TooltipContent>{calling ? `End voice call (${state})` : "Start voice call"}</TooltipContent></Tooltip>
   </>;

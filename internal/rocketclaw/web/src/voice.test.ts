@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, expect, jest, spyOn, test } from "bun:test";
-import { holdWakeLock, startVoice, stopVoice, subscribeVoice, voiceChoice, voiceLevel, voiceView } from "./voice";
+import { holdWakeLock, startVoice, stopVoice, subscribeVoice, voiceChoice, voiceInputsPending, voiceLevel, voiceView } from "./voice";
 
 // Minimal stand-ins for the browser media, WebRTC and page APIs a call touches.
 class FakeChannel {
@@ -415,4 +415,14 @@ test("a person's voice applies while the default provider offers it, else its de
   expect(voiceChoice(openai, "juniper")).toBe("juniper");
   expect(voiceChoice(keyed, "juniper")).toBe("marin");
   expect(voiceChoice(keyed, "cedar")).toBe("cedar");
+});
+
+test("a fresh composer call waits for initial voice inputs but can use defaults after a read fails", () => {
+  expect(voiceInputsPending("pending", "success", "success")).toBe(true);
+  expect(voiceInputsPending("success", "pending", "pending")).toBe(true);
+  expect(voiceInputsPending("success", "success", "pending")).toBe(true);
+  expect(voiceInputsPending("success", "success", "success")).toBe(false);
+  expect(voiceInputsPending("error", "success", "success")).toBe(false);
+  expect(voiceInputsPending("success", "error", "pending")).toBe(false);
+  expect(voiceInputsPending("success", "success", "error")).toBe(false);
 });
