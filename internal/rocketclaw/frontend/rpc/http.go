@@ -371,11 +371,8 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 			return
 		}
 
-		var errMarshal error
-
-		body, errMarshal = encoding.MarshalAppend(append(body[:0], "data: "...), response)
-		if errMarshal != nil {
-			err = errMarshal
+		body, err = encoding.MarshalAppend(append(body[:0], "data: "...), response)
+		if err != nil {
 			continue
 		}
 
