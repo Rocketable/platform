@@ -47,7 +47,6 @@ type lockedRun struct {
 	sandboxes sandboxPreparer
 	cfg       *config.Config
 	db        *sql.DB
-	sessions  *SessionService
 }
 
 type runShutdown struct {
@@ -157,20 +156,20 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 
 	stateLogger.Info("starting rocketclaw state store", "workspace", s.cfg.Workspace, "runtime_dir", s.cfg.RuntimeDirName())
 
-	s.sessions, err = newSessionService(runCtx, s.cfg, s.db, stateLogger)
+	sessions, err := newSessionService(runCtx, s.cfg, s.db, stateLogger)
 	if err != nil {
 		return fmt.Errorf("start rocketcode session service: %w", err)
 	}
 
 	stateLogger.Info("started rocketclaw state store", "elapsed", time.Since(startedAt))
 
-	return s.serve(runCtx)
+	return s.serve(runCtx, sessions)
 }
 
-func (s *lockedRun) serve(runCtx context.Context) error {
+func (s *lockedRun) serve(runCtx context.Context, rocketcodeSessions *SessionService) error {
 	s.detach()
 
-	cfg, logger, rocketcodeSessions := s.sessions.definitions.Clone(), s.logger, s.sessions
+	cfg, logger := rocketcodeSessions.definitions.Clone(), s.logger
 	rt := new(Runtime)
 	workCtx, cancelWork := context.WithCancelCause(runCtx)
 
@@ -192,7 +191,7 @@ func (s *lockedRun) serve(runCtx context.Context) error {
 		return err
 	}
 
-	slackWarnings, err := s.startWithBehavior(runCtx, cfg)
+	slackWarnings, err := s.startWithBehavior(runCtx, cfg, rocketcodeSessions)
 	if err != nil {
 		return err
 	}
@@ -390,19 +389,19 @@ func (f conversationFactory) newBridge(cfg *Config) directBridge {
 	return bridge
 }
 
-func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config) ([]slackAgentWarning, error) {
-	stored, found, err := s.sessions.behaviorSettings(ctx)
+func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config, sessions *SessionService) ([]slackAgentWarning, error) {
+	stored, found, err := sessions.behaviorSettings(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	if !found {
-		warnings, err := s.startWith(cfg)
+		warnings, err := s.startWith(cfg, sessions)
 		if err != nil {
 			return nil, err
 		}
 
-		return warnings, putBehaviorSettings(ctx, s.sessions.db, new(cfg.Behavior()))
+		return warnings, putBehaviorSettings(ctx, sessions.db, new(cfg.Behavior()))
 	}
 
 	if ignored := setBehaviorFields(new(cfg.Behavior())); len(ignored) > 0 {
@@ -411,7 +410,7 @@ func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config) (
 
 	cfg.SetBehavior(&stored)
 
-	warnings, err := s.startWith(cfg)
+	warnings, err := s.startWith(cfg, sessions)
 	if err != nil {
 		return nil, fmt.Errorf("stored behavior settings: %w", err)
 	}
@@ -419,19 +418,19 @@ func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config) (
 	return warnings, nil
 }
 
-func (s *lockedRun) startWith(cfg *config.Config) ([]slackAgentWarning, error) {
+func (s *lockedRun) startWith(cfg *config.Config, sessions *SessionService) ([]slackAgentWarning, error) {
 	if err := cfg.ValidateBehavior(); err != nil {
 		return nil, fmt.Errorf("validate behavior settings: %w", err)
 	}
 
-	s.sessions.definitions.Store(cfg)
+	sessions.definitions.Store(cfg)
 	SetLogLevel(s.logLevel, cfg.Logging.Level)
 
 	if err := skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, s.logger); err != nil {
 		return nil, fmt.Errorf("sync rocketclaw skeleton: %w", err)
 	}
 
-	warnings, err := validateRuntimeAssets(s.sessions.definitions, cfg.RuntimeDirName(), s.logger)
+	warnings, err := validateRuntimeAssets(sessions.definitions, cfg.RuntimeDirName(), s.logger)
 	if err != nil {
 		return nil, err
 	}
