@@ -1050,6 +1050,7 @@ function leave(state: TabState, doomed: string, spaces: Space[]): TabState {
 }
 
 const relocate = ({ preview: _preview, unplaced: _unplaced, ...tab }: Tab, space: string): Tab => ({ ...tab, space });
+const pageAgent = (path: string) => path.startsWith("/pages/") ? decodeURIComponent(path.split("/")[3] ?? "") : "";
 
 // The server's saved tabs; tabs left in a lost space or group belong to the first space and no group, and a lost group's
 // placeholder goes. A group saved before every group held one gets its placeholder after its last tab.
@@ -1266,6 +1267,17 @@ function useTabs() {
     queue.next = state;
     if (!queue.saving) flush();
   }, [state]);
+  const movePages = (paths: string[], { id: space, name: named }: Space) => {
+    for (const agent of new Set(paths.map(pageAgent).filter(Boolean))) void mutations.updateSession({ id: agent, spaceId: space, server: name }).then(() => {
+      const rename = (from: string) => pageAgent(from) === agent ? ["", "pages", encodeURIComponent(named), ...from.split("/").slice(3)].join("/") : from;
+      void queryClient.invalidateQueries({ queryKey: queries.pages().queryKey });
+      setState((current) => {
+        const tabs = current.tabs.map((tab) => pageAgent(tab.path) === agent ? { ...relocate(tab, space), path: rename(tab.path), group: tab.space === space ? tab.group : undefined } : tab);
+        return settled({ ...current, active: rename(current.active), tabs: tabs.filter((tab, i) => tabs.findIndex((other) => other.path === tab.path) === i) });
+      });
+      if (viewed && rename(pagePath()) !== pagePath()) navigate(rename(pagePath()), true);
+    }, () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }));
+  };
   const moveTo = (paths: Set<string>, space: string) => setState((current) => settled({ ...current, tabs: current.tabs.map((tab) => paths.has(tab.path) ? { ...relocate(tab, space), group: undefined } : tab) }));
   // An unplaced session moves to the space it was born in once its row names it; an unknown new space is fetched first.
   // A background window holds stale tabs, so it waits until it is focused and has reloaded.
@@ -1455,7 +1467,10 @@ function useTabs() {
         link, ...share, ...copy, ...attention, ...grouping,
         // A session moved to another space can go back to the space it was born in.
         ...birth && birth.id !== tab?.space ? [{ key: "restore", label: `Restore to "${birth.name}"`, run: () => moveTo(paths, birth.id) }] : [],
-        ...state.spaces.filter((item) => item.id !== space).map((item) => ({ key: `space-${item.id}`, label: `Move to "${item.name}"`, sub: { menu: "Move to space", label: item.name }, run: () => moveTo(paths, item.id) })),
+        ...state.spaces.filter((item) => item.id !== space).map((item) => ({ key: `space-${item.id}`, label: `Move to "${item.name}"`, sub: { menu: "Move to space", label: item.name }, run: () => {
+          moveTo(paths, item.id);
+          movePages([...paths], item);
+        } })),
       ];
     },
     newInGroup,
@@ -1470,7 +1485,10 @@ function useTabs() {
           close(members);
           update((tabs) => tabs.filter((tab) => tab.path !== keeper(id)));
         } },
-        ...state.spaces.filter((item) => item.id !== space).map((item) => ({ key: `space-${item.id}`, label: `Move group to "${item.name}"`, run: () => setState(settled({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? relocate(tab, item.id) : tab) })) })),
+        ...state.spaces.filter((item) => item.id !== space).map((item) => ({ key: `space-${item.id}`, label: `Move group to "${item.name}"`, run: () => {
+          setState(settled({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? relocate(tab, item.id) : tab) }));
+          movePages(state.tabs.flatMap((tab) => tab.group === id ? [tab.path] : []), item);
+        } })),
       ];
     },
   };

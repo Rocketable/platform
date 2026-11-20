@@ -984,6 +984,7 @@ message UpdateSessionRequest {
   optional string tag = 6;
   // Pauses or resumes the agent of a Web chat.
   optional bool paused = 7;
+  optional string space_id = 8;
 }
 
 message UpdateSessionResponse {}

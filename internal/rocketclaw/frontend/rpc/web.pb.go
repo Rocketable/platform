@@ -7881,7 +7881,8 @@ type UpdateSessionRequest struct {
 	// Toggles a tag a person chose: any tag on a remote OpenCode session, or one its agent allows.
 	Tag *string `protobuf:"bytes,6,opt,name=tag,proto3,oneof" json:"tag,omitempty"`
 	// Pauses or resumes the agent of a Web chat.
-	Paused        *bool `protobuf:"varint,7,opt,name=paused,proto3,oneof" json:"paused,omitempty"`
+	Paused        *bool   `protobuf:"varint,7,opt,name=paused,proto3,oneof" json:"paused,omitempty"`
+	SpaceId       *string `protobuf:"bytes,8,opt,name=space_id,json=spaceId,proto3,oneof" json:"space_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7942,6 +7943,13 @@ func (x *UpdateSessionRequest) GetPaused() bool {
 		return *x.Paused
 	}
 	return false
+}
+
+func (x *UpdateSessionRequest) GetSpaceId() string {
+	if x != nil && x.SpaceId != nil {
+		return *x.SpaceId
+	}
+	return ""
 }
 
 type UpdateSessionResponse struct {
@@ -11030,15 +11038,17 @@ const file_web_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vproposal_id\x18\x02 \x01(\tR\n" +
 	"proposalId\x12\x16\n" +
-	"\x06accept\x18\x03 \x01(\bR\x06accept\"\xa9\x01\n" +
+	"\x06accept\x18\x03 \x01(\bR\x06accept\"\xd6\x01\n" +
 	"\x14UpdateSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\x04name\x18\x03 \x01(\tH\x00R\x04name\x88\x01\x01\x12\x15\n" +
 	"\x03tag\x18\x06 \x01(\tH\x01R\x03tag\x88\x01\x01\x12\x1b\n" +
-	"\x06paused\x18\a \x01(\bH\x02R\x06paused\x88\x01\x01B\a\n" +
+	"\x06paused\x18\a \x01(\bH\x02R\x06paused\x88\x01\x01\x12\x1e\n" +
+	"\bspace_id\x18\b \x01(\tH\x03R\aspaceId\x88\x01\x01B\a\n" +
 	"\x05_nameB\x06\n" +
 	"\x04_tagB\t\n" +
-	"\a_pausedJ\x04\b\x02\x10\x03J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\x06pinned\"\x17\n" +
+	"\a_pausedB\v\n" +
+	"\t_space_idJ\x04\b\x02\x10\x03J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\x06pinned\"\x17\n" +
 	"\x15UpdateSessionResponse\"\x11\n" +
 	"\x0fProtocolRequest\"5\n" +
 	"\x10ProtocolResponse\x12!\n" +

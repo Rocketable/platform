@@ -9,9 +9,9 @@ const pages = [{ agent: "main", path: "index.html" }, { agent: "ops-bot", space:
 // The page keeps every message it receives, and its fragment token, for the test to read.
 const script = `<script>window.replies = []; addEventListener("message", (event) => replies.push(event.data)); window.token = new URLSearchParams(location.hash.slice(1)).get("rc");</script>`;
 
-async function withPage(spaces: string[], run: (page: any, origin: string, reads: object[]) => Promise<void>, options = {}) {
+async function withPage(spaces: string[], run: (page: any, origin: string, reads: object[], moves: object[]) => Promise<void>, options = {}) {
   const { chromium: engine } = await import(playwright!);
-  const reads: object[] = [];
+  const reads: object[] = [], moves: object[] = [];
   // The shared spaces, and the tab state the page saves.
   const saved = { spaces: spaces.map((name, index) => ({ id: `s${index}`, name })), state: { tabs: [], groups: [], space: "s0", last: {} } };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
@@ -29,6 +29,7 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
       case "/api/ListConfig": return Response.json({ config: { workspace: "pages" } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListPages": return Response.json({ pages });
+      case "/api/UpdateSession": moves.push(input); return Response.json({});
       case "/api/Tabs": if (input.state) saved.state = input.state; return Response.json(saved);
       case "/api/GetPage":
         reads.push(input);
@@ -44,7 +45,7 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
     const origin = `http://127.0.0.1:${server.port}`;
     await page.goto(`${origin}/`);
     await page.getByPlaceholder("Message a new session").waitFor();
-    await run(page, origin, reads);
+    await run(page, origin, reads, moves);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
@@ -107,6 +108,21 @@ test("a page's shared link and its Page Index link share one tab, and a - link o
   await page.waitForURL(`${origin}/pages/Space%202/main/index.html`);
   expect(await space(page)).toBe("Space 2");
   expect(await names(page)).toEqual(["main · index.html"]);
+}), 60_000);
+
+test("moving a page's tab moves its session's pages to the space, and its tabs there", () => withPage(["Main", "billing"], async (page, origin, _reads, moves) => {
+  await page.goto(`${origin}/pages/Billing/reporter/q3/report.html`);
+  await page.locator('button[aria-current="true"][aria-label="billing"]').waitFor();
+  await go(page, "/pages/Billing/reporter/index.html");
+  await page.waitForURL(`${origin}/pages/billing/reporter/index.html`);
+
+  await strip(page).getByRole("tab", { name: "reporter · index.html", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Move to space", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Main", exact: true }).click();
+  await page.waitForURL(`${origin}/pages/Main/reporter/index.html`);
+  expect(moves).toEqual([{ id: "reporter", spaceId: "s0" }]);
+  expect(await space(page)).toBe("Main");
+  expect((await names(page)).filter((name: string) => name.startsWith("reporter")).toSorted()).toEqual(["reporter · index.html", "reporter · q3/report.html"]);
 }), 60_000);
 
 test("a sandboxed page reads its agent's Page Data only with its token and from its own frame", () => withPage(["Main"], async (page, origin, reads) => {
