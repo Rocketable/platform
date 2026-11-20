@@ -33,6 +33,9 @@ func runServe(args []string) error {
 	}
 
 	selected, cfg, err := loadRuntimeConfig(*secretsARN, *usersARN)
+	if err == nil {
+		err = cfg.Validate()
+	}
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}

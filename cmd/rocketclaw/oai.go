@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	"golang.org/x/sys/unix"
 )
@@ -20,14 +21,20 @@ import (
 const oaiHelpText = `rocketclaw oai
 
 Usage:
-  rocketclaw oai login [provider] [--headless]
-  rocketclaw oai list
-  rocketclaw oai logout [provider]
+  rocketclaw oai login [provider] [--headless] [--aws-secrets-manager-arn ARN]
+  rocketclaw oai list [--aws-secrets-manager-arn ARN]
+  rocketclaw oai logout [provider] [--aws-secrets-manager-arn ARN]
 
 Commands:
-  login   Authenticate a provider with ChatGPT for model requests.
+  login   Authenticate a provider with ChatGPT for model requests, and set its
+          auth to chatgpt in the config file unless the secret already does.
   list    List provider auth modes and local credential presence.
   logout  Remove one provider's local ChatGPT OAuth token.
+
+Options:
+  --aws-secrets-manager-arn
+          Merge this JSON secret over rocketclaw.json, as rocketclaw run does.
+          login refuses a provider whose auth the secret sets to anything but chatgpt.
 `
 
 func runOAI(args []string) error {
@@ -60,8 +67,21 @@ func runOAILogin(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}
-	if _, ok := cfg.Provider(provider); !ok {
+	current, ok := cfg.Provider(provider)
+	if !ok {
 		return fmt.Errorf("unknown provider %q", provider)
+	}
+	var secret config.Config
+	if secretsARN != "" {
+		body, err := secretFetcher.SecretString(context.Background(), secretsARN)
+		if err != nil {
+			return fmt.Errorf("load secret: %w", err)
+		}
+		_ = json.Unmarshal([]byte(body), &secret)
+	}
+	fromSecret, createSection := secret.Provider(provider)
+	if fromSecret.Auth != "" && fromSecret.AuthMode() != "chatgpt" {
+		return fmt.Errorf(`the AWS secret sets provider %q auth to %q, which overrides the config file; set it to "chatgpt" in the secret`, provider, fromSecret.AuthMode())
 	}
 
 	acquire := oai.AcquireBrowserToken
@@ -72,12 +92,16 @@ func runOAILogin(args []string) error {
 	if err != nil {
 		return fmt.Errorf("login with ChatGPT OAuth: %w", err)
 	}
-	previous, path, err := saveOAILogin(selected.Path, cfg.Workspace, cfg.RuntimeDirName(), provider, token)
+	if fromSecret.Auth != "" {
+		err = oai.SaveTokenIn(cfg.Workspace, cfg.RuntimeDirName(), provider, token)
+	} else {
+		err = saveOAILogin(selected.Path, cfg.Workspace, cfg.RuntimeDirName(), provider, createSection, token)
+	}
 	if err != nil {
 		return err
 	}
-	result := fmt.Sprintf("Saved %s ChatGPT OAuth token to %s\n", provider, path)
-	if previous != "chatgpt" {
+	result := fmt.Sprintf("Saved %s ChatGPT OAuth token to %s\n", provider, filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "auth.json"))
+	if current.AuthMode() != "chatgpt" {
 		result += fmt.Sprintf("Restart RocketClaw to use ChatGPT OAuth for %s.\n", provider)
 	}
 	return printStdout(result, "oai login result")
@@ -140,7 +164,7 @@ func runOAIList(args []string) error {
 		marker := map[string]string{"openai": " (default)"}[name]
 		credentials := map[bool]string{false: "missing", true: "present"}[present]
 		provider, _ := cfg.Provider(name)
-		fmt.Fprintf(&output, "%s%s\t%s\t%s\n", name, marker, provider.Auth, credentials)
+		fmt.Fprintf(&output, "%s%s\t%s\t%s\n", name, marker, provider.AuthMode(), credentials)
 	}
 	return printStdout(output.String(), "oai list")
 }
@@ -170,76 +194,81 @@ func runOAILogout(args []string) error {
 	return printStdout(fmt.Sprintf("Removed local ChatGPT OAuth token for %s; no remote token was revoked.\n", provider), "oai logout result")
 }
 
-func saveOAILogin(configPath, workspace, runtimeDir, provider string, token oai.Token) (string, string, error) {
+func saveOAILogin(configPath, workspace, runtimeDir, provider string, createSection bool, token oai.Token) error {
 	lock, err := os.OpenFile(configPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return "", "", fmt.Errorf("open config lock: %w", err)
+		return fmt.Errorf("open config lock: %w", err)
 	}
 	defer func() { _ = lock.Close() }()
 	if err := lock.Chmod(0o600); err != nil {
-		return "", "", fmt.Errorf("chmod config lock: %w", err)
+		return fmt.Errorf("chmod config lock: %w", err)
 	}
 	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
-		return "", "", fmt.Errorf("lock config: %w", err)
+		return fmt.Errorf("lock config: %w", err)
 	}
 
-	original, err := os.ReadFile(configPath)
-	if err != nil {
-		return "", "", fmt.Errorf("read config: %w", err)
-	}
+	mode, original := os.FileMode(0o600), []byte(nil)
 	info, err := os.Stat(configPath)
-	if err != nil {
-		return "", "", fmt.Errorf("stat config: %w", err)
+	if err == nil {
+		mode = info.Mode()
+		original, err = os.ReadFile(configPath)
 	}
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(original, &root); err != nil {
-		return "", "", fmt.Errorf("parse config JSON: %w", err)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read config: %w", err)
+	}
+	root := map[string]json.RawMessage{}
+	if original != nil {
+		if err := json.Unmarshal(original, &root); err != nil || root == nil {
+			return fmt.Errorf("parse config JSON: %w", cmp.Or(err, errors.New("must be an object")))
+		}
 	}
 	container, key := root, "openai"
 	if provider != "openai" {
-		container, key = nil, provider
-		if err := json.Unmarshal(root["providers"], &container); err != nil || container == nil {
-			return "", "", fmt.Errorf("parse providers object for provider %q", provider)
+		container, key = map[string]json.RawMessage{}, provider
+		if raw, ok := root["providers"]; ok {
+			if err := json.Unmarshal(raw, &container); err != nil || container == nil {
+				return fmt.Errorf("parse providers object for provider %q", provider)
+			}
 		}
 	}
-	section, ok := container[key]
-	if !ok {
-		return "", "", fmt.Errorf("provider %q is no longer configured", provider)
+	target := map[string]json.RawMessage{}
+	if section, ok := container[key]; ok {
+		if err := json.Unmarshal(section, &target); err != nil || target == nil {
+			return fmt.Errorf("parse provider %q object", provider)
+		}
+	} else if !createSection {
+		return fmt.Errorf("provider %q is no longer configured", provider)
 	}
-	var target map[string]json.RawMessage
-	if err := json.Unmarshal(section, &target); err != nil || target == nil {
-		return "", "", fmt.Errorf("parse provider %q object", provider)
-	}
-	var auth, legacyAuth string
-	_ = json.Unmarshal(target["auth"], &auth)
-	_ = json.Unmarshal(target["rocketcode_auth"], &legacyAuth)
-	previous := cmp.Or(auth, legacyAuth)
 	target["auth"] = json.RawMessage(`"chatgpt"`)
 	delete(target, "rocketcode_auth")
-	section, _ = json.Marshal(target)
-	container[key] = section
+	container[key], _ = json.Marshal(target)
 	if provider != "openai" {
 		root["providers"], _ = json.Marshal(container)
 	}
 	updated, _ := json.MarshalIndent(root, "", "  ")
-	committed, errConfig := replaceConfig(configPath, append(updated, '\n'), info.Mode())
+	committed, errConfig := replaceConfig(configPath, append(updated, '\n'), mode)
 	if errConfig != nil {
 		errConfig = fmt.Errorf("commit config: %w", errConfig)
 	}
 	if !committed {
-		return "", "", errConfig
+		return errConfig
 	}
 	errToken := oai.SaveTokenIn(workspace, runtimeDir, provider, token)
 	if errToken != nil {
 		if stored, _ := oai.LoadTokenIn(workspace, runtimeDir, provider); stored != token {
-			_, errRestore := replaceConfig(configPath, original, info.Mode())
+			var errRestore error
+			if original == nil {
+				errRestore = os.Remove(configPath)
+			} else {
+				_, errRestore = replaceConfig(configPath, original, mode)
+			}
 			if errRestore != nil {
 				errRestore = fmt.Errorf("restore config: %w", errRestore)
 			}
-			return "", "", errors.Join(errConfig, errToken, errRestore)
+			return errors.Join(errConfig, errToken, errRestore)
 		}
 	}
-	return previous, filepath.Join(workspace, runtimeDir, "auth.json"), errors.Join(errConfig, errToken)
+	return errors.Join(errConfig, errToken)
 }
 
 func replaceConfig(path string, data []byte, mode os.FileMode) (bool, error) {

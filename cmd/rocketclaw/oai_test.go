@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -90,17 +91,115 @@ func TestRunOAILoginDefaultsProviderToOpenAI(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestRunOAILoginRejectsUnknownProviderBeforeOAuth(t *testing.T) {
-	prepareOAIConfig(t)
-	base := http.DefaultClient.Transport
-	http.DefaultClient.Transport = oaiLoginRoundTrip(func(*http.Request) (*http.Response, error) {
-		t.Fatal("OAuth must not start for an unknown provider")
-		return nil, nil
-	})
-	t.Cleanup(func() { http.DefaultClient.Transport = base })
+func TestRunOAILoginRejectsBeforeOAuth(t *testing.T) {
+	for _, tt := range []struct {
+		name, secret, provider, want string
+	}{
+		{name: "unknown provider", provider: "missing", want: `unknown provider "missing"`},
+		{name: "unknown provider with secret", secret: `{"providers":{"other":{"api_key":"k"}}}`, provider: "missing", want: `unknown provider "missing"`},
+		{name: "secret sets default api key", secret: `{"openai":{"auth":"api_key"}}`, provider: "openai", want: `the AWS secret sets provider "openai" auth to "api_key", which overrides the config file; set it to "chatgpt" in the secret`},
+		{name: "secret sets named api key", secret: `{"providers":{"work":{"auth":" api_key "}}}`, provider: "work", want: `the AWS secret sets provider "work" auth to "api_key", which overrides the config file; set it to "chatgpt" in the secret`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := prepareOAIConfig(t)
+			original, err := os.ReadFile(defaultConfigPath)
+			require.NoError(t, err)
+			args := []string{tt.provider, "--headless"}
+			if tt.secret != "" {
+				useTestSecrets(t, testSecrets{testSecretsARN: tt.secret})
+				args = append(args, "--aws-secrets-manager-arn", testSecretsARN)
+			}
+			requests := 0
+			base := http.DefaultClient.Transport
+			http.DefaultClient.Transport = oaiLoginRoundTrip(func(*http.Request) (*http.Response, error) {
+				requests++
+				return nil, errors.New("OAuth must not start")
+			})
+			t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	err := runOAILogin([]string{"missing", "--headless"})
-	require.EqualError(t, err, `unknown provider "missing"`)
+			require.EqualError(t, runOAILogin(args), tt.want)
+			assert.Zero(t, requests)
+			data, err := os.ReadFile(defaultConfigPath)
+			require.NoError(t, err)
+			assert.Equal(t, original, data)
+			_, err = oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, tt.provider)
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
+}
+
+func TestRunOAILoginSetsUpChatGPT(t *testing.T) {
+	for _, tt := range []struct {
+		name, file, secret, provider, want string
+	}{
+		{name: "fresh config", file: `{"openai": {}}`, provider: "openai", want: `{"openai":{"auth":"chatgpt"}}`},
+		{name: "secret without config file", secret: `{"openai":{"api_key":"k"}}`, provider: "openai", want: `{"openai":{"auth":"chatgpt"}}`},
+		{name: "secret named provider without config file", secret: `{"providers":{"work":{"api_key":"k"}}}`, provider: "work", want: `{"providers":{"work":{"auth":"chatgpt"}}}`},
+		{
+			name:     "secret named provider missing from config file",
+			file:     `{"future":true,"providers":{"alpha":{"api_key":"a"}}}`,
+			secret:   `{"providers":{"work":{"rocketcode_auth":"api_key","api_key":"k"}}}`,
+			provider: "work",
+			want:     `{"future":true,"providers":{"alpha":{"api_key":"a"},"work":{"auth":"chatgpt"}}}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			t.Chdir(workspace)
+			if tt.file != "" {
+				require.NoError(t, os.WriteFile(defaultConfigPath, []byte(tt.file), 0o600))
+			}
+			args := []string{tt.provider, "--headless"}
+			if tt.secret != "" {
+				useTestSecrets(t, testSecrets{testSecretsARN: tt.secret})
+				args = append(args, "--aws-secrets-manager-arn", testSecretsARN)
+			}
+			mockDeviceLogin(t, "refresh")
+
+			synctest.Test(t, func(t *testing.T) {
+				output := captureStdout(t, func() error { return runOAILogin(args) })
+				assert.Contains(t, output, "Restart RocketClaw to use ChatGPT OAuth for "+tt.provider)
+			})
+
+			data, err := os.ReadFile(defaultConfigPath)
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.want, string(data))
+			info, err := os.Stat(defaultConfigPath)
+			require.NoError(t, err)
+			assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+			token, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, tt.provider)
+			require.NoError(t, err)
+			assert.Equal(t, "refresh", token.Refresh)
+		})
+	}
+}
+
+func TestRunOAILoginLeavesConfigAloneWhenSecretUsesChatGPT(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	useTestSecrets(t, testSecrets{testSecretsARN: `{"providers":{"work":{"auth":"chatgpt"}}}`})
+	mockDeviceLogin(t, "refresh")
+
+	synctest.Test(t, func(t *testing.T) {
+		output := captureStdout(t, func() error {
+			return runOAILogin([]string{"work", "--headless", "--aws-secrets-manager-arn", testSecretsARN})
+		})
+		assert.NotContains(t, output, "Restart RocketClaw")
+	})
+
+	_, err := os.Stat(defaultConfigPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	token, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, "work")
+	require.NoError(t, err)
+	assert.Equal(t, "refresh", token.Refresh)
+}
+
+func TestRunOAIListIgnoresServerOnlySettings(t *testing.T) {
+	t.Chdir(t.TempDir())
+	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{"openai": {}, "providers": {"work": {"rocketcode_auth": "chatgpt"}}}`), 0o600))
+
+	output := captureStdout(t, func() error { return runOAI([]string{"list"}) })
+	assert.Equal(t, "openai (default)\tapi_key\tmissing\nwork\tchatgpt\tmissing\n", output)
 }
 
 func TestRunOAILoginUpdatesOnlySelectedProvider(t *testing.T) {
@@ -143,7 +242,7 @@ func TestSaveOAILoginRejectsConfigChangedDuringOAuth(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			require.NoError(t, os.WriteFile(defaultConfigPath, []byte(tt.data), 0o640))
-			_, _, err := saveOAILogin(defaultConfigPath, workspace, config.DefaultRuntimeDir, "work", oai.Token{Refresh: "refresh"})
+			err := saveOAILogin(defaultConfigPath, workspace, config.DefaultRuntimeDir, "work", false, oai.Token{Refresh: "refresh"})
 			require.ErrorContains(t, err, tt.want)
 			data, err := os.ReadFile(defaultConfigPath)
 			require.NoError(t, err)
@@ -152,21 +251,11 @@ func TestSaveOAILoginRejectsConfigChangedDuringOAuth(t *testing.T) {
 	}
 }
 
-func TestSaveOAILoginReportsMissingConfigPaths(t *testing.T) {
-	for _, tt := range []struct {
-		path string
-		want string
-	}{
-		{path: "missing/config.json", want: "open config lock"},
-		{path: "config.json", want: "read config"},
-	} {
-		t.Run(tt.want, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), tt.path)
-			_, _, err := saveOAILogin(path, t.TempDir(), config.DefaultRuntimeDir, "work", oai.Token{Refresh: "refresh"})
-			require.ErrorContains(t, err, tt.want)
-			require.ErrorIs(t, err, os.ErrNotExist)
-		})
-	}
+func TestSaveOAILoginReportsMissingConfigFolder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "config.json")
+	err := saveOAILogin(path, t.TempDir(), config.DefaultRuntimeDir, "work", true, oai.Token{Refresh: "refresh"})
+	require.ErrorContains(t, err, "open config lock")
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestSaveOAILoginLeavesConfigAndCredentialsUnchangedWhenConfigCommitFails(t *testing.T) {
@@ -177,7 +266,7 @@ func TestSaveOAILoginLeavesConfigAndCredentialsUnchangedWhenConfigCommitFails(t 
 	require.NoError(t, os.Chmod(".", 0o500))
 	t.Cleanup(func() { require.NoError(t, os.Chmod(".", 0o700)) })
 
-	_, _, err = saveOAILogin(defaultConfigPath, workspace, config.DefaultRuntimeDir, "work", oai.Token{Refresh: "refresh"})
+	err = saveOAILogin(defaultConfigPath, workspace, config.DefaultRuntimeDir, "work", false, oai.Token{Refresh: "refresh"})
 	require.ErrorContains(t, err, "commit config")
 	require.ErrorIs(t, err, os.ErrPermission)
 	data, err := os.ReadFile(defaultConfigPath)
@@ -191,7 +280,7 @@ func TestSaveOAILoginPreservesFullFileMode(t *testing.T) {
 	workspace := prepareOAIConfig(t)
 	wantMode := os.FileMode(0o640) | os.ModeSetgid
 	require.NoError(t, os.Chmod(defaultConfigPath, wantMode))
-	_, _, err := saveOAILogin(defaultConfigPath, workspace, config.DefaultRuntimeDir, "work", oai.Token{Refresh: "refresh"})
+	err := saveOAILogin(defaultConfigPath, workspace, config.DefaultRuntimeDir, "work", false, oai.Token{Refresh: "refresh"})
 	require.NoError(t, err)
 	info, err := os.Stat(defaultConfigPath)
 	require.NoError(t, err)
@@ -223,7 +312,7 @@ func TestSaveOAILoginDoesNotRollbackCommittedToken(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(authPath+".lock"))
 	require.NoError(t, os.Mkdir(authPath+".lock", 0o700))
-	_, _, err = saveOAILogin(defaultConfigPath, workspace, config.DefaultRuntimeDir, "work", intended)
+	err = saveOAILogin(defaultConfigPath, workspace, config.DefaultRuntimeDir, "work", false, intended)
 	require.Error(t, err)
 	stored, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, "work")
 	require.NoError(t, err)
@@ -245,7 +334,7 @@ func TestRunOAILoginSerializesDifferentProviderConfigChanges(t *testing.T) {
 	for _, provider := range []string{"openai", "work"} {
 		go func() {
 			started <- struct{}{}
-			_, _, err := saveOAILogin(selected.Path, cfg.Workspace, cfg.RuntimeDirName(), provider, oai.Token{Refresh: provider + "-refresh"})
+			err := saveOAILogin(selected.Path, cfg.Workspace, cfg.RuntimeDirName(), provider, false, oai.Token{Refresh: provider + "-refresh"})
 			errs <- err
 		}()
 	}

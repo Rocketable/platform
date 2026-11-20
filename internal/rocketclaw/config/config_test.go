@@ -121,6 +121,9 @@ func TestAttachmentLocation(t *testing.T) {
 				require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 
 				cfg, err := Load(path, "", &AWSFetcher{})
+				require.NoError(t, err)
+
+				err = cfg.Validate()
 				if test.driver == "" {
 					require.Error(t, err)
 					return
@@ -162,6 +165,9 @@ func TestLoadTsnet(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
 			cfg, err := Load(path, "", &AWSFetcher{})
+			require.NoError(t, err)
+
+			err = cfg.Validate()
 			if tt.wantErr {
 				require.ErrorContains(t, err, "web.tsnet")
 				return
@@ -723,7 +729,8 @@ func TestLoadDefaultsWorkspaceToConfigDirectory(t *testing.T) {
 	}`), 0o600))
 
 	cfg, err := Load(path, "", &AWSFetcher{})
-	require.NoError(t, err, "a config written for relay ports still loads")
+	require.NoError(t, err)
+	require.NoError(t, cfg.Validate(), "a config written for relay ports still loads")
 	assert.Equal(t, dir, cfg.Workspace)
 }
 
@@ -905,6 +912,7 @@ func loadTestConfig(t *testing.T, content string) *Config {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644), "write config")
 	cfg, err := Load(path, "", &AWSFetcher{})
 	require.NoError(t, err)
+	require.NoError(t, cfg.Validate())
 
 	return cfg
 }

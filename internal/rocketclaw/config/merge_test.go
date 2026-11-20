@@ -65,6 +65,7 @@ func loadSecretConfig(t *testing.T, local, arn string, fetcher SecretFetcher) *C
 	require.NoError(t, os.WriteFile(path, []byte(local), 0o600))
 	cfg, err := Load(path, arn, fetcher)
 	require.NoError(t, err)
+	require.NoError(t, cfg.Validate())
 
 	return cfg
 }

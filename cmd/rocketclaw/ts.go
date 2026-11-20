@@ -17,12 +17,16 @@ import (
 const tsHelpText = `rocketclaw ts
 
 Usage:
-  rocketclaw ts login
+  rocketclaw ts login [--aws-secrets-manager-arn ARN]
 
 Commands:
   login  Log the Web's Tailscale node (web.tsnet) in to the tailnet, then exit.
          It uses web.tsnet.auth_key when set; otherwise it prints a login link.
          Stop RocketClaw first, and start it again afterwards.
+
+Options:
+  --aws-secrets-manager-arn
+         Merge this JSON secret over rocketclaw.json, as rocketclaw run does.
 `
 
 func runTS(args []string) error {
@@ -54,6 +58,9 @@ func runTSLogin(args []string) error {
 	}
 
 	_, cfg, err := loadRuntimeConfig(*secretsARN, "")
+	if err == nil {
+		err = cfg.ValidateTsnet()
+	}
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}
