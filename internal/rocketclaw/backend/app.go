@@ -334,7 +334,7 @@ func (s *lockedRun) serve(runCtx context.Context, rocketcodeSessions *SessionSer
 	return nil
 }
 
-func pruneRocketcodeTemp(ctx context.Context, dir string, cutoff time.Time) (int, error) {
+func pruneRocketcodeTemp(ctx context.Context, dir string, cutoff time.Time) (removed int, err error) {
 	root, err := os.OpenRoot(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil
@@ -344,7 +344,7 @@ func pruneRocketcodeTemp(ctx context.Context, dir string, cutoff time.Time) (int
 		return 0, fmt.Errorf("open rocketcode dir: %w", err)
 	}
 
-	removed := 0
+	defer func() { err = errors.Join(err, root.Close()) }()
 
 	for _, sub := range []string{"tmp", "shell-outputs"} {
 		entries, errRead := fs.ReadDir(root.FS(), sub)
@@ -354,7 +354,7 @@ func pruneRocketcodeTemp(ctx context.Context, dir string, cutoff time.Time) (int
 
 		for _, entry := range entries {
 			if ctx.Err() != nil {
-				return removed, errors.Join(err, ctx.Err(), root.Close())
+				return removed, errors.Join(err, ctx.Err())
 			}
 
 			info, errEntry := entry.Info()
@@ -368,7 +368,7 @@ func pruneRocketcodeTemp(ctx context.Context, dir string, cutoff time.Time) (int
 		}
 	}
 
-	return removed, errors.Join(err, root.Close())
+	return removed, err
 }
 
 type conversationFactory struct {
