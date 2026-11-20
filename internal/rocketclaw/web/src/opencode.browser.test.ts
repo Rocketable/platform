@@ -522,11 +522,23 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     expect(await rocketPalette("sessions").count()).toBe(0);
     expect(terminals.input.join("")).toBe("x");
 
+    const terminalPath = "/oc/box/api/experimental/session/ses_a/terminal";
+    const terminalRequests: {
+      url(): string;
+      method(): string;
+      existingResponse(): { status(): number } | null;
+      failure(): { errorText: string } | null;
+    }[] = [];
+    page.on("request", (request: (typeof terminalRequests)[number]) => {
+      const pathname = new URL(request.url()).pathname;
+      if (pathname === terminalPath || pathname.startsWith("/oc/box/api/experimental/persistent-pty/")) terminalRequests.push(request);
+    });
     // Native append carries the stored panes property when the last terminal is reopened.
     for (const close of ["command", "tab"]) {
+      const requestStart = terminalRequests.length;
       const terminalList = Promise.withResolvers<void>();
       const releaseList = Promise.withResolvers<void>();
-      await page.route("**/oc/box/api/experimental/session/ses_a/terminal", async (route: { request(): { method(): string }; continue(): Promise<void> }) => {
+      await page.route(`**${terminalPath}`, async (route: { request(): { method(): string }; continue(): Promise<void> }) => {
         if (route.request().method() === "GET") {
           terminalList.resolve();
           await releaseList.promise;
@@ -561,7 +573,12 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
         await view.locator('[data-pane-content="bottom"] [data-component="terminal"]').waitFor();
         await until(() => terminals.open === 1);
       } catch (error: unknown) {
-        console.error("Terminal reopen wait failed", { close, expectedPane: "bottom", expectedOpenSockets: 1, observedOpenSockets: terminals.open, serverTerminals: fake.terminals, requests: fake.requests, errors, error });
+        const requests = terminalRequests.slice(requestStart).map((request) => ({
+          request: `${request.method()} ${new URL(request.url()).pathname}`,
+          status: request.existingResponse()?.status(),
+          failure: request.failure()?.errorText,
+        }));
+        console.error("Terminal reopen wait failed", { close, expectedPane: "bottom", expectedOpenSockets: 1, observedOpenSockets: terminals.open, serverTerminals: fake.terminals, requests, errors, error });
         try {
           const dom = await view.locator('[data-component="terminal"], [data-pane-tab^="terminal:"]').evaluateAll((nodes: Element[]) => nodes.map((node) => ({
             component: node.getAttribute("data-component"),
