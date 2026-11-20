@@ -27,6 +27,7 @@ const (
 	getTagsToolName           = "rocketclaw_get_tags"
 	sessionsWriteToolName     = "rocketclaw_sessions_write"
 	sessionsGetURLToolName    = "rocketclaw_sessions_get_url"
+	sessionsMoveToolName      = "rocketclaw_sessions_move"
 	sessionsSubject           = "rocketclaw_sessions"
 	recipientSetting          = "rocketclaw_sessions_recipient"
 
@@ -679,6 +680,44 @@ func sessionsGetURLTool(threads *threadBridgeManager) harness.Tool {
 			}
 
 			return harness.TextToolResult(url), nil
+		},
+	}
+}
+
+func sessionsMoveTool(service *SessionService, conversationID string) harness.Tool {
+	return harness.Tool{
+		Name: sessionsMoveToolName, Description: "Move this session to another Web space, named as the Web names it, ignoring case. It moves for everyone: the space becomes the session's Birth Space, which decides which people limited to some spaces can read it, what space: searches find, and where Restore puts its tabs. Tabs people already have stay where they are. Fails for a space that does not exist.",
+		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject},
+		Subjects:   func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
+		Parameters: map[string]any{"type": "object", "properties": map[string]any{"space": map[string]any{"type": "string"}}, "required": []string{"space"}, "additionalProperties": false},
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
+			var params struct {
+				Space string `json:"space"`
+			}
+			if err := json.Unmarshal(raw, &params); err != nil {
+				return harness.ToolResult{}, fmt.Errorf("parse move session: %w", err)
+			}
+
+			spaces, err := service.Spaces(ctx)
+			if err != nil {
+				return harness.ToolResult{}, err
+			}
+
+			i := slices.IndexFunc(spaces, func(space Space) bool { return strings.EqualFold(space.Name, params.Space) })
+			if i < 0 {
+				names := make([]string, len(spaces))
+				for j := range spaces {
+					names[j] = strconv.Quote(spaces[j].Name)
+				}
+
+				return harness.ToolResult{}, fmt.Errorf("no space is named %q; the spaces are %s", params.Space, strings.Join(names, ", "))
+			}
+
+			if err := service.MoveConversation(ctx, conversationID, spaces[i].ID); err != nil {
+				return harness.ToolResult{}, err
+			}
+
+			return harness.TextToolResult("moved this session to " + spaces[i].Name), nil
 		},
 	}
 }

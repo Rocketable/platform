@@ -348,7 +348,7 @@ Another RocketClaw server declared in the local server's configuration, whose ch
 
 The Space a session was born in.
 
-It is its agent's space, or for a cron's sessions the cron's, else the cron agent's, else for a Web session, or a remote OpenCode session created from the Web, the space the person was in; a forked remote session takes its source's. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Moving a tab changes only that person's tabs, except a remote OpenCode session's Hosted Page tab, whose move changes the session's Birth Space for everyone. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report chats, have none.
+It is its agent's space, or for a cron's sessions the cron's, else the cron agent's, else for a Web session, or a remote OpenCode session created from the Web, the space the person was in; a forked remote session takes its source's. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Moving a tab changes only that person's tabs, except a remote OpenCode session's Hosted Page tab, whose move changes the session's Birth Space for everyone. An agent without a space of its own can move its session to another space, which changes the Birth Space for everyone and leaves people's tabs where they are. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report chats, have none.
 
 ### Space Limit
 
