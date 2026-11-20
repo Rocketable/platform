@@ -432,11 +432,10 @@ func (c *voiceCall) handOff(ctx context.Context, event voiceEvent) error {
 
 	c.said, c.seen[event.id], c.latest = nil, true, event.id
 
-	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: message}, true)
-	inbound.ConversationID = c.conversationID
-	inbound.Metadata[protocol.InboundPrincipalMetadataKey], inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey] = c.principal, c.principal, c.username
-	inbound.Metadata[protocol.InboundMediaMetadataKey] = "Voice"
-	inbound.Metadata["web_message_id"] = event.id
+	inbound := &protocol.InboundMessage{
+		Source: protocol.SourceWeb, Kind: protocol.InboundKindSteer, Text: message, Human: true, ConversationID: c.conversationID,
+		Metadata: map[string]string{protocol.InboundRawTextMetadataKey: message, protocol.InboundPrincipalMetadataKey: c.principal, protocol.InboundPrincipalNameMetadataKey: c.principal, protocol.InboundPrincipalEmailMetadataKey: c.username, protocol.InboundMediaMetadataKey: "Voice", "web_message_id": event.id},
+	}
 
 	item := &protocol.ThreadQueueItem{ID: event.id, Source: protocol.SourceWeb, Kind: protocol.InboundKindSteer, Principal: c.principal, Message: message, Inbound: inbound}
 	if err := c.server.backend.StashQueueItem(context.WithoutCancel(ctx), c.conversationID, item); err != nil {
