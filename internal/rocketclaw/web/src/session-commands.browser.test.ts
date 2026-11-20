@@ -174,6 +174,9 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.mouse.move(0, 0);
     await page.locator("textarea").focus();
     await copyButton.waitFor({ state: "hidden" });
+    const withoutActionTransitions = width === 1280 ? await page.addStyleTag({
+      content: '[data-message-id="1:0"] [data-slot="message-actions"] button { transition: none; }',
+    }) : undefined;
     const focusTrace = width === 1280 ? await headerMessage.evaluateHandle((message: HTMLElement) => {
       const actions = message.querySelector("[data-slot=message-actions]")!;
       const original = [message, actions, ...actions.querySelectorAll("button")];
@@ -226,6 +229,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     } finally {
       await focusTrace?.evaluate((probe: { stop(): void }) => probe.stop()).catch(() => {});
       await focusTrace?.dispose().catch(() => {});
+      await withoutActionTransitions?.evaluate((style: HTMLElement) => style.remove()).catch(() => {});
     }
     const composer = page.locator("textarea");
     await composer.fill("/fork");
