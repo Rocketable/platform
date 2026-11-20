@@ -540,22 +540,25 @@ func rejectSymlink(sfs *sandboxedFileSystem, name string) error {
 }
 
 func deriveNewContentsFromChunks(originalText, filePath string, chunks []updateFileChunk) (text string, bom bool, err error) {
-	originalLines := strings.Split(originalText, "\n")
-	if len(originalLines) > 0 && originalLines[len(originalLines)-1] == "" {
-		originalLines = originalLines[:len(originalLines)-1]
+	lines := strings.Split(originalText, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
 	}
 
-	replacements, err := computeReplacements(originalLines, filePath, chunks)
+	replacements, err := computeReplacements(lines, filePath, chunks)
 	if err != nil {
 		return "", false, err
 	}
 
-	newLines := applyReplacements(originalLines, replacements)
-	if len(newLines) == 0 || newLines[len(newLines)-1] != "" {
-		newLines = append(newLines, "")
+	for _, repl := range slices.Backward(replacements) {
+		lines = append(lines[:repl.start], append(repl.newLines, lines[repl.start+repl.oldLen:]...)...)
 	}
 
-	text, bom = strings.CutPrefix(strings.Join(newLines, "\n"), "\ufeff")
+	if len(lines) == 0 || lines[len(lines)-1] != "" {
+		lines = append(lines, "")
+	}
+
+	text, bom = strings.CutPrefix(strings.Join(lines, "\n"), "\ufeff")
 
 	return text, bom, nil
 }
@@ -591,7 +594,7 @@ func computeReplacements(originalLines []string, filePath string, chunks []updat
 			continue
 		}
 
-		pattern := append([]string(nil), chunk.oldLines...)
+		pattern := chunk.oldLines
 		newSlice := append([]string(nil), chunk.newLines...)
 
 		found := seekSequence(originalLines, pattern, lineIndex, chunk.endOfFile)
@@ -615,17 +618,6 @@ func computeReplacements(originalLines []string, filePath string, chunks []updat
 	sort.Slice(replacements, func(i, j int) bool { return replacements[i].start < replacements[j].start })
 
 	return replacements, nil
-}
-
-func applyReplacements(lines []string, replacements []replacement) []string {
-	result := append([]string(nil), lines...)
-
-	for _, v := range slices.Backward(replacements) {
-		repl := v
-		result = append(result[:repl.start], append(repl.newLines, result[repl.start+repl.oldLen:]...)...)
-	}
-
-	return result
 }
 
 func seekSequence(lines, pattern []string, startIndex int, eof bool) int {
