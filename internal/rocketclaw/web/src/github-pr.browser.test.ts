@@ -193,7 +193,9 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     expect(github.at(-1)!.headers.authorization).toBe("Bearer quota-token-marker");
     expect(await viewer().getByText("0 of 101 files loaded", { exact: true }).count()).toBe(1);
     failPage = false;
-    await viewer().getByRole("button", { name: "Load files", exact: true }).click();
+    expect(await viewer().getByRole("button", { name: /Load (more )?files/ }).count()).toBe(0);
+    await viewer().getByRole("tab", { name: "Summary", exact: true }).click();
+    await viewer().getByRole("tab", { name: "Code", exact: true }).click();
     await viewer().getByText("100 of 101 files loaded", { exact: true }).waitFor();
     await viewer().getByRole("treeitem", { name: "file-marker-0.txt", exact: true }).click();
     hold = "files";
@@ -213,7 +215,9 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     await scrollPatch(true);
     await page.waitForTimeout(500);
     expect(filesRequests("2")).toBe(cancelledPages);
-    await viewer().getByRole("button", { name: "Load more files", exact: true }).click();
+    await viewer().getByRole("tab", { name: "Summary", exact: true }).click();
+    await viewer().getByRole("tab", { name: "Code", exact: true }).click();
+    await scrollPatch(true);
     await viewer().getByText("101 of 101 files loaded", { exact: true }).waitFor();
     expect(github.slice(-3).every(({ headers }) => headers.authorization === "Bearer quota-token-marker")).toBe(true);
     await scrollPatch(false);
@@ -270,10 +274,11 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     await page.waitForTimeout(500);
     expect(filesRequests("1")).toBe(cancelledFirstPages);
     expect(await viewer().getByText("0 of 101 files loaded", { exact: true }).count()).toBe(1);
-    await viewer().getByRole("button", { name: "Load files", exact: true }).click();
+    await viewer().getByRole("tab", { name: "Summary", exact: true }).click();
+    await viewer().getByRole("tab", { name: "Code", exact: true }).click();
     await viewer().getByText("100 of 101 files loaded", { exact: true }).waitFor();
     changed = true;
-    await viewer().getByRole("button", { name: "Load more files", exact: true }).click();
+    await scrollPatch(true);
     await viewer().getByText("Pull request changed. Refresh before loading more files.", { exact: true }).waitFor();
     expect(await viewer().getByText("100 of 101 files loaded", { exact: true }).count()).toBe(1);
     changed = false;

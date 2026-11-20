@@ -95,11 +95,14 @@ function PreviewAction({ reference }: { reference: GitHubPR }) {
 
 function usePreview(reference: GitHubPR, source?: OpenCodePRSource, refresh = 0) {
   const tab = usePreference(TAB_KEY) ?? "summary";
-  const setTab = (value: string) => setPreference(TAB_KEY, value);
   const [credential, setCredential] = useState("");
   const token = useRef("");
   const controller = useRef<AbortController | null>(null);
   const [result, setResult] = useState<PreviewResult>({ ...unread, loading: true });
+  const setTab = (value: string) => {
+    setPreference(TAB_KEY, value);
+    if (value === "code") setResult((current) => ({ ...current, halted: false }));
+  };
   useEffect(() => {
     const request = new AbortController();
     controller.current = request;
@@ -186,7 +189,6 @@ function PreviewBody({ reference, state, close, source, composer }: { reference:
     </span>
     {!source && !result.loading && (!pr || Boolean(result.error)) && <TokenEntry state={state} />}
     {pr && <PreviewDetails reference={reference} pr={pr} state={state} composer={composer} />}
-    {source && <span className="shrink-0 text-xs text-muted-foreground">Read with this OpenCode server's GitHub login.</span>}
   </span>;
 }
 
@@ -211,10 +213,8 @@ function PreviewDetails({ reference, pr, state, composer }: { reference: GitHubP
       <Suspense fallback={<span role="status">Loading diff viewer…</span>}>{result.files.length > 0 ? <PRCode files={result.files} more={remaining && idle ? () => void load(true) : undefined} reference={reference} composer={composer} /> : <span className="py-4 text-muted-foreground">No files loaded.</span>}</Suspense>
     </TabsContent>
     <span className="flex shrink-0 flex-col gap-2 py-2 text-xs text-muted-foreground">
-      <span>Patches may be incomplete. Open GitHub for the full diff.</span>
       {result.files.length >= 3000 && <span>GitHub's 3,000-file limit reached; this preview may be incomplete.</span>}
       {result.ended && result.files.length < pr.changed_files && <span>GitHub returned fewer files than reported. This preview is incomplete.</span>}
-      {remaining && <Button type="button" variant="outline" size="sm" disabled={result.loading} onClick={() => { setTab("code"); void load(true); }}>{result.page ? "Load more files" : "Load files"}</Button>}
     </span>
   </Tabs>;
 }

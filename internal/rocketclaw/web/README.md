@@ -47,7 +47,8 @@ The header shows lifecycle status, author/update time and branch/change counts
 when GitHub supplies them. **Code** uses Pierre CodeView and FileTree, bundled
 locally: a scrolling diff, file navigation, and Unified/Split layouts. No iframe,
 hosted DiffsHub request, external renderer service, or renderer credential is used.
-Files still load on demand. Counts show partial results;
+Files load when **Code** opens and as its diff scrolls to the end; opening **Code**
+again retries after a cancel or failure. Counts show partial results;
 GitHub exposes at most 3,000 files, and patches can be omitted or incomplete.
 Revision checks before and after each file page reject observed base/head/count
 changes. They are not an atomic snapshot: a branch changing A→B→A between checks
