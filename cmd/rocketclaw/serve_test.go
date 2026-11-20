@@ -29,21 +29,27 @@ import (
 func TestRunServeReportsAppStartupError(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		args     []string
+		disabled bool
 		occupied bool
 		want     string
 	}{
-		{name: "disabled with occupied port", args: []string{"--pprof=false"}, occupied: true, want: "start rocketcode session service"},
+		{name: "disabled with occupied port", disabled: true, occupied: true, want: "start rocketcode session service"},
 		{name: "enabled with occupied port", occupied: true, want: "start private pprof HTTP"},
 		{name: "enabled with backend startup failure", want: "start rocketcode session service"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			diagnosticsAddress := "127.0.0.1:0"
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			diagnosticsAddress := listener.Addr().String()
 			if tc.occupied {
-				listener, err := net.Listen("tcp", diagnosticsAddress)
-				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, listener.Close()) })
-				diagnosticsAddress = listener.Addr().String()
+			} else {
+				require.NoError(t, listener.Close())
+			}
+
+			args := []string{"--pprof=" + diagnosticsAddress}
+			if tc.disabled {
+				args = append(args, "--pprof=false")
 			}
 
 			workspace := t.TempDir()
@@ -64,7 +70,7 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 
 			t.Cleanup(func() { os.Stderr = stderr })
 
-			err = runServe(tc.args, diagnosticsAddress)
+			err = runServe(args)
 			require.ErrorContains(t, err, tc.want)
 
 			if tc.want == "start rocketcode session service" {
@@ -99,13 +105,12 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 
 			require.Contains(t, string(output), "go_version=")
 
-			if len(tc.args) == 0 && !tc.occupied {
+			if !tc.occupied {
 				require.Contains(t, string(output), `msg="started private pprof HTTP"`)
 				_, address, ok := strings.Cut(string(output), "address=")
 				require.True(t, ok)
 				address, _, _ = strings.Cut(address, "\n")
-				require.True(t, strings.HasPrefix(address, "127.0.0.1:"), address)
-				require.NotEqual(t, "127.0.0.1:0", address)
+				require.Equal(t, diagnosticsAddress, address)
 
 				listener, err := net.Listen("tcp", address)
 				require.NoError(t, err, "diagnostics listener leaked after backend startup failure")
@@ -141,7 +146,7 @@ func TestRunServeStopsAtTheTailnetGate(t *testing.T) {
 				workspace, tc.authKey, dsn,
 			), 0o600))
 
-			err = runServe([]string{"--pprof=false"}, "127.0.0.1:0")
+			err = runServe([]string{"--pprof=false"})
 			require.ErrorContains(t, err, "start the Web: ")
 			require.ErrorContains(t, err, tc.want)
 			require.Equal(t, 1, exitCodeForError(err))
@@ -186,7 +191,7 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 	)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))
 
-	err = runServe([]string{"--pprof=false"}, "127.0.0.1:0")
+	err = runServe([]string{"--pprof=false"})
 	require.EqualError(t, err, "run rocketclaw: assemble frontends: start Slack connector: slack auth test failed: invalid_auth")
 	agents, _, err := backend.LoadRuntimeDefinitions(config.NewLockedConfig(&config.Config{Workspace: workspace}), ".rocketclaw")
 	require.NoError(t, err)

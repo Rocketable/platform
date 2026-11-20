@@ -21,12 +21,13 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func runServe(args []string, diagnosticsAddress string) error {
+func runServe(args []string) error {
 	processStart := time.Now().UTC().Format(time.RFC3339Nano)
 	flagSet := flag.NewFlagSet("rocketclaw", flag.ContinueOnError)
 	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
 	usersARN := flagSet.String(usersARNFlag, "", "Secrets Manager ARN of a JSON secret to use as mcp_external.users")
-	pprofEnabled := flagSet.Bool("pprof", true, "serve private Go profiles at 127.0.0.1:6060")
+	diagnosticsAddress := pprofAddress(defaultPprofAddress)
+	flagSet.Var(&diagnosticsAddress, "pprof", "serve private Go profiles at this host:port; true means "+defaultPprofAddress+", false turns them off")
 	if err := flagSet.Parse(args); err != nil {
 		return fmt.Errorf("parse serve flags: %w", err)
 	}
@@ -73,8 +74,8 @@ func runServe(args []string, diagnosticsAddress string) error {
 	}
 	logBuildIdentity(logger, &build)
 
-	if *pprofEnabled {
-		listener, err := net.Listen("tcp", diagnosticsAddress)
+	if diagnosticsAddress != "" {
+		listener, err := net.Listen("tcp", string(diagnosticsAddress))
 		if err != nil {
 			return fmt.Errorf("start private pprof HTTP: %w", err)
 		}

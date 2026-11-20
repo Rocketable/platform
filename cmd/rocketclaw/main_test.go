@@ -71,7 +71,7 @@ func TestRunServeKeepsLegacyConfigReadOnly(t *testing.T) {
 	legacy := fmt.Appendf(nil, `{"workspace":".","web":{"tsnet":{"auth_key":"tskey-auth-test"}},"database_url":%q,"slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","human_user_id":"U123","room":"D123","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`, dsn)
 	require.NoError(t, os.WriteFile(defaultConfigPath, legacy, 0o600))
 
-	err = runServe([]string{"--pprof=false"}, "127.0.0.1:0")
+	err = runServe([]string{"--pprof=false"})
 	require.ErrorContains(t, err, "slack.channels is required")
 
 	data, err := os.ReadFile(defaultConfigPath)
@@ -114,7 +114,7 @@ func TestRunServeRequiresConfig(t *testing.T) {
 		require.NoError(t, os.Chdir(cwd))
 	})
 
-	err = runServe(nil, "127.0.0.1:0")
+	err = runServe(nil)
 	require.ErrorContains(t, err, "load config")
 }
 
@@ -145,6 +145,7 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 		want string
 	}{
 		{name: "serve", args: []string{"run", "--bad-flag"}, want: "parse serve flags"},
+		{name: "serve pprof", args: []string{"run", "--pprof=6061"}, want: `parse serve flags: invalid boolean value "6061" for -pprof: want true, false, or host:port such as 127.0.0.1:6061`},
 		{name: "oai", args: []string{"oai", "bogus"}, want: `unknown oai command "bogus"`},
 		{name: "oai login config", args: []string{"oai", "login", "--headless"}, want: "load runtime config"},
 		{name: "oai list config", args: []string{"oai", "list"}, want: "load runtime config"},
@@ -166,7 +167,8 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 func TestRunDispatchesHelp(t *testing.T) {
 	output := captureStdout(t, func() error { return run([]string{"help"}) })
 	assert.Contains(t, output, "Usage:")
-	assert.Contains(t, output, "rocketclaw run [--pprof=false]")
+	assert.Contains(t, output, "rocketclaw run [--pprof=false|HOST:PORT]")
+	assert.Contains(t, output, "--pprof=HOST:PORT")
 	assert.Contains(t, output, "127.0.0.1:6060")
 	assert.Contains(t, output, "enabled by default")
 	assert.NotContains(t, output, "rocketclaw cli")
