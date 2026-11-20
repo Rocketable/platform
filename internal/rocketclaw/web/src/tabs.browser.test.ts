@@ -2517,34 +2517,59 @@ test("with other RocketClaws the strip lists every server's space cards, each wi
   }
 }));
 
-test("with parked tabs on more than one RocketClaw, Parked is a tree of servers whose rows act on their own server", () => withPage({}, async (page, origin, _prompts, saved) => {
-  const remote = serveRemote({ spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [{ path: href("india"), space: "lab" }], groups: [], space: "lab", last: {}, sharedOrder: [] }, shared: [] },
-    (sent) => [{ id: "india", name: "India", agent: "main", spaceId: "lab", parked: !sent.length }]);
-  const sent = remote.sent;
-  try {
-    await addRemote(page, remote.url);
-    saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }, { path: href("bravo"), space: "main" }] };
-    saved.attention = [{ path: href("bravo"), parked: true }];
-    const parked = page.getByRole("tablist", { name: "Parked tabs" }), tree = () => parked.locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
-    await page.goto(`${origin}${href("alpha")}`);
-    await page.getByRole("button", { name: "Parked", exact: true }).click();
-    await parked.getByRole("button", { name: "Parked on work", exact: true }).waitFor();
-    expect(await tree()).toEqual(["Parked on 127.0.0.1", "Bravo", "Parked on work", "India"]);
-    expect(await parked.getByRole("tab", { name: "India", exact: true }).getAttribute("aria-description")).toBe("Space: Lab, work, Parked");
-    expect(await parked.getByRole("button", { name: "Close India" }).count()).toBe(0);
+test("with parked tabs on more than one RocketClaw, Parked is a tree of servers whose rows act on their own server", () => {
+  const started = performance.now(), stages: Record<string, number> = { "start browser": 0 };
+  const step = (name: string) => { stages[name] = Math.round(performance.now() - started); };
+  let local: Saved | undefined, remotePolls = 0, sent: Change[] | undefined, lastTree: (string | null)[] | undefined;
+  const nearDeadline = setTimeout(() => {
+    console.error("Cross-server Parked test still running near its deadline", JSON.stringify({ elapsedMs: Math.round(performance.now() - started), stageStartMs: stages, localPolls: local?.polls, remotePolls, remoteAttention: sent, lastParkedTree: lastTree }));
+  }, 4_500).unref();
+  return withPage({}, async (page, origin, _prompts, saved) => {
+    step("set up fixtures");
+    local = saved;
+    const remote = serveRemote({ spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [{ path: href("india"), space: "lab" }], groups: [], space: "lab", last: {}, sharedOrder: [] }, shared: [] },
+      (sent) => {
+        remotePolls++;
+        return [{ id: "india", name: "India", agent: "main", spaceId: "lab", parked: !sent.length }];
+      });
+    sent = remote.sent;
+    try {
+      await addRemote(page, remote.url);
+      saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }, { path: href("bravo"), space: "main" }] };
+      saved.attention = [{ path: href("bravo"), parked: true }];
+      const parked = page.getByRole("tablist", { name: "Parked tabs" }), tree = () => parked.locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+      step("navigate");
+      await page.goto(`${origin}${href("alpha")}`);
+      step("open Parked");
+      await page.getByRole("button", { name: "Parked", exact: true }).click();
+      step("wait for work branch");
+      await parked.getByRole("button", { name: "Parked on work", exact: true }).waitFor();
+      step("check both branches");
+      lastTree = await tree();
+      expect(lastTree).toEqual(["Parked on 127.0.0.1", "Bravo", "Parked on work", "India"]);
+      expect(await parked.getByRole("tab", { name: "India", exact: true }).getAttribute("aria-description")).toBe("Space: Lab, work, Parked");
+      expect(await parked.getByRole("button", { name: "Close India" }).count()).toBe(0);
 
-    await parked.getByRole("tab", { name: "India", exact: true }).click({ button: "right" });
-    await page.getByRole("menuitem").first().waitFor();
-    expect(await menuLines(page)).toEqual(["Pull requests", "—", "Unpark", "Auto-park when I send", "Unfollow"]);
-    await page.getByRole("menuitem", { name: "Unpark", exact: true }).click();
-    await until(() => sent.length === 1);
-    expect(sent).toEqual([{ paths: [href("india")], action: "UNPARK" }]);
-    await parked.getByRole("tab", { name: "India", exact: true }).waitFor({ state: "detached" });
-    expect(await tree()).toEqual(["Bravo"]);
-  } finally {
-    remote.server.stop(true);
-  }
-}));
+      step("open India menu");
+      await parked.getByRole("tab", { name: "India", exact: true }).click({ button: "right" });
+      await page.getByRole("menuitem").first().waitFor();
+      expect(await menuLines(page)).toEqual(["Pull requests", "—", "Unpark", "Auto-park when I send", "Unfollow"]);
+      step("click Unpark");
+      await page.getByRole("menuitem", { name: "Unpark", exact: true }).click();
+      step("wait for remote Unpark");
+      await until(() => remote.sent.length === 1);
+      expect(remote.sent).toEqual([{ paths: [href("india")], action: "UNPARK" }]);
+      step("wait for India to leave Parked");
+      await parked.getByRole("tab", { name: "India", exact: true }).waitFor({ state: "detached" });
+      step("check remaining Parked rows");
+      lastTree = await tree();
+      expect(lastTree).toEqual(["Bravo"]);
+      step("close fixtures and browser");
+    } finally {
+      remote.server.stop(true);
+    }
+  }).finally(() => clearTimeout(nearDeadline));
+});
 
 test("New session and the palette offer every RocketClaw's OpenCode servers from any page, and start the session on the server that has it", () => withPage({}, async (page, origin, _prompts, saved) => {
   const remote = serveRemote({ spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [], groups: [], space: "lab", last: {}, sharedOrder: [] }, shared: [] }, () => []);
