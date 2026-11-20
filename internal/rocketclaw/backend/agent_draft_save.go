@@ -181,7 +181,7 @@ func (s *SessionService) SaveAgentDraft(ctx context.Context, rt agentDraftRuntim
 		return refuse(err)
 	}
 
-	if err := s.checkAgentDraftVariant(rt, draft, variant); err != nil {
+	if err := s.checkAgentDraftVariant(rt, draft, variant, data); err != nil {
 		return refuse(err)
 	}
 
@@ -216,7 +216,7 @@ func (s *SessionService) SaveAgentDraft(ctx context.Context, rt agentDraftRuntim
 	return s.reloadAgentDraft(ctx, rt, draft, save.Author, agentDraftWorkspaceLayer, string(data), draft.Revision)
 }
 
-func (s *SessionService) checkAgentDraftVariant(rt agentDraftRuntime, draft *AgentDraft, variant *AgentDraftVariant) error {
+func (s *SessionService) checkAgentDraftVariant(rt agentDraftRuntime, draft *AgentDraft, variant *AgentDraftVariant, data []byte) error {
 	one := *draft
 	one.Variants = []AgentDraftVariant{*variant}
 
@@ -229,7 +229,7 @@ func (s *SessionService) checkAgentDraftVariant(rt agentDraftRuntime, draft *Age
 		return &AgentDraftSaveError{Problem: "Fix the draft's settings before saving it.", Problems: problems}
 	}
 
-	if err := rt.ValidateAgentFile(draft.Name, renderAgentDraftFile(draft.Mode, variant)); err != nil {
+	if err := rt.ValidateAgentFile(draft.Name, slices.Clone(data)); err != nil {
 		return &AgentDraftSaveError{Problem: "Saving it would keep RocketClaw from reloading: " + err.Error()}
 	}
 

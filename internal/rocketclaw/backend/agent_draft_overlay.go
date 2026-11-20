@@ -140,7 +140,7 @@ func (s *SessionService) saveAgentDraftToOverlay(ctx context.Context, rt agentDr
 			return false, err
 		}
 
-		if err := s.checkAgentDraftVariant(rt, draft, variant); err != nil {
+		if err := s.checkAgentDraftVariant(rt, draft, variant, data); err != nil {
 			return false, err
 		}
 
