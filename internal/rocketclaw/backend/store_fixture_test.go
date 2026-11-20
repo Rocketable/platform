@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,12 +20,26 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
+
+const backendGuardDirEnv = "ROCKETCLAW_TEST_BACKEND_GUARD_DIR"
 
 func TestMain(m *testing.M) {
 	code := 0
 
 	err := func() (errResult error) {
+		dir, err := filepath.Abs(filepath.Join("..", "..", "..", ".tmp", "backend-guards-"+rand.Text()))
+		if err != nil {
+			return fmt.Errorf("resolve backend guard directory: %w", err)
+		}
+
+		defer func() { errResult = errors.Join(errResult, os.RemoveAll(dir)) }()
+
+		if err := os.Setenv(backendGuardDirEnv, dir); err != nil {
+			return fmt.Errorf("remember backend guard directory: %w", err)
+		}
+
 		base := strings.TrimSpace(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
 		if base == "" || os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL") != "" {
 			code = m.Run()
@@ -98,6 +113,32 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(code)
+}
+
+func uninstrumentedBackendBinary(t *testing.T) string {
+	t.Helper()
+
+	dir := os.Getenv(backendGuardDirEnv)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	lock, err := os.OpenFile(filepath.Join(dir, "build.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, lock.Close()) }()
+
+	require.NoError(t, unix.Flock(int(lock.Fd()), unix.LOCK_EX))
+
+	binary := filepath.Join(dir, "backend.test")
+	if _, err := os.Stat(binary); errors.Is(err, os.ErrNotExist) {
+		build := exec.CommandContext(t.Context(), "go", "test", "-c", "-race=false", "-cover=false", "-o", binary+".building", ".")
+		output, err := build.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		require.NoError(t, os.Rename(binary+".building", binary))
+	} else {
+		require.NoError(t, err)
+	}
+
+	return binary
 }
 
 func newTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
