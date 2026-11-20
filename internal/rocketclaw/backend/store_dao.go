@@ -921,7 +921,7 @@ func (s *SessionService) ExternalMCPSessionByConversationID(conversationID strin
 	return externalConversationID, session, true, nil
 }
 
-const externalMCPSessionSQL = `SELECT external_id, external_agent, external_run, conversation_id, origin_pairs
+const externalMCPSessionSQL = `SELECT external_id, external_agent, COALESCE(external_run, ''), conversation_id, origin_pairs
 FROM conversations WHERE external_id IS NOT NULL`
 
 type externalMCPSessionScanner struct{}
@@ -930,18 +930,15 @@ func (externalMCPSessionScanner) scan(scanner rowScanner) (string, ExternalMCPSe
 	var (
 		externalConversationID string
 		session                ExternalMCPSessionState
-		privateConversationID  sql.NullString
 		originPairs            []byte
 	)
-	if err := scanner.Scan(&externalConversationID, &session.Agent, &privateConversationID, &session.ManagedConversationID, &originPairs); err != nil {
+	if err := scanner.Scan(&externalConversationID, &session.Agent, &session.PrivateConversationID, &session.ManagedConversationID, &originPairs); err != nil {
 		return "", ExternalMCPSessionState{}, fmt.Errorf("scan external MCP session: %w", err)
 	}
 
 	if err := json.Unmarshal(originPairs, &session.OriginPairs); err != nil {
 		return "", ExternalMCPSessionState{}, fmt.Errorf("decode external MCP origin pairs: %w", err)
 	}
-
-	session.PrivateConversationID = privateConversationID.String
 
 	return externalConversationID, session, nil
 }
