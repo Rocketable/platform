@@ -87,7 +87,7 @@ func TestUsersSecretReplacesExternalMCPUsers(t *testing.T) {
 	for _, body := range []string{`["LEAKED-SECRET-VALUE"]`, `{"alice":{"pw":"LEAKED-SECRET-VALUE"}}`, `null`} {
 		useTestSecrets(t, testSecrets{testSecretsARN: configSecret, usersARN: body})
 
-		err := runServe([]string{"--aws-secrets-manager-arn", testSecretsARN, "--aws-secrets-manager-users-arn", usersARN}, "127.0.0.1:0")
+		err := runServe([]string{"--aws-secrets-manager-arn", testSecretsARN, "--aws-secrets-manager-users-arn", usersARN})
 		require.ErrorContains(t, err, "--aws-secrets-manager-users-arn "+usersARN)
 		assert.NotContains(t, err.Error(), "LEAKED-SECRET-VALUE")
 	}
@@ -168,7 +168,7 @@ func TestServeErrorOmitsResolvedSecret(t *testing.T) {
 	}`), 0o600))
 	useTestSecrets(t, testSecrets{testSecretsARN: `{"token":"LEAKED-SECRET-VALUE"}`})
 
-	err := runServe([]string{"--aws-secrets-manager-arn", testSecretsARN}, "127.0.0.1:0")
+	err := runServe([]string{"--aws-secrets-manager-arn", testSecretsARN, "--pprof=127.0.0.1:0"})
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "LEAKED-SECRET-VALUE")
 }

@@ -9,8 +9,39 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"runtime"
+	"strconv"
 	"sync"
 )
+
+const defaultPprofAddress = "127.0.0.1:6060"
+
+var errPprofValue = errors.New("want true, false, or host:port such as 127.0.0.1:6061")
+
+type pprofAddress string
+
+func (a *pprofAddress) String() string { return string(*a) }
+
+func (a *pprofAddress) IsBoolFlag() bool { return true }
+
+func (a *pprofAddress) Set(value string) error {
+	if enabled, err := strconv.ParseBool(value); err == nil {
+		*a = ""
+		if enabled {
+			*a = defaultPprofAddress
+		}
+
+		return nil
+	}
+
+	_, port, errSplit := net.SplitHostPort(value)
+	if _, errPort := strconv.ParseUint(port, 10, 16); errSplit != nil || errPort != nil {
+		return errPprofValue
+	}
+
+	*a = pprofAddress(value)
+
+	return nil
+}
 
 func newDiagnosticsServer(ctx context.Context, connections *sync.WaitGroup) *http.Server {
 	runtime.SetBlockProfileRate(10_000_000)

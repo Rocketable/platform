@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,6 +25,46 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
+
+func TestPprofFlagForms(t *testing.T) {
+	for _, tc := range []struct {
+		args    []string
+		want    pprofAddress
+		wantErr string
+	}{
+		{want: defaultPprofAddress},
+		{args: []string{"--pprof"}, want: defaultPprofAddress},
+		{args: []string{"-pprof"}, want: defaultPprofAddress},
+		{args: []string{"--pprof=true"}, want: defaultPprofAddress},
+		{args: []string{"--pprof=false"}, want: ""},
+		{args: []string{"-pprof=0"}, want: ""},
+		{args: []string{"--pprof=127.0.0.1:6061"}, want: "127.0.0.1:6061"},
+		{args: []string{"--pprof=[::1]:6061"}, want: "[::1]:6061"},
+		{args: []string{"--pprof=localhost:0"}, want: "localhost:0"},
+		{args: []string{"--pprof=127.0.0.1:6061", "--pprof=false"}, want: ""},
+		{args: []string{"--pprof=6061"}, wantErr: `invalid boolean value "6061" for -pprof: want true, false, or host:port such as 127.0.0.1:6061`},
+		{args: []string{"--pprof=127.0.0.1"}, wantErr: `invalid boolean value "127.0.0.1" for -pprof: want true, false, or host:port such as 127.0.0.1:6061`},
+		{args: []string{"--pprof=127.0.0.1:"}, wantErr: `invalid boolean value "127.0.0.1:" for -pprof: want true, false, or host:port such as 127.0.0.1:6061`},
+		{args: []string{"--pprof=127.0.0.1:65536"}, wantErr: `invalid boolean value "127.0.0.1:65536" for -pprof: want true, false, or host:port such as 127.0.0.1:6061`},
+		{args: []string{"--pprof="}, wantErr: `invalid boolean value "" for -pprof: want true, false, or host:port such as 127.0.0.1:6061`},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			flagSet := flag.NewFlagSet("rocketclaw", flag.ContinueOnError)
+			flagSet.SetOutput(io.Discard)
+			address := pprofAddress(defaultPprofAddress)
+			flagSet.Var(&address, "pprof", "")
+
+			err := flagSet.Parse(tc.args)
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tc.want, address)
+		})
+	}
+}
 
 func TestDiagnosticsRoutes(t *testing.T) {
 	runtime.SetBlockProfileRate(0)
