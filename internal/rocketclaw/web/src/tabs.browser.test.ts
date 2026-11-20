@@ -537,7 +537,9 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
 }), 60_000);
 
 test("a RocketClaw session's tab menu and palette delete it after asking, showing a refusal and closing its tab", () => withPage({}, async (page, origin, _prompts, saved) => {
-  for (const [link, name] of [[href("alpha"), "Alpha"], [href("bravo"), "Bravo"]]) await openSaved(page, origin, link, name, saved);
+  saved.state = { ...saved.state, space: "main", tabs: ["alpha", "bravo"].map((id) => ({ path: href(id), space: "main" })) };
+  await page.goto(`${origin}${href("bravo")}`);
+  await strip(page).getByRole("tab", { name: "Alpha", exact: true }).waitFor();
   const confirm = page.getByRole("dialog", { name: "Delete session", exact: true });
   await menu(page, "Bravo", "Delete session");
   await confirm.getByText('Delete session "Bravo"?', { exact: true }).waitFor();
