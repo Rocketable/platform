@@ -2845,7 +2845,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       ctrl.running = false;
       ctrl.queue = [
         { id: "expand-target", text: queueText, delivery: count === 1 ? "STASH" : "QUEUE", principal: ctrl.principal, attachments: [uploadedFiles.find(({ meta }) => meta.name === "held.txt")!.meta] },
-        ...Array.from({ length: count - 1 }, (_, index): QueueItem => ({ id: `expand-other-${index}`, text: `Other message ${index}`, delivery: "STASH", principal: ctrl.principal })),
+        ...Array.from({ length: count - 1 }, (_, index): QueueItem => ({ id: `expand-other-${index}`, text: `Other message ${index}`, delivery: width === 320 && index === 0 ? "QUEUE" : "STASH", principal: ctrl.principal })),
       ];
       const originalQueue = JSON.stringify(ctrl.queue);
       const queuePage = await browser.newPage({ viewport: { width, height: 640 } });
@@ -3063,12 +3063,14 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         await remaining.getByRole("button", { name: "Edit", exact: true }).click();
         await remaining.getByRole("button", { name: "Save", exact: true }).click();
         await remaining.getByRole("button", { name: "Saving…", exact: true }).waitFor();
-        ctrl.queue = ctrl.queue.filter((item) => item.id !== "expand-other-0");
+        const consumedItem = ctrl.queue.find((item) => item.id === "expand-other-0")!;
+        ctrl.history.push({ entryKey: "consumed-during-save", itemId: "consumed-during-save:0", inputId: consumedItem.id, role: "user", text: consumedItem.text, turnId: "", complete: true });
         const id = `queue-expansion-${width}-${count}`;
         (await transcriptStream(id).promise).enqueue(`data: ${JSON.stringify({ conversationId: id, revision: "consumed-during-save" })}\n\n`);
         await remaining.waitFor({ state: "hidden" });
         const last = queuePage.locator('[data-queue-id="expand-other-1"]');
         expect(await last.getByRole("button", { name: "Edit", exact: true }).isDisabled()).toBe(true);
+        ctrl.queue = ctrl.queue.filter((item) => item !== consumedItem);
         consumedSave.resolve();
         await last.getByRole("button", { name: "Edit", exact: true }).click();
         expect(await editor.inputValue()).toBe("Other message 1");
