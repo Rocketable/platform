@@ -351,7 +351,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 		})
 	}
 
-	var rows []SidebarSession
+	var rows []*SidebarSession
 
 	narrow := scope != SearchFilters && search.Needle != "" && !strings.Contains(search.Needle, " ")
 	if narrow {
@@ -379,8 +379,8 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 
 	if s.definitions.Clone().PermittedSpaces(username) != nil {
 		search.Principals = nil
-		for i := range rows {
-			search.Principals = append(search.Principals, principals[rows[i].Conversation.ID]...)
+		for _, row := range rows {
+			search.Principals = append(search.Principals, principals[row.Conversation.ID]...)
 		}
 
 		slices.Sort(search.Principals)
@@ -396,8 +396,8 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 
 	hits := make(map[string]bool)
 
-	for i := range rows {
-		chat, err := sidebarChat(ctx, slack, rooms, &rows[i])
+	for _, row := range rows {
+		chat, err := sidebarChat(ctx, slack, rooms, row)
 		if err != nil {
 			return nil, err
 		}
@@ -484,20 +484,6 @@ func readChats(candidates []string, hits []MessageSearchHit) []string {
 	}
 
 	return candidates
-}
-
-func (s *SessionService) sidebarRows(ctx context.Context, username string, chats []string) ([]SidebarSession, error) {
-	var rows []SidebarSession
-
-	for row, err := range s.sidebarSessions(ctx, username, chats) {
-		if err != nil {
-			return nil, err
-		}
-
-		rows = append(rows, row)
-	}
-
-	return rows, nil
 }
 
 func (s *SessionService) searchDefinitions(ctx context.Context, terms []SearchTerm) (agents harness.Agents, spaces []Space, err error) {

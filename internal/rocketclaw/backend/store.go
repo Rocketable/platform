@@ -1161,13 +1161,27 @@ func (s *SessionService) scheduledAgents() []string {
 
 func (s *SessionService) sidebarSessions(ctx context.Context, username string, chats []string) iter.Seq2[SidebarSession, error] {
 	return func(yield func(SidebarSession, error) bool) {
-		limit, err := s.SpaceLimitFor(ctx, s.definitions.Clone().PermittedSpaces(username))
+		rows, err := s.sidebarRows(ctx, username, chats)
 		if err != nil {
 			yield(SidebarSession{}, err)
 			return
 		}
 
-		rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+chatOriginSQL+shownChatsSQL+`,
+		for _, row := range rows {
+			if !yield(*row, nil) {
+				return
+			}
+		}
+	}
+}
+
+func (s *SessionService) sidebarRows(ctx context.Context, username string, chats []string) ([]*SidebarSession, error) {
+	limit, err := s.SpaceLimitFor(ctx, s.definitions.Clone().PermittedSpaces(username))
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+chatOriginSQL+shownChatsSQL+`,
 running AS (
     SELECT DISTINCT ON (conversation_id) conversation_id, inbound_json->>'Text' AS prompt, to_timestamp(created_at_unix_ns / 1e9) AS started_at
     FROM turns WHERE phase NOT IN ('waiting', 'done') AND takes_lane
@@ -1258,78 +1272,69 @@ WHERE o.kind = 'remote' AND o.server = ANY($4) AND ($5::text[] IS NULL OR o.conv
 SELECT * FROM local UNION ALL SELECT * FROM remote
 )
 SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, KindOneOffCronRun,
-			slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)), chats, username, s.scheduledAgents())
-		if err != nil {
-			yield(SidebarSession{}, fmt.Errorf("query sidebar sessions: %w", err))
-			return
-		}
-		defer func() { _ = rows.Close() }()
-
-		var (
-			sessions       []*SidebarSession
-			preview        pgtype.DriverBytes
-			tags           pgtype.DriverBytes
-			updated        sql.NullTime
-			unread, until  sql.NullTime
-			since, arrived int64
-			origin         chatOriginScan
-		)
-
-		dest := make([]any, 0, 45)
-
-		for rows.Next() {
-			var row SidebarSession
-
-			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Paused, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
-				&row.Attention.Parked, &row.Attention.Unfollowed, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &since, &row.Queued, &row.External, &arrived)
-			if err := origin.read(rows, &row.Origin, dest...); err != nil {
-				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
-				return
-			}
-
-			if !limit.AllowsSession(&row) {
-				continue
-			}
-
-			row.Origin.ConversationID, row.Origin.CreatedBy = row.Conversation.ID, ThreadCreator(row.Conversation.CreatedBy)
-			row.Attention.UnreadAt, row.Attention.Until = unread.Time.UTC(), until.Time.UTC()
-			row.StateSince, row.ArrivedAt = cmp.Or(timeFromUnixNano(since), updated.Time.UTC()), cmp.Or(timeFromUnixNano(arrived), updated.Time.UTC())
-
-			if err := json.Unmarshal(tags, &row.Tags); err != nil {
-				yield(SidebarSession{}, fmt.Errorf("decode sidebar tags: %w", err))
-				return
-			}
-
-			if updated.Valid {
-				row.Summary = &protocol.SessionSummary{ConversationID: row.Conversation.ID, LastMessage: string(preview), LastUpdated: updated.Time.UTC()}
-			}
-
-			sessions = append(sessions, &row)
-		}
-
-		if err := errors.Join(rows.Err(), ctx.Err()); err != nil {
-			yield(SidebarSession{}, fmt.Errorf("read sidebar sessions: %w", err))
-			return
-		}
-
-		slices.SortFunc(sessions, func(a, b *SidebarSession) int {
-			var updated [2]time.Time
-
-			for i, row := range [2]*SidebarSession{a, b} {
-				if row.Summary != nil {
-					updated[i] = row.Summary.LastUpdated
-				}
-			}
-
-			return cmp.Or(updated[1].Compare(updated[0]), strings.Compare(a.Conversation.ID, b.Conversation.ID))
-		})
-
-		for _, row := range sessions {
-			if !yield(*row, nil) {
-				return
-			}
-		}
+		slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)), chats, username, s.scheduledAgents())
+	if err != nil {
+		return nil, fmt.Errorf("query sidebar sessions: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
+
+	var (
+		sessions       []*SidebarSession
+		preview        pgtype.DriverBytes
+		tags           pgtype.DriverBytes
+		updated        sql.NullTime
+		unread, until  sql.NullTime
+		since, arrived int64
+		origin         chatOriginScan
+	)
+
+	dest := make([]any, 0, 45)
+
+	for rows.Next() {
+		var row SidebarSession
+
+		dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Paused, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
+			&row.Attention.Parked, &row.Attention.Unfollowed, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &since, &row.Queued, &row.External, &arrived)
+		if err := origin.read(rows, &row.Origin, dest...); err != nil {
+			return nil, fmt.Errorf("scan sidebar session: %w", err)
+		}
+
+		if !limit.AllowsSession(&row) {
+			continue
+		}
+
+		row.Origin.ConversationID, row.Origin.CreatedBy = row.Conversation.ID, ThreadCreator(row.Conversation.CreatedBy)
+		row.Attention.UnreadAt, row.Attention.Until = unread.Time.UTC(), until.Time.UTC()
+		row.StateSince, row.ArrivedAt = cmp.Or(timeFromUnixNano(since), updated.Time.UTC()), cmp.Or(timeFromUnixNano(arrived), updated.Time.UTC())
+
+		if err := json.Unmarshal(tags, &row.Tags); err != nil {
+			return nil, fmt.Errorf("decode sidebar tags: %w", err)
+		}
+
+		if updated.Valid {
+			row.Summary = &protocol.SessionSummary{ConversationID: row.Conversation.ID, LastMessage: string(preview), LastUpdated: updated.Time.UTC()}
+		}
+
+		sessions = append(sessions, &row)
+	}
+
+	if err := errors.Join(rows.Err(), ctx.Err()); err != nil {
+		return nil, fmt.Errorf("read sidebar sessions: %w", err)
+	}
+
+	slices.SortFunc(sessions, func(a, b *SidebarSession) int {
+		var updated [2]time.Time
+
+		for i, row := range [2]*SidebarSession{a, b} {
+			if row.Summary != nil {
+				updated[i] = row.Summary.LastUpdated
+			}
+		}
+
+		return cmp.Or(updated[1].Compare(updated[0]), strings.Compare(a.Conversation.ID, b.Conversation.ID))
+	})
+
+	return sessions, nil
 }
 
 func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, cutoff time.Time) (rows int64, pruned bool, err error) {
