@@ -664,6 +664,16 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
+    await page.addInitScript(() => {
+      const flatMap = Array.prototype.flatMap;
+      let agentScans = 0;
+      Object.defineProperty(window, "agentScans", { get: () => agentScans });
+      Object.defineProperty(Array.prototype, "flatMap", { value: function(this: { id?: string }[], ...args: Parameters<typeof flatMap>) {
+        const values = Reflect.apply(flatMap, this, args);
+        if (values.includes("build") && this.some((row) => row?.id === "opencode:box:ses")) agentScans++;
+        return values;
+      } });
+    });
     await page.goto(origin);
     await page.getByRole("button", { name: "Search sessions and commands", exact: true }).waitFor();
     await page.keyboard.press("Control+p");
@@ -676,6 +686,7 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
     // The title match is one row, with no message or field rows, and the hand-off comes last.
     expect(await palette.locator("li > button").evaluateAll((buttons: Element[]) => buttons.map((button) => button.querySelector('[data-slot="session-title"]')?.textContent ?? button.textContent))).toEqual(["Needle notes", "Search in this space for 'needle'", "Search everywhere for 'needle'"]);
     expect(requests).toEqual([]);
+    expect(await page.evaluate(() => Reflect.get(window, "agentScans"))).toBe(0);
 
     // Remote sessions suggest their servers, agents and models; RocketClaw agents their configured models.
     for (const [typed, offered] of [["server:", ["box"]], ["agent:", ["main", "build"]], ["model:", ["gpt-6.1-sol", "anthropic/claude-opus-4-7"]], ["model:OPUS", ["anthropic/claude-opus-4-7"]]] as const) {
@@ -683,6 +694,7 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
       const choices = palette.locator("ul.bg-popover li span.font-medium");
       await choices.first().waitFor();
       expect(await choices.allTextContents()).toEqual([...offered]);
+      if (typed === "agent:") expect(await page.evaluate(() => Reflect.get(window, "agentScans"))).toBeGreaterThan(0);
     }
 
     await input.fill("done. updated"); // Markdown reads as the row shows it.
