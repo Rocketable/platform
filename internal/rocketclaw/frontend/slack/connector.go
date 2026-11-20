@@ -1347,18 +1347,17 @@ func (c *Connector) stripSlackBotMention(text string) string {
 		return text
 	}
 
-	for _, mention := range []string{"<@" + botUserID + ">", "<@" + botUserID + "|"} {
-		if !strings.HasPrefix(text, mention) {
-			continue
+	prefix := "<@" + botUserID
+	if after, ok := strings.CutPrefix(text, prefix+">"); ok {
+		return strings.TrimLeftFunc(after, unicode.IsSpace)
+	}
+
+	if after, ok := strings.CutPrefix(text, prefix+"|"); ok {
+		if _, rest, found := strings.Cut(text, ">"); found {
+			after = rest
 		}
 
-		if mention[len(mention)-1] == '|' {
-			if _, after, ok := strings.Cut(text, ">"); ok {
-				return strings.TrimLeftFunc(after, unicode.IsSpace)
-			}
-		}
-
-		return strings.TrimLeftFunc(strings.TrimPrefix(text, mention), unicode.IsSpace)
+		return strings.TrimLeftFunc(after, unicode.IsSpace)
 	}
 
 	return text
