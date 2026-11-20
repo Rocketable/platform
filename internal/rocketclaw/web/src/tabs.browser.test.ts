@@ -139,7 +139,7 @@ for (const width of [1280, 320]) test(`the bottom bar's buttons fit without over
   }));
   // The sidebar toggle, the four middle buttons, and the theme toggle, left to right without overlap.
   expect(boxes).toHaveLength(6);
-  expect(await page.locator("#bottom-navigation").getByRole("button", { name: "Pull requests", exact: true }).count()).toBe(0);
+  expect(await page.locator("#bottom-navigation").getByRole("button", { name: "Pull requests and issues", exact: true }).count()).toBe(0);
   expect(boxes[0].x).toBeLessThan(16);
   expect(boxes[5].x + boxes[5].width).toBeGreaterThan(width - 16);
   for (const [index, box] of boxes.entries()) {
@@ -344,7 +344,7 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   await tab("New session").click({ button: "right" });
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Rename session");
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Regenerate title");
-  expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Pull requests");
+  expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Pull requests and issues");
 }), 60_000);
 
 test("a RocketClaw session's tab menu and palette delete it after asking, showing a refusal and closing its tab", () => withPage({}, async (page, origin, _prompts, saved) => {
@@ -781,9 +781,9 @@ test("Cmd/Ctrl+click and Shift+click select tabs that the tab menu groups and un
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("In selection, Space: Main");
   // An unselected tab's menu acts on it alone, and a selected one's menu has no Rename session.
   expect(await items("Bravo")).toContain("Rename session");
-  expect(await items("Bravo")).toContain("Pull requests");
+  expect(await items("Bravo")).toContain("Pull requests and issues");
   expect(await items("Charlie")).not.toContain("Rename session");
-  expect(await items("Charlie")).not.toContain("Pull requests");
+  expect(await items("Charlie")).not.toContain("Pull requests and issues");
   await menu(page, "Charlie", "Add to group", "New group");
   await page.keyboard.type("Work");
   await page.keyboard.press("Escape");

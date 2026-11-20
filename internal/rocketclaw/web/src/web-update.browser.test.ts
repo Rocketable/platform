@@ -71,7 +71,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
       const box = el.getBoundingClientRect();
       return box.width > 0 && box.top >= 0 && box.left >= 0 && box.bottom <= innerHeight && box.right <= innerWidth && el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
     });
-    for (const target of [refresh, page.getByRole("button", { name: "Show pull requests", exact: true }).locator(".."), tabs, page.locator("footer").getByRole("button", { name: "New session", exact: true })]) expect(await unobstructed(target)).toBe(true);
+    for (const target of [refresh, page.getByRole("button", { name: "Show pull requests and issues", exact: true }).locator(".."), tabs, page.locator("footer").getByRole("button", { name: "New session", exact: true })]) expect(await unobstructed(target)).toBe(true);
     await page.screenshot({ path: path.join(shots, `web-update-${width}.png`) });
 
     // A failed check keeps what the last successful check showed.

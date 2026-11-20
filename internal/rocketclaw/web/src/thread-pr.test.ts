@@ -4,6 +4,7 @@ import { changedPR, loadThreadPRs, pullRequestsIn } from "./thread-pr";
 
 const url = "https://github.com/owner/repo/pull/7";
 const pr = (n: number) => `https://github.com/owner/repo/pull/${n}`;
+const issue = "https://github.com/owner/repo/issues/6";
 
 test("a successful command's created and mentioned PRs follow the harness rule", () => {
   const cases = shared as { name: string; command: string; output: string; created?: string[]; mentioned?: string[] }[];
@@ -35,7 +36,8 @@ test("native discovery reads every page of the thread, its subagents at any dept
   const histories: Record<string, Record<string, object>> = {
     thread: {
       "": { messages: [
-        { delegation: "thread/sub" },
+        { delegation: "thread/sub", role: "user", text: `[Track this](${issue}#issuecomment-1)` },
+        { role: "assistant", text: `${issue}. https://other.example/${issue} ${issue}00stuff` },
         { codeModeCalls: [bash("gh pr create --fill", { summary: "Warning: 1 uncommitted change", createdPullRequests: [pr(1)] }), bash("gh pr create --fill", { status: "error", summary: pr(90) }), bash("gh pr create --fill", { status: "running", summary: pr(93) })] },
       ], start: "20", more: true },
       "20": { messages: [{ codeModeCalls: [
@@ -55,7 +57,7 @@ test("native discovery reads every page of the thread, its subagents at any dept
     return Response.json(histories[body.id]![body.before ?? ""]);
   }) as typeof fetch;
   try {
-    expect(await loadThreadPRs("thread", new AbortController().signal)).toEqual({ created: [pr(1), pr(2), pr(3), pr(4)], mentioned: [pr(5), pr(8)] });
+    expect(await loadThreadPRs("thread", new AbortController().signal)).toEqual({ created: [pr(1), pr(2), pr(3), pr(4)], mentioned: [pr(5), pr(8)], issues: [issue] });
     expect(requests).toEqual([
       { id: "thread", before: undefined, marked: true },
       { id: "thread", before: "20", marked: true },
@@ -85,7 +87,8 @@ test("OpenCode discovery reads paged tool and shell history of the thread and it
     if (target.pathname.endsWith("/message")) return Response.json({ data: [{ type: "assistant", content: target.searchParams.has("cursor") ? [
       { type: "tool", name: "bash", state: { status: "completed", input: { command: "gh pr create" }, metadata: { exit: 0 }, content: [{ type: "text", text: url }] } },
       { type: "tool", name: "bash", state: { status: "completed", input: { command: "gh pr create" }, metadata: { exit: 1 }, content: [{ type: "text", text: pr(99) }] } },
-    ] : [{ type: "text", text: url }] }, ...target.searchParams.has("cursor") ? [
+    ] : [{ type: "text", text: `${url} and ${issue}` }] }, ...target.searchParams.has("cursor") ? [
+      { type: "user", payload: { text: `${issue}/` } },
       { type: "shell", command: "gh pr create", status: "exited", exit: 0, output: { output: pr(8) } },
       { type: "shell", command: "gh pr create", status: "exited", exit: 1, output: { output: pr(99) } },
       { type: "shell", command: "gh pr create", status: "running", exit: 0, output: { output: pr(99) } },
@@ -93,7 +96,7 @@ test("OpenCode discovery reads paged tool and shell history of the thread and it
     throw new Error("Unexpected request");
   }) as typeof fetch;
   try {
-    expect(await loadThreadPRs("opencode:box:ses_one", new AbortController().signal)).toEqual({ created: [url, pr(8), pr(11), pr(13), pr(12)], mentioned: [pr(14)] });
+    expect(await loadThreadPRs("opencode:box:ses_one", new AbortController().signal)).toEqual({ created: [url, pr(8), pr(11), pr(13), pr(12)], mentioned: [pr(14)], issues: [issue] });
     const pages = requests.filter((request) => request.startsWith("/oc/box/api/session/ses_one/message"));
     expect(pages).toHaveLength(2);
     expect(new URL(pages[1], "https://web.test").searchParams.get("cursor")).toBe("older marker");

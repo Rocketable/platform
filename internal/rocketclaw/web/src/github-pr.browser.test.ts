@@ -392,6 +392,8 @@ test("built App PR layouts preserve the composer draft and existing delegation p
   let prompts = 0;
   let second = false;
   let mention = false;
+  let issueLink = "";
+  let holdIssueComments: Promise<void> | undefined;
   let discovery: Promise<void> | undefined;
   let filesHold: Promise<void> | undefined;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
@@ -416,7 +418,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
         return Response.json(tabs);
       case "/api/History": {
         if (url.searchParams.has("pull-request-discovery")) await discovery;
-        const text = input.id === session ? `[Synthetic change](${href})` : input.id === child ? "Existing delegation fixture" : "Other conversation fixture";
+        const text = input.id === session ? `[Synthetic change](${href}) ${issueLink}` : input.id === child ? "Existing delegation fixture" : "Other conversation fixture";
         const bash = (command: string, call: object) => ({ name: "bash", arguments: JSON.stringify({ command }), status: "ok" as const, ...call });
         const mentioned = href.replace(/7\/files$/, "9"), subagentCreated = href.replace(/7\/files$/, "8");
         const calls = input.id === session ? [...mention ? [bash("gh pr view 9", { summary: `url:\t${mentioned}`, mentionedPullRequests: [mentioned] })] : [], bash("gh pr create --title 'Sample change' --body 'Sample'", { summary: href.replace(/\/files$/, "") })]
@@ -438,6 +440,14 @@ test("built App PR layouts preserve the composer draft and existing delegation p
       const url = new URL(route.request().url());
       if (url.hostname === "api.github.com") {
         github.push(url.pathname);
+        if (url.pathname.endsWith("/issues/12")) return route.fulfill(route.request().headers().authorization === "Bearer synthetic-issue-token"
+          ? { json: { title: "Issue preview fixture", body: "**Issue summary** ![private diagram](https://untrusted.invalid/issue.png)", state: "open", labels: [{ name: "example label" }], user: { login: "demo-author" }, comments: 101 } }
+          : { status: 404, json: {} });
+        if (url.pathname.endsWith("/issues/12/comments")) {
+          await holdIssueComments;
+          const comment = (id: number) => ({ id, body: `Discussion item ${id}`, user: { login: "demo-author" }, created_at: "2026-11-12T12:00:00Z" });
+          return route.fulfill({ json: url.searchParams.get("page") === "1" ? Array.from({ length: 100 }, (_, index) => comment(index + 1)) : [comment(101)] });
+        }
         if (url.pathname.endsWith("/files")) await filesHold;
         return route.fulfill({ json: url.pathname.endsWith("/files") ? [file(0)] : { ...metadata, changed_files: url.pathname.endsWith("/pulls/8") ? 0 : 1 }, headers: { "Access-Control-Allow-Origin": "*" } });
       }
@@ -508,8 +518,8 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     filesHold = files.promise;
     const beforePane = filesRead();
     await page.getByRole("button", { name: "Tab actions", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
-    const prs = page.getByRole("complementary", { name: "Pull requests", exact: true });
+    await page.getByRole("menuitem", { name: "Pull requests and issues", exact: true }).click();
+    const prs = page.getByRole("complementary", { name: "Pull requests and issues", exact: true });
     await prs.getByText(metadata.title, { exact: true }).waitFor();
     expect(await page.getByRole("complementary", { name: "Delegation", exact: true }).count()).toBe(0);
     expect(await composer.inputValue()).toBe("App composer draft edited beside preview");
@@ -523,7 +533,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     discovery = held.promise;
     updatedAt = "2026-01-02T00:00:00Z";
     await prs.locator('button:disabled[aria-label="Refresh"]').waitFor();
-    expect(await prs.getByText("Finding pull requests…", { exact: true }).count()).toBe(0);
+    expect(await prs.getByText("Finding pull requests and issues…", { exact: true }).count()).toBe(0);
     expect((await title.boundingBox())!.y).toBe(top);
     held.resolve();
     await prs.locator('button:enabled[aria-label="Refresh"]').waitFor();
@@ -552,23 +562,23 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     expect(filesRead() - beforeRefresh).toBe(1);
     await title.waitFor();
     await page.getByRole("tab", { name: "Other fixture", exact: true }).click({ button: "right" });
-    await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Pull requests and issues", exact: true }).click();
     await page.getByText("Other conversation fixture", { exact: true }).waitFor();
-    await prs.getByText("No pull requests found for this thread.", { exact: true }).waitFor();
+    await prs.getByText("No pull requests or issues found for this thread.", { exact: true }).waitFor();
     expect(await prs.getByText(metadata.title, { exact: true }).count()).toBe(0);
     await page.getByRole("tab", { name: "Preview fixture", exact: true }).click();
     await preview.waitFor();
     await page.getByRole("button", { name: "Tab actions", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Pull requests and issues", exact: true }).click();
     await prs.getByText(metadata.title, { exact: true }).waitFor();
     await page.setViewportSize({ width: 390, height: 844 });
-    const mobile = page.getByRole("dialog", { name: "Pull requests", exact: true });
+    const mobile = page.getByRole("dialog", { name: "Pull requests and issues", exact: true });
     await mobile.getByText(metadata.title, { exact: true }).waitFor();
-    await mobile.getByRole("button", { name: "Close pull requests", exact: true }).click();
+    await mobile.getByRole("button", { name: "Close pull requests and issues", exact: true }).click();
     await page.getByRole("button", { name: "Show sidebar", exact: true }).click();
     const actions = page.getByRole("button", { name: "Tab actions", exact: true });
     await actions.press("Enter");
-    await page.getByRole("menuitem", { name: "Pull requests", exact: true }).press("Enter");
+    await page.getByRole("menuitem", { name: "Pull requests and issues", exact: true }).press("Enter");
     await mobile.getByText(metadata.title, { exact: true }).waitFor();
     await page.waitForFunction((node: HTMLElement) => node.contains(document.activeElement), await mobile.elementHandle());
     await page.keyboard.press("Escape");
@@ -582,7 +592,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     let look = subagentLook();
     await page.setViewportSize({ width: 1440, height: 900 });
     await look;
-    await page.getByRole("button", { name: "Show pull requests", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Show pull requests and issues", exact: true }).waitFor();
     expect(await prs.count()).toBe(0);
     mention = true;
     for (const at of ["2026-01-03T00:00:00Z", "2026-01-04T00:00:00Z"]) {
@@ -594,23 +604,43 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     second = true;
     updatedAt = "2026-01-05T00:00:00Z";
     // The picker shows only once the thread has more than one PR.
-    await prs.getByRole("combobox", { name: "Thread pull request" }).waitFor();
-    expect(await prs.getByRole("combobox", { name: "Thread pull request" }).textContent()).toContain("#8");
+    await prs.getByRole("combobox", { name: "Thread pull request or issue" }).waitFor();
+    expect(await prs.getByRole("combobox", { name: "Thread pull request or issue" }).textContent()).toContain("#8");
     await prs.getByText("0 of 0 files loaded", { exact: true }).waitFor();
-    await prs.getByRole("combobox", { name: "Thread pull request" }).click();
+    await prs.getByRole("combobox", { name: "Thread pull request or issue" }).click();
     const option = page.getByRole("option", { name: "sample/fixture-repository-marker #7", exact: true });
     expect(await option.evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true);
     expect(await page.getByRole("option").allTextContents()).toEqual(["sample/fixture-repository-marker #7", "sample/fixture-repository-marker #8", "sample/fixture-repository-marker #9 · mentioned"]);
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Hide right pane", exact: true }).click();
     await prs.waitFor({ state: "detached" });
-    await page.getByRole("button", { name: "Show pull requests", exact: true }).click();
+    await page.getByRole("button", { name: "Show pull requests and issues", exact: true }).click();
     await prs.getByText(metadata.title, { exact: true }).waitFor();
-    expect(await prs.getByRole("combobox", { name: "Thread pull request" }).textContent()).toContain("#7");
+    expect(await prs.getByRole("combobox", { name: "Thread pull request or issue" }).textContent()).toContain("#7");
+    issueLink = "https://github.com/sample/fixture-repository-marker/issues/12";
+    await prs.getByRole("button", { name: "Refresh", exact: true }).click();
+    await prs.getByRole("combobox", { name: "Thread pull request or issue" }).click();
+    await page.getByRole("option", { name: "sample/fixture-repository-marker #12 · issue", exact: true }).click();
+    await prs.getByRole("alert").getByText("Not found or private.", { exact: false }).waitFor();
+    await prs.getByLabel("Personal read token").fill("synthetic-issue-token");
+    await prs.getByRole("button", { name: "Use token", exact: true }).click();
+    await prs.getByRole("heading", { name: "Issue preview fixture" }).waitFor();
+    await prs.getByText("Issue summary", { exact: true }).waitFor();
+    expect(await prs.locator("img").count()).toBe(0);
+    await prs.getByRole("button", { name: "Load more comments" }).click();
+    await prs.getByText("Discussion item 101", { exact: true }).waitFor();
+    expect(await prs.getByRole("button", { name: "Load more comments" }).count()).toBe(0);
+    const heldComments = Promise.withResolvers<void>();
+    holdIssueComments = heldComments.promise;
+    const reading = page.waitForRequest((request: { url(): string }) => request.url().includes("/issues/12/comments"));
+    await prs.getByRole("button", { name: "Refresh", exact: true }).click();
+    await reading;
+    const aborted = page.waitForEvent("requestfailed", (request: { url(): string }) => request.url().includes("/issues/12/comments"));
     // Cmd/Ctrl+Shift+B does what the button does, also while the message box has focus.
     await composer.focus();
     await page.keyboard.press("ControlOrMeta+Shift+B");
     await prs.waitFor({ state: "detached" });
+    try { await aborted; } finally { heldComments.resolve(); }
     await page.keyboard.press("ControlOrMeta+Shift+B");
     await prs.getByText(metadata.title, { exact: true }).waitFor();
     expect(github.filter((pathname) => pathname.endsWith("/pulls/8/files"))).toEqual([]);
@@ -667,7 +697,7 @@ test("the PR pane quotes its description and adds diff notes to the native draft
     await page.goto(`${origin}${sessionPath(session)}?pullRequests=`);
     const composer = page.locator("main textarea");
     await page.locator("main textarea:enabled").waitFor();
-    const prs = page.getByRole("complementary", { name: "Pull requests", exact: true });
+    const prs = page.getByRole("complementary", { name: "Pull requests and issues", exact: true });
     await prs.getByText(metadata.title, { exact: true }).waitFor();
     const selectDescription = (root: any) => root.getByText("Description sentence marker", { exact: true }).evaluate((node: HTMLElement) => {
       const range = document.createRange();
@@ -747,7 +777,7 @@ test("the PR pane quotes its description and adds diff notes to the native draft
 
     await composer.fill("narrow");
     await page.setViewportSize({ width: 390, height: 844 });
-    const sheet = page.getByRole("dialog", { name: "Pull requests", exact: true });
+    const sheet = page.getByRole("dialog", { name: "Pull requests and issues", exact: true });
     await sheet.getByText("add11", { exact: true }).waitFor();
     await selectLines(sheet, "change-addition", 10, 10);
     await sheet.getByRole("textbox", { name: "Note", exact: true }).fill("small screen");

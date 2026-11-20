@@ -27,7 +27,7 @@ import { CodeBlock, InlineText, MarkdownText, OUTPUT_KEY, TranscriptText, cleanT
 import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { BehaviorSettings } from "./behavior-settings";
-import { ThreadPRContent, ThreadPRWatch } from "./thread-pr-panel";
+import { ThreadPRContent, ThreadPRWatch, threadGitHubLabel } from "./thread-pr-panel";
 import { SelectionQuote, type DiffNote, type PRComposer } from "./github-pr-preview";
 import type { GitHubPR } from "./github-pr";
 import { reportTyping, TypingPill } from "./typing";
@@ -881,7 +881,7 @@ function PanelToggle() {
   const session = pathSession(usePathname());
   const search = new URLSearchParams(useSearch());
   const open = ["delegation", "skill", "pullRequests"].some((panel) => search.has(panel));
-  const label = open ? "Hide right pane" : "Show pull requests";
+  const label = open ? "Hide right pane" : "Show pull requests and issues";
   const Icon = open ? PanelRightClose : PanelRightOpen;
   const toggle = () => navigate(panelHref(open ? undefined : "1", "pullRequests"));
   const onKey = useEffectEvent((event: KeyboardEvent) => {
@@ -1729,7 +1729,7 @@ function menuItems(tabs: TabStoreValue, menu: CardMenu, view: ServerView, target
 }
 
 const pullRequestItems = (menu: { path: string }, single: boolean, name: string): TabCommand[] =>
-  pathSession(menu.path) && single ? [{ key: "pull-requests", label: "Pull requests", run: () => navigate(`${menu.path}?pullRequests=1`, false, name) }] : [];
+  pathSession(menu.path) && single ? [{ key: "pull-requests", label: threadGitHubLabel, run: () => navigate(`${menu.path}?pullRequests=1`, false, name) }] : [];
 
 type TabStoreValue = ReturnType<typeof useTabs>;
 // A card's tabs, which its rows rename and edit through; outside a card, the page's.
@@ -4979,7 +4979,7 @@ function ThreadPRPanel({ drafts, onDraftChange }: { drafts: Map<string, Composer
   const close = () => navigate(panelHref());
   return <>
     {wide ? <ThreadPRWatch key={id} id={id} version={version} /> : null}
-    {selected === null ? null : <SidePanel label="Pull requests" close={close}>
+    {selected === null ? null : <SidePanel label={threadGitHubLabel} close={close}>
       <ThreadPRContent key={`${id} ${selected}`} id={id} version={version} selected={selected} close={close} composer={composer} />
       {added ? <p key={added} role="status" className="shrink-0 border-t p-2 text-xs text-muted-foreground">Added to message</p> : null}
     </SidePanel>}

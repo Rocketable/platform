@@ -25,6 +25,7 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
   let checkoutUnavailable = true;
   let directory = "/repo";
   let holdMetadata = false;
+  let includeIssue = false;
   const pendingMetadata = Promise.withResolvers<void>(), releaseMetadata = Promise.withResolvers<void>();
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -35,7 +36,7 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
       const url = new URL(request.request().url());
       if (!url.searchParams.has("pull-request-discovery")) return request.continue();
       if (url.pathname.endsWith("/message")) return request.fulfill({ json: { data: url.pathname.includes("/ses_a/") ? [{ type: "assistant", content: [
-        { type: "text", text: "https://github.com/sample/fixture-repository-marker/pull/99" },
+        { type: "text", text: includeIssue ? "https://github.com/sample/fixture-repository-marker/issues/12" : "https://github.com/sample/fixture-repository-marker/pull/99" },
         { type: "tool", name: "shell", state: { status: "completed", input: { command: "gh pr create --title 'Sample' --body 'Sample'" }, metadata: { exit: 0 }, content: [{ type: "text", text: "https://github.com/sample/fixture-repository-marker/pull/7" }] } },
       ] }] : [], cursor: {} } });
       if (url.pathname.endsWith("/api/session")) return request.fulfill({ json: { data: [], cursor: {} } });
@@ -44,6 +45,8 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
         const body = request.request().postDataJSON(); commands.push(body);
         const command = body.command as string;
         const output = command.includes("gh pr view") ? checkoutUnavailable ? "To get started with GitHub CLI, please run:  gh auth login" : JSON.stringify({ url: `https://github.com/sample/fixture-repository-marker/pull/${{ "/repo/child": 8, "/repo/next": 9 }[body.cwd as string] ?? 7}`, headRefName: "feature/pr-pane", mergedAt: null, closedAt: null })
+          : command.includes("/issues/12/comments") ? JSON.stringify([{ id: 1, body: "Private discussion fixture", user: { login: "demo-author" }, created_at: "2026-11-12T12:00:00Z" }])
+          : command.includes("/issues/12") ? JSON.stringify({ title: "Remote issue fixture", body: "Private issue description", state: "closed", labels: [], user: null, comments: 1 })
           : command.includes("/files?") ? JSON.stringify([{ filename: "private-file-marker.ts", status: "modified", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+private-patch-marker <script>text only</script>" }])
           : JSON.stringify({ title: command.includes("/pulls/8") ? "Second thread PR marker" : "Remote private PR marker", body: "Private description marker", state: "open", draft: true, merged: false, changed_files: 1, user: { login: "demo-author" }, updated_at: "2026-11-12T12:00:00Z", additions: 1, deletions: 0, head: { sha: "head", ref: "feature/pr-reader" }, base: { sha: "base", ref: "main" } });
         const id = `sh_pr_${outputs.size}`; outputs.set(id, output);
@@ -62,13 +65,13 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
     await draft.fill("OpenCode draft before reading a PR");
     expect(await page.locator("#bottom-navigation").getByRole("button").count()).toBe(6);
     await page.getByRole("button", { name: "Tab actions", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
-    const pane = page.getByRole("complementary", { name: "Pull requests", exact: true });
+    await page.getByRole("menuitem", { name: "Pull requests and issues", exact: true }).click();
+    const pane = page.getByRole("complementary", { name: "Pull requests and issues", exact: true });
     await pane.getByText("Remote private PR marker", { exact: true }).waitFor();
     await pane.getByRole("alert").getByText("Could not read the current checkout's pull request using this OpenCode server's gh login.", { exact: true }).waitFor();
     expect(await pane.getByLabel("Personal read token").count()).toBe(0);
     // One PR needs no picker.
-    expect(await pane.getByRole("combobox", { name: "Thread pull request" }).count()).toBe(0);
+    expect(await pane.getByRole("combobox", { name: "Thread pull request or issue" }).count()).toBe(0);
     expect(await pane.textContent()).not.toContain("#99");
     await draft.fill("OpenCode draft edited beside the PR");
     await pane.getByRole("tab", { name: "Code", exact: true }).click();
@@ -106,11 +109,11 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
     await page.getByRole("tab", { name: "Alpha work", exact: true }).click();
     await view.getByText("answer in ses_a", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Tab actions", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Pull requests and issues", exact: true }).click();
     await pane.getByText("Remote private PR marker", { exact: true }).waitFor();
     expect(await pane.getByText(/^Current checkout/).count()).toBe(0);
     await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
-    await pane.getByRole("button", { name: "Close pull requests", exact: true }).click();
+    await pane.getByRole("button", { name: "Close pull requests and issues", exact: true }).click();
     expect(await draft.textContent()).toBe("OpenCode draft edited beside the PR");
     directory = "/repo/next";
     for (const minutes of [1, 2]) {
@@ -126,9 +129,9 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
     }
     expect(await pane.count()).toBe(0);
     await page.getByRole("button", { name: "Tab actions", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Pull requests and issues", exact: true }).click();
     await pane.getByText("Remote private PR marker", { exact: true }).waitFor();
-    await pane.getByRole("combobox", { name: "Thread pull request" }).click();
+    await pane.getByRole("combobox", { name: "Thread pull request or issue" }).click();
     const options = page.getByRole("option");
     await options.first().waitFor();
     expect(await options.allTextContents()).toEqual(["sample/fixture-repository-marker #7", "sample/fixture-repository-marker #9"]);
@@ -163,7 +166,15 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
     await firstLine.click();
     await page.waitForTimeout(300);
     expect(await pane.getByRole("textbox", { name: "Note", exact: true }).count()).toBe(0);
-    await pane.getByRole("button", { name: "Close pull requests", exact: true }).click();
+    includeIssue = true;
+    await pane.getByRole("button", { name: "Refresh", exact: true }).click();
+    await pane.getByRole("combobox", { name: "Thread pull request or issue" }).click();
+    await page.getByRole("option", { name: "sample/fixture-repository-marker #12 · issue", exact: true }).click();
+    await pane.getByRole("heading", { name: "Remote issue fixture" }).waitFor();
+    await pane.getByText("Private discussion fixture", { exact: true }).waitFor();
+    expect(await pane.getByLabel("Personal read token").count()).toBe(0);
+    expect(commands.some(({ command }) => command.endsWith("/issues/12/comments?per_page=100&page=1'"))).toBe(true);
+    await pane.getByRole("button", { name: "Close pull requests and issues", exact: true }).click();
     expect(commands.every(({ cwd, command }) => ["/repo", "/repo/child", "/repo/moved", "/repo/next"].includes(cwd) && /^GH_PROMPT_DISABLED=1 gh (?:pr view \$\(git symbolic-ref -q HEAD >\/dev\/null \|\| jj log .+ \| head -n1\) --json|api --hostname github.com --method GET)/.test(command))).toBe(true);
     expect(removed).toHaveLength(commands.length);
     expect(prompts).toEqual([]);

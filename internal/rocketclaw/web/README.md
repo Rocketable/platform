@@ -69,14 +69,20 @@ Preview DOM and GitHub network data are excluded from PostHog recording.
 Browser extensions and clipboard managers remain outside the
 application's control. No remote images or executable description content load.
 
-The conversation tab's **⋯ → Pull requests** menu item opens the existing right
+The conversation tab's **⋯ → Pull requests and issues** menu item opens the right
 pane for a RocketClaw or OpenCode thread. So does the bottom bar's right-end
 button, which closes whichever right pane is open, and Cmd/Ctrl+Shift+B, which does
 what that button does. The key is RocketClaw's even while the button is disabled,
 so Chrome's bookmarks bar toggle never takes it. On desktop the conversation
 stays editable beside it; on narrow screens it uses a sheet. It replaces an open
 delegation or skill pane. It shows a PR's description and changed-file patches;
-when the thread has more than one PR, a picker in the pane's header selects it.
+when there is more than one result, a picker in the pane's header selects it.
+The picker also shows GitHub issues linked in the conversation or its child
+sessions. Choose an issue to read its description, labels, and discussion. Older
+or long discussions can be read a page at a time with **Load more comments**.
+Issues do not open the pane automatically. Private issues in native sessions
+need a personal token with **Issues: read**; OpenCode sessions use the server's
+existing GitHub login. Issue previews do not load embedded images.
 
 On desktop the pane also opens by itself, on that PR, when a session in the thread
 creates a PR or one of its created PRs gets a new head commit. Discovery then runs
