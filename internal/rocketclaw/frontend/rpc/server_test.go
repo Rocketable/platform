@@ -967,6 +967,33 @@ WHERE c.conversation_id = v.id`)
 	require.Empty(t, response.Messages)
 }
 
+func TestMessageMatchesAllocationBudget(t *testing.T) {
+	hits := messageMatchFixture()
+
+	var matches []*MessageMatch
+
+	allocs := testing.AllocsPerRun(10, func() {
+		matches = messageMatches(hits)
+	})
+
+	require.Len(t, matches, len(hits))
+	require.LessOrEqual(t, allocs, 8.0)
+}
+
+func BenchmarkMessageMatches(b *testing.B) {
+	hits := messageMatchFixture()
+	for b.Loop() {
+		messageMatches(hits)
+	}
+}
+
+func messageMatchFixture() []backend.MessageSearchHit {
+	return slices.Repeat([]backend.MessageSearchHit{
+		{ConversationID: "garden", Role: "user", Text: "The basil is ready.", MessageID: "1:0"},
+		{ConversationID: "garden", Role: "assistant", Text: "Pick the largest leaves first.", MessageID: "2:0"},
+	}, 128)
+}
+
 func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 	t.Parallel()
 

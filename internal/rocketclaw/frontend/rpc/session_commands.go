@@ -243,9 +243,17 @@ func (work sessionSearch) search(scanCtx context.Context, s *Server) (*SearchSes
 }
 
 func messageMatches(hits []backend.MessageSearchHit) []*MessageMatch {
-	matches := make([]*MessageMatch, 0, len(hits))
-	for _, hit := range hits {
-		matches = append(matches, &MessageMatch{ConversationId: hit.ConversationID, Message: &TranscriptEvent{Role: hit.Role, Text: hit.Text, MessageId: hit.MessageID}})
+	rows := make([]struct {
+		match   MessageMatch
+		message TranscriptEvent
+	}, len(hits))
+
+	matches := make([]*MessageMatch, len(hits))
+	for i, hit := range hits {
+		row := &rows[i]
+		row.message = TranscriptEvent{Role: hit.Role, Text: hit.Text, MessageId: hit.MessageID}
+		row.match = MessageMatch{ConversationId: hit.ConversationID, Message: &row.message}
+		matches[i] = &row.match
 	}
 
 	return matches
