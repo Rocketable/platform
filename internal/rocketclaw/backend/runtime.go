@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -46,8 +45,8 @@ type Runtime struct {
 
 	reloadMu sync.Mutex
 
-	slackWarningsMu sync.Mutex
-	slackWarnings   []slackAgentWarning
+	slackWarningMu   sync.Mutex
+	slackWarningText string
 
 	TextRouter protocol.PrimaryTextRouter
 	threads    *threadBridgeManager
@@ -74,7 +73,7 @@ func (r *Runtime) Reload(reason string) (string, error) {
 	cfg := r.Cfg.Clone()
 	r.Log.Info("reload requested", "reason", reason)
 
-	var warnings []slackAgentWarning
+	var warnings string
 
 	if err := skel.ReplaceRuntimeAssetsAfterValidation(cfg.Workspace, cfg.RuntimeDirName(), new(cfg.Behavior()), r.Log, r.Cfg, func(runtimeDir string) error {
 		var err error
@@ -87,9 +86,9 @@ func (r *Runtime) Reload(reason string) (string, error) {
 		return "", fmt.Errorf("reload runtime assets: %w", err)
 	}
 
-	r.slackWarningsMu.Lock()
-	r.slackWarnings = warnings
-	r.slackWarningsMu.Unlock()
+	r.slackWarningMu.Lock()
+	r.slackWarningText = warnings
+	r.slackWarningMu.Unlock()
 
 	if err := r.ExternalMCPAgents.Refresh(); err != nil {
 		return "", fmt.Errorf("refresh external MCP agents: %w", err)
@@ -134,7 +133,7 @@ func (r *Runtime) SaveBehavior(behavior *config.Behavior) error {
 		return err
 	}
 
-	var warnings []slackAgentWarning
+	var warnings string
 
 	validate := func(runtimeDir string) error {
 		var err error
@@ -187,9 +186,9 @@ func (r *Runtime) SaveBehavior(behavior *config.Behavior) error {
 	}
 
 	if err == nil {
-		r.slackWarningsMu.Lock()
-		r.slackWarnings = warnings
-		r.slackWarningsMu.Unlock()
+		r.slackWarningMu.Lock()
+		r.slackWarningText = warnings
+		r.slackWarningMu.Unlock()
 
 		r.prepareSandbox()
 
@@ -212,15 +211,10 @@ func (r *Runtime) SaveBehavior(behavior *config.Behavior) error {
 }
 
 func (r *Runtime) SlackWarning() string {
-	r.slackWarningsMu.Lock()
-	defer r.slackWarningsMu.Unlock()
+	r.slackWarningMu.Lock()
+	defer r.slackWarningMu.Unlock()
 
-	lines := make([]string, 0, len(r.slackWarnings))
-	for _, warning := range r.slackWarnings {
-		lines = append(lines, fmt.Sprintf("Slack channel %s uses agent %s, which is not sticky: slack, so it does not answer mentions there.", warning.channel, warning.agent))
-	}
-
-	return strings.Join(lines, " ")
+	return r.slackWarningText
 }
 
 func (r *Runtime) Subscribe(ctx context.Context) iter.Seq[protocol.Event] {
