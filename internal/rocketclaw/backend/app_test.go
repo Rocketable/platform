@@ -749,10 +749,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-
-	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: testSlack()}
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: cloneMigratedTestDatabase(t), OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: testSlack()}
 
 	ctx, signal := context.WithCancel(t.Context())
 
