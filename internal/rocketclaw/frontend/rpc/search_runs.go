@@ -69,7 +69,6 @@ func (s *Server) runSearch(ctx context.Context, request *SearchSessionsRequest, 
 
 		scanCtx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
 		run = &searchRun{tab: request.Tab, id: request.SearchId, work: work, entered: entered, cancel: cancel, done: make(chan struct{})}
-		runs = append(runs, run)
 
 		s.runGroup.Go(func() error {
 			found, err := work.search(scanCtx, s)
@@ -89,9 +88,10 @@ func (s *Server) runSearch(ctx context.Context, request *SearchSessionsRequest, 
 
 			return nil
 		})
+
+		s.runs[work.username] = append(runs, run)
 	}
 
-	s.runs[work.username] = runs
 	s.runsMu.Unlock()
 
 	select {
