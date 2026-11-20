@@ -565,6 +565,26 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
         await view.locator('[data-pane-tab^="terminal:"]').getByRole("button", { name: "Close tab", exact: true }).click();
       }
       await until(() => terminals.open === 0);
+      const reopenKey = await page.evaluateHandle(() => {
+        let press: { event: KeyboardEvent; target: string; component?: string; insideView: boolean } | undefined;
+        const record = (event: KeyboardEvent) => {
+          if (event.code !== "Backquote") return;
+          window.removeEventListener("keydown", record, true);
+          const element = event.target instanceof Element ? event.target : null;
+          press = {
+            event,
+            target: element ? element.tagName + (element.id ? `#${element.id}` : "") : String(event.target),
+            component: element?.closest("[data-component]")?.getAttribute("data-component") ?? undefined,
+            insideView: !!element?.closest("[data-oc-view]"),
+          };
+        };
+        window.addEventListener("keydown", record, true);
+        return () => {
+          if (!press) return null;
+          const { event, ...target } = press;
+          return { ...target, key: event.key, control: event.ctrlKey, defaultPrevented: event.defaultPrevented };
+        };
+      });
       await terminalList.promise;
       await view.locator("[data-component=composer] [contenteditable=true]").click();
       await page.keyboard.press("Control+Backquote");
@@ -579,6 +599,11 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
           failure: request.failure()?.errorText,
         }));
         console.error("Terminal reopen wait failed", { close, expectedPane: "bottom", expectedOpenSockets: 1, observedOpenSockets: terminals.open, serverTerminals: fake.terminals, requests, errors, error });
+        try {
+          console.error("Ctrl+backtick keydown for the failed reopen", await reopenKey.evaluate((read: () => unknown) => read()));
+        } catch (snapshotError: unknown) {
+          console.error("Terminal reopen keydown snapshot failed", snapshotError);
+        }
         try {
           const dom = await view.locator('[data-component="terminal"], [data-pane-tab^="terminal:"]').evaluateAll((nodes: Element[]) => nodes.map((node) => ({
             component: node.getAttribute("data-component"),
