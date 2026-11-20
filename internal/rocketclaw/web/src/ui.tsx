@@ -3659,11 +3659,11 @@ function SearchResults({ path, held, tab, rows, edit, input }: { path: string; h
   const [entered, setEntered] = useState(true);
   const search = useSessionSearch(tab.query, "messages", entered, { tab: path, searchId: tab.id, held });
   const { response } = search.result;
+  const hits = useMemo(() => Map.groupBy(response?.messages ?? [], (match) => rowKey(match.conversationId, match.rocketclaw)), [response]);
   // Rows are drawn a page at a time as the end nears the screen; a new response starts again at one page.
   const [budget, setBudget] = useState({ response, rows: searchPage });
   const rowsDrawn = budget.response === response ? budget.rows : searchPage;
   const { groups, more } = useMemo(() => {
-    const hits = Map.groupBy(response?.messages ?? [], (match) => rowKey(match.conversationId, match.rocketclaw));
     let left = rowsDrawn;
     const groups = [];
     for (const { match, session } of search.found) {
@@ -3673,7 +3673,7 @@ function SearchResults({ path, held, tab, rows, edit, input }: { path: string; h
       left -= own.length + Number(!!match.field);
     }
     return { groups, more: left < 0 || groups.length < search.found.length };
-  }, [response, search.found, rowsDrawn]);
+  }, [hits, response, search.found, rowsDrawn]);
   return <>
     <div id="search-tab-panel" role="tabpanel" aria-label="Search" className="min-w-0">
       <SessionSearch rows={rows} query={tab.query} setQuery={(update) => { setEntered(false); edit((item) => ({ query: update(item.query) }), true); }} search={search} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { setEntered(true); void search.run(tab.query.trimEnd()); } }} />

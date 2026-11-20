@@ -982,25 +982,43 @@ test("typing reuses message results and new replies preserve selected text", asy
   }
 }, 30_000);
 
-test("a broad search draws a page of rows and scrolling draws the rest", async () => {
+test("scrolling through a broad search reuses the grouped hits", async () => {
   const { chromium: engine } = await import(playwright!);
   const rows = Array.from({ length: 1000 }, (_, i) => ({ id: `wide-${i}`, name: `Wide ${i}`, agent: "main" }));
-  const { server, origin } = serve(rows, (input) => response(input.query, rows.map(({ id }) => ({ conversationId: id, field: "" })), [], {
-    messages: rows.flatMap(({ id }) => [0, 1, 2].map((turn) => ({ conversationId: id, message: { messageId: `${turn}:0`, role: "assistant", text: `wide match ${turn}`, complete: true } }))),
-  }));
+  const messages = rows.flatMap(({ id }) => [0, 1, 2].map((turn) => ({ conversationId: id, message: { messageId: `${turn}:0`, role: "assistant", text: `wide match ${turn}`, complete: true } })));
+  const requests: SearchInput[] = [];
+  const { server, origin } = serve(rows, (input) => {
+    requests.push(input);
+    return response(input.query, rows.map(({ id }) => ({ conversationId: id, field: "" })), [], { messages });
+  });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
+    await page.addInitScript(() => {
+      let grouped = 0;
+      const groupBy = Map.groupBy;
+      Map.groupBy = (items, key) => {
+        if (Array.isArray(items) && items[0]?.conversationId === "wide-0" && items[0].message) grouped += items.length;
+        return groupBy(items, key);
+      };
+      Object.defineProperty(window, "groupedSearchHits", { get: () => grouped });
+    });
     await page.goto(`${origin}/search?q=wide`);
     const results = page.getByLabel("Search results");
     const hits = results.locator('a[href*="?message="]');
     await results.getByRole("group", { name: "Wide 0", exact: true }).waitFor();
-    expect(await hits.count()).toBeLessThan(1000);
+    expect(requests[0]).toMatchObject({ query: "wide", messages: true });
+    const requested = requests.length;
+    const grouped = await page.evaluate(() => Reflect.get(window, "groupedSearchHits"));
+    expect(grouped).toBeGreaterThanOrEqual(messages.length);
+    expect(await hits.count()).toBe(200);
     expect(await results.getByRole("group", { name: "Wide 999", exact: true }).count()).toBe(0);
     while (!await results.getByRole("group", { name: "Wide 999", exact: true }).count()) await results.evaluate((node: HTMLElement) => { node.scrollTop = node.scrollHeight; });
     await page.waitForFunction(() => document.querySelectorAll('[aria-label="Search results"] a[href*="?message="]').length === 3000);
     expect(await results.getByRole("group").count()).toBe(1000);
     expect(await results.getByRole("group", { name: "Wide 999", exact: true }).getByRole("heading").textContent()).toBe("Wide 999(3)");
+    expect(requests).toHaveLength(requested);
+    expect(await page.evaluate(() => Reflect.get(window, "groupedSearchHits"))).toBe(grouped);
   } finally {
     await browser.close();
     server.stop(true);
