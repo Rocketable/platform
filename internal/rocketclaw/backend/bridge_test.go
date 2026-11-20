@@ -1009,40 +1009,24 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 	inbound.Metadata = map[string]string{"web_message_id": "failed-input"}
 	inbound.ConversationID = conversationID
 
-	waitingFor := "consumed input"
+	err = handleTestInbound(t.Context(), bridge, &bridgeRequest{inbound: inbound})
+	require.Len(t, bus.outbound, 2, "handler returned %v", err)
 
-	defer func() {
-		if !t.Failed() {
-			return
-		}
-
-		t.Logf("missing-agent reply: waiting_for=%s conversation=%s buffered_outbound=%d database=%+v", waitingFor, conversationID, len(bus.outbound), service.db.Stats())
-
-		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-		defer cancel()
-
-		rows, err := queryStrings(ctx, service.db, `SELECT format('turn=%s phase=%s terminal=%s outbound=%s', id, phase, terminal, outbound_json)
-FROM turns WHERE conversation_id = $1 ORDER BY id`, "missing-agent reply state", conversationID)
-		t.Logf("missing-agent reply rows=%v query_error=%v", rows, err)
-	}()
-
-	var group errgroup.Group
-	group.Go(func() error { return handleTestInbound(context.Background(), bridge, &bridgeRequest{inbound: inbound}) })
-
-	consumed := readRocketCodeOutbound(t, bus)
+	consumed := <-bus.outbound
 	require.Equal(t, "failed-input", consumed.ConsumedID)
 	require.Equal(t, "hello", consumed.ConsumedText)
 	require.Equal(t, protocol.SourceWeb, consumed.ConsumedSource)
 	require.Empty(t, consumed.ConsumedHeader, "no model prompt was generated")
 
-	waitingFor = "error final"
-	outbound := readRocketCodeOutbound(t, bus)
+	outbound := <-bus.outbound
 	assert.True(t, outbound.Complete)
 	assert.Contains(t, outbound.Text, internalErrorResponse)
 	assert.Contains(t, outbound.Text, `missing required default agent "main"`)
-	require.ErrorContains(t, group.Wait(), `prepare rocketcode turn: missing required default agent "main"`)
+	require.ErrorContains(t, err, `prepare rocketcode turn: missing required default agent "main"`)
 
-	response := <-inbound.EnableResponseWait()
+	responseCh := inbound.EnableResponseWait()
+	require.Len(t, responseCh, 1)
+	response := <-responseCh
 	assert.Equal(t, outbound.Text, response.Text)
 	require.NoError(t, response.Err)
 }
