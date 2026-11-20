@@ -452,8 +452,9 @@ signs the browser in itself. A remote serves only requests from other sites that
 name the trusted page in `Origin` (or navigate to it), so every call to a remote
 is a `fetch`, `EventSource` or WebSocket, attachment images load with
 `crossorigin="anonymous"`, and hosted page frames, being navigations, need
-neither. Query keys belong to the page's server unless they start with
-`{ server }`.
+neither. A remote lets only its own pages and the pages it trusts frame it, so a
+remote's hosted page shows only on a page the remote trusts. Query keys belong
+to the page's server unless they start with `{ server }`.
 
 The session list polls each server on its own schedule and merges their rows by
 recency; a row is its chat on its server. `viewing` goes only to the page's

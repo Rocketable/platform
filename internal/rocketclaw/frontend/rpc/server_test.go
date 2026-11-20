@@ -447,7 +447,10 @@ func TestTailnetCrossSitePages(t *testing.T) {
 	}
 
 	image := http.Header{"Sec-Fetch-Site": {"same-site"}, "Sec-Fetch-Mode": {"cors"}, "Sec-Fetch-Dest": {"image"}}
-	require.Equal(t, http.StatusBadRequest, serve(trusted, http.MethodGet, "/api/DownloadAttachment?id=file", "100.64.0.1:41641", page, image).Code)
+	download := serve(trusted, http.MethodGet, "/api/DownloadAttachment?id=file", "100.64.0.1:41641", page, image)
+	require.Equal(t, http.StatusBadRequest, download.Code)
+	require.Equal(t, []string{"frame-ancestors 'self' " + page}, download.Header().Values("Content-Security-Policy"))
+	require.Equal(t, "same-origin", download.Header().Get("Cross-Origin-Resource-Policy"))
 	image.Set("Sec-Fetch-Mode", "no-cors")
 	require.Equal(t, http.StatusForbidden, serve(trusted, http.MethodGet, "/api/DownloadAttachment?id=file", "100.64.0.1:41641", "", image).Code)
 

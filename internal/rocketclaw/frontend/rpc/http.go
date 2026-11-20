@@ -201,7 +201,8 @@ func servePage(connection *grpc.ClientConn, app http.Handler) http.HandlerFunc {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/pages-raw/"):
 			w.Header().Set("Content-Type", page.ContentType)
-			w.Header().Set("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-forms allow-modals allow-downloads")
+			w.Header().Add("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-forms allow-modals allow-downloads")
+			w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Cache-Control", "no-store")
 			_, _ = w.Write(page.Body)
@@ -218,11 +219,16 @@ type tailnetWhoIs interface {
 }
 
 func NewTailnetHandler(client tailnetWhoIs, trusted []string, next http.Handler) http.Handler {
+	ancestors := strings.Join(append([]string{"frame-ancestors 'self'"}, trusted...), " ")
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if bridge, _ := path.Match("/opencode/*/mcp", r.URL.Path); bridge {
 			next.ServeHTTP(w, r)
 			return
 		}
+
+		w.Header().Set("Content-Security-Policy", ancestors)
+		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 
 		origin := r.Header.Get("Origin")
 
@@ -315,7 +321,7 @@ func httpDownload(w http.ResponseWriter, stream grpc.ClientStream, file *Attachm
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": file.Name}))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	w.Header().Add("Content-Security-Policy", "sandbox; default-src 'none'")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Length", strconv.FormatInt(file.Size, 10))
 
