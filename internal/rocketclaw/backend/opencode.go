@@ -156,14 +156,14 @@ func (shells *openCodeShells) follow(ctx context.Context, name string, server co
 }
 
 func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedConfig) {
-	servers := cfg.Clone().OpenCode
+	startup := cfg.Clone()
 
 	var following errgroup.Group
 	defer func() { _ = following.Wait() }()
 
-	shells := make(map[string]*openCodeShells, len(servers))
+	shells := make(map[string]*openCodeShells, len(startup.OpenCode))
 
-	for name, server := range servers {
+	for name, server := range startup.OpenCode {
 		running := &openCodeShells{running: map[string]string{}}
 		shells[name] = running
 
@@ -186,9 +186,9 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedCon
 	ticker := time.NewTicker(openCodeSyncInterval)
 	defer ticker.Stop()
 
-	for {
-		origin := cfg.Clone().Web.Tsnet.Origin
+	servers, origin := startup.OpenCode, startup.Web.Tsnet.Origin
 
+	for {
 		for name, server := range servers {
 			if s.pushOpenCodeNames(ctx, name, server) == nil && s.syncOpenCode(ctx, name, server, shells[name]) == nil && origin != "" {
 				addOpenCodeBridges(ctx, origin, name, server)
