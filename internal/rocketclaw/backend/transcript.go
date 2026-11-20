@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
@@ -129,7 +128,7 @@ SELECT id, CASE WHEN $2::jsonb->>key IS DISTINCT FROM revision THEN entry_json E
 FROM fingerprinted ORDER BY position, checkpoint, checkpoint_timestamp, turn_id`, "transcript", func(row rowScanner) (ObservedSessionEntry, error) {
 		var (
 			entry               ObservedSessionEntry
-			raw                 sql.NullString
+			raw                 []byte
 			checkpointTimestamp int64
 			index               int
 		)
@@ -137,8 +136,8 @@ FROM fingerprinted ORDER BY position, checkpoint, checkpoint_timestamp, turn_id`
 			return ObservedSessionEntry{}, fmt.Errorf("scan transcript entry: %w", err)
 		}
 
-		if raw.Valid {
-			if err := json.Unmarshal([]byte(raw.String), &entry.Entry); err != nil {
+		if raw != nil {
+			if err := json.Unmarshal(raw, &entry.Entry); err != nil {
 				return ObservedSessionEntry{}, fmt.Errorf("decode transcript entry: %w", err)
 			}
 
