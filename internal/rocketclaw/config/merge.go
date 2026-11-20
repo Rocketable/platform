@@ -9,19 +9,17 @@ import (
 
 var errInvalidAWSRef = errors.New("aws object requires arn and key")
 
-func mergeJSON(dst, src any) any {
-	dstMap, dstOK := dst.(map[string]any)
+func mergeJSON(dst, src map[string]any) {
+	for key, value := range src {
+		dstChild, dstOK := dst[key].(map[string]any)
+		srcChild, srcOK := value.(map[string]any)
 
-	srcMap, srcOK := src.(map[string]any)
-	if !dstOK || !srcOK {
-		return src
+		if dstOK && srcOK {
+			mergeJSON(dstChild, srcChild)
+		} else {
+			dst[key] = value
+		}
 	}
-
-	for key, value := range srcMap {
-		dstMap[key] = mergeJSON(dstMap[key], value)
-	}
-
-	return dstMap
 }
 
 func resolveAWS(ctx context.Context, value any, fetcher SecretFetcher) (any, error) {
