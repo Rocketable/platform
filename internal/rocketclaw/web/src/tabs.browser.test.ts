@@ -449,10 +449,10 @@ test("saved tabs, deep links, keyboard, page close, palette commands, and the si
   expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
   const mainBox = await page.getByRole("main").boundingBox();
   expect((await strip(page).boundingBox()).x + (await strip(page).boundingBox()).width).toBeLessThanOrEqual(mainBox.x);
+  expect((await page.getByRole("banner").boundingBox()).x).toBe(mainBox.x);
   await page.locator("footer").getByRole("button", { name: "Hide sidebar", exact: true }).click();
   await strip(page).waitFor({ state: "hidden" });
-  // Only the drawer's narrow screens head the page with the tab's name.
-  expect(await page.getByRole("banner").count()).toBe(0);
+  expect(await page.getByRole("banner").textContent()).toBe("Bravo");
   await page.keyboard.press("Control+b");
   await strip(page).waitFor();
   expect(await page.locator("footer").getByRole("button", { name: "Hide sidebar", exact: true }).getAttribute("aria-expanded")).toBe("true");
@@ -535,10 +535,28 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   await tab("Regenerated").waitFor();
   expect(await tab("Regenerated").getAttribute("aria-description")).not.toContain("Regenerating title");
 
+  const bar = page.getByRole("banner"), barMenu = bar.getByRole("button", { name: "Page actions", exact: true });
+  const barTitle = await bar.getByText("Bravo", { exact: true }).boundingBox();
+  expect((await barMenu.boundingBox()).x - (barTitle.x + barTitle.width)).toBeLessThanOrEqual(8);
+  const items = async (button: any) => {
+    await button.click();
+    const texts = await page.getByRole("menuitem").allInnerTexts();
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").waitFor({ state: "hidden" });
+    return texts;
+  };
+  expect(await items(barMenu)).toEqual(await items(strip(page).getByRole("button", { name: "Tab actions", exact: true })));
+  await barMenu.click();
+  await page.getByRole("menuitem", { name: "Rename session", exact: true }).click();
+  await bar.getByRole("textbox", { name: "Session name" }).fill("Renamed from the bar");
+  await bar.getByRole("textbox", { name: "Session name" }).press("Enter");
+  await tab("Renamed from the bar").waitFor();
+  expect(await bar.textContent()).toBe("Renamed from the bar");
+
   const box = await strip(page).boundingBox();
   await strip(page).dblclick({ position: { x: box.width / 2, y: box.height - 2 } });
   await page.waitForURL(`${origin}/`);
-  expect(await names(page)).toEqual(["Regenerated", "Bravo", "New session", "Charlie"]);
+  expect(await names(page)).toEqual(["Regenerated", "Renamed from the bar", "New session", "Charlie"]);
   await tab("New session").click({ button: "right" });
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Rename session");
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Regenerate title");

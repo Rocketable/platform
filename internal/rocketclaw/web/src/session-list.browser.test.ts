@@ -912,7 +912,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await navigation.getByRole("button", { name: "Show bottom navigation" }).click();
     expect((await navigation.boundingBox())!.height).toBe(compactHeight);
 
-    expect(await page.locator("header:visible").count()).toBe(0);
+    expect(await page.locator("header:visible").count()).toBe(1);
     await page.keyboard.press("Control+p");
     expect(await sessionPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
     await search.waitFor();
