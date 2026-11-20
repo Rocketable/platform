@@ -2194,6 +2194,17 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   });
 }), 30_000);
 
+test("a Shared row moves to another space as a tab of the person's own, staying in Shared", () => withPage({}, async (page, origin, _prompts, saved) => {
+  saved.spaces.push({ id: "ops", name: "Ops" });
+  saved.state = { ...saved.state, tabs: [{ path: href("alpha"), space: "main" }], space: "main" };
+  saved.shared = [{ space: "main", path: href("bravo") }];
+  await page.goto(`${origin}${href("alpha")}`);
+  expect(await sharedMenu(page, "Bravo")).toEqual(expect.arrayContaining(["Add to group", "Move to space"]));
+  for (const item of ["Move to space", "Ops"]) await page.getByRole("menuitem", { name: item, exact: true }).click();
+  await until(() => saved.state.tabs.some((item) => item.path === href("bravo") && item.space === "ops"));
+  expect([await names(page), await sharedNames(page)]).toEqual([["Alpha"], ["Bravo"]]);
+}), 30_000);
+
 // The new-chat Transcript stays mounted, hidden, on other pages; its creation must not pull the person off the page they chose.
 test("a new chat created while another page shows opens when New session shows again", () => withPage({}, async (page, origin, prompts) => {
   const held = Promise.withResolvers<void>(), requested = Promise.withResolvers<void>();
@@ -2384,7 +2395,7 @@ test("Parked also lists the Shared rows this person parked, which open in their 
 
   await original.click({ button: "right" });
   await page.getByRole("menuitem").first().waitFor();
-  expect(await menuLines(page)).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group"]);
+  expect(await menuLines(page)).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group", "Move to space"]);
   await page.getByRole("menuitem", { name: "Rename session", exact: true }).click();
   const input = parked.getByRole("textbox", { name: "Session name" });
   await input.fill("Renamed hotel");
