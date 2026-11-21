@@ -49,23 +49,22 @@ ON CONFLICT (agent, kind, name) DO UPDATE SET content_type = excluded.content_ty
 	if page.Kind == PageFile && page.ContentType == "text/html" {
 		if err := s.markLocation(ctx, tx, "/pages", page.Space, page.Agent+" · "+page.Name+" updated", func(rest string) bool {
 			_, location, _ := strings.Cut(rest, "/")
-			segments := strings.Split(location, "/")
 
-			for i := range segments {
-				segment, err := url.PathUnescape(segments[i])
-				if err != nil {
-					return false
-				}
-
-				segments[i] = segment
+			agent, file, _ := strings.Cut(location, "/")
+			if decoded, err := url.PathUnescape(agent); err != nil || decoded != page.Agent {
+				return false
 			}
 
-			file := strings.Join(segments[1:], "/")
+			file, err := url.PathUnescape(file)
+			if err != nil {
+				return false
+			}
+
 			if file == "" || strings.HasSuffix(file, "/") {
 				file += "index.html"
 			}
 
-			return segments[0] == page.Agent && file == page.Name
+			return file == page.Name
 		}); err != nil {
 			return err
 		}
