@@ -216,10 +216,6 @@ func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule,
 		rules := []PermissionRule{}
 
 		for i := 0; i+1 < len(node.Content); i += 2 {
-			if permission == "rocketclaw" && (node.Content[i].Value == "rocketclaw_set_tag" && node.Content[i+1].Kind == yaml.SequenceNode || node.Content[i].Value == "rocketclaw_sessions_recipient") {
-				continue
-			}
-
 			if permission == "rocketclaw" && node.Content[i].Value == "session" {
 				return nil, errors.New("session.spawn_mode is removed; use rocketclaw_sessions")
 			}
@@ -235,6 +231,10 @@ func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule,
 			}
 
 			action, reviewer, err := parsePermissionAction(value.Value)
+			if permission == "rocketclaw" && err != nil {
+				continue
+			}
+
 			if err != nil {
 				return nil, fmt.Errorf("pattern %q: %w", node.Content[i].Value, err)
 			}
