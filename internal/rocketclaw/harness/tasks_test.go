@@ -728,7 +728,7 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 	factory.autoApproverModel = defaultOpenAIModel
 	factory.agent = &Agent{}
 	factory.agents = agents
-	factory.skills = Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
+	factory.skills = Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}
 	factory.baseTools = map[string]looperTool{
 		"bash": bashTool,
 		"read": readTool,

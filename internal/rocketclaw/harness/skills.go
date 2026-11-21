@@ -36,8 +36,8 @@ type Skill struct {
 type Skills struct {
 	Root  string
 	Items map[string]Skill
-	Dirs  []string
 
+	dirs []string
 	fsys fs.FS
 }
 
@@ -62,7 +62,7 @@ type skillReadDir struct {
 
 func LoadSkills(fsys fs.FS, root string) SkillLoadResult {
 	result := SkillLoadResult{
-		Skills: Skills{Root: root, Items: map[string]Skill{}, Dirs: nil, fsys: fsys},
+		Skills: Skills{Root: root, Items: map[string]Skill{}, fsys: fsys},
 		Errors: nil,
 	}
 
@@ -105,7 +105,7 @@ func LoadSkills(fsys fs.FS, root string) SkillLoadResult {
 	}
 
 	slices.Sort(paths)
-	result.Skills.Dirs = slices.Clip(slices.Compact(paths))
+	result.Skills.dirs = slices.Clip(slices.Compact(paths))
 
 	return result
 }
@@ -232,8 +232,8 @@ findAllowedSkill:
 }
 
 func (s Skills) readableDirs(root *os.Root) map[string]skillReadDir {
-	dirs := make(map[string]skillReadDir, len(s.Dirs))
-	for _, dir := range s.Dirs {
+	dirs := make(map[string]skillReadDir, len(s.dirs))
+	for _, dir := range s.dirs {
 		skillRoot, err := normalizeRootName(root, filepath.Join(s.Root, filepath.FromSlash(dir)))
 		if err != nil || !filepath.IsLocal(skillRoot) {
 			continue
@@ -501,18 +501,13 @@ func (s Skills) skillFiles(dir string) ([]string, error) {
 		return nil, errors.New("skills filesystem is not available")
 	}
 
-	boundaries := make(map[string]struct{}, len(s.Dirs))
-	for _, dir := range s.Dirs {
-		boundaries[dir] = struct{}{}
-	}
-
 	err := fs.WalkDir(fsys, dir, func(filePath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		if d.IsDir() {
-			if _, nestedSkill := boundaries[filePath]; filePath != dir && nestedSkill {
+			if _, nestedSkill := slices.BinarySearch(s.dirs, filePath); filePath != dir && nestedSkill {
 				return fs.SkipDir
 			}
 
