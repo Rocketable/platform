@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/rand"
@@ -154,7 +155,7 @@ func (s *SessionService) copySessionPrefix(ctx context.Context, db stateStoreDB,
 		}
 
 		copyID := rand.Text()
-		if err := s.attachments.Put(ctx, copyID, data); err != nil {
+		if _, err := s.attachments.Put(ctx, copyID, bytes.NewReader(data)); err != nil {
 			return "", fmt.Errorf("copy fork attachment: %w", err)
 		}
 

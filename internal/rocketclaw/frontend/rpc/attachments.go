@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"crypto/rand"
@@ -50,29 +51,16 @@ func (s *Server) uploadAttachment(stream grpc.ServerStream) error {
 		return fmt.Errorf("upload attachment: %w", status.Error(codes.InvalidArgument, "file name and chunks of at most 256 KiB are required"))
 	}
 
-	attachment := protocol.OutboundAttachment{ID: rand.Text(), Name: name, Data: append([]byte{}, first.Data...)}
+	attachment := protocol.OutboundAttachment{ID: rand.Text(), Name: name}
+	body := bufio.NewReaderSize(&uploadFrames{stream: stream, pending: first.Data}, 512)
 
-	for {
-		chunk := &Attachment{}
-
-		err := stream.RecvMsg(chunk)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-
-		if err != nil {
-			return fmt.Errorf("receive upload chunk: %w", err)
-		}
-
-		if len(chunk.Data) > attachmentChunkBytes || chunk.ConversationId != "" || chunk.Name != "" || chunk.Id != "" || chunk.MimeType != "" || chunk.Size != 0 || chunk.OriginalUnverified {
-			return fmt.Errorf("upload attachment: %w", status.Error(codes.InvalidArgument, "continuation frames must contain only chunks of at most 256 KiB"))
-		}
-
-		attachment.Data = append(attachment.Data, chunk.Data...)
+	head, err := body.Peek(512)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("read upload: %w", err)
 	}
 
-	attachment.MIMEType = protocol.NormalizeMIMEType(http.DetectContentType(attachment.Data))
-	if err := s.sessions.SaveAttachment(ctx, first.ConversationId, "", &attachment, true); err != nil {
+	attachment.MIMEType = protocol.NormalizeMIMEType(http.DetectContentType(head))
+	if err := s.sessions.SaveUpload(ctx, first.ConversationId, &attachment, body); err != nil {
 		return fmt.Errorf("store upload: %w", err)
 	}
 
@@ -81,6 +69,39 @@ func (s *Server) uploadAttachment(stream grpc.ServerStream) error {
 	}
 
 	return nil
+}
+
+type uploadFrames struct {
+	stream  grpc.ServerStream
+	pending []byte
+	err     error
+}
+
+func (u *uploadFrames) Read(p []byte) (int, error) {
+	for len(u.pending) == 0 && u.err == nil {
+		chunk := &Attachment{}
+
+		err := u.stream.RecvMsg(chunk)
+		switch {
+		case errors.Is(err, io.EOF):
+			u.err = io.EOF
+		case err != nil:
+			u.err = fmt.Errorf("receive upload chunk: %w", err)
+		case len(chunk.Data) > attachmentChunkBytes || chunk.ConversationId != "" || chunk.Name != "" || chunk.Id != "" || chunk.MimeType != "" || chunk.Size != 0 || chunk.OriginalUnverified:
+			u.err = fmt.Errorf("upload attachment: %w", status.Error(codes.InvalidArgument, "continuation frames must contain only chunks of at most 256 KiB"))
+		default:
+			u.pending = chunk.Data
+		}
+	}
+
+	if len(u.pending) == 0 {
+		return 0, u.err
+	}
+
+	n := copy(p, u.pending)
+	u.pending = u.pending[n:]
+
+	return n, nil
 }
 
 func (s *Server) downloadAttachment(stream grpc.ServerStream) error {

@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -9,26 +8,28 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 type attachmentStorage interface {
-	Put(context.Context, string, []byte) error
+	Put(context.Context, string, io.Reader) (int64, error)
 	Get(context.Context, string) ([]byte, error)
 	Delete(context.Context, string) error
 }
 
 type filesystemAttachments struct{ path string }
 
-func (s filesystemAttachments) Put(_ context.Context, id string, data []byte) error {
+func (s filesystemAttachments) Put(_ context.Context, id string, body io.Reader) (int64, error) {
 	if err := os.MkdirAll(s.path, 0o700); err != nil {
-		return fmt.Errorf("create attachment directory: %w", err)
+		return 0, fmt.Errorf("create attachment directory: %w", err)
 	}
 
 	root, err := os.OpenRoot(s.path)
 	if err != nil {
-		return fmt.Errorf("open attachment directory: %w", err)
+		return 0, fmt.Errorf("open attachment directory: %w", err)
 	}
 
 	defer func() { _ = root.Close() }()
@@ -37,20 +38,20 @@ func (s filesystemAttachments) Put(_ context.Context, id string, data []byte) er
 
 	file, err := root.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return fmt.Errorf("create pending attachment: %w", err)
+		return 0, fmt.Errorf("create pending attachment: %w", err)
 	}
 	defer func() { _ = root.Remove(temporary) }()
 
-	_, err = file.Write(data)
+	size, err := io.Copy(file, body)
 	if err = errors.Join(err, file.Sync(), file.Close()); err != nil {
-		return fmt.Errorf("write pending attachment: %w", err)
+		return 0, fmt.Errorf("write pending attachment: %w", err)
 	}
 
 	if err := root.Link(temporary, id); err != nil {
-		return fmt.Errorf("publish attachment: %w", err)
+		return 0, fmt.Errorf("publish attachment: %w", err)
 	}
 
-	return nil
+	return size, nil
 }
 
 func (s filesystemAttachments) Get(_ context.Context, id string) ([]byte, error) {
@@ -95,13 +96,13 @@ func (s s3Attachments) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s s3Attachments) Put(ctx context.Context, id string, data []byte) error {
-	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{Bucket: &s.bucket, Key: &id, Body: bytes.NewReader(data), IfNoneMatch: new("*")})
+func (s s3Attachments) Put(ctx context.Context, id string, body io.Reader) (int64, error) {
+	uploaded, err := transfermanager.New(s.client, func(o *transfermanager.Options) { o.FailTimeout = time.Minute }).UploadObject(ctx, &transfermanager.UploadObjectInput{Bucket: &s.bucket, Key: &id, Body: body, IfNoneMatch: new("*")})
 	if err != nil {
-		return fmt.Errorf("put S3 attachment: %w", err)
+		return 0, fmt.Errorf("put S3 attachment: %w", err)
 	}
 
-	return nil
+	return *uploaded.ContentLength, nil
 }
 
 func (s s3Attachments) Get(ctx context.Context, id string) ([]byte, error) {

@@ -3,11 +3,13 @@ package backend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"io"
 	"io/fs"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -52,7 +56,34 @@ func TestAttachmentStorage(t *testing.T) {
 			var (
 				mu         sync.Mutex
 				cancelSave context.CancelFunc = func() {}
+				parts                         = map[string]map[int][]byte{}
 			)
+
+			inFlight := func() int64 {
+				var size int64
+
+				if driver == config.S3Attachments {
+					mu.Lock()
+					defer mu.Unlock()
+
+					for _, upload := range parts {
+						for _, part := range upload {
+							size += int64(len(part))
+						}
+					}
+
+					return size
+				}
+
+				entries, _ := os.ReadDir(service.attachments.(filesystemAttachments).path)
+				for _, entry := range entries {
+					if info, err := entry.Info(); err == nil && strings.HasPrefix(entry.Name(), ".pending-") {
+						size += info.Size()
+					}
+				}
+
+				return size
+			}
 
 			if driver == config.S3Attachments {
 				objects := map[string][]byte{}
@@ -61,6 +92,57 @@ func TestAttachmentStorage(t *testing.T) {
 					assert.True(t, strings.HasPrefix(r.URL.Path, "/originals/"))
 					mu.Lock()
 					defer mu.Unlock()
+
+					query := r.URL.Query()
+					upload := query.Get("uploadId")
+
+					switch {
+					case r.Method == http.MethodPost && query.Has("uploads"):
+						parts[r.URL.Path] = map[int][]byte{}
+						_, _ = io.WriteString(w, `<InitiateMultipartUploadResult><UploadId>`+r.URL.Path+`</UploadId></InitiateMultipartUploadResult>`)
+					case r.Method == http.MethodPut && upload != "":
+						number, err := strconv.Atoi(query.Get("partNumber"))
+						assert.NoError(t, err)
+						assert.NotEmpty(t, r.Header.Get("X-Amz-Checksum-Crc32"))
+
+						data, err := io.ReadAll(r.Body)
+						if _, open := parts[upload]; err != nil || !open {
+							w.WriteHeader(http.StatusNotFound)
+							_, _ = io.WriteString(w, `<Error><Code>NoSuchUpload</Code></Error>`)
+
+							return
+						}
+
+						parts[upload][number] = data
+						w.Header().Set("ETag", `"`+strconv.Itoa(number)+`"`)
+					case r.Method == http.MethodPost && upload != "":
+						assert.Equal(t, "*", r.Header.Get("If-None-Match"))
+
+						if _, exists := objects[r.URL.Path]; exists {
+							w.WriteHeader(http.StatusPreconditionFailed)
+							_, _ = io.WriteString(w, `<Error><Code>PreconditionFailed</Code></Error>`)
+
+							return
+						}
+
+						var data []byte
+						for number := 1; number <= len(parts[upload]); number++ {
+							data = append(data, parts[upload][number]...)
+						}
+
+						objects[r.URL.Path] = data
+
+						delete(parts, upload)
+
+						_, _ = io.WriteString(w, `<CompleteMultipartUploadResult><ETag>"complete"</ETag></CompleteMultipartUploadResult>`)
+					case r.Method == http.MethodDelete && upload != "":
+						delete(parts, upload)
+						w.WriteHeader(http.StatusNoContent)
+					}
+
+					if upload != "" || query.Has("uploads") {
+						return
+					}
 
 					switch r.Method {
 					case http.MethodPut:
@@ -77,6 +159,10 @@ func TestAttachmentStorage(t *testing.T) {
 						assert.NoError(t, err)
 
 						objects[r.URL.Path] = data
+
+						if strings.HasSuffix(r.URL.Path, "lost-reply") {
+							w.WriteHeader(http.StatusInternalServerError)
+						}
 					case http.MethodGet:
 						data, exists := objects[r.URL.Path]
 						if !exists {
@@ -131,7 +217,8 @@ func TestAttachmentStorage(t *testing.T) {
 			_, err = service.LoadAttachment(t.Context(), "other", "shared", false)
 			require.ErrorIs(t, err, sql.ErrNoRows)
 
-			require.NoError(t, service.attachments.Put(t.Context(), "orphan", []byte("original")))
+			_, err = service.attachments.Put(t.Context(), "orphan", strings.NewReader("original"))
+			require.NoError(t, err)
 			err = service.SaveAttachment(t.Context(), "producer", "", &protocol.OutboundAttachment{ID: "orphan", Name: "replacement", Data: []byte("different")}, true)
 			require.Error(t, err)
 
@@ -149,13 +236,51 @@ func TestAttachmentStorage(t *testing.T) {
 			_, err = service.attachments.Get(t.Context(), "missing")
 			require.Error(t, err)
 
+			const (
+				uploadBytes = 24<<20 + 7
+				headBytes   = 20 << 20
+			)
+
+			reachesStorage := readHook(func() {
+				require.Eventually(t, func() bool { return inFlight() >= 8<<20 }, 10*time.Second, time.Millisecond, "the start of the upload reaches storage before the rest is read")
+			})
+
+			large := protocol.OutboundAttachment{ID: "large", Name: "large.bin"}
+			require.NoError(t, service.SaveUpload(t.Context(), "producer", &large, io.MultiReader(io.LimitReader(rand.NewChaCha8([32]byte{1}), headBytes), reachesStorage, io.LimitReader(rand.NewChaCha8([32]byte{2}), uploadBytes-headBytes))))
+			require.Zero(t, inFlight())
+
+			want := sha256.New()
+			_, err = io.Copy(want, io.MultiReader(io.LimitReader(rand.NewChaCha8([32]byte{1}), headBytes), io.LimitReader(rand.NewChaCha8([32]byte{2}), uploadBytes-headBytes)))
+			require.NoError(t, err)
+
+			stored, err = service.LoadAttachment(t.Context(), "producer", "large", true)
+			require.NoError(t, err)
+			require.Equal(t, int64(uploadBytes), stored.Size)
+			got := sha256.Sum256(stored.Data)
+			require.Equal(t, want.Sum(nil), got[:])
+
+			abortCtx, abort := context.WithCancel(t.Context())
+			err = service.SaveUpload(abortCtx, "producer", &protocol.OutboundAttachment{ID: "aborted", Name: "aborted.bin"}, io.MultiReader(io.LimitReader(rand.NewChaCha8([32]byte{3}), headBytes), reachesStorage, readHook(abort), iotest.ErrReader(errors.New("client went away"))))
+			require.ErrorContains(t, err, "client went away")
+			require.Zero(t, inFlight(), "an aborted upload leaves no pending file or multipart upload")
+			_, err = service.attachments.Get(t.Context(), "aborted")
+			require.Error(t, err)
+			_, err = service.AttachmentMetadata(t.Context(), "producer", "aborted", false)
+			require.ErrorIs(t, err, sql.ErrNoRows)
+
+			if driver == config.S3Attachments {
+				require.Error(t, service.SaveUpload(t.Context(), "producer", &protocol.OutboundAttachment{ID: "lost-reply", Name: "lost"}, strings.NewReader("stored anyway")))
+				_, err = service.attachments.Get(t.Context(), "lost-reply")
+				require.Error(t, err, "an object stored before a failed reply is removed")
+			}
+
 			_, err = service.db.ExecContext(t.Context(), `CREATE FUNCTION reject_attachment_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'attachment commit unavailable'; END $$;
 CREATE CONSTRAINT TRIGGER reject_attachment_commit AFTER INSERT ON attachments DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.id LIKE 'uncommitted%') EXECUTE FUNCTION reject_attachment_commit()`)
 			require.NoError(t, err)
 
-			uncommitted, queued := []string{"uncommitted"}, []string(nil)
+			uncommitted, queued := []string{"uncommitted", "uncommitted-upload"}, []string(nil)
 			if driver == config.S3Attachments {
-				uncommitted, queued = append(uncommitted, "uncommitted-undeletable"), []string{"uncommitted-undeletable"}
+				uncommitted, queued = append(uncommitted, "uncommitted-undeletable", "uncommitted-upload-undeletable"), []string{"uncommitted-undeletable", "uncommitted-upload-undeletable"}
 			}
 
 			for _, id := range uncommitted {
@@ -165,14 +290,21 @@ CREATE CONSTRAINT TRIGGER reject_attachment_commit AFTER INSERT ON attachments D
 				cancelSave = cancel
 				mu.Unlock()
 
-				err = service.SaveAttachment(ctx, "producer", "", &protocol.OutboundAttachment{ID: id, Name: id, Data: []byte(id)}, true)
+				if strings.Contains(id, "upload") {
+					err = service.SaveUpload(ctx, "producer", &protocol.OutboundAttachment{ID: id, Name: id}, strings.NewReader(id))
+				} else {
+					err = service.SaveAttachment(ctx, "producer", "", &protocol.OutboundAttachment{ID: id, Name: id, Data: []byte(id)}, true)
+				}
+
 				require.ErrorContains(t, err, "attachment commit unavailable")
 				_, err = service.AttachmentMetadata(t.Context(), "producer", id, false)
 				require.ErrorIs(t, err, sql.ErrNoRows)
 			}
 
-			_, err = service.attachments.Get(t.Context(), "uncommitted")
-			require.Error(t, err, "a failed commit must not leave the stored file behind")
+			for _, id := range []string{"uncommitted", "uncommitted-upload"} {
+				_, err = service.attachments.Get(t.Context(), id)
+				require.Error(t, err, "a failed commit must not leave the stored file behind")
+			}
 
 			require.NoError(t, service.SaveAttachment(t.Context(), "producer", "", &protocol.OutboundAttachment{ID: "committed", Name: "committed", Data: []byte("committed")}, true))
 			require.NoError(t, service.discardUnsavedAttachment(t.Context(), "committed"))
@@ -187,11 +319,18 @@ CREATE CONSTRAINT TRIGGER reject_attachment_commit AFTER INSERT ON attachments D
 			require.NoError(t, err, "an unconfirmed failure must keep the file")
 			require.Equal(t, []byte("committed"), kept)
 
-			pending, err := queryStrings(t.Context(), service.db, `SELECT id FROM pending_attachment_deletions`, "pending attachment deletions")
+			pending, err := queryStrings(t.Context(), service.db, `SELECT id FROM pending_attachment_deletions ORDER BY id`, "pending attachment deletions")
 			require.NoError(t, err)
 			require.Equal(t, queued, pending)
 		})
 	}
+}
+
+type readHook func()
+
+func (h readHook) Read([]byte) (int, error) {
+	h()
+	return 0, io.EOF
 }
 
 func TestFilesystemAttachmentsAtomicAndConfined(t *testing.T) {
@@ -210,7 +349,7 @@ func TestFilesystemAttachmentsAtomicAndConfined(t *testing.T) {
 	errs := make([]error, 8)
 	for i := range errs {
 		writers.Go(func() error {
-			errs[i] = storage.Put(t.Context(), "snapshot", data)
+			_, errs[i] = storage.Put(t.Context(), "snapshot", bytes.NewReader(data))
 
 			got, err := storage.Get(t.Context(), "snapshot")
 			if err != nil {
@@ -240,8 +379,9 @@ func TestFilesystemAttachmentsAtomicAndConfined(t *testing.T) {
 	require.Equal(t, 1, winners)
 
 	for _, id := range []string{"../escape", filepath.Join(t.TempDir(), "escape"), "missing/file"} {
-		require.Error(t, storage.Put(t.Context(), id, data))
-		_, err := storage.Get(t.Context(), id)
+		_, err := storage.Put(t.Context(), id, bytes.NewReader(data))
+		require.Error(t, err)
+		_, err = storage.Get(t.Context(), id)
 		require.Error(t, err)
 	}
 
@@ -254,7 +394,8 @@ func TestFilesystemAttachmentsAtomicAndConfined(t *testing.T) {
 	require.NoError(t, root.Symlink(filepath.Join(outside.Name(), "secret"), "symlink"))
 	_, err = storage.Get(t.Context(), "symlink")
 	require.Error(t, err)
-	require.Error(t, storage.Put(t.Context(), "symlink", data))
+	_, err = storage.Put(t.Context(), "symlink", bytes.NewReader(data))
+	require.Error(t, err)
 
 	entries, err := fs.ReadDir(root.FS(), ".")
 	require.NoError(t, err)
@@ -269,7 +410,8 @@ func TestFilesystemAttachmentsAtomicAndConfined(t *testing.T) {
 
 	require.NoError(t, parent.Remove(filepath.Base(storage.path)))
 	require.NoError(t, parent.WriteFile(filepath.Base(storage.path), []byte("collision"), 0o600))
-	require.Error(t, storage.Put(context.Background(), "new", data))
+	_, err = storage.Put(context.Background(), "new", bytes.NewReader(data))
+	require.Error(t, err)
 	_, err = storage.Get(context.Background(), "new")
 	require.Error(t, err)
 }

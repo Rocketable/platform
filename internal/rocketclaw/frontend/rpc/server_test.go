@@ -3036,6 +3036,23 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		}
 		defer func() { core.RunTurnFunc = previousRunTurn }()
 
+		_, attachmentsPath, err := storageConfig.AttachmentLocation()
+		require.NoError(t, err)
+
+		pendingUploads := func() []string {
+			entries, _ := os.ReadDir(attachmentsPath)
+
+			var pending []string
+
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), ".pending-") {
+					pending = append(pending, entry.Name())
+				}
+			}
+
+			return pending
+		}
+
 		data := bytes.Repeat([]byte("exact binary\x00\xff"), 400000)
 		upload, err := connection.NewStream(ctx, &grpc.StreamDesc{ClientStreams: true}, "/rpc.Web/UploadAttachment")
 		require.NoError(t, err)
@@ -3057,7 +3074,12 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, err)
 		imageUpload, err := connection.NewStream(ctx, &grpc.StreamDesc{ClientStreams: true}, "/rpc.Web/UploadAttachment")
 		require.NoError(t, err)
-		require.NoError(t, imageUpload.SendMsg(&Attachment{ConversationId: conversation, Name: "image.png", Data: imageData}))
+		require.NoError(t, imageUpload.SendMsg(&Attachment{ConversationId: conversation, Name: "image.png"}))
+
+		for chunk := range slices.Chunk(imageData, 8) {
+			require.NoError(t, imageUpload.SendMsg(&Attachment{Data: chunk}))
+		}
+
 		require.NoError(t, imageUpload.CloseSend())
 
 		imageFile := &Attachment{}
@@ -3305,6 +3327,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			{"oversized first chunk", []*Attachment{{ConversationId: conversation, Name: "bad.bin", Data: make([]byte, (256<<10)+1)}}, codes.InvalidArgument},
 			{"continuation metadata", []*Attachment{{ConversationId: conversation, Name: "bad.bin"}, {Name: "changed.bin"}}, codes.InvalidArgument},
 			{"oversized continuation", []*Attachment{{ConversationId: conversation, Name: "bad.bin"}, {Data: make([]byte, (256<<10)+1)}}, codes.InvalidArgument},
+			{"bad frame after stored chunks", []*Attachment{{ConversationId: conversation, Name: "bad.bin", Data: make([]byte, 256<<10)}, {Data: make([]byte, 256<<10)}, {Name: "changed.bin"}}, codes.InvalidArgument},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				upload, err := connection.NewStream(ctx, &grpc.StreamDesc{ClientStreams: true}, "/rpc.Web/UploadAttachment")
@@ -3316,8 +3339,19 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 				require.NoError(t, upload.CloseSend())
 				require.Equal(t, test.code, status.Code(upload.RecvMsg(&Attachment{})))
+				require.Empty(t, pendingUploads())
 			})
 		}
+
+		abortCtx, abort := context.WithCancel(ctx)
+		aborted, err := connection.NewStream(abortCtx, &grpc.StreamDesc{ClientStreams: true}, "/rpc.Web/UploadAttachment")
+		require.NoError(t, err)
+		require.NoError(t, aborted.SendMsg(&Attachment{ConversationId: conversation, Name: "aborted.bin", Data: make([]byte, 256<<10)}))
+		require.NoError(t, aborted.SendMsg(&Attachment{Data: make([]byte, 256<<10)}))
+		require.Eventually(t, func() bool { return len(pendingUploads()) == 1 }, 10*time.Second, 10*time.Millisecond, "the upload reaches storage before it ends")
+		abort()
+		require.Equal(t, codes.Canceled, status.Code(aborted.RecvMsg(&Attachment{})))
+		require.Eventually(t, func() bool { return len(pendingUploads()) == 0 }, 10*time.Second, 10*time.Millisecond, "an aborted upload leaves no pending file")
 
 		_, _, err = sessions.DeleteThreadQueueItem(ctx, queue[0].ConversationID, queue[0].ID)
 		require.NoError(t, err)
