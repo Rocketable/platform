@@ -26,7 +26,7 @@ related_components:
 
 ## Context
 
-RocketCode used to be a separate component, `internal/rocketcode`, with its own size budget and CI job. It was folded into RocketClaw as `internal/rocketclaw/harness`, with `codemode` and `mcpclient` beside it. The move renamed import paths, the package, comments, docs, and the config key `rocketcode_auth` (now `auth`, with `rocketcode_auth` still read as an alias in `internal/rocketclaw/config/config.go`).
+RocketCode used to be a separate component, `internal/rocketcode`, with its own size budget and CI job. It was folded into RocketClaw as `internal/rocketclaw/harness`, with `codemode` and `mcpclient` beside it. The move renamed import paths, the package, comments, docs, and the config key `rocketcode_auth` (now `auth`).
 
 Many strings still spell `rocketcode`. Some look like leftovers that a follow-up should finish renaming. Several of them are not names at all: they are values already stored in the database, folders already on disk, telemetry keys that dashboards query, or text the model reads. A repo-wide `rocketcode` -> `harness` sweep breaks them without any test failing: the tests pin these literals in files the same sweep rewrites, and no test holds data saved under the old spelling.
 
@@ -40,12 +40,11 @@ Before renaming a `rocketcode` string, decide which group it belongs to.
 - **Runtime folders** under the runtime directory: `<runtimeDir>/.rocketcode/spill` (`internal/rocketclaw/backend/raw_run.go:43`; the harness's own fallback is `internal/rocketclaw/harness/execute_results.go:23`), `<runtimeDir>/.rocketcode/tmp/<conversation>` (`internal/rocketclaw/backend/bridge.go:2354-2368`), and the hand-off scratch folder (`internal/rocketclaw/backend/handoff.go:31`). Existing spills and retained output live there, and resetting the runtime directory keeps `.rocketcode` by name (`internal/rocketclaw/skel/skel.go:643`). Permission rules a person wrote may also name these paths; the built-in shell-temp grant is derived from the configured path and moves with it.
 - **Telemetry names**: the tracer `rocketcode` (`internal/rocketclaw/backend/bridge.go:2487`), spans `rocketcode.turn`, `rocketcode.provider`, `rocketcode.tool.*`, `rocketcode.decision` (`internal/rocketclaw/harness/decision.go:91`), the span event `rocketcode.provider.diagnostic` (`internal/rocketclaw/harness/observability.go:94`), and the `rocketcode.*` attributes (`internal/rocketclaw/harness/observability.go:105-110`; `internal/rocketclaw/harness/looper.go:690-701`, `:1176-1186`). PostHog views are keyed on them; see `docs/solutions/best-practices/posthog-needs-genai-span-attributes.md`.
 - **MCP client name** `rocketcode-mcp-client` (`internal/rocketclaw/mcpclient/registry.go:23`), which outbound MCP servers receive and may log or allowlist.
-- **Config key** `rocketcode_auth`, the old name of a provider's `auth` (`internal/rocketclaw/config/config.go:201`, normalized at `:434`–`443`; `cmd/rocketclaw/oai.go:215-218` reads it and rewrites it to `auth`). Existing `rocketclaw.json` files still use it.
 - **Model-facing text**: the compaction checkpoint ("compacted by RocketCode", `internal/rocketclaw/harness/looper.go:2346`), the automatic permission reviewer's prompt (`internal/rocketclaw/harness/permission_review.go:323`, `:328`), and the shipped skills that name it (`internal/rocketclaw/skel/.rocketclaw/skills/main-create-or-update-agent/SKILL.md`, `internal/rocketclaw/skel/.rocketclaw/skills/main-update-rocketclaw-json/SKILL.md:138`). Changing them is a prompt change and needs the same care as one, not a rename.
 
 **Safe to rename:** Go identifiers and test names (`prepareRocketCode`, `rocketcodeConfig`, `rocketcodeRetainedDir`, `loadRocketCodeDefinitions`, ...), comments, and current docs. These are code, so the compiler and tests catch mistakes.
 
-If a stored or external name really has to change, treat it as a migration: keep reading the old value (as `config.go` does for `rocketcode_auth`), or rewrite the stored data, and tell the people who own the dashboards.
+If a stored or external name really has to change, treat it as a migration: keep reading the old value, or rewrite the stored data, and tell the people who own the dashboards.
 
 ## Why This Matters
 

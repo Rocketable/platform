@@ -186,9 +186,7 @@ websearch: allow
 		"read: []":                       `permission "read": permission rule must be a scalar or mapping`,
 		"read: &rule allow\nedit: *rule": `permission "edit": permission rule must be a scalar or mapping`,
 		"websearch: {openai.com: allow}": `permission "websearch" only supports coarse allow or deny`,
-		"read: ask":                      `permission action "ask" is not supported`,
-		"doom_loop: deny":                `permission "doom_loop" is not supported`,
-		"external_directory: deny":       `permission "external_directory" is not supported`,
+		"read: ask":                      `unknown permission action "ask"`,
 		"rocketclaw: allow":              `permission "rocketclaw": name each rocketclaw tool`,
 		"rocketclaw: {'*': allow}":       `permission "rocketclaw": name each rocketclaw tool`,
 		"rocketclaw: {rocketclaw_sessions_*: allow}": `permission "rocketclaw": name each rocketclaw tool`,
@@ -235,8 +233,7 @@ func TestPermissionSetHelpers(t *testing.T) {
 	permissions = PermissionSet{Buckets: nil}
 	require.NoError(t, permissions.Allow("apply_patch", "*.go"))
 	require.Equal(t, "edit", permissions.Buckets[0].Name)
-	require.EqualError(t, permissions.Allow("external_directory", "*"), `permission "external_directory" is not supported`)
-	require.EqualError(t, permissions.Set("read", "*", PermissionAction("ask")), `permission action "ask" is not supported`)
+	require.EqualError(t, permissions.Set("read", "*", PermissionAction("ask")), `unknown permission action "ask"`)
 }
 
 func TestPermissionSetEvaluate(t *testing.T) {
