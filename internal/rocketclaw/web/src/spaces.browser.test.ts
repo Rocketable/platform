@@ -1194,9 +1194,10 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
   let lastRows: (string | null)[] | undefined, lastHeight: number | undefined, pollsBeforeReload: number | undefined;
   const reload: { startedMs?: number; committedMs?: number; listingFinishedMs?: number } = {};
   const firstReloadRequests: Record<string, string> = { Identity: "not requested", Protocol: "not requested", Tabs: "not requested", ListSessions: "not requested" };
+  const snapshotReads: string[] = [];
   onTestFinished(() => {
     if (waitingFor) console.error("Parked test state", JSON.stringify({
-      waitingFor, elapsedMs: elapsed(), reload, firstReloadRequests, lastRows, lastHeight, savedOrder: fixture?.layout?.order, pollsBeforeReload, polls: fixture?.polls,
+      waitingFor, elapsedMs: elapsed(), reload, firstReloadRequests, snapshotReads, lastRows, lastHeight, savedOrder: fixture?.layout?.order, pollsBeforeReload, polls: fixture?.polls,
     }));
   });
   await withPage({}, async (page, origin, _prompts, saved) => {
@@ -1266,6 +1267,35 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
     page.on("requestfailed", (request: object & { failure(): { errorText: string } | null }) => {
       const observed = reloadRequests.get(request);
       if (observed?.first) firstReloadRequests[observed.rpc] = `failed (${request.failure()?.errorText})`;
+    });
+    page.on("console", (message: { text(): string }) => {
+      const text = message.text(), prefix = "parked-snapshot ";
+      if (text.startsWith(prefix)) snapshotReads.push(text.slice(prefix.length));
+    });
+    await page.addInitScript(() => {
+      const dbName = "rocketclaw-session-list-v2";
+      const trace = (event: string) => console.debug(`parked-snapshot ${Math.round(performance.now())}ms after navigation: ${event}`);
+      const open = IDBFactory.prototype.open;
+      IDBFactory.prototype.open = function (this: IDBFactory, ...args: Parameters<typeof open>) {
+        const request = open.apply(this, args);
+        if (args[0] === dbName) {
+          trace("open");
+          for (const event of ["success", "error", "blocked", "upgradeneeded"]) request.addEventListener(event, () => trace(`open ${event}`));
+        }
+        return request;
+      };
+      const get = IDBObjectStore.prototype.get;
+      IDBObjectStore.prototype.get = function (this: IDBObjectStore, key: Parameters<typeof get>[0]) {
+        const request = get.call(this, key);
+        const tx = this.transaction;
+        if (tx.db.name === dbName && this.name === "snapshots" && tx.mode === "readonly") {
+          const read = typeof key === "string" ? "generation" : "saved rows";
+          trace(`${read} get`);
+          for (const event of ["success", "error"]) request.addEventListener(event, () => trace(`${read} get ${event}`));
+          for (const event of ["complete", "abort"]) tx.addEventListener(event, () => trace(`${read} transaction ${event}`));
+        }
+        return request;
+      };
     });
     waitingFor = "finish reload";
     reload.startedMs = elapsed();
