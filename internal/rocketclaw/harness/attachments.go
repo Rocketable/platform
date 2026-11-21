@@ -216,18 +216,18 @@ func textFromHTMLString(s string) (string, error) {
 
 	var (
 		out  strings.Builder
-		walk func(*html.Node, bool)
+		walk func(*html.Node)
 	)
 
-	walk = func(n *html.Node, skip bool) {
+	walk = func(n *html.Node) {
 		if n.Type == html.ElementNode {
 			switch strings.ToLower(n.Data) {
 			case "script", "style", "noscript", "iframe", "object", "embed":
-				skip = true
+				return
 			}
 		}
 
-		if n.Type == html.TextNode && !skip {
+		if n.Type == html.TextNode {
 			text := strings.TrimSpace(n.Data)
 			if text != "" {
 				if out.Len() > 0 {
@@ -239,10 +239,10 @@ func textFromHTMLString(s string) (string, error) {
 		}
 
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c, skip)
+			walk(c)
 		}
 	}
-	walk(doc, false)
+	walk(doc)
 
 	return strings.TrimSpace(out.String()), nil
 }
