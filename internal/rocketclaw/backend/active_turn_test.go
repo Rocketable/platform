@@ -358,6 +358,54 @@ func TestStopOnWaitingRowPostsStoppedFinalAndDoesNotRun(t *testing.T) {
 	assert.Equal(t, protocol.TerminalStopped, entries[0].Terminal, "the web transcript shows the stopped turn")
 }
 
+func TestIdleStopSettlesCallsLeftRunning(t *testing.T) {
+	t.Parallel()
+
+	newBridge, service, _, finals := newResumeTestBridges(t, false)
+	idle := newBridge()
+	conversationID := idle.config.ConversationID
+	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "seed", true)
+	inbound.ConversationID = conversationID
+	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-cut", conversationID, inbound))
+
+	journal := conversationJournal{store: service, conversationID: conversationID, log: slog.New(slog.DiscardHandler)}
+	output := `[{"type":"function_call_output","call_id":"%s","output":"done"}]`
+	require.NoError(t, journal.Save(t.Context(), harness.CallKey("turn-cut", "call-failed"), json.RawMessage(`{"output":`+fmt.Sprintf(output, "call-failed")+`,"state":"failed"}`)))
+	require.NoError(t, journal.Save(t.Context(), harness.CallKey("turn-cut", "call-old"), json.RawMessage(`{"output":`+fmt.Sprintf(output, "call-old")+`}`)))
+	require.NoError(t, journal.Save(t.Context(), harness.CallKey("turn-cut", "call-cut"), json.RawMessage(`{}`)))
+
+	calls := []harness.PublicProgress{
+		{ID: "call-failed", Kind: harness.PublicProgressTool, State: harness.PublicProgressReview},
+		{ID: "call-old", Kind: harness.PublicProgressTool, State: harness.PublicProgressWorking},
+		{ID: "call-cut", Kind: harness.PublicProgressDelegation, State: harness.PublicProgressWorking},
+		{ID: "call-done", Kind: harness.PublicProgressTool, State: harness.PublicProgressCompleted},
+	}
+	trace := make([]json.RawMessage, 0, len(calls))
+
+	for _, call := range calls {
+		raw, err := json.Marshal(map[string]any{"type": "rocketcode_public_progress", "progress": call})
+		require.NoError(t, err)
+
+		trace = append(trace, raw)
+	}
+
+	require.NoError(t, journal.SaveTrace(t.Context(), "turn-cut", trace))
+
+	require.NotNil(t, idle.InterruptActiveTurn())
+	assert.Equal(t, protocol.TerminalStopped, readFinal(t, finals).Terminal)
+
+	entries := testHistoryEntries(t, service, conversationID)
+	require.Len(t, entries, 1)
+
+	states := map[string]harness.PublicProgressState{}
+	for _, progress := range harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace) {
+		states[progress.ID] = progress.State
+	}
+
+	assert.Equal(t, map[string]harness.PublicProgressState{"call-failed": harness.PublicProgressFailed, "call-old": harness.PublicProgressCompleted, "call-cut": harness.PublicProgressStopped, "call-done": harness.PublicProgressCompleted}, states,
+		"a turn stopped before it resumed leaves no call spinning: journaled calls keep their state, a cut-off call is stopped")
+}
+
 func TestStopBetweenTakeAndHandleDoesNotRun(t *testing.T) {
 	t.Parallel()
 

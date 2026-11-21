@@ -1239,6 +1239,20 @@ func (j conversationJournal) SaveTrace(ctx context.Context, turnID string, trace
 	return errExec
 }
 
+func settleStoppedTrace(ctx context.Context, journal conversationJournal, turnID string) error {
+	trace, err := queryRows(ctx, journal.store.db, `SELECT e.value FROM turns t CROSS JOIN LATERAL jsonb_array_elements(COALESCE(t.output_trace_json::jsonb, '[]')) WITH ORDINALITY e(value, n)
+WHERE t.id = $1 ORDER BY e.n`, "stopped turn trace", scanJSON, turnID)
+	if err == nil {
+		err = harness.SettleStoppedTrace(ctx, journal, turnID, trace)
+	}
+
+	if err != nil {
+		return fmt.Errorf("settle stopped turn calls: %w", err)
+	}
+
+	return journal.SaveTrace(ctx, turnID, trace)
+}
+
 func (j conversationJournal) SaveCodeModeCall(ctx context.Context, turnID, key string, record json.RawMessage) error {
 	rowID, _, _ := strings.Cut(turnID, "/")
 

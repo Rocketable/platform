@@ -526,6 +526,10 @@ func (b *Bridge) stopIdleTurn() *protocol.InboundMessage {
 		return nil
 	}
 
+	if err := settleStoppedTrace(ctx, conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, turn.id); err != nil {
+		b.log.Error("settle idle active turn calls", "conversation_id", b.config.ConversationID, "turn_id", turn.id, "error", err)
+	}
+
 	outbound := b.newOutboundMessage(turn.inbound, turn.id, "", true)
 	outbound.Terminal = protocol.TerminalStopped
 

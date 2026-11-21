@@ -3287,6 +3287,10 @@ func TestLooperResumesTurnCutOffMidCall(t *testing.T) {
 				return ToolResult{}, ctx.Err()
 			}
 
+			if string(args) == `{"n":4}` {
+				return ToolResult{}, errors.New("lookup unavailable")
+			}
+
 			return TextToolResult("result " + string(args)), nil
 		}
 		tools[name] = tool
@@ -3327,7 +3331,10 @@ func TestLooperResumesTurnCutOffMidCall(t *testing.T) {
 			testFunctionCall("tool-2", "call-2", "lookup", `{"n":2}`),
 			testFunctionCall("tool-3", "call-3", "lookup", `{"n":3}`),
 		}),
-		responseWithFunctionCalls("resp-2", []responses.ResponseFunctionToolCall{testFunctionCall("tool-4", "call-4", "hang", `{}`)}),
+		responseWithFunctionCalls("resp-2", []responses.ResponseFunctionToolCall{
+			testFunctionCall("tool-5", "call-5", "lookup", `{"n":4}`),
+			testFunctionCall("tool-4", "call-4", "hang", `{}`),
+		}),
 	)), &cutApplied)
 	require.Error(t, err)
 	require.Equal(t, [][]string{{"initial"}}, cutApplied, "the steer is accepted after the 3 finished calls")
@@ -3335,11 +3342,11 @@ func TestLooperResumesTurnCutOffMidCall(t *testing.T) {
 	mock := mockResponses(responseWithMessage("resp-final", "done"))
 	saved, err := run(t.Context(), testLooper(mock), &resumedApplied)
 	require.NoError(t, err)
-	require.Equal(t, map[string]int{`{"n":1}`: 1, `{"n":2}`: 1, `{"n":3}`: 1, `{}`: 1}, runs, "no finished or cut-off call runs again")
+	require.Equal(t, map[string]int{`{"n":1}`: 1, `{"n":2}`: 1, `{"n":3}`: 1, `{"n":4}`: 1, `{}`: 1}, runs, "no finished or cut-off call runs again")
 	require.Equal(t, [][]string{{"initial", "steer-1"}, {"initial", "steer-1"}}, resumedApplied, "the resumed turn knows the inputs it applied")
 
 	sent := marshalJSON(t, newParams(mock)[0].Input.OfInputItemList)
-	for _, text := range []string{"work", "also check the logs", `result {\"n\":1}`, `result {\"n\":2}`, `result {\"n\":3}`, genericAbortedToolOutputText} {
+	for _, text := range []string{"work", "also check the logs", `result {\"n\":1}`, `result {\"n\":2}`, `result {\"n\":3}`, "tool call failed: lookup: lookup unavailable", genericAbortedToolOutputText} {
 		require.Equal(t, 1, strings.Count(sent, text), text)
 	}
 
@@ -3358,7 +3365,110 @@ func TestLooperResumesTurnCutOffMidCall(t *testing.T) {
 		}
 	}
 
-	require.Equal(t, map[string]PublicProgressState{"call-1": PublicProgressCompleted, "call-2": PublicProgressCompleted, "call-3": PublicProgressCompleted, "call-4": PublicProgressStopped}, states)
+	require.Equal(t, map[string]PublicProgressState{"call-1": PublicProgressCompleted, "call-2": PublicProgressCompleted, "call-3": PublicProgressCompleted, "call-4": PublicProgressStopped, "call-5": PublicProgressFailed}, states)
+}
+
+func TestLooperResumeKeepsCutOffAndBackgroundStates(t *testing.T) {
+	t.Parallel()
+
+	journal := recordingJournal()
+
+	var (
+		mu        sync.Mutex
+		runIndex  int
+		cancelRun context.CancelFunc
+	)
+
+	runs := map[string]int{}
+	tools := map[string]looperTool{}
+
+	for _, name := range []string{"bg", "hang", "slow"} {
+		tool := testLooperTool(name)
+		tool.resumable = name != "hang"
+		tool.Call = func(ctx context.Context, _ json.RawMessage, _ chan<- ChatResponse, metadata toolCallMetadata) (ToolResult, error) {
+			mu.Lock()
+			runs[name]++
+			index := runIndex
+			mu.Unlock()
+
+			switch {
+			case name == "bg":
+				progress := *metadata.progress
+				if _, err := metadata.observations.finishCall(context.WithoutCancel(ctx), &progress, PublicProgressBackground); err != nil {
+					return ToolResult{}, err
+				}
+
+				return TextToolResult("moved"), nil
+			case name == "hang" || index < 2:
+				cancelRun()
+				<-ctx.Done()
+
+				return ToolResult{}, ctx.Err()
+			}
+
+			return TextToolResult("slow done"), nil
+		}
+		tools[name] = tool
+	}
+
+	allow := []PermissionRule{{Pattern: "*", Action: permissionAllow}}
+	permissions := PermissionSet{Buckets: []PermissionBucket{{Name: "bg", Rules: allow}, {Name: "hang", Rules: allow}, {Name: "slow", Rules: allow}}}
+	run := func(loop *looper) ([]SessionEntry, error) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		mu.Lock()
+		cancelRun = cancel
+		mu.Unlock()
+
+		loop.Tools, loop.Permissions, loop.ParallelToolCalls, loop.Journal = tools, permissions, 1, journal
+		output := make(chan ChatResponse, 20)
+
+		input := make(chan PromptInput, 1)
+		input <- PromptInput{ID: "initial", TurnID: "turn-1", Texts: []string{"work"}, Responses: output}
+
+		close(input)
+
+		var saved []SessionEntry
+
+		err := loop.Loop(ctx, input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
+			saved = append(saved, *entry)
+			return nil
+		}}, make(chan os.Signal, 1))
+
+		collectResponses(output)
+
+		mu.Lock()
+		runIndex++
+		mu.Unlock()
+
+		return saved, err
+	}
+
+	_, err := run(testLooper(mockResponses(responseWithFunctionCalls("resp-1", []responses.ResponseFunctionToolCall{
+		testFunctionCall("tool-1", "call-bg", "bg", `{}`),
+		testFunctionCall("tool-2", "call-hang", "hang", `{}`),
+		testFunctionCall("tool-3", "call-slow", "slow", `{}`),
+	}))))
+	require.Error(t, err)
+
+	_, err = run(testLooper(mockResponses()))
+	require.Error(t, err)
+
+	saved, err := run(testLooper(mockResponses(responseWithMessage("resp-final", "done"))))
+	require.NoError(t, err)
+	require.Len(t, saved, 1)
+
+	states := map[string]PublicProgressState{}
+
+	for _, progress := range PublicProgressFromTrace(saved[0].OutputTrace) {
+		if progress.Kind == PublicProgressTool {
+			states[progress.ID] = progress.State
+		}
+	}
+
+	require.Equal(t, map[string]int{"bg": 1, "hang": 1, "slow": 3}, runs, "only the resumable call cut off by each stop runs again")
+	require.Equal(t, map[string]PublicProgressState{"call-bg": PublicProgressBackground, "call-hang": PublicProgressStopped, "call-slow": PublicProgressCompleted}, states, "a call cut off twice stays stopped and a call moved to the background stays background across resumes")
 }
 
 func TestLooperTurnSavesWriteOnlyTheirNewItems(t *testing.T) {

@@ -1841,7 +1841,7 @@ func (l *looper) dispatchToolCalls(
 
 		tool, ok := l.Tools[item.Name]
 		if !ok {
-			if err := l.observations.finishCall(ctx, &progress, PublicProgressFailed); err != nil {
+			if _, err := l.observations.finishCall(ctx, &progress, PublicProgressFailed); err != nil {
 				return nil, err
 			}
 
@@ -1857,7 +1857,7 @@ func (l *looper) dispatchToolCalls(
 		}
 
 		if doomLoop != nil && doomLoop.trapped(item.Name, args) {
-			if err := l.observations.finishCall(ctx, &progress, PublicProgressBlocked); err != nil {
+			if _, err := l.observations.finishCall(ctx, &progress, PublicProgressBlocked); err != nil {
 				return nil, err
 			}
 
@@ -1889,7 +1889,7 @@ func (l *looper) dispatchToolCalls(
 		}
 
 		if decision.denied {
-			if err := l.observations.finishCall(ctx, &progress, PublicProgressBlocked); err != nil {
+			if _, err := l.observations.finishCall(ctx, &progress, PublicProgressBlocked); err != nil {
 				return nil, err
 			}
 
@@ -1983,8 +1983,9 @@ func (l *looper) dispatchToolCalls(
 				state = PublicProgressStopped
 			}
 
-			if err := l.observations.finishCall(context.WithoutCancel(groupCtx), &progress, state); err != nil {
-				return err
+			var errFinish error
+			if state, errFinish = l.observations.finishCall(context.WithoutCancel(groupCtx), &progress, state); errFinish != nil {
+				return errFinish
 			}
 
 			if err != nil {
@@ -2006,7 +2007,7 @@ func (l *looper) dispatchToolCalls(
 
 			outputs[call.outputIndex] = dispatchedToolOutput{Param: toolCallOutput(call.callID, result), ReplayInput: replayInput}
 
-			return l.recordCall(groupCtx, key, &outputs[call.outputIndex].Param, replayInput)
+			return l.recordCall(groupCtx, key, &outputs[call.outputIndex].Param, replayInput, state)
 		})
 	}
 
@@ -2056,19 +2057,20 @@ func (l *looper) replayCall(ctx context.Context, outputs []dispatchedToolOutput,
 		return false, nil
 	}
 
-	state := PublicProgressCompleted
 	if len(step.Output) == 0 {
-		state = PublicProgressStopped
 		output := toolCallOutput(callID, TextToolResult(genericAbortedToolOutputText))
 
 		if step.Output, err = ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfFunctionCallOutput: &output}}); err != nil {
 			return true, err
 		}
 
+		step.State = PublicProgressStopped
 		if err := saveStep(ctx, l.Journal, key, &step); err != nil {
 			return true, err
 		}
 	}
+
+	state := cmp.Or(step.State, PublicProgressCompleted)
 
 	items, err := ReplayInputToParams(step.Output)
 	if err != nil {
@@ -2077,16 +2079,18 @@ func (l *looper) replayCall(ctx context.Context, outputs []dispatchedToolOutput,
 
 	outputs[index] = dispatchedToolOutput{Param: *items[0].OfFunctionCallOutput, ReplayInput: items[1:]}
 
-	return true, l.observations.finishCall(context.WithoutCancel(ctx), progress, state)
+	_, err = l.observations.finishCall(context.WithoutCancel(ctx), progress, state)
+
+	return true, err
 }
 
-func (l *looper) recordCall(ctx context.Context, key string, output *responses.ResponseInputItemFunctionCallOutputParam, replayInput []responses.ResponseInputItemUnionParam) error {
+func (l *looper) recordCall(ctx context.Context, key string, output *responses.ResponseInputItemFunctionCallOutputParam, replayInput []responses.ResponseInputItemUnionParam, state PublicProgressState) error {
 	recorded, err := ReplayInputFromParams(append([]responses.ResponseInputItemUnionParam{{OfFunctionCallOutput: output}}, replayInput...))
 	if err != nil {
 		return err
 	}
 
-	return saveStep(ctx, l.Journal, key, &callStep{Output: recorded})
+	return saveStep(ctx, l.Journal, key, &callStep{Output: recorded, State: state})
 }
 
 func toolCallFailureResult(name string, err error) ToolResult {

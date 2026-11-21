@@ -266,7 +266,7 @@ func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *lo
 		progress := *metadata.progress
 		progress.SubagentKey = subagent
 
-		if err := metadata.observations.finishCall(context.WithoutCancel(ctx), &progress, PublicProgressBackground); err != nil {
+		if _, err := metadata.observations.finishCall(context.WithoutCancel(ctx), &progress, PublicProgressBackground); err != nil {
 			return ToolResult{}, err
 		}
 
