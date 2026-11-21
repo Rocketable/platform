@@ -1,4 +1,4 @@
-import { expect, onTestFinished, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { href, withPage, current, names, order, until, openSaved, openFromPalette, menu, chooseSpace, newSpace, shared, sharedNames, focus, menuLines, sharedMenu, strip, type SharedTab, type Change, type Saved } from "./tabs-browser_test";
 import type { SearchPage } from "./types";
 
@@ -1300,99 +1300,105 @@ const addRemote = (page: any, url: string) => page.addInitScript((remote: string
   document.head.append(Object.assign(document.createElement("script"), { id: "rocketclaws", type: "application/json", textContent: JSON.stringify([{ name: "work", url: remote }]) }));
 }), url);
 
-test("with other RocketClaws the strip lists every server's space cards, each with its Shared tabs, in this person's order, titled with their server, acting, folded and moved the same from any server and any browser", () => withPage({}, async (page, origin, _prompts, saved) => {
-  const remote = serveRemote({ spaces: [{ id: "lab", name: "Lab" }, { id: "home", name: "Home" }], state: { tabs: [{ path: href("india"), space: "lab" }, { path: href("kilo"), space: "lab" }, { path: href("juliet"), space: "home" }], groups: [], space: "lab", last: {}, sharedOrder: [] }, shared: [{ space: "home", path: href("lima") }] },
-    () => [{ id: "india", name: "India", agent: "main", spaceId: "lab", unreadAt: "2026-10-22T11:00:00Z" }, { id: "kilo", name: "Kilo", agent: "main", spaceId: "lab" }, { id: "juliet", name: "Juliet", agent: "main", spaceId: "home", running: true, asking: true }, { id: "lima", name: "Lima", agent: "main", spaceId: "home" }]);
+const workSessions = () => [
+  { id: "india", name: "India", agent: "main", spaceId: "lab", unreadAt: "2026-10-22T11:00:00Z" },
+  { id: "kilo", name: "Kilo", agent: "main", spaceId: "lab" },
+  { id: "juliet", name: "Juliet", agent: "main", spaceId: "home", running: true, asking: true },
+  { id: "lima", name: "Lima", agent: "main", spaceId: "home" },
+];
+const workTabs = (): RemoteTabs => ({
+  spaces: [{ id: "lab", name: "Lab" }, { id: "home", name: "Home" }],
+  state: { tabs: [{ path: href("india"), space: "lab" }, { path: href("kilo"), space: "lab" }, { path: href("juliet"), space: "home" }], groups: [], space: "lab", last: {}, sharedOrder: [] },
+  shared: [{ space: "home", path: href("lima") }],
+});
+async function withWork(page: any, saved: Saved, run: (remote: ReturnType<typeof serveRemote>) => Promise<void>) {
+  const remote = serveRemote(workTabs(), workSessions);
   try {
     await addRemote(page, remote.url);
     saved.spaces.push({ id: "ops", name: "Ops" });
     saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }, { path: href("bravo"), space: "ops" }] };
-    saved.layout = { order: ["away/ops"] };
-    const titles = () => page.locator("[data-card-key] > div > button[aria-expanded][aria-description]").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
-    const title = (name: string) => page.getByRole("button", { name, exact: true });
-    const list = (name: string) => page.getByRole("tablist", { name, exact: true }), rows = (name: string) => list(name).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
-    await page.goto(`${origin}${href("alpha")}`);
-    await list("Lab tabs on work").getByRole("tab", { name: "Kilo", exact: true }).waitFor();
-    expect([await titles(), await page.locator(`button${current}`).getAttribute("aria-label")]).toEqual([["Main · 127.0.0.1", "Ops · 127.0.0.1", "Lab · work", "Home · work"], "Main · 127.0.0.1"]);
-    expect([await rows("Ops tabs on 127.0.0.1"), await rows("Home Shared tabs on work"), await rows("Lab tabs on work"), await rows("Home tabs on work")]).toEqual([["Bravo"], ["Lima"], ["India", "Kilo"], ["Juliet"]]);
-
-    // Another server's rows take their whole menu, whose changes act on that server.
-    await list("Lab tabs on work").getByRole("tab", { name: "India", exact: true }).click({ button: "right" });
-    await page.getByRole("menuitem").first().waitFor();
-    expect(await menuLines(page)).toEqual(expect.arrayContaining(["Close", "Close others", "Add to Shared", "Mark as read", "Add to group", "Move to space"]));
-    await page.getByRole("menuitem", { name: "Mark as read", exact: true }).click();
-    await until(() => remote.sent.length === 1);
-    expect(remote.sent).toEqual([{ paths: [href("india")], action: "MARK_READ" }]);
-    await list("Lab tabs on work").getByRole("button", { name: "Close Kilo", exact: true }).click();
-    await until(() => !remote.saved.state.tabs.some((tab) => tab.path === href("kilo")));
-    expect(new URL(page.url()).pathname).toBe(href("alpha"));
-
-    // A card dropped on another's upper half goes before it, Shift+Arrow on a title moves its card past the next one and
-    // keeps it focused, a new space comes last, and a card not shown, as on a server that does not answer, keeps its place.
-    await title("Lab · work").dragTo(title("Main · 127.0.0.1"), { targetPosition: { x: 20, y: 2 } });
-    await title("Ops · 127.0.0.1").focus();
-    await page.keyboard.press("Shift+ArrowUp");
-    await until(() => saved.layout?.order?.[2] === "/ops");
-    expect(await page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).toBe("Ops · 127.0.0.1");
-    await newSpace(page, "Docs", "Spaces: New space on 127.0.0.1");
-    await title("Docs · 127.0.0.1").waitFor();
-    const order = ["Lab · work", "Ops · 127.0.0.1", "Main · 127.0.0.1", "Home · work", "Docs · 127.0.0.1"];
-    expect([await titles(), saved.layout?.order]).toEqual([order, ["away/ops", "work/lab", "/ops", "/main", "work/home"]]);
-
-    // Clicking a title folds its card for this person, on every server's page and in every browser, and so does the order.
-    await title("Ops · 127.0.0.1").click();
-    await page.locator('[aria-label="Ops · 127.0.0.1"][aria-expanded="false"]').waitFor();
-    await list("Home tabs on work").getByRole("tab", { name: "Juliet", exact: true }).click();
-    await page.waitForURL(`**/r/work${href("juliet")}`);
-    await page.locator(`button${current}[aria-label="Home · work"]`).waitFor();
-    expect([await titles(), await rows("Ops tabs on 127.0.0.1"), saved.layout?.folded]).toEqual([order, [], { "/ops": true }]);
-    const snapshotPrefix = "work strip reload: ";
-    let workTabs = "work tablist not rendered", restored = false;
-    const requests = new Map<object, string>();
-    page.on("request", (request: { url(): string }) => {
-      if (/\/api\/(Identity|Tabs|ListSessions)$/.test(request.url())) requests.set(request, `${request.url()} pending`);
-    });
-    page.on("response", (response: { request(): object; url(): string; status(): number }) => {
-      if (requests.has(response.request())) requests.set(response.request(), `${response.url()} ${response.status()}`);
-    });
-    page.on("requestfailed", (request: { url(): string; failure(): { errorText: string } }) => {
-      if (requests.has(request)) requests.set(request, `${request.url()} ${request.failure().errorText}`);
-    });
-    page.on("console", (message: { text(): string }) => {
-      if (message.text().startsWith(snapshotPrefix)) workTabs = message.text().slice(snapshotPrefix.length);
-    });
-    onTestFinished(() => {
-      if (!restored) console.error("Juliet did not return on work after clearing local storage and reloading", { url: page.url(), workTabs, requests: [...requests.values()], remoteTabs: remote.saved.state.tabs, layout: saved.layout });
-    });
-    await page.addInitScript((prefix: string) => {
-      let previous = "";
-      const render = new MutationObserver(() => {
-        const strip = document.querySelector("[data-tab-lists]");
-        if (!strip) return;
-        render.disconnect();
-        const snapshot = () => {
-          const lists = [...strip.querySelectorAll('[role="tablist"][data-card^="work/"]')].map((list) => ({
-            name: list.getAttribute("aria-label"),
-            tabs: [...list.querySelectorAll('[role="tab"]')].map((tab) => tab.getAttribute("aria-label")),
-          }));
-          const current = JSON.stringify(lists);
-          if (current !== previous) console.debug(prefix + (previous = current));
-        };
-        new MutationObserver(snapshot).observe(strip, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label"] });
-        snapshot();
-      });
-      render.observe(document, { childList: true, subtree: true });
-    }, snapshotPrefix);
-    await page.evaluate(() => localStorage.clear());
-    requests.clear();
-    await page.reload();
-    await list("Home tabs on work").getByRole("tab", { name: "Juliet", exact: true }).waitFor();
-    restored = true;
-    expect([await titles(), await title("Ops · 127.0.0.1").getAttribute("aria-expanded")]).toEqual([order, "false"]);
+    await run(remote);
   } finally {
     remote.server.stop(true);
   }
-}));
+}
+const cardTitles = (page: any) => page.locator("[data-card-key] > div > button[aria-expanded][aria-description]").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+const cardTitle = (page: any, name: string) => page.getByRole("button", { name, exact: true });
+const tabList = (page: any, name: string) => page.getByRole("tablist", { name, exact: true });
+const tabNames = (page: any, name: string) => tabList(page, name).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+
+test("with other RocketClaws the strip lists every server's space cards, titled with their server, each with its tabs and Shared tabs", () => withPage({}, (page, origin, _prompts, saved) => withWork(page, saved, async () => {
+  await page.goto(`${origin}${href("alpha")}`);
+  await tabList(page, "Lab tabs on work").getByRole("tab", { name: "Kilo", exact: true }).waitFor();
+  expect(await cardTitles(page)).toEqual(["Main · 127.0.0.1", "Ops · 127.0.0.1", "Lab · work", "Home · work"]);
+  expect(await page.locator(`button${current}`).getAttribute("aria-label")).toBe("Main · 127.0.0.1");
+  expect(await tabNames(page, "Ops tabs on 127.0.0.1")).toEqual(["Bravo"]);
+  expect(await tabNames(page, "Lab tabs on work")).toEqual(["India", "Kilo"]);
+  expect(await tabNames(page, "Home tabs on work")).toEqual(["Juliet"]);
+  expect(await tabNames(page, "Home Shared tabs on work")).toEqual(["Lima"]);
+})), 30_000);
+
+test("another RocketClaw's tab takes the whole tab menu, and its changes and closes act on that server", () => withPage({}, (page, origin, _prompts, saved) => withWork(page, saved, async (remote) => {
+  await page.goto(`${origin}${href("alpha")}`);
+  const lab = tabList(page, "Lab tabs on work");
+  await lab.getByRole("tab", { name: "India", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem").first().waitFor();
+  expect(await menuLines(page)).toEqual(expect.arrayContaining(["Close", "Close others", "Add to Shared", "Mark as read", "Add to group", "Move to space"]));
+  await page.getByRole("menuitem", { name: "Mark as read", exact: true }).click();
+  await until(() => remote.sent.length === 1);
+  expect(remote.sent).toEqual([{ paths: [href("india")], action: "MARK_READ" }]);
+
+  await lab.getByRole("button", { name: "Close Kilo", exact: true }).click();
+  await until(() => !remote.saved.state.tabs.some((tab) => tab.path === href("kilo")));
+  expect(remote.saved.state.tabs.map((tab) => tab.path)).toEqual([href("india"), href("juliet")]);
+  expect(new URL(page.url()).pathname).toBe(href("alpha"));
+})), 30_000);
+
+test("space cards from every RocketClaw move by dragging and Shift+Arrow, a card not shown keeps its place, and a new space comes last", () => withPage({}, (page, origin, _prompts, saved) => withWork(page, saved, async () => {
+  saved.layout = { order: ["away/ops"] };
+  await page.goto(`${origin}${href("alpha")}`);
+  await cardTitle(page, "Lab · work").waitFor();
+
+  await cardTitle(page, "Lab · work").dragTo(cardTitle(page, "Main · 127.0.0.1"), { targetPosition: { x: 20, y: 2 } });
+  await until(() => JSON.stringify(saved.layout?.order) === JSON.stringify(["away/ops", "work/lab", "/main", "/ops", "work/home"]));
+  expect(await cardTitles(page)).toEqual(["Lab · work", "Main · 127.0.0.1", "Ops · 127.0.0.1", "Home · work"]);
+
+  await cardTitle(page, "Ops · 127.0.0.1").focus();
+  await page.keyboard.press("Shift+ArrowUp");
+  await until(() => JSON.stringify(saved.layout?.order) === JSON.stringify(["away/ops", "work/lab", "/ops", "/main", "work/home"]));
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).toBe("Ops · 127.0.0.1");
+
+  await newSpace(page, "Docs", "Spaces: New space on 127.0.0.1");
+  await cardTitle(page, "Docs · 127.0.0.1").waitFor();
+  expect(await cardTitles(page)).toEqual(["Lab · work", "Ops · 127.0.0.1", "Main · 127.0.0.1", "Home · work", "Docs · 127.0.0.1"]);
+  expect(saved.layout?.order).toEqual(["away/ops", "work/lab", "/ops", "/main", "work/home"]);
+})), 30_000);
+
+test("a folded space card and the card order follow this person to another RocketClaw's page and to a browser with nothing saved", () => withPage({}, (page, origin, _prompts, saved) => withWork(page, saved, async () => {
+  const order = ["Lab · work", "Ops · 127.0.0.1", "Main · 127.0.0.1", "Home · work"];
+  saved.layout = { order: ["work/lab", "/ops", "/main", "work/home"] };
+  await page.goto(`${origin}${href("alpha")}`);
+  await tabList(page, "Ops tabs on 127.0.0.1").getByRole("tab", { name: "Bravo", exact: true }).waitFor();
+  expect(await cardTitles(page)).toEqual(order);
+
+  await cardTitle(page, "Ops · 127.0.0.1").click();
+  await page.locator('[aria-label="Ops · 127.0.0.1"][aria-expanded="false"]').waitFor();
+  await until(() => saved.layout?.folded?.["/ops"] === true);
+  expect(await tabNames(page, "Ops tabs on 127.0.0.1")).toEqual([]);
+
+  await tabList(page, "Home tabs on work").getByRole("tab", { name: "Juliet", exact: true }).click();
+  await page.waitForURL(`**/r/work${href("juliet")}`);
+  await page.locator(`button${current}[aria-label="Home · work"]`).waitFor();
+  expect(await cardTitles(page)).toEqual(order);
+  expect(await cardTitle(page, "Ops · 127.0.0.1").getAttribute("aria-expanded")).toBe("false");
+
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await tabList(page, "Home tabs on work").getByRole("tab", { name: "Juliet", exact: true }).waitFor();
+  expect(await cardTitles(page)).toEqual(order);
+  expect(await cardTitle(page, "Ops · 127.0.0.1").getAttribute("aria-expanded")).toBe("false");
+  expect(await tabNames(page, "Ops tabs on 127.0.0.1")).toEqual([]);
+})), 30_000);
 
 test("with parked tabs on more than one RocketClaw, Parked is a tree of servers whose rows act on their own server", () => {
   const started = performance.now(), stages: Record<string, number> = { "start browser": 0 };
