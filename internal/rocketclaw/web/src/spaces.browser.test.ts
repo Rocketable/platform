@@ -1362,9 +1362,11 @@ test("Parked also lists the Shared rows this person parked, which open in their 
     await input.press("Enter");
     await row.waitFor();
 
-    waitingFor = "Hotel to open in Ops without a personal tab";
+    waitingFor = "the click on Renamed hotel to finish";
     await row.click();
+    waitingFor = "the URL to change to Hotel";
     await page.waitForURL(`**${href("hotel")}`);
+    waitingFor = "Ops to be saved as the active space";
     await until(() => saved.state.space === "ops");
     expect(saved.state.tabs.map((tab) => tab.path)).toEqual([href("alpha")]);
 
