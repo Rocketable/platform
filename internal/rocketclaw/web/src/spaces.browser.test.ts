@@ -1193,9 +1193,10 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
   let waitingFor = "open browser", fixture: Saved | undefined;
   let lastRows: (string | null)[] | undefined, lastHeight: number | undefined, pollsBeforeReload: number | undefined;
   const reload: { startedMs?: number; committedMs?: number; listingFinishedMs?: number } = {};
+  const firstReloadRequests: Record<string, string> = { Identity: "not requested", Protocol: "not requested", Tabs: "not requested", ListSessions: "not requested" };
   onTestFinished(() => {
     if (waitingFor) console.error("Parked test state", JSON.stringify({
-      waitingFor, elapsedMs: elapsed(), reload, lastRows, lastHeight, savedOrder: fixture?.layout?.order, pollsBeforeReload, polls: fixture?.polls,
+      waitingFor, elapsedMs: elapsed(), reload, firstReloadRequests, lastRows, lastHeight, savedOrder: fixture?.layout?.order, pollsBeforeReload, polls: fixture?.polls,
     }));
   });
   await withPage({}, async (page, origin, _prompts, saved) => {
@@ -1244,15 +1245,27 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
     await until(() => saved.state.groups.some(({ id, collapsed }) => id === "parked" && collapsed === false));
     saved.attention.push({ path: href("foxtrot"), parked: true });
     pollsBeforeReload = saved.polls;
-    const reloadListings = new WeakSet<object>();
+    const reloadRequests = new WeakMap<object, { rpc: string; first: boolean }>();
     page.on("framenavigated", (frame: unknown) => {
       if (frame === page.mainFrame()) reload.committedMs ??= elapsed();
     });
     page.on("request", (request: { url(): string }) => {
-      if (reload.committedMs !== undefined && new URL(request.url()).pathname === "/api/ListSessions") reloadListings.add(request);
+      if (reload.committedMs === undefined) return;
+      const [, rpc] = /^\/api\/(Identity|Protocol|Tabs|ListSessions)$/.exec(new URL(request.url()).pathname) ?? [];
+      if (!rpc) return;
+      const first = firstReloadRequests[rpc] === "not requested";
+      if (first) firstReloadRequests[rpc] = "pending";
+      if (first || rpc === "ListSessions") reloadRequests.set(request, { rpc, first });
     });
-    page.on("requestfinished", (request: object) => {
-      if (reloadListings.has(request)) reload.listingFinishedMs ??= elapsed();
+    page.on("requestfinished", (request: object & { existingResponse(): { status(): number } | null }) => {
+      const observed = reloadRequests.get(request);
+      if (!observed) return;
+      if (observed.first) firstReloadRequests[observed.rpc] = `finished (HTTP ${request.existingResponse()?.status()})`;
+      if (observed.rpc === "ListSessions") reload.listingFinishedMs ??= elapsed();
+    });
+    page.on("requestfailed", (request: object & { failure(): { errorText: string } | null }) => {
+      const observed = reloadRequests.get(request);
+      if (observed?.first) firstReloadRequests[observed.rpc] = `failed (${request.failure()?.errorText})`;
     });
     waitingFor = "finish reload";
     reload.startedMs = elapsed();
