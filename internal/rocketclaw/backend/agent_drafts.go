@@ -498,7 +498,7 @@ func (s *SessionService) agentDraftChanges(ctx context.Context, draft *AgentDraf
 		AgentDraftSetMode, AgentDraftSetExternalMCP, AgentDraftSetTestChat, AgentDraftSetSaveState:
 	}
 
-	if !slices.ContainsFunc(ops, func(change AgentDraftOp) bool { return change.BaseRevision < draft.Revision }) {
+	if len(ops) == 0 || ops[0].BaseRevision == draft.Revision {
 		return ops, nil
 	}
 
@@ -509,7 +509,7 @@ func (s *SessionService) agentDraftChanges(ctx context.Context, draft *AgentDraf
 
 	for i := range ops {
 		for j := range later {
-			if committed := &later[j]; committed.Revision > ops[i].BaseRevision && committed.Revision <= draft.Revision && committed.Variant == ops[i].Variant && ops[i].Variant != "" {
+			if committed := &later[j]; committed.Revision <= draft.Revision && committed.Variant == ops[i].Variant && ops[i].Variant != "" {
 				switch {
 				case committed.Kind == AgentDraftRenameVariant:
 					ops[i].Variant = committed.Value
