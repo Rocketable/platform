@@ -13,7 +13,7 @@ ROOT := $(abspath ../../..)
 WORK := $(ROOT)/.tmp/run/slack-sticky-model
 MODEL := $(CURDIR)/SlackSticky.tla
 TLA_VERSION := 1.8.0
-TLA_SHA256 := 7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f
+TLA_SHA256 := fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713
 TOOLS := $(WORK)/tla2tools-$(TLA_VERSION).jar
 JAVA := java -Djava.io.tmpdir=$(WORK)/java -XX:+UseParallelGC
 # Every TLC run is killed after LIMIT seconds (SIGALRM; exit 142), which fails its check.

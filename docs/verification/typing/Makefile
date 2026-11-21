@@ -9,7 +9,7 @@
 # files and each check's log go to WORK, the repository's .tmp/verification/typing unless set otherwise.
 
 TLA_VERSION = 1.8.0
-TLA_SHA256 = 7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f
+TLA_SHA256 = fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713
 WORK ?= ../../../.tmp/verification/typing
 TOOLS = $(WORK)/tla2tools-$(TLA_VERSION).jar
 SHA256SUM = $(if $(shell command -v sha256sum),sha256sum,shasum -a 256)

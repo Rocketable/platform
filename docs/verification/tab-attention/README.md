@@ -20,7 +20,7 @@ make -C docs/verification/tab-attention fail-follow-ignored # a server that igno
 ```
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256
-`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`. The tools, the translator's copy, Java's
+`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. The tools, the translator's copy, Java's
 temporary files, TLC's working files and each check's log go to the repository root's
 `.tmp/verification/tab-attention/`. A check passes only when TLC exits 0 and reports
 `Model checking completed. No error has been found.` `fail-old-turn-end` passes only when TLC exits 12 or 13 and
@@ -28,6 +28,8 @@ reports `Invariant DoneEndsOnlyWhenIdle is violated`, and `fail-follow-ignored` 
 `Invariant NoMarkWhileUnfollowed is violated`.
 
 ## What each check proves
+
+On 2026-11-21, `make all` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 Both checks run the design as built (every `CONSTANTS` switch set to the built shape) and check:
 

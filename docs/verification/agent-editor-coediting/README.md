@@ -22,7 +22,7 @@ make -C docs/verification/agent-editor-coediting reject-drops-queue
 
 Requires Java 11+, `curl`, `shasum` and Make. The runner downloads
 `tla2tools.jar` v1.8.0 and verifies SHA-256
-`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`, the same
+`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`, the same
 artifact as `../thread-pr/Makefile`. Tools, the translator's scratch copy, Java
 temporary files, TLC metadata and every log and trace go to repository-root
 `.tmp/run/agent-editor-coediting/`, never `docs/`. A passing check needs TLC
@@ -140,6 +140,8 @@ values it shows for keys edited there, and "changed back" is measured against
 the last submit the server will take.
 
 ## Checks and results
+
+On 2026-11-21, `make check` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 Recorded on 2026-11-13 with `make check` (exit 0, 16 min 40 s in total), on a 12-core machine shared with other TLC runs, so times are rough.
 TLC banner `TLC2 Version 2026.11.06.222357 (rev: d8fb231)`

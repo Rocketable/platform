@@ -30,7 +30,7 @@ make -C docs/verification/upload-streaming fixed    # one check
 ```
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256
-`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`, as the other models here do. The tools, the
+`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. The tools, the
 translator's copy, Java's temporary files, TLC's working files and each check's log go to the repository root's
 `.tmp/verification/upload-streaming/`. A passing check needs TLC exit 0 and `Model checking completed. No error has
 been found.`; a check that must fail needs TLC exit 12 (safety) or 13 (liveness) and its named violation, so a parse or
@@ -104,6 +104,8 @@ upload is recorded), `NeverQueued` (a failed delete is queued) and `NeverRemoved
 before the client aborted is removed).
 
 ## Results
+
+On 2026-11-21, `make all` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 Recorded 2026-11-20 on Linux (aarch64, 16 cores), OpenJDK 21.0.13.1, TLC `2026.11.15.002146 (rev: bc1b506)`,
 `pcal.trans` 1.12, one TLC worker. `make -k` ran every check in about 6 s with the tools in place and exited 0. Every

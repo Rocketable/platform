@@ -22,7 +22,7 @@ make -C docs/verification/thread-pr aba
 Requires Java 11+, `curl`, `shasum`, and Make. The runner downloads the same
 v1.8.0 tools artifact and verifies the same SHA-256 as
 `../tab-attention/Makefile`:
-`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`.
+`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`.
 The local Java used for the recorded run was OpenJDK 21.0.13.0.3. The pinned
 artifact's TLC banner reported `2026.11.06.222357 (rev: d8fb231)`.
 
@@ -154,6 +154,8 @@ network responses. Browser loss disables the shell worker, making cleanup
 impossible in that case even though its weak-fairness assumption still holds.
 
 ## Properties and results
+
+On 2026-11-21, `make check` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 Recorded on 2026-11-18 with `make translate` then `make check`, one TLC worker,
 1 GiB heap; the full matrix (4 passing, 18 expected counterexamples) completed

@@ -1,5 +1,5 @@
 TLA_VERSION = 1.8.0
-TLA_SHA256 = e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f
+TLA_SHA256 = fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713
 WORK ?= ../../../.tmp/verification/thread-queue-reorder
 TOOLS = $(WORK)/tla2tools-$(TLA_VERSION).jar
 SHA256SUM = $(if $(shell command -v sha256sum),sha256sum,shasum -a 256)

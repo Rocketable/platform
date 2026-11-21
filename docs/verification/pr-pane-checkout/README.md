@@ -8,7 +8,8 @@
 make -C docs/verification/pr-pane-checkout
 ```
 
-The jar is `tla2tools.jar` v1.8.0, SHA-256 `7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`. On 2026-11-20 the fresh download no longer matched that checksum, as `docs/packs/formal-modeling/stateful-design.md` warns. The run used a local copy that matches the pin, placed at `.tmp/run/pr-pane-checkout-model/tla2tools-1.8.0.jar`. The pin was not changed.
+The jar is `tla2tools.jar` v1.8.0, SHA-256 `fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`.
+The 2026-11-20 run used a local copy of the previous pin because the release download no longer matched it.
 
 TLC2 Version 2026.11.15.002146 (rev: bc1b506), OpenJDK 21.0.13.1. Each check finishes in about a second.
 
@@ -45,6 +46,8 @@ stateDiagram-v2
 - `LoginFailureAlerts`: in a folder with a named branch, a broken login still shows the banner. This keeps a fix from hiding real login failures.
 
 ## Checks
+
+On 2026-11-21, `make check` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 | Check | Classifier | Folders | Expected | Outcome | States (generated / distinct) |
 |---|---|---|---|---|---|
