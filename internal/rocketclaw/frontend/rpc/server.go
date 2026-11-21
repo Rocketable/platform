@@ -403,17 +403,13 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 	defer func() { _ = root.Close() }()
 
-	calls := make(map[string]map[string]string)
+	calls := make(map[[2]string]string)
 	current := view.Inventory
 	current.Entries = make(map[string]string)
 
 	for i := range entries {
 		entry := &entries[i]
 		producer := cmp.Or(entry.SourceConversationID, request.Id)
-
-		if calls[producer] == nil {
-			calls[producer] = make(map[string]string)
-		}
 
 		if request.GetSourceConversationId() != "" && entry.SourceConversationID != request.GetSourceConversationId() {
 			continue
@@ -430,12 +426,12 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 		response.ReplacedKeys = append(response.ReplacedKeys, entry.Key)
 
-		messages, err := s.transcriptEntry(ctx, root, entry, request.Id, cronTrace, calls[producer])
+		messages, err := s.transcriptEntry(ctx, root, entry, request.Id, cronTrace, calls)
 		if err != nil {
 			return nil, err
 		}
 
-		linkCalls(messages, byCall[producer], response.Delegations)
+		linkCalls(messages, byCall, producer, response.Delegations)
 
 		response.Messages = append(response.Messages, messages...)
 	}
@@ -497,7 +493,7 @@ func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse
 	return nil
 }
 
-func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *backend.ObservedSessionEntry, conversationID string, cronTrace bool, calls map[string]string) ([]*TranscriptEvent, error) {
+func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *backend.ObservedSessionEntry, conversationID string, cronTrace bool, calls map[[2]string]string) ([]*TranscriptEvent, error) {
 	items, err := harness.ReplayInputToParams(entry.Entry.ReplayInput)
 	if err != nil {
 		return nil, fmt.Errorf("decode web history: %w", err)
@@ -774,31 +770,27 @@ func (e *TranscriptEvent) linkReview(producer string) {
 	}
 }
 
-func (r *HistoryResponse) addDelegations(view *backend.HistorySnapshot) map[string]map[string]backend.Delegation {
+func (r *HistoryResponse) addDelegations(view *backend.HistorySnapshot) map[[2]string]backend.Delegation {
 	for i := range view.Lineage {
 		level := &view.Lineage[i]
 		r.Lineage = append(r.Lineage, &LineageLevel{Id: level.Conversation.ID, Kind: conversationKind(level.Kind), Agent: level.Conversation.Agent})
 	}
 
-	byCall := make(map[string]map[string]backend.Delegation)
+	byCall := make(map[[2]string]backend.Delegation)
 
 	for _, delegation := range view.Delegations {
 		r.Delegations = append(r.Delegations, delegation.ID)
 		if delegation.Legacy || delegation.Kind == backend.KindSubagent {
-			if byCall[delegation.Parent] == nil {
-				byCall[delegation.Parent] = make(map[string]backend.Delegation)
-			}
-
-			byCall[delegation.Parent][delegation.CallID] = delegation
+			byCall[[2]string{delegation.Parent, delegation.CallID}] = delegation
 		}
 	}
 
 	return byCall
 }
 
-func linkCalls(messages []*TranscriptEvent, children map[string]backend.Delegation, delegations []string) {
+func linkCalls(messages []*TranscriptEvent, children map[[2]string]backend.Delegation, producer string, delegations []string) {
 	for _, e := range messages {
-		child, ok := children[e.ToolCallId]
+		child, ok := children[[2]string{producer, e.ToolCallId}]
 
 		switch {
 		case !ok:
