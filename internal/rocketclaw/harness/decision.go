@@ -319,7 +319,7 @@ func decisionTool(deciders map[string]Decider, observability ObservabilityConfig
 				return ToolResult{}, err
 			}
 
-			result := decisionToolResult{Model: input.Model, Answers: map[string]decisionToolAnswer{}, StopReason: "stop"}
+			result := decisionToolResult{Model: input.Model, StopReason: "stop"}
 
 			answers, usage, err := decide(ctx, observability, deciders, input.Model, &DecisionRequest{Input: input.State, Images: images, Questions: questions})
 			if err == nil {
