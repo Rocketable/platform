@@ -126,8 +126,8 @@ func codeModeSystemPrompt(hosts map[string]looperTool, servers []string) string 
 		for _, name := range slices.Sorted(maps.Keys(hosts)) {
 			tool := hosts[name]
 
-			desc := strings.TrimSpace(strings.SplitN(tool.Definition.Description.Value, "\n", 2)[0])
-			if len(desc) > 120 {
+			desc, _, _ := strings.Cut(tool.Definition.Description.Value, "\n")
+			if desc = strings.TrimSpace(desc); len(desc) > 120 {
 				desc = desc[:117] + "..."
 			}
 
