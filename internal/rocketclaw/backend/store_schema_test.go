@@ -382,21 +382,25 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 	admin := stdlib.OpenDB(*adminConfig)
 	defer func() { require.NoError(t, admin.Close()) }()
 
+	database := "t_" + strings.ToLower(rand.Text())
+	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE `+database)
+
+	require.NoError(t, err)
+	defer func() {
+		_, err := admin.ExecContext(context.Background(), `DROP DATABASE `+database+` WITH (FORCE)`)
+		require.NoError(t, err)
+	}()
+
+	var databaseOID uint32
+	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT oid FROM pg_database WHERE datname = $1`, database).Scan(&databaseOID))
+
 	for _, outcome := range []string{"success", "cancel", "cancel waiting", "connection loss"} {
 		t.Run(outcome, func(t *testing.T) {
-			name := "t_" + strings.ToLower(rand.Text())
-			_, err := admin.ExecContext(t.Context(), `CREATE DATABASE `+name)
-
-			require.NoError(t, err)
-			defer func() {
-				_, err := admin.ExecContext(context.Background(), `DROP DATABASE `+name+` WITH (FORCE)`)
-				require.NoError(t, err)
-			}()
-
+			schema := "t_" + strings.ToLower(rand.Text())
 			location := *base
-			location.Path = "/" + name
+			location.Path = "/" + database
 			query := location.Query()
-			query.Set("options", "-csearch_path="+name)
+			query.Set("options", "-csearch_path="+schema)
 			location.RawQuery = query.Encode()
 			dsn := location.String()
 			cfg, err := pgx.ParseConfig(dsn)
@@ -405,23 +409,36 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			db := stdlib.OpenDB(*cfg)
 			defer func() { require.NoError(t, db.Close()) }()
 
-			_, err = db.ExecContext(t.Context(), `CREATE SCHEMA `+name)
+			_, err = db.ExecContext(t.Context(), `CREATE SCHEMA `+schema)
+
 			require.NoError(t, err)
+			defer func() {
+				_, err := db.ExecContext(context.Background(), `DROP SCHEMA `+schema+` CASCADE; DROP EXTENSION IF EXISTS pg_trgm`)
+				require.NoError(t, err)
+			}()
 
 			_, err = db.ExecContext(t.Context(), `CREATE TABLE pg_migrations (id text PRIMARY KEY, applied_at timestamptz)`)
 			require.NoError(t, err)
 			barrier, err := db.BeginTx(t.Context(), nil)
 			require.NoError(t, err)
 
-			defer func() { _ = barrier.Rollback() }()
+			ctx, cancel := context.WithCancel(t.Context())
+			ctxSecond, cancelSecond := context.WithCancel(t.Context())
+
+			var first, second errgroup.Group
+
+			defer func() {
+				cancelSecond()
+				cancel()
+
+				_ = barrier.Rollback()
+				_ = first.Wait()
+				_ = second.Wait()
+			}()
 
 			_, err = barrier.ExecContext(t.Context(), `LOCK TABLE pg_migrations IN SHARE MODE`)
 			require.NoError(t, err)
 
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-
-			var first errgroup.Group
 			first.Go(func() error {
 				store, err := NewSessionServiceIn(ctx, &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
 				if err != nil {
@@ -434,13 +451,10 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			var pid int
 
 			require.Eventually(t, func() bool {
-				return db.QueryRowContext(t.Context(), `SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON a.pid=l.pid WHERE l.relation='pg_migrations'::regclass AND NOT l.granted AND a.query LIKE 'LOCK TABLE pg_migrations%'`).Scan(&pid) == nil
+				return db.QueryRowContext(t.Context(), `SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON a.pid = l.pid
+WHERE l.database = $1 AND l.relation = 'pg_migrations'::regclass AND NOT l.granted AND a.query LIKE 'LOCK TABLE pg_migrations%'`, databaseOID).Scan(&pid) == nil
 			}, 5*time.Second, time.Millisecond)
 
-			ctxSecond, cancelSecond := context.WithCancel(t.Context())
-			defer cancelSecond()
-
-			var second errgroup.Group
 			second.Go(func() error {
 				store, err := NewSessionServiceIn(ctxSecond, &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
 				if err != nil {
@@ -452,7 +466,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			require.Eventually(t, func() bool {
 				var waiting int
 
-				err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE relation='pg_migrations'::regclass AND NOT granted`).Scan(&waiting)
+				err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE database = $1 AND relation = 'pg_migrations'::regclass AND NOT granted`, databaseOID).Scan(&waiting)
 
 				return err == nil && waiting == 2
 			}, 5*time.Second, time.Millisecond)
@@ -495,7 +509,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			require.Eventually(t, func() bool {
 				var locks int
 
-				err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE relation='pg_migrations'::regclass`).Scan(&locks)
+				err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE database = $1 AND relation = 'pg_migrations'::regclass`, databaseOID).Scan(&locks)
 
 				return err == nil && locks == 0
 			}, 5*time.Second, time.Millisecond)
