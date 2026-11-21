@@ -58,20 +58,16 @@ func startExternalMCPServer(
 ) *externalmcp.Server {
 	locks := backend.NewKeyedConversationLocks()
 
-	return externalmcp.StartSessionPromptServer(ctx, logger, listener, users, func(callCtx context.Context, username, externalConversationID, requestedAgent, input string, metadata map[string]string, attachments []externalmcp.SessionAttachment) (result externalmcp.SessionResult, err error) {
-		var (
-			session             backend.ExternalMCPSessionState
-			durableRegistration bool
-			promptAccepted      bool
-		)
+	return externalmcp.StartSessionPromptServer(ctx, logger, listener, users, func(callCtx context.Context, username, externalConversationID, requestedAgent, input string, metadata map[string]string, attachments []externalmcp.SessionAttachment) (_ externalmcp.SessionResult, err error) {
+		var pendingManagedID string
 
 		defer func() {
-			if err == nil || !durableRegistration || promptAccepted {
+			if err == nil || pendingManagedID == "" {
 				return
 			}
 
 			if err := store.RemoveExternalMCPConversation(externalConversationID); err != nil {
-				logger.Error("clean failed external MCP conversation", "external_conversation_id", externalConversationID, "conversation_id", session.ManagedConversationID, "error", err)
+				logger.Error("clean failed external MCP conversation", "external_conversation_id", externalConversationID, "conversation_id", pendingManagedID, "error", err)
 			}
 		}()
 
@@ -130,11 +126,14 @@ func startExternalMCPServer(
 				return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP conversation: %w", err)
 			}
 
-			durableRegistration = true
+			pendingManagedID = session.ManagedConversationID
 			logger.Info("started external MCP session", "event", "external_mcp_session_started", "external_conversation_id", externalConversationID, "conversation_id", session.PrivateConversationID, "managed_conversation_id", session.ManagedConversationID, "agent", session.Agent, "user", username)
 		}
 
-		result, promptAccepted, err = submitExternalMCPInput(callCtx, turns, session.Agent, session.PrivateConversationID, session.ManagedConversationID, &inboundContent, metadata, username, externalConversationID)
+		result, accepted, err := submitExternalMCPInput(callCtx, turns, session.Agent, session.PrivateConversationID, session.ManagedConversationID, &inboundContent, metadata, username, externalConversationID)
+		if accepted {
+			pendingManagedID = ""
+		}
 
 		return result, err
 	})
