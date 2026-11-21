@@ -117,7 +117,8 @@ func PromptInputMessage(input *PromptInput) responses.ResponseInputItemUnionPara
 		role = responses.EasyInputMessageRoleDeveloper
 	}
 
-	content := easyInputStringContent(strings.Join(input.Texts, ""))
+	var content responses.EasyInputMessageContentUnionParam
+
 	if len(input.Texts) > 1 || len(input.Attachments) > 0 {
 		parts := responses.ResponseInputMessageContentListParam{}
 
@@ -127,7 +128,19 @@ func PromptInputMessage(input *PromptInput) responses.ResponseInputItemUnionPara
 			}
 		}
 
-		content = responses.EasyInputMessageContentUnionParam{OfInputItemContentList: appendAttachmentContent(parts, input.Attachments...)}
+		for _, attachment := range input.Attachments {
+			mimeType := normalizeMIME(attachment.MIME)
+			switch {
+			case isImageAttachmentMIME(mimeType):
+				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{Detail: responses.ResponseInputImageDetailAuto, ImageURL: openai.String(attachment.URL)}})
+			case mimeType == "application/pdf":
+				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputFile: &responses.ResponseInputFileParam{Filename: openai.String(attachment.Filename), FileData: openai.String(attachment.URL)}})
+			}
+		}
+
+		content = responses.EasyInputMessageContentUnionParam{OfInputItemContentList: parts}
+	} else {
+		content = easyInputStringContent(strings.Join(input.Texts, ""))
 	}
 
 	message := inputMessageParam(role, content)
@@ -158,20 +171,6 @@ func inputMessageParam(role responses.EasyInputMessageRole, content responses.Ea
 
 func easyInputStringContent(text string) responses.EasyInputMessageContentUnionParam {
 	return responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}
-}
-
-func appendAttachmentContent(content responses.ResponseInputMessageContentListParam, attachments ...Attachment) responses.ResponseInputMessageContentListParam {
-	for _, attachment := range attachments {
-		mimeType := normalizeMIME(attachment.MIME)
-		switch {
-		case isImageAttachmentMIME(mimeType):
-			content = append(content, responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{Detail: responses.ResponseInputImageDetailAuto, ImageURL: openai.String(attachment.URL)}})
-		case mimeType == "application/pdf":
-			content = append(content, responses.ResponseInputContentUnionParam{OfInputFile: &responses.ResponseInputFileParam{Filename: openai.String(attachment.Filename), FileData: openai.String(attachment.URL)}})
-		}
-	}
-
-	return content
 }
 
 func functionCallOutputContent(result ToolResult) responses.ResponseFunctionCallOutputItemListParam {
