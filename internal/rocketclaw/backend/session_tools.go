@@ -1007,7 +1007,6 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 
 			older := len(observations) > params.Limit
 			observations = observations[:min(len(observations), params.Limit)]
-			slices.Reverse(observations)
 
 			var output strings.Builder
 
@@ -1015,7 +1014,7 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 
 			output.WriteString("timestamp\trole\tcontent\n")
 
-			for i := range observations {
+			for i := range slices.Backward(observations) {
 				entry := &observations[i].Entry
 
 				timestamp := entry.Timestamp.Format(time.RFC3339Nano)
@@ -1105,7 +1104,7 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 			}
 
 			if older {
-				fmt.Fprintf(&output, "[next_before_entry_id=%d]\n", observations[0].ID)
+				fmt.Fprintf(&output, "[next_before_entry_id=%d]\n", observations[len(observations)-1].ID)
 			}
 
 			return sessionToolComparisonResult(ctx, service.db, params.ConversationID, params.BeforeEntryID, &output, escape)
