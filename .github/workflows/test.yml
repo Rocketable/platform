@@ -161,7 +161,12 @@ jobs:
       - name: Coverage shard
         working-directory: internal/rocketclaw
         run: |
-          tests=$(grep -rhoE '^func Test[A-Za-z0-9_]*\(' --include='*_test.go' ../../cmd/rocketclaw . | sed -E 's/^func (.*)\(/\1/' | grep -vx TestMain | sort -u | awk -v n=${{ strategy.job-total }} -v i=${{ matrix.shard }} 'NR % n == i' | paste -sd'|' -)
+          tests=$(grep -roE --include='*_test.go' '^func Test[A-Za-z0-9_]*\(' ../../cmd/rocketclaw . |
+            sed -E 's#^(.*)/[^/]*:func (Test[A-Za-z0-9_]*)\($#\1 \2#' | grep -v ' TestMain$' | sort -u |
+            awk 'NR == FNR { seconds[$2] = $1; next } { print ($2 in seconds ? seconds[$2] : 0.1), $1, $2 }' ../../.github/rocketclaw-test-seconds.tsv - |
+            sort -k1,1gr -k3,3 -k2,2 |
+            awk -v n=${{ strategy.job-total }} -v i=${{ matrix.shard }} '!seen[$3]++ { m = 0; for (s = 1; s < n; s++) if (load[$2, s] < load[$2, m]) m = s; load[$2, m] += $1; if (m == i) print $3 }' |
+            paste -sd'|' -)
           make coverage-profile COVERPROFILE=coverage-${{ matrix.shard }}.out GOTESTRUN="^($tests)\$\$"
       - uses: actions/upload-artifact@v7
         with:
