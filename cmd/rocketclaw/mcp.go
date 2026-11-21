@@ -130,7 +130,7 @@ func startExternalMCPServer(
 			logger.Info("started external MCP session", "event", "external_mcp_session_started", "external_conversation_id", externalConversationID, "conversation_id", session.PrivateConversationID, "managed_conversation_id", session.ManagedConversationID, "agent", session.Agent, "user", username)
 		}
 
-		result, accepted, err := submitExternalMCPInput(callCtx, turns, session.Agent, session.PrivateConversationID, session.ManagedConversationID, &inboundContent, metadata, username, externalConversationID)
+		result, accepted, err := submitExternalMCPInput(callCtx, turns, &session, &inboundContent, metadata, username, externalConversationID)
 		if accepted {
 			pendingManagedID = ""
 		}
@@ -178,7 +178,7 @@ func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (pro
 	return content, nil
 }
 
-func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAgent, conversationID, managedConversationID string, content *protocol.InboundContent, metadata map[string]string, principal, externalConversationID string) (externalmcp.SessionResult, bool, error) {
+func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, session *backend.ExternalMCPSessionState, content *protocol.InboundContent, metadata map[string]string, principal, externalConversationID string) (externalmcp.SessionResult, bool, error) {
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, content, true)
 
 	inbound.ExternalMCPMetadata = map[string]string{}
@@ -189,12 +189,12 @@ func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAge
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
 	}
 
-	inbound.ConversationID, inbound.SyncDestination = conversationID, managedConversationID
+	inbound.ConversationID, inbound.SyncDestination = session.PrivateConversationID, session.ManagedConversationID
 
 	resultCh := inbound.EnableResponseWait()
 
 	if err := turns.RunTurn(ctx, inbound); err != nil {
-		return externalmcp.SessionResult{}, errors.Is(err, protocol.ErrBridgeStopped), fmt.Errorf("submit external MCP input to agent %q: %w", usedAgent, err)
+		return externalmcp.SessionResult{}, errors.Is(err, protocol.ErrBridgeStopped), fmt.Errorf("submit external MCP input to agent %q: %w", session.Agent, err)
 	}
 
 	select {
@@ -212,6 +212,6 @@ func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAge
 			attachments = append(attachments, externalmcp.SessionAttachment{Name: name, MIMEType: result.Attachments[i].MIMEType, DataBase64: base64.StdEncoding.EncodeToString(result.Attachments[i].Data)})
 		}
 
-		return externalmcp.SessionResult{ExternalConversationID: externalConversationID, Agent: usedAgent, Answer: result.Text, Attachments: attachments}, true, nil
+		return externalmcp.SessionResult{ExternalConversationID: externalConversationID, Agent: session.Agent, Answer: result.Text, Attachments: attachments}, true, nil
 	}
 }
