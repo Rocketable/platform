@@ -1611,9 +1611,10 @@ func truncateUTF8(text string, limit int) string {
 func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.File) (attachments []protocol.InboundAttachment, textAttachments []string, presence protocol.AttachmentPresence, warnings []string) {
 	for i := range files {
 		file := &files[i]
+		mimeType := protocol.NormalizeMIMEType(file.Mimetype)
 
-		if !strings.HasPrefix(protocol.NormalizeMIMEType(file.Mimetype), "image/") {
-			if protocol.IsTextAttachment(slackFileDisplayName(file), file.Mimetype) {
+		if !strings.HasPrefix(mimeType, "image/") {
+			if protocol.IsTextAttachment(slackFileDisplayName(file), mimeType) {
 				data, warning := c.downloadSlackFileOrSkip(ctx, file, protocol.MaxInboundTextAttachmentBytes, "text attachment", "it exceeded the text file size limit")
 				if warning != "" {
 					warnings = append(warnings, warning)
@@ -1665,7 +1666,7 @@ func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.
 
 		attachments = append(attachments, protocol.InboundAttachment{
 			Name:     slackFileDisplayName(file),
-			MIMEType: protocol.NormalizeMIMEType(file.Mimetype),
+			MIMEType: mimeType,
 			Data:     data,
 		})
 	}

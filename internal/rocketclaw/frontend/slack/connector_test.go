@@ -43,7 +43,7 @@ func TestSlackImageHelpers(t *testing.T) {
 	assert.Equal(t, "unnamed file", slackFileDisplayName(&slack.File{}))
 	assert.Equal(t, "report.txt", slackFileDescriptor(&slack.File{Name: " report.txt "}))
 	assert.True(t, protocol.IsTextAttachment("payload.json", "application/octet-stream"))
-	assert.True(t, protocol.IsTextAttachment("report", "text/csv; charset=utf-8"))
+	assert.True(t, protocol.IsTextAttachment("report", protocol.NormalizeMIMEType("text/csv; charset=utf-8")))
 	assert.False(t, protocol.IsTextAttachment("archive.zip", "application/zip"))
 	data := mustPNG(t, 2, 2)
 	assert.Equal(t, "image/png", protocol.NormalizeMIMEType(http.DetectContentType(data)))
