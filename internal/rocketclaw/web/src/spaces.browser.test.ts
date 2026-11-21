@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
 import { href, withPage, current, names, order, until, openSaved, openFromPalette, menu, chooseSpace, newSpace, shared, sharedNames, focus, menuLines, sharedMenu, strip, type SharedTab, type Change, type Saved } from "./tabs-browser_test";
 import type { SearchPage } from "./types";
 
@@ -1189,13 +1189,22 @@ test("with more than one space Parked is a tree whose spaces fold on their own a
 }));
 
 test("Parked rows move among their space's by dragging or Shift+Arrow, in an order saved for this person, and Parked resizes from its top edge", () => withPage({}, async (page, origin, _prompts, saved) => {
+  let waitingFor = "open Parked";
+  let lastRows: (string | null)[] | undefined, lastHeight: number | undefined, pollsBeforeReload: number | undefined;
+  onTestFinished(() => {
+    if (waitingFor) console.error("Parked test state", JSON.stringify({
+      waitingFor, lastRows, lastHeight, savedOrder: saved.layout?.order, pollsBeforeReload, polls: saved.polls,
+    }));
+  });
   saved.spaces.push({ id: "ops", name: "Ops" });
   saved.state = { ...saved.state, space: "main", tabs: [...["alpha", "foxtrot", "bravo", "charlie", "delta"].map((id) => ({ path: href(id), space: "main" })), { path: href("echo"), space: "ops" }] };
   saved.attention = ["bravo", "charlie", "delta", "echo"].map((id) => ({ path: href(id), parked: true }));
   const parked = page.getByRole("tablist", { name: "Parked tabs" }), row = (name: string) => parked.getByRole("tab", { name, exact: true });
-  const rows = () => parked.getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+  const rows = async () => lastRows = await parked.getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
   const placed = async (...ids: string[]) => {
+    waitingFor = `save order: ${ids.join(", ")}`;
     await until(() => JSON.stringify(saved.layout?.order) === JSON.stringify(ids.map((id) => `parked:/main\n${href(id)}`)));
+    waitingFor = `show order: ${ids.join(", ")}`;
     await parked.getByRole("tab").nth(ids.indexOf("delta")).filter({ hasText: "Delta" }).waitFor();
   };
   await page.goto(`${origin}${href("alpha")}`);
@@ -1203,16 +1212,19 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
   await row("Echo").waitFor();
   expect(await rows()).toEqual(["Bravo", "Charlie", "Delta", "Echo"]);
 
+  waitingFor = "drag Parked rows";
   await row("Charlie").dragTo(row("Echo"));
   await row("Delta").dragTo(row("Bravo"));
   await placed("delta", "bravo", "charlie");
   expect(await rows()).toEqual(["Delta", "Bravo", "Charlie", "Echo"]);
+  waitingFor = "move Parked rows with Shift+Arrow";
   await row("Charlie").press("Shift+ArrowDown");
   await row("Delta").press("Shift+ArrowDown");
   await placed("bravo", "delta", "charlie");
   expect([await rows(), await page.evaluate(() => document.activeElement?.getAttribute("aria-label"))]).toEqual([["Bravo", "Delta", "Charlie", "Echo"], "Delta"]);
 
-  const height = async () => (await parked.locator("xpath=..").boundingBox()).height, handle = page.getByRole("separator", { name: "Resize Parked" });
+  waitingFor = "resize Parked";
+  const height = async () => lastHeight = (await parked.locator("xpath=..").boundingBox()).height, handle = page.getByRole("separator", { name: "Resize Parked" });
   const before = await height(), edge = await handle.boundingBox();
   await page.mouse.move(edge.x + 20, edge.y + 3);
   await page.mouse.down();
@@ -1223,11 +1235,17 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
   await handle.press("ArrowUp");
   expect(await height()).toBeCloseTo(dragged + 16, 0);
 
+  waitingFor = "save Parked expansion";
   await until(() => saved.state.groups.some(({ id, collapsed }) => id === "parked" && collapsed === false));
   saved.attention.push({ path: href("foxtrot"), parked: true });
+  pollsBeforeReload = saved.polls;
+  waitingFor = "finish reload";
   await page.reload();
+  waitingFor = "show Foxtrot after reload";
   await row("Foxtrot").waitFor();
+  waitingFor = "check restored Parked order and height";
   expect([await rows(), await height()]).toEqual([["Bravo", "Delta", "Charlie", "Foxtrot", "Echo"], expect.closeTo(dragged + 16, 0)]);
+  waitingFor = "";
 }));
 
 test("Parked also lists the Shared rows this person parked, which open in their space without a tab of their own, can be renamed and can join a group", () => withPage({}, async (page, origin, _prompts, saved) => {
