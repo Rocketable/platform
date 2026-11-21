@@ -377,7 +377,7 @@ func (s *SessionService) SpaceLimitFor(ctx context.Context, spaces []string) (Sp
 		return SpaceLimit{}, err
 	}
 
-	agents, _, err := LoadRuntimeDefinitions(s.definitions, cfg.RuntimeDirName())
+	agents, err := LoadRuntimeAgents(s.definitions, cfg.RuntimeDirName())
 	if err != nil {
 		return SpaceLimit{}, fmt.Errorf("load agents for space limit: %w", err)
 	}
@@ -1669,7 +1669,7 @@ SELECT COALESCE(max(r.cron_path), ''), COALESCE(max(r.space), ''), COALESCE(max(
 		stem := CronStem(cronPath)
 
 		if space == "" {
-			agents, _, err := LoadRuntimeDefinitions(s.definitions, s.definitions.Clone().RuntimeDirName())
+			agents, err := LoadRuntimeAgents(s.definitions, s.definitions.Clone().RuntimeDirName())
 			if err != nil {
 				return fmt.Errorf("load cron agents: %w", err)
 			}

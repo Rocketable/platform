@@ -32,7 +32,7 @@ func (s *Server) getPage(ctx context.Context, request *PageRequest) (*Page, erro
 		return nil, err
 	}
 
-	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	agents, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web page agents: %w", err)
 	}
@@ -65,7 +65,7 @@ func (s *Server) listPages(ctx context.Context) (*ListPagesResponse, error) {
 		return nil, err
 	}
 
-	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	agents, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web page agents: %w", err)
 	}

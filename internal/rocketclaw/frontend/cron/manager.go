@@ -421,7 +421,7 @@ func (m *Manager) preparePrompt(body string) string {
 }
 
 func loadDefinitionsIn(cfg *config.LockedConfig, runtimeDir string) ([]definition, error) {
-	agents, _, err := backend.LoadRuntimeDefinitions(cfg, runtimeDir)
+	agents, err := backend.LoadRuntimeAgents(cfg, runtimeDir)
 	if err != nil {
 		return nil, fmt.Errorf("load agents: %w", err)
 	}

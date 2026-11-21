@@ -74,7 +74,7 @@ func (s *Server) voiceSettings(ctx context.Context, request *VoiceSettingsReques
 			return nil, err
 		}
 
-		definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+		definitions, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 		if err != nil {
 			return nil, fmt.Errorf("load web agents: %w", err)
 		}

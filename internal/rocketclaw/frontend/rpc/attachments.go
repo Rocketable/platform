@@ -172,7 +172,7 @@ func (s *Server) uploadContent(ctx context.Context, conversationID, text string,
 		return content, fmt.Errorf("read upload conversation: %w", err)
 	}
 
-	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, cfg.RuntimeDirName())
+	agents, err := backend.LoadRuntimeAgents(s.cfg, cfg.RuntimeDirName())
 	if err != nil {
 		return content, fmt.Errorf("load upload agents: %w", err)
 	}
