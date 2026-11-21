@@ -70,7 +70,8 @@ type turnStep struct {
 }
 
 type callStep struct {
-	Output []json.RawMessage `json:"output,omitempty"`
+	Output []json.RawMessage   `json:"output,omitempty"`
+	State  PublicProgressState `json:"state,omitempty"`
 }
 
 type hostCallStep struct {

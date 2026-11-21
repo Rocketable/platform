@@ -37,7 +37,8 @@ func TestTurnObservationsPersistPublicProgress(t *testing.T) {
 		require.Contains(t, PublicProgressFromTrace(journal.SaveTraceCalls()[2].Trace), replacement, "empty text replaces rather than appends to the previous text")
 
 		replacement.Agent = ""
-		require.NoError(t, owner.finishCall(t.Context(), &replacement, PublicProgressCompleted))
+		_, err := owner.finishCall(t.Context(), &replacement, PublicProgressCompleted)
+		require.NoError(t, err)
 		require.Empty(t, replacement.Agent, "completion must not mutate the worker's snapshot")
 		require.Equal(t, "main", PublicProgressFromTrace(journal.SaveTraceCalls()[2].Trace)[0].Agent, "later caller mutations must not alter stored attribution")
 
@@ -93,7 +94,8 @@ func TestTurnObservationsPersistAfterChildCancellation(t *testing.T) {
 
 	progress := PublicProgress{ID: "execute-1", Kind: PublicProgressTool, State: PublicProgressWorking}
 	require.NoError(t, owner.observe(ctx, &progress))
-	require.NoError(t, owner.finishCall(t.Context(), &progress, PublicProgressCompleted))
+	_, err := owner.finishCall(t.Context(), &progress, PublicProgressCompleted)
+	require.NoError(t, err)
 	require.NoError(t, owner.replaceResponse(t.Context(), "", []PublicProgress{{ID: "answer-1", Kind: PublicProgressText, State: PublicProgressCompleted, Text: "done"}}))
 	require.NoError(t, owner.recordCodeModeCall(ctx, &CodeModeCall{Type: codeModeCallTraceType, ParentCallID: "execute-1", Key: "turn-1/call/execute-1/host/0", Name: "bash", Status: codeModeCallRunning}, false))
 

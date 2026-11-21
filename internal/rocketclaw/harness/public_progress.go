@@ -105,6 +105,29 @@ type CodeModeCall struct {
 	command string
 }
 
+func SettleStoppedTrace(ctx context.Context, journal Journal, turnID string, trace []json.RawMessage) error {
+	for i := range trace {
+		items := PublicProgressFromTrace(trace[i : i+1])
+		if len(items) != 1 || items[0].Kind != PublicProgressTool && items[0].Kind != PublicProgressDelegation || items[0].State != PublicProgressReview && items[0].State != PublicProgressWorking {
+			continue
+		}
+
+		var step callStep
+		if _, err := loadStep(ctx, journal, CallKey(turnID, items[0].ID), &step); err != nil {
+			return err
+		}
+
+		items[0].State = PublicProgressStopped
+		if len(step.Output) > 0 {
+			items[0].State = cmp.Or(step.State, PublicProgressCompleted)
+		}
+
+		trace[i], _ = json.Marshal(publicProgressTrace{Type: "rocketcode_public_progress", Progress: items[0]})
+	}
+
+	return nil
+}
+
 func CodeModeCallsFromTrace(traces []json.RawMessage) []CodeModeCall {
 	var calls []CodeModeCall
 
@@ -393,11 +416,13 @@ func (o *turnObservations) observe(ctx context.Context, progress *PublicProgress
 	return o.observeLocked(ctx, progress, nil)
 }
 
-func (o *turnObservations) finishCall(ctx context.Context, progress *PublicProgress, state PublicProgressState) error {
+func (o *turnObservations) finishCall(ctx context.Context, progress *PublicProgress, state PublicProgressState) (PublicProgressState, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	return o.observeLocked(ctx, progress, &state)
+	err := o.observeLocked(ctx, progress, &state)
+
+	return state, err
 }
 
 func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicProgress, finalState *PublicProgressState) error {
@@ -432,6 +457,10 @@ func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicPr
 	}
 
 	if index < len(o.trace) && (existing == snapshot || existing.State == PublicProgressBackground) {
+		if finalState != nil {
+			*finalState = existing.State
+		}
+
 		return nil
 	}
 
