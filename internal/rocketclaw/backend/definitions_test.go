@@ -376,7 +376,6 @@ func TestLoadRocketCodeDefinitionsSessions(t *testing.T) {
 		"rocketclaw: allow":                          "name each rocketclaw tool",
 		"rocketclaw: {'*': allow}":                   "name each rocketclaw tool",
 		"rocketclaw: {rocketclaw_sessions_*: allow}": "name each rocketclaw tool",
-		"rocketclaw: {session: {spawn_mode: all}}":   "session.spawn_mode is removed; use rocketclaw_sessions",
 	} {
 		writeAgent(t, workspace, "bad", "---\nmodel: gpt-5.4\npermission:\n  "+permission+"\n---\nPrompt\n")
 

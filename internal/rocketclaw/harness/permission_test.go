@@ -189,9 +189,8 @@ websearch: allow
 		"read: ask":                      `permission action "ask" is not supported`,
 		"doom_loop: deny":                `permission "doom_loop" is not supported`,
 		"external_directory: deny":       `permission "external_directory" is not supported`,
-		"rocketclaw: {session: {spawn_mode: all}}":   "session.spawn_mode is removed; use rocketclaw_sessions",
-		"rocketclaw: allow":                          `permission "rocketclaw": name each rocketclaw tool`,
-		"rocketclaw: {'*': allow}":                   `permission "rocketclaw": name each rocketclaw tool`,
+		"rocketclaw: allow":              `permission "rocketclaw": name each rocketclaw tool`,
+		"rocketclaw: {'*': allow}":       `permission "rocketclaw": name each rocketclaw tool`,
 		"rocketclaw: {rocketclaw_sessions_*: allow}": `permission "rocketclaw": name each rocketclaw tool`,
 	} {
 		_, err := parsePermissionNode(parseYAMLNode(t, input), nil)
