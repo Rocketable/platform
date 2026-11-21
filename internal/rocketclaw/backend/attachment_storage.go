@@ -11,7 +11,6 @@ import (
 	"os"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 type attachmentStorage interface {
@@ -89,16 +88,7 @@ func (s filesystemAttachments) Delete(_ context.Context, id string) error {
 }
 
 func (s s3Attachments) Delete(ctx context.Context, id string) error {
-	object, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &s.bucket, Key: &id})
-	if _, missing := errors.AsType[*types.NotFound](err); missing {
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("head deleted S3 attachment: %w", err)
-	}
-
-	if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: &id, VersionId: object.VersionId}); err != nil {
+	if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: &id}); err != nil {
 		return fmt.Errorf("delete S3 attachment: %w", err)
 	}
 

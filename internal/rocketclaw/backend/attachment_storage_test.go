@@ -87,13 +87,9 @@ func TestAttachmentStorage(t *testing.T) {
 						}
 
 						_, _ = w.Write(data)
-					case http.MethodHead:
+					case http.MethodDelete:
 						cancelSave()
 
-						if _, exists := objects[r.URL.Path]; !exists {
-							w.WriteHeader(http.StatusNotFound)
-						}
-					case http.MethodDelete:
 						if strings.HasSuffix(r.URL.Path, "undeletable") {
 							w.WriteHeader(http.StatusServiceUnavailable)
 							return
