@@ -1578,6 +1578,8 @@ test("New session and the palette offer every RocketClaw's OpenCode servers from
   let pending = "configure remote RocketClaw";
   type CreateRequest = { url(): string; postData(): string | null; failure(): { errorText: string } | null };
   let lastCreate: CreateRequest | undefined, status: number | undefined, bodyFinished = false;
+  let lastPageError: { pending: string; message: string } | null = null;
+  page.on("pageerror", (error: Error) => { lastPageError = { pending, message: error.message }; });
   page.on("response", (response: { request(): CreateRequest; status(): number }) => {
     if (response.request() === lastCreate) status = response.status();
   });
@@ -1585,10 +1587,12 @@ test("New session and the palette offer every RocketClaw's OpenCode servers from
     if (request === lastCreate) bodyFinished = true;
   });
   onTestFinished(() => {
-    if (pending) console.error("Cross-server New session test stalled", JSON.stringify({
-      pending, pageURL: page.url(), createURL,
-      lastCreate: lastCreate ? { url: lastCreate.url(), body: lastCreate.postData(), status: status ?? null, bodyFinished, failure: lastCreate.failure()?.errorText ?? null } : null,
-    }));
+    if (pending) {
+      expect({
+        pending, pageURL: page.url(), createURL, lastPageError,
+        lastCreate: lastCreate ? { url: lastCreate.url(), body: lastCreate.postData(), status: status ?? null, bodyFinished, failure: lastCreate.failure()?.errorText ?? null } : null,
+      }, `Expected to finish: ${pending}`).toMatchObject({ pending: "" });
+    }
   });
   try {
     await addRemote(page, remote.url);
