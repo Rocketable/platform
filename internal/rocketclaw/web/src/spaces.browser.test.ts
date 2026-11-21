@@ -1620,7 +1620,17 @@ test("New session and the palette offer every RocketClaw's OpenCode servers from
     pending = "check CreateSession request";
     expect(JSON.parse((await created).postData())).toEqual({ opencodeServer: "far", directory: "/srv/far", spaceId: "lab" });
     pending = "wait for remote session URL";
-    await page.waitForURL(`**/r/work/oc/${Buffer.from("opencode:far:ses_far").toString("base64url")}`);
+    const outcome = new AbortController();
+    try {
+      await Promise.race([
+        page.waitForURL(`**/r/work/oc/${Buffer.from("opencode:far:ses_far").toString("base64url")}`, { signal: outcome.signal }),
+        page.getByRole("dialog", { name: "New session on far", exact: true }).getByRole("alert").textContent({ signal: outcome.signal }).then((message: string | null) => {
+          throw new Error(`New session on far: ${message}`);
+        }),
+      ]);
+    } finally {
+      outcome.abort();
+    }
     pending = "open unknown server page";
     await page.goto(`${origin}/r/nowhere/`);
     pending = "open New session menu on unknown server page";
