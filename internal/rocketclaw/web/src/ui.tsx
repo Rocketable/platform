@@ -1471,16 +1471,13 @@ function useTabs() {
           movePages([...paths], item);
         } })),
       ];
-      // A parked tab's menu has none of the strip's commands but Close; a Shared row, parked or not, can join this
-      // person's tabs in a group or another space.
-      if (!shownOf(space).some((item) => item.path === path)) return [...tab ? [closing] : [], link, ...share, ...copy, ...attention, ...inShared ? placing : []];
-      return [
+      const closings = !shownOf(space).some((item) => item.path === path) ? tab ? [closing] : [] : [
         closing,
         { key: "close-others", label: "Close others", run: () => close(there.flatMap((item) => item.path === path ? [] : [item.path]), path) },
         { key: "close-right", label: "Close to the right", run: () => close(there.slice(there.findIndex((item) => item.path === path) + 1).map((item) => item.path), path) },
         { key: "close-all", label: "Close all", run: () => close(there.map((item) => item.path)) },
-        link, ...share, ...copy, ...attention, ...placing,
       ];
+      return [...closings, link, ...share, ...copy, ...attention, ...placing];
     },
     newInGroup,
     // Ungrouping or closing a group's tabs leaves it empty; only Delete group, which closes them too, removes it.
@@ -1728,13 +1725,13 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
 function menuItems(tabs: TabStoreValue, menu: CardMenu, view: ServerView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
   const search = isSearch(menu.path), id = pathSession(menu.path);
   const regenerate = { key: "rename-title", label: "Regenerate title", run: () => void queryClient.getMutationCache().build(queryClient, { mutationKey: ["regenerateTitle"], mutationFn: mutations.updateSession }).execute({ id, name: "", server: tabs.name }).then(view.invalidateQueries, () => undefined) };
-  const renaming = (search ? targets.size === 1 : id && (menu.shared || targets.size === 1)) ? [{ key: "rename", label: search ? "Rename search" : "Rename session", run: rename }, ...search ? [] : [regenerate]] : [];
-  const session = tabs.viewed && targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === id) : undefined;
-  return [...renaming, ...menu.shared ? tabs.commands(menu.path, view, undefined, menu.space).filter(({ key }) => /^(link|unshare|duplicate|read|unread|park|unpark|follow|unfollow|group|restore|space)/.test(key)) : tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
+  const renaming = (search || id) && targets.size === 1 ? [{ key: "rename", label: search ? "Rename search" : "Rename session", run: rename }, ...search ? [] : [regenerate]] : [];
+  const session = tabs.viewed && targets.size === 1 ? view.rows.find((row) => row.id === id) : undefined;
+  return [...renaming, ...tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
 }
 
-const pullRequestItems = (menu: { path: string; shared?: boolean }, single: boolean, name: string): TabCommand[] =>
-  pathSession(menu.path) && (menu.shared || single) ? [{ key: "pull-requests", label: "Pull requests", run: () => navigate(`${menu.path}?pullRequests=1`, false, name) }] : [];
+const pullRequestItems = (menu: { path: string }, single: boolean, name: string): TabCommand[] =>
+  pathSession(menu.path) && single ? [{ key: "pull-requests", label: "Pull requests", run: () => navigate(`${menu.path}?pullRequests=1`, false, name) }] : [];
 
 type TabStoreValue = ReturnType<typeof useTabs>;
 // A card's tabs, which its rows rename and edit through; outside a card, the page's.
