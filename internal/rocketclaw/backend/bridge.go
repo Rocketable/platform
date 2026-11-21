@@ -2040,18 +2040,24 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, request *bridgeRequest) err
 	return nil
 }
 
-func appendSessionEntry(entries iter.Seq2[harness.SessionEntry, error], added *harness.SessionEntry) iter.Seq2[harness.SessionEntry, error] {
+func turnReplayEntries(observed []ObservedSessionEntry, restored, contextEntries []harness.SessionEntry) iter.Seq2[harness.SessionEntry, error] {
 	return func(yield func(harness.SessionEntry, error) bool) {
-		for entry, err := range entries {
-			if !yield(entry, err) {
+		for i := range observed {
+			if (len(restored) == 0 || observed[i].Entry.Type != externalMCPMetadataEntryType) && !yield(observed[i].Entry, nil) {
 				return
 			}
 		}
 
-		entry := *added
-		entry.Timestamp = time.Now().UTC()
+		for _, entries := range [][]harness.SessionEntry{restored, contextEntries} {
+			for i := range entries {
+				entry := entries[i]
 
-		yield(entry, nil)
+				entry.Timestamp = time.Now().UTC()
+				if !yield(entry, nil) {
+					return
+				}
+			}
+		}
 	}
 }
 
@@ -2266,26 +2272,12 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	b.log.Info("prepared rocketcode session history", "conversation_id", b.config.ConversationID, "turn_id", turnID, "entry_count", len(observed), "replay_item_count", replayItemCount, "history_bytes", historyBytes, "compaction_count", compactionCount, "latest_entry_id", latestEntryID, "latest_entry_type", latestEntryType)
 
-	restored := captured && len(childContext) > 0
-	sessionIn := func(yield func(harness.SessionEntry, error) bool) {
-		for i := range observed {
-			if (!restored || observed[i].Entry.Type != externalMCPMetadataEntryType) && !yield(observed[i].Entry, nil) {
-				return
-			}
-		}
+	var restored []harness.SessionEntry
+	if captured && len(childContext) > 0 {
+		restored = childContext[:1]
 	}
 
-	for i := range finish.entries {
-		sessionIn = appendSessionEntry(sessionIn, &finish.entries[i])
-	}
-
-	if restored {
-		sessionIn = appendSessionEntry(sessionIn, &childContext[0])
-	}
-
-	for i := range snapshot.ContextEntries {
-		sessionIn = appendSessionEntry(sessionIn, &snapshot.ContextEntries[i])
-	}
+	sessionIn := turnReplayEntries(observed, restored, snapshot.ContextEntries)
 
 	tagConversationID := cmp.Or(origin.SyncDestination, self)
 
