@@ -447,33 +447,26 @@ func parseUpdateFileChunks(lines []string, start, end int) (chunks []updateFileC
 	return chunks, i
 }
 
-func stripHeredoc(input string) string {
-	trimmed := strings.TrimSpace(input)
+func stripHeredoc(trimmedPatch string) string {
+	first, rest, _ := strings.Cut(trimmedPatch, "\n")
 
-	lines := strings.Split(trimmed, "\n")
-	if len(lines) < 3 {
-		return input
+	marker, ok := strings.CutPrefix(strings.TrimPrefix(strings.TrimSpace(first), "cat "), "<<")
+	if !ok {
+		return trimmedPatch
 	}
 
-	first := strings.TrimSpace(lines[0])
+	marker = strings.Trim(strings.TrimSpace(marker), `"'`)
 
-	first = strings.TrimPrefix(first, "cat ")
-	if !strings.HasPrefix(first, "<<") {
-		return input
+	body, last, _ := strings.CutLast(rest, "\n")
+	if marker == "" || strings.TrimSpace(last) != marker {
+		return trimmedPatch
 	}
 
-	marker := strings.TrimSpace(strings.TrimPrefix(first, "<<"))
-
-	marker = strings.Trim(marker, `"'`)
-	if marker == "" {
-		return input
+	if strings.Contains(body, "\n") {
+		return strings.Clone(body)
 	}
 
-	if strings.TrimSpace(lines[len(lines)-1]) != marker {
-		return input
-	}
-
-	return strings.Join(lines[1:len(lines)-1], "\n")
+	return body
 }
 
 func readTextFile(sfs *sandboxedFileSystem, name string) (text string, bom bool, err error) {
