@@ -1474,25 +1474,49 @@ test("with parked tabs on more than one RocketClaw, Parked is a tree of servers 
 
 test("New session and the palette offer every RocketClaw's OpenCode servers from any page, and start the session on the server that has it", () => withPage({}, async (page, origin, _prompts, saved) => {
   const remote = serveRemote({ spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [], groups: [], space: "lab", last: {}, sharedOrder: [] }, shared: [] }, () => []);
+  const createURL = `${remote.url}/api/CreateSession`;
+  let pending = "configure remote RocketClaw";
+  let lastCreate: { url: string; body: string | null } | null = null;
+  onTestFinished(() => {
+    if (pending) console.error("Cross-server New session test stalled", JSON.stringify({ pending, pageURL: page.url(), createURL, lastCreate }));
+  });
   try {
     await addRemote(page, remote.url);
     saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }] };
+    pending = "open Alpha";
     await page.goto(`${origin}${href("alpha")}`);
-    const created = page.waitForRequest((request: { url(): string }) => request.url() === `${remote.url}/api/CreateSession`);
+    const created = page.waitForRequest((request: { url(): string; postData(): string | null }) => {
+      const url = request.url();
+      if (new URL(url).pathname === "/api/CreateSession") lastCreate = { url, body: request.postData() };
+      return url === createURL;
+    });
+    pending = "open New session menu on Alpha";
     await page.getByRole("button", { name: "New session", exact: true }).click();
+    pending = "choose far in New session menu";
     await page.getByRole("menuitem", { name: "far", exact: true }).click();
     const folder = page.getByPlaceholder("Folder on far, like /srv/app");
+    pending = "fill remote folder";
     await folder.fill("/srv/far");
+    pending = "submit remote folder";
     await folder.press("Enter");
+    pending = "check CreateSession request";
     expect(JSON.parse((await created).postData())).toEqual({ opencodeServer: "far", directory: "/srv/far", spaceId: "lab" });
+    pending = "wait for remote session URL";
     await page.waitForURL(`**/r/work/oc/${Buffer.from("opencode:far:ses_far").toString("base64url")}`);
+    pending = "open unknown server page";
     await page.goto(`${origin}/r/nowhere/`);
+    pending = "open New session menu on unknown server page";
     await page.getByRole("button", { name: "New session", exact: true }).click();
+    pending = "wait for far in New session menu";
     await page.getByRole("menuitem", { name: "far", exact: true }).waitFor();
+    pending = "open command palette";
     await page.keyboard.press("Escape");
     await page.keyboard.press("Control+Shift+p");
+    pending = "search command palette for far";
     await page.getByPlaceholder("Type a command").fill("new on far");
+    pending = "wait for far in command palette";
     await page.getByRole("button", { name: "Sessions: New on far (work)", exact: true }).waitFor();
+    pending = "";
   } finally {
     remote.server.stop(true);
   }
