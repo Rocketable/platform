@@ -19,6 +19,7 @@ type Host interface {
 
 type Command struct {
 	Script   string
+	Stdin    string
 	Cwd      string
 	Dir      string
 	ReadOnly []string

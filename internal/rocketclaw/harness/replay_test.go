@@ -191,6 +191,35 @@ func TestReplayInputPreservesMessageHeaderLocally(t *testing.T) {
 	require.Equal(t, "input-2", items[1].OfMessage.ExtraFields()["input_id"])
 }
 
+func TestReplayKeepsImageNamesLocally(t *testing.T) {
+	image := Attachment{MIME: "image/png", Filename: "red42.png", URL: "data:image/png;base64,cmVk"}
+	items := []responses.ResponseInputItemUnionParam{
+		{OfFunctionCallOutput: new(toolCallOutput("call-1", ToolResult{Output: "done", Attachments: []Attachment{image}}))},
+		PromptInputMessage(&PromptInput{Texts: []string{"note"}, Attachments: []Attachment{image}}),
+	}
+
+	stored, err := ReplayInputFromParams(items)
+	require.NoError(t, err)
+	decoded, err := ReplayInputToParams(stored)
+	require.NoError(t, err)
+	restored, err := ReplayInputFromParams(decoded)
+	require.NoError(t, err)
+
+	switched := SessionEntry{Model: "work/model", ReplayInput: stored}
+	require.NoError(t, switched.forProvider("openai"))
+
+	projected, err := ReplayInputFromParams(projectReplayForOpenAI(decoded))
+	require.NoError(t, err)
+
+	for i := range items {
+		for _, kept := range [][]json.RawMessage{stored, restored, switched.ReplayInput} {
+			require.Contains(t, string(kept[i]), `"filename":"red42.png"`, "History names the image from the stored replay, also after a resume or a provider switch")
+		}
+
+		require.NotContains(t, string(projected[i]), "red42.png", "the provider gets no image name")
+	}
+}
+
 func marshalReplayJSON(t *testing.T, value any) string {
 	t.Helper()
 

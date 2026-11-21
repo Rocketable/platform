@@ -61,7 +61,7 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 		env = append(env, "TMPDIR="+e.shellTemp.tmpDir)
 
 		if e.customShell.Emulated {
-			res, err := runEmulated(context.WithoutCancel(ctx), e.sandbox, &e.customShell, "exec 2>/dev/null\n"+command, e.customShell.Dir, e.env, env, emulatedExpansionTimeout)
+			res, err := runEmulated(context.WithoutCancel(ctx), e.sandbox, &e.customShell, "exec 2>/dev/null\n"+command, "", e.customShell.Dir, e.env, env, emulatedExpansionTimeout)
 			if err != nil {
 				return ""
 			}

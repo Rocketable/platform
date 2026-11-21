@@ -953,6 +953,11 @@ WHERE conversation_id = $1 AND takes_lane AND (input_id = $2 OR inbound_json->'M
 		if part.Type == "input_image" || part.Type == "input_file" {
 			url := cmp.Or(part.ImageURL, part.FileData, part.FileURL)
 			mime, _, _ := strings.Cut(strings.TrimPrefix(url, "data:"), ";")
+
+			if part.Type == "input_image" {
+				part.Filename = ""
+			}
+
 			attachments = append(attachments, harness.Attachment{MIME: mime, Filename: part.Filename, URL: url})
 		}
 	}

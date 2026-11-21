@@ -4231,7 +4231,7 @@ function ToolLine({ line, conversationId, hasSandboxed, open }: { line: Line; co
 
 function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Line; conversationId: string; hasSandboxed: boolean; open?: boolean }) {
   const markdown = usePreference(OUTPUT_KEY) !== "raw";
-  if (line.completionNotes?.length) return <CompletionNotes notes={line.completionNotes} />;
+  if (line.completionNotes?.length) return <><CompletionNotes notes={line.completionNotes} /><MessageAttachments attachments={line.attachments} conversationId={conversationId} /></>;
   // Reasoning follows https://ui.shadcn.com/docs/ai-elements/base/reasoning; saved thinking is always finished.
   if (line.role === "thinking") return <TraceRow key={String(open)} open={open} icon={<Brain />} title="Thought"><div className="whitespace-pre-wrap">{line.text}</div></TraceRow>;
   if (line.role === "developer") return <TraceRow key={String(open)} open={open} icon={<ScrollText />} title="Instructions">

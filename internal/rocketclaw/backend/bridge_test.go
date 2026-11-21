@@ -4090,7 +4090,7 @@ func systemPromptHeader() string {
 }
 
 func testExecuteNote(jobID string) string {
-	return `<execute id="` + jobID + `" state="completed" description="tests">` + "\ncompleted\n</execute>"
+	return `<execute id="` + jobID + `" description="tests">` + "\ncompleted\n</execute>"
 }
 
 func TestBackgroundNotesWakeIdleConversation(t *testing.T) {
@@ -4105,10 +4105,12 @@ func TestBackgroundNotesWakeIdleConversation(t *testing.T) {
 
 	manager.noteReady(nt.conversationID)
 
+	assert.Equal(t, systemPromptHeader()+"\n\n"+testExecuteNote("turn-1/call/b"), lastRequestMessage(t, nt.request(t)))
+	assert.Equal(t, "[System]\n\n"+testExecuteNote("turn-1/call/a"), lastRequestMessage(t, nt.request(t)), "each note is its own input")
+
 	final := readFinal(t, nt.finals)
-	assert.Equal(t, "answer", final.Text)
+	assert.Equal(t, "answer"+"\n"+"answer", final.Text, "the turn answers each note")
 	assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.333", ThreadTS: "111.222"}, final.SlackReply)
-	assert.Equal(t, systemPromptHeader()+"\n\n"+testExecuteNote("turn-1/call/b")+"\n\n"+testExecuteNote("turn-1/call/a"), lastRequestMessage(t, nt.request(t)))
 
 	manager.noteReady(nt.conversationID)
 	nt.waitIdle(t, manager, nt.conversationID)
@@ -4120,7 +4122,41 @@ func TestBackgroundNotesWakeIdleConversation(t *testing.T) {
 	require.Len(t, entries, 1)
 	items, err := harness.ReplayInputToParams(entries[0].Entry.ReplayInput)
 	require.NoError(t, err)
-	assert.Equal(t, "turn-1/call/b turn-1/call/a", items[0].OfMessage.ExtraFields()["input_id"], "the Web finds the turn's notes by their job IDs")
+	assert.Equal(t, "turn-1/call/b", items[0].OfMessage.ExtraFields()["input_id"], "the Web finds each note by its job ID")
+}
+
+func TestWakeGivesEachNoteItsOwnFiles(t *testing.T) {
+	t.Parallel()
+
+	nt := newNoteTest(t, answerNoteTest)
+	manager, _ := nt.run(t, ignoreOutbound)
+	spill := openTestSpill(t, nt.service)
+
+	for _, jobID := range []string{"turn-1/call/b", "turn-1/call/a"} {
+		resultID, _ := retainTestFiles(t, spill, nt.conversationID)
+		nt.addNote(t, nt.conversationID, jobID, nt.slackPrompt("run the tests"))
+		_, err := nt.service.db.ExecContext(t.Context(), `UPDATE turns SET result_id = $3 WHERE conversation_id = $1 AND input_id = $2`, nt.conversationID, jobID, resultID)
+		require.NoError(t, err)
+	}
+
+	manager.noteReady(nt.conversationID)
+	nt.request(t)
+
+	var request struct {
+		Input []struct{ Content json.RawMessage }
+	}
+	require.NoError(t, json.Unmarshal([]byte(nt.request(t)), &request))
+	readFinal(t, nt.finals)
+
+	var images []int
+
+	for _, item := range request.Input {
+		if n := strings.Count(string(item.Content), `"type":"input_image"`); n > 0 {
+			images = append(images, n)
+		}
+	}
+
+	assert.Equal(t, []int{1, 1}, images, "each note carries only its own file")
 }
 
 func TestChannelQuietFollowsWhatStartedTheTurn(t *testing.T) {
@@ -4405,7 +4441,7 @@ func TestResumedTurnInjectsNoteOnce(t *testing.T) {
 	second, _ := nt.run(t, ignoreOutbound)
 	require.NoError(t, second.StartActiveTurns(t.Context()))
 	readFinal(t, nt.finals)
-	assert.Equal(t, 1, strings.Count(nt.request(t), "state="), "the resumed turn holds the note once")
+	assert.Equal(t, 1, strings.Count(nt.request(t), "<execute id="), "the resumed turn holds the note once")
 	nt.waitIdle(t, second, nt.conversationID)
 	assert.Empty(t, nt.requests, "the note is not injected again")
 
@@ -4415,7 +4451,7 @@ func TestResumedTurnInjectsNoteOnce(t *testing.T) {
 
 	recorded, err := json.Marshal(entries[0].Entry.ReplayInput)
 	require.NoError(t, err)
-	assert.Equal(t, 1, strings.Count(string(recorded), "state="), "the note is in history once")
+	assert.Equal(t, 1, strings.Count(string(recorded), "execute id="), "the note is in history once")
 	assert.Equal(t, []string{"turn-0/call/a consumed true"}, noteStates(t, nt.service))
 }
 
@@ -4430,7 +4466,7 @@ func TestResumedTurnInjectsNoteClaimedBeforeCrash(t *testing.T) {
 
 	manager, _ := nt.run(t, ignoreOutbound)
 	require.NoError(t, manager.StartActiveTurns(t.Context()))
-	assert.NotContains(t, nt.request(t), "state=")
+	assert.NotContains(t, nt.request(t), "<execute id=")
 	assert.Equal(t, "[System]\n\n"+testExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)))
 	readFinal(t, nt.finals)
 	nt.waitIdle(t, manager, nt.conversationID)
@@ -4671,7 +4707,7 @@ func TestStopLeavesBackgroundJobsRunning(t *testing.T) {
 	assert.Equal(t, backgroundRunning, testBackgroundRow(t, nt.service, nt.conversationID, "turn-0/call/a").status)
 
 	close(release)
-	assert.Contains(t, lastRequestMessage(t, nt.request(t)), `<execute id="turn-0/call/a" state="completed" description="tests">`+"\ndone\n</execute>", "the job finishes and reports")
+	assert.Contains(t, lastRequestMessage(t, nt.request(t)), `<execute id="turn-0/call/a" description="tests">`+"\ndone\n</execute>", "the job finishes and reports")
 	readFinal(t, nt.finals)
 }
 
@@ -4705,7 +4741,7 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 			return
 		}
 
-		code := "def main():\n    bash(command=r'''while [ ! -f " + gate + " ]; do sleep 0.05; done''')\n    return '|'.join([rocketclaw_attach_files_to_response(attachments=[]), rocketclaw_restart(reason='x'), rocketclaw_schedule_message(message='later', send_this_in='1h', recurring=False)])\n"
+		code := "def main():\n    bash(command=r'''while [ ! -f " + gate + " ]; do sleep 0.05; done''')\n    return '|'.join([str(r) for r in [rocketclaw_attach_files_to_response(attachments=[]), rocketclaw_restart(reason='x'), rocketclaw_schedule_message(message='later', send_this_in='1h', recurring=False)]])\n"
 		arguments, _ := json.Marshal(struct {
 			Code        string `json:"code"`
 			Description string `json:"description"`

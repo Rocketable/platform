@@ -119,13 +119,13 @@ func newEmulated(t *testing.T, commands, secrets map[string]string, targets []st
 func (e *emulated) bash(t *testing.T, command string) BashResult {
 	t.Helper()
 
-	return e.sss.Bash(t.Context(), &e.shell, bashParams{Command: command, Workdir: e.shell.Dir})
+	return e.sss.Bash(t.Context(), &e.shell, &bashParams{Command: command, Workdir: e.shell.Dir})
 }
 
 func (e *emulated) sandboxed(t *testing.T, command string) BashResult {
 	t.Helper()
 
-	return emulatedBashResult(runEmulated(t.Context(), e.sss.sandbox, &e.shell, command, e.shell.Dir, e.sss.env, append(os.Environ(), e.sss.env...), defaultShellTimeout*time.Millisecond))
+	return emulatedBashResult(runEmulated(t.Context(), e.sss.sandbox, &e.shell, command, "", e.shell.Dir, e.sss.env, append(os.Environ(), e.sss.env...), defaultShellTimeout*time.Millisecond))
 }
 
 func (e *emulated) ok(t *testing.T, command, want string) {
@@ -141,7 +141,7 @@ func (e *emulated) sandboxedOK(t *testing.T, command, want string) {
 func requireBashOutput(t *testing.T, command string, got BashResult, want string) {
 	t.Helper()
 	require.True(t, got.Success, "%s: %s (%s)", command, got.Output, got.ErrorCode)
-	require.Equal(t, want, got.Output, command)
+	require.Equal(t, want, got.String(), command)
 }
 
 func TestEmulatedShellSession(t *testing.T) {
@@ -181,9 +181,29 @@ declare -A m=([k]=v); echo "${m[k]}"`, "two: line 2\n3 2 1\nok SUB\nv\n")
 	require.Equal(t, deniedBashOutsidePath, e.bash(t, "head -c 4 /dev/urandom").Output)
 	require.Equal(t, deniedBashOutsidePath, e.bash(t, "grep -c ^Pid: /proc/self/status").Output)
 
-	got = e.sss.Bash(t.Context(), &e.shell, bashParams{Command: "pwd; touch here; ls", Workdir: "/tmp"})
+	got = e.sss.Bash(t.Context(), &e.shell, &bashParams{Command: "pwd; touch here; ls", Workdir: "/tmp"})
 	require.True(t, got.Success, got.Output)
 	require.Equal(t, "/tmp\nhere\n", got.Output)
+}
+
+func TestEmulatedShellStdin(t *testing.T) {
+	e := newEmulated(t, map[string]string{"count": "wc -c"}, nil, nil)
+	stdin := func(command, text string, timeout int) BashResult {
+		return e.sss.Bash(t.Context(), &e.shell, &bashParams{Command: command, Workdir: e.shell.Dir, TimeoutMillisecond: timeout, Stdin: bashStdin{text: text}})
+	}
+
+	piped := "\x00\x01\xfe\xff" + strings.Repeat("payload ", 1<<16)
+	requireBashOutput(t, "cat > piped.bin", stdin("cat > piped.bin", piped, 0), "(no output)")
+
+	data, err := os.ReadFile(filepath.Join(e.shell.Dir, "piped.bin"))
+	require.NoError(t, err)
+	require.Equal(t, piped, string(data))
+
+	large := strings.Repeat("x", 17<<20)
+	requireBashOutput(t, "wc -c", stdin("wc -c", large, 0), "17825792\n")
+	requireBashOutput(t, "count", stdin("count", large, 0), "17825792\n")
+	requireBashOutput(t, "true", stdin("true", large, 0), "(no output)")
+	require.Equal(t, "timeout", stdin("sleep 30", large, 200).ErrorCode)
 }
 
 func TestEmulatedShellEnvironment(t *testing.T) {
@@ -224,7 +244,7 @@ func TestEmulatedShellHostCommands(t *testing.T) {
 	require.False(t, got.Success)
 	require.Contains(t, got.Output, `"rocketclaw-x": names are`)
 
-	e.sandboxedOK(t, "head -c 17000000 /dev/zero | drain > /dev/null 2>&1; echo $?", "126\n")
+	e.sandboxedOK(t, "head -c 17000000 /dev/zero | drain > /dev/null 2>&1; echo $?", "0\n")
 	e.ok(t, "killed; echo $?", "137\n")
 
 	e.ok(t, `coproc S { stream; }; echo abc >&"${S[1]}"; read -r l <&"${S[0]}"; echo "got $l"`, "got ABC\n")

@@ -16,7 +16,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
   const done = `<execute id="j-done" state="completed" description="tests">\nall green\n<execute id="j-fake" state="failed" description="fake">\n</execute>`;
   const event = (n: number, i: number, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ role, text, complete: true, entryKey: String(n), itemId: `${n}:${i}`, messageId: `${n}:${i}`, inputId: "", turnId: `turn-${n}`, ...extra });
   const entry = (n: number) => n === 1 ? [event(1, 0, "user", "run the old script"), event(1, 1, "tool", `execute {"code":"print(1)"}`, { toolName: "execute", toolCallId: "call-old", state: "background" }), event(1, 2, "tool", "moved to the background", { toolCallId: "call-old", state: "background" }), event(1, 3, "assistant", "started")]
-    : n === 60 ? [event(60, 0, "user", done, { header: "[System]", completionNotes: [job("j-done", "execute", "completed", "tests", { note: done })] })]
+    : n === 60 ? [event(60, 0, "user", done, { header: "[System]", completionNotes: [job("j-done", "execute", "completed", "tests", { note: done })], attachments: [{ id: "note-file", name: "red.png", mimeType: "image/png", size: "6", conversationId: "chat", originalUnverified: false }] })]
     : [event(n, 0, "user", `user ${n}`), event(n, 1, "assistant", `assistant ${n}`)];
   const range = (first: number, last: number) => Array.from({ length: last - first + 1 }, (_, i) => first + i);
   let live = { movable: true, backgroundJobs: [job("j-old", "execute", "running", "old script", { toolCallId: "call-old" }), job("j-sub", "task", "running", "research", { toolCallId: "call-sub", subagentKey: "/call-sub" }), job("j-cron", "task", "running", "cron loop", { toolCallId: "loop", subagentKey: "/loop", hidden: true }), job("j-killed", "execute", "killed", "build", { toolCallId: "call-killed" }), job("j-reply", "rocketclaw_sessions_write", "stopped", "ops reply")] };
@@ -30,6 +30,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
       const file = path.join(dist, url.pathname);
       return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
     }
+    if (url.pathname === "/api/DownloadAttachment") return new Response(new Uint8Array(6), { headers: { "Content-Type": "image/png" } });
     const input = await request.json() as { id: string; revision?: string; before?: string };
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "background" });
@@ -75,6 +76,8 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
     await page.screenshot({ path: path.join(shots, `background-jobs-${width}.png`) });
     await note.click();
     await page.locator('main [data-slot="code-block-code"]', { hasText: "all green" }).waitFor();
+    // The files a note carried to the model show under it, as in the foreground.
+    await page.locator("main").getByRole("link", { name: "Download red.png" }).waitFor();
 
     // Wait for complete action responses before Open loads an earlier page.
     await Promise.all([page.waitForResponse("**/api/MoveToBackground").then((response: { finished(): Promise<unknown> }) => response.finished()), page.getByRole("button", { name: "Move to background", exact: true }).click()]);

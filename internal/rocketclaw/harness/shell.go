@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -33,11 +35,35 @@ const (
 )
 
 type bashParams struct {
-	Command            string `json:"command"`
-	TimeoutMillisecond int    `json:"timeout_ms"`
-	Workdir            string `json:"workdir"`
-	Description        string `json:"description"`
+	Command            string    `json:"command"`
+	TimeoutMillisecond int       `json:"timeout_ms"`
+	Workdir            string    `json:"workdir"`
+	Description        string    `json:"description"`
+	Stdin              bashStdin `json:"stdin,omitzero"`
 }
+
+type bashStdin struct {
+	text, fileSHA256 string
+}
+
+func (s *bashStdin) UnmarshalJSON(data []byte) error {
+	if json.Unmarshal(data, &s.text) == nil {
+		return nil
+	}
+
+	var file struct {
+		SHA256 string `json:"sha256"`
+	}
+	if json.Unmarshal(data, &file) != nil || file.SHA256 == "" {
+		return errBashStdin
+	}
+
+	s.fileSHA256 = file.SHA256
+
+	return nil
+}
+
+var errBashStdin = errors.New("stdin must be text or a file object")
 
 type BashResult struct {
 	Output    string
@@ -46,7 +72,7 @@ type BashResult struct {
 }
 
 func (r BashResult) String() string {
-	return r.Output
+	return cmp.Or(r.Output, "(no output)")
 }
 
 type sandboxedShellSystem struct {
@@ -96,7 +122,7 @@ func shellEnvList(shellEnv map[string]string) ([]string, error) {
 	return env, nil
 }
 
-func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomShell, params bashParams) BashResult {
+func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomShell, params *bashParams) BashResult {
 	if strings.TrimSpace(params.Command) == "" {
 		return bashFailure("command is required")
 	}
@@ -148,7 +174,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 	env = append(env, "TMPDIR="+sss.shellTemp.tmpDir)
 
 	if customShell.Emulated {
-		return emulatedBashResult(runEmulated(ctx, sss.sandbox, customShell, params.Command, hostDir, sss.env, env, timeout))
+		return emulatedBashResult(runEmulated(ctx, sss.sandbox, customShell, params.Command, params.Stdin.text, hostDir, sss.env, env, timeout))
 	}
 
 	commandCtx, cancel := context.WithTimeout(ctx, timeout+shellTimeoutGrace)
@@ -161,9 +187,9 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 	cmd := exec.CommandContext(commandCtx, shell, args...)
 	cmd.Dir, cmd.Env = hostDir, env
 
-	outputReader, outputWriter, err := os.Pipe()
+	outputReader, outputWriter, err := shellPipes(cmd, params.Stdin.text)
 	if err != nil {
-		return bashFailure(fmt.Errorf("create output pipe: %w", err).Error())
+		return bashFailure(err.Error())
 	}
 	defer func() { _ = outputReader.Close() }()
 
@@ -219,10 +245,6 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 		}
 	}
 
-	if full == "" {
-		full = "(no output)"
-	}
-
 	errorCode := ""
 	if timedOut {
 		errorCode = "timeout"
@@ -237,6 +259,32 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 		ErrorCode: errorCode,
 		Success:   err == nil && !timedOut,
 	}
+}
+
+func shellPipes(cmd *exec.Cmd, stdin string) (outputReader, outputWriter *os.File, err error) {
+	outputReader, outputWriter, err = os.Pipe()
+	if err != nil {
+		return nil, nil, fmt.Errorf("create output pipe: %w", err)
+	}
+
+	if stdin == "" {
+		return outputReader, outputWriter, nil
+	}
+
+	stdinWriter, err := cmd.StdinPipe()
+	if err != nil {
+		_ = outputReader.Close()
+		_ = outputWriter.Close()
+
+		return nil, nil, fmt.Errorf("create stdin pipe: %w", err)
+	}
+
+	go func() {
+		_, _ = io.WriteString(stdinWriter, stdin)
+		_ = stdinWriter.Close()
+	}()
+
+	return outputReader, outputWriter, nil
 }
 
 func readShellOutput(pipe *os.File) string {
@@ -256,10 +304,6 @@ func readShellOutput(pipe *os.File) string {
 }
 
 func bashFailure(message string) BashResult {
-	if message == "" {
-		message = "(no output)"
-	}
-
 	return BashResult{
 		Output:    message,
 		ErrorCode: "error",

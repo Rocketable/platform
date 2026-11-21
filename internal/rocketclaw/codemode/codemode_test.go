@@ -12,8 +12,29 @@ import (
 
 func allowAll(context.Context, string, map[string]any) error { return nil }
 
+func runToString(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc, call CallFunc, host []HostTool) (string, error) {
+	value, err := Run(ctx, source, tools, decide, call, host)
+	if err != nil {
+		return "", err
+	}
+
+	if text, ok := value.(Text); ok {
+		return text.Text(), nil
+	}
+
+	if IsFailure(value) {
+		return value.String(), nil
+	}
+
+	if text, ok := starlark.AsString(value); ok {
+		return text, nil
+	}
+
+	return encodeJSON(value)
+}
+
 func TestRunRawStringKeepsUnknownEscapes(t *testing.T) {
-	got, err := Run(t.Context(), `def main():
+	got, err := runToString(t.Context(), `def main():
     return r"find . \( -name '*.go' \)"
 `, nil, allowAll, nilCall, nil)
 	if err != nil {
@@ -66,8 +87,9 @@ func TestRunParseFailureDoesNotCallHost(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			called := false
 
-			_, err := Run(t.Context(), tc.source, nil, allowAll, nilCall, []HostTool{{
-				Name: "bash",
+			_, err := runToString(t.Context(), tc.source, nil, allowAll, nilCall, []HostTool{{
+				Details: NoDetails{},
+				Name:    "bash",
 				CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
 					called = true
 					return starlark.String("dispatched"), nil
@@ -100,12 +122,13 @@ func TestRunParseFailureDoesNotCallHost(t *testing.T) {
 func TestRunRawTripleQuotedMultiline(t *testing.T) {
 	var got string
 
-	out, err := Run(t.Context(), `def main():
+	out, err := runToString(t.Context(), `def main():
     return bash(command=r'''python3 - <<'PY'
 print("hello")
 PY''')
 `, nil, allowAll, nilCall, []HostTool{{
-		Name: "bash",
+		Details: NoDetails{},
+		Name:    "bash",
 		CallValue: func(_ context.Context, args map[string]any) (starlark.Value, error) {
 			got, _ = args["command"].(string)
 			return starlark.String("ok"), nil
@@ -121,7 +144,7 @@ PY''')
 }
 
 func TestRunDollarInsideRawString(t *testing.T) {
-	got, err := Run(t.Context(), `def main():
+	got, err := runToString(t.Context(), `def main():
     return r'''rg -F -- "$pattern" file.txt'''
 `, nil, allowAll, nilCall, nil)
 	if err != nil {
@@ -134,7 +157,7 @@ func TestRunDollarInsideRawString(t *testing.T) {
 }
 
 func TestRunMainReturnsDictJSON(t *testing.T) {
-	got, err := Run(t.Context(), `def main():
+	got, err := runToString(t.Context(), `def main():
     return {"a": 1, "b": True}
 `, nil, allowAll, nilCall, nil)
 	if err != nil {
@@ -147,7 +170,7 @@ func TestRunMainReturnsDictJSON(t *testing.T) {
 }
 
 func TestRunJSONModule(t *testing.T) {
-	got, err := Run(t.Context(), `def main():
+	got, err := runToString(t.Context(), `def main():
     data = json.decode('{"scores":[2,3]}')
     return json.encode({"total": data["scores"][0] + data["scores"][1]})
 `, nil, allowAll, nilCall, nil)
@@ -169,10 +192,9 @@ func TestRunRejectsInvalidProgram(t *testing.T) {
 		{"noncallable main", "main = 1\n", "main must be a function"},
 		{"initialization fails", "x = 1 // 0\ndef main():\n    return 'unused'\n", "execute codemode:"},
 		{"undefined name", "def main():\n    return unknown\n", "execute codemode:"},
-		{"unencodable result", "def main():\n    return lambda: 'unused'\n", "encode main result:"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Run(t.Context(), tc.source, nil, allowAll, nilCall, nil)
+			got, err := runToString(t.Context(), tc.source, nil, allowAll, nilCall, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Run() error = %v, want %q", err, tc.want)
 			}
@@ -195,13 +217,13 @@ func TestRunDecideDenyDoesNotCall(t *testing.T) {
 		},
 	}}
 
-	_, err := Run(t.Context(), `def main():
-    return demo_echo(message="hi")
+	_, err := runToString(t.Context(), `def main():
+    return demo_echo(message="hi").unwrap()
 `, tools, func(context.Context, string, map[string]any) error {
 		return errors.New("denied")
-	}, func(context.Context, string, string, map[string]any) (string, error) {
+	}, func(context.Context, string, string, map[string]any) (starlark.Value, error) {
 		called = true
-		return "", nil
+		return starlark.String(""), nil
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "denied") {
 		t.Fatalf("Run() error = %v, want denied", err)
@@ -220,7 +242,7 @@ func TestRunInvalidSchemaArgsDoesNotCall(t *testing.T) {
 		{
 			name:       "invalid arguments",
 			expression: `demo_echo(other="x")`,
-			want:       "demo_echo: invalid arguments: validate args:",
+			want:       "demo.echo: invalid arguments: validate args:",
 			schema: map[string]any{
 				"type":                 "object",
 				"properties":           map[string]any{"message": map[string]any{"type": "string"}},
@@ -228,8 +250,9 @@ func TestRunInvalidSchemaArgsDoesNotCall(t *testing.T) {
 				"additionalProperties": false,
 			},
 		},
-		{"positional argument", `demo_echo("hi")`, "demo_echo: only keyword arguments are allowed", nil},
-		{"unencodable argument", `demo_echo(message=lambda: "hi")`, "demo_echo arguments: encode kwargs:", nil},
+		{"positional argument", `demo_echo("hi")`, "demo.echo: only keyword arguments are allowed; use keyword arguments", nil},
+		{"positional argument naming the one required parameter", `demo_echo("hi")`, "demo.echo: only keyword arguments are allowed; call demo_echo(message=...)", map[string]any{"type": "object", "required": []any{"message"}}},
+		{"unencodable argument", `demo_echo(message=lambda: "hi")`, "demo.echo: invalid arguments: encode kwargs:", nil},
 		{"invalid schema type", `demo_echo()`, "parse input schema:", map[string]any{"type": 1}},
 		{"unresolved schema reference", `demo_echo()`, "resolve input schema:", map[string]any{"$ref": "#/$defs/missing"}},
 		{"unencodable schema", `demo_echo()`, "encode input schema:", map[string]any{"default": make(chan string)}},
@@ -238,9 +261,9 @@ func TestRunInvalidSchemaArgsDoesNotCall(t *testing.T) {
 			called := false
 			tools := []ToolDesc{{Server: "demo", Name: "echo", InputSchema: tc.schema}}
 
-			got, err := Run(t.Context(), "def main():\n    return "+tc.expression+"\n", tools, allowAll, func(context.Context, string, string, map[string]any) (string, error) {
+			got, err := runToString(t.Context(), "def main():\n    return "+tc.expression+".unwrap()\n", tools, allowAll, func(context.Context, string, string, map[string]any) (starlark.Value, error) {
 				called = true
-				return "", nil
+				return starlark.String(""), nil
 			}, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Run() error = %v, want %q", err, tc.want)
@@ -278,7 +301,7 @@ func TestBuildCatalogCollision(t *testing.T) {
 		t.Fatalf("BuildCatalog() error = %v, want collision", err)
 	}
 
-	got, err := Run(t.Context(), "def main():\n    return 'unused'\n", tools, allowAll, nilCall, nil)
+	got, err := runToString(t.Context(), "def main():\n    return 'unused'\n", tools, allowAll, nilCall, nil)
 	if err == nil || !strings.Contains(err.Error(), "collision") || got != "" {
 		t.Fatalf("Run() = %q, %v, want collision error and no result", got, err)
 	}
@@ -288,7 +311,7 @@ func TestRunCancelledContextStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	_, err := Run(ctx, `def main():
+	_, err := runToString(ctx, `def main():
     while True:
         pass
     return "done"
@@ -306,11 +329,11 @@ func TestToolIsNotCalledOnceItsScriptIsCancelled(t *testing.T) {
 	thread.SetLocal(localCtx, ctx)
 
 	called := false
-	tool := newKwargsValueBuiltin("probe", nil, func(context.Context, map[string]any) (starlark.Value, error) {
+	tool := newKwargsValueBuiltin("probe", HostTool{Name: "probe", CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
 		called = true
 
 		return starlark.None, nil
-	})
+	}})
 
 	if _, err := starlark.Call(thread, tool, nil, nil); !errors.Is(err, context.Canceled) || called {
 		t.Fatalf("call after cancel: err = %v, called = %v; want context.Canceled and no call", err, called)
@@ -333,21 +356,21 @@ func TestRunCallsTool(t *testing.T) {
 		gotArgs                        map[string]any
 	)
 
-	result, err := Run(t.Context(), `def main():
+	result, err := runToString(t.Context(), `def main():
     return demo_echo(message="hi")
 `, tools, func(_ context.Context, subject string, args map[string]any) error {
 		gotSubject = subject
 		gotArgs = args
 
 		return nil
-	}, func(_ context.Context, server, name string, args map[string]any) (string, error) {
+	}, func(_ context.Context, server, name string, args map[string]any) (starlark.Value, error) {
 		gotServer, gotName = server, name
 
 		if args["message"] != "hi" {
 			t.Fatalf("call args = %#v", args)
 		}
 
-		return "echoed", nil
+		return starlark.String("echoed"), nil
 	}, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -358,18 +381,19 @@ func TestRunCallsTool(t *testing.T) {
 	}
 }
 
-func nilCall(context.Context, string, string, map[string]any) (string, error) {
-	return "", errors.New("unexpected call")
+func nilCall(context.Context, string, string, map[string]any) (starlark.Value, error) {
+	return nil, errors.New("unexpected call")
 }
 
 func TestRunHostTool(t *testing.T) {
 	var keys []string
 
-	got, err := Run(t.Context(), `def main():
+	got, err := runToString(t.Context(), `def main():
     first = read(filePath="a.txt")
     return first + read(filePath="a.txt")
 `, nil, allowAll, nilCall, []HostTool{{
-		Name: "read",
+		Details: NoDetails{},
+		Name:    "read",
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"filePath": map[string]any{"type": "string"}},
@@ -400,13 +424,13 @@ func TestRunRejectsHostToolNames(t *testing.T) {
 		host []HostTool
 		want string
 	}{
-		{"empty name", []HostTool{{CallValue: nilCallHost}}, "host tool name is required"},
-		{"MCP collision", []HostTool{{Name: "demo_echo", CallValue: nilCallHost}}, `builtin name collision "demo_echo"`},
-		{"JSON collision", []HostTool{{Name: "json", CallValue: nilCallHost}}, `builtin name collision "json"`},
-		{"concurrency collision", []HostTool{{Name: "gather", CallValue: nilCallHost}}, `builtin name collision "gather"`},
+		{"empty name", []HostTool{{Details: NoDetails{}, CallValue: nilCallHost}}, "host tool name is required"},
+		{"MCP collision", []HostTool{{Details: NoDetails{}, Name: "demo_echo", CallValue: nilCallHost}}, `builtin name collision "demo_echo"`},
+		{"JSON collision", []HostTool{{Details: NoDetails{}, Name: "json", CallValue: nilCallHost}}, `builtin name collision "json"`},
+		{"concurrency collision", []HostTool{{Details: NoDetails{}, Name: "gather", CallValue: nilCallHost}}, `builtin name collision "gather"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Run(t.Context(), "def main():\n    return 'unused'\n", []ToolDesc{{Server: "demo", Name: "echo"}}, allowAll, nilCall, tc.host)
+			got, err := runToString(t.Context(), "def main():\n    return 'unused'\n", []ToolDesc{{Server: "demo", Name: "echo"}}, allowAll, nilCall, tc.host)
 			if err == nil || err.Error() != tc.want || got != "" {
 				t.Fatalf("Run() = %q, %v, want no result and %q", got, err, tc.want)
 			}
@@ -416,16 +440,17 @@ func TestRunRejectsHostToolNames(t *testing.T) {
 
 func TestRunHostToolValueAndError(t *testing.T) {
 	errHost := errors.New("host failed")
+
 	for _, tc := range []struct {
 		name string
 		tool HostTool
 		want string
-		err  error
 	}{
 		{
 			name: "tuple value",
 			tool: HostTool{
-				Name: "read",
+				Details: NoDetails{},
+				Name:    "read",
 				CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
 					return starlark.Tuple{starlark.String("contents"), starlark.MakeInt(7)}, nil
 				},
@@ -435,18 +460,19 @@ func TestRunHostToolValueAndError(t *testing.T) {
 		{
 			name: "call failure",
 			tool: HostTool{
-				Name: "read",
+				Details: NoDetails{},
+				Name:    "read",
 				CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
 					return starlark.String("partial contents"), errHost
 				},
 			},
-			err: errHost,
+			want: "read: host failed",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Run(t.Context(), "def main():\n    return read()\n", nil, allowAll, nilCall, []HostTool{tc.tool})
-			if got != tc.want || !errors.Is(err, tc.err) {
-				t.Fatalf("Run() = %q, %v, want %q, %v", got, err, tc.want, tc.err)
+			got, err := runToString(t.Context(), "def main():\n    return read()\n", nil, allowAll, nilCall, []HostTool{tc.tool})
+			if got != tc.want || err != nil {
+				t.Fatalf("Run() = %q, %v, want %q", got, err, tc.want)
 			}
 		})
 	}
@@ -454,4 +480,70 @@ func TestRunHostToolValueAndError(t *testing.T) {
 
 func nilCallHost(context.Context, map[string]any) (starlark.Value, error) {
 	return nil, errors.New("unexpected host call")
+}
+
+func TestRunReturnsFinalValue(t *testing.T) {
+	got, err := Run(t.Context(), "def main():\n    return [t(), 1]\n", nil, allowAll, nilCall, valueHosts(map[string]starlark.Value{"t": starlark.String("x")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	list, ok := got.(*starlark.List)
+	if !ok || list.Len() != 2 || list.Index(0).Type() != "text" {
+		t.Fatalf("Run() = %s %v, want a list holding a text", got.Type(), got)
+	}
+
+	if list.Append(starlark.None) == nil {
+		t.Fatal("Run() returned a mutable value")
+	}
+}
+
+func TestRunFileArguments(t *testing.T) {
+	file := NewFile(FileSpec{Name: "chart.png", Mime: "image/png", Content: "png-bytes"})
+	tool := func(name string, fileArgs ...string) HostTool {
+		return HostTool{
+			Details:  NoDetails{},
+			Name:     name,
+			FileArgs: fileArgs,
+			CallValue: func(ctx context.Context, args map[string]any) (starlark.Value, error) {
+				got, ok := ArgFile(ctx, file.SHA256())
+				if !ok || got != file {
+					return nil, errors.New("file not reachable")
+				}
+
+				encoded, _ := json.Marshal(args)
+
+				return starlark.String(encoded), nil
+			},
+		}
+	}
+
+	descriptor := `{"file":"chart.png","mime":"image/png","sha256":"` + file.SHA256() + `","size":9,"source":"","summary":"chart.png, image/png, 9 B"}`
+	refused := func(tool, arg string) string {
+		return tool + ": argument " + arg + " got a file object; pass chart.base64(), a path, or text"
+	}
+
+	for _, tc := range []struct {
+		expression, want string
+	}{
+		{`bash(command="cat > x", stdin=f())`, `{"command":"cat \u003e x","stdin":` + descriptor + `}`},
+		{`decision(images=[f(), "a.png"])`, `{"images":[` + descriptor + `,"a.png"]}`},
+		{`decision(images=try_gather([f]))`, `{"images":[` + descriptor + `]}`},
+		{`decision(images=f()).error`, refused("decision", "images")},
+		{`bash(command=f()).error`, refused("bash", "command")},
+		{`bash(stdin={"x": f()}).error`, refused("bash", "stdin")},
+		{`bash(stdin=[f()]).error`, refused("bash", "stdin")},
+		{`bash(stdin={f(): 1}).error`, refused("bash", "stdin")},
+		{`upload(image=(f(),)).error`, refused("upload", "image")},
+		{`upload(image=try_gather([f])).error`, refused("upload", "image")},
+	} {
+		t.Run(tc.expression, func(t *testing.T) {
+			hosts := append(valueHosts(map[string]starlark.Value{"f": file}), tool("bash", "stdin"), tool("decision", "images[]"), tool("upload"))
+
+			got, err := runToString(t.Context(), "def main():\n    return "+tc.expression+"\n", nil, allowAll, nilCall, hosts)
+			if err != nil || got != tc.want {
+				t.Fatalf("runToString() = %q, %v, want %q", got, err, tc.want)
+			}
+		})
+	}
 }

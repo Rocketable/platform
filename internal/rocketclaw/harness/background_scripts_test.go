@@ -36,7 +36,7 @@ func TestTurnBoundToolRefusesDetachedWork(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				var (
 					work     errgroup.Group
-					finished string
+					finished ToolResult
 					errWork  error
 				)
 
@@ -77,7 +77,7 @@ func TestTurnBoundToolRefusesDetachedWork(t *testing.T) {
 					require.NoError(t, work.Wait())
 					require.NoError(t, errWork)
 
-					got = finished
+					got = finished.Output
 				}
 
 				require.Equal(t, tc.want, got)
@@ -99,7 +99,7 @@ func TestBackgroundExecuteRetainsLargeResult(t *testing.T) {
 	client := openai.NewClient()
 	agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, "rocketclaw: {allow_background: allow}\nread: {'*': allow}")}}}
 
-	var finished string
+	var finished ToolResult
 
 	jobs := enabledBackgroundJobs()
 	jobs.RunFunc = func(ctx context.Context, _ *BackgroundJob, w BackgroundWork) (BackgroundResult, error) {
@@ -135,10 +135,10 @@ func TestBackgroundExecuteRetainsLargeResult(t *testing.T) {
 		require.NoError(t, err)
 		_, err = loop.Tools[executeToolName].Call(ctx, raw, make(chan ChatResponse, 8), toolCallMetadata{callID: "call-1", observations: loop.observations, progress: &PublicProgress{}})
 		require.NoError(t, err)
-		require.Contains(t, finished, "This result expires in 7 days.")
-		require.Equal(t, 2000, strings.Count(finished, "line\n"))
+		require.True(t, strings.HasSuffix(finished.Output, "Fetch the rest with the top-level load_execute_result tool, using this result_id, start_line, limit and line_numbers.\n"))
+		require.Equal(t, 2000, strings.Count(finished.Output, "line\n"))
 
-		_, footer, ok := strings.Cut(finished, `result_id="`)
+		_, footer, ok := strings.Cut(finished.Output, `result_id="`)
 		require.True(t, ok)
 
 		id, _, _ := strings.Cut(footer, `"`)
@@ -175,9 +175,8 @@ func TestBackgroundExecuteRetainsLargeResult(t *testing.T) {
 	require.NoError(t, err)
 
 	read := later.CodeModeHosts["read"]
-	result, err := read.Call(ctx, raw, nil, emptyToolCallMetadata())
-	require.NoError(t, err)
-	require.Contains(t, result.Output, deniedSpillAccess)
+	_, err = read.Call(ctx, raw, nil, emptyToolCallMetadata())
+	require.EqualError(t, err, deniedSpillAccess)
 
 	other, otherCtx := turn("b", "turn-3")
 	_, err = load(other, otherCtx, id)
@@ -195,6 +194,7 @@ func TestBackgroundExecuteRetainsLargeResult(t *testing.T) {
 	expire(swept)
 
 	kept := execute(later, ctx)
+	background := strings.ReplaceAll(finished.Output, kept, "ID")
 	_, err = root.Stat(stored(swept))
 	require.ErrorIs(t, err, os.ErrNotExist, "retaining a result sweeps expired ones")
 	_, err = load(later, ctx, kept)
@@ -205,12 +205,15 @@ func TestBackgroundExecuteRetainsLargeResult(t *testing.T) {
 		require.NoError(t, errRun)
 		require.False(t, w.Detach())
 
-		return BackgroundResult{Output: output}, nil
+		return BackgroundResult{Result: output}, nil
 	}
 	attached := `{"code":"def main():\n    return \"line\\n\" * 2100\n","description":"Print","background":false}`
-	result, err = later.Tools[executeToolName].Call(ctx, json.RawMessage(attached), make(chan ChatResponse, 8), toolCallMetadata{callID: "call-1", observations: later.observations, progress: &PublicProgress{}})
+	result, err := later.Tools[executeToolName].Call(ctx, json.RawMessage(attached), make(chan ChatResponse, 8), toolCallMetadata{callID: "call-1", observations: later.observations, progress: &PublicProgress{}})
 	require.NoError(t, err)
-	require.Contains(t, result.Output, "This result expires when this turn ends.")
+
+	_, footer, _ := strings.Cut(result.Output, `result_id="`)
+	foreground, _, _ := strings.Cut(footer, `"`)
+	require.Equal(t, background, strings.ReplaceAll(result.Output, foreground, "ID"), "a long result reads the same in the foreground and the background, apart from its result_id")
 
 	for _, dir := range []string{"", "../outside", "/absolute"} {
 		config := testWorkspaceConfig(t, root.Name())

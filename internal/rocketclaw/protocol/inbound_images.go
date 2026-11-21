@@ -67,7 +67,13 @@ func normalizeInboundAttachments(content *InboundContent) {
 			continue
 		}
 
-		data, mimeType, err := fitInboundImageWithinLimit(mimeType, data, targetLimit)
+		mimeType, upright, err := StraightenImage(mimeType, string(data))
+		if err != nil {
+			content.AttachmentWarnings = append(content.AttachmentWarnings, "Skipped attachment "+name+" because "+err.Error()+".")
+			continue
+		}
+
+		data, mimeType, err = fitInboundImageWithinLimit(mimeType, []byte(upright), targetLimit)
 		if err != nil {
 			content.AttachmentWarnings = append(content.AttachmentWarnings, "Skipped attachment "+name+" because "+inboundAttachmentReductionFailureReason(err, targetLimit)+".")
 			continue

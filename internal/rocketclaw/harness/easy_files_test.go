@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 )
 
 func TestEasyFileView(t *testing.T) {
@@ -58,7 +60,9 @@ func TestEasyFileView(t *testing.T) {
 		require.NoError(t, err)
 
 		result, err := hosts[name].Call(t.Context(), raw, nil, toolCallMetadata{})
-		require.NoError(t, err)
+		if err != nil {
+			return "error: " + err.Error()
+		}
 
 		return result.Output
 	}
@@ -68,19 +72,33 @@ func TestEasyFileView(t *testing.T) {
 
 		return easy[name].Subjects(raw)
 	}
-	readOutput := func(path, line string) string {
-		return "<path>" + path + "</path>\n<type>file</type>\n<content>\n1: " + line + "\n\n(End of file - total 1 lines)\n</content>"
+	readOutput := func(hosts map[string]looperTool, path string) string {
+		raw, err := json.Marshal(readToolParams{FilePath: path})
+		require.NoError(t, err)
+
+		result, err := hosts["read"].Call(t.Context(), raw, nil, toolCallMetadata{})
+		require.NoError(t, err)
+
+		text, ok := result.Data.(*codemode.TextValue)
+		require.True(t, ok)
+		require.Equal(t, text.String(), result.Output)
+
+		return numberedView(t, text)
+	}
+	numbered := func(_, line string) string {
+		return "1: " + line
 	}
 
 	t.Run("read", func(t *testing.T) {
-		require.Equal(t, readOutput(filepath.Join(folder, "note.txt"), "hello needle"), call(easy, "read", readToolParams{FilePath: filepath.Join(folder, "note.txt")}))
-		require.Equal(t, readOutput(filepath.Join(folder, "note.txt"), "hello needle"), call(easy, "read", readToolParams{FilePath: "note.txt"}), "a relative path starts from the folder")
-		require.Equal(t, readOutput(upload, "upload needle"), call(easy, "read", readToolParams{FilePath: upload}))
-		require.Equal(t, filepath.Join(dir, "secret")+" is outside this agent's folders", call(easy, "read", readToolParams{FilePath: folder + "/../secret"}))
-		require.Equal(t, filepath.Join(dir, "workspace", "agents", "secret.md")+" is outside this agent's folders", call(easy, "read", readToolParams{FilePath: filepath.Join(dir, "workspace", "agents", "secret.md")}))
-		require.Equal(t, "File not found: "+filepath.Join(folder, "agents", "secret.md"), call(easy, "read", readToolParams{FilePath: "agents/secret.md"}), "a workspace path is not the folder's")
-		require.Equal(t, "symlink access denied: link", call(easy, "read", readToolParams{FilePath: filepath.Join(folder, "link")}))
-		require.Equal(t, readOutput("agents/secret.md", "workspace secret"), call(advanced, "read", readToolParams{FilePath: "agents/secret.md"}), "an advanced agent reads the workspace")
+		require.Equal(t, numbered(filepath.Join(folder, "note.txt"), "hello needle"), readOutput(easy, filepath.Join(folder, "note.txt")))
+		require.Equal(t, numbered(filepath.Join(folder, "note.txt"), "hello needle"), readOutput(easy, "note.txt"), "a relative path starts from the folder")
+		require.Equal(t, numbered(upload, "upload needle"), readOutput(easy, upload))
+		require.Equal(t, "upload needle\n", call(easy, "read", readToolParams{FilePath: upload}))
+		require.Equal(t, "error: "+filepath.Join(dir, "secret")+" is outside this agent's folders", call(easy, "read", readToolParams{FilePath: folder + "/../secret"}))
+		require.Equal(t, "error: "+filepath.Join(dir, "workspace", "agents", "secret.md")+" is outside this agent's folders", call(easy, "read", readToolParams{FilePath: filepath.Join(dir, "workspace", "agents", "secret.md")}))
+		require.Equal(t, "error: File not found: "+filepath.Join(folder, "agents", "secret.md"), call(easy, "read", readToolParams{FilePath: "agents/secret.md"}), "a workspace path is not the folder's")
+		require.Equal(t, "error: symlink access denied: link", call(easy, "read", readToolParams{FilePath: filepath.Join(folder, "link")}))
+		require.Equal(t, numbered("agents/secret.md", "workspace secret"), readOutput(advanced, "agents/secret.md"), "an advanced agent reads the workspace")
 
 		got, err := subjects("read", readToolParams{FilePath: "note.txt"})
 		require.NoError(t, err)
@@ -103,7 +121,7 @@ func TestEasyFileView(t *testing.T) {
 		patch = applyPatchToolParams{PatchText: "*** Begin Patch\n*** Update File: " + upload + "\n@@\n-upload needle\n+changed\n*** End Patch"}
 		_, err = subjects("apply_patch", patch)
 		require.EqualError(t, err, "apply_patch verification failed: "+upload+" is read-only")
-		require.Equal(t, "apply_patch verification failed: "+upload+" is read-only", call(easy, "apply_patch", patch))
+		require.Equal(t, "error: apply_patch verification failed: "+upload+" is read-only", call(easy, "apply_patch", patch))
 
 		data, err = base.ReadFile("uploads/chat/up1/report.txt")
 		require.NoError(t, err)
@@ -114,7 +132,7 @@ func TestEasyFileView(t *testing.T) {
 		require.Equal(t, filepath.Join(folder, "note.txt")+"\n"+upload, call(easy, "glob", globToolParams{Pattern: "**/*.txt"}), "every folder, newest first")
 		require.Equal(t, filepath.Join(skill, "scripts", "run.sh"), call(easy, "glob", globToolParams{Pattern: "**/*.sh", Path: skill}))
 		require.Equal(t, "No files found", call(easy, "glob", globToolParams{Pattern: "**/*.md", Path: uploads}))
-		require.Equal(t, filepath.Join(dir, "workspace")+" is outside this agent's folders", call(easy, "glob", globToolParams{Pattern: "**/*.md", Path: filepath.Join(dir, "workspace")}))
+		require.Equal(t, "error: "+filepath.Join(dir, "workspace")+" is outside this agent's folders", call(easy, "glob", globToolParams{Pattern: "**/*.md", Path: filepath.Join(dir, "workspace")}))
 
 		require.Equal(t, "Found 3 matches\n"+filepath.Join(folder, "note.txt")+":\n  Line 1: hello needle\n\n"+upload+":\n  Line 1: upload needle\n\n"+filepath.Join(skill, "scripts", "run.sh")+":\n  Line 1: echo needle", call(easy, "grep", grepToolParams{Pattern: "needle"}))
 		require.Equal(t, "Found 1 matches\n"+upload+":\n  Line 1: upload needle", call(easy, "grep", grepToolParams{Pattern: "needle", Path: upload}))

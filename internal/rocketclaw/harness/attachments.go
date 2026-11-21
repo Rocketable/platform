@@ -2,18 +2,16 @@ package harness
 
 import (
 	"bytes"
-	"encoding/base64"
-	"errors"
+	"encoding/binary"
 	"fmt"
 	"mime"
+	"slices"
 	"strings"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"golang.org/x/net/html"
 )
-
-const maxAttachmentBytes = 5 * 1024 * 1024
 
 type PromptInputRole string
 
@@ -57,23 +55,6 @@ func TextToolResult(output string) ToolResult {
 	return ToolResult{Output: output}
 }
 
-func attachmentFromBytes(filename, mimeType string, data []byte) (Attachment, error) {
-	if len(data) > maxAttachmentBytes {
-		return Attachment{}, errors.New("attachment too large (exceeds 5MB limit)")
-	}
-
-	mimeType = normalizeMIME(mimeType)
-	if !isSupportedAttachmentMIME(mimeType) {
-		return Attachment{}, fmt.Errorf("unsupported attachment MIME type: %s", mimeType)
-	}
-
-	return Attachment{
-		MIME:     mimeType,
-		Filename: filename,
-		URL:      "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data),
-	}, nil
-}
-
 func normalizeMIME(mimeType string) string {
 	mediaType, _, err := mime.ParseMediaType(mimeType)
 	if err == nil {
@@ -100,7 +81,8 @@ func sniffAttachmentMIME(data []byte, fallback string) string {
 		return "image/jpeg"
 	case bytes.HasPrefix(data, []byte{0x47, 0x49, 0x46, 0x38}):
 		return "image/gif"
-	case bytes.HasPrefix(data, []byte{0x42, 0x4d}):
+	case len(data) >= 18 && bytes.HasPrefix(data, []byte("BM")) && slices.Contains([]uint32{12, 40, 52, 56, 64, 108, 124}, binary.LittleEndian.Uint32(data[14:])) &&
+		binary.LittleEndian.Uint32(data[10:]) >= 14+binary.LittleEndian.Uint32(data[14:]) && binary.LittleEndian.Uint32(data[2:]) >= binary.LittleEndian.Uint32(data[10:]):
 		return "image/bmp"
 	case bytes.HasPrefix(data, []byte("%PDF-")):
 		return "application/pdf"
@@ -132,7 +114,7 @@ func PromptInputMessage(input *PromptInput) responses.ResponseInputItemUnionPara
 			mimeType := normalizeMIME(attachment.MIME)
 			switch {
 			case isImageAttachmentMIME(mimeType):
-				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{Detail: responses.ResponseInputImageDetailAuto, ImageURL: openai.String(attachment.URL)}})
+				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputImage: withImageName(responses.ResponseInputImageParam{Detail: responses.ResponseInputImageDetailAuto, ImageURL: openai.String(attachment.URL)}, attachment.Filename)})
 			case mimeType == "application/pdf":
 				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputFile: &responses.ResponseInputFileParam{Filename: openai.String(attachment.Filename), FileData: openai.String(attachment.URL)}})
 			}
@@ -180,7 +162,7 @@ func functionCallOutputContent(result ToolResult) responses.ResponseFunctionCall
 		mimeType := normalizeMIME(attachment.MIME)
 		switch {
 		case isImageAttachmentMIME(mimeType):
-			content = append(content, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{Detail: responses.ResponseInputImageContentDetailAuto, ImageURL: openai.String(attachment.URL)}})
+			content = append(content, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: withImageName(responses.ResponseInputImageContentParam{Detail: responses.ResponseInputImageContentDetailAuto, ImageURL: openai.String(attachment.URL)}, attachment.Filename)})
 		case mimeType == "application/pdf":
 			content = append(content, responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &responses.ResponseInputFileContentParam{Filename: openai.String(attachment.Filename), FileData: openai.String(attachment.URL)}})
 		}

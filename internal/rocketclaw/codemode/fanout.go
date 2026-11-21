@@ -44,25 +44,27 @@ func concurrencyBuiltins() starlark.StringDict {
 	slots := semaphore.NewWeighted(MaxConcurrency)
 
 	return starlark.StringDict{
-		"gather":     starlark.NewBuiltin("gather", makeGather(slots)),
-		"map":        starlark.NewBuiltin("map", makeMap(slots)),
+		"gather":     starlark.NewBuiltin("gather", makeGather(slots, false)),
+		"try_gather": starlark.NewBuiltin("try_gather", makeGather(slots, true)),
+		"map":        starlark.NewBuiltin("map", makeMap(slots, false)),
+		"try_map":    starlark.NewBuiltin("try_map", makeMap(slots, true)),
 		"race":       starlark.NewBuiltin("race", makeRace(slots)),
 		"race_first": starlark.NewBuiltin("race_first", makeRace(slots)),
 	}
 }
 
-func makeGather(slots *semaphore.Weighted) func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error) {
+func makeGather(slots *semaphore.Weighted, failFast bool) func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error) {
 	return func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		callables, concurrency, err := unpackCallables(b.Name(), args, kwargs)
 		if err != nil {
 			return nil, err
 		}
 
-		return runGather(thread, slots, concurrencyOpGather, concurrency, callables, nil)
+		return runGather(thread, slots, b.Name(), concurrency, callables, nil, failFast)
 	}
 }
 
-func makeMap(slots *semaphore.Weighted) func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error) {
+func makeMap(slots *semaphore.Weighted, failFast bool) func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error) {
 	return func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		var items starlark.Value
 
@@ -91,7 +93,7 @@ func makeMap(slots *semaphore.Weighted) func(*starlark.Thread, *starlark.Builtin
 			value.Freeze()
 		}
 
-		return runGather(thread, slots, concurrencyOpMap, limit, values, fn)
+		return runGather(thread, slots, b.Name(), limit, values, fn, failFast)
 	}
 }
 
@@ -151,7 +153,7 @@ func resolveConcurrency(value starlark.Value) (int, error) {
 }
 
 func listOrTuple(value starlark.Value) ([]starlark.Value, error) {
-	switch v := value.(type) {
+	switch v := unbox(value).(type) {
 	case *starlark.List:
 		return slices.Collect(v.Elements()), nil
 	case starlark.Tuple:
@@ -174,26 +176,29 @@ func releaseParentSlot(parent *starlark.Thread) func() {
 	}
 }
 
-const (
-	concurrencyOpGather    = "gather"
-	concurrencyOpMap       = "map"
-	concurrencyOpRaceFirst = "race_first"
-)
+const concurrencyOpRaceFirst = "race_first"
 
-func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, concurrency int, values []starlark.Value, mapFn starlark.Callable) (starlark.Value, error) {
+var errBranchFailed = errors.New("cancelled after another branch failed")
+
+func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, concurrency int, values []starlark.Value, mapFn starlark.Callable, failFast bool) (starlark.Value, error) {
+	results := make([]starlark.Value, len(values))
 	if len(values) == 0 {
-		return starlark.NewList(nil), nil
+		return gatherList(results, failFast), nil
 	}
 
 	parentCtx := parent.Local(localCtx).(context.Context)
 
 	defer releaseParentSlot(parent)()
 
-	results := make([]starlark.Value, len(values))
 	group, groupCtx := errgroup.WithContext(parentCtx)
 	group.SetLimit(concurrency)
 
 	branchKey := nextKey(parent) + "/"
+
+	var (
+		firstFailure sync.Once
+		failure      starlark.Value
+	)
 
 	for i, value := range values {
 		group.Go(func() error {
@@ -207,9 +212,9 @@ func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, co
 				err    error
 			)
 			if mapFn != nil {
-				result, err = callBranch(groupCtx, fmt.Sprintf("map-%d", i), mapFn, starlark.Tuple{value}, slots, branchKey)
+				result, err = callBranch(groupCtx, op, fmt.Sprintf("map-%d", i), mapFn, starlark.Tuple{value}, slots, branchKey)
 			} else {
-				result, err = callBranch(groupCtx, fmt.Sprintf("gather-%d", i), value, nil, slots, branchKey)
+				result, err = callBranch(groupCtx, op, fmt.Sprintf("gather-%d", i), value, nil, slots, branchKey)
 			}
 
 			if err != nil {
@@ -218,15 +223,33 @@ func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, co
 
 			results[i] = result
 
+			if failFast && IsFailure(result) {
+				firstFailure.Do(func() { failure = result })
+
+				return errBranchFailed
+			}
+
 			return nil
 		})
 	}
 
 	if err := group.Wait(); err != nil {
+		if errors.Is(err, errBranchFailed) {
+			return failure, nil
+		}
+
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
 
-	return starlark.NewList(results), nil
+	return gatherList(results, failFast), nil
+}
+
+func gatherList(results []starlark.Value, failFast bool) starlark.Value {
+	if failFast {
+		return newGatherResult(results)
+	}
+
+	return starlark.NewList(results)
 }
 
 func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, concurrency int, callables []starlark.Value) (starlark.Value, error) {
@@ -256,7 +279,7 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 			return
 		}
 
-		if op == concurrencyOpRaceFirst || err == nil {
+		if op == concurrencyOpRaceFirst || err == nil && !IsFailure(value) {
 			settled = true
 			winner = value
 			errWin = err
@@ -266,7 +289,8 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 			return
 		}
 
-		if errWin == nil {
+		if winner == nil && errWin == nil {
+			winner = value
 			errWin = err
 		}
 	}
@@ -291,7 +315,7 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 			}
 			defer slots.Release(1)
 
-			finish(callBranch(groupCtx, fmt.Sprintf("race-%d", i), callable, nil, slots, branchKey))
+			finish(callBranch(groupCtx, op, fmt.Sprintf("race-%d", i), callable, nil, slots, branchKey))
 
 			return nil
 		})
@@ -302,7 +326,7 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 	return winner, errWin
 }
 
-func callBranch(ctx context.Context, name string, callable starlark.Value, args starlark.Tuple, slots *semaphore.Weighted, key string) (starlark.Value, error) {
+func callBranch(ctx context.Context, op, name string, callable starlark.Value, args starlark.Tuple, slots *semaphore.Weighted, key string) (starlark.Value, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, fmt.Errorf("branch context: %w", err)
 	}
@@ -320,7 +344,7 @@ func callBranch(ctx context.Context, name string, callable starlark.Value, args 
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("branch call: %w", err)
+		return NewFailure(op, err.Error(), nil), nil
 	}
 
 	return value, nil

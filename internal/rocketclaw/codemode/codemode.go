@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"path"
+	"slices"
 	"strings"
 	"sync"
 	"unicode"
@@ -12,6 +15,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	starjson "go.starlark.net/lib/json"
 	"go.starlark.net/starlark"
+	"go.starlark.net/starlarkstruct"
 	"go.starlark.net/syntax"
 )
 
@@ -32,14 +36,30 @@ type ToolDesc struct {
 	InputSchema               map[string]any
 }
 
-type CallFunc func(ctx context.Context, server, name string, args map[string]any) (string, error)
+type CallFunc func(ctx context.Context, server, name string, args map[string]any) (starlark.Value, error)
 
 type DecideFunc func(ctx context.Context, subject string, args map[string]any) error
 
 type HostTool struct {
 	Name        string
 	InputSchema map[string]any
+	FileArgs    []string
+	Details     CallDetails
 	CallValue   func(ctx context.Context, args map[string]any) (starlark.Value, error)
+}
+
+type CallDetails interface {
+	Details(args map[string]any) starlark.StringDict
+}
+
+type NoDetails struct{}
+
+func (NoDetails) Details(map[string]any) starlark.StringDict { return nil }
+
+type mcpCallDetails ToolDesc
+
+func (d mcpCallDetails) Details(map[string]any) starlark.StringDict {
+	return starlark.StringDict{"server": starlark.String(d.Server), "tool": starlark.String(d.Name)}
 }
 
 func StarlarkName(server, mcpToolName string) string {
@@ -96,62 +116,71 @@ func FreeNames(source string) ([]string, error) {
 	return names, nil
 }
 
-func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc, call CallFunc, host []HostTool) (string, error) {
+func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc, call CallFunc, host []HostTool) (starlark.Value, error) {
 	catalog, errCatalog := BuildCatalog(tools)
 	if errCatalog != nil {
-		return "", errCatalog
+		return nil, errCatalog
 	}
 
 	concurrency := concurrencyBuiltins()
+	members := maps.Clone(starjson.Module.Members)
+	members["decode"] = starlark.NewBuiltin("json.decode", decodeJSON)
+	predeclared := starlark.StringDict{"json": &starlarkstruct.Module{Name: "json", Members: members}}
 
-	predeclared := make(starlark.StringDict, 1+len(catalog)+len(host)+len(concurrency))
-
-	predeclared["json"] = starjson.Module
 	for name, tool := range catalog {
-		predeclared[name] = newKwargsValueBuiltin(name, tool.InputSchema, func(ctx context.Context, callArgs map[string]any) (starlark.Value, error) {
-			if err := decide(ctx, tool.Server+"."+tool.Name, callArgs); err != nil {
-				return nil, err
-			}
+		predeclared[name] = newKwargsValueBuiltin(name, HostTool{
+			Name:        tool.Server + "." + tool.Name,
+			InputSchema: tool.InputSchema,
+			Details:     mcpCallDetails(tool),
+			CallValue: func(ctx context.Context, callArgs map[string]any) (starlark.Value, error) {
+				if err := decide(ctx, tool.Server+"."+tool.Name, callArgs); err != nil {
+					return nil, err
+				}
 
-			result, err := call(ctx, tool.Server, tool.Name, callArgs)
-			if err != nil {
-				return nil, err
-			}
-
-			return starlark.String(result), nil
+				return call(ctx, tool.Server, tool.Name, callArgs)
+			},
 		})
 	}
 
 	for _, tool := range host {
 		if tool.Name == "" {
-			return "", errors.New("host tool name is required")
+			return nil, errors.New("host tool name is required")
 		}
 
 		if _, exists := predeclared[tool.Name]; exists {
-			return "", fmt.Errorf("builtin name collision %q", tool.Name)
+			return nil, fmt.Errorf("builtin name collision %q", tool.Name)
 		}
 
-		predeclared[tool.Name] = newKwargsValueBuiltin(tool.Name, tool.InputSchema, tool.CallValue)
+		predeclared[tool.Name] = newKwargsValueBuiltin(tool.Name, tool)
 	}
 
 	for name, builtin := range concurrency {
 		if _, exists := predeclared[name]; exists {
-			return "", fmt.Errorf("builtin name collision %q", name)
+			return nil, fmt.Errorf("builtin name collision %q", name)
 		}
 
 		predeclared[name] = builtin
 	}
 
+	maps.Copy(predeclared, comparisonBuiltins())
+
 	if err := context.Cause(ctx); err != nil {
-		return "", fmt.Errorf("codemode context: %w", err)
+		return nil, fmt.Errorf("codemode context: %w", err)
 	}
 
-	_, prog, errSource := starlark.SourceProgramOptions(sourceOptions(), "codemode.star", source, predeclared.Has)
-	if errSource != nil {
-		return "", wrapParseError(errSource)
+	f, errParse := sourceOptions().Parse("codemode.star", source, 0)
+	if errParse != nil {
+		return nil, wrapParseError(errParse)
 	}
 
-	thread, stopCancel := newCancellableThread(ctx, "codemode", stepBudget)
+	rewriteComparisons(f)
+
+	prog, errCompile := starlark.FileProgram(f, predeclared.Has)
+	if errCompile != nil {
+		return nil, wrapParseError(errCompile)
+	}
+
+	thread, stopCancel := newCancellableThread(context.WithValue(ctx, sourceContext{}, source), "codemode", stepBudget)
 	defer stopCancel()
 
 	globals, errExec := prog.Init(thread, predeclared)
@@ -159,72 +188,137 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 
 	if errExec != nil {
 		if errCtx := context.Cause(ctx); errCtx != nil {
-			return "", fmt.Errorf("codemode context: %w", errCtx)
+			return nil, fmt.Errorf("codemode context: %w", errCtx)
 		}
 
-		return "", fmt.Errorf("execute codemode: %w", errExec)
+		return nil, fmt.Errorf("execute codemode: %w", errExec)
 	}
 
 	main := globals["main"]
 	if main == nil {
-		return "", errors.New("main is required")
+		return nil, errors.New("main is required")
 	}
 
 	fn, ok := main.(starlark.Callable)
 	if !ok {
-		return "", errors.New("main must be a function")
+		return nil, errors.New("main must be a function")
 	}
 
 	value, errCall := starlark.Call(thread, fn, nil, nil)
 	if errCall != nil {
 		if errCtx := context.Cause(ctx); errCtx != nil {
-			return "", fmt.Errorf("codemode context: %w", errCtx)
+			return nil, fmt.Errorf("codemode context: %w", errCtx)
 		}
 
-		return "", fmt.Errorf("call main: %w", errCall)
+		return nil, fmt.Errorf("call main: %w", errCall)
 	}
 
 	if value == starlark.None {
-		return "", errors.New("main returned None")
+		return nil, errors.New("main returned None")
 	}
 
-	if text, ok := starlark.AsString(value); ok {
-		return text, nil
-	}
+	value.Freeze()
 
-	if value.Type() == "bash_result" {
-		return value.String(), nil
-	}
-
-	encoded, errEncode := starlark.Call(thread, starjson.Module.Members["encode"], starlark.Tuple{value}, nil)
-	if errEncode != nil {
-		return "", fmt.Errorf("encode main result: %w", errEncode)
-	}
-
-	return string(encoded.(starlark.String)), nil
+	return value, nil
 }
 
-func newKwargsValueBuiltin(name string, schema map[string]any, call func(context.Context, map[string]any) (starlark.Value, error)) *starlark.Builtin {
-	resolved := sync.OnceValues(func() (*jsonschema.Resolved, error) { return resolveSchema(schema) })
+type argFilesContext struct{}
 
-	return starlark.NewBuiltin(name, func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		if len(args) != 0 {
-			return nil, fmt.Errorf("%s: only keyword arguments are allowed", b.Name())
+func ArgFile(ctx context.Context, sha256 string) (*File, bool) {
+	file, ok := ctx.Value(argFilesContext{}).(map[string]*File)[sha256]
+
+	return file, ok
+}
+
+type argumentWalk struct {
+	allowed         []string
+	files           map[string]*File
+	arg, refusedArg string
+	refused         *File
+}
+
+func (w *argumentWalk) failure(v starlark.Value, position string) starlark.Value {
+	if IsFailure(v) {
+		return v
+	}
+
+	switch v := unbox(v).(type) {
+	case *File:
+		switch {
+		case slices.Contains(w.allowed, position):
+			w.files[v.SHA256()] = v
+		case w.refused == nil:
+			w.refused, w.refusedArg = v, w.arg
+		}
+	case *starlark.List, starlark.Tuple, *starlark.Set:
+		for elem := range starlark.Elements(v.(starlark.Iterable)) {
+			if failure := w.failure(elem, position+"[]"); failure != nil {
+				return failure
+			}
+		}
+	case *starlark.Dict:
+		for _, part := range slices.Concat(v.Items()...) {
+			if failure := w.failure(part, position+"{}"); failure != nil {
+				return failure
+			}
+		}
+	}
+
+	return nil
+}
+
+func newKwargsValueBuiltin(callable string, tool HostTool) *starlark.Builtin {
+	resolved := sync.OnceValues(func() (*jsonschema.Resolved, error) { return resolveSchema(tool.InputSchema) })
+
+	return starlark.NewBuiltin(tool.Name, func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		walk := argumentWalk{allowed: tool.FileArgs, files: map[string]*File{}}
+
+		for _, arg := range args {
+			if failure := walk.failure(arg, ""); failure != nil {
+				return failure, nil
+			}
+		}
+
+		for _, kv := range kwargs {
+			walk.arg = string(kv[0].(starlark.String))
+			if failure := walk.failure(kv[1], walk.arg); failure != nil {
+				return failure, nil
+			}
 		}
 
 		callArgs, errArgs := kwargsToMap(thread, kwargs)
-		if errArgs != nil {
-			return nil, fmt.Errorf("%s arguments: %w", b.Name(), errArgs)
+		fail := func(message string) starlark.Value {
+			return NewFailure(b.Name(), message, tool.Details.Details(callArgs))
+		}
+
+		switch {
+		case len(args) != 0:
+			var schema jsonschema.Schema
+			if raw, err := json.Marshal(tool.InputSchema); err == nil {
+				_ = json.Unmarshal(raw, &schema)
+			}
+
+			if len(schema.Required) == 1 {
+				return fail(fmt.Sprintf("only keyword arguments are allowed; call %s(%s=...)", callable, schema.Required[0])), nil
+			}
+
+			return fail("only keyword arguments are allowed; use keyword arguments"), nil
+		case walk.refused != nil:
+			stem := strings.TrimSuffix(walk.refused.Name(), path.Ext(walk.refused.Name()))
+
+			return fail(fmt.Sprintf("argument %s got a file object; pass %s.base64(), a path, or text", walk.refusedArg, stem)), nil
+		case errArgs != nil:
+			return fail("invalid arguments: " + errArgs.Error()), nil
 		}
 
 		inputSchema, errSchema := resolved()
 		if errSchema != nil {
-			return nil, fmt.Errorf("%s: invalid arguments: %w", b.Name(), errSchema)
+			return fail("invalid arguments: " + errSchema.Error()), nil
 		}
 
 		if inputSchema != nil {
 			if err := inputSchema.Validate(callArgs); err != nil {
-				return nil, fmt.Errorf("%s: invalid arguments: validate args: %w", b.Name(), err)
+				return fail("invalid arguments: validate args: " + err.Error()), nil
 			}
 		}
 
@@ -233,7 +327,22 @@ func newKwargsValueBuiltin(name string, schema map[string]any, call func(context
 			return nil, fmt.Errorf("%s: %w", b.Name(), err)
 		}
 
-		return call(context.WithValue(ctx, callKeyContext{}, nextKey(thread)), callArgs)
+		callCtx := context.WithValue(context.WithValue(ctx, callKeyContext{}, nextKey(thread)), argFilesContext{}, walk.files)
+		if thread.CallStackDepth() > 1 {
+			callCtx = context.WithValue(callCtx, callLineContext{}, int(thread.CallFrame(1).Pos.Line))
+		}
+
+		value, err := tool.CallValue(callCtx, callArgs)
+		if err != nil && context.Cause(ctx) != nil {
+			return nil, err
+		}
+
+		result := HostResult(b.Name(), value, err)
+		if failure, ok := result.(*Error); ok {
+			return failure.withDetails(tool.Details.Details(callArgs)), nil
+		}
+
+		return result, nil
 	})
 }
 

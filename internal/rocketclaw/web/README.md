@@ -1435,7 +1435,7 @@ also listed as a job until the other session's answer comes back; its Stop only
 stops waiting for that answer and leaves the other session alone. Calls running
 in the background stay visible at every Timeline detail level. Background Jobs
 and Completion Notes are Trace lines too: a running job spins, and a failed or killed one shows in red. Each Completion Note is one
-row, its label followed by `finished`, `failed`, `stopped by user`,
+row, its label followed by `finished`, `failed` (also when a script returned a failure), `stopped by user`,
 `stopped by agent`, or `killed (server restarted)`, shown at every level with the
 full note collapsed beneath it. `/stop` does not stop
 Background Jobs; use Stop.

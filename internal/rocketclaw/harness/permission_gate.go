@@ -76,16 +76,28 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 		return permissionDeniedError(decision.message)
 	}
 
-	if decision.review == nil || tc.looper.Permissions.Easy {
-		return nil
+	var bash bashParams
+	if decision.review != nil && decision.review.Permission == "bash" {
+		_ = json.Unmarshal(args, &bash)
 	}
 
-	decision.review.ReviewContext = slices.Clone(tc.reviewInput)
-	decision.review.CurrentTurnInputs = slices.Clone(tc.currentTurnInputs)
-	decision.review.Review = ChildKey{Path: "/" + ReviewKey(tc.observations.turnID, tc.callID), Turn: tc.observations.turnID, Call: tc.callID}
-	decision.review.Turn = ReviewTurn(ToolCallKey(ctx))
+	switch {
+	case decision.review == nil, tc.looper.Permissions.Easy && bash.Stdin.text == "":
+		return nil
+	case len(bash.Stdin.text) > 64<<10:
+		return permissionDeniedError("stdin too large to review (max 64 KiB); write it to a file first")
+	}
 
-	reviewDecision := tc.looper.PermissionReviewer.reviewPermission(ctx, decision.review)
+	return reviewNestedCall(ctx, &tc, decision.review, ReviewTurn(ToolCallKey(ctx)))
+}
+
+func reviewNestedCall(ctx context.Context, tc *toolCallContext, review *permissionReviewRequest, turn string) error {
+	review.ReviewContext = slices.Clone(tc.reviewInput)
+	review.CurrentTurnInputs = slices.Clone(tc.currentTurnInputs)
+	review.Review = ChildKey{Path: "/" + ReviewKey(tc.observations.turnID, tc.callID), Turn: tc.observations.turnID, Call: tc.callID}
+	review.Turn = turn
+
+	reviewDecision := tc.looper.PermissionReviewer.reviewPermission(ctx, review)
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("permission review: %w", err)
 	}

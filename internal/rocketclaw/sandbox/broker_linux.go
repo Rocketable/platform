@@ -210,8 +210,6 @@ func (b *broker) invoke(ctx context.Context, conn *net.UnixConn, r *wire.Reader,
 	defer func() { _ = stdinR.Close() }()
 
 	go func() {
-		var total int
-
 		for {
 			f, err := r.Read()
 			if err != nil {
@@ -223,14 +221,6 @@ func (b *broker) invoke(ctx context.Context, conn *net.UnixConn, r *wire.Reader,
 
 			switch body := f.GetBody().(type) {
 			case *wire.Frame_StdinChunk:
-				if total += len(body.StdinChunk); total > hostInputBytes {
-					b.log.Warn(limitReached, "limit", "host_command_input", "command", name, "limit_bytes", hostInputBytes, "received_bytes", total)
-					stdinW.CloseWithError(errors.New("host command input limit exceeded"))
-					cancel()
-
-					return
-				}
-
 				_, _ = stdinW.Write(body.StdinChunk)
 			case *wire.Frame_StdinEof:
 				_ = stdinW.Close()
