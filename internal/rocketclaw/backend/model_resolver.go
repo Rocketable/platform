@@ -76,8 +76,9 @@ func (r *modelResolver) Resolve(model string) (*openai.Client, harness.ProviderO
 
 	origin := harness.ProviderOrigin{Provider: provider, Model: apiModel, CompactThreshold: providerConfig.AutocompactionThreshold, PromptCacheMarkersRelativePosition: providerConfig.PromptCacheMarkersRelativePosition}
 
-	options := r.options(origin)
 	if providerConfig.Auth == "chatgpt" {
+		options := r.options(origin, "sdk_return")
+
 		client, err := oai.NewChatGPTClientIn(r.workspace, r.runtimeDir, provider, r.log.With("provider", provider, "model", apiModel), options...)
 		if err != nil {
 			return nil, harness.ProviderOrigin{}, fmt.Errorf("create ChatGPT OAuth client for provider %q: %w", provider, err)
@@ -86,7 +87,7 @@ func (r *modelResolver) Resolve(model string) (*openai.Client, harness.ProviderO
 		return client, origin, nil
 	}
 
-	options = append(options, option.WithAPIKey(providerConfig.APIKey))
+	options := append(r.options(origin, "http_headers"), option.WithAPIKey(providerConfig.APIKey))
 	if strings.TrimSpace(providerConfig.APIBaseURL) != "" {
 		options = append(options, option.WithBaseURL(providerConfig.APIBaseURL), option.WithUnsafeAllowHTTP())
 	}
@@ -147,7 +148,7 @@ func newDeciders(cfg *config.Config) map[string]harness.Decider {
 	return deciders
 }
 
-func (r *modelResolver) options(origin harness.ProviderOrigin) []option.RequestOption {
+func (r *modelResolver) options(origin harness.ProviderOrigin, boundary string) []option.RequestOption {
 	if !r.log.Enabled(context.Background(), slog.LevelInfo) && !r.log.Enabled(context.Background(), slog.LevelError) {
 		return nil
 	}
@@ -159,11 +160,6 @@ func (r *modelResolver) options(origin harness.ProviderOrigin) []option.RequestO
 		status := 0
 		if resp != nil {
 			status = resp.StatusCode
-		}
-
-		boundary := "http_headers"
-		if r.providers[origin.Provider].Auth == "chatgpt" {
-			boundary = "sdk_return"
 		}
 
 		attrs := append(providerLogAttrs(req, resp, status, time.Since(startedAt), err, boundary), "provider", origin.Provider, "model", origin.Model)
