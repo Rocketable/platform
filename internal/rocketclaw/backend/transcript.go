@@ -79,7 +79,6 @@ func observeTranscriptDB(ctx context.Context, db stateStoreDB, conversationID st
 	return queryRows(ctx, db, `WITH `+sessionHistorySQL+`, saved_turns AS (
     SELECT DISTINCT CASE WHEN synced THEN source_conversation_id ELSE $1 END AS conversation_id, entry->>'turn_id' AS turn_id FROM physical_entries
 ), readable_turns AS (
-    -- A running hidden run that reports here shows live, after this chat's history.
     SELECT a.*, c.marker, CASE WHEN a.conversation_id = $1 THEN a.history_anchor_id ELSE 9223372036854775807 END AS anchor
     FROM turns a CROSS JOIN cutoff c CROSS JOIN visibility v
     LEFT JOIN saved_turns saved ON saved.conversation_id = a.conversation_id AND saved.turn_id = a.id
@@ -92,11 +91,9 @@ func observeTranscriptDB(ctx context.Context, db stateStoreDB, conversationID st
         AND CASE WHEN $4::bigint = 0 THEN a.terminal = '' OR a.anchor >= $3
             ELSE a.terminal <> '' AND a.anchor >= $3 AND a.anchor < $4 END
 ), live_replays AS (
-    -- A running turn's replay items are checked before json_agg combines them (readable_replay).
     SELECT a.id FROM shown_turns a JOIN steps i ON i.conversation_id = a.conversation_id AND starts_with(i.key, a.id || '/replay_input/')
     WHERE a.record IS NULL GROUP BY a.id HAVING readable_replay(sum(octet_length(i.value::text)))
 ), turn_replays AS (
-    -- Replay items stay json text: a turn's whole record can exceed what jsonb holds.
     SELECT a.conversation_id, a.id, json_agg(i.value ORDER BY i.key) AS replay FROM shown_turns a JOIN live_replays USING (id)
     JOIN steps i ON i.conversation_id = a.conversation_id AND starts_with(i.key, a.id || '/replay_input/') GROUP BY a.conversation_id, a.id
 ), transcript AS (

@@ -957,7 +957,6 @@ const delegationsSQL = `WITH ` + sessionHistorySQL + `, ` + turnReplaySQL + `, s
     WHERE (c.call_turn IS NULL OR c.call_turn = p.turn_id) AND ($2 = '' OR p.producer = $2)
 )
 SELECT c.* FROM children c
--- Exception to the no-subquery rule: stop at a child history's first entry.
 CROSS JOIN LATERAL (SELECT 1 FROM entries e WHERE e.conversation_id = c.id LIMIT 1) h ORDER BY c.id`
 
 type SidebarSession struct {
@@ -1013,7 +1012,6 @@ const shownChatsSQL = `, reporting AS (
     SELECT reports_to AS conversation_id FROM conversations WHERE reports_to IS NOT NULL
     UNION SELECT c.conversation_id FROM conversations c JOIN conversations r ON r.conversation_id = c.continues WHERE c.continues IS NOT NULL
 ), shown AS (
-    -- A chat whose history is its hidden runs' has a summary time once their first entry lands.
     SELECT c.*, c.has_entries OR p.conversation_id IS NOT NULL AND c.last_updated > '0001-01-01' IS TRUE AS found, p.conversation_id IS NOT NULL AS reported
     FROM origins c LEFT JOIN reporting p USING (conversation_id)
 )`
@@ -1187,14 +1185,12 @@ running AS (
     FROM turns WHERE phase NOT IN ('waiting', 'done') AND takes_lane
     ORDER BY conversation_id, created_at_unix_ns
 ), live AS (
-    -- Running lane turns and Background Jobs, then waiting turns other than scheduled reminders.
     SELECT conversation_id, created_at_unix_ns AS since, takes_lane, FALSE AS queued FROM turns WHERE phase = 'running' OR phase = 'delivering' AND takes_lane
     UNION ALL SELECT conversation_id, created_at_unix_ns, TRUE, TRUE FROM turns WHERE phase = 'waiting' AND reason <> 'scheduled'
 ), credited AS (
     SELECT conversation_id, since, takes_lane, queued, TRUE AS own FROM live
     UNION ALL SELECT c.reports_to, l.since, l.takes_lane, l.queued, FALSE FROM live l JOIN conversations c USING (conversation_id) WHERE c.reports_to IS NOT NULL
 ), work AS (
-    -- Background work is a chat's Background Jobs and everything running of the runs reporting to it.
     SELECT conversation_id, bool_or(NOT queued AND NOT (own AND takes_lane)) AS background, min(since) FILTER (WHERE NOT queued) AS running_since,
         min(since) FILTER (WHERE queued) AS queued_since, max(since) AS arrived
     FROM credited GROUP BY conversation_id
@@ -1266,7 +1262,6 @@ SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updat
 FROM conversations o
 LEFT JOIN reads u ON u.conversation_id = o.conversation_id
 LEFT JOIN everyone e ON TRUE
--- Rows of servers no longer configured stay stored, hidden, and return with their server.
 WHERE o.kind = 'remote' AND o.server = ANY($4) AND ($5::text[] IS NULL OR o.conversation_id = ANY($5))
 ), chats AS (
 SELECT * FROM local UNION ALL SELECT * FROM remote

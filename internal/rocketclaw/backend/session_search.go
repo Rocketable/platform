@@ -251,7 +251,6 @@ func (s *SessionService) searchCandidates(ctx context.Context, slack slackLookup
     UNION ALL SELECT c.conversation_id FROM creating c JOIN own p ON p.conversation_id = c.creating_source AND p.run
     UNION ALL SELECT c.conversation_id FROM visible_chats c JOIN turns t ON t.conversation_id = c.conversation_id AND t.phase NOT IN ('waiting', 'done') AND t.takes_lane
     WHERE lower(replace(replace(t.inbound_json->>'Text', U&'\0130', 'i'), U&'\212A', 'k') COLLATE "C") LIKE ANY ($6)
-    -- A needle holding what JSON escapes, or spanning a pair, can only be read from the decoded pairs.
     UNION ALL SELECT conversation_id FROM origins c WHERE $5::text[] <> '{}' AND c.slack_channel = ANY($5) OR $4 ~ '[="\\[:cntrl:]]' AND c.pairs <> 'null'
         OR (c.managed = c.conversation_id) <> (c.run_at IS NOT NULL) AND strpos('cron source: stem: run kind: scheduled one-off id: agent: ran at: external mcp conversation:', $4) > 0
 )
