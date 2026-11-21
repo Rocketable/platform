@@ -581,8 +581,6 @@ func (s *SessionService) sessionToolSummaries(ctx context.Context, ids []string,
 ), newest AS (
     SELECT c.*, e.entry_timestamp FROM counted c JOIN entries e USING (id) ORDER BY c.id DESC LIMIT NULLIF($2, 0)
 ), fields AS (
-    -- json_to_record parses each entry once; every ->> on it parses the whole entry again. Without
-    -- previews the stored time stands for the entry's.
     SELECT n.id, n.turns, COALESCE(f."timestamp", n.entry_timestamp) AS "timestamp", f.replay_input FROM newest n,
         json_to_record(CASE WHEN $3 THEN n.entry_json END) AS f("timestamp" text, replay_input json)
 )
