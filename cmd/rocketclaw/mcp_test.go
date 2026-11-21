@@ -34,7 +34,7 @@ func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T)
 	})
 	content := &protocol.InboundContent{Text: "prompt"}
 	metadata := map[string]string{"ticket": "123", protocol.InboundPrincipalNameMetadataKey: "Mallory", protocol.InboundPrincipalEmailMetadataKey: "mallory@example.com", protocol.InboundSenderAgentMetadataKey: "main", protocol.InboundSenderSessionMetadataKey: "web:x", protocol.InboundSenderActionMetadataKey: "write", protocol.InboundAllowedAgentsMetadataKey: "intruder", "web_message_id": "w-1", "background_job_ids": "j-1", "external_conversation_id": "forged"}
-	result, accepted, err := submitExternalMCPInput(context.Background(), turns, "planner", "external_mcp:planner:private", "managed-chat", content, metadata, "alice", "public-1")
+	result, accepted, err := submitExternalMCPInput(context.Background(), turns, &backend.ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:private", ManagedConversationID: "managed-chat"}, content, metadata, "alice", "public-1")
 
 	require.NoError(t, err)
 	assert.True(t, accepted)
@@ -82,7 +82,7 @@ func TestSubmitExternalMCPInputWaitsForOwnQueuedTurnResult(t *testing.T) {
 	})
 
 	go func() {
-		result, _, err := submitExternalMCPInput(context.Background(), turns, "planner", "external_mcp:planner:x", "managed-chat", &protocol.InboundContent{Text: "follow-up"}, nil, "", "public-1")
+		result, _, err := submitExternalMCPInput(context.Background(), turns, &backend.ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:x", ManagedConversationID: "managed-chat"}, &protocol.InboundContent{Text: "follow-up"}, nil, "", "public-1")
 		if err != nil {
 			errCh <- err
 
@@ -330,7 +330,7 @@ func TestSubmitExternalMCPInputReturnsAfterSubmitAgent(t *testing.T) {
 	errCh := make(chan error, 1)
 
 	go func() {
-		result, _, err := submitExternalMCPInput(context.Background(), turns, "planner", "external_mcp:planner:x", "managed-chat", &protocol.InboundContent{Text: "hello"}, nil, "", "public-1")
+		result, _, err := submitExternalMCPInput(context.Background(), turns, &backend.ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:x", ManagedConversationID: "managed-chat"}, &protocol.InboundContent{Text: "hello"}, nil, "", "public-1")
 		if err != nil {
 			errCh <- err
 
