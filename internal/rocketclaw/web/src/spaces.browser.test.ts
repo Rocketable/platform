@@ -1513,18 +1513,32 @@ test("New session and the palette offer every RocketClaw's OpenCode servers from
   const remote = serveRemote({ spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [], groups: [], space: "lab", last: {}, sharedOrder: [] }, shared: [] }, () => []);
   const createURL = `${remote.url}/api/CreateSession`;
   let pending = "configure remote RocketClaw";
-  let lastCreate: { url: string; body: string | null } | null = null;
+  type CreateRequest = { url(): string; postData(): string | null; failure(): { errorText: string } | null };
+  let lastCreate: CreateRequest | undefined, status: number | undefined, bodyFinished = false;
+  page.on("response", (response: { request(): CreateRequest; status(): number }) => {
+    if (response.request() === lastCreate) status = response.status();
+  });
+  page.on("requestfinished", (request: CreateRequest) => {
+    if (request === lastCreate) bodyFinished = true;
+  });
   onTestFinished(() => {
-    if (pending) console.error("Cross-server New session test stalled", JSON.stringify({ pending, pageURL: page.url(), createURL, lastCreate }));
+    if (pending) console.error("Cross-server New session test stalled", JSON.stringify({
+      pending, pageURL: page.url(), createURL,
+      lastCreate: lastCreate ? { url: lastCreate.url(), body: lastCreate.postData(), status: status ?? null, bodyFinished, failure: lastCreate.failure()?.errorText ?? null } : null,
+    }));
   });
   try {
     await addRemote(page, remote.url);
     saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }] };
     pending = "open Alpha";
     await page.goto(`${origin}${href("alpha")}`);
-    const created = page.waitForRequest((request: { url(): string; postData(): string | null }) => {
+    const created = page.waitForRequest((request: CreateRequest) => {
       const url = request.url();
-      if (new URL(url).pathname === "/api/CreateSession") lastCreate = { url, body: request.postData() };
+      if (new URL(url).pathname === "/api/CreateSession") {
+        lastCreate = request;
+        status = undefined;
+        bodyFinished = false;
+      }
       return url === createURL;
     });
     pending = "open New session menu on Alpha";
