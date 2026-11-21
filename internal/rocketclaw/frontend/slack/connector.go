@@ -1497,15 +1497,11 @@ func (c *Connector) addSlackForward(ctx context.Context, content *protocol.Inbou
 		channel, errInfo := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: forward.channelID})
 		if errInfo == nil && channel != nil {
 			c.queueChannelFact(forward.channelID, channel.Name, observedAt)
+
+			if channel.IsChannel && !channel.IsPrivate && !channel.IsIM && !channel.IsMpIM {
+				messages, _ = c.slackThreadReplies(ctx, forward.channelID, forward.threadTS)
+			}
 		}
-
-		if errInfo != nil || channel == nil || !channel.IsChannel || channel.IsPrivate || channel.IsIM || channel.IsMpIM {
-			content.TextAttachments = append(content.TextAttachments, renderSlackForward(forward, nil, nil, nil))
-
-			return
-		}
-
-		messages, _ = c.slackThreadReplies(ctx, forward.channelID, forward.threadTS)
 	}
 
 	var files []slack.File
