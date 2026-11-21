@@ -862,16 +862,13 @@ func TestPublishFinalPreservesTurnID(t *testing.T) {
 	inbound.ConversationID = bridge.config.ConversationID
 	result := runResult{turnID: "turn-1", text: "hello back"}
 
-	var group errgroup.Group
-
-	group.Go(func() error { return publishTestFinal(context.Background(), bridge, inbound, &result) })
-
-	final := readRocketCodeOutbound(t, bus)
+	require.NoError(t, publishTestFinal(t.Context(), bridge, inbound, &result))
+	require.NotEmpty(t, bus.outbound, "final outbound message was not published")
+	final := <-bus.outbound
 	assert.Equal(t, "turn-1", final.TurnID)
 	assert.Equal(t, "hello back", final.Text)
 	assert.True(t, final.Complete)
 	assert.Equal(t, protocol.TerminalComplete, final.Terminal)
-	require.NoError(t, group.Wait())
 }
 
 func TestPublishFinalMarksCurrentGoalCompletion(t *testing.T) {
