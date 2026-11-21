@@ -173,7 +173,7 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	assert.Contains(t, hosts["bash"].Definition.Description.Value, `{"code":`)
 	assert.NotContains(t, prompt, `bash(command="`)
 
-	entries := concurrencySearchEntries()
+	entries := buildCodeModeSearchIndex(nil, nil)
 	require.NotEmpty(t, entries)
 	assert.Contains(t, entries[0].item.Signature, "gather([lambda:")
 	assert.Contains(t, entries[0].item.Description, "not varargs")

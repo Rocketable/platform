@@ -519,7 +519,7 @@ func codeModeSearch(index []codeModeSearchEntry, args map[string]any) string {
 	return string(raw)
 }
 
-func concurrencySearchEntries() []codeModeSearchEntry {
+func buildCodeModeSearchIndex(hosts map[string]looperTool, mcp []codemode.ToolDesc) []codeModeSearchEntry {
 	type row struct {
 		name, sig, desc string
 	}
@@ -533,7 +533,7 @@ func concurrencySearchEntries() []codeModeSearchEntry {
 		{"race_first", fmt.Sprintf("race_first([lambda: …, …], concurrency=%d)", defN), fmt.Sprintf("First finished zero-arg lambda in a list wins (success or failure; not varargs); losers cancelled (default concurrency %d, max %d).", defN, maxN)},
 	}
 
-	entries := make([]codeModeSearchEntry, 0, len(rows))
+	entries := make([]codeModeSearchEntry, 0, len(hosts)+len(mcp)+len(rows))
 	for _, row := range rows {
 		entries = append(entries, codeModeSearchEntry{
 			item: codeModeSearchItem{
@@ -545,13 +545,6 @@ func concurrencySearchEntries() []codeModeSearchEntry {
 			searchText: strings.ToLower(strings.Join([]string{row.name, row.sig, row.desc, "concurrency", "parallel", "fanout"}, "\n")),
 		})
 	}
-
-	return entries
-}
-
-func buildCodeModeSearchIndex(hosts map[string]looperTool, mcp []codemode.ToolDesc) []codeModeSearchEntry {
-	entries := make([]codeModeSearchEntry, 0, len(hosts)+len(mcp)+4)
-	entries = append(entries, concurrencySearchEntries()...)
 
 	for _, name := range slices.Sorted(maps.Keys(hosts)) {
 		tool := hosts[name]
