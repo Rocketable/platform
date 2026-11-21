@@ -1248,37 +1248,56 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
   waitingFor = "";
 }));
 
-test("Parked also lists the Shared rows this person parked, which open in their space without a tab of their own, can be renamed and can join a group", () => withPage({}, async (page, origin, _prompts, saved) => {
-  saved.spaces.push({ id: "ops", name: "Ops" });
-  saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }] };
-  saved.shared = [{ space: "ops", path: href("hotel") }];
-  saved.attention = [{ path: href("hotel"), parked: true }];
-  const parked = page.getByRole("tablist", { name: "Parked tabs" }), original = parked.getByRole("tab", { name: "Hotel", exact: true }), row = parked.getByRole("tab", { name: "Renamed hotel", exact: true });
-  await page.goto(`${origin}${href("alpha")}`);
-  await page.getByRole("button", { name: "Parked", exact: true }).click();
-  expect(await original.getAttribute("aria-description")).toBe("Shared, Space: Ops, Forked session, Parked");
-  expect(await parked.getByRole("button", { name: "Close Hotel" }).count()).toBe(0);
+test("Parked also lists the Shared rows this person parked, which open in their space without a tab of their own, can be renamed and can join a group", async () => {
+  let waitingFor: string | undefined = "Chromium to open a page";
+  let observed: (() => object) | undefined;
+  onTestFinished(() => {
+    if (waitingFor) {
+      expect({ waitingFor, ...observed?.() }, `Expected ${waitingFor}`).toMatchObject({ waitingFor: undefined });
+    }
+  });
+  await withPage({}, async (page, origin, _prompts, saved) => {
+    saved.spaces.push({ id: "ops", name: "Ops" });
+    saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }] };
+    saved.shared = [{ space: "ops", path: href("hotel") }];
+    saved.attention = [{ path: href("hotel"), parked: true }];
+    observed = () => ({ url: page.url(), listSessionsCalls: saved.polls, savedSpace: saved.state.space, savedTabs: saved.state.tabs });
+    const parked = page.getByRole("tablist", { name: "Parked tabs" }), original = parked.getByRole("tab", { name: "Hotel", exact: true }), row = parked.getByRole("tab", { name: "Renamed hotel", exact: true });
+    waitingFor = "Alpha to load";
+    await page.goto(`${origin}${href("alpha")}`);
+    waitingFor = "Parked to open and list Hotel";
+    await page.getByRole("button", { name: "Parked", exact: true }).click();
+    expect(await original.getAttribute("aria-description")).toBe("Shared, Space: Ops, Forked session, Parked");
+    expect(await parked.getByRole("button", { name: "Close Hotel" }).count()).toBe(0);
 
-  await original.click({ button: "right" });
-  await page.getByRole("menuitem").first().waitFor();
-  expect(await menuLines(page)).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group", "Move to space", "—", "Delete session"]);
-  await page.getByRole("menuitem", { name: "Rename session", exact: true }).click();
-  const input = parked.getByRole("textbox", { name: "Session name" });
-  await input.fill("Renamed hotel");
-  await input.press("Enter");
-  await row.waitFor();
+    waitingFor = "Hotel's menu to offer Rename session";
+    await original.click({ button: "right" });
+    await page.getByRole("menuitem").first().waitFor();
+    expect(await menuLines(page)).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group", "Move to space", "—", "Delete session"]);
+    await page.getByRole("menuitem", { name: "Rename session", exact: true }).click();
+    waitingFor = "Parked to show Renamed hotel";
+    const input = parked.getByRole("textbox", { name: "Session name" });
+    await input.fill("Renamed hotel");
+    await input.press("Enter");
+    await row.waitFor();
 
-  await row.click();
-  await page.waitForURL(`**${href("hotel")}`);
-  await until(() => saved.state.space === "ops");
-  expect(saved.state.tabs.map((tab) => tab.path)).toEqual([href("alpha")]);
+    waitingFor = "Hotel to open in Ops without a personal tab";
+    await row.click();
+    await page.waitForURL(`**${href("hotel")}`);
+    await until(() => saved.state.space === "ops");
+    expect(saved.state.tabs.map((tab) => tab.path)).toEqual([href("alpha")]);
 
-  await row.click({ button: "right" });
-  for (const item of ["Add to group", "New group"]) await page.getByRole("menuitem", { name: item, exact: true }).click();
-  await page.getByRole("textbox", { name: "Group name" }).waitFor();
-  await page.keyboard.press("Escape");
-  await until(() => saved.state.tabs.some((tab) => tab.path === href("hotel") && tab.space === "ops" && !!tab.group));
-}));
+    waitingFor = "New group to open the group-name editor";
+    await row.click({ button: "right" });
+    for (const item of ["Add to group", "New group"]) await page.getByRole("menuitem", { name: item, exact: true }).click();
+    await page.getByRole("textbox", { name: "Group name" }).waitFor();
+    waitingFor = "the Ops tab group to save Hotel as a member";
+    await page.keyboard.press("Escape");
+    await until(() => saved.state.tabs.some((tab) => tab.path === href("hotel") && tab.space === "ops" && !!tab.group));
+    waitingFor = "page error check and browser cleanup to finish";
+  });
+  waitingFor = undefined;
+});
 
 test("a parked Shared row offers the same menu from Parked as from its space's Shared group", () => withPage({}, async (page, origin, _prompts, saved) => {
   saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }] };
