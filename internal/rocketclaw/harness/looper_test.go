@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -1957,7 +1958,7 @@ func TestLooperReportsToolErrorsInBand(t *testing.T) {
 
 			return webFetch(ctx, http.DefaultClient, params)
 		}
-		run(t, map[string]looperTool{"webfetch": tool}, testFunctionCall("tool-1", "call-1", "webfetch", fmt.Sprintf(`{"url":%q}`, server.URL)), "tool call failed: webfetch: request failed with status 404")
+		run(t, map[string]looperTool{"webfetch": tool}, testFunctionCall("tool-1", "call-1", "webfetch", fmt.Sprintf(`{"url":%q}`, server.URL)), `"output":"HTTP 404"`)
 	})
 }
 
@@ -3829,6 +3830,10 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 	require.Len(t, turnSaves(t, sink), 4, "start, two provider responses, and one tool batch")
 }
 
+func withoutImageNames(item string) string {
+	return regexp.MustCompile(`"filename":"[^"]*",("image_url")`).ReplaceAllString(item, "$1")
+}
+
 func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	steers := []PromptInput{
 		{Texts: []string{"use the other file"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}, Attachments: []Attachment{{MIME: "image/png", Filename: "screen.png", URL: "data:image/png;base64,c2NyZWVu"}}},
@@ -3838,8 +3843,8 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	}
 	want := []string{
 		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\n<skill_metadata>\nname: docs-helper\ndescription: Docs\nlicense: \ncompatibility: \nlocation: docs-helper/SKILL.md\nmetadata: null\n</skill_metadata>\n\nInstructions first fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
-		`{"content":[{"type":"input_text","text":"use the other file"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,c2NyZWVu"}],"role":"user","type":"message"}`,
-		`{"content":[{"type":"input_image","detail":"auto","image_url":"data:image/jpeg;base64,cGhvdG8="}],"role":"user","type":"message"}`,
+		`{"content":[{"type":"input_text","text":"use the other file"},{"type":"input_image","detail":"auto","filename":"screen.png","image_url":"data:image/png;base64,c2NyZWVu"}],"role":"user","type":"message"}`,
+		`{"content":[{"type":"input_image","detail":"auto","filename":"photo.jpg","image_url":"data:image/jpeg;base64,cGhvdG8="}],"role":"user","type":"message"}`,
 		`{"content":"/tmp is full","role":"user","type":"message"}`,
 		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\n<skill_metadata>\nname: docs-helper\ndescription: Docs\nlicense: \ncompatibility: \nlocation: docs-helper/SKILL.md\nmetadata: null\n</skill_metadata>\n\nInstructions last fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
 		`{"content":"and skip tests","role":"user","type":"message"}`,
@@ -3899,9 +3904,9 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	require.Len(t, history, 10)
 
 	for i, expected := range want {
-		require.JSONEq(t, expected, marshalJSON(t, items[3+i]))
+		require.JSONEq(t, withoutImageNames(expected), marshalJSON(t, items[3+i]), "the provider gets no image file name")
 		require.JSONEq(t, expected, string(turns[0].ReplayInput[3+i]))
-		require.JSONEq(t, expected, marshalJSON(t, history[3+i]))
+		require.JSONEq(t, expected, marshalJSON(t, history[3+i]), "the loaded history keeps image names locally")
 	}
 
 	looper.SteerDrain = InertSteerDrain{}
@@ -4057,7 +4062,7 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 		{Texts: []string{"and skip lint"}},
 	}
 	want := []string{
-		`{"content":[{"type":"input_text","text":"also add a test"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,dGVzdA=="}],"role":"user","type":"message"}`,
+		`{"content":[{"type":"input_text","text":"also add a test"},{"type":"input_image","detail":"auto","filename":"test.png","image_url":"data:image/png;base64,dGVzdA=="}],"role":"user","type":"message"}`,
 		`{"content":[{"type":"input_file","filename":"spec.pdf","file_data":"data:application/pdf;base64,c3BlYw=="}],"role":"user","type":"message"}`,
 		`{"content":"and skip lint","role":"user","type":"message"}`,
 	}
@@ -4119,9 +4124,9 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 	require.Len(t, history, 6)
 
 	for i, expected := range want {
-		require.JSONEq(t, expected, marshalJSON(t, items[2+i]))
+		require.JSONEq(t, withoutImageNames(expected), marshalJSON(t, items[2+i]), "the provider gets no image file name")
 		require.JSONEq(t, expected, string(turns[0].ReplayInput[2+i]))
-		require.JSONEq(t, expected, marshalJSON(t, history[2+i]))
+		require.JSONEq(t, expected, marshalJSON(t, history[2+i]), "the loaded history keeps image names locally")
 	}
 
 	require.Equal(t, []TurnPhase{TurnPhaseFinalAnswer, TurnPhaseFinalAnswer}, phases)

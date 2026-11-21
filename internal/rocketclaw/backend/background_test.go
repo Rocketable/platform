@@ -1,10 +1,15 @@
 package backend
 
 import (
+	"cmp"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +17,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -35,14 +41,14 @@ func testTurnRoot(t *testing.T) *turnRoot {
 
 func blockedWork(started chan<- struct{}, release <-chan struct{}) *backgroundWorkMock {
 	return &backgroundWorkMock{
-		RunBackgroundFunc: func(ctx context.Context) (string, error) {
+		RunBackgroundFunc: func(ctx context.Context) (harness.ToolResult, error) {
 			started <- struct{}{}
 
 			select {
 			case <-release:
-				return "done", nil
+				return harness.TextToolResult("done"), nil
 			case <-ctx.Done():
-				return "", context.Cause(ctx)
+				return harness.ToolResult{}, context.Cause(ctx)
 			}
 		},
 		DetachFunc: func() bool { return true },
@@ -187,7 +193,7 @@ func TestBackgroundJobStop(t *testing.T) {
 	_, err := registry.stop(t.Context(), "other", "turn-1/call/main", errStoppedByUser)
 	require.ErrorContains(t, err, `background job "turn-1/call/main" is neither running nor waiting to report in this conversation`)
 
-	for jobID, reason := range map[string]backgroundStopError{"turn-1/call/main": errStoppedByUser, "turn-1/call/cron:daily": errStoppedByAgent} {
+	for jobID, reason := range map[string]harness.BackgroundStopError{"turn-1/call/main": errStoppedByUser, "turn-1/call/cron:daily": errStoppedByAgent} {
 		stopped, err := registry.stop(t.Context(), "main", jobID, reason)
 		require.NoError(t, err)
 		require.True(t, stopped)
@@ -197,6 +203,8 @@ func TestBackgroundJobStop(t *testing.T) {
 		require.Equal(t, notePending, row.noteState)
 		require.True(t, row.wake)
 		require.Equal(t, string(reason), row.result)
+		require.Equal(t, fmt.Sprintf("<subagent id=%q description=\"\" continue=\"/a\">\nThe job was %s. Do not run it again unless asked.\n</subagent>", jobID, reason), backgroundNote(&row))
+		require.Contains(t, backgroundNote(&row), "\n"+harness.ToolCallResult("task", harness.ToolResult{}, fmt.Errorf("run task job: %w", reason)).Output+"\n", "a stop reads the same as a call answer ending in that stop")
 
 		stopped, err = registry.stop(t.Context(), "main", jobID, reason)
 		require.NoError(t, err)
@@ -237,12 +245,12 @@ func TestStoppedSubagentStaysStopped(t *testing.T) {
 	require.NoError(t, err)
 	createTestBackgroundJob(t, store, testReply("main/a", "turn-2/call/w", "web:ops"))
 
-	waiting := &backgroundWorkMock{RunBackgroundFunc: func(ctx context.Context) (string, error) {
+	waiting := &backgroundWorkMock{RunBackgroundFunc: func(ctx context.Context) (harness.ToolResult, error) {
 		started <- struct{}{}
 
 		_, _, err := registry.awaitSubagent(ctx, "main/a", "main/turn-1/call/a")
 
-		return "", err
+		return harness.ToolResult{}, err
 	}, DetachFunc: func() bool { return true }}
 	_, err = backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/a", Kind: harness.BackgroundKindTask, SubagentKey: "/a", Detached: true}, waiting)
 	require.NoError(t, err)
@@ -342,7 +350,7 @@ func TestBackgroundJobAttachedCall(t *testing.T) {
 		work := blockedWork(started, release)
 		result, err := turn.Run(t.Context(), task("a"), work)
 		require.NoError(t, err)
-		require.Equal(t, harness.BackgroundResult{Output: "done"}, result)
+		require.Equal(t, harness.BackgroundResult{Result: harness.TextToolResult("done")}, result)
 		require.Empty(t, work.DetachCalls())
 		require.False(t, registry.movable("main"))
 	})
@@ -409,7 +417,7 @@ CREATE TRIGGER refuse_row BEFORE INSERT ON turns FOR EACH ROW EXECUTE FUNCTION r
 		close(release)
 		require.Empty(t, moved, "a call whose script already returned is not listed as moved")
 		require.NoError(t, call.Wait())
-		require.Equal(t, harness.BackgroundResult{Output: "done"}, result)
+		require.Equal(t, harness.BackgroundResult{Result: harness.TextToolResult("done")}, result)
 		require.NotContains(t, backgroundJobIDs(t, store, "main"), "turn-1/call/s", "the job leaves no row and no note")
 	})
 
@@ -425,14 +433,14 @@ CREATE TRIGGER refuse_row BEFORE INSERT ON turns FOR EACH ROW EXECUTE FUNCTION r
 		)
 
 		work := &backgroundWorkMock{
-			RunBackgroundFunc: func(ctx context.Context) (string, error) {
+			RunBackgroundFunc: func(ctx context.Context) (harness.ToolResult, error) {
 				workCtx = ctx
 
 				started <- struct{}{}
 
 				<-release
 
-				return "done", context.Cause(ctx)
+				return harness.TextToolResult("done"), context.Cause(ctx)
 			},
 			DetachFunc: func() bool { return true },
 		}
@@ -606,6 +614,184 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 	require.Empty(t, again.continueSubagentCalls())
 }
 
+func retainTestFiles(t *testing.T, root *os.Root, conversationID string) (resultID string, chart []byte) {
+	t.Helper()
+
+	resultID, chart = uuid.NewString(), []byte("\x89PNG\r\n\x1a\nchart")
+	dir := rocketcodeRetainedDir(conversationID)
+	require.NoError(t, root.MkdirAll(dir, 0o700))
+
+	for suffix, data := range map[string]string{".files.json": `[{"number":1,"name":"chart.png","mime":"image/png","attached":true},{"number":2,"name":"scan.pdf","mime":"application/pdf","attached":false}]`, ".1": string(chart), ".2": "%PDF-1.4"} {
+		require.NoError(t, root.WriteFile(filepath.Join(dir, resultID+suffix), []byte(data), 0o600))
+	}
+
+	return resultID, chart
+}
+
+func TestBackgroundNoteCarriesTheJobsFiles(t *testing.T) {
+	t.Parallel()
+
+	for _, running := range []bool{false, true} {
+		t.Run(fmt.Sprintf("running=%t", running), func(t *testing.T) {
+			t.Parallel()
+
+			release := make(chan struct{})
+			nt := newNoteTest(t, holdNoteTest(release, 0))
+			manager, _ := nt.run(t, ignoreOutbound)
+			resultID, chart := retainTestFiles(t, openTestSpill(t, nt.service), nt.conversationID)
+
+			if running {
+				require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
+				nt.request(t)
+			} else {
+				close(release)
+			}
+
+			work := &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (harness.ToolResult, error) {
+				return harness.ToolResult{Output: "Attached file 1: chart.png", Attachments: []harness.Attachment{{MIME: "image/png", Filename: "chart.png", URL: "data:image/png;base64,"}}, Data: harness.RetainedFiles{ResultID: resultID}}, nil
+			}, DetachFunc: func() bool { return true }}
+			turn := backgroundTurn{registry: nt.service.jobs.(*backgroundRegistry), root: testTurnRoot(t), conversationID: nt.conversationID, origin: nt.slackPrompt("run the tests")}
+			_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-0/call/a", Kind: harness.BackgroundKindExecute, Label: "tests", Agent: "main", CallID: "a", Detached: true}, work)
+			require.NoError(t, err)
+
+			if running {
+				require.Eventually(t, func() bool {
+					rows, err := nt.service.notedBackgroundJobs(t.Context(), nt.conversationID, []string{"turn-0/call/a"})
+					return err == nil && len(rows) == 1 && rows[0].noteState == notePending
+				}, 10*time.Second, 10*time.Millisecond)
+				manager.noteReady(nt.conversationID)
+				close(release)
+			}
+
+			body := nt.request(t)
+			readFinal(t, nt.finals)
+			nt.waitIdle(t, manager, nt.conversationID)
+			require.Empty(t, nt.requests, "the note reached the model in one request")
+			require.Contains(t, body, `"image_url":"data:image/png;base64,`+base64.StdEncoding.EncodeToString(chart)+`"`, "the note carries the job's file as message content")
+			require.NotContains(t, body, "application/pdf", "a held-back file stays behind its result_id")
+
+			rows, err := nt.service.notedBackgroundJobs(t.Context(), nt.conversationID, []string{"turn-0/call/a"})
+			require.NoError(t, err)
+			require.Equal(t, resultID, rows[0].resultID)
+		})
+	}
+}
+
+func TestBackgroundNoteInputSendsFilesOnlyWhenItCan(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	root := openTestSpill(t, store)
+	resultID, chart := retainTestFiles(t, root, "main")
+	job := testBackgroundJob("main", "turn-1/call/a")
+	job.status, job.result, job.resultID = backgroundCompleted, "Attached file 1: chart.png", resultID
+
+	note, attachments := store.backgroundNoteInput(job)
+	require.Equal(t, backgroundNote(job), note)
+	require.Equal(t, []protocol.InboundAttachment{{Name: "chart.png", MIMEType: "image/png", Data: chart}}, attachments)
+
+	for _, status := range []backgroundJobStatus{backgroundFailed, backgroundStopped, backgroundKilled} {
+		ended := *job
+		ended.status = status
+		note, attachments = store.backgroundNoteInput(&ended)
+		require.Equal(t, backgroundNote(&ended), note)
+		require.Empty(t, attachments, status)
+	}
+
+	old := time.Now().Add(-8 * 24 * time.Hour)
+	require.NoError(t, root.Chtimes(filepath.Join(rocketcodeRetainedDir("main"), resultID+".files.json"), old, old))
+
+	note, attachments = store.backgroundNoteInput(job)
+	require.Equal(t, `<execute id="turn-1/call/a" description="tests">`+"\nAttached file 1: chart.png\n\nThe files this result attached are no longer available: they expire 7 days after the job finishes.\n</execute>", note)
+	require.Empty(t, attachments)
+}
+
+func TestExecuteAnswerMatchesItsBackgroundNote(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ name, code string }{
+		{"success with a file", "def main():\n    return [bash(command=\"echo ok\"), read(filePath=\"chart.png\")]\n"},
+		{"returned error", "def main():\n    return read(filePath=\"missing.txt\")\n"},
+		{"returned failed bash_result", "def main():\n    return bash(command=\"echo out; exit 3\")\n"},
+		{"crash", "def main():\n    fail(\"boom\")\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			foreground, background := executeAnswer(t, tc.code, false), executeAnswer(t, tc.code, true)
+			require.NotEmpty(t, foreground[0])
+			require.Equal(t, foreground, background, "the note carries exactly the call's answer")
+		})
+	}
+}
+
+func executeAnswer(t *testing.T, code string, background bool) []string {
+	t.Helper()
+
+	nt := newNoteTest(t, func(w http.ResponseWriter, _ *http.Request, _ int, body string) {
+		if strings.Contains(body, "function_call_output") {
+			_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
+			return
+		}
+
+		writeRawRunFunctionCall(t, w, "act", "execute", map[string]any{"code": code, "description": "tests", "background": background})
+	})
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n  read: allow\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
+	require.NoError(t, os.WriteFile(filepath.Join(nt.cfg.Workspace, "chart.png"), []byte("\x89PNG\r\n\x1a\nchart"), 0o600))
+	manager, _ := nt.run(t, ignoreOutbound)
+	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("go")))
+
+	type part struct {
+		Text     string `json:"text"`
+		ImageURL string `json:"image_url"`
+	}
+
+	type item struct {
+		Type    string          `json:"type"`
+		Content json.RawMessage `json:"content"`
+		Output  json.RawMessage `json:"output"`
+	}
+
+	answer := func(raw json.RawMessage) []string {
+		var text string
+		if json.Unmarshal(raw, &text) == nil {
+			return []string{text}
+		}
+
+		var parts []part
+		require.NoError(t, json.Unmarshal(raw, &parts))
+
+		answer := make([]string, len(parts))
+		for i, p := range parts {
+			answer[i] = cmp.Or(p.Text, p.ImageURL)
+		}
+
+		return answer
+	}
+
+	for {
+		var request struct{ Input []item }
+		require.NoError(t, json.Unmarshal([]byte(nt.request(t)), &request))
+
+		for _, input := range slices.Backward(request.Input) {
+			if !background && input.Type == "function_call_output" {
+				return answer(input.Output)
+			}
+
+			if !background || input.Type != "message" {
+				continue
+			}
+
+			if content := answer(input.Content); strings.Contains(content[0], "<execute id=") {
+				_, note, _ := strings.Cut(content[0], `description="tests">`+"\n")
+				content[0], _, _ = strings.Cut(note, "\n</execute>")
+
+				return content
+			}
+		}
+	}
+}
+
 func refuseBackgroundFinish(t *testing.T, store *SessionService, refusals int) {
 	t.Helper()
 
@@ -635,7 +821,7 @@ func TestBackgroundJobFinishRetriesUntilSaved(t *testing.T) {
 	refuseBackgroundFinish(t, store, 3)
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
-	done := &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (string, error) { return "done", nil }, DetachFunc: func() bool { return true }}
+	done := &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (harness.ToolResult, error) { return harness.TextToolResult("done"), nil }, DetachFunc: func() bool { return true }}
 
 	_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/f", Kind: harness.BackgroundKindExecute, Detached: true}, done)
 	require.NoError(t, err)
@@ -661,7 +847,7 @@ func TestShutdownStopsBackgroundFinishRetries(t *testing.T) {
 	refuseBackgroundFinish(t, store, 1_000_000)
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
-	done := &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (string, error) { return "done", nil }, DetachFunc: func() bool { return true }}
+	done := &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (harness.ToolResult, error) { return harness.TextToolResult("done"), nil }, DetachFunc: func() bool { return true }}
 
 	_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/f", Kind: harness.BackgroundKindExecute, Detached: true}, done)
 	require.NoError(t, err)
@@ -692,7 +878,7 @@ func TestShutdownKeepsAResultThatReturnedAsItStopped(t *testing.T) {
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
 	stopped := make(chan struct{})
-	returned := &backgroundWorkMock{RunBackgroundFunc: func(ctx context.Context) (string, error) {
+	returned := &backgroundWorkMock{RunBackgroundFunc: func(ctx context.Context) (harness.ToolResult, error) {
 		go func() {
 			registry.shutdown()
 			close(stopped)
@@ -700,12 +886,12 @@ func TestShutdownKeepsAResultThatReturnedAsItStopped(t *testing.T) {
 
 		<-ctx.Done()
 
-		return "done", nil
+		return harness.TextToolResult("done"), nil
 	}, DetachFunc: func() bool { return true }}
-	cancelled := &backgroundWorkMock{RunBackgroundFunc: func(ctx context.Context) (string, error) {
+	cancelled := &backgroundWorkMock{RunBackgroundFunc: func(ctx context.Context) (harness.ToolResult, error) {
 		<-ctx.Done()
 
-		return "", context.Cause(ctx)
+		return harness.ToolResult{}, context.Cause(ctx)
 	}, DetachFunc: func() bool { return true }}
 
 	_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/c", Kind: harness.BackgroundKindExecute, Detached: true}, cancelled)

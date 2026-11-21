@@ -32,7 +32,6 @@ const (
 	fileBytes       = 256 << 20
 	tmpBytes        = 256 << 20
 	scriptBytes     = 8 << 20
-	hostInputBytes  = 16 << 20
 	hostInvocations = 128
 	hostConcurrency = 16
 	guestNoFile     = 1024
@@ -324,6 +323,21 @@ func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *ex
 			CgroupFD:    cg.fd,
 			Pdeathsig:   syscall.SIGKILL,
 		},
+	}
+
+	if cmd.Stdin != "" {
+		stdin, err := c.StdinPipe()
+		if err != nil {
+			_ = readyW.Close()
+			_ = outW.Close()
+
+			return Result{}, fmt.Errorf("stdin pipe: %w", err)
+		}
+
+		go func() {
+			_, _ = io.WriteString(stdin, cmd.Stdin)
+			_ = stdin.Close()
+		}()
 	}
 
 	errStart := c.Start()

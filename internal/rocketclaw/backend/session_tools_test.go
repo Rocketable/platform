@@ -105,7 +105,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 				if requests < len(calls) {
 					writeRawRunFunctionCall(t, w, fmt.Sprintf("tag-%d", requests), "execute", struct {
 						Code string `json:"code"`
-					}{"def main():\n    return " + calls[requests] + "\n"})
+					}{"def main():\n    return " + calls[requests] + ".unwrap()\n"})
 				} else {
 					writeRawRunMessage(t, w, "done", "message", "done")
 				}
@@ -1594,7 +1594,7 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 	wakes, err := queryStrings(t.Context(), nt.service.db, `SELECT j.input_id`+testJobsSQL+` AND j.conversation_id = $1`, "helper wakes", nt.conversationID)
 	require.NoError(t, err)
 	require.Len(t, wakes, 1)
-	assert.Equal(t, systemPromptHeader()+"\n\n"+`<subagent id="`+wakes[0]+`" state="completed" description="researcher" continue="`+strings.TrimPrefix(helpers[0], nt.conversationID)+`">`+
+	assert.Equal(t, systemPromptHeader()+"\n\n"+`<subagent id="`+wakes[0]+`" description="researcher" continue="`+strings.TrimPrefix(helpers[0], nt.conversationID)+`">`+
 		"\n<task_result>\nbilling noted\n</task_result>\n</subagent>", report)
 
 	entries, err := nt.service.ObserveEntries(t.Context(), nt.conversationID)

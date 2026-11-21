@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,8 @@ import (
 	openai "github.com/openai/openai-go/v3"
 	"go.opentelemetry.io/otel/attribute"
 	otelsemconv "go.opentelemetry.io/otel/semconv/v1.37.0"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 )
 
 type DecisionQuestionType string
@@ -108,7 +111,7 @@ func decide(ctx context.Context, observability ObservabilityConfig, deciders map
 	return answers, usage, nil
 }
 
-const decisionToolSummary = "Ask a decision model typed questions about state and get answers with probabilities."
+const decisionToolSummary = "Ask a decision model typed questions on a state dict; search first for the format."
 
 func decisionToolDescription(models []string) string {
 	summary := decisionToolSummary
@@ -118,8 +121,9 @@ func decisionToolDescription(models []string) string {
 
 	return strings.Join([]string{
 		summary,
+		"state is a dict (not a string) of the data the questions are about.",
 		"questions maps each name to {type, instructions, criteria}: a choice's criteria map each label to when it applies; a score's criteria list its levels, lowest first; a bool's criteria are {\"true\": ..., \"false\": ...}.",
-		"images, which may be empty, lists workspace image files judged with the state; reading them needs read permission.",
+		"images, which may be empty, lists workspace image paths or image file objects judged with the state; reading a path needs read permission.",
 		"Returns {model, answers, usage, stop_reason, error_message}, with answers by question name: a choice {choice, probabilities, confidence}, a score {score, confidence}, where score is the expected level index, and a bool {probability}, that it is true. usage is {input_tokens, output_tokens}.",
 		"Confidence runs from 0 to 1; act on an answer only when it is high enough for what depends on it.",
 		"A provider error, a refused question or 30 seconds without an answer returns stop_reason \"error\" and error_message instead of failing the script.",
@@ -226,21 +230,39 @@ func decisionToolAnswers(questions []DecisionQuestion, answers []DecisionAnswer)
 	return out, nil
 }
 
-func decisionImages(ctx context.Context, paths []string) ([]DecisionImage, error) {
-	if len(paths) == 0 {
-		return nil, nil
-	}
+func decisionImages(ctx context.Context, items []json.RawMessage) ([]DecisionImage, error) {
+	var images []DecisionImage
 
-	tc, _ := toolCallContextFrom(ctx)
+	for _, item := range items {
+		var path string
+		if json.Unmarshal(item, &path) != nil {
+			var descriptor struct {
+				SHA256 string `json:"sha256"`
+			}
 
-	read, ok := tc.looper.CodeModeHosts["read"]
-	if !ok {
-		return nil, errors.New("images: reading files needs read permission")
-	}
+			_ = json.Unmarshal(item, &descriptor)
 
-	images := make([]DecisionImage, 0, len(paths))
+			file, ok := codemode.ArgFile(ctx, descriptor.SHA256)
+			if !ok {
+				return nil, fmt.Errorf("image %s: pass a path or a file object", item)
+			}
 
-	for _, path := range paths {
+			if !strings.HasPrefix(file.Mime(), "image/") {
+				return nil, fmt.Errorf("image %q: not an image (%s)", file.Name(), file.Mime())
+			}
+
+			images = append(images, DecisionImage{MIME: file.Mime(), Base64: base64.StdEncoding.EncodeToString([]byte(file.Content()))})
+
+			continue
+		}
+
+		tc, _ := toolCallContextFrom(ctx)
+
+		read, ok := tc.looper.CodeModeHosts["read"]
+		if !ok {
+			return nil, errors.New("images: reading files needs read permission")
+		}
+
 		raw, _ := json.Marshal(struct {
 			FilePath string `json:"filePath"`
 		}{path})
@@ -254,12 +276,12 @@ func decisionImages(ctx context.Context, paths []string) ([]DecisionImage, error
 			return nil, fmt.Errorf("image %q: %w", path, err)
 		}
 
-		if len(result.Attachments) == 0 || !strings.HasPrefix(result.Attachments[0].MIME, "image/") {
+		file, ok := result.Data.(*codemode.File)
+		if !ok || !strings.HasPrefix(file.Mime(), "image/") {
 			return nil, fmt.Errorf("image %q: %s", path, cmp.Or(result.Output, "not an image"))
 		}
 
-		mime, data, _ := strings.Cut(strings.TrimPrefix(result.Attachments[0].URL, "data:"), ";base64,")
-		images = append(images, DecisionImage{MIME: mime, Base64: data})
+		images = append(images, DecisionImage{MIME: file.Mime(), Base64: base64.StdEncoding.EncodeToString([]byte(file.Content()))})
 	}
 
 	return images, nil
@@ -269,7 +291,7 @@ func decisionTool(deciders map[string]Decider, observability ObservabilityConfig
 	type params struct {
 		Model     string                          `json:"model"`
 		State     map[string]any                  `json:"state"`
-		Images    []string                        `json:"images"`
+		Images    []json.RawMessage               `json:"images"`
 		Questions map[string]decisionToolQuestion `json:"questions"`
 	}
 
@@ -277,7 +299,7 @@ func decisionTool(deciders map[string]Decider, observability ObservabilityConfig
 		Definition: *functionTool("decision", decisionToolDescription(nil), map[string]any{
 			"model":  map[string]any{"type": "string", "description": "provider/model, such as typesafe/jev-latest."},
 			"state":  map[string]any{"type": "object", "description": "The data every question is about."},
-			"images": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Workspace image files judged with the state."},
+			"images": map[string]any{"type": "array", "items": map[string]any{"type": []string{"string", "object"}}, "description": "Workspace image paths or image file objects judged with the state."},
 			"questions": map[string]any{"type": "object", "description": "Questions by name; one call answers all of them.", "additionalProperties": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

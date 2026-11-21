@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"golang.org/x/sync/errgroup"
@@ -22,17 +23,11 @@ import (
 
 var errBackgroundAbandoned = fmt.Errorf("background job abandoned: %w", harness.ErrBackgroundKilled)
 
-type backgroundStopError string
-
 const (
-	errStoppedByUser    backgroundStopError = "stopped by user"
-	errStoppedByAgent   backgroundStopError = "stopped by agent"
-	errStoppedWithOwner backgroundStopError = "stopped with its subagent"
+	errStoppedByUser    harness.BackgroundStopError = "stopped by user"
+	errStoppedByAgent   harness.BackgroundStopError = "stopped by agent"
+	errStoppedWithOwner harness.BackgroundStopError = "stopped with its subagent"
 )
-
-func (e backgroundStopError) Error() string { return string(e) }
-
-func (backgroundStopError) Unwrap() error { return harness.ErrBackgroundKilled }
 
 var errMovedToBackground = errors.New("the user moved the work to the background")
 
@@ -64,7 +59,7 @@ func backgroundNote(job *backgroundJob) string {
 		switch {
 		case job.status == backgroundRemoved:
 			body = fmt.Sprintf("A person removed your write from session %s's queue before it ran, so no answer will come.", job.target)
-		case job.status == backgroundStopped && slices.Contains([]backgroundStopError{errStoppedByUser, errStoppedByAgent}, backgroundStopError(job.result)):
+		case job.status == backgroundStopped && slices.Contains([]harness.BackgroundStopError{errStoppedByUser, errStoppedByAgent}, harness.BackgroundStopError(job.result)):
 			body = fmt.Sprintf("This reply was %s, so session %s's answer to your write will not come here; your write may still run there. %s", job.result, job.target, hint)
 		case job.runnerID != "":
 			body = fmt.Sprintf("Session %s's turn that your stop interrupted is over (state %s). %s", job.target, job.status, hint)
@@ -87,17 +82,45 @@ func backgroundNote(job *backgroundJob) string {
 
 	switch job.status {
 	case backgroundStopped:
-		body = "The job was " + job.result + ". Do not run it again unless asked."
+		body = harness.ToolCallResult(string(job.kind.tool()), harness.ToolResult{}, harness.BackgroundStopError(job.result)).Output
 	case backgroundKilled:
-		body = "The job was killed because the server restarted."
+		body = harness.ToolCallResult(string(job.kind.tool()), harness.ToolResult{}, harness.ErrBackgroundKilled).Output
 	case backgroundRunning, backgroundCompleted, backgroundFailed, backgroundRemoved:
 	}
 
 	if job.kind == turnScript {
-		return fmt.Sprintf("<execute id=%q state=%q description=%q>\n%s\n</execute>", job.jobID, job.status, job.label, body)
+		return fmt.Sprintf("<execute id=%q description=%q>\n%s\n</execute>", job.jobID, job.label, body)
 	}
 
-	return fmt.Sprintf("<subagent id=%q state=%q description=%q continue=%q>\n%s\n</subagent>", job.jobID, job.status, job.label, job.subagentKey, body)
+	return fmt.Sprintf("<subagent id=%q description=%q continue=%q>\n%s\n</subagent>", job.jobID, job.label, job.subagentKey, body)
+}
+
+func (s *SessionService) backgroundNoteInput(job *backgroundJob) (string, []protocol.InboundAttachment) {
+	if job.resultID == "" || job.status != backgroundCompleted {
+		return backgroundNote(job), nil
+	}
+
+	root, err := s.openSpill()
+
+	var files []*codemode.File
+	if root != nil {
+		files, err = harness.LoadRetainedFiles(root, rocketcodeRetainedDir(job.conversationID), job.resultID)
+		err = errors.Join(err, root.Close())
+	}
+
+	if root == nil || err != nil {
+		expired := *job
+		expired.result += "\n\nThe files this result attached are no longer available: they expire 7 days after the job finishes."
+
+		return backgroundNote(&expired), nil
+	}
+
+	attachments := make([]protocol.InboundAttachment, len(files))
+	for i, file := range files {
+		attachments[i] = protocol.InboundAttachment{Name: file.Name(), MIMEType: file.Mime(), Data: []byte(file.Content())}
+	}
+
+	return backgroundNote(job), attachments
 }
 
 func systemPromptInput(id, text string) harness.PromptInput {
@@ -127,7 +150,7 @@ type backgroundRun struct {
 	recorded, done chan struct{}
 
 	attached bool
-	output   string
+	result   harness.ToolResult
 	err      error
 }
 
@@ -263,7 +286,7 @@ func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, wor
 		return harness.BackgroundResult{Moved: true}, nil
 	}
 
-	if stop, ok := errors.AsType[backgroundStopError](context.Cause(workCtx)); ok && run.err != nil {
+	if stop, ok := errors.AsType[harness.BackgroundStopError](context.Cause(workCtx)); ok && run.err != nil {
 		return harness.BackgroundResult{}, stop
 	}
 
@@ -271,18 +294,18 @@ func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, wor
 		return harness.BackgroundResult{}, fmt.Errorf("run background work: %w", run.err)
 	}
 
-	return harness.BackgroundResult{Output: run.output}, nil
+	return harness.BackgroundResult{Result: run.result}, nil
 }
 
 func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *backgroundRun, work harness.BackgroundWork) {
 	defer close(run.done)
 
-	output, errWork := work.RunBackground(ctx)
+	result, errWork := work.RunBackground(ctx)
 
 	r.mu.Lock()
 	delete(r.runs, key)
 
-	run.output, run.err = output, errWork
+	run.result, run.err = result, errWork
 	attached := run.attached
 	flipped := attached && !r.attachedLocked(key.conversationID)
 	r.mu.Unlock()
@@ -298,10 +321,16 @@ func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *b
 
 	<-run.recorded
 
-	stop, stopped := errors.AsType[backgroundStopError](cause)
+	stop, stopped := errors.AsType[harness.BackgroundStopError](cause)
+
+	result = harness.ToolCallResult(string(run.row.kind.tool()), result, errWork)
 
 	end := *run.row
-	end.status, end.noteState, end.wake, end.result = backgroundCompleted, notePending, true, output
+	end.status, end.noteState, end.wake, end.result = backgroundCompleted, notePending, true, result.Output
+
+	if files, ok := result.Data.(harness.RetainedFiles); ok {
+		end.resultID = files.ResultID
+	}
 
 	switch {
 	case stop == errStoppedWithOwner:
@@ -309,7 +338,7 @@ func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *b
 	case stopped:
 		end.status, end.result = backgroundStopped, stop.Error()
 	case errWork != nil:
-		end.status, end.result = backgroundFailed, errWork.Error()
+		end.status = backgroundFailed
 	}
 
 	finished, err := r.store.finishBackgroundJob(context.WithoutCancel(ctx), &end)
@@ -411,8 +440,10 @@ type subagentTurn struct {
 	job   *backgroundJob
 }
 
-func (w subagentTurn) RunBackground(ctx context.Context) (string, error) {
-	return w.notes.continueSubagent(ctx, w.job)
+func (w subagentTurn) RunBackground(ctx context.Context) (harness.ToolResult, error) {
+	answer, err := w.notes.continueSubagent(ctx, w.job)
+
+	return harness.TextToolResult(answer), err
 }
 
 func (subagentTurn) Detach() bool { return true }
@@ -469,7 +500,7 @@ func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, 
 		case <-finished:
 		case <-ctx.Done():
 			cause := context.Cause(ctx)
-			_, jobStopped := errors.AsType[backgroundStopError](cause)
+			_, jobStopped := errors.AsType[harness.BackgroundStopError](cause)
 			stopped := !errors.Is(cause, harness.ErrShutdown) && !errors.Is(cause, errBackgroundAbandoned)
 
 			if stopped && !jobStopped {
@@ -590,7 +621,7 @@ func (r *backgroundRegistry) movableChanged(ctx context.Context, conversationID 
 	}
 }
 
-func (r *backgroundRegistry) stop(ctx context.Context, conversationID, jobID string, reason backgroundStopError) (bool, error) {
+func (r *backgroundRegistry) stop(ctx context.Context, conversationID, jobID string, reason harness.BackgroundStopError) (bool, error) {
 	jobs, err := r.store.backgroundJobs(ctx, conversationID)
 	if err != nil {
 		return false, err

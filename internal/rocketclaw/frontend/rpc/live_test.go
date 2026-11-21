@@ -1,14 +1,20 @@
 package rpc
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"iter"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -277,6 +283,153 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 
 	for _, check := range checks {
 		check()
+	}
+}
+
+func TestHistoryShowsFilesAnExecuteResultOrNoteCarried(t *testing.T) {
+	h := startVoiceHarness(t)
+	cfg := h.server.cfg.Clone()
+	root, err := os.OpenRoot(cfg.Workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.WriteFile(cfg.RuntimeDirName()+"/agents/files.md", []byte("---\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  rocketclaw: {allow_background: allow}\n---\nReply plainly.\n"), 0o600))
+	require.NoError(t, h.rt.CreateConversation(t.Context(), protocol.Conversation{ID: "files", Agent: "files", CreatedBy: "alice"}))
+
+	var encoded [2]bytes.Buffer
+
+	picture := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	require.NoError(t, png.Encode(&encoded[0], picture))
+	require.NoError(t, jpeg.Encode(&encoded[1], picture, nil))
+
+	files := map[string][]byte{"red42.png": encoded[0].Bytes(), "sideways.jpg": encoded[1].Bytes(), "otter.pdf": []byte("%PDF-1.4 otter")}
+	for name, data := range files {
+		require.NoError(t, root.WriteFile(name, data, 0o600))
+	}
+
+	code := "def main():\n    return {\"img\": read(filePath=\"red42.png\"), \"photo\": read(filePath=\"sideways.jpg\"), \"doc\": read(filePath=\"otter.pdf\")}\n"
+	arguments, err := json.Marshal(map[string]any{"code": code, "description": "files", "background": true})
+	require.NoError(t, err)
+	quoted, err := json.Marshal(string(arguments))
+	require.NoError(t, err)
+
+	var turn errgroup.Group
+
+	turn.Go(func() error {
+		_, err := h.server.prompt(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")), &PromptRequest{Id: "files", Text: "show the files"})
+		return err
+	})
+	assert.Contains(t, <-h.requests, "show the files")
+
+	h.replies <- voiceModelCode("r1", code)
+
+	answer := <-h.requests
+	assert.Contains(t, answer, `"type":"input_image"`)
+
+	h.replies <- voiceModel("r2", `{"id":"fc_r2","type":"function_call","status":"completed","call_id":"call_r2","name":"execute","arguments":`+string(quoted)+`}`)
+
+	assert.Contains(t, <-h.requests, "call_r2")
+
+	h.replies <- voiceModelText("r3", "Started.")
+
+	require.NoError(t, turn.Wait())
+
+	note := <-h.requests
+	assert.Contains(t, note, `<execute id=`)
+
+	h.replies <- voiceModelText("r4", "Got them.")
+
+	for _, request := range []string{answer, note} {
+		assert.NotContains(t, request, `"filename":"red42.png"`, "the model gets no image name")
+		assert.NotContains(t, request, `"filename":"sideways.jpg"`, "the model gets no image name")
+	}
+
+	alice := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
+
+	var view *HistoryResponse
+
+	require.Eventually(t, func() bool {
+		view, err = h.server.history(alice, &HistoryRequest{Id: "files"})
+		return err == nil && view.Messages[len(view.Messages)-1].Text == "Got them."
+	}, 20*time.Second, 10*time.Millisecond)
+
+	for range 2 {
+		view, err = h.server.history(alice, &HistoryRequest{Id: "files"})
+		require.NoError(t, err)
+
+		shown := map[string][]string{}
+
+		for _, message := range view.Messages {
+			for _, attachment := range message.Attachments {
+				response, err := http.Get(h.url + "/api/DownloadAttachment?conversationId=files&id=" + attachment.Id)
+				require.NoError(t, err)
+				data, err := io.ReadAll(response.Body)
+				require.NoError(t, err)
+				require.NoError(t, response.Body.Close())
+				_, disposition, err := mime.ParseMediaType(response.Header.Get("Content-Disposition"))
+				require.NoError(t, err)
+				require.Equal(t, files[attachment.Name], data, attachment.Name)
+
+				shown[message.Role] = append(shown[message.Role], attachment.Name+" "+attachment.MimeType+" "+disposition["filename"])
+			}
+		}
+
+		named := []string{"otter.pdf application/pdf otter.pdf", "red42.png image/png red42.png", "sideways.jpg image/jpeg sideways.jpg"}
+		require.Equal(t, map[string][]string{"tool": named, "user": named}, shown, "every returned file keeps its name in History and downloads, in the answer and in the note")
+	}
+}
+
+func TestHistoryNamesUnnamedImagesOfOlderRows(t *testing.T) {
+	t.Parallel()
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	seeded := openTestTurns(t, dsn)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+
+	picture, pdf := []byte("\x89PNG\r\n\x1a\nimage"), []byte("%PDF-1.4 otter")
+	imageURL, pdfURL := "data:image/png;base64,"+base64.StdEncoding.EncodeToString(picture), "data:application/pdf;base64,"+base64.StdEncoding.EncodeToString(pdf)
+	output, err := json.Marshal([]map[string]string{{"type": "input_text", "text": `{"doc":{"attachment":2},"img":{"attachment":1}}`}, {"type": "input_image", "image_url": imageURL, "detail": "auto"}, {"type": "input_file", "filename": "otter.pdf", "file_data": pdfURL}})
+	require.NoError(t, err)
+	note, err := json.Marshal([]map[string]string{{"type": "input_text", "text": "[System]\n\n<execute id=\"job-1\" description=\"files\">\nAttached file 1: red.png\n</execute>"}, {"type": "input_image", "image_url": imageURL, "detail": "auto"}})
+	require.NoError(t, err)
+
+	checkpoint := &testCheckpoint{TurnID: "turn-1", ConversationKey: "chat", Agent: "main", Model: "model", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","input_id":"input-1","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\nshow the files"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"call-1","name":"execute","arguments":"{\"code\":\"main()\"}"}`),
+		json.RawMessage(`{"type":"function_call_output","call_id":"call-1","output":` + string(output) + `}`),
+		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[System]","content":` + string(note) + `}`),
+	}}
+	require.NoError(t, seeded.UpsertActiveTurn(t.Context(), checkpoint))
+
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
+	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
+
+	for range 2 {
+		view, err := server.history(ctx, &HistoryRequest{Id: "chat"})
+		require.NoError(t, err)
+		require.Len(t, view.Messages, 4)
+		require.JSONEq(t, `{"doc":{"attachment":2},"img":{"attachment":1}}`, view.Messages[2].Text)
+
+		shown := map[string][]string{}
+
+		for _, message := range []*TranscriptEvent{view.Messages[2], view.Messages[3]} {
+			for _, attachment := range message.Attachments {
+				stored, err := sessions.LoadAttachment(t.Context(), "chat", attachment.Id, false)
+				require.NoError(t, err)
+
+				shown[message.Role] = append(shown[message.Role], attachment.Name+" "+attachment.MimeType+" "+string(stored.Data))
+			}
+		}
+
+		require.Equal(t, map[string][]string{
+			"tool": {"attachment-1.png image/png " + string(picture), "otter.pdf application/pdf " + string(pdf)},
+			"user": {"attachment-1.png image/png " + string(picture)},
+		}, shown, "an image stored without its name is named by its place, every time History is read")
+		require.Equal(t, view.Messages[2].Attachments[0].Id, view.Messages[3].Attachments[0].Id, "the same file is stored once")
 	}
 }
 

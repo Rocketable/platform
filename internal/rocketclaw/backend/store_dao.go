@@ -1973,11 +1973,12 @@ type backgroundJob struct {
 	createdAt             time.Time
 	finishedAt            time.Time
 	result                string
+	resultID              string
 	input                 string
 	target                string
 }
 
-const backgroundJobColumns = `j.conversation_id, j.input_id, j.kind, CASE WHEN j.phase = 'running' THEN 'running' WHEN j.terminal = '' THEN 'completed' ELSE j.terminal END, j.agent, j.label, j.call_id, j.subagent_key, j.inbound_json, COALESCE(c.reports_to, ''), j.runner_id, j.note, j.wake, j.run_at_unix_ns, j.claimed_by, j.created_at_unix_ns, CASE WHEN j.phase = 'running' THEN 0 ELSE j.updated_at_unix_ns END, j.result, j.message, COALESCE(j.reply_target, '')`
+const backgroundJobColumns = `j.conversation_id, j.input_id, j.kind, CASE WHEN j.phase = 'running' THEN 'running' WHEN j.terminal = '' THEN 'completed' ELSE j.terminal END, j.agent, j.label, j.call_id, j.subagent_key, j.inbound_json, COALESCE(c.reports_to, ''), j.runner_id, j.note, j.wake, j.run_at_unix_ns, j.claimed_by, j.created_at_unix_ns, CASE WHEN j.phase = 'running' THEN 0 ELSE j.updated_at_unix_ns END, j.result, COALESCE(j.result_id, ''), j.message, COALESCE(j.reply_target, '')`
 
 func scanBackgroundJob(scanner rowScanner) (backgroundJob, error) {
 	var (
@@ -1987,7 +1988,7 @@ func scanBackgroundJob(scanner rowScanner) (backgroundJob, error) {
 		wakeAfter, createdAt, finishedAt int64
 	)
 
-	if err := scanner.Scan(&job.conversationID, &job.jobID, &job.kind, &job.status, &job.agent, &job.label, &job.callID, &job.subagentKey, &origin, &reportsTo, &job.runnerID, &job.noteState, &job.wake, &wakeAfter, &job.claimedTurnID, &createdAt, &finishedAt, &job.result, &job.input, &job.target); err != nil {
+	if err := scanner.Scan(&job.conversationID, &job.jobID, &job.kind, &job.status, &job.agent, &job.label, &job.callID, &job.subagentKey, &origin, &reportsTo, &job.runnerID, &job.noteState, &job.wake, &wakeAfter, &job.claimedTurnID, &createdAt, &finishedAt, &job.result, &job.resultID, &job.input, &job.target); err != nil {
 		return backgroundJob{}, fmt.Errorf("scan background job: %w", err)
 	}
 
@@ -2029,8 +2030,8 @@ func (s *SessionService) finishBackgroundJob(ctx context.Context, job *backgroun
 		return false, err
 	}
 
-	finished, err := execRows(ctx, tx, "finish background job", `UPDATE turns SET phase = 'done', terminal = CASE WHEN $4 = $9 THEN '' ELSE $4 END, note = $5, wake = $6, result = $7, updated_at_unix_ns = $8
-WHERE conversation_id = $1 AND input_id = $2 AND NOT takes_lane AND runner_id = $3 AND phase = 'running'`, job.conversationID, job.jobID, job.runnerID, job.status, job.noteState, job.wake, strings.ReplaceAll(job.result, "\x00", ""), timeUnixNano(time.Now()), backgroundCompleted)
+	finished, err := execRows(ctx, tx, "finish background job", `UPDATE turns SET phase = 'done', terminal = CASE WHEN $4 = $9 THEN '' ELSE $4 END, note = $5, wake = $6, result = $7, updated_at_unix_ns = $8, result_id = NULLIF($10, '')
+WHERE conversation_id = $1 AND input_id = $2 AND NOT takes_lane AND runner_id = $3 AND phase = 'running'`, job.conversationID, job.jobID, job.runnerID, job.status, job.noteState, job.wake, strings.ReplaceAll(job.result, "\x00", ""), timeUnixNano(time.Now()), backgroundCompleted, job.resultID)
 	if err != nil || finished == 0 {
 		return false, err
 	}

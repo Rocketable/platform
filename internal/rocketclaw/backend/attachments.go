@@ -2,9 +2,11 @@ package backend
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -274,28 +276,38 @@ func (s *SessionService) RevertAttachmentMetadata(ctx context.Context, conversat
 
 func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID string, root *os.Root, raw json.RawMessage, calls map[[2]string]string) ([]protocol.OutboundAttachment, error) {
 	var item struct {
-		Type, Name, Arguments, Output string
-		CallID                        string `json:"call_id"`
+		Type, Name, Arguments string
+		Output, Content       json.RawMessage
+		Header                string `json:"prompt_header"`
+		CallID                string `json:"call_id"`
 	}
 	if err := json.Unmarshal(raw, &item); err != nil {
 		return nil, fmt.Errorf("decode attachment replay: %w", err)
 	}
 
-	if item.Type == "function_call" && item.Name == attachFilesToolName {
+	switch {
+	case item.Type == "function_call_output" && bytes.HasPrefix(item.Output, []byte("[")):
+		return s.replayedPartAttachments(ctx, conversationID, item.Output)
+	case (item.Header == "[System]" || strings.HasPrefix(item.Header, "[System ")) && bytes.HasPrefix(item.Content, []byte("[")):
+		return s.replayedPartAttachments(ctx, conversationID, item.Content)
+	case item.Type == "function_call" && item.Name == attachFilesToolName:
 		calls[[2]string{conversationID, item.CallID}] = item.Arguments
 	}
 
+	var output string
+
+	_ = json.Unmarshal(item.Output, &output)
 	arguments, called := calls[[2]string{conversationID, item.CallID}]
 
 	const success = "queued attachments for final response"
-	if !called || item.Type != "function_call_output" || (item.Output != success && !strings.HasPrefix(item.Output, success+": ")) {
+	if !called || item.Type != "function_call_output" || (output != success && !strings.HasPrefix(output, success+": ")) {
 		return nil, nil
 	}
 
 	var attachments []protocol.OutboundAttachment
 
-	if item.Output != success {
-		for id := range strings.FieldsSeq(strings.TrimPrefix(item.Output, success+": ")) {
+	if output != success {
+		for id := range strings.FieldsSeq(strings.TrimPrefix(output, success+": ")) {
 			attachment, err := s.AttachmentMetadata(ctx, conversationID, id, false)
 			if err != nil {
 				return nil, err
@@ -324,6 +336,56 @@ func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID s
 
 			attachment.ID, attachment.OriginalUnverified = id, true
 			if err := s.SaveAttachment(ctx, conversationID, "", &attachment, false); err != nil {
+				return nil, err
+			}
+
+			attachment, err = s.AttachmentMetadata(ctx, conversationID, id, false)
+		}
+
+		if err != nil {
+			return nil, err
+		}
+
+		attachments = append(attachments, attachment)
+	}
+
+	return attachments, nil
+}
+
+func (s *SessionService) replayedPartAttachments(ctx context.Context, conversationID string, content json.RawMessage) ([]protocol.OutboundAttachment, error) {
+	var parts []struct {
+		Type     string `json:"type"`
+		ImageURL string `json:"image_url"`
+		FileData string `json:"file_data"`
+		Filename string `json:"filename"`
+	}
+	if err := json.Unmarshal(content, &parts); err != nil {
+		return nil, fmt.Errorf("decode replayed attachments: %w", err)
+	}
+
+	var attachments []protocol.OutboundAttachment
+
+	for _, part := range parts {
+		url := cmp.Or(part.ImageURL, part.FileData)
+
+		mimeType, encoded, inline := strings.Cut(strings.TrimPrefix(url, "data:"), ";base64,")
+		if part.Type != "input_image" && part.Type != "input_file" || !inline {
+			continue
+		}
+
+		id := fmt.Sprintf("replayed-%x", sha256.Sum256([]byte(conversationID+"\x00"+url)))
+
+		attachment, err := s.AttachmentMetadata(ctx, conversationID, id, false)
+		if errors.Is(err, sql.ErrNoRows) {
+			data, errDecode := base64.StdEncoding.DecodeString(encoded)
+			if errDecode != nil {
+				continue
+			}
+
+			_, extension, _ := strings.Cut(mimeType, "/")
+			name := cmp.Or(part.Filename, fmt.Sprintf("attachment-%d.%s", len(attachments)+1, extension))
+
+			if err := s.SaveAttachment(ctx, conversationID, "", &protocol.OutboundAttachment{ID: id, Name: name, MIMEType: mimeType, Data: data}, false); err != nil {
 				return nil, err
 			}
 

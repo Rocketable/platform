@@ -187,6 +187,8 @@ func (inertPermissionReviewer) reviewPermission(context.Context, *permissionRevi
 	return permissionReviewFailure("automatic permission reviewer is unavailable")
 }
 
+const recursiveReviewDenied = "tool call denied: automatic permission review cannot recursively require automatic approval. Choose a different action."
+
 type toolPermissionDecision struct {
 	denied  bool
 	message string
@@ -216,6 +218,7 @@ type permissionReviewRequest struct {
 	AutoSubjects      []permissionReviewSubject               `json:"auto_subjects"`
 	Reviewer          string                                  `json:"reviewer"`
 	ReviewerEmbedded  bool                                    `json:"reviewer_embedded"`
+	Redirect          *webFetchRedirectReview                 `json:"redirect,omitempty"`
 	ReviewContext     []responses.ResponseInputItemUnionParam `json:"-"`
 	Review            ChildKey                                `json:"-"`
 	Turn              string                                  `json:"-"`
@@ -1863,7 +1866,7 @@ func (l *looper) dispatchToolCalls(
 			}
 
 			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, "", toolCallMetadata{})
-			result := toolCallFailureResult(item.Name, errors.New("tool not found"))
+			result := ToolCallResult(item.Name, ToolResult{}, errors.New("tool not found"))
 			recordSpanError(span, errors.New("tool not found"))
 			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", true))
 			span.span.End()
@@ -1896,7 +1899,7 @@ func (l *looper) dispatchToolCalls(
 
 		if err != nil {
 			decision.denied = true
-			decision.message = toolCallFailureResult(item.Name, fmt.Errorf("check permission: %w", err)).Output
+			decision.message = ToolCallResult(item.Name, ToolResult{}, fmt.Errorf("check permission: %w", err)).Output
 			errDenied = err
 		} else if !decision.denied && decision.review != nil {
 			reviewDecision := l.reviewToolCall(ctx, item.Name, item.CallID, decision.review, reviewContext)
@@ -2008,15 +2011,11 @@ func (l *looper) dispatchToolCalls(
 			if err != nil {
 				recordSpanError(span, err)
 
-				if runCtx.Err() != nil {
-					return fmt.Errorf("run tool %q: %w", call.name, err)
+				var errStop error
+				if result, errStop = l.failedCallResult(runCtx, call.name, err); errStop != nil {
+					return errStop
 				}
 
-				if l.InPermissionReview {
-					return fmt.Errorf("run reviewer tool %q: %w", call.name, err)
-				}
-
-				result = toolCallFailureResult(call.name, err)
 				replayInput = nil
 			}
 
@@ -2110,7 +2109,35 @@ func (l *looper) recordCall(ctx context.Context, key string, output *responses.R
 	return saveStep(ctx, l.Journal, key, &callStep{Output: recorded, State: state})
 }
 
-func toolCallFailureResult(name string, err error) ToolResult {
+func (l *looper) failedCallResult(ctx context.Context, name string, err error) (ToolResult, error) {
+	if ctx.Err() != nil {
+		return ToolResult{}, fmt.Errorf("run tool %q: %w", name, err)
+	}
+
+	if failed, ok := errors.AsType[toolResultError](err); l.InPermissionReview && (!ok || failed.err != nil) {
+		return ToolResult{}, fmt.Errorf("run reviewer tool %q: %w", name, err)
+	}
+
+	return ToolCallResult(name, ToolResult{}, err), nil
+}
+
+func ToolCallResult(name string, result ToolResult, err error) ToolResult {
+	if err == nil {
+		return result
+	}
+
+	if failed, ok := errors.AsType[toolResultError](err); ok {
+		return failed.result
+	}
+
+	if stop, ok := errors.AsType[BackgroundStopError](err); ok {
+		return TextToolResult("The job was " + string(stop) + ". Do not run it again unless asked.")
+	}
+
+	if errors.Is(err, ErrBackgroundKilled) {
+		return TextToolResult(genericAbortedToolOutputText)
+	}
+
 	return TextToolResult(fmt.Sprintf("tool call failed: %s: %v. Choose a different action.", name, err))
 }
 
@@ -2213,7 +2240,7 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 		}
 
 		if l.InPermissionReview {
-			return toolPermissionDecision{denied: true, message: "tool call denied: automatic permission review cannot recursively require automatic approval. Choose a different action."}, nil
+			return toolPermissionDecision{denied: true, message: recursiveReviewDenied}, nil
 		}
 
 		if len(autoSubjects) == 0 {

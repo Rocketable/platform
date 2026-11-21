@@ -13,6 +13,8 @@ import (
 	"sync"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 )
 
 type PublicProgressKind string
@@ -182,7 +184,7 @@ func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
 	r.command = ""
 
 	r.Status = codeModeCallOK
-	if bash, ok := result.Data.(BashResult); ok && bash.ErrorCode != "" {
+	if value, ok := hostCallValue(result); ok && codemode.IsFailure(codemode.HostResult(r.Name, value, nil)) {
 		r.Status = codeModeCallError
 	}
 

@@ -264,7 +264,7 @@ func portableMessage(role, phase string, raw json.RawMessage) (responses.Respons
 			case "input_text", "output_text":
 				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: part.Text, Type: "input_text"}})
 			case "input_image":
-				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{ImageURL: openai.String(part.ImageURL), Detail: responses.ResponseInputImageDetail(part.Detail), Type: "input_image"}})
+				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputImage: withImageName(responses.ResponseInputImageParam{ImageURL: openai.String(part.ImageURL), Detail: responses.ResponseInputImageDetail(part.Detail), Type: "input_image"}, part.Filename)})
 			case "input_file":
 				parts = append(parts, responses.ResponseInputContentUnionParam{OfInputFile: &responses.ResponseInputFileParam{FileData: openai.String(part.FileData), FileURL: openai.String(part.FileURL), Filename: openai.String(part.Filename), Detail: responses.ResponseInputFileDetail(part.Detail), Type: "input_file"}})
 			}
@@ -303,7 +303,7 @@ func portableFunctionOutput(callID string, raw json.RawMessage) (responses.Respo
 			case "input_text", "output_text":
 				parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{OfInputText: &responses.ResponseInputTextContentParam{Text: part.Text, Type: "input_text"}})
 			case "input_image":
-				parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{ImageURL: openai.String(part.ImageURL), Detail: responses.ResponseInputImageContentDetail(part.Detail), Type: "input_image"}})
+				parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: withImageName(responses.ResponseInputImageContentParam{ImageURL: openai.String(part.ImageURL), Detail: responses.ResponseInputImageContentDetail(part.Detail), Type: "input_image"}, part.Filename)})
 			case "input_file":
 				parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &responses.ResponseInputFileContentParam{FileData: openai.String(part.FileData), FileURL: openai.String(part.FileURL), Filename: openai.String(part.Filename), Detail: responses.ResponseInputFileContentDetail(part.Detail), Type: "input_file"}})
 			}

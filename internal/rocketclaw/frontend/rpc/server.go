@@ -830,7 +830,7 @@ func (s *Server) projectInputEvent(ctx context.Context, id string, event *Transc
 		return fmt.Errorf("strip input attachments: %w", err)
 	}
 
-	event.Text, event.Attachments, event.Complete = text, nil, false
+	event.Text, event.Complete = text, false
 	for i := range stored {
 		event.Attachments = append(event.Attachments, attachmentMetadata(id, &stored[i]))
 	}
@@ -851,11 +851,11 @@ func (s *Server) projectInputEvent(ctx context.Context, id string, event *Transc
 
 func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessage) (*TranscriptEvent, error) {
 	var kind struct {
-		Type      string `json:"type"`
-		Name      string `json:"name"`
-		CallID    string `json:"call_id"`
-		Arguments string `json:"arguments"`
-		Output    string `json:"output"`
+		Type      string          `json:"type"`
+		Name      string          `json:"name"`
+		CallID    string          `json:"call_id"`
+		Arguments string          `json:"arguments"`
+		Output    json.RawMessage `json:"output"`
 		Summary   []struct {
 			Text string `json:"text"`
 		} `json:"summary"`
@@ -911,11 +911,28 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 
 		return &TranscriptEvent{Role: "tool", Text: text, Complete: true, ToolCallId: kind.CallID, ToolName: kind.Name}, nil
 	case "function_call_output":
-		if strings.TrimSpace(kind.Output) == "" {
+		var text string
+		if json.Unmarshal(kind.Output, &text) != nil {
+			var parts []struct{ Type, Text string }
+
+			_ = json.Unmarshal(kind.Output, &parts)
+
+			var texts strings.Builder
+
+			for _, part := range parts {
+				if part.Type == "input_text" {
+					texts.WriteString(part.Text)
+				}
+			}
+
+			text = texts.String()
+		}
+
+		if strings.TrimSpace(text) == "" {
 			return nil, nil
 		}
 
-		return &TranscriptEvent{Role: "tool", Text: kind.Output, Complete: true, ToolCallId: kind.CallID}, nil
+		return &TranscriptEvent{Role: "tool", Text: text, Complete: true, ToolCallId: kind.CallID}, nil
 	}
 
 	role, text, ok, err := backend.ReplayInputMessageRoleText(item, raw)

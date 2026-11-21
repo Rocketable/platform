@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -24,7 +23,7 @@ const (
 	emulatedHome             = "/tmp"
 )
 
-func runEmulated(ctx context.Context, rt *sandbox.Runtime, shell *CustomShell, command, cwd string, turnEnv, hostEnv []string, timeout time.Duration) (sandbox.Result, error) {
+func runEmulated(ctx context.Context, rt *sandbox.Runtime, shell *CustomShell, command, stdin, cwd string, turnEnv, hostEnv []string, timeout time.Duration) (sandbox.Result, error) {
 	if shell.Dir == "" {
 		return sandbox.Result{}, errors.New("emulated shell: the agent's folder is not set up for this turn")
 	}
@@ -43,7 +42,7 @@ func runEmulated(ctx context.Context, rt *sandbox.Runtime, shell *CustomShell, c
 	}
 
 	res, err := rt.Run(ctx, &sandbox.Command{
-		Script: command, Cwd: cwd, Dir: shell.Dir, ReadOnly: shell.ReadOnly, Env: env,
+		Script: command, Stdin: stdin, Cwd: cwd, Dir: shell.Dir, ReadOnly: shell.ReadOnly, Env: env,
 		Commands: slices.Sorted(maps.Keys(shell.Commands)), Timeout: timeout,
 	}, host)
 	if err != nil {
@@ -83,7 +82,7 @@ func emulatedBashResult(res sandbox.Result, err error) BashResult {
 		code = strconv.Itoa(res.ExitCode)
 	}
 
-	return BashResult{Output: cmp.Or(string(res.Output), "(no output)"), ErrorCode: code, Success: code == ""}
+	return BashResult{Output: string(res.Output), ErrorCode: code, Success: code == ""}
 }
 
 type emulatedHost struct {

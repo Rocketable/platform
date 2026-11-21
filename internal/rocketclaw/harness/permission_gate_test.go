@@ -2,9 +2,19 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
+	"go.starlark.net/starlark"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 )
 
 func TestCheckNestedPermissionOutsideToolCall(t *testing.T) {
@@ -83,4 +93,133 @@ func TestCheckNestedPermissionAutoWithReviewerAllow(t *testing.T) {
 	requests := reviewedRequests(reviewer)
 	require.Equal(t, []string{"/" + reviewKey("turn-1", "call_0"), "/" + reviewKey("turn-1", "call_0"), "/" + reviewKey("turn-2", "call_0")}, []string{requests[0].Review.Path, requests[1].Review.Path, requests[2].Review.Path})
 	require.Equal(t, ReviewTurn(CallKey("turn-2", "call_0")), requests[2].Turn, "the review's turn is named after the call it checks")
+}
+
+func stdinTestShell(t *testing.T) (*os.Root, looperTool) {
+	t.Helper()
+
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(".tmp/shell", 0o700))
+	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell"))
+
+	return root, bashTool(newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}), &CustomShell{})
+}
+
+func TestExecuteBashStdinReview(t *testing.T) {
+	const refused = "bash: stdin too large to review (max 64 KiB); write it to a file first"
+
+	for _, tc := range []struct {
+		name, rules, stdin, want string
+		easy, sudo               bool
+		reviews                  []string
+	}{
+		{"advanced allow runs unreviewed", "bash: allow", strings.Repeat("x", 65537), "65537", false, false, nil},
+		{"advanced auto shows stdin in full", "bash: auto", strings.Repeat("x", 65536), "65536", false, false, []string{"bash"}},
+		{"advanced auto refuses stdin over 64 KiB before review", "bash: auto", strings.Repeat("x", 65537), refused, false, false, nil},
+		{"sudo reviews unmatched calls with their stdin", "read: allow", "hi", "2", false, true, []string{"execute", "bash"}},
+		{"advanced deny refuses", "bash: deny", "hi", `bash: tool call denied: permission "bash" rejected subject "wc -c" by rule "*" => deny. Choose a different action.`, false, false, nil},
+		{"easy reviews the script, then the call with its stdin", "rocketclaw: {code_mode_approve: auto}\nbash: auto", "hi", "2", true, false, []string{"execute", "bash"}},
+		{"easy without stdin reviews only the script", "rocketclaw: {code_mode_approve: auto}\nbash: auto", "", "0", true, false, []string{"execute"}},
+		{"easy refuses stdin over 64 KiB before the second review", "rocketclaw: {code_mode_approve: auto}\nbash: auto", strings.Repeat("x", 65537), refused, true, false, []string{"execute"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			permissions := parsePermissionYAML(t, tc.rules)
+			_, bash := stdinTestShell(t)
+			hosts := map[string]looperTool{"bash": bash}
+			loop := testLooper(mockResponses())
+			loop.agent = Agent{Name: "main"}
+			loop.Tools = (&toolFactory{}).mcpToolsFor(&Agent{Permission: permissions}, hosts)
+			permissions.Easy, permissions.Sudo = tc.easy, tc.sudo
+			loop.Permissions = permissions
+			loop.CodeModeHosts = hosts
+			reviewer := permissionReviewerWith(permissionReviewDecision{Outcome: permissionReviewOutcomeAllow, Rationale: "ok"})
+			loop.PermissionReviewer = reviewer
+
+			stdin := ""
+			if tc.stdin != "" {
+				stdin = fmt.Sprintf(", stdin=%q", tc.stdin)
+			}
+
+			code, err := json.Marshal(map[string]string{"code": "def main():\n    return bash(command=r'''wc -c'''" + stdin + ").strip()\n"})
+			require.NoError(t, err)
+
+			results, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, string(code))}), nil, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, results[0].Param.Output.OfString.Value)
+
+			var reviewed []string
+
+			for _, request := range reviewedRequests(reviewer) {
+				reviewed = append(reviewed, request.ToolName)
+				if request.ToolName != "bash" {
+					continue
+				}
+
+				want, err := json.Marshal(map[string]string{"command": "wc -c", "stdin": tc.stdin})
+				require.NoError(t, err)
+				require.JSONEq(t, string(want), request.RawArguments)
+			}
+
+			require.Equal(t, tc.reviews, reviewed)
+		})
+	}
+}
+
+func TestBashFileStdin(t *testing.T) {
+	binary := "\x00\x89PNG\xff\xfe" + strings.Repeat("payload ", 1<<16)
+	blob := codemode.NewFile(codemode.FileSpec{Name: "blob.bin", Mime: "application/octet-stream", Content: binary, Source: "test fixture"})
+	descriptor, err := json.Marshal(blob)
+	require.NoError(t, err)
+
+	const script = `def main():
+    saved = bash(command=r'''cat > blob.bin''', stdin=blob())
+    forged = bash(command=r'''cat''', stdin={"sha256": "forged"})
+    return [saved.ok, forged.error]
+`
+
+	for _, tc := range []struct {
+		name, rules string
+		easy        bool
+		reviews     int
+	}{
+		{"easy: a file never triggers the second review", "bash: auto", true, 0},
+		{"advanced auto: reviewers see the file's descriptor", "bash: auto", false, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, bash := stdinTestShell(t)
+			loop := testLooper(mockResponses())
+			loop.agent = Agent{Name: "main"}
+			loop.Permissions = parsePermissionYAML(t, tc.rules)
+			loop.Permissions.Easy = tc.easy
+			loop.CodeModeHosts = map[string]looperTool{"bash": bash}
+			reviewer := permissionReviewerWith(permissionReviewDecision{Outcome: permissionReviewOutcomeAllow, Rationale: "ok"})
+			loop.PermissionReviewer = reviewer
+			ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: loop, observations: loop.observations, callID: "call"})
+
+			host, _ := codeModeHostToolsFromContext(ctx)
+			host = append(host, codemode.HostTool{Details: codemode.NoDetails{}, Name: "blob", CallValue: func(context.Context, map[string]any) (starlark.Value, error) { return blob, nil }})
+
+			value, err := codemode.Run(ctx, script, nil, nil, nil, host)
+			require.NoError(t, err)
+			out, _, _, err := convertExecuteReturn(value, "")
+			require.NoError(t, err)
+			require.Equal(t, `[true,"bash: stdin must be text or a file object"]`, out)
+
+			saved, err := root.ReadFile("blob.bin")
+			require.NoError(t, err)
+			require.Equal(t, binary, string(saved), "the file's exact bytes reach the command")
+
+			requests := reviewedRequests(reviewer)
+			require.Len(t, requests, tc.reviews)
+
+			if tc.reviews > 0 {
+				require.JSONEq(t, `{"command":"cat > blob.bin","stdin":`+string(descriptor)+`}`, requests[0].RawArguments)
+				require.Contains(t, requests[0].RawArguments, `"summary":"blob.bin, application/octet-stream, 512 KB, from test fixture"`)
+				require.NotContains(t, requests[0].RawArguments, "payload")
+			}
+		})
+	}
 }

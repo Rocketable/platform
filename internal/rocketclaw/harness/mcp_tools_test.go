@@ -13,8 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -113,10 +115,10 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	loader := model[loadExecuteResultToolName].Definition
 	require.True(t, loader.Strict.Value)
 	require.Equal(t, false, loader.Parameters["additionalProperties"])
-	require.Equal(t, []string{"limit", "line_numbers", "result_id", "start_line"}, loader.Parameters["required"])
+	require.Equal(t, []string{"attachment", "limit", "line_numbers", "result_id", "start_line"}, loader.Parameters["required"])
 	propsLoader := loader.Parameters["properties"].(map[string]any)
-	require.Len(t, propsLoader, 4)
-	require.Contains(t, loader.Description.Value, "omitted tail cannot be fetched")
+	require.Len(t, propsLoader, 5)
+	require.Contains(t, loader.Description.Value, "not callable from scripts")
 
 	for _, entry := range buildCodeModeSearchIndex(hosts, nil) {
 		require.NotEqual(t, loadExecuteResultToolName, entry.item.Path)
@@ -129,52 +131,32 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 
 	execDesc := model[executeToolName].Definition.Description.Value
 	assert.Contains(t, execDesc, "search(")
-	assert.Contains(t, execDesc, "gather(")
-	assert.Contains(t, execDesc, "gather/map/race/race_first")
-	assert.Contains(t, execDesc, "No import/from")
-	assert.Contains(t, execDesc, `bash(command=...) takes r'''...''' only`)
-	assert.Contains(t, execDesc, `execute code is a JSON string`)
-	assert.Contains(t, execDesc, `{"code":`)
-	assert.Contains(t, execDesc, `r"..."`)
-	assert.Contains(t, execDesc, `r'''`)
-	assert.Contains(t, execDesc, "single-line")
-	assert.Contains(t, execDesc, "nothing ran")
-	assert.Contains(t, execDesc, "str(result)")
-	assert.Contains(t, execDesc, "not varargs")
-	assert.Contains(t, execDesc, `gather([lambda: read(filePath="a")`)
+	assert.Contains(t, execDesc, "gather, try_gather, race and race_first take one list of zero-arg lambdas; map and try_map take (items, fn)")
+	assert.Contains(t, execDesc, "default 16, max 64")
+	assert.Contains(t, execDesc, "no import")
+	assert.Contains(t, execDesc, "returning None is an error")
+	assert.Contains(t, execDesc, "Write shell commands as r'''...'''.")
+	assert.Equal(t, 1, strings.Count(execDesc, "Write shell commands"))
+	assert.Contains(t, execDesc, "if not r.ok")
+	assert.Contains(t, execDesc, "check .ok once, at the end")
+	assert.Contains(t, execDesc, "json.decode included")
+	assert.Contains(t, execDesc, "a sideways JPEG/WebP comes back upright")
+	assert.Contains(t, execDesc, "bash(command=r'''cat > out.jpg''', stdin=f)")
+	assert.Contains(t, execDesc, "Fan out over a list with map(items, fn) or try_map")
+	assert.Contains(t, execDesc, "top-level load_execute_result tool")
+	assert.NotContains(t, execDesc, "for p in")
 	assert.NotContains(t, execDesc, `bash(command="`)
 
 	props, _ := model[executeToolName].Definition.Parameters["properties"].(map[string]any)
 	codeProp, _ := props["code"].(map[string]any)
-	codeDesc, _ := codeProp["description"].(string)
-	assert.Contains(t, codeDesc, "Starlark source")
-	assert.Contains(t, codeDesc, `bash(command=...) takes r'''...''' only`)
-	assert.Contains(t, codeDesc, `execute code is a JSON string`)
-	assert.Contains(t, codeDesc, `{"code":`)
-	assert.Contains(t, codeDesc, `r"..."`)
-	assert.Contains(t, codeDesc, `r'''`)
-	assert.Contains(t, codeDesc, "single-line")
-	assert.Contains(t, codeDesc, "not varargs")
+	assert.Equal(t, "Starlark source defining def main().", codeProp["description"])
 
 	prompt := withCodeModeSystemPrompt("base", model, hosts, nil)
-	assert.Contains(t, prompt, "## Code Mode")
-	assert.Contains(t, prompt, "read(")
-	assert.Contains(t, prompt, "No import/from")
-	assert.Contains(t, prompt, `bash(command=...) takes r'''...''' only`)
-	assert.Contains(t, prompt, `execute code is a JSON string`)
-	assert.Contains(t, prompt, `{"code":`)
-	assert.Contains(t, prompt, `r"..."`)
-	assert.Contains(t, prompt, `r'''`)
-	assert.Contains(t, prompt, "single-line")
-	assert.Contains(t, prompt, "str(result)")
-	assert.Contains(t, prompt, "Concurrency (callables is one list")
-	assert.Contains(t, prompt, "gather([lambda:")
-	assert.Contains(t, prompt, "race_first([lambda:")
-	assert.Contains(t, prompt, `gather([lambda: read(filePath="a")`)
-	assert.Contains(t, prompt, "Default concurrency 16")
-	assert.Contains(t, hosts["bash"].Definition.Description.Value, `bash(command=...) takes r'''...''' only`)
-	assert.Contains(t, hosts["bash"].Definition.Description.Value, `{"code":`)
-	assert.NotContains(t, prompt, `bash(command="`)
+	assert.Contains(t, prompt, "base\n\n## Code Mode\n\nThese tools exist only inside execute scripts:\n")
+	assert.Contains(t, prompt, "\n- read(")
+	assert.NotContains(t, prompt, "MCP servers")
+	assert.NotContains(t, hosts["bash"].Definition.Description.Value, "r'''")
+	assert.Contains(t, hosts["bash"].Definition.Description.Value, "stdin= takes text or a file")
 
 	entries := buildCodeModeSearchIndex(nil, nil)
 	require.NotEmpty(t, entries)
@@ -381,7 +363,7 @@ func TestCodeModeHostsSurviveModelWithoutHosts(t *testing.T) {
 	looper.restoreTurnExecuteResults("turn")
 	t.Cleanup(looper.deleteTurnExecuteResults)
 
-	result, err = run.Call(ctx, json.RawMessage(`{"code":"def main():\n    text = read(filePath=\"large.txt\")\n    if \"2100: line\" not in text:\n        fail(\"host output clipped\")\n    return \"full host content\"\n"}`), nil, emptyToolCallMetadata())
+	result, err = run.Call(ctx, json.RawMessage(`{"code":"def main():\n    text = read(filePath=\"large.txt\")\n    if \"2100: line\" not in text.numbered():\n        fail(\"host output clipped\")\n    return \"full host content\"\n"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
 	require.Equal(t, "full host content", result.Output)
 	require.Empty(t, looper.spillResults)
@@ -422,8 +404,15 @@ func TestExecuteBashOutputSurvivesContainers(t *testing.T) {
 		{"gather", `gather([lambda: bash(command=r'''printf first'''), lambda: bash(command=r'''printf second'''), lambda: bash(command=r'''printf third''')])`, `["first","second","third"]`},
 		{"nested", `{"results": [gather([lambda: bash(command=r'''printf first''')])]}`, `{"results":[["first"]]}`},
 		{"escaped", `[bash(command=r'''printf '%s\n' 'first "quoted" \path 日本語' second''')]`, `["first \"quoted\" \\path 日本語\nsecond\n"]`},
-		{"failure", `[bash(command=r'''printf failed >&2; exit 7''')]`, `["failed"]`},
+		{"failure", `[bash(command=r'''printf failed >&2; exit 7''')]`, `[{"error":"bash: exit status 7","error_code":"7","ok":false,"output":"failed"}]`},
 		{"error_code", `bash(command=r'''exit 7''').error_code`, "7"},
+		{"failed result keeps its output", `(lambda r: [r.ok, r.error, r.error_code, str(r), r.output, r.or_else("fallback")])(bash(command=r'''printf failed; exit 7'''))`, `[false,"bash: exit status 7","7","bash: exit status 7\nfailed","failed","fallback"]`},
+		{"failed result is opaque", `(lambda r: [bool(r), r == "failed", r in ["failed"], r in {"failed": 1}, r in set(["failed"]), json.decode(r) == r])(bash(command=r'''printf failed; exit 7'''))`, `[false,false,false,false,false,true]`},
+		{"string methods", `bash(command=r'''printf 'a,b' ''').split(",")`, `["a","b"]`},
+		{"compares as its text", `[bash(command=r'''printf yes''') == "yes", "e" in bash(command=r'''printf yes''')]`, `[true,true]`},
+		{"text stdin", `bash(command=r'''tr a-z A-Z''', stdin="piped")`, "PIPED"},
+		{"text result as stdin", `bash(command=r'''tr a-z A-Z''', stdin=bash(command=r'''printf chained'''))`, "CHAINED"},
+		{"allowed stdin has no size limit", `bash(command=r'''wc -c''', stdin="x" * 1000000).strip()`, "1000000"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			raw, err := json.Marshal(struct {
@@ -494,7 +483,7 @@ func TestMCPServerVisibility(t *testing.T) {
 	assert.Empty(t, visibleMCPServers(PermissionSet{Sudo: true}, []string{"demo", "acme"}))
 
 	prompt := codeModeSystemPrompt(nil, []string{"demo"})
-	assert.Contains(t, prompt, "demo")
+	assert.Equal(t, "## Code Mode\n\nMCP servers: demo. List their tools with search(namespace=\"<server>\").", prompt)
 	assert.NotContains(t, prompt, "acme")
 }
 
@@ -597,7 +586,7 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: sibling, observations: sibling.observations, output: nil, callID: ""})
 	_, err = loader.Call(ctx, json.RawMessage(pageArgs), nil, emptyToolCallMetadata())
 	require.EqualError(t, err, "unknown or expired execute result")
-	_, err = sibling.saveExecuteResult(strings.Repeat("own\n", 2100))
+	_, err = sibling.saveExecuteResult(strings.Repeat("own\n", 2100), nil)
 	require.NoError(t, err)
 
 	for siblingID := range sibling.spillResults {
@@ -849,7 +838,7 @@ func TestCodeModeSearchOpenCodeShape(t *testing.T) {
 	out = codeModeSearch(index, map[string]any{"query": "", "limit": 1, "offset": 0})
 	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
 	require.Len(t, parsed.Items, 1)
-	assert.Equal(t, 6, parsed.Remaining)
+	assert.Equal(t, 8, parsed.Remaining)
 	require.NotNil(t, parsed.Next)
 	assert.Equal(t, 1, parsed.Next.Offset)
 
@@ -980,7 +969,7 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 		return output
 	}
 
-	script := "def main():\n    a = note(text=\"one\")\n    b = gather([lambda: note(text=\"left\"), lambda: note(text=\"right\")])\n    return a + \"|\" + \"|\".join(b)\n"
+	script := "def main():\n    a = note(text=\"one\")\n    b = gather([lambda: note(text=\"left\"), lambda: note(text=\"right\")])\n    return a.unwrap() + \"|\" + \"|\".join([str(x) for x in b])\n"
 	first := run(script)
 
 	require.Len(t, calls, 3)
@@ -1035,6 +1024,10 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 
 	require.Empty(t, calls, "a recorded failure is replayed without running the call")
 	require.Contains(t, fmt.Sprint(failed, err), "note failed")
+
+	failed, err = execute("def main():\n    return note(text=\"one\")\n")
+	_, isFailure := errors.AsType[toolResultError](err)
+	require.Equal(t, []any{"note: note failed", true}, []any{failed, isFailure}, "a replayed failure comes back as an error result")
 	require.Equal(t, recorded, observations.calls, "a replayed interruption or failure keeps the first run's record")
 
 	diverged := run("def main():\n    return other(text=\"one\")\n")
@@ -1110,12 +1103,6 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 			<-fetching
 
 			return ToolResult{}, errors.New("boom")
-		case "fail-after-bash":
-			for _, err := root.Stat("bash-started"); err != nil; _, err = root.Stat("bash-started") {
-				time.Sleep(10 * time.Millisecond)
-			}
-
-			return ToolResult{}, errors.New("boom")
 		case "peek":
 			loop.observations.mu.Lock()
 			defer loop.observations.mu.Unlock()
@@ -1182,9 +1169,9 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 		"mcp-rule-denied":     "def main():\n    return demo_danger()\n",
 		"mcp-approver-denied": "def main():\n    return demo_risky()\n",
 		"cap":                 "def main():\n    for i in range(201):\n        emit(text=\"x\")\n    return \"done\"\n",
-		"cancelled":           "def main():\n    return gather([lambda: probe(text=\"slow\"), lambda: demo_stalled(), lambda: read(filePath=\"slow.txt\"), lambda: emit(text=\"fail-after-review\")])\n",
-		"bash-cancelled":      "def main():\n    return gather([lambda: bash(command=r'''touch bash-started; sleep 30'''), lambda: emit(text=\"fail-after-bash\")])\n",
-		"fetch-cancelled":     fmt.Sprintf("def main():\n    return gather([lambda: webfetch(url=%q), lambda: emit(text=\"fail-after-fetch\")])\n", hang.URL+"/hang"),
+		"cancelled":           "def main():\n    return try_gather([lambda: probe(text=\"slow\"), lambda: demo_stalled(), lambda: read(filePath=\"slow.txt\"), lambda: emit(text=\"fail-after-review\")])\n",
+		"bash-cancelled":      "def main():\n    return try_gather([lambda: bash(command=r'''echo $$ > bash-started; sleep 30'''), lambda: bash(command=r'''until [ -s bash-started ]; do sleep 0.01; done; exit 3''', timeout_ms=10000)])\n",
+		"fetch-cancelled":     fmt.Sprintf("def main():\n    return try_gather([lambda: webfetch(url=%q), lambda: emit(text=\"fail-after-fetch\")])\n", hang.URL+"/hang"),
 	}
 
 	calls := make([]responses.ResponseFunctionToolCall, 0, len(scripts))
@@ -1196,8 +1183,10 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 		calls = append(calls, testFunctionCall(id, id, executeToolName, string(raw)))
 	}
 
+	started := time.Now()
 	_, err = loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", calls), nil, nil, nil)
 	require.NoError(t, err)
+	require.Less(t, time.Since(started), 2*time.Second, "bash calls in parallel branches run together, and the cancelled sleep 30 is stopped at once")
 
 	records := map[string][]CodeModeCall{}
 	for _, record := range loop.observations.calls {
@@ -1216,7 +1205,7 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 		review("main"),
 		record("main", 0, "bash", `{"command":"printf 'one\\ntwo\\nthree\\n\\n\\n' "}`, codeModeCallOK, "three", "", ""),
 		record("main", 1, "bash", `{"command":"echo failed; exit 3"}`, codeModeCallError, "failed", "", ""),
-		record("main", 2, "read", `{"filePath":"notes.txt"}`, codeModeCallOK, "(End of file - total 2 lines)", "", ""),
+		record("main", 2, "read", `{"filePath":"notes.txt"}`, codeModeCallOK, "beta", "", ""),
 		record("main", 3, "emit", `{"text":"long"}`, codeModeCallOK, "x"+strings.Repeat("é", 99), "", ""),
 		record("main", 4, "emit", `{"text":"nul"}`, codeModeCallOK, "2 KiB of binary output", "", ""),
 		record("main", 5, "emit", `{"text":"invalid"}`, codeModeCallOK, "2 KiB of binary output", "", ""),
@@ -1250,9 +1239,18 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 		{"bash-cancelled", "bash"},
 		{"fetch-cancelled", "webfetch"},
 	} {
-		got := records[cancelled.script][slices.IndexFunc(records[cancelled.script], func(record CodeModeCall) bool { return record.Name == cancelled.name })]
+		got := records[cancelled.script][slices.IndexFunc(records[cancelled.script], func(record CodeModeCall) bool {
+			return record.Name == cancelled.name && (record.Name != "bash" || strings.Contains(record.Arguments, "sleep 30"))
+		})]
 		require.Equal(t, []any{codeModeCallCancelled, permissionReviewOutcome(""), "cancelled"}, []any{got.Status, got.Outcome, got.Summary}, "%s its script cancelled reads as cancelled, in review or running", cancelled.name)
 	}
+
+	pid, err := root.ReadFile("bash-started")
+	require.NoError(t, err)
+
+	group, err := strconv.Atoi(strings.TrimSpace(string(pid)))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return errors.Is(syscall.Kill(-group, 0), syscall.ESRCH) }, time.Second, 10*time.Millisecond, "no process of the cancelled bash is left")
 
 	require.Len(t, records["cap"], 1+MaxCodeModeCalls, "the 201st call of one script adds no record")
 	require.Equal(t, record("cap", MaxCodeModeCalls-1, "emit", `{"text":"x"}`, codeModeCallOK, "", "", ""), records["cap"][MaxCodeModeCalls])

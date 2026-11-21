@@ -484,7 +484,7 @@ func TestFinishTurnSettlesSessionReplies(t *testing.T) {
 func TestFinishTurnReportsSubagentWakeUp(t *testing.T) {
 	t.Parallel()
 
-	answered := "<subagent id=\"turn-1\" state=\"completed\" description=\"researcher\" continue=\"/a\">\n<task_result>\nbilling noted\n</task_result>\n</subagent>"
+	answered := "<subagent id=\"turn-1\" description=\"researcher\" continue=\"/a\">\n<task_result>\nbilling noted\n</task_result>\n</subagent>"
 
 	for _, tc := range []struct {
 		name                  string
@@ -494,7 +494,7 @@ func TestFinishTurnReportsSubagentWakeUp(t *testing.T) {
 	}{
 		{"wake turn", true, false, false, "", answered, ""},
 		{"hidden-run parent", true, false, true, "", answered, "web:main"},
-		{"failed wake turn", true, false, false, protocol.TerminalFailed, "<subagent id=\"turn-1\" state=\"failed\" description=\"researcher\" continue=\"/a\">\nturn failed\n</subagent>", ""},
+		{"failed wake turn", true, false, false, protocol.TerminalFailed, "<subagent id=\"turn-1\" description=\"researcher\" continue=\"/a\">\nturn failed\n</subagent>", ""},
 		{"stopped wake turn", true, false, false, protocol.TerminalStopped, "", ""},
 		{"task input", false, false, false, "", "", ""},
 		{"wake turn took a task steer", true, true, false, "", "", ""},

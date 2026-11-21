@@ -30,12 +30,12 @@ func TestRuntimeCompletionNotesReadStoredJobs(t *testing.T) {
 	notes, err := rt.CompletionNotes(t.Context(), conversationID, []string{script.jobID, subagent.jobID, "turn-1/call/unknown"})
 	require.NoError(t, err)
 	require.Equal(t, []protocol.BackgroundJob{{ID: script.jobID, Kind: "execute", State: "completed", Label: "tests", ToolCallID: "call",
-		Note: `<execute id="turn-1/call/a" state="completed" description="tests">` + "\ncompleted\n</execute>"}}, notes, "only the conversation's own notes")
+		Note: `<execute id="turn-1/call/a" description="tests">` + "\ncompleted\n</execute>"}}, notes, "only the conversation's own notes")
 
 	notes, err = rt.CompletionNotes(t.Context(), conversationID+"/t-1", []string{subagent.jobID})
 	require.NoError(t, err)
 	require.Equal(t, []protocol.BackgroundJob{{ID: subagent.jobID, Kind: "task", State: "completed", Label: "research", ToolCallID: "call", SubagentKey: "/b-2",
-		Note: `<subagent id="turn-1/call/t-1/task/call/b" state="completed" description="research" continue="/b-2">` + "\ncompleted\n</subagent>"}}, notes)
+		Note: `<subagent id="turn-1/call/t-1/task/call/b" description="research" continue="/b-2">` + "\ncompleted\n</subagent>"}}, notes)
 
 	notes, err = rt.CompletionNotes(t.Context(), conversationID+"/t-1/b-2", []string{subagent.jobID})
 	require.NoError(t, err)

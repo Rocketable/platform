@@ -1526,19 +1526,13 @@ func (b *Bridge) wakePrompt(ctx context.Context, msg *protocol.InboundMessage) e
 		return nil
 	}
 
-	notes, err := b.config.SessionService.notedBackgroundJobs(ctx, b.config.ConversationID, ids)
-	if err != nil {
+	notes, err := b.config.SessionService.notedBackgroundJobs(ctx, b.config.ConversationID, ids[:1])
+	if err != nil || len(notes) == 0 {
 		return err
 	}
 
-	var prompt strings.Builder
-
-	for i := range notes {
-		prompt.WriteString(backgroundNote(&notes[i]))
-		prompt.WriteString("\n\n")
-	}
-
-	msg.Text = strings.TrimSuffix(prompt.String(), "\n\n")
+	msg.Text, msg.Attachments = b.config.SessionService.backgroundNoteInput(&notes[0])
+	msg.Metadata[backgroundNotesMetadataKey] = ids[0]
 
 	return nil
 }
@@ -1571,6 +1565,7 @@ func (b *Bridge) openInputWindow(ctx context.Context, request *bridgeRequest) (b
 
 	b.inputOpen, b.activeTurnID = !hiddenRun(msg) && !b.historyMutation && !paused && !canonical.Closed && request.delivery == nil, request.turnID
 	b.notesOffered = strings.Fields(msg.Metadata[backgroundNotesMetadataKey])
+	b.notesOffered = b.notesOffered[:min(len(b.notesOffered), 1)]
 
 	for _, steer := range recorded {
 		if !slices.ContainsFunc(b.steers, func(request bridgeRequest) bool { return request.queueItemID == steer.ID }) {

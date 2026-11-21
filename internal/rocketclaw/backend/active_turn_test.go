@@ -2643,7 +2643,7 @@ func (nt *noteTest) restart(t *testing.T) (manager *threadBridgeManager, shutdow
 }
 
 func killedExecuteNote(jobID string) string {
-	return `<execute id="` + jobID + `" state="killed" description="tests">` + "\nThe job was killed because the server restarted.\n</execute>"
+	return `<execute id="` + jobID + `" description="tests">` + "\ntool call aborted because the runtime stopped before the call completed. Side effects may have partially occurred. Inspect the current environment before deciding whether to retry or continue.\n</execute>"
 }
 
 func TestRestartReportsKilledScriptAtNextTurn(t *testing.T) {
@@ -2716,7 +2716,7 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 
 	manager, shutdown := nt.restart(t)
 	assert.Contains(t, nt.request(t), `research the flaky test"`, "the subagent session resumes its journaled turn")
-	assert.Equal(t, systemPromptHeader()+"\n\n"+`<subagent id="`+jobs[0]+`" state="completed" description="research" continue="`+keys[0]+`">`+"\n<task_result>\nfound it\n</task_result>\n</subagent>", lastRequestMessage(t, nt.request(t)))
+	assert.Equal(t, systemPromptHeader()+"\n\n"+`<subagent id="`+jobs[0]+`" description="research" continue="`+keys[0]+`">`+"\n<task_result>\nfound it\n</task_result>\n</subagent>", lastRequestMessage(t, nt.request(t)))
 	readFinal(t, nt.finals)
 	nt.waitIdle(t, manager, nt.conversationID)
 	assert.Equal(t, []string{jobs[0] + " consumed true"}, noteStates(t, nt.service))
@@ -3068,7 +3068,7 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 	t.Parallel()
 
 	report := func(key, result string) string {
-		return `" state="completed" description="researcher" continue="` + key + `">` + "\n<task_result>\n" + result + "\n</task_result>\n</subagent>"
+		return `" description="researcher" continue="` + key + `">` + "\n<task_result>\n" + result + "\n</task_result>\n</subagent>"
 	}
 
 	for _, tc := range []struct {
