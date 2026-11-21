@@ -1454,7 +1454,7 @@ func TestAttachFilesToolReadsWorkspacePath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, protocol.OutboundAttachment{ID: got[0].ID, Name: "latest.txt", MIMEType: "text/plain", Data: data, Size: int64(len(data))}, stored)
 
-	calls := make(map[string]string)
+	calls := make(map[[2]string]string)
 	_, err = sessions.ReplayAttachments(t.Context(), "attachment-test", root, json.RawMessage(`{"type":"function_call","call_id":"capture","name":"rocketclaw_attach_files_to_response","arguments":"{}"}`), calls)
 	require.NoError(t, err)
 	replayed, err := sessions.ReplayAttachments(t.Context(), "attachment-test", root, json.RawMessage(fmt.Sprintf(`{"type":"function_call_output","call_id":"capture","output":%q}`, result.Output)), calls)

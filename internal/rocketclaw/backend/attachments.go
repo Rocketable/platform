@@ -272,7 +272,7 @@ func (s *SessionService) RevertAttachmentMetadata(ctx context.Context, conversat
 	return protocol.OutboundAttachment{}, sql.ErrNoRows
 }
 
-func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID string, root *os.Root, raw json.RawMessage, calls map[string]string) ([]protocol.OutboundAttachment, error) {
+func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID string, root *os.Root, raw json.RawMessage, calls map[[2]string]string) ([]protocol.OutboundAttachment, error) {
 	var item struct {
 		Type, Name, Arguments, Output string
 		CallID                        string `json:"call_id"`
@@ -282,10 +282,10 @@ func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID s
 	}
 
 	if item.Type == "function_call" && item.Name == attachFilesToolName {
-		calls[item.CallID] = item.Arguments
+		calls[[2]string{conversationID, item.CallID}] = item.Arguments
 	}
 
-	arguments, called := calls[item.CallID]
+	arguments, called := calls[[2]string{conversationID, item.CallID}]
 
 	const success = "queued attachments for final response"
 	if !called || item.Type != "function_call_output" || (item.Output != success && !strings.HasPrefix(item.Output, success+": ")) {

@@ -608,7 +608,7 @@ func (c *voiceCall) snapshot(ctx context.Context, root *os.Root, from int64, lim
 	for i := range view.Entries {
 		entry := &view.Entries[i]
 
-		messages, err := c.server.transcriptEntry(ctx, root, entry, c.conversationID, false, map[string]string{})
+		messages, err := c.server.transcriptEntry(ctx, root, entry, c.conversationID, false, map[[2]string]string{})
 		if err != nil {
 			return snapshot, 0, err
 		}
