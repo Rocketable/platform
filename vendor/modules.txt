@@ -8,7 +8,7 @@ filippo.io/edwards25519/field
 # github.com/Arize-ai/openinference/go/openinference-instrumentation v0.1.2
 ## explicit; go 1.25.0
 github.com/Arize-ai/openinference/go/openinference-instrumentation
-# github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.15
+# github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.16
 ## explicit; go 1.25
 github.com/Arize-ai/openinference/go/openinference-semantic-conventions
 # github.com/JohannesKaufmann/dom v0.3.1
@@ -543,8 +543,8 @@ github.com/x448/float16
 # github.com/yosida95/uritemplate/v3 v3.0.2
 ## explicit; go 1.14
 github.com/yosida95/uritemplate/v3
-# go.opentelemetry.io/auto/sdk v1.2.1
-## explicit; go 1.24.0
+# go.opentelemetry.io/auto/sdk v1.2.2
+## explicit; go 1.25.0
 go.opentelemetry.io/auto/sdk
 go.opentelemetry.io/auto/sdk/internal/telemetry
 # go.opentelemetry.io/otel v1.47.0
@@ -649,7 +649,7 @@ golang.org/x/crypto/nacl/box
 golang.org/x/crypto/nacl/secretbox
 golang.org/x/crypto/poly1305
 golang.org/x/crypto/salsa20/salsa
-# golang.org/x/exp v0.0.0-20261120130654-b6de8d37927a
+# golang.org/x/exp v0.0.0-20261121134650-e1094eeca1b5
 ## explicit; go 1.26.0
 golang.org/x/exp/constraints
 golang.org/x/exp/maps
@@ -848,7 +848,7 @@ google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# gvisor.dev/gvisor v0.0.0-20261120093554-bcda51de39fc
+# gvisor.dev/gvisor v0.0.0-20261121111754-3eadbee70834
 ## explicit; go 1.27.3
 gvisor.dev/gvisor/pkg/atomicbitops
 gvisor.dev/gvisor/pkg/bits
