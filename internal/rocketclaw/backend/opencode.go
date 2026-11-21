@@ -294,14 +294,14 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	}
 
 	var (
-		titles, directories, agents, models, remotes []string
-		updated                                      []time.Time
-		running, backgrounds, askings                []bool
-		replies                                      []*string
-		oldest                                       time.Time
-		cursors                                      []*int64
-		markedIDs, markedUsers, ended                []string
-		markedWaking, failures                       []bool
+		titles, directories, agents, models []string
+		updated                             []time.Time
+		running, backgrounds, askings       []bool
+		replies                             []*string
+		oldest                              time.Time
+		cursors                             []*int64
+		markedIDs, markedUsers, ended       []string
+		markedWaking, failures              []bool
 	)
 
 	for i, session := range sessions.Data {
@@ -372,12 +372,12 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 
 		titles, directories, agents, models = append(titles, session.Title), append(directories, session.Location.Directory), append(agents, session.Agent), append(models, session.model())
 		updated, running, replies = append(updated, oldest), append(running, busy), append(replies, reply)
-		backgrounds, remotes, cursors = append(backgrounds, background[session.ID]), append(remotes, session.ID), append(cursors, cursor)
+		backgrounds, cursors = append(backgrounds, background[session.ID]), append(cursors, cursor)
 		askings = append(askings, asking[session.ID])
 	}
 
 	return s.storeOpenCodeSync(ctx, []any{name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds,
-		agents, models, KindRemote, remotes, cursors, markedIDs, markedUsers, askings, markedWaking}, ended, failures)
+		agents, models, KindRemote, cursors, markedIDs, markedUsers, askings, markedWaking}, ended, failures)
 }
 
 func (s *SessionService) storeOpenCodeSync(ctx context.Context, synced []any, ended []string, failures []bool) error {
@@ -389,7 +389,7 @@ func (s *SessionService) storeOpenCodeSync(ctx context.Context, synced []any, en
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := execState(ctx, tx, "sync opencode sessions", `WITH incoming AS (
-    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::text[], $16::bigint[], $19::boolean[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, remote_session, read_through, asking)
+    SELECT *, substr(conversation_id, char_length('opencode:' || $1::text || ':') + 1) AS remote_session FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::bigint[], $18::boolean[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, read_through, asking)
 ), upserted AS (
     INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session, name, read_through, asking)
     SELECT conversation_id, agent, '', $14, FALSE, 'remote', $1, title, directory, updated_at, running, now(), reply, background, model, remote_session, title, read_through, asking FROM incoming
@@ -402,7 +402,7 @@ func (s *SessionService) storeOpenCodeSync(ctx context.Context, synced []any, en
 ), asked AS (
     SELECT i.conversation_id FROM incoming i LEFT JOIN conversations o USING (conversation_id) WHERE i.asking AND o.asking IS NOT TRUE
 ), events AS (
-    SELECT m.conversation_id, $14 AS kind, m.waking, m.username FROM unnest($17::text[], $18::text[], $20::boolean[]) AS m(conversation_id, username, waking)
+    SELECT m.conversation_id, $14 AS kind, m.waking, m.username FROM unnest($16::text[], $17::text[], $19::boolean[]) AS m(conversation_id, username, waking)
     LEFT JOIN asked a USING (conversation_id) WHERE NOT m.waking OR a.conversation_id IS NOT NULL
     UNION SELECT conversation_id, $14, TRUE, '' FROM asked
 )`+sessionReadersSQL+markTabsSQL+`, removed AS (
