@@ -214,7 +214,7 @@ func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error)
 	}
 
 	modelField := frontmatterField(frontmatterNode, "model")
-	if modelField == nil || modelField.Kind != yaml.ScalarNode || modelField.ShortTag() != "!!str" || strings.TrimSpace(modelField.Value) == "" {
+	if modelField == nil || modelField.Kind != yaml.ScalarNode || modelField.ShortTag() != "!!str" {
 		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
 	}
 
