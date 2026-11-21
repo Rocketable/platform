@@ -40,7 +40,7 @@ test:
 	cleanup; \
 	trap cleanup EXIT INT TERM; \
 	bash -o pipefail -c 'find ./src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" -exec ls -S {} + | xargs -n 1 -P 4 bun test'; \
-	go -C .. test ./frontend/rpc -run 'Test(PublicProgressRealBrowser|RevertRealBackendBrowser|ShadowsRealBackendBrowser|SessionEntries|SidebarHTTPStreamsBeforeGoTailAndCancels|PagesRealBrowser|ReloadRealBackendBrowser|RemoteRocketClawRealBrowser|AgentEditorRealBackendBrowser)$$' -count=1
+	go -C .. test ./frontend/rpc -run 'Test(PublicProgressRealBrowser|RevertRealBackendBrowser|ShadowsRealBackendBrowser|SessionEntries|SidebarHTTPStreamsBeforeGoTailAndCancels|PagesRealBrowser|ReloadRealBackendBrowser|RemoteRocketClawRealBrowser|AgentEditor(EditingAndSaving|PreviewAndChat)RealBackendBrowser)$$' -count=1
 	$(MAKE) check-cloc-budget
 
 .PHONY: cloc check-cloc-budget lint test

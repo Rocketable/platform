@@ -38,7 +38,7 @@ tags:
 
 ## Context
 
-Ten Go tests in `internal/rocketclaw/frontend/rpc` start a real backend and then run a Bun test file against it through `runWebTest` (`internal/rocketclaw/frontend/rpc/server_test.go:4044`). That helper runs `bun test <file>` in `internal/rocketclaw/web`, with the parent's environment plus the test's URLs (`server_test.go:4047`–`4050`). It skips nothing.
+Eleven Go tests in `internal/rocketclaw/frontend/rpc` start a real backend and then run a Bun test file against it through `runWebTest` (`internal/rocketclaw/frontend/rpc/server_test.go:4044`). That helper runs `bun test <file>` in `internal/rocketclaw/web`, with the parent's environment plus the test's URLs (`server_test.go:4047`–`4050`). It skips nothing.
 
 | Test | `runWebTest` call | Opens Chromium |
 |---|---|---|
@@ -50,7 +50,8 @@ Ten Go tests in `internal/rocketclaw/frontend/rpc` start a real backend and then
 | `TestShadowsRealBackendBrowser` | `shadow_live_test.go:166` | yes |
 | `TestRemoteRocketClawRealBrowser` | `remote_test.go:191` | yes |
 | `TestSpacePermissionsRealBrowser` | `permissions_live_test.go:164` | yes |
-| `TestAgentEditorRealBackendBrowser` | `agent_editor_live_test.go:225` | yes |
+| `TestAgentEditorEditingAndSavingRealBackendBrowser` | `agent_editor_live_test.go:236` | yes |
+| `TestAgentEditorPreviewAndChatRealBackendBrowser` | `agent_editor_live_test.go:236` | yes |
 | `TestSidebarHTTPStreamsBeforeGoTailAndCancels` | `sidebar_test.go:232` | no, needs only the web packages |
 
 All paths are under `internal/rocketclaw/frontend/rpc/`. These tests need two things the Go toolchain does not provide:

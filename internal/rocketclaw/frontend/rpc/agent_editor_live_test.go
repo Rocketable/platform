@@ -30,9 +30,20 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func TestAgentEditorRealBackendBrowser(t *testing.T) {
-	pattern := os.Getenv("ROCKETCLAW_TEST_AGENT_EDITOR_CHILD")
-	if pattern == "" {
+const agentEditorEditingAndSaving = "the.agent.editor.starts|two.people.co-edit|saving.picks"
+
+func TestAgentEditorEditingAndSavingRealBackendBrowser(t *testing.T) {
+	runAgentEditorBrowser(t, "^(?:"+agentEditorEditingAndSaving+")")
+}
+
+func TestAgentEditorPreviewAndChatRealBackendBrowser(t *testing.T) {
+	runAgentEditorBrowser(t, "^(?!(?:"+agentEditorEditingAndSaving+"))")
+}
+
+func runAgentEditorBrowser(t *testing.T, pattern string) {
+	t.Helper()
+
+	if os.Getenv("ROCKETCLAW_TEST_AGENT_EDITOR_CHILD") == "" {
 		t.Parallel()
 
 		executable, err := os.Executable()
@@ -43,22 +54,12 @@ func TestAgentEditorRealBackendBrowser(t *testing.T) {
 			args = append(args, "-test.gocoverdir="+os.Getenv("GOCOVERDIR"))
 		}
 
-		const editingAndSaving = "the.agent.editor.starts|two.people.co-edit|saving.picks"
-		for _, group := range []struct{ name, pattern string }{
-			{"editing_and_saving", "^(?:" + editingAndSaving + ")"},
-			{"preview_and_chat", "^(?!(?:" + editingAndSaving + "))"},
-		} {
-			t.Run(group.name, func(t *testing.T) {
-				t.Parallel()
+		cmd := exec.CommandContext(t.Context(), executable, args...)
 
-				cmd := exec.CommandContext(t.Context(), executable, args...)
-
-				cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_AGENT_EDITOR_CHILD="+group.pattern)
-				output, err := cmd.CombinedOutput()
-				require.NoError(t, err, "%s", output)
-				t.Log(string(output))
-			})
-		}
+		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_AGENT_EDITOR_CHILD=1")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		t.Log(string(output))
 
 		return
 	}
