@@ -82,7 +82,7 @@ test("reads every shell-output page and rejects shell metacharacters before star
     const source = { api: "https://web.test/oc/box/api", directory: "/work" };
     expect(await readOpenCodePR(source, "repos/owner/repo/pulls/7", new AbortController().signal)).toEqual({ title: "read" });
     expect(cursors).toEqual(["0", "9"]);
-    for (const endpoint of ["repos/owner/repo'; echo secret/pulls/7", "repos/owner/../pulls/7", "repos/owner/repo/pulls/7/files?page=1; echo secret"]) await expect(readOpenCodePR(source, endpoint, new AbortController().signal)).rejects.toThrow("Invalid GitHub pull request reference.");
+    for (const endpoint of ["repos/owner/repo'; echo secret/pulls/7", "repos/owner/../pulls/7", "repos/owner/repo/pulls/7/files?page=1; echo secret", "repos/owner/repo/issues/7/labels"]) await expect(readOpenCodePR(source, endpoint, new AbortController().signal)).rejects.toThrow("Invalid GitHub reference.");
     expect(starts).toBe(1);
   } finally { globalThis.fetch = original; }
 });
