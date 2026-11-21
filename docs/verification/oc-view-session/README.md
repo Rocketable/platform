@@ -16,7 +16,7 @@ make -C docs/verification/oc-view-session view    # one check
 ```
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256
-`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`. The tools, the translator's copy, Java's
+`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. The tools, the translator's copy, Java's
 temporary files, TLC's working files and each check's log go to the repository root's
 `.tmp/verification/oc-view-session/`. A passing check needs TLC exit 0 and
 `Model checking completed. No error has been found.`; a check that must fail needs TLC exit 12 and its named
@@ -39,6 +39,8 @@ stateDiagram-v2
 ```
 
 ## What each check proves
+
+On 2026-11-21, `make all` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 Requirements, checked once nothing is moving (`Quiet`: no transition pending, the Web's effect has told the view
 everything, no child still syncing):

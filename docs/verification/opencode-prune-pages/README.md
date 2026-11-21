@@ -35,7 +35,7 @@ make -C docs/verification/opencode-prune-pages fixed    # one check
 ```
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256
-`e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`. The tools, the translator's copy, Java's temporary
+`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. The tools, the translator's copy, Java's temporary
 files, TLC's working files and each check's log go to the repository root's `.tmp/verification/opencode-prune-pages/`.
 A passing check needs TLC exit 0 and `Model checking completed. No error has been found.`; a check that must fail
 needs TLC exit 12 (safety) or 13 (liveness) and its named violation, so a parse or tool error never counts.
@@ -84,6 +84,8 @@ Properties:
   forget deleted sessions and does finish after more than one page of sessions plus the final empty one.
 
 ## Checks and results
+
+On 2026-11-21, `make all` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 With TLC2 `2026.11.06.222357` (rev `d8fb231`) and OpenJDK `21.0.13`, `-workers 1`, on 2026-11-19. Every check uses
 `Sessions = {1, 2, 3}`, `MaxChanges = 2` and `MaxFailures = 1` except `fixed-wide`, and finished in under 15 seconds.

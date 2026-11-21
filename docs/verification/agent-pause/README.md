@@ -21,7 +21,7 @@ make -C docs/verification/agent-pause goal     # one check
 ```
 
 Needs Java 11+, `curl`, `shasum`, `perl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and checks its
-SHA-256 `7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`. Tools, the translator's scratch copy,
+SHA-256 `fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. Tools, the translator's scratch copy,
 Java's temporary files, TLC metadata and every log (with full counterexample traces) live under the repository
 root's `.tmp/run/agent-pause-model/`. Each TLC run is killed after 600 seconds, which fails its check; passing
 checks use 4 workers, must-fail checks one, so their first counterexample is the same on every run. A passing check
@@ -150,6 +150,8 @@ follows; each must-fail check turns one off and finds the old counterexample aga
 | C. A held caller whose row a duplicate ran was never answered | Ann's request was held in `b.waiting` while paused; a caller-less duplicate of her row, from a `pickLaterWork` that read the flag before the pause, passed the gate after the resume and ran her message; her held request then waited in `b.waiting` for a row that no longer waited, and her send never returned while the chat stayed live. | `Bridge.activateInbound`, after a real claim, calls `takeHeldCaller`: under `b.mu` it removes the first `b.waiting` request with the same queue item ID; the claiming request takes its completion (answered when the turn ends, with that turn's error), or, when it has its own, the held completion is closed at once. | `no-take` (`Mutation = "no-take"`) |
 
 ## Checks, bounds and results
+
+On 2026-11-21, `make check` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 Recorded 2026-11-14 on aarch64 while Go tests ran on the same machine; OpenJDK 21.0.13.0.3; TLC
 `2026.11.06.222357 (rev: d8fb231)` from the pinned v1.8.0 jar; `-Xmx3g`; every run under the 600-second limit. Each

@@ -16,7 +16,7 @@ make -C docs/verification/tab-selection-escape fixed      # one check
 ```
 
 Requires Java 11 or newer, `curl`, `shasum` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies
-SHA-256 `7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`. The tools, the translator's copy, Java's
+SHA-256 `fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. The tools, the translator's copy, Java's
 temporary files, TLC's metadata and each check's log go to the repository root's `.tmp/run/tab-selection-escape-model/`.
 A passing check must exit 0 and print `Model checking completed. No error has been found.`; a check that must fail must
 exit 12 or 13 and print its named violation, so a parse error never counts as an expected failure.
@@ -59,6 +59,8 @@ menu, and the selection before and after the latest Escape; `raced` records that
 was open.
 
 ## Checks
+
+On 2026-11-21, `make check` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 All checks use `MaxOpens = 3`: the person can open the menu on Charlie and close it with Escape twice, then open it
 again and group.

@@ -21,7 +21,7 @@ make -C docs/verification/agent-editor-test-turns replay-skips-queued
 ```
 
 Requires Java 11+, `curl`, `shasum` and Make. The runner downloads tla2tools v1.8.0 and checks SHA-256
-`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`. Tools, the translator's scratch copy,
+`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. Tools, the translator's scratch copy,
 Java temp files, TLC metadata and every log and counterexample trace go to the repository root's
 `.tmp/run/agent-editor-test-turns/`. A passing check needs exit 0 and `Model checking completed. No error has
 been found.`; a negative check needs exit 12 or 13 and its exact `EXPECTED_<check>` message, so a parse
@@ -122,6 +122,8 @@ stateDiagram-v2
 | `NeverWaitsForKeystrokes` | Canary only: must be violated, showing a pressed send really waits with keystrokes pending. |
 
 ## Checks
+
+On 2026-11-21, `make check` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 All checks: `MaxSaves = 1` unless listed, `MaxRestarts = 1`, `MaxMsgs = 2` composer sends over all chats
 unless listed (a replay re-sends every recorded message). As-built switches: capture at send, live file captured, labels from the

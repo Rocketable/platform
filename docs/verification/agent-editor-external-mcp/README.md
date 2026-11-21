@@ -24,7 +24,7 @@ make -C docs/verification/agent-editor-external-mcp queue-steer
 
 Requires Java 11+, `curl`, `shasum` and Make. The runner downloads tla2tools
 v1.8.0 and checks SHA-256
-`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`. Tools,
+`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. Tools,
 the translator's scratch copy, Java temp files, TLC metadata and every log and
 counterexample trace go to the repository root's
 `.tmp/run/agent-editor-external-mcp/`. A passing check needs exit 0 and
@@ -108,6 +108,8 @@ stateDiagram-v2
 | `MetaFrozenInMCPChat`, `NoMCPTurn`, `NoSecondMCPMessage`, `NoMCPInRestartedChat`, `NoLiveMCPTurn`, `NoRenamedLockedKey` | Probes that must fail, showing the states they name are reachable |
 
 ## Checks and results
+
+On 2026-11-21, `make check` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 As built means: server sticky check on the capture, mode change refused, locked
 keys checked on the capture and compared as variables, pairs refused when two keys

@@ -42,8 +42,8 @@ make -C docs/verification/sticky-attachment-retention fixed    # one check
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar`
 v1.8.0 and verifies SHA-256
-`e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`, as the other
-models here do. The tools, the translator's copy, Java's temporary files, TLC's
+`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`.
+The tools, the translator's copy, Java's temporary files, TLC's
 working files and each check's log go to the repository root's
 `.tmp/verification/sticky-attachment-retention/`. A passing check needs TLC exit
 0 and `Model checking completed. No error has been found.`; a check that must
@@ -118,6 +118,8 @@ Assumptions:
 - Attachment ids are never reused.
 
 ## Checks and result
+
+On 2026-11-21, `make all` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 Bounds: `Files = {f1, f2}`, `Msgs = {m1, m2, m3}`, `MaxFailures = 1`, two
 drainers. Deadlock checking is off, because every process waits for work.

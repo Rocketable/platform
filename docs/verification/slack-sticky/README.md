@@ -27,8 +27,8 @@ make -C docs/verification/slack-sticky safety   # one check
 You need Java 11+, `curl`, `shasum`, `perl` and Make.
 
 The Makefile downloads `tla2tools.jar` v1.8.0 and checks its SHA-256
-`7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f` (build `bc1b506`, 2026-11-15). This change moved
-that pin for every model, from build `d8fb231`, after the four checks in
+`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713` (build `bc1b506`, 2026-11-19).
+The previous pin moved from `d8fb231` to `bc1b506` after the four checks in
 `docs/packs/formal-modeling/stateful-design.md` held:
 
 1. The download's hash matches the release's published digest.
@@ -259,6 +259,8 @@ reachable:
 - `NoExpiry`: an admission record drops out of the duplicate check's window.
 
 ## Results
+
+On 2026-11-21, `make check` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 All checks below share these settings unless their row says otherwise:
 

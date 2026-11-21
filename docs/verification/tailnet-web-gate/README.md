@@ -32,7 +32,7 @@ make -C docs/verification/tailnet-web-gate fixed    # one check
 ```
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256
-`e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f`, as the other models here do. The tools, the
+`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. The tools, the
 translator's copy, Java's temporary files, TLC's working files and each check's log go to the repository root's
 `.tmp/verification/tailnet-web-gate/`. A passing check needs TLC exit 0 and `Model checking completed. No error has
 been found.`; a check that must fail needs TLC exit 12 (safety) or 13 (liveness) and its named violation, so a parse or
@@ -119,6 +119,8 @@ again after a restart), `NeverGateFailure` (a gate failure exits 1), `NeverResta
 signal's shutdown and its restart request is refused).
 
 ## Results
+
+On 2026-11-21, `make all` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 
 Recorded 2026-11-18 on Linux (aarch64, 16 cores), OpenJDK 21.0.13.0.3, TLC `2026.11.06.222357 (rev: d8fb231)`,
 `pcal.trans` 1.12, one TLC worker. `make` ran every check in about 7 s with the tools in place. Every check matched its
