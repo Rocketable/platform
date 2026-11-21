@@ -185,6 +185,16 @@ function start() {
   let failFork = true;
   // Terminal sockets the view holds open, counted where OpenCode would serve them.
   const terminals = { open: 0, input: [] as string[] };
+  const openCodeGates = new Map<string, () => Promise<void>>();
+  const holdOpenCode = (request: string) => {
+    const arrived = Promise.withResolvers<void>(), released = Promise.withResolvers<void>();
+    openCodeGates.set(request, () => {
+      openCodeGates.delete(request);
+      arrived.resolve();
+      return released.promise;
+    });
+    return { arrived: arrived.promise, release: released.resolve };
+  };
   // A test holds session creates here to press again while one is still running.
   const creates = { hold: Promise.resolve() };
   // Loads of the view's entry left to fail, as a network blip or a deploy mid-load would.
@@ -201,7 +211,11 @@ function start() {
   } }, async fetch(request, server) {
     const url = new URL(request.url);
     if (/^\/oc\/box\/api\/experimental\/persistent-pty\/[^/]+\/connect$/.test(url.pathname)) return server.upgrade(request) ? undefined : new Response("not a WebSocket", { status: 400 });
-    if (url.pathname.startsWith("/oc/box/api/")) return openCode(request);
+    if (url.pathname.startsWith("/oc/box/api/")) {
+      const gate = openCodeGates.get(`${request.method} ${url.pathname}`);
+      if (gate) await gate();
+      return openCode(request);
+    }
     if (url.pathname.startsWith("/oc-ui/")) {
       if (url.pathname === "/oc-ui/_assets/index.js") {
         await entry;
@@ -255,7 +269,7 @@ function start() {
       default: return Response.json({});
     }
   } });
-  return { web, calls, release, terminals, creates, entryFailures, typing, rows, base: `http://127.0.0.1:${web.port}` };
+  return { web, calls, release, terminals, creates, entryFailures, typing, rows, holdOpenCode, base: `http://127.0.0.1:${web.port}` };
 }
 
 test("remote diagrams and HTML find keep their content inside the view", async () => {
@@ -373,7 +387,7 @@ test("a message link opens a remote session at that prompt, also when the sessio
 test("a remote session mounts OpenCode's view in the page, with RocketClaw's keys, commands, and tabs around it", async () => {
   const started = performance.now();
   const { chromium: engine } = await import(playwright!);
-  const { web, calls, release, terminals, base } = start();
+  const { web, calls, release, terminals, holdOpenCode, base } = start();
   fake.extraText = '<script>window.__ocUnsafe=1</script><img src=x onerror="window.__ocUnsafe=1"><a href="javascript:alert(1)">unsafe link</a>\n\n```mermaid\nflowchart LR\nA["<img src=x onerror=alert(1)>"]\nclick A "javascript:alert(1)"\n```';
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
@@ -536,31 +550,17 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     // Native append carries the stored panes property when the last terminal is reopened.
     for (const close of ["command", "tab"]) {
       const requestStart = terminalRequests.length;
-      const terminalList = Promise.withResolvers<void>();
-      const releaseList = Promise.withResolvers<void>();
-      await page.route(`**${terminalPath}`, async (route: { request(): { method(): string }; continue(): Promise<void> }) => {
-        if (route.request().method() === "GET") {
-          terminalList.resolve();
-          await releaseList.promise;
-        }
-        await route.continue();
-      }, { times: 1 });
+      const terminalList = holdOpenCode(`GET ${terminalPath}`);
       if (close === "command") {
         // While Mod+W's close is pending, toggle still hides a visible terminal without waiting.
-        const removing = Promise.withResolvers<void>();
-        const releaseRemove = Promise.withResolvers<void>();
-        await page.route("**/oc/box/api/experimental/persistent-pty/pty_1", async (route: { continue(): Promise<void> }) => {
-          removing.resolve();
-          await releaseRemove.promise;
-          await route.continue();
-        }, { times: 1 });
+        const removing = holdOpenCode("DELETE /oc/box/api/experimental/persistent-pty/pty_1");
         await view.locator('[data-component="terminal"]').click();
         await page.keyboard.press("ControlOrMeta+w");
-        await removing.promise;
+        await removing.arrived;
         expect(await view.locator('[data-component="terminal"]').isVisible()).toBe(true);
         await page.keyboard.press("Control+Backquote");
         await until(async () => !await view.locator('[data-component="terminal"]').isVisible());
-        releaseRemove.resolve();
+        removing.release();
       } else {
         await view.locator('[data-pane-tab^="terminal:"]').getByRole("button", { name: "Close tab", exact: true }).click();
       }
@@ -585,10 +585,10 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
           return { ...target, key: event.key, control: event.ctrlKey, defaultPrevented: event.defaultPrevented };
         };
       });
-      await terminalList.promise;
+      await terminalList.arrived;
       await view.locator("[data-component=composer] [contenteditable=true]").click();
       await page.keyboard.press("Control+Backquote");
-      releaseList.resolve();
+      terminalList.release();
       try {
         await view.locator('[data-pane-content="bottom"] [data-component="terminal"]').waitFor();
         await until(() => terminals.open === 1);
