@@ -336,13 +336,13 @@ func (s *SessionService) commitAgentDraftOps(ctx context.Context, draft *AgentDr
 	draft.Revision += int64(len(ops))
 
 	committed, err := execRows(ctx, s.db, "commit agent draft op", `WITH changed AS (
-    UPDATE agent_drafts SET revision = $2 + jsonb_array_length($3), draft = $4 WHERE id = $1 AND revision = $2 RETURNING id AS draft_id
+    UPDATE agent_drafts SET revision = $2 + jsonb_array_length($3), draft = $4::jsonb -> -1 WHERE id = $1 AND revision = $2 RETURNING id AS draft_id
 ), logged AS (
     INSERT INTO agent_draft_ops (draft_id, revision, op, draft)
-    SELECT c.draft_id, $2 + o.n, o.op, o.draft FROM changed c CROSS JOIN ROWS FROM (jsonb_array_elements($3), jsonb_array_elements($5)) WITH ORDINALITY AS o(op, draft, n)
+    SELECT c.draft_id, $2 + o.n, o.op, o.draft FROM changed c CROSS JOIN ROWS FROM (jsonb_array_elements($3), jsonb_array_elements($4)) WITH ORDINALITY AS o(op, draft, n)
 )
 SELECT `+notifyAgentDraft+` FROM changed`,
-		draft.ID, revision, string(opsJSON), string(docs[len(docs)-1]), string(docsJSON))
+		draft.ID, revision, string(opsJSON), string(docsJSON))
 
 	return committed > 0, err
 }
