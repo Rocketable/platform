@@ -33,6 +33,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   let serverStoppedAtMs: number | null = null;
   let browserDisconnectedAtMs: number | null = null;
   let pageClosedAtMs: number | null = null;
+  let chromiumPID: number | undefined;
   const streamAbortedAtMs: number[] = [];
   const scroll: string[] = [], pageErrors: string[] = [], failedReads: string[] = [];
   const historyResponses: { body: string | null; status: number; atMs: number }[] = [];
@@ -77,15 +78,35 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
   } });
   reportFailure = () => {
+    let chromiumProcess = "not observed";
+    if (chromiumPID !== undefined) {
+      try {
+        process.kill(chromiumPID, 0);
+        chromiumProcess = "PID present";
+      } catch (error) {
+        chromiumProcess = (error as NodeJS.ErrnoException).code === "ESRCH" ? "PID gone" : String(error);
+      }
+    }
     console.error("Long chat test state", JSON.stringify({
       steps, elapsedMs: elapsed(), firstReadArrived, streamRequests, streamAbortedAtMs, fullReads, pages, historyResponses, scroll, pageErrors, failedReads,
-      cleanup: { closeStartedAtMs, closeFinishedAtMs, pageClosedAtMs, browserDisconnectedAtMs, serverStoppedAtMs, pendingRequests: server.pendingRequests },
+      cleanup: { closeStartedAtMs, closeFinishedAtMs, pageClosedAtMs, browserDisconnectedAtMs, serverStoppedAtMs, pendingRequests: server.pendingRequests, chromiumProcess },
     }));
   };
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   browser.once("disconnected", () => {
     browserDisconnectedAtMs = elapsed();
   });
+  void browser.newBrowserCDPSession().then(async (session: {
+    send(method: "SystemInfo.getProcessInfo"): Promise<{ processInfo: { type: string; id: number }[] }>;
+    detach(): Promise<void>;
+  }) => {
+    try {
+      const { processInfo } = await session.send("SystemInfo.getProcessInfo");
+      chromiumPID = processInfo.find(({ type }) => type === "browser")?.id;
+    } finally {
+      await session.detach();
+    }
+  }).catch(() => {});
   try {
     mark("create page");
     const page = await browser.newPage({ viewport: { width: 1100, height: 650 } });
