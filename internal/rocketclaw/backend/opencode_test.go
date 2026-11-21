@@ -932,6 +932,87 @@ FROM generate_series(1, 1024) AS series(i)`)
 	}
 }
 
+func TestSyncOpenCodePrunesOnItsOwnSchedule(t *testing.T) {
+	t.Parallel()
+
+	s := newOpenCodeTestService(t, "box")
+	fake := &fakeOpenCode{}
+	prunes, passes, release := make(chan struct{}, 10), make(chan struct{}, 10), make(chan struct{})
+	pruneArrived := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Query().Get("order") == "asc":
+			prunes <- struct{}{}
+
+			select {
+			case <-pruneArrived:
+			default:
+				close(pruneArrived)
+			}
+
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+
+			w.WriteHeader(http.StatusServiceUnavailable)
+
+			return
+		case r.URL.Path == "/api/session/active":
+			select {
+			case <-pruneArrived:
+			case <-r.Context().Done():
+				return
+			}
+
+			passes <- struct{}{}
+		}
+
+		fake.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
+		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "pw"}
+		cfg.Web.Tsnet = &config.TsnetConfig{}
+
+		return nil
+	}))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	var syncing errgroup.Group
+	syncing.Go(func() error {
+		s.SyncOpenCode(ctx, s.definitions)
+		return nil
+	})
+
+	select {
+	case <-prunes:
+	case <-time.After(openCodeSyncInterval):
+		require.FailNow(t, "the prune starts at startup, beside the first sync pass")
+	}
+
+	select {
+	case <-passes:
+	case <-time.After(openCodeSyncInterval / 2):
+		require.FailNow(t, "a sync pass runs while the prune is slow")
+	}
+
+	close(release)
+
+	select {
+	case <-passes:
+	case <-time.After(2 * openCodeSyncInterval):
+		require.FailNow(t, "sync keeps running after the prune failed")
+	}
+
+	require.Never(t, func() bool { return len(prunes) > 0 }, time.Second, 10*time.Millisecond, "a failed prune waits for the next day")
+
+	cancel()
+	require.NoError(t, syncing.Wait())
+}
+
 func TestPruneOpenCodeListsEveryPageFirst(t *testing.T) {
 	t.Parallel()
 
