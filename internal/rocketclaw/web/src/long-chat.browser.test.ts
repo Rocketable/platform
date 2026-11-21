@@ -87,7 +87,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     browserDisconnectedAtMs = elapsed();
   });
   try {
-    mark("create page and enable CPU throttling");
+    mark("create page");
     const page = await browser.newPage({ viewport: { width: 1100, height: 650 } });
     page.once("close", () => {
       pageClosedAtMs = elapsed();
@@ -104,8 +104,6 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
       const text = message.text();
       if (text.startsWith("long-chat-scroll ")) scroll.push(`${elapsed()} ms: ${text}`);
     });
-    const cdp = await page.context().newCDPSession(page);
-    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 8 });
     mark("navigate to long chat");
     await page.goto(`http://127.0.0.1:${server.port}/s/bG9uZw`);
     // A slow first read shows that the chat is loading, not an empty chat.
@@ -161,6 +159,9 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     mark("show new tab group name");
     await page.getByRole("button", { name: named, exact: true }).waitFor();
 
+    mark("enable CPU throttling for history paging");
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 8 });
     mark("hover over transcript");
     await page.locator("#transcript-scroll").hover();
     mark("wheel to the top");
