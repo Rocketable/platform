@@ -717,7 +717,7 @@ func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger
 			}
 		}
 
-		mode := embeddedFileMode(dst)
+		mode := os.FileMode(0o644)
 
 		if preserveExecutable {
 			info, err := d.Info()
@@ -725,10 +725,11 @@ func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger
 				return fmt.Errorf("stat skeleton source file %s: %w", name, err)
 			}
 
-			mode = 0o644
 			if info.Mode().Perm()&0o111 != 0 {
 				mode = 0o755
 			}
+		} else if strings.HasSuffix(dst, ".sh") {
+			mode = 0o755
 		}
 
 		if err := os.WriteFile(dst, data, mode); err != nil {
@@ -747,12 +748,4 @@ func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger
 	}
 
 	return nil
-}
-
-func embeddedFileMode(name string) os.FileMode {
-	if strings.HasSuffix(name, ".sh") {
-		return 0o755
-	}
-
-	return 0o644
 }
