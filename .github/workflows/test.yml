@@ -44,7 +44,8 @@ jobs:
         with:
           path: internal/rocketclaw/web/node_modules
           key: node-modules-${{ hashFiles('internal/rocketclaw/web/bun.lock') }}
-      - uses: actions/cache@v6
+      - &oc-node-modules
+        uses: actions/cache@v6
         with:
           path: internal/rocketclaw/oc/node_modules
           key: oc-node-modules-${{ hashFiles('internal/rocketclaw/oc/bun.lock') }}
@@ -66,7 +67,6 @@ jobs:
       - run: go generate ./internal/rocketclaw/internal/web ./internal/rocketclaw/frontend/rpc ./internal/rocketclaw/sandbox/wire ./cmd/rocketclaw
       - name: Generated files are committed
         run: git diff --exit-code && test -z "$(git status --porcelain)"
-      - run: make -C internal/rocketclaw/oc lint test
       - run: make check-cloc-budget
       - run: make -C internal/rocketclaw lint
       - run: make -C internal/funneld lint
@@ -78,6 +78,16 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/golangci-lint
           key: go-${{ github.job }}-${{ github.sha }}
+
+  oc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-bun
+      - *oc-node-modules
+      - run: bun install --frozen-lockfile
+        working-directory: internal/rocketclaw/oc
+      - run: make -C internal/rocketclaw/oc lint test
 
   funneld:
     runs-on: ubuntu-latest
@@ -255,7 +265,7 @@ jobs:
   core:
     name: test (core)
     if: always()
-    needs: [checks, funneld, rocketclaw, sandbox, coverage]
+    needs: [checks, oc, funneld, rocketclaw, sandbox, coverage]
     runs-on: ubuntu-latest
     steps:
       - &all-passed
