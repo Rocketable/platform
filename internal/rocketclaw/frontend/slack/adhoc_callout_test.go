@@ -170,44 +170,21 @@ func TestHandleAppMentionEventAdmitsRecentRootMentionFirst(t *testing.T) {
 }
 
 func TestHandleAppMentionEventThreadUnderBotRoot(t *testing.T) {
-	mark := map[string]any{"event_type": slackChannelReplyEvent, "event_payload": map[string]any{}}
+	router := newMentionRouter(false)
 
-	for _, tt := range []struct {
-		name, root string
-		metadata   map[string]any
-		admitted   bool
-	}{
-		{name: "cron report", root: "🔁 nightly.md | main"},
-		{name: "External MCP relay", root: "📡 MCP request | ext-1 | main"},
-		{name: "Channel Session answer", root: "💬 main", metadata: mark, admitted: true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			var writes []string
+	server := newAdhocSlackServer(t, "random", []map[string]any{
+		{"ts": "171234.0001", "user": "U999", "bot_id": "B999", "text": "💬 main", "metadata": map[string]any{"event_type": slackChannelReplyEvent, "event_payload": map[string]any{}}},
+		{"ts": "171234.9999", "user": "U123", "text": "<@U999> why did this fail?"},
+	}, new([]string))
+	defer server.Close()
 
-			router := newMentionRouter(false)
+	connector := newAdhocConnector(server.URL, router)
+	connector.handleAppMentionEvent(context.Background(), newThreadMention("<@U999> why did this fail?"), slackNativeForward{})
 
-			server := newAdhocSlackServer(t, "random", []map[string]any{
-				{"ts": "171234.0001", "user": "U999", "bot_id": "B999", "text": tt.root, "metadata": tt.metadata},
-				{"ts": "171234.9999", "user": "U123", "text": "<@U999> why did this fail?"},
-			}, &writes)
-			defer server.Close()
-
-			connector := newAdhocConnector(server.URL, router)
-			connector.handleAppMentionEvent(context.Background(), newThreadMention("<@U999> why did this fail?"), slackNativeForward{})
-
-			if !tt.admitted {
-				assert.Empty(t, router.SubmitMentionCalls(), "a thread under an unmarked bot root is a Report Thread")
-				assert.Empty(t, writes)
-
-				return
-			}
-
-			started := router.SubmitMentionCalls()
-			require.Len(t, started, 1, "a thread under a Channel Session answer is a Thread Session")
-			assert.Equal(t, "171234.0001", started[0].Target.ThreadID)
-			assert.Contains(t, started[0].Inbound.Text, tt.root, "the answer is adopted as thread history")
-		})
-	}
+	started := router.SubmitMentionCalls()
+	require.Len(t, started, 1, "a thread under a Channel Session answer is a Thread Session")
+	assert.Equal(t, "171234.0001", started[0].Target.ThreadID)
+	assert.Contains(t, started[0].Inbound.Text, "💬 main", "the answer is adopted as thread history")
 }
 
 func TestHandleAppMentionEventRepliesWhenHistoryFetchFails(t *testing.T) {

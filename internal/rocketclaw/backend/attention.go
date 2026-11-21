@@ -6,11 +6,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
@@ -169,24 +167,9 @@ SELECT space, own FROM tabs`, "search tabs", func(row rowScanner) (tab, error) {
 }
 
 func decodeSessionID(value string) string {
-	if decoded, err := url.PathUnescape(value); err == nil && utf8.ValidString(decoded) {
-		value = decoded
-	}
-
-	data := strings.Map(func(r rune) rune {
-		if strings.ContainsRune("\t\n\f\r ", r) {
-			return -1
-		}
-
-		return r
-	}, strings.NewReplacer("-", "+", "_", "/").Replace(value)+strings.Repeat("=", (4-len(value)%4)%4))
-	if len(data)%4 == 0 {
-		data = strings.TrimSuffix(strings.TrimSuffix(data, "="), "=")
-	}
-
-	raw, err := base64.RawStdEncoding.DecodeString(data)
+	raw, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil {
-		return value
+		return ""
 	}
 
 	text := make([]rune, len(raw))

@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -57,11 +58,11 @@ VALUES ($1, '', '', $2, 'review', FALSE, 'nested', $3, $4)`, id, parent, turnID,
 	return id
 }
 
-func (s testTurns) RecordLegacyDelegation(tb testing.TB, parent, callID string) {
+func (s testTurns) RecordDelegation(tb testing.TB, parent, turnID, callID string) {
 	tb.Helper()
 
-	_, err := s.db.ExecContext(tb.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, retention, call_id)
-VALUES ($1 || '/' || $2, '', '', $1, 'subagent', FALSE, 'nested', $2)`, parent, callID)
+	_, err := s.db.ExecContext(tb.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, retention, call_turn, call_id)
+VALUES ($1 || '/' || $3, '', '', $1, 'subagent', FALSE, 'nested', $2, $3)`, parent, turnID, callID)
 	require.NoError(tb, err)
 }
 
@@ -161,4 +162,14 @@ UPDATE conversations c SET running = f.running FROM facts f WHERE c.conversation
 	}
 
 	return nil
+}
+
+func withInbound(item *protocol.ThreadQueueItem) *protocol.ThreadQueueItem {
+	content := item.Content
+	content.Text = item.Message
+	item.Inbound = protocol.NewInboundMessageFromContent(item.Source, cmp.Or(item.Kind, protocol.InboundKindEnqueue), &content, true)
+	item.Inbound.ConversationID = item.ConversationID
+	item.Inbound.Metadata["web_message_id"], item.Inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.ID, item.Principal
+
+	return item
 }

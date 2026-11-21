@@ -666,7 +666,7 @@ func TestSidebarSessionsWorkTimes(t *testing.T) {
 	require.NoError(t, err)
 	_, err = service.AppendEntryID(ctx, "busy", testSessionEntry("progress", "still working"))
 	require.NoError(t, err)
-	require.NoError(t, service.PutThreadQueueItem("next", &protocol.ThreadQueueItem{ConversationID: "busy", Message: "next", StashAt: time.Now()}))
+	require.NoError(t, service.PutThreadQueueItem("next", withInbound(&protocol.ThreadQueueItem{ConversationID: "busy", Message: "next", StashAt: time.Now()})))
 
 	require.Equal(t, time.Unix(0, started.UnixNano()).UTC(), row("busy").StateSince, "running wins over queued")
 }

@@ -9,8 +9,8 @@ import (
 
 type inertThreadRouter struct{}
 
-func (inertThreadRouter) MentionThread(protocol.TextConversationTarget) (recorded, report bool, err error) {
-	return false, false, nil
+func (inertThreadRouter) MentionThread(protocol.TextConversationTarget) (recorded bool, err error) {
+	return false, nil
 }
 func (inertThreadRouter) SubmitMention(context.Context, string, protocol.TextConversationTarget, *protocol.InboundMessage) (bool, error) {
 	return false, errors.New("slack thread routing is not configured")

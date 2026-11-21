@@ -177,7 +177,7 @@ func TestClaimedQueueItemRunsExactlyOnceAfterCrash(t *testing.T) {
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	crashed := newBridge()
 	conversationID := crashed.config.ConversationID
-	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "queued work", Principal: "U1", Source: protocol.SourceWeb}))
+	require.NoError(t, service.PutThreadQueueItem("q1", withInbound(&protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "queued work", Principal: "U1", Source: protocol.SourceWeb})))
 
 	require.NoError(t, crashed.pickLaterWork(t.Context(), false))
 	request := <-crashed.requestCh
@@ -1290,7 +1290,7 @@ func TestPausedChatFinishesInterruptedReply(t *testing.T) {
 	rt := &Runtime{Sessions: service, threads: manager, Cfg: crashed.runtime}
 
 	seedActiveTurn(t, service, conversationID, "turn-mid", nil)
-	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "queued work", Source: protocol.SourceWeb}))
+	require.NoError(t, service.PutThreadQueueItem("q1", withInbound(&protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "queued work", Source: protocol.SourceWeb})))
 
 	for range 2 {
 		require.NoError(t, rt.SetAgentPaused(t.Context(), conversationID, "Bob", true))
@@ -1347,7 +1347,7 @@ func TestPausedChatHoldsWorkUntilResume(t *testing.T) {
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	cfg, conversationID := newBridge().runtime, newBridge().config.ConversationID
 	require.NoError(t, service.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 1}))
-	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "queued work", Source: protocol.SourceWeb}))
+	require.NoError(t, service.PutThreadQueueItem("q1", withInbound(&protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "queued work", Source: protocol.SourceWeb})))
 	require.NoError(t, service.PutScheduledMessage("once", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "one-time reminder", DueAt: time.Now().Add(-time.Hour)}))
 	require.NoError(t, service.PutScheduledMessage("hourly", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "recurring reminder", DueAt: time.Now().Add(-3 * time.Hour), Recurring: true, Interval: time.Hour}))
 
@@ -1459,7 +1459,7 @@ func TestResumedCronRunMarksCronTabs(t *testing.T) {
 	spaces, err := nt.service.Spaces(ctx)
 	require.NoError(t, err)
 
-	for person, tabs := range map[string][]Tab{alice: {{Path: "/cron", Space: spaces[1].ID}, {Path: "/cron/daily", Space: spaces[1].ID}}, bob: {{Path: "/cron", Space: spaces[0].ID}}} {
+	for person, tabs := range map[string][]Tab{alice: {{Path: "/cron", Space: spaces[1].ID}, {Path: cronTabPath("daily"), Space: spaces[1].ID}}, bob: {{Path: "/cron", Space: spaces[0].ID}}} {
 		saved, err := nt.service.SaveTabState(ctx, person, &TabState{Tabs: tabs}, 0)
 		require.NoError(t, err)
 		require.True(t, saved)
@@ -1469,7 +1469,7 @@ func TestResumedCronRunMarksCronTabs(t *testing.T) {
 	manager, _ := nt.run(t, ignoreOutbound)
 	require.NoError(t, manager.StartActiveTurns(ctx))
 	readFinalFor(t, nt.finals, "cron:daily")
-	assert.ElementsMatch(t, []string{alice + " /cron loud", alice + " /cron/daily loud"}, locationMarks(t, nt.service, "Run finished"), "not Bob's overview of another space")
+	assert.ElementsMatch(t, []string{alice + " /cron loud", alice + " " + cronTabPath("daily") + " loud"}, locationMarks(t, nt.service, "Run finished"), "not Bob's overview of another space")
 }
 
 func TestResumedCronRowOpensReportChat(t *testing.T) {

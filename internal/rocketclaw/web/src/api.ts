@@ -68,7 +68,7 @@ export async function searchAll(servers: string[], input: object, signal: AbortS
     (reply) => ({ ...reply, matches: reply.matches.map((match) => ({ ...match, rocketclaw: name })), messages: reply.messages.map((match) => ({ ...match, rocketclaw: name })) }),
     (error: Error) => { if (name) return undefined; throw error; })));
   const found = replies.filter((reply) => reply !== undefined);
-  return { ...found[0], matches: found.flatMap((reply) => reply.matches), messages: found.flatMap((reply) => reply.messages), mentionIds: [...new Set(found.flatMap((reply) => reply.mentionIds))], principals: [...new Set(found.flatMap((reply) => reply.principals ?? []))] };
+  return { ...found[0], matches: found.flatMap((reply) => reply.matches), messages: found.flatMap((reply) => reply.messages), mentionIds: [...new Set(found.flatMap((reply) => reply.mentionIds))], principals: [...new Set(found.flatMap((reply) => reply.principals))] };
 }
 
 export const queries = {

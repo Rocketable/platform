@@ -54,7 +54,7 @@ func SlackThreadSessionID(channelID, threadTS, agent string) string {
 }
 
 type PrimaryTextRouter interface {
-	MentionThread(target TextConversationTarget) (recorded, report bool, err error)
+	MentionThread(target TextConversationTarget) (recorded bool, err error)
 	SubmitMention(ctx context.Context, agent string, target TextConversationTarget, inbound *InboundMessage) (bool, error)
 	InterruptTurn(ctx context.Context, turnID string) error
 	WebURL(conversationID string) (string, error)

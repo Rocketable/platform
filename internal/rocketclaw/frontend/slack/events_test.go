@@ -26,7 +26,7 @@ func TestStartEventsRoutesAndAcknowledgesSubscription(t *testing.T) {
 	defer server.Close()
 
 	router := &primaryTextRouterMock{
-		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, false, nil },
+		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, error) { return true, nil },
 		WebURLFunc:        func(string) (string, error) { return testFooterLink, nil },
 	}
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)

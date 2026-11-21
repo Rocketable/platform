@@ -116,7 +116,7 @@ UNION ALL SELECT format('tab %s unread=%s', path, unread_at IS NOT NULL) FROM we
 	assert.Equal(t, map[string]string{"x": at + " marked", "y": "", "/cron": at}, unread("alice", "/s/bm9uZQ"))
 	assert.Equal(t, []string{"alice viewing=/s/bm9uZQ", "tab /cron unread=t", "tab /s/eA unread=t"}, reads(), "a viewing that names no session clears no mark")
 
-	assert.Equal(t, map[string]string{"x": "", "y": "", "/cron": at}, unread("alice", "/s/x"), "viewing x, in its legacy spelling, clears its mark in the same response")
+	assert.Equal(t, map[string]string{"x": "", "y": "", "/cron": at}, unread("alice", "/s/eA"), "viewing x clears its mark in the same response")
 	assert.Equal(t, []string{"alice viewing=/s/eA", "tab /cron unread=t", "tab /s/eA unread=f"}, reads(), "and ends alice's view of y")
 	assert.Equal(t, map[string]string{"x": "", "y": "", "/cron": ""}, unread("alice", "/cron"), "viewing the Cron tab clears its mark")
 

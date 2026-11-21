@@ -523,7 +523,7 @@ func TestFinishTurnReportsSubagentWakeUp(t *testing.T) {
 			}
 
 			if tc.steered {
-				require.NoError(t, store.PutThreadQueueItem("main/turn-2/call/s", &protocol.ThreadQueueItem{ID: "main/turn-2/call/s", ConversationID: "main/a", Kind: protocol.InboundKindSteer}))
+				require.NoError(t, store.PutThreadQueueItem("main/turn-2/call/s", withInbound(&protocol.ThreadQueueItem{ID: "main/turn-2/call/s", ConversationID: "main/a", Kind: protocol.InboundKindSteer})))
 				require.NoError(t, store.SaveTurnStep(ctx, "main/a", "turn-1", json.RawMessage(`{"applied_input_ids":["main/turn-2/call/s"]}`)))
 			}
 

@@ -150,39 +150,29 @@ func TestPermissionReviewInputsStayInTheirTurn(t *testing.T) {
 func TestPermissionReviewResumesAvailableCheckpointEvidence(t *testing.T) {
 	planned := responseWithFunctionCalls("action", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "publish", "publish", `{}`)})
 
-	for _, legacy := range []bool{false, true} {
-		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
-			journal := recordingJournal()
-			want := PromptInput{ID: "later", Texts: []string{"Inspect the demo board."}}
-			step := turnStep{Record: SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1", Model: "work/model"}}
-			provider := mockResponses(responseWithMessage("first", "checking"), planned, responseWithMessage("final", "done"))
+	journal := recordingJournal()
+	want := PromptInput{ID: "initial", Texts: []string{"Inspect the first demo board."}}
+	step := turnStep{Record: SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1", Model: "work/model"}, ReviewInputs: []PromptInput{want}, Response: json.RawMessage(planned.RawJSON())}
+	provider := mockResponses(responseWithMessage("final", "done"))
 
-			if !legacy {
-				want = PromptInput{ID: "initial", Texts: []string{"Inspect the first demo board."}}
-				step.ReviewInputs, step.Response = []PromptInput{want}, json.RawMessage(planned.RawJSON())
-				provider = mockResponses(responseWithMessage("final", "done"))
-			}
+	raw, err := json.Marshal(step)
+	require.NoError(t, err)
+	require.NoError(t, journal.SaveTurn(t.Context(), "turn-1", raw, nil))
 
-			raw, err := json.Marshal(step)
-			require.NoError(t, err)
-			require.NoError(t, journal.SaveTurn(t.Context(), "turn-1", raw, nil))
+	loop := testLooper(provider)
+	reviewer := permissionReviewerWith(permissionReviewFailure("probe"))
+	loop.PermissionReviewer = reviewer
+	loop.Tools = map[string]looperTool{"publish": testLooperTool("publish")}
+	loop.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "publish", Rules: []PermissionRule{{Pattern: "*", Action: permissionAuto}}}}}
+	loop.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
+		return []PromptInput{{ID: "later", Texts: []string{"Inspect the demo board."}}}, nil
+	}}
+	_, err = runJournaledTurn(t.Context(), loop, journal, "unavailable initiating input")
+	require.NoError(t, err)
 
-			loop := testLooper(provider)
-			reviewer := permissionReviewerWith(permissionReviewFailure("probe"))
-			loop.PermissionReviewer = reviewer
-			loop.Tools = map[string]looperTool{"publish": testLooperTool("publish")}
-			loop.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "publish", Rules: []PermissionRule{{Pattern: "*", Action: permissionAuto}}}}}
-			loop.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
-				return []PromptInput{{ID: "later", Texts: []string{"Inspect the demo board."}}}, nil
-			}}
-			_, err = runJournaledTurn(t.Context(), loop, journal, "unavailable initiating input")
-			require.NoError(t, err)
-
-			requests := reviewedRequests(reviewer)
-			require.Len(t, requests, 1)
-			require.Equal(t, []PromptInput{want}, requests[0].CurrentTurnInputs)
-		})
-	}
+	requests := reviewedRequests(reviewer)
+	require.Len(t, requests, 1)
+	require.Equal(t, []PromptInput{want}, requests[0].CurrentTurnInputs)
 }
 
 func TestPermissionReviewInputKeepsSubmittedEvidenceWithoutAttachmentContents(t *testing.T) {

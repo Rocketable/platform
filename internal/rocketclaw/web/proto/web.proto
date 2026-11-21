@@ -408,8 +408,7 @@ message TranscriptEvent {
   string delegation = 22;
   // Delegation History a reviewed call's row opens: its automatic permission review.
   string review = 23;
-  // On an Execute call's first event: the calls its script made, in start order. Chats saved
-  // before calls were recorded list only the calls the automatic approver checked.
+  // On an Execute call's first event: the calls its script made, in start order.
   repeated CodeModeCall code_mode_calls = 24;
   // On an Execute call's first event: the automatic approver's reason for its whole script.
   string script_reason = 25;
@@ -421,7 +420,7 @@ message TranscriptEvent {
 }
 
 // One call an Execute script made. Arguments are clipped to 4 KiB. Status is running, ok, error,
-// or denied, and empty when read from an older chat's review. Outcome (allow or deny), reason, and
+// or denied. Outcome (allow or deny), reason, and
 // review_turn, the turn under which the script's review saves the approver's answer on this call,
 // are set only when the automatic approver ran.
 message CodeModeCall {
@@ -444,7 +443,8 @@ message Attachment {
   string name = 2;
   string mime_type = 3;
   int64 size = 4;
-  bool original_unverified = 5;
+  reserved 5;
+  reserved "original_unverified";
   bytes data = 6;
   string conversation_id = 7;
 }

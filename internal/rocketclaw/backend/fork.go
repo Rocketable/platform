@@ -158,7 +158,7 @@ func (s *SessionService) copySessionPrefix(ctx context.Context, db stateStoreDB,
 			return "", fmt.Errorf("copy fork attachment: %w", err)
 		}
 
-		if _, err := db.ExecContext(ctx, `INSERT INTO attachments (id, conversation_id, name, mime_type, size, original_unverified, upload) SELECT $1, $2, name, mime_type, size, original_unverified, upload FROM attachments WHERE id = $3`, copyID, destination, id); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO attachments (id, conversation_id, name, mime_type, size, upload) SELECT $1, $2, name, mime_type, size, upload FROM attachments WHERE id = $3`, copyID, destination, id); err != nil {
 			return "", fmt.Errorf("record fork attachment: %w", err)
 		}
 
