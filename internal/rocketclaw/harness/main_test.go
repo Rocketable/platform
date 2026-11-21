@@ -350,7 +350,7 @@ read:
 
 	result, err := readTool.Call(context.Background(), readArgs, nil, emptyToolCallMetadata())
 	require.NoError(t, err)
-	require.Contains(t, result.Output, "1: parent asset")
+	require.Equal(t, "parent asset", result.Output)
 
 	skillResult, err := loop.Tools["skill"].Call(context.Background(), json.RawMessage(`{"name":"parent"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
@@ -386,7 +386,7 @@ func TestExecuteSpillStorageIsPrivate(t *testing.T) {
 			t.Cleanup(loop.deleteTurnExecuteResults)
 
 			full := strings.Repeat("private-result\n", 2100)
-			_, err = loop.saveExecuteResult(full)
+			_, err = loop.saveExecuteResult(full, nil)
 			require.NoError(t, err)
 			require.NoError(t, root.WriteFile("ordinary.txt", []byte("ordinary\n"), 0o600))
 
@@ -442,12 +442,16 @@ func TestExecuteSpillStorageIsPrivate(t *testing.T) {
 
 						tool := loop.CodeModeHosts[input.name]
 						result, err := tool.Call(ctx, raw, nil, emptyToolCallMetadata())
-						require.NoError(t, err)
+
+						output := result.Output
+						if err != nil {
+							output = err.Error()
+						}
 
 						if filepath.IsAbs(path) && !strings.HasPrefix(path, root.Name()+"/") {
-							require.Regexp(t, "execute output storage is private|path escapes root|bash command denied: (path|workdir) is outside this agent's working directory", result.Output, "%s(%s)", input.name, raw)
+							require.Regexp(t, "execute output storage is private|path escapes root|bash command denied: (path|workdir) is outside this agent's working directory", output, "%s(%s)", input.name, raw)
 						} else {
-							require.Contains(t, result.Output, deniedSpillAccess, "%s(%s)", input.name, raw)
+							require.Contains(t, output, deniedSpillAccess, "%s(%s)", input.name, raw)
 						}
 					}
 				}
@@ -480,7 +484,7 @@ func TestExecuteSpillStorageIsPrivate(t *testing.T) {
 					require.NoError(t, err)
 					result, err = read.Call(ctx, args, nil, emptyToolCallMetadata())
 					require.NoError(t, err)
-					require.Contains(t, result.Output, "1: ordinary")
+					require.Equal(t, "ordinary", result.Output)
 
 					bash := loop.CodeModeHosts["bash"]
 					args, err = json.Marshal(bashParams{Command: fmt.Sprintf("cat %q", ordinary)})

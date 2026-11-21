@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"golang.org/x/sync/errgroup"
@@ -100,6 +101,34 @@ func backgroundNote(job *backgroundJob) string {
 	return fmt.Sprintf("<subagent id=%q state=%q description=%q continue=%q>\n%s\n</subagent>", job.jobID, job.status, job.label, job.subagentKey, body)
 }
 
+func (s *SessionService) backgroundNoteInput(job *backgroundJob) (string, []protocol.InboundAttachment) {
+	if job.resultID == "" || job.status != backgroundCompleted {
+		return backgroundNote(job), nil
+	}
+
+	root, err := s.openSpill()
+
+	var files []*codemode.File
+	if root != nil {
+		files, err = harness.LoadRetainedFiles(root, rocketcodeRetainedDir(job.conversationID), job.resultID)
+		err = errors.Join(err, root.Close())
+	}
+
+	if root == nil || err != nil {
+		expired := *job
+		expired.result += "\n\nThe files this result attached are no longer available: they expire 7 days after the job finishes."
+
+		return backgroundNote(&expired), nil
+	}
+
+	attachments := make([]protocol.InboundAttachment, len(files))
+	for i, file := range files {
+		attachments[i] = protocol.InboundAttachment{Name: file.Name(), MIMEType: file.Mime(), Data: []byte(file.Content())}
+	}
+
+	return backgroundNote(job), attachments
+}
+
 func systemPromptInput(id, text string) harness.PromptInput {
 	header := provenanceHeader(&promptProvenance{origin: "System"})
 	return harness.PromptInput{ID: id, Texts: []string{header + "\n\n" + text}, Header: header}
@@ -126,7 +155,7 @@ type backgroundRun struct {
 	recorded, done chan struct{}
 
 	attached bool
-	output   string
+	result   harness.ToolResult
 	err      error
 }
 
@@ -274,18 +303,18 @@ func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, wor
 		return harness.BackgroundResult{}, fmt.Errorf("run background work: %w", run.err)
 	}
 
-	return harness.BackgroundResult{Output: run.output}, nil
+	return harness.BackgroundResult{Result: run.result}, nil
 }
 
 func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *backgroundRun, work harness.BackgroundWork) {
 	defer close(run.done)
 
-	output, errWork := work.RunBackground(ctx)
+	result, errWork := work.RunBackground(ctx)
 
 	r.mu.Lock()
 	delete(r.runs, key)
 
-	run.output, run.err = output, errWork
+	run.result, run.err = result, errWork
 	attached := run.attached
 	flipped := attached && !r.attachedLocked(key.conversationID)
 	r.mu.Unlock()
@@ -304,7 +333,11 @@ func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *b
 	stop, stopped := errors.AsType[backgroundStopError](cause)
 
 	end := *run.row
-	end.status, end.noteState, end.wake, end.result = backgroundCompleted, notePending, true, output
+	end.status, end.noteState, end.wake, end.result = backgroundCompleted, notePending, true, result.Output
+
+	if files, ok := result.Data.(harness.RetainedFiles); ok {
+		end.resultID = files.ResultID
+	}
 
 	switch {
 	case stop == errStoppedWithOwner:
@@ -410,8 +443,10 @@ type subagentTurn struct {
 	job   *backgroundJob
 }
 
-func (w subagentTurn) RunBackground(ctx context.Context) (string, error) {
-	return w.notes.continueSubagent(ctx, w.job)
+func (w subagentTurn) RunBackground(ctx context.Context) (harness.ToolResult, error) {
+	answer, err := w.notes.continueSubagent(ctx, w.job)
+
+	return harness.TextToolResult(answer), err
 }
 
 func (subagentTurn) Detach() bool { return true }

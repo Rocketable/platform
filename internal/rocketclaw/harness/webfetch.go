@@ -1,9 +1,9 @@
 package harness
 
 import (
-	"bytes"
 	"cmp"
 	"context"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +12,6 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,11 +19,14 @@ import (
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
+	"go.starlark.net/starlark"
 )
 
 const (
 	defaultWebFetchTimeout = 30 * time.Second
 	maxWebFetchTimeout     = 120 * time.Second
+	maxWebFetchRedirects   = 10
 )
 
 const webFetchDescription = `- Fetches content from a specified URL
@@ -37,11 +39,80 @@ Usage notes:
 - The URL must be a fully-formed valid URL
 - Format options: markdown (default), text, or html
 - This tool is read-only and does not modify any files
-- Image and PDF responses are returned as model-visible attachments`
+- Returns text only: images, PDFs and other non-text responses are refused`
+
+type webFetchPage struct {
+	ContentType string `json:"content_type"`
+	Output      string `json:"output"`
+	URL         string `json:"url"`
+}
+
+type webFetchResult struct {
+	page webFetchPage
+}
+
+func (w *webFetchResult) String() string       { return w.page.Output }
+func (w *webFetchResult) Text() string         { return w.page.Output }
+func (w *webFetchResult) Type() string         { return "webfetch_result" }
+func (w *webFetchResult) Freeze()              {}
+func (w *webFetchResult) Truth() starlark.Bool { return w.page.Output != "" }
+func (w *webFetchResult) Ok() bool             { return true }
+
+func (w *webFetchResult) Hash() (uint32, error) {
+	hash, _ := starlark.String(w.page.Output).Hash()
+
+	return hash, nil
+}
+
+func (w *webFetchResult) MarshalJSON() ([]byte, error) {
+	encoded, err := jsonv2.Marshal(struct {
+		ContentType string `json:"content_type"`
+		Output      string `json:"output"`
+	}{w.page.ContentType, w.page.Output})
+	if err != nil {
+		return nil, fmt.Errorf("encode webfetch_result: %w", err)
+	}
+
+	return encoded, nil
+}
+
+func (w *webFetchResult) Attr(name string) (starlark.Value, error) {
+	if v, ok := codemode.ResultAttr(w, nil, name); ok {
+		return v, nil
+	}
+
+	switch name {
+	case "content_type":
+		return starlark.String(w.page.ContentType), nil
+	case "output":
+		return starlark.String(w.page.Output), nil
+	case "url":
+		return starlark.String(w.page.URL), nil
+	}
+
+	method, _ := starlark.String(w.page.Output).Attr(name)
+
+	return method, nil
+}
+
+func (w *webFetchResult) AttrNames() []string {
+	return codemode.ResultAttrNames(append([]string{"content_type", "output", "url"}, starlark.String("").AttrNames()...)...)
+}
+
+var (
+	_ codemode.Result   = (*webFetchResult)(nil)
+	_ codemode.Text     = (*webFetchResult)(nil)
+	_ starlark.HasAttrs = (*webFetchResult)(nil)
+)
 
 func webFetch(ctx context.Context, client *http.Client, params webFetchToolParams) (ToolResult, error) {
-	if !strings.HasPrefix(params.URL, "http://") && !strings.HasPrefix(params.URL, "https://") {
+	rawURL, _, _ := strings.Cut(params.URL, "#")
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		return ToolResult{}, errors.New("URL must start with http:// or https://")
+	}
+
+	if u, err := url.Parse(rawURL); err == nil && u.User != nil {
+		return ToolResult{}, errors.New("URL must not include credentials")
 	}
 
 	format := params.Format
@@ -63,7 +134,28 @@ func webFetch(ctx context.Context, client *http.Client, params webFetchToolParam
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	resp, err := doWebFetchRequest(ctx, client, params.URL, format, false)
+	tc, _ := toolCallContextFrom(ctx)
+	checked := *client
+	checked.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > maxWebFetchRedirects {
+			return fmt.Errorf("too many redirects (more than %d)", maxWebFetchRedirects)
+		}
+
+		if req.URL.User != nil {
+			return errors.New("URL must not include credentials")
+		}
+
+		req.URL.Fragment, req.URL.RawFragment = "", ""
+
+		decision := tc.looper.Permissions.evaluate("webfetch", req.URL.String())
+		if decision.Matched && decision.Action == permissionDeny {
+			return permissionDeniedError(formatPermissionDenied(&decision))
+		}
+
+		return nil
+	}
+
+	resp, err := doWebFetchRequest(ctx, &checked, rawURL, format, false)
 	if err != nil {
 		return ToolResult{}, err
 	}
@@ -73,7 +165,7 @@ func webFetch(ctx context.Context, client *http.Client, params webFetchToolParam
 	if resp.StatusCode == http.StatusForbidden && resp.Header.Get("Cf-Mitigated") == "challenge" {
 		_ = resp.Body.Close()
 
-		resp, err = doWebFetchRequest(ctx, client, params.URL, format, true)
+		resp, err = doWebFetchRequest(ctx, &checked, rawURL, format, true)
 		if err != nil {
 			return ToolResult{}, err
 		}
@@ -85,48 +177,41 @@ func webFetch(ctx context.Context, client *http.Client, params webFetchToolParam
 		return ToolResult{}, fmt.Errorf("request failed with status %d", resp.StatusCode)
 	}
 
-	if length := resp.Header.Get("Content-Length"); length != "" {
-		value, err := strconv.ParseInt(length, 10, 64)
-		if err == nil && value > maxAttachmentBytes {
-			return ToolResult{}, errors.New("response too large (exceeds 5MB limit)")
-		}
+	contentType := resp.Header.Get("Content-Type")
+	if err := refuseNonTextWebFetch(normalizeMIME(contentType)); err != nil {
+		return ToolResult{}, err
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAttachmentBytes+1))
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return ToolResult{}, fmt.Errorf("read limited body: %w", err)
+		return ToolResult{}, fmt.Errorf("read body: %w", err)
 	}
 
-	if len(body) > maxAttachmentBytes {
-		return ToolResult{}, errors.New("response too large (exceeds 5MB limit)")
+	if err := refuseNonTextWebFetch(sniffAttachmentMIME(body, "")); err != nil {
+		return ToolResult{}, err
 	}
 
-	return webFetchToolResult(params.URL, format, resp.Header.Get("Content-Type"), body)
+	output, err := webFetchOutput(rawURL, format, contentType, strings.ToValidUTF8(string(body), "\uFFFD"))
+	if err != nil {
+		return ToolResult{}, err
+	}
+
+	return ToolResult{Output: output, Data: &webFetchResult{page: webFetchPage{ContentType: contentType, Output: output, URL: resp.Request.URL.String()}}}, nil
 }
 
-func webFetchToolResult(rawURL, format, contentType string, body []byte) (ToolResult, error) {
-	mimeType := sniffAttachmentMIME(body, contentType)
-	if isSupportedAttachmentMIME(mimeType) {
-		filename := "webfetch"
-		if mimeType == "application/pdf" {
-			filename += ".pdf"
-		}
-
-		attachment, err := attachmentFromBytes(filename, mimeType, body)
-		if err != nil {
-			return ToolResult{}, err
-		}
-
-		message := "Image fetched successfully"
-		if mimeType == "application/pdf" {
-			message = "PDF fetched successfully"
-		}
-
-		return ToolResult{Output: message, Attachments: []Attachment{attachment}}, nil
+func refuseNonTextWebFetch(mimeType string) error {
+	switch {
+	case isImageAttachmentMIME(mimeType):
+		return errors.New("Unsupported fetched image content type: " + mimeType)
+	case mimeType == "" || strings.HasPrefix(mimeType, "text/") || strings.HasSuffix(mimeType, "+json") || strings.HasSuffix(mimeType, "+xml") ||
+		slices.Contains([]string{"application/json", "application/xml", "application/javascript", "application/x-javascript"}, mimeType):
+		return nil
+	default:
+		return errors.New("Unsupported fetched file content type: " + mimeType)
 	}
+}
 
-	content := string(body)
-
+func webFetchOutput(rawURL, format, contentType, content string) (string, error) {
 	if strings.Contains(normalizeMIME(contentType), "text/html") {
 		switch format {
 		case "markdown":
@@ -137,28 +222,23 @@ func webFetchToolResult(rawURL, format, contentType string, body []byte) (ToolRe
 
 			markdown, err := htmltomarkdown.ConvertString(content, opts...)
 			if err != nil {
-				return ToolResult{}, fmt.Errorf("convert HTML to markdown: %w", err)
+				return "", fmt.Errorf("convert HTML to markdown: %w", err)
 			}
 
-			return TextToolResult(markdown), nil
+			return markdown, nil
 		case "text":
-			text, err := textFromHTMLString(content)
-			if err != nil {
-				return ToolResult{}, err
-			}
-
-			return TextToolResult(text), nil
+			return textFromHTMLString(content)
 		}
 	}
 
-	if format == "markdown" && bytes.Contains(body, []byte("<html")) {
+	if format == "markdown" && strings.Contains(content, "<html") {
 		markdown, err := htmltomarkdown.ConvertString(content)
 		if err == nil {
-			return TextToolResult(markdown), nil
+			return markdown, nil
 		}
 	}
 
-	return TextToolResult(content), nil
+	return content, nil
 }
 
 func doWebFetchRequest(ctx context.Context, client *http.Client, rawURL, format string, honestUA bool) (*http.Response, error) {

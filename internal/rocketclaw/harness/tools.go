@@ -17,11 +17,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
+	"go.starlark.net/starlark"
 )
 
 type toolFactory struct {
@@ -245,12 +247,12 @@ func toolVisible(agent *Agent, name string, tool *looperTool) bool {
 }
 
 type fileSystem interface {
-	ReadResult(filename string, offset int) ToolResult
+	Read(ctx context.Context, filename string, offset int) (starlark.Value, error)
 	readPermissionSubject(name string) string
 	previewApplyPatch(patchText string) (applyPatchPreview, string)
-	ApplyPatch(patchText string) string
-	Glob(ctx context.Context, pattern, path string) string
-	Grep(ctx context.Context, pattern, searchPath, include string) string
+	ApplyPatch(patchText string) (starlark.Value, error)
+	Glob(ctx context.Context, pattern, path string) (starlark.Value, error)
+	Grep(ctx context.Context, pattern, searchPath, include string) (starlark.Value, error)
 }
 
 func makeSandboxedTools(sfs fileSystem, sss *sandboxedShellSystem) map[string]looperTool {
@@ -270,13 +272,13 @@ func makeSandboxedTools(sfs fileSystem, sss *sandboxedShellSystem) map[string]lo
 
 				return []string{sfs.readPermissionSubject(params.FilePath)}, nil
 			},
-			Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				var params readToolParams
 				if err := decodeToolParams(raw, &params); err != nil {
 					return ToolResult{}, err
 				}
 
-				return sfs.ReadResult(params.FilePath, max(params.Offset, 1)), nil
+				return typedToolResult(sfs.Read(ctx, params.FilePath, max(params.Offset, 1)))
 			},
 		},
 		"apply_patch": {
@@ -313,7 +315,7 @@ func makeSandboxedTools(sfs fileSystem, sss *sandboxedShellSystem) map[string]lo
 					return ToolResult{}, err
 				}
 
-				return TextToolResult(sfs.ApplyPatch(params.PatchText)), nil
+				return typedToolResult(sfs.ApplyPatch(params.PatchText))
 			},
 		},
 		"glob": {
@@ -341,7 +343,7 @@ func makeSandboxedTools(sfs fileSystem, sss *sandboxedShellSystem) map[string]lo
 					return ToolResult{}, err
 				}
 
-				return TextToolResult(sfs.Glob(ctx, params.Pattern, params.Path)), nil
+				return typedToolResult(sfs.Glob(ctx, params.Pattern, params.Path))
 			},
 		},
 		"grep": {
@@ -365,7 +367,7 @@ func makeSandboxedTools(sfs fileSystem, sss *sandboxedShellSystem) map[string]lo
 					return ToolResult{}, err
 				}
 
-				return TextToolResult(sfs.Grep(ctx, params.Pattern, params.Path, params.Include)), nil
+				return typedToolResult(sfs.Grep(ctx, params.Pattern, params.Path, params.Include))
 			},
 		},
 		"webfetch": webFetchTool(http.DefaultClient),
@@ -387,7 +389,9 @@ func webFetchTool(client *http.Client) looperTool {
 				return nil, err
 			}
 
-			return []string{params.URL}, nil
+			rawURL, _, _ := strings.Cut(params.URL, "#")
+
+			return []string{rawURL}, nil
 		},
 		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 			var params webFetchToolParams
@@ -401,7 +405,7 @@ func webFetchTool(client *http.Client) looperTool {
 }
 
 func bashTool(sss *sandboxedShellSystem, customShell *CustomShell) looperTool {
-	description := "Run a shell script in the workspace. Every operation needs permission, including declarations, assignments, redirections, expansions, and nested commands. Whole-script rules support wildcards within the same operation tree; last matching rule wins per operation. Invalid syntax and unresolved executable names are denied. Inside execute JSON code, bash(command=...) takes r'''...''' only.\nExample: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}"
+	description := "Run a shell script in the workspace. Every operation needs permission, including declarations, assignments, redirections, expansions, and nested commands. Whole-script rules support wildcards within the same operation tree; last matching rule wins per operation. Invalid syntax and unresolved executable names are denied. Inside execute JSON code, bash(command=...) takes r'''...''' only. stdin= takes text or a file object fed to the command's standard input; to save a file, use command=r'''cat > path''' with stdin=file.\nExample: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}"
 	if customShell.Emulated {
 		description += "\nCommands run in an emulated bash shell, which may limit what they can reach."
 	} else if customShell.Path != "" {
@@ -414,6 +418,7 @@ func bashTool(sss *sandboxedShellSystem, customShell *CustomShell) looperTool {
 			"timeout_ms":  map[string]any{"type": "integer"},
 			"workdir":     map[string]any{"type": "string"},
 			"description": map[string]any{"type": "string"},
+			"stdin":       map[string]any{"type": []string{"string", "object"}},
 		}),
 		Permission: "bash",
 		Subjects: func(raw json.RawMessage) ([]string, error) {
@@ -430,7 +435,16 @@ func bashTool(sss *sandboxedShellSystem, customShell *CustomShell) looperTool {
 				return ToolResult{}, err
 			}
 
-			result := sss.Bash(ctx, customShell, params)
+			if params.Stdin.fileSHA256 != "" {
+				file, ok := codemode.ArgFile(ctx, params.Stdin.fileSHA256)
+				if !ok {
+					return ToolResult{}, errBashStdin
+				}
+
+				params.Stdin.text = file.Content()
+			}
+
+			result := sss.Bash(ctx, customShell, &params)
 
 			return ToolResult{Output: result.String(), Data: result}, nil
 		},

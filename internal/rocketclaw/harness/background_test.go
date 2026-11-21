@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -20,7 +21,7 @@ import (
 )
 
 const (
-	todayExecuteParameters = `{"additionalProperties":false,"properties":{"code":{"description":"Starlark source defining def main() that returns a string (or JSON-encodable value). Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in \"...\". Inside that string, bash(command=...) takes r'''...''' only, not Starlark \"...\" or '...'. r\"...\" is raw but single-line; a real newline needs r'''...'''. Example execute argument: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun. Concurrency: gather([lambda: …], concurrency=16) — one list of zero-arg lambdas, not varargs.","type":"string"},"description":{"description":"A short 3-5 word label for the script, displayed to the user.","type":"string"}},"required":["code","description"],"type":"object"}`
+	todayExecuteParameters = `{"additionalProperties":false,"properties":{"code":{"description":"Starlark source defining def main(); its return value (text, files, or a list/dict of both) is what you receive. Every call returns a typed Result; check failures with r.ok. Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in \"...\". Inside that string, bash(command=...) takes r'''...''' only, not Starlark \"...\" or '...'. r\"...\" is raw but single-line; a real newline needs r'''...'''. Example execute argument: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}. $ is valid inside a closed Starlark string, not interpolation. Failed wrapper output is not evidence; fix and rerun. Concurrency: gather([lambda: …], concurrency=16) — one list of zero-arg lambdas, not varargs.","type":"string"},"description":{"description":"A short 3-5 word label for the script, displayed to the user.","type":"string"}},"required":["code","description"],"type":"object"}`
 	todayTaskParameters    = `{"additionalProperties":false,"properties":{"description":{"type":"string"},"prompt":{"type":"string"},"subagent_type":{"type":"string"}},"required":["description","prompt","subagent_type"],"type":"object"}`
 	backgroundPermissions  = `{rocketclaw: {allow_background: allow}, task: allow, read: allow, probe: auto}`
 )
@@ -161,7 +162,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				var (
 					work     errgroup.Group
-					finished string
+					finished ToolResult
 					errWork  error
 					detached []bool
 				)
@@ -239,7 +240,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 
 				require.Equal(t, []CodeModeCall{{Type: codeModeCallTraceType, ParentCallID: "call-1", Key: "turn/call/call-1/host/0", Name: "probe", Arguments: "{}", Status: codeModeCallRunning}}, loop.observations.calls)
 
-				require.Equal(t, "probedprobed", finished)
+				require.Equal(t, "probedprobed", finished.Output)
 				require.Equal(t, []bool{tc.job.Detached, true}, detached, "the script sees when its job leaves the turn")
 				require.Equal(t, map[bool]int{true: 0, false: 1}[tc.job.Detached], nested, "only attached work reaches the turn")
 
@@ -634,6 +635,83 @@ func continueTestTask(t *testing.T, mock *mockResponsesAPI, jobs BackgroundJobs,
 	}
 }
 
+func TestExecuteDeliversTheSameResultInForegroundAndBackground(t *testing.T) {
+	chart := testFile(t, "chart.png", "image/png", "")
+	run := func(t *testing.T, jobs BackgroundJobs, background string, probe func(context.Context) (ToolResult, error)) (responses.ResponseInputItemFunctionCallOutputParam, *looper) {
+		t.Helper()
+
+		loop := backgroundTestLooper(t, backgroundPermissions, jobs, probe)
+		root, err := os.OpenRoot(t.TempDir())
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+		loop.promptExpansion = promptExpansionEnvironment{root: root}
+		args := `{"code":"def main():\n    return {\"chart\": probe(), \"note\": \"done\"}\n","description":"Chart"` + background + `}`
+		outputs, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", executeToolName, args)}), nil, nil, make(chan ChatResponse, 20))
+		require.NoError(t, err)
+
+		return outputs[0].Param, loop
+	}
+	file := func(context.Context) (ToolResult, error) { return ToolResult{Output: chart.String(), Data: chart}, nil }
+	detachedJobs := func(finished *ToolResult, errWork *error) *mockBackgroundJobs {
+		jobs := enabledBackgroundJobs()
+		jobs.RunFunc = func(ctx context.Context, _ *BackgroundJob, w BackgroundWork) (BackgroundResult, error) {
+			*finished, *errWork = w.RunBackground(context.WithoutCancel(ctx))
+
+			return BackgroundResult{Moved: true}, nil
+		}
+
+		return jobs
+	}
+
+	foreground, _ := run(t, InertBackgroundJobs{}, "", file)
+	require.Equal(t, toolCallOutput("call-1", ToolResult{
+		Output:      fmt.Sprintf(`{"chart":{"attachment":1,"height":1,"mime":"image/png","name":"chart.png","size":%d,"width":2},"note":"done"}`, chart.Size()),
+		Attachments: []Attachment{fileAttachment(chart)},
+	}), foreground)
+
+	attached := enabledBackgroundJobs()
+	attached.RunFunc = InertBackgroundJobs{}.Run
+	got, _ := run(t, attached, `,"background":false`, file)
+	require.Equal(t, foreground, got, "with background jobs on, an attached run still returns its files")
+
+	var (
+		finished ToolResult
+		errWork  error
+	)
+
+	_, loop := run(t, detachedJobs(&finished, &errWork), `,"background":true`, file)
+	require.NoError(t, errWork)
+
+	retained := finished.Data.(RetainedFiles)
+	finished.Data = nil
+	require.Equal(t, foreground, toolCallOutput("call-1", finished), "a detached run produces the same result")
+
+	kept, err := LoadRetainedFiles(loop.promptExpansion.root, "retained", retained.ResultID)
+	require.NoError(t, err)
+	require.Equal(t, []Attachment{fileAttachment(kept[0])}, finished.Attachments, "the note gets the same files back")
+
+	missing := func(context.Context) (ToolResult, error) {
+		return ToolResult{}, errors.New("File not found: chart.png")
+	}
+	args := `,"background":true`
+
+	failed, loop := run(t, InertBackgroundJobs{}, "", missing)
+	require.Equal(t, toolCallOutput("call-1", TextToolResult(`{"chart":{"error":"File not found: chart.png"},"note":"done"}`)), failed, "an error inside a returned dict is data, not a failure")
+	require.Equal(t, PublicProgressCompleted, PublicProgressFromTrace(loop.observations.trace)[0].State)
+
+	loop = backgroundTestLooper(t, backgroundPermissions, InertBackgroundJobs{}, missing)
+	outputs, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", executeToolName, `{"code":"def main():\n    return probe()\n","description":"Read"}`)}), nil, nil, make(chan ChatResponse, 20))
+	require.NoError(t, err)
+	require.Equal(t, "File not found: chart.png", outputs[0].Param.Output.OfString.Value, "a returned error result shows its message")
+	require.Equal(t, PublicProgressFailed, PublicProgressFromTrace(loop.observations.trace)[0].State, "and marks the call failed")
+
+	loop = backgroundTestLooper(t, backgroundPermissions, detachedJobs(&finished, &errWork), missing)
+	_, err = loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", executeToolName, `{"code":"def main():\n    return probe()\n","description":"Read"`+args+`}`)}), nil, nil, make(chan ChatResponse, 20))
+	require.NoError(t, err)
+	require.EqualError(t, errWork, "File not found: chart.png", "a background job fails with the same message")
+}
+
 func backgroundTestLooper(t *testing.T, permissions string, jobs BackgroundJobs, probe func(context.Context) (ToolResult, error)) *looper {
 	t.Helper()
 
@@ -648,6 +726,7 @@ func backgroundTestLooper(t *testing.T, permissions string, jobs BackgroundJobs,
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child")}})
 	factory.baseTools = map[string]looperTool{"probe": probeTool}
 	factory.backgroundJobs = jobs
+	factory.retainedRel = "retained"
 	agent := Agent{Name: "main", Permission: parsePermissionYAML(t, permissions)}
 	loop := testLooper(mockResponses())
 	loop.agent = agent

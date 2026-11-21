@@ -59,12 +59,12 @@ type BackgroundJob struct {
 }
 
 type BackgroundResult struct {
-	Output string
+	Result ToolResult
 	Moved  bool
 }
 
 type BackgroundWork interface {
-	RunBackground(ctx context.Context) (string, error)
+	RunBackground(ctx context.Context) (ToolResult, error)
 	Detach() bool
 }
 
@@ -78,12 +78,12 @@ type InertBackgroundJobs struct{}
 func (InertBackgroundJobs) Enabled() bool { return false }
 
 func (InertBackgroundJobs) Run(ctx context.Context, _ *BackgroundJob, work BackgroundWork) (BackgroundResult, error) {
-	output, err := work.RunBackground(ctx)
+	result, err := work.RunBackground(ctx)
 	if err != nil {
 		return BackgroundResult{}, fmt.Errorf("run background work: %w", err)
 	}
 
-	return BackgroundResult{Output: output}, nil
+	return BackgroundResult{Result: result}, nil
 }
 
 type backgroundParams struct {
@@ -149,7 +149,7 @@ func (w *backgroundWork) Detach() bool {
 	return w.tc.sink.detached
 }
 
-func (w *backgroundWork) RunBackground(ctx context.Context) (string, error) {
+func (w *backgroundWork) RunBackground(ctx context.Context) (ToolResult, error) {
 	ctx = context.WithValue(context.WithValue(ctx, toolCallContextKey{}, w.tc), backgroundSinkKey{}, w.tc.sink)
 
 	var group errgroup.Group
@@ -164,7 +164,7 @@ func (w *backgroundWork) RunBackground(ctx context.Context) (string, error) {
 
 	_ = group.Wait()
 
-	return result.Output, err
+	return result, err
 }
 
 func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *looperTool) looperTool {
@@ -258,7 +258,9 @@ func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *lo
 		}
 
 		if !result.Moved {
-			return TextToolResult(continueLine + result.Output), nil
+			result.Result.Output = continueLine + result.Result.Output
+
+			return result.Result, nil
 		}
 
 		work.Detach()

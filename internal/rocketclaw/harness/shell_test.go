@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -49,7 +50,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			{"file workdir", bashParams{Command: "touch rejected-command", Workdir: "root.txt"}, deniedBashMissingWorkdir},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				got := sss.Bash(t.Context(), &CustomShell{}, tc.command)
+				got := sss.Bash(t.Context(), &CustomShell{}, &tc.command)
 				require.False(t, got.Success)
 				require.Equal(t, "error", got.ErrorCode)
 				require.Contains(t, got.Output, tc.want)
@@ -70,7 +71,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		} {
 			t.Run(env.name, func(t *testing.T) {
 				t.Setenv(env.name, env.value)
-				got := sss.Bash(t.Context(), &CustomShell{}, bashParams{Command: "printf checked"})
+				got := sss.Bash(t.Context(), &CustomShell{}, &bashParams{Command: "printf checked"})
 				require.True(t, got.Success, got.Output)
 				require.Equal(t, "checked", got.Output)
 			})
@@ -81,38 +82,38 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 
 		time.AfterFunc(200*time.Millisecond, func() { interrupt(errTurnInterrupted) })
 
-		got := sss.Bash(ctx, &CustomShell{}, bashParams{Command: "echo started; sleep 30; echo finished"})
+		got := sss.Bash(ctx, &CustomShell{}, &bashParams{Command: "echo started; sleep 30; echo finished"})
 		require.False(t, got.Success)
 		require.Contains(t, got.Output, "started")
 		require.NotContains(t, got.Output, "finished")
 	})
 	t.Run("captures stderr", func(t *testing.T) {
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "echo stdout_msg && echo stderr_msg >&2", TimeoutMillisecond: 0, Workdir: "", Description: "stderr"}).String()
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: "echo stdout_msg && echo stderr_msg >&2", TimeoutMillisecond: 0, Workdir: "", Description: "stderr"}).String()
 		require.Contains(t, got, "stdout_msg")
 		require.Contains(t, got, "stderr_msg")
 	})
 	t.Run("empty output", func(t *testing.T) {
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "true", TimeoutMillisecond: 0, Workdir: "", Description: "No output"}).String()
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: "true", TimeoutMillisecond: 0, Workdir: "", Description: "No output"}).String()
 		require.Equal(t, "(no output)", got)
 	})
 	t.Run("non zero exit sets error code", func(t *testing.T) {
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "exit 42", TimeoutMillisecond: 0, Workdir: "", Description: "Non zero"})
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: "exit 42", TimeoutMillisecond: 0, Workdir: "", Description: "Non zero"})
 		require.Equal(t, "(no output)", got.String())
 		require.Equal(t, "42", got.ErrorCode)
 		require.False(t, got.Success)
 	})
 	t.Run("default workdir is sandbox root", func(t *testing.T) {
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "pwd", TimeoutMillisecond: 0, Workdir: "", Description: "pwd"}).String()
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: "pwd", TimeoutMillisecond: 0, Workdir: "", Description: "pwd"}).String()
 		require.Contains(t, got, dir)
 	})
 	t.Run("nested workdir is honored", func(t *testing.T) {
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "pwd && ls", TimeoutMillisecond: 0, Workdir: filepath.Join(dir, "nested"), Description: "nested pwd"}).String()
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: "pwd && ls", TimeoutMillisecond: 0, Workdir: filepath.Join(dir, "nested"), Description: "nested pwd"}).String()
 		require.Contains(t, got, "file.txt")
 	})
 
 	t.Run("external workdir is rejected", func(t *testing.T) {
 		workdir := t.TempDir()
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "pwd", TimeoutMillisecond: 0, Workdir: workdir, Description: "external pwd"}).String()
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: "pwd", TimeoutMillisecond: 0, Workdir: workdir, Description: "external pwd"}).String()
 		require.Equal(t, deniedBashWorkdir, got)
 	})
 
@@ -121,32 +122,32 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		externalFile := filepath.Join(externalDir, "secret.txt")
 		require.NoError(t, os.WriteFile(externalFile, []byte("secret\n"), 0o644))
 
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "cat " + externalFile, TimeoutMillisecond: 0, Workdir: "", Description: "external cat"}).String()
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: "cat " + externalFile, TimeoutMillisecond: 0, Workdir: "", Description: "external cat"}).String()
 		require.Equal(t, deniedBashOutsidePath, got)
 	})
 
 	t.Run("relative external file access is denied", func(t *testing.T) {
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "cat ../outside.txt", TimeoutMillisecond: 0, Workdir: "", Description: "relative external cat"}).String()
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: "cat ../outside.txt", TimeoutMillisecond: 0, Workdir: "", Description: "relative external cat"}).String()
 		require.Equal(t, deniedBashOutsidePath, got)
 	})
 
 	t.Run("external cd is denied", func(t *testing.T) {
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "cd /tmp", TimeoutMillisecond: 0, Workdir: "", Description: "external cd"}).String()
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: "cd /tmp", TimeoutMillisecond: 0, Workdir: "", Description: "external cd"}).String()
 		require.Equal(t, deniedBashOutsidePath, got)
 	})
 
 	t.Run("direct env file access is denied", func(t *testing.T) {
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "cat .env", TimeoutMillisecond: 0, Workdir: "", Description: "env cat"}).String()
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: "cat .env", TimeoutMillisecond: 0, Workdir: "", Description: "env cat"}).String()
 		require.Equal(t, deniedBashEnvFile, got)
 	})
 
 	t.Run("env example file access is allowed", func(t *testing.T) {
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "cat .env.example", TimeoutMillisecond: 0, Workdir: "", Description: "env example cat"}).String()
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: "cat .env.example", TimeoutMillisecond: 0, Workdir: "", Description: "env example cat"}).String()
 		require.Contains(t, got, "SECRET=example")
 	})
 
 	t.Run("timeout sets error code and preserves output", func(t *testing.T) {
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "echo started && sleep 10", TimeoutMillisecond: 100, Workdir: "", Description: "timeout"})
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: "echo started && sleep 10", TimeoutMillisecond: 100, Workdir: "", Description: "timeout"})
 		require.Contains(t, got.String(), "started")
 		require.Equal(t, "timeout", got.ErrorCode)
 		require.False(t, got.Success)
@@ -173,7 +174,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 				)
 
 				running.Go(func() error {
-					got = sss.Bash(ctx, &CustomShell{}, bashParams{Command: tt.command, Description: "escaped child"})
+					got = sss.Bash(ctx, &CustomShell{}, &bashParams{Command: tt.command, Description: "escaped child"})
 					return nil
 				})
 				t.Cleanup(func() {
@@ -214,7 +215,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	t.Run("environment precedence and private temp dir", func(t *testing.T) {
 		t.Setenv("ROCKETCLAW_CONVERSATION_ID", "old")
 
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: `printf %s "$TMPDIR"`, TimeoutMillisecond: 0, Workdir: "", Description: "tmpdir"}).String()
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: `printf %s "$TMPDIR"`, TimeoutMillisecond: 0, Workdir: "", Description: "tmpdir"}).String()
 		require.Equal(t, outputDir, got)
 
 		info, err := root.Stat(filepath.Join(".tmp", "shell-tmp"))
@@ -223,14 +224,14 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 
 		configured := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new", "TMPDIR=/not/rocketcode"}, &sandbox.Runtime{})
 
-		result := configured.Bash(t.Context(), &CustomShell{}, bashParams{Command: `printf '%s\n%s' "$ROCKETCLAW_CONVERSATION_ID" "$TMPDIR"`, Description: "env precedence"})
+		result := configured.Bash(t.Context(), &CustomShell{}, &bashParams{Command: `printf '%s\n%s' "$ROCKETCLAW_CONVERSATION_ID" "$TMPDIR"`, Description: "env precedence"})
 		require.True(t, result.Success, result.Output)
 		require.Equal(t, "new\n"+outputDir, result.String())
 	})
 
 	t.Run("returns full multi-line output", func(t *testing.T) {
 		cmd := "i=1; while [ $i -le 2100 ]; do echo $i; i=$((i+1)); done"
-		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: cmd, TimeoutMillisecond: 0, Workdir: "", Description: "many lines"})
+		got := sss.Bash(context.Background(), &CustomShell{}, &bashParams{Command: cmd, TimeoutMillisecond: 0, Workdir: "", Description: "many lines"})
 		require.Equal(t, got.Output, got.String())
 		require.Contains(t, got.Output, "1\n2\n3")
 		require.Contains(t, got.Output, "2099\n2100")
@@ -238,6 +239,38 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		require.NotContains(t, got.Output, "full_output")
 		require.Empty(t, got.ErrorCode)
 		require.True(t, got.Success)
+	})
+
+	t.Run("stdin", func(t *testing.T) {
+		binary := "\x00\x01\xfe\xff" + strings.Repeat("payload ", 1<<17)
+
+		got := sss.Bash(t.Context(), &CustomShell{}, &bashParams{Command: "cat > piped.bin", Stdin: bashStdin{text: binary}})
+		require.True(t, got.Success, got.Output)
+
+		data, err := root.ReadFile("piped.bin")
+		require.NoError(t, err)
+		require.Equal(t, binary, string(data))
+
+		require.NoError(t, root.WriteFile("upper.sh", []byte("#!/bin/sh\ntr a-z A-Z"), 0o755))
+		got = sss.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "upper.sh")}, &bashParams{Command: "ignored", Stdin: bashStdin{text: "wrapped"}})
+		require.Equal(t, BashResult{Output: "WRAPPED", Success: true}, got)
+
+		start := time.Now()
+		got = sss.Bash(t.Context(), &CustomShell{}, &bashParams{Command: "true", Stdin: bashStdin{text: binary}})
+		require.Equal(t, BashResult{Output: "(no output)", Success: true}, got)
+
+		got = sss.Bash(t.Context(), &CustomShell{}, &bashParams{Command: "sleep 30 <&0 >/dev/null 2>&1 & echo $! > stdin-holder.pid", Stdin: bashStdin{text: binary}})
+		require.True(t, got.Success, got.Output)
+
+		pid, err := root.ReadFile("stdin-holder.pid")
+		require.NoError(t, err)
+		holder, err := strconv.Atoi(strings.TrimSpace(string(pid)))
+		require.NoError(t, err)
+		require.NoError(t, syscall.Kill(holder, syscall.SIGKILL))
+
+		got = sss.Bash(t.Context(), &CustomShell{}, &bashParams{Command: "sleep 30", TimeoutMillisecond: 100, Stdin: bashStdin{text: binary}})
+		require.Equal(t, "timeout", got.ErrorCode)
+		require.Less(t, time.Since(start), 10*time.Second, "unread stdin never holds the call open")
 	})
 
 	t.Run("custom shell", func(t *testing.T) {
@@ -248,12 +281,12 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 
 		t.Run("receives the full command as its only argument", func(t *testing.T) {
 			command := `printf "%s\n" 'two words' | tr a-z A-Z`
-			got := sss.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "wrap.sh")}, bashParams{Command: command})
+			got := sss.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "wrap.sh")}, &bashParams{Command: command})
 			require.True(t, got.Success, got.Output)
 			require.Equal(t, fmt.Sprintf("argc=1 arg=%s pwd=%s tmp=%s", command, realDir, outputDir), got.Output)
 		})
 		t.Run("runs in the nested workdir with the session TMPDIR", func(t *testing.T) {
-			got := sss.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "wrap.sh")}, bashParams{Command: "ls", Workdir: filepath.Join(dir, "nested")})
+			got := sss.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "wrap.sh")}, &bashParams{Command: "ls", Workdir: filepath.Join(dir, "nested")})
 			require.True(t, got.Success, got.Output)
 			require.Equal(t, fmt.Sprintf("argc=1 arg=ls pwd=%s tmp=%s", filepath.Join(realDir, "nested"), outputDir), got.Output)
 		})
@@ -263,7 +296,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			folder, err := filepath.EvalSymlinks(t.TempDir())
 			require.NoError(t, err)
 
-			got := sss.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "env.sh"), Dir: folder, Env: []string{`ROCKETCLAW_ENVIRONMENT={"commands":{"gh":"gh"}}`}}, bashParams{Command: "ls"})
+			got := sss.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "env.sh"), Dir: folder, Env: []string{`ROCKETCLAW_ENVIRONMENT={"commands":{"gh":"gh"}}`}}, &bashParams{Command: "ls"})
 			require.True(t, got.Success, got.Output)
 			require.Equal(t, "pwd="+folder+` environment={"commands":{"gh":"gh"}}`, got.Output)
 		})
@@ -271,7 +304,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			folder, err := filepath.EvalSymlinks(t.TempDir())
 			require.NoError(t, err)
 
-			got := sss.Bash(t.Context(), &CustomShell{Emulated: true, Dir: folder}, bashParams{Command: "touch ran-under-bash", Workdir: folder})
+			got := sss.Bash(t.Context(), &CustomShell{Emulated: true, Dir: folder}, &bashParams{Command: "touch ran-under-bash", Workdir: folder})
 			require.Contains(t, got.Output, "emulated shell")
 			require.Equal(t, "error", got.ErrorCode)
 			require.False(t, got.Success)
@@ -280,7 +313,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			require.ErrorIs(t, err, fs.ErrNotExist)
 		})
 		t.Run("missing program reports the start error without falling back to bash", func(t *testing.T) {
-			got := sss.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "missing-shell")}, bashParams{Command: "touch ran-under-bash"})
+			got := sss.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "missing-shell")}, &bashParams{Command: "touch ran-under-bash"})
 			require.Contains(t, got.Output, "no such file or directory")
 			require.Equal(t, "error", got.ErrorCode)
 			require.False(t, got.Success)
@@ -362,14 +395,14 @@ func TestBashStaysInTheAgentFolder(t *testing.T) {
 		{"wrapper works in its folder", wrapper, bashParams{Command: "mkdir sub && touch sub/new.txt && echo hi > own.txt && cat own.txt && pwd", Workdir: folder}, "hi\n" + folder + "\n", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := sss.Bash(t.Context(), &tc.shell, tc.params)
+			got := sss.Bash(t.Context(), &tc.shell, &tc.params)
 			require.Equal(t, tc.want, got.Output)
 			require.Equal(t, tc.success, got.Success)
 		})
 	}
 
 	for _, params := range []bashParams{{Command: "cat /tmp/x"}, {Command: "cd /tmp"}, {Command: "touch /tmp/x"}, {Command: "mkdir /tmp/d && cp /tmp/x /tmp/d/y"}, {Command: "pwd", Workdir: "/tmp"}, {Command: "cat ~/secret.txt"}, {Command: "touch ~/x"}, {Command: "cd ~"}, {Command: "pwd", Workdir: "~"}} {
-		require.NotContains(t, sss.Bash(t.Context(), &emulated, params).Output, "bash command denied", params)
+		require.NotContains(t, sss.Bash(t.Context(), &emulated, &params).Output, "bash command denied", params)
 	}
 
 	for _, name := range []string{"stolen.txt", "leak.txt", "new.txt", "copy.txt"} {
@@ -420,7 +453,7 @@ func TestBashRefusalsAreTheSameForEveryShell(t *testing.T) {
 		{bashParams{Command: "ls", Workdir: "missing"}, deniedBashMissingWorkdir},
 	} {
 		for name, shell := range shells {
-			got := sss.Bash(t.Context(), &shell, tc.params)
+			got := sss.Bash(t.Context(), &shell, &tc.params)
 			require.Equal(t, tc.want, got.Output, "%s: %+v", name, tc.params)
 			require.False(t, got.Success)
 		}
@@ -449,7 +482,7 @@ func BenchmarkBashOutput(b *testing.B) {
 	want = "before\n" + want + "after\n"
 
 	for b.Loop() {
-		got := sss.Bash(b.Context(), shell, params)
+		got := sss.Bash(b.Context(), shell, &params)
 		if got.Output != want || got.ErrorCode != "7" || got.Success {
 			b.Fatal("shell changed the output or exit status")
 		}

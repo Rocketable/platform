@@ -113,18 +113,23 @@ func (s *Session) ListTools(ctx context.Context, server string) ([]ToolInfo, err
 	return out, nil
 }
 
-func (s *Session) CallTool(ctx context.Context, server, tool string, args map[string]any) (string, error) {
+func (s *Session) CallTool(ctx context.Context, server, tool string, args map[string]any) (*mcp.CallToolResult, string, error) {
 	cs, err := s.connect(ctx, server)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 
 	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 	if err != nil {
-		return "", fmt.Errorf("call %s.%s: %w", server, tool, err)
+		return nil, "", fmt.Errorf("call %s.%s: %w", server, tool, err)
 	}
 
-	return flattenCallToolResult(result)
+	text, err := flattenCallToolResult(result)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return result, text, nil
 }
 
 func (s *Session) Close() error {

@@ -635,7 +635,10 @@ func (b *Bridge) Drain(ctx context.Context, responseID string, phase harness.Tur
 
 	for i := range notes {
 		if !slices.Contains(b.notesOffered, notes[i].jobID) {
-			inputs = append(inputs, systemPromptInput(notes[i].jobID, backgroundNote(&notes[i])))
+			note, attachments := b.config.SessionService.backgroundNoteInput(&notes[i])
+			input := systemPromptInput(notes[i].jobID, note)
+			input.Attachments = attachmentsFromInbound(attachments)
+			inputs = append(inputs, input)
 		}
 	}
 

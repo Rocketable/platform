@@ -110,9 +110,9 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	loader := model[loadExecuteResultToolName].Definition
 	require.True(t, loader.Strict.Value)
 	require.Equal(t, false, loader.Parameters["additionalProperties"])
-	require.Equal(t, []string{"limit", "line_numbers", "result_id", "start_line"}, loader.Parameters["required"])
+	require.Equal(t, []string{"attachment", "limit", "line_numbers", "result_id", "start_line"}, loader.Parameters["required"])
 	propsLoader := loader.Parameters["properties"].(map[string]any)
-	require.Len(t, propsLoader, 4)
+	require.Len(t, propsLoader, 5)
 	require.Contains(t, loader.Description.Value, "omitted tail cannot be fetched")
 
 	for _, entry := range buildCodeModeSearchIndex(hosts, nil) {
@@ -127,7 +127,7 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	execDesc := model[executeToolName].Definition.Description.Value
 	assert.Contains(t, execDesc, "search(")
 	assert.Contains(t, execDesc, "gather(")
-	assert.Contains(t, execDesc, "gather/map/race/race_first")
+	assert.Contains(t, execDesc, "gather/try_gather/map/try_map/race/race_first")
 	assert.Contains(t, execDesc, "No import/from")
 	assert.Contains(t, execDesc, `bash(command=...) takes r'''...''' only`)
 	assert.Contains(t, execDesc, `execute code is a JSON string`)
@@ -136,7 +136,11 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	assert.Contains(t, execDesc, `r'''`)
 	assert.Contains(t, execDesc, "single-line")
 	assert.Contains(t, execDesc, "nothing ran")
-	assert.Contains(t, execDesc, "str(result)")
+	assert.Contains(t, execDesc, "if not r.ok:")
+	assert.Contains(t, execDesc, "try_gather/try_map")
+	assert.Contains(t, execDesc, "load_execute_result(result_id=..., attachment=n)")
+	assert.Contains(t, execDesc, "stdin=f")
+	assert.NotContains(t, execDesc, "str(result)")
 	assert.Contains(t, execDesc, "not varargs")
 	assert.Contains(t, execDesc, `gather([lambda: read(filePath="a")`)
 	assert.NotContains(t, execDesc, `bash(command="`)
@@ -163,7 +167,9 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	assert.Contains(t, prompt, `r"..."`)
 	assert.Contains(t, prompt, `r'''`)
 	assert.Contains(t, prompt, "single-line")
-	assert.Contains(t, prompt, "str(result)")
+	assert.Contains(t, prompt, "check failures with r.ok")
+	assert.Contains(t, prompt, "attachment=n for a file")
+	assert.Contains(t, prompt, "try_gather([lambda:")
 	assert.Contains(t, prompt, "Concurrency (callables is one list")
 	assert.Contains(t, prompt, "gather([lambda:")
 	assert.Contains(t, prompt, "race_first([lambda:")
@@ -378,7 +384,7 @@ func TestCodeModeHostsSurviveModelWithoutHosts(t *testing.T) {
 	looper.restoreTurnExecuteResults("turn")
 	t.Cleanup(looper.deleteTurnExecuteResults)
 
-	result, err = run.Call(ctx, json.RawMessage(`{"code":"def main():\n    text = read(filePath=\"large.txt\")\n    if \"2100: line\" not in text:\n        fail(\"host output clipped\")\n    return \"full host content\"\n"}`), nil, emptyToolCallMetadata())
+	result, err = run.Call(ctx, json.RawMessage(`{"code":"def main():\n    text = read(filePath=\"large.txt\")\n    if \"2100: line\" not in text.numbered():\n        fail(\"host output clipped\")\n    return \"full host content\"\n"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
 	require.Equal(t, "full host content", result.Output)
 	require.Empty(t, looper.spillResults)
@@ -421,6 +427,12 @@ func TestExecuteBashOutputSurvivesContainers(t *testing.T) {
 		{"escaped", `[bash(command=r'''printf '%s\n' 'first "quoted" \path 日本語' second''')]`, `["first \"quoted\" \\path 日本語\nsecond\n"]`},
 		{"failure", `[bash(command=r'''printf failed >&2; exit 7''')]`, `["failed"]`},
 		{"error_code", `bash(command=r'''exit 7''').error_code`, "7"},
+		{"failed result keeps its output", `(lambda r: [r.ok, r.error, r.error_code, str(r), r.or_else("fallback")])(bash(command=r'''printf failed; exit 7'''))`, `[false,"failed","7","failed","fallback"]`},
+		{"string methods", `bash(command=r'''printf 'a,b' ''').split(",")`, `["a","b"]`},
+		{"compares as its text", `[bash(command=r'''printf yes''') == "yes", "e" in bash(command=r'''printf yes''')]`, `[true,true]`},
+		{"text stdin", `bash(command=r'''tr a-z A-Z''', stdin="piped")`, "PIPED"},
+		{"text result as stdin", `bash(command=r'''tr a-z A-Z''', stdin=bash(command=r'''printf chained'''))`, "CHAINED"},
+		{"allowed stdin has no size limit", `bash(command=r'''wc -c''', stdin="x" * 1000000).strip()`, "1000000"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			raw, err := json.Marshal(struct {
@@ -594,7 +606,7 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: sibling, observations: sibling.observations, output: nil, callID: ""})
 	_, err = loader.Call(ctx, json.RawMessage(pageArgs), nil, emptyToolCallMetadata())
 	require.EqualError(t, err, "unknown or expired execute result")
-	_, err = sibling.saveExecuteResult(strings.Repeat("own\n", 2100))
+	_, err = sibling.saveExecuteResult(strings.Repeat("own\n", 2100), nil)
 	require.NoError(t, err)
 
 	for siblingID := range sibling.spillResults {
@@ -815,7 +827,7 @@ func TestCodeModeSearchOpenCodeShape(t *testing.T) {
 	out = codeModeSearch(index, map[string]any{"query": "", "limit": 1, "offset": 0})
 	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
 	require.Len(t, parsed.Items, 1)
-	assert.Equal(t, 6, parsed.Remaining)
+	assert.Equal(t, 8, parsed.Remaining)
 	require.NotNil(t, parsed.Next)
 	assert.Equal(t, 1, parsed.Next.Offset)
 
@@ -946,7 +958,7 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 		return output
 	}
 
-	script := "def main():\n    a = note(text=\"one\")\n    b = gather([lambda: note(text=\"left\"), lambda: note(text=\"right\")])\n    return a + \"|\" + \"|\".join(b)\n"
+	script := "def main():\n    a = note(text=\"one\")\n    b = gather([lambda: note(text=\"left\"), lambda: note(text=\"right\")])\n    return a.unwrap() + \"|\" + \"|\".join([str(x) for x in b])\n"
 	first := run(script)
 
 	require.Len(t, calls, 3)
@@ -1001,6 +1013,10 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 
 	require.Empty(t, calls, "a recorded failure is replayed without running the call")
 	require.Contains(t, fmt.Sprint(failed, err), "note failed")
+
+	failed, err = execute("def main():\n    return note(text=\"one\")\n")
+	_, isFailure := errors.AsType[toolResultError](err)
+	require.Equal(t, []any{"note failed", true}, []any{failed, isFailure}, "a replayed failure comes back as an error result")
 	require.Equal(t, recorded, observations.calls, "a replayed interruption or failure keeps the first run's record")
 
 	diverged := run("def main():\n    return other(text=\"one\")\n")
@@ -1148,7 +1164,7 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 		review("main"),
 		record("main", 0, "bash", `{"command":"printf 'one\\ntwo\\nthree\\n\\n\\n' "}`, codeModeCallOK, "three", "", ""),
 		record("main", 1, "bash", `{"command":"echo failed; exit 3"}`, codeModeCallError, "failed", "", ""),
-		record("main", 2, "read", `{"filePath":"notes.txt"}`, codeModeCallOK, "(End of file - total 2 lines)", "", ""),
+		record("main", 2, "read", `{"filePath":"notes.txt"}`, codeModeCallOK, "beta", "", ""),
 		record("main", 3, "emit", `{"text":"long"}`, codeModeCallOK, "x"+strings.Repeat("é", 99), "", ""),
 		record("main", 4, "emit", `{"text":"nul"}`, codeModeCallOK, "2 KiB of binary output", "", ""),
 		record("main", 5, "emit", `{"text":"invalid"}`, codeModeCallOK, "2 KiB of binary output", "", ""),

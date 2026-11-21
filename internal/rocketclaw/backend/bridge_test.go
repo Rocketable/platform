@@ -4694,7 +4694,7 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 			return
 		}
 
-		code := "def main():\n    bash(command=r'''while [ ! -f " + gate + " ]; do sleep 0.05; done''')\n    return '|'.join([rocketclaw_attach_files_to_response(attachments=[]), rocketclaw_restart(reason='x'), rocketclaw_schedule_message(message='later', send_this_in='1h', recurring=False)])\n"
+		code := "def main():\n    bash(command=r'''while [ ! -f " + gate + " ]; do sleep 0.05; done''')\n    return '|'.join([str(r) for r in [rocketclaw_attach_files_to_response(attachments=[]), rocketclaw_restart(reason='x'), rocketclaw_schedule_message(message='later', send_this_in='1h', recurring=False)]])\n"
 		arguments, _ := json.Marshal(struct {
 			Code        string `json:"code"`
 			Description string `json:"description"`

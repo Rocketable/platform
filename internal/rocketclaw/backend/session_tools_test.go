@@ -105,7 +105,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 				if requests < len(calls) {
 					writeRawRunFunctionCall(t, w, fmt.Sprintf("tag-%d", requests), "execute", struct {
 						Code string `json:"code"`
-					}{"def main():\n    return " + calls[requests] + "\n"})
+					}{"def main():\n    return " + calls[requests] + ".unwrap()\n"})
 				} else {
 					writeRawRunMessage(t, w, "done", "message", "done")
 				}

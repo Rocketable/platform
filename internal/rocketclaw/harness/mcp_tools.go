@@ -13,6 +13,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openai/openai-go/v3/responses"
 	starjson "go.starlark.net/lib/json"
 	"go.starlark.net/starlark"
@@ -26,7 +27,13 @@ const (
 	mcpPermissionBucket       = "mcp"
 	codeModeApproveSubject    = "code_mode_approve"
 	AllowBackgroundSubject    = "allow_background"
-	codeModeRawStringRule     = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in "...". Inside that string, bash(command=...) takes r'''...''' only, not Starlark "..." or '...'. r"..." is raw but single-line; a real newline needs r'''...'''. Example execute argument: {"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
+	codeModeRawStringRule     = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in "...". Inside that string, bash(command=...) takes r'''...''' only, not Starlark "..." or '...'. r"..." is raw but single-line; a real newline needs r'''...'''. Example execute argument: {"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}. $ is valid inside a closed Starlark string, not interpolation. Failed wrapper output is not evidence; fix and rerun.`
+	codeModeResultRule        = `Every call returns a typed value that is also a Result. Success: the value itself, .ok=True, .error=None, truthy like the plain value (empty text or list is falsy). Failure: a falsy error with .ok=False and .error (the message); nothing raises, and methods on a failure return that same failure, so chains carry the first failure. A failed bash stays a bash_result (.ok False) with its output and .error_code. Check failures with "if not r.ok:", not "if not r:". r.unwrap() returns the value or stops the script with the error; r.or_else(x) returns the value or x.
+Text results work like strings: string methods, slicing, +, and == != < <= > >= in / not in compare their text. Use str(x) for "".join, dict keys and d[x], and as an argument to a string method. json.decode accepts text results.
+read(filePath) returns text (the raw file, no line numbers; .lines(), .search(regex), .numbered() for the N: view, .path .size .total_lines) or, for PNG/JPEG/GIF/WebP/PDF, a file (.name .mime .size .width .height .sha256 .bytes() .base64()). Other binary files are refused. Image files also have .crop(x=,y=,width=,height=) .resize(width=,height=) .rotate(degrees=90|180|270, clockwise) .convert(format="png"|"jpeg"|"gif", quality=90), each returning a new file; edits refuse images over 10.24 MP.
+glob returns paths (.path .name .mtime); grep returns matches (.path .line .text); both index and iterate. webfetch returns .output .content_type .url, text only: images, PDFs and other non-text are failures. MCP calls return .text, .content (strings, files, resource dicts), .structured.
+A file object is accepted only by bash(stdin=...), decision(images=[...]) and main()'s return; elsewhere pass a path, text, or f.base64(). bash(stdin=) takes text or a file; save a file with bash(command=r'''cat > out.png''', stdin=f). A reviewed bash call refuses text stdin over 64 KiB: write it to a file first.
+gather/map return every result, failures included; try_gather/try_map stop at the first failure, cancel the rest and return that failure, else the list; race returns the first success, or the first failure if every branch fails.`
 )
 
 func compileMCPGrant(permission *PermissionSet, facets map[string]map[string][]string, grant map[string]map[string]PermissionAction) error {
@@ -89,16 +96,19 @@ func executeDescription() string {
 
 	return strings.Join([]string{
 		"Run Starlark in Code Mode to orchestrate tool calls and compose their results.",
-		"Define def main() that returns a string (or JSON-encodable value). Only keyword arguments are allowed on tool calls.",
+		"Define def main(). Its return value is exactly what you receive: a string or text as text; a file as the real image or PDF; a failure as its message; a list/dict as JSON with each file attached and shown as {\"attachment\": n}. Nothing read but not returned is sent. Only keyword arguments are allowed on tool calls.",
 		"No import/from, threads, concurrent.futures, or stdlib. Use only the builtins listed here and in search.",
 		"Use json.decode(text) to parse JSON and json.encode(value) to produce JSON. No import needed.",
 		codeModeRawStringRule,
+		codeModeResultRule,
+		"Example: def main():\n    cfg = read(filePath=\"config.json\")\n    if not cfg.ok:\n        return \"no config: \" + cfg.error\n    return json.decode(cfg)[\"name\"]",
+		"Example: def main():\n    small = read(filePath=\"logo.png\").resize(width=128)\n    if not small.ok:\n        return small\n    saved = bash(command=r'''cat > logo-128.png''', stdin=small)\n    return small if saved.ok else saved.error",
 		"Call host tools by name (read, bash, …), platform/custom tools by name, and MCP as server_toolname(**kwargs).",
-		fmt.Sprintf("Concurrency only via gather/map/race/race_first (default concurrency=%d, max %d). callables is one list of zero-arg lambdas, not varargs.", defN, maxN),
+		fmt.Sprintf("Concurrency only via gather/try_gather/map/try_map/race/race_first (default concurrency=%d, max %d). callables is one list of zero-arg lambdas, not varargs.", defN, maxN),
 		fmt.Sprintf("Example: gather([lambda: read(filePath=\"a\"), lambda: read(filePath=\"b\")], concurrency=%d)", defN),
 		"Use search(query=\"\", namespace=\"\", offset=0, limit=10) inside the script to discover tools and concurrency builtins (path, description, signature).",
 		"A short Code Mode catalog is also in the system prompt; search when you need more detail or MCP schemas.",
-		"Oversized returns include a turn-scoped result_id. Recover pages with the top-level load_execute_result tool, not inside Starlark.",
+		"Returns share one 20 MiB budget for text plus files. Text over 2000 lines or 50 KiB, and files that do not fit, come back with a result_id: load text pages with the top-level load_execute_result(result_id=..., start_line=...) and a file with load_execute_result(result_id=..., attachment=n). It is not callable inside Starlark.",
 	}, "\n")
 }
 
@@ -109,11 +119,12 @@ func codeModeSystemPrompt(hosts map[string]looperTool, servers []string) string 
 	lines := []string{
 		"## Code Mode",
 		"",
-		"Use the execute tool with a short Starlark script (def main() returning a string).",
-		"For oversized returns, call load_execute_result at the top level with the result_id from Execute. It is not a Starlark host tool; IDs expire at turn end.",
+		"Use the execute tool with a short Starlark script whose def main() returns what you want to see (text, files, or a list/dict of both).",
+		"Oversized text and files that do not fit the 20 MiB return budget come with a result_id: call load_execute_result at the top level (start_line for text, attachment=n for a file). It is not a Starlark host tool; IDs expire at turn end, or after 7 days for background runs.",
 		"No import/from, threads, concurrent.futures, or stdlib.",
 		"Use json.decode(text) to parse JSON and json.encode(value) to produce JSON. No import needed.",
 		codeModeRawStringRule,
+		"Every call returns a typed Result; check failures with r.ok. The execute tool description lists the types and rules.",
 		"Inside the script, call tools with keyword arguments only.",
 		"Discover tools with search(query=\"\", namespace=\"\", offset=0, limit=10).",
 		"search returns JSON: {items:[{path,description,signature}], remaining, next}.",
@@ -152,9 +163,11 @@ func codeModeSystemPrompt(hosts map[string]looperTool, servers []string) string 
 
 	lines = append(lines,
 		"Concurrency (callables is one list of zero-arg lambdas, not varargs):",
-		fmt.Sprintf("- gather([lambda: …, …], concurrency=%d) // run together; ordered results; fail-fast cancels siblings", defN),
-		fmt.Sprintf("- map(items, fn, concurrency=%d) // concurrent map; ordered results; fail-fast cancels siblings", defN),
-		fmt.Sprintf("- race([lambda: …, …], concurrency=%d) // first success wins; losers cancelled", defN),
+		fmt.Sprintf("- gather([lambda: …, …], concurrency=%d) // run together; every result in order, failures included", defN),
+		fmt.Sprintf("- try_gather([lambda: …, …], concurrency=%d) // like gather; the first failure cancels the rest and is returned", defN),
+		fmt.Sprintf("- map(items, fn, concurrency=%d) // concurrent map; every result in order, failures included", defN),
+		fmt.Sprintf("- try_map(items, fn, concurrency=%d) // like map; the first failure cancels the rest and is returned", defN),
+		fmt.Sprintf("- race([lambda: …, …], concurrency=%d) // first success wins; losers cancelled; the first failure if all fail", defN),
 		fmt.Sprintf("- race_first([lambda: …, …], concurrency=%d) // first finish (ok or err) wins; losers cancelled", defN),
 		fmt.Sprintf("Example: gather([lambda: read(filePath=\"a\"), lambda: read(filePath=\"b\")], concurrency=%d)", defN),
 		fmt.Sprintf("Default concurrency %d, max %d. Nested gather/map/race allowed. search(query=\"gather\") for details.", defN, maxN),
@@ -184,11 +197,12 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 
 	return map[string]looperTool{
 		loadExecuteResultToolName: {
-			Definition: *functionTool(loadExecuteResultToolName, "Load a page of a full oversized Execute result from this turn. Top-level only, not callable in Starlark. No filesystem read permission is needed. Pages contain at most 2000 source lines and 50 KiB including numbering and footer. A line too large for a fresh page returns a UTF-8-safe prefix with an omission marker and advances to the next line; its omitted tail cannot be fetched with this line-only tool. IDs expire when the turn ends. Follow next_start_line or stop at EOF.", map[string]any{
+			Definition: *functionTool(loadExecuteResultToolName, "Load a page of a full oversized Execute result, or with attachment=n a file it did not send (of any size, as a real attachment). Top-level only, not callable in Starlark. No filesystem read permission is needed. Pages contain at most 2000 source lines and 50 KiB including numbering and footer. A line too large for a fresh page returns a UTF-8-safe prefix with an omission marker and advances to the next line; its omitted tail cannot be fetched with this line-only tool. IDs expire when the turn ends, or after 7 days for background runs. Follow next_start_line or stop at EOF.", map[string]any{
 				"result_id":    map[string]any{"type": "string", "description": "Opaque result ID from Execute's overflow footer."},
 				"start_line":   map[string]any{"type": "integer", "description": "1-based starting source line; 0 means 1. Negative values are invalid."},
 				"limit":        map[string]any{"type": "integer", "description": "Maximum source lines; 0 means 2000, positive values capped at 2000. Negative values are invalid."},
 				"line_numbers": map[string]any{"type": "boolean", "description": "Prefix each returned line with its original 1-based line number."},
+				"attachment":   map[string]any{"type": "integer", "description": "Number n of a file listed as not sent in the Execute result; returns that file as a real attachment. 0 means text pages."},
 			}),
 			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				var params loadExecuteResultParams
@@ -205,7 +219,7 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 			Definition: *functionTool(executeToolName, executeDescription(), map[string]any{
 				"code": map[string]any{
 					"type":        "string",
-					"description": fmt.Sprintf("Starlark source defining def main() that returns a string (or JSON-encodable value). %s Concurrency: gather([lambda: …], concurrency=%d) — one list of zero-arg lambdas, not varargs.", codeModeRawStringRule, codemode.DefaultConcurrency),
+					"description": fmt.Sprintf("Starlark source defining def main(); its return value (text, files, or a list/dict of both) is what you receive. Every call returns a typed Result; check failures with r.ok. %s Concurrency: gather([lambda: …], concurrency=%d) — one list of zero-arg lambdas, not varargs.", codeModeRawStringRule, codemode.DefaultConcurrency),
 				},
 				"description": map[string]any{"type": "string", "description": executeDescriptionParam},
 			}),
@@ -300,8 +314,8 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 		return ToolResult{}, errors.New("code is required")
 	}
 
-	mcpCall := codemode.CallFunc(func(context.Context, string, string, map[string]any) (string, error) {
-		return "", errors.New("mcp call unavailable")
+	mcpCall := codemode.CallFunc(func(context.Context, string, string, map[string]any) (starlark.Value, error) {
+		return nil, errors.New("mcp call unavailable")
 	})
 
 	var (
@@ -324,10 +338,18 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 			return ToolResult{}, errList
 		}
 
-		mcpCall = func(ctx context.Context, server, name string, args map[string]any) (string, error) {
+		mcpCall = func(ctx context.Context, server, name string, args map[string]any) (starlark.Value, error) {
 			result, err := recordHostCall(ctx, server+"."+name, args, false, mcpHostCall{session: session, server: server, name: name, args: args})
+			if err != nil {
+				return nil, err
+			}
 
-			return result.Output, err
+			blocks, ok := result.Data.(*mcp.CallToolResult)
+			if !ok {
+				blocks = &mcp.CallToolResult{}
+			}
+
+			return newMCPResult(server+"."+name, result.Output, blocks)
 		}
 	}
 
@@ -335,7 +357,7 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 
 	host = append(host, codeModeSearchTool(buildCodeModeSearchIndex(hostMap, mcpTools)))
 
-	out, errRun := codemode.Run(ctx, params.Code, mcpTools,
+	value, errRun := codemode.Run(ctx, params.Code, mcpTools,
 		func(ctx context.Context, subject string, args map[string]any) error {
 			errCheck := CheckNestedPermission(ctx, executeToolName, mcpPermissionBucket, subject, args)
 			if errCheck == nil {
@@ -351,16 +373,27 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 		mcpCall,
 		host,
 	)
+
+	var (
+		text  string
+		files []returnedFile
+	)
+
+	if errRun == nil {
+		suffix := ""
+		if len(notes) > 0 {
+			suffix = "\n\nPartial MCP list failures:\n- " + strings.Join(notes, "\n- ")
+		}
+
+		text, files, errRun = convertExecuteReturn(value, suffix)
+	}
+
 	if errRun != nil {
 		if len(notes) > 0 {
 			return ToolResult{}, fmt.Errorf("run code mode: %w (partial list failures: %s)", errRun, strings.Join(notes, "; "))
 		}
 
 		return ToolResult{}, fmt.Errorf("run code mode: %w", errRun)
-	}
-
-	if len(notes) > 0 {
-		out += "\n\nPartial MCP list failures:\n- " + strings.Join(notes, "\n- ")
 	}
 
 	tc, _ := toolCallContextFrom(ctx)
@@ -374,16 +407,20 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 	}
 
 	if backgroundDetached(ctx) {
-		out, errSave = retainExecuteResult(tc.looper.promptExpansion.root, retainedRel, out)
+		result, errSave = retainExecuteResult(tc.looper.promptExpansion.root, retainedRel, text, files)
 	} else {
-		out, errSave = tc.looper.saveExecuteResult(out)
+		result, errSave = tc.looper.saveExecuteResult(text, files)
 	}
 
 	if errSave != nil {
 		return ToolResult{}, errSave
 	}
 
-	return TextToolResult(out), nil
+	if _, failed := value.(*codemode.Error); failed {
+		return result, toolResultError{result: result}
+	}
+
+	return result, nil
 }
 
 const defaultSearchLimit = 10
@@ -527,9 +564,11 @@ func concurrencySearchEntries() []codeModeSearchEntry {
 	defN := codemode.DefaultConcurrency
 	maxN := codemode.MaxConcurrency
 	rows := []row{
-		{"gather", fmt.Sprintf("gather([lambda: …, …], concurrency=%d)", defN), fmt.Sprintf("Run a list of zero-arg lambdas concurrently (not varargs); ordered results; fail-fast cancels siblings (default concurrency %d, max %d). Example: gather([lambda: read(filePath=\"a\"), lambda: read(filePath=\"b\")], concurrency=%d).", defN, maxN, defN)},
-		{"map", fmt.Sprintf("map(items, fn, concurrency=%d)", defN), fmt.Sprintf("Concurrent map over items; fn is one callable; ordered results; fail-fast cancels siblings (default concurrency %d, max %d).", defN, maxN)},
-		{"race", fmt.Sprintf("race([lambda: …, …], concurrency=%d)", defN), fmt.Sprintf("First successful zero-arg lambda in a list wins (not varargs); losers cancelled (default concurrency %d, max %d).", defN, maxN)},
+		{"gather", fmt.Sprintf("gather([lambda: …, …], concurrency=%d)", defN), fmt.Sprintf("Run a list of zero-arg lambdas concurrently (not varargs); every result in order, failures included (default concurrency %d, max %d). Example: gather([lambda: read(filePath=\"a\"), lambda: read(filePath=\"b\")], concurrency=%d).", defN, maxN, defN)},
+		{"try_gather", fmt.Sprintf("try_gather([lambda: …, …], concurrency=%d)", defN), fmt.Sprintf("Like gather, but the first failure (a result with .ok False) cancels the rest and is returned; otherwise the ordered results (default concurrency %d, max %d).", defN, maxN)},
+		{"map", fmt.Sprintf("map(items, fn, concurrency=%d)", defN), fmt.Sprintf("Concurrent map over items; fn is one callable; every result in order, failures included (default concurrency %d, max %d).", defN, maxN)},
+		{"try_map", fmt.Sprintf("try_map(items, fn, concurrency=%d)", defN), fmt.Sprintf("Like map, but the first failure cancels the rest and is returned; otherwise the ordered results (default concurrency %d, max %d).", defN, maxN)},
+		{"race", fmt.Sprintf("race([lambda: …, …], concurrency=%d)", defN), fmt.Sprintf("First successful zero-arg lambda in a list wins (not varargs); failures are losses; losers cancelled; if every branch fails, the first failure is returned (default concurrency %d, max %d).", defN, maxN)},
 		{"race_first", fmt.Sprintf("race_first([lambda: …, …], concurrency=%d)", defN), fmt.Sprintf("First finished zero-arg lambda in a list wins (success or failure; not varargs); losers cancelled (default concurrency %d, max %d).", defN, maxN)},
 	}
 
@@ -549,8 +588,8 @@ func concurrencySearchEntries() []codeModeSearchEntry {
 	return entries
 }
 
-func buildCodeModeSearchIndex(hosts map[string]looperTool, mcp []codemode.ToolDesc) []codeModeSearchEntry {
-	entries := make([]codeModeSearchEntry, 0, len(hosts)+len(mcp)+4)
+func buildCodeModeSearchIndex(hosts map[string]looperTool, mcpTools []codemode.ToolDesc) []codeModeSearchEntry {
+	entries := make([]codeModeSearchEntry, 0, len(hosts)+len(mcpTools)+6)
 	entries = append(entries, concurrencySearchEntries()...)
 
 	for _, name := range slices.Sorted(maps.Keys(hosts)) {
@@ -569,7 +608,7 @@ func buildCodeModeSearchIndex(hosts map[string]looperTool, mcp []codemode.ToolDe
 		})
 	}
 
-	for _, tool := range mcp {
+	for _, tool := range mcpTools {
 		callable := codemode.StarlarkName(tool.Server, tool.Name)
 		path := tool.Server + "." + tool.Name
 		sig := hostToolSignature(callable, tool.InputSchema)
@@ -736,10 +775,15 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 		host = append(host, codemode.HostTool{
 			Name:        toolName,
 			InputSchema: schema,
+			FileArgs:    codeModeFileArgs(toolName),
 			CallValue: func(ctx context.Context, args map[string]any) (starlark.Value, error) {
 				result, errCall := recordHostCall(ctx, toolName, args, toolCopy.resumable, toolHostCall{name: toolName, tool: &toolCopy, output: output})
 				if errCall != nil {
 					return nil, errCall
+				}
+
+				if value, ok := result.Data.(starlark.Value); ok {
+					return value, nil
 				}
 
 				if toolName == "decision" {
@@ -773,8 +817,12 @@ type mcpHostCall struct {
 }
 
 func (c mcpHostCall) run(ctx context.Context, _ json.RawMessage) (ToolResult, error) {
-	out, err := c.session.CallTool(ctx, c.server, c.name, c.args)
-	return TextToolResult(out), err
+	result, text, err := c.session.CallTool(ctx, c.server, c.name, c.args)
+	if err != nil {
+		return ToolResult{}, fmt.Errorf("%w", err)
+	}
+
+	return ToolResult{Output: text, Data: result}, nil
 }
 
 type toolHostCall struct {
@@ -820,6 +868,21 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 				result.Data = *step.Bash
 			}
 
+			if step.WebFetch != nil {
+				result.Data = &webFetchResult{page: *step.WebFetch}
+			}
+
+			if step.MCP != nil {
+				result.Data = step.MCP
+			}
+
+			if step.Typed != nil {
+				var errReplay error
+				if result, errReplay = step.Typed.replay(ctx, step.Output, call, raw); errReplay != nil {
+					return ToolResult{}, errors.Join(errReplay, tc.observations.recordCodeModeCall(ctx, record.finish(ToolResult{}, errReplay), true))
+				}
+			}
+
 			return result, tc.observations.recordCodeModeCall(ctx, record.finish(result, nil), true)
 		case !resumable:
 			return ToolResult{}, errors.Join(errHostCallInterrupted, tc.observations.recordCodeModeCall(ctx, record.finish(ToolResult{}, errHostCallInterrupted), true))
@@ -846,6 +909,16 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 	if bash, ok := result.Data.(BashResult); ok {
 		want.Bash = &bash
 	}
+
+	if fetched, ok := result.Data.(*webFetchResult); ok {
+		want.WebFetch = &fetched.page
+	}
+
+	if blocks, ok := result.Data.(*mcp.CallToolResult); ok {
+		want.MCP = blocks
+	}
+
+	want.Typed = typedHostStepOf(result.Data)
 
 	if errRun != nil {
 		want.Err = errRun.Error()
