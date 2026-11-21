@@ -515,9 +515,6 @@ func (m *threadBridgeManager) MentionThread(target protocol.TextConversationTarg
 	}
 
 	report = thread.CreatedBy == ThreadCreatedByCron || paired
-	if target.Agent == "" {
-		return false, report, nil
-	}
 
 	conversationID, err := slackSessionID(context.Background(), m.store.db, target.ChannelID, target.ThreadID, target.MessageID, target.Agent)
 	if err != nil {
