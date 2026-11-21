@@ -3,7 +3,6 @@ package slackconnector
 import (
 	"cmp"
 	"fmt"
-	"slices"
 	"unicode"
 )
 
@@ -28,6 +27,7 @@ func splitSlackText(text string, limit int) []string {
 	chunks := make([]string, 0, len(runes)/limit+1)
 	for len(runes) > 0 {
 		size, hardEnd := 0, 0
+		paragraph, line, space := 0, 0, 0
 
 		for i, r := range runes {
 			width := 1
@@ -46,6 +46,16 @@ func splitSlackText(text string, limit int) []string {
 			size += width
 
 			hardEnd = i + 1
+
+			switch {
+			case r == '\n':
+				line = hardEnd
+				if i > 0 && runes[i-1] == '\n' {
+					paragraph = hardEnd
+				}
+			case unicode.IsSpace(r):
+				space = hardEnd
+			}
 		}
 
 		if hardEnd == len(runes) && size < limit {
@@ -53,34 +63,10 @@ func splitSlackText(text string, limit int) []string {
 			break
 		}
 
-		end := hardEnd
-		if bound := slackBoundary(runes[:hardEnd]); bound > 0 {
-			end = bound
-		}
-
+		end := cmp.Or(paragraph, line, space, hardEnd)
 		chunks = append(chunks, string(runes[:end]))
 		runes = runes[end:]
 	}
 
 	return chunks
-}
-
-func slackBoundary(runes []rune) int {
-	line, space := 0, 0
-
-	for i := range slices.Backward(runes) {
-		if i > 0 && runes[i-1] == '\n' && runes[i] == '\n' {
-			return i + 1
-		}
-
-		if line == 0 && runes[i] == '\n' {
-			line = i + 1
-		}
-
-		if space == 0 && unicode.IsSpace(runes[i]) && runes[i] != '\n' {
-			space = i + 1
-		}
-	}
-
-	return cmp.Or(line, space)
 }
