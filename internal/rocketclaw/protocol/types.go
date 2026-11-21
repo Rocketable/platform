@@ -241,10 +241,8 @@ func NormalizeMIMEType(mimeType string) string {
 	return strings.ToLower(strings.TrimSpace(mimeType))
 }
 
-func IsTextAttachment(name, mimeType string) bool {
-	mediaType := NormalizeMIMEType(mimeType)
-
-	return strings.HasPrefix(mediaType, "text/") || slices.Contains([]string{"application/json", "application/jsonl", "application/ld+json", "application/xml", "application/yaml", "application/x-yaml", "application/toml", "application/x-toml", "application/csv", "application/x-ndjson"}, mediaType) || slices.Contains([]string{".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml", ".xml", ".ini", ".log"}, strings.ToLower(filepath.Ext(strings.TrimSpace(name))))
+func IsTextAttachment(name, normalizedMIME string) bool {
+	return strings.HasPrefix(normalizedMIME, "text/") || slices.Contains([]string{"application/json", "application/jsonl", "application/ld+json", "application/xml", "application/yaml", "application/x-yaml", "application/toml", "application/x-toml", "application/csv", "application/x-ndjson"}, normalizedMIME) || slices.Contains([]string{".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml", ".xml", ".ini", ".log"}, strings.ToLower(filepath.Ext(strings.TrimSpace(name))))
 }
 
 func (m *InboundMessage) EnableResponseWait() <-chan InboundResponse {

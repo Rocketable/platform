@@ -151,11 +151,11 @@ func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (pro
 		name := strings.TrimSpace(attachments[i].Name)
 		mimeType := strings.TrimSpace(attachments[i].MIMEType)
 
-		if protocol.IsTextAttachment(name, mimeType) {
+		if normalizedMIME := protocol.NormalizeMIMEType(mimeType); protocol.IsTextAttachment(name, normalizedMIME) {
 			descriptor := cmp.Or(name, "attachment")
 
-			if descriptorMIMEType := protocol.NormalizeMIMEType(mimeType); descriptorMIMEType != "" {
-				descriptor += " (" + descriptorMIMEType + ")"
+			if normalizedMIME != "" {
+				descriptor += " (" + normalizedMIME + ")"
 			}
 
 			switch {
