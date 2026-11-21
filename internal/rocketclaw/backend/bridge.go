@@ -3594,12 +3594,7 @@ func canonicalOverride(value string, allowed ...string) string {
 }
 
 func provenanceHeader(provenance *promptProvenance) string {
-	origin := provenanceToken(provenance.origin)
-	if origin == "" {
-		origin = "System"
-	}
-
-	header := "[" + origin
+	header := "[" + cmp.Or(provenanceToken(provenance.origin), "System")
 	if media := provenanceToken(provenance.media); media != "" && media != "Text" {
 		header += " media=" + media
 	}
