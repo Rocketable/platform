@@ -1599,10 +1599,14 @@ export async function appScenario(part: "lists" | "composer") {
         expect(await timelinePage.getByRole("group", { name: "Runs per day", exact: true }).getByRole("button").count()).toBe(18);
         expect(await runRows.count()).toBe(60);
         expect(await runRows.first().textContent()).toBe("12:00 AM+3h 0m");
-        await runRows.first().click();
+        const [historyRequest] = await Promise.all([
+          timelinePage.waitForRequest((request: { method(): string; url(): string; postDataJSON(): { id: string } | null }) =>
+            request.method() === "POST" && request.url() === `${origin}/api/History` && request.postDataJSON()?.id === "old-source"),
+          runRows.first().click(),
+        ]);
         const preview = timelinePage.getByRole("region", { name: "Run preview", exact: true });
         expect(await preview.getByRole("link").getAttribute("href")).toBe("/s/b2xkLWNoYXQ");
-        expect(historyRequests.some((request) => request.id === "old-source")).toBe(true);
+        expect((await historyRequest.response())?.ok()).toBe(true);
         const row = (await runRows.first().boundingBox())!, beside = (await preview.boundingBox())!;
         expect(width > 1024 ? beside.x >= row.x + row.width : beside.y >= row.y + row.height).toBe(true);
         // Picking a day shows its runs, loading older ones as needed, as Show older runs does.
