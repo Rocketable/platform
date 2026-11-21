@@ -48,7 +48,7 @@ func AgentSettings() []AgentSetting {
 			Explanation: "Whether a new chat starts fresh, reopens the person's own chat (user), or reopens one chat everyone shares (global). A slack agent answers only in Slack and is not offered for new chats. A user or slack agent cannot have routines.",
 			Default:     "Off: every new chat starts fresh.", Allowed: "off, user, global or slack."},
 		{Key: "model", Modes: both, Group: "Model", Label: "Model", Control: AgentSettingModel, Required: true,
-			Explanation: "The AI model the agent runs on. Add #low, #medium or #high to set how hard it thinks.",
+			Explanation: "The AI model the agent runs on. Add #low, #medium or #high to set how hard it thinks; without one, it thinks as the model does by default.",
 			Default:     "None: every agent must name a model.", Allowed: "A model name, optionally after a configured provider and a slash, optionally followed by #effort."},
 		{Key: "reasoningEffort", Modes: advanced, Group: "Model", Label: "Thinking effort (old)", Control: AgentSettingText,
 			Explanation: "An older way to set how hard the model thinks. Prefer the #effort ending on the model, which wins over this.",

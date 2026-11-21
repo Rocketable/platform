@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -242,23 +241,32 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 	root, err := os.OpenRoot(dir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
-	client, _ := testResolverClient(t, "answer")
+	client, requests := testResolverClient(t, "answer")
 	resolver := testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
 		return client, ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, nil
 	})
 	cfg := testConfig(dir)
 
-	for _, effort := range []string{"low", ""} {
-		t.Run("agent_effort="+effort, func(t *testing.T) {
+	for _, tc := range []struct{ effort, reasoning string }{
+		{"max", `{"effort":"max","summary":"auto"}`},
+		{"", `{"summary":"auto"}`},
+	} {
+		t.Run("agent_effort="+tc.effort, func(t *testing.T) {
+			helper := Agent{Name: "helper", Model: "work/template", Prompt: "prompt"}
 			loop, err := NewWithModelResolver(resolver, cfg, root, Agents{Items: map[string]Agent{
-				"main": {Name: "main", Model: "work/template", Prompt: "prompt", ReasoningEffort: effort},
+				"main":   {Name: "main", Model: "work/template", Prompt: "prompt", ReasoningEffort: tc.effort},
+				"helper": helper,
 			}}, Skills{Items: map[string]Skill{}}, "main")
 
 			require.NoError(t, err)
 			require.Equal(t, "work/gpt-6.1-sol", loop.DisplayModel)
 			require.Equal(t, ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, loop.ProviderOrigin)
 
-			require.Equal(t, cmp.Or(effort, "high"), string(loop.ReasoningEffort))
+			require.Equal(t, tc.effort, string(loop.ReasoningEffort))
+
+			subagent, err := loop.PermissionReviewer.(*toolFactory).newLooper(&helper, "")
+			require.NoError(t, err)
+			require.Empty(t, subagent.ReasoningEffort, "a subagent with no effort of its own does not take its caller's")
 
 			sink := recordingJournal()
 			loop.Journal = sink
@@ -274,6 +282,10 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 				saved = *entry
 				return nil
 			}}, make(chan os.Signal, 1)))
+
+			var request struct{ Reasoning json.RawMessage }
+			require.NoError(t, json.Unmarshal([]byte(<-requests), &request))
+			require.JSONEq(t, tc.reasoning, string(request.Reasoning), "an agent with no effort leaves the effort to the model")
 
 			var restored SessionEntry
 			require.NoError(t, json.Unmarshal([]byte(marshalJSON(t, saved)), &restored))

@@ -276,7 +276,6 @@ func NewWithModelResolver(
 
 	workspaceInstructions := fmt.Sprintf("<current-workspace>\nWorkspace root: %s\n</current-workspace>", promptExpansion.hostDir)
 
-	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, "high"))
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
 
 	baseTools, shellSystem := newSandboxedTools(root, spillRel, shellTemp, shellEnv, &sb)
@@ -300,7 +299,6 @@ func NewWithModelResolver(
 		autoApproverDecisionModel: config.AutoApproverDecisionModel,
 		autoApproverMinConfidence: config.AutoApproverMinConfidence,
 		deciders:                  config.Deciders,
-		reasoningEffort:           reasoningEffort,
 		parallelToolCalls:         config.ParallelToolCalls,
 		expandPromptShellCommands: config.ExpandPromptShellCommands,
 		promptExpansion:           promptExpansion,

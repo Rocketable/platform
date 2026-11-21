@@ -612,6 +612,8 @@ model: work/gpt-6.1-sol
 
 `work/gpt-6.1-sol` uses the `work` provider, and a bare `gpt-6.1-sol` uses `openai`. RocketClaw never switches to another provider on its own. Each provider compacts conversation history at 200000 tokens unless you set `autocompaction_threshold`.
 
+An `#effort` ending, as in `work/gpt-6.1-sol#high`, sets how hard the model thinks. An advanced agent's older `reasoningEffort` key does the same, and the ending wins. An agent that sets neither sends no effort, so the model uses its own default. That holds wherever the agent runs: as a chat's agent, as a `task` subagent, which never takes its caller's effort, and as a custom reviewer (`auto(name)`). The guardian thinks at `low` unless an easy agent's `approver.model` names another effort.
+
 The agent editor's assistant runs on `main`'s model. To give it another one, set `"agent_editor_model"` in `rocketclaw.json`, written as an agent file's `model` is (`work/gpt-6.1-sol#high`).
 
 Web sessions get their titles from `openai/gpt-6-luna#low`: a person's first Web message names an unnamed session, and **Regenerate title** names it again from the conversation. To use another model, set `"title_model"` in `rocketclaw.json` the same way.
