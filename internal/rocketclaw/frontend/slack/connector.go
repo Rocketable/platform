@@ -1125,13 +1125,16 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 			return
 		}
 
-		if slices.ContainsFunc(messages, func(message slack.Message) bool {
-			return message.Timestamp == threadTS && message.User == c.botUserID && message.Metadata.EventType != slackChannelReplyEvent
-		}) {
+		i := slices.IndexFunc(messages, func(message slack.Message) bool { return message.Timestamp == threadTS })
+		if i >= 0 && messages[i].User == c.botUserID && messages[i].Metadata.EventType != slackChannelReplyEvent {
 			return
 		}
 
-		history, root = slackAdoptHistory(messages, ev.TimeStamp), c.recentRootMention(channel, ev.TimeStamp, threadTS, messages)
+		history = slackAdoptHistory(messages, ev.TimeStamp)
+
+		if i >= 0 {
+			root = c.recentRootMention(channel, ev.TimeStamp, threadTS, &messages[i])
+		}
 	}
 
 	c.responseMu.Lock()
@@ -1177,13 +1180,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	}
 }
 
-func (c *Connector) recentRootMention(channel, mentionTS, threadTS string, messages []slack.Message) *slack.Message {
-	i := slices.IndexFunc(messages, func(message slack.Message) bool { return message.Timestamp == threadTS })
-	if i < 0 {
-		return nil
-	}
-
-	root := &messages[i]
+func (c *Connector) recentRootMention(channel, mentionTS, threadTS string, root *slack.Message) *slack.Message {
 	postedAt, _ := strconv.ParseFloat(threadTS, 64)
 	mentionedAt, _ := strconv.ParseFloat(mentionTS, 64)
 
