@@ -998,7 +998,7 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 		return nil, fmt.Errorf("list web cron jobs: %w", err)
 	}
 
-	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	agents, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web cron agents: %w", err)
 	}
@@ -1068,7 +1068,7 @@ func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*R
 		return nil, fmt.Errorf("load web cron job: %w", err)
 	}
 
-	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	agents, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web cron agents: %w", err)
 	}
@@ -1172,7 +1172,7 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 			return nil, fmt.Errorf("update web conversation: %w", status.Error(codes.InvalidArgument, "a tag cannot be blank or contain a null character"))
 		}
 
-		definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+		definitions, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 		if err != nil {
 			return nil, fmt.Errorf("load web agents: %w", err)
 		}
@@ -1380,7 +1380,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 		return nil, err
 	}
 
-	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	definitions, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web agents: %w", err)
 	}
@@ -1463,7 +1463,7 @@ func (s *Server) sessionAgentChoices(ctx context.Context, id string) ([]string, 
 		return nil, fmt.Errorf("read selected conversation: %w", err)
 	}
 
-	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	definitions, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web agents: %w", err)
 	}
@@ -1507,7 +1507,7 @@ func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) 
 		return nil, err
 	}
 
-	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	definitions, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web agents: %w", err)
 	}
@@ -1588,7 +1588,7 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 		return nil, err
 	}
 
-	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	agents, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web agents: %w", err)
 	}
@@ -2259,7 +2259,7 @@ func (s *Server) cronInLimit(limit backend.SpaceLimit, stem string) error {
 		return nil
 	}
 
-	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	agents, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return fmt.Errorf("load web cron agents: %w", err)
 	}

@@ -111,14 +111,25 @@ func BenchmarkSidebarFingerprints(b *testing.B) {
 	}
 }
 
-func TestListSessionsHeaderDoesNotLoadSkillCatalog(t *testing.T) {
-	server, root := sidebarHeaderFixture(t)
-	withoutSkills := testing.AllocsPerRun(20, func() { sidebarHeader(t, server) })
+func TestAgentListingsDoNotLoadSkillCatalog(t *testing.T) {
+	for name, list := range map[string]func(testing.TB, *Server){"session list": sidebarHeader, "agent list": listedAgents} {
+		t.Run(name, func(t *testing.T) {
+			server, root := sidebarHeaderFixture(t)
+			withoutSkills := testing.AllocsPerRun(20, func() { list(t, server) })
 
-	addSidebarSkills(t, root)
+			addSidebarSkills(t, root)
 
-	withSkills := testing.AllocsPerRun(20, func() { sidebarHeader(t, server) })
-	require.LessOrEqual(t, withSkills, withoutSkills+32, "unrelated skills should not add work before the session list starts")
+			withSkills := testing.AllocsPerRun(20, func() { list(t, server) })
+			require.LessOrEqual(t, withSkills, withoutSkills+32, "unrelated skills should not add work to the %s", name)
+		})
+	}
+}
+
+func listedAgents(tb testing.TB, server *Server) {
+	tb.Helper()
+	response, err := server.listAgents(metadata.NewIncomingContext(tb.Context(), tailnetUser("alice")), "")
+	require.NoError(tb, err)
+	require.Len(tb, response.Agents, 1)
 }
 
 func BenchmarkListSessionsHeader(b *testing.B) {

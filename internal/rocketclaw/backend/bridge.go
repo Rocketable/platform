@@ -1043,7 +1043,7 @@ func (b *Bridge) goalHoldsQueue(request *bridgeRequest) (bool, error) {
 }
 
 func (b *Bridge) skipUnstickyTurn(ctx context.Context, tx *sql.Tx, request *bridgeRequest, agent, turnID string) (bool, error) {
-	agents, _, err := LoadRuntimeDefinitions(b.runtime, b.runtime.Clone().RuntimeDirName())
+	agents, err := LoadRuntimeAgents(b.runtime, b.runtime.Clone().RuntimeDirName())
 	if err != nil || agents.Items[agent].Sticky == harness.AgentStickySlack {
 		return false, err
 	}
@@ -1349,7 +1349,7 @@ WHERE m.conversation_id = $1`, source).Scan(&data, &owner, &active); err != nil 
 			return fmt.Errorf("decode producer routing: %w", err)
 		}
 
-		definitions, _, err := LoadRuntimeDefinitions(b.runtime, runtimeCfg.RuntimeDirName())
+		definitions, err := LoadRuntimeAgents(b.runtime, runtimeCfg.RuntimeDirName())
 		if err != nil {
 			return fmt.Errorf("load web agents: %w", err)
 		}
@@ -1757,7 +1757,7 @@ func (b *Bridge) channelSummary(ctx context.Context, turnID string) string {
 		transcript strings.Builder
 	)
 
-	agents, _, err := LoadRuntimeDefinitions(b.runtime, runtimeCfg.RuntimeDirName())
+	agents, err := LoadRuntimeAgents(b.runtime, runtimeCfg.RuntimeDirName())
 	if err == nil {
 		err = queryScalar(ctx, b.config.SessionService.db, "read turn history anchor", `SELECT history_anchor_id FROM turns WHERE id = $1`, &anchor, turnID)
 	}
@@ -1926,7 +1926,7 @@ func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *
 }
 
 func (b *Bridge) openCronReport(ctx context.Context, outbound *protocol.OutboundMessage) error {
-	agents, _, err := LoadRuntimeDefinitions(b.runtime, b.runtime.Clone().RuntimeDirName())
+	agents, err := LoadRuntimeAgents(b.runtime, b.runtime.Clone().RuntimeDirName())
 	if err != nil {
 		return fmt.Errorf("load cron agents: %w", err)
 	}
@@ -2998,7 +2998,7 @@ func LoadRuntimeAgents(cfg *config.LockedConfig, runtimeDir string) (agents harn
 }
 
 func ExternalMCPAgentsIn(cfg *config.LockedConfig, runtimeDir string) ([]string, error) {
-	agents, _, err := LoadRuntimeDefinitions(cfg, runtimeDir)
+	agents, err := LoadRuntimeAgents(cfg, runtimeDir)
 	if err != nil {
 		return nil, err
 	}
