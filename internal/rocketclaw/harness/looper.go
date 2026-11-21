@@ -1362,23 +1362,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 			return nil, fmt.Errorf("compact context after context_length_exceeded: %w", err)
 		}
 
-		output := compacted.Output
-		if len(system) > 0 {
-			output = slices.DeleteFunc(slices.Clone(output), func(item responses.ResponseOutputItemUnion) bool {
-				if item.Type != "message" || item.Role != "developer" {
-					return false
-				}
-
-				var text strings.Builder
-				for i := range item.Content {
-					text.WriteString(item.Content[i].Text)
-				}
-
-				return text.String() == l.SystemPrompt
-			})
-		}
-
-		recoveredHistory, err := compactedOutputToReplayParams(output)
+		recoveredHistory, err := compactedOutputToReplayParams(compacted.Output, l.SystemPrompt)
 		if err != nil {
 			return nil, fmt.Errorf("convert compacted response: %w", err)
 		}
@@ -1480,13 +1464,24 @@ func compactionBlocks(items []responses.ResponseInputItemUnionParam) []int {
 	return blocks
 }
 
-func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion) ([]responses.ResponseInputItemUnionParam, error) {
+func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion, systemPrompt string) ([]responses.ResponseInputItemUnionParam, error) {
 	input := make([]responses.ResponseInputItemUnionParam, 0, len(items))
 	latestCompaction := -1
 
 	for i := range items {
 		switch items[i].Type {
 		case "message":
+			if systemPrompt != "" && items[i].Role == "developer" {
+				var text strings.Builder
+				for j := range items[i].Content {
+					text.WriteString(items[i].Content[j].Text)
+				}
+
+				if text.String() == systemPrompt {
+					continue
+				}
+			}
+
 			var message responses.EasyInputMessageParam
 			if items[i].Role == "assistant" {
 				message = responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleAssistant, Content: easyInputStringContent(responseItemText(&items[i])), Type: "message"}

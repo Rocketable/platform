@@ -75,7 +75,7 @@ func TestResponseOutputReplayText(t *testing.T) {
 			require.True(t, ok)
 			require.JSONEq(t, tt.want, marshalReplayJSON(t, got))
 
-			compacted, err := compactedOutputToReplayParams([]responses.ResponseOutputItemUnion{item})
+			compacted, err := compactedOutputToReplayParams([]responses.ResponseOutputItemUnion{item}, "")
 			require.NoError(t, err)
 			require.Len(t, compacted, 1)
 			require.JSONEq(t, tt.wantCompacted, marshalReplayJSON(t, compacted[0]))
