@@ -47,8 +47,8 @@ func (r *Reader) Read() (*Frame, error) {
 		return nil, errors.New("wire: unknown InvokeStart field")
 	}
 
-	if exit := f.GetInvokeExit(); exit != nil && exit.GetCode() > 255 {
-		return nil, fmt.Errorf("wire: exit code %d out of range", exit.GetCode())
+	if code := f.GetInvokeExit().GetCode(); code > 255 {
+		return nil, fmt.Errorf("wire: exit code %d out of range", code)
 	}
 
 	return f, nil
