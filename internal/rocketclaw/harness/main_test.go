@@ -28,7 +28,7 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	looper, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "remember !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
-	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main")
+	}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "main")
 
 	require.NoError(t, err)
 	require.Contains(t, looper.SystemPrompt, "remember workspace memory\n\n<current-workspace>\nWorkspace root: "+dir+"\n</current-workspace>")
@@ -41,7 +41,7 @@ func TestNewRequiresShellTempDir(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	client := openai.NewClient()
-	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(""), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "")
+	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(""), root, Agents{Items: nil}, Skills{Root: "", Items: nil, dirs: nil, fsys: nil}, "")
 
 	require.EqualError(t, err, "shell temp dir is required")
 }
@@ -57,15 +57,15 @@ func TestNewRejectsInvalidShellTempDir(t *testing.T) {
 	require.NoError(t, root.WriteFile("file", []byte("not a dir"), 0o644))
 
 	client := openai.NewClient()
-	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(filepath.Join(dir, "missing")), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "")
+	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(filepath.Join(dir, "missing")), root, Agents{Items: nil}, Skills{Root: "", Items: nil, dirs: nil, fsys: nil}, "")
 	require.ErrorContains(t, err, "resolve shell temp dir")
 	require.ErrorContains(t, err, "missing")
 
-	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(filePath), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "")
+	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(filePath), root, Agents{Items: nil}, Skills{Root: "", Items: nil, dirs: nil, fsys: nil}, "")
 	require.EqualError(t, err, "resolve shell temp dir \""+filePath+"\": not a directory")
 
 	outsideDir := t.TempDir()
-	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(outsideDir), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "")
+	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(outsideDir), root, Agents{Items: nil}, Skills{Root: "", Items: nil, dirs: nil, fsys: nil}, "")
 	require.EqualError(t, err, "resolve shell temp dir \""+outsideDir+"\": must be inside workspace root")
 }
 
@@ -90,7 +90,7 @@ func TestNewRejectsInvalidShellEnv(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			config := testWorkspaceConfig(t, dir)
 			config.ShellEnv = tc.env
-			_, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "")
+			_, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: nil}, Skills{Root: "", Items: nil, dirs: nil, fsys: nil}, "")
 
 			require.EqualError(t, err, tc.wantErr)
 		})
@@ -109,7 +109,7 @@ func TestNewCopiesShellEnv(t *testing.T) {
 	config.ShellEnv = env
 	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
-	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main")
+	}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "main")
 	require.NoError(t, err)
 
 	env["ROCKETCLAW_CONVERSATION_ID"] = "second"
@@ -136,7 +136,7 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 	config.ShellEnv = map[string]string{"ROCKETCLAW_CONVERSATION_ID": "prompt", "TMPDIR": "/ignored"}
 	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "env !`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"` tmp !`printf %s \"$TMPDIR\"`", Location: "", Permission: parsePermissionYAML(t, `edit: {"${ROCKETCLAW_CONVERSATION_ID}/note.txt": allow}`), Frontmatter: nil, FileMode: 0},
-	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main")
+	}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "main")
 
 	require.NoError(t, err)
 	require.Contains(t, loop.SystemPrompt, "env prompt tmp "+filepath.Join(dir, ".tmp", "shell-tmp"))
@@ -615,16 +615,16 @@ func TestNewRequiresParsedAgentsAndSkills(t *testing.T) {
 	client := openai.NewClient()
 	config := testWorkspaceConfig(t, dir)
 
-	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "")
+	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: nil}, Skills{Root: "", Items: nil, dirs: nil, fsys: nil}, "")
 	require.EqualError(t, err, "agents are required")
 
-	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "")
+	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: nil, dirs: nil, fsys: nil}, "")
 	require.EqualError(t, err, "skills are required")
 
-	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "")
+	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "")
 	require.EqualError(t, err, "defaultAgent is required")
 
-	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main")
+	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "main")
 	require.EqualError(t, err, `missing required default agent "main"`)
 }
 
@@ -635,7 +635,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	client := openai.NewClient()
-	skills := Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
+	skills := Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}
 
 	t.Run("rejects guardian agent", func(t *testing.T) {
 		config := testWorkspaceConfig(t, dir)

@@ -72,7 +72,7 @@ Use for docs.
 		require.Equal(t, "/tmp/skills", result.Skills.Root)
 		require.Len(t, result.Skills.Items, 2)
 		require.Equal(t, []string{"docs-writer", "git-release"}, slices.Sorted(maps.Keys(result.Skills.Items)))
-		require.Equal(t, []string{"docs-writer", "git-release"}, result.Skills.Dirs)
+		require.Equal(t, []string{"docs-writer", "git-release"}, result.Skills.dirs)
 
 		skill := result.Skills.Items["git-release"]
 		require.Equal(t, "git-release", skill.Name)
@@ -104,7 +104,7 @@ Use for docs.
 		})
 
 		require.Empty(t, result.Skills.Items)
-		require.Equal(t, []string{"bad-skill"}, result.Skills.Dirs)
+		require.Equal(t, []string{"bad-skill"}, result.Skills.dirs)
 		require.Len(t, result.Errors, 1)
 		require.Equal(t, `bad-skill/SKILL.md: missing YAML frontmatter`, result.Errors[0].Error())
 		require.Less(t, cost.AllocedBytesPerOp(), int64(len(content)*3/2))
@@ -196,7 +196,7 @@ func TestSkillDescriptions(t *testing.T) {
 	skills := Skills{Root: "/tmp/skills", Items: map[string]Skill{
 		"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Metadata: nil, Location: "docs-helper/SKILL.md", Content: ""},
 		"git-review":  {Name: "git-review", Description: "Review git changes", License: "", Compatibility: "", Metadata: nil, Location: "git-review/SKILL.md", Content: ""},
-	}, Dirs: nil, fsys: nil}
+	}, dirs: nil, fsys: nil}
 
 	t.Run("tool description lists explicitly allowed skills", func(t *testing.T) {
 		factory := testSkillFactory(t, skills, agentWithSkillPermission())
@@ -353,7 +353,7 @@ func TestFindSkillsTool(t *testing.T) {
 	skills := Skills{Root: "/tmp/skills", Items: map[string]Skill{
 		"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Metadata: nil, Location: "docs-helper/SKILL.md", Content: "documentation guides"},
 		"git-review":  {Name: "git-review", Description: "Review git changes", License: "", Compatibility: "", Metadata: nil, Location: "git-review/SKILL.md", Content: "git status diff"},
-	}, Dirs: nil, fsys: nil}
+	}, dirs: nil, fsys: nil}
 
 	t.Run("finds explicitly allowed skills not presented in system prompt", func(t *testing.T) {
 		factory := testSkillFactory(t, skills, agentWithSkillPermission())
@@ -382,7 +382,7 @@ func TestFindSkillsTool(t *testing.T) {
 func TestFindSkillsToolVisibilityFollowsSkillPermission(t *testing.T) {
 	skills := Skills{Root: "/tmp/skills", Items: map[string]Skill{
 		"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Metadata: nil, Location: "docs-helper/SKILL.md", Content: ""},
-	}, Dirs: nil, fsys: nil}
+	}, dirs: nil, fsys: nil}
 
 	t.Run("hidden when all skills are denied", func(t *testing.T) {
 		factory := testSkillFactory(t, skills, agentWithSkillPermission())
@@ -569,7 +569,7 @@ Use for docs.
 }
 
 func TestSkillsRenderRequiresLoadedFS(t *testing.T) {
-	skills := Skills{Root: "/virtual/skills", Items: map[string]Skill{"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Metadata: nil, Location: "docs-helper/SKILL.md", Content: "Use for docs."}}, Dirs: []string{"docs-helper"}, fsys: nil}
+	skills := Skills{Root: "/virtual/skills", Items: map[string]Skill{"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Metadata: nil, Location: "docs-helper/SKILL.md", Content: "Use for docs."}}, dirs: []string{"docs-helper"}, fsys: nil}
 	factory := testSkillFactory(t, skills, agentWithSkillPermission())
 
 	_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil, emptyToolCallMetadata())
@@ -747,7 +747,7 @@ func agentWithSkillRules(rules ...PermissionRule) *Agent {
 }
 
 func emptySkills() Skills {
-	return Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}
+	return Skills{Root: "", Items: nil, dirs: nil, fsys: nil}
 }
 
 func testSkillFactory(t *testing.T, skills Skills, agent *Agent) *toolFactory {
