@@ -67,8 +67,6 @@ func (e *openCodeError) Error() string {
 }
 
 type openCodeShells struct {
-	lastPruned time.Time
-
 	mu      sync.Mutex
 	running map[string]string
 }
@@ -158,8 +156,8 @@ func (shells *openCodeShells) follow(ctx context.Context, name string, server co
 func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedConfig) {
 	startup := cfg.Clone()
 
-	var following errgroup.Group
-	defer func() { _ = following.Wait() }()
+	var workers errgroup.Group
+	defer func() { _ = workers.Wait() }()
 
 	shells := make(map[string]*openCodeShells, len(startup.OpenCode))
 
@@ -167,7 +165,7 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedCon
 		running := &openCodeShells{running: map[string]string{}}
 		shells[name] = running
 
-		following.Go(func() error {
+		workers.Go(func() error {
 			for {
 				connection, cancel := context.WithTimeout(ctx, openCodeShellsEvery)
 				running.follow(connection, name, server)
@@ -178,6 +176,20 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedCon
 				case <-ctx.Done():
 					return nil
 				case <-time.After(openCodeSyncInterval):
+				}
+			}
+		})
+
+		workers.Go(func() error {
+			for {
+				if err := s.pruneOpenCode(ctx, name, server); err != nil && ctx.Err() == nil {
+					s.log.Warn("prune opencode sessions", "server", name, "error", err)
+				}
+
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(openCodePruneEvery):
 				}
 			}
 		})
@@ -192,10 +204,6 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedCon
 		for name, server := range servers {
 			if s.pushOpenCodeNames(ctx, name, server) == nil && s.syncOpenCode(ctx, name, server, shells[name]) == nil && origin != "" {
 				addOpenCodeBridges(ctx, origin, name, server)
-			}
-
-			if time.Since(shells[name].lastPruned) >= openCodePruneEvery && s.pruneOpenCode(ctx, name, server) == nil {
-				shells[name].lastPruned = time.Now()
 			}
 		}
 

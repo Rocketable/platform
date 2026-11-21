@@ -3,7 +3,9 @@
 Once a day per configured OpenCode server, RocketClaw's sync loop (`SyncOpenCode` in
 `internal/rocketclaw/backend/opencode.go`) runs `pruneOpenCode`: it lists the server's root sessions, then forgets the
 local copy of every session the list no longer holds, except copies written after the prune started. The day counts
-from the last prune that succeeded; a failed prune runs again on the next pass, about 5 seconds later.
+from the last prune that succeeded; a failed prune runs again on the next pass, about 5 seconds later. (Since then
+the prune has its own loop beside the sync loop: at startup, then a day after each attempt, whatever its outcome. See
+`docs/verification/opencode-prune-schedule/`.)
 
 As built, the prune asks for every session in one request (`limit=1000000`) with the 5-second timeout every OpenCode
 call has. On a server whose full list takes longer than that, every pass fails and starts over, so the prune never
