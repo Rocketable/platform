@@ -318,6 +318,7 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     expect(await page.getByText("Late cancelled response", { exact: true }).count()).toBe(0);
     await viewer().getByText("100 of 101 files loaded", { exact: true }).waitFor();
     expect(await viewer().getByRole("region", { name: "Changed files", exact: true }).count()).toBe(1);
+    await viewer().getByText("patch-marker <script>example</script>", { exact: true }).waitFor();
     await scrollPatch(true);
     await viewer().getByText("101 of 101 files loaded", { exact: true }).waitFor();
     await page.setViewportSize({ width: 360, height: 740 });
