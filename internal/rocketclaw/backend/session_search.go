@@ -564,10 +564,7 @@ func (search *SessionSearch) sortMatches() {
 
 		order := at.Compare(bt)
 
-		switch {
-		case at.IsZero() || bt.IsZero():
-			order = bt.Compare(at)
-		case sort == "newest":
+		if at.IsZero() || bt.IsZero() || sort == "newest" {
 			order = -order
 		}
 
