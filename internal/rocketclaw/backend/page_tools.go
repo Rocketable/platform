@@ -88,13 +88,13 @@ func (p pageSpace) storeFile(ctx context.Context, name string, file *protocol.Ou
 
 func (p pageSpace) nativeTools(root *os.Root, shell *harness.CustomShell) []harness.Tool {
 	tools := p.tools()
-	store := tools[0]
+	name := tools[0].Name
 	tools[0].Parameters["properties"].(map[string]any)["source"] = map[string]any{"type": "string"}
 	tools[0].Description += "\nInstead of content or content_base64, source may name a workspace file to store."
-	tools[0].Call = func(ctx context.Context, raw json.RawMessage, output chan<- harness.ChatResponse) (harness.ToolResult, error) {
+	tools[0].Call = func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		var input pageToolInput
 		if err := json.Unmarshal(raw, &input); err != nil {
-			return store.Call(ctx, raw, output)
+			return harness.ToolResult{}, fmt.Errorf("parse %s: %w", name, err)
 		}
 
 		file, err := outboundAttachment(root, shell, &outboundAttachmentInput{Path: input.Source, Name: input.Path, MIMEType: input.ContentType, Content: input.Content, ContentBase64: input.ContentBase64})
