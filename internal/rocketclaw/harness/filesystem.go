@@ -3,13 +3,10 @@ package harness
 import (
 	"bufio"
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"mime"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +14,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"go.starlark.net/starlark"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 )
 
 type sandboxedFileSystem struct {
@@ -60,123 +61,41 @@ func (e openCodePatchError) Error() string {
 	return e.message
 }
 
-func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResult {
-	sfs.mu.Lock()
-	defer sfs.mu.Unlock()
-
-	if offset < 1 {
-		return TextToolResult("offset must be greater than or equal to 1")
-	}
-
-	if denied := sfs.deniedPath(filename); denied != "" {
-		return TextToolResult(denied)
-	}
-
-	name, err := normalizeRootName(sfs.root, filename)
-	if err != nil {
-		return TextToolResult(err.Error())
-	}
-
-	if err := rejectSymlink(sfs, name); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return TextToolResult(err.Error())
-	}
-
-	file, err := sfs.root.Open(name)
-	if err != nil {
-		return TextToolResult("File not found: " + filename)
-	}
-
-	content, err := io.ReadAll(file)
-	errClose := file.Close()
-
-	if err != nil {
-		return TextToolResult("failed to read file: " + filename)
-	}
-
-	if errClose != nil {
-		return TextToolResult("failed to read file: " + filename)
-	}
-
-	mimeType := sniffAttachmentMIME(content, cmp.Or(mime.TypeByExtension(filepath.Ext(filename)), "application/octet-stream"))
-	if isSupportedAttachmentMIME(mimeType) {
-		attachment, err := attachmentFromBytes(filepath.Base(filename), mimeType, content)
-		if err != nil {
-			return TextToolResult(err.Error())
-		}
-
-		message := "Image read successfully"
-		if mimeType == "application/pdf" {
-			message = "PDF read successfully"
-		}
-
-		return ToolResult{Output: message, Attachments: []Attachment{attachment}}
-	}
-
-	var output strings.Builder
-	output.WriteString("<path>")
-	output.WriteString(filename)
-	output.WriteString("</path>\n<type>file</type>\n<content>\n")
-
-	scanner := bufio.NewScanner(bytes.NewReader(content))
-	scanner.Buffer(make([]byte, 0, 64*1024), max(len(content)+2, 64*1024))
-
-	count := 0
-
-	for scanner.Scan() {
-		count++
-		if count < offset {
-			continue
-		}
-
-		if count > offset {
-			output.WriteByte('\n')
-		}
-
-		fmt.Fprintf(&output, "%d: %s", count, scanner.Text())
-	}
-
-	if count < offset && (count != 0 || offset != 1) {
-		return TextToolResult(fmt.Sprintf("Offset %d is out of range for this file (%d lines)", offset, count))
-	}
-
-	fmt.Fprintf(&output, "\n\n(End of file - total %d lines)", count)
-
-	output.WriteString("\n</content>")
-
-	return TextToolResult(output.String())
+func (sfs *sandboxedFileSystem) Read(ctx context.Context, filename string, offset int) (starlark.Value, error) {
+	return readTyped(ctx, &sfs.mu, rootedReadAttempt{sfs: sfs, path: filename}, filename, offset)
 }
 
-func (sfs *sandboxedFileSystem) ApplyPatch(patchText string) string {
+func (sfs *sandboxedFileSystem) ApplyPatch(patchText string) (starlark.Value, error) {
 	sfs.mu.Lock()
 	defer sfs.mu.Unlock()
 
 	preview, errText := previewApplyPatchLocked(sfs, patchText)
 	if errText != "" {
-		return errText
+		return nil, errors.New(errText)
 	}
 
 	for _, change := range preview.changes {
 		switch change.typ {
 		case "add", "update":
 			if err := writeTextFile(sfs, change.path, change.newContent, change.bom); err != nil {
-				return "apply_patch verification failed: " + err.Error()
+				return nil, errors.New("apply_patch verification failed: " + err.Error())
 			}
 		case "move":
 			if err := writeTextFile(sfs, change.movePath, change.newContent, change.bom); err != nil {
-				return "apply_patch verification failed: " + err.Error()
+				return nil, errors.New("apply_patch verification failed: " + err.Error())
 			}
 
 			if err := sfs.root.Remove(change.path); err != nil {
-				return "apply_patch verification failed: " + err.Error()
+				return nil, errors.New("apply_patch verification failed: " + err.Error())
 			}
 		case "delete":
 			if err := sfs.root.Remove(change.path); err != nil {
-				return "apply_patch verification failed: " + err.Error()
+				return nil, errors.New("apply_patch verification failed: " + err.Error())
 			}
 		}
 	}
 
-	return preview.output
+	return codemode.NewText(preview.output, codemode.PlainText{}), nil
 }
 
 func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (preview applyPatchPreview, errText string) {
@@ -665,34 +584,13 @@ type globMatch struct {
 	mtime int64
 }
 
-func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) string {
+func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) (starlark.Value, error) {
 	matches, errText := sfs.globMatches(ctx, pattern, path)
 	if errText != "" {
-		return errText
+		return nil, errors.New(errText)
 	}
 
-	return formatGlobOutput(matches)
-}
-
-func formatGlobOutput(results []globMatch) string {
-	if len(results) == 0 {
-		return "No files found"
-	}
-
-	slices.SortFunc(results, func(a, b globMatch) int {
-		if order := cmp.Compare(b.mtime, a.mtime); order != 0 {
-			return order
-		}
-
-		return strings.Compare(a.path, b.path)
-	})
-
-	output := make([]string, 0, len(results))
-	for _, result := range results {
-		output = append(output, result.path)
-	}
-
-	return strings.Join(output, "\n")
+	return newGlobResult(matches), nil
 }
 
 type grepMatch struct {
@@ -721,13 +619,13 @@ type grepTarget struct {
 	files    []string
 }
 
-func (sfs *sandboxedFileSystem) Grep(ctx context.Context, pattern, searchPath, include string) string {
+func (sfs *sandboxedFileSystem) Grep(ctx context.Context, pattern, searchPath, include string) (starlark.Value, error) {
 	matches, partial, errText := sfs.grepMatches(ctx, pattern, searchPath, include)
 	if errText != "" {
-		return errText
+		return nil, errors.New(errText)
 	}
 
-	return formatGrepOutput(matches, partial)
+	return newGrepResult(matches, partial), nil
 }
 
 func (sfs *sandboxedFileSystem) grepMatches(ctx context.Context, pattern, searchPath, include string) (matches []grepMatch, partial bool, errText string) {
@@ -1080,40 +978,4 @@ func parseGrepMatches(stdout []byte, searchRoot *os.Root, hostRoot string) ([]gr
 	}
 
 	return matches, nil
-}
-
-func formatGrepOutput(matches []grepMatch, partial bool) string {
-	if len(matches) == 0 {
-		return "No files found"
-	}
-
-	slices.SortFunc(matches, func(a, b grepMatch) int {
-		if order := cmp.Compare(b.mtime, a.mtime); order != 0 {
-			return order
-		}
-
-		return cmp.Or(strings.Compare(a.path, b.path), cmp.Compare(a.line, b.line))
-	})
-
-	output := []string{fmt.Sprintf("Found %d matches", len(matches))}
-
-	current := ""
-	for _, match := range matches {
-		if current != match.path {
-			if current != "" {
-				output = append(output, "")
-			}
-
-			current = match.path
-			output = append(output, match.path+":")
-		}
-
-		output = append(output, fmt.Sprintf("  Line %d: %s", match.line, match.text))
-	}
-
-	if partial {
-		output = append(output, "", "(Some paths were inaccessible and skipped)")
-	}
-
-	return strings.Join(output, "\n")
 }

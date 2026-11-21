@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 )
 
 type oracleInput struct {
@@ -141,17 +143,17 @@ func runGoApplyPatch(t *testing.T, dir, patchText string) oracleResult {
 	defer func() { require.NoError(t, root.Close()) }()
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	output := sfs.ApplyPatch(patchText)
+	output, err := sfs.ApplyPatch(patchText)
 
 	result := oracleResult{OK: false, Output: "", Error: "", Tree: snapshotTree(t, dir)}
-	if strings.HasPrefix(output, "Success. Updated the following files:") {
-		result.OK = true
-		result.Output = output
+	if err != nil {
+		result.Error = err.Error()
 
 		return result
 	}
 
-	result.Error = output
+	result.OK = true
+	result.Output = output.String()
 
 	return result
 }
@@ -219,115 +221,112 @@ func TestTSandboxedFileSystem(t *testing.T) {
 		root: root,
 	}
 
+	read := func(name string, offset int) string {
+		return resultText(sfs.Read(t.Context(), name, offset))
+	}
+
 	for _, name := range []string{"small.txt", "extensionless", "small.rocketcode-unknown"} {
-		result := sfs.ReadResult(name, 1)
-		require.Equal(t, TextToolResult("<path>"+name+"</path>\n<type>file</type>\n<content>\n1: hello world\n\n(End of file - total 1 lines)\n</content>"), result)
+		text := readTextValue(t, sfs, name, 1)
+		require.Equal(t, "hello world", text.String())
+		require.Equal(t, "<path>"+name+"</path>\n<type>file</type>\n<content>\n1: hello world\n\n(End of file - total 1 lines)\n</content>", numberedView(t, text))
 	}
 
 	{
 		path := filepath.Join(root.Name(), "small.txt")
-		file := sfs.ReadResult(path, 1).Output
-		require.Contains(t, file, "<path>"+path+"</path>")
-		require.Contains(t, file, "1: hello world")
+		text := readTextValue(t, sfs, path, 1)
+		require.Equal(t, "hello world", text.String())
+		require.Equal(t, "<path>"+path+"</path>\n<type>file</type>\n<content>\n1: hello world\n\n(End of file - total 1 lines)\n</content>", numberedView(t, text))
 		require.Equal(t, "small.txt", sfs.readPermissionSubject(path))
 	}
 
 	{
 		path := filepath.Join(t.TempDir(), "outside.txt")
-		file := sfs.ReadResult(path, 1).Output
-		require.Equal(t, "path escapes root: "+path, file)
+		require.Equal(t, "error: path escapes root: "+path, read(path, 1))
 	}
 
 	{
-		file := sfs.ReadResult("offset.txt", 2).Output
-		require.Contains(t, file, "2: line2")
-		require.Contains(t, file, "3: line3")
-		require.Contains(t, file, "(End of file - total 3 lines)")
+		text := readTextValue(t, sfs, "offset.txt", 2)
+		require.Equal(t, "line2\nline3", text.String())
+		require.Equal(t, "<path>offset.txt</path>\n<type>file</type>\n<content>\n2: line2\n3: line3\n\n(End of file - total 3 lines)\n</content>", numberedView(t, text))
 	}
 
 	{
-		file := sfs.ReadResult("many-lines.txt", 1).Output
-		require.Contains(t, file, "1: line1")
+		text := readTextValue(t, sfs, "many-lines.txt", 1)
+		require.Equal(t, manyLines.String(), text.String())
+
+		file := numberedView(t, text)
+		require.Contains(t, file, "1: line1\n2: line2\n")
 		require.Contains(t, file, "2000: line2000")
-		require.Contains(t, file, "2100: line2100")
-		require.Contains(t, file, "(End of file - total 2100 lines)")
+		require.True(t, strings.HasSuffix(file, "\n2100: line2100\n\n(End of file - total 2100 lines)\n</content>"))
 		require.NotContains(t, file, "Use offset=")
 	}
 
 	{
-		file := sfs.ReadResult("many-lines.txt", 2001).Output
-		require.Contains(t, file, "2001: line2001")
-		require.Contains(t, file, "2100: line2100")
-		require.Contains(t, file, "(End of file - total 2100 lines)")
+		text := readTextValue(t, sfs, "many-lines.txt", 2001)
+		require.True(t, strings.HasPrefix(text.String(), "line2001\nline2002\n"))
+		require.True(t, strings.HasPrefix(numberedView(t, text), "<path>many-lines.txt</path>\n<type>file</type>\n<content>\n2001: line2001\n"))
+		require.True(t, strings.HasSuffix(numberedView(t, text), "\n2100: line2100\n\n(End of file - total 2100 lines)\n</content>"))
 	}
 
 	{
 		longLine := strings.Repeat("x", 80*1024)
 		require.NoError(t, root.WriteFile("long-line.txt", []byte(longLine+"\n"), 0o644))
 
-		file := sfs.ReadResult("long-line.txt", 1).Output
-		require.True(t, strings.HasPrefix(file, "<path>long-line.txt</path>\n<type>file</type>\n<content>\n1: "+longLine), file[:min(120, len(file))])
-		require.NotContains(t, file, "line truncated")
+		text := readTextValue(t, sfs, "long-line.txt", 1)
+		require.Equal(t, longLine+"\n", text.String())
+		require.Equal(t, "<path>long-line.txt</path>\n<type>file</type>\n<content>\n1: "+longLine+"\n\n(End of file - total 1 lines)\n</content>", numberedView(t, text))
 	}
 
-	{
-		file := sfs.ReadResult("offset.txt", 4).Output
-		require.Equal(t, "Offset 4 is out of range for this file (3 lines)", file)
-	}
-
-	{
-		file := sfs.ReadResult("offset.txt", 0).Output
-		require.Equal(t, "offset must be greater than or equal to 1", file)
-	}
-
-	{
-		file := sfs.ReadResult("file_b.txt", 30).Output
-		require.Equal(t, "File not found: file_b.txt", file)
-	}
-
-	{
-		file := sfs.ReadResult("secret", 1).Output
-		require.Equal(t, "failed to read file: secret", file)
-	}
-
-	{
-		file := sfs.ReadResult(".env", 1).Output
-		require.Equal(t, deniedEnvAccessMessage(".env"), file)
-	}
-
-	{
-		file := sfs.ReadResult(".env.example", 1).Output
-		require.Contains(t, file, "1: SECRET=example")
-	}
-
-	{
-		file := sfs.ReadResult("safe-env-link.txt", 1).Output
-		require.Equal(t, "symlink access denied: safe-env-link.txt", file)
-	}
-
-	{
-		file := sfs.ReadResult("linked-secret/value.txt", 1).Output
-		require.Equal(t, "symlink access denied: linked-secret", file)
+	for _, tc := range []struct {
+		name   string
+		offset int
+		want   string
+	}{
+		{"offset.txt", 4, "error: Offset 4 is out of range for this file (3 lines)"},
+		{"offset.txt", 0, "error: offset must be greater than or equal to 1"},
+		{"file_b.txt", 30, "error: File not found: file_b.txt"},
+		{"secret", 1, "error: failed to read file: secret"},
+		{".env", 1, "error: " + deniedEnvAccessMessage(".env")},
+		{".env.example", 1, "SECRET=example"},
+		{"safe-env-link.txt", 1, "error: symlink access denied: safe-env-link.txt"},
+		{"linked-secret/value.txt", 1, "error: symlink access denied: linked-secret"},
+	} {
+		require.Equal(t, tc.want, read(tc.name, tc.offset), tc.name)
 	}
 
 	const png = "\x89PNG\r\n\x1a\n"
 	for _, tc := range []struct {
-		name, data, output, mime string
+		name, data, mime string
 	}{
-		{"image.png", png, "Image read successfully", "image/png"},
-		{"doc.pdf", "%PDF-1.7\n", "PDF read successfully", "application/pdf"},
-		{"filename.png", "filename only", "Image read successfully", "image/png"},
-		{"filename.PNG", "filename only", "Image read successfully", "image/png"},
-		{"image", png, "Image read successfully", "image/png"},
-		{"mislabeled.pdf", png, "Image read successfully", "image/png"},
+		{"image.png", png, "image/png"},
+		{"doc.pdf", "%PDF-1.7\n", "application/pdf"},
+		{"filename.png", "filename only", "image/png"},
+		{"filename.PNG", "filename only", "image/png"},
+		{"image", png, "image/png"},
+		{"mislabeled.pdf", png, "image/png"},
+		{"photo.jpg", "\xff\xd8\xff\xe0\x00\x10JFIF", "image/jpeg"},
+		{"anim.gif", "GIF89a\x01\x00\x01\x00", "image/gif"},
+		{"pic.webp", "RIFF\x00\x00\x00\x00WEBPVP8 ", "image/webp"},
 	} {
 		require.NoError(t, root.WriteFile(tc.name, []byte(tc.data), 0o644))
-		result := sfs.ReadResult(tc.name, 1)
-		require.Equal(t, ToolResult{Output: tc.output, Attachments: []Attachment{{
-			MIME:     tc.mime,
-			Filename: tc.name,
-			URL:      "data:" + tc.mime + ";base64," + base64.StdEncoding.EncodeToString([]byte(tc.data)),
-		}}}, result, tc.name)
+
+		value, err := sfs.Read(t.Context(), tc.name, 1)
+		require.NoError(t, err, tc.name)
+
+		file, ok := value.(*codemode.File)
+		require.True(t, ok, tc.name)
+		require.Equal(t, []string{tc.name, tc.mime, tc.data, "read " + tc.name}, []string{file.Name(), file.Mime(), file.Content(), file.Source()})
+	}
+
+	for _, tc := range []struct{ name, data, want string }{
+		{"blob.bin", "abc\x00def", "error: Cannot read binary file: blob.bin"},
+		{"pic.bmp", "BM\x36\x00\x00\x00\x00\x00", "error: Cannot read binary file: pic.bmp"},
+		{"scan.tiff", "II*\x00\x08\x00", "error: Cannot read binary file: scan.tiff"},
+		{"logo.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>"},
+		{"notes.bmp", "plain words", "plain words"},
+	} {
+		require.NoError(t, root.WriteFile(tc.name, []byte(tc.data), 0o644))
+		require.Equal(t, tc.want, read(tc.name, 1), tc.name)
 	}
 }
 
@@ -361,7 +360,7 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 
 	t.Run("no matches", func(t *testing.T) {
-		require.Equal(t, "No files found", sfs.Glob(context.Background(), "**/*.pdf", "glob"))
+		require.Equal(t, "No files found", resultText(sfs.Glob(context.Background(), "**/*.pdf", "glob")))
 	})
 
 	t.Run("sorts by newest first then path", func(t *testing.T) {
@@ -370,7 +369,7 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 		for _, modified := range []time.Time{inside, newer} {
 			require.NoError(t, root.Chtimes("glob/nested/inside.txt", modified, modified))
 
-			got := sfs.Glob(context.Background(), "*.txt", "glob")
+			got := resultText(sfs.Glob(context.Background(), "*.txt", "glob"))
 			require.Equal(t, strings.Join([]string{
 				filepath.Join(dir, "glob", "nested", "inside.txt"),
 				filepath.Join(dir, "glob", "new.txt"),
@@ -380,7 +379,7 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 	})
 
 	t.Run("searches nested path from sandbox root", func(t *testing.T) {
-		got := sfs.Glob(context.Background(), "**/*.txt", "glob")
+		got := resultText(sfs.Glob(context.Background(), "**/*.txt", "glob"))
 		require.Equal(t, strings.Join([]string{
 			filepath.Join(dir, "glob", "nested", "inside.txt"),
 			filepath.Join(dir, "glob", "new.txt"),
@@ -389,7 +388,7 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 	})
 
 	t.Run("searches absolute in root path", func(t *testing.T) {
-		got := sfs.Glob(context.Background(), "*.txt", filepath.Join(root.Name(), "glob"))
+		got := resultText(sfs.Glob(context.Background(), "*.txt", filepath.Join(root.Name(), "glob")))
 		require.Equal(t, strings.Join([]string{
 			filepath.Join(dir, "glob", "nested", "inside.txt"),
 			filepath.Join(dir, "glob", "new.txt"),
@@ -399,11 +398,11 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 
 	t.Run("rejects absolute outside root path", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "glob")
-		require.Equal(t, "path escapes root: "+path, sfs.Glob(context.Background(), "*.txt", path))
+		require.Equal(t, "error: path escapes root: "+path, resultText(sfs.Glob(context.Background(), "*.txt", path)))
 	})
 
 	t.Run("does not follow or return symlinks", func(t *testing.T) {
-		got := sfs.Glob(context.Background(), "**/*.txt", "glob")
+		got := resultText(sfs.Glob(context.Background(), "**/*.txt", "glob"))
 		require.NotContains(t, got, filepath.Join(dir, "glob", "link.txt"))
 		require.NotContains(t, got, filepath.Join(dir, "glob", "linkdir"))
 	})
@@ -411,27 +410,28 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 	t.Run("ignores ripgrep config", func(t *testing.T) {
 		t.Setenv("RIPGREP_CONFIG_PATH", filepath.Join(dir, "ripgreprc"))
 
-		got := sfs.Glob(context.Background(), "*.txt", "glob")
+		got := resultText(sfs.Glob(context.Background(), "*.txt", "glob"))
 		require.Contains(t, got, filepath.Join(dir, "glob", "new.txt"))
 	})
 
 	t.Run("reports invalid pattern", func(t *testing.T) {
-		got := sfs.Glob(context.Background(), "[", "glob")
-		require.Contains(t, got, "error parsing glob")
+		got := resultText(sfs.Glob(context.Background(), "[", "glob"))
+		require.Contains(t, got, "error: rg: error parsing glob")
 	})
 
 	t.Run("reports invalid search path", func(t *testing.T) {
-		got := sfs.Glob(context.Background(), "*.txt", "missing")
+		got := resultText(sfs.Glob(context.Background(), "*.txt", "missing"))
+		require.True(t, strings.HasPrefix(got, "error: "), got)
 		require.Contains(t, got, "missing")
 		require.Contains(t, got, "no such file or directory")
 	})
 
 	t.Run("denies symlinked search path", func(t *testing.T) {
-		require.Equal(t, "symlink access denied: glob/linkdir", sfs.Glob(context.Background(), "*.txt", "glob/linkdir"))
+		require.Equal(t, "error: symlink access denied: glob/linkdir", resultText(sfs.Glob(context.Background(), "*.txt", "glob/linkdir")))
 	})
 
 	t.Run("filters denied env files", func(t *testing.T) {
-		got := sfs.Glob(context.Background(), ".env*", "glob")
+		got := resultText(sfs.Glob(context.Background(), ".env*", "glob"))
 		require.Equal(t, filepath.Join(dir, "glob", ".env.example"), got)
 	})
 
@@ -447,7 +447,7 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 			require.NoError(t, root.Chtimes(name, mtime, mtime))
 		}
 
-		got := sfs.Glob(context.Background(), "*.txt", "many")
+		got := resultText(sfs.Glob(context.Background(), "*.txt", "many"))
 		lines := strings.Split(got, "\n")
 		require.Len(t, lines, 101)
 		require.Equal(t, filepath.Join(dir, "many", "file-100.txt"), lines[0])
@@ -492,7 +492,7 @@ func TestSandboxedFileSystemGlobPathAllocations(t *testing.T) {
 		}
 	})
 	allocs := testing.AllocsPerRun(3, func() {
-		if got := sfs.Glob(t.Context(), "*.txt", ""); got != want {
+		if got := resultText(sfs.Glob(t.Context(), "*.txt", "")); got != want {
 			t.Fatal("glob output differs from the sorted file paths")
 		}
 	})
@@ -540,7 +540,7 @@ func TestRunRipgrepExitResults(t *testing.T) {
 	})
 }
 
-func TestFormatGrepOutput(t *testing.T) {
+func TestGrepResultString(t *testing.T) {
 	matches := []grepMatch{
 		{path: "a", line: 1, text: "old", mtime: 0},
 		{path: "c", line: 1, text: "last", mtime: 1},
@@ -548,7 +548,7 @@ func TestFormatGrepOutput(t *testing.T) {
 		{path: "b", line: 1, text: "first", mtime: 1},
 	}
 
-	require.Equal(t, "Found 4 matches\nb:\n  Line 1: first\n  Line 2: second\n\nc:\n  Line 1: last\n\na:\n  Line 1: old", formatGrepOutput(matches, false))
+	require.Equal(t, "Found 4 matches\nb:\n  Line 1: first\n  Line 2: second\n\nc:\n  Line 1: last\n\na:\n  Line 1: old", newGrepResult(matches, false).String())
 }
 
 func TestSandboxedFileSystemGrep(t *testing.T) {
@@ -580,23 +580,23 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 
 	t.Run("no matches", func(t *testing.T) {
-		require.Equal(t, "No files found", sfs.Grep(context.Background(), "missing", "grep", ""))
+		require.Equal(t, "No files found", resultText(sfs.Grep(context.Background(), "missing", "grep", "")))
 	})
 
 	t.Run("requires pattern", func(t *testing.T) {
-		require.Equal(t, "pattern is required", sfs.Grep(context.Background(), "", "grep", ""))
+		require.Equal(t, "error: pattern is required", resultText(sfs.Grep(context.Background(), "", "grep", "")))
 	})
 
 	t.Run("include matches no files", func(t *testing.T) {
-		require.Equal(t, "No files found", sfs.Grep(context.Background(), "needle", "grep", "*.pdf"))
+		require.Equal(t, "No files found", resultText(sfs.Grep(context.Background(), "needle", "grep", "*.pdf")))
 	})
 
 	t.Run("reports invalid include", func(t *testing.T) {
-		require.Equal(t, "rg: error parsing glob '[': unclosed character class; missing ']'", sfs.Grep(context.Background(), "needle", "grep", "["))
+		require.Equal(t, "error: rg: error parsing glob '[': unclosed character class; missing ']'", resultText(sfs.Grep(context.Background(), "needle", "grep", "[")))
 	})
 
 	t.Run("searches file in sandbox root", func(t *testing.T) {
-		require.Equal(t, "Found 1 matches\n"+filepath.Join(dir, "grep-ripgreprc")+":\n  Line 1: --bad-flag", sfs.Grep(context.Background(), "bad", "grep-ripgreprc", ""))
+		require.Equal(t, "Found 1 matches\n"+filepath.Join(dir, "grep-ripgreprc")+":\n  Line 1: --bad-flag", resultText(sfs.Grep(context.Background(), "bad", "grep-ripgreprc", "")))
 	})
 
 	t.Run("searches directory sorted by newest file then path and line", func(t *testing.T) {
@@ -605,7 +605,7 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 		for _, modified := range []time.Time{inside, newer} {
 			require.NoError(t, root.Chtimes("grep/nested/inside.txt", modified, modified))
 
-			got := sfs.Grep(context.Background(), "needle|shared", "grep", "*.txt")
+			got := resultText(sfs.Grep(context.Background(), "needle|shared", "grep", "*.txt"))
 			require.Equal(t, strings.Join([]string{
 				"Found 6 matches",
 				filepath.Join(dir, "grep", "nested", "inside.txt") + ":",
@@ -624,7 +624,7 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 	})
 
 	t.Run("searches exact file path", func(t *testing.T) {
-		got := sfs.Grep(context.Background(), "shared", "grep/new.txt", "")
+		got := resultText(sfs.Grep(context.Background(), "shared", "grep/new.txt", ""))
 		require.Equal(t, strings.Join([]string{
 			"Found 1 matches",
 			filepath.Join(dir, "grep", "new.txt") + ":",
@@ -633,13 +633,13 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 	})
 
 	t.Run("searches absolute in root directory", func(t *testing.T) {
-		got := sfs.Grep(context.Background(), "needle", filepath.Join(root.Name(), "grep"), "*.txt")
+		got := resultText(sfs.Grep(context.Background(), "needle", filepath.Join(root.Name(), "grep"), "*.txt"))
 		require.Contains(t, got, filepath.Join(dir, "grep", "new.txt")+":")
 		require.Contains(t, got, "  Line 1: needle new")
 	})
 
 	t.Run("searches absolute in root file", func(t *testing.T) {
-		got := sfs.Grep(context.Background(), "shared", filepath.Join(root.Name(), "grep", "new.txt"), "")
+		got := resultText(sfs.Grep(context.Background(), "shared", filepath.Join(root.Name(), "grep", "new.txt"), ""))
 		require.Equal(t, strings.Join([]string{
 			"Found 1 matches",
 			filepath.Join(dir, "grep", "new.txt") + ":",
@@ -649,11 +649,11 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 
 	t.Run("rejects absolute outside root path", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "grep")
-		require.Equal(t, "path escapes root: "+path, sfs.Grep(context.Background(), "needle", path, ""))
+		require.Equal(t, "error: path escapes root: "+path, resultText(sfs.Grep(context.Background(), "needle", path, "")))
 	})
 
 	t.Run("include filters files", func(t *testing.T) {
-		got := sfs.Grep(context.Background(), "needle", "grep", "*.md")
+		got := resultText(sfs.Grep(context.Background(), "needle", "grep", "*.md"))
 		require.Equal(t, strings.Join([]string{
 			"Found 1 matches",
 			filepath.Join(dir, "grep", "skip.md") + ":",
@@ -675,7 +675,7 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 			require.NoError(t, root.Chtimes(name, mtime, mtime))
 		}
 
-		got := sfs.Grep(context.Background(), "needle", "grep/many", "*.txt")
+		got := resultText(sfs.Grep(context.Background(), "needle", "grep/many", "*.txt"))
 		require.Contains(t, got, "Found 101 matches")
 		require.Contains(t, got, filepath.Join(dir, "grep", "many", "file-100.txt")+":")
 		require.Contains(t, got, filepath.Join(dir, "grep", "many", "file-000.txt")+":")
@@ -690,43 +690,45 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 		mtime := inside.Add(2 * time.Hour)
 		require.NoError(t, root.Chtimes("grep/long.txt", mtime, mtime))
 
-		got := sfs.Grep(context.Background(), "a+", "grep/long.txt", "")
+		got := resultText(sfs.Grep(context.Background(), "a+", "grep/long.txt", ""))
 		require.Contains(t, got, "  Line 1: "+longLine)
 	})
 
 	t.Run("reports invalid regex", func(t *testing.T) {
-		got := sfs.Grep(context.Background(), "(", "grep", "")
+		got := resultText(sfs.Grep(context.Background(), "(", "grep", ""))
+		require.True(t, strings.HasPrefix(got, "error: "), got)
 		require.Contains(t, got, "regex parse error")
 	})
 
 	t.Run("reports invalid search path", func(t *testing.T) {
-		got := sfs.Grep(context.Background(), "needle", "missing", "")
+		got := resultText(sfs.Grep(context.Background(), "needle", "missing", ""))
+		require.True(t, strings.HasPrefix(got, "error: "), got)
 		require.Contains(t, got, "missing")
 		require.Contains(t, got, "no such file or directory")
 	})
 
 	t.Run("denies exact symlink target", func(t *testing.T) {
-		require.Equal(t, "symlink access denied: grep/link.txt", sfs.Grep(context.Background(), "needle", "grep/link.txt", ""))
+		require.Equal(t, "error: symlink access denied: grep/link.txt", resultText(sfs.Grep(context.Background(), "needle", "grep/link.txt", "")))
 	})
 
 	t.Run("does not follow symlink entries", func(t *testing.T) {
-		got := sfs.Grep(context.Background(), "secret", "grep", "*.txt")
+		got := resultText(sfs.Grep(context.Background(), "secret", "grep", "*.txt"))
 		require.Equal(t, "No files found", got)
 	})
 
 	t.Run("ignores ripgrep config", func(t *testing.T) {
 		t.Setenv("RIPGREP_CONFIG_PATH", filepath.Join(dir, "grep-ripgreprc"))
 
-		got := sfs.Grep(context.Background(), "needle", "grep/new.txt", "")
+		got := resultText(sfs.Grep(context.Background(), "needle", "grep/new.txt", ""))
 		require.Contains(t, got, "Found 1 matches")
 	})
 
 	t.Run("denies exact env file target", func(t *testing.T) {
-		require.Equal(t, deniedEnvAccessMessage("grep/.env"), sfs.Grep(context.Background(), "needle", "grep/.env", ""))
+		require.Equal(t, "error: "+deniedEnvAccessMessage("grep/.env"), resultText(sfs.Grep(context.Background(), "needle", "grep/.env", "")))
 	})
 
 	t.Run("excludes denied env files but allows env example", func(t *testing.T) {
-		got := sfs.Grep(context.Background(), "needle", "grep", ".env*")
+		got := resultText(sfs.Grep(context.Background(), "needle", "grep", ".env*"))
 		require.Contains(t, got, filepath.Join(dir, "grep", ".env.example")+":")
 		require.NotContains(t, got, filepath.Join(dir, "grep", ".env")+":")
 		require.NotContains(t, got, "secret needle")
@@ -970,7 +972,8 @@ func TestApplyPatchFailures(t *testing.T) {
 			require.NoError(t, root.Symlink("dir", "link"))
 			sfs := &sandboxedFileSystem{root: root}
 
-			require.Equal(t, strings.ReplaceAll(tt.want, "<root>", root.Name()), sfs.ApplyPatch("*** Begin Patch\n"+tt.patch+"\n*** End Patch"))
+			_, err = sfs.ApplyPatch("*** Begin Patch\n" + tt.patch + "\n*** End Patch")
+			require.EqualError(t, err, strings.ReplaceAll(tt.want, "<root>", root.Name()))
 		})
 	}
 }
@@ -993,7 +996,9 @@ func TestApplyPatchParity(t *testing.T) {
 			require.NoError(t, root.WriteFile("file.txt", []byte(tc.before), 0o644))
 			sfs := &sandboxedFileSystem{root: root}
 
-			require.Equal(t, "Success. Updated the following files:\nM file.txt", sfs.ApplyPatch("*** Begin Patch\n*** Update File: file.txt\n@@\n"+tc.chunk+"\n*** End Patch"))
+			output, err := sfs.ApplyPatch("*** Begin Patch\n*** Update File: file.txt\n@@\n" + tc.chunk + "\n*** End Patch")
+			require.NoError(t, err)
+			require.Equal(t, "Success. Updated the following files:\nM file.txt", output.String())
 
 			got, err := root.ReadFile("file.txt")
 			require.NoError(t, err)
@@ -1106,9 +1111,9 @@ func TestSandboxedFileSystemGlobHonorsCancellation(t *testing.T) {
 	require.NoError(t, root.WriteFile("found.txt", []byte("x"), 0o644))
 
 	sfs := &sandboxedFileSystem{root: root}
-	require.Contains(t, sfs.Glob(t.Context(), "*.txt", ""), "found.txt")
+	require.Contains(t, resultText(sfs.Glob(t.Context(), "*.txt", "")), "found.txt")
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	require.NotContains(t, sfs.Glob(ctx, "*.txt", ""), "found.txt", "cancellation stops read-only searches")
+	require.NotContains(t, resultText(sfs.Glob(ctx, "*.txt", "")), "found.txt", "cancellation stops read-only searches")
 }

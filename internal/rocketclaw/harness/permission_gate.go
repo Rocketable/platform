@@ -76,8 +76,16 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 		return permissionDeniedError(decision.message)
 	}
 
-	if decision.review == nil || tc.looper.Permissions.Easy {
+	var bash bashParams
+	if decision.review != nil && decision.review.Permission == "bash" {
+		_ = json.Unmarshal(args, &bash)
+	}
+
+	switch {
+	case decision.review == nil, tc.looper.Permissions.Easy && bash.Stdin.text == "":
 		return nil
+	case len(bash.Stdin.text) > 64<<10:
+		return permissionDeniedError("stdin too large to review (max 64 KiB); write it to a file first")
 	}
 
 	decision.review.ReviewContext = slices.Clone(tc.reviewInput)

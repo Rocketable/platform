@@ -2090,6 +2090,10 @@ func (l *looper) recordCall(ctx context.Context, key string, output *responses.R
 }
 
 func toolCallFailureResult(name string, err error) ToolResult {
+	if failed, ok := errors.AsType[toolResultError](err); ok {
+		return failed.result
+	}
+
 	return TextToolResult(fmt.Sprintf("tool call failed: %s: %v. Choose a different action.", name, err))
 }
 

@@ -46,6 +46,14 @@ packages:
       runLockWork:
         config:
           structname: runLockWorkMock
+  github.com/Rocketable/platform/internal/rocketclaw/codemode:
+    interfaces:
+      FileMethods:
+        config:
+          structname: fileMethodsMock
+      TextAttrs:
+        config:
+          structname: textAttrsMock
   github.com/Rocketable/platform/internal/rocketclaw/config:
     interfaces:
       SecretFetcher:
@@ -169,6 +177,9 @@ packages:
       Decider:
         config:
           structname: mockDecider
+      readAttempt:
+        config:
+          structname: mockReadAttempt
   google.golang.org/grpc:
     interfaces:
       ServerStream:

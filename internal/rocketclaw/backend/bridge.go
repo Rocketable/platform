@@ -1527,14 +1527,20 @@ func (b *Bridge) wakePrompt(ctx context.Context, msg *protocol.InboundMessage) e
 		return err
 	}
 
-	var prompt strings.Builder
+	var (
+		prompt      strings.Builder
+		attachments []protocol.InboundAttachment
+	)
 
 	for i := range notes {
-		prompt.WriteString(backgroundNote(&notes[i]))
+		note, files := b.config.SessionService.backgroundNoteInput(&notes[i])
+		prompt.WriteString(note)
 		prompt.WriteString("\n\n")
+
+		attachments = append(attachments, files...)
 	}
 
-	msg.Text = strings.TrimSuffix(prompt.String(), "\n\n")
+	msg.Text, msg.Attachments = strings.TrimSuffix(prompt.String(), "\n\n"), attachments
 
 	return nil
 }

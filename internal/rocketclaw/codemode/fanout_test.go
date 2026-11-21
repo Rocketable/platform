@@ -15,7 +15,7 @@ import (
 
 func TestGatherOrderedResults(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		got, err := Run(t.Context(), `def main():
+		got, err := runToString(t.Context(), `def main():
     return gather([
         lambda: gather([lambda: slow(id="a", ms=30), lambda: slow(id="b", ms=5)]),
         lambda: slow(id="c", ms=0),
@@ -42,7 +42,7 @@ func TestGatherOrderedResults(t *testing.T) {
 	})
 }
 
-func TestGatherFailFastCancelsSibling(t *testing.T) {
+func TestTryGatherFailFastCancelsSibling(t *testing.T) {
 	var (
 		mu        sync.Mutex
 		cancelled bool
@@ -50,8 +50,8 @@ func TestGatherFailFastCancelsSibling(t *testing.T) {
 
 	hangStarted := make(chan struct{})
 
-	_, err := Run(t.Context(), `def main():
-    return gather([
+	got, err := runToString(t.Context(), `def main():
+    return try_gather([
         lambda: boom(),
         lambda: hang(),
     ], concurrency=2)
@@ -81,8 +81,8 @@ func TestGatherFailFastCancelsSibling(t *testing.T) {
 			},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("Run() error = %v, want boom", err)
+	if err != nil || got != "boom" {
+		t.Fatalf("Run() = %q, %v, want the boom failure", got, err)
 	}
 
 	mu.Lock()
@@ -102,7 +102,7 @@ func TestMapConcurrencyLimit(t *testing.T) {
 			maxSeen int
 		)
 
-		got, err := Run(t.Context(), `def main():
+		got, err := runToString(t.Context(), `def main():
     return map([1, 2, 3, 4, 5], lambda n: work(n=n), concurrency=2)
 `, nil, allowAll, nilCall, []HostTool{{
 			Name: "work",
@@ -152,7 +152,7 @@ func TestConcurrencyRejectsInvalidArguments(t *testing.T) {
 		{"missing race callables", "race()", "race arguments: race: missing argument for callables"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Run(t.Context(), "def main():\n    return "+tc.expression+"\n", nil, allowAll, nilCall, nil)
+			got, err := runToString(t.Context(), "def main():\n    return "+tc.expression+"\n", nil, allowAll, nilCall, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Run() error = %v, want %q", err, tc.want)
 			}
@@ -165,7 +165,7 @@ func TestConcurrencyRejectsInvalidArguments(t *testing.T) {
 }
 
 func TestEmptyGatherAndRace(t *testing.T) {
-	got, err := Run(t.Context(), `def main():
+	got, err := runToString(t.Context(), `def main():
     return gather([])
 `, nil, allowAll, nilCall, nil)
 	if err != nil {
@@ -176,7 +176,7 @@ func TestEmptyGatherAndRace(t *testing.T) {
 		t.Fatalf("empty gather = %q", got)
 	}
 
-	_, err = Run(t.Context(), `def main():
+	_, err = runToString(t.Context(), `def main():
     return race([])
 `, nil, allowAll, nilCall, nil)
 	if err == nil || !strings.Contains(err.Error(), "race") {
@@ -190,7 +190,7 @@ func TestRaceSuccessWins(t *testing.T) {
 		slowFinished bool
 	)
 
-	got, err := Run(t.Context(), `def main():
+	got, err := runToString(t.Context(), `def main():
     return race([
         lambda: slow(),
         lambda: fast(),
@@ -238,7 +238,7 @@ func TestRaceSuccessWins(t *testing.T) {
 }
 
 func TestRaceAllBranchesFail(t *testing.T) {
-	got, err := Run(t.Context(), `def main():
+	got, err := runToString(t.Context(), `def main():
     return race([lambda: 1 // 0, lambda: 1 // 0])
 `, nil, allowAll, nilCall, nil)
 	if err == nil || !strings.Contains(err.Error(), "floored division by zero") {
@@ -251,7 +251,7 @@ func TestRaceAllBranchesFail(t *testing.T) {
 }
 
 func TestRaceFirstFailureWins(t *testing.T) {
-	_, err := Run(t.Context(), `def main():
+	got, err := runToString(t.Context(), `def main():
     return race_first([
         lambda: fail_fast(),
         lambda: slow_ok(),
@@ -275,8 +275,8 @@ func TestRaceFirstFailureWins(t *testing.T) {
 			},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "first-done-fail") {
-		t.Fatalf("race_first error = %v, want first-done-fail", err)
+	if err != nil || got != "first-done-fail" {
+		t.Fatalf("race_first = %q, %v, want the first-done-fail failure", got, err)
 	}
 }
 
@@ -290,7 +290,7 @@ func TestNestedGatherAtMaxConcurrency(t *testing.T) {
 
 	src := "def main():\n    return gather([\n        " + strings.Join(callables, ",\n        ") + fmt.Sprintf("\n    ], concurrency=%d)\n", MaxConcurrency)
 
-	got, err := Run(t.Context(), src, nil, allowAll, nilCall, []HostTool{{
+	got, err := runToString(t.Context(), src, nil, allowAll, nilCall, []HostTool{{
 		Name: "echo",
 		CallValue: func(_ context.Context, args map[string]any) (starlark.Value, error) {
 			return starlark.String(args["v"].(string)), nil
@@ -313,7 +313,7 @@ func TestGatherRootCancel(t *testing.T) {
 	hangStarted := make(chan struct{})
 
 	go func() {
-		_, err := Run(ctx, `def main():
+		_, err := runToString(ctx, `def main():
     return gather([lambda: hang()], concurrency=1)
 `, nil, allowAll, nilCall, []HostTool{{
 			Name: "hang",
@@ -343,4 +343,20 @@ func TestGatherRootCancel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after cancel")
 	}
+}
+
+func TestConcurrencyResults(t *testing.T) {
+	runScriptCases(t, map[string]starlark.Value{"t": starlark.String("x"), "e": NewError("e", "missing")}, []scriptCase{
+		{expression: `gather([lambda: e(), lambda: t()])`, want: `[{"error":"missing"},"x"]`},
+		{expression: `map([1, 2], lambda n: e() if n == 1 else t())`, want: `[{"error":"missing"},"x"]`},
+		{expression: `try_gather([lambda: t(), lambda: t()])`, want: `["x","x"]`},
+		{expression: `try_gather([lambda: t(), lambda: e()]).error`, want: "missing"},
+		{expression: `try_map([1, 2, 3], lambda n: e() if n == 2 else t())`, want: "missing"},
+		{expression: `try_map([], lambda n: n)`, want: "[]"},
+		{expression: `race([lambda: e(), lambda: t()])`, want: "x"},
+		{expression: `race([lambda: e(), lambda: e()])`, want: "missing"},
+		{expression: `race([lambda: e(), lambda: 1 // 0, lambda: t()])`, want: "x"},
+		{expression: `gather([lambda: e().unwrap(), lambda: t()])`, wantErr: "gather: branch call: e: missing"},
+		{expression: `try_gather([lambda: e().unwrap()])`, wantErr: "try_gather: branch call: e: missing"},
+	})
 }

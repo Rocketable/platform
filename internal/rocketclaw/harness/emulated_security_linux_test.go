@@ -156,10 +156,10 @@ func TestEmulatedShellFilesystem(t *testing.T) {
 }
 
 func TestEmulatedShellLimits(t *testing.T) {
-	e := newEmulated(t, map[string]string{"slow": "sleep 30", "late": "sleep 2; echo > late", "bigout": "head -c 20000000 /dev/zero", "drain": "cat > /dev/null"}, nil, nil)
+	e := newEmulated(t, map[string]string{"slow": "sleep 30", "late": "sleep 2; echo > late", "bigout": "head -c 20000000 /dev/zero"}, nil, nil)
 	limitLogged := `level=WARN msg="emulated shell limit reached" conversation=web:c1 folder=` + regexp.QuoteMeta(e.shell.Dir) + ` cwd=\S+ script_bytes=\d+ `
 
-	got := e.sss.Bash(t.Context(), &e.shell, bashParams{Command: "while :; do :; done", Workdir: e.shell.Dir, TimeoutMillisecond: 1000})
+	got := e.sss.Bash(t.Context(), &e.shell, &bashParams{Command: "while :; do :; done", Workdir: e.shell.Dir, TimeoutMillisecond: 1000})
 	require.Equal(t, "timeout", got.ErrorCode, "E01")
 	require.Regexp(t, limitLogged+`exec=x-\S+ limit=timeout timeout=1s\n`, e.logs.String())
 
@@ -180,9 +180,6 @@ func TestEmulatedShellLimits(t *testing.T) {
 	require.Contains(t, got.Output, "output stopped at 16 MiB", "E04: a host command's output counts too")
 	require.Regexp(t, limitLogged+`exec=x-\S+ command=bigout limit=host_command_output limit_bytes=16777216\n`, e.logs.String())
 
-	e.sandboxedOK(t, "head -c 17000000 /dev/zero | drain > /dev/null 2>&1; echo $?", "126\n")
-	require.Regexp(t, limitLogged+`exec=x-\S+ limit=host_command_input command=drain limit_bytes=16777216 received_bytes=\d{8}\n`, e.logs.String())
-
 	require.False(t, e.bash(t, strings.Repeat(":", 8<<20+1)).Success)
 	require.Regexp(t, `level=WARN msg="emulated shell limit reached" conversation=web:c1 folder=\S+ cwd=\S+ script_bytes=8388609 limit=script limit_bytes=8388608\n`, e.logs.String())
 
@@ -198,7 +195,7 @@ func TestEmulatedShellLimits(t *testing.T) {
 	defer cancel()
 
 	start = time.Now()
-	got = e.sss.Bash(ctx, &e.shell, bashParams{Command: "slow", Workdir: e.shell.Dir})
+	got = e.sss.Bash(ctx, &e.shell, &bashParams{Command: "slow", Workdir: e.shell.Dir})
 	require.False(t, got.Success)
 	require.Less(t, time.Since(start), 10*time.Second)
 
@@ -229,7 +226,7 @@ func TestEmulatedShellLimits(t *testing.T) {
 	}
 
 	bounded := newEmulated(t, map[string]string{"nop": "true"}, nil, nil)
-	got = bounded.sss.Bash(t.Context(), &bounded.shell, bashParams{Command: "for i in $(seq 140); do nop || { echo stopped at $i; break; }; done", Workdir: bounded.shell.Dir})
+	got = bounded.sss.Bash(t.Context(), &bounded.shell, &bashParams{Command: "for i in $(seq 140); do nop || { echo stopped at $i; break; }; done", Workdir: bounded.shell.Dir})
 	require.Contains(t, got.Output, "stopped at 129")
 	require.Equal(t, 1, strings.Count(bounded.logs.String(), "limit=host_command_calls"), "the call limit logs once per run, not once per refused call")
 	require.Regexp(t, `exec=x-\S+ limit=host_command_calls command=nop limit_calls=128\n`, bounded.logs.String())

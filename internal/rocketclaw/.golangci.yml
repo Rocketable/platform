@@ -77,6 +77,7 @@ linters:
         - stdlib
         - github.com/Rocketable/platform/internal/rocketclaw/backend.directBridge
         - go.starlark.net/starlark.Value
+        - go.starlark.net/starlark.Iterator
     godox:
       keywords:
         - TODO

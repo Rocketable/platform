@@ -2,8 +2,6 @@ package harness
 
 import (
 	"bytes"
-	"encoding/base64"
-	"errors"
 	"fmt"
 	"mime"
 	"strings"
@@ -12,8 +10,6 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"golang.org/x/net/html"
 )
-
-const maxAttachmentBytes = 5 * 1024 * 1024
 
 type PromptInputRole string
 
@@ -55,23 +51,6 @@ type ToolResult struct {
 
 func TextToolResult(output string) ToolResult {
 	return ToolResult{Output: output}
-}
-
-func attachmentFromBytes(filename, mimeType string, data []byte) (Attachment, error) {
-	if len(data) > maxAttachmentBytes {
-		return Attachment{}, errors.New("attachment too large (exceeds 5MB limit)")
-	}
-
-	mimeType = normalizeMIME(mimeType)
-	if !isSupportedAttachmentMIME(mimeType) {
-		return Attachment{}, fmt.Errorf("unsupported attachment MIME type: %s", mimeType)
-	}
-
-	return Attachment{
-		MIME:     mimeType,
-		Filename: filename,
-		URL:      "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data),
-	}, nil
 }
 
 func normalizeMIME(mimeType string) string {

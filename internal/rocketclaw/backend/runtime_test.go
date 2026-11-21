@@ -109,7 +109,7 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 			}
 
 			if len(tagOutputs) == 0 {
-				writeRawRunFunctionCall(t, w, "tag", "execute", json.RawMessage(`{"code":"def main():\n    return \"\\n\".join([rocketclaw_set_tag(tag=\"red\"), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_sessions_current_id()])\n"}`))
+				writeRawRunFunctionCall(t, w, "tag", "execute", json.RawMessage(`{"code":"def main():\n    return \"\\n\".join([str(r) for r in [rocketclaw_set_tag(tag=\"red\"), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_sessions_current_id()]])\n"}`))
 			} else {
 				writeRawRunMessage(t, w, "done", "message", "done")
 			}
@@ -1522,11 +1522,11 @@ func TestMoveAsCallFinishes(t *testing.T) {
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
-	finished := &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (string, error) { return "done", nil }, DetachFunc: func() bool { return true }}
+	finished := &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (harness.ToolResult, error) { return harness.TextToolResult("done"), nil }, DetachFunc: func() bool { return true }}
 
 	result, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/a", Kind: harness.BackgroundKindExecute}, finished)
 	require.NoError(t, err)
-	require.Equal(t, harness.BackgroundResult{Output: "done"}, result)
+	require.Equal(t, harness.BackgroundResult{Result: harness.TextToolResult("done")}, result)
 	require.Empty(t, registry.move("main"), "a finished call has nothing left to move")
 
 	for i := range 20 {
@@ -1548,7 +1548,7 @@ func TestMoveAsCallFinishes(t *testing.T) {
 		require.Equal(t, result.Moved, len(rows) > 0)
 
 		if !result.Moved {
-			require.Equal(t, "done", result.Output)
+			require.Equal(t, "done", result.Result.Output)
 			continue
 		}
 

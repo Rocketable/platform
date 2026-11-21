@@ -2,10 +2,13 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"go.starlark.net/starlark"
 )
 
 type easyFiles struct {
@@ -32,27 +35,19 @@ func EasyRoot(shell *CustomShell, name string) (root *os.Root, rel string, err e
 	return nil, "", fmt.Errorf("%s is outside this agent's folders", filepath.Clean(name))
 }
 
-func (v *easyFiles) ReadResult(filename string, offset int) ToolResult {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+func (v *easyFiles) Read(ctx context.Context, filename string, offset int) (starlark.Value, error) {
+	path := v.readPermissionSubject(filename)
 
-	sfs, name, err := v.open(filename)
-	if err != nil {
-		return TextToolResult(err.Error())
-	}
-
-	defer func() { _ = sfs.root.Close() }()
-
-	return sfs.ReadResult(name, offset)
+	return readTyped(ctx, &v.mu, easyReadAttempt{files: v, path: path}, path, offset)
 }
 
-func (v *easyFiles) ApplyPatch(patchText string) string {
+func (v *easyFiles) ApplyPatch(patchText string) (starlark.Value, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
 	sfs, errText := v.patchFolder(patchText)
 	if errText != "" {
-		return errText
+		return nil, errors.New(errText)
 	}
 
 	defer func() { _ = sfs.root.Close() }()
@@ -60,7 +55,7 @@ func (v *easyFiles) ApplyPatch(patchText string) string {
 	return sfs.ApplyPatch(patchText)
 }
 
-func (v *easyFiles) Glob(ctx context.Context, pattern, path string) string {
+func (v *easyFiles) Glob(ctx context.Context, pattern, path string) (starlark.Value, error) {
 	var matches []globMatch
 
 	if errText := v.search(path, func(sfs *sandboxedFileSystem, name string) string {
@@ -69,13 +64,13 @@ func (v *easyFiles) Glob(ctx context.Context, pattern, path string) string {
 
 		return errText
 	}); errText != "" {
-		return errText
+		return nil, errors.New(errText)
 	}
 
-	return formatGlobOutput(matches)
+	return newGlobResult(matches), nil
 }
 
-func (v *easyFiles) Grep(ctx context.Context, pattern, searchPath, include string) string {
+func (v *easyFiles) Grep(ctx context.Context, pattern, searchPath, include string) (starlark.Value, error) {
 	var (
 		matches []grepMatch
 		partial bool
@@ -87,10 +82,10 @@ func (v *easyFiles) Grep(ctx context.Context, pattern, searchPath, include strin
 
 		return errText
 	}); errText != "" {
-		return errText
+		return nil, errors.New(errText)
 	}
 
-	return formatGrepOutput(matches, partial)
+	return newGrepResult(matches, partial), nil
 }
 
 func (v *easyFiles) open(name string) (*sandboxedFileSystem, string, error) {

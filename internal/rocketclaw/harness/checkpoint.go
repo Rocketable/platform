@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type Journal interface {
@@ -74,12 +76,15 @@ type callStep struct {
 }
 
 type hostCallStep struct {
-	Name   string      `json:"name"`
-	Hash   string      `json:"hash"`
-	Done   bool        `json:"done,omitempty"`
-	Output string      `json:"output,omitempty"`
-	Bash   *BashResult `json:"bash,omitempty"`
-	Err    string      `json:"error,omitempty"`
+	Name     string              `json:"name"`
+	Hash     string              `json:"hash"`
+	Done     bool                `json:"done,omitempty"`
+	Output   string              `json:"output,omitempty"`
+	Bash     *BashResult         `json:"bash,omitempty"`
+	Typed    *typedHostStep      `json:"typed,omitempty"`
+	WebFetch *webFetchPage       `json:"webfetch,omitempty"`
+	MCP      *mcp.CallToolResult `json:"mcp,omitempty"`
+	Err      string              `json:"error,omitempty"`
 }
 
 func loadStep(ctx context.Context, journal Journal, key string, step any) (bool, error) {

@@ -24,7 +24,7 @@ var _ harness.BackgroundWork = &backgroundWorkMock{}
 //			DetachFunc: func() bool {
 //				panic("mock out the Detach method")
 //			},
-//			RunBackgroundFunc: func(ctx context.Context) (string, error) {
+//			RunBackgroundFunc: func(ctx context.Context) (harness.ToolResult, error) {
 //				panic("mock out the RunBackground method")
 //			},
 //		}
@@ -38,7 +38,7 @@ type backgroundWorkMock struct {
 	DetachFunc func() bool
 
 	// RunBackgroundFunc mocks the RunBackground method.
-	RunBackgroundFunc func(ctx context.Context) (string, error)
+	RunBackgroundFunc func(ctx context.Context) (harness.ToolResult, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -83,7 +83,7 @@ func (mock *backgroundWorkMock) DetachCalls() []struct {
 }
 
 // RunBackground calls RunBackgroundFunc.
-func (mock *backgroundWorkMock) RunBackground(ctx context.Context) (string, error) {
+func (mock *backgroundWorkMock) RunBackground(ctx context.Context) (harness.ToolResult, error) {
 	if mock.RunBackgroundFunc == nil {
 		panic("backgroundWorkMock.RunBackgroundFunc: method is nil but BackgroundWork.RunBackground was just called")
 	}

@@ -1,10 +1,14 @@
 package harness
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -23,6 +28,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	otelsemconv "go.opentelemetry.io/otel/semconv/v1.37.0"
+	"go.starlark.net/starlark"
 )
 
 func testDecisionQuestions() []DecisionQuestion {
@@ -339,7 +345,7 @@ func TestExecuteDecisionReturnsADict(t *testing.T) {
 
 		raw, err := json.Marshal(struct {
 			Code string `json:"code"`
-		}{"def main():\n    r = decision(model=\"openai/gpt-6-luna\", state={\"message\": \"hi\"}, images=[\"photo.png\"], questions={\"tone\": {\"type\": \"choice\", \"instructions\": \"Tone?\", \"criteria\": {\"calm\": \"\", \"angry\": \"\"}}})\n    return \"%s %s %d\" % (r[\"answers\"][\"tone\"][\"choice\"], r[\"stop_reason\"], r[\"usage\"][\"input_tokens\"])\n"})
+		}{"def main():\n    r = decision(model=\"openai/gpt-6-luna\", state={\"message\": \"hi\"}, images=[\"photo.png\"], questions={\"tone\": {\"type\": \"choice\", \"instructions\": \"Tone?\", \"criteria\": {\"calm\": \"\", \"angry\": \"\"}}})\n    if not r.ok:\n        return r.error\n    return \"%s %s %d\" % (r[\"answers\"][\"tone\"][\"choice\"], r[\"stop_reason\"], r[\"usage\"][\"input_tokens\"])\n"})
 		require.NoError(t, err)
 
 		return model[executeToolName].Call(ctx, raw, nil, emptyToolCallMetadata())
@@ -356,8 +362,119 @@ func TestExecuteDecisionReturnsADict(t *testing.T) {
 	var noRead PermissionSet
 	require.NoError(t, noRead.Allow("decision", "openai/*"))
 
-	_, err = run(noRead)
-	require.ErrorContains(t, err, "images: reading files needs read permission")
+	result, err = run(noRead)
+	require.NoError(t, err)
+	require.Contains(t, result.Output, "images: reading files needs read permission")
+}
+
+func TestExecuteDecisionTakesImageFileObjects(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(".tmp/shell", 0o700))
+
+	onDisk := "\x89PNG\r\n\x1a\nrest"
+	require.NoError(t, root.WriteFile("photo.png", []byte(onDisk), 0o600))
+
+	encodePNG := func(width, height int) string {
+		var buf bytes.Buffer
+		require.NoError(t, png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, width, height))))
+
+		return buf.String()
+	}
+	photo := newFileValue(codemode.FileSpec{Name: "photo.png", Mime: "image/png", Content: encodePNG(2, 2), Source: "read photo.png"})
+	cropped := newFileValue(codemode.FileSpec{Name: "photo.png", Mime: "image/png", Content: encodePNG(1, 1), Source: "read photo.png → crop 1×1"})
+	notes := newFileValue(codemode.FileSpec{Name: "notes.pdf", Mime: "application/pdf", Content: "%PDF-1.4", Source: "read notes.pdf"})
+
+	pngImage := func(content string) DecisionImage {
+		return DecisionImage{MIME: "image/png", Base64: base64.StdEncoding.EncodeToString([]byte(content))}
+	}
+	fileArgError := func(tool, arg, name string) *codemode.Error {
+		return codemode.NewError(tool, fmt.Sprintf("argument %q got a file object (%s). Pass a path, text, or %s.base64().", arg, name, strings.TrimSuffix(name, filepath.Ext(name))))
+	}
+
+	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell"))
+	baseTools := makeSandboxedTools(&sandboxedFileSystem{mu: sync.Mutex{}, root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}))
+
+	var permissions PermissionSet
+	require.NoError(t, permissions.Allow("decision", "openai/*"))
+	require.NoError(t, permissions.Allow("read", "*"))
+
+	for _, tc := range []struct {
+		name       string
+		call       string
+		reviewed   []any
+		wantImages []DecisionImage
+		wantError  *codemode.Error
+	}{
+		{name: "path", call: `decision(images=["photo.png"], state={}, ...)`, reviewed: []any{"photo.png"}, wantImages: []DecisionImage{pngImage(onDisk)}},
+		{name: "file object", call: `decision(images=[photo], state={}, ...)`, reviewed: []any{photo}, wantImages: []DecisionImage{pngImage(photo.Content())}},
+		{name: "edited file object", call: `decision(images=(cropped,), state={}, ...)`, reviewed: []any{cropped}, wantImages: []DecisionImage{pngImage(cropped.Content())}},
+		{name: "mixed", call: `decision(images=[cropped, "photo.png", photo], state={}, ...)`, reviewed: []any{cropped, "photo.png", photo}, wantImages: []DecisionImage{pngImage(cropped.Content()), pngImage(onDisk), pngImage(photo.Content())}},
+		{name: "non-image file object", call: `decision(images=[photo, notes], state={}, ...)`, wantError: codemode.NewError("decision", `image "notes.pdf": not an image (application/pdf)`)},
+		{name: "descriptor without its file", call: `decision(images=[{"sha256": photo.sha256}], state={}, ...)`, wantError: codemode.NewError("decision", `image {"sha256":"`+photo.SHA256()+`"}: pass a path or a file object`)},
+		{name: "images not a list", call: `decision(images=photo, state={}, ...)`, wantError: fileArgError("decision", "images", "photo.png")},
+		{name: "images nested list", call: `decision(images=[[photo]], state={}, ...)`, wantError: fileArgError("decision", "images", "photo.png")},
+		{name: "images nested dict", call: `decision(images=[{"pic": photo}], state={}, ...)`, wantError: fileArgError("decision", "images", "photo.png")},
+		{name: "state", call: `decision(state={"pics": [notes]}, ...)`, wantError: fileArgError("decision", "state", "notes.pdf")},
+		{name: "host tool", call: `read(filePath=photo)`, wantError: fileArgError("read", "filePath", "photo.png")},
+		{name: "mcp tool", call: `figma_upload(image={"files": [cropped]})`, wantError: fileArgError("figma_upload", "image", "photo.png")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decider := &mockDecider{DecideFunc: func(context.Context, *DecisionRequest) ([]DecisionAnswer, DecisionUsage, error) {
+				return []DecisionAnswer{{Name: "tone", Type: DecisionChoice, Choice: "calm"}}, DecisionUsage{}, nil
+			}}
+			decision := decisionTool(map[string]Decider{"openai": decider}, ObservabilityConfig{})
+			callDecision := decision.Call
+
+			var reviewed json.RawMessage
+
+			decision.Call = func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse, metadata toolCallMetadata) (ToolResult, error) {
+				reviewed = raw
+
+				return callDecision(ctx, raw, output, metadata)
+			}
+
+			baseTools["decision"] = decision
+			model, hosts := (&toolFactory{baseTools: baseTools}).assembleTools(&Agent{Permission: permissions})
+			looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+			ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})
+
+			host, _ := codeModeHostToolsFromContext(ctx)
+			host = append(host, codemode.HostTool{Name: "files", CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
+				return starlark.Tuple{photo, cropped, notes}, nil
+			}})
+			mcp := []codemode.ToolDesc{{Server: "figma", Name: "upload"}}
+			script := "def main():\n    photo, cropped, notes = files()\n    return " + strings.ReplaceAll(tc.call, "...", `model="openai/gpt-6-luna", questions={"tone": {"type": "choice", "instructions": "Tone?", "criteria": {"calm": "", "angry": ""}}}`) + "\n"
+
+			value, err := codemode.Run(ctx, script, mcp, func(context.Context, string, map[string]any) error { return nil }, func(context.Context, string, string, map[string]any) (starlark.Value, error) {
+				return nil, errors.New("the call should have been refused")
+			}, host)
+			require.NoError(t, err)
+
+			if tc.wantError != nil {
+				require.Equal(t, tc.wantError, value)
+				require.Empty(t, decider.DecideCalls())
+
+				return
+			}
+
+			result, ok := value.(*codemode.DictResult)
+			require.True(t, ok, "got %s", value.Type())
+			require.JSONEq(t, `{"model": "openai/gpt-6-luna", "answers": {"tone": {"type": "choice", "choice": "calm", "confidence": 0}}, "usage": {"input_tokens": 0, "output_tokens": 0}, "stop_reason": "stop"}`, result.String())
+			require.Equal(t, tc.wantImages, decider.DecideCalls()[0].Request.Images)
+
+			var args struct {
+				Images json.RawMessage `json:"images"`
+			}
+			require.NoError(t, json.Unmarshal(reviewed, &args))
+
+			want, err := json.Marshal(tc.reviewed)
+			require.NoError(t, err)
+			require.JSONEq(t, string(want), string(args.Images))
+		})
+	}
 }
 
 func roundConfidence(answers []DecisionAnswer) []DecisionAnswer {

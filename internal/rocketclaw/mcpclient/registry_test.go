@@ -170,8 +170,9 @@ func TestSessionErrors(t *testing.T) {
 			require.ErrorContains(t, err, tt.want)
 			assert.Nil(t, tools)
 
-			got, err := session.CallTool(t.Context(), tt.server, "echo", nil)
+			result, got, err := session.CallTool(t.Context(), tt.server, "echo", nil)
 			require.ErrorContains(t, err, tt.want)
+			assert.Nil(t, result)
 			assert.Empty(t, got)
 		})
 	}
@@ -200,6 +201,13 @@ func TestHTTPCallTool(t *testing.T) {
 		}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return &mcp.CallToolResult{StructuredContent: map[string]any{"n": float64(1)}}, nil
 		})
+		server.AddTool(&mcp.Tool{
+			Name:        "picture",
+			Description: "image block",
+			InputSchema: map[string]any{"type": "object"},
+		}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "see"}, &mcp.ImageContent{Data: []byte("\x89PNG"), MIMEType: "image/png"}}}, nil
+		})
 	})
 
 	reg := New(t.TempDir(), map[string]ServerConfig{"demo": {URL: url}}, nil)
@@ -210,7 +218,7 @@ func TestHTTPCallTool(t *testing.T) {
 
 	tools, err := session.ListTools(t.Context(), "demo")
 	require.NoError(t, err)
-	require.Len(t, tools, 3)
+	require.Len(t, tools, 4)
 
 	names := make([]string, 0, len(tools))
 	for _, tool := range tools {
@@ -218,22 +226,31 @@ func TestHTTPCallTool(t *testing.T) {
 		assert.NotNil(t, tool.InputSchema)
 	}
 
-	assert.ElementsMatch(t, []string{"echo", "fail", "struct_only"}, names)
+	assert.ElementsMatch(t, []string{"echo", "fail", "picture", "struct_only"}, names)
 
-	got, err := session.CallTool(t.Context(), "demo", "echo", map[string]any{"message": "hi"})
+	result, got, err := session.CallTool(t.Context(), "demo", "echo", map[string]any{"message": "hi"})
 	require.NoError(t, err)
 	assert.Equal(t, "hi", got)
+	assert.Equal(t, []mcp.Content{&mcp.TextContent{Text: "hi"}}, result.Content)
 
-	_, err = session.CallTool(t.Context(), "demo", "fail", map[string]any{})
+	result, _, err = session.CallTool(t.Context(), "demo", "fail", map[string]any{})
 	require.EqualError(t, err, "nope")
+	assert.Nil(t, result)
 
-	got, err = session.CallTool(t.Context(), "demo", "struct_only", map[string]any{})
+	result, got, err = session.CallTool(t.Context(), "demo", "struct_only", map[string]any{})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"n":1}`, got)
+	assert.Equal(t, map[string]any{"n": float64(1)}, result.StructuredContent)
 
-	got, err = session.CallTool(t.Context(), "demo", "missing", nil)
+	result, got, err = session.CallTool(t.Context(), "demo", "picture", map[string]any{})
+	require.NoError(t, err)
+	assert.Equal(t, "see", got)
+	assert.Equal(t, []mcp.Content{&mcp.TextContent{Text: "see"}, &mcp.ImageContent{Data: []byte("\x89PNG"), MIMEType: "image/png"}}, result.Content)
+
+	result, got, err = session.CallTool(t.Context(), "demo", "missing", nil)
 	require.ErrorContains(t, err, `call demo.missing:`)
 	require.ErrorContains(t, err, `unknown tool "missing"`)
+	assert.Nil(t, result)
 	assert.Empty(t, got)
 
 	require.NoError(t, session.Close())
@@ -299,7 +316,7 @@ func TestHTTPHeaders(t *testing.T) {
 
 	t.Cleanup(func() { require.NoError(t, session.Close()) })
 
-	got, err := session.CallTool(t.Context(), "demo", "ping", nil)
+	_, got, err := session.CallTool(t.Context(), "demo", "ping", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "pong", got)
 	assert.Equal(t, "Bearer secret", sawAuth)
@@ -329,7 +346,7 @@ func TestStdioCallTool(t *testing.T) {
 	require.Len(t, tools, 1)
 	assert.Equal(t, "echo", tools[0].Name)
 
-	got, err := session.CallTool(t.Context(), "local", "echo", map[string]any{"message": "stdio"})
+	_, got, err := session.CallTool(t.Context(), "local", "echo", map[string]any{"message": "stdio"})
 	require.NoError(t, err)
 
 	var payload map[string]any
@@ -357,7 +374,7 @@ func TestStdioServerSeesOnlyItsOwnSessionEnv(t *testing.T) {
 		return session
 	}
 	caseOf := func(session *Session) string {
-		got, err := session.CallTool(t.Context(), "local", "echo", map[string]any{"message": "case"})
+		_, got, err := session.CallTool(t.Context(), "local", "echo", map[string]any{"message": "case"})
 		require.NoError(t, err)
 
 		var payload map[string]string
