@@ -1446,7 +1446,12 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 			shell = "emulated"
 		}
 
-		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt, CustomShell: shell, Voices: voices, Space: agent.Space, Sticky: string(agent.Sticky), StickySession: sticky[name]})
+		origin, err := s.sessions.AgentOrigin(name)
+		if err != nil {
+			return nil, fmt.Errorf("list web agents: %w", err)
+		}
+
+		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt, Permissions: harness.PermissionPrompt(agent.Permission), Origin: origin, CustomShell: shell, Voices: voices, Space: agent.Space, Sticky: string(agent.Sticky), StickySession: sticky[name]})
 	}
 
 	return response, nil

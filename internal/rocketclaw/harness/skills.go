@@ -301,7 +301,7 @@ func composeSystemPromptWithSkills(base string, skills Skills, agent *Agent) str
 		prompts = append(prompts, "skills provide specialized instructions and workflows for specific tasks."+"\n"+"When a task may benefit from specialized instructions, call the find_skills tool to search all available skills, then call the skill tool to load the selected skill.")
 	}
 
-	if prompt := permissionPrompt(agent.Permission); prompt != "" {
+	if prompt := PermissionPrompt(agent.Permission); prompt != "" {
 		prompts = append(prompts, prompt)
 	}
 
@@ -317,7 +317,7 @@ func composeSystemPromptWithSkills(base string, skills Skills, agent *Agent) str
 	return strings.TrimSpace(strings.Join(prompts, "\n\n"))
 }
 
-func permissionPrompt(permissions PermissionSet) string {
+func PermissionPrompt(permissions PermissionSet) string {
 	lines := []string{}
 	inlineCode := strings.NewReplacer("\r", " ", "\n", " ", "`", "\\`")
 

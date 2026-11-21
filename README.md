@@ -399,6 +399,8 @@ Release note for MCP facets:
 
 The Agents page in the Web page has **Create New Agent** and, on each agent, **Edit**. They open the agent editor, where you pick an easy or advanced agent, fill in its settings and instructions with plain-language help, talk to it before it is saved, compare variants and the live agent side by side, and get suggestions from an assistant. Drafts are stored on the server, and teammates who open a draft's link edit it with you live. Only people with no space limits can use the editor, because a draft can give itself any permission and its test chats run real tools.
 
+Each agent on the Agents page names where it comes from: `built-in`, the overlay as written in `overlays`, or `workspace`. A file that matches the one in the layer below it counts as that layer, so a built-in agent that RocketClaw copied into `agents/` shows as `built-in` while the copy is unchanged. Opening an agent shows its permission rules, written the way its instructions list them, and its prompt.
+
 Saving writes one variant to the workspace's `agents/` folder, or to a Git overlay by a push to its branch or a pull request, chosen each time; an overlay pinned to a tag or commit cannot be saved to. The save checks the agent first, then runs the same reload as `rocketclaw_reload`. It rewrites the agent file in a standard order, dropping comments, and the editor shows that difference before saving. Pushes use the host's Git credentials. Pull requests use `gh` when it is installed and logged in; otherwise the editor links to GitHub's page for opening one. The draft then waits for the merge, and anyone can click **Stop waiting**, which leaves the pull request open. See the [Web README](internal/rocketclaw/web/README.md#agent-editor) for the details.
 
 ### Sticky agents
@@ -683,6 +685,8 @@ With a token, RocketClaw sends:
 - Traces of agent turns, model calls, and tools. They go to PostHog's AI Observability (model, tokens, and latency for each model call) and to its distributed tracing. Each trace belongs to the person who sent the turn: their email when known, else their principal name. Turns nobody sent, such as cron jobs, have no person. Traces never include the text of prompts, conversation history, tool arguments, replies, or tool results: each of those reads `__REDACTED__`.
 
 To get console logs and network requests in replays, also turn them on in the PostHog project settings.
+
+The Config page's Flags section shows **PostHog** as On when a project token is set and Off when it is not.
 
 ## Repository layout
 
