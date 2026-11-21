@@ -162,7 +162,7 @@ jobs:
         working-directory: internal/rocketclaw
         run: |
           tests=$(grep -rhoE '^func Test[A-Za-z0-9_]*\(' --include='*_test.go' ../../cmd/rocketclaw . | sed -E 's/^func (.*)\(/\1/' | grep -vx TestMain | sort -u | awk -v n=${{ strategy.job-total }} -v i=${{ matrix.shard }} 'NR % n == i' | paste -sd'|' -)
-          make coverage-profile COVERPROFILE=coverage-${{ matrix.shard }}.out GOTESTRUN="^($tests)\$\$"
+          GOFLAGS=-v make coverage-profile COVERPROFILE=coverage-${{ matrix.shard }}.out GOTESTRUN="^($tests)\$\$"
       - uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.shard }}
