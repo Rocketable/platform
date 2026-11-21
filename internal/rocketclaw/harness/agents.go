@@ -291,7 +291,6 @@ func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error)
 	}
 
 	agent.Description = argString(frontmatter, "description")
-	agent.ReasoningEffort = cmp.Or(modelEffort, argString(frontmatter, "reasoningEffort"))
 	agent.Verbosity = argString(frontmatter, "verbosity")
 
 	return agent, nil

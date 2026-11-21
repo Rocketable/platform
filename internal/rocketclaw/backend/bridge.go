@@ -1425,49 +1425,17 @@ func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *protocol.ThreadQu
 	}
 	b.mu.Unlock()
 
-	if inbound := item.Inbound; inbound != nil {
-		if inbound.SyncDestination == "" {
-			return b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "submit stored message")
-		}
-
-		destination, err := b.threads.recordedBridge(ctx, inbound.SyncDestination)
-		if err != nil {
-			return fmt.Errorf("load stored message destination: %w", err)
-		}
-
-		return destination.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID, producer: b}, "submit stored message")
+	inbound := item.Inbound
+	if inbound.SyncDestination == "" {
+		return b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "submit stored message")
 	}
 
-	content := item.Content
-	content.Text = item.Message
-	inbound := protocol.NewInboundMessageFromContent(item.Source, cmp.Or(item.Kind, protocol.InboundKindEnqueue), &content, true)
-
-	inbound.ConversationID = b.config.ConversationID
-	if principal := strings.TrimSpace(item.Principal); principal != "" {
-		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
+	destination, err := b.threads.recordedBridge(ctx, inbound.SyncDestination)
+	if err != nil {
+		return fmt.Errorf("load stored message destination: %w", err)
 	}
 
-	inbound.Metadata["web_message_id"] = item.ID
-
-	if item.SlackChannel != "" {
-		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS, ThreadTS: item.SlackTS}
-	}
-
-	if item.SlackReply != nil {
-		inbound.SlackReply = new(*item.SlackReply)
-	}
-
-	startedAt := time.Now()
-	err := b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "submit enqueued message")
-
-	log := b.log
-	if !item.StashAt.IsZero() {
-		log = log.With("queue_age_ms", time.Since(item.StashAt).Milliseconds())
-	}
-
-	log.Info("queue item admission returned", "event", "queue_admitted", "conversation_id", b.config.ConversationID, "queue_item_id", item.ID, "admitted", err == nil, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
-
-	return err
+	return destination.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID, producer: b}, "submit stored message")
 }
 
 func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *protocol.ScheduledMessageState, now time.Time) error {
@@ -1714,10 +1682,7 @@ func (b *Bridge) moveRatcheted(ctx context.Context, turnID string, origin *proto
 
 	reply, agent := origin.SlackReply, b.agentSnapshot()
 
-	thread, err := slackSessionID(quiet, store.db, reply.ChannelID, reply.MessageTS, "", agent)
-	if err != nil {
-		return "", inputPersistenceError{cause: err}
-	}
+	thread := slackSessionID(reply.ChannelID, reply.MessageTS, "", agent)
 
 	summary := ""
 	if summarize {

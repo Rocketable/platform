@@ -28,7 +28,7 @@ func TestRevertQueueAdmissionAndRetry(t *testing.T) {
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
 	id, err := s.AppendEntryID(ctx, "main", testSessionEntry("abandoned", "answer"))
 	require.NoError(t, err)
-	require.NoError(t, s.PutThreadQueueItem("stashed-before", &protocol.ThreadQueueItem{ID: "stashed-before", ConversationID: "main", Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindHeld, Message: "for later"}))
+	require.NoError(t, s.PutThreadQueueItem("stashed-before", withInbound(&protocol.ThreadQueueItem{ID: "stashed-before", ConversationID: "main", Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindHeld, Message: "for later"})))
 
 	marker := fmt.Sprintf("%d:0", id)
 	_, _, err = stageRevertDB(ctx, s.db, "main", marker)
@@ -37,7 +37,7 @@ func TestRevertQueueAdmissionAndRetry(t *testing.T) {
 	bridge := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	rt := &Runtime{Sessions: s, threads: manager}
-	item := protocol.ThreadQueueItem{ID: "replacement", Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindHeld, Message: "edited"}
+	item := *withInbound(&protocol.ThreadQueueItem{ID: "replacement", ConversationID: "main", Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindHeld, Message: "edited"})
 	require.NoError(t, rt.StashQueueItem(ctx, "main", &item))
 	current, _, _, err := s.RevertState(ctx, "main")
 	require.NoError(t, err)
@@ -53,10 +53,12 @@ func TestRevertQueueAdmissionAndRetry(t *testing.T) {
 	require.Equal(t, "stashed-before", queue[0].ID)
 
 	item.Message = "conflicting"
+	withInbound(&item)
 	require.ErrorContains(t, rt.StashQueueItem(ctx, "main", &item), "different content")
 
 	bridge.historyMutation = true
 	item.ID = "racing"
+	withInbound(&item)
 	require.ErrorContains(t, rt.StashQueueItem(ctx, "main", &item), "busy")
 
 	bridge.historyMutation = false
@@ -91,7 +93,7 @@ func TestRevertSettlesAndPreservesWaitingWork(t *testing.T) {
 	require.NoError(t, s.BeginGoal("main", &GoalState{Objective: "continue forever", MaxTurns: 0}))
 
 	for _, id := range []string{"queued-1", "queued-2"} {
-		require.NoError(t, s.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: "main", Message: id, Source: protocol.SourceWeb, Position: 10}))
+		require.NoError(t, s.PutThreadQueueItem(id, withInbound(&protocol.ThreadQueueItem{ID: id, ConversationID: "main", Message: id, Source: protocol.SourceWeb, Position: 10})))
 	}
 
 	steer := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "waiting steer"}, true)
@@ -404,7 +406,7 @@ func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
 	secondID, err := s.AppendEntryID(ctx, "main", second)
 	require.NoError(t, err)
 
-	recordLegacyDelegations(t, s, "main", "call_k")
+	recordDelegations(t, s, "main", "turn-1", "call_k")
 
 	for _, key := range []harness.ChildKey{{Path: "/call_k-aaaaaaaa", Turn: "turn-1", Call: "call_k"}, {Path: "/call_r-bbbbbbbb", Turn: "turn-2", Call: "call_r"}, {Path: "/call_b-cccccccc", Turn: "turn-2", Call: "call_b"}} {
 		require.NoError(t, s.startSubagent(ctx, "main", &harness.SubagentWrite{Key: key, Agent: "helper"}))
@@ -553,7 +555,7 @@ func TestRevertFloor(t *testing.T) {
 
 	bridge := &Bridge{config: Config{ConversationID: thread, SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})}
-	require.NoError(t, rt.StashQueueItem(ctx, thread, &protocol.ThreadQueueItem{ID: "next", Source: protocol.SourceWeb, Principal: "Ann", Kind: protocol.InboundKindHeld, Message: "next"}))
+	require.NoError(t, rt.StashQueueItem(ctx, thread, withInbound(&protocol.ThreadQueueItem{ID: "next", ConversationID: thread, Source: protocol.SourceWeb, Principal: "Ann", Kind: protocol.InboundKindHeld, Message: "next"})))
 
 	marker, _, _, err := s.RevertState(ctx, thread)
 	require.NoError(t, err)
@@ -1001,7 +1003,7 @@ func TestRevertAdmissionRollbackAndConcurrentIdentity(t *testing.T) {
         CREATE TRIGGER reject_admission BEFORE INSERT ON turns FOR EACH ROW EXECUTE FUNCTION reject_admission()`)
 	require.NoError(t, err)
 
-	item := protocol.ThreadQueueItem{ID: "new", Kind: protocol.InboundKindHeld, Source: protocol.SourceWeb, Principal: "alice", Message: "edited"}
+	item := *withInbound(&protocol.ThreadQueueItem{ID: "new", ConversationID: "main", Kind: protocol.InboundKindHeld, Source: protocol.SourceWeb, Principal: "alice", Message: "edited"})
 	require.ErrorContains(t, rt.StashQueueItem(t.Context(), "main", &item), "admission failed")
 	current, _, _, err := s.RevertState(t.Context(), "main")
 	require.NoError(t, err)
@@ -1033,7 +1035,10 @@ func TestRevertAdmissionRollbackAndConcurrentIdentity(t *testing.T) {
 	otherBridge := &Bridge{config: Config{ConversationID: "other", SessionService: s}, log: b.log, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 	manager.bridges["other"] = otherBridge
 
-	require.ErrorContains(t, rt.StashQueueItem(t.Context(), "other", &item), "another conversation")
+	elsewhere := item
+	elsewhere.ConversationID = "other"
+	withInbound(&elsewhere)
+	require.ErrorContains(t, rt.StashQueueItem(t.Context(), "other", &elsewhere), "another conversation")
 	current, _, _, err = s.RevertState(t.Context(), "other")
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("%d:0", other), current)
@@ -1341,7 +1346,7 @@ func TestRevertBranchCancelsPreservedOwners(t *testing.T) {
 	<-discarded.done
 	require.ErrorIs(t, discarded.err, context.Canceled)
 
-	item := protocol.ThreadQueueItem{ID: "replacement", Source: protocol.SourceWeb, Kind: protocol.InboundKindHeld, Message: "edited"}
+	item := *withInbound(&protocol.ThreadQueueItem{ID: "replacement", ConversationID: "main", Source: protocol.SourceWeb, Kind: protocol.InboundKindHeld, Message: "edited"})
 	require.NoError(t, rt.StashQueueItem(ctx, "main", &item))
 	<-withdrawn.done
 	require.ErrorIs(t, withdrawn.err, context.Canceled)
@@ -1351,34 +1356,6 @@ func TestRevertBranchCancelsPreservedOwners(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, queue, 1)
 	require.Equal(t, "replacement", queue[0].ID)
-}
-
-func TestRevertLegacyQueuePromotionAndEnqueue(t *testing.T) {
-	t.Parallel()
-
-	newBridge, s, requests, finals := newResumeTestBridges(t, false)
-	b := newBridge()
-	b.config.ConversationID = "main"
-
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
-	manager := newThreadBridgeManager(b.runtime, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
-	manager.bridges["main"] = b
-	rt := &Runtime{Sessions: s, threads: manager, Cfg: b.runtime}
-	runTestBridge(t, b)
-	require.NoError(t, s.PutThreadQueueItem("legacy", &protocol.ThreadQueueItem{ID: "legacy", ConversationID: "main", Source: protocol.SourceWeb, Principal: "alice", Message: "legacy request", Kind: protocol.InboundKindEnqueue}))
-	changed, err := rt.PromoteQueueItem(t.Context(), "main", "legacy")
-	require.NoError(t, err)
-	require.True(t, changed)
-	require.Equal(t, "main", readFinal(t, finals).ConversationID)
-
-	request := <-requests
-	require.Contains(t, request, "legacy request")
-	require.Contains(t, request, "alice")
-
-	item := protocol.ThreadQueueItem{ID: "queued", Source: protocol.SourceWeb, Principal: "bob", Message: "new queue request", Kind: protocol.InboundKindEnqueue}
-	require.NoError(t, rt.StashQueueItem(t.Context(), "main", &item))
-	require.Equal(t, "main", readFinal(t, finals).ConversationID)
-	require.Contains(t, <-requests, "new queue request")
 }
 
 func TestRevertStashKeepsVoiceInbound(t *testing.T) {
@@ -1479,7 +1456,7 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 			require.NoError(t, startTurnDB(ctx, s.db, "old-turn", "main", inbound))
 			_, err = s.db.ExecContext(ctx, `UPDATE turns SET phase = 'done'; INSERT INTO steps (conversation_id, key, value) VALUES ('main', 'old-turn/retry/1', '{}')`)
 			require.NoError(t, err)
-			require.NoError(t, s.PutThreadQueueItem("waiting", &protocol.ThreadQueueItem{ID: "waiting", ConversationID: "main", Source: protocol.SourceWeb, Message: "pending"}))
+			require.NoError(t, s.PutThreadQueueItem("waiting", withInbound(&protocol.ThreadQueueItem{ID: "waiting", ConversationID: "main", Source: protocol.SourceWeb, Message: "pending"})))
 
 			marker := fmt.Sprintf("%d:2", id)
 			_, _, err = stageRevertDB(ctx, s.db, "main", marker)
@@ -1549,7 +1526,7 @@ func TestRevertStorageFailuresAreNotEmptySuccess(t *testing.T) {
 	require.ErrorContains(t, err, "database is closed")
 	_, err = rt.PromoteQueueItem(ctx, "main", "new")
 	require.ErrorContains(t, err, "database is closed")
-	require.ErrorContains(t, rt.StashQueueItem(ctx, "main", &protocol.ThreadQueueItem{Source: protocol.SourceWeb}), "database is closed")
+	require.ErrorContains(t, rt.StashQueueItem(ctx, "main", withInbound(&protocol.ThreadQueueItem{Source: protocol.SourceWeb})), "database is closed")
 	_, err = rt.mutateWebQueue(ctx, "main", "new", protocol.InboundKindSteer)
 	require.ErrorContains(t, err, "database is closed")
 	_, err = rt.admitWeb(ctx, b, inbound, protocol.GoalRequest{})

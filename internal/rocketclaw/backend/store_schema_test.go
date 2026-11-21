@@ -105,13 +105,13 @@ func TestDelegationLookupStopsAtFirstChildEntry(t *testing.T) {
 
 	ctx := t.Context()
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"parent-history": KindWebChat})
-	recordLegacyDelegations(t, store, "parent-history", "amber", "cobalt")
+	recordDelegations(t, store, "parent-history", "t1", "amber", "cobalt")
 	_, err := store.db.ExecContext(ctx, `
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
 SELECT 'unrelated-history-' || n, 'main', '', 'web_chat', TRUE FROM generate_series(1, 4096) n;
 ALTER TABLE entries DISABLE TRIGGER entries_transcript_change, DISABLE TRIGGER shadow_entries_change;
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES
-    ('parent-history', '{"replay_input":[{"type":"function_call","call_id":"cobalt"},{"type":"function_call","call_id":"amber"},{"type":"function_call","call_id":"missing"}]}', '2000-01-01T00:00:00Z');
+    ('parent-history', '{"turn_id":"t1","replay_input":[{"type":"function_call","call_id":"cobalt"},{"type":"function_call","call_id":"amber"},{"type":"function_call","call_id":"missing"}]}', '2000-01-01T00:00:00Z');
 WITH children(conversation_id) AS (VALUES ('parent-history/amber'), ('parent-history/cobalt'))
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT conversation_id, '{}', '2000-01-01T00:00:00Z'
@@ -132,7 +132,7 @@ FROM pg_index WHERE indrelid = 'entries'::regclass`
 	require.NoError(t, store.db.QueryRowContext(ctx, historyReads).Scan(&before))
 	ids, err := store.Delegations(ctx, "parent-history", "", 0, 0)
 	require.NoError(t, err)
-	require.Equal(t, []Delegation{{ID: "parent-history/amber", Parent: "parent-history", CallID: "amber", Legacy: true, Kind: KindSubagent}, {ID: "parent-history/cobalt", Parent: "parent-history", CallID: "cobalt", Legacy: true, Kind: KindSubagent}}, ids)
+	require.Equal(t, []Delegation{{ID: "parent-history/amber", Parent: "parent-history", CallID: "amber", Kind: KindSubagent}, {ID: "parent-history/cobalt", Parent: "parent-history", CallID: "cobalt", Kind: KindSubagent}}, ids)
 
 	_, err = store.db.ExecContext(ctx, `SELECT pg_stat_force_next_flush()`)
 	require.NoError(t, err)
@@ -290,10 +290,10 @@ SELECT 'unrelated-' || n, 'main', '', 'web_chat', TRUE FROM generate_series(1, 4
 INSERT INTO conversations (conversation_id, agent, created_by, revert_message_id, kind, listed)
 VALUES ('parent', 'main', '', '10:1', 'web_chat', TRUE), ('ordinary', 'main', '', '', 'web_chat', TRUE);`)
 	require.NoError(t, err)
-	recordLegacyDelegations(t, store, "parent", "kept", "discarded")
+	recordDelegations(t, store, "parent", "t1", "kept", "discarded")
 	_, err = store.db.ExecContext(ctx, `
 INSERT INTO entries (id, conversation_id, entry_json, entry_timestamp) VALUES
-    (10, 'parent', '{"replay_input":[{"type":"function_call","call_id":"kept"},{"type":"function_call","call_id":"discarded"}]}', ''),
+    (10, 'parent', '{"turn_id":"t1","replay_input":[{"type":"function_call","call_id":"kept"},{"type":"function_call","call_id":"discarded"}]}', ''),
     (20, 'parent/kept', '{}', ''), (30, 'parent/discarded', '{}', ''), (40, 'ordinary', '{}', '');
 ANALYZE conversations;
 ANALYZE entries;
@@ -583,50 +583,6 @@ func TestSessionMigrationRollsBackWithItsLedgerWrite(t *testing.T) {
 	require.ErrorContains(t, initializeSessionDB(ctx, db, slog.New(slog.DiscardHandler)), "unknown migration")
 }
 
-func TestInitializeSessionDBAdoptsReleasedStore(t *testing.T) {
-	t.Parallel()
-
-	store := newColdTestSessionServiceAt(t, t.TempDir())
-	ctx := t.Context()
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"chat": KindWebChat})
-
-	release := func(ids ...string) {
-		t.Helper()
-
-		_, err := store.db.ExecContext(ctx, `DELETE FROM pg_migrations;
-CREATE TABLE IF NOT EXISTS legacy_thread_queue (queue_item_id TEXT PRIMARY KEY);
-INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
-		require.NoError(t, err)
-
-		for _, id := range ids {
-			_, err = store.db.ExecContext(ctx, `INSERT INTO pg_migrations VALUES ($1, '2026-10-22Z')`, id)
-			require.NoError(t, err)
-		}
-	}
-
-	release("001_init.sql", "058_schedules.sql")
-	require.ErrorContains(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)), "predates 059_legacy_handoff.sql")
-
-	var kept int
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM legacy_thread_queue`).Scan(&kept))
-	require.Equal(t, 1, kept)
-
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql")
-	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
-
-	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
-	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql"}, ledger)
-
-	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
-	require.NoError(t, err)
-	require.Empty(t, legacy)
-
-	chats, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations`, "conversations")
-	require.NoError(t, err)
-	require.Equal(t, []string{"chat"}, chats)
-}
-
 func TestHistoryRequiresConversationMigration(t *testing.T) {
 	t.Parallel()
 
@@ -662,7 +618,7 @@ func TestAgentDraftsMigrationDown(t *testing.T) {
 	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	recordTestConversations(t, store, "bot", map[string]ConversationKind{"draft-chat": KindAgentDraft, "kept": KindWebChat})
-	recordLegacyDelegations(t, store, "draft-chat", "call-1")
+	recordDelegations(t, store, "draft-chat", "t1", "call-1")
 
 	for _, id := range []string{"draft-chat", "draft-chat/call-1", "kept"} {
 		_, err := store.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{}', '')`, id)

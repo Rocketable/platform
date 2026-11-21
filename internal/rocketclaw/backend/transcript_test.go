@@ -49,7 +49,7 @@ func TestRevertTranscriptPrefix(t *testing.T) {
 	_, err = s.AppendEntryID(ctx, "main", testSessionEntry("later", "abandoned later"))
 	require.NoError(t, err)
 
-	recordLegacyDelegations(t, s, "main", "kept-child", "discarded-child")
+	recordDelegations(t, s, "main", checkpoint.TurnID, "kept-child", "discarded-child")
 
 	for _, child := range []string{"main/kept-child", "main/discarded-child"} {
 		_, err := s.AppendEntryID(ctx, child, testSessionEntry("child", "reply"))
@@ -74,7 +74,7 @@ func TestRevertTranscriptPrefix(t *testing.T) {
 
 	children, err := s.Delegations(ctx, "main", "", 0, 0)
 	require.NoError(t, err)
-	require.Equal(t, []Delegation{{ID: "main/kept-child", Parent: "main", CallID: "kept-child", Legacy: true, Kind: KindSubagent}}, children)
+	require.Equal(t, []Delegation{{ID: "main/kept-child", Parent: "main", CallID: "kept-child", Kind: KindSubagent}}, children)
 
 	child, err := s.ObserveEntries(ctx, "main/discarded-child")
 	require.NoError(t, err)

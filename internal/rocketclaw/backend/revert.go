@@ -734,13 +734,6 @@ func (r *Runtime) mutateWebQueue(ctx context.Context, conversationID, id string,
 	}
 
 	inbound := item.Inbound
-	if inbound == nil {
-		content := item.Content
-		content.Text = item.Message
-		inbound = protocol.NewInboundMessageFromContent(item.Source, kind, &content, true)
-		inbound.ConversationID = conversationID
-		inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = id, item.Principal
-	}
 
 	inbound.Kind, item.Inbound, item.Kind, item.ParkAfter = kind, inbound, kind, ""
 	if err := putThreadQueueItem(ctx, tx, id, &item); err != nil {

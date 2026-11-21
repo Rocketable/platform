@@ -387,7 +387,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
   const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
   const session = "preview-fixture", child = `${session}/task`, other = "other-fixture";
   const sessionPath = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
-  const tabs: SavedTabs = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [session, other].map((id) => ({ path: sessionPath(id), space: "main" })), groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [] };
+  const tabs: SavedTabs = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [session, other].map((id) => ({ path: sessionPath(id), space: "main" })), groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [], closed: [] };
   const message = (id: string, text: string): TranscriptEvent => ({ role: "assistant", text, complete: true, turnId: id, entryKey: id, itemId: id, inputId: "" });
   let updatedAt = "2026-01-01T00:00:00Z";
   let prompts = 0;

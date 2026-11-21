@@ -499,7 +499,7 @@ func TestMessageSearchFollowsCommittedRevert(t *testing.T) {
 
 	bridge := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})}
-	require.NoError(t, rt.StashQueueItem(ctx, "main", &protocol.ThreadQueueItem{ID: "replacement", Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindHeld, Message: "edited"}))
+	require.NoError(t, rt.StashQueueItem(ctx, "main", withInbound(&protocol.ThreadQueueItem{ID: "replacement", ConversationID: "main", Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindHeld, Message: "edited"})))
 
 	require.Equal(t, []messageSearchTestRow{
 		{id, 0, 0, "user", "keep prompt", "keep prompt"},

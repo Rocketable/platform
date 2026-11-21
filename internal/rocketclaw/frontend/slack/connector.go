@@ -591,15 +591,9 @@ func (c *Connector) handleAgentSessionTitleChanged(ctx context.Context, ev *slac
 		return
 	}
 
-	for _, conversationID := range []string{protocol.SlackThreadSessionID(ev.Channel, ev.ThreadTimestamp, agent), protocol.SlackThreadConversationID(ev.Channel, ev.ThreadTimestamp)} {
-		found, err := c.facts.UpdateConversationDetails(ctx, conversationID, &title)
-		if err != nil {
-			c.log.Warn("name Web conversation after Slack session title", "conversation_id", conversationID, "error", err)
-		}
-
-		if found || err != nil {
-			return
-		}
+	conversationID := protocol.SlackThreadSessionID(ev.Channel, ev.ThreadTimestamp, agent)
+	if _, err := c.facts.UpdateConversationDetails(ctx, conversationID, &title); err != nil {
+		c.log.Warn("name Web conversation after Slack session title", "conversation_id", conversationID, "error", err)
 	}
 }
 
@@ -960,7 +954,7 @@ func (c *Connector) runSocketLoop(ctx context.Context) {
 					break clientLoop
 				}
 
-				if (event.Type == socketmode.EventTypeEventsAPI || event.Type == socketmode.EventTypeInteractive) && event.Request != nil {
+				if event.Type == socketmode.EventTypeEventsAPI && event.Request != nil {
 					if err := c.ackSocketEvent(client, *event.Request); err != nil {
 						c.log.Warn("ack Slack socket event", "error", err)
 					}
@@ -1094,13 +1088,9 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	target := protocol.TextConversationTarget{ChannelID: ev.Channel, MessageID: ev.TimeStamp, ThreadID: threadTS, Agent: agent}
 
-	recorded, report, err := c.threadRouter.MentionThread(target)
+	recorded, err := c.threadRouter.MentionThread(target)
 	if err != nil {
 		c.log.Error("read Slack mention thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
-		return
-	}
-
-	if report {
 		return
 	}
 
@@ -1118,14 +1108,9 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 			return
 		}
 
-		i := slices.IndexFunc(messages, func(message slack.Message) bool { return message.Timestamp == threadTS })
-		if i >= 0 && messages[i].User == c.botUserID && messages[i].Metadata.EventType != slackChannelReplyEvent {
-			return
-		}
-
 		history = slackAdoptHistory(messages, ev.TimeStamp)
 
-		if i >= 0 {
+		if i := slices.IndexFunc(messages, func(message slack.Message) bool { return message.Timestamp == threadTS }); i >= 0 {
 			root = c.recentRootMention(channel, ev.TimeStamp, threadTS, &messages[i])
 		}
 	}

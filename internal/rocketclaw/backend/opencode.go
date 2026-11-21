@@ -201,7 +201,7 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedCon
 
 	for {
 		for name, server := range servers {
-			if s.pushOpenCodeNames(ctx, name, server) == nil && s.syncOpenCode(ctx, name, server, shells[name]) == nil && origin != "" {
+			if s.syncOpenCode(ctx, name, server, shells[name]) == nil && origin != "" {
 				addOpenCodeBridges(ctx, origin, name, server)
 			}
 		}
@@ -490,40 +490,6 @@ func openCodeWaiting(ctx context.Context, name string, server config.OpenCodeCon
 	}
 
 	return waiting
-}
-
-func (s *SessionService) pushOpenCodeNames(ctx context.Context, name string, server config.OpenCodeConfig) error {
-	named := map[string]string{}
-
-	if err := readRows(ctx, s.db, `SELECT remote_session, name FROM conversations WHERE server = $1 AND kind = $2 AND name <> '' AND name <> title`, "named opencode sessions", func(row rowScanner) error {
-		var remote, title string
-		if err := row.Scan(&remote, &title); err != nil {
-			return fmt.Errorf("scan named opencode session: %w", err)
-		}
-
-		named[remote] = title
-
-		return nil
-	}, name, KindRemote); err != nil {
-		return err
-	}
-
-	for remote, title := range named {
-		err := openCodeCall(ctx, name, server, http.MethodPatch, "/api/session/"+url.PathEscape(remote), &openCodeTitle{Title: title}, nil)
-		if _, refused := errors.AsType[*openCodeError](err); refused {
-			continue
-		}
-
-		if err != nil {
-			return err
-		}
-
-		if _, err := execState(ctx, s.db, "move opencode session name", `UPDATE conversations SET title = name WHERE server = $1 AND remote_session = $2`, name, remote); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (s *SessionService) pruneOpenCode(ctx context.Context, name string, server config.OpenCodeConfig) error {

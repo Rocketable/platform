@@ -16,7 +16,6 @@ import (
 	"log/slog"
 	"maps"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -399,13 +398,6 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		}
 	}
 
-	root, err := os.OpenRoot(s.cfg.Clone().Workspace)
-	if err != nil {
-		return nil, fmt.Errorf("open attachment workspace: %w", err)
-	}
-
-	defer func() { _ = root.Close() }()
-
 	calls := make(map[[2]string]string)
 	current := view.Inventory
 	current.Entries = make(map[string]string)
@@ -429,12 +421,12 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 		response.ReplacedKeys = append(response.ReplacedKeys, entry.Key)
 
-		messages, err := s.transcriptEntry(ctx, root, entry, request.Id, cronTrace, calls)
+		messages, err := s.transcriptEntry(ctx, entry, request.Id, cronTrace, calls)
 		if err != nil {
 			return nil, err
 		}
 
-		linkCalls(messages, byCall, producer, response.Delegations)
+		linkCalls(messages, byCall, producer)
 
 		response.Messages = append(response.Messages, messages...)
 	}
@@ -455,13 +447,6 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse, reviews []string) error {
 	response.ReviewRationales = make(map[string]string)
-	unrecorded := make(map[string]*TranscriptEvent)
-
-	for _, event := range response.Messages {
-		if event.ToolName == "execute" && len(event.CodeModeCalls) == 0 && event.ScriptReason == "" {
-			unrecorded[event.Review] = event
-		}
-	}
 
 	for _, review := range reviews {
 		entries, err := s.sessions.ObserveEntries(ctx, review)
@@ -471,20 +456,9 @@ func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse
 
 		var rationales []string
 
-		script := unrecorded[review]
-
 		for i := range entries {
-			decision := entries[i].Entry.PermissionReviewDecision()
-			if decision.Rationale != "" {
+			if decision := entries[i].Entry.PermissionReviewDecision(); decision.Rationale != "" {
 				rationales = append(rationales, decision.Rationale)
-			}
-
-			if script == nil {
-				continue
-			}
-
-			if call, ok := decision.CodeModeCall(&entries[i].Entry); ok {
-				script.codeModeCall(&call, entries[i].Entry.TurnID)
 			}
 		}
 
@@ -496,7 +470,7 @@ func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse
 	return nil
 }
 
-func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *backend.ObservedSessionEntry, conversationID string, cronTrace bool, calls map[[2]string]string) ([]*TranscriptEvent, error) {
+func (s *Server) transcriptEntry(ctx context.Context, entry *backend.ObservedSessionEntry, conversationID string, cronTrace bool, calls map[[2]string]string) ([]*TranscriptEvent, error) {
 	items, err := harness.ReplayInputToParams(entry.Entry.ReplayInput)
 	if err != nil {
 		return nil, fmt.Errorf("decode web history: %w", err)
@@ -543,7 +517,7 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 			continue
 		}
 
-		attachments, err := s.sessions.ReplayAttachments(ctx, producer, root, entry.Entry.ReplayInput[i], calls)
+		attachments, err := s.sessions.ReplayAttachments(ctx, producer, entry.Entry.ReplayInput[i], calls)
 		if err != nil {
 			return nil, fmt.Errorf("project history attachments: %w", err)
 		}
@@ -783,7 +757,7 @@ func (r *HistoryResponse) addDelegations(view *backend.HistorySnapshot) map[[2]s
 
 	for _, delegation := range view.Delegations {
 		r.Delegations = append(r.Delegations, delegation.ID)
-		if delegation.Legacy || delegation.Kind == backend.KindSubagent {
+		if delegation.Kind == backend.KindSubagent {
 			byCall[[2]string{delegation.Parent, delegation.CallID}] = delegation
 		}
 	}
@@ -791,16 +765,10 @@ func (r *HistoryResponse) addDelegations(view *backend.HistorySnapshot) map[[2]s
 	return byCall
 }
 
-func linkCalls(messages []*TranscriptEvent, children map[[2]string]backend.Delegation, producer string, delegations []string) {
+func linkCalls(messages []*TranscriptEvent, children map[[2]string]backend.Delegation, producer string) {
 	for _, e := range messages {
-		child, ok := children[[2]string{producer, e.ToolCallId}]
-
-		switch {
-		case !ok:
-		case e.Delegation == "":
+		if child, ok := children[[2]string{producer, e.ToolCallId}]; ok && e.Delegation == "" {
 			e.Delegation = child.ID
-		case child.Legacy && e.Delegation != child.ID && !slices.Contains(delegations, e.Review):
-			e.Review = child.ID
 		}
 	}
 }
@@ -1907,34 +1875,29 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 	response := &ListQueueResponse{}
 
 	for i := range items {
-		text := strings.Join(append([]string{items[i].Message}, items[i].Content.TextAttachments...), "\n\n")
-		if inbound := items[i].Inbound; inbound != nil {
-			text = inbound.Text
-		}
+		inbound := items[i].Inbound
 
-		input := &TranscriptEvent{Role: "user", Text: text}
+		input := &TranscriptEvent{Role: "user", Text: inbound.Text}
 		if err := s.projectInputEvent(ctx, request.Id, input); err != nil {
 			return nil, err
 		}
 
 		delivery := map[protocol.InboundKind]PromptDelivery{
-			"": PromptDelivery_QUEUE, protocol.InboundKindEnqueue: PromptDelivery_QUEUE,
-			protocol.InboundKindSteer: PromptDelivery_STEER,
-			protocol.InboundKindHeld:  PromptDelivery_STASH,
+			protocol.InboundKindEnqueue: PromptDelivery_QUEUE,
+			protocol.InboundKindSteer:   PromptDelivery_STEER,
+			protocol.InboundKindHeld:    PromptDelivery_STASH,
 		}[items[i].Kind]
 
 		principal := items[i].Principal
-		if inbound := items[i].Inbound; inbound != nil && inbound.Metadata[protocol.InboundSenderSessionMetadataKey] != "" {
+		if inbound.Metadata[protocol.InboundSenderSessionMetadataKey] != "" {
 			principal = "agent " + inbound.Metadata[protocol.InboundSenderAgentMetadataKey] + " (session " + inbound.Metadata[protocol.InboundSenderSessionMetadataKey] + ")"
 		}
 
 		item := &QueueItem{Id: items[i].ID, Text: input.Text, Attachments: input.Attachments, Delivery: delivery, Principal: principal}
 
-		text = items[i].Message
-		if inbound := items[i].Inbound; inbound != nil {
-			if raw, ok := inbound.Metadata[protocol.InboundRawTextMetadataKey]; ok {
-				text = raw
-			}
+		text := items[i].Message
+		if raw, ok := inbound.Metadata[protocol.InboundRawTextMetadataKey]; ok {
+			text = raw
 		}
 
 		if text != input.Text {

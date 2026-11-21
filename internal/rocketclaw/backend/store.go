@@ -277,7 +277,7 @@ func (s *SessionService) BeginGoal(conversationID string, goal *GoalState) error
 func beginGoalDB(ctx context.Context, db stateStoreDB, conversationID string, goal *GoalState) error {
 	now := time.Now().UTC()
 
-	rows, err := execRows(ctx, db, "begin goal", `UPDATE conversations SET goal_objective = $2, goal_max_turns = $3, goal_turns_used = 0, goal_status = $4, goal_note = '', goal_created_at_unix_ns = $5, goal_updated_at_unix_ns = $5, goal_principal_name = $6, goal_principal_email = $7, goal_origin = $8 WHERE conversation_id = $1 AND COALESCE(goal_status NOT IN ('', $4), TRUE)`, conversationID, goal.Objective, goal.MaxTurns, GoalStatusActive, timeUnixNano(now), goal.PrincipalName, goal.PrincipalEmail, goal.Origin)
+	rows, err := execRows(ctx, db, "begin goal", `UPDATE conversations SET goal_objective = $2, goal_max_turns = $3, goal_turns_used = 0, goal_status = $4, goal_note = '', goal_created_at_unix_ns = $5, goal_updated_at_unix_ns = $5, goal_principal_name = $6, goal_principal_email = $7, goal_origin = $8 WHERE conversation_id = $1 AND COALESCE(goal_status <> $4, TRUE)`, conversationID, goal.Objective, goal.MaxTurns, GoalStatusActive, timeUnixNano(now), goal.PrincipalName, goal.PrincipalEmail, goal.Origin)
 	if err != nil {
 		return err
 	}
@@ -539,7 +539,7 @@ SELECT count(*) > 0 FROM advanced LEFT JOIN running r ON TRUE WHERE r.id IS NULL
 
 func (s *SessionService) ActiveGoalThreads() (map[string]ThreadState, error) {
 	return queryMap(context.Background(), s.db, `SELECT conversation_id, agent, created_by FROM conversations
-WHERE goal_status = '' OR goal_status = $1 ORDER BY conversation_id`, "active goal threads", activeGoalThreadScanner{}, GoalStatusActive)
+WHERE goal_status = $1 ORDER BY conversation_id`, "active goal threads", activeGoalThreadScanner{}, GoalStatusActive)
 }
 
 type activeGoalThreadScanner struct{}
@@ -912,13 +912,12 @@ func (s *SessionService) Delegations(ctx context.Context, conversationID, source
 
 type Delegation struct {
 	ID, Parent, CallID string
-	Legacy             bool
 	Kind               ConversationKind
 }
 
 func scanDelegation(row rowScanner) (Delegation, error) {
 	var delegation Delegation
-	if err := row.Scan(&delegation.ID, &delegation.Parent, &delegation.CallID, &delegation.Legacy, &delegation.Kind); err != nil {
+	if err := row.Scan(&delegation.ID, &delegation.Parent, &delegation.CallID, &delegation.Kind); err != nil {
 		return Delegation{}, fmt.Errorf("scan delegation: %w", err)
 	}
 
@@ -936,9 +935,9 @@ const delegationsSQL = `WITH ` + sessionHistorySQL + `, ` + turnReplaySQL + `, s
     SELECT $1, r.turn_id, r.item->>'call_id' FROM turn_replay r CROSS JOIN viewer v LEFT JOIN saved_turns saved USING (turn_id)
     WHERE $4::bigint = 0 AND v.readable AND v.marker = '' AND saved.turn_id IS NULL AND r.item->>'type' = 'function_call'
 ), children AS (
-    SELECT DISTINCT c.conversation_id AS id, p.producer, c.call_id, c.call_turn IS NULL AS legacy, c.kind FROM calls p
+    SELECT DISTINCT c.conversation_id AS id, p.producer, c.call_id, c.kind FROM calls p
     JOIN conversations c ON c.parent_conversation_id = p.producer AND c.call_id = p.call_id
-    WHERE (c.call_turn IS NULL OR c.call_turn = p.turn_id) AND ($2 = '' OR p.producer = $2)
+    WHERE c.call_turn = p.turn_id AND ($2 = '' OR p.producer = $2)
 )
 SELECT c.* FROM children c
 CROSS JOIN LATERAL (SELECT 1 FROM entries e WHERE e.conversation_id = c.id LIMIT 1) h ORDER BY c.id`
@@ -1504,7 +1503,7 @@ func (s *SessionService) setGoalStatus(conversationID, status, note string) (Goa
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := execRows(ctx, tx, "set active goal status", `UPDATE conversations SET goal_status = $1, goal_note = $2, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (goal_status = '' OR goal_status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive); err != nil {
+	if _, err := execRows(ctx, tx, "set active goal status", `UPDATE conversations SET goal_status = $1, goal_note = $2, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND goal_status = $5`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive); err != nil {
 		return GoalState{}, err
 	}
 

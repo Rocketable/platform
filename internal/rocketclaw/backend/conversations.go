@@ -339,38 +339,30 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $3 AND reason <> $4 AND
 	item.Message, item.Content.Text, item.Source, item.Principal = text, text, protocol.SourceWeb, principal
 	editor := protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: principal, protocol.InboundPrincipalNameMetadataKey: principal, protocol.InboundPrincipalEmailMetadataKey: username}}
 
-	var inbound *string
-
 	updated := item.Content
-	if item.Inbound != nil {
-		if raw, ok := item.Inbound.Metadata[protocol.InboundRawTextMetadataKey]; ok && (len(updated.TextAttachments) > 0 || item.Inbound.Text != raw) {
-			suffix := item.Inbound.Text
-			if strings.TrimSpace(raw) != "" {
-				suffix = strings.TrimPrefix(strings.TrimPrefix(suffix, raw), "\n\n")
-			}
+	if raw, ok := item.Inbound.Metadata[protocol.InboundRawTextMetadataKey]; ok && (len(updated.TextAttachments) > 0 || item.Inbound.Text != raw) {
+		suffix := item.Inbound.Text
+		if strings.TrimSpace(raw) != "" {
+			suffix = strings.TrimPrefix(strings.TrimPrefix(suffix, raw), "\n\n")
+		}
 
-			updated.TextAttachments = nil
-			if suffix != "" {
-				updated.TextAttachments = []string{suffix}
-			}
+		updated.TextAttachments = nil
+		if suffix != "" {
+			updated.TextAttachments = []string{suffix}
 		}
 	}
 
-	updatedText := protocol.NewInboundMessageFromContent(item.Source, item.Kind, &updated, true).Text
-	if item.Inbound != nil {
-		item.Inbound.Text = updatedText
-		if item.Inbound.Metadata == nil {
-			item.Inbound.Metadata = make(map[string]string)
-		}
-
-		item.Inbound.Metadata[protocol.InboundRawTextMetadataKey] = text
-		copyProvenance(item.Inbound, &editor)
-		data, _ := json.Marshal(item.Inbound)
-		inbound = new(string(removeSessionEntryNUL(data)))
+	item.Inbound.Text = protocol.NewInboundMessageFromContent(item.Source, item.Kind, &updated, true).Text
+	if item.Inbound.Metadata == nil {
+		item.Inbound.Metadata = make(map[string]string)
 	}
+
+	item.Inbound.Metadata[protocol.InboundRawTextMetadataKey] = text
+	copyProvenance(item.Inbound, &editor)
+	inbound, _ := json.Marshal(item.Inbound)
 
 	content, _ := json.Marshal(item.Content)
-	if _, err := tx.ExecContext(ctx, `UPDATE turns SET message = $3, content = $4, inbound_json = $5, source = $6, principal = $7 WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting'`, conversationID, id, text, content, inbound, item.Source, item.Principal); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE turns SET message = $3, content = $4, inbound_json = $5, source = $6, principal = $7 WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting'`, conversationID, id, text, content, string(removeSessionEntryNUL(inbound)), item.Source, item.Principal); err != nil {
 		return false, fmt.Errorf("edit queue text: %w", err)
 	}
 
@@ -384,7 +376,7 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $3 AND reason <> $4 AND
 			continue
 		}
 
-		request.inbound.Text = updatedText
+		request.inbound.Text = item.Inbound.Text
 		if request.inbound.Metadata == nil {
 			request.inbound.Metadata = make(map[string]string)
 		}
@@ -455,21 +447,12 @@ func (r *Runtime) StashQueueItem(ctx context.Context, conversationID string, ite
 				return err
 			}
 
-			inbound := item.Inbound
-			if inbound == nil {
-				content := item.Content
-				content.Text = item.Message
-				inbound = protocol.NewInboundMessageFromContent(item.Source, item.Kind, &content, true)
-				inbound.ConversationID = conversationID
-				inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.ID, item.Principal
-			}
-
-			fresh, err := r.admitWeb(ctx, bridge, inbound, protocol.GoalRequest{})
+			fresh, err := r.admitWeb(ctx, bridge, item.Inbound, protocol.GoalRequest{})
 			if err != nil || !fresh || item.Kind == protocol.InboundKindHeld {
 				return err
 			}
 
-			return bridge.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "enqueue Web prompt")
+			return bridge.enqueue(ctx, &bridgeRequest{inbound: item.Inbound, queueItemID: item.ID}, "enqueue Web prompt")
 		}
 	}
 

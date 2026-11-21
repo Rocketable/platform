@@ -125,34 +125,6 @@ func TestRuntimeSwitchesConversationAgent(t *testing.T) {
 	require.Equal(t, ThreadState{Agent: "planner", CreatedBy: "alice"}, thread)
 }
 
-func TestThreadBridgeManagerMentionThreadRecognizesReportThreads(t *testing.T) {
-	t.Parallel()
-
-	store := newWorkspaceSessionService(t)
-	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("C123", "1.1"), ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
-	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{PrivateConversationID: "external_mcp:private", ManagedConversationID: protocol.SlackThreadConversationID("C123", "2.2"), Agent: "main"}))
-	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("C123", "3.3"), ThreadState{Agent: "main"}))
-
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
-
-	for _, tt := range []struct {
-		name, threadTS   string
-		recorded, report bool
-	}{
-		{name: "cron report", threadTS: "1.1", recorded: true, report: true},
-		{name: "External MCP thread from before Web chats", threadTS: "2.2", recorded: true, report: true},
-		{name: "mention thread", threadTS: "3.3", recorded: true},
-		{name: "unknown thread", threadTS: "4.4"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			recorded, report, err := manager.MentionThread(protocol.TextConversationTarget{ChannelID: "C123", ThreadID: tt.threadTS, Agent: "main"})
-			require.NoError(t, err)
-			assert.Equal(t, tt.recorded, recorded)
-			assert.Equal(t, tt.report, report)
-		})
-	}
-}
-
 func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	t.Parallel()
 
@@ -299,33 +271,26 @@ func TestSubmitMentionAdmitsItsRootFirst(t *testing.T) {
 	requireQueueIDs(t, store, map[string][]string{"slack-channel:D123:slack": {"slack:D123:1.1"}, "slack-thread:D123:1.1:slack": {"slack:D123:2.2"}})
 }
 
-func TestSlackThreadMentionContinuesManagedSlackThreadOfSameAgent(t *testing.T) {
+func TestSlackThreadMentionUsesAgentThreadSession(t *testing.T) {
 	t.Parallel()
 
 	store := newWorkspaceSessionService(t)
-	recordTestConversations(t, store, "slack", map[string]ConversationKind{protocol.SlackThreadConversationID("D123", "1.1"): KindSlackThread})
-	recordTestConversations(t, store, "assistant", map[string]ConversationKind{protocol.SlackThreadConversationID("D123", "3.3"): KindSlackThread})
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
 	runTestManager(t, manager)
 
-	for _, tt := range []struct {
-		threadTS, messageTS, session string
-		recorded                     bool
-	}{
-		{threadTS: "1.1", messageTS: "9.1", session: "slack-thread:D123:1.1", recorded: true},
-		{threadTS: "3.3", messageTS: "9.3", session: "slack-thread:D123:3.3:slack"},
-	} {
-		target := protocol.TextConversationTarget{ChannelID: "D123", MessageID: tt.messageTS, ThreadID: tt.threadTS, Agent: "slack"}
-		recorded, report, err := manager.MentionThread(target)
-		require.NoError(t, err)
-		assert.Equal(t, tt.recorded, recorded, tt.session)
-		assert.False(t, report)
+	target := protocol.TextConversationTarget{ChannelID: "D123", MessageID: "9.3", ThreadID: "3.3", Agent: "slack"}
+	recorded, err := manager.MentionThread(target)
+	require.NoError(t, err)
+	assert.False(t, recorded)
 
-		accepted, err := manager.SubmitMention(t.Context(), "slack", target, newThreadInboundMessage("later", tt.messageTS, tt.threadTS))
-		require.NoError(t, err)
-		require.True(t, accepted)
-		requireQueueIDs(t, store, map[string][]string{tt.session: {"slack:D123:" + tt.messageTS}})
-	}
+	accepted, err := manager.SubmitMention(t.Context(), "slack", target, newThreadInboundMessage("later", "9.3", "3.3"))
+	require.NoError(t, err)
+	require.True(t, accepted)
+	requireQueueIDs(t, store, map[string][]string{"slack-thread:D123:3.3:slack": {"slack:D123:9.3"}})
+
+	recorded, err = manager.MentionThread(target)
+	require.NoError(t, err)
+	assert.True(t, recorded)
 }
 
 func TestThreadBridgeManagerSubmitMentionKeepsMentionForStoppedBridge(t *testing.T) {
@@ -413,7 +378,7 @@ func TestStartQueuedConversationsReportsLaterWorkErrors(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{}))
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "one"}))
+	require.NoError(t, store.PutThreadQueueItem("q1", withInbound(&protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "one"})))
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
 		return newDirectBridgeMock()
 	}})
@@ -430,9 +395,9 @@ func TestStartQueuedConversationsWakesEachRecordedConversationOnce(t *testing.T)
 
 	require.NoError(t, store.UpsertThread(first, ThreadState{Agent: "main"}))
 	require.NoError(t, store.UpsertThread(second, ThreadState{Agent: "main"}))
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: first, Message: "one"}))
-	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{ID: "q2", ConversationID: first, Message: "two"}))
-	require.NoError(t, store.PutThreadQueueItem("q3", &protocol.ThreadQueueItem{ID: "q3", ConversationID: second, Message: "three"}))
+	require.NoError(t, store.PutThreadQueueItem("q1", withInbound(&protocol.ThreadQueueItem{ID: "q1", ConversationID: first, Message: "one"})))
+	require.NoError(t, store.PutThreadQueueItem("q2", withInbound(&protocol.ThreadQueueItem{ID: "q2", ConversationID: first, Message: "two"})))
+	require.NoError(t, store.PutThreadQueueItem("q3", withInbound(&protocol.ThreadQueueItem{ID: "q3", ConversationID: second, Message: "three"})))
 
 	woke := map[string]int{}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
@@ -494,9 +459,9 @@ func TestThreadBridgeManagerStashListAndDeleteQueue(t *testing.T) {
 	other := protocol.SlackThreadConversationID("C123", "333.444")
 	recordPrivateHistories(t, store, map[string]ConversationKind{target: KindSlackThread, other: KindSlackThread})
 
-	require.NoError(t, manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "q1", Message: "first", Principal: "U1", StashAt: time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC), SlackChannel: "C123", SlackTS: "1"}))
-	require.NoError(t, manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "q2", Message: "second", Principal: "U1", StashAt: time.Date(2026, 8, 24, 14, 0, 0, 0, time.UTC), SlackChannel: "C123", SlackTS: "2"}))
-	require.NoError(t, manager.stashQueueItem(t.Context(), other, &protocol.ThreadQueueItem{ID: "other", Message: "keep", Principal: "U2", StashAt: time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC)}))
+	require.NoError(t, manager.stashQueueItem(t.Context(), target, withInbound(&protocol.ThreadQueueItem{ID: "q1", Message: "first", Principal: "U1", StashAt: time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC), SlackChannel: "C123", SlackTS: "1"})))
+	require.NoError(t, manager.stashQueueItem(t.Context(), target, withInbound(&protocol.ThreadQueueItem{ID: "q2", Message: "second", Principal: "U1", StashAt: time.Date(2026, 8, 24, 14, 0, 0, 0, time.UTC), SlackChannel: "C123", SlackTS: "2"})))
+	require.NoError(t, manager.stashQueueItem(t.Context(), other, withInbound(&protocol.ThreadQueueItem{ID: "other", Message: "keep", Principal: "U2", StashAt: time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC)})))
 
 	items, err := manager.queueItems(target)
 	require.NoError(t, err)
@@ -1146,13 +1111,13 @@ func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, activated, "the held request does not run")
 
-			require.NoError(t, manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "by hand", Kind: protocol.InboundKindHeld, Source: protocol.SourceWeb, Principal: "alice", Message: "later"}))
+			require.NoError(t, manager.stashQueueItem(t.Context(), target, withInbound(&protocol.ThreadQueueItem{ID: "by hand", Kind: protocol.InboundKindHeld, Source: protocol.SourceWeb, Principal: "alice", Message: "later"})))
 			require.Equal(t, []string{"earlier"}, queueIDs(t, store, target), "a stash releases nothing")
 
 			if writer == "agent" {
 				_, _, err = manager.writeSession(t.Context(), target, "next", sessionWriteEnqueue, agentWrite("next"), nil)
 			} else {
-				err = manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "next", Kind: protocol.InboundKindEnqueue, Source: protocol.SourceWeb, Principal: "alice", Message: "next", StashAt: time.Now().UTC()})
+				err = manager.stashQueueItem(t.Context(), target, withInbound(&protocol.ThreadQueueItem{ID: "next", Kind: protocol.InboundKindEnqueue, Source: protocol.SourceWeb, Principal: "alice", Message: "next", StashAt: time.Now().UTC()}))
 			}
 
 			require.NoError(t, err)

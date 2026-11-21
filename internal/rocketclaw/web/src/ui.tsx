@@ -636,8 +636,7 @@ function ServerSessions({ children }: { children: ReactNode }) {
   // A remote that has not answered yet is asked again until it does.
   const protocol = useQuery({ ...queries.protocol(name), retry: false, refetchInterval: (query) => query.state.data === undefined && 2000 });
   const local = useQuery({ ...queries.protocol(""), enabled: false }).data, foreign = protocol.data !== undefined && protocol.data !== local;
-  // A remote's saved rows keep apart from the local server's, whose cache key stays as it was.
-  const scope = protocol.data === undefined || !name ? protocol.data : JSON.stringify([name, protocol.data]);
+  const scope = protocol.data === undefined ? undefined : JSON.stringify([name, protocol.data]);
   const identityRejected = identity.isError && (!name || identity.error instanceof RPCError);
   const unreachable = identity.isError && !identityRejected;
   const owner = identity.isSuccess || unreachable ? identity.data?.username : undefined;
@@ -1057,16 +1056,12 @@ const relocate = ({ preview: _preview, unplaced: _unplaced, ...tab }: Tab, space
 const pageAgent = (path: string) => path.startsWith("/pages/") ? decodeURIComponent(path.split("/")[3] ?? "") : "";
 
 // The server's saved tabs; tabs left in a lost space or group belong to the first space and no group, and a lost group's
-// placeholder goes. A group saved before every group held one gets its placeholder after its last tab.
+// placeholder goes.
 function savedTabs(owner?: string, saved?: Pick<SavedTabs, "spaces" | "state">): TabState {
   const spaces = saved?.spaces ?? [{ id: "main", name: "Main" }], known = (id?: string) => spaces.some((space) => space.id === id);
   const groups = saved?.state.groups ?? [];
   const tabs = (saved?.state.tabs ?? []).map(({ group, space, ...tab }) => ({ ...tab, group: groups.some((item) => item.id === group) ? group : undefined, space: known(space) ? space : spaces[0].id })).filter((tab) => tab.group || !isKeeper(tab));
-  const kept = groups.reduce<Tab[]>((list, { id }) => {
-    const member = list.find((tab) => tab.group === id);
-    return member && !list.some((tab) => tab.path === keeper(id)) ? join(list, keeper(id), id, member.space!) : list;
-  }, tabs);
-  return { owner, tabs: arrange(kept), active: "", groups, spaces, space: known(saved?.state.space) ? saved!.state.space : spaces[0].id, last: saved?.state.last ?? {}, sharedOrder: saved?.state.sharedOrder ?? [] };
+  return { owner, tabs: arrange(tabs), active: "", groups, spaces, space: known(saved?.state.space) ? saved!.state.space : spaces[0].id, last: saved?.state.last ?? {}, sharedOrder: saved?.state.sharedOrder ?? [] };
 }
 
 // A space chosen on another server's card, which that server's first load enters.
@@ -3555,8 +3550,6 @@ function DeleteSessionDialog({ id }: { id: string }) {
 
 type SavedSearch = SearchPageState["searches"][number];
 
-type LegacySearch = SavedSearch & { agentFilter?: string; roomFilter?: string };
-
 // mine, made from base, made again onto theirs: their searches with mine's changes, those mine added, and none mine
 // closed; mine's name and shown search when it changed them.
 function rebase(base: SearchPageState | undefined, mine: SearchPageState, theirs: SearchPageState): SearchPageState {
@@ -3574,10 +3567,6 @@ function rebase(base: SearchPageState | undefined, mine: SearchPageState, theirs
 
 const comparablePage = (searches: SavedSearch[] = [], active = "") => JSON.stringify([searches.map(({ id, name, query }) => [id, name ?? "", query]), active]);
 
-// Legacy agent and room filters fold into the query once, in one canonical form.
-function foldFilters(query: string, agent?: string | null, room?: string | null) {
-  return [agent ? `agent:${termValue(agent)}` : "", room ? `room:${termValue(room)}` : "", query].filter(Boolean).join(" ");
-}
 type SavedSearches = Pick<SearchPageState, "searches" | "active">;
 
 function withQuery({ searches, active }: SavedSearches, query: string): SavedSearches {
@@ -3599,21 +3588,15 @@ function SearchPage() {
 }
 
 // A page's searches are saved with its tab: typing after a pause, as each tab change redraws the app, anything else and
-// leaving the page at once. Searches this browser kept before Search pages were tabs move into the first page without any.
+// leaving the page at once.
 function SearchTabs({ path, owner, inShared, page, link, consumeLink }: { path: string; owner: string; inShared: boolean; page?: SearchPageState; link: string; consumeLink: () => void }) {
-  // Only the person's own page takes this browser's old searches; a Shared one would hand them to everyone.
-  const legacy = `search-tabs:${owner}`, tabs = useContext(TabActions), owned = !inShared && tabs.state.tabs.some((tab) => tab.path === path);
-  // Only the page that took them in deletes them, once its tab holds them.
-  const [imported] = useState(() => !page?.searches.length && !inShared && localStorage.getItem(legacy) !== null);
+  const tabs = useContext(TabActions), owned = !inShared && tabs.state.tabs.some((tab) => tab.path === path);
   const [rename, setRename] = useState<string | null>(null);
   // The searches the page held as it opened: running one of them again is no query the person entered.
   const [held] = useState(() => page?.searches ?? []);
   const [saved, setSaved] = useState<SavedSearches>(() => {
-    const stored = (page?.searches.length || inShared ? { tabs: page?.searches ?? [], active: page?.active ?? "" } : JSON.parse(localStorage.getItem(legacy) ?? '{"tabs":[]}')) as { tabs: LegacySearch[]; active: string };
-    const searches = stored.tabs.map(({ agentFilter, roomFilter, ...tab }) => ({ ...tab, query: foldFilters(tab.query, agentFilter, roomFilter) }));
-    const params = new URLSearchParams(link);
-    const query = foldFilters(params.get("q") ?? "", params.get("agent"), params.get("room"));
-    return searches.length && !query ? { searches, active: stored.active } : withQuery({ searches, active: stored.active }, query);
+    const stored = { searches: page?.searches ?? [], active: page?.active ?? "" }, query = new URLSearchParams(link).get("q") ?? "";
+    return stored.searches.length && !query ? stored : withQuery(stored, query);
   });
   const savedRef = useRef(saved), typing = useRef<ReturnType<typeof setTimeout>>(undefined);
   const shown = useMemo(() => comparablePage(page?.searches, page?.active), [page]), lastPageSeen = useRef(shown);
@@ -3623,7 +3606,6 @@ function SearchTabs({ path, owner, inShared, page, link, consumeLink }: { path: 
     typing.current = undefined;
     if (comparablePage(savedRef.current.searches, savedRef.current.active) === shown) return;
     tabs.editSearch(path, savedRef.current, inShared);
-    if (owned && imported) localStorage.removeItem(legacy);
   };
   // Opening saves what it opened; leaving saves typing that waits, unless another person signed in meanwhile.
   const settle = useEffectEvent((leaving: boolean) => {
@@ -4080,7 +4062,7 @@ function MessageAttachment({ file, conversationId }: { file: NonNullable<Line["a
   const image = /^image\/(png|jpeg|gif|webp|avif)$/.test(file.mimeType);
   return <Attachment orientation={image ? "vertical" : "horizontal"}>
     <AttachmentMedia variant={image ? "image" : "icon"}>{image ? <img src={url} alt={file.name} crossOrigin="anonymous" loading="lazy" /> : <FileIcon />}</AttachmentMedia>
-    <AttachmentContent><AttachmentTitle>{file.name}</AttachmentTitle><AttachmentDescription>{file.size ?? "0"} bytes{file.originalUnverified ? " · Original unverified" : ""}</AttachmentDescription></AttachmentContent>
+    <AttachmentContent><AttachmentTitle>{file.name}</AttachmentTitle><AttachmentDescription>{file.size ?? "0"} bytes</AttachmentDescription></AttachmentContent>
     <AttachmentActions><AttachmentAction role="link" nativeButton={false} render={<a href={file.file ? url : `${url}&download=1`} download={file.name} aria-label={`Download ${file.name}`} />} aria-label={`Download ${file.name}`}><Download /></AttachmentAction></AttachmentActions>
   </Attachment>;
 }
@@ -4230,7 +4212,7 @@ function codeModeCallRow(call: CodeModeCall, running: boolean) {
   } catch {
     // Clipped arguments are no longer JSON and show as sent.
   }
-  const denied = call.status === "denied" || call.outcome === "deny";
+  const denied = call.status === "denied";
   const status: TraceStatus | undefined = denied || call.status === "error" ? "error" : call.status === "running" && running ? "running" : undefined;
   return { command, status, title: `${call.name} · ${command.replace(/\s+/g, " ").slice(0, 120)}`,
     description: denied ? "denied" : call.status === "error" ? "failed" : call.status === "cancelled" ? "cancelled" : undefined };
@@ -4847,10 +4829,9 @@ async function openCall(draft: ComposerDraft, onDraftChange: () => void, scrollT
 }
 
 function historyLines(messages: TranscriptEvent[]): Line[] {
-  const seen = new Map<string, number>();
   return messages.map((message) => {
     const role = message.role === "thinking" || message.role === "user" || message.role === "tool" || message.role === "developer" ? message.role : "assistant";
-    return { ...message, id: message.inputId || message.itemId || message.messageId || lineId(role, message.text, seen), role };
+    return { ...message, id: message.inputId || message.itemId, role };
   });
 }
 

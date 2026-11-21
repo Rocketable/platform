@@ -351,7 +351,7 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 	require.NotEqual(t, full.Version, unchanged.Version)
 
 	queuedAt := time.Now()
-	require.NoError(t, server.sessions.PutThreadQueueItem("later", &protocol.ThreadQueueItem{ConversationID: "chat-00", Message: "later", StashAt: queuedAt}))
+	require.NoError(t, server.sessions.PutThreadQueueItem("later", withInbound(&protocol.ThreadQueueItem{ConversationID: "chat-00", Message: "later", StashAt: queuedAt})))
 
 	sent, queued := list(ctx, unchanged.Version)
 	require.Equal(t, []string{"chat-00"}, sent, "queueing work into an idle chat changes its work state")

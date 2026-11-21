@@ -285,7 +285,7 @@ func TestShadowPublicMutationsAreReadOnly(t *testing.T) {
 			case "reorder":
 				err = runtime.ReorderQueueItems(ctx, id, []string{"item"})
 			case "stash":
-				err = runtime.StashQueueItem(ctx, id, &protocol.ThreadQueueItem{ID: "item", Source: protocol.SourceWeb})
+				err = runtime.StashQueueItem(ctx, id, withInbound(&protocol.ThreadQueueItem{ID: "item", ConversationID: id, Source: protocol.SourceWeb}))
 			case "switch":
 				_, err = runtime.SwitchConversationAgent(id, "primary")
 			case "move background":

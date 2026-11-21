@@ -113,7 +113,7 @@ func TestShadowActivationRollback(t *testing.T) {
 			case "queue":
 				request.queueItemID = "queued"
 
-				require.NoError(t, store.PutThreadQueueItem("queued", &protocol.ThreadQueueItem{ConversationID: "parent", Message: "new input"}))
+				require.NoError(t, store.PutThreadQueueItem("queued", withInbound(&protocol.ThreadQueueItem{ConversationID: "parent", Message: "new input"})))
 			case "schedule":
 				request.scheduledMessageID = "scheduled"
 
@@ -661,7 +661,7 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 	require.True(t, closed)
 
 	for _, id := range []string{"s1", "waiting"} {
-		require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ConversationID: "parent", Message: id}))
+		require.NoError(t, store.PutThreadQueueItem(id, withInbound(&protocol.ThreadQueueItem{ConversationID: "parent", Message: id})))
 	}
 
 	entry := harness.SessionEntry{Version: 1, Type: "turn", TurnID: request.turnID, ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"compaction","id":"cmp","encrypted_content":"summary"}`)}}

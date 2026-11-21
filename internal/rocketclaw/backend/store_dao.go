@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -522,15 +521,12 @@ func TabConversation(path string) string {
 		}
 	}
 
-	if unescaped, err := url.PathUnescape(encoded); err == nil {
-		encoded = unescaped
+	id, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return ""
 	}
 
-	if id, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(strings.NewReplacer("+", "-", "/", "_").Replace(encoded), "=")); err == nil {
-		encoded = string(id)
-	}
-
-	return strings.ToValidUTF8(encoded, "\uFFFD")
+	return strings.ToValidUTF8(string(id), "\uFFFD")
 }
 
 func (s *SessionService) TabState(ctx context.Context, username string) (TabState, int64, error) {
@@ -903,9 +899,6 @@ FROM conversations WHERE conversation_id = $1 AND goal_objective IS NOT NULL`, s
 	goal.CreatedAt = timeFromUnixNano(createdAt)
 
 	goal.UpdatedAt = timeFromUnixNano(updatedAt)
-	if strings.TrimSpace(goal.Status) == "" {
-		goal.Status = GoalStatusActive
-	}
 
 	return goal, true, nil
 }
@@ -966,18 +959,12 @@ func putThreadQueueItem(ctx context.Context, db stateStoreDB, id string, item *p
 	content, _ := json.Marshal(item.Content)
 	reply, _ := json.Marshal(item.SlackReply)
 
-	var inbound *string
-
-	if item.Inbound != nil {
-		data, _ := json.Marshal(item.Inbound)
-
-		inbound = new(string(removeSessionEntryNUL(data)))
-	}
+	inbound, _ := json.Marshal(item.Inbound)
 
 	changed, err := execRows(ctx, db, "put thread queue item", `INSERT INTO turns (`+waitingColumns+`, updated_at_unix_ns, phase, reason)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $5, $15, CASE WHEN $10 <> 'held' THEN $16 WHEN $14::json->>'Kind' = 'enqueue' THEN $17 ELSE $18 END)
 ON CONFLICT (input_id) WHERE phase = 'waiting' DO UPDATE SET message = excluded.message, principal = excluded.principal, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns, position = excluded.position, park_after = excluded.park_after, slack_channel = excluded.slack_channel, slack_ts = excluded.slack_ts, delivery = excluded.delivery, reason = excluded.reason, content = excluded.content, source = excluded.source, slack_reply = excluded.slack_reply, inbound_json = excluded.inbound_json WHERE turns.conversation_id = excluded.conversation_id`,
-		strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, strings.TrimSpace(item.ParkAfter), item.SlackChannel, item.SlackTS, kind, content, item.Source, reply, inbound, turnWaiting, waitQueued, waitHeld, waitStashed)
+		strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, strings.TrimSpace(item.ParkAfter), item.SlackChannel, item.SlackTS, kind, content, item.Source, reply, string(removeSessionEntryNUL(inbound)), turnWaiting, waitQueued, waitHeld, waitStashed)
 	if err != nil {
 		return err
 	}
@@ -1502,7 +1489,7 @@ FROM shadow_turns t WHERE a.id = $1 AND t.child_turn_id = $1 AND $2 = 'stopped' 
 	}
 
 	if finish.accountGoal {
-		if _, err := tx.ExecContext(ctx, `UPDATE conversations SET goal_turns_used = goal_turns_used + 1, goal_status = CASE WHEN goal_max_turns > 0 AND goal_turns_used + 1 >= goal_max_turns THEN $1 ELSE $2 END, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (goal_status = '' OR goal_status = $2)`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(time.Now()), finish.conversationID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE conversations SET goal_turns_used = goal_turns_used + 1, goal_status = CASE WHEN goal_max_turns > 0 AND goal_turns_used + 1 >= goal_max_turns THEN $1 ELSE $2 END, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND goal_status = $2`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(time.Now()), finish.conversationID); err != nil {
 			return nil, fmt.Errorf("account goal turn: %w", err)
 		}
 	}

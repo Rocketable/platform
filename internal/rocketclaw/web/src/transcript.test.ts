@@ -235,10 +235,6 @@ test("active items become stored without changing render identity or losing mess
   expect(draft.lines.map((line) => line.id)).toEqual(["input", "turn:1"]);
   expect(draft.lines.map((line) => line.messageId)).toEqual(["83:0", "83:1"]);
   expect(draft.lines[0]).toMatchObject(metadata);
-  expect(historyLines([event("legacy", "", "assistant", "saved", { messageId: "1:0" })])[0].id).toBe("1:0");
-  const legacy = [event("legacy", "", "assistant", "same"), event("legacy", "", "assistant", "same"), event("legacy", "", "thinking", "same")];
-  expect(historyLines(legacy).map((line: Line) => line.id)).toEqual(["assistant:same:1", "assistant:same:2", "thinking:same:1"]);
-  expect(historyLines(legacy.slice(1)).map((line: Line) => line.id)).toEqual(["assistant:same:1", "thinking:same:1"]);
   const row = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "TranscriptLine")!.getText(source);
   expect(row).toContain("data-message-id={line.messageId || undefined}");
   const fork = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "ForkDialog")!.getText(source);

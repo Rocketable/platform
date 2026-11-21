@@ -608,7 +608,7 @@ test("with reduced motion a running tab's title shows a still gradient", () => w
 test("collapsed group badges do not rescan sessions for each hidden tab", () => withPage({}, async (page, origin, _prompts, saved) => {
   const sessions = Array.from({ length: 200 }, (_, index) => ({ id: `group-row-${index}`, name: `Row ${index}`, agent: "main", unreadAt: index === 79 ? "2026-01-01T00:00:00Z" : "", asking: index === 79 }));
   const tabs = sessions.slice(0, 80).map(({ id }) => ({ path: href(id), group: "work", space: "main" }));
-  saved.state = { ...saved.state, space: "main", tabs, groups: [{ id: "work", name: "Work", color: "Blue" }] };
+  saved.state = { ...saved.state, space: "main", tabs: [...tabs, { path: "group:work", group: "work", space: "main" }], groups: [{ id: "work", name: "Work", color: "Blue" }] };
   await page.route("**/api/ListSessions*", (route: any) => route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n` }));
   await page.goto(origin + tabs[0].path);
   await strip(page).getByRole("tab", { name: "Row 79", exact: true }).waitFor();
@@ -775,7 +775,7 @@ test("a space's Shared tabs head its card, which counts them, under a Shared pil
 
 test("a full sidebar scrolls Shared and the person's tabs as one while Parked stays put", () => withPage({ viewport: { width: 1280, height: 400 } }, async (page, origin, _prompts, saved) => {
   saved.shared = ["alpha", "bravo"].map((id) => ({ space: "main", path: href(id) }));
-  saved.state = { ...saved.state, space: "main", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [href("charlie"), href("delta"), "/cron", href("foxtrot"), href("golf"), "/shortcuts", href("hotel")].map((path, i) => ({ path, space: "main", group: i > 2 ? "work" : undefined })) };
+  saved.state = { ...saved.state, space: "main", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [href("charlie"), href("delta"), "/cron", href("foxtrot"), href("golf"), "/shortcuts", href("hotel"), "group:work"].map((path, i) => ({ path, space: "main", group: i > 2 ? "work" : undefined })) };
   saved.attention = [{ path: href("hotel"), parked: true }];
   await page.goto(`${origin}${href("charlie")}`);
   const top = (locator: any) => locator.evaluate((node: HTMLElement) => node.getBoundingClientRect().top), parked = page.getByRole("button", { name: "Parked", exact: true });

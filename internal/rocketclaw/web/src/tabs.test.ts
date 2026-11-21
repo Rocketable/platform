@@ -19,7 +19,7 @@ const { tabsCall, queryClient } = await import(`data:text/javascript;base64,${Bu
 
 test("personal save replies retain intervening Shared edits, including refused saves", async () => {
   const key = [{ server: "" }, "tabs", "tester"];
-  const initial: SavedTabs = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "1", shared: [] };
+  const initial: SavedTabs = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "1", shared: [], closed: [] };
   for (const state of [true, false]) for (const stale of [false, true]) for (const changed of ["neither", "shared"] as const) {
     queryClient.clear();
     queryClient.setQueryData(key, initial);

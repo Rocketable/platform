@@ -56,7 +56,6 @@ export function timelineLevel(rows: TimelineRows) {
   }));
 }
 
-// Details saved for categories that no longer collapse are dropped, so older saved values still match their level.
 function parseRows(value: string | null): TimelineRows {
   let saved: { version?: unknown; rows?: Record<string, { placement?: unknown; details?: unknown } | null> } | null;
   try {
@@ -69,7 +68,6 @@ function parseRows(value: string | null): TimelineRows {
   return Object.fromEntries(timelineCategories.map(({ id }) => {
     const row = stored[id];
     const placement = placements.includes(row?.placement) ? row!.placement : compact[id].placement;
-    if (!collapsible.has(id)) return [id, { placement }];
     return [id, { placement, details: detailValues.includes(row?.details) ? row!.details : compact[id].details }];
   })) as TimelineRows;
 }

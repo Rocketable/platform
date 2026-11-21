@@ -536,27 +536,6 @@ func TestSocketLoopAcksEventsAPIBeforeEnqueue(t *testing.T) {
 	}
 }
 
-func TestEventLoopIgnoresInteractiveEvents(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	connector.socketEvents = make(chan socketmode.Event)
-
-	go connector.eventLoop(t.Context())
-
-	connector.socketEvents <- socketmode.Event{Type: socketmode.EventTypeInteractive, Request: &socketmode.Request{EnvelopeID: "stale"}, Data: slack.InteractionCallback{
-		Type:           slack.InteractionTypeBlockActions,
-		User:           slack.User{ID: "U123"},
-		Channel:        slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
-		ActionCallback: slack.ActionCallbacks{BlockActions: []*slack.BlockAction{{BlockID: "question-1", ActionID: "option_0", Value: "yes"}}},
-	}}
-
-	connector.socketEvents <- socketmode.Event{Type: socketmode.EventTypeConnecting}
-}
-
 func TestSocketLoopEnqueuesEventsAPIWhenAckFails(t *testing.T) {
 	connector := newTestConnector("http://slack.test")
 	connector.reconnectDelay = 0
@@ -1259,7 +1238,7 @@ func newFooterRouter(t *testing.T, errLink error) *primaryTextRouterMock {
 	t.Helper()
 
 	return &primaryTextRouterMock{
-		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, false, nil },
+		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, error) { return true, nil },
 		WebURLFunc: func(conversationID string) (string, error) {
 			assert.Equal(t, "slack-thread:C123:111.222", conversationID)
 
@@ -1900,15 +1879,12 @@ func TestAgentSessionTitleChangedNamesWebConversation(t *testing.T) {
 	server, _ := newAgentSessionServer(t, "")
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, nil))
 	facts := connector.facts.(*channelFactsStoreMock)
-	facts.UpdateConversationDetailsFunc = func(_ context.Context, id string, _ *string) (bool, error) {
-		return id == "slack-thread:C123:333.444", nil
-	}
+	facts.UpdateConversationDetailsFunc = func(context.Context, string, *string) (bool, error) { return true, nil }
 
 	for _, ev := range []slackevents.AgentSessionTitleChangedEvent{
 		{Channel: "C123", ThreadTimestamp: "111.222", User: "U123", Title: " Login checks "},
 		{Channel: "C123", ThreadTimestamp: "111.222", User: "U999", Title: "Someone else"},
 		{Channel: "C123", ThreadTimestamp: "111.222", User: "U123", Title: " "},
-		{Channel: "C123", ThreadTimestamp: "333.444", User: "U123", Title: "Older thread"},
 	} {
 		connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(&ev))
 	}
@@ -1920,12 +1896,7 @@ func TestAgentSessionTitleChangedNamesWebConversation(t *testing.T) {
 		named = append(named, call.ConversationID+" "+*call.Name)
 	}
 
-	assert.Equal(t, []string{
-		"slack-thread:C123:111.222:social Login checks",
-		"slack-thread:C123:111.222 Login checks",
-		"slack-thread:C123:333.444:social Older thread",
-		"slack-thread:C123:333.444 Older thread",
-	}, named, "a Thread Session is named by its agent-specific ID, falling back to an older Managed Slack Thread")
+	assert.Equal(t, []string{"slack-thread:C123:111.222:social Login checks"}, named, "a Thread Session is named by its agent-specific ID")
 }
 
 func TestAgentSessionStoppedEvent(t *testing.T) {
@@ -2603,31 +2574,6 @@ func TestSlackCommandTextReachesOrdinaryRouting(t *testing.T) {
 	}
 }
 
-func TestHandleAppMentionEventIgnoresReportThread(t *testing.T) {
-	var (
-		posted    []url.Values
-		reactions []string
-	)
-
-	server := newSlackStackTestServer(t, &posted, &reactions)
-	defer server.Close()
-
-	router := &primaryTextRouterMock{MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, true, nil }}
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
-	connector.botUserID = "U999"
-
-	for _, text := range []string{"<@U999> why did this fail?", "<@U999>"} {
-		mention := newSlackAppMentionEvent()
-		mention.TimeStamp, mention.ThreadTimeStamp, mention.Text = "171235.0001", "171234.5678", text
-		connector.handleAppMentionEvent(t.Context(), mention, slackNativeForward{})
-	}
-
-	require.Len(t, router.MentionThreadCalls(), 2)
-	assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C123", MessageID: "171235.0001", ThreadID: "171234.5678", Agent: "social"}, router.MentionThreadCalls()[0].Target)
-	assert.Empty(t, posted)
-	assert.Empty(t, reactions)
-}
-
 func TestHandleEventsAPIIgnoresMessagesAndReactions(t *testing.T) {
 	server := newSlackStackTestServer(t, new([]url.Values), new([]string))
 	defer server.Close()
@@ -2918,7 +2864,7 @@ func newTestConnectorWithOptions(apiURL string, channels []config.SlackChannelCo
 
 func newMentionRouter(recorded bool) *primaryTextRouterMock {
 	return &primaryTextRouterMock{
-		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return recorded, false, nil },
+		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, error) { return recorded, nil },
 		SubmitMentionFunc: func(context.Context, string, protocol.TextConversationTarget, *protocol.InboundMessage) (bool, error) {
 			return true, nil
 		},

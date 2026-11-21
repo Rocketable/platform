@@ -185,8 +185,6 @@ Only a mention from an allowed user starts work. Messages without a mention, inc
 
 While a turn runs, the thread shows Slack's own working state with a Stop button, or that it needs someone while a question the turn asked in Web waits. A turn that runs scripts or subagents posts one checklist of them, updated as each finishes. When the turn ends, its answer and any files post as new replies. The answer ends with a footer: the agent, how the turn ended (done, failed, or stopped), and an Open in Web link. A turn without an answer posts the footer alone.
 
-Slack threads that earlier versions posted cron reports or MCP sessions into are read-only: the bot ignores every reply and mention in them. Their conversations are Web chats now; keep working there.
-
 Slack has no commands. `/stop`, `/agent`, `/goal`, `/enqueue`, skill names, and any other `/` text after the mention reach the agent as plain text. Start the message with the mention: Slack takes a message that begins with `/` as one of its own slash commands and never posts it. There is no agent picker, steering, queue card, question button, or reaction control. Mention turns cannot use `ask_user_question`, so the agent asks in its reply or hands the work to Web. Use Web to switch agents, run commands and skills, start goals, manage queued work, and stop any turn. Web messages used in a Slack thread are still posted there, and every reply in that conversation still goes to Slack.
 
 Set up the Slack app with the bot events `app_mention`, `channel_rename` and `group_rename` and these bot scopes, then reinstall it:
@@ -198,7 +196,12 @@ Set up the Slack app with the bot events `app_mention`, `channel_rename` and `gr
 
 With `channel_rename` and `group_rename`, a renamed channel's new name shows in the Web sidebar right away; without them, it shows after a restart or the next mention in that channel.
 
-The `message.*` event subscriptions and Interactivity are no longer used and can be removed.
+The `message.*` event subscriptions and Interactivity are no longer used. Remove them: RocketClaw no longer acknowledges button clicks, so Slack shows an error on buttons posted by earlier versions.
+
+Release note for old Slack threads:
+
+- A mention in a thread created before `sticky: slack` starts a new Thread Session. It reads the thread from Slack and does not continue the old conversation, which stays in Web.
+- Old cron report and MCP Slack threads are no longer read-only: a mention there starts a Thread Session like any other thread.
 
 The bot uses Slack's agent sessions, which need two more steps: turn the app into an agent (**Agents** in the app settings, manifest `features.agent_view`), which cannot be undone, and subscribe to the bot events `agent_session_stopped` and `agent_session_title_changed`. Then every turn in a mention thread, whichever surface started it, shows Slack's working state until it ends, renewed before Slack's one-hour limit, and Stop from an allowed user ends the turn and its goal, like Web `/stop`. The thread's session in Slack is titled after the mention that created it, and renaming it, in Web or by an allowed user in Slack, renames it in both. `agent_view` also adds an agent chat to the app's Messages tab that RocketClaw never answers.
 
@@ -507,7 +510,7 @@ An agent file with `mode: easy` uses a shorter format. Leaving `mode` out, or `m
 - Everything turned on is reviewed before it runs by the agent's approver: the guardian, on `approver.model` when set, with `approver.prompt` added to its rules. `approver.decision` (`model`, `minConfidence`, `prompt`) sets the decision model asked first and its own rules. With `approver.prompt` set and no `approver.decision.prompt`, reviews are never pre-gated; write the rules in both to pre-gate them. As under `sudo`, skills, `task`, web search and the default-on RocketClaw tools (reload, scheduled messages, attaching files, goal updates and questions) run without review, and so does the `decision` tool for the models the `decision` list names.
 - The approver works in the agent's `workingDirectory` and kind of shell, and has no `workingDirectory` of its own. Its `read`, `glob` and `grep` see that folder as the agent's do, not the workspace. It has only those three tools unless `approver` gives it more, with the keys the agent itself uses: `rocketclaw`, `tags`, `skills`, `mcp`, `allowedNetworkTargets`, `commands` and `secretsARN`. They are written and checked exactly as the agent's are, with three differences. A key left out of `approver` turns on nothing, where the same key left out of the agent turns on everything, except `mcp`, which stays off for both. Nothing reviews the approver: whatever its keys turn on runs at once. And `approver.rocketclaw` takes only `sessions`, `pages` and `tags`; `background` and `restart` fail to load. `tags` are set on the chat it is reviewing. Its `sessions` writes go out under the name `guardian`, so an agent whose `delegatedFrom` is a list must name `guardian` to accept them. `commands` gives it a shell with those commands, which get only the approver's own `secretsARN`, never the agent's. `allowedNetworkTargets` gives it `webfetch` and sets what that shell's `curl` reaches; left out, the shell reaches no network. It uses its tools only while it reviews: a review the decision model settles first never reaches them.
 - An `execute` script is reviewed once, whole, before it runs, and that approves every call it makes: its calls are not reviewed again. The approver sees the script's code but not the values it reads or fetches while it runs. The exception is a `bash` call with text `stdin`: it is reviewed again when it runs, with its stdin, and refused when that text is over 64 KiB. A file on `stdin` adds no review. A call the file does not turn on is still refused.
-- `model`, `space` and `workingDirectory` are required. A misspelled or unknown key fails to load, and so do the advanced keys `description`, `reasoningEffort`, `verbosity`, `permission`, `sudo` and `additionalInstructions`.
+- `model`, `space` and `workingDirectory` are required. A misspelled or unknown key fails to load, and so do the advanced keys `description`, `verbosity`, `permission`, `sudo` and `additionalInstructions`.
 - The body is the agent's whole instructions. Easy agents get no reply-style line.
 
 ```yaml
@@ -733,6 +736,14 @@ With `--aws-secrets-manager-arn ARN`, the three commands read providers from the
 - Back up the database and the attachment storage together. Restoring only the database brings back references to files, not the files.
 - `.rocketclaw/` holds generated runtime files, such as cloned overlays, per-session temporary folders, and oversized command output. Do not treat it as source code.
 - At every start, RocketClaw empties the runtime folder (`.rocketclaw/`, or `.femtoclaw/` with `femtoclaw.json`) and builds it again. It keeps only `.rocketcode`, `attachments`, `sandbox`, `uploads`, `auth.json`, `auth.json.lock`, entries whose names start with `.auth.json-`, and `overlays`. Anything else, including files you put there by hand, is deleted.
+
+Release note for dropping old formats:
+
+- `auth.json` must use the `providers` layout. A single-token file from older versions is refused; delete it and run `rocketclaw oai login` again.
+- The agent setting `reasoningEffort` is ignored. Use the `#effort` ending on `model`.
+- A database whose migration ledger predates `001_baseline.sql` fails at startup with an unknown migration. Start it once with the previous release first.
+- Old chats lose details that newer versions record: links from tool calls saved before 2026-10-22 to their subagent and review histories, per-call rows on Execute calls saved before 2026-10-17, and files recovered for old attachment calls.
+- Queued, stashed, or held messages saved without their full message (`turns.inbound_json` is NULL while `phase = 'waiting'`) crash RocketClaw when picked up. Delete them before upgrading.
 
 ## Monitoring and profiling
 

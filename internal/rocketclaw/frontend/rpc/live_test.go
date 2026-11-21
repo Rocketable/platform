@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -793,19 +792,19 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 	var keys []string
 
 	appendTurn := func(text string, items ...json.RawMessage) int64 {
-		id, err := sessions.AppendEntryID(ctx, "chat", &harness.SessionEntry{Type: "turn", ReplayInput: append([]json.RawMessage{
+		id, err := sessions.AppendEntryID(ctx, "chat", &harness.SessionEntry{Type: "turn", TurnID: text, ReplayInput: append([]json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"user","content":"` + text + `"}`),
 			json.RawMessage(`{"type":"message","role":"assistant","content":"reply"}`),
 		}, items...)})
 		require.NoError(t, err)
 
-		keys = append(keys, strconv.FormatInt(id, 10))
+		keys = append(keys, "turn:chat:"+text)
 
 		return id
 	}
 	ids := []int64{appendTurn("one", json.RawMessage(`{"type":"function_call","call_id":"early","name":"task","arguments":"{}"}`)), appendTurn("two"), appendTurn("three"), appendTurn("four")}
 
-	openTestTurns(t, dsn).RecordLegacyDelegation(t, "chat", "early")
+	openTestTurns(t, dsn).RecordDelegation(t, "chat", "one", "early")
 
 	_, err = sessions.AppendEntryID(ctx, "chat/early", &harness.SessionEntry{Type: "turn"})
 	require.NoError(t, err)
@@ -1353,7 +1352,7 @@ type testPlannedAction struct {
 	Subjects     []string `json:"subjects"`
 }
 
-func testReviewEntry(tb testing.TB, transcript string, action *testPlannedAction, rationale string) *harness.SessionEntry {
+func testReviewEntry(tb testing.TB, action *testPlannedAction, rationale string) *harness.SessionEntry {
 	tb.Helper()
 
 	type part struct {
@@ -1367,7 +1366,7 @@ func testReviewEntry(tb testing.TB, transcript string, action *testPlannedAction
 		Type    string `json:"type"`
 		Role    string `json:"role"`
 		Content []part `json:"content"`
-	}{"message", "user", []part{{"input_text", transcript + "Planned action JSON:\n" + string(planned) + "\n>>> APPROVAL REQUEST END\n"}}})
+	}{"message", "user", []part{{"input_text", "Planned action JSON:\n" + string(planned) + "\n>>> APPROVAL REQUEST END\n"}}})
 	require.NoError(tb, err)
 	decision, err := json.Marshal(struct {
 		Outcome   string `json:"outcome"`
@@ -1417,36 +1416,10 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 		}
 	}
 	script := &testPlannedAction{"execute", "rocketclaw", `{"code":"def main():\n    return bash(command=\"ls\")"}`, []string{"code_mode_approve"}}
-	big := `{"command":"echo ` + strings.Repeat("é", 2100) + `"}`
-	clipped := big[:4095] + "…[truncated]"
+	review("new", testReviewEntry(t, script, "script reason"))
+	review("top", testReviewEntry(t, &testPlannedAction{"bash", "bash", `{"command":"ls"}`, []string{"ls"}}, "top is safe"))
 
-	review("new", testReviewEntry(t, "", script, "PARSED SCRIPT REASON"), testReviewEntry(t, "", &testPlannedAction{"bash", "bash", `{"command":"PARSED"}`, []string{"PARSED"}}, "checked"))
-
-	old := []*harness.SessionEntry{
-		testReviewEntry(t, "Earlier transcript.\n", script, "script ok"),
-		testReviewEntry(t, "", &testPlannedAction{"bash", "bash", `{"command":"ls -la"}`, []string{"ls -la"}}, "ls is safe"),
-		testReviewEntry(t, "", &testPlannedAction{"bash", "bash", big, []string{"echo"}}, "echo is safe"),
-		testReviewEntry(t, "", &testPlannedAction{"execute", "mcp", `{"query":"is:open"}`, []string{"github.search_issues"}}, "search is read-only"),
-	}
-	for i, entry := range old {
-		entry.TurnID = fmt.Sprintf("old-%d", i)
-	}
-
-	review("old", old...)
-
-	broken := testReviewEntry(t, "", script, "unparsable action")
-	broken.ReplayInput[0] = json.RawMessage(strings.ReplaceAll(string(broken.ReplayInput[0]), "Planned action JSON:", "missing"))
-	review("broken", broken)
-
-	capped := make([]*harness.SessionEntry, 0, 201)
-	for i := range 201 {
-		capped = append(capped, testReviewEntry(t, "", &testPlannedAction{"bash", "bash", fmt.Sprintf(`{"command":"echo %d"}`, i), nil}, "fine"))
-	}
-
-	review("capped", capped...)
-	review("top", testReviewEntry(t, "", &testPlannedAction{"bash", "bash", `{"command":"ls"}`, []string{"ls"}}, "top is safe"))
-
-	replay := append(append([]json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"ask"}`)}, testCallItems("execute", "new", "old", "broken", "capped")...), testCallItems("bash", "top")...)
+	replay := append(append([]json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"ask"}`)}, testCallItems("execute", "new")...), testCallItems("bash", "top")...)
 	_, err = sessions.AppendEntryID(ctx, "chat", &harness.SessionEntry{Type: "turn", TurnID: "turn", ReplayInput: replay, OutputTrace: []json.RawMessage{
 		json.RawMessage(`{"type":"rocketcode_code_mode_review","parent_call_id":"new","key":"turn/call/new","outcome":"allow","reason":"script reason"}`),
 		json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"new","key":"turn/call/new/host/0","name":"bash","arguments":"{\"command\":\"printf one\"}","status":"ok","summary":"one","created_pull_requests":["https://github.com/o/r/pull/7"],"mentioned_pull_requests":["https://github.com/o/r/pull/8","https://github.com/o/r/pull/9"]}`),
@@ -1468,7 +1441,7 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 		}
 	}
 
-	require.Len(t, calls, 5)
+	require.Len(t, calls, 2)
 	encoded, err := json.Marshal(calls["new"].GetCodeModeCalls())
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), `"summary":"one"`, "actual tool output reaches PR discovery; permission-review plans carry no summary")
@@ -1479,22 +1452,14 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 			{Name: "read", Arguments: `{"filePath":"a.txt"}`, Status: "ok", Summary: "(End of file - total 2 lines)"},
 			{Name: "bash", Arguments: `{"command":"PARSED"}`, Status: "denied", Summary: "denied", Outcome: "deny", Reason: "checked", ReviewTurn: harness.ReviewTurn("turn/call/new/host/2")},
 		}},
-		"old": {ScriptReason: "script ok", ScriptOutcome: "allow", ReviewTurn: "old-0", CodeModeCalls: []*CodeModeCall{
-			{Name: "bash", Arguments: `{"command":"ls -la"}`, Outcome: "allow", Reason: "ls is safe", ReviewTurn: "old-1"},
-			{Name: "bash", Arguments: clipped, Outcome: "allow", Reason: "echo is safe", ReviewTurn: "old-2"},
-			{Name: "github.search_issues", Arguments: `{"query":"is:open"}`, Outcome: "allow", Reason: "search is read-only", ReviewTurn: "old-3"},
-		}},
-		"broken": {ReviewTurn: harness.ReviewTurn("turn/call/broken")},
-		"top":    {ReviewTurn: harness.ReviewTurn("turn/call/top")},
+		"top": {ReviewTurn: harness.ReviewTurn("turn/call/top")},
 	} {
 		got := &TranscriptEvent{ScriptReason: calls[id].GetScriptReason(), ScriptOutcome: calls[id].GetScriptOutcome(), ReviewTurn: calls[id].GetReviewTurn(), CodeModeCalls: calls[id].GetCodeModeCalls()}
 		require.True(t, proto.Equal(want, got), "%s: %v", id, got)
 	}
 
-	require.Len(t, calls["capped"].GetCodeModeCalls(), 200, "an older chat lists at most 200 reviewed calls per script")
-	require.JSONEq(t, `{"command":"echo 199"}`, calls["capped"].GetCodeModeCalls()[199].GetArguments())
 	require.Equal(t, "top is safe", view.ReviewRationales["chat/"+harness.ReviewKey("turn", "top")], "an HTTP review's reason reaches its top-level row")
-	require.Equal(t, "unparsable action", view.ReviewRationales["chat/"+harness.ReviewKey("turn", "broken")])
+	require.Equal(t, "script reason", view.ReviewRationales["chat/"+harness.ReviewKey("turn", "new")])
 
 	poll, err := server.history(ctx, &HistoryRequest{Id: "chat", Revision: view.Revision})
 	require.NoError(t, err)

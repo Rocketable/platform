@@ -24,7 +24,7 @@ import (
 const attachmentChunkBytes = 256 << 10
 
 func attachmentMetadata(conversationID string, attachment *protocol.OutboundAttachment) *Attachment {
-	return &Attachment{Id: attachment.ID, Name: attachment.Name, MimeType: attachment.MIMEType, Size: max(attachment.Size, int64(len(attachment.Data))), OriginalUnverified: attachment.OriginalUnverified, ConversationId: cmp.Or(attachment.ConversationID, conversationID)}
+	return &Attachment{Id: attachment.ID, Name: attachment.Name, MimeType: attachment.MIMEType, Size: max(attachment.Size, int64(len(attachment.Data))), ConversationId: cmp.Or(attachment.ConversationID, conversationID)}
 }
 
 func (s *Server) uploadAttachment(stream grpc.ServerStream) error {
@@ -87,7 +87,7 @@ func (u *uploadFrames) Read(p []byte) (int, error) {
 			u.err = io.EOF
 		case err != nil:
 			u.err = fmt.Errorf("receive upload chunk: %w", err)
-		case len(chunk.Data) > attachmentChunkBytes || chunk.ConversationId != "" || chunk.Name != "" || chunk.Id != "" || chunk.MimeType != "" || chunk.Size != 0 || chunk.OriginalUnverified:
+		case len(chunk.Data) > attachmentChunkBytes || chunk.ConversationId != "" || chunk.Name != "" || chunk.Id != "" || chunk.MimeType != "" || chunk.Size != 0:
 			u.err = fmt.Errorf("upload attachment: %w", status.Error(codes.InvalidArgument, "continuation frames must contain only chunks of at most 256 KiB"))
 		default:
 			u.pending = chunk.Data

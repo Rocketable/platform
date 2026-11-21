@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -35,7 +34,7 @@ func (s *SessionService) SaveAttachment(ctx context.Context, conversationID, tur
 
 	var id string
 
-	found, err := scanFound("save attachment", tx.QueryRowContext(ctx, `INSERT INTO attachments (id, conversation_id, name, mime_type, size, original_unverified, upload, turn_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING RETURNING id`, attachment.ID, conversationID, attachment.Name, attachment.MIMEType, len(attachment.Data), attachment.OriginalUnverified, upload, turnID).Scan(&id))
+	found, err := scanFound("save attachment", tx.QueryRowContext(ctx, `INSERT INTO attachments (id, conversation_id, name, mime_type, size, upload, turn_id) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING RETURNING id`, attachment.ID, conversationID, attachment.Name, attachment.MIMEType, len(attachment.Data), upload, turnID).Scan(&id))
 	if err != nil || !found {
 		return err
 	}
@@ -72,7 +71,7 @@ func (s *SessionService) SaveUpload(ctx context.Context, conversationID string, 
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO attachments (id, conversation_id, name, mime_type, size, original_unverified, upload, turn_id) VALUES ($1,$2,$3,$4,$5,$6,TRUE,'')`, attachment.ID, conversationID, attachment.Name, attachment.MIMEType, attachment.Size, attachment.OriginalUnverified); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO attachments (id, conversation_id, name, mime_type, size, upload, turn_id) VALUES ($1,$2,$3,$4,$5,TRUE,'')`, attachment.ID, conversationID, attachment.Name, attachment.MIMEType, attachment.Size); err != nil {
 		return fmt.Errorf("record upload: %w", err)
 	}
 
@@ -124,7 +123,7 @@ func (s *SessionService) loadAttachmentData(ctx context.Context, attachments []p
 func (s *SessionService) AttachmentMetadata(ctx context.Context, conversationID, id string, uploadOnly bool) (protocol.OutboundAttachment, error) {
 	attachment := protocol.OutboundAttachment{ID: id}
 
-	err := s.db.QueryRowContext(ctx, `SELECT name, mime_type, size, original_unverified FROM attachments WHERE id=$1 AND conversation_id=$2 AND (NOT $3 OR upload)`, id, conversationID, uploadOnly).Scan(&attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified)
+	err := s.db.QueryRowContext(ctx, `SELECT name, mime_type, size FROM attachments WHERE id=$1 AND conversation_id=$2 AND (NOT $3 OR upload)`, id, conversationID, uploadOnly).Scan(&attachment.Name, &attachment.MIMEType, &attachment.Size)
 	if err != nil {
 		return protocol.OutboundAttachment{}, fmt.Errorf("load attachment metadata: %w", err)
 	}
@@ -138,10 +137,10 @@ func (s *SessionService) TurnAttachments(ctx context.Context, conversationID, tu
 ), `+descendantsSQL+`, owners AS (
     SELECT id AS conversation_id FROM roots UNION ALL SELECT conversation_id FROM descendants
 )
-SELECT a.id, COALESCE(NULLIF(a.conversation_id, $1), ''), a.name, a.mime_type, a.size, a.original_unverified FROM owners o
+SELECT a.id, COALESCE(NULLIF(a.conversation_id, $1), ''), a.name, a.mime_type, a.size FROM owners o
 JOIN attachments a USING (conversation_id) WHERE a.turn_id = $2 ORDER BY a.seq`, "turn attachments", func(row rowScanner) (protocol.OutboundAttachment, error) {
 		var attachment protocol.OutboundAttachment
-		if err := row.Scan(&attachment.ID, &attachment.ConversationID, &attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified); err != nil {
+		if err := row.Scan(&attachment.ID, &attachment.ConversationID, &attachment.Name, &attachment.MIMEType, &attachment.Size); err != nil {
 			return protocol.OutboundAttachment{}, fmt.Errorf("scan turn attachment: %w", err)
 		}
 
@@ -167,9 +166,9 @@ func inputAttachmentsDB(ctx context.Context, db stateStoreDB, producer, text str
 
 		attachment := protocol.OutboundAttachment{ID: id}
 
-		err := db.QueryRowContext(ctx, `SELECT a.conversation_id, a.name, a.mime_type, a.size, a.original_unverified FROM attachments a
+		err := db.QueryRowContext(ctx, `SELECT a.conversation_id, a.name, a.mime_type, a.size FROM attachments a
 WHERE a.id = $1 AND a.upload AND (a.conversation_id = $2 OR EXISTS (SELECT 1 FROM shadow_turns t
-    WHERE t.child_conversation_id = $2 AND t.parent_source_conversation_id = a.conversation_id AND t.child_turn_id <> ''))`, id, producer).Scan(&attachment.ConversationID, &attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified)
+    WHERE t.child_conversation_id = $2 AND t.parent_source_conversation_id = a.conversation_id AND t.child_turn_id <> ''))`, id, producer).Scan(&attachment.ConversationID, &attachment.Name, &attachment.MIMEType, &attachment.Size)
 		if err == nil && attachment.ConversationID != producer {
 			if turns == nil {
 				entries, errRead := observeTranscriptDB(ctx, db, producer, 0, 0, nil)
@@ -201,10 +200,10 @@ WHERE a.id = $1 AND a.upload AND (a.conversation_id = $2 OR EXISTS (SELECT 1 FRO
 				}
 			}
 
-			err = db.QueryRowContext(ctx, `SELECT a.conversation_id, a.name, a.mime_type, a.size, a.original_unverified FROM attachments a
+			err = db.QueryRowContext(ctx, `SELECT a.conversation_id, a.name, a.mime_type, a.size FROM attachments a
 WHERE a.id = $1 AND a.upload AND EXISTS (SELECT 1 FROM shadow_turns t
     WHERE t.child_conversation_id = $2 AND t.parent_source_conversation_id = a.conversation_id
-        AND t.child_turn_id <> '' AND t.child_turn_id = ANY($3))`, id, producer, turns).Scan(&attachment.ConversationID, &attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified)
+        AND t.child_turn_id <> '' AND t.child_turn_id = ANY($3))`, id, producer, turns).Scan(&attachment.ConversationID, &attachment.Name, &attachment.MIMEType, &attachment.Size)
 		}
 
 		if errors.Is(err, sql.ErrNoRows) {
@@ -266,7 +265,7 @@ func (s *SessionService) RevertAttachmentMetadata(ctx context.Context, conversat
 	return protocol.OutboundAttachment{}, sql.ErrNoRows
 }
 
-func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID string, root *os.Root, raw json.RawMessage, calls map[[2]string]string) ([]protocol.OutboundAttachment, error) {
+func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID string, raw json.RawMessage, calls map[[2]string]string) ([]protocol.OutboundAttachment, error) {
 	var item struct {
 		Type, Name, Arguments string
 		Output, Content       json.RawMessage
@@ -289,51 +288,17 @@ func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID s
 	var output string
 
 	_ = json.Unmarshal(item.Output, &output)
-	arguments, called := calls[[2]string{conversationID, item.CallID}]
+	_, called := calls[[2]string{conversationID, item.CallID}]
 
-	const success = "queued attachments for final response"
-	if !called || item.Type != "function_call_output" || (output != success && !strings.HasPrefix(output, success+": ")) {
+	ids, queued := strings.CutPrefix(output, "queued attachments for final response: ")
+	if !called || item.Type != "function_call_output" || !queued {
 		return nil, nil
 	}
 
 	var attachments []protocol.OutboundAttachment
 
-	if output != success {
-		for id := range strings.FieldsSeq(strings.TrimPrefix(output, success+": ")) {
-			attachment, err := s.AttachmentMetadata(ctx, conversationID, id, false)
-			if err != nil {
-				return nil, err
-			}
-
-			attachments = append(attachments, attachment)
-		}
-
-		return attachments, nil
-	}
-
-	var input attachFilesInput
-	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
-		return nil, fmt.Errorf("decode historical attachments: %w", err)
-	}
-
-	for i := range input.Attachments {
-		id := fmt.Sprintf("recovered-%x", sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", conversationID, item.CallID, i))))
-
+	for id := range strings.FieldsSeq(ids) {
 		attachment, err := s.AttachmentMetadata(ctx, conversationID, id, false)
-		if errors.Is(err, sql.ErrNoRows) {
-			attachment, err = outboundAttachment(root, &harness.CustomShell{}, &input.Attachments[i])
-			if err != nil {
-				continue
-			}
-
-			attachment.ID, attachment.OriginalUnverified = id, true
-			if err := s.SaveAttachment(ctx, conversationID, "", &attachment, false); err != nil {
-				return nil, err
-			}
-
-			attachment, err = s.AttachmentMetadata(ctx, conversationID, id, false)
-		}
-
 		if err != nil {
 			return nil, err
 		}

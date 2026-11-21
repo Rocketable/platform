@@ -1132,46 +1132,6 @@ VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	assert.Equal(t, []string{`opencode:box:ses_a remote ["billing", "urgent"] Named opencode:box:ses_a`, `web web_chat ["internal"] Named web`}, facts)
 }
 
-func TestOpenCodeMovesOldNamesToTheServer(t *testing.T) {
-	t.Parallel()
-
-	s := newOpenCodeTestService(t, "box")
-	ctx := t.Context()
-	fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "Alpha", "/srv/app", 2000), openCodeTestSession("ses_b", "Beta", "/srv/app", 1000)}}
-	server := httptest.NewServer(fake)
-	t.Cleanup(server.Close)
-
-	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
-
-	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
-
-	names := func() []string {
-		var names []string
-
-		require.NoError(t, readRows(ctx, s.db, `SELECT name || '|' || title FROM conversations WHERE server = 'box' ORDER BY conversation_id`, "read names", func(row rowScanner) error {
-			var name string
-			if err := row.Scan(&name); err != nil {
-				return fmt.Errorf("scan name: %w", err)
-			}
-
-			names = append(names, name)
-
-			return nil
-		}))
-
-		return names
-	}
-
-	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET name = 'old work' WHERE conversation_id = 'opencode:box:ses_b'`)
-	require.NoError(t, err)
-	require.NoError(t, s.pushOpenCodeNames(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "wrong"}))
-	assert.Equal(t, []string{"Alpha|Alpha", "old work|Beta"}, names(), "a refused name stays to move later")
-
-	require.NoError(t, s.pushOpenCodeNames(ctx, "box", box))
-	assert.Equal(t, []string{"Alpha", "old work"}, []string{fake.sessions[0].Title, fake.sessions[1].Title})
-	assert.Equal(t, []string{"Alpha|Alpha", "old work|old work"}, names())
-}
-
 func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
 	t.Parallel()
 

@@ -910,8 +910,7 @@ active tab.
   lost. The server keeps one row per tab and per group. A session's tab is saved
   only while the session exists, and deleting a session removes its tab for
   everyone. Every group holds its place with a hidden tab row whose path is
-  `group:<id>`, which no tab command sees; a group saved before every group
-  had one gets it after its last tab. Groups with no tabs, that row included,
+  `group:<id>`, which no tab command sees. Groups with no tabs, that row included,
   are dropped, except the entry that keeps whether you collapsed Parked. Tabs whose space is gone join the
   first space keeping their group, and tabs whose group is gone leave it. A
   window reloads them when it becomes visible or regains focus: it takes in
@@ -986,9 +985,7 @@ if none was seen. Opening Search again starts an empty tab. The address follows 
 selected tab as `/search?q=…`, omitting an empty query and adding no
 history entries, so it can be copied and shared. Opening such a URL selects a tab
 with the same query, or saves a new one, so Back from a result
-reuses that tab. Older links and saved searches with `agent=` or `room=` filters are
-read once as the query `agent:<value> room:<value> <query>`, quoting values that
-contain spaces, and saved searches are rewritten that way. Cmd/Ctrl+P still opens
+reuses that tab. Cmd/Ctrl+P still opens
 the palette, which lists every conversation. It is the quick look and the
 Search page is the deep dig: the palette matches only the title a row shows (its
 name, else its preview's first line), as it reads on screen, so `**Done.**` matches
@@ -1292,7 +1289,7 @@ History, queued messages, and live replies show attachment names and download
 actions. Raster images have inline previews, including attachment-only replies.
 Files retain their original bytes; previews do not resize or re-encode uploads.
 HTML, SVG, and other active formats download instead of rendering in the app's
-origin. An **Original unverified** label appears when supplied by the backend.
+origin.
 Typing `/` lists commands and the selected agent's allowed skills, and typing
 `/skill` lists only the skills;
 typing a name filters the list, and choosing a skill leaves room for arguments.
