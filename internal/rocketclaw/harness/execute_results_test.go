@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -40,6 +41,36 @@ func TestClipExecuteHead(t *testing.T) {
 	head, oversized = clipExecuteHead(long)
 	require.True(t, oversized)
 	require.Equal(t, long[:executeHeadMaxBytes], head)
+}
+
+func TestExecuteSpillPathRefusesWhatItCannotCheck(t *testing.T) {
+	t.Parallel()
+
+	workspace, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, workspace.Close()) })
+
+	require.NoError(t, workspace.MkdirAll("moved/spill", 0o700))
+	require.NoError(t, workspace.WriteFile("moved/spill/result.txt", []byte("private-result\n"), 0o600))
+	require.NoError(t, workspace.Symlink(filepath.Join(workspace.Name(), "moved"), ".rocketcode"))
+	require.NoError(t, workspace.Symlink(filepath.Join(workspace.Name(), "moved", "spill"), "alias"))
+	require.NoError(t, workspace.Mkdir(".tmp", 0o700))
+
+	_, err = workspace.Stat(defaultSpillRel)
+	require.ErrorContains(t, err, "path escapes from parent")
+
+	sfs := &sandboxedFileSystem{root: workspace, spillRel: defaultSpillRel}
+	require.Equal(t, deniedSpillAccess, sfs.ReadResult("moved/spill/result.txt", 1).Output)
+
+	shellTemp := testShellTempConfig(t, workspace, filepath.Join(workspace.Name(), ".tmp"))
+	sss := newSandboxedShellSystem(workspace, &shellTemp, nil, &sandbox.Runtime{})
+	sss.spillRel = defaultSpillRel
+	got := sss.Bash(t.Context(), &CustomShell{}, bashParams{Command: "cat " + filepath.Join(workspace.Name(), "moved", "spill", "result.txt")})
+	require.Equal(t, deniedSpillAccess, got.Output)
+
+	require.NoError(t, workspace.Remove(".rocketcode"))
+	require.NoError(t, workspace.Rename("moved", ".rocketcode"))
+	require.Equal(t, deniedSpillAccess, sfs.ReadResult("alias/result.txt", 1).Output)
 }
 
 func TestSweepRetainedResults(t *testing.T) {
