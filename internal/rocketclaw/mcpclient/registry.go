@@ -211,15 +211,7 @@ func (s *Session) connect(ctx context.Context, name string) (*mcp.ClientSession,
 
 func childEnv(overrides map[string]string) []string {
 	allow := []string{"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TMP", "TEMP", "USER", "LOGNAME", "SHELL"}
-	parent := map[string]string{}
-
-	for _, entry := range os.Environ() {
-		key, val, ok := strings.Cut(entry, "=")
-		if ok {
-			parent[key] = val
-		}
-	}
-
+	parent := os.Environ()
 	out := make([]string, 0, len(allow)+len(overrides))
 
 	for _, key := range allow {
@@ -229,8 +221,13 @@ func childEnv(overrides map[string]string) []string {
 			continue
 		}
 
-		if val, ok := parent[key]; ok {
-			out = append(out, key+"="+val)
+		prefix := key + "="
+		for _, entry := range slices.Backward(parent) {
+			if strings.HasPrefix(entry, prefix) {
+				out = append(out, entry)
+
+				break
+			}
 		}
 	}
 
