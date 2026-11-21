@@ -33,38 +33,34 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 
 	producers := []string{source}
 	prompt, found := "", before == ""
+	_, suffix, _ := strings.Cut(before, ":")
+	boundary, _ := strconv.Atoi(suffix)
 
 	for index := range history {
 		observed := &history[index]
 		producers = append(producers, cmp.Or(observed.SourceConversationID, source))
 
 		entry := observed.Entry
-		if before != "" {
-			for i, raw := range entry.ReplayInput {
-				if fmt.Sprintf("%d:%d", observed.ID, i) != before {
-					continue
-				}
+		if before != "" && boundary >= 0 && boundary < len(entry.ReplayInput) && before == fmt.Sprintf("%d:%d", observed.ID, boundary) {
+			raw := entry.ReplayInput[boundary]
 
-				items, err := harness.ReplayInputToParams([]json.RawMessage{raw})
-				if err != nil {
-					return "", fmt.Errorf("decode fork boundary: %w", err)
-				}
-
-				role, text, ok, err := ReplayInputMessageRoleText(&items[0], raw)
-				if err != nil {
-					return "", err
-				}
-
-				if !ok || role != "user" {
-					return "", errors.New("fork boundary must be a user message")
-				}
-
-				prompt, found = text, true
-				entry.ReplayInput = entry.ReplayInput[:i]
-				entry.ResponseID, entry.OutputTrace, entry.TokenUsage = "", nil, nil
-
-				break
+			items, err := harness.ReplayInputToParams([]json.RawMessage{raw})
+			if err != nil {
+				return "", fmt.Errorf("decode fork boundary: %w", err)
 			}
+
+			role, text, ok, err := ReplayInputMessageRoleText(&items[0], raw)
+			if err != nil {
+				return "", err
+			}
+
+			if !ok || role != "user" {
+				return "", errors.New("fork boundary must be a user message")
+			}
+
+			prompt, found = text, true
+			entry.ReplayInput = entry.ReplayInput[:boundary]
+			entry.ResponseID, entry.OutputTrace, entry.TokenUsage = "", nil, nil
 		}
 
 		if len(entry.ReplayInput) > 0 {
