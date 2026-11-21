@@ -1310,8 +1310,8 @@ func messageText(message *slack.Message) string {
 			fields = append([]*slack.TextBlockObject{block.Text}, block.Fields...)
 		case *slack.ContextBlock:
 			for _, element := range block.ContextElements.Elements {
-				if text, ok := element.(*slack.TextBlockObject); ok {
-					fields = append(fields, text)
+				if text, ok := element.(*slack.TextBlockObject); ok && text != nil {
+					texts = append(texts, text.Text)
 				}
 			}
 		case *slack.HeaderBlock:
