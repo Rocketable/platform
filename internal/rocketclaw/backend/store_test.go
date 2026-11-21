@@ -1258,47 +1258,28 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		require.NoError(t, reopened.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pending_attachment_deletions`).Scan(&count))
 		require.Zero(t, count, "missing bytes are an idempotent deletion, not a failed retry")
 	})
-	t.Run("S3 original version", func(t *testing.T) {
-		requests := make(chan string, 9)
-
-		firstHead := make(chan struct{}, 1)
-		firstHead <- struct{}{}
+	t.Run("S3 plain delete", func(t *testing.T) {
+		requests := make(chan string, 8)
 
 		firstDelete := make(chan struct{}, 1)
 		firstDelete <- struct{}{}
 
-		gone := make(chan struct{})
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requests <- r.Method
 
-			if r.Method == http.MethodHead {
-				select {
-				case <-firstHead:
-					w.WriteHeader(http.StatusForbidden)
-					return
-				default:
-				}
-
-				select {
-				case <-gone:
-					w.WriteHeader(http.StatusNotFound)
-					return
-				default:
-				}
-
-				w.Header().Set("X-Amz-Version-Id", "original-version")
-			}
-
-			if r.Method == http.MethodDelete {
-				assert.Equal(t, "original-version", r.URL.Query().Get("versionId"), "erase original bytes instead of only creating a delete marker")
+			switch r.Method {
+			case http.MethodPut:
+			case http.MethodDelete:
+				assert.False(t, r.URL.Query().Has("versionId"), "delete the key, not one version")
 
 				select {
 				case <-firstDelete:
 					w.WriteHeader(http.StatusServiceUnavailable)
-					return
 				default:
-					close(gone)
+					w.WriteHeader(http.StatusNoContent)
 				}
+			default:
+				w.WriteHeader(http.StatusForbidden)
 			}
 		}))
 		t.Cleanup(server.Close)
@@ -1308,27 +1289,19 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		_, err := store.DeleteSession(t.Context(), "parent")
 		require.Error(t, err)
 		require.Equal(t, http.MethodPut, <-requests)
-		require.Equal(t, http.MethodHead, <-requests)
+		require.Equal(t, http.MethodDelete, <-requests)
 		pending, err := queryStrings(t.Context(), store.db, `SELECT id FROM pending_attachment_deletions`, "failed S3 deletion")
 		require.NoError(t, err)
-		require.Equal(t, []string{"blob"}, pending, "403 is not proof that the bytes are absent")
-		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0), 0)
-		require.Error(t, err)
-		require.Equal(t, http.MethodHead, <-requests)
-		require.Equal(t, http.MethodDelete, <-requests)
-		pending, err = queryStrings(t.Context(), store.db, `SELECT id FROM pending_attachment_deletions`, "failed S3 version deletion")
-		require.NoError(t, err)
-		require.Equal(t, []string{"blob"}, pending, "a failed permanent deletion keeps ownership")
+		require.Equal(t, []string{"blob"}, pending, "a failed deletion keeps ownership")
 		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0), 0)
 		require.NoError(t, err)
-		require.Equal(t, http.MethodHead, <-requests)
 		require.Equal(t, http.MethodDelete, <-requests)
 		_, err = store.db.ExecContext(t.Context(), `INSERT INTO pending_attachment_deletions (id) VALUES ('blob')`)
 		require.NoError(t, err)
 		_, err = store.PruneStateBefore(t.Context(), time.Unix(0, 0), 0)
-		require.NoError(t, err, "a missing S3 key after permanent version deletion is a completed retry")
-		require.Equal(t, http.MethodHead, <-requests)
-		require.Empty(t, requests, "a 404 must not issue another marker-producing DELETE")
+		require.NoError(t, err, "deleting a missing S3 key succeeds even without permission to see that it is missing")
+		require.Equal(t, http.MethodDelete, <-requests)
+		require.Empty(t, requests)
 		pending, err = queryStrings(t.Context(), store.db, `SELECT id FROM pending_attachment_deletions`, "completed S3 deletion")
 		require.NoError(t, err)
 		require.Empty(t, pending)
