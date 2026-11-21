@@ -1195,13 +1195,16 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
   const reload: { startedMs?: number; committedMs?: number; listingFinishedMs?: number } = {};
   const firstReloadRequests: Record<string, string> = { Identity: "not requested", Protocol: "not requested", Tabs: "not requested", ListSessions: "not requested" };
   const snapshotReads: string[] = [];
+  let renderedAfterReload: string | undefined;
   onTestFinished(() => {
-    if (waitingFor) console.error("Parked test state", JSON.stringify({
-      waitingFor, elapsedMs: elapsed(), reload, firstReloadRequests, snapshotReads, lastRows, lastHeight, savedOrder: fixture?.layout?.order, pollsBeforeReload, polls: fixture?.polls,
-    }));
+    if (waitingFor) {
+      expect({
+        waitingFor, elapsedMs: elapsed(), reload, firstReloadRequests, snapshotReads, renderedAfterReload, lastRows, lastHeight, savedOrder: fixture?.layout?.order, pollsBeforeReload, polls: fixture?.polls,
+      }, `Expected to finish: ${waitingFor}`).toMatchObject({ waitingFor: "" });
+    }
   });
   await withPage({}, async (page, origin, _prompts, saved) => {
-    waitingFor = "open Parked";
+    waitingFor = "load Alpha";
     fixture = saved;
     saved.spaces.push({ id: "ops", name: "Ops" });
     saved.state = { ...saved.state, space: "main", tabs: [...["alpha", "foxtrot", "bravo", "charlie", "delta"].map((id) => ({ path: href(id), space: "main" })), { path: href("echo"), space: "ops" }] };
@@ -1215,7 +1218,9 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
       await parked.getByRole("tab").nth(ids.indexOf("delta")).filter({ hasText: "Delta" }).waitFor();
     };
     await page.goto(`${origin}${href("alpha")}`);
+    waitingFor = "open Parked";
     await page.getByRole("button", { name: "Parked", exact: true }).click();
+    waitingFor = "show Echo";
     await row("Echo").waitFor();
     expect(await rows()).toEqual(["Bravo", "Charlie", "Delta", "Echo"]);
 
@@ -1271,8 +1276,23 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
     page.on("console", (message: { text(): string }) => {
       const text = message.text(), prefix = "parked-snapshot ";
       if (text.startsWith(prefix)) snapshotReads.push(text.slice(prefix.length));
+      if (text.startsWith("parked-render ")) renderedAfterReload = text.slice("parked-render ".length);
     });
     await page.addInitScript(() => {
+      let lastRender: string | undefined;
+      const observeParked = () => {
+        const list = document.querySelector('#tab-sidebar [role="tablist"][aria-label="Parked tabs"]');
+        const state = list ? {
+          expanded: list.parentElement?.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded"),
+          rows: Array.from(list.querySelectorAll('[role="tab"]'), (row) => row.getAttribute("aria-label")),
+        } : "no Parked panel";
+        const render = JSON.stringify(state);
+        if (render === lastRender) return;
+        lastRender = render;
+        console.debug(`parked-render ${Math.round(performance.now())}ms after navigation: ${render}`);
+      };
+      new MutationObserver(observeParked).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-label", "aria-expanded"] });
+      observeParked();
       const dbName = "rocketclaw-session-list-v2";
       const trace = (event: string) => console.debug(`parked-snapshot ${Math.round(performance.now())}ms after navigation: ${event}`);
       const open = IDBFactory.prototype.open;
