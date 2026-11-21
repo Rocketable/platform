@@ -1379,9 +1379,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 
 	response := &ListAgentsResponse{}
 
-	allowed := slices.DeleteFunc(definitions.PrimaryNames(), func(name string) bool {
-		return id == "" && definitions.Items[name].Sticky == harness.AgentStickySlack
-	})
+	allowed := definitions.PrimaryNames()
 
 	if id != "" {
 		if err := s.visibleConversation(ctx, id); err != nil {
@@ -1411,7 +1409,9 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 		}
 	}
 
-	allowed = sameSpace(definitions, response.CurrentAgent, slices.DeleteFunc(allowed, func(name string) bool { return !limit.AllowsAgent(name) }))
+	allowed = sameSpace(definitions, response.CurrentAgent, slices.DeleteFunc(allowed, func(name string) bool {
+		return id == "" && definitions.Items[name].Sticky == harness.AgentStickySlack || !limit.AllowsAgent(name)
+	}))
 	cfg := s.cfg.Clone()
 
 	sticky, err := s.sessions.StickySessions(ctx, username, definitions)
