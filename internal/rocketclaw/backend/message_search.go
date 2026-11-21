@@ -43,10 +43,10 @@ func messageSearchText(ctx context.Context, db stateStoreDB, producer string, re
 			continue
 		}
 
-		shown := []string{text}
+		parts := []struct{ Type, Text string }{{Type: "output_text", Text: text}}
 
 		if role == "user" {
-			shown[0], _, err = inputAttachmentsDB(ctx, db, producer, text)
+			parts[0].Text, _, err = inputAttachmentsDB(ctx, db, producer, text)
 			if err != nil {
 				return "", nil, err
 			}
@@ -60,21 +60,19 @@ func messageSearchText(ctx context.Context, db stateStoreDB, producer string, re
 			}
 
 			if identity.ID != "" && len(identity.Content) > 0 && identity.Content[0] == '[' {
-				var content []struct{ Type, Text string }
-				if err := json.Unmarshal(identity.Content, &content); err != nil {
+				parts = nil
+				if err := json.Unmarshal(identity.Content, &parts); err != nil {
 					return "", nil, &harness.ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Cause: fmt.Errorf("decode message search output text: %w", err)}
-				}
-
-				shown = make([]string, len(content))
-				for part := range content {
-					if content[part].Type == "output_text" {
-						shown[part] = strings.ReplaceAll(content[part].Text, "\x00", "")
-					}
 				}
 			}
 		}
 
-		for part, text := range shown {
+		for part, content := range parts {
+			if content.Type != "output_text" {
+				continue
+			}
+
+			text := strings.ReplaceAll(content.Text, "\x00", "")
 			if strings.TrimSpace(text) != "" || principal != "" {
 				lines = append(lines, fmt.Sprintf("%d %d %s", i, part, searchJSON([4]string{role, principal, text, strings.ToLower(text)})))
 			}
