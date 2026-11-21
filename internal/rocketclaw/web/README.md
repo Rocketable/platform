@@ -281,9 +281,9 @@ after it, and replaces that session's composer text and files with the request.
 It sends nothing and keeps the current agent and submitting identity.
 `/undo` (also in the command palette) moves to the previous recorded request;
 repeated Undo can leave an empty conversation. **Redo** or `/redo` restores the
-whole hidden suffix without changing the composer. While history is reverted, a
-[Checkpoint](https://ui.shadcn.com/docs/ai-elements/base/checkpoint) divider below
-the last kept turn says so and offers **Redo**.
+whole hidden suffix without changing the composer. The command palette lists Redo
+as **Redo history** only while history is reverted; the transcript shows no marker
+for it.
 
 The cutoff survives reload and daemon restart. Waiting human work stays stored
 but hidden until Redo, which restores its order. Sending a new prompt—including
@@ -907,7 +907,7 @@ desktop uses 32px targets and 4px gaps. Screens narrower than 22rem keep 48px
 targets but tighten gaps and side padding to 4px. Icons are 24px in all layouts.
 The sidebar toggle sits at the bar's left end and the right pane toggle at its right end;
 between them, centered, are New session, Search sessions and commands, Voice, and
-Copy page link.
+Next session needing you (the inbox button).
 When remote RocketClaws or OpenCode servers are configured, New session opens a
 menu of where to start one, with the page's own server highlighted so Enter starts
 it there. The menu names the local server by the first label of the page's host
@@ -1161,6 +1161,23 @@ it was used, with its attachments. Identical texts remain separate inputs, track
 by durable input ID. Queue promotion keeps the server queue ID and follows the
 same consumption rule. Replacing the active turn includes each consumed steer
 without repeating the earlier response.
+**Pause agent**, the pause button beside Send (hidden while Steer shows) or the
+command palette's **Pause agent**, pauses the agent of a session a person started
+in the Web with nothing reporting into it, for everyone in the session. The
+session's history records who paused it, and its row shows a pause icon. A running
+turn is not stopped, but nothing more steers into it. While paused, Send becomes
+**Send to the people here**: the message is added to the chat at once and starts
+no turn, and the agent later reads it as people talking to each other, not as a
+request. A pending question is answered only from its card. Queued work, including
+stashed rows you pop, waits for the agent to be resumed: a queued row's Send or
+Steer is disabled, with the tooltip **Runs after the agent is resumed**. Starting a `/goal` or a voice request to the agent is refused,
+and an active goal stops continuing. Other requests no person sent, such as
+another agent's message or a one-off scheduled message, are refused; a repeating
+scheduled message waits. Press the button again, or **Resume agent** in the
+palette, to resume: the history records who resumed it, a goal that stopped
+continuing continues if nothing is running, and queued work runs. Pausing or
+resuming while history is reverted settles it as sending does, so Redo is no
+longer available. A fork of a paused session starts resumed.
 Use **Composer actions (…) → Stash** to save the draft and its attachments without sending, whether the
 chat is idle or busy. Press **⌘ Option Enter** on macOS or **Ctrl Alt Enter** on
 Windows/Linux to stash, including when command suggestions are open.
@@ -1319,7 +1336,8 @@ never heard the stop: its stream was full, or it opened after the stop arrived.
 
 The session age stays visible beside the agent; hover it for the exact
 last-update date and time in your local time zone.
-Use the rename icon in the chat to set an optional name. Chat action
+Use **Rename session** in the **Page actions** menu (the **…** beside the chat's title)
+to set an optional name. Chat action
 buttons have descriptive tooltips. Add files sits at the far left, before the agent
 selector. On mobile, these and the session actions sit above Steer and Send. The name
 replaces the session row's last-message preview without changing the messages; both
@@ -1369,10 +1387,10 @@ execution finishes, then opens the resulting chat.
 Each turn shows its activity and replies in the order they happened. How much
 activity appears is the browser's **Timeline detail** setting (see Config). Activity
 falls into six categories: Execute (`execute` calls), Thinking (reasoning summaries),
-Subagents (`task`), Skills (`skill` with its loaded instructions), Notices (developer
+Subagents (`task`), Skills (`skill` with its loaded instructions), Instructions (developer
 messages), and Other tools. Each category is shown on its own, grouped, or hidden.
 Neighbouring grouped items of any category merge into one closed summary row such as
-"Used 3 tools", "Thoughts", or "Updates"; a reply or a separately shown item ends the
+"Used 3 tools", "Thoughts", or "Instructions"; a reply or a separately shown item ends the
 row. Collapse decides whether Execute calls and reasoning start open; a summary row
 of only reasoning shows the reasoning text itself when opened. Opening or
 closing an item survives live updates of the same turn. Replies always appear. A
