@@ -1,0 +1,130 @@
+name: unsharded experiment
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  ROCKETCLAW_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/rocketclaw_test?sslmode=disable
+
+jobs:
+  rocketclaw:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        parallel: [4, 16, 32]
+    steps:
+      - name: Start PostgreSQL
+        run: >-
+          nohup docker run -d --name postgres -p 5432:5432
+          -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rocketclaw_test
+          postgres:18 > "$RUNNER_TEMP/postgres.log" 2>&1 &
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/go-build
+          key: go-rocketclaw-${{ github.sha }}
+          restore-keys: go-rocketclaw-
+      - name: Install ripgrep
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/rg.tar.gz" https://github.com/BurntSushi/ripgrep/releases/download/14.1.0/ripgrep-14.1.0-x86_64-unknown-linux-musl.tar.gz
+          echo "f84757b07f425fe5cf11d87df6644691c644a5cd2348a2c670894272999d3ba7  $RUNNER_TEMP/rg.tar.gz" | sha256sum -c -
+          sudo tar -xzf "$RUNNER_TEMP/rg.tar.gz" -C /usr/local/bin --strip-components 1 ripgrep-14.1.0-x86_64-unknown-linux-musl/rg
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/cache@v6
+        with:
+          path: internal/rocketclaw/web/node_modules
+          key: node-modules-${{ hashFiles('internal/rocketclaw/web/bun.lock') }}
+      - run: bun install --frozen-lockfile
+        working-directory: internal/rocketclaw/web
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/playwright-core
+          key: playwright-1.63.0-no-shell
+      - name: Install Playwright and Chromium for browser tests
+        run: |
+          dir="$HOME/.cache/playwright-core"
+          [ -d "$dir/node_modules/playwright-core" ] || (mkdir -p "$dir" && cd "$dir" && bun add playwright-core@1.63.0)
+          cd "$dir"
+          ./node_modules/.bin/playwright-core install --no-shell chromium
+          echo "ROCKETCLAW_PLAYWRIGHT_MODULE=$dir/node_modules/playwright-core" >> "$GITHUB_ENV"
+          echo "ROCKETCLAW_CHROMIUM=$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')" >> "$GITHUB_ENV"
+      - name: Wait for PostgreSQL
+        timeout-minutes: 2
+        run: until docker exec postgres pg_isready -h 127.0.0.1 -U postgres -d rocketclaw_test; do sleep 1; done
+      - name: Whole suite
+        working-directory: internal/rocketclaw
+        run: |
+          nohup vmstat -n 2 > "$RUNNER_TEMP/vmstat.log" 2>&1 &
+          started=$(date +%s)
+          set +e
+          go test -race -count 1 -covermode=atomic -coverpkg=github.com/Rocketable/platform/cmd/rocketclaw,./... -coverprofile=coverage.out -parallel ${{ matrix.parallel }} github.com/Rocketable/platform/cmd/rocketclaw/... ./... 2>&1 | tee "$RUNNER_TEMP/test.log" | grep -E '^(ok|FAIL|---|panic)'
+          status=${PIPESTATUS[0]}
+          echo "WALL_SECONDS=$(( $(date +%s) - started ))"
+          exit $status
+      - name: CPU use during the suite
+        if: always()
+        run: |
+          awk 'NR > 2 { n++; us += $13; sy += $14; id += $15; wa += $16; if ($1 > rmax) rmax = $1 } END { printf "samples=%d user=%.0f%% sys=%.0f%% idle=%.0f%% iowait=%.0f%% max_runnable=%d\n", n, us/n, sy/n, id/n, wa/n, rmax }' "$RUNNER_TEMP/vmstat.log"
+          grep -E '^ok' "$RUNNER_TEMP/test.log" | sort -k3 -t$'\t' | awk '{ print $3, $2 }' | sort -rn | head -6
+
+  web:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        processes: [2, 4, 6]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/cache@v6
+        with:
+          path: internal/rocketclaw/web/node_modules
+          key: node-modules-${{ hashFiles('internal/rocketclaw/web/bun.lock') }}
+      - run: bun install --frozen-lockfile
+        working-directory: internal/rocketclaw/web
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/playwright-core
+          key: playwright-1.63.0-no-shell
+      - name: Install Playwright and Chromium for browser tests
+        run: |
+          dir="$HOME/.cache/playwright-core"
+          [ -d "$dir/node_modules/playwright-core" ] || (mkdir -p "$dir" && cd "$dir" && bun add playwright-core@1.63.0)
+          cd "$dir"
+          ./node_modules/.bin/playwright-core install --no-shell chromium
+          echo "ROCKETCLAW_PLAYWRIGHT_MODULE=$dir/node_modules/playwright-core" >> "$GITHUB_ENV"
+          echo "ROCKETCLAW_CHROMIUM=$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')" >> "$GITHUB_ENV"
+      - name: All web tests
+        working-directory: internal/rocketclaw/web
+        run: |
+          nohup vmstat -n 2 > "$RUNNER_TEMP/vmstat.log" 2>&1 &
+          started=$(date +%s)
+          set +e
+          find src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" |
+            awk 'NR == FNR { seconds[$2] = $1; next } { w = $0 in seconds ? seconds[$0] : 1; print w, $0 }' ../../../.github/web-test-seconds.tsv - |
+            sort -k1,1nr -k2,2 | awk '{ print $2 }' |
+            xargs -n 1 -P ${{ matrix.processes }} bun test > "$RUNNER_TEMP/test.log" 2>&1
+          status=$?
+          echo "WALL_SECONDS=$(( $(date +%s) - started ))"
+          grep -cE '^\(pass\)' "$RUNNER_TEMP/test.log" | sed 's/^/passed=/'
+          grep -E '^\(fail\)' "$RUNNER_TEMP/test.log" | cut -c1-160
+          exit $status
+      - name: CPU use during the suite
+        if: always()
+        run: awk 'NR > 2 { n++; us += $13; sy += $14; id += $15; wa += $16; if ($1 > rmax) rmax = $1 } END { printf "samples=%d user=%.0f%% sys=%.0f%% idle=%.0f%% iowait=%.0f%% max_runnable=%d\n", n, us/n, sy/n, id/n, wa/n, rmax }' "$RUNNER_TEMP/vmstat.log"
