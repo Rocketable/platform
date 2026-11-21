@@ -31,7 +31,6 @@ type toolFactory struct {
 	autoApproverDecisionModel string
 	autoApproverMinConfidence float64
 	deciders                  map[string]Decider
-	reasoningEffort           shared.ReasoningEffort
 	parallelToolCalls         int
 	expandPromptShellCommands PromptShellCommandExpansion
 	promptExpansion           promptExpansionEnvironment
@@ -205,7 +204,7 @@ func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, err
 		Client:             responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}},
 		SystemPrompt:       withCodeModeSystemPrompt(composeSystemPromptWithSkills(systemPrompt, f.skills, agent), modelTools, codeHosts, mcpServers),
 		DisplayModel:       origin.displayModel(),
-		ReasoningEffort:    shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
+		ReasoningEffort:    shared.ReasoningEffort(agent.ReasoningEffort),
 		Verbosity:          agent.Verbosity,
 		CompactThreshold:   cmp.Or(origin.CompactThreshold, defaultCompactThreshold),
 		ParallelToolCalls:  f.parallelToolCalls,

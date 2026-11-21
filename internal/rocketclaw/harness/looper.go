@@ -1733,9 +1733,7 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 		params.Instructions = openai.String(l.SystemPrompt)
 	}
 
-	if l.ReasoningEffort != "" {
-		params.Reasoning = shared.ReasoningParam{Effort: l.ReasoningEffort, Summary: shared.ReasoningSummaryAuto}
-	}
+	params.Reasoning = shared.ReasoningParam{Effort: l.ReasoningEffort, Summary: shared.ReasoningSummaryAuto}
 
 	if l.Verbosity != "" || l.ResponseFormat.GetType() != nil {
 		params.Text = responses.ResponseTextConfigParam{Verbosity: responses.ResponseTextConfigVerbosity(l.Verbosity), Format: l.ResponseFormat}
