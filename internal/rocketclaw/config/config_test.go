@@ -204,8 +204,7 @@ func TestLoadPreservesNamedProviders(t *testing.T) {
 	  "openai": {"api_key": "default-key"},
 	  "providers": {
 	    "work": {"api_key": "work-key", "api_base_url": "https://work.example/v1"},
-	    "chat": {"rocketcode_auth": " chatgpt "},
-	    "renamed": {"auth": "chatgpt", "rocketcode_auth": "api_key"}
+	    "chat": {"auth": " chatgpt "}
 	  },
 	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}
 	}`)
@@ -225,10 +224,6 @@ func TestLoadPreservesNamedProviders(t *testing.T) {
 	provider, ok = cfg.Provider("chat")
 	require.True(t, ok)
 	assert.Equal(t, "chatgpt", provider.Auth)
-
-	provider, ok = cfg.Provider("renamed")
-	require.True(t, ok)
-	assert.Equal(t, OpenAIConfig{Auth: "chatgpt"}, provider)
 
 	_, ok = cfg.Provider("missing")
 	assert.False(t, ok)

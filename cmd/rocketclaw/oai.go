@@ -240,7 +240,6 @@ func saveOAILogin(configPath, workspace, runtimeDir, provider string, createSect
 		return fmt.Errorf("provider %q is no longer configured", provider)
 	}
 	target["auth"] = json.RawMessage(`"chatgpt"`)
-	delete(target, "rocketcode_auth")
 	container[key], _ = json.Marshal(target)
 	if provider != "openai" {
 		root["providers"], _ = json.Marshal(container)

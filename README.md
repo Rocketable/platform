@@ -619,7 +619,7 @@ The guardian, the built-in reviewer that `auto` permissions and `sudo` agents se
 
 Set `prompt_cache_markers_relative_position` (a negative number) only on a provider that accepts Anthropic `cache_control` markers, such as CLIProxyAPI in front of Claude. RocketClaw then marks one text piece of the last request message, counted from the end: `-2` marks the piece before the last. Automatic permission reviews send the planned action as the last piece, so `-2` lets the next review reuse the cached transcript. Leave it unset for OpenAI and other providers that reject unknown fields.
 
-`auth` sets how a provider signs in: `api_key` (the default) uses `api_key`, and `chatgpt` uses a ChatGPT login. The older name `rocketcode_auth` still works; `auth` wins when both are set.
+`auth` sets how a provider signs in: `api_key` (the default) uses `api_key`, and `chatgpt` uses a ChatGPT login.
 
 Sign in per provider with `rocketclaw oai login [provider] [--headless]`. It sets that provider's `auth` to `chatgpt` in the config file, so you do not write `auth` yourself: a named provider needs only an entry such as `"providers": {"work": {}}`, and the default `openai` provider needs none. The command checks only that the provider exists, not the settings the server needs, such as `database_url`. If RocketClaw is running with another `auth` for that provider, restart it afterwards. Use `rocketclaw oai list` to see sign-ins and `rocketclaw oai logout [provider]` to remove one. Credentials are normally saved in `.rocketclaw/auth.json`.
 
