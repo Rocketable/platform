@@ -190,6 +190,13 @@ The Agents page has **Create New Agent** and, on each agent, **Edit**, which
 reopens the newest draft of that agent still in editing, or else starts one as a
 copy. People limited to spaces do not see either button.
 
+Each agent's summary line ends with its origin: `built-in`, the overlay's spec
+from `overlays`, or `workspace`, the highest layer that holds its file. A file
+identical to the one in the layer below counts as that lower layer, so an
+unchanged copy of a built-in agent in workspace `agents/` reads `built-in`.
+Opening an agent shows its custom shell when it has one, its permission rules
+written the way its instructions list them, and its prompt.
+
 The page is a workbench: settings on the left, the test chat in the middle, and
 the assistant on the right, under a header with the draft's save state, **Save…**,
 **Easy** and **Advanced**, **Drafts**, the people who have the draft open, and
@@ -420,7 +427,8 @@ Tailscale user login. Browsers are admitted by their Tailscale login, which the
 `web.tsnet` node looks up for each connection; it refuses tagged or unknown devices.
 New messages use `UserProfile.DisplayName`, falling back to the admitted login
 when the display name is missing or blank. Ownership, routing, and Config's
-Tailscale display remain login-based.
+Tailscale display remain login-based. Its Flags section shows **PostHog**, On
+when the server has a PostHog project token, and **External MCP**.
 
 Users named in the config file's `web.admins`, unless limited to spaces, also
 get a **Behavior settings** section on the Config page. **Edit** shows one control per Behavior Setting

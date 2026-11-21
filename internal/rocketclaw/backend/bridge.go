@@ -3540,7 +3540,7 @@ func parseDirectSkillTrigger(text string) *harness.PromptInputDirectSkill {
 	plainIfUnknown := true
 
 	switch strings.ToLower(name) {
-	case "", "agent", "cron", "stop", "enqueue", "queue", "goal":
+	case "", "agent", "stop", "enqueue", "goal":
 		return nil
 	case "skill":
 		name, arguments = splitFirstWord(arguments)

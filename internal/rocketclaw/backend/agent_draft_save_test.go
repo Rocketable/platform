@@ -427,6 +427,23 @@ func TestAgentDraftLayers(t *testing.T) {
 	writeAgentFile(t, team, "triage", "team triage")
 	writeAgentFile(t, workspace, "triage", "ours")
 	writeAgentFile(t, workspace, "main", *builtin)
+	writeAgentFile(t, team, "shared", "team shared")
+	writeAgentFile(t, workspace, "shared", "team shared")
+
+	origins := func() map[string]string {
+		got := map[string]string{}
+
+		for _, name := range []string{"triage", "main", "shared", "missing"} {
+			origin, err := store.AgentOrigin(name)
+			require.NoError(t, err)
+
+			got[name] = origin
+		}
+
+		return got
+	}
+
+	require.Equal(t, map[string]string{"triage": "workspace", "main": "built-in", "shared": overlays[0], "missing": ""}, origins(), "an identical copy comes from the layer it copies")
 
 	type flags struct {
 		hiddenBy, replaces string
@@ -463,6 +480,7 @@ func TestAgentDraftLayers(t *testing.T) {
 
 	_, got = layers("main", "workspace")
 	require.Equal(t, flags{}, got)
+	require.Equal(t, "workspace", origins()["main"])
 
 	draft, err := store.CreateAgentDraft(t.Context(), "alice", AgentDraftOrigin{Name: "main", Mode: harness.AgentModeAdvanced})
 	require.NoError(t, err)

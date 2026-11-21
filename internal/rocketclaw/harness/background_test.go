@@ -96,7 +96,7 @@ func TestSudoAgentSeesEveryTool(t *testing.T) {
 	require.Subset(t, slices.Collect(maps.Keys(hosts)), []string{"bash", "read"})
 	require.Contains(t, model[executeToolName].Definition.Parameters["properties"], "background")
 	require.Contains(t, model["task"].Definition.Description.Value, "child")
-	require.Contains(t, permissionPrompt(agent.Permission), "## Sudo Mode")
+	require.Contains(t, PermissionPrompt(agent.Permission), "## Sudo Mode")
 }
 
 func TestBackgroundRequestsRejectedWhenNotOffered(t *testing.T) {

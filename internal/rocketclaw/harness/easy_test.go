@@ -267,7 +267,7 @@ func TestEasyAgentPermissions(t *testing.T) {
 
 	require.ElementsMatch(t, []string{"skill *", "task main"}, allowed)
 	require.Empty(t, visibleMCPServers(agent.Permission, []string{"s", "t"}))
-	require.NotContains(t, permissionPrompt(agent.Permission), "Sudo Mode")
+	require.NotContains(t, PermissionPrompt(agent.Permission), "Sudo Mode")
 
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": agent}})
 	model, hosts := factory.assembleTools(&agent)

@@ -223,9 +223,9 @@ export async function appScenario(part: "lists" | "composer") {
             return historyResponse(input.id, [{ role: "assistant", text: "Daily run report", complete: true, turnId: "", entryKey: "daily", itemId: "daily:0", inputId: "" }], "", input.revision);
           }
           return historyResponse(input.id, ctrl.history, "", input.revision);
-        case "/api/ListAgents": return Response.json({ agents: input.conversationId === "web:cron:silent-source" ? [{ name: "other", model: "gpt" }] : [{ name: "other", model: "gpt", customShell: "/usr/local/bin/agent-sandbox" }, { name: "main", model: "gpt" }], currentAgent: input.conversationId ? ctrl.currentAgents.get(input.conversationId) ?? "main" : "" });
+        case "/api/ListAgents": return Response.json({ agents: input.conversationId === "web:cron:silent-source" ? [{ name: "other", model: "gpt" }] : [{ name: "other", model: "gpt", customShell: "/usr/local/bin/agent-sandbox", permissions: "## Bash Permissions\n\n- Deny `*`.", origin: "workspace" }, { name: "main", model: "gpt" }], currentAgent: input.conversationId ? ctrl.currentAgents.get(input.conversationId) ?? "main" : "" });
         case "/api/ListSkills": return Response.json({ skills: input.agent === "main" ? [{ name: "review", description: "Review changes" }, { name: "stop", description: "Inspect logs" }] : input.agent ? [] : [{ name: "release", description: "Ship a release", content: "release steps" }] });
-        case "/api/ListConfig": return Response.json({ config: { tailscaleUser: "connected@example.com" } });
+        case "/api/ListConfig": return Response.json({ config: { tailscaleUser: "connected@example.com", instrumentationEnabled: true } });
         case "/api/UpdateSession":
           if (ctrl.updateError) throw new RPCError("Could not save session", 13);
           if (!ctrl.rows.some((session) => session.id === input.id)) return Response.json({});
@@ -565,6 +565,8 @@ export async function appScenario(part: "lists" | "composer") {
       await page.waitForURL("**/agents");
       await page.getByRole("button", { name: /^other/ }).click();
       expect(await page.getByRole("heading", { name: "Shell" }).locator("..").getByText("/usr/local/bin/agent-sandbox").textContent()).toBe("/usr/local/bin/agent-sandbox");
+      expect(await page.getByRole("heading", { name: "Permissions" }).locator("..").locator("pre").textContent()).toBe("## Bash Permissions\n\n- Deny `*`.");
+      await page.getByText("gpt · workspace", { exact: true }).waitFor();
       await page.goBack();
       await page.waitForURL(origin + "/");
       expect(await skillComposer.inputValue()).toBe("retained through browser history");
@@ -1387,6 +1389,7 @@ export async function appScenario(part: "lists" | "composer") {
       await navPage.waitForURL(`${origin}/config`);
       await shown(navPage.locator("main"), "Configured user");
       await shown(navPage.locator("main"), "connected@example.com");
+      expect(await navPage.locator("main").getByText("PostHog", { exact: true }).locator("..").textContent()).toBe("PostHogOn");
       await navPage.keyboard.press("Escape");
       await closed("Config");
       const chatPath = `/s/${Buffer.from("slack-thread:C:active").toString("base64url")}`;

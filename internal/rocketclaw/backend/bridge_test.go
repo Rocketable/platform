@@ -1775,7 +1775,7 @@ func TestParseDirectSkillTrigger(t *testing.T) {
 		assert.Nil(t, parseDirectSkillTrigger(text), text)
 	}
 
-	for _, name := range []string{"", "agent", "cron", "stop", "enqueue", "queue", "goal"} {
+	for _, name := range []string{"", "agent", "stop", "enqueue", "goal"} {
 		assert.Nil(t, parseDirectSkillTrigger("/"+name))
 		assert.Equal(t, &harness.PromptInputDirectSkill{Name: name, Arguments: ""}, parseDirectSkillTrigger("/skill "+name))
 	}

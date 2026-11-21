@@ -69,20 +69,10 @@ func (s *SessionService) AgentDraftLayers(ctx context.Context, id, variant, dest
 		return nil, &AgentDraftOpError{Problem: "That variant does not exist."}
 	}
 
-	_, bases, err := s.agentLayerFiles(draft.Name)
+	layers, overlays, err := s.agentLayers(draft.Name)
 	if err != nil {
 		return nil, err
 	}
-
-	cfg := s.definitions.Clone()
-	layers := []AgentLayer{{Layer: agentDraftBuiltinLayer, File: skel.BuiltinAgent(draft.Name)}}
-	overlays := skel.OverlayInfos(cfg.RuntimeDirName(), cfg.Overlays)
-
-	for _, overlay := range overlays {
-		layers = append(layers, AgentLayer{Layer: overlay.Spec, Ref: overlay.Ref, File: bases[overlay.Spec]})
-	}
-
-	layers = append(layers, AgentLayer{Layer: agentDraftWorkspaceLayer, File: bases[agentDraftWorkspaceLayer]})
 
 	at := slices.IndexFunc(layers[1:], func(layer AgentLayer) bool { return layer.Layer == destination }) + 1
 	if at == 0 {
@@ -114,6 +104,40 @@ func (s *SessionService) AgentDraftLayers(ctx context.Context, id, variant, dest
 	}
 
 	return report, nil
+}
+
+func (s *SessionService) AgentOrigin(name string) (string, error) {
+	layers, _, err := s.agentLayers(name)
+	if err != nil {
+		return "", err
+	}
+
+	var origin AgentLayer
+
+	for _, layer := range layers {
+		if layer.File != nil && !sameAgentFile(layer.File, origin.File) {
+			origin = layer
+		}
+	}
+
+	return origin.Layer, nil
+}
+
+func (s *SessionService) agentLayers(name string) ([]AgentLayer, []skel.OverlayInfo, error) {
+	_, bases, err := s.agentLayerFiles(name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	cfg := s.definitions.Clone()
+	layers := []AgentLayer{{Layer: agentDraftBuiltinLayer, File: skel.BuiltinAgent(name)}}
+	overlays := skel.OverlayInfos(cfg.RuntimeDirName(), cfg.Overlays)
+
+	for _, overlay := range overlays {
+		layers = append(layers, AgentLayer{Layer: overlay.Spec, Ref: overlay.Ref, File: bases[overlay.Spec]})
+	}
+
+	return append(layers, AgentLayer{Layer: agentDraftWorkspaceLayer, File: bases[agentDraftWorkspaceLayer]}), overlays, nil
 }
 
 func (s *SessionService) SaveAgentDraft(ctx context.Context, rt agentDraftRuntime, save *AgentDraftSave) (AgentDraftSaveState, error) {

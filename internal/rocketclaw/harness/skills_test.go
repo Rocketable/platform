@@ -278,12 +278,12 @@ func TestSkillsAvailable(t *testing.T) {
 
 func TestPermissionPrompt(t *testing.T) {
 	t.Run("escapes rule patterns and reviewer names", func(t *testing.T) {
-		prompt := permissionPrompt(PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy\r\n`tag`\\", Action: permissionAuto, Reviewer: "review\r\n`agent`\\"}}}}})
+		prompt := PermissionPrompt(PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy\r\n`tag`\\", Action: permissionAuto, Reviewer: "review\r\n`agent`\\"}}}}})
 		require.Contains(t, prompt, "- Require automatic approval by `review  \\`agent\\`\\` for `deploy  \\`tag\\`\\`.")
 	})
 	t.Run("omits generated session tag authority", func(t *testing.T) {
 		permissions := parsePermissionYAML(t, "rocketclaw_tags: {rocketclaw_set_tag: deny, rocketclaw_get_tags: allow}\nread: {README.md: allow}")
-		prompt := permissionPrompt(permissions)
+		prompt := PermissionPrompt(permissions)
 		require.NotContains(t, prompt, "rocketclaw_set_tag")
 		require.NotContains(t, prompt, "rocketclaw_get_tags")
 		require.Contains(t, prompt, "README.md")
@@ -322,7 +322,7 @@ func TestPermissionPrompt(t *testing.T) {
 	})
 
 	t.Run("renders rule exceptions and sudo MCP limits", func(t *testing.T) {
-		prompt := permissionPrompt(PermissionSet{Sudo: true, Buckets: []PermissionBucket{{Name: "mcp", Rules: []PermissionRule{
+		prompt := PermissionPrompt(PermissionSet{Sudo: true, Buckets: []PermissionBucket{{Name: "mcp", Rules: []PermissionRule{
 			{Pattern: "*", Action: permissionDeny},
 			{Pattern: "s.*", Action: permissionAuto, Except: []string{"s.delete_*", "s.get_secret"}},
 		}}}})
@@ -332,7 +332,7 @@ func TestPermissionPrompt(t *testing.T) {
 
 	t.Run("preserves deny then allow exception", func(t *testing.T) {
 		permissions := parsePermissionYAML(t, "edit: {'*': allow, '.tmp/*': deny, '.tmp/banana/note.txt': allow}\nbash: deny")
-		prompt := permissionPrompt(permissions)
+		prompt := PermissionPrompt(permissions)
 		require.Contains(t, prompt, "## Edit Permissions\n\nRules are listed in order. The last matching rule wins.\n\n- Allow `*`.\n- Deny `.tmp/*`.\n- Allow `.tmp/banana/note.txt`.")
 		require.Contains(t, prompt, "## Bash Permissions\n\nRules are listed in order. The last matching rule wins.\n\n- Deny `*`.")
 	})

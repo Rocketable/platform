@@ -153,12 +153,10 @@ const slashCommands = [
   { name: "redo", label: "Redo history", hint: "", desc: "Restore the entire hidden conversation" },
   { name: "goal", label: "Start goal", hint: "<objective>", desc: "Start a goal loop" },
   { name: "stop", label: "Stop turn", hint: "", desc: "End the active turn" },
-  { name: "cron", label: "Run cron", hint: "[job]", desc: "List or run a cron job" },
   { name: "agent", label: "Choose agent", hint: "[name]", desc: "List or switch agent" },
   { name: "enqueue", label: "Enqueue work", hint: "<text>", desc: "Queue work to run automatically" },
   { name: "stash", label: "Stash work", hint: "<text>", desc: "Hold work until explicitly sent" },
   { name: "steer", label: "Steer turn", hint: "<text>", desc: "Send now or guide the active turn" },
-  { name: "queue", hint: "", desc: "List pending steers and later work" },
   { name: "skill", label: "Invoke skill", hint: "<name> [args]", desc: "Invoke a skill by name" },
 ];
 
@@ -2923,7 +2921,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
   const draft = drafts.get(id);
-  const commands = id ? slashCommands.filter(({ name }) => name !== "cron" && name !== "queue" && (name !== "undo" || draft?.revertEligible && (draft.canUndo || !draft.revertMessageId && !!unsavedRequest(draft.lines))) && (name !== "redo" || draft?.revertEligible && draft.revertMessageId) && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: ["fork", "handoff", "stop", "agent"].includes(name) ? `Sessions: ${label}` : `Command: ${label} (/${name})`, disabled: [!draft?.hydrated, draft?.sending, draft?.reverting].some(Boolean), run: () => {
+  const commands = id ? slashCommands.filter(({ name }) => (name !== "undo" || draft?.revertEligible && (draft.canUndo || !draft.revertMessageId && !!unsavedRequest(draft.lines))) && (name !== "redo" || draft?.revertEligible && draft.revertMessageId) && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: ["fork", "handoff", "stop", "agent"].includes(name) ? `Sessions: ${label}` : `Command: ${label} (/${name})`, disabled: [!draft?.hydrated, draft?.sending, draft?.reverting].some(Boolean), run: () => {
     if (name === "fork" || name === "handoff") setCommand({ mode: name, source: id });
     else composer.current!(name);
   } })) : [];
@@ -6439,7 +6437,7 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
           <ConfigList items={servers} empty="No servers" />
         </ConfigSection>
         <ConfigSection title="Flags">
-          <ConfigRow label="Instrumentation" value={view.instrumentationEnabled ? "On" : "Off"} />
+          <ConfigRow label="PostHog" value={view.instrumentationEnabled ? "On" : "Off"} />
           <ConfigRow label="External MCP" value={view.mcpExternal ? "On" : "Off"} />
         </ConfigSection>
       </>}

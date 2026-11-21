@@ -31,6 +31,7 @@ import (
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/gorilla/websocket"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
@@ -4071,6 +4072,56 @@ func TestStickySlackAgentsAnswerOnlyInSlackSessions(t *testing.T) {
 	current, names = offered(slackSession)
 	require.Equal(t, "channel", current)
 	require.Equal(t, []string{"channel"}, names, "the Slack session still opens with its agent")
+}
+
+func TestListAgentsShowsPermissionsAndOrigin(t *testing.T) {
+	t.Parallel()
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	workspace := t.TempDir()
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: workspace, Overlays: []string{filepath.Join(workspace, "team.git")}}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	team := skel.OverlayInfos(cfg.RuntimeDirName(), cfg.Overlays)[0].ClonePath
+	files := map[string]string{
+		"careful": "---\nmodel: gpt-6.1-sol\npermission:\n  bash:\n    \"*\": deny\n    \"git *\": auto(guardian)\n  webfetch: allow\n---\nHelp.",
+		"root":    "---\nmodel: gpt-6.1-sol\nsudo: yes\n---\nHelp.",
+		"plain":   "---\nmodel: gpt-6.1-sol\n---\nHelp.",
+	}
+
+	for _, dir := range []string{cfg.RuntimeDirName(), "", team} {
+		require.NoError(t, root.MkdirAll(filepath.Join(dir, "agents"), 0o700))
+	}
+
+	for name, file := range files {
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte(file), 0o600))
+	}
+
+	require.NoError(t, root.WriteFile(filepath.Join("agents", "careful.md"), []byte(files["careful"]), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(team, "agents", "root.md"), []byte(files["root"]), 0o600))
+
+	server := New(withoutBackgroundJobs(), sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{})
+	listed, err := server.listAgents(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")), "")
+	require.NoError(t, err)
+
+	origins := map[string]string{}
+	permissions := map[string]string{}
+
+	for _, agent := range listed.Agents {
+		origins[agent.Name], permissions[agent.Name] = agent.Origin, agent.Permissions
+	}
+
+	require.Equal(t, map[string]string{"careful": "workspace", "root": cfg.Overlays[0], "plain": ""}, origins)
+	require.Contains(t, permissions["careful"], "## Bash Permissions\n\nRules are listed in order. The last matching rule wins.\n\n- Deny `*`.\n- Require automatic approval by `guardian` for `git *`.\n\n## Webfetch Permissions")
+	require.Contains(t, permissions["root"], "## Sudo Mode")
 }
 
 func TestRoutineCronJobs(t *testing.T) {
