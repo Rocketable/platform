@@ -518,8 +518,8 @@ test("actual App renders independent public lifecycle and reconnect replacements
 
 test("actual App restores, merges, isolates and keeps composer independent", async () => {
   const started = Date.now();
-  let reportHeldLinkWait: (() => void) | undefined;
-  onTestFinished(() => reportHeldLinkWait?.());
+  let reportPendingWait: (() => void) | undefined;
+  onTestFinished(() => reportPendingWait?.());
   const { chromium: engine } = await import(playwright!);
   let identityHold = Promise.withResolvers<void>();
   let promptHold = Promise.withResolvers<string>();
@@ -2805,8 +2805,14 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const popping = heldRow.getByRole("button", { name: "Popping…", exact: true });
     await popping.waitFor();
     expect(await popping.isDisabled()).toBe(true);
+    reportPendingWait = () => console.error("Expected Steer on the popped queue row", {
+      url: stashPage.url(), running: ctrl.running, prompting: ctrl.prompting.has("stash-session"),
+      queue: ctrl.queue.map(({ id, delivery }) => ({ id, delivery })),
+      historyReads: historyRequests.filter(({ id }) => id === "stash-session").length,
+    });
     popRelease.resolve();
     await heldRow.getByRole("button", { name: "Steer", exact: true }).waitFor();
+    reportPendingWait = undefined;
     expect(await heldRow.getByText("/stop", { exact: true }).count()).toBe(1);
     expect(ctrl.queue[0].delivery).toBe("QUEUE");
     expect(await stashPage.getByRole("region", { name: "Pending steers", exact: true }).count()).toBe(0);
@@ -2867,11 +2873,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       });
       await queuePage.goto(`${origin}/s/${Buffer.from(`queue-expansion-${width}-${count}`).toString("base64url")}`);
       const target = queuePage.locator('[data-queue-id="expand-target"]');
-      reportHeldLinkWait = () => console.error("Expected a visible Download held.txt link in queue row expand-target", {
+      reportPendingWait = () => console.error("Expected a visible Download held.txt link in queue row expand-target", {
         width, count, url: queuePage.url(), queueRead,
       });
       await target.getByRole("link", { name: "Download held.txt", exact: true }).waitFor();
-      reportHeldLinkWait = undefined;
+      reportPendingWait = undefined;
       expect(await target.getByRole("button", { name: "Edit", exact: true }).count()).toBe(1);
       const attachmentHref = await target.getByRole("link").getAttribute("href");
       await queuePage.locator("textarea").fill("Draft stays here");
