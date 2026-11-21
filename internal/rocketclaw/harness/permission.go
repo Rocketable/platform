@@ -274,31 +274,21 @@ func expandPermissionPattern(permission, pattern string) string {
 		return pattern
 	}
 
-	home := func() string {
-		if dir, err := os.UserHomeDir(); err == nil {
-			return dir
-		}
-
-		return ""
+	switch {
+	case pattern == "~" || strings.HasPrefix(pattern, "~/"):
+		pattern = pattern[1:]
+	case pattern == "$HOME" || strings.HasPrefix(pattern, "$HOME/"):
+		pattern = pattern[len("$HOME"):]
+	default:
+		return pattern
 	}
 
-	if pattern == "~" {
-		return home()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return pattern
 	}
 
-	if strings.HasPrefix(pattern, "~/") {
-		return home() + pattern[1:]
-	}
-
-	if pattern == "$HOME" {
-		return home()
-	}
-
-	if strings.HasPrefix(pattern, "$HOME/") {
-		return home() + pattern[5:]
-	}
-
-	return pattern
+	return home + pattern
 }
 
 func (ps *PermissionSet) Allow(permission, pattern string) error {
