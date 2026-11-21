@@ -26,8 +26,8 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   const opened = Promise.withResolvers<void>();
   let fullReads = 0, streamRequests = 0, firstReadArrived = false;
   const streamOpened = Promise.withResolvers<void>();
-  let step = { name: "Chromium launch", atMs: 0 };
-  const mark = (name: string) => { step = { name, atMs: elapsed() }; };
+  const steps = [{ name: "Chromium launch", atMs: 0 }];
+  const mark = (name: string) => { steps.push({ name, atMs: elapsed() }); };
   let closeStartedAtMs: number | null = null;
   let closeFinishedAtMs: number | null = null;
   let serverStoppedAtMs: number | null = null;
@@ -78,7 +78,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   } });
   reportFailure = () => {
     console.error("Long chat test state", JSON.stringify({
-      step, elapsedMs: elapsed(), firstReadArrived, streamRequests, streamAbortedAtMs, fullReads, pages, historyResponses, scroll, pageErrors, failedReads,
+      steps, elapsedMs: elapsed(), firstReadArrived, streamRequests, streamAbortedAtMs, fullReads, pages, historyResponses, scroll, pageErrors, failedReads,
       cleanup: { closeStartedAtMs, closeFinishedAtMs, pageClosedAtMs, browserDisconnectedAtMs, serverStoppedAtMs, pendingRequests: server.pendingRequests },
     }));
   };
