@@ -1108,7 +1108,7 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 				fmt.Fprintf(&output, "[next_before_entry_id=%d]\n", observations[0].ID)
 			}
 
-			return sessionToolComparisonResult(ctx, service.db, params.ConversationID, params.BeforeEntryID, &output)
+			return sessionToolComparisonResult(ctx, service.db, params.ConversationID, params.BeforeEntryID, &output, escape)
 		},
 	}
 }
@@ -1124,15 +1124,13 @@ func writeSessionTranscriptRow(output *strings.Builder, escape *strings.Replacer
 	output.WriteByte('\n')
 }
 
-func sessionToolComparisonResult(ctx context.Context, db stateStoreDB, id string, before int64, output *strings.Builder) (harness.ToolResult, error) {
+func sessionToolComparisonResult(ctx context.Context, db stateStoreDB, id string, before int64, output *strings.Builder, escape *strings.Replacer) (harness.ToolResult, error) {
 	shadows, err := shadowHistoryDB(ctx, db, id, "", 0, before)
 	if err != nil {
 		return harness.ToolResult{}, err
 	}
 
 	if len(shadows) > 0 {
-		escape := strings.NewReplacer("\\", "\\\\", "\t", "\\t", "\r", "\\r", "\n", "\\n")
-
 		output.WriteString("\nshadows\nparent_conversation_id\tparent_agent\tshadow_agent\tchild_conversation_id\n")
 
 		for _, shadow := range shadows {
