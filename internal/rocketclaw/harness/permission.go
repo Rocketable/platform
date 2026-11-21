@@ -154,10 +154,7 @@ func parsePermissionNode(node *yaml.Node, facets map[string]map[string][]string)
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			key := node.Content[i].Value
 
-			bucketName, err := normalizePermissionName(key)
-			if err != nil {
-				return PermissionSet{}, err
-			}
+			bucketName := normalizePermissionName(key)
 
 			if bucketName == mcpPermissionBucket {
 				var grant map[string]map[string]PermissionAction
@@ -249,8 +246,6 @@ func parsePermissionAction(value string) (PermissionAction, string, error) {
 	switch action := PermissionAction(value); action {
 	case PermissionAllow, PermissionDeny, PermissionAuto:
 		return action, "", nil
-	case "ask":
-		return "", "", fmt.Errorf("permission action %q is not supported", value)
 	default:
 		if reviewer, ok := strings.CutPrefix(value, "auto("); ok {
 			reviewer, closed := strings.CutSuffix(reviewer, ")")
@@ -265,14 +260,12 @@ func parsePermissionAction(value string) (PermissionAction, string, error) {
 	}
 }
 
-func normalizePermissionName(name string) (string, error) {
+func normalizePermissionName(name string) string {
 	switch name {
 	case "apply_patch", "write", "patch":
-		return "edit", nil
-	case "external_directory", "doom_loop":
-		return "", fmt.Errorf("permission %q is not supported", name)
+		return "edit"
 	default:
-		return name, nil
+		return name
 	}
 }
 
@@ -321,11 +314,7 @@ func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction
 		return err
 	}
 
-	bucketName, err := normalizePermissionName(permission)
-	if err != nil {
-		return err
-	}
-
+	bucketName := normalizePermissionName(permission)
 	rule := PermissionRule{Pattern: expandPermissionPattern(bucketName, pattern), Action: action, Except: except}
 
 	for i := range ps.Buckets {

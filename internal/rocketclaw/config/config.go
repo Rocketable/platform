@@ -193,13 +193,12 @@ type OpenAIConfig struct {
 	APIKey                             string `json:"api_key"`
 	APIBaseURL                         string `json:"api_base_url"`
 	Auth                               string `json:"auth"`
-	LegacyAuth                         string `json:"rocketcode_auth,omitempty"`
 	AutocompactionThreshold            int64  `json:"autocompaction_threshold,omitempty"`
 	PromptCacheMarkersRelativePosition *int   `json:"prompt_cache_markers_relative_position,omitempty"`
 }
 
 func (c *OpenAIConfig) AuthMode() string {
-	return cmp.Or(strings.TrimSpace(cmp.Or(c.Auth, c.LegacyAuth)), "api_key")
+	return cmp.Or(strings.TrimSpace(c.Auth), "api_key")
 }
 
 type DecisionProvider string
@@ -444,8 +443,6 @@ func normalizeOpenAIConfig(field string, cfg *OpenAIConfig) error {
 	default:
 		return fmt.Errorf("%s.auth must be api_key or chatgpt", field)
 	}
-
-	cfg.LegacyAuth = ""
 
 	if cfg.Auth == "api_key" && strings.TrimSpace(cfg.APIKey) == "" {
 		return fmt.Errorf("%s.api_key is required when %s.auth is api_key", field, field)

@@ -79,7 +79,6 @@ type OpenAIConfig struct {
 	APIKey                             string `json:"api_key"`
 	APIBaseURL                         string `json:"api_base_url"`
 	Auth                               string `json:"auth"`
-	LegacyAuth                         string `json:"rocketcode_auth,omitempty"`
 	AutocompactionThreshold            int64  `json:"autocompaction_threshold,omitempty"`
 	PromptCacheMarkersRelativePosition *int   `json:"prompt_cache_markers_relative_position,omitempty"`
 }

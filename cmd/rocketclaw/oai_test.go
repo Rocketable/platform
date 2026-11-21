@@ -138,7 +138,7 @@ func TestRunOAILoginSetsUpChatGPT(t *testing.T) {
 		{
 			name:     "secret named provider missing from config file",
 			file:     `{"future":true,"providers":{"alpha":{"api_key":"a"}}}`,
-			secret:   `{"providers":{"work":{"rocketcode_auth":"api_key","api_key":"k"}}}`,
+			secret:   `{"providers":{"work":{"api_key":"k"}}}`,
 			provider: "work",
 			want:     `{"future":true,"providers":{"alpha":{"api_key":"a"},"work":{"auth":"chatgpt"}}}`,
 		},
@@ -196,7 +196,7 @@ func TestRunOAILoginLeavesConfigAloneWhenSecretUsesChatGPT(t *testing.T) {
 
 func TestRunOAIListIgnoresServerOnlySettings(t *testing.T) {
 	t.Chdir(t.TempDir())
-	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{"openai": {}, "providers": {"work": {"rocketcode_auth": "chatgpt"}}}`), 0o600))
+	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{"openai": {}, "providers": {"work": {"auth": "chatgpt"}}}`), 0o600))
 
 	output := captureStdout(t, func() error { return runOAI([]string{"list"}) })
 	assert.Equal(t, "openai (default)\tapi_key\tmissing\nwork\tchatgpt\tmissing\n", output)
@@ -454,7 +454,7 @@ func prepareOAIConfig(t *testing.T) string {
   "workspace": "../runtime", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
   "openai": {"auth":"api_key","api_key":"openai-key"},
   "providers": {
-    "work": {"rocketcode_auth":"api_key","api_key":"work-key","future_provider_field":true},
+    "work": {"auth":"api_key","api_key":"work-key","future_provider_field":true},
     "alpha": {"auth":"api_key","api_key":"alpha-key"},
     "help": {"auth":"api_key","api_key":"help-key"}
   },
