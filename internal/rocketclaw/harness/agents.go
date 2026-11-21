@@ -439,14 +439,12 @@ func sanitizeAgentFrontmatter(frontmatterText string) string {
 			continue
 		}
 
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
+		key, value, found := strings.Cut(line, ":")
+		if !found {
 			continue
 		}
 
-		key := strings.TrimSpace(parts[0])
-
-		value := strings.TrimSpace(parts[1])
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
 		if key == "" || value == "" || value == ">" || value == "|" || strings.HasPrefix(value, "\"") || strings.HasPrefix(value, "'") || !strings.Contains(value, ":") {
 			continue
 		}
