@@ -26,12 +26,19 @@ const (
 )
 
 func isExecuteSpillPath(root *os.Root, spillRel, path string) bool {
+	if spillRel == "" {
+		return false
+	}
+
 	name, err := normalizeRootName(root, path)
-	if err == nil && spillRel != "" && pathWithinRoot(spillRel, name) {
+	if err == nil && pathWithinRoot(spillRel, name) {
 		return true
 	}
 
 	spill, err := root.Stat(spillRel)
+	if err != nil {
+		return !errors.Is(err, os.ErrNotExist)
+	}
 
 	for ancestor := filepath.Clean(path); ancestor != "." && ancestor != "/"; ancestor = filepath.Dir(ancestor) {
 		info, errStat := root.Stat(ancestor)
@@ -39,7 +46,11 @@ func isExecuteSpillPath(root *os.Root, spillRel, path string) bool {
 			info, errStat = os.Stat(ancestor)
 		}
 
-		if err == nil && errStat == nil && os.SameFile(spill, info) {
+		if errors.Is(errStat, os.ErrNotExist) {
+			continue
+		}
+
+		if errStat != nil || os.SameFile(spill, info) {
 			return true
 		}
 	}
