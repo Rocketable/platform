@@ -247,14 +247,20 @@ func IsTextAttachment(name, mimeType string) bool {
 	return strings.HasPrefix(mediaType, "text/") || slices.Contains([]string{"application/json", "application/jsonl", "application/ld+json", "application/xml", "application/yaml", "application/x-yaml", "application/toml", "application/x-toml", "application/csv", "application/x-ndjson"}, mediaType) || slices.Contains([]string{".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml", ".xml", ".ini", ".log"}, strings.ToLower(filepath.Ext(strings.TrimSpace(name))))
 }
 
-func (m *InboundMessage) EnableResponseWait() <-chan InboundResponse { return m.responseChannel() }
+func (m *InboundMessage) EnableResponseWait() <-chan InboundResponse {
+	m.responseInit.Do(func() {
+		m.responseCh = make(chan InboundResponse, 1)
+	})
+
+	return m.responseCh
+}
 
 func (m *InboundMessage) CompleteResponseWithAttachments(text string, attachments []OutboundAttachment, err error) {
-	ch := m.responseChannel()
+	m.EnableResponseWait()
 	m.responseOnce.Do(func() {
-		ch <- InboundResponse{Text: text, Attachments: CloneOutboundAttachments(attachments), Err: err}
+		m.responseCh <- InboundResponse{Text: text, Attachments: CloneOutboundAttachments(attachments), Err: err}
 
-		close(ch)
+		close(m.responseCh)
 	})
 }
 
@@ -269,12 +275,4 @@ func CloneOutboundAttachments(attachments []OutboundAttachment) []OutboundAttach
 	}
 
 	return cloned
-}
-
-func (m *InboundMessage) responseChannel() chan InboundResponse {
-	m.responseInit.Do(func() {
-		m.responseCh = make(chan InboundResponse, 1)
-	})
-
-	return m.responseCh
 }
