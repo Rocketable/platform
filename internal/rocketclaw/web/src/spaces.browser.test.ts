@@ -1193,7 +1193,7 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
   const started = performance.now(), elapsed = () => Math.round(performance.now() - started);
   let waitingFor = "open browser", fixture: Saved | undefined;
   let lastRows: (string | null)[] | undefined, lastHeight: number | undefined, pollsBeforeReload: number | undefined;
-  const reload: { startedMs?: number; committedMs?: number; listingFinishedMs?: number } = {};
+  const reload: { startedMs?: number; committedMs?: number; listingFinishedMs?: number; foxtrotWaitStartedMs?: number; foxtrotWaitFinishedMs?: number } = {};
   const firstReloadRequests: Record<string, string> = { Identity: "not requested", Protocol: "not requested", Tabs: "not requested", ListSessions: "not requested" };
   const snapshotReads: string[] = [];
   let renderedAfterReload: string | undefined;
@@ -1335,7 +1335,9 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
     reload.startedMs = elapsed();
     await page.reload();
     waitingFor = "show Foxtrot after reload";
+    reload.foxtrotWaitStartedMs = elapsed();
     await row("Foxtrot").waitFor();
+    reload.foxtrotWaitFinishedMs = elapsed();
     waitingFor = "check restored Parked order and height";
     expect([await rows(), await height()]).toEqual([["Bravo", "Delta", "Charlie", "Foxtrot", "Echo"], expect.closeTo(dragged + 16, 0)]);
     waitingFor = "check page errors and close browser";
