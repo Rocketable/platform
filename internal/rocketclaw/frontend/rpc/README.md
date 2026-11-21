@@ -463,7 +463,14 @@ from the instructions then), so edits committed since are kept, authored
 `UploadAttachment(stream Attachment) -> Attachment` accepts one file per call.
 The first frame supplies `conversation_id`, `name`, and optional `data`; subsequent
 frames supply `data`. Each chunk is at most 256 KiB, below gRPC's default 4 MiB
-receive limit. Close the sending side to finish. The response supplies the
+receive limit. Close the sending side to finish. The server writes the chunks to
+attachment storage as they arrive instead of collecting the file in memory (S3
+buffers a file under 16 MiB, and a larger one's 8 MiB parts, up to about 64 MiB
+per upload), detects the MIME type from the first 512 bytes,
+and records the file once it is stored. When the stream fails, the client
+cancels, or recording fails, the stored file is deleted, or queued for deletion
+when the delete fails; only a database that cannot be reached during that
+cleanup leaves it behind. The response supplies the
 immutable ID, basename, detected MIME type, and original byte count. Pass IDs in
 `Prompt.attachment_ids` for either steer or queue. Images retain the existing
 model-side normalization; all uploads are also materialized through

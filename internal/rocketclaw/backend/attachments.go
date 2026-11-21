@@ -1,12 +1,14 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -40,12 +42,44 @@ func (s *SessionService) SaveAttachment(ctx context.Context, conversationID, tur
 		return err
 	}
 
-	if err := s.attachments.Put(ctx, id, attachment.Data); err != nil {
+	if _, err := s.attachments.Put(ctx, id, bytes.NewReader(attachment.Data)); err != nil {
 		return fmt.Errorf("store attachment original: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit attachment: %w", errors.Join(err, s.discardUnsavedAttachment(context.WithoutCancel(ctx), id)))
+	}
+
+	return nil
+}
+
+func (s *SessionService) SaveUpload(ctx context.Context, conversationID string, attachment *protocol.OutboundAttachment, body io.Reader) (err error) {
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, s.discardUnsavedAttachment(context.WithoutCancel(ctx), attachment.ID))
+		}
+	}()
+
+	if attachment.Size, err = s.attachments.Put(ctx, attachment.ID, body); err != nil {
+		return fmt.Errorf("store upload original: %w", err)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin upload: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := rejectShadowMutation(ctx, tx, conversationID); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO attachments (id, conversation_id, name, mime_type, size, original_unverified, upload, turn_id) VALUES ($1,$2,$3,$4,$5,$6,TRUE,'')`, attachment.ID, conversationID, attachment.Name, attachment.MIMEType, attachment.Size, attachment.OriginalUnverified); err != nil {
+		return fmt.Errorf("record upload: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit upload: %w", err)
 	}
 
 	return nil
