@@ -1357,7 +1357,7 @@ test("Search pages are tabs of their own: renamed in place, shared as one page, 
   await until(() => JSON.stringify(saved.shared[0].search?.searches.map((item) => item.query)) === JSON.stringify(["rollback", "other person", "mine"]));
   // Taken out of Shared, the page as saved stays as this person's own, with their own searches there, so nothing anyone
   // added is lost.
-  expect(await sharedMenu(page, "Prod deploys")).toEqual(["Rename search", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park", "Unfollow", "—", "Add to group"]);
+  expect(await sharedMenu(page, "Prod deploys")).toEqual(["Rename search", "—", "Close", "Close others", "Close to the right", "Close all", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park", "Unfollow", "—", "Add to group"]);
   await page.getByRole("menuitem", { name: "Add to group", exact: true }).click();
   await page.getByRole("menuitem", { name: "New group", exact: true }).click();
   await page.getByRole("textbox", { name: "Group name" }).waitFor();
@@ -1753,11 +1753,20 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
   await page.waitForURL(`**${href("alpha")}`);
   expect([await row("Alpha").getAttribute("aria-selected"), await tab("Alpha").getAttribute("aria-selected")]).toEqual(["true", "true"]);
 
-  // A Shared row has no close button, offers no closing, ignores middle-clicks, and takes no drops of this person's tabs.
+  // A Shared row has no close button, ignores middle-clicks, and takes no drops of this person's tabs; its menu is the
+  // one their own tab and the page's bar offer.
   expect(await shared(page).getByRole("button", { name: "Close Alpha" }).count()).toBe(0);
-  expect(await sharedMenu(page, "Alpha")).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "Unfollow", "—", "Add to group"]);
-  await page.keyboard.press("Escape");
-  await page.getByRole("menu").waitFor({ state: "hidden" });
+  const lines = async (open: () => Promise<void>) => {
+    await open();
+    await page.getByRole("menuitem").first().waitFor();
+    const got = await menuLines(page);
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").waitFor({ state: "hidden" });
+    return got;
+  };
+  const fromShared = await lines(() => row("Alpha").click({ button: "right" }));
+  expect(fromShared).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Close", "Close others", "Close to the right", "Close all", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "Unfollow", "—", "Add to group", "—", "Delete session"]);
+  expect([await lines(() => tab("Alpha").click({ button: "right" })), await lines(() => page.getByRole("banner").getByRole("button", { name: "Page actions", exact: true }).click())]).toEqual([fromShared, fromShared]);
   await row("Alpha").click({ button: "middle" });
   await tab("Bravo").dragTo(row("Alpha"));
   expect(await names(page)).toEqual(["New session", "Alpha", "Bravo"]);
@@ -2164,7 +2173,7 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   saved.state = { ...saved.state, tabs: [{ path: href("alpha"), space: "main" }], space: "main" };
   saved.shared = [{ space: "main", path: href("bravo") }, { space: "main", path: "/search/d", search: { name: "Ops", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" } }];
   await page.goto(`${origin}${href("alpha")}`);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "Unfollow", "—", "Add to group"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send", "Unfollow", "—", "Add to group", "—", "Delete session"]);
   await close();
   expect(await sharedMenu(page, "Ops")).toEqual(["Rename search", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park", "Unfollow", "—", "Add to group"]);
   await close();
@@ -2173,7 +2182,7 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   for (const item of ["Park", "Until I unpark"]) await page.getByRole("menuitem", { name: item, exact: true }).click();
   await row("Bravo").and(page.locator('[aria-description="Shared, Space: Main, Parked"]')).waitFor();
   expect([await sharedNames(page), await opacity(href("bravo")), await names(page)]).toEqual([["Bravo", "Ops"], "0.6", ["Alpha"]]);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group", "—", "Delete session"]);
   await close();
   // Another person's session list carries none of this person's parks, so for them the row is as it was.
   saved.attention = [];
@@ -2395,7 +2404,7 @@ test("Parked also lists the Shared rows this person parked, which open in their 
 
   await original.click({ button: "right" });
   await page.getByRole("menuitem").first().waitFor();
-  expect(await menuLines(page)).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group", "Move to space"]);
+  expect(await menuLines(page)).toEqual(["Pull requests", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group", "Move to space", "—", "Delete session"]);
   await page.getByRole("menuitem", { name: "Rename session", exact: true }).click();
   const input = parked.getByRole("textbox", { name: "Session name" });
   await input.fill("Renamed hotel");

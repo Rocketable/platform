@@ -796,10 +796,10 @@ active tab.
   has no Shared tabs. A tab can be in Shared and among your own tabs
   at once, and both rows light up while it is open. Opening a Shared row adds no
   tab of your own and opens it in its space. Shared rows show a people
-  icon instead of a close button, and their menu offers only **Copy link**,
-  **Remove from Shared**, the attention items (Mark as read or unread, Park),
-  and, for a Search page, **Rename search** and, on the page's server,
-  **Duplicate**; middle-click and selection never act on them. Drag a Shared
+  icon instead of a close button, middle-click never acts on them, and they
+  cannot be selected. Their menu is the one the tab gets in your own tabs and from the page
+  bar's **…**: the close commands show only while the tab is also among your own
+  tabs, and close that copy. Drag a Shared
   row onto another row of its space, or press Shift+Arrow on it, to reorder it
   for you alone; your own tabs and
   Shared rows never drop on each other. Otherwise the keyboard treats them as
