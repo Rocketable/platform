@@ -1286,7 +1286,12 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 	dest := make([]any, 0, 45)
 
 	for rows.Next() {
-		var row SidebarSession
+		var entry struct {
+			row     SidebarSession
+			summary protocol.SessionSummary
+		}
+
+		row := &entry.row
 
 		dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Paused, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
 			&row.Attention.Parked, &row.Attention.Unfollowed, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &since, &row.Queued, &row.External, &arrived)
@@ -1294,7 +1299,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			return nil, fmt.Errorf("scan sidebar session: %w", err)
 		}
 
-		if !limit.AllowsSession(&row) {
+		if !limit.AllowsSession(row) {
 			continue
 		}
 
@@ -1307,10 +1312,11 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 		}
 
 		if updated.Valid {
-			row.Summary = &protocol.SessionSummary{ConversationID: row.Conversation.ID, LastMessage: string(preview), LastUpdated: updated.Time.UTC()}
+			entry.summary = protocol.SessionSummary{ConversationID: row.Conversation.ID, LastMessage: string(preview), LastUpdated: updated.Time.UTC()}
+			row.Summary = &entry.summary
 		}
 
-		sessions = append(sessions, &row)
+		sessions = append(sessions, row)
 	}
 
 	if err := errors.Join(rows.Err(), ctx.Err()); err != nil {

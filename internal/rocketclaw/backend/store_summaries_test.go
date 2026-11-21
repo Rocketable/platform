@@ -533,6 +533,7 @@ func TestSidebarSessionsAllocationBudgets(t *testing.T) {
 	result = testing.Benchmark(BenchmarkSidebarSearchRows)
 	require.Positive(t, result.N)
 	require.Less(t, result.AllocedBytesPerOp(), int64(2<<20))
+	require.Less(t, result.AllocsPerOp(), int64(12700))
 }
 
 func BenchmarkSidebarSearchRows(b *testing.B) {
