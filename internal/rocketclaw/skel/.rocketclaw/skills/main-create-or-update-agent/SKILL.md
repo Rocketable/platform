@@ -358,7 +358,7 @@ Keys:
 - `delegatedFrom`: `true` (default), `false`, or the agent names that may start, message or stop its chats
 - `schema.output`: as for advanced agents
 
-Any other key fails loading with `<key>: not an easy-mode key`, including the advanced keys `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo`, `guardrail` and `additionalInstructions`. `approver` takes only `model`, `prompt` and `decision`, `approver.decision` only `model`, `minConfidence` and `prompt`, and `schema` only `output`.
+Any other key fails loading with `<key>: not an easy-mode key`, including the advanced keys `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo` and `additionalInstructions`. `approver` takes only `model`, `prompt` and `decision`, `approver.decision` only `model`, `minConfidence` and `prompt`, and `schema` only `output`.
 
 Each `commands` entry becomes a program of that name in the agent's shell. A plain call of that name runs it instead of any tool or builtin with the same name; `builtin`, `command` or a full path such as `/bin/echo` still reach the original. Name it with 1-64 letters, digits, `_`, `.`, `+` or `-`, starting with a letter, digit or `_` and not with `rocketclaw`. Calling `<name> a b` runs `<command line> "$@"` in host bash with `a` and `b` as `$@`:
 

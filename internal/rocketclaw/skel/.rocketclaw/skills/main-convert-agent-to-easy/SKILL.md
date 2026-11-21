@@ -75,7 +75,7 @@ Start the new frontmatter with `mode: easy`. Write only easy keys. A section lef
 
 `sudo: yes` agents already have everything on and reviewed, which is what easy does with sections left out. Leave the sections out, and still ask the questions below.
 
-Dropped with no easy equivalent; tell the human each one that was set: `description`, `verbosity`, `guardrail`, `shell` (a wrapper path), `sudo`, `permission.rocketclaw.code_mode_approve` (easy reviews every whole script), a `websearch` deny (easy agents always have web search), and every `deny` rule. Also tell the human when the agent had no `bash`, `read`, `edit`, `glob` or `grep` rules: easy agents always have the shell and file tools, reviewed and limited to their folder.
+Dropped with no easy equivalent; tell the human each one that was set: `description`, `verbosity`, `shell` (a wrapper path), `sudo`, `permission.rocketclaw.code_mode_approve` (easy reviews every whole script), a `websearch` deny (easy agents always have web search), and every `deny` rule. Also tell the human when the agent had no `bash`, `read`, `edit`, `glob` or `grep` rules: easy agents always have the shell and file tools, reviewed and limited to their folder.
 
 ## Questions
 
