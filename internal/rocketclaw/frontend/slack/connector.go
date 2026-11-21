@@ -433,17 +433,11 @@ func (c *Connector) mentionThread(ctx context.Context, msg *protocol.OutboundMes
 
 func (c *Connector) mentionConversation(ctx context.Context, conversationID string) (channelID, threadTS string, ok bool) {
 	channelID, threadTS, channelSession, err := c.facts.SlackThread(ctx, conversationID)
-
-	report := false
-	if err == nil && threadTS != "" {
-		_, report, err = c.threadRouter.MentionThread(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
-	}
-
 	if err != nil {
 		c.log.Warn("read Slack mention thread", "conversation_id", conversationID, "error", err)
 	}
 
-	return channelID, threadTS, err == nil && (threadTS != "" || channelSession) && !report
+	return channelID, threadTS, err == nil && (threadTS != "" || channelSession)
 }
 
 func (c *Connector) mentionFooter(ctx context.Context, msg *protocol.OutboundMessage) (string, []slack.Block) {

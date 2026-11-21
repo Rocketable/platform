@@ -1205,7 +1205,7 @@ func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 	}))
 	defer server.Close()
 
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, false, nil))
+	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, nil))
 	replyTarget := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
 
 	longText := strings.Repeat("x", slackBlockTextLimit*50) + "closing line"
@@ -1255,11 +1255,11 @@ func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 
 const testFooterLink = "http://100.95.197.99:3000/s/c2xhY2s"
 
-func newFooterRouter(t *testing.T, report bool, errLink error) *primaryTextRouterMock {
+func newFooterRouter(t *testing.T, errLink error) *primaryTextRouterMock {
 	t.Helper()
 
 	return &primaryTextRouterMock{
-		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, report, nil },
+		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, false, nil },
 		WebURLFunc: func(conversationID string) (string, error) {
 			assert.Equal(t, "slack-thread:C123:111.222", conversationID)
 
@@ -1304,7 +1304,6 @@ func TestSendResponseMentionFooter(t *testing.T) {
 
 	for _, tt := range []struct {
 		name               string
-		report             bool
 		errLink            error
 		turnID, text       string
 		goal               bool
@@ -1319,8 +1318,6 @@ func TestSendResponseMentionFooter(t *testing.T) {
 		{name: "done without text", turnID: "turn-1", terminal: protocol.TerminalComplete, want: footer("done")},
 		{name: "Web stop with nothing running", wantNoSlackMessage: true},
 		{name: "link unavailable", errLink: errors.New("tailscale is not running"), turnID: "turn-1", text: "answer", terminal: protocol.TerminalComplete, want: "main · done"},
-		{name: "report thread", report: true, turnID: "turn-1", text: "answer", terminal: protocol.TerminalComplete},
-		{name: "report thread without text", report: true, turnID: "turn-1", terminal: protocol.TerminalStopped, wantNoSlackMessage: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var sent []url.Values
@@ -1345,7 +1342,7 @@ func TestSendResponseMentionFooter(t *testing.T) {
 
 			var logs bytes.Buffer
 
-			connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, tt.report, tt.errLink))
+			connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, tt.errLink))
 			connector.log = slog.New(slog.NewJSONHandler(&logs, nil))
 
 			msg := protocol.NewOutboundMessage("slack-thread:C123:111.222", tt.text)
@@ -1361,11 +1358,6 @@ func TestSendResponseMentionFooter(t *testing.T) {
 			require.Len(t, sent, 1)
 
 			texts, count := slackContextTexts(t, sent[0].Get("blocks"))
-			if tt.want == "" {
-				assert.Empty(t, texts)
-				return
-			}
-
 			assert.Equal(t, []string{tt.want}, texts)
 
 			if tt.goal {
@@ -1450,7 +1442,7 @@ func TestSendResponseFooterOnlyPostsOncePerTurn(t *testing.T) {
 	final.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
 
 	for range 2 {
-		connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, false, nil))
+		connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, nil))
 		connector.facts = newTestTurnSteps(t, final.ConversationID, steps)
 		require.NoError(t, connector.SendResponse(t.Context(), protocol.CloneOutboundMessage(final)))
 	}
@@ -1463,7 +1455,7 @@ func TestSendResponseFooterOnlyPostsOncePerTurn(t *testing.T) {
 	assert.Equal(t, 1, count)
 
 	cut := map[string]json.RawMessage{"turn-1/footer/posting": json.RawMessage(`{"channel_id":"C123","thread_ts":"111.222"}`)}
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, false, nil))
+	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, nil))
 	connector.facts = newTestTurnSteps(t, final.ConversationID, cut)
 	require.NoError(t, connector.SendResponse(t.Context(), protocol.CloneOutboundMessage(final)))
 	require.Len(t, posted, 1)
@@ -1601,24 +1593,19 @@ func newMentionThreadTurn(turnID string, terminal protocol.Terminal) *protocol.O
 }
 
 func TestMentionTurnSetsAgentSessionStatus(t *testing.T) {
-	session := []string{"processing C123 111.222", "active C123 111.222"}
-
 	for _, tt := range []struct {
 		name      string
-		report    bool
 		errStatus string
-		want      []string
 	}{
-		{name: "mention thread", want: session},
-		{name: "refused", errStatus: "not_authorized", want: session},
-		{name: "report thread", report: true},
+		{name: "mention thread"},
+		{name: "refused", errStatus: "not_authorized"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			server, calls := newAgentSessionServer(t, tt.errStatus)
 
 			var logs bytes.Buffer
 
-			connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, tt.report, nil))
+			connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, nil))
 			connector.log = slog.New(slog.NewJSONHandler(&logs, nil))
 
 			final := newMentionThreadTurn("turn-1", protocol.TerminalComplete)
@@ -1627,7 +1614,7 @@ func TestMentionTurnSetsAgentSessionStatus(t *testing.T) {
 			require.NoError(t, connector.SendResponse(t.Context(), newMentionThreadTurn("turn-1", "")))
 			require.NoError(t, connector.SendResponse(t.Context(), final))
 
-			assert.Equal(t, tt.want, calls.statuses)
+			assert.Equal(t, []string{"processing C123 111.222", "active C123 111.222"}, calls.statuses)
 			require.Len(t, calls.posts, 1, "the final is delivered")
 			assert.Empty(t, connector.sessions)
 
@@ -1642,7 +1629,7 @@ func TestMentionTurnSetsAgentSessionStatus(t *testing.T) {
 func TestResumedMentionTurnSetsProcessingAgain(t *testing.T) {
 	server, calls := newAgentSessionServer(t, "")
 	newConnector := func() *Connector {
-		return newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, false, nil))
+		return newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, nil))
 	}
 
 	require.NoError(t, newConnector().SendResponse(t.Context(), newMentionThreadTurn("turn-1", "")))
@@ -1658,7 +1645,7 @@ func TestResumedMentionTurnSetsProcessingAgain(t *testing.T) {
 func newProgressConnector(t *testing.T, serverURL string, progress *protocol.TurnProgress) *Connector {
 	t.Helper()
 
-	connector := newTestConnectorWithOptions(serverURL, testSocialChannels(), newFooterRouter(t, false, nil))
+	connector := newTestConnectorWithOptions(serverURL, testSocialChannels(), newFooterRouter(t, nil))
 	connector.facts.(*channelFactsStoreMock).TurnProgressFunc = func(_ context.Context, turnID string) (protocol.TurnProgress, error) {
 		assert.Equal(t, "turn-1", turnID)
 
@@ -1814,8 +1801,7 @@ func TestChannelTurnStatusFollowsItsMove(t *testing.T) {
 	progress := protocol.TurnProgress{Running: true}
 	connector := newProgressConnector(t, server.URL, &progress)
 	connector.threadRouter = &primaryTextRouterMock{
-		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, false, nil },
-		WebURLFunc:        func(string) (string, error) { return testFooterLink, nil },
+		WebURLFunc: func(string) (string, error) { return testFooterLink, nil },
 	}
 
 	require.NoError(t, connector.SendResponse(t.Context(), newChannelSessionTurn("turn-1")))
@@ -1901,21 +1887,18 @@ func TestSendResponseFinalJournalFailures(t *testing.T) {
 
 func TestRenameThreadSession(t *testing.T) {
 	server, calls := newAgentSessionServer(t, "")
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, false, nil))
+	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, nil))
 
 	connector.RenameThreadSession(t.Context(), "slack-thread:C123:111.222", " Login checks ")
 	connector.RenameThreadSession(t.Context(), "slack-thread:C123:111.222", " ")
 	connector.RenameThreadSession(t.Context(), "web:chat", "Not a thread")
-
-	report := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, true, nil))
-	report.RenameThreadSession(t.Context(), "slack-thread:C123:111.222", "Report")
 
 	assert.Equal(t, []string{"Login checks C123 111.222"}, calls.renames)
 }
 
 func TestAgentSessionTitleChangedNamesWebConversation(t *testing.T) {
 	server, _ := newAgentSessionServer(t, "")
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, false, nil))
+	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, nil))
 	facts := connector.facts.(*channelFactsStoreMock)
 	facts.UpdateConversationDetailsFunc = func(_ context.Context, id string, _ *string) (bool, error) {
 		return id == "slack-thread:C123:333.444", nil
@@ -1967,7 +1950,7 @@ func TestAgentSessionStoppedEvent(t *testing.T) {
 			var connector *Connector
 
 			interrupts := 0
-			router := newFooterRouter(t, false, nil)
+			router := newFooterRouter(t, nil)
 			router.InterruptTurnFunc = func(_ context.Context, turnID string) error {
 				interrupts++
 
