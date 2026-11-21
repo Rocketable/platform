@@ -172,6 +172,7 @@ WHERE c.conversation_id = h.conversation_id`, conversationIDs)
 
 func (s *SessionService) messagePrincipals(ctx context.Context) (principals map[string][]string, listed []string, err error) {
 	principals = make(map[string][]string)
+	names := make(map[string]struct{})
 	err = readRows(ctx, s.db, `WITH `+visibleChatsSQL+chatOriginSQL+shownChatsSQL+`
 SELECT c.conversation_id, p.principal, c.found OR c.running FROM shown c CROSS JOIN LATERAL unnest(c.principals) AS p(principal)
 WHERE c.principals <> '{}' ORDER BY c.conversation_id COLLATE "C", p.principal COLLATE "C"`, "message principals", func(row rowScanner) error {
@@ -185,15 +186,13 @@ WHERE c.principals <> '{}' ORDER BY c.conversation_id COLLATE "C", p.principal C
 
 		principals[id] = append(principals[id], principal)
 		if sidebar {
-			listed = append(listed, principal)
+			names[principal] = struct{}{}
 		}
 
 		return nil
 	}, "", ThreadCreatedByCron, KindOneOffCronRun)
 
-	slices.Sort(listed)
-
-	return principals, slices.Compact(listed), err
+	return principals, slices.Sorted(maps.Keys(names)), err
 }
 
 func (s *SessionService) indexTurnMessages(ctx context.Context, db stateStoreDB, conversationID, turnID string) error {
