@@ -75,7 +75,7 @@ func (s *Server) forkSession(ctx context.Context, request *ForkSessionRequest) (
 		return nil, fmt.Errorf("web fork: %w", status.Error(codes.FailedPrecondition, "session agent is no longer available"))
 	}
 
-	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	definitions, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web agents: %w", err)
 	}

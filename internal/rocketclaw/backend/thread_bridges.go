@@ -732,7 +732,7 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 		return "", false, fmt.Errorf("agent %q is not allowed on this source surface", start.agent)
 	}
 
-	agents, _, err := LoadRuntimeDefinitions(m.runtime, m.runtime.Clone().RuntimeDirName())
+	agents, err := LoadRuntimeAgents(m.runtime, m.runtime.Clone().RuntimeDirName())
 	if err != nil {
 		return "", false, fmt.Errorf("load configured agents: %w", err)
 	}

@@ -508,7 +508,7 @@ func (s *SessionService) searchDefinitions(ctx context.Context, terms []SearchTe
 		return agents, spaces, nil
 	}
 
-	agents, _, err = LoadRuntimeDefinitions(s.definitions, s.definitions.Clone().RuntimeDirName())
+	agents, err = LoadRuntimeAgents(s.definitions, s.definitions.Clone().RuntimeDirName())
 	if err != nil {
 		return agents, spaces, fmt.Errorf("load agents for model search: %w", err)
 	}

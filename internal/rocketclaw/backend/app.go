@@ -468,7 +468,7 @@ func SetLogLevel(level *slog.LevelVar, text string) {
 }
 
 func validateRuntimeAssets(cfg *config.LockedConfig, runtimeDir string, logger *slog.Logger) (string, error) {
-	agents, _, err := LoadRuntimeDefinitions(cfg, runtimeDir)
+	agents, err := LoadRuntimeAgents(cfg, runtimeDir)
 	if err != nil {
 		return "", fmt.Errorf("validate rocketcode definitions: %w", err)
 	}

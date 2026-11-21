@@ -22,7 +22,7 @@ func sandboxDir(cfg *config.Config) string {
 }
 
 func (r *Runtime) prepareSandbox() {
-	agents, _, err := LoadRuntimeDefinitions(r.Cfg, r.Cfg.Clone().RuntimeDirName())
+	agents, err := LoadRuntimeAgents(r.Cfg, r.Cfg.Clone().RuntimeDirName())
 	e := &r.Sessions.shells
 
 	var rt *sandbox.Runtime
