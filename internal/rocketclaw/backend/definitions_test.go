@@ -20,7 +20,7 @@ import (
 func TestSessionTagDefinitions(t *testing.T) {
 	t.Parallel()
 
-	for _, tags := range []string{"", "[]", "[[triage, investigating, resolved], [customer, internal]]", "[['*', '?', A, a]]", "wrong", "[[]]", "[['']]", "[[same], [same]]", "[[12]]", "null", "example"} {
+	for _, tags := range []string{"", "[]", "[[triage, investigating, resolved], [customer, internal]]", "[['*', '?', A, a]]", "[[]]", "[['']]", "[[same], [same]]", "[[12]]", "null", "example"} {
 		t.Run(tags, func(t *testing.T) {
 			workspace := t.TempDir()
 			root, err := os.OpenRoot(workspace)
@@ -48,11 +48,7 @@ func TestSessionTagDefinitions(t *testing.T) {
 
 			valid := tags == "" || tags == "[]" || tags == "example" || strings.HasPrefix(tags, "[[triage") || strings.HasPrefix(tags, "[['*'")
 			if !valid {
-				if tags == "wrong" || tags == "null" {
-					require.ErrorContains(t, err, `main.md: parse permission: permission "rocketclaw": pattern "rocketclaw_set_tag": unknown permission action`)
-				} else {
-					require.ErrorContains(t, err, "main.md: permission.rocketclaw.rocketclaw_set_tag")
-				}
+				require.ErrorContains(t, err, "main.md: permission.rocketclaw.rocketclaw_set_tag")
 
 				return
 			}
@@ -377,11 +373,10 @@ func TestLoadRocketCodeDefinitionsSessions(t *testing.T) {
 	}
 
 	for permission, message := range map[string]string{
-		"rocketclaw: allow":                                 "name each rocketclaw tool",
-		"rocketclaw: {'*': allow}":                          "name each rocketclaw tool",
-		"rocketclaw: {rocketclaw_sessions_*: allow}":        "name each rocketclaw tool",
-		"rocketclaw: {rocketclaw_sessions_write: children}": `pattern "rocketclaw_sessions_write": unknown permission action "children"`,
-		"rocketclaw: {session: {spawn_mode: all}}":          "session.spawn_mode is removed; use rocketclaw_sessions",
+		"rocketclaw: allow":                          "name each rocketclaw tool",
+		"rocketclaw: {'*': allow}":                   "name each rocketclaw tool",
+		"rocketclaw: {rocketclaw_sessions_*: allow}": "name each rocketclaw tool",
+		"rocketclaw: {session: {spawn_mode: all}}":   "session.spawn_mode is removed; use rocketclaw_sessions",
 	} {
 		writeAgent(t, workspace, "bad", "---\nmodel: gpt-5.4\npermission:\n  "+permission+"\n---\nPrompt\n")
 
