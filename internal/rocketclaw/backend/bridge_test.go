@@ -3809,49 +3809,22 @@ func seedFunctionCallOutputText(output *responses.ResponseInputItemFunctionCallO
 	return strings.Join(parts, "\n")
 }
 
-func TestAppendSessionEntryKeepsPriorEntriesThenAdded(t *testing.T) {
+func TestTurnReplayEntriesKeepsPriorEntriesThenAdded(t *testing.T) {
 	t.Parallel()
 
-	continued := false
-	stopped := appendSessionEntry(iter.Seq2[harness.SessionEntry, error](func(yield func(harness.SessionEntry, error) bool) {
-		if !yield(harness.SessionEntry{Type: "stored"}, nil) {
-			return
-		}
-
-		continued = true
-	}), &harness.SessionEntry{Type: "added"})
-	stopped(func(harness.SessionEntry, error) bool { return false })
-	assert.False(t, continued)
-
-	var (
-		got       []string
-		errFailed error
-	)
-
-	for entry, err := range appendSessionEntry(iter.Seq2[harness.SessionEntry, error](func(yield func(harness.SessionEntry, error) bool) {
-		if !yield(harness.SessionEntry{Type: "stored"}, nil) {
-			return
-		}
-
-		yield(harness.SessionEntry{Type: "failed"}, assert.AnError)
-	}), &harness.SessionEntry{Type: "added"}) {
-		got = append(got, entry.Type)
-
-		if err != nil {
-			errFailed = err
-			break
-		}
-	}
-
-	assert.Equal(t, []string{"stored", "failed"}, got)
-	require.ErrorIs(t, errFailed, assert.AnError)
-
 	replay := []json.RawMessage{[]byte(`"before"`)}
-	added := harness.SessionEntry{Type: "added", Version: 1, Model: "early", ReplayInput: replay}
-	seq := appendSessionEntry(iter.Seq2[harness.SessionEntry, error](func(yield func(harness.SessionEntry, error) bool) {
-		yield(harness.SessionEntry{Type: "stored"}, nil)
-	}), &added)
-	added.Model = "late"
+	added := []harness.SessionEntry{{Type: "added", Version: 1, Model: "early", ReplayInput: replay}}
+	seq := turnReplayEntries([]ObservedSessionEntry{{Entry: harness.SessionEntry{Type: "stored"}}}, nil, added)
+
+	var stopped []string
+
+	seq(func(entry harness.SessionEntry, _ error) bool {
+		stopped = append(stopped, entry.Type)
+		return false
+	})
+	assert.Equal(t, []string{"stored"}, stopped)
+
+	added[0].Model = "late"
 	replay[0] = []byte(`"after"`)
 	before := time.Now().UTC()
 
