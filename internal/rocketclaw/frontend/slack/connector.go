@@ -1011,20 +1011,18 @@ func (c *Connector) handleEventsAPI(ctx context.Context, event socketmode.Event)
 		return
 	}
 
-	var payload json.RawMessage
-	if event.Request != nil {
-		payload = event.Request.Payload
-	}
-
-	forward := nativeSlackForward(payload)
-
 	switch ev := eventsAPIEvent.InnerEvent.Data.(type) {
 	case *slackevents.ChannelRenameEvent:
 		c.queueChannelFact(ev.Channel.ID, ev.Channel.Name, time.Now())
 	case *slackevents.GroupRenameEvent:
 		c.queueChannelFact(ev.Channel.ID, ev.Channel.Name, time.Now())
 	case *slackevents.AppMentionEvent:
-		c.handleAppMentionEvent(ctx, ev, forward)
+		var payload json.RawMessage
+		if event.Request != nil {
+			payload = event.Request.Payload
+		}
+
+		c.handleAppMentionEvent(ctx, ev, nativeSlackForward(payload))
 	case *slackevents.AgentSessionStoppedEvent:
 		c.handleAgentSessionStopped(ctx, ev)
 	case *slackevents.AgentSessionTitleChangedEvent:
