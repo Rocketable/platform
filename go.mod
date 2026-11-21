@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	cirello.io/pglock v1.18.0
 	github.com/Arize-ai/openinference/go/openinference-instrumentation v0.1.2
-	github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.15
+	github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.16
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.21
@@ -114,7 +114,7 @@ require (
 	github.com/tidwall/sjson v1.2.11 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/auto/sdk v1.2.2 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.47.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
@@ -123,7 +123,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb // indirect
-	golang.org/x/exp v0.0.0-20261120130654-b6de8d37927a // indirect
+	golang.org/x/exp v0.0.0-20261121134650-e1094eeca1b5 // indirect
 	golang.org/x/oauth2 v0.38.0 // indirect
 	golang.org/x/term v0.48.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
@@ -131,5 +131,5 @@ require (
 	golang.zx2c4.com/wireguard/windows v1.1.1 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20261118221215-c8830f628b3f // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261118221215-c8830f628b3f // indirect
-	gvisor.dev/gvisor v0.0.0-20261120093554-bcda51de39fc // indirect
+	gvisor.dev/gvisor v0.0.0-20261121111754-3eadbee70834 // indirect
 )
