@@ -470,7 +470,7 @@ when the server has a PostHog project token, and **External MCP**.
 
 Users named in the config file's `web.admins`, unless limited to spaces, also
 get a **Behavior settings** section on the Config page. **Edit** shows one control per Behavior Setting
-(see the [root README](../../../README.md#getting-started) for which fields they
+(see the [root README](../../../README.md#behavior-settings) for which fields they
 are); **Save** replaces the whole document and applies it to the running server,
 or shows the validation error and changes nothing. Its **Built-in agents** group
 has, for `main` and `voice`, an on/off switch and a model picker, empty for the
