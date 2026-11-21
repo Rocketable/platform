@@ -278,6 +278,7 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     await viewer().getByRole("tab", { name: "Code", exact: true }).click();
     await viewer().getByText("100 of 101 files loaded", { exact: true }).waitFor();
     changed = true;
+    await viewer().getByText("patch-marker <script>example</script>", { exact: true }).waitFor();
     await scrollPatch(true);
     await viewer().getByText("Pull request changed. Refresh before loading more files.", { exact: true }).waitFor();
     expect(await viewer().getByText("100 of 101 files loaded", { exact: true }).count()).toBe(1);
