@@ -112,16 +112,17 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
     await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
     await pane.getByRole("button", { name: "Close pull requests", exact: true }).click();
     expect(await draft.textContent()).toBe("OpenCode draft edited beside the PR");
-    const createdHeadRead = async () => {
-      const posted = await page.waitForResponse((response: any) => response.request().method() === "POST" && /"cwd":"\/repo\/next"/.test(response.request().postData()) && /\/pulls\/7'"/.test(response.request().postData()));
-      const { data: { id } } = await posted.json();
-      await page.waitForResponse((response: any) => response.request().method() === "DELETE" && response.url().includes(`/${id}`));
-    };
     directory = "/repo/next";
     for (const minutes of [1, 2]) {
-      const look = createdHeadRead();
+      const posted = page.waitForResponse((response: any) => response.request().method() === "POST" && /"cwd":"\/repo\/next"/.test(response.request().postData()) && /\/pulls\/7'"/.test(response.request().postData()));
+      const shellID = posted.then(async (response: any) => {
+        const { data: { id } } = await response.json() as { data: { id: string } };
+        return id;
+      });
+      const deleted = page.waitForResponse(async (response: any) =>
+        response.request().method() === "DELETE" && new URL(response.url()).pathname === `/oc/box/api/shell/${await shellID}`);
       rows[0].updatedAt = new Date(Date.now() + minutes * 60_000).toISOString();
-      await look;
+      await Promise.all([shellID, deleted]);
     }
     expect(await pane.count()).toBe(0);
     await page.getByRole("button", { name: "Tab actions", exact: true }).click();
