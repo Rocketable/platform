@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -203,7 +204,7 @@ func TestSessionTagsPrivateLifecycle(t *testing.T) {
 	_, err = store.AppendEntryID(ctx, ids[1], testSessionEntryAt(cutoff.Add(time.Hour), "recent"))
 	require.NoError(t, err)
 
-	item := protocol.ThreadQueueItem{ID: "tags-queue", ConversationID: ids[2], Message: "waiting"}
+	item := *withInbound(&protocol.ThreadQueueItem{ID: "tags-queue", ConversationID: ids[2], Message: "waiting"})
 	require.NoError(t, store.PutThreadQueueItem(item.ID, &item))
 	_, err = store.AppendEntryID(ctx, ids[4], testSessionEntryAt(cutoff.Add(time.Hour), "recent"))
 	require.NoError(t, err)
@@ -286,7 +287,7 @@ func TestAttachmentMetadata(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	attachment := protocol.OutboundAttachment{ID: "snapshot", Name: "report.txt", MIMEType: "text/plain", Data: []byte(strings.Repeat("original", 700000)), OriginalUnverified: true}
+	attachment := protocol.OutboundAttachment{ID: "snapshot", Name: "report.txt", MIMEType: "text/plain", Data: []byte(strings.Repeat("original", 700000))}
 	require.NoError(t, service.SaveAttachment(t.Context(), "producer", "", &attachment, false))
 
 	var columns []string
@@ -542,9 +543,9 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 
 	recordTestConversations(t, store, "helper", map[string]ConversationKind{conversationID: KindSlackThread, "other": KindWebChat})
 
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ConversationID: conversationID, Message: "write tests", Content: content, Source: protocol.SourceSlack, SlackReply: reply, Principal: "U1", StashAt: firstStash, Position: 0, ParkAfter: "s1", SlackChannel: reply.ChannelID, SlackTS: reply.MessageTS}))
-	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{Kind: "steer", ConversationID: conversationID, Message: "write changelog", Principal: "U2", StashAt: secondStash, Position: 1, ParkAfter: "s1", SlackChannel: "D123", SlackTS: "333.444"}))
-	require.NoError(t, store.PutThreadQueueItem("other", &protocol.ThreadQueueItem{ConversationID: "other", Message: "keep", Principal: "U2", StashAt: firstStash, Position: 0}))
+	require.NoError(t, store.PutThreadQueueItem("q1", withInbound(&protocol.ThreadQueueItem{ConversationID: conversationID, Message: "write tests", Content: content, Source: protocol.SourceSlack, SlackReply: reply, Principal: "U1", StashAt: firstStash, Position: 0, ParkAfter: "s1", SlackChannel: reply.ChannelID, SlackTS: reply.MessageTS})))
+	require.NoError(t, store.PutThreadQueueItem("q2", withInbound(&protocol.ThreadQueueItem{Kind: "steer", ConversationID: conversationID, Message: "write changelog", Principal: "U2", StashAt: secondStash, Position: 1, ParkAfter: "s1", SlackChannel: "D123", SlackTS: "333.444"})))
+	require.NoError(t, store.PutThreadQueueItem("other", withInbound(&protocol.ThreadQueueItem{ConversationID: "other", Message: "keep", Principal: "U2", StashAt: firstStash, Position: 0})))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "helper", Message: "later", DueAt: dueAt}))
 	require.NoError(t, store.Stop())
 	store = newTestSessionServiceAt(t, workspace)
@@ -833,13 +834,11 @@ func TestSessionServiceActiveGoalThreads(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, threads)
 
-	for _, id := range []string{"active", "legacy", "terminal"} {
+	for _, id := range []string{"active", "terminal"} {
 		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
 		require.NoError(t, store.BeginGoal(id, &GoalState{Objective: "work", MaxTurns: 1}))
 	}
 
-	_, err = store.db.ExecContext(t.Context(), `UPDATE conversations SET goal_status = '' WHERE conversation_id = 'legacy'`)
-	require.NoError(t, err)
 	_, err = store.UpdateGoalStatus("terminal", GoalStatusComplete, "done")
 	require.NoError(t, err)
 
@@ -847,7 +846,6 @@ func TestSessionServiceActiveGoalThreads(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]ThreadState{
 		"active": {Agent: "planner", CreatedBy: ThreadCreatedByCron},
-		"legacy": {Agent: "planner", CreatedBy: ThreadCreatedByCron},
 	}, threads)
 }
 
@@ -1685,7 +1683,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 			_, err = store.db.ExecContext(ctx, `UPDATE turns SET phase = 'done', terminal = 'stopped', created_at_unix_ns = $2 WHERE id = $1`, "ended-"+id, old.UnixNano())
 			require.NoError(t, err)
 			seedActiveTurn(t, store, id, "active-"+id, testSessionEntryAt(cutoff.Add(time.Second), "current work"))
-			require.NoError(t, store.PutThreadQueueItem("queued-"+id, &protocol.ThreadQueueItem{ID: "queued-" + id, ConversationID: id, Message: "pending", Kind: protocol.InboundKindHeld, StashAt: old}))
+			require.NoError(t, store.PutThreadQueueItem("queued-"+id, withInbound(&protocol.ThreadQueueItem{ID: "queued-" + id, ConversationID: id, Message: "pending", Kind: protocol.InboundKindHeld, StashAt: old})))
 		}
 
 		_, _, err := store.CreateStickyConversation(ctx, protocol.Conversation{ID: "empty-user", Agent: "user", CreatedBy: "bob@example.com"}, harness.AgentStickyUser)
@@ -1776,7 +1774,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 
 		_, err = store.AppendEntryID(ctx, id, testSessionEntryAt(cutoff.Add(time.Second), "attachment:file-shown"))
 		require.NoError(t, err)
-		require.NoError(t, store.PutThreadQueueItem("queued", &protocol.ThreadQueueItem{ID: "queued", ConversationID: id, Message: "attachment:file-queued", Kind: protocol.InboundKindHeld, StashAt: old}))
+		require.NoError(t, store.PutThreadQueueItem("queued", withInbound(&protocol.ThreadQueueItem{ID: "queued", ConversationID: id, Message: "attachment:file-queued", Kind: protocol.InboundKindHeld, StashAt: old})))
 		require.NoError(t, store.PutScheduledMessage("daily", &protocol.ScheduledMessageState{ConversationID: id, Agent: "room", Message: "attachment:file-scheduled", DueAt: cutoff, Recurring: true, Interval: time.Hour}))
 
 		_, err = store.PruneStateBefore(ctx, cutoff, 0)
@@ -1809,7 +1807,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 
 	webID := "web-queued"
 	require.NoError(t, store.UpsertThread(webID, ThreadState{Agent: "planner"}))
-	webItem := protocol.ThreadQueueItem{ID: "web-q1", ConversationID: webID, Message: "first web message", Principal: "alice", Source: protocol.SourceWeb}
+	webItem := *withInbound(&protocol.ThreadQueueItem{ID: "web-q1", ConversationID: webID, Message: "first web message", Principal: "alice", Source: protocol.SourceWeb})
 	require.NoError(t, store.PutThreadQueueItem(webItem.ID, &webItem))
 
 	queuedSlack := protocol.SlackThreadConversationID("DQUEUE", slackTestTS(cutoff.Add(-time.Hour)))
@@ -1821,7 +1819,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	_, err = store.AppendEntryID(t.Context(), emptySlack, testSessionEntryAt(cutoff.Add(-time.Hour), emptySlack))
 	require.NoError(t, err)
 
-	slackItem := protocol.ThreadQueueItem{ID: "slack-q1", ConversationID: queuedSlack, Message: "waiting slack", Principal: "U1"}
+	slackItem := *withInbound(&protocol.ThreadQueueItem{ID: "slack-q1", ConversationID: queuedSlack, Message: "waiting slack", Principal: "U1"})
 	require.NoError(t, store.PutThreadQueueItem(slackItem.ID, &slackItem))
 
 	managedID := protocol.SlackThreadConversationID("C1", slackTestTS(cutoff.Add(-time.Hour)))
@@ -1834,7 +1832,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	privateItem := protocol.ThreadQueueItem{ID: "private-q1", ConversationID: privateID, Message: "private follow-up", Principal: "mcp"}
+	privateItem := *withInbound(&protocol.ThreadQueueItem{ID: "private-q1", ConversationID: privateID, Message: "private follow-up", Principal: "mcp"})
 	require.NoError(t, store.PutThreadQueueItem(privateItem.ID, &privateItem))
 
 	orphanID := "external_mcp:planner:queued-orphan"
@@ -1843,7 +1841,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, id := range []string{"orphan-q1", "orphan-q2"} {
-		item := protocol.ThreadQueueItem{ID: id, ConversationID: orphanID, Message: "orphan follow-up", Principal: "mcp"}
+		item := *withInbound(&protocol.ThreadQueueItem{ID: id, ConversationID: orphanID, Message: "orphan follow-up", Principal: "mcp"})
 		require.NoError(t, store.PutThreadQueueItem(id, &item))
 	}
 
@@ -2293,12 +2291,12 @@ func recordTestConversations(tb testing.TB, s *SessionService, agent string, kin
 	}
 }
 
-func recordLegacyDelegations(t *testing.T, s *SessionService, parent string, calls ...string) {
+func recordDelegations(t *testing.T, s *SessionService, parent, turn string, calls ...string) {
 	t.Helper()
 
 	for _, call := range calls {
-		_, err := s.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, retention, call_id)
-VALUES ($1 || '/' || $2, '', '', $1, $3, FALSE, 'nested', $2)`, parent, call, KindSubagent)
+		_, err := s.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, retention, call_turn, call_id)
+VALUES ($1 || '/' || $2, '', '', $1, $3, FALSE, 'nested', $4, $2)`, parent, call, KindSubagent, turn)
 		require.NoError(t, err)
 	}
 }
@@ -2593,12 +2591,12 @@ func TestWebSharedTabs(t *testing.T) {
 	}
 
 	share("main", "/search")
-	share("main", "/s/a")
+	share("main", "/s/YQ")
 	share("main", "/search")
 	share("main", "/s/bm9uZQ")
 	share("gone", "/cron")
 	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/s/YQ"}}, shared(),
-		"oldest first; a legacy spelling is stored canonical; sharing again, a missing session, or a missing space changes nothing")
+		"oldest first; sharing again, a missing session, or a missing space changes nothing")
 
 	share(ops, "/cron")
 	share(ops, "/s/YQ")
@@ -2763,10 +2761,10 @@ func TestWebClosedTabs(t *testing.T) {
 	page := &SearchPage{Name: "Triage", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}}}
 	a, b, cron, search := Tab{Path: "/s/YQ", Space: "main"}, Tab{Path: "/s/Yg", Space: "ops"}, Tab{Path: "/cron", Space: "main"}, Tab{Path: "/search/x", Space: "main", Search: page}
 	save("alice", Tab{Path: "/", Space: "main"}, Tab{Path: "group:g", Group: "g", Space: "main"}, a, b, search, cron)
-	save("alice", Tab{Path: "/s/a", Space: "main"}, b, search)
-	save("alice", Tab{Path: "/s/a", Space: "main"}, b)
+	save("alice", a, b, search)
+	save("alice", a, b)
 	assert.Equal(t, []string{"/search/x main true", "/cron main false"}, closed("alice"),
-		"newest closed first, keeping space and page; New session, a kept group's placeholder, and a tab saved under another spelling are not closed")
+		"newest closed first, keeping space and page; New session, a kept group's placeholder, and a still-open tab are not closed")
 
 	tabs, err := store.ClosedTabs(ctx, "alice")
 	require.NoError(t, err)
@@ -2892,4 +2890,22 @@ FROM conversations c WHERE c.shadow_parent IS NULL`, "kinds", func(row rowScanne
 		require.NoError(t, err)
 		require.Equal(t, slices.Contains(listed, id) || slices.Contains(shadows, id), eligible, id)
 	}
+}
+
+func withInbound(item *protocol.ThreadQueueItem) *protocol.ThreadQueueItem {
+	content := item.Content
+	content.Text = item.Message
+	item.Inbound = protocol.NewInboundMessageFromContent(item.Source, cmp.Or(item.Kind, protocol.InboundKindEnqueue), &content, true)
+	item.Inbound.ConversationID = item.ConversationID
+	item.Inbound.Metadata["web_message_id"], item.Inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.ID, item.Principal
+
+	if item.SlackChannel != "" {
+		item.Inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS, ThreadTS: item.SlackTS}
+	}
+
+	if item.SlackReply != nil {
+		item.Inbound.SlackReply = new(*item.SlackReply)
+	}
+
+	return item
 }

@@ -103,7 +103,7 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   // A space deleted elsewhere hands its tabs, groups kept, to the first space; the menu sits atop the tabs.
   await page.locator(`button${current}[aria-label="Main"]`).waitFor();
   await settled();
-  saved.state.tabs = saved.state.tabs.map((tab) => tab.path === href("bravo") ? { ...tab, space: "gone", group: "kept" } : tab);
+  saved.state.tabs = [...saved.state.tabs.map((tab) => tab.path === href("bravo") ? { ...tab, space: "gone", group: "kept" } : tab), { path: "group:kept", space: "gone", group: "kept" }];
   saved.state.groups = [{ id: "kept", name: "Kept", color: "Blue" }];
   await page.reload();
   await tab("Bravo").waitFor();
@@ -834,7 +834,7 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   const header = page.getByRole("button", { name: "Parked", exact: true }), sent = (count: number) => until(() => saved.sent.length === count);
   // The person's tabs are in Ops, Bravo and Charlie in its Work group; Hotel, in Main, is parked until they unpark it.
   saved.spaces.push({ id: "ops", name: "Ops" });
-  saved.state = { ...saved.state, space: "ops", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [...[href("alpha"), href("bravo"), href("charlie"), href("delta"), "/cron"].map((path, i) => ({ path, space: "ops", group: i === 1 || i === 2 ? "work" : undefined })), { path: href("hotel"), space: "main" }] };
+  saved.state = { ...saved.state, space: "ops", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [...[href("alpha"), href("bravo"), href("charlie"), "group:work", href("delta"), "/cron"].map((path, i) => ({ path, space: "ops", group: i >= 1 && i <= 3 ? "work" : undefined })), { path: href("hotel"), space: "main" }] };
   saved.attention = [{ path: href("hotel"), parked: true }];
   await page.goto(`${origin}${href("alpha")}`);
   await header.waitFor();
@@ -854,8 +854,8 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   const nine = await page.evaluate(() => { const at = new Date(); at.setDate(at.getDate() + 1); at.setHours(9, 0, 0, 0); return at.toISOString(); });
   expect([saved.sent[1], nine.slice(10)]).toEqual([{ paths: ["/cron"], action: "PARK", until: nine }, "T03:30:00.000Z"]);
   await parked.locator('[role="tab"][aria-label="Cron"][aria-description^="Space: Ops, Parked until "]').waitFor();
-  // Parked from its keyboard menu, Charlie leaves Work empty, whose header stays, though Work was saved before every
-  // group held its place, and focus moves to the strip's selected tab.
+  // Parked from its keyboard menu, Charlie leaves Work empty, whose header stays, and focus moves to the strip's selected
+  // tab.
   await tab("Charlie").focus();
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Park", exact: true }).press("ArrowRight");
@@ -1121,7 +1121,7 @@ test("every tab offers Unfollow, which then offers Follow, the two act on their 
 
 test("a space's card is drawn and acts the same whether its space is current: its groups under their names, its tabs with their whole menu, its unread tabs counted, and folded only the tab in view under a header that still marks its group's hidden tabs", () => withPage({}, async (page, origin, _prompts, saved) => {
   saved.spaces.push({ id: "ops", name: "Ops" });
-  saved.state = { ...saved.state, space: "main", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [{ path: href("alpha"), space: "main" }, ...["bravo", "foxtrot", "golf", "charlie", "delta"].map((id) => ({ path: href(id), space: "ops", group: ["bravo", "foxtrot", "golf"].includes(id) ? "work" : undefined }))] };
+  saved.state = { ...saved.state, space: "main", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [{ path: href("alpha"), space: "main" }, ...["bravo", "foxtrot", "golf", "charlie", "delta"].map((id) => ({ path: href(id), space: "ops", group: ["bravo", "foxtrot", "golf"].includes(id) ? "work" : undefined })), { path: "group:work", group: "work", space: "ops" }] };
   const ops = page.getByRole("tablist", { name: "Ops tabs" }), fold = page.getByRole("button", { name: "Ops", exact: true });
   const layout = () => ops.locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
   const header = ops.locator('[data-group="work"]'), weight = () => header.getByRole("button", { name: "Work", exact: true }).locator("span").evaluate((name: HTMLElement) => getComputedStyle(name).fontWeight);

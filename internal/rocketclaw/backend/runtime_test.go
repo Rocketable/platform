@@ -346,7 +346,7 @@ func TestRuntimePersistedEnqueueAndProducerArrivalOrder(t *testing.T) {
 				for _, enqueue := range []bool{tt.enqueueFirst, !tt.enqueueFirst} {
 					if enqueue {
 						content := protocol.InboundContent{AttachmentPresence: protocol.AttachmentPresenceImages}
-						require.NoError(t, rt.threads.stashQueueItem(ctx, protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID), &protocol.ThreadQueueItem{ID: "enqueue", Kind: protocol.InboundKindEnqueue, Source: protocol.SourceSlack, Content: content, Principal: "original author", StashAt: time.Now(), SlackChannel: target.ChannelID, SlackTS: "enqueue", SlackReply: &protocol.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: "enqueue", ThreadTS: target.ThreadID}}))
+						require.NoError(t, rt.threads.stashQueueItem(ctx, protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID), withInbound(&protocol.ThreadQueueItem{ID: "enqueue", Kind: protocol.InboundKindEnqueue, Source: protocol.SourceSlack, Content: content, Principal: "original author", StashAt: time.Now(), SlackChannel: target.ChannelID, SlackTS: "enqueue", SlackReply: &protocol.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: "enqueue", ThreadTS: target.ThreadID}})))
 					} else {
 						waiting.Go(func() error { return rt.RunTurn(ctx, competing) })
 					}
@@ -612,7 +612,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		queued := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &content, true)
 		queued.Metadata[protocol.InboundPrincipalMetadataKey] = "original author"
 		queued.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: "promoted"}
-		require.NoError(t, manager.stashQueueItem(t.Context(), conversationID, &protocol.ThreadQueueItem{ID: "q1", Message: content.Text, Content: content, Source: queued.Source, SlackReply: queued.SlackReply, Principal: "original author", SlackChannel: target.ChannelID, SlackTS: "promoted"}))
+		require.NoError(t, manager.stashQueueItem(t.Context(), conversationID, withInbound(&protocol.ThreadQueueItem{ID: "q1", Message: content.Text, Content: content, Source: queued.Source, SlackReply: queued.SlackReply, Principal: "original author", SlackChannel: target.ChannelID, SlackTS: "promoted"})))
 
 		var (
 			promotions [2]bool
@@ -656,7 +656,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 			bridge.requestCh = make(chan bridgeRequest, 1)
 			bridge.stopCh = make(chan struct{})
 			bridge.log = slog.New(slog.DiscardHandler)
-			require.NoError(t, bridge.submitEnqueuedItem(ctx, &protocol.ThreadQueueItem{ID: "q1", Message: "stale queue snapshot"}))
+			require.NoError(t, bridge.submitEnqueuedItem(ctx, withInbound(&protocol.ThreadQueueItem{ID: "q1", Message: "stale queue snapshot"})))
 
 			var group errgroup.Group
 			group.Go(func() error {
@@ -675,7 +675,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 
 			manager.bridges[conversationID] = bridge
 			for _, id := range []string{"before", "attachment", "after"} {
-				require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Source: protocol.SourceWeb, Principal: "goal_continuation", Content: protocol.InboundContent{TextAttachments: []string{"/docs-helper attachment-only"}}}))
+				require.NoError(t, store.PutThreadQueueItem(id, withInbound(&protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Source: protocol.SourceWeb, Principal: "goal_continuation", Content: protocol.InboundContent{TextAttachments: []string{"/docs-helper attachment-only"}}})))
 			}
 
 			promoted, err := manager.promoteQueueItem(t.Context(), conversationID, "attachment")
@@ -847,8 +847,8 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store}
 
-	first := &protocol.ThreadQueueItem{ID: "q1", Message: "one", Source: protocol.SourceSlack, Principal: "U1", SlackChannel: target.ChannelID, SlackTS: "1", SlackReply: &protocol.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: "1", ThreadTS: target.ThreadID}}
-	second := &protocol.ThreadQueueItem{ID: "q2", Message: "two", Source: protocol.SourceSlack, Principal: "U2", SlackChannel: target.ChannelID, SlackTS: "2", SlackReply: &protocol.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: "2", ThreadTS: target.ThreadID}}
+	first := withInbound(&protocol.ThreadQueueItem{ID: "q1", Message: "one", Source: protocol.SourceSlack, Principal: "U1", SlackChannel: target.ChannelID, SlackTS: "1", SlackReply: &protocol.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: "1", ThreadTS: target.ThreadID}})
+	second := withInbound(&protocol.ThreadQueueItem{ID: "q2", Message: "two", Source: protocol.SourceSlack, Principal: "U2", SlackChannel: target.ChannelID, SlackTS: "2", SlackReply: &protocol.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: "2", ThreadTS: target.ThreadID}})
 
 	require.NoError(t, rt.StashQueueItem(t.Context(), conversationID, first))
 	require.NoError(t, rt.StashQueueItem(t.Context(), conversationID, second))
@@ -996,7 +996,7 @@ func TestRuntimeReorderQueueItemsIsAtomic(t *testing.T) {
 			require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
 			for i, id := range []string{"q1", "q2", "q3"} {
-				require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Message: id, Source: protocol.SourceWeb, Position: i, StashAt: time.Unix(int64(i+1), 0).UTC()}))
+				require.NoError(t, store.PutThreadQueueItem(id, withInbound(&protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Message: id, Source: protocol.SourceWeb, Position: i, StashAt: time.Unix(int64(i+1), 0).UTC()})))
 			}
 
 			err := (&Runtime{Sessions: store}).ReorderQueueItems(t.Context(), conversationID, test.ids)
@@ -1220,7 +1220,7 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 	runTestManager(t, manager)
 	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store}
-	held := &protocol.ThreadQueueItem{ID: "held", Kind: protocol.InboundKindHeld, Message: "/keep this", Principal: "alice", Source: protocol.SourceWeb, Content: protocol.InboundContent{Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: tinyPNG()}}}}
+	held := withInbound(&protocol.ThreadQueueItem{ID: "held", ConversationID: conversationID, Kind: protocol.InboundKindHeld, Message: "/keep this", Principal: "alice", Source: protocol.SourceWeb, Content: protocol.InboundContent{Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: tinyPNG()}}}})
 	require.NoError(t, rt.StashQueueItem(t.Context(), conversationID, held))
 	require.Empty(t, bridge.requestCh)
 	require.NoError(t, store.Stop())
@@ -1257,7 +1257,7 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 	require.True(t, removed)
 
 	require.NoError(t, rt.StashQueueItem(t.Context(), conversationID, held))
-	require.NoError(t, store.PutThreadQueueItem("ready", &protocol.ThreadQueueItem{ConversationID: conversationID, Message: "first", Position: 40}))
+	require.NoError(t, store.PutThreadQueueItem("ready", withInbound(&protocol.ThreadQueueItem{ConversationID: conversationID, Message: "first", Position: 40})))
 	popped, err := rt.PopQueueItem(t.Context(), "other", held.ID)
 	require.NoError(t, err)
 	require.False(t, popped)

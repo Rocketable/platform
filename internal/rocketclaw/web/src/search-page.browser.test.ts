@@ -131,7 +131,6 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     const search = page.getByRole("textbox", { name: "Search sessions" });
     await search.waitFor();
     expect(await tabs.count()).toBe(1);
-    expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("search-tabs:")))).toEqual([]);
     await page.goto(`http://127.0.0.1:${server.port}/`);
     await page.getByRole("button", { name: "Search sessions and commands" }).waitFor(); // The shortcut listens once the app renders.
     await page.keyboard.press("Control+Shift+p");
@@ -268,28 +267,6 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
   }
 }, 30_000);
 
-test("searches this browser kept stay when a page that already has searches is edited", async () => {
-  const { chromium: engine } = await import(playwright!);
-  const { server, tabs: api, origin } = serve([], ({ query }) => response(query));
-  const browser = await engine.launch({ executablePath: chromium, headless: true });
-  try {
-    const page = await browser.newPage();
-    const first = () => api.tabs().find((tab) => tab.path === "/search/a")?.search?.searches[0].query;
-    await page.goto(`${origin}/search/a`);
-    const search = page.getByRole("textbox", { name: "Search sessions" });
-    await search.fill("server");
-    await until(() => first() === "server");
-    await page.evaluate(() => localStorage.setItem("search-tabs:tester", JSON.stringify({ tabs: [{ id: "old", query: "kept" }], active: "old" })));
-    await page.reload();
-    await search.fill("edited");
-    await until(() => first() === "edited");
-    expect(await page.evaluate(() => localStorage.getItem("search-tabs:tester"))).not.toBeNull();
-  } finally {
-    await browser.close();
-    server.stop(true);
-  }
-}, 30_000);
-
 test("principal filters retain links, pills and quoted suggestions", async () => {
   const { chromium: engine } = await import(playwright!);
   const principal = 'Writer "One"', term = `principal:${JSON.stringify(principal)}`;
@@ -335,15 +312,14 @@ test("principal filters retain links, pills and quoted suggestions", async () =>
   }
 }, 30_000);
 
-test("search URL follows the active tab, folds legacy filters, and reopens a matching tab", async () => {
+test("search URL follows the active tab and reopens a matching tab", async () => {
   const { chromium: engine } = await import(playwright!);
-  const folded = "agent:acme-cs-support outage";
-  const { server, paths, tabs: api, origin } = serve([{ id: "chat", name: "Outage chat", preview: "", agent: "acme-cs-support" }], ({ query }) => query === folded ? response(query, [{ conversationId: "chat", field: "Name", text: "Outage chat" }], ["agent:acme-cs-support"]) : response(query));
+  const searched = "agent:acme-cs-support outage";
+  const { server, paths, tabs: api, origin } = serve([{ id: "chat", name: "Outage chat", preview: "", agent: "acme-cs-support" }], ({ query }) => query === searched ? response(query, [{ conversationId: "chat", field: "Name", text: "Outage chat" }], ["agent:acme-cs-support"]) : response(query));
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
-    const link = "/search?q=outage&agent=acme-cs-support";
-    const canonical = "/search?q=agent%3Aacme-cs-support+outage";
+    const link = "/search?q=agent%3Aacme-cs-support+outage";
     const at = (target: string) => page.waitForURL((url: URL) => url.pathname + url.search === target);
     const search = page.getByRole("textbox", { name: "Search sessions" });
     const tabs = page.getByRole("tablist", { name: "Searches" }).getByRole("tab");
@@ -353,15 +329,12 @@ test("search URL follows the active tab, folds legacy filters, and reopens a mat
       expect(await tabs.first().getAttribute("aria-selected")).toBe("true");
       expect(await search.inputValue()).toBe("outage");
     };
-    await page.goto(`${origin}/`);
-    await page.evaluate(() => localStorage.setItem("search-tabs:tester", JSON.stringify({ tabs: [{ id: "legacy", query: "outage", agentFilter: "acme-cs-support", roomFilter: "" }], active: "legacy" })));
     await page.goto(origin + link);
-    await opened(1); // The legacy tab, folded once into its query, matches the folded link, and moves into the page's tab.
+    await opened(1);
     const saved = () => api.tabs().find((tab) => tab.path === "/search")?.search?.searches;
     await until(() => !!saved());
-    expect(saved()).toEqual([{ id: "legacy", query: folded }]);
-    expect(await page.evaluate(() => localStorage.getItem("search-tabs:tester"))).toBeNull();
-    await at(canonical);
+    expect(saved()!.map((item) => item.query)).toEqual([searched]);
+    await at(link);
     await page.reload();
     await opened(1);
     await page.getByRole("button", { name: "New search" }).click();
@@ -374,13 +347,13 @@ test("search URL follows the active tab, folds legacy filters, and reopens a mat
     await page.getByLabel("Search results").getByRole("heading").getByRole("link", { name: "Outage chat" }).click();
     await page.waitForURL("**/s/Y2hhdA");
     await page.goBack();
-    await at(canonical);
+    await at(link);
     await opened(2);
     const entries = await page.evaluate(() => history.length);
     await tabs.last().click();
     await at("/search?q=other+room");
     await tabs.first().click();
-    await at(canonical);
+    await at(link);
     await page.getByRole("button", { name: "Close search 1" }).click();
     await at("/search?q=other+room");
     await page.getByRole("button", { name: "New search" }).click();
@@ -1186,7 +1159,6 @@ test("message matches jump after history loads and last close returns to the las
     await page.getByRole("button", { name: "Close search 1" }).click();
     await page.waitForURL(root + lastSeen);
     expect(await page.getByRole("textbox", { name: "Search sessions" }).count()).toBe(0);
-    expect(await page.evaluate(() => localStorage.getItem("search-tabs:tester"))).toBeNull();
     owner = "bob";
     await page.waitForResponse(async (response: { url: () => string; json: () => Promise<{ username: string }> }) => response.url().endsWith("/api/Identity") && (await response.json()).username === "bob");
     await page.waitForTimeout(150);

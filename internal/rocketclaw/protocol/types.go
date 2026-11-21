@@ -80,12 +80,11 @@ type InboundContent struct {
 }
 
 type OutboundAttachment struct {
-	ID                 string
-	ConversationID     string `json:"conversation_id,omitempty"`
-	Name, MIMEType     string
-	Data               []byte `json:"-"`
-	OriginalUnverified bool
-	Size               int64
+	ID             string
+	ConversationID string `json:"conversation_id,omitempty"`
+	Name, MIMEType string
+	Data           []byte `json:"-"`
+	Size           int64
 }
 
 type CronjobMessage struct {

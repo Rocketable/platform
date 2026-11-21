@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -486,47 +485,18 @@ func (r *Runtime) RunningAgent(conversationID string) string {
 	return running.activeAttribution.Agent
 }
 
-func slackSessionID(ctx context.Context, db stateStoreDB, channelID, threadTS, messageTS, agent string) (string, error) {
+func slackSessionID(channelID, threadTS, messageTS, agent string) string {
 	if messageTS == threadTS {
-		return "slack-channel:" + channelID + ":" + agent, nil
+		return "slack-channel:" + channelID + ":" + agent
 	}
 
-	managed := protocol.SlackThreadConversationID(channelID, threadTS)
-
-	var continues bool
-	if err := queryScalar(ctx, db, "read Managed Slack Thread agent", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND agent = $2`, &continues, managed, agent); err != nil || continues {
-		return managed, err
-	}
-
-	return protocol.SlackThreadSessionID(channelID, threadTS, agent), nil
+	return protocol.SlackThreadSessionID(channelID, threadTS, agent)
 }
 
-func (m *threadBridgeManager) MentionThread(target protocol.TextConversationTarget) (recorded, report bool, err error) {
-	managed := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
+func (m *threadBridgeManager) MentionThread(target protocol.TextConversationTarget) (bool, error) {
+	_, recorded, err := m.store.Thread(slackSessionID(target.ChannelID, target.ThreadID, target.MessageID, target.Agent))
 
-	thread, _, err := m.store.Thread(managed)
-	if err != nil {
-		return false, false, err
-	}
-
-	_, _, paired, err := m.store.ExternalMCPSessionByConversationID(managed)
-	if err != nil {
-		return false, false, err
-	}
-
-	report = thread.CreatedBy == ThreadCreatedByCron || paired
-	if target.Agent == "" {
-		return false, report, nil
-	}
-
-	conversationID, err := slackSessionID(context.Background(), m.store.db, target.ChannelID, target.ThreadID, target.MessageID, target.Agent)
-	if err != nil {
-		return false, false, err
-	}
-
-	_, recorded, err = m.store.Thread(conversationID)
-
-	return recorded, report, err
+	return recorded, err
 }
 
 func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
@@ -544,9 +514,7 @@ func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, t
 
 	ids := make([]string, len(mentions))
 	for i, mention := range mentions {
-		if ids[i], err = slackSessionID(ctx, tx, target.ChannelID, target.ThreadID, mention.SlackReply.MessageTS, agent); err != nil {
-			return false, err
-		}
+		ids[i] = slackSessionID(target.ChannelID, target.ThreadID, mention.SlackReply.MessageTS, agent)
 	}
 
 	if err := lockHistories(ctx, tx, ids); err != nil {
@@ -985,7 +953,7 @@ func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.Thre
 	}
 
 	items = slices.DeleteFunc(items, func(item protocol.ThreadQueueItem) bool {
-		return item.Inbound != nil && !item.Inbound.Human && item.Inbound.Metadata[protocol.InboundSenderSessionMetadataKey] == ""
+		return !item.Inbound.Human && item.Inbound.Metadata[protocol.InboundSenderSessionMetadataKey] == ""
 	})
 
 	m.mu.Lock()
@@ -1030,19 +998,6 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 	}
 
 	inbound := item.Inbound
-	if inbound == nil {
-		content := item.Content
-		content.Text = item.Message
-		inbound = protocol.NewInboundMessageFromContent(item.Source, cmp.Or(item.Kind, protocol.InboundKindEnqueue), &content, true)
-		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.Principal
-		inbound.Metadata["web_message_id"] = id
-
-		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS, ThreadTS: item.SlackTS}
-		if item.SlackReply != nil {
-			inbound.SlackReply = new(*item.SlackReply)
-		}
-	}
-
 	kind := inbound.Kind
 
 	inbound.Kind = protocol.InboundKindSteer

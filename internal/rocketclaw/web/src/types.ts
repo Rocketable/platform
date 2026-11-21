@@ -1,9 +1,8 @@
 export type PromptDelivery = "STEER" | "QUEUE" | "STASH";
-export type Attachment = { id: string; name: string; mimeType: string; size?: string; originalUnverified?: boolean; conversationId: string };
+export type Attachment = { id: string; name: string; mimeType: string; size?: string; conversationId: string };
 export type TranscriptEvent = { text: string; role: string; complete: boolean; turnId: string; entryKey: string; itemId: string; inputId: string; messageId?: string; toolCallId?: string; toolName?: string; attachments?: Attachment[]; agent?: string; model?: string; reasoningEffort?: string; origin?: string; header?: string; principal?: string; state?: "working" | "review" | "completed" | "blocked" | "failed" | "stopped" | "background"; parentId?: string; completionNotes?: BackgroundJob[]; delegation?: string; review?: string; codeModeCalls?: CodeModeCall[]; scriptReason?: string; scriptOutcome?: "allow" | "deny"; reviewTurn?: string };
 // A call an Execute script made. Arguments are JSON clipped to 4 KiB; clipped arguments end in "…[truncated]".
-// Older chats list only approver-checked calls, without status.
-export type CodeModeCall = { name: string; arguments?: string; status?: "running" | "ok" | "error" | "denied"; summary?: string; outcome?: "allow" | "deny"; reason?: string; reviewTurn?: string; createdPullRequests?: string[]; mentionedPullRequests?: string[] };
+export type CodeModeCall = { name: string; arguments?: string; status: "running" | "ok" | "error" | "denied"; summary?: string; outcome?: "allow" | "deny"; reason?: string; reviewTurn?: string; createdPullRequests?: string[]; mentionedPullRequests?: string[] };
 export type BackgroundJob = { jobId: string; kind: string; state: string; label: string; toolCallId: string; subagentKey: string; stoppedBy: string; hidden: boolean; note: string };
 export type PendingQuestion = { id: string; question: string; details: string; options: { label: string; value: string; description: string }[]; multiple: boolean };
 export type QueueItem = { id: string; text: string; editText?: string; attachments?: Attachment[]; delivery?: PromptDelivery; principal?: string };
@@ -19,7 +18,7 @@ export type HistoryView = { messages: TranscriptEvent[]; origin?: ChatOrigin; de
 export type MessageMatch = { conversationId: string; message: TranscriptEvent; rocketclaw?: string };
 export type SearchMessagesResponse = { matches?: MessageMatch[]; tagIds?: string[] };
 // Term offsets are UTF-16 positions in the sent query; an empty match field means only message text matched.
-export type SearchSessionsResponse = { terms: { key: string; text: string; start: number; end: number }[]; text: string; needle: string; matches: { conversationId: string; field: string; text: string; rocketclaw?: string }[]; messages: MessageMatch[]; mentionIds: string[]; principals?: string[] };
+export type SearchSessionsResponse = { terms: { key: string; text: string; start: number; end: number }[]; text: string; needle: string; matches: { conversationId: string; field: string; text: string; rocketclaw?: string }[]; messages: MessageMatch[]; mentionIds: string[]; principals: string[] };
 // A tab location's attention, as a session row carries its session's: a mark, quiet when it raises no notification, a
 // park, the one timer, and the notification text the server wrote. A row with only its path says the location has none.
 export type TabAttention = { path: string; unreadAt?: string; quiet?: boolean; parked?: boolean; until?: string; untilDone?: boolean; note?: string; autoPark?: boolean; unfollowed?: boolean };
@@ -66,8 +65,8 @@ export type SearchPage = { name?: string; searches: { id: string; name?: string;
 // and sharedOrder is the person's own order of Shared tabs by path.
 // revision counts saves; stale reports a save refused because it was made from an older revision than the one saved.
 // shared is every space's Shared tabs, the same for every person, oldest added first, a Search tab with its one page.
-// closed is the person's last closed tabs, newest first, which a server older than them leaves out.
-export type SavedTabs = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: string; stale?: boolean; shared: { space: string; path: string; search?: SearchPage }[]; unshared?: SearchPage; layout?: StripLayout; closed?: { path: string; space?: string; search?: SearchPage }[]; autoPark?: boolean };
+// closed is the person's last closed tabs, newest first.
+export type SavedTabs = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: string; stale?: boolean; shared: { space: string; path: string; search?: SearchPage }[]; unshared?: SearchPage; layout?: StripLayout; closed: { path: string; space?: string; search?: SearchPage }[]; autoPark?: boolean };
 // StripLayout is how this person lays out their tab strip on every RocketClaw, kept by the local server: whether each of
 // its cards and Parked branches is folded, by its key, and the order of its cards and of each Parked branch's tabs, by
 // their keys.

@@ -8,10 +8,4 @@ describe("session id", () => {
     expect(encoded).not.toMatch(/[/+]/);
     expect(decodeSessionId(encoded)).toBe(id);
   });
-
-  it("accepts percent-encoded raw ids", () => {
-    const id = "slack-thread:C0BC7HARQ5B:1786456859.534779";
-    expect(decodeSessionId(encodeURIComponent(id))).toBe(id);
-    expect(decodeSessionId(id)).toBe(id);
-  });
 });

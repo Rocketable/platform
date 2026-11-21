@@ -15,8 +15,7 @@ import (
 )
 
 const benchmarkAgentFrontmatter = `description: Reviews proposed changes
-model: example-model
-reasoningEffort: high
+model: example-model#high
 verbosity: low
 maxRecursion: 2
 permission:
@@ -199,8 +198,7 @@ func TestLoadAgents(t *testing.T) {
 		fsys := fstest.MapFS{
 			"review.md": testMapFileMode(0o640, `---
 description: Reviews code for correctness
-model: gpt-6.1-sol
-reasoningEffort: high
+model: gpt-6.1-sol#high
 verbosity: low
 maxRecursion: 2
 permission:
@@ -309,8 +307,6 @@ ignored
 	t.Run("loads reasoning effort from model suffix", func(t *testing.T) {
 		for _, tt := range []struct{ frontmatter, model, effort string }{
 			{"model: work/gpt-6.1-sol#max", "work/gpt-6.1-sol", "max"},
-			{"model: work/gpt-6.1-sol#max\nreasoningEffort: high", "work/gpt-6.1-sol", "max"},
-			{"model: work/gpt-6.1-sol\nreasoningEffort: high", "work/gpt-6.1-sol", "high"},
 			{"model: work/gpt-6.1-sol", "work/gpt-6.1-sol", ""},
 		} {
 			t.Run(tt.frontmatter, func(t *testing.T) {

@@ -339,12 +339,12 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 	require.NoError(t, err)
 
 	mainID, ops := spaces[0].ID, spaces[1].ID
-	routine, typed, shared := cronTabPath("marketing · 30m"), "/cron/marketing%20%C2%B7%2030m", "/cron/marketing · 30m"
+	routine := cronTabPath("marketing · 30m")
 
 	for person, tabs := range map[string][]Tab{
 		alice: {{Path: routine, Space: mainID}, {Path: "/cron", Space: ops}, {Path: cronTabPath("daily"), Space: mainID}},
-		bob:   {{Path: typed, Space: mainID}, {Path: "/cron", Space: mainID}},
-		carol: {{Path: routine, Space: ops}, {Path: "/cron/daily", Space: ops}},
+		bob:   {{Path: "/cron", Space: mainID}},
+		carol: {{Path: routine, Space: ops}, {Path: cronTabPath("daily"), Space: ops}},
 		dave:  {{Path: routine, Space: mainID}, {Path: "/cron", Space: mainID}},
 	} {
 		saved, err := service.SaveTabState(ctx, person, &TabState{Tabs: tabs, Space: mainID}, 0)
@@ -352,7 +352,7 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 		require.True(t, saved)
 	}
 
-	require.NoError(t, service.ShareTab(ctx, mainID, shared, nil))
+	require.NoError(t, service.ShareTab(ctx, mainID, routine, nil))
 
 	runEnds := func(runID, path, space string) []string {
 		t.Helper()
@@ -370,8 +370,8 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 	}
 
 	assert.ElementsMatch(t, []string{
-		alice + " /cron loud", alice + " " + shared + " loud", alice + " " + routine + " loud",
-		bob + " " + shared + " loud", bob + " " + typed + " loud",
+		alice + " /cron loud", alice + " " + routine + " loud",
+		bob + " " + routine + " loud",
 		carol + " " + routine + " loud",
 	}, runEnds("cron:marketing", "agents/marketing.md#30m", "Ops"))
 
@@ -391,7 +391,7 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 		return locationMarks(t, service, "Run finished")
 	}
 
-	require.NoError(t, service.PutThreadQueueItem("next", &protocol.ThreadQueueItem{ConversationID: "cron:twice", Message: "again"}))
+	require.NoError(t, service.PutThreadQueueItem("next", withInbound(&protocol.ThreadQueueItem{ConversationID: "cron:twice", Message: "again"})))
 	assert.Empty(t, turnEnds("turn:first"))
 
 	removed, _, err := service.DeleteThreadQueueItem(ctx, "cron:twice", "next")
@@ -465,7 +465,7 @@ func TestAttentionParkUntilDone(t *testing.T) {
 	}
 	queue := func(t *testing.T, chat string) {
 		t.Helper()
-		require.NoError(t, service.PutThreadQueueItem(chat+":next", &protocol.ThreadQueueItem{ConversationID: chat, Message: "again"}))
+		require.NoError(t, service.PutThreadQueueItem(chat+":next", withInbound(&protocol.ThreadQueueItem{ConversationID: chat, Message: "again"})))
 	}
 
 	t.Run("waits for the session to be idle", func(t *testing.T) {

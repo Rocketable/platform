@@ -105,7 +105,7 @@ func TestShadowReviewClearRetainsPendingAttachments(t *testing.T) {
 		require.NoError(t, store.SaveAttachment(t.Context(), id, turnID, &files[i], i == 0))
 	}
 
-	require.NoError(t, store.PutThreadQueueItem("stash", &protocol.ThreadQueueItem{ID: "stash", ConversationID: id, Kind: protocol.InboundKindHeld, Source: protocol.SourceWeb, Content: protocol.InboundContent{TextAttachments: []string{"attachment:stashed-upload"}}}))
+	require.NoError(t, store.PutThreadQueueItem("stash", withInbound(&protocol.ThreadQueueItem{ID: "stash", ConversationID: id, Kind: protocol.InboundKindHeld, Source: protocol.SourceWeb, Content: protocol.InboundContent{TextAttachments: []string{"attachment:stashed-upload"}}})))
 	require.NoError(t, startTurnDB(t.Context(), store.db, "unfinished", id, protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "work", true)))
 
 	_, err := store.DeleteSession(t.Context(), id)

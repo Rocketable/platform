@@ -290,7 +290,7 @@ func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
 			require.NoError(t, err)
 
 			for _, id := range []string{"main/turn-1/call/w", "main/turn-1/call/job"} {
-				require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: "main/a", Kind: protocol.InboundKindEnqueue}))
+				require.NoError(t, store.PutThreadQueueItem(id, withInbound(&protocol.ThreadQueueItem{ID: id, ConversationID: "main/a", Kind: protocol.InboundKindEnqueue})))
 			}
 
 			if tc.detached {

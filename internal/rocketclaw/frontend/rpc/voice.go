@@ -563,19 +563,12 @@ func (c *voiceCall) end(ctx context.Context, events <-chan voiceEvent, closed bo
 }
 
 func (c *voiceCall) forward(ctx context.Context, snapshots chan<- voiceSnapshot) error {
-	root, err := os.OpenRoot(c.server.cfg.Clone().Workspace)
-	if err != nil {
-		return fmt.Errorf("open voice workspace: %w", err)
-	}
-
-	defer func() { _ = root.Close() }()
-
 	from, limit := int64(0), 10
 
 	for _, err := range c.server.sessions.Changes(ctx, c.conversationID) {
 		var snapshot voiceSnapshot
 		if err == nil {
-			snapshot, from, err = c.snapshot(ctx, root, from, limit)
+			snapshot, from, err = c.snapshot(ctx, from, limit)
 			limit = 0
 		}
 
@@ -597,7 +590,7 @@ func (c *voiceCall) forward(ctx context.Context, snapshots chan<- voiceSnapshot)
 	return nil
 }
 
-func (c *voiceCall) snapshot(ctx context.Context, root *os.Root, from int64, limit int) (voiceSnapshot, int64, error) {
+func (c *voiceCall) snapshot(ctx context.Context, from int64, limit int) (voiceSnapshot, int64, error) {
 	snapshot := voiceSnapshot{typedBy: map[string]string{}}
 
 	view, err := c.server.sessions.ObserveHistory(ctx, c.conversationID, "", from, 0, limit, &backend.HistoryInventory{})
@@ -608,7 +601,7 @@ func (c *voiceCall) snapshot(ctx context.Context, root *os.Root, from int64, lim
 	for i := range view.Entries {
 		entry := &view.Entries[i]
 
-		messages, err := c.server.transcriptEntry(ctx, root, entry, c.conversationID, false, map[string]string{})
+		messages, err := c.server.transcriptEntry(ctx, entry, c.conversationID, false, map[string]string{})
 		if err != nil {
 			return snapshot, 0, err
 		}

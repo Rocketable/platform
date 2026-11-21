@@ -116,7 +116,7 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	_, err = db.ExecContext(t.Context(), `INSERT INTO web_tab_attention (username, path, conversation_id, unread_at) VALUES ('alice', '/s/Yg', 'b', now()), ('alice', '/s/Yw', 'c', now())`)
 	require.NoError(t, err)
 
-	next := &TabState{Tabs: []*Tab{{Path: "/s/a", Space: "main"}, {Path: "/s/bm9uZQ", Space: "main"}, {Path: "/s/_w", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/s/a"}}
+	next := &TabState{Tabs: []*Tab{{Path: "/s/YQ", Space: "main"}, {Path: "/s/bm9uZQ", Space: "main"}, {Path: "/s/_w", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/s/YQ"}}
 	response, err = call("alice", &TabsRequest{State: next, Revision: 1})
 	require.NoError(t, err)
 	assert.False(t, response.Stale)
@@ -230,7 +230,7 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.Equal(t, []string{space + " /search", space + " /cron"}, shared(response), "an edit after unsharing does not share again")
 
 	later := time.Now().Add(time.Hour).UTC().Format("2006-01-02T15:04:05.000Z07:00")
-	_, err = call("alice", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/a", "/cron"}, Action: AttentionAction_PARK, Until: later}})
+	_, err = call("alice", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_PARK, Until: later}})
 	require.NoError(t, err)
 	_, err = call("bob", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/Yw"}, Action: AttentionAction_PARK, Until: later}})
 	require.NoError(t, err)

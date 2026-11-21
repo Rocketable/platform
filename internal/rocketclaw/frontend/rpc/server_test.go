@@ -127,7 +127,7 @@ func TestQueueEdit(t *testing.T) {
 		require.False(t, slices.ContainsFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == id }))
 	}
 
-	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("steer", &protocol.ThreadQueueItem{ID: "steer", ConversationID: "main", Kind: protocol.InboundKindSteer, Message: "unchanged"}))
+	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("steer", withInbound(&protocol.ThreadQueueItem{ID: "steer", ConversationID: "main", Kind: protocol.InboundKindSteer, Message: "unchanged"})))
 	_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "main", ItemId: "steer", Text: "changed"})
 	require.Equal(t, codes.NotFound, status.Code(err))
 
@@ -1658,9 +1658,9 @@ func TestSessionEntries(t *testing.T) {
 		require.Len(t, turns, before)
 	})
 
-	require.NoError(t, sessions.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{
+	require.NoError(t, sessions.PutThreadQueueItem("q1", withInbound(&protocol.ThreadQueueItem{
 		ConversationID: id, Message: "queued later", Principal: "alice", StashAt: time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC),
-	}))
+	})))
 	queued, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: id})
 	require.NoError(t, err)
 	require.Equal(t, []*QueueItem{{Id: "q1", Text: "queued later", Delivery: PromptDelivery_QUEUE, Principal: "alice"}}, queued.Items)
@@ -1670,9 +1670,9 @@ func TestSessionEntries(t *testing.T) {
 
 		core.QueueItemsFunc = func(string) ([]protocol.ThreadQueueItem, error) {
 			return []protocol.ThreadQueueItem{
-				{ID: "later-first", Kind: protocol.InboundKindEnqueue, Message: "first later message", Principal: "Bob Smith"},
-				{ID: "steering", Kind: protocol.InboundKindSteer, Message: "guide the current response", Principal: "Bob Smith"},
-				{ID: "later-second", Kind: protocol.InboundKindEnqueue, Message: "second later message"},
+				*withInbound(&protocol.ThreadQueueItem{ID: "later-first", Kind: protocol.InboundKindEnqueue, Message: "first later message", Principal: "Bob Smith"}),
+				*withInbound(&protocol.ThreadQueueItem{ID: "steering", Kind: protocol.InboundKindSteer, Message: "guide the current response", Principal: "Bob Smith"}),
+				*withInbound(&protocol.ThreadQueueItem{ID: "later-second", Kind: protocol.InboundKindEnqueue, Message: "second later message"}),
 				{ID: "agent", Kind: protocol.InboundKindHeld, Message: "from an agent", Inbound: &protocol.InboundMessage{Text: "from an agent", Metadata: map[string]string{protocol.InboundSenderSessionMetadataKey: "web:a", protocol.InboundSenderAgentMetadataKey: "planner"}}},
 			}, nil
 		}
@@ -1700,12 +1700,12 @@ func TestSessionEntries(t *testing.T) {
 	_, err = invoke[QueueItemResponse](ctx, connection, "SteerQueueItem", &QueueItemRequest{Id: id, ItemId: "missing"})
 	require.Equal(t, codes.NotFound, status.Code(err))
 
-	require.NoError(t, sessions.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{
+	require.NoError(t, sessions.PutThreadQueueItem("q2", withInbound(&protocol.ThreadQueueItem{
 		ConversationID: id, Message: "second", Principal: "alice", Position: 0, StashAt: time.Date(2026, 9, 6, 12, 0, 1, 0, time.UTC),
-	}))
-	require.NoError(t, sessions.PutThreadQueueItem("q3", &protocol.ThreadQueueItem{
+	})))
+	require.NoError(t, sessions.PutThreadQueueItem("q3", withInbound(&protocol.ThreadQueueItem{
 		ConversationID: id, Message: "third", Principal: "alice", Position: 1, StashAt: time.Date(2026, 9, 6, 12, 0, 2, 0, time.UTC),
-	}))
+	})))
 
 	_, err = invoke[QueueItemResponse](t.Context(), connection, "RemoveQueueItem", &QueueItemRequest{Id: id, ItemId: "q2"})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
@@ -3116,7 +3116,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			defer func() { core.QueueItemsFunc = list }()
 
 			core.QueueItemsFunc = func(string) ([]protocol.ThreadQueueItem, error) {
-				return []protocol.ThreadQueueItem{{ID: "attachment-input", Kind: protocol.InboundKindSteer, Message: turns[len(turns)-1].Text, Principal: "Bob Smith"}}, nil
+				return []protocol.ThreadQueueItem{*withInbound(&protocol.ThreadQueueItem{ID: "attachment-input", Kind: protocol.InboundKindSteer, Message: turns[len(turns)-1].Text, Principal: "Bob Smith"})}, nil
 			}
 			pending, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: conversation})
 			require.NoError(t, err)
@@ -3346,37 +3346,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		require.Equal(t, data, received)
 
-		require.NoError(t, root.MkdirAll("artifacts/memes", 0o700))
-		require.NoError(t, root.WriteFile("artifacts/memes/old.png", []byte("old image bytes"), 0o600))
-		outside, err := os.OpenRoot(t.TempDir())
-
-		require.NoError(t, err)
-		defer func() { require.NoError(t, outside.Close()) }()
-
-		require.NoError(t, outside.WriteFile("secret", []byte("outside workspace"), 0o600))
-		require.NoError(t, root.Symlink(filepath.Join(outside.Name(), "secret"), "escape"))
-
-		legacy := []json.RawMessage{
-			json.RawMessage(`{"type":"function_call","call_id":"legacy","name":"rocketclaw_attach_files_to_response","arguments":"{\"attachments\":[{\"path\":\"artifacts/memes/old.png\"},{\"path\":\"escape\"},{\"path\":\"missing\"}]}"}`),
-			json.RawMessage(`{"type":"function_call_output","call_id":"legacy","output":"queued attachments for final response"}`),
-		}
-		_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: legacy})
-		require.NoError(t, err)
-		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
-		require.NoError(t, err)
-		require.Len(t, history.Messages[len(history.Messages)-1].Attachments, 1)
-
-		recovered := history.Messages[len(history.Messages)-1].Attachments[0]
-		require.True(t, recovered.OriginalUnverified)
-		require.Empty(t, recovered.Data)
-		require.NoError(t, root.WriteFile("artifacts/memes/old.png", []byte("overwritten"), 0o600))
-
-		history, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
-		require.NoError(t, err)
-		require.True(t, proto.Equal(recovered, history.Messages[len(history.Messages)-1].Attachments[0]))
-		stored, err := reopened.LoadAttachment(ctx, conversation, recovered.Id, false)
-		require.NoError(t, err)
-		require.Equal(t, []byte("old image bytes"), stored.Data)
 		nestedFile := protocol.OutboundAttachment{ID: "nested-generated", Name: "nested.png", MIMEType: "image/png", Data: []byte("nested image")}
 		require.NoError(t, sessions.SaveAttachment(ctx, conversation, "attaching-turn", &nestedFile, false))
 		_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "attaching-turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
@@ -3385,7 +3354,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			json.RawMessage(`{"type":"message","role":"assistant","content":"here it is"}`),
 		}})
 		require.NoError(t, err)
-		history, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
+		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
 		require.NoError(t, err)
 
 		reply := history.Messages[len(history.Messages)-1]
@@ -3398,18 +3367,18 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, sessions.SaveAttachment(ctx, "private-X", "", &producerFile, false))
 		_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $1 WHERE conversation_id = 'private-X'`, conversation)
 		require.NoError(t, err)
-		_, err = sessions.AppendEntryID(ctx, "private-X", &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		_, err = sessions.AppendEntryID(ctx, "private-X", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "delegating-turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call","call_id":"private-file","name":"rocketclaw_attach_files_to_response","arguments":"{}"}`),
 			json.RawMessage(`{"type":"function_call_output","call_id":"private-file","output":"queued attachments for final response: private-generated"}`),
 		}})
 		require.NoError(t, err)
-		_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "delegating-turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call","call_id":"own","name":"task","arguments":"{}"}`),
 		}})
 		require.NoError(t, err)
 
 		for _, call := range [][2]string{{conversation, "own"}, {conversation + "/own", "nested"}, {conversation, "unshown"}, {"private-X", "private-file"}, {"private-X", "unmirrored"}} {
-			testTurns{db: db}.RecordLegacyDelegation(t, call[0], call[1])
+			testTurns{db: db}.RecordDelegation(t, call[0], "delegating-turn", call[1])
 		}
 
 		_, err = db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention) VALUES ('private-Xother/decoy', '', '', 'web_chat', FALSE, 'private')`)
@@ -3481,7 +3450,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, err)
 		stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/DownloadAttachment")
 		require.NoError(t, err)
-		require.NoError(t, stream.SendMsg(&Attachment{ConversationId: conversation, Id: recovered.Id}))
+		require.NoError(t, stream.SendMsg(&Attachment{ConversationId: conversation, Id: file.Id}))
 		require.NoError(t, stream.CloseSend())
 		require.Equal(t, codes.NotFound, status.Code(stream.RecvMsg(&Attachment{})))
 	})
@@ -3687,7 +3656,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		for _, replay := range []string{
 			`[{"type":"compaction","content":42}]`,
-			`[{"type":"function_call","name":"rocketclaw_attach_files_to_response","call_id":"broken","arguments":"invalid"},{"type":"function_call_output","call_id":"broken","output":"queued attachments for final response"}]`,
 		} {
 			_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', $1::jsonb)::json WHERE id = $2`, replay, entryID)
 			require.NoError(t, err)

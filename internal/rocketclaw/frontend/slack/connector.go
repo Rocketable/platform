@@ -433,17 +433,11 @@ func (c *Connector) mentionThread(ctx context.Context, msg *protocol.OutboundMes
 
 func (c *Connector) mentionConversation(ctx context.Context, conversationID string) (channelID, threadTS string, ok bool) {
 	channelID, threadTS, channelSession, err := c.facts.SlackThread(ctx, conversationID)
-
-	report := false
-	if err == nil && threadTS != "" {
-		_, report, err = c.threadRouter.MentionThread(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
-	}
-
 	if err != nil {
 		c.log.Warn("read Slack mention thread", "conversation_id", conversationID, "error", err)
 	}
 
-	return channelID, threadTS, err == nil && (threadTS != "" || channelSession) && !report
+	return channelID, threadTS, err == nil && (threadTS != "" || channelSession)
 }
 
 func (c *Connector) mentionFooter(ctx context.Context, msg *protocol.OutboundMessage) (string, []slack.Block) {
@@ -598,15 +592,9 @@ func (c *Connector) handleAgentSessionTitleChanged(ctx context.Context, ev *slac
 		return
 	}
 
-	for _, conversationID := range []string{protocol.SlackThreadSessionID(ev.Channel, ev.ThreadTimestamp, agent), protocol.SlackThreadConversationID(ev.Channel, ev.ThreadTimestamp)} {
-		found, err := c.facts.UpdateConversationDetails(ctx, conversationID, &title)
-		if err != nil {
-			c.log.Warn("name Web conversation after Slack session title", "conversation_id", conversationID, "error", err)
-		}
-
-		if found || err != nil {
-			return
-		}
+	conversationID := protocol.SlackThreadSessionID(ev.Channel, ev.ThreadTimestamp, agent)
+	if _, err := c.facts.UpdateConversationDetails(ctx, conversationID, &title); err != nil {
+		c.log.Warn("name Web conversation after Slack session title", "conversation_id", conversationID, "error", err)
 	}
 }
 
@@ -967,7 +955,7 @@ func (c *Connector) runSocketLoop(ctx context.Context) {
 					break clientLoop
 				}
 
-				if (event.Type == socketmode.EventTypeEventsAPI || event.Type == socketmode.EventTypeInteractive) && event.Request != nil {
+				if event.Type == socketmode.EventTypeEventsAPI && event.Request != nil {
 					if err := c.ackSocketEvent(client, *event.Request); err != nil {
 						c.log.Warn("ack Slack socket event", "error", err)
 					}
@@ -1103,13 +1091,9 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	target := protocol.TextConversationTarget{ChannelID: ev.Channel, MessageID: ev.TimeStamp, ThreadID: threadTS, Agent: agent}
 
-	recorded, report, err := c.threadRouter.MentionThread(target)
+	recorded, err := c.threadRouter.MentionThread(target)
 	if err != nil {
 		c.log.Error("read Slack mention thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
-		return
-	}
-
-	if report {
 		return
 	}
 
@@ -1124,12 +1108,6 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		messages, ok := c.slackThreadReplies(ctx, ev.Channel, threadTS)
 		if !ok {
 			c.replyMentionFailure(ctx, replyTarget, "I couldn't read this thread's earlier messages.")
-			return
-		}
-
-		if slices.ContainsFunc(messages, func(message slack.Message) bool {
-			return message.Timestamp == threadTS && message.User == c.botUserID && message.Metadata.EventType != slackChannelReplyEvent
-		}) {
 			return
 		}
 

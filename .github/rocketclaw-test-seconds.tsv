@@ -109,7 +109,6 @@
 1.8	TestSaveAgentDraftPushesToOverlay
 1.8	TestAttentionParkUntilDone
 1.8	TestSessionReads
-1.7	TestRevertLegacyQueuePromotionAndEnqueue
 1.7	TestSaveAgentDraftOverlayRefusals
 1.7	TestShadowSiblingFailureIsIndependent
 1.7	TestSaveAgentDraftPullRequestWithGh
@@ -161,7 +160,6 @@
 1.4	TestSessionSummaryHistoryAllocationBudget
 1.4	TestRuntimeProducerReportsToDestination
 1.4	TestHistoryFollowsHiddenRun
-1.4	TestThreadBridgeManagerMentionThreadRecognizesReportThreads
 1.4	TestBackgroundNoteConsumedBeforeMoveIsNotOfferedAgain
 1.4	TestSessionWriteReplyWakesHelper
 1.4	TestSessionTagToolsBridge
@@ -171,7 +169,7 @@
 1.4	TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale
 1.4	TestSearchSessionsResponse
 1.4	TestShadowHistorySourcePagesAndChildRevision
-1.4	TestSlackThreadMentionContinuesManagedSlackThreadOfSameAgent
+1.4	TestSlackThreadMentionUsesAgentThreadSession
 1.4	TestSteerSwitchesRunningSessionType
 1.4	TestSearchSessionsUnreadPerCaller
 1.4	TestStopSearchesCancelsAndWaits
@@ -257,7 +255,6 @@
 1.1	TestRunOneOffCronjobRejectsStoppedManager
 1.1	TestPausedMessageMarksOtherReaders
 1.1	TestAgentDraftSavingResetsOnStart
-1.1	TestInitializeSessionDBAdoptsReleasedStore
 1.0	TestShadowLifecycleDefinitionFailureAndRetry
 1.0	TestStoppedTurnReleasesItsNotes
 1.0	TestRevertStashKeepsVoiceInbound

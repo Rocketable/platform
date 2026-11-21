@@ -6,7 +6,7 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 
 ### Managed Slack Thread
 
-A Slack thread that RocketClaw persists as a conversation owned by a selected agent. In Slack, only mentions start its turns; replies without a mention start nothing. Since `sticky: slack`, a Managed Slack Thread is a Thread Session; one created earlier keeps its history and continues when its agent is the channel's agent.
+A Slack thread that RocketClaw persists as a conversation owned by a selected agent. In Slack, only mentions start its turns; replies without a mention start nothing. Since `sticky: slack`, a Managed Slack Thread is a Thread Session.
 
 A Managed Slack Thread has one active turn at a time. A mention received during that turn waits in the Thread Queue and runs as the next turn; it never steers. Web can also work in the conversation: Web input it consumes and every reply are posted into the thread. A second Slack delivery of an accepted mention is not a new send. While any of its turns runs, whichever surface started it, Slack shows the thread as working, or as needing someone while the turn waits for an answer in Web, and an allowlisted user's Stop in Slack ends that turn; besides the turn's checklist and any Web input it consumes, nothing is posted until its answer arrives as a new reply.
 
@@ -31,12 +31,6 @@ Unmapped conversations use the `@` Channel Entry. Mapped channels keep that room
 ### `@` Channel Entry
 
 A configured Slack channel entry named `@` that supplies agents and an allowlist for Adhoc Callouts in joined channels that have no entry of their own. It is not a Slack channel.
-
-### Report Thread
-
-A Slack thread an earlier version posted a cron report or an External MCP session into: its conversation, now a Web chat created by cron or bound to the session, or an unrecorded thread whose root RocketClaw's own bot posted without the mark Channel Session answers carry. The last case covers threads whose record expired; a thread under a Channel Session answer is a Thread Session, not a Report Thread.
-
-A Report Thread is read-only. RocketClaw ignores every reply and mention in it, showing no working state and posting no reply, and posts nothing more into it. Read-only means RocketClaw ignores input, not that Slack locks the thread. Work on it continues in Web.
 
 ### Thread Queue
 
@@ -432,7 +426,6 @@ A running turn saves each item of its record once, as a step of its own, instead
 - An Adhoc Callout creates or takes over a Managed Slack Thread.
 - A Root Slack Mention in an unmapped joined channel is an Adhoc Callout when an `@` Channel Entry exists.
 - A mention in a Managed Slack Thread becomes one Thread Queue item and runs as its own turn.
-- A Report Thread ignores Slack input; its conversation continues in Web.
 - A Managed Slack Thread, Thread Queue, External MCP binding, and Step Journal persist in the State Store.
 - Reload replaces Overlay Clones.
 - Frontends and the Backend share Protocol.
