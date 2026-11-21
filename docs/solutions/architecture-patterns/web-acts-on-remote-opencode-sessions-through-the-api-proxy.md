@@ -37,7 +37,7 @@ The first version went through the mounted OpenCode view. `internal/rocketclaw/o
 natural extension. It did not work where it was needed:
 
 - `internal/rocketclaw/oc/packages/app/src/session/timeline/message-timeline.tsx:277` registers
-  `session.rename` and `session.delete` only when `props.hideHeader` is false, and line 577 hides
+  `session.rename` and `session.delete` only when `props.hideHeader` is false, and line 578 hides
   the header, ••• menu included, under the same flag.
 - `internal/rocketclaw/oc/packages/app/src/session/screen.tsx:295` passes
   `hideHeader={!isDesktop()}`, and `internal/rocketclaw/oc/packages/app/src/session/model.ts:28`
@@ -47,7 +47,7 @@ natural extension. It did not work where it was needed:
 
 Making the command exist on narrow views meant editing the copied upstream file. The owner threw
 that whole version away: a request for a RocketClaw command is not permission to change the copied
-OpenCode UI, and `internal/rocketclaw/oc/AGENTS.md:21` allows editing a copied file only when the
+OpenCode UI, and `internal/rocketclaw/oc/AGENTS.md:23` allows editing a copied file only when the
 change cannot be made from outside it. Here it could.
 
 ## Guidance
@@ -62,12 +62,12 @@ Build the action in the Web, and call the OpenCode server's own API through the 
   `internal/rocketclaw/oc/packages/app/src/runtime/server/runtime.tsx:236`.
 - Confirm with a RocketClaw dialog, close the tab, and invalidate the session list. RocketClaw's
   synced copy goes on its next poll, which deletes rows the server no longer lists within the synced
-  window (`internal/rocketclaw/backend/opencode.go:380`).
+  window (`internal/rocketclaw/backend/opencode.go:394`).
 
-In `internal/rocketclaw/web/src/ui.tsx` this is `DeleteSessionDialog` (line 3341), opened through
+In `internal/rocketclaw/web/src/ui.tsx` this is `DeleteSessionDialog` (line 3425), opened through
 the existing `SessionCommand` flow with mode `"delete"`. The palette adds it in `useSessionActions`
-(line 3256) and the sidebar tab menu in `menuItems` (line 1686, for one tab outside the Shared
-group). Since "delete any session from the Web", both offer it for every session; the dialog sends a remote OpenCode session (a row with a `server`) to its server through the proxy, and a RocketClaw session to the `DeleteSession` RPC, which refuses remote rows (`TestDeleteSessionRefusesRemoteSessions`):
+(line 3340) and the sidebar tab menu in `menuItems` (line 1725, whenever the menu acts on one
+session tab of the page's server, Shared rows included). Since "delete any session from the Web", both offer it for every session; the dialog sends a remote OpenCode session (a row with a `server`) to its server through the proxy, and a RocketClaw session to the `DeleteSession` RPC, which refuses remote rows (`TestDeleteSessionRefusesRemoteSessions`):
 
 ```tsx
 const response = await fetch(`${serverURL()}/oc/${session.server}/api/session/${session.remoteSessionId}`, { method: "DELETE" });
