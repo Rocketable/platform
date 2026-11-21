@@ -1,5 +1,6 @@
 import { expect, onTestFinished, test } from "bun:test";
 import { href, withPage, current, names, order, until, openSaved, openFromPalette, menu, chooseSpace, newSpace, shared, sharedNames, focus, menuLines, sharedMenu, strip, type SharedTab, type Change, type Saved } from "./tabs-browser_test";
+import type { SavedListing } from "./session-list";
 import type { SearchPage } from "./types";
 
 test("spaces show only their own tabs, return to their last tab, follow opened tabs, and survive reload", () => withPage({}, async (page, origin, _prompts, saved) => {
@@ -1279,6 +1280,10 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
       if (text.startsWith("parked-render ")) renderedAfterReload = text.slice("parked-render ".length);
     });
     await page.addInitScript(() => {
+      const foxtrotState = (listing?: SavedListing) => {
+        const row = listing?.rows.find(({ id }) => id === "foxtrot");
+        return !listing ? "no snapshot" : !row ? "missing" : row.parked ? "parked" : "unparked";
+      };
       let lastRender: string | undefined;
       const observeParked = () => {
         const list = document.querySelector('#tab-sidebar [role="tablist"][aria-label="Parked tabs"]');
@@ -1311,8 +1316,17 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
         if (tx.db.name === dbName && this.name === "snapshots" && tx.mode === "readonly") {
           const read = typeof key === "string" ? "generation" : "saved rows";
           trace(`${read} get`);
-          for (const event of ["success", "error"]) request.addEventListener(event, () => trace(`${read} get ${event}`));
+          request.addEventListener("success", () => trace(`${read} get success${read === "saved rows" ? ` (Foxtrot: ${foxtrotState(request.result)})` : ""}`));
+          request.addEventListener("error", () => trace(`${read} get error`));
           for (const event of ["complete", "abort"]) tx.addEventListener(event, () => trace(`${read} transaction ${event}`));
+        }
+        return request;
+      };
+      const put = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (this: IDBObjectStore, ...args: Parameters<typeof put>) {
+        const request = put.apply(this, args);
+        if (this.transaction.db.name === dbName && this.name === "snapshots" && Array.isArray(args[1])) {
+          trace(`live snapshot write queued (Foxtrot: ${foxtrotState(args[0])})`);
         }
         return request;
       };
