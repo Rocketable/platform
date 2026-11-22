@@ -289,34 +289,25 @@ func acquireBrowserToken(ctx context.Context, out io.Writer, listener net.Listen
 			return
 		}
 
-		if value := req.URL.Query().Get("error"); value != "" {
-			errCh <- errors.New(cmp.Or(req.URL.Query().Get("error_description"), value))
+		query := req.URL.Query()
+		switch value, code := query.Get("error"), query.Get("code"); {
+		case value != "":
+			errCh <- errors.New(cmp.Or(query.Get("error_description"), value))
 
 			_, _ = io.WriteString(w, "Authorization failed. You can close this window.")
-
-			return
-		}
-
-		if req.URL.Query().Get("state") != state {
+		case query.Get("state") != state:
 			errCh <- errors.New("invalid OAuth state")
 
 			_, _ = io.WriteString(w, "Invalid authorization state. You can close this window.")
-
-			return
-		}
-
-		code := req.URL.Query().Get("code")
-		if code == "" {
+		case code == "":
 			errCh <- errors.New("missing OAuth authorization code")
 
 			_, _ = io.WriteString(w, "Missing authorization code. You can close this window.")
+		default:
+			codeCh <- code
 
-			return
+			_, _ = io.WriteString(w, "Authorization successful. You can close this window.")
 		}
-
-		codeCh <- code
-
-		_, _ = io.WriteString(w, "Authorization successful. You can close this window.")
 	})
 
 	go func() {
