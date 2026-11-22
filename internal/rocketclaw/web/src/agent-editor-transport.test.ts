@@ -627,24 +627,50 @@ test("the test chat answers in every column, labels versions, restarts, and pose
     }
 
     const replayed = (await read(queue.id)).testChat;
-    release = await hold(page, /\/api\/History$/, { only: (request) => {
+    const captured = Promise.withResolvers<RoutedRequest>();
+    const oldHistory = (request: RoutedRequest) => {
+      if (request.url() !== `${alice}/api/History` || request.method() !== "POST") return false;
       const body = request.postDataJSON();
       return body.id === replayed && !!body.limit;
-    } });
-    await send("three");
+    };
+    const intercepted = page.waitForRequest(async (request: RoutedRequest) => oldHistory(request) && request === await captured.promise);
+    release = await hold(page, /\/api\/History$/, { only: oldHistory, onHeld: ({ request }) => captured.resolve(request) });
+    const [historyRequest] = await Promise.all([intercepted, send("three")]);
     await until("the turn starts", async () => (await call<{ messages: { role: string; text: string }[] }>("History", { id: replayed })).messages.some((line) => line.role === "user" && line.text === "three"));
-    await Bun.sleep(2500);
+    const queueURL = `${alice}/api/ListQueue`;
+    const nextPoll = page.waitForRequest((request: RoutedRequest) => request.url() === queueURL && request.method() === "POST" && request.postDataJSON().id === replayed);
+    const [queueReply] = await Promise.all([
+      page.waitForResponse(async (response: { url(): string; request(): RoutedRequest }) => response.url() === queueURL && response.request() === await nextPoll),
+      page.clock.fastForward(2_000),
+    ]);
+    expect(queueReply.status()).toBe(200);
+    expect((await queueReply.json() as { items: QueueItem[] }).items.some(({ text }) => text === "three")).toBe(false);
     await chat.getByText("Waiting its turn: three", { exact: true }).waitFor({ state: "detached" });
     expect(await row(3).count()).toBe(0);
-    await chat.getByRole("button", { name: "Restart & replay", exact: true }).click();
-    await until("a new chat", async () => (await read(queue.id)).testChat !== replayed);
+    const [replayReply] = await Promise.all([
+      page.waitForResponse((reply: { request(): RoutedRequest }) => {
+        const request = reply.request();
+        return request.url() === `${alice}/api/RestartDraftChat` && request.method() === "POST" && request.postDataJSON().id === queue.id;
+      }),
+      chat.getByRole("button", { name: "Restart & replay", exact: true }).click(),
+    ]);
+    expect(replayReply.status()).toBe(200);
+    const restarted = await readDraft(queue.id);
+    const restarting = restarted.draft.testChat;
+    expect(restarting).not.toBe(replayed);
+    expect(restarted.messages).toHaveLength(3);
+    await until("the browser follows the replayed chat", async () => streams.includes(restarting));
     for (const [n, text] of ["one", "two", "three"].entries()) {
       await row(n + 1).getByText(text, { exact: true }).first().waitFor();
       await cell(n + 1, "queue").getByText(`gpt-held answer ${n + 1}`, { exact: false }).waitFor();
     }
-    await release();
+    expect(historyRequest.existingResponse(), "old chat History is still held after replay").toBeNull();
+    const [oldReply] = await Promise.all([
+      page.waitForResponse((response: { request(): RoutedRequest }) => response.request() === historyRequest),
+      release(),
+    ]);
+    expect(oldReply.status()).toBe(200);
 
-    const restarting = (await read(queue.id)).testChat;
     await checkHeld("RestartDraftChat", { id: queue.id, replay: [], replayEarlier: true }, async (release) => {
       await chat.getByRole("button", { name: "Restart & replay", exact: true }).click();
       for (const name of ["Restart", "Restart & replay"]) await chat.getByRole("button", { name, exact: true, disabled: true }).waitFor();
