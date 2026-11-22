@@ -1199,11 +1199,12 @@ test("with more than one space Parked is a tree whose spaces fold on their own a
   const started = performance.now();
   let waitingFor: string | undefined, bravoVisible = false;
   let beforeReload: { elapsedMs: number; panelExpanded: boolean; listSessionsCalls: number } | undefined, reloadLoadedMs: number | undefined;
+  let reloadTabs: string | { panelExpanded: boolean; opsFolded: boolean } = "reload not committed";
   onTestFinished(() => {
     if (!waitingFor || bravoVisible) return;
     expect<boolean>(bravoVisible, `Parked tree did not show Bravo after reload; waiting for ${waitingFor}: ${JSON.stringify({
       elapsedMs: Math.round(performance.now() - started), opsFoldSaved: saved.layout?.folded?.["parked:/ops"] === true,
-      beforeReload, reloadLoadedMs, listSessionsCallsAtFailure: saved.polls,
+      beforeReload, reloadLoadedMs, reloadTabs, listSessionsCallsAtFailure: saved.polls,
     })}`).toBe(true);
   });
   saved.spaces.push({ id: "ops", name: "Ops" });
@@ -1225,6 +1226,29 @@ test("with more than one space Parked is a tree whose spaces fold on their own a
     panelExpanded: saved.state.groups.some(({ id, collapsed }) => id === "parked" && collapsed === false),
     listSessionsCalls: saved.polls,
   };
+  page.on("framenavigated", (frame: unknown) => {
+    if (frame === page.mainFrame() && reloadTabs === "reload not committed") reloadTabs = "not requested";
+  });
+  let tabsRead: object | undefined;
+  page.on("request", (request: { url(): string; postData(): string | null }) => {
+    if (reloadTabs === "not requested" && request.url() === `${origin}/api/Tabs` && request.postData() === "{}") {
+      tabsRead = request;
+      reloadTabs = "awaiting response";
+    }
+  });
+  page.on("response", async (response: { request(): object; status(): number; json(): Promise<Saved> }) => {
+    if (response.request() !== tabsRead) return;
+    reloadTabs = `HTTP ${response.status()}, body unread`;
+    try {
+      const reply = await response.json();
+      reloadTabs = {
+        panelExpanded: reply.state.groups.some(({ id, collapsed }) => id === "parked" && collapsed === false),
+        opsFolded: reply.layout?.folded?.["parked:/ops"] === true,
+      };
+    } catch {
+      reloadTabs = `HTTP ${response.status()}, unreadable tab state`;
+    }
+  });
   waitingFor = "the page to finish reloading";
   await page.reload();
   reloadLoadedMs = Math.round(performance.now() - started);
