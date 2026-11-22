@@ -58,7 +58,7 @@ func (e *ReplayDecodeError) Unwrap() error {
 }
 
 func ReplayInputFromParams(items []responses.ResponseInputItemUnionParam) ([]json.RawMessage, error) {
-	raw := make([]json.RawMessage, 0, len(items))
+	raw := make([]json.RawMessage, len(items))
 	for i := range items {
 		data, err := json.Marshal(items[i])
 		if err != nil {
@@ -70,17 +70,17 @@ func ReplayInputFromParams(items []responses.ResponseInputItemUnionParam) ([]jso
 			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: responseInputKind(&items[i]), Cause: fmt.Errorf("unmarshal SDK replay input: %w", err)}
 		}
 
-		raw = append(raw, json.RawMessage(data))
+		raw[i] = data
 	}
 
 	return raw, nil
 }
 
 func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUnionParam, error) {
-	items := make([]responses.ResponseInputItemUnionParam, 0, len(raw))
+	items := make([]responses.ResponseInputItemUnionParam, len(raw))
 	for i := range raw {
-		var item responses.ResponseInputItemUnionParam
-		if err := json.Unmarshal(raw[i], &item); err != nil {
+		item := &items[i]
+		if err := json.Unmarshal(raw[i], item); err != nil {
 			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("unmarshal SDK replay input: %w", err)}
 		}
 
@@ -145,7 +145,7 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 			}
 		}
 
-		data, err := json.Marshal(item)
+		data, err := json.Marshal(*item)
 		if err != nil {
 			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("marshal SDK replay input: %w", err)}
 		}
@@ -156,8 +156,6 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 				return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("round-trip SDK replay input: %w", err)}
 			}
 		}
-
-		items = append(items, item)
 	}
 
 	return items, nil
