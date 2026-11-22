@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -294,7 +293,7 @@ func (s *SessionService) agentDraftRecord(ctx context.Context, draft *AgentDraft
 			old := &revisions[j]
 
 			i := old.variant(variant.Name)
-			if i < 0 || !bytes.Equal(renderAgentDraftFile(old.Mode, &old.Variants[i]), file) {
+			if i < 0 || renderAgentDraftFile(old.Mode, &old.Variants[i]) != file {
 				break
 			}
 

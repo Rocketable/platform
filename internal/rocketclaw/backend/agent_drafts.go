@@ -248,7 +248,7 @@ func (s *SessionService) captureAgentDraft(ctx context.Context, id string, metad
 			file = draft.Name + ".md"
 		}
 
-		files[file] = string(renderAgentDraftFile(draft.Mode, &draft.Variants[i]))
+		files[file] = renderAgentDraftFile(draft.Mode, &draft.Variants[i])
 	}
 
 	metadata[inboundAgentMetadataKey] = draft.Name
@@ -409,7 +409,7 @@ func (s *SessionService) ValidateAgentDraft(draft *AgentDraft) ([]AgentDraftProb
 		for i := range draft.Variants {
 			variant, file := &draft.Variants[i], draft.Name+".md"
 
-			agents, err := loadAgentDefinitions(fstest.MapFS{file: {Data: renderAgentDraftFile(draft.Mode, variant)}}, skills, cfg)
+			agents, err := loadAgentDefinitions(fstest.MapFS{file: {Data: []byte(renderAgentDraftFile(draft.Mode, variant))}}, skills, cfg)
 			agent := agents.Items[draft.Name]
 
 			if err == nil {
@@ -905,7 +905,7 @@ func transformAgentDraftSplice(a, b AgentDraftSplice, aFirst bool) []AgentDraftS
 	return []AgentDraftSplice{a}
 }
 
-func renderAgentDraftFile(mode harness.AgentMode, variant *AgentDraftVariant) []byte {
+func renderAgentDraftFile(mode harness.AgentMode, variant *AgentDraftVariant) string {
 	rank, settingsHelp := map[string]int{}, harness.AgentSettings()
 	for i := range settingsHelp {
 		if key, _, _ := strings.Cut(settingsHelp[i].Key, "."); rank[key] == 0 {
@@ -930,7 +930,7 @@ func renderAgentDraftFile(mode harness.AgentMode, variant *AgentDraftVariant) []
 		frontmatter.Content = append(frontmatter.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: setting.Key}, value.Content[0])
 	}
 
-	return []byte("---\n" + encodeAgentDraftYAML(frontmatter) + "\n---\n" + variant.Body)
+	return "---\n" + encodeAgentDraftYAML(frontmatter) + "\n---\n" + variant.Body
 }
 
 func parseAgentDraftFile(text string) (harness.AgentMode, AgentDraftVariant, error) {
