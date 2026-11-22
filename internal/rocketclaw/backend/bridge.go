@@ -2474,6 +2474,11 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	if request := strings.TrimSpace(cmp.Or(msg.Metadata[protocol.InboundRawTextMetadataKey], msg.Text)); !captured && len(observed) == 0 && msg.Human && msg.Source == protocol.SourceWeb && !b.shadow && layer == nil && request != "" {
 		b.titles.Go(func() {
+			var name string
+			if queryScalar(ctx, b.config.SessionService.db, "read session name", `SELECT name FROM conversations WHERE conversation_id = $1`, &name, b.config.ConversationID) == nil && name != "" {
+				return
+			}
+
 			title, err := harness.GenerateTitle(ctx, resolver, runtimeCfg.TitleModel, request, "")
 			if err == nil {
 				_, err = execState(ctx, b.config.SessionService.db, "name session", `UPDATE conversations SET name = $2 WHERE conversation_id = $1 AND name = ''`, b.config.ConversationID, title)
