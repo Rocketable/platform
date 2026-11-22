@@ -16,14 +16,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMain lets this binary stand in for mmdebstrap: it writes the smallest Ubuntu-like tar the build
-// accepts where the real one would, the path after the suite argument.
 func TestMain(m *testing.M) {
 	if filepath.Base(os.Args[0]) != "mmdebstrap" {
 		os.Exit(m.Run())
 	}
 
-	// The build clears its folder through mmdebstrap's helper, which runs the rest as the build's uid.
 	if os.Args[1] == "--unshare-helper" {
 		path, err := exec.LookPath(os.Args[2])
 		if err == nil {
@@ -77,9 +74,6 @@ func TestMain(m *testing.M) {
 	os.Exit(0)
 }
 
-// update builds both architectures from the given snapshot and, when a package changed, writes the snapshot,
-// the locks beside the sandbox package and the SBOMs beside the tool, leaving no image in the repository's
-// .tmp. A snapshot that changes no package changes nothing, so hosts do not rebuild an identical image.
 func TestUpdate(t *testing.T) {
 	self, err := os.Executable()
 	require.NoError(t, err)
@@ -87,8 +81,6 @@ func TestUpdate(t *testing.T) {
 	bin := t.TempDir()
 	require.NoError(t, os.Symlink(self, filepath.Join(bin, "mmdebstrap")))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	// The fake tool finishes its tar synchronously; only its exit sleep is unnecessary. The test process's
-	// race runtime is already initialized, so its exit grace and race detection stay unchanged.
 	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
 
 	repo := t.TempDir()

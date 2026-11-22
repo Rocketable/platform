@@ -1,11 +1,5 @@
 //go:build linux
 
-// Command rootfs moves the emulated shell's guest image to the newest Ubuntu archive snapshot. `go generate
-// ./internal/rocketclaw/sandbox` runs it. It builds the image for
-// amd64 and arm64 with mmdebstrap (qemu-user emulation runs the other architecture) in a temporary folder.
-// When a package version changed, it writes the snapshot to snapshot.gen.go, the versions to
-// packages.<arch>.lock, and an SBOM per architecture beside this file; otherwise it changes nothing, so hosts
-// do not rebuild an identical image. Commit what it writes: each host builds the new image at its next start.
 package main
 
 import (
@@ -39,8 +33,6 @@ func main() {
 	}
 }
 
-// update builds both architectures' images from snapshot and, when any package version differs from the
-// locks, writes snapshot, locks and SBOMs. It reports whether it wrote them.
 func update(dir, snapshot string) (bool, error) {
 	type build struct {
 		arch, release string
@@ -86,15 +78,12 @@ func update(dir, snapshot string) (bool, error) {
 	return true, nil
 }
 
-// buildImage builds arch's image from snapshot in a temporary folder, the same every run, and removes it. It is
-// not the repository's .tmp, which may be on a case-insensitive file system, and Ubuntu has pam.7.gz and PAM.7.gz.
 func buildImage(snapshot, arch string) (installed []string, release string, err error) {
 	tmp := filepath.Join(os.TempDir(), "rocketclaw-sandbox-image")
 	defer func() { _ = os.RemoveAll(tmp) }()
 
 	installed, release, err = sandbox.BuildImage(context.Background(), snapshot, arch, filepath.Join(tmp, "rootfs"), "")
 	if err != nil {
-		// The error names mmdebstrap's first error line; whoever runs this needs its whole output.
 		if b, ok := errors.AsType[*sandbox.BuildError](err); ok {
 			_, _ = os.Stderr.Write(b.Output)
 		}
@@ -105,7 +94,6 @@ func buildImage(snapshot, arch string) (installed []string, release string, err 
 	return installed, release, nil
 }
 
-// writeSBOM writes an SPDX 2.3 document listing every installed package.
 func writeSBOM(path, snapshot, arch, release string, pkgs []string) error {
 	type ref struct {
 		Category string `json:"referenceCategory"`
@@ -147,7 +135,7 @@ func writeSBOM(path, snapshot, arch, release string, pkgs []string) error {
 	for _, p := range pkgs {
 		name, version, _ := strings.Cut(p, "=")
 		doc.Packages = append(doc.Packages, pkg{
-			SPDXID:           "SPDXRef-Package-" + strings.ReplaceAll(name, "+", "-"), // dpkg names are [a-z0-9.+-]
+			SPDXID:           "SPDXRef-Package-" + strings.ReplaceAll(name, "+", "-"),
 			Name:             name,
 			Version:          version,
 			DownloadLocation: "NOASSERTION",
