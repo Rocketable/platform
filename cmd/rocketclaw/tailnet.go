@@ -2,19 +2,14 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
-	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/local"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
@@ -34,25 +29,6 @@ func startTailnet(ctx context.Context, tailnet *config.TsnetConfig, log *slog.Lo
 	tailnet.Origin = "https://" + node.server.CertDomains()[0]
 
 	return node, nil
-}
-
-func serveTailnet(rt *backend.Runtime, node *tailnetNode, handler http.Handler, serving *errgroup.Group) func() error {
-	server := &http.Server{
-		Handler:   rpc.NewTailnetHandler(node.client, rt.Cfg.Clone().TrustedRocketClaws, handler),
-		TLSConfig: &tls.Config{GetCertificate: node.client.GetCertificate},
-	}
-
-	rt.Log.Info("started Web HTTPS on the tailnet", "domains", node.server.CertDomains())
-
-	serving.Go(func() error {
-		if err := server.ServeTLS(node.https, "", ""); !errors.Is(err, http.ErrServerClosed) {
-			rt.Restart(fmt.Sprintf("Web HTTPS on the tailnet stopped: %v", err))
-		}
-
-		return nil
-	})
-
-	return server.Close
 }
 
 var errTailnetLogin = errors.New("the Tailscale node needs a login: run `rocketclaw ts login`, or set web.tsnet.auth_key to a valid key")
