@@ -129,7 +129,12 @@ func (b *broker) handle(ctx context.Context, conn *net.UnixConn) {
 		exit(w, 126, "rocketclaw: host command request for another command")
 		return
 	case !slices.Contains(b.names, name):
-		exit(w, 127, safeName(name)+": command not found")
+		if !commandName.MatchString(name) {
+			name = "rocketclaw"
+		}
+
+		exit(w, 127, name+": command not found")
+
 		return
 	}
 
@@ -156,14 +161,6 @@ func (b *broker) handle(ctx context.Context, conn *net.UnixConn) {
 	}
 
 	b.invoke(ctx, conn, r, w, name, start)
-}
-
-func safeName(name string) string {
-	if commandName.MatchString(name) {
-		return name
-	}
-
-	return "rocketclaw"
 }
 
 func exit(w *wire.Writer, code int, msg string) {

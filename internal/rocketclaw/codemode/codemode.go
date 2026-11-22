@@ -143,10 +143,6 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 	}
 
 	for _, tool := range host {
-		if tool.Name == "" {
-			return nil, errors.New("host tool name is required")
-		}
-
 		if _, exists := predeclared[tool.Name]; exists {
 			return nil, fmt.Errorf("builtin name collision %q", tool.Name)
 		}
@@ -347,10 +343,6 @@ func newKwargsValueBuiltin(callable string, tool HostTool) *starlark.Builtin {
 }
 
 func kwargsToMap(thread *starlark.Thread, kwargs []starlark.Tuple) (map[string]any, error) {
-	if len(kwargs) == 0 {
-		return map[string]any{}, nil
-	}
-
 	dict := starlark.NewDict(len(kwargs))
 	for _, kv := range kwargs {
 		if err := dict.SetKey(kv[0], kv[1]); err != nil {

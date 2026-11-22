@@ -376,25 +376,22 @@ func parseEmulatedShell(node *yaml.Node, agent *Agent) error {
 		}
 	}
 
-	var err error
-	if agent.NetworkTargets, err = easyNetworkTargets(frontmatterField(node, "allowedNetworkTargets")); err != nil {
+	targets, err := easyList(frontmatterField(node, "allowedNetworkTargets"), "allowedNetworkTargets")
+	for _, target := range targets {
+		if !strings.Contains(target, "://") && (strings.HasPrefix(target, "*.") || strings.Contains(target, "/")) {
+			return fmt.Errorf("allowedNetworkTargets: %s: wildcards and CIDR ranges are not supported", target)
+		}
+	}
+
+	if err != nil {
 		return err
 	}
+
+	agent.NetworkTargets = targets
 
 	agent.CustomShell = CustomShell{Emulated: true}
 
 	return nil
-}
-
-func easyNetworkTargets(node *yaml.Node) ([]string, error) {
-	targets, err := easyList(node, "allowedNetworkTargets")
-	for _, target := range targets {
-		if !strings.Contains(target, "://") && (strings.HasPrefix(target, "*.") || strings.Contains(target, "/")) {
-			return nil, fmt.Errorf("allowedNetworkTargets: %s: wildcards and CIDR ranges are not supported", target)
-		}
-	}
-
-	return targets, err
 }
 
 func checkKeys(node *yaml.Node, prefix, problem string, keys ...string) error {

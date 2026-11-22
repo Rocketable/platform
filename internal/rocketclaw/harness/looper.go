@@ -323,19 +323,11 @@ type providerRateLimitError struct {
 }
 
 func (e *providerRateLimitError) Error() string {
-	if e.code != "" && e.message != "" {
-		return fmt.Sprintf("provider rate limit: %s: %s", e.code, e.message)
-	}
+	return providerErrorText("provider rate limit", e.code, e.message)
+}
 
-	if e.code != "" {
-		return "provider rate limit: " + e.code
-	}
-
-	if e.message != "" {
-		return "provider rate limit: " + e.message
-	}
-
-	return "provider rate limit"
+func providerErrorText(parts ...string) string {
+	return strings.Join(slices.DeleteFunc(parts, func(part string) bool { return part == "" }), ": ")
 }
 
 func (e *providerRateLimitError) Unwrap() error {
@@ -362,37 +354,17 @@ type providerRetryLimitError struct {
 	cause      error
 }
 
-type providerUsageLimitError struct {
+type providerUsageError struct {
+	reason  string
 	message string
 	cause   error
 }
 
-func (e *providerUsageLimitError) Error() string {
-	if e.message != "" {
-		return "provider usage limit: " + e.message
-	}
-
-	return "provider usage limit"
+func (e *providerUsageError) Error() string {
+	return providerErrorText("provider "+e.reason, e.message)
 }
 
-func (e *providerUsageLimitError) Unwrap() error {
-	return e.cause
-}
-
-type providerUsageNotIncludedError struct {
-	message string
-	cause   error
-}
-
-func (e *providerUsageNotIncludedError) Error() string {
-	if e.message != "" {
-		return "provider usage not included: " + e.message
-	}
-
-	return "provider usage not included"
-}
-
-func (e *providerUsageNotIncludedError) Unwrap() error {
+func (e *providerUsageError) Unwrap() error {
 	return e.cause
 }
 
@@ -409,19 +381,11 @@ func (e *providerRetryLimitError) Unwrap() error {
 }
 
 func (e *responseFailureError) Error() string {
-	if e.code != "" && e.message != "" {
-		return fmt.Sprintf("response failed: %s: %s", e.code, e.message)
+	if e.code == "" && e.message == "" {
+		return fmt.Sprintf("response failed with status %q", e.status)
 	}
 
-	if e.code != "" {
-		return fmt.Sprintf("response failed: %s", e.code)
-	}
-
-	if e.message != "" {
-		return "response failed: " + e.message
-	}
-
-	return fmt.Sprintf("response failed with status %q", e.status)
+	return providerErrorText("response failed", string(e.code), e.message)
 }
 
 type SessionEntry struct {
@@ -455,19 +419,6 @@ func (u *TokenUsage) add(other TokenUsage) {
 	u.PromptCacheReadTokens += other.PromptCacheReadTokens
 	u.PromptCacheWriteTokens += other.PromptCacheWriteTokens
 	u.CompletionReasoningTokens += other.CompletionReasoningTokens
-}
-
-func (e *SessionEntry) addTokenUsageFromResponse(resp *responses.Response) {
-	usage, ok := tokenUsageFromResponse(resp)
-	if !ok {
-		return
-	}
-
-	if e.TokenUsage == nil {
-		e.TokenUsage = &TokenUsage{}
-	}
-
-	e.TokenUsage.add(usage)
 }
 
 func (u TokenUsage) attributes() []attribute.KeyValue {
@@ -533,22 +484,6 @@ func (l *looper) Loop(
 	sessionOut sessionWriter,
 	interrupts <-chan os.Signal,
 ) (err error) {
-	if ctx == nil {
-		return errors.New("context is required")
-	}
-
-	if input == nil {
-		return errors.New("input channel is required")
-	}
-
-	if sessionIn == nil {
-		return errors.New("sessionIn is required")
-	}
-
-	if interrupts == nil {
-		return errors.New("interrupts channel is required")
-	}
-
 	var (
 		history            []responses.ResponseInputItemUnionParam
 		historyAttribution []ReplayAttribution
@@ -557,10 +492,6 @@ func (l *looper) Loop(
 	loaded := false
 
 	for line := range input {
-		if line.Responses == nil {
-			return errors.New("prompt response channel is required")
-		}
-
 		turnOutput := line.Responses
 
 		if cmp.Or(line.Texts...) == "" && len(line.Attachments) == 0 && line.DirectSkill == nil {
@@ -710,7 +641,7 @@ func (l *looper) runTurn(
 		attribute.String(semconv.InputValue, instrumentation.RedactedValue),
 		attribute.String("rocketcode.model", l.DisplayModel),
 		attribute.Int("rocketcode.tool_count", len(l.Tools)),
-		attribute.Int64("rocketcode.compact_threshold", l.compactThreshold()),
+		attribute.Int64("rocketcode.compact_threshold", l.CompactThreshold),
 		attribute.Int("rocketcode.parallel_tool_calls", l.ParallelToolCalls),
 	)
 	defer func() {
@@ -734,20 +665,18 @@ func (l *looper) runTurn(
 		_ = group.Wait()
 	}()
 
-	if interrupts != nil {
-		group.Go(func() error {
-			select {
-			case <-turnCtx.Done():
-				return nil
-			case <-interrupts:
-				cancel(errTurnInterrupted)
+	group.Go(func() error {
+		select {
+		case <-turnCtx.Done():
+			return nil
+		case <-interrupts:
+			cancel(errTurnInterrupted)
 
-				emitChatResponse(output, ChatResponse{Kind: ChatResponseAssistantCommentary, Text: "(interrupted)"})
+			emitChatResponse(output, ChatResponse{Kind: ChatResponseAssistantCommentary, Text: "(interrupted)"})
 
-				return nil
-			}
-		})
-	}
+			return nil
+		}
+	})
 
 	rendered = []ChatResponse{}
 	doomLoop := doomLoopTrap{recent: nil}
@@ -1061,7 +990,10 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 
 func (l *looper) appendProviderReplay(record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, resp *responses.Response) error {
 	record.ResponseID = resp.ID
-	record.addTokenUsageFromResponse(resp)
+	if usage, ok := tokenUsageFromResponse(resp); ok {
+		record.TokenUsage = cmp.Or(record.TokenUsage, &TokenUsage{})
+		record.TokenUsage.add(usage)
+	}
 
 	for i := range resp.Output {
 		asInput, ok := responseOutputToReplayInput(&resp.Output[i])
@@ -1280,9 +1212,9 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 					if errAPI.StatusCode == http.StatusTooManyRequests {
 						switch {
 						case errAPI.Code == "usage_limit_reached" || errAPI.Type == "usage_limit_reached":
-							errReturn = &providerUsageLimitError{message: errAPI.Message, cause: err}
+							errReturn = &providerUsageError{reason: "usage limit", message: errAPI.Message, cause: err}
 						case errAPI.Code == "usage_not_included" || errAPI.Type == "usage_not_included":
-							errReturn = &providerUsageNotIncludedError{message: errAPI.Message, cause: err}
+							errReturn = &providerUsageError{reason: "usage not included", message: errAPI.Message, cause: err}
 						default:
 							errReturn = &providerRetryLimitError{httpStatus: errAPI.StatusCode, requestID: providerRequestID(errAPI.Response), cause: err}
 						}
@@ -1318,12 +1250,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 		}
 
 		if isContextLengthExceeded(err) {
-			resp, err := l.newResponseAfterContextCompaction(ctx, params, observer, err, checkpointCompacted)
-			if err != nil {
-				return nil, err
-			}
-
-			return resp, nil
+			return l.newResponseAfterContextCompaction(ctx, params, observer, err, checkpointCompacted)
 		}
 
 		if resp.Error.Code != responses.ResponseErrorCodeRateLimitExceeded {
@@ -1572,15 +1499,7 @@ func providerRequestID(resp *http.Response) string {
 		return ""
 	}
 
-	if requestID := resp.Header.Get("X-Request-ID"); requestID != "" {
-		return requestID
-	}
-
-	if requestID := resp.Header.Get("X-Oai-Request-Id"); requestID != "" {
-		return requestID
-	}
-
-	return resp.Header.Get("Cf-Ray")
+	return cmp.Or(resp.Header.Get("X-Request-ID"), resp.Header.Get("X-Oai-Request-Id"), resp.Header.Get("Cf-Ray"))
 }
 
 func providerDiagnosticHeaders(resp *http.Response) map[string]string {
@@ -1596,17 +1515,7 @@ func providerDiagnosticHeaders(resp *http.Response) map[string]string {
 		}
 
 		nameLower := strings.ToLower(name)
-		switch {
-		case nameLower == "retry-after-ms",
-			nameLower == "retry-after",
-			nameLower == "x-ratelimit-reset-requests",
-			nameLower == "x-ratelimit-reset-tokens",
-			nameLower == "x-request-id",
-			nameLower == "x-oai-request-id",
-			nameLower == "cf-ray",
-			nameLower == "x-openai-authorization-error",
-			nameLower == "x-error-json",
-			strings.HasPrefix(nameLower, "x-codex-"):
+		if strings.HasPrefix(nameLower, "x-codex-") || slices.Contains([]string{"retry-after-ms", "retry-after", "x-ratelimit-reset-requests", "x-ratelimit-reset-tokens", "x-request-id", "x-oai-request-id", "cf-ray", "x-openai-authorization-error", "x-error-json"}, nameLower) {
 			headers[nameLower] = values[0]
 		}
 	}
@@ -1631,7 +1540,7 @@ func waitProviderRetry(ctx context.Context, wait time.Duration) error {
 }
 
 func providerRetryDelay(resp *http.Response, attempt int) time.Duration {
-	wait := providerRetryBackoff(attempt)
+	wait := min(time.Second<<min(attempt-1, 6), providerRetryBackoffMaxDelay)
 	if resp == nil {
 		return wait
 	}
@@ -1639,47 +1548,24 @@ func providerRetryDelay(resp *http.Response, attempt int) time.Duration {
 	headerWait := -time.Nanosecond
 
 	if millis, errParse := strconv.ParseFloat(resp.Header.Get("Retry-After-Ms"), 64); errParse == nil && millis >= 0 && millis == millis {
-		if delay := time.Duration(millis * float64(time.Millisecond)); delay > headerWait {
-			headerWait = delay
-		}
+		headerWait = max(headerWait, time.Duration(millis*float64(time.Millisecond)))
 	}
 
 	for _, header := range []string{"X-RateLimit-Reset-Requests", "X-RateLimit-Reset-Tokens"} {
-		if delay, errParse := time.ParseDuration(resp.Header.Get(header)); errParse == nil && delay > headerWait {
-			headerWait = delay
+		if delay, errParse := time.ParseDuration(resp.Header.Get(header)); errParse == nil {
+			headerWait = max(headerWait, delay)
 		}
 	}
 
 	retryAfter := resp.Header.Get("Retry-After")
 	if seconds, errParse := strconv.ParseFloat(retryAfter, 64); errParse == nil && seconds >= 0 && seconds == seconds {
-		if delay := time.Duration(seconds * float64(time.Second)); delay > headerWait {
-			headerWait = delay
-		}
+		headerWait = max(headerWait, time.Duration(seconds*float64(time.Second)))
 	} else if when, errParse := time.Parse(time.RFC1123, retryAfter); errParse == nil {
-		if delay := time.Until(when); delay > headerWait {
-			headerWait = delay
-		}
+		headerWait = max(headerWait, time.Until(when))
 	}
 
 	if headerWait >= 0 {
 		return headerWait
-	}
-
-	return wait
-}
-
-func providerRetryBackoff(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
-	}
-
-	wait := time.Second
-	for range attempt - 1 {
-		if wait >= providerRetryBackoffMaxDelay/2 {
-			return providerRetryBackoffMaxDelay
-		}
-
-		wait *= 2
 	}
 
 	return wait
@@ -1771,7 +1657,7 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 	params.Store = openai.Bool(false)
 	params.ContextManagement = []responses.ResponseNewParamsContextManagement{{
 		Type:             "compaction",
-		CompactThreshold: openai.Int(l.compactThreshold()),
+		CompactThreshold: openai.Int(l.CompactThreshold),
 	}}
 	params.Include = []responses.ResponseIncludable{reasoningEncryptedContent}
 
@@ -1803,14 +1689,6 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 	}
 
 	return params
-}
-
-func (l *looper) compactThreshold() int64 {
-	if l.CompactThreshold > 0 {
-		return l.CompactThreshold
-	}
-
-	return defaultCompactThreshold
 }
 
 func pruneHistoryBeforeLatestCompaction(items []responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam {
@@ -1846,6 +1724,21 @@ func (l *looper) dispatchToolCalls(
 	calls := []pendingToolCall{}
 	taskTotal := 0
 
+	reject := func(item *responses.ResponseOutputItemUnion, progress *PublicProgress, state PublicProgressState, permission, message string, errRejected error, failure bool) error {
+		if _, err := l.observations.finishCall(ctx, progress, state); err != nil {
+			return err
+		}
+
+		_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, permission, toolCallMetadata{})
+		recordSpanError(span, errRejected)
+		span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue), attribute.Bool("rocketcode.tool_denied", state == PublicProgressBlocked), attribute.Bool("rocketcode.tool_failure", failure))
+		span.span.End()
+
+		outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, TextToolResult(message))})
+
+		return nil
+	}
+
 	for i := range resp.Output {
 		item := resp.Output[i]
 		if item.Type != "function_call" {
@@ -1861,35 +1754,19 @@ func (l *looper) dispatchToolCalls(
 
 		tool, ok := l.Tools[item.Name]
 		if !ok {
-			if _, err := l.observations.finishCall(ctx, &progress, PublicProgressFailed); err != nil {
+			errMissing := errors.New("tool not found")
+			if err := reject(&item, &progress, PublicProgressFailed, "", ToolCallResult(item.Name, ToolResult{}, errMissing).Output, errMissing, true); err != nil {
 				return nil, err
 			}
-
-			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, "", toolCallMetadata{})
-			result := ToolCallResult(item.Name, ToolResult{}, errors.New("tool not found"))
-			recordSpanError(span, errors.New("tool not found"))
-			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", true))
-			span.span.End()
-
-			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), ReplayInput: nil})
 
 			continue
 		}
 
 		if doomLoop != nil && doomLoop.trapped(item.Name, args) {
-			if _, err := l.observations.finishCall(ctx, &progress, PublicProgressBlocked); err != nil {
+			message := fmt.Sprintf("tool call rejected: repeated identical %q call detected. Review the previous tool output and choose a different action instead of retrying the same input.", item.Name)
+			if err := reject(&item, &progress, PublicProgressBlocked, tool.Permission, message, errors.New("repeated identical tool call"), true); err != nil {
 				return nil, err
 			}
-
-			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, toolCallMetadata{})
-			result := fmt.Sprintf("tool call rejected: repeated identical %q call detected. Review the previous tool output and choose a different action instead of retrying the same input.", item.Name)
-
-			recordSpanError(span, errors.New("repeated identical tool call"))
-			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", true))
-			span.span.End()
-
-			toolResult := TextToolResult(result)
-			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), ReplayInput: nil})
 
 			continue
 		}
@@ -1909,19 +1786,9 @@ func (l *looper) dispatchToolCalls(
 		}
 
 		if decision.denied {
-			if _, err := l.observations.finishCall(ctx, &progress, PublicProgressBlocked); err != nil {
-				return nil, err
+			if errReject := reject(&item, &progress, PublicProgressBlocked, tool.Permission, decision.message, errDenied, err != nil); errReject != nil {
+				return nil, errReject
 			}
-
-			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, toolCallMetadata{})
-			result := decision.message
-
-			recordSpanError(span, errDenied)
-			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", err != nil))
-			span.span.End()
-
-			toolResult := TextToolResult(result)
-			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), ReplayInput: nil})
 
 			continue
 		}
@@ -1930,11 +1797,8 @@ func (l *looper) dispatchToolCalls(
 			taskTotal++
 		}
 
-		calls = append(calls, pendingToolCall{name: item.Name, callID: item.CallID, args: args, tool: tool, progress: progress, outputIndex: len(outputs), subagentIndex: 0, subagentTotal: 0})
-
-		var outputItem dispatchedToolOutput
-
-		outputs = append(outputs, outputItem)
+		calls = append(calls, pendingToolCall{name: item.Name, callID: item.CallID, args: args, tool: tool, progress: progress, outputIndex: len(outputs)})
+		outputs = append(outputs, dispatchedToolOutput{})
 	}
 
 	if len(outputs) == 0 {
@@ -2148,20 +2012,26 @@ func (l *looper) emitProviderDiagnostic(ctx context.Context, diagnostic *Provide
 }
 
 func toolCallOutput(callID string, result ToolResult) responses.ResponseInputItemFunctionCallOutputParam {
-	var output responses.ResponseInputItemFunctionCallOutputOutputUnionParam
-	if len(result.Attachments) > 0 {
-		output.OfResponseFunctionCallOutputItemArray = functionCallOutputContent(result)
-	} else {
-		output.OfString = openai.String(result.Output)
+	output := responses.ResponseInputItemFunctionCallOutputParam{CallID: openai.String(callID), Type: "function_call_output", Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String(result.Output)}}
+	if len(result.Attachments) == 0 {
+		return output
 	}
 
-	var outputParam responses.ResponseInputItemFunctionCallOutputParam
+	content := responses.ResponseFunctionCallOutputItemListParam{{OfInputText: &responses.ResponseInputTextContentParam{Text: result.Output}}}
 
-	outputParam.CallID = openai.String(callID)
-	outputParam.Output = output
-	outputParam.Type = "function_call_output"
+	for _, attachment := range result.Attachments {
+		mimeType := normalizeMIME(attachment.MIME)
+		switch {
+		case isImageAttachmentMIME(mimeType):
+			content = append(content, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: withImageName(responses.ResponseInputImageContentParam{Detail: responses.ResponseInputImageContentDetailAuto, ImageURL: openai.String(attachment.URL)}, attachment.Filename)})
+		case mimeType == "application/pdf":
+			content = append(content, responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &responses.ResponseInputFileContentParam{Filename: openai.String(attachment.Filename), FileData: openai.String(attachment.URL)}})
+		}
+	}
 
-	return outputParam
+	output.Output = responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfResponseFunctionCallOutputItemArray: content}
+
+	return output
 }
 
 func (d *doomLoopTrap) trapped(name string, args json.RawMessage) bool {
@@ -2192,10 +2062,7 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 		return toolPermissionDecision{}, decodeToolParams(args, &params)
 	}
 
-	permission := tool.Permission
-	if permission == "" {
-		permission = toolName
-	}
+	permission := cmp.Or(tool.Permission, toolName)
 
 	subjects := []string{"*"}
 
@@ -2271,10 +2138,7 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 }
 
 func formatPermissionReviewDenied(decision permissionReviewDecision) string {
-	reason := strings.TrimSpace(decision.Rationale)
-	if reason == "" {
-		reason = "automatic permission review denied or failed"
-	}
+	reason := cmp.Or(strings.TrimSpace(decision.Rationale), "automatic permission review denied or failed")
 
 	return "tool call denied: automatic permission review rejected the action: " + reason + ". Choose a different action."
 }
@@ -2322,10 +2186,7 @@ func loadSession(entries iter.Seq2[SessionEntry, error], provider string) ([]res
 func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (responses.ResponseInputItemUnionParam, bool) {
 	switch item.Type {
 	case "message":
-		role := strings.TrimSpace(item.Role)
-		if role == "" {
-			role = "assistant"
-		}
+		role := cmp.Or(strings.TrimSpace(item.Role), "assistant")
 
 		assistant := responses.EasyInputMessageParam{
 			Content: easyInputStringContent(responseItemText(item)),

@@ -56,52 +56,26 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 		return withoutDatabaseText("UploadAttachment", s.uploadAttachment(stream))
 	}}, {StreamName: "DownloadAttachment", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
 		return withoutDatabaseText("DownloadAttachment", s.downloadAttachment(stream))
-	}}, {StreamName: "Join", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
-		request := &JoinRequest{}
-		if err := stream.RecvMsg(request); err != nil {
-			return fmt.Errorf("receive web join: %w", err)
-		}
-
-		if err := validRequest(request.ProtoReflect()); err != nil {
-			return err
-		}
-
-		return withoutDatabaseText("Join", s.join(request, stream))
-	}}, {StreamName: "WatchTyping", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
-		request := &WatchTypingRequest{}
-		if err := stream.RecvMsg(request); err != nil {
-			return fmt.Errorf("receive web typing watch: %w", err)
-		}
-
-		if err := validRequest(request.ProtoReflect()); err != nil {
-			return err
-		}
-
-		return withoutDatabaseText("WatchTyping", s.watchTyping(request, stream))
-	}}, {StreamName: "Voice", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
-		request := &VoiceRequest{}
-		if err := stream.RecvMsg(request); err != nil {
-			return fmt.Errorf("receive web voice: %w", err)
-		}
-
-		if err := validRequest(request.ProtoReflect()); err != nil {
-			return err
-		}
-
-		return withoutDatabaseText("Voice", s.voice(request, stream))
-	}}, {StreamName: "ListSessions", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
-		request := &ListSessionsRequest{}
-		if err := stream.RecvMsg(request); err != nil {
-			return fmt.Errorf("receive web session list: %w", err)
-		}
-
-		if err := validRequest(request.ProtoReflect()); err != nil {
-			return err
-		}
-
-		return withoutDatabaseText("ListSessions", s.listSessions(request, stream))
-	}}}
+	}}, serverStream("Join", s.join), serverStream("WatchTyping", s.watchTyping), serverStream("Voice", s.voice), serverStream("ListSessions", s.listSessions)}
 	registrar.RegisterService(&desc, s)
+}
+
+func serverStream[T any, R interface {
+	*T
+	protoreflect.ProtoMessage
+}](method string, serve func(R, grpc.ServerStream) error) grpc.StreamDesc {
+	return grpc.StreamDesc{StreamName: method, ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
+		request := R(new(T))
+		if err := stream.RecvMsg(request); err != nil {
+			return fmt.Errorf("receive web %s: %w", method, err)
+		}
+
+		if err := validRequest(request.ProtoReflect()); err != nil {
+			return err
+		}
+
+		return withoutDatabaseText(method, serve(request, stream))
+	}}
 }
 
 func validRequest(message protoreflect.Message) error {

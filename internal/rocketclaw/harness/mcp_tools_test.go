@@ -39,7 +39,6 @@ func TestCodeModeHostInputSchemaRequiredFields(t *testing.T) {
 		want     []string
 	}{
 		{name: "string slice", tool: "custom", required: []string{"second", "first"}, want: []string{"second", "first"}},
-		{name: "decoded array", tool: "custom", required: []any{"second", "", 17, "first"}, want: []string{"second", "first"}},
 		{name: "absent", tool: "custom"},
 		{name: "webfetch override", tool: "webfetch", required: []string{"url", "format", "timeout_s"}, want: []string{"url"}},
 	} {
@@ -824,7 +823,7 @@ func TestCodeModeSearchOpenCodeShape(t *testing.T) {
 	}}
 
 	index := buildCodeModeSearchIndex(hosts, mcpTools)
-	out := codeModeSearch(index, map[string]any{"query": " *echo* ", "limit": 10})
+	out := codeModeSearch(index, map[string]any{"query": " *echo* ", "limit": 10.0})
 
 	var parsed codeModeSearchResult
 	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
@@ -835,14 +834,14 @@ func TestCodeModeSearchOpenCodeShape(t *testing.T) {
 	assert.Equal(t, 0, parsed.Remaining)
 	assert.Nil(t, parsed.Next)
 
-	out = codeModeSearch(index, map[string]any{"query": "", "limit": 1, "offset": 0})
+	out = codeModeSearch(index, map[string]any{"query": "", "limit": 1.0, "offset": 0.0})
 	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
 	require.Len(t, parsed.Items, 1)
 	assert.Equal(t, 8, parsed.Remaining)
 	require.NotNil(t, parsed.Next)
 	assert.Equal(t, 1, parsed.Next.Offset)
 
-	out = codeModeSearch(index, map[string]any{"query": "gather", "limit": 5})
+	out = codeModeSearch(index, map[string]any{"query": "gather", "limit": 5.0})
 	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
 	require.NotEmpty(t, parsed.Items)
 	assert.Equal(t, "gather", parsed.Items[0].Path)

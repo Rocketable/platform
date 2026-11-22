@@ -67,9 +67,9 @@ func TestCodeModeCallStatusUsesTheResultsFailureCheck(t *testing.T) {
 		err        error
 		want       codeModeCallStatus
 	}{
-		{name: "webfetch HTTP error", tool: "webfetch", result: ToolResult{Output: "HTTP 404", Data: &webFetchResult{page: webFetchPage{Status: 404, Output: "Not here", Error: "HTTP 404"}}}, want: codeModeCallError},
-		{name: "webfetch refused redirect", tool: "webfetch", result: ToolResult{Output: "redirect to http://10.0.0.1/: private address", Data: &webFetchResult{page: webFetchPage{Status: 302, Error: "redirect to http://10.0.0.1/: private address"}}}, want: codeModeCallError},
-		{name: "webfetch page", tool: "webfetch", result: ToolResult{Output: "Hello", Data: &webFetchResult{page: webFetchPage{Status: 200, Output: "Hello"}}}, want: codeModeCallOK},
+		{name: "webfetch HTTP error", tool: "webfetch", result: ToolResult{Output: "HTTP 404", Data: webFetchPage{Status: 404, Output: "Not here", Error: "HTTP 404"}}, want: codeModeCallError},
+		{name: "webfetch refused redirect", tool: "webfetch", result: ToolResult{Output: "redirect to http://10.0.0.1/: private address", Data: webFetchPage{Status: 302, Error: "redirect to http://10.0.0.1/: private address"}}, want: codeModeCallError},
+		{name: "webfetch page", tool: "webfetch", result: ToolResult{Output: "Hello", Data: webFetchPage{Status: 200, Output: "Hello"}}, want: codeModeCallOK},
 		{name: "bash exit status", tool: "bash", result: ToolResult{Output: "FAIL", Data: BashResult{Output: "FAIL", ErrorCode: "2"}}, want: codeModeCallError},
 		{name: "bash success", tool: "bash", result: ToolResult{Output: "hi", Data: BashResult{Output: "hi", Success: true}}, want: codeModeCallOK},
 		{name: "read failure", tool: "read", err: errors.New("File not found: x"), want: codeModeCallError},

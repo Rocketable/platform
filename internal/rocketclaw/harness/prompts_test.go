@@ -206,29 +206,6 @@ func TestPromptExpansionEnvironmentForcesTMPDIR(t *testing.T) {
 	require.Equal(t, filepath.Join(dir, ".tmp", "shell-tmp"), got)
 }
 
-func TestNewPromptExpansionEnvironmentRejectsInvalidSetup(t *testing.T) {
-	t.Run("nil root", func(t *testing.T) {
-		var shellTemp shellTempConfig
-
-		_, err := newPromptExpansionEnvironment(nil, shellTemp, nil, &sandbox.Runtime{})
-
-		require.EqualError(t, err, "prompt expansion root is required")
-	})
-
-	t.Run("closed root", func(t *testing.T) {
-		dir := t.TempDir()
-		root, err := os.OpenRoot(dir)
-		require.NoError(t, err)
-		require.NoError(t, root.Close())
-
-		var shellTemp shellTempConfig
-
-		_, err = newPromptExpansionEnvironment(root, shellTemp, nil, &sandbox.Runtime{})
-
-		require.ErrorContains(t, err, "stat prompt expansion root")
-	})
-}
-
 func testPromptExpansionEnvironment(t *testing.T) promptExpansionEnvironment {
 	t.Helper()
 

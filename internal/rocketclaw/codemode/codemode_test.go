@@ -18,8 +18,8 @@ func runToString(ctx context.Context, source string, tools []ToolDesc, decide De
 		return "", err
 	}
 
-	if text, ok := value.(Text); ok {
-		return text.Text(), nil
+	if text, ok := value.(*TextValue); ok {
+		return text.content, nil
 	}
 
 	if IsFailure(value) {
@@ -424,7 +424,6 @@ func TestRunRejectsHostToolNames(t *testing.T) {
 		host []HostTool
 		want string
 	}{
-		{"empty name", []HostTool{{Details: NoDetails{}, CallValue: nilCallHost}}, "host tool name is required"},
 		{"MCP collision", []HostTool{{Details: NoDetails{}, Name: "demo_echo", CallValue: nilCallHost}}, `builtin name collision "demo_echo"`},
 		{"JSON collision", []HostTool{{Details: NoDetails{}, Name: "json", CallValue: nilCallHost}}, `builtin name collision "json"`},
 		{"concurrency collision", []HostTool{{Details: NoDetails{}, Name: "gather", CallValue: nilCallHost}}, `builtin name collision "gather"`},

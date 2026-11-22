@@ -628,7 +628,7 @@ No placeholder here.
 `), "arg-skill/$ARGUMENTS.txt": mapFile("resource")}, "/virtual/skills").Skills
 	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
 
-	_, output, err := factory.renderSkillToolOutput(t.Context(), json.RawMessage(`{"name":"arg-skill","arguments":"literal request","direct":true}`), true)
+	output, err := factory.renderSkillToolOutput(t.Context(), skillToolParams{Name: "arg-skill", Arguments: "literal request", Direct: true}, true)
 	require.NoError(t, err)
 	require.Contains(t, output, "No placeholder here.\n\nliteral request\n\nBase directory")
 	require.Contains(t, output, "description: $ARGUMENTS and $1 are metadata")

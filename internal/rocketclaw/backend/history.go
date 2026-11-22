@@ -49,20 +49,13 @@ const descendantsSQL = `descendants AS (
 func (s *SessionService) ShadowParent(ctx context.Context, id string) (string, error) {
 	var parent string
 
-	err := queryScalar(ctx, s.db, "resolve shadow parent", `WITH RECURSIVE starts AS (
+	_, err := scanFound("resolve shadow parent", s.db.QueryRowContext(ctx, `WITH RECURSIVE starts AS (
     SELECT $1::text AS id
 ), `+ancestorsSQL+`
 SELECT COALESCE(m.reports_to, b.shadow_parent) FROM ancestors a JOIN conversations b ON b.conversation_id = a.conversation_id
-JOIN conversations m ON m.conversation_id = b.shadow_parent WHERE b.shadow_parent IS NOT NULL`, &parent, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
+JOIN conversations m ON m.conversation_id = b.shadow_parent WHERE b.shadow_parent IS NOT NULL`, id).Scan(&parent))
 
-	if err != nil {
-		return "", err
-	}
-
-	return parent, nil
+	return parent, err
 }
 
 func rejectShadowMutation(ctx context.Context, db stateStoreDB, id string) error {
@@ -170,11 +163,7 @@ SELECT c.conversation_id, c.kind, c.agent FROM ancestors a JOIN conversations c 
 		view.Inventory.Shadows = fmt.Sprintf("%x", sha256.Sum256(data))
 	}
 
-	if err := tx.Commit(); err != nil {
-		return view, fmt.Errorf("commit history snapshot: %w", err)
-	}
-
-	return view, nil
+	return view, commitState(tx, "history snapshot")
 }
 
 const shadowHistorySQL = `WITH ` + sessionHistorySQL + `, owners AS (

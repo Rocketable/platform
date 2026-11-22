@@ -196,11 +196,7 @@ SELECT `+notifyAgentDraft+` FROM saved`,
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return "", nil, fmt.Errorf("commit agent draft test messages: %w", err)
-	}
-
-	return chat, problems, nil
+	return chat, problems, commitState(tx, "agent draft test messages")
 }
 
 func (s *SessionService) startAgentDraftTestChat(ctx context.Context, draft *AgentDraft, chat, username string) error {

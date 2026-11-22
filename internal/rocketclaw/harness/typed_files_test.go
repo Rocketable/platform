@@ -222,13 +222,14 @@ func TestMCPImageBlocksAreStraightened(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	turned, ok := result.content.Index(0).(*codemode.File)
+	content, _ := result.(starlark.HasAttrs).Attr("content")
+	turned, ok := content.(*starlark.List).Index(0).(*codemode.File)
 	require.True(t, ok)
 
 	width, height, _ := turned.Dimensions()
 	require.Equal(t, [3]any{"image-1.jpeg", 2, 4}, [3]any{turned.Name(), width, height})
 
-	refused, ok := result.content.Index(1).(*codemode.Error)
+	refused, ok := content.(*starlark.List).Index(1).(*codemode.Error)
 	require.True(t, ok)
 	require.Equal(t, [2]string{"demo.photo", "image too large to straighten (12 MP; limit 10.24 MP)"}, [2]string{refused.Tool(), refused.Message()})
 }

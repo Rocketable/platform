@@ -181,6 +181,9 @@ func newResultModelEnv(t *testing.T) *resultModelEnv {
 		add("clip", func(map[string]any) *mcp.CallToolResult {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.AudioContent{Data: []byte("RIFF" + strings.Repeat("\x00", 48<<10-4)), MIMEType: "audio/wav"}}}
 		})
+		add("snap", func(map[string]any) *mcp.CallToolResult {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.ImageContent{Data: []byte(paddedPNG(t, 1, 1, 128)), MIMEType: "image/png"}}}
+		})
 		add("fail", func(map[string]any) *mcp.CallToolResult {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "nope"}}}
 		})
@@ -215,7 +218,7 @@ func (e *resultModelEnv) script(expr string) string {
 		"nope": `read(filePath="out/missing.png")`, "huge": `read(filePath="pano.jpg")`, "zipf": `read(filePath="data.zip")`,
 		"md_path": `glob(pattern="notes.md")[0]`, "found": `glob(pattern="*.md")`,
 		"hit": `grep(pattern="ready", include="notes.md")`, "hit_line": `grep(pattern="ready", include="notes.md")[0]`,
-		"said": `uploader_say()`, "mcp_bad": `uploader_fail()`,
+		"said": `uploader_say()`, "mcp_bad": `uploader_fail()`, "snap": `uploader_snap()`,
 		"quiet":       `bash(command="grep -q ready notes.md")`,
 		"bad_args":    `bash(command="true", timeout_ms="soon")`,
 		"positional":  `read("notes.md")`,
@@ -486,11 +489,12 @@ func TestResultModelKindsAndOperations(t *testing.T) {
 		{name: "file", details: `[X.name, X.mime]`, detailsWant: `["shot.png","image/png"]`, value: "shot", plain: `read(filePath="out/shot.png")`, method: `X.base64()[:8]`, argument: "uploader.echo: argument value got a file object; pass shot.base64(), a path, or text", argumentFails: true, returned: "Attached file 1: shot.png (image/png, 1280 × 800, 182 KB)", files: []string{"shot.png"}},
 		{name: "path", sequence: true, details: `[X.path, X.name]`, detailsWant: `["/w/notes.md","notes.md"]`, value: "md_path", plain: `MD`, method: `X.endswith(".md")`, argument: `"/w/notes.md"`, returned: "/w/notes.md"},
 		{name: "match", details: `[X.path, X.line, X.text]`, detailsWant: `["/w/notes.md",1,"ready"]`, value: "hit_line", plain: `hit_line`, method: `X.text.upper()`, argument: match, returned: "/w/notes.md:1: ready"},
-		{name: "glob_result", details: `[X.pattern, X.path]`, detailsWant: `["*.md",""]`, value: "found", plain: `found`, method: `X[0].name`, argument: `["/w/a.md","/w/b.md","/w/notes.md"]`, returned: "/w/a.md\n/w/b.md\n/w/notes.md"},
+		{name: "glob_result", details: `[X.pattern, X.path, X.partial]`, detailsWant: `["*.md","",false]`, value: "found", plain: `found`, method: `X[0].name`, argument: `["/w/a.md","/w/b.md","/w/notes.md"]`, returned: "/w/a.md\n/w/b.md\n/w/notes.md"},
 		{name: "grep_result", details: `[X.pattern, X.path, X.include, X.partial]`, detailsWant: `["ready","","notes.md",false]`, value: "hit", plain: `hit`, method: `X[0].text`, argument: "[" + match + "]", returned: "Found 1 matches\n/w/notes.md:\n  Line 1: ready"},
 		{name: "bash_result", sequence: true, details: `[X.output, X.error_code]`, detailsWant: `["hi",""]`, value: "ok_sh", plain: `"hi"`, method: `X.upper()`, argument: `"hi"`, returned: "hi"},
 		{name: "webfetch_result", sequence: true, details: `[X.url, X.status]`, detailsWant: `["http://web/ok",200]`, value: "page", plain: `"Hello"`, method: `X.upper()`, argument: page, returned: "Hello", data: `{"url":"http://web/ok","status":200,"status_text":"OK","content_type":"text/plain","headers":{"content-length":"5","content-type":"text/plain"},"redirects":[],"request":{"method":"GET","url":"http://web/ok","headers":{"accept":"text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1","accept-language":"en-US,en;q=0.9","user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"}},"timing_ms":{"total":0,"first_byte":0},"output":"Hello"}`},
 		{name: "mcp_result", sequence: true, details: `[X.server, X.tool, X.text]`, detailsWant: `["uploader","say","said"]`, value: "said", plain: `"said"`, method: `X.upper()`, argument: `"said"`, returned: "said"},
+		{name: "mcp_result with only images", details: `[X.tool, len(X.content), X.content[0].mime]`, detailsWant: `["snap",1,"image/png"]`, value: "snap", plain: `""`, method: `X.upper()`, argument: `""`, returned: ""},
 		{name: "dict_result", details: `X["model"]`, detailsWant: "openai/gpt-6-luna", value: "verdict", plain: `{"model": "openai/gpt-6-luna", "answers": {"tone": {"type": "choice", "choice": "calm", "confidence": 0}}, "usage": {"input_tokens": 0, "output_tokens": 0}, "stop_reason": "stop"}`, method: `X.keys()`, argument: verdict, returned: verdict},
 		{name: "decoded json", details: `[X.ok, X.error]`, detailsWant: "[true,null]", value: "data", plain: `{"name": "orchard", "tags": ["a"]}`, method: `X.get("name")`, argument: `{"name":"orchard","tags":["a"]}`, returned: `{"name":"orchard","tags":["a"]}`},
 		{name: "decoded json list", sequence: true, details: `[X.ok, X.error]`, detailsWant: "[true,null]", value: "rows", plain: `[1, 2]`, method: `X.index(2)`, argument: `[1,2]`, returned: `[1,2]`},

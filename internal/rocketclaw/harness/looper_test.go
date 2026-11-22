@@ -366,6 +366,7 @@ func testLooper(client responsesAPI) *looper {
 	var l looper
 
 	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT6Luna}
+	l.CompactThreshold = defaultCompactThreshold
 	l.Client = client
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.Journal = InertJournal{}
@@ -379,6 +380,7 @@ func emptyTestLooper() *looper {
 	var l looper
 
 	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT6Luna}
+	l.CompactThreshold = defaultCompactThreshold
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.Journal = InertJournal{}
 	l.SteerDrain = InertSteerDrain{}
@@ -3674,12 +3676,12 @@ func TestLooperClassifiesTerminalTooManyRequestsErrors(t *testing.T) {
 		want func(error) bool
 	}{
 		{name: "usage limit", code: "usage_limit_reached", want: func(err error) bool {
-			_, ok := errors.AsType[*providerUsageLimitError](err)
-			return ok
+			errUsage, ok := errors.AsType[*providerUsageError](err)
+			return ok && errUsage.reason == "usage limit"
 		}},
 		{name: "usage not included", code: "usage_not_included", want: func(err error) bool {
-			_, ok := errors.AsType[*providerUsageNotIncludedError](err)
-			return ok
+			errUsage, ok := errors.AsType[*providerUsageError](err)
+			return ok && errUsage.reason == "usage not included"
 		}},
 		{name: "generic retry limit", code: "rate_limit_exceeded", want: func(err error) bool {
 			_, ok := errors.AsType[*providerRetryLimitError](err)
@@ -3750,33 +3752,6 @@ func TestLooperRetriesTooManyRequestsRequestError(t *testing.T) {
 			})
 		})
 	}
-}
-
-func TestLooperLoopRequiresDependencies(t *testing.T) {
-	looper := emptyTestLooper()
-	input := make(chan PromptInput)
-	interrupts := make(chan os.Signal, 1)
-
-	var nilCtx context.Context
-	require.EqualError(t, looper.Loop(nilCtx, input, emptySession(), discardSession(), interrupts), "context is required")
-	require.EqualError(t, looper.Loop(context.Background(), nil, emptySession(), discardSession(), interrupts), "input channel is required")
-	require.EqualError(t, looper.Loop(context.Background(), input, nil, discardSession(), interrupts), "sessionIn is required")
-	require.EqualError(t, looper.Loop(context.Background(), input, emptySession(), discardSession(), nil), "interrupts channel is required")
-
-	close(input)
-}
-
-func TestLooperLoopRequiresPromptResponseChannel(t *testing.T) {
-	looper := emptyTestLooper()
-
-	input := make(chan PromptInput, 1)
-	input <- PromptInput{Role: PromptInputRoleUser, Texts: []string{"question"}}
-
-	close(input)
-
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
-
-	require.EqualError(t, err, "prompt response channel is required")
 }
 
 func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {

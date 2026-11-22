@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -237,9 +236,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 
 	roots := make(map[string]bool, len(sessions.Data))
 
-	var ids []string
-
-	ids = slices.Grow(ids, len(sessions.Data))
+	ids := make([]string, 0, len(sessions.Data))
 	for _, session := range sessions.Data {
 		roots[session.ID] = true
 		ids = append(ids, "opencode:"+name+":"+session.ID)
@@ -418,11 +415,7 @@ WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit opencode sync: %w", err)
-	}
-
-	return nil
+	return commitState(tx, "opencode sync")
 }
 
 func openCodeSenders(ctx context.Context, name string, server config.OpenCodeConfig, session string, since, until int64) ([]string, error) {
@@ -635,11 +628,9 @@ func (s *SessionService) ToggleManualTag(ctx context.Context, agents harness.Age
 		return err
 	}
 
-	remote := kind == KindRemote
-
 	group := []string{tag}
 
-	if !remote {
+	if kind != KindRemote {
 		thread, _, err := s.Thread(id)
 		if err != nil {
 			return err
@@ -662,16 +653,9 @@ func (s *SessionService) ToggleManualTag(ctx context.Context, agents harness.Age
 }
 
 func (s *SessionService) ConversationKind(ctx context.Context, id string) (kind ConversationKind, err error) {
-	err = s.db.QueryRowContext(ctx, `SELECT kind FROM conversations WHERE conversation_id = $1`, id).Scan(&kind)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
+	_, err = scanFound("read conversation kind", s.db.QueryRowContext(ctx, `SELECT kind FROM conversations WHERE conversation_id = $1`, id).Scan(&kind))
 
-	if err != nil {
-		return "", fmt.Errorf("read conversation kind: %w", err)
-	}
-
-	return kind, nil
+	return kind, err
 }
 
 var ErrTagNotAllowed = errors.New("the session's agent does not allow this tag")

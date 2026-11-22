@@ -3,6 +3,7 @@ package harness
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -95,7 +96,7 @@ func (sfs *sandboxedFileSystem) ApplyPatch(patchText string) (starlark.Value, er
 		}
 	}
 
-	return codemode.NewText(preview.output, codemode.PlainText{}), nil
+	return codemode.NewText("text", preview.output, nil, nil), nil
 }
 
 func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (preview applyPatchPreview, errText string) {
@@ -580,24 +581,24 @@ func tryMatch(lines, pattern []string, startIndex int, compare func(string, stri
 }
 
 type globMatch struct {
-	path  string
-	mtime int64
+	Path  string `json:"path"`
+	MTime int64  `json:"mtime"`
 }
 
 func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) (starlark.Value, error) {
-	matches, errText := sfs.globMatches(ctx, pattern, path)
+	matches, partial, errText := sfs.globMatches(ctx, pattern, path)
 	if errText != "" {
 		return nil, errors.New(errText)
 	}
 
-	return newGlobResult(matches, globToolParams{Pattern: pattern, Path: path}), nil
+	return newGlobResult(matches, partial, globToolParams{Pattern: pattern, Path: path}), nil
 }
 
 type grepMatch struct {
-	path  string
-	line  int
-	text  string
-	mtime int64
+	Path  string `json:"path"`
+	Line  int    `json:"line"`
+	Text  string `json:"text"`
+	MTime int64  `json:"mtime"`
 }
 
 type ripgrepJSON struct {
@@ -649,23 +650,22 @@ func (sfs *sandboxedFileSystem) grepMatches(ctx context.Context, pattern, search
 
 	files := target.files
 	if len(files) == 1 && files[0] == "." {
-		files, errText = sfs.allowedRipgrepFiles(ctx, target.hostRoot, include)
-		if errText != "" || len(files) == 0 {
+		if files, errText = sfs.allowedRipgrepFiles(ctx, target.hostRoot, include); len(files) == 0 {
 			return nil, false, errText
 		}
 	}
 
-	stdout, partial, errText := runRipgrep(ctx, target.hostRoot, pattern, files)
-	if errText != "" {
-		return nil, false, errText
-	}
+	stdout, errSearch := ripgrep(ctx, target.hostRoot, append([]string{"--json", "--no-messages", "--", pattern}, files...)...)
 
 	matches, err = parseGrepMatches(stdout, target.root, target.hostRoot)
-	if err != nil {
+	switch {
+	case err != nil:
 		return nil, false, err.Error()
+	case len(matches) == 0:
+		return nil, false, cmp.Or(errSearch, errText)
 	}
 
-	return matches, partial, ""
+	return matches, errSearch != "" || errText != "", ""
 }
 
 func (sfs *sandboxedFileSystem) previewApplyPatch(patchText string) (preview applyPatchPreview, errText string) {
@@ -675,7 +675,7 @@ func (sfs *sandboxedFileSystem) previewApplyPatch(patchText string) (preview app
 	return previewApplyPatchLocked(sfs, patchText)
 }
 
-func (sfs *sandboxedFileSystem) globMatches(ctx context.Context, pattern, path string) (results []globMatch, errText string) {
+func (sfs *sandboxedFileSystem) globMatches(ctx context.Context, pattern, path string) (results []globMatch, partial bool, errText string) {
 	sfs.mu.Lock()
 	defer sfs.mu.Unlock()
 
@@ -684,7 +684,7 @@ func (sfs *sandboxedFileSystem) globMatches(ctx context.Context, pattern, path s
 
 	hostRoot := sfs.root.Name()
 	if denied := sfs.deniedPath(searchPath); denied != "" {
-		return nil, denied
+		return nil, false, denied
 	}
 
 	if searchPath != "" {
@@ -692,16 +692,16 @@ func (sfs *sandboxedFileSystem) globMatches(ctx context.Context, pattern, path s
 
 		searchPath, err = normalizeRootName(sfs.root, searchPath)
 		if err != nil {
-			return nil, err.Error()
+			return nil, false, err.Error()
 		}
 
 		if err := rejectSymlink(sfs, searchPath); err != nil {
-			return nil, err.Error()
+			return nil, false, err.Error()
 		}
 
 		root, err := sfs.root.OpenRoot(searchPath)
 		if err != nil {
-			return nil, err.Error()
+			return nil, false, err.Error()
 		}
 
 		defer func() { _ = root.Close() }()
@@ -710,30 +710,11 @@ func (sfs *sandboxedFileSystem) globMatches(ctx context.Context, pattern, path s
 		hostRoot = filepath.Join(hostRoot, searchPath)
 	}
 
-	cmd := exec.CommandContext(ctx, "rg", "--no-config", "--files", "--hidden", "--no-follow", "--path-separator=/", "--glob=!.git/*", "-g", pattern)
-	cmd.Dir = hostRoot
-
-	var stderr bytes.Buffer
-
-	cmd.Stderr = &stderr
-
-	stdout, err := cmd.Output()
-	if err != nil {
-		if errExit, ok := errors.AsType[*exec.ExitError](err); ok && errExit.ExitCode() == 1 {
-			return nil, ""
-		}
-
-		message := strings.TrimSpace(stderr.String())
-		if message != "" {
-			return nil, message
-		}
-
-		return nil, err.Error()
-	}
+	stdout, errText := ripgrep(ctx, hostRoot, "--files", "-g", pattern)
 
 	outputText := strings.TrimSpace(string(stdout))
 	if outputText == "" {
-		return nil, ""
+		return nil, false, errText
 	}
 
 	matches := strings.Split(outputText, "\n")
@@ -754,10 +735,10 @@ func (sfs *sandboxedFileSystem) globMatches(ctx context.Context, pattern, path s
 			continue
 		}
 
-		results = append(results, globMatch{path: full, mtime: info.ModTime().UnixMilli()})
+		results = append(results, globMatch{Path: full, MTime: info.ModTime().UnixMilli()})
 	}
 
-	return results, ""
+	return results, errText != "", ""
 }
 
 func (sfs *sandboxedFileSystem) deniedPath(name string) string {
@@ -861,35 +842,16 @@ func (sfs *sandboxedFileSystem) resolveGrepTarget(searchPath string) (grepTarget
 }
 
 func (sfs *sandboxedFileSystem) allowedRipgrepFiles(ctx context.Context, hostRoot, include string) (files []string, errText string) {
-	args := []string{"--no-config", "--files", "--hidden", "--no-follow", "--path-separator=/", "--glob=!.git/*"}
+	args := []string{"--files"}
 	if include != "" {
 		args = append(args, "--glob="+include)
 	}
 
-	cmd := exec.CommandContext(ctx, "rg", args...)
-	cmd.Dir = hostRoot
-
-	var stderr bytes.Buffer
-
-	cmd.Stderr = &stderr
-
-	stdout, err := cmd.Output()
-	message := strings.TrimSpace(stderr.String())
-
-	if err != nil {
-		errExit, ok := errors.AsType[*exec.ExitError](err)
-		if !ok || errExit.ExitCode() != 1 {
-			if message != "" {
-				return nil, message
-			}
-
-			return nil, err.Error()
-		}
-	}
+	stdout, errText := ripgrep(ctx, hostRoot, args...)
 
 	outputText := strings.TrimSpace(string(stdout))
 	if outputText == "" {
-		return nil, ""
+		return nil, errText
 	}
 
 	listed := strings.Split(outputText, "\n")
@@ -903,14 +865,11 @@ func (sfs *sandboxedFileSystem) allowedRipgrepFiles(ctx context.Context, hostRoo
 		allowed = append(allowed, file)
 	}
 
-	return allowed, ""
+	return allowed, errText
 }
 
-func runRipgrep(ctx context.Context, hostRoot, pattern string, files []string) (stdout []byte, partial bool, errText string) {
-	args := make([]string, 0, 7+len(files))
-	args = append(args, "--no-config", "--json", "--hidden", "--no-follow", "--path-separator=/", "--glob=!.git/*", "--no-messages", "--", pattern)
-	args = append(args, files...)
-	cmd := exec.CommandContext(ctx, "rg", args...)
+func ripgrep(ctx context.Context, hostRoot string, args ...string) (stdout []byte, errText string) {
+	cmd := exec.CommandContext(ctx, "rg", append([]string{"--no-config", "--hidden", "--no-follow", "--path-separator=/", "--glob=!.git/*"}, args...)...)
 	cmd.Dir = hostRoot
 
 	var stderr bytes.Buffer
@@ -918,25 +877,16 @@ func runRipgrep(ctx context.Context, hostRoot, pattern string, files []string) (
 	cmd.Stderr = &stderr
 	stdout, err := cmd.Output()
 	message := strings.TrimSpace(stderr.String())
+	errExit, exited := errors.AsType[*exec.ExitError](err)
 
-	if err == nil {
-		return stdout, false, ""
+	switch {
+	case err == nil || exited && errExit.ExitCode() == 1:
+		return stdout, ""
+	case exited && errExit.ExitCode() == 2:
+		return stdout, cmp.Or(message, "some paths could not be searched and nothing was found")
 	}
 
-	errExit, ok := errors.AsType[*exec.ExitError](err)
-	if ok && errExit.ExitCode() == 1 {
-		return nil, false, ""
-	}
-
-	if message != "" {
-		return nil, false, message
-	}
-
-	if ok && errExit.ExitCode() == 2 {
-		return stdout, true, ""
-	}
-
-	return nil, false, err.Error()
+	return nil, cmp.Or(message, err.Error())
 }
 
 func parseGrepMatches(stdout []byte, searchRoot *os.Root, hostRoot string) ([]grepMatch, error) {
@@ -970,7 +920,7 @@ func parseGrepMatches(stdout []byte, searchRoot *os.Root, hostRoot string) ([]gr
 		}
 
 		text := strings.TrimRight(item.Data.Lines.Text, "\r\n")
-		matches = append(matches, grepMatch{path: filepath.Join(hostRoot, item.Data.Path.Text), line: item.Data.LineNumber, text: text, mtime: info.ModTime().UnixMilli()})
+		matches = append(matches, grepMatch{Path: filepath.Join(hostRoot, item.Data.Path.Text), Line: item.Data.LineNumber, Text: text, MTime: info.ModTime().UnixMilli()})
 	}
 
 	if err := scanner.Err(); err != nil {

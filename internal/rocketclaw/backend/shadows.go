@@ -334,12 +334,8 @@ func commitShadowRevertDB(ctx context.Context, db stateStoreDB, parent string, e
 			return fmt.Errorf("rewind comparison history: %w", err)
 		}
 
-		if _, err := db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, child); err != nil {
-			return fmt.Errorf("clear comparison cutoff: %w", err)
-		}
-
-		if _, err := db.ExecContext(ctx, `UPDATE conversations SET preview = NULL, last_updated = NULL WHERE conversation_id = $1`, child); err != nil {
-			return fmt.Errorf("clear comparison summary: %w", err)
+		if _, err := db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '', preview = NULL, last_updated = NULL WHERE conversation_id = $1`, child); err != nil {
+			return fmt.Errorf("clear comparison cutoff and summary: %w", err)
 		}
 
 		summary, err := loadSessionSummary(ctx, db, child)
@@ -391,12 +387,8 @@ func loadTurnInputs(ctx context.Context, db stateStoreDB, conversation, turn str
 
 	var data []byte
 
-	err := queryScalar(ctx, db, "load canonical input", `SELECT value FROM steps WHERE conversation_id = $1 AND key = $2`, &data, conversation, turn+"/canonical")
-	if errors.Is(err, sql.ErrNoRows) {
-		return snapshot, false, nil
-	}
-
-	if err != nil {
+	found, err := scanFound("load canonical input", db.QueryRowContext(ctx, `SELECT value FROM steps WHERE conversation_id = $1 AND key = $2`, conversation, turn+"/canonical").Scan(&data))
+	if err != nil || !found {
 		return snapshot, false, err
 	}
 
@@ -449,13 +441,9 @@ func (s *SessionService) shadowInputs(ctx context.Context, child, turn string) (
 		inputs, entries, environment []byte
 	)
 
-	err := s.db.QueryRowContext(ctx, `SELECT inputs, context_entries, environment, input_closed FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = $2`, child, turn).Scan(&inputs, &entries, &environment, &snapshot.Closed)
-	if errors.Is(err, sql.ErrNoRows) {
-		return snapshot, false, nil
-	}
-
-	if err != nil {
-		return snapshot, false, fmt.Errorf("load mirrored input: %w", err)
+	found, err := scanFound("load mirrored input", s.db.QueryRowContext(ctx, `SELECT inputs, context_entries, environment, input_closed FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = $2`, child, turn).Scan(&inputs, &entries, &environment, &snapshot.Closed))
+	if err != nil || !found {
+		return snapshot, false, err
 	}
 
 	for _, field := range []struct {
@@ -818,17 +806,13 @@ func (s *SessionService) claimShadowTurn(ctx context.Context, child string) (act
 		shadowAgent, parentAgent string
 	)
 
-	err = tx.QueryRowContext(ctx, `WITH head AS (
+	found, err := scanFound("read shadow queue head", tx.QueryRowContext(ctx, `WITH head AS (
 SELECT id, inbound_json, inputs FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = '' AND terminal = '' ORDER BY id LIMIT 1),
 busy AS (SELECT count(*) AS n FROM turns WHERE conversation_id = $1 AND phase NOT IN ('waiting', 'done'))
 SELECT h.id, h.inbound_json, c.shadow_agent, c.parent_agent FROM head h CROSS JOIN busy b JOIN conversations c ON c.conversation_id = $1
-WHERE jsonb_array_length(h.inputs) > 0 AND b.n = 0`, child).Scan(&id, &data, &shadowAgent, &parentAgent)
-	if errors.Is(err, sql.ErrNoRows) {
-		return activeTurn{}, false, nil
-	}
-
-	if err != nil {
-		return activeTurn{}, false, fmt.Errorf("read shadow queue head: %w", err)
+WHERE jsonb_array_length(h.inputs) > 0 AND b.n = 0`, child).Scan(&id, &data, &shadowAgent, &parentAgent))
+	if err != nil || !found {
+		return activeTurn{}, false, err
 	}
 
 	var parent protocol.InboundMessage

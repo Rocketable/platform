@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -156,10 +157,6 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 		return nil
 	}
 
-	registry := f.mcpRegistry
-	permissions := agent.Permission
-	retainedRel := f.retainedRel
-
 	return map[string]looperTool{
 		loadExecuteResultToolName: {
 			Definition: *functionTool(loadExecuteResultToolName, "Load a page of an oversized execute result, or with attachment=n a file it held back. Top-level only, not callable from scripts. Pages hold at most 2000 lines and 50 KiB; follow next_start_line until EOF.", map[string]any{
@@ -177,7 +174,7 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 
 				tc, _ := toolCallContextFrom(ctx)
 
-				return tc.looper.loadExecuteResult(ctx, retainedRel, params)
+				return tc.looper.loadExecuteResult(ctx, f.retainedRel, params)
 			},
 		},
 		executeToolName: f.backgroundTool(agent, BackgroundKindExecute, &looperTool{
@@ -193,7 +190,7 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 			VisibilitySubjects: []string{codeModeApproveSubject},
 			Subjects:           func(json.RawMessage) ([]string, error) { return []string{codeModeApproveSubject}, nil },
 			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				return callExecute(ctx, registry, permissions, servers, retainedRel, raw)
+				return callExecute(ctx, f.mcpRegistry, agent.Permission, servers, f.retainedRel, raw)
 			},
 		}),
 	}
@@ -204,10 +201,6 @@ type executeParams struct {
 }
 
 func listAllowedTools(ctx context.Context, session *mcpclient.Session, permissions PermissionSet, servers []string) ([]codemode.ToolDesc, []string, error) {
-	if len(servers) == 0 {
-		return nil, nil, nil
-	}
-
 	type serverResult struct {
 		tools []codemode.ToolDesc
 		note  string
@@ -451,19 +444,9 @@ type codeModeSearchEntry struct {
 
 func codeModeSearch(index []codeModeSearchEntry, args map[string]any) string {
 	query := strings.TrimSpace(argString(args, "query"))
+	namespace := cmp.Or(strings.TrimSpace(argString(args, "namespace")), strings.TrimSpace(argString(args, "server")))
 
-	namespace := strings.TrimSpace(argString(args, "namespace"))
-	if namespace == "" {
-		namespace = strings.TrimSpace(argString(args, "server"))
-	}
-
-	offset := argInt(args, "offset", 0)
 	limit := argInt(args, "limit", defaultSearchLimit)
-
-	if offset < 0 {
-		offset = 0
-	}
-
 	if limit <= 0 {
 		limit = defaultSearchLimit
 	}
@@ -482,17 +465,11 @@ func codeModeSearch(index []codeModeSearchEntry, args map[string]any) string {
 
 	var ranked []codeModeSearchEntry
 
-	if pathQuery != "" {
-		for _, entry := range scoped {
-			if entry.item.Path == pathQuery || entry.item.Callable == pathQuery {
-				ranked = []codeModeSearchEntry{entry}
-
-				break
-			}
-		}
-	}
-
-	if ranked == nil {
+	if i := slices.IndexFunc(scoped, func(entry codeModeSearchEntry) bool {
+		return pathQuery != "" && (entry.item.Path == pathQuery || entry.item.Callable == pathQuery)
+	}); i >= 0 {
+		ranked = scoped[i : i+1]
+	} else {
 		terms := searchTokenize(query)
 		for _, entry := range scoped {
 			score := openCodeSearchScore(terms, entry.item.Path, entry.item.Description, entry.searchText)
@@ -505,18 +482,11 @@ func codeModeSearch(index []codeModeSearchEntry, args map[string]any) string {
 		}
 
 		slices.SortFunc(ranked, func(a, b codeModeSearchEntry) int {
-			if a.score != b.score {
-				return b.score - a.score
-			}
-
-			return strings.Compare(a.item.Path, b.item.Path)
+			return cmp.Or(cmp.Compare(b.score, a.score), strings.Compare(a.item.Path, b.item.Path))
 		})
 	}
 
-	if offset > len(ranked) {
-		offset = len(ranked)
-	}
-
+	offset := min(max(argInt(args, "offset", 0), 0), len(ranked))
 	end := min(offset+limit, len(ranked))
 	page := ranked[offset:end]
 	remaining := len(ranked) - end
@@ -719,16 +689,11 @@ func argString(args map[string]any, key string) string {
 }
 
 func argInt(args map[string]any, key string, fallback int) int {
-	switch v := args[key].(type) {
-	case int:
-		return v
-	case int64:
+	if v, ok := args[key].(float64); ok {
 		return int(v)
-	case float64:
-		return int(v)
-	default:
-		return fallback
 	}
+
+	return fallback
 }
 
 func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool, hosts map[string]looperTool) {
@@ -738,24 +703,16 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 	names := slices.Sorted(maps.Keys(hosts))
 	host = make([]codemode.HostTool, 0, len(names))
 
-	for _, name := range names {
-		tool := hosts[name]
-		if tool.Call == nil {
-			continue
-		}
-
-		schema := codeModeHostInputSchema(name, &tool.Definition)
-		toolName := name
-		toolCopy := tool
-		output := tc.output
+	for _, toolName := range names {
+		tool := hosts[toolName]
 
 		host = append(host, codemode.HostTool{
 			Name:        toolName,
-			InputSchema: schema,
+			InputSchema: codeModeHostInputSchema(toolName, &tool.Definition),
 			FileArgs:    map[string][]string{"bash": {"stdin"}, "decision": {"images[]"}}[toolName],
 			Details:     codeModeCallDetails(toolName),
 			CallValue: func(ctx context.Context, args map[string]any) (starlark.Value, error) {
-				result, errCall := recordHostCall(ctx, toolName, args, toolCopy.resumable, toolHostCall{name: toolName, tool: &toolCopy, output: output})
+				result, errCall := recordHostCall(ctx, toolName, args, tool.resumable, toolHostCall{name: toolName, tool: &tool, output: tc.output})
 				if errCall != nil {
 					return nil, errCall
 				}
@@ -768,7 +725,7 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 					return starlark.Call(&starlark.Thread{Name: toolName}, starjson.Module.Members["decode"], starlark.Tuple{starlark.String(result.Output)}, nil)
 				}
 
-				return starlark.String(attachmentOutputMessage(result)), nil
+				return starlark.String(result.Output), nil
 			},
 		})
 	}
@@ -781,7 +738,9 @@ func hostCallValue(result ToolResult) (starlark.Value, bool) {
 	case starlark.Value:
 		return data, true
 	case BashResult:
-		return &bashStarlarkResult{output: data.Output, errorCode: data.ErrorCode}, true
+		return newBashStarlarkResult(data.Output, data.ErrorCode), true
+	case webFetchPage:
+		return webFetchValue(&data), true
 	}
 
 	return nil, false
@@ -847,15 +806,12 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 			return ToolResult{}, errors.Join(errStep, tc.observations.recordCodeModeCall(ctx, record.finish(ToolResult{}, errStep), true))
 		case step.Done:
 			result := TextToolResult(step.Output)
-			if step.Bash != nil {
+			switch {
+			case step.Bash != nil:
 				result.Data = *step.Bash
-			}
-
-			if step.WebFetch != nil {
-				result.Data = &webFetchResult{page: *step.WebFetch}
-			}
-
-			if step.MCP != nil {
+			case step.WebFetch != nil:
+				result.Data = *step.WebFetch
+			case step.MCP != nil:
 				result.Data = step.MCP
 			}
 
@@ -892,20 +848,17 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 		return result, errors.Join(errRun, tc.observations.recordCodeModeCall(ctx, record.cancel(), false))
 	}
 
-	want.Done, want.Output = true, attachmentOutputMessage(result)
-	if bash, ok := result.Data.(BashResult); ok {
-		want.Bash = &bash
+	want.Done, want.Output = true, result.Output
+	switch data := result.Data.(type) {
+	case BashResult:
+		want.Bash = &data
+	case webFetchPage:
+		want.WebFetch = &data
+	case *mcp.CallToolResult:
+		want.MCP = data
+	default:
+		want.Typed = typedHostStepOf(data)
 	}
-
-	if fetched, ok := result.Data.(*webFetchResult); ok {
-		want.WebFetch = &fetched.page
-	}
-
-	if blocks, ok := result.Data.(*mcp.CallToolResult); ok {
-		want.MCP = blocks
-	}
-
-	want.Typed = typedHostStepOf(result.Data)
 
 	if errRun != nil {
 		want.Err = errRun.Error()
@@ -915,22 +868,16 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 }
 
 func codeModeHostInputSchema(name string, def *responses.FunctionToolParam) map[string]any {
-	if def == nil || def.Parameters == nil {
-		return nil
-	}
-
 	props, _ := def.Parameters["properties"].(map[string]any)
 	if props == nil {
 		return maps.Clone(def.Parameters)
 	}
 
-	required := codeModeHostRequiredFields(name, def.Parameters)
-
 	return map[string]any{
 		"type":                 "object",
 		"properties":           maps.Clone(props),
 		"additionalProperties": false,
-		"required":             required,
+		"required":             codeModeHostRequiredFields(name, def.Parameters),
 	}
 }
 
@@ -950,22 +897,7 @@ func codeModeHostRequiredFields(name string, params map[string]any) []string {
 		return []string{"model", "state", "questions"}
 	}
 
-	switch required := params["required"].(type) {
-	case []string:
-		return slices.Clone(required)
-	case []any:
-		out := make([]string, 0, len(required))
-		for _, item := range required {
-			text, ok := item.(string)
-			if !ok || text == "" {
-				continue
-			}
+	required, _ := params["required"].([]string)
 
-			out = append(out, text)
-		}
-
-		return out
-	default:
-		return nil
-	}
+	return slices.Clone(required)
 }

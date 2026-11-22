@@ -59,17 +59,17 @@ func TestNormalizeInboundAttachmentsRejectsAttachmentsTooLargeToReduce(t *testin
 	assert.Equal(t, []string{"Skipped attachment large.png because it was too large to attempt size reduction."}, content.AttachmentWarnings)
 }
 
-func TestReduceResizedImageWithinLimitReportsEncoderErrorsAndExhaustion(t *testing.T) {
+func TestShrinkImageWithinLimitReportsEncoderErrorsAndExhaustion(t *testing.T) {
 	t.Parallel()
 
 	img := image.NewNRGBA(image.Rect(0, 0, 4, 4))
 
-	_, err := reduceResizedImageWithinLimit(img, 1000, 1, &inboundImageEncoderMock{encodeWithinLimitFunc: func(image.Image, int) ([]byte, int, error) {
+	_, err := shrinkImageWithinLimit(img, 1, &inboundImageEncoderMock{encodeWithinLimitFunc: func(image.Image, int) ([]byte, int, error) {
 		return nil, 0, assert.AnError
 	}})
 	require.ErrorIs(t, err, assert.AnError)
 
-	_, err = reduceResizedImageWithinLimit(img, 1000, 1, &inboundImageEncoderMock{encodeWithinLimitFunc: func(image.Image, int) ([]byte, int, error) {
+	_, err = shrinkImageWithinLimit(img, 1, &inboundImageEncoderMock{encodeWithinLimitFunc: func(image.Image, int) ([]byte, int, error) {
 		return nil, 1000, nil
 	}})
 	require.ErrorIs(t, err, errInboundAttachmentReductionNotEnough)
@@ -204,10 +204,10 @@ func TestFitInboundImageWithinLimitReportsPNGDecodeFailure(t *testing.T) {
 	assert.ErrorIs(t, err, errInboundAttachmentReductionFailed)
 }
 
-func TestResizePNGWithinLimitRejectsSinglePixelImageTooLargeForTarget(t *testing.T) {
+func TestShrinkPNGWithinLimitRejectsSinglePixelImageTooLargeForTarget(t *testing.T) {
 	t.Parallel()
 
-	transformed, err := resizePNGWithinLimit(newAttachmentTestImage(1, 1), 1)
+	transformed, err := shrinkImageWithinLimit(newAttachmentTestImage(1, 1), 1, inboundPNGEncoder{})
 	assert.Nil(t, transformed)
 	assert.ErrorIs(t, err, errInboundAttachmentReductionNotEnough)
 }

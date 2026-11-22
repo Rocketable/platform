@@ -124,11 +124,7 @@ INSERT INTO conversations (conversation_id, agent, created_by, forked_from, spac
 		return "", err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("commit fork: %w", err)
-	}
-
-	return prompt, nil
+	return prompt, commitState(tx, "fork")
 }
 
 func (s *SessionService) copySessionPrefix(ctx context.Context, db stateStoreDB, destination string, entries []harness.SessionEntry, producers []string, prompt string) (string, error) {

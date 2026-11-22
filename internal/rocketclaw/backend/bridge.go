@@ -147,12 +147,8 @@ type bridgeRequest struct {
 func (request *bridgeRequest) claimQueueItem(ctx context.Context, db stateStoreDB, conversationID, turnID string) (protocol.ThreadQueueItem, bool, error) {
 	item, err := scanThreadQueueItem(db.QueryRowContext(ctx, `UPDATE turns SET id = $3, phase = $4, reason = NULL
 WHERE conversation_id = $1 AND input_id = $2 AND phase = $5 AND reason = $6 RETURNING `+waitingColumns, conversationID, request.queueItemID, turnID, turnRunning, turnWaiting, waitQueued))
-	if errors.Is(err, sql.ErrNoRows) {
-		return item, false, nil
-	}
-
-	if err != nil {
-		return item, false, fmt.Errorf("start waiting turn: %w", err)
+	if found, err := scanFound("start waiting turn", err); err != nil || !found {
+		return item, false, err
 	}
 
 	content := item.Content
@@ -224,11 +220,7 @@ ON CONFLICT (conversation_id) DO NOTHING`, b.config.ConversationID+key.Path, b.c
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit review history append: %w", err)
-	}
-
-	return nil
+	return commitState(tx, "review history append")
 }
 
 func (b *Bridge) WriteSubagent(ctx context.Context, write *harness.SubagentWrite) (bool, error) {
@@ -2637,10 +2629,7 @@ func providerLogAttrs(req *http.Request, resp *http.Response, status int, durati
 }
 
 func rocketcodeShellTempRel(runtimeDir, conversationID string) string {
-	id := strings.TrimSpace(conversationID)
-	if id == "" {
-		id = "anonymous"
-	}
+	id := cmp.Or(strings.TrimSpace(conversationID), "anonymous")
 
 	id = strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {

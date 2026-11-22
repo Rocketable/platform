@@ -10,10 +10,14 @@ import (
 
 type decodedDict struct {
 	*starlark.Dict
+
+	kind string
 }
 
 type decodedList struct {
 	*starlark.List
+
+	kind string
 }
 
 func decodeJSON(thread *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
@@ -38,11 +42,11 @@ func decodeJSON(thread *starlark.Thread, _ *starlark.Builtin, args starlark.Tupl
 
 	switch v := decoded.(type) {
 	case starlark.String:
-		return NewText(string(v), PlainText{}), nil
+		return NewText("text", string(v), nil, nil), nil
 	case *starlark.Dict:
-		return decodedDict{v}, nil
+		return decodedDict{v, "decoded_dict"}, nil
 	case *starlark.List:
-		return decodedList{v}, nil
+		return decodedList{v, "decoded_list"}, nil
 	}
 
 	return decoded, nil
@@ -59,8 +63,12 @@ func Decoded(v starlark.Value) starlark.Value {
 	return v
 }
 
-func (d decodedDict) Type() string { return "decoded_dict" }
+func (d decodedDict) Type() string { return d.kind }
 func (d decodedDict) Ok() bool     { return true }
+
+func (d decodedDict) Hash() (uint32, error) {
+	return 0, fmt.Errorf("unhashable type: %s", d.kind)
+}
 
 func (d decodedDict) Attr(name string) (starlark.Value, error) { return decodedAttr(d, d.Dict, name) }
 
@@ -74,8 +82,12 @@ func (d decodedDict) Binary(op syntax.Token, y starlark.Value, side starlark.Sid
 	return binaryUnboxed(op, d.Dict, y, side)
 }
 
-func (l decodedList) Type() string { return "decoded_list" }
+func (l decodedList) Type() string { return l.kind }
 func (l decodedList) Ok() bool     { return true }
+
+func (l decodedList) Hash() (uint32, error) {
+	return 0, fmt.Errorf("unhashable type: %s", l.kind)
+}
 
 func (l decodedList) Attr(name string) (starlark.Value, error) { return decodedAttr(l, l.List, name) }
 

@@ -180,11 +180,11 @@ func clipCodeModeArguments(arguments string) string {
 }
 
 func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
-	text, command := attachmentOutputMessage(result), r.command
+	text, command := result.Output, r.command
 	r.command = ""
 
 	r.Status = codeModeCallOK
-	if value, ok := hostCallValue(result); ok && codemode.IsFailure(codemode.HostResult(r.Name, value, nil)) {
+	if value, ok := hostCallValue(result); ok && codemode.IsFailure(value) {
 		r.Status = codeModeCallError
 	}
 
@@ -207,13 +207,7 @@ func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
 
 	text = strings.TrimRightFunc(text, unicode.IsSpace)
 
-	line := text[strings.LastIndexByte(text, '\n')+1:]
-	if line == "</content>" {
-		text = strings.TrimRightFunc(strings.TrimSuffix(text, line), unicode.IsSpace)
-		line = text[strings.LastIndexByte(text, '\n')+1:]
-	}
-
-	r.Summary = strings.TrimSpace(line)
+	r.Summary = strings.TrimSpace(text[strings.LastIndexByte(text, '\n')+1:])
 	if len(r.Summary) > 200 {
 		r.Summary = strings.ToValidUTF8(r.Summary[:200], "")
 	}

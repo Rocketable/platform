@@ -256,21 +256,14 @@ WHERE username = $1 AND path = ANY($2) AND unread_at IS NULL AND NOT parked AND 
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit attention change: %w", err)
-	}
-
-	return nil
+	return commitState(tx, "attention change")
 }
 
 func (s *SessionService) PollAttention(ctx context.Context, username, path string, hold bool) (int64, error) {
 	var revision int64
 
 	if path == "" {
-		err := queryScalar(ctx, s.db, "read tab state", `SELECT revision FROM web_tab_states WHERE username = $1`, &revision, username)
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, nil
-		}
+		_, err := scanFound("read tab state", s.db.QueryRowContext(ctx, `SELECT revision FROM web_tab_states WHERE username = $1`, username).Scan(&revision))
 
 		return revision, err
 	}
@@ -376,14 +369,10 @@ func (s *SessionService) wakeDue(ctx context.Context, username string) error {
 
 	var viewing string
 
-	err = tx.QueryRowContext(ctx, `SELECT CASE WHEN viewed_at >= now() - interval '4 seconds' THEN viewing ELSE '' END
-FROM web_tab_states WHERE username = $1 FOR UPDATE`, username).Scan(&viewing)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("lock tab state: %w", err)
+	found, err := scanFound("lock tab state", tx.QueryRowContext(ctx, `SELECT CASE WHEN viewed_at >= now() - interval '4 seconds' THEN viewing ELSE '' END
+FROM web_tab_states WHERE username = $1 FOR UPDATE`, username).Scan(&viewing))
+	if err != nil || !found {
+		return err
 	}
 
 	woken, err := queryStrings(ctx, tx, `WITH due AS (
@@ -431,11 +420,7 @@ UPDATE web_tab_states s SET revision = s.revision + 1 FROM restored r WHERE s.us
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit park wake: %w", err)
-	}
-
-	return nil
+	return commitState(tx, "park wake")
 }
 
 func (s *SessionService) AutoParkAll(ctx context.Context, username string) (bool, error) {

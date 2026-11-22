@@ -245,11 +245,14 @@ func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, co
 }
 
 func gatherList(results []starlark.Value, failFast bool) starlark.Value {
+	list := starlark.NewList(results)
 	if failFast {
-		return newGatherResult(results)
+		list.Freeze()
+
+		return decodedList{list, "gather_result"}
 	}
 
-	return starlark.NewList(results)
+	return list
 }
 
 func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, concurrency int, callables []starlark.Value) (starlark.Value, error) {

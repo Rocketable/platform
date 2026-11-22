@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.starlark.net/starlark"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 )
@@ -501,31 +502,29 @@ func TestSandboxedFileSystemGlobPathAllocations(t *testing.T) {
 
 func TestRunRipgrepExitResults(t *testing.T) {
 	for _, tt := range []struct {
-		name    string
-		code    int
-		stderr  string
-		stdout  []byte
-		partial bool
-		errText string
+		name, out, stderr string
+		code              int
+		stdout            []byte
+		errText           string
 	}{
-		{name: "success with stderr", code: 0, stderr: "detail", stdout: []byte("result")},
-		{name: "no matches with stderr", code: 1, stderr: "detail"},
-		{name: "partial", code: 2, stdout: []byte("result"), partial: true},
-		{name: "error with stderr", code: 2, stderr: "detail", errText: "detail"},
+		{name: "success ignores stderr", out: "result", stderr: "detail", code: 0, stdout: []byte("result")},
+		{name: "no matches", stderr: "detail", code: 1, stdout: []byte{}},
+		{name: "unreadable paths with results", out: "result", stderr: "rg: ./locked: Permission denied (os error 13)", code: 2, stdout: []byte("result"), errText: "rg: ./locked: Permission denied (os error 13)"},
+		{name: "unreadable paths without a message", code: 2, stdout: []byte{}, errText: "some paths could not be searched and nothing was found"},
 		{name: "other failure", code: 3, errText: "exit status 3"},
+		{name: "other failure with a message", stderr: "detail", code: 3, errText: "detail"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root, err := os.OpenRoot(t.TempDir())
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-			script := fmt.Sprintf("#!/bin/sh\nprintf result\nprintf ' %s \\n' >&2\nexit %d\n", tt.stderr, tt.code)
+			script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' %q\nprintf ' %%s \\n' %q >&2\nexit %d\n", tt.out, tt.stderr, tt.code)
 			require.NoError(t, root.WriteFile("rg", []byte(script), 0o755))
 			t.Setenv("PATH", root.Name())
 
-			stdout, partial, errText := runRipgrep(t.Context(), root.Name(), "needle", []string{"."})
+			stdout, errText := ripgrep(t.Context(), root.Name(), "needle")
 			require.Equal(t, tt.stdout, stdout)
-			require.Equal(t, tt.partial, partial)
 			require.Equal(t, tt.errText, errText)
 		})
 	}
@@ -533,19 +532,84 @@ func TestRunRipgrepExitResults(t *testing.T) {
 	t.Run("cannot start", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Setenv("PATH", dir)
-		stdout, partial, errText := runRipgrep(t.Context(), dir, "needle", []string{"."})
+		stdout, errText := ripgrep(t.Context(), dir, "needle")
 		require.Nil(t, stdout)
-		require.False(t, partial)
 		require.Equal(t, `exec: "rg": executable file not found in $PATH`, errText)
 	})
 }
 
+func TestGlobAndGrepFollowRipgrepExitCodes(t *testing.T) {
+	const denied = "rg: ./locked: Permission denied (os error 13)"
+
+	for _, tt := range []struct {
+		name, stderr, failure string
+		code                  int
+		found, partial        bool
+	}{
+		{name: "exit 0", code: 0, found: true},
+		{name: "exit 1 is an empty list", code: 1},
+		{name: "exit 2 with results and a message is partial", stderr: denied, code: 2, found: true, partial: true},
+		{name: "exit 2 with results is partial", code: 2, found: true, partial: true},
+		{name: "exit 2 without results fails with the message", stderr: denied, failure: denied, code: 2},
+		{name: "exit 2 without results or a message fails", failure: "some paths could not be searched and nothing was found", code: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root, err := os.OpenRoot(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
+			require.NoError(t, root.WriteFile("a.txt", []byte("needle\n"), 0o644))
+
+			bin, err := os.OpenRoot(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, bin.Close()) })
+
+			listing, match := "", ""
+			if tt.found {
+				listing, match = "a.txt", `{"type":"match","data":{"path":{"text":"a.txt"},"lines":{"text":"needle\n"},"line_number":1}}`
+			}
+
+			script := fmt.Sprintf("#!/bin/sh\ncase \"$*\" in\n*--files*) printf '%%s' %q ;;\n*) printf '%%s\\n' %q '{\"type\":\"summary\"}' ;;\nesac\nprintf '%%s' %q >&2\nexit %d\n", listing, match, tt.stderr, tt.code)
+			require.NoError(t, bin.WriteFile("rg", []byte(script), 0o755))
+			t.Setenv("PATH", bin.Name())
+
+			sfs := &sandboxedFileSystem{root: root}
+
+			for tool, value := range map[string]func() (starlark.Value, error){
+				"glob": func() (starlark.Value, error) { return sfs.Glob(t.Context(), "*.txt", "") },
+				"grep": func() (starlark.Value, error) { return sfs.Grep(t.Context(), "needle", "", "") },
+			} {
+				got, err := value()
+				if tt.failure != "" {
+					require.EqualError(t, err, tt.failure, tool)
+
+					continue
+				}
+
+				require.NoError(t, err, tool)
+
+				path := filepath.Join(root.Name(), "a.txt")
+				text := map[string]string{"glob": path, "grep": "Found 1 matches\n" + path + ":\n  Line 1: needle"}[tool]
+
+				switch {
+				case !tt.found:
+					text = "No files found"
+				case tt.partial:
+					text += "\n\n(Some paths were inaccessible and skipped)"
+				}
+
+				partial, _ := got.(starlark.HasAttrs).Attr("partial")
+				require.Equal(t, []any{starlark.Bool(tt.partial), map[bool]int{true: 1}[tt.found], text}, []any{partial, starlark.Len(got), got.String()}, tool)
+			}
+		})
+	}
+}
+
 func TestGrepResultString(t *testing.T) {
 	matches := []grepMatch{
-		{path: "a", line: 1, text: "old", mtime: 0},
-		{path: "c", line: 1, text: "last", mtime: 1},
-		{path: "b", line: 2, text: "second", mtime: 1},
-		{path: "b", line: 1, text: "first", mtime: 1},
+		{Path: "a", Line: 1, Text: "old", MTime: 0},
+		{Path: "c", Line: 1, Text: "last", MTime: 1},
+		{Path: "b", Line: 2, Text: "second", MTime: 1},
+		{Path: "b", Line: 1, Text: "first", MTime: 1},
 	}
 
 	require.Equal(t, "Found 4 matches\nb:\n  Line 1: first\n  Line 2: second\n\nc:\n  Line 1: last\n\na:\n  Line 1: old", newGrepResult(matches, false, grepToolParams{}).String())

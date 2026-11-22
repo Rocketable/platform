@@ -35,12 +35,8 @@ func (s *SessionService) SaveAttachment(ctx context.Context, conversationID, tur
 
 	var id string
 
-	err = queryScalar(ctx, tx, "save attachment", `INSERT INTO attachments (id, conversation_id, name, mime_type, size, original_unverified, upload, turn_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING RETURNING id`, &id, attachment.ID, conversationID, attachment.Name, attachment.MIMEType, len(attachment.Data), attachment.OriginalUnverified, upload, turnID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-
-	if err != nil {
+	found, err := scanFound("save attachment", tx.QueryRowContext(ctx, `INSERT INTO attachments (id, conversation_id, name, mime_type, size, original_unverified, upload, turn_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING RETURNING id`, attachment.ID, conversationID, attachment.Name, attachment.MIMEType, len(attachment.Data), attachment.OriginalUnverified, upload, turnID).Scan(&id))
+	if err != nil || !found {
 		return err
 	}
 
@@ -80,11 +76,7 @@ func (s *SessionService) SaveUpload(ctx context.Context, conversationID string, 
 		return fmt.Errorf("record upload: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit upload: %w", err)
-	}
-
-	return nil
+	return commitState(tx, "upload")
 }
 
 func (s *SessionService) discardUnsavedAttachment(ctx context.Context, id string) error {
@@ -354,7 +346,6 @@ func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID s
 
 func (s *SessionService) replayedPartAttachments(ctx context.Context, conversationID string, content json.RawMessage) ([]protocol.OutboundAttachment, error) {
 	var parts []struct {
-		Type     string `json:"type"`
 		ImageURL string `json:"image_url"`
 		FileData string `json:"file_data"`
 		Filename string `json:"filename"`
@@ -369,7 +360,7 @@ func (s *SessionService) replayedPartAttachments(ctx context.Context, conversati
 		url := cmp.Or(part.ImageURL, part.FileData)
 
 		mimeType, encoded, inline := strings.Cut(strings.TrimPrefix(url, "data:"), ";base64,")
-		if part.Type != "input_image" && part.Type != "input_file" || !inline {
+		if !inline {
 			continue
 		}
 
