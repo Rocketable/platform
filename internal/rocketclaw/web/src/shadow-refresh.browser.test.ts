@@ -6,8 +6,10 @@ import type { HistoryView, ShadowBinding, TranscriptEvent } from "./types";
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
+const timeoutMs = 15000;
 
 for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refresh survives ${mode} history reads`, async () => {
+  const testStarted = performance.now();
   const { chromium: engine } = await import(playwright!);
   const message = (id: string, turn: number, text: string): TranscriptEvent => ({ text, role: "assistant", complete: true, turnId: `T${turn}`, entryKey: `turn:${id}:T${turn}`, itemId: `${id}-${turn}`, inputId: "", messageId: `${turn}:0`, agent: id, model: `${id}/model`, origin: "canonical" });
   const correlation = { parentSourceConversationId: "parent", parentTurnId: "T1", childTurnId: "T1", order: "1", running: true, terminal: "", revision: "initial" };
@@ -54,9 +56,12 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
     }
   } });
   const errors: string[] = [], failedReads: string[] = [];
-  let succeeded = false;
+  let assertionsPassed = false, closeFailed = false;
+  let closeStartedMs: number | undefined, closeSettledMs: number | undefined;
   if (mode === "cached") onTestFinished(() => {
-    if (!succeeded) console.error("cached shadow refresh failure", JSON.stringify({ reads, streams, hold, correlation, childRevision: child.revision, childMessages: child.messages, errors, failedReads }));
+    const closePending = closeStartedMs !== undefined && closeSettledMs === undefined;
+    const closeLate = closeSettledMs !== undefined && closeSettledMs >= timeoutMs;
+    if (!assertionsPassed || closePending || closeLate || closeFailed) console.error("cached shadow refresh failure", JSON.stringify({ assertionsPassed, closePending, closeLate, closeFailed, closeStartedMs, closeSettledMs, reads, streams, hold, correlation, childRevision: child.revision, childMessages: child.messages, errors, failedReads }));
   });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
@@ -111,10 +116,18 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
       expect(await page.getByRole("alert").count()).toBe(0);
     }
     expect(errors).toEqual([]);
-    succeeded = true;
+    assertionsPassed = true;
   } finally {
     delayed.resolve(Response.json(child));
-    await browser.close();
+    closeStartedMs = performance.now() - testStarted;
+    try {
+      await browser.close();
+    } catch (error) {
+      closeFailed = true;
+      throw error;
+    } finally {
+      closeSettledMs = performance.now() - testStarted;
+    }
     server.stop(true);
   }
-}, 15000);
+}, timeoutMs);
