@@ -1410,7 +1410,7 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
 
 test("Parked also lists the Shared rows this person parked, which open in their space without a tab of their own, can be renamed and can join a group", async () => {
   const started = performance.now();
-  const teardown = { pageErrorsChecked: false, browserCloseStarted: false, browserClosed: false };
+  const teardown = { pageErrorsChecked: false, browserCloseStarted: undefined as number | undefined, browserClosed: false };
   let waitingFor: string | undefined = "Chromium to open a page";
   let observed: (() => object) | undefined;
   onTestFinished(() => {
@@ -1418,7 +1418,9 @@ test("Parked also lists the Shared rows this person parked, which open in their 
       const stage = waitingFor === "the page error check to pass" && teardown.pageErrorsChecked
         ? teardown.browserClosed ? "the test server to stop" : "Chromium to close"
         : waitingFor;
-      expect({ waitingFor: stage, ...observed?.(), teardown }, `Expected ${stage}`).toMatchObject({ waitingFor: undefined });
+      const { pageErrorsChecked, browserCloseStarted, browserClosed } = teardown;
+      const browserCloseStartedMs = browserCloseStarted === undefined ? undefined : Math.round(browserCloseStarted - started);
+      expect({ waitingFor: stage, ...observed?.(), teardown: { pageErrorsChecked, browserCloseStartedMs, browserClosed } }, `Expected ${stage}`).toMatchObject({ waitingFor: undefined });
     }
   });
   await withPage({}, async (page, origin, _prompts, saved) => {

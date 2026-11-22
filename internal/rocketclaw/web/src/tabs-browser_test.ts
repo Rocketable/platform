@@ -78,7 +78,7 @@ function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: numb
   return Response.json(saved);
 }
 
-export async function withPage(options: object, run: (page: any, origin: string, prompts: { id: string; text: string }[], saved: Saved) => Promise<void>, teardown?: { pageErrorsChecked: boolean; browserCloseStarted: boolean; browserClosed: boolean }) {
+export async function withPage(options: object, run: (page: any, origin: string, prompts: { id: string; text: string }[], saved: Saved) => Promise<void>, teardown?: { pageErrorsChecked: boolean; browserCloseStarted?: number; browserClosed: boolean }) {
   const { chromium: engine } = await import(playwright!);
   const prompts: { id: string; text: string }[] = [];
   const sessions = structuredClone(rows);
@@ -137,7 +137,7 @@ export async function withPage(options: object, run: (page: any, origin: string,
     expect(errors).toEqual([]);
     if (teardown) teardown.pageErrorsChecked = true;
   } finally {
-    if (teardown) teardown.browserCloseStarted = true;
+    if (teardown) teardown.browserCloseStarted = performance.now();
     await browser.close();
     if (teardown) teardown.browserClosed = true;
     server.stop(true);
