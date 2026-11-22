@@ -66,6 +66,7 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    if (mode === "cached") await page.clock.install();
     page.on("pageerror", (error: Error) => errors.push(error.message));
     page.on("requestfailed", (request: { url(): string }) => { if (request.url().endsWith("/api/History")) failedReads.push(request.url()); });
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("parent").replace(/=+$/, "")}`, { waitUntil: "domcontentloaded" });
@@ -108,8 +109,37 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
     // A fingerprint key change cancels the obsolete read; its replacement owns a fresh signal.
     expect(failedReads).toHaveLength(mode === "earlier" ? 0 : 1);
     if (mode === "cached") {
+      const backoffs = [1000, 2000, 4000];
+      const scheduled = new Map(backoffs.map((delay) => [delay, Promise.withResolvers<void>()]));
+      await page.exposeFunction("shadowRetryScheduled", (delay: number) => scheduled.get(delay)!.resolve());
+      await page.evaluate((backoffs: number[]) => {
+        const timers: Window = window;
+        const setTimeout = timers.setTimeout;
+        const { shadowRetryScheduled } = window as unknown as { shadowRetryScheduled(delay: number): Promise<void> };
+        timers.setTimeout = (handler, delay, ...args) => {
+          const timer = setTimeout.call(window, handler, delay, ...args);
+          if (delay === backoffs[0]) {
+            backoffs.shift();
+            if (backoffs.length === 0) timers.setTimeout = setTimeout;
+            void shadowRetryScheduled(delay);
+          }
+          return timer;
+        };
+      }, backoffs);
+      const unavailable = Array.from({ length: backoffs.length + 1 }, () => Promise.withResolvers<void>());
+      let failedAttempts = 0;
+      page.on("response", (response: { url(): string; status(): number; request(): { postDataJSON(): { id: string } } }) => {
+        if (response.url().endsWith("/api/History") && response.status() === 503 && response.request().postDataJSON().id === "b") unavailable[failedAttempts++]?.resolve();
+      });
       await page.getByRole("tab", { name: "main/b", exact: true }).click();
+      for (const [i, delay] of backoffs.entries()) {
+        await unavailable[i].promise;
+        await scheduled.get(delay)!.promise;
+        await page.clock.runFor(delay);
+      }
+      await unavailable.at(-1)!.promise;
       await page.getByRole("alert").filter({ hasText: "Shadow history unavailable" }).waitFor();
+      expect(reads.filter((read) => read.id === "b")).toHaveLength(4);
       expect(await page.getByText("Parent oldest answer", { exact: true }).count()).toBe(1);
       await page.getByRole("tab", { name: "main/a", exact: true }).click();
       await page.getByText("Final child answer", { exact: true }).waitFor();
