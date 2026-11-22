@@ -219,19 +219,19 @@ func TestParsePermissionAuto(t *testing.T) {
 
 func TestPermissionSetHelpers(t *testing.T) {
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("read", "docs/*.md"))
-	require.NoError(t, permissions.Deny("read", "docs/private/*"))
+	require.NoError(t, permissions.Set("read", "docs/*.md", PermissionAllow))
+	require.NoError(t, permissions.Set("read", "docs/private/*", PermissionDeny))
 	require.Equal(t, PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "docs/*.md", Action: PermissionAllow}, {Pattern: "docs/private/*", Action: PermissionDeny}}}}}, permissions)
 
 	permissions = PermissionSet{Buckets: nil}
-	require.NoError(t, permissions.Deny("tools", "current_time"))
-	require.NoError(t, permissions.Allow("tools", "current_time"))
+	require.NoError(t, permissions.Set("tools", "current_time", PermissionDeny))
+	require.NoError(t, permissions.Set("tools", "current_time", PermissionAllow))
 	require.Equal(t, PermissionAllow, permissions.evaluate("tools", "current_time").Action)
-	require.NoError(t, permissions.Allow("rocketclaw", "rocketclaw_*"))
+	require.NoError(t, permissions.Set("rocketclaw", "rocketclaw_*", PermissionAllow))
 	require.Equal(t, PermissionDeny, permissions.evaluate("rocketclaw", "rocketclaw_restart").Action)
 
 	permissions = PermissionSet{Buckets: nil}
-	require.NoError(t, permissions.Allow("apply_patch", "*.go"))
+	require.NoError(t, permissions.Set("apply_patch", "*.go", PermissionAllow))
 	require.Equal(t, "edit", permissions.Buckets[0].Name)
 	require.EqualError(t, permissions.Set("read", "*", PermissionAction("ask")), `unknown permission action "ask"`)
 }
@@ -306,7 +306,7 @@ func TestPermissionSetEvaluate(t *testing.T) {
 
 	t.Run("sudo", func(t *testing.T) {
 		sudo := PermissionSet{Sudo: true}
-		require.NoError(t, sudo.Allow("rocketclaw", "rocketclaw_reload"))
+		require.NoError(t, sudo.Set("rocketclaw", "rocketclaw_reload", PermissionAllow))
 
 		for _, tc := range []struct {
 			permission, subject string

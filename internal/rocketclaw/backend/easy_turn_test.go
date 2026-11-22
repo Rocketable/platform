@@ -98,13 +98,13 @@ func TestEasyTurnShell(t *testing.T) {
 	skills := harness.Skills{Root: skillsRoot, Items: map[string]harness.Skill{"a": {Name: "a", Location: "a/SKILL.md"}, "b": {Name: "b", Location: "a/b/SKILL.md"}, "c": {Name: "c", Location: "c/SKILL.md"}}}
 
 	var permission harness.PermissionSet
-	require.NoError(t, permission.Allow("skill", "a"))
-	require.NoError(t, permission.Allow("skill", "b"))
+	require.NoError(t, permission.Set("skill", "a", harness.PermissionAllow))
+	require.NoError(t, permission.Set("skill", "b", harness.PermissionAllow))
 
 	easy := harness.Agent{Mode: harness.AgentModeEasy, Permission: permission, CustomShell: harness.CustomShell{Emulated: true}, WorkingDirectory: filepath.Join(workspace, "data", "$ROCKETCLAW_CONVERSATION_ID"), Commands: map[string]string{"show": "printenv SECRET_KEY"}, SecretsARN: []string{"arn:a"}}
 
 	reviewer := harness.Agent{Mode: harness.AgentModeEasy, CustomShell: harness.CustomShell{Emulated: true}, WorkingDirectory: easy.WorkingDirectory, Commands: map[string]string{"lookup": "printenv REVIEW_KEY"}, NetworkTargets: []string{}, SecretsARN: []string{"arn:review"}}
-	require.NoError(t, reviewer.Permission.Allow("skill", "c"))
+	require.NoError(t, reviewer.Permission.Set("skill", "c", harness.PermissionAllow))
 
 	easy.Approver = &reviewer
 	advanced := harness.Agent{CustomShell: harness.CustomShell{Path: "/bin/sandbox"}}

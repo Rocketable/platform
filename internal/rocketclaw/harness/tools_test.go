@@ -315,7 +315,7 @@ func TestBashPermissionsCheckWholeScript(t *testing.T) {
 			loop.Permissions = PermissionSet{}
 		}
 
-		require.NoError(t, loop.Permissions.Allow("bash", grant))
+		require.NoError(t, loop.Permissions.Set("bash", grant, PermissionAllow))
 
 		factory := &toolFactory{baseTools: tools}
 		loop.Tools, loop.CodeModeHosts = factory.assembleTools(&Agent{Permission: loop.Permissions})

@@ -36,7 +36,7 @@ Use for docs.
 	require.Equal(t, "docs-helper", skills.Items["docs-helper"].Name)
 
 	agent := agents.Items["main"]
-	require.NoError(t, agent.Permission.Allow("tools", "current_time"))
+	require.NoError(t, agent.Permission.Set("tools", "current_time", PermissionAllow))
 	agents.Items["main"] = agent
 
 	decision := agents.Items["main"].Permission.Buckets[0].Rules[1]

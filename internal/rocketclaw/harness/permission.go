@@ -291,14 +291,6 @@ func expandPermissionPattern(permission, pattern string) string {
 	return home + pattern
 }
 
-func (ps *PermissionSet) Allow(permission, pattern string) error {
-	return ps.Set(permission, pattern, PermissionAllow)
-}
-
-func (ps *PermissionSet) Deny(permission, pattern string) error {
-	return ps.Set(permission, pattern, PermissionDeny)
-}
-
 func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction, except ...string) error {
 	if _, _, err := parsePermissionAction(string(action)); err != nil {
 		return err

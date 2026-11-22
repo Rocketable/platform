@@ -395,9 +395,9 @@ func decodeAgentFrontmatter(frontmatterText []byte) (map[string]any, *yaml.Node,
 
 func sudoPermissions(facets map[string]map[string][]string) PermissionSet {
 	permissions := PermissionSet{Sudo: true}
-	_ = permissions.Allow("skill", "*")
-	_ = permissions.Allow("task", "*")
-	_ = permissions.Deny(mcpPermissionBucket, "*")
+	_ = permissions.Set("skill", "*", PermissionAllow)
+	_ = permissions.Set("task", "*", PermissionAllow)
+	_ = permissions.Set(mcpPermissionBucket, "*", PermissionDeny)
 
 	everyFacet := map[string]map[string]PermissionAction{}
 	for server := range facets {

@@ -194,7 +194,7 @@ func compileEasyPermissions(agent *Agent, cfg *AgentLoadConfig) error {
 	_ = permission.Set("rocketclaw", codeModeApproveSubject, PermissionAuto)
 
 	if len(agent.Subagents) > 0 && *agent.MaxRecursion > 0 {
-		_ = permission.Allow("task", agent.Name)
+		_ = permission.Set("task", agent.Name, PermissionAllow)
 	}
 
 	if err := compileEasySections(agent, cfg, PermissionAuto); err != nil {
@@ -229,15 +229,15 @@ func compileEasyApprover(agent *Agent, cfg *AgentLoadConfig) error {
 	}
 
 	approver.CustomShell = agent.CustomShell
-	_ = approver.Permission.Deny("rocketclaw", AllowBackgroundSubject)
-	_ = approver.Permission.Deny("rocketclaw", "rocketclaw_restart")
+	_ = approver.Permission.Set("rocketclaw", AllowBackgroundSubject, PermissionDeny)
+	_ = approver.Permission.Set("rocketclaw", "rocketclaw_restart", PermissionDeny)
 
 	if len(approver.Commands) > 0 {
-		_ = approver.Permission.Allow("bash", "*")
+		_ = approver.Permission.Set("bash", "*", PermissionAllow)
 	}
 
 	if approver.NetworkTargets == nil || len(approver.NetworkTargets) > 0 {
-		_ = approver.Permission.Allow("webfetch", "*")
+		_ = approver.Permission.Set("webfetch", "*", PermissionAllow)
 	}
 
 	agent.Approver = &approver
@@ -317,13 +317,13 @@ func compileEasySections(agent *Agent, cfg *AgentLoadConfig, action PermissionAc
 	}
 
 	if folders == nil {
-		_ = permission.Allow("skill", "*")
+		_ = permission.Set("skill", "*", PermissionAllow)
 	}
 
 	for _, folder := range folders {
 		if fs.WalkDir(cfg.Skills, folder, func(name string, entry fs.DirEntry, err error) error {
 			if err == nil && !entry.IsDir() && path.Base(name) == "SKILL.md" {
-				_ = permission.Allow("skill", path.Base(path.Dir(name)))
+				_ = permission.Set("skill", path.Base(path.Dir(name)), PermissionAllow)
 			}
 
 			return err
@@ -351,7 +351,7 @@ func compileEasyDecision(agent *Agent, cfg *AgentLoadConfig, permission *Permiss
 	}
 
 	for _, model := range models {
-		_ = permission.Allow("decision", model)
+		_ = permission.Set("decision", model, PermissionAllow)
 	}
 
 	return nil

@@ -73,11 +73,11 @@ func TestMCPToolsOmitsWithoutAllow(t *testing.T) {
 	assert.Nil(t, factory.mcpToolsFor(&Agent{}, nil))
 
 	var denied PermissionSet
-	require.NoError(t, denied.Deny("mcp", "demo.*"))
+	require.NoError(t, denied.Set("mcp", "demo.*", PermissionDeny))
 	assert.Nil(t, factory.mcpToolsFor(&Agent{Permission: denied}, nil))
 
 	var otherServer PermissionSet
-	require.NoError(t, otherServer.Allow("mcp", "missing.*"))
+	require.NoError(t, otherServer.Set("mcp", "missing.*", PermissionAllow))
 	assert.Nil(t, factory.mcpToolsFor(&Agent{Permission: otherServer}, nil))
 }
 
@@ -90,8 +90,8 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	t.Cleanup(func() { _ = root.Close() })
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("read", "*"))
-	require.NoError(t, permissions.Allow("bash", "echo *"))
+	require.NoError(t, permissions.Set("read", "*", PermissionAllow))
+	require.NoError(t, permissions.Set("bash", "echo *", PermissionAllow))
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
@@ -188,7 +188,7 @@ func TestExecuteAvailableWithHostToolsOnly(t *testing.T) {
 	t.Cleanup(func() { _ = root.Close() })
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("read", "*"))
+	require.NoError(t, permissions.Set("read", "*", PermissionAllow))
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 	factory := &toolFactory{
@@ -212,8 +212,8 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 	t.Cleanup(func() { _ = root.Close() })
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("rocketclaw", "ask_user_question"))
-	require.NoError(t, permissions.Allow("rocketclaw", "rocketclaw_reload"))
+	require.NoError(t, permissions.Set("rocketclaw", "ask_user_question", PermissionAllow))
+	require.NoError(t, permissions.Set("rocketclaw", "rocketclaw_reload", PermissionAllow))
 
 	custom, err := customLooperTools([]Tool{
 		{Name: "rocketclaw_denied", Permission: "rocketclaw", Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
@@ -293,8 +293,8 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 	shellTemp := testShellTempConfig(t, root, outputDir)
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("bash", "echo *"))
-	require.NoError(t, permissions.Deny("bash", "rm *"))
+	require.NoError(t, permissions.Set("bash", "echo *", PermissionAllow))
+	require.NoError(t, permissions.Set("bash", "rm *", PermissionDeny))
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{})
@@ -352,7 +352,7 @@ func TestCodeModeHostsSurviveModelWithoutHosts(t *testing.T) {
 	require.NoError(t, root.WriteFile("a.txt", []byte("hello"), 0o600))
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("read", "*"))
+	require.NoError(t, permissions.Set("read", "*", PermissionAllow))
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, nil)}
@@ -407,7 +407,7 @@ func TestExecuteBashOutputSurvivesContainers(t *testing.T) {
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("bash", "*"))
+	require.NoError(t, permissions.Set("bash", "*", PermissionAllow))
 
 	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, sss)}
 	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
@@ -443,7 +443,7 @@ func TestExecuteParseFailureDoesNotRunHost(t *testing.T) {
 	t.Cleanup(func() { _ = root.Close() })
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("read", "*"))
+	require.NoError(t, permissions.Set("read", "*", PermissionAllow))
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, nil)}
@@ -503,7 +503,7 @@ func TestExecuteExactToolGrant(t *testing.T) {
 	}, nil)
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("mcp", "github.create_issue"))
+	require.NoError(t, permissions.Set("mcp", "github.create_issue", PermissionAllow))
 	require.NoError(t, permissions.Set("rocketclaw", codeModeApproveSubject, PermissionAuto))
 
 	tools := (&toolFactory{mcpRegistry: reg}).mcpToolsFor(&Agent{Permission: permissions}, nil)
@@ -718,8 +718,8 @@ func TestExecuteSearchAndRun(t *testing.T) {
 	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{"demo": {URL: url}}, nil)
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("mcp", "demo.*"))
-	require.NoError(t, permissions.Deny("mcp", "demo.danger"))
+	require.NoError(t, permissions.Set("mcp", "demo.*", PermissionAllow))
+	require.NoError(t, permissions.Set("mcp", "demo.danger", PermissionDeny))
 	require.NoError(t, permissions.Set("mcp", "demo.search_issue", PermissionAuto))
 
 	tools := (&toolFactory{mcpRegistry: reg}).mcpToolsFor(&Agent{Permission: permissions}, nil)
@@ -766,8 +766,8 @@ func TestExecuteSendsShellEnvToMCPServers(t *testing.T) {
 	})
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("rocketclaw", codeModeApproveSubject))
-	require.NoError(t, permissions.Allow("mcp", "demo.*"))
+	require.NoError(t, permissions.Set("rocketclaw", codeModeApproveSubject, PermissionAllow))
+	require.NoError(t, permissions.Set("mcp", "demo.*", PermissionAllow))
 
 	client := openai.NewClient()
 	config := testWorkspaceConfig(t, dir)
@@ -835,7 +835,7 @@ func TestToolsForIncludesExecuteWhenConfigured(t *testing.T) {
 	}, nil)
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("mcp", "demo.*"))
+	require.NoError(t, permissions.Set("mcp", "demo.*", PermissionAllow))
 
 	factory := &toolFactory{
 		mcpRegistry: reg,
@@ -910,7 +910,7 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 
 	var permissions PermissionSet
 	for _, name := range []string{"read", "note", "other", "drain"} {
-		require.NoError(t, permissions.Allow(name, "*"))
+		require.NoError(t, permissions.Set(name, "*", PermissionAllow))
 	}
 
 	root, err := os.OpenRoot(t.TempDir())
@@ -1084,7 +1084,7 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 	loop.agent = Agent{Name: "main", Permission: parsePermissionYAML(t, rules)}
 	loop.Tools, loop.CodeModeHosts = (&toolFactory{mcpRegistry: reg, baseTools: base}).assembleTools(&loop.agent)
 	loop.Permissions = parsePermissionYAML(t, rules)
-	require.NoError(t, loop.Permissions.Deny("mcp", "demo.danger"))
+	require.NoError(t, loop.Permissions.Set("mcp", "demo.danger", PermissionDeny))
 	loop.observations = &turnObservations{journal: InertJournal{}, turnID: "turn"}
 	loop.PermissionReviewer = &mockPermissionReviewer{reviewPermissionFunc: func(_ context.Context, request *permissionReviewRequest) permissionReviewDecision {
 		switch {
