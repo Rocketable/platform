@@ -1098,6 +1098,19 @@ func TestStripInputIDsRemovesIDsWhenStoreFalse(t *testing.T) {
 	require.NotContains(t, string(body.Input[2]), "summary")
 }
 
+func TestCleanCodexRequestSendsTextInputAsAMessageList(t *testing.T) {
+	req := requestWithBody(`{"model":"gpt-6-luna","instructions":"Name it.","input":"hello","store":false}`)
+
+	_, err := cleanCodexRequest(req)
+	require.NoError(t, err)
+
+	var body struct {
+		Input json.RawMessage `json:"input"`
+	}
+	require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
+	require.JSONEq(t, `[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]`, string(body.Input))
+}
+
 func TestCleanCodexRequestPreservesUntouchedBodies(t *testing.T) {
 	tests := []struct {
 		name        string
