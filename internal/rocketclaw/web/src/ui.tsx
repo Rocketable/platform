@@ -1605,7 +1605,7 @@ function useNextAttention(path: string) {
   const since = (mark: Mark) => Date.parse((mark.row?.asking ? mark.row.stateSince : mark.unreadAt)!);
   const order = waiting.toSorted((a, b) => Number(!!b.row?.asking) - Number(!!a.row?.asking) || since(a) - since(b));
   const at = order.findIndex((mark) => mark.server === server() && mark.path === path);
-  const next = [...order.slice(at + 1), ...order.slice(0, Math.max(at, 0))][0];
+  const next = order[at + 1] ?? (at > 0 ? order[0] : undefined);
   return next && (() => visit(next.server, next.path));
 }
 
