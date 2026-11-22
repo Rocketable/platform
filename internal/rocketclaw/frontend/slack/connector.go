@@ -296,8 +296,8 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 	}
 
 	if !msg.Complete {
-		if _, threadTS := slackStatusThread(msg.SlackReply); c.sessions[msg.TurnID] == nil && threadTS != "" && c.mentionThread(ctx, msg) {
-			c.startSession(ctx, msg)
+		if channelID, threadTS := slackStatusThread(msg.SlackReply); c.sessions[msg.TurnID] == nil && threadTS != "" && c.mentionThread(ctx, msg) {
+			c.startSession(ctx, msg.ConversationID, msg.TurnID, channelID, threadTS)
 		}
 
 		return nil
@@ -453,14 +453,13 @@ func (c *Connector) mentionFooter(ctx context.Context, msg *protocol.OutboundMes
 	return c.slackFooter(msg.Agent, state, msg.ConversationID)
 }
 
-func (c *Connector) startSession(ctx context.Context, msg *protocol.OutboundMessage) {
-	channelID, threadTS := slackStatusThread(msg.SlackReply)
-	session := &slackSession{conversationID: msg.ConversationID, channelID: channelID, threadTS: threadTS, processingSince: time.Now()}
+func (c *Connector) startSession(ctx context.Context, conversationID, turnID, channelID, threadTS string) {
+	session := &slackSession{conversationID: conversationID, channelID: channelID, threadTS: threadTS, processingSince: time.Now()}
 
 	c.sendStatus(ctx, session, slack.AgentSessionStatusProcessing)
 
-	session.poll = time.AfterFunc(c.sessionPoll, func() { c.pollSession(msg.TurnID, session) })
-	c.sessions[msg.TurnID] = session
+	session.poll = time.AfterFunc(c.sessionPoll, func() { c.pollSession(turnID, session) })
+	c.sessions[turnID] = session
 }
 
 func (c *Connector) pollSession(turnID string, session *slackSession) {
