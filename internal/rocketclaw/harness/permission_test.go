@@ -411,7 +411,7 @@ func parsePermissionYAML(t *testing.T, text string) PermissionSet {
 	t.Helper()
 
 	permissions, err := parsePermissionNode(parseYAMLNode(t, text), map[string]map[string][]string{
-		"demo": {"all": {"*"}, "checked": {"checked"}, "risky": {"risky"}},
+		"demo": {"all": {"*"}, "checked": {"checked"}, "risky": {"risky"}, "stalled": {"stalled"}},
 		"acme": {"echo": {"echo"}},
 	})
 	require.NoError(t, err)

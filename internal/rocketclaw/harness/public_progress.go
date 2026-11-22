@@ -75,10 +75,11 @@ func PublicProgressFromTrace(traces []json.RawMessage) []PublicProgress {
 type codeModeCallStatus string
 
 const (
-	codeModeCallRunning codeModeCallStatus = "running"
-	codeModeCallOK      codeModeCallStatus = "ok"
-	codeModeCallError   codeModeCallStatus = "error"
-	codeModeCallDenied  codeModeCallStatus = "denied"
+	codeModeCallRunning   codeModeCallStatus = "running"
+	codeModeCallOK        codeModeCallStatus = "ok"
+	codeModeCallError     codeModeCallStatus = "error"
+	codeModeCallDenied    codeModeCallStatus = "denied"
+	codeModeCallCancelled codeModeCallStatus = "cancelled"
 )
 
 const (
@@ -145,7 +146,7 @@ func (r *CodeModeCall) String() string {
 	text := "[" + r.ParentCallID + "]"
 	if r.Name != "" {
 		text += " " + r.Name + " " + r.Arguments + " -> " + string(r.Status)
-		if r.Summary != "" {
+		if r.Summary != "" && r.Summary != string(r.Status) {
 			text += ": " + r.Summary
 		}
 	}
@@ -214,6 +215,12 @@ func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
 	if len(r.Summary) > 200 {
 		r.Summary = strings.ToValidUTF8(r.Summary[:200], "")
 	}
+
+	return r
+}
+
+func (r *CodeModeCall) cancel() *CodeModeCall {
+	r.command, r.Status, r.Summary = "", codeModeCallCancelled, "cancelled"
 
 	return r
 }

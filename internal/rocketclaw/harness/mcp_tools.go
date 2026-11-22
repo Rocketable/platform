@@ -357,7 +357,13 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 			tc, _ := toolCallContextFrom(ctx)
 			record := codeModeCallRecord(ctx, subject, raw)
 
-			return errors.Join(errCheck, tc.observations.recordCodeModeCall(ctx, record.finish(ToolResult{}, errCheck), false))
+			if ctx.Err() != nil {
+				record.cancel()
+			} else {
+				record.finish(ToolResult{}, errCheck)
+			}
+
+			return errors.Join(errCheck, tc.observations.recordCodeModeCall(ctx, &record, false))
 		},
 		mcpCall,
 		host,
@@ -847,7 +853,7 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 	}
 
 	if errRun != nil && runCtx.Err() != nil {
-		return result, errors.Join(errRun, tc.observations.recordCodeModeCall(ctx, record.finish(result, errRun), false))
+		return result, errors.Join(errRun, tc.observations.recordCodeModeCall(ctx, record.cancel(), false))
 	}
 
 	want.Done, want.Output = true, attachmentOutputMessage(result)

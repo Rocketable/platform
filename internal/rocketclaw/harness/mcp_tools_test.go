@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
@@ -1067,7 +1068,7 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 
 	shellTemp := testShellTempConfig(t, root, filepath.Join(root.Name(), ".tmp", "shell"))
 	url := startRocketCodeMCPHTTPServer(t, func(server *mcp.Server) {
-		for _, name := range []string{"checked", "danger", "risky"} {
+		for _, name := range []string{"checked", "danger", "risky", "stalled"} {
 			mcp.AddTool(server, &mcp.Tool{Name: name}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
 				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: name + " said\nhello\n"}}}, nil, nil
 			})
@@ -1075,8 +1076,17 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 	})
 	reg := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}}, nil)
 
+	fetching := make(chan struct{}, 1)
+	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		fetching <- struct{}{}
+
+		<-r.Context().Done()
+	}))
+	t.Cleanup(hang.Close)
+
 	loop := testLooper(mockResponses())
 	outputs := map[string]string{"long": "x" + strings.Repeat("é", 150), "nul": "a\x00" + strings.Repeat("b", 2000), "invalid": "\xff" + strings.Repeat("c", 1024)}
+	reviewing := make(chan struct{}, 3)
 	emit := testLooperTool("emit")
 	emit.codeModeOnly = true
 	emit.Call = func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
@@ -1090,6 +1100,22 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 		switch args.Text {
 		case "fail":
 			return ToolResult{}, errors.New("first line\nboom")
+		case "fail-after-review":
+			<-reviewing
+			<-reviewing
+			<-reviewing
+
+			return ToolResult{}, errors.New("boom")
+		case "fail-after-fetch":
+			<-fetching
+
+			return ToolResult{}, errors.New("boom")
+		case "fail-after-bash":
+			for _, err := root.Stat("bash-started"); err != nil; _, err = root.Stat("bash-started") {
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			return ToolResult{}, errors.New("boom")
 		case "peek":
 			loop.observations.mu.Lock()
 			defer loop.observations.mu.Unlock()
@@ -1112,17 +1138,23 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 	base := makeSandboxedTools(&sandboxedFileSystem{root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}))
 	base["emit"], base["probe"] = emit, probe
 
-	const rules = "rocketclaw: {code_mode_approve: auto}\nbash: {'*': allow, 'rm *': deny}\nread: allow\nemit: allow\nprobe: auto\nmcp: {demo: {all: allow, checked: auto, risky: auto}}"
+	const rules = "rocketclaw: {code_mode_approve: auto}\nbash: {'*': allow, 'rm *': deny}\nread: {'*': allow, 'slow.txt': auto}\nwebfetch: allow\nemit: allow\nprobe: auto\nmcp: {demo: {all: allow, checked: auto, risky: auto, stalled: auto}}"
 
 	loop.agent = Agent{Name: "main", Permission: parsePermissionYAML(t, rules)}
 	loop.Tools, loop.CodeModeHosts = (&toolFactory{mcpRegistry: reg, baseTools: base}).assembleTools(&loop.agent)
 	loop.Permissions = parsePermissionYAML(t, rules)
 	require.NoError(t, loop.Permissions.Set("mcp", "demo.danger", PermissionDeny))
 	loop.observations = &turnObservations{journal: InertJournal{}, turnID: "turn"}
-	loop.PermissionReviewer = &mockPermissionReviewer{reviewPermissionFunc: func(_ context.Context, request *permissionReviewRequest) permissionReviewDecision {
+	loop.PermissionReviewer = &mockPermissionReviewer{reviewPermissionFunc: func(ctx context.Context, request *permissionReviewRequest) permissionReviewDecision {
 		switch {
 		case request.Permission == "rocketclaw":
 			return permissionReviewDecision{Outcome: permissionReviewOutcomeAllow, Rationale: "script ok"}
+		case strings.Contains(request.RawArguments, "slow") || slices.Contains(request.Subjects, "demo.stalled"):
+			reviewing <- struct{}{}
+
+			<-ctx.Done()
+
+			return permissionReviewFailure("automatic permission review failed: " + ctx.Err().Error())
 		case strings.Contains(request.RawArguments, "bad") || slices.Contains(request.Subjects, "demo.risky"):
 			return permissionReviewDecision{Outcome: permissionReviewOutcomeDeny, Rationale: "too risky"}
 		}
@@ -1150,6 +1182,9 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 		"mcp-rule-denied":     "def main():\n    return demo_danger()\n",
 		"mcp-approver-denied": "def main():\n    return demo_risky()\n",
 		"cap":                 "def main():\n    for i in range(201):\n        emit(text=\"x\")\n    return \"done\"\n",
+		"cancelled":           "def main():\n    return gather([lambda: probe(text=\"slow\"), lambda: demo_stalled(), lambda: read(filePath=\"slow.txt\"), lambda: emit(text=\"fail-after-review\")])\n",
+		"bash-cancelled":      "def main():\n    return gather([lambda: bash(command=r'''touch bash-started; sleep 30'''), lambda: emit(text=\"fail-after-bash\")])\n",
+		"fetch-cancelled":     fmt.Sprintf("def main():\n    return gather([lambda: webfetch(url=%q), lambda: emit(text=\"fail-after-fetch\")])\n", hang.URL+"/hang"),
 	}
 
 	calls := make([]responses.ResponseFunctionToolCall, 0, len(scripts))
@@ -1207,6 +1242,17 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 		review("mcp-approver-denied"),
 		record("mcp-approver-denied", 0, "demo.risky", `{}`, codeModeCallDenied, reviewDenied, permissionReviewOutcomeDeny, "too risky"),
 	}, records["mcp-approver-denied"])
+
+	for _, cancelled := range []struct{ script, name string }{
+		{"cancelled", "probe"},
+		{"cancelled", "demo.stalled"},
+		{"cancelled", "read"},
+		{"bash-cancelled", "bash"},
+		{"fetch-cancelled", "webfetch"},
+	} {
+		got := records[cancelled.script][slices.IndexFunc(records[cancelled.script], func(record CodeModeCall) bool { return record.Name == cancelled.name })]
+		require.Equal(t, []any{codeModeCallCancelled, permissionReviewOutcome(""), "cancelled"}, []any{got.Status, got.Outcome, got.Summary}, "%s its script cancelled reads as cancelled, in review or running", cancelled.name)
+	}
 
 	require.Len(t, records["cap"], 1+MaxCodeModeCalls, "the 201st call of one script adds no record")
 	require.Equal(t, record("cap", MaxCodeModeCalls-1, "emit", `{"text":"x"}`, codeModeCallOK, "", "", ""), records["cap"][MaxCodeModeCalls])
