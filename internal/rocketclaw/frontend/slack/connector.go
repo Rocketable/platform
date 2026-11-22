@@ -1558,8 +1558,6 @@ func renderSlackForward(forward slackNativeForward, messages []slack.Message, im
 
 	var transcript strings.Builder
 
-	transcript.WriteString(immutable)
-
 	for _, text := range textAttachments {
 		if transcript.Len() > 0 {
 			transcript.WriteByte('\n')
@@ -1577,18 +1575,16 @@ func renderSlackForward(forward slackNativeForward, messages []slack.Message, im
 		fmt.Fprintf(&transcript, "%s: %s", strings.TrimSpace(messages[i].User), messageText(&messages[i]))
 	}
 
-	remaining := protocol.MaxInboundTextAttachmentBytes - len(result) - len(threadHeading)
-	if transcript.Len() <= remaining {
-		return result + threadHeading + transcript.String()
-	}
-
-	if immutable != "" && (len(textAttachments) > 0 || len(messages) > 0) {
+	if immutable != "" && transcript.Len() > 0 {
 		immutable += "\n"
 	}
 
-	remaining -= len(threadNotice) + len(immutable)
+	remaining := protocol.MaxInboundTextAttachmentBytes - len(result) - len(threadHeading) - len(immutable)
+	if transcript.Len() <= remaining {
+		return result + threadHeading + immutable + transcript.String()
+	}
 
-	return result + threadHeading + immutable + truncateUTF8(transcript.String()[len(immutable):], remaining) + threadNotice
+	return result + threadHeading + immutable + truncateUTF8(transcript.String(), remaining-len(threadNotice)) + threadNotice
 }
 
 func truncateUTF8(text string, limit int) string {
