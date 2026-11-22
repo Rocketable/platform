@@ -3845,6 +3845,7 @@ type noteTest struct {
 	cfg            *config.Config
 	conversationID string
 	requests       chan string
+	titles         chan string
 	finals         chan *protocol.OutboundMessage
 	logs           *lockedBuffer
 }
@@ -3880,7 +3881,7 @@ func newNoteTest(t *testing.T, respond noteTestResponder) *noteTest {
 	writeAgent(t, workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission: {}\n---\nResearch\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
-	nt := &noteTest{service: newTestSessionServiceAt(t, workspace), conversationID: protocol.SlackThreadConversationID("C123", "111.222"), requests: make(chan string, 16), finals: make(chan *protocol.OutboundMessage, 16), logs: new(lockedBuffer)}
+	nt := &noteTest{service: newTestSessionServiceAt(t, workspace), conversationID: protocol.SlackThreadConversationID("C123", "111.222"), requests: make(chan string, 16), titles: make(chan string, 16), finals: make(chan *protocol.OutboundMessage, 16), logs: new(lockedBuffer)}
 
 	var (
 		mu    sync.Mutex
@@ -3889,6 +3890,9 @@ func newNoteTest(t *testing.T, respond noteTestResponder) *noteTest {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if answerTitleRequest(w, r) {
+			body, _ := io.ReadAll(r.Body)
+			nt.titles <- string(body)
+
 			return
 		}
 
@@ -3979,6 +3983,7 @@ func TestFirstWebMessageNamesUnnamedSession(t *testing.T) {
 	}
 
 	require.Equal(t, []string{nt.conversationID + "=Session title", named + "=Chosen name"}, names(), "only an unnamed session takes the generated title")
+	require.Len(t, nt.titles, 1, "a named session asks the title model nothing")
 
 	_, err = nt.service.UpdateConversationDetails(t.Context(), nt.conversationID, new(""))
 	require.NoError(t, err)
