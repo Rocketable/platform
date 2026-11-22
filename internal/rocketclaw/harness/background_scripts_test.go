@@ -185,9 +185,11 @@ func TestBackgroundExecuteRetainsLargeResult(t *testing.T) {
 
 	expire(id)
 	_, err = load(later, ctx, id)
-	require.EqualError(t, err, "execute result expired")
+	require.EqualError(t, err, "unknown or expired execute result")
 	_, err = root.Stat(stored(id))
 	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = load(later, ctx, id)
+	require.EqualError(t, err, "unknown or expired execute result", "an expired result reads the same once its file is gone")
 
 	swept := execute(later, ctx)
 	expire(swept)
