@@ -351,9 +351,12 @@ test("a RocketClaw session's tab menu and palette delete it after asking, showin
   const started = performance.now();
   let waitingFor = "open Chromium page", observed: (() => object) | undefined;
   let lastVisibleTabs: (string | null)[] | undefined;
+  let firstDelete: object | undefined, refusalStatus: number | undefined, refusalTransport = "not requested", lastRefusalRegion = "not observed";
   onTestFinished(() => {
     if (waitingFor) {
-      expect({ waitingFor, elapsedMs: Math.round(performance.now() - started), lastVisibleTabs, ...observed?.() },
+      const refusal = waitingFor === "show the running-turn refusal" || waitingFor === "confirm deletion from the tab menu"
+        ? { refusalStatus, refusalTransport, lastRefusalRegion } : {};
+      expect({ waitingFor, elapsedMs: Math.round(performance.now() - started), lastVisibleTabs, ...observed?.(), ...refusal },
         `Expected to finish: ${waitingFor}`).toMatchObject({ waitingFor: "" });
     }
   });
@@ -369,6 +372,45 @@ test("a RocketClaw session's tab menu and palette delete it after asking, showin
     await menu(page, "Bravo", "Delete session");
     waitingFor = "show the confirmation naming Bravo";
     await confirm.getByText('Delete session "Bravo"?', { exact: true }).waitFor();
+    page.on("request", (request: { url(): string }) => {
+      if (firstDelete || request.url() !== `${origin}/api/DeleteSession`) return;
+      firstDelete = request;
+      refusalTransport = "requested";
+    });
+    page.on("response", (response: { request(): object; status(): number }) => {
+      if (response.request() === firstDelete) refusalStatus = response.status();
+    });
+    page.on("requestfinished", (request: object) => {
+      if (request === firstDelete) refusalTransport = "body downloaded";
+    });
+    page.on("requestfailed", (request: { failure(): { errorText: string } | null }) => {
+      if (request === firstDelete) refusalTransport = request.failure()?.errorText ?? "request failed";
+    });
+    const refusalSnapshot = "delete-refusal ";
+    page.on("console", (message: { text(): string }) => {
+      const text = message.text();
+      if (text.startsWith(refusalSnapshot)) lastRefusalRegion = text.slice(refusalSnapshot.length);
+    });
+    await page.evaluate((prefix: string) => {
+      const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).find((element) =>
+        document.getElementById(element.getAttribute("aria-labelledby") ?? "")?.textContent === "Delete session");
+      let previous = "";
+      const snapshot = () => {
+        const state = JSON.stringify(dialog?.isConnected ? {
+          alerts: Array.from(dialog.querySelectorAll('[role="alert"]'), (alert) => alert.textContent),
+          disabledButtons: Array.from(dialog.querySelectorAll("button:disabled"), (button) => button.textContent),
+        } : "dialog not mounted");
+        if (state === previous) return;
+        previous = state;
+        console.debug(prefix + state);
+      };
+      const observer = new MutationObserver(() => {
+        snapshot();
+        if (!dialog?.isConnected) observer.disconnect();
+      });
+      if (dialog) observer.observe(document, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["disabled", "role"] });
+      snapshot();
+    }, refusalSnapshot);
     waitingFor = "confirm deletion from the tab menu";
     await confirm.getByRole("button", { name: "Delete session", exact: true }).click();
     waitingFor = "show the running-turn refusal";
