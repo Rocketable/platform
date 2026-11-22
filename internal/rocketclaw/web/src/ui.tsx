@@ -1143,12 +1143,12 @@ async function tabsCall(name: string, input: Parameters<typeof mutations.tabs>[0
 function mergeList<T>(base: T[], local: T[], server: T[], key: (item: T) => string, sig: (item: T) => string, localOrder: boolean) {
   const find = (list: T[], item: T) => list.find((other) => key(other) === key(item));
   const all = localOrder ? [...local, ...server] : [...server, ...local];
-  return all.filter((item, i) => all.findIndex((other) => key(other) === key(item)) === i)
-    .filter((item) => find(server, item) ? find(local, item) || !find(base, item) : find(local, item) && !find(base, item))
-    .map((item) => {
-      const mine = find(local, item), was = find(base, item);
-      return mine && (!was || sig(mine) !== sig(was)) ? mine : find(server, item) ?? item;
-    });
+  return all.reduce<T[]>((merged, item, i) => {
+    if (all.findIndex((other) => key(other) === key(item)) !== i) return merged;
+    const mine = find(local, item), was = find(base, item), theirs = find(server, item);
+    if (theirs ? mine || !was : mine && !was) merged.push(mine && (!was || sig(mine) !== sig(was)) ? mine : theirs ?? item);
+    return merged;
+  }, []);
 }
 
 // Tabs saved elsewhere since base, with this window's own changes since base on top. This window keeps its order, tabs
