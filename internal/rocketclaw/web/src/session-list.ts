@@ -127,7 +127,7 @@ export function listedRows(held: SavedListing, result: Pick<EnumerationResult, "
   const rows = mergeSessionRows(held.rows, result.received).filter((row) => !removed.has(row.id));
   // RFC 3339 times in UTC compare as text once their fractions have nine digits.
   const updated = new Map(rows.map((row) => [row, row.updatedAt?.replace(/(\.\d+)?Z$/, (_, fraction = ".") => `${fraction.padEnd(10, "0")}Z`) ?? ""]));
-  return rows.toSorted((a, b) => compare(updated.get(b)!, updated.get(a)!) || compare(a.id, b.id));
+  return rows.sort((a, b) => compare(updated.get(b)!, updated.get(a)!) || compare(a.id, b.id));
 }
 
 // Tab rows sent since the held version replace the held ones by location; a row with nothing set leaves.
