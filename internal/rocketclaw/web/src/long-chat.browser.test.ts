@@ -35,7 +35,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   let pageClosedAtMs: number | null = null;
   let chromiumPID: number | undefined;
   const streamAbortedAtMs: number[] = [];
-  const scroll: string[] = [], pageErrors: string[] = [], failedReads: string[] = [];
+  const scroll: string[] = [], historyAlert: string[] = [], pageErrors: string[] = [], failedReads: string[] = [];
   const historyResponses = new Map<object, { body: string | null; status: number; atMs: number; finishedAtMs: number | null }>();
   const transcriptRead = (request: { url(): string }) => {
     const url = new URL(request.url());
@@ -88,7 +88,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
       }
     }
     console.error("Long chat test state", JSON.stringify({
-      steps, elapsedMs: elapsed(), firstReadArrived, streamRequests, streamAbortedAtMs, fullReads, pages, historyResponses: [...historyResponses.values()], scroll, pageErrors, failedReads,
+      steps, elapsedMs: elapsed(), firstReadArrived, streamRequests, streamAbortedAtMs, fullReads, pages, historyResponses: [...historyResponses.values()], scroll, historyAlert, pageErrors, failedReads,
       cleanup: { closeStartedAtMs, closeFinishedAtMs, pageClosedAtMs, browserDisconnectedAtMs, serverStoppedAtMs, pendingRequests: server.pendingRequests, chromiumProcess },
     }));
   };
@@ -128,6 +128,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     page.on("console", (message: { text(): string }) => {
       const text = message.text();
       if (text.startsWith("long-chat-scroll ")) scroll.push(`${elapsed()} ms: ${text}`);
+      if (text.startsWith("long-chat-history-alert ")) historyAlert.push(`${elapsed()} ms: ${text}`);
     });
     mark("navigate to long chat");
     await page.goto(`http://127.0.0.1:${server.port}/s/bG9uZw`);
@@ -207,6 +208,15 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
 
     mark("navigate to linked message 5:0");
     const linkedTurnInViewport = await page.evaluateHandle(() => {
+      let alertRendered = false;
+      const alertObserver = new MutationObserver(() => {
+        const rendered = [...document.querySelectorAll('[role="alert"]')].some((alert) => alert.textContent === "Earlier history unavailable");
+        if (rendered === alertRendered) return;
+        alertRendered = rendered;
+        console.debug(`long-chat-history-alert ${rendered ? "rendered" : "cleared"}`);
+        if (!rendered) alertObserver.disconnect();
+      });
+      alertObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
       history.pushState(null, "", "/s/bG9uZw?message=5%3A0");
       window.dispatchEvent(new PopStateEvent("popstate"));
       let lastPosition: string | undefined;
