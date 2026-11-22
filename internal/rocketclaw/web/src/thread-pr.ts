@@ -1,5 +1,5 @@
 import { serverURL } from "./navigation";
-import { githubIssue } from "./github-pr";
+import { parseGitHubReference } from "./github-pr";
 import type { HistoryView } from "./types";
 
 const unreadable = "Could not read this thread's pull requests.";
@@ -54,7 +54,7 @@ type SessionPRs = { found: { created: string[]; mentioned: string[] }[]; childre
 
 function collectIssues(issues: Set<string>, text = "") {
   for (const match of text.matchAll(/(?:^|[\s([<|"'])((?:https:\/\/github\.com)\/[a-z\d-]+\/[a-z\d_.-]+\/issues\/[1-9]\d*)(?=\/?(?:$|[\s?#.,;:!)\]>"']))/gi)) {
-    const ref = githubIssue(match[1]);
+    const ref = parseGitHubReference(match[1], "issue");
     if (ref) issues.add(`https://github.com/${ref.owner.toLowerCase()}/${ref.repo.toLowerCase()}/issues/${ref.number}`);
   }
 }

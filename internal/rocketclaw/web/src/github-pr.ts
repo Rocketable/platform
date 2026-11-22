@@ -6,15 +6,11 @@ export type PRFile = { filename: string; previous_filename?: string; status: str
 export type GitHubIssue = { title: string; body: string | null; state: "open" | "closed"; user: { login: string } | null; labels: (string | { name: string })[]; comments: number; pull_request?: unknown };
 export type IssueComment = { id: number; body: string; user: { login: string } | null; created_at: string };
 
-export function githubIssue(href: string): GitHubPR | null {
-  const match = /^https:\/\/github\.com\/([a-z\d][a-z\d-]*)\/([a-z\d_.-]+)\/issues\/([1-9]\d*)\/?(?:[?#][^\s]*)?$/i.exec(href);
-  if (!match || [".", ".."].includes(match[2]) || !Number.isSafeInteger(Number(match[3]))) return null;
-  return { owner: match[1], repo: match[2], number: Number(match[3]) };
-}
-
-export function githubPR(href: string): GitHubPR | null {
-  // Match the original path, not URL's normalized path (which erases traversal).
-  const match = /^https:\/\/github\.com\/([a-z\d][a-z\d-]*)\/([a-z\d_.-]+)\/pull\/([1-9]\d*)(?:\/(?:files|commits|checks))?\/?(?:[?#][^\s]*)?$/i.exec(href);
+export function parseGitHubReference(href: string, kind: "issue" | "pull"): GitHubPR | null {
+  const pattern = kind === "issue"
+    ? /^https:\/\/github\.com\/([a-z\d][a-z\d-]*)\/([a-z\d_.-]+)\/issues\/([1-9]\d*)\/?(?:[?#][^\s]*)?$/i
+    : /^https:\/\/github\.com\/([a-z\d][a-z\d-]*)\/([a-z\d_.-]+)\/pull\/([1-9]\d*)(?:\/(?:files|commits|checks))?\/?(?:[?#][^\s]*)?$/i;
+  const match = pattern.exec(href);
   if (!match || [".", ".."].includes(match[2]) || !Number.isSafeInteger(Number(match[3]))) return null;
   return { owner: match[1], repo: match[2], number: Number(match[3]) };
 }

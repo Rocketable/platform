@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { SelectionSide } from "@pierre/diffs";
-import { GitHubError, githubPR, loadPR, loadPRFiles, type GitHubPR, type PRFile, type PullRequest } from "./github-pr";
+import { GitHubError, loadPR, loadPRFiles, parseGitHubReference, type GitHubPR, type PRFile, type PullRequest } from "./github-pr";
 import type { OpenCodePRSource } from "./opencode-pr";
 import { MarkdownText, setPreference, usePreference } from "./transcript-text";
 
@@ -67,7 +67,7 @@ export function SelectionQuote({ container, hidden, quote }: { container: () => 
 }
 
 export function GitHubPRLink({ href, children }: { href: string | undefined; children: ReactNode }) {
-  const ref = useMemo(() => href ? githubPR(href) : null, [href]);
+  const ref = useMemo(() => href ? parseGitHubReference(href, "pull") : null, [href]);
   const anchor = <a href={href} className="underline" target="_blank" rel="noopener noreferrer">{children}</a>;
   return ref ? <span className="ph-no-capture">{anchor} <PreviewAction key={href} reference={ref} /></span> : anchor;
 }

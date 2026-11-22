@@ -4,7 +4,7 @@ import { RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { githubIssue, githubPR, type PullRequest } from "./github-pr";
+import { parseGitHubReference, type PullRequest } from "./github-pr";
 import { GitHubPRContent, PrivatePreviewRoot, type PRComposer } from "./github-pr-preview";
 import { GitHubIssueContent } from "./github-issue-preview";
 import { navigate, panelHref } from "./navigation";
@@ -21,12 +21,12 @@ function useThreadPRs(id: string, version?: string, initial = "") {
     return discoverOpenCodePR(api, sessionID, signal);
   }, placeholderData: keepPreviousData, retry: false, gcTime: 0, refetchOnWindowFocus: false });
   const mentioned = useMemo(() => new Set(found.data?.mentioned), [found.data]);
-  const urls = useMemo(() => [...new Set([...(found.data?.created ?? []), ...mentioned, ...(checkout.data?.url ? [checkout.data.url] : [])])].filter((url) => githubPR(url)).concat(found.data?.issues ?? []), [found.data, mentioned, checkout.data]);
+  const urls = useMemo(() => [...new Set([...(found.data?.created ?? []), ...mentioned, ...(checkout.data?.url ? [checkout.data.url] : [])])].filter((url) => parseGitHubReference(url, "pull")).concat(found.data?.issues ?? []), [found.data, mentioned, checkout.data]);
   const [selected, setSelected] = useState(initial);
   const url = urls.includes(selected) ? selected : urls[0];
-  const issue = useMemo(() => url ? githubIssue(url) : null, [url]);
+  const issue = useMemo(() => url ? parseGitHubReference(url, "issue") : null, [url]);
   const checkoutOnly = !issue && !found.data?.created.includes(url!) && !mentioned.has(url!);
-  const reference = useMemo(() => url ? githubPR(url) : null, [url]);
+  const reference = useMemo(() => url ? parseGitHubReference(url, "pull") : null, [url]);
   const { api, directory } = checkout.data ?? {};
   const source = useMemo(() => api === undefined ? undefined : { api, directory: directory! }, [api, directory]);
   const loading = found.isFetching || remote && checkout.isFetching;
@@ -39,7 +39,7 @@ export function ThreadPRWatch({ id, version }: { id: string; version?: string })
   const { found, source, loading } = useThreadPRs(id, version);
   const created = found.data?.created ?? [];
   const heads = useQuery({ queryKey: ["threadPRHeads", id, version, created], enabled: !loading && !found.error, retry: false, gcTime: 0, refetchOnWindowFocus: false, queryFn: ({ signal }) => Promise.all(created.map(async (url): Promise<[string, string | undefined]> => {
-    const { owner, repo, number } = githubPR(url)!;
+    const { owner, repo, number } = parseGitHubReference(url, "pull")!;
     return [url, source ? await readOpenCodePR<PullRequest>(source, `repos/${owner}/${repo}/pulls/${number}`, signal).then((pr) => pr.head.sha, () => undefined) : undefined];
   })) });
   const seen = useRef<Map<string, string | undefined>>(undefined);
@@ -80,12 +80,12 @@ export function ThreadPRContent({ id, version, selected, close, composer }: { id
 
 function ThreadGitHubPicker({ urls, url, mentioned, setSelected }: { urls: string[]; url: string; mentioned: Set<string>; setSelected: (url: string) => void }) {
   if (urls.length < 2) return null;
-  const issue = githubIssue(url);
+  const issue = parseGitHubReference(url, "issue");
   return <Select value={url} onValueChange={(value) => setSelected(value ?? "")}>
-    <SelectTrigger size="sm" aria-label="Thread pull request or issue"><SelectValue>{issue ? `Issue #${issue.number}` : `#${githubPR(url)!.number}`}</SelectValue></SelectTrigger>
+    <SelectTrigger size="sm" aria-label="Thread pull request or issue"><SelectValue>{issue ? `Issue #${issue.number}` : `#${parseGitHubReference(url, "pull")!.number}`}</SelectValue></SelectTrigger>
     <SelectContent className="w-auto" render={<PrivatePreviewRoot />}><SelectGroup>{urls.map((value) => {
-      const issueRef = githubIssue(value);
-      const ref = issueRef ?? githubPR(value)!;
+      const issueRef = parseGitHubReference(value, "issue");
+      const ref = issueRef ?? parseGitHubReference(value, "pull")!;
       return <SelectItem key={value} value={value}>{ref.owner}/{ref.repo} #{ref.number}{issueRef ? " · issue" : mentioned.has(value) ? " · mentioned" : ""}</SelectItem>;
     })}</SelectGroup></SelectContent>
   </Select>;
