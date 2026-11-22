@@ -1336,10 +1336,23 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
     await page.reload();
     waitingFor = "show Foxtrot after reload";
     reload.foxtrotWaitStartedMs = elapsed();
-    await row("Foxtrot").waitFor();
+    const restored = await page.waitForFunction(() => {
+      const list = document.querySelector('#tab-sidebar [role="tablist"][aria-label="Parked tabs"]');
+      if (!list) return;
+      const tabs = [...list.querySelectorAll('[role="tab"]')].filter((tab) => tab.checkVisibility({ visibilityProperty: true }) && !tab.closest('[aria-hidden="true"]'));
+      const tab = tabs.find((item) => item.getAttribute("aria-label") === "Foxtrot");
+      if (!tab) return;
+      const { width, height } = tab.getBoundingClientRect();
+      if (width <= 0 || height <= 0) return;
+      return [
+        tabs.map((item) => item.getAttribute("aria-label")),
+        list.parentElement!.getBoundingClientRect().height,
+      ] as const;
+    });
     reload.foxtrotWaitFinishedMs = elapsed();
     waitingFor = "check restored Parked order and height";
-    expect([await rows(), await height()]).toEqual([["Bravo", "Delta", "Charlie", "Foxtrot", "Echo"], expect.closeTo(dragged + 16, 0)]);
+    [lastRows, lastHeight] = await restored.jsonValue();
+    expect([lastRows, lastHeight]).toEqual([["Bravo", "Delta", "Charlie", "Foxtrot", "Echo"], expect.closeTo(dragged + 16, 0)]);
     waitingFor = "check page errors and close browser";
   });
   waitingFor = "";
