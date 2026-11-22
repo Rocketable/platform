@@ -391,6 +391,24 @@ func TestSpacePermissions(t *testing.T) {
 		require.Equal(t, tc.want, status.Code(err), "%s: %v", tc.id, err)
 	}
 
+	core.CreateConversationFunc = func(ctx context.Context, conversation protocol.Conversation) error {
+		return (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, conversation)
+	}
+	named, err := server.createSession(bob, &CreateSessionRequest{Agent: "main-agent", Name: " Quarterly report "})
+	require.NoError(t, err)
+	_, err = sessions.AppendEntryID(t.Context(), named.Id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
+	require.NoError(t, err)
+
+	var names []string
+
+	for chat, err := range sessions.SidebarChats(t.Context(), "bob@example.com", &mockChannels{}, []string{named.Id}) {
+		require.NoError(t, err)
+
+		names = append(names, chat.Session.Name)
+	}
+
+	require.Equal(t, []string{"Quarterly report"}, names, "a name given at creation is kept")
+
 	_, err = server.createSession(alice, &CreateSessionRequest{OpencodeServer: "box", Directory: "/srv/app"})
 	require.Equal(t, codes.PermissionDenied, status.Code(err))
 	_, err = server.forkSession(alice, &ForkSessionRequest{Id: "opencode:box:ses_a"})

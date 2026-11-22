@@ -1650,6 +1650,12 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 		}
 	}
 
+	if name := strings.TrimSpace(request.Name); name != "" && !resumed {
+		if _, err := s.sessions.UpdateConversationDetails(ctx, id, &name); err != nil {
+			return nil, fmt.Errorf("name web conversation: %w", err)
+		}
+	}
+
 	return &CreateSessionResponse{Id: id, Resumed: resumed}, nil
 }
 

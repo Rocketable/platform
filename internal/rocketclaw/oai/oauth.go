@@ -756,6 +756,12 @@ func cleanCodexRequest(req *http.Request) (*float64, error) {
 
 	_ = json.Unmarshal(body["store"], &store)
 
+	if text := ""; bytes.HasPrefix(body["input"], []byte(`"`)) && json.Unmarshal(body["input"], &text) == nil {
+		message := responses.EasyInputMessageParam{Type: "message", Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfInputItemContentList: responses.ResponseInputMessageContentListParam{{OfInputText: &responses.ResponseInputTextParam{Text: text}}}}}
+		body["input"], _ = json.Marshal([]responses.EasyInputMessageParam{message})
+		changed = true
+	}
+
 	var items []json.RawMessage
 	if err := json.Unmarshal(body["input"], &items); err == nil {
 		inputChanged := false
