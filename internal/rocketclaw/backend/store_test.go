@@ -344,26 +344,31 @@ func TestAttachmentMetadata(t *testing.T) {
 
 func TestRemoveSessionEntryNUL(t *testing.T) {
 	for _, sample := range []struct {
-		text      string
-		maxAllocs float64
+		text  string
+		reuse bool
 	}{
-		{"quoted \"value\", path \\\\ and newline\n", 0},
-		{"literal \\u0000", 1},
-		{"first\x00\x00\\\x00\\\\\x00\n\t😀", 1},
-		{strings.Repeat("text\x00 and literal \\u0000", 1024), 1},
+		{"quoted \"value\", path \\\\ and newline\n", true},
+		{"literal \\u0000", false},
+		{"first\x00\x00\\\x00\\\\\x00\n\t😀", false},
+		{strings.Repeat("text\x00 and literal \\u0000", 1024), false},
 	} {
 		data, err := json.Marshal(sample.text)
 		require.NoError(t, err)
 
 		original := string(data)
+		cleaned := removeSessionEntryNUL(data)
 
 		var text string
-		require.NoError(t, json.Unmarshal(removeSessionEntryNUL(data), &text))
+		require.NoError(t, json.Unmarshal(cleaned, &text))
 		require.Equal(t, strings.ReplaceAll(sample.text, "\x00", ""), text)
 		require.Equal(t, original, string(data))
-		require.LessOrEqual(t, testing.AllocsPerRun(100, func() {
-			removeSessionEntryNUL(data)
-		}), sample.maxAllocs)
+
+		if sample.reuse {
+			require.Same(t, &data[0], &cleaned[0])
+		} else {
+			require.NotSame(t, &data[0], &cleaned[0])
+			require.Equal(t, len(data), cap(cleaned))
+		}
 	}
 }
 
