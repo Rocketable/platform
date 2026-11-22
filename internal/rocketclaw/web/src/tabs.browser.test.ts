@@ -349,6 +349,7 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
 
 test("a RocketClaw session's tab menu and palette delete it after asking, showing a refusal and closing its tab", async () => {
   const started = performance.now();
+  const teardown = { pageErrorsChecked: false, browserCloseStarted: undefined as number | undefined, browserClosed: false };
   let waitingFor = "open Chromium page", observed: (() => object) | undefined;
   let lastVisibleTabs: (string | null)[] | undefined;
   let firstDelete: object | undefined, refusalStatus: number | undefined, refusalTransport = "not requested", lastRefusalRegion = "not observed";
@@ -356,8 +357,13 @@ test("a RocketClaw session's tab menu and palette delete it after asking, showin
     if (waitingFor) {
       const refusal = waitingFor === "show the running-turn refusal" || waitingFor === "confirm deletion from the tab menu"
         ? { refusalStatus, refusalTransport, lastRefusalRegion } : {};
-      expect({ waitingFor, elapsedMs: Math.round(performance.now() - started), lastVisibleTabs, ...observed?.(), ...refusal },
-        `Expected to finish: ${waitingFor}`).toMatchObject({ waitingFor: "" });
+      const cleanup = waitingFor === "check page errors";
+      const { pageErrorsChecked, browserCloseStarted, browserClosed } = teardown;
+      const stage = cleanup && pageErrorsChecked ? (browserClosed ? "stop the test server" : "close Chromium") : waitingFor;
+      const browserCloseStartedMs = browserCloseStarted === undefined ? undefined : Math.round(browserCloseStarted - started);
+      expect({ waitingFor: stage, elapsedMs: Math.round(performance.now() - started), lastVisibleTabs, ...observed?.(), ...refusal,
+        ...(cleanup ? { pageErrorsChecked, browserCloseStartedMs, browserClosed } : {}) },
+        `Expected to finish: ${stage}`).toMatchObject({ waitingFor: "" });
     }
   });
   await withPage({}, async (page, origin, _prompts, saved) => {
@@ -437,8 +443,8 @@ test("a RocketClaw session's tab menu and palette delete it after asking, showin
     expect(saved.deletes).toEqual(["bravo", "bravo"]);
     lastVisibleTabs = await names(page);
     expect(lastVisibleTabs).toEqual(["Alpha"]);
-    waitingFor = "check page errors and close Chromium";
-  });
+    waitingFor = "check page errors";
+  }, teardown);
   waitingFor = "";
 });
 
