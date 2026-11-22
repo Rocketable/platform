@@ -56,8 +56,8 @@ type DecisionImage struct {
 }
 
 type DecisionUsage struct {
-	InputTokens  int64
-	OutputTokens int64
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
 }
 
 type DecisionAnswer struct {
@@ -130,14 +130,9 @@ func decisionToolDescription(models []string) string {
 type decisionToolResult struct {
 	Model        string                        `json:"model"`
 	Answers      map[string]decisionToolAnswer `json:"answers"`
-	Usage        *decisionToolUsage            `json:"usage,omitempty"`
+	Usage        *DecisionUsage                `json:"usage,omitempty"`
 	StopReason   string                        `json:"stop_reason"`
 	ErrorMessage string                        `json:"error_message,omitempty"`
-}
-
-type decisionToolUsage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
 }
 
 type decisionToolAnswer struct {
@@ -323,7 +318,7 @@ func decisionTool(deciders map[string]Decider, observability ObservabilityConfig
 
 			answers, usage, err := decide(ctx, observability, deciders, input.Model, &DecisionRequest{Input: input.State, Images: images, Questions: questions})
 			if err == nil {
-				result.Usage = &decisionToolUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}
+				result.Usage = &usage
 
 				result.Answers, err = decisionToolAnswers(questions, answers)
 			}
