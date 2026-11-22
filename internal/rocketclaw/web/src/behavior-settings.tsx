@@ -55,7 +55,7 @@ function BehaviorFields({ draft, disabled, onChange }: { draft: Behavior; disabl
         <Setting label="Log level"><Choice label="Log level" value={draft.logging.level} options={levels} disabled={disabled} onPick={(level) => onChange({ logging: { ...draft.logging, level } })} /></Setting>
       </Group>
       <Group title="Overlays">
-        <Rows noun="overlay" columns={["Overlay"]} rows={(draft.overlays ?? []).map((overlay) => [overlay])} onChange={(rows) => onChange({ overlays: rows.map(([overlay]) => overlay) })} />
+        <Overlays overlays={draft.overlays ?? []} onChange={(overlays) => onChange({ overlays })} />
       </Group>
     </>
   );
@@ -84,18 +84,17 @@ function useKeys(count: number) {
   return { list, add: () => setList([...list, ++lastKey]), remove: (index: number) => setList(list.toSpliced(index, 1)) };
 }
 
-function Rows({ noun, columns, rows, onChange }: { noun: string; columns: string[]; rows: string[][]; onChange: (rows: string[][]) => void }) {
-  const keys = useKeys(rows.length);
-  const set = (index: number, column: number, value: string) => onChange(rows.with(index, rows[index]!.with(column, value)));
+function Overlays({ overlays, onChange }: { overlays: string[]; onChange: (overlays: string[]) => void }) {
+  const keys = useKeys(overlays.length);
   return (
     <div className="flex flex-col gap-2">
-      {rows.map((row, index) => (
+      {overlays.map((overlay, index) => (
         <div key={keys.list[index]} className="flex items-center gap-2">
-          {row.map((cell, column) => <Input key={columns[column]} aria-label={`${columns[column]} ${index + 1}`} placeholder={columns[column]} value={cell} onChange={(event) => set(index, column, event.target.value)} />)}
-          <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove ${noun} ${index + 1}`} onClick={() => { keys.remove(index); onChange(rows.toSpliced(index, 1)); }}><X /></Button>
+          <Input aria-label={`Overlay ${index + 1}`} placeholder="Overlay" value={overlay} onChange={(event) => onChange(overlays.with(index, event.target.value))} />
+          <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove overlay ${index + 1}`} onClick={() => { keys.remove(index); onChange(overlays.toSpliced(index, 1)); }}><X /></Button>
         </div>
       ))}
-      <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => { keys.add(); onChange([...rows, columns.map(() => "")]); }}><Plus />Add {noun}</Button>
+      <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => { keys.add(); onChange([...overlays, ""]); }}><Plus />Add overlay</Button>
     </div>
   );
 }
