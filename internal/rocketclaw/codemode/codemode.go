@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -78,6 +79,21 @@ func BuildCatalog(tools []ToolDesc) (map[string]ToolDesc, error) {
 	}
 
 	return out, nil
+}
+
+func FreeNames(source string) ([]string, error) {
+	var names []string
+
+	_, _, err := starlark.SourceProgramOptions(sourceOptions(), "codemode.star", source, func(name string) bool {
+		names = append(names, name)
+
+		return true
+	})
+	if err != nil {
+		return nil, wrapParseError(err)
+	}
+
+	return names, nil
 }
 
 func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc, call CallFunc, host []HostTool) (string, error) {
@@ -189,6 +205,8 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 }
 
 func newKwargsValueBuiltin(name string, schema map[string]any, call func(context.Context, map[string]any) (starlark.Value, error)) *starlark.Builtin {
+	resolved := sync.OnceValues(func() (*jsonschema.Resolved, error) { return resolveSchema(schema) })
+
 	return starlark.NewBuiltin(name, func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		if len(args) != 0 {
 			return nil, fmt.Errorf("%s: only keyword arguments are allowed", b.Name())
@@ -199,8 +217,15 @@ func newKwargsValueBuiltin(name string, schema map[string]any, call func(context
 			return nil, fmt.Errorf("%s arguments: %w", b.Name(), errArgs)
 		}
 
-		if err := validateArgs(schema, callArgs); err != nil {
-			return nil, fmt.Errorf("%s: invalid arguments: %w", b.Name(), err)
+		inputSchema, errSchema := resolved()
+		if errSchema != nil {
+			return nil, fmt.Errorf("%s: invalid arguments: %w", b.Name(), errSchema)
+		}
+
+		if inputSchema != nil {
+			if err := inputSchema.Validate(callArgs); err != nil {
+				return nil, fmt.Errorf("%s: invalid arguments: validate args: %w", b.Name(), err)
+			}
 		}
 
 		ctx := thread.Local(localCtx).(context.Context)
@@ -234,31 +259,27 @@ func kwargsToMap(thread *starlark.Thread, kwargs []starlark.Tuple) (map[string]a
 	return out, nil
 }
 
-func validateArgs(schemaMap, args map[string]any) error {
+func resolveSchema(schemaMap map[string]any) (*jsonschema.Resolved, error) {
 	if schemaMap == nil {
-		return nil
+		return nil, nil
 	}
 
 	raw, err := json.Marshal(schemaMap)
 	if err != nil {
-		return fmt.Errorf("encode input schema: %w", err)
+		return nil, fmt.Errorf("encode input schema: %w", err)
 	}
 
 	var schema jsonschema.Schema
 	if err := json.Unmarshal(raw, &schema); err != nil {
-		return fmt.Errorf("parse input schema: %w", err)
+		return nil, fmt.Errorf("parse input schema: %w", err)
 	}
 
 	resolved, err := schema.Resolve(nil)
 	if err != nil {
-		return fmt.Errorf("resolve input schema: %w", err)
+		return nil, fmt.Errorf("resolve input schema: %w", err)
 	}
 
-	if err := resolved.Validate(args); err != nil {
-		return fmt.Errorf("validate args: %w", err)
-	}
-
-	return nil
+	return resolved, nil
 }
 
 type parseCategory string

@@ -300,6 +300,17 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 		return ToolResult{}, errors.New("code is required")
 	}
 
+	names, errNames := codemode.FreeNames(params.Code)
+	if errNames != nil {
+		return ToolResult{}, fmt.Errorf("run code mode: %w", errNames)
+	}
+
+	usedServers := slices.DeleteFunc(slices.Clone(visibleServers), func(server string) bool {
+		return !slices.ContainsFunc(names, func(name string) bool {
+			return name == searchBuiltinName || strings.HasPrefix(name, codemode.SanitizeTool(server)+"_")
+		})
+	})
+
 	mcpCall := codemode.CallFunc(func(context.Context, string, string, map[string]any) (string, error) {
 		return "", errors.New("mcp call unavailable")
 	})
@@ -309,7 +320,7 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 		notes    []string
 	)
 
-	if len(visibleServers) > 0 {
+	if len(usedServers) > 0 {
 		session := registry.Open()
 		defer func() {
 			if cerr := session.Close(); cerr != nil && err != nil {
@@ -319,7 +330,7 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 
 		var errList error
 
-		mcpTools, notes, errList = listAllowedTools(ctx, session, permissions, visibleServers)
+		mcpTools, notes, errList = listAllowedTools(ctx, session, permissions, usedServers)
 		if errList != nil {
 			return ToolResult{}, errList
 		}

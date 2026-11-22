@@ -753,6 +753,37 @@ func TestExecuteSearchAndRun(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestExecuteConnectsOnlyToMCPServersTheScriptUses(t *testing.T) {
+	t.Parallel()
+
+	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{"demo": {URL: "http://127.0.0.1:9"}}, nil)
+	permissions := parsePermissionYAML(t, "mcp: {demo: {all: allow}}")
+	run := (&toolFactory{mcpRegistry: reg}).mcpToolsFor(&Agent{Permission: permissions}, nil)[executeToolName]
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions}
+	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations})
+
+	for _, tc := range []struct{ name, body, wantErr string }{
+		{"no mcp", `return "ok"`, ""},
+		{"mcp tool", `return demo_echo()`, "list mcp tools: server demo:"},
+		{"search", `return search(query="")`, "list mcp tools: server demo:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(executeParams{Code: "def main():\n    " + tc.body + "\n"})
+			require.NoError(t, err)
+
+			result, err := run.Call(ctx, raw, nil, emptyToolCallMetadata())
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, "ok", result.Output)
+		})
+	}
+}
+
 func TestExecuteSendsShellEnvToMCPServers(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
