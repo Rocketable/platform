@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
 import path from "node:path";
 import { unpacked } from "./test-browsers";
 import type { Session } from "./types";
@@ -866,10 +866,25 @@ test("remote sessions list, tag, go offline, and start", async () => {
 
     // When the view's code fails to load, Retry loads it again without reloading the page.
     const fresh = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const entryURL = `${base}/oc-ui/_assets/index.js`;
+    const entryEvents: string[] = [];
+    fresh.on("request", (request: { url(): string }) => {
+      if (request.url() === `${entryURL}?retry=1`) entryEvents.push("retry requested");
+    });
+    fresh.on("response", (response: { url(): string; status(): number }) => {
+      if (response.url() === entryURL) entryEvents.push(`initial HTTP ${response.status()}`);
+      if (response.url() === `${entryURL}?retry=1`) entryEvents.push(`retry HTTP ${response.status()}`);
+    });
     entryFailures.remaining = 1;
     await fresh.goto(`${base}${route("opencode:box:ses_a")}`);
     await fresh.getByRole("alert").waitFor();
+    const clickStarted = performance.now();
+    let clickFinished = false;
+    onTestFinished(() => {
+      if (!clickFinished) expect({ clickFinished, clickMs: Math.round(performance.now() - clickStarted), entryEvents }, "Expected the OpenCode Retry click to finish").toMatchObject({ clickFinished: true });
+    });
     await fresh.getByRole("button", { name: "Retry", exact: true }).click();
+    clickFinished = true;
     await fresh.locator("main [data-oc-view]").getByText("answer in ses_a").waitFor();
     expect(await fresh.getByRole("alert").count()).toBe(0);
   } finally {
