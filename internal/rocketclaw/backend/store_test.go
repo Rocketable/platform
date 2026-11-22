@@ -1061,10 +1061,16 @@ func TestSessionServiceSerializesConcurrentAccess(t *testing.T) {
 }
 
 func TestSessionServiceBeginGoalRejectsConcurrentActiveStarts(t *testing.T) {
-	t.Parallel()
-
 	service := newTestSessionService(t)
+	service.db.SetMaxOpenConns(2)
 	recordTestConversations(t, service, "main", map[string]ConversationKind{"thread": KindWebChat})
+
+	conn, err := service.db.Conn(t.Context())
+	require.NoError(t, err)
+	errPing := service.db.PingContext(t.Context())
+	require.NoError(t, errors.Join(errPing, conn.Close()))
+
+	t.Parallel()
 
 	errCh := make(chan error, 20)
 
