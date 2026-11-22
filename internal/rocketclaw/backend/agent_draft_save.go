@@ -79,7 +79,7 @@ func (s *SessionService) AgentDraftLayers(ctx context.Context, id, variant, dest
 		return nil, &AgentDraftOpError{Problem: "That is not a save destination."}
 	}
 
-	report := &AgentDraftLayers{Layers: layers, Recreated: layers[0].File != nil && at < len(layers)-1, Next: string(renderAgentDraftFile(draft.Mode, &draft.Variants[i]))}
+	report := &AgentDraftLayers{Layers: layers, Recreated: layers[0].File != nil && at < len(layers)-1, Next: renderAgentDraftFile(draft.Mode, &draft.Variants[i])}
 
 	for _, layer := range layers[at+1:] {
 		if layer.File != nil {
@@ -190,7 +190,7 @@ func (s *SessionService) SaveAgentDraft(ctx context.Context, rt agentDraftRuntim
 	}
 
 	variant, file := &draft.Variants[i], filepath.Join("agents", draft.Name+".md")
-	data := renderAgentDraftFile(draft.Mode, variant)
+	data := []byte(renderAgentDraftFile(draft.Mode, variant))
 
 	changed := func() error {
 		_, files, err := s.agentLayerFiles(draft.Name)

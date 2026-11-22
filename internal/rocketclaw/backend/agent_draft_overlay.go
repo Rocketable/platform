@@ -96,8 +96,8 @@ func (s *SessionService) saveAgentDraftToOverlay(ctx context.Context, rt agentDr
 		return "", err
 	}
 
-	data, file := renderAgentDraftFile(draft.Mode, variant), path.Join("agents", draft.Name+".md")
-	pending := &AgentDraftPending{Destination: overlay.Spec, Base: branch, Branch: branch, File: string(data), Revision: draft.Revision + 1}
+	pending := &AgentDraftPending{Destination: overlay.Spec, Base: branch, Branch: branch, File: renderAgentDraftFile(draft.Mode, variant), Revision: draft.Revision + 1}
+	data, file := []byte(pending.File), path.Join("agents", draft.Name+".md")
 
 	if save.PullRequest {
 		pending.Branch = fmt.Sprintf("%s%s-%d", agentDraftBranchPrefix, draft.ID, draft.Revision)

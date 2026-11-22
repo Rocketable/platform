@@ -145,7 +145,7 @@ func TestAgentDraftFileEditKeepsTeammateEdits(t *testing.T) {
 		base := applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: 1, OpID: "alice.1", Author: "alice", Kind: AgentDraftEditBody, Variant: "a", Splices: []AgentDraftSplice{{At: 0, Insert: "XY"}}})
 		applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: base, OpID: "bob.1", Author: "bob", Kind: AgentDraftEditBody, Variant: "a", Splices: tt.teammate})
 
-		file := string(renderAgentDraftFile(harness.AgentModeAdvanced, &AgentDraftVariant{Body: "aX"}))
+		file := renderAgentDraftFile(harness.AgentModeAdvanced, &AgentDraftVariant{Body: "aX"})
 		revision := applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: base, OpID: "alice.2", Author: "alice", Kind: AgentDraftEditFile, Variant: "a", Value: file})
 
 		got, err := store.LoadAgentDraft(ctx, draft.ID)
@@ -450,7 +450,7 @@ func TestAgentDraftModeSwitchConvertsEveryVariant(t *testing.T) {
 	b, err := store.LoadAgentDraft(ctx, draft.ID)
 	require.NoError(t, err)
 
-	file := string(renderAgentDraftFile(harness.AgentModeAdvanced, &b.Variants[1]))
+	file := renderAgentDraftFile(harness.AgentModeAdvanced, &b.Variants[1])
 	advanced := applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: easy, OpID: "alice.4", Kind: AgentDraftEditFile, Variant: "b", Value: file})
 	require.Equal(t, easy+1, advanced)
 	require.Equal(t, [][]string{advancedKeys, advancedKeys, advancedKeys}, keys(advanced, harness.AgentModeAdvanced))
@@ -487,7 +487,7 @@ func TestAgentDraftCopyRendersInStandardOrder(t *testing.T) {
 		draft, err := store.CreateAgentDraft(ctx, "alice", AgentDraftOrigin{Name: tt.name, Copy: true})
 		require.NoError(t, err)
 		require.Equal(t, tt.settings, draft.Variants[0].Settings, tt.name)
-		require.Equal(t, cmp.Or(tt.rendered, tt.file), string(renderAgentDraftFile(draft.Mode, &draft.Variants[0])), tt.name)
+		require.Equal(t, cmp.Or(tt.rendered, tt.file), renderAgentDraftFile(draft.Mode, &draft.Variants[0]), tt.name)
 	}
 }
 
