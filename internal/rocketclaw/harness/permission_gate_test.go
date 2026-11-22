@@ -31,7 +31,7 @@ func TestCheckNestedPermissionAllow(t *testing.T) {
 	t.Parallel()
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("mcp", "demo.echo"))
+	require.NoError(t, permissions.Set("mcp", "demo.echo", PermissionAllow))
 
 	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions}
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})
@@ -44,7 +44,7 @@ func TestCheckNestedPermissionDeny(t *testing.T) {
 	t.Parallel()
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Deny("mcp", "demo.danger"))
+	require.NoError(t, permissions.Set("mcp", "demo.danger", PermissionDeny))
 
 	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions}
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})

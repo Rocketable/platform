@@ -346,15 +346,15 @@ func TestExecuteDecisionReturnsADict(t *testing.T) {
 	}
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("decision", "openai/*"))
-	require.NoError(t, permissions.Allow("read", "*"))
+	require.NoError(t, permissions.Set("decision", "openai/*", PermissionAllow))
+	require.NoError(t, permissions.Set("read", "*", PermissionAllow))
 
 	result, err := run(permissions)
 	require.NoError(t, err)
 	require.Equal(t, "calm stop 12", result.Output)
 
 	var noRead PermissionSet
-	require.NoError(t, noRead.Allow("decision", "openai/*"))
+	require.NoError(t, noRead.Set("decision", "openai/*", PermissionAllow))
 
 	_, err = run(noRead)
 	require.ErrorContains(t, err, "images: reading files needs read permission")

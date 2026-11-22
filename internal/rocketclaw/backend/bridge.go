@@ -2927,7 +2927,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 				continue
 			}
 
-			_ = agent.Permission.Allow("rocketclaw", tool)
+			_ = agent.Permission.Set("rocketclaw", tool, harness.PermissionAllow)
 		}
 
 		agents.Items[name] = agent
