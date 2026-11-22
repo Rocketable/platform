@@ -1196,6 +1196,16 @@ test("a space's card is drawn and acts the same whether its space is current: it
 });
 
 test("with more than one space Parked is a tree whose spaces fold on their own and stay folded after a reload", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const started = performance.now();
+  let waitingFor: string | undefined, bravoVisible = false;
+  let beforeReload: { elapsedMs: number; panelExpanded: boolean; listSessionsCalls: number } | undefined, reloadLoadedMs: number | undefined;
+  onTestFinished(() => {
+    if (!waitingFor || bravoVisible) return;
+    expect<boolean>(bravoVisible, `Parked tree did not show Bravo after reload; waiting for ${waitingFor}: ${JSON.stringify({
+      elapsedMs: Math.round(performance.now() - started), opsFoldSaved: saved.layout?.folded?.["parked:/ops"] === true,
+      beforeReload, reloadLoadedMs, listSessionsCallsAtFailure: saved.polls,
+    })}`).toBe(true);
+  });
   saved.spaces.push({ id: "ops", name: "Ops" });
   saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }, { path: href("charlie"), space: "ops" }, { path: href("bravo"), space: "main" }] };
   saved.attention = [{ path: href("bravo"), parked: true }, { path: href("charlie"), parked: true }];
@@ -1205,11 +1215,22 @@ test("with more than one space Parked is a tree whose spaces fold on their own a
   await parked.getByRole("button", { name: "Parked in Ops", exact: true }).waitFor();
   expect(await tree()).toEqual(["Parked in Main", "Bravo", "Parked in Ops", "Charlie"]);
 
+  waitingFor = "the Ops fold to hide Charlie";
   await parked.getByRole("button", { name: "Parked in Ops", exact: true }).click();
   await parked.getByRole("tab", { name: "Charlie", exact: true }).waitFor({ state: "detached" });
+  waitingFor = "the Ops fold save";
   await until(() => saved.layout?.folded?.["parked:/ops"] === true);
+  beforeReload = {
+    elapsedMs: Math.round(performance.now() - started),
+    panelExpanded: saved.state.groups.some(({ id, collapsed }) => id === "parked" && collapsed === false),
+    listSessionsCalls: saved.polls,
+  };
+  waitingFor = "the page to finish reloading";
   await page.reload();
+  reloadLoadedMs = Math.round(performance.now() - started);
+  waitingFor = "Bravo to be visible";
   await parked.getByRole("tab", { name: "Bravo", exact: true }).waitFor();
+  bravoVisible = true;
   expect(await tree()).toEqual(["Parked in Main", "Bravo", "Parked in Ops"]);
 }));
 
