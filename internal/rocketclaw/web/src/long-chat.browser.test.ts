@@ -36,7 +36,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   let chromiumPID: number | undefined;
   const streamAbortedAtMs: number[] = [];
   const scroll: string[] = [], pageErrors: string[] = [], failedReads: string[] = [];
-  const historyResponses: { body: string | null; status: number; atMs: number }[] = [];
+  const historyResponses = new Map<object, { body: string | null; status: number; atMs: number; finishedAtMs: number | null }>();
   const transcriptRead = (request: { url(): string }) => {
     const url = new URL(request.url());
     return url.pathname === "/api/History" && !url.searchParams.has("pull-request-discovery");
@@ -88,7 +88,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
       }
     }
     console.error("Long chat test state", JSON.stringify({
-      steps, elapsedMs: elapsed(), firstReadArrived, streamRequests, streamAbortedAtMs, fullReads, pages, historyResponses, scroll, pageErrors, failedReads,
+      steps, elapsedMs: elapsed(), firstReadArrived, streamRequests, streamAbortedAtMs, fullReads, pages, historyResponses: [...historyResponses.values()], scroll, pageErrors, failedReads,
       cleanup: { closeStartedAtMs, closeFinishedAtMs, pageClosedAtMs, browserDisconnectedAtMs, serverStoppedAtMs, pendingRequests: server.pendingRequests, chromiumProcess },
     }));
   };
@@ -119,7 +119,11 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     });
     page.on("response", (response: { request(): { url(): string; postData(): string | null }; status(): number }) => {
       const request = response.request();
-      if (transcriptRead(request)) historyResponses.push({ body: request.postData(), status: response.status(), atMs: elapsed() });
+      if (transcriptRead(request)) historyResponses.set(request, { body: request.postData(), status: response.status(), atMs: elapsed(), finishedAtMs: null });
+    });
+    page.on("requestfinished", (request: object) => {
+      const response = historyResponses.get(request);
+      if (response) response.finishedAtMs = elapsed();
     });
     page.on("console", (message: { text(): string }) => {
       const text = message.text();
