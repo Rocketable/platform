@@ -33,9 +33,9 @@ MCP servers used to get only a fixed allowlist plus their config `env`, so they 
 **A stdio server's environment is fixed when its process starts.** These values are only correct because one server process never serves more than one `execute` call:
 
 - the backend builds a new runtime config, and so a new registry, for every turn (`internal/rocketclaw/backend/bridge.go:2337`);
-- `callExecute` opens a registry session for the call and closes it when the call ends (`internal/rocketclaw/harness/mcp_tools.go:313-315`). Closing the session stops the stdio processes.
+- `callExecute` opens a registry session for the call and closes it when the call ends (`internal/rocketclaw/harness/mcp_tools.go:324-326`). Closing the session stops the stdio processes. It connects only the servers the script names (a free name starting with the server's Starlark prefix) or all visible servers when the script calls `search`, so a script that uses no MCP starts none.
 
-Do not pool or reuse stdio servers across `execute` calls, turns or sessions. Starting every visible server on every call costs time, and that makes sharing look like an easy speedup. It would quietly hand one conversation's case ID to another, with no error. `TestStdioServerSeesOnlyItsOwnSessionEnv` (`internal/rocketclaw/mcpclient/registry_test.go`) fails if a server is shared inside `mcpclient`. It cannot see a registry kept alive across turns one layer up in the harness or backend.
+Do not pool or reuse stdio servers across `execute` calls, turns or sessions. Starting each used server on every call costs time, and that makes sharing look like an easy speedup. It would quietly hand one conversation's case ID to another, with no error. `TestStdioServerSeesOnlyItsOwnSessionEnv` (`internal/rocketclaw/mcpclient/registry_test.go`) fails if a server is shared inside `mcpclient`. It cannot see a registry kept alive across turns one layer up in the harness or backend.
 
 If long-lived servers are ever needed, move the values into the request instead: MCP's per-call `_meta` field (`CallToolParams.Meta` in the Go SDK). The agent cannot set it, because Code Mode only controls tool arguments. Every server then has to read the case from each request and never keep it, which is a new duty for every server author. That is why this change did not take that route.
 
