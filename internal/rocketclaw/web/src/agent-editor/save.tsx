@@ -23,8 +23,8 @@ function PendingLink({ pending }: { pending: AgentDraftPending }) {
 }
 
 function stopped(coedit: CoEdit, draft: AgentDraft) {
-  const [before, last] = coedit.log.filter((op) => op.kind === "set_save_state").slice(-2).map((op) => op.value);
-  return draft.saveState === "editing" && draft.pending?.branch !== draft.pending?.base && before === "waiting" && last === "editing";
+  const saves = coedit.log.filter((op) => op.kind === "set_save_state");
+  return draft.saveState === "editing" && draft.pending?.branch !== draft.pending?.base && saves.at(-2)?.value === "waiting" && saves.at(-1)?.value === "editing";
 }
 
 export function SaveHeader({ coedit, draft, onRefusal }: { coedit: CoEdit; draft: AgentDraft; onRefusal: (refusal?: Refusal) => void }) {
