@@ -17,9 +17,8 @@ type observabilitySpan struct {
 }
 
 func (o ObservabilityConfig) startSpan(ctx context.Context, name, kind string, attrs ...attribute.KeyValue) (context.Context, observabilitySpan) {
-	tracer := noop.NewTracerProvider().Tracer("rocketcode")
 	if !o.Enabled {
-		ctx, span := tracer.Start(ctx, name)
+		ctx, span := noop.Tracer{}.Start(ctx, name)
 
 		return ctx, observabilitySpan{span: span}
 	}
