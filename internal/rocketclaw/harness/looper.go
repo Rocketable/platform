@@ -339,6 +339,20 @@ func (e *providerRateLimitError) Unwrap() error {
 	return e.cause
 }
 
+type providerRequestError struct {
+	provider, message string
+	status            int
+	cause             error
+}
+
+func (e *providerRequestError) Error() string {
+	return strings.TrimSuffix(fmt.Sprintf("%s API error: %d %s: %s", e.provider, e.status, http.StatusText(e.status), e.message), ": ")
+}
+
+func (e *providerRequestError) Unwrap() error {
+	return e.cause
+}
+
 type providerRetryLimitError struct {
 	httpStatus int
 	requestID  string
@@ -1258,6 +1272,8 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 						continue
 					}
 
+					errReturn = &providerRequestError{provider: l.ProviderOrigin.Provider, message: errAPI.Message, status: errAPI.StatusCode, cause: err}
+
 					if errAPI.StatusCode == http.StatusTooManyRequests {
 						switch {
 						case errAPI.Code == "usage_limit_reached" || errAPI.Type == "usage_limit_reached":
@@ -1394,6 +1410,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 					diagnostic.Code = errAPI.Code
 					diagnostic.Message = errAPI.Message
 					diagnostic.HTTPStatus = errAPI.StatusCode
+					err = &providerRequestError{provider: l.ProviderOrigin.Provider, message: errAPI.Message, status: errAPI.StatusCode, cause: err}
 				}
 
 				l.emitProviderDiagnostic(ctx, &diagnostic)

@@ -3637,6 +3637,9 @@ func observeTestResponseAttempt(ctx context.Context, observer oai.ResponseObserv
 }
 
 func TestLooperReturnsProviderRequestErrors(t *testing.T) {
+	refusal := openAIError("", "claude refusal (cyber): blocked under the usage policy", nil)
+	refusal.StatusCode, refusal.Type = http.StatusBadRequest, "invalid_request_error"
+
 	for _, tc := range []struct {
 		mock *mockResponsesAPI
 		want string
@@ -3644,8 +3647,10 @@ func TestLooperReturnsProviderRequestErrors(t *testing.T) {
 		{mockResponses(failedResponseWithCode("resp-invalid", responses.ResponseErrorCodeInvalidPrompt, "bad prompt")), "run turn: request response: response failed: invalid_prompt: bad prompt"},
 		{mockResponseError(openAIError("rate_limit_exceeded", "slow down", nil)), "run turn: request response: new response: provider retry limit: status 429"},
 		{mockResponseError(errors.New("network exploded")), "run turn: request response: new response: network exploded"},
+		{mockResponseError(refusal), "run turn: request response: new response: anthropic API error: 400 Bad Request: claude refusal (cyber): blocked under the usage policy"},
 	} {
 		looper := testLooper(tc.mock)
+		looper.ProviderOrigin.Provider = "anthropic"
 		output := make(chan ChatResponse, 10)
 
 		input := make(chan PromptInput, 1)
