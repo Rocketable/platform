@@ -403,8 +403,11 @@ CREATE TRIGGER refuse_row BEFORE INSERT ON turns FOR EACH ROW EXECUTE FUNCTION r
 			return err
 		})
 		<-started
-		require.Len(t, registry.move("main"), 1)
+
+		moved := registry.move("main")
+
 		close(release)
+		require.Empty(t, moved, "a call whose script already returned is not listed as moved")
 		require.NoError(t, call.Wait())
 		require.Equal(t, harness.BackgroundResult{Output: "done"}, result)
 		require.NotContains(t, backgroundJobIDs(t, store, "main"), "turn-1/call/s", "the job leaves no row and no note")

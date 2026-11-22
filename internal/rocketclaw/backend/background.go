@@ -120,6 +120,7 @@ type backgroundKey struct{ conversationID, jobID string }
 
 type backgroundRun struct {
 	row            *backgroundJob
+	work           harness.BackgroundWork
 	cancel         context.CancelCauseFunc
 	unlink         func() bool
 	markMoved      context.CancelCauseFunc
@@ -201,7 +202,7 @@ func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, wor
 		kind = turnScript
 	}
 
-	run := &backgroundRun{row: &backgroundJob{conversationID: key.conversationID, jobID: job.ID, kind: kind, agent: job.Agent, label: job.Label, callID: job.CallID, subagentKey: job.SubagentKey, origin: t.origin, runnerID: r.runnerID}, cancel: cancel, recorded: make(chan struct{}), done: make(chan struct{}), attached: !job.Detached}
+	run := &backgroundRun{row: &backgroundJob{conversationID: key.conversationID, jobID: job.ID, kind: kind, agent: job.Agent, label: job.Label, callID: job.CallID, subagentKey: job.SubagentKey, origin: t.origin, runnerID: r.runnerID}, work: work, cancel: cancel, recorded: make(chan struct{}), done: make(chan struct{}), attached: !job.Detached}
 
 	r.mu.Lock()
 	flipped := run.attached && !r.attachedLocked(key.conversationID)
@@ -250,21 +251,16 @@ func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, wor
 	select {
 	case <-run.done:
 	case <-moved.Done():
-		if work.Detach() {
-			defer close(run.recorded)
+		defer close(run.recorded)
 
-			if _, _, err := createBackgroundJob(context.WithoutCancel(ctx), r.store.db, run.row); err != nil {
-				run.cancel(errBackgroundAbandoned)
-				<-run.done
+		if _, _, err := createBackgroundJob(context.WithoutCancel(ctx), r.store.db, run.row); err != nil {
+			run.cancel(errBackgroundAbandoned)
+			<-run.done
 
-				return harness.BackgroundResult{}, err
-			}
-
-			return harness.BackgroundResult{Moved: true}, nil
+			return harness.BackgroundResult{}, err
 		}
 
-		close(run.recorded)
-		<-run.done
+		return harness.BackgroundResult{Moved: true}, nil
 	}
 
 	if stop, ok := errors.AsType[backgroundStopError](context.Cause(workCtx)); ok && run.err != nil {
@@ -548,7 +544,7 @@ func (r *backgroundRegistry) move(conversationID string) []*backgroundRun {
 	var moved []*backgroundRun
 
 	for key, run := range r.runs {
-		if key.conversationID == conversationID && run.attached {
+		if key.conversationID == conversationID && run.attached && run.work.Detach() {
 			run.attached = false
 			run.unlink()
 			run.markMoved(errMovedToBackground)
