@@ -137,6 +137,8 @@ func externalOriginAllocationCheck(tb testing.TB) func() {
 
 func TestChatOriginFactsAllocationBudget(t *testing.T) {
 	if os.Getenv("ROCKETCLAW_TEST_CHAT_ORIGIN_ALLOCATIONS") != "1" {
+		t.Parallel()
+
 		cmd := exec.CommandContext(t.Context(), uninstrumentedBackendBinary(t), "-test.run=^"+t.Name()+"$", "-test.cpu=1", "-test.benchtime=32x")
 
 		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_CHAT_ORIGIN_ALLOCATIONS=1", "GOGC=100", "GOMEMLIMIT=off")
