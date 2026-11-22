@@ -1,4 +1,3 @@
-// Package harnessbridgetest holds test helpers for backend.
 package harnessbridgetest
 
 import (
@@ -13,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
-// IsolatedTestDatabaseURL creates a unique schema on ROCKETCLAW_TEST_DATABASE_URL.
 func IsolatedTestDatabaseURL() (string, error) {
 	base := strings.TrimSpace(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
 	if base == "" {
