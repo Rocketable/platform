@@ -45,9 +45,9 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 
 	handleOpenCode(mux, connection, cfg)
 
-	for _, route := range []string{"GET /pages/{space}/{agent}/{path...}", "GET /pages-raw/{agent}/{path...}"} {
-		mux.HandleFunc(route, servePage(connection, app))
-	}
+	pageHandler := servePage(connection, app)
+	mux.HandleFunc("GET /pages/{space}/{agent}/{path...}", pageHandler)
+	mux.HandleFunc("GET /pages-raw/{agent}/{path...}", pageHandler)
 
 	for method := range strings.FieldsSeq(webUnaryMethods + " " + editorMethods) {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
