@@ -298,6 +298,25 @@ func TestRunCancelledContextStops(t *testing.T) {
 	}
 }
 
+func TestToolIsNotCalledOnceItsScriptIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	thread := &starlark.Thread{}
+	thread.SetLocal(localCtx, ctx)
+
+	called := false
+	tool := newKwargsValueBuiltin("probe", nil, func(context.Context, map[string]any) (starlark.Value, error) {
+		called = true
+
+		return starlark.None, nil
+	})
+
+	if _, err := starlark.Call(thread, tool, nil, nil); !errors.Is(err, context.Canceled) || called {
+		t.Fatalf("call after cancel: err = %v, called = %v; want context.Canceled and no call", err, called)
+	}
+}
+
 func TestRunCallsTool(t *testing.T) {
 	tools := []ToolDesc{{
 		Server: "demo",
