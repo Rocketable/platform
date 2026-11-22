@@ -458,7 +458,7 @@ test("tab status icons and running titles keep their layout and shimmer in both 
   await page.goto(`${origin}${href("delta")}`);
   await tab("Delta").waitFor();
   await page.goto(`${origin}${href("alpha")}`);
-  await tab("Delta").waitFor();
+  await tab("Delta").and(page.locator('[aria-description="Space: Main, Turn running, Background work running"]')).waitFor();
   await page.mouse.move(640, 600);
   expect(await animation(title("Delta"))).not.toBe("none");
   expect(await animation(title("Alpha"))).toBe("none");
