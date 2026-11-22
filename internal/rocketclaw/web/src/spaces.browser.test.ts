@@ -1388,6 +1388,7 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
 });
 
 test("Parked also lists the Shared rows this person parked, which open in their space without a tab of their own, can be renamed and can join a group", async () => {
+  const started = performance.now();
   let waitingFor: string | undefined = "Chromium to open a page";
   let observed: (() => object) | undefined;
   onTestFinished(() => {
@@ -1400,7 +1401,20 @@ test("Parked also lists the Shared rows this person parked, which open in their 
     saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }] };
     saved.shared = [{ space: "ops", path: href("hotel") }];
     saved.attention = [{ path: href("hotel"), parked: true }];
-    observed = () => ({ url: page.url(), listSessionsCalls: saved.polls, savedSpace: saved.state.space, savedTabs: saved.state.tabs });
+    const elapsed = () => Math.round(performance.now() - started), clickEvents: { event: string; elapsedMs: number }[] = [];
+    let clickStartedMs: number | undefined;
+    observed = () => ({ url: page.url(), listSessionsCalls: saved.polls, savedSpace: saved.state.space, savedTabs: saved.state.tabs, clickStartedMs, clickEvents, elapsedMs: elapsed() });
+    page.on("console", (message: { text(): string }) => {
+      const prefix = "parked-hotel-click:", text = message.text();
+      if (text.startsWith(prefix)) clickEvents.push({ event: text.slice(prefix.length), elapsedMs: elapsed() });
+    });
+    await page.addInitScript(() => {
+      document.addEventListener("click", (event) => {
+        if (!event.isTrusted || !(event.target instanceof Element) || !event.target.closest('[aria-label="Parked tabs"] [role="tab"][aria-label="Renamed hotel"]')) return;
+        console.debug("parked-hotel-click:click reached the parked row");
+        requestAnimationFrame(() => console.debug(`parked-hotel-click:next animation frame at ${location.pathname}`));
+      }, { capture: true });
+    });
     const parked = page.getByRole("tablist", { name: "Parked tabs" }), original = parked.getByRole("tab", { name: "Hotel", exact: true }), row = parked.getByRole("tab", { name: "Renamed hotel", exact: true });
     waitingFor = "Alpha to load";
     await page.goto(`${origin}${href("alpha")}`);
@@ -1421,6 +1435,7 @@ test("Parked also lists the Shared rows this person parked, which open in their 
     await row.waitFor();
 
     waitingFor = "the click on Renamed hotel to finish";
+    clickStartedMs = elapsed();
     await row.click();
     waitingFor = "the URL to change to Hotel";
     await page.waitForURL(`**${href("hotel")}`);
