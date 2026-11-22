@@ -315,7 +315,7 @@ func TestBackgroundForegroundCallKeepsTurnCancellation(t *testing.T) {
 				if tc.cause == errTurnInterrupted {
 					require.ErrorIs(t, seen, errTurnInterrupted)
 
-					record.Status, record.Summary = codeModeCallError, "probe: "+errTurnInterrupted.Error()
+					record.Status, record.Summary = codeModeCallCancelled, "cancelled"
 				}
 
 				require.Equal(t, []CodeModeCall{record}, loop.observations.calls)

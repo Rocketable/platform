@@ -86,6 +86,9 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 	decision.review.Turn = ReviewTurn(ToolCallKey(ctx))
 
 	reviewDecision := tc.looper.PermissionReviewer.reviewPermission(ctx, decision.review)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("permission review: %w", err)
+	}
 
 	tc.observations.mu.Lock()
 	if tc.observations.reviews == nil {

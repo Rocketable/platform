@@ -4125,7 +4125,7 @@ function codeModeCallRow(call: CodeModeCall, running: boolean) {
   const denied = call.status === "denied" || call.outcome === "deny";
   const status: TraceStatus | undefined = denied || call.status === "error" ? "error" : call.status === "running" && running ? "running" : undefined;
   return { command, status, title: `${call.name} · ${command.replace(/\s+/g, " ").slice(0, 120)}`,
-    description: denied ? "denied" : call.status === "error" ? "failed" : undefined };
+    description: denied ? "denied" : call.status === "error" ? "failed" : call.status === "cancelled" ? "cancelled" : undefined };
 }
 
 // An approver's reason, one line under the box it explains until clicked. Its icon opens the review at

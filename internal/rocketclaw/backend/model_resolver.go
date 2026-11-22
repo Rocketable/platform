@@ -180,9 +180,12 @@ func (r *modelResolver) options(origin harness.ProviderOrigin, boundary string) 
 			}
 		}
 
-		if status < 200 || status >= 300 || err != nil {
+		switch {
+		case errors.Is(err, context.Canceled):
+			r.log.Info("provider request cancelled", attrs...)
+		case status < 200 || status >= 300 || err != nil:
 			r.log.Error("provider request failed", attrs...)
-		} else {
+		default:
 			r.log.Info("provider request completed", attrs...)
 		}
 

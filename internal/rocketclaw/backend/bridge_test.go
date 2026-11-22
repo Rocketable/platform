@@ -2429,6 +2429,15 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 	assert.Contains(t, logs.String(), "provider request completed")
 	assert.Contains(t, logs.String(), `"status":200`)
 	assert.Contains(t, logs.String(), `"outcome":"success"`)
+	logs.Reset()
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _ = client.Responses.New(cancelled, params)
+
+	assert.Contains(t, logs.String(), "provider request cancelled")
+	assert.NotContains(t, logs.String(), `"level":"ERROR"`, "a cancelled request is not an error")
 }
 
 func TestAskUserQuestionToolAllowsEmptyOptions(t *testing.T) {

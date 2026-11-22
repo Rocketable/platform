@@ -131,6 +131,11 @@ func TestCodeModeCallString(t *testing.T) {
 			want:   `[exec-2] read {"path":"go.mod"} -> error: file not found`,
 		},
 		{
+			name:   "cancelled call",
+			record: CodeModeCall{ParentCallID: "exec-4", Name: "bash", Arguments: `{"command":"sleep 30"}`, Status: codeModeCallCancelled, Summary: "cancelled"},
+			want:   `[exec-4] bash {"command":"sleep 30"} -> cancelled`,
+		},
+		{
 			name:   "whole-script review",
 			record: CodeModeCall{ParentCallID: "exec-3", Arguments: `{"path":"secret"}`, Status: codeModeCallDenied, Summary: "not a call", Outcome: permissionReviewOutcomeDeny, Reason: "outside workspace"},
 			want:   "[exec-3] (approver deny: outside workspace)",
