@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
 import { href, withPage, names, italic, behind, paletteReady, animation, order, until, openSaved, openFromPalette, follow, menu, chooseSpace, shared, sharedNames, focus, strip } from "./tabs-browser_test";
 
 test("each opened location keeps a tab; close commands, middle-click, and drag survive reload", () => withPage({}, async (page, origin, prompts, saved) => {
@@ -347,27 +347,58 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Pull requests and issues");
 }), 60_000);
 
-test("a RocketClaw session's tab menu and palette delete it after asking, showing a refusal and closing its tab", () => withPage({}, async (page, origin, _prompts, saved) => {
-  saved.state = { ...saved.state, space: "main", tabs: ["alpha", "bravo"].map((id) => ({ path: href(id), space: "main" })) };
-  await page.goto(`${origin}${href("bravo")}`);
-  await strip(page).getByRole("tab", { name: "Alpha", exact: true }).waitFor();
-  const confirm = page.getByRole("dialog", { name: "Delete session", exact: true });
-  await menu(page, "Bravo", "Delete session");
-  await confirm.getByText('Delete session "Bravo"?', { exact: true }).waitFor();
-  await confirm.getByRole("button", { name: "Delete session", exact: true }).click();
-  await confirm.getByRole("alert").getByText("this session has a running turn; stop it first", { exact: true }).waitFor();
-  await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
-  await confirm.waitFor({ state: "hidden" });
-  expect(await names(page)).toEqual(["Alpha", "Bravo"]);
+test("a RocketClaw session's tab menu and palette delete it after asking, showing a refusal and closing its tab", async () => {
+  const started = performance.now();
+  let waitingFor = "open Chromium page", observed: (() => object) | undefined;
+  let lastVisibleTabs: (string | null)[] | undefined;
+  onTestFinished(() => {
+    if (waitingFor) {
+      expect({ waitingFor, elapsedMs: Math.round(performance.now() - started), lastVisibleTabs, ...observed?.() },
+        `Expected to finish: ${waitingFor}`).toMatchObject({ waitingFor: "" });
+    }
+  });
+  await withPage({}, async (page, origin, _prompts, saved) => {
+    saved.state = { ...saved.state, space: "main", tabs: ["alpha", "bravo"].map((id) => ({ path: href(id), space: "main" })) };
+    observed = () => ({ url: page.url(), listSessionsCalls: saved.polls, deleteRequests: saved.deletes, savedTabs: saved.state.tabs.map((tab) => tab.path), savedRevision: saved.revision });
+    waitingFor = "navigate to Bravo";
+    await page.goto(`${origin}${href("bravo")}`);
+    waitingFor = "show the saved Alpha tab";
+    await strip(page).getByRole("tab", { name: "Alpha", exact: true }).waitFor();
+    const confirm = page.getByRole("dialog", { name: "Delete session", exact: true });
+    waitingFor = "select Delete session in Bravo's tab menu";
+    await menu(page, "Bravo", "Delete session");
+    waitingFor = "show the confirmation naming Bravo";
+    await confirm.getByText('Delete session "Bravo"?', { exact: true }).waitFor();
+    waitingFor = "confirm deletion from the tab menu";
+    await confirm.getByRole("button", { name: "Delete session", exact: true }).click();
+    waitingFor = "show the running-turn refusal";
+    await confirm.getByRole("alert").getByText("this session has a running turn; stop it first", { exact: true }).waitFor();
+    waitingFor = "cancel the refused deletion";
+    await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+    waitingFor = "hide the confirmation after cancelling";
+    await confirm.waitFor({ state: "hidden" });
+    waitingFor = "keep both tabs after cancelling";
+    lastVisibleTabs = await names(page);
+    expect(lastVisibleTabs).toEqual(["Alpha", "Bravo"]);
 
-  await page.keyboard.press("Control+Shift+p");
-  await page.getByPlaceholder("Type a command").fill("Delete session");
-  await page.getByRole("button", { name: "Sessions: Delete session" }).click();
-  await confirm.getByRole("button", { name: "Delete session", exact: true }).click();
-  await until(() => !saved.state.tabs.some((tab) => tab.path === href("bravo")));
-  expect(saved.deletes).toEqual(["bravo", "bravo"]);
-  expect(await names(page)).toEqual(["Alpha"]);
-}));
+    waitingFor = "open the command palette";
+    await page.keyboard.press("Control+Shift+p");
+    waitingFor = "type Delete session in the command palette";
+    await page.getByPlaceholder("Type a command").fill("Delete session");
+    waitingFor = "select Sessions: Delete session in the command palette";
+    await page.getByRole("button", { name: "Sessions: Delete session" }).click();
+    waitingFor = "confirm deletion from the command palette";
+    await confirm.getByRole("button", { name: "Delete session", exact: true }).click();
+    waitingFor = "save the tabs without Bravo";
+    await until(() => !saved.state.tabs.some((tab) => tab.path === href("bravo")));
+    waitingFor = "verify the two Bravo delete requests and the remaining Alpha tab";
+    expect(saved.deletes).toEqual(["bravo", "bravo"]);
+    lastVisibleTabs = await names(page);
+    expect(lastVisibleTabs).toEqual(["Alpha"]);
+    waitingFor = "check page errors and close Chromium";
+  });
+  waitingFor = "";
+});
 
 test("running tabs keep a reachable close control, and closing hands focus to the next tab", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
