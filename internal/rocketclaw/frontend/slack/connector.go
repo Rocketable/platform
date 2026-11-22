@@ -1431,14 +1431,14 @@ func nativeSlackForward(payload json.RawMessage) slackNativeForward {
 				continue
 			}
 
-			parts := strings.Split(strings.Trim(permalink.Path, "/"), "/")
-			if len(parts) < 3 || parts[len(parts)-2] == "" || !strings.HasPrefix(parts[len(parts)-1], "p") {
+			prefix, leaf, _ := strings.CutLast(strings.Trim(permalink.Path, "/"), "/")
+			_, permalinkChannel, hasChannel := strings.CutLast(prefix, "/")
+
+			permalinkTS, hasTimestampPrefix := strings.CutPrefix(leaf, "p")
+			if !hasChannel || permalinkChannel == "" || !hasTimestampPrefix {
 				conflict = true
 				continue
 			}
-
-			permalinkChannel := parts[len(parts)-2]
-			permalinkTS := strings.TrimPrefix(parts[len(parts)-1], "p")
 
 			permalinkThread := strings.TrimSpace(permalink.Query().Get("thread_ts"))
 			if channelID != "" && channelID != permalinkChannel ||
