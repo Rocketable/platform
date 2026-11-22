@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -33,7 +34,20 @@ func startWebRPC(rt *backend.Runtime, tailnet *tailnetNode, channels rpc.Channel
 
 	var serving errgroup.Group
 
-	closeTailnet := serveTailnet(rt, tailnet, handler, &serving)
+	https := &http.Server{
+		Handler:   rpc.NewTailnetHandler(tailnet.client, rt.Cfg.Clone().TrustedRocketClaws, handler),
+		TLSConfig: &tls.Config{GetCertificate: tailnet.client.GetCertificate},
+	}
+
+	rt.Log.Info("started Web HTTPS on the tailnet", "domains", tailnet.server.CertDomains())
+
+	serving.Go(func() error {
+		if err := https.ServeTLS(tailnet.https, "", ""); !errors.Is(err, http.ErrServerClosed) {
+			rt.Restart(fmt.Sprintf("Web HTTPS on the tailnet stopped: %v", err))
+		}
+
+		return nil
+	})
 
 	serving.Go(func() error {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
@@ -60,7 +74,7 @@ func startWebRPC(rt *backend.Runtime, tailnet *tailnetNode, channels rpc.Channel
 	return func(context.Context) error {
 		cancelSync()
 
-		errTailnet := closeTailnet()
+		errTailnet := https.Close()
 
 		server.Stop()
 		web.StopSearches()

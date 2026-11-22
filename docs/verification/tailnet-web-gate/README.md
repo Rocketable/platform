@@ -16,7 +16,7 @@ later. `Design` picks one of three startup orders:
   with `web.tsnet.auth_key` when it is logged out), require an HTTPS name and listen on port 443. A gate error ends
   `lockedRun.Run`, pglock releases the lock, and `rocketclaw run` exits with code 1. Only then come PostHog
   instrumentation, the schema migrations (`newSessionService`), and everything else. The page serves on the gate's
-  node and listener (`serveTailnet`); if `ServeTLS` returns anything but `http.ErrServerClosed`, `rt.Restart` requests
+  node and listener (`startWebRPC`); if `ServeTLS` returns anything but `http.ErrServerClosed`, `rt.Restart` requests
   a restart through `runShutdown.start(reason, true)`, `backend.Run` returns `ErrRestartRequested`, and `rocketclaw
   run` exits with code 255. The node closes before the lock is released.
 
@@ -82,7 +82,7 @@ and then runs, stops and, on exit code 255, starts again (the supervisor's resta
 | `lock`: wait until `holder = 0`, take it | `holdRunLock`, pglock `Do` and `AcquireContext` |
 | `gate`: with `lasting = "none"` the node comes up, else exit `"1"`, releasing the lock | `lockedRun.Run` calls `Gate`; `processAssembler.Gate`, `startTailnet` |
 | `migrate` | `newSessionService`, `initializeSessionDB` |
-| `rest`: everything else starts and the page serves; in `"current"` a lasting cause leaves `web` at `login` or `failed` | `lockedRun.Run`, `processAssembler.Assemble`, `serveTailnet` |
+| `rest`: everything else starts and the page serves; in `"current"` a lasting cause leaves `web` at `login` or `failed` | `lockedRun.Run`, `processAssembler.Assemble`, `startWebRPC` |
 | serving fails, at most `MaxFailures` times in the whole behavior | `ServeTLS` returns an error |
 | `failed` handled: outside `"current"`, `RequestStop(p, "restart")` | `rt.Restart` |
 | shutdown: `running` to `stopping`, close the server, then exit 255 if a restart was requested, else 0, releasing the lock | `lockedRun.Run`'s `select`, the deferred stops, `ErrRestartRequested`, `exitCodeError(255)` |
