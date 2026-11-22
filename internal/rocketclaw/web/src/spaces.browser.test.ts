@@ -1279,18 +1279,23 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
       if (text.startsWith(prefix)) snapshotReads.push(text.slice(prefix.length));
       if (text.startsWith("parked-render ")) renderedAfterReload = text.slice("parked-render ".length);
     });
-    await page.addInitScript(() => {
+    await page.addInitScript((foxtrot: string) => {
       const foxtrotState = (listing?: SavedListing) => {
         const row = listing?.rows.find(({ id }) => id === "foxtrot");
         return !listing ? "no snapshot" : !row ? "missing" : row.parked ? "parked" : "unparked";
       };
       let lastRender: string | undefined;
       const observeParked = () => {
-        const list = document.querySelector('#tab-sidebar [role="tablist"][aria-label="Parked tabs"]');
-        const state = list ? {
-          expanded: list.parentElement?.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded"),
-          rows: Array.from(list.querySelectorAll('[role="tab"]'), (row) => row.getAttribute("aria-label")),
-        } : "no Parked panel";
+        const sidebar = document.getElementById("tab-sidebar");
+        const list = sidebar?.querySelector('[role="tablist"][aria-label="Parked tabs"]');
+        const strip = '[role="tablist"][data-card]';
+        const state = {
+          panel: list ? {
+            expanded: list.parentElement?.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded"),
+            rows: Array.from(list.querySelectorAll('[role="tab"]'), (row) => row.getAttribute("aria-label")),
+          } : "no Parked panel",
+          foxtrotOnStrip: sidebar?.querySelector(`${strip} [data-tab="${foxtrot}"]`)?.closest(strip)?.getAttribute("aria-label") ?? null,
+        };
         const render = JSON.stringify(state);
         if (render === lastRender) return;
         lastRender = render;
@@ -1330,7 +1335,7 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
         }
         return request;
       };
-    });
+    }, href("foxtrot"));
     waitingFor = "finish reload";
     reload.startedMs = elapsed();
     await page.reload();
