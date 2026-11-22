@@ -1123,10 +1123,12 @@ test("every tab offers Unfollow, which then offers Follow, the two act on their 
 test("a space's card is drawn and acts the same whether its space is current: its groups under their names, its tabs with their whole menu, its unread tabs counted, and folded only the tab in view under a header that still marks its group's hidden tabs", async () => {
   const started = performance.now();
   let pending = "start the browser", fixture: Saved | undefined;
+  let beforeFold: { elapsedMs: number; expanded: string | null; currentSpace: string | null; menuOpen: boolean } | undefined;
   onTestFinished(() => {
     if (pending) console.error("Ops card test did not finish:", {
       pending, elapsedMs: Math.round(performance.now() - started),
       savedSpace: fixture?.state.space, savedFold: fixture?.layout?.folded?.["/ops"],
+      beforeFold,
     });
   });
   await withPage({}, async (page, origin, _prompts, saved) => {
@@ -1163,6 +1165,17 @@ test("a space's card is drawn and acts the same whether its space is current: it
 
     // Folded, it lists nothing while the tab in view is elsewhere, and only that tab once its space is entered, under
     // its group's header, bold for the hidden unread Foxtrot and needing this person for the hidden Golf.
+    pending = "check the Ops title before folding";
+    const snapshot: NonNullable<typeof beforeFold> = {
+      ...await page.evaluate(() => ({
+        expanded: document.querySelector('[data-card-key="/ops"] button[aria-label="Ops"]')?.getAttribute("aria-expanded") ?? null,
+        currentSpace: document.querySelector('button[aria-current="true"]')?.getAttribute("aria-label") ?? null,
+        menuOpen: !!document.querySelector('[role="menu"][data-open]'),
+      })),
+      elapsedMs: Math.round(performance.now() - started),
+    };
+    beforeFold = snapshot;
+    expect([snapshot.currentSpace, snapshot.expanded], "Main should still be current and Ops expanded after closing Delta").toEqual(["Main", "true"]);
     pending = "click the Ops fold button while Main is current";
     await fold.click();
     pending = "render the folded Ops card";
