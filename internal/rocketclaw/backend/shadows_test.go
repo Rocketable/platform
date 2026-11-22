@@ -408,11 +408,12 @@ func TestShadowImplicitCreation(t *testing.T) {
 func TestShadowExecutionOwnerEntrypoints(t *testing.T) {
 	t.Parallel()
 
+	store, _ := newShadowTestStore(t)
 	for _, entrypoint := range []string{"web", "cron", "scheduled", "goal continuation", "background wake"} {
 		t.Run(entrypoint, func(t *testing.T) {
-			store, _ := newShadowTestStore(t)
-			recordTestConversations(t, store, "main", map[string]ConversationKind{"visible": KindWebChat})
-			visible := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "visible", Agent: "main", SessionService: store}}
+			visibleID := "visible-" + entrypoint
+			recordTestConversations(t, store, "main", map[string]ConversationKind{visibleID: KindWebChat})
+			visible := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: visibleID, Agent: "main", SessionService: store}}
 			owner := visible
 			inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "input", true)
 			inbound.Metadata = map[string]string{"web_message_id": "id", "channel_id": "C1"}
@@ -422,17 +423,17 @@ func TestShadowExecutionOwnerEntrypoints(t *testing.T) {
 			switch entrypoint {
 			case "cron":
 				owner = &Bridge{log: visible.log, config: Config{ConversationID: "private", Agent: "main", SessionService: store}}
-				request.producer, inbound.SyncDestination = owner, "visible"
+				request.producer, inbound.SyncDestination = owner, visibleID
 				inbound.Source, inbound.RequireOutputDecision = protocol.SourceSystem, true
 			case "scheduled":
 				inbound.Source, inbound.Human, request.scheduledMessageID = protocol.SourceSystem, false, "scheduled"
 
-				require.NoError(t, store.PutScheduledMessage("scheduled", &protocol.ScheduledMessageState{ConversationID: "visible", Agent: "main", Message: "input", DueAt: time.Now()}))
+				require.NoError(t, store.PutScheduledMessage("scheduled", &protocol.ScheduledMessageState{ConversationID: visibleID, Agent: "main", Message: "input", DueAt: time.Now()}))
 			case "goal continuation":
 				inbound.Source, inbound.Human, inbound.GoalAction = protocol.SourceSystem, false, protocol.GoalActionContinue
 			case "background wake":
 				inbound.Source, inbound.Human, request.backgroundWake = protocol.SourceSystem, false, true
-				job := testBackgroundJob("visible", "parent-job")
+				job := testBackgroundJob(visibleID, "parent-job")
 				createTestBackgroundJob(t, store, job)
 				job.status, job.noteState, job.wake = backgroundCompleted, notePending, true
 				_, err := store.finishBackgroundJob(t.Context(), job)
