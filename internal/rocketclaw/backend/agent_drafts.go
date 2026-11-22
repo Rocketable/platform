@@ -371,11 +371,7 @@ SELECT `+notifyAgentDraft+` FROM seen`,
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit agent draft presence: %w", err)
-	}
-
-	return nil
+	return commitState(tx, "agent draft presence")
 }
 
 func (s *SessionService) AgentDraftPresences(ctx context.Context, id string) ([]AgentDraftPresence, error) {

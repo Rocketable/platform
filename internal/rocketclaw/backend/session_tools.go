@@ -761,11 +761,7 @@ func (s *SessionService) parkStopLine(ctx context.Context, conversationID, key s
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit stop line: %w", err)
-	}
-
-	return nil
+	return commitState(tx, "stop line")
 }
 
 func (s *SessionService) postStopLines(ctx context.Context, conversationID string) error {

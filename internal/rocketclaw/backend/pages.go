@@ -2,8 +2,6 @@ package backend
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -70,24 +68,16 @@ ON CONFLICT (agent, kind, name) DO UPDATE SET content_type = excluded.content_ty
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit page store: %w", err)
-	}
-
-	return nil
+	return commitState(tx, "page store")
 }
 
 func (s *SessionService) Page(ctx context.Context, agent string, kind PageKind, name string) (Page, bool, error) {
 	page := Page{Agent: agent, Kind: kind, Name: name}
 
-	err := s.db.QueryRowContext(ctx, `SELECT p.content_type, p.body, p.updated_at, COALESCE(p.conversation_id, ''), COALESCE(s.name, '')`+pageOwnerSQL+`
-WHERE p.agent = $1 AND p.kind = $2 AND p.name = $3`, agent, kind, name).Scan(&page.ContentType, &page.Body, &page.UpdatedAt, &page.Conversation, &page.Space)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Page{}, false, nil
-	}
-
-	if err != nil {
-		return Page{}, false, fmt.Errorf("read page: %w", err)
+	found, err := scanFound("read page", s.db.QueryRowContext(ctx, `SELECT p.content_type, p.body, p.updated_at, COALESCE(p.conversation_id, ''), COALESCE(s.name, '')`+pageOwnerSQL+`
+WHERE p.agent = $1 AND p.kind = $2 AND p.name = $3`, agent, kind, name).Scan(&page.ContentType, &page.Body, &page.UpdatedAt, &page.Conversation, &page.Space))
+	if err != nil || !found {
+		return Page{}, false, err
 	}
 
 	page.Size = len(page.Body)

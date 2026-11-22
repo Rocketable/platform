@@ -155,40 +155,6 @@ func easyInputStringContent(text string) responses.EasyInputMessageContentUnionP
 	return responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}
 }
 
-func functionCallOutputContent(result ToolResult) responses.ResponseFunctionCallOutputItemListParam {
-	content := responses.ResponseFunctionCallOutputItemListParam{{OfInputText: &responses.ResponseInputTextContentParam{Text: result.Output}}}
-
-	for _, attachment := range result.Attachments {
-		mimeType := normalizeMIME(attachment.MIME)
-		switch {
-		case isImageAttachmentMIME(mimeType):
-			content = append(content, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: withImageName(responses.ResponseInputImageContentParam{Detail: responses.ResponseInputImageContentDetailAuto, ImageURL: openai.String(attachment.URL)}, attachment.Filename)})
-		case mimeType == "application/pdf":
-			content = append(content, responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &responses.ResponseInputFileContentParam{Filename: openai.String(attachment.Filename), FileData: openai.String(attachment.URL)}})
-		}
-	}
-
-	return content
-}
-
-func attachmentOutputMessage(result ToolResult) string {
-	if len(result.Attachments) == 0 {
-		return result.Output
-	}
-
-	parts := []string{result.Output}
-	for _, attachment := range result.Attachments {
-		label := attachment.Filename
-		if label == "" {
-			label = attachment.MIME
-		}
-
-		parts = append(parts, fmt.Sprintf("Attached %s (%s)", label, attachment.MIME))
-	}
-
-	return strings.Join(parts, "\n")
-}
-
 func textFromHTMLString(s string) (string, error) {
 	doc, err := html.Parse(strings.NewReader(s))
 	if err != nil {

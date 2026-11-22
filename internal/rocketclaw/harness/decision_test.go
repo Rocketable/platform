@@ -461,9 +461,8 @@ func TestExecuteDecisionTakesImageFileObjects(t *testing.T) {
 				return
 			}
 
-			result, ok := value.(*codemode.DictResult)
-			require.True(t, ok, "got %s", value.Type())
-			require.JSONEq(t, `{"model": "openai/gpt-6-luna", "answers": {"tone": {"type": "choice", "choice": "calm", "confidence": 0}}, "usage": {"input_tokens": 0, "output_tokens": 0}, "stop_reason": "stop"}`, result.String())
+			require.Equal(t, "dict_result", value.Type())
+			require.JSONEq(t, `{"model": "openai/gpt-6-luna", "answers": {"tone": {"type": "choice", "choice": "calm", "confidence": 0}}, "usage": {"input_tokens": 0, "output_tokens": 0}, "stop_reason": "stop"}`, value.String())
 			require.Equal(t, tc.wantImages, decider.DecideCalls()[0].Request.Images)
 
 			var args struct {

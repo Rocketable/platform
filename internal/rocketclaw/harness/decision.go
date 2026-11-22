@@ -295,65 +295,53 @@ func decisionTool(deciders map[string]Decider, observability ObservabilityConfig
 		Questions map[string]decisionToolQuestion `json:"questions"`
 	}
 
-	return looperTool{
-		Definition: *functionTool("decision", decisionToolDescription(nil), map[string]any{
-			"model":  map[string]any{"type": "string", "description": "provider/model, such as typesafe/jev-latest."},
-			"state":  map[string]any{"type": "object", "description": "The data every question is about."},
-			"images": map[string]any{"type": "array", "items": map[string]any{"type": []string{"string", "object"}}, "description": "Workspace image paths or image file objects judged with the state."},
-			"questions": map[string]any{"type": "object", "description": "Questions by name; one call answers all of them.", "additionalProperties": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"type":         map[string]any{"type": "string", "enum": []string{"choice", "score", "bool"}},
-					"instructions": map[string]any{"type": "string"},
-					"criteria":     map[string]any{"description": "A choice's {label: when it applies}, a score's [levels, lowest first], or a bool's {\"true\": ..., \"false\": ...}."},
-				},
-				"required":             []string{"type", "instructions", "criteria"},
-				"additionalProperties": false,
-			}},
-		}),
-		Permission:   "decision",
-		codeModeOnly: true,
-		Subjects: func(raw json.RawMessage) ([]string, error) {
-			var input params
+	tool := paramsTool(functionTool("decision", decisionToolDescription(nil), map[string]any{
+		"model":  map[string]any{"type": "string", "description": "provider/model, such as typesafe/jev-latest."},
+		"state":  map[string]any{"type": "object", "description": "The data every question is about."},
+		"images": map[string]any{"type": "array", "items": map[string]any{"type": []string{"string", "object"}}, "description": "Workspace image paths or image file objects judged with the state."},
+		"questions": map[string]any{"type": "object", "description": "Questions by name; one call answers all of them.", "additionalProperties": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"type":         map[string]any{"type": "string", "enum": []string{"choice", "score", "bool"}},
+				"instructions": map[string]any{"type": "string"},
+				"criteria":     map[string]any{"description": "A choice's {label: when it applies}, a score's [levels, lowest first], or a bool's {\"true\": ..., \"false\": ...}."},
+			},
+			"required":             []string{"type", "instructions", "criteria"},
+			"additionalProperties": false,
+		}},
+	}), "decision", func(input params) ([]string, error) {
+		return []string{input.Model}, nil
+	}, func(ctx context.Context, input params) (ToolResult, error) {
+		questions, err := decisionQuestions(input.Questions)
+		if err != nil {
+			return ToolResult{}, err
+		}
 
-			err := decodeToolParams(raw, &input)
+		images, err := decisionImages(ctx, input.Images)
+		if err != nil {
+			return ToolResult{}, err
+		}
 
-			return []string{input.Model}, err
-		},
-		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-			var input params
-			if err := decodeToolParams(raw, &input); err != nil {
-				return ToolResult{}, err
-			}
+		result := decisionToolResult{Model: input.Model, StopReason: "stop"}
 
-			questions, err := decisionQuestions(input.Questions)
-			if err != nil {
-				return ToolResult{}, err
-			}
+		answers, usage, err := decide(ctx, observability, deciders, input.Model, &DecisionRequest{Input: input.State, Images: images, Questions: questions})
+		if err == nil {
+			result.Usage = &usage
 
-			images, err := decisionImages(ctx, input.Images)
-			if err != nil {
-				return ToolResult{}, err
-			}
+			result.Answers, err = decisionToolAnswers(questions, answers)
+		}
 
-			result := decisionToolResult{Model: input.Model, StopReason: "stop"}
+		if err != nil {
+			result.Answers, result.StopReason, result.ErrorMessage = map[string]decisionToolAnswer{}, "error", err.Error()
+		}
 
-			answers, usage, err := decide(ctx, observability, deciders, input.Model, &DecisionRequest{Input: input.State, Images: images, Questions: questions})
-			if err == nil {
-				result.Usage = &usage
+		output, err := json.Marshal(result)
 
-				result.Answers, err = decisionToolAnswers(questions, answers)
-			}
+		return TextToolResult(string(output)), err
+	})
+	tool.codeModeOnly = true
 
-			if err != nil {
-				result.Answers, result.StopReason, result.ErrorMessage = map[string]decisionToolAnswer{}, "error", err.Error()
-			}
-
-			output, err := json.Marshal(result)
-
-			return TextToolResult(string(output)), err
-		},
-	}
+	return tool
 }
 
 func predicateAnswer(name string, probability float64) DecisionAnswer {

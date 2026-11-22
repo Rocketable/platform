@@ -403,7 +403,7 @@ func TestTryGatherResult(t *testing.T) {
 		{expression: `"y" in try_gather([t, u])`, want: "true"},
 		{expression: `try_map([1, 2], lambda n: n) == [1, 2]`, want: "true"},
 		{expression: `map(try_map([1, 2], lambda n: n), lambda n: n * 10)`, want: "[10,20]"},
-		{expression: `try_gather([t]).append(1)`, wantErr: "gather_result has no .append field or method"},
+		{expression: `try_gather([t]).append(1)`, wantErr: "append: cannot append to frozen list"},
 		{expression: `{try_gather([t]): 1}`, wantErr: "unhashable type: gather_result"},
 	})
 }

@@ -43,7 +43,7 @@ func TestNewRequiresShellTempDir(t *testing.T) {
 	client := openai.NewClient()
 	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(""), root, Agents{Items: nil}, Skills{Root: "", Items: nil, dirs: nil, fsys: nil}, "")
 
-	require.EqualError(t, err, "shell temp dir is required")
+	require.ErrorContains(t, err, `resolve shell temp dir ""`)
 }
 
 func TestNewRejectsInvalidShellTempDir(t *testing.T) {
@@ -610,7 +610,7 @@ func TestNewDoesNotAllowReadingFilesThroughSymlinkedSkillRoot(t *testing.T) {
 	require.NotContains(t, loop.Tools, "read")
 }
 
-func TestNewRequiresParsedAgentsAndSkills(t *testing.T) {
+func TestNewRequiresDefaultAgent(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	require.NoError(t, err)
@@ -618,15 +618,6 @@ func TestNewRequiresParsedAgentsAndSkills(t *testing.T) {
 
 	client := openai.NewClient()
 	config := testWorkspaceConfig(t, dir)
-
-	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: nil}, Skills{Root: "", Items: nil, dirs: nil, fsys: nil}, "")
-	require.EqualError(t, err, "agents are required")
-
-	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: nil, dirs: nil, fsys: nil}, "")
-	require.EqualError(t, err, "skills are required")
-
-	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "")
-	require.EqualError(t, err, "defaultAgent is required")
 
 	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "main")
 	require.EqualError(t, err, `missing required default agent "main"`)

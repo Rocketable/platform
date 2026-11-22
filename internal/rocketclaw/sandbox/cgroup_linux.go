@@ -164,13 +164,6 @@ func cgroupKey(dir, file, key string) (int64, error) {
 	return 0, fmt.Errorf("%s: no %s", file, key)
 }
 
-func (cg *execCgroup) limitEvents() (oomKills, processLimitHits int64) {
-	oomKills, _ = cgroupKey(cg.path, "memory.events", "oom_kill")
-	processLimitHits, _ = cgroupKey(cg.path, "pids.events", "max")
-
-	return oomKills, processLimitHits
-}
-
 func (cg *execCgroup) remove() error {
 	if cg.fd >= 0 {
 		_ = unix.Close(cg.fd)
@@ -181,13 +174,4 @@ func (cg *execCgroup) remove() error {
 	}
 
 	return nil
-}
-
-func cgroupRelative(dir string) (string, error) {
-	rel, err := filepath.Rel(cgroupRoot, dir)
-	if err != nil || !filepath.IsLocal(rel) {
-		return "", fmt.Errorf("cgroup %s is not under %s", dir, cgroupRoot)
-	}
-
-	return "/" + rel, nil
 }

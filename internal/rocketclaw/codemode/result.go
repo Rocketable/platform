@@ -22,20 +22,11 @@ type Result interface {
 	Ok() bool
 }
 
-type Text interface {
-	String() string
-	Type() string
-	Freeze()
-	Truth() starlark.Bool
-	Hash() (uint32, error)
-	Text() string
-}
-
 func ResultAttrNames(extra ...string) []string {
 	names := append(slices.Clone(extra), "error", "ok", "or_else", "unwrap")
 	slices.Sort(names)
 
-	return names
+	return slices.Compact(names)
 }
 
 func ResultAttr(v starlark.Value, failure *Error, name string) (starlark.Value, bool) {
@@ -91,13 +82,11 @@ func HostResult(tool string, value starlark.Value, err error) starlark.Value {
 
 	switch v := value.(type) {
 	case starlark.String:
-		return NewText(string(v), PlainText{})
+		return NewText("text", string(v), nil, nil)
 	case *starlark.Dict:
-		return NewDictResult(v)
-	case interface{ Failure() *Error }:
-		if failure := v.Failure(); failure != nil {
-			return failure
-		}
+		v.Freeze()
+
+		return decodedDict{v, "dict_result"}
 	}
 
 	return value
@@ -187,113 +176,6 @@ func (e *Error) failureText() string {
 	}
 
 	return e.tool + ": " + e.message
-}
-
-type DictResult struct {
-	dict *starlark.Dict
-}
-
-func NewDictResult(d *starlark.Dict) *DictResult {
-	d.Freeze()
-
-	return &DictResult{dict: d}
-}
-
-func (d *DictResult) String() string       { return d.dict.String() }
-func (d *DictResult) Type() string         { return "dict_result" }
-func (d *DictResult) Freeze()              {}
-func (d *DictResult) Truth() starlark.Bool { return d.dict.Len() > 0 }
-func (d *DictResult) Ok() bool             { return true }
-func (d *DictResult) Len() int             { return d.dict.Len() }
-func (d *DictResult) Iterate() starlark.Iterator {
-	return d.dict.Iterate()
-}
-func (d *DictResult) Items() []starlark.Tuple { return d.dict.Items() }
-
-func (d *DictResult) Get(k starlark.Value) (starlark.Value, bool, error) {
-	v, found, err := d.dict.Get(k)
-	if err != nil {
-		return nil, false, fmt.Errorf("dict_result: %w", err)
-	}
-
-	return v, found, nil
-}
-
-func (d *DictResult) Hash() (uint32, error) {
-	return 0, errors.New("unhashable type: dict_result")
-}
-
-func (d *DictResult) MarshalJSON() ([]byte, error) {
-	encoded, err := encodeJSON(d.dict)
-
-	return []byte(encoded), err
-}
-
-func (d *DictResult) Attr(name string) (starlark.Value, error) {
-	if v, ok := ResultAttr(d, nil, name); ok {
-		return v, nil
-	}
-
-	switch name {
-	case "get", "items", "keys", "values":
-		method, err := d.dict.Attr(name)
-		if err != nil {
-			return nil, fmt.Errorf("dict_result.%s: %w", name, err)
-		}
-
-		return method, nil
-	default:
-		return nil, nil
-	}
-}
-
-func (d *DictResult) AttrNames() []string {
-	return ResultAttrNames("get", "items", "keys", "values")
-}
-
-type GatherResult struct {
-	list *starlark.List
-}
-
-func newGatherResult(values []starlark.Value) *GatherResult {
-	list := starlark.NewList(values)
-	list.Freeze()
-
-	return &GatherResult{list: list}
-}
-
-func (g *GatherResult) String() string             { return g.list.String() }
-func (g *GatherResult) Type() string               { return "gather_result" }
-func (g *GatherResult) Freeze()                    {}
-func (g *GatherResult) Truth() starlark.Bool       { return g.list.Len() > 0 }
-func (g *GatherResult) Ok() bool                   { return true }
-func (g *GatherResult) Len() int                   { return g.list.Len() }
-func (g *GatherResult) Index(i int) starlark.Value { return g.list.Index(i) }
-func (g *GatherResult) Iterate() starlark.Iterator { return g.list.Iterate() }
-func (g *GatherResult) AttrNames() []string        { return ResultAttrNames("index") }
-func (g *GatherResult) Slice(start, end, step int) starlark.Value {
-	return g.list.Slice(start, end, step)
-}
-
-func (g *GatherResult) Hash() (uint32, error) {
-	return 0, errors.New("unhashable type: gather_result")
-}
-
-func (g *GatherResult) Attr(name string) (starlark.Value, error) {
-	if v, ok := ResultAttr(g, nil, name); ok {
-		return v, nil
-	}
-
-	if name != "index" {
-		return nil, nil
-	}
-
-	method, err := g.list.Attr(name)
-	if err != nil {
-		return nil, fmt.Errorf("gather_result.%s: %w", name, err)
-	}
-
-	return method, nil
 }
 
 type Match struct {
@@ -387,12 +269,8 @@ func unboxValue(v starlark.Value) (starlark.Value, bool) {
 	switch v := v.(type) {
 	case starlark.String:
 		return v, false
-	case Text:
-		return starlark.String(v.Text()), true
-	case *DictResult:
-		return v.dict, true
-	case *GatherResult:
-		return v.list, true
+	case *TextValue:
+		return starlark.String(v.content), true
 	case decodedDict:
 		return v.Dict, true
 	case decodedList:
@@ -409,15 +287,9 @@ func IsFailure(v starlark.Value) bool {
 }
 
 var (
-	_ Result                   = (*Error)(nil)
-	_ starlark.HasAttrs        = (*Error)(nil)
-	_ starlark.Callable        = (*Error)(nil)
-	_ starlark.Comparable      = (*Error)(nil)
-	_ starlark.IterableMapping = (*DictResult)(nil)
-	_ starlark.Sequence        = (*DictResult)(nil)
-	_ Result                   = (*GatherResult)(nil)
-	_ starlark.Sliceable       = (*GatherResult)(nil)
-	_ starlark.Sequence        = (*GatherResult)(nil)
-	_ starlark.HasAttrs        = (*GatherResult)(nil)
-	_ starlark.HasAttrs        = (*Match)(nil)
+	_ Result              = (*Error)(nil)
+	_ starlark.HasAttrs   = (*Error)(nil)
+	_ starlark.Callable   = (*Error)(nil)
+	_ starlark.Comparable = (*Error)(nil)
+	_ starlark.HasAttrs   = (*Match)(nil)
 )

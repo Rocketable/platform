@@ -71,14 +71,6 @@ func startExternalMCPServer(
 			}
 		}()
 
-		if externalConversationID == "" {
-			return externalmcp.SessionResult{}, errors.New("external MCP conversation ID is required")
-		}
-
-		if requestedAgent == "" {
-			return externalmcp.SessionResult{}, errors.New("external MCP agent is required")
-		}
-
 		inboundContent, err := externalMCPInboundContent(attachments)
 		if err != nil {
 			return externalmcp.SessionResult{}, err

@@ -1,6 +1,7 @@
 package codemode
 
 import (
+	"encoding/json"
 	"fmt"
 	"iter"
 	"regexp"
@@ -10,36 +11,18 @@ import (
 	"go.starlark.net/syntax"
 )
 
-type TextAttrs interface {
-	Attr(name string) (starlark.Value, error)
-	AttrNames() []string
-}
-
-type PlainText struct{}
-
-func (PlainText) Attr(name string) (starlark.Value, error) {
-	switch name {
-	case "path", "name":
-		return starlark.None, nil
-	default:
-		return nil, nil
-	}
-}
-
-func (PlainText) AttrNames() []string { return []string{"name", "path"} }
-
 type TextValue struct {
-	content string
-	attrs   TextAttrs
+	kind, content string
+	attrs         starlark.StringDict
+	data          json.RawMessage
 }
 
-func NewText(content string, attrs TextAttrs) *TextValue {
-	return &TextValue{content: content, attrs: attrs}
+func NewText(kind, content string, attrs starlark.StringDict, data json.RawMessage) *TextValue {
+	return &TextValue{kind: kind, content: content, attrs: attrs, data: data}
 }
 
 func (t *TextValue) String() string       { return t.content }
-func (t *TextValue) Text() string         { return t.content }
-func (t *TextValue) Type() string         { return "text" }
+func (t *TextValue) Type() string         { return t.kind }
 func (t *TextValue) Freeze()              {}
 func (t *TextValue) Truth() starlark.Bool { return t.content != "" }
 func (t *TextValue) Ok() bool             { return true }
@@ -51,13 +34,17 @@ func (t *TextValue) Hash() (uint32, error) {
 	return h, nil
 }
 
-func (t *TextValue) Index(i int) starlark.Value { return TextIndex(t, i) }
+func (t *TextValue) Index(i int) starlark.Value { return starlark.String(t.content).Index(i) }
 
 func (t *TextValue) Slice(start, end, step int) starlark.Value {
-	return TextSlice(t, start, end, step)
+	return starlark.String(t.content).Slice(start, end, step)
 }
 
 func (t *TextValue) MarshalJSON() ([]byte, error) {
+	if t.data != nil {
+		return t.data, nil
+	}
+
 	encoded, err := encodeJSON(starlark.String(t.content))
 
 	return []byte(encoded), err
@@ -70,23 +57,11 @@ func (t *TextValue) CompareSameType(op syntax.Token, y starlark.Value, depth int
 }
 
 func (t *TextValue) Binary(op syntax.Token, y starlark.Value, side starlark.Side) (starlark.Value, error) {
-	return TextBinary(t, op, y, side)
-}
-
-func TextIndex(t Text, i int) starlark.Value {
-	return starlark.String(t.Text()).Index(i)
-}
-
-func TextSlice(t Text, start, end, step int) starlark.Value {
-	return starlark.String(t.Text()).Slice(start, end, step)
-}
-
-func TextBinary(t Text, op syntax.Token, y starlark.Value, side starlark.Side) (starlark.Value, error) {
 	if op != syntax.PLUS && op != syntax.STAR && op != syntax.PERCENT && op != syntax.IN {
 		return nil, nil
 	}
 
-	return binaryUnboxed(op, starlark.String(t.Text()), y, side)
+	return binaryUnboxed(op, starlark.String(t.content), y, side)
 }
 
 func (t *TextValue) Attr(name string) (starlark.Value, error) {
@@ -94,16 +69,13 @@ func (t *TextValue) Attr(name string) (starlark.Value, error) {
 		return v, nil
 	}
 
-	v, err := t.attrs.Attr(name)
-	if err != nil {
-		return nil, fmt.Errorf("text.%s: %w", name, err)
-	}
-
-	if v != nil {
+	if v, ok := t.attrs[name]; ok {
 		return v, nil
 	}
 
 	switch name {
+	case "path", "name":
+		return starlark.None, nil
 	case "lines":
 		return noArgsMethod("lines", func() (starlark.Value, error) {
 			var lines []starlark.Value
@@ -119,16 +91,13 @@ func (t *TextValue) Attr(name string) (starlark.Value, error) {
 		return noArgsMethod("bytes", func() (starlark.Value, error) { return starlark.Bytes(t.content), nil }), nil
 	}
 
-	method, err := starlark.String(t.content).Attr(name)
-	if err != nil {
-		return nil, fmt.Errorf("text.%s: %w", name, err)
-	}
+	method, _ := starlark.String(t.content).Attr(name)
 
 	return method, nil
 }
 
 func (t *TextValue) AttrNames() []string {
-	return ResultAttrNames(append(append(t.attrs.AttrNames(), "bytes", "lines", "search"), starlark.String("").AttrNames()...)...)
+	return ResultAttrNames(append(append(t.attrs.Keys(), "bytes", "lines", "name", "path", "search"), starlark.String("").AttrNames()...)...)
 }
 
 func (t *TextValue) lines() iter.Seq[string] {
@@ -152,17 +121,12 @@ func (t *TextValue) search(_ *starlark.Thread, b *starlark.Builtin, args starlar
 		return nil, fmt.Errorf("search: %w", err)
 	}
 
-	var path string
-	if p, errPath := t.attrs.Attr("path"); errPath == nil && p != nil {
-		path, _ = starlark.AsString(p)
-	}
-
+	path, _ := starlark.AsString(t.attrs["path"])
 	n := 0
 
-	if start, errStart := t.attrs.Attr("start_line"); errStart == nil && start != nil {
-		if first, errInt := starlark.AsInt32(start); errInt == nil {
-			n = first - 1
-		}
+	if start, ok := t.attrs["start_line"].(starlark.Int); ok {
+		first, _ := start.Int64()
+		n = int(first) - 1
 	}
 
 	var matches []starlark.Value
@@ -180,7 +144,6 @@ func (t *TextValue) search(_ *starlark.Thread, b *starlark.Builtin, args starlar
 
 var (
 	_ Result              = (*TextValue)(nil)
-	_ Text                = (*TextValue)(nil)
 	_ starlark.HasAttrs   = (*TextValue)(nil)
 	_ starlark.Sliceable  = (*TextValue)(nil)
 	_ starlark.HasBinary  = (*TextValue)(nil)

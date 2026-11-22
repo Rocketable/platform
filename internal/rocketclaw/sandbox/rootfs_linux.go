@@ -262,7 +262,13 @@ func extract(raw, dst string) (installed []string, release string, err error) {
 				return nil, "", fmt.Errorf("chmod %s: %w", name, err)
 			}
 		case tar.TypeReg:
-			if err := writeFile(root, name, tr, mode); err != nil {
+			w, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+			if err != nil {
+				return nil, "", fmt.Errorf("write %s: open: %w", name, err)
+			}
+
+			_, err = io.Copy(w, tr)
+			if err := errors.Join(err, w.Close(), root.Chmod(name, mode)); err != nil {
 				return nil, "", fmt.Errorf("write %s: %w", name, err)
 			}
 		case tar.TypeSymlink:
@@ -300,11 +306,7 @@ func guestFiles(root *os.Root) (installed []string, release string, err error) {
 		}
 
 		_, err = w.WriteString(f.line)
-		if errClose := w.Close(); err == nil {
-			err = errClose
-		}
-
-		if err != nil {
+		if err := errors.Join(err, w.Close()); err != nil {
 			return nil, "", fmt.Errorf("add the guest user to %s: %w", f.name, err)
 		}
 	}
@@ -331,28 +333,6 @@ func guestFiles(root *os.Root) (installed []string, release string, err error) {
 	}
 
 	return dpkgInstalled(status), release, nil
-}
-
-func writeFile(root *os.Root, name string, r io.Reader, mode fs.FileMode) error {
-	w, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return fmt.Errorf("open: %w", err)
-	}
-
-	_, err = io.Copy(w, r)
-	if errClose := w.Close(); err == nil {
-		err = errClose
-	}
-
-	if err != nil {
-		return fmt.Errorf("copy: %w", err)
-	}
-
-	if err := root.Chmod(name, mode); err != nil {
-		return fmt.Errorf("chmod: %w", err)
-	}
-
-	return nil
 }
 
 func dpkgInstalled(status []byte) []string {

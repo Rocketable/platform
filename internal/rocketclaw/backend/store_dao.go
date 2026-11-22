@@ -53,17 +53,10 @@ func (d stateDAO) stickyConversationID(ctx context.Context, agent, username stri
 
 	var id string
 
-	err := d.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE sticky = $1 AND agent = $2 AND ($1 = 'global' OR created_by = $3)`,
-		string(sticky), agent, username).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
+	_, err := scanFound("read sticky session", d.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE sticky = $1 AND agent = $2 AND ($1 = 'global' OR created_by = $3)`,
+		string(sticky), agent, username).Scan(&id))
 
-	if err != nil {
-		return "", fmt.Errorf("read sticky session: %w", err)
-	}
-
-	return id, nil
+	return id, err
 }
 
 func (d stateDAO) createConversation(ctx context.Context, conversation protocol.Conversation, facts conversationFacts, sticky harness.AgentSticky) (bool, error) {
@@ -241,17 +234,10 @@ SELECT r.target, t.agent FROM run r JOIN conversations t ON t.conversation_id = 
 func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error) {
 	var thread ThreadState
 
-	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by, COALESCE(parent_conversation_id, ''), CASE WHEN kind = 'slack_thread' THEN 'slack' WHEN sticky = 'off' THEN '' ELSE sticky END
-FROM conversations WHERE conversation_id = $1 AND retention = 'record'`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &thread.CreatedBy, &thread.parent, &thread.sticky)
-	if err == sql.ErrNoRows {
-		return ThreadState{}, false, nil
-	}
+	found, err := scanFound("read managed conversation", s.db.QueryRowContext(context.Background(), `SELECT agent, created_by, COALESCE(parent_conversation_id, ''), CASE WHEN kind = 'slack_thread' THEN 'slack' WHEN sticky = 'off' THEN '' ELSE sticky END
+FROM conversations WHERE conversation_id = $1 AND retention = 'record'`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &thread.CreatedBy, &thread.parent, &thread.sticky))
 
-	if err != nil {
-		return ThreadState{}, false, fmt.Errorf("read managed conversation: %w", err)
-	}
-
-	return thread, true, nil
+	return thread, found, err
 }
 
 func (s *SessionService) StickySessions(ctx context.Context, username string, agents harness.Agents) (map[string]string, error) {
@@ -296,16 +282,9 @@ type VoiceSettings struct {
 func (s *SessionService) VoiceSettings(ctx context.Context, username string) (VoiceSettings, error) {
 	var settings VoiceSettings
 
-	err := s.db.QueryRowContext(ctx, `SELECT agent, voice, transcript FROM voice_settings WHERE username = $1`, username).Scan(&settings.Agent, &settings.Voice, &settings.Transcript)
-	if errors.Is(err, sql.ErrNoRows) {
-		return VoiceSettings{}, nil
-	}
+	_, err := scanFound("read voice settings", s.db.QueryRowContext(ctx, `SELECT agent, voice, transcript FROM voice_settings WHERE username = $1`, username).Scan(&settings.Agent, &settings.Voice, &settings.Transcript))
 
-	if err != nil {
-		return VoiceSettings{}, fmt.Errorf("read voice settings: %w", err)
-	}
-
-	return settings, nil
+	return settings, err
 }
 
 func (s *SessionService) UpdateVoiceSettings(ctx context.Context, username string, agent, voice *string, transcript *bool) error {
@@ -321,13 +300,9 @@ func (s *SessionService) behaviorSettings(ctx context.Context) (config.Behavior,
 		document []byte
 	)
 
-	err := s.db.QueryRowContext(ctx, `SELECT document FROM behavior_settings`).Scan(&document)
-	if errors.Is(err, sql.ErrNoRows) {
-		return config.Behavior{}, false, nil
-	}
-
-	if err != nil {
-		return config.Behavior{}, false, fmt.Errorf("read behavior settings: %w", err)
+	found, err := scanFound("read behavior settings", s.db.QueryRowContext(ctx, `SELECT document FROM behavior_settings`).Scan(&document))
+	if err != nil || !found {
+		return config.Behavior{}, false, err
 	}
 
 	if err := json.Unmarshal(document, &behavior); err != nil {
@@ -432,21 +407,14 @@ func (l SpaceLimit) AllowsSession(session *SidebarSession) bool {
 func (s *SessionService) TopLevelSession(ctx context.Context, conversationID string) (SidebarSession, error) {
 	var session SidebarSession
 
-	err := s.db.QueryRowContext(ctx, `WITH RECURSIVE starts AS (
+	_, err := scanFound("read top-level session", s.db.QueryRowContext(ctx, `WITH RECURSIVE starts AS (
     SELECT $1::text AS id
 ), `+ancestorsSQL+`, top AS (
     SELECT conversation_id FROM ancestors ORDER BY depth DESC LIMIT 1
 )
-SELECT COALESCE(c.space_id, ''), c.agent, c.kind FROM top JOIN conversations c USING (conversation_id)`, conversationID).Scan(&session.SpaceID, &session.Conversation.Agent, &session.Kind)
-	if errors.Is(err, sql.ErrNoRows) {
-		return SidebarSession{}, nil
-	}
+SELECT COALESCE(c.space_id, ''), c.agent, c.kind FROM top JOIN conversations c USING (conversation_id)`, conversationID).Scan(&session.SpaceID, &session.Conversation.Agent, &session.Kind))
 
-	if err != nil {
-		return SidebarSession{}, fmt.Errorf("read top-level session: %w", err)
-	}
-
-	return session, nil
+	return session, err
 }
 
 func (s *SessionService) CreateSpace(ctx context.Context, name string) error {
@@ -579,13 +547,9 @@ func (s *SessionService) TabState(ctx context.Context, username string) (TabStat
 		revision    int64
 	)
 
-	err = tx.QueryRowContext(ctx, `SELECT space, last, shared_order, revision FROM web_tab_states WHERE username = $1`, username).Scan(&state.Space, &last, &order, &revision)
-	if errors.Is(err, sql.ErrNoRows) {
-		return TabState{}, 0, nil
-	}
-
-	if err != nil {
-		return TabState{}, 0, fmt.Errorf("read tab state: %w", err)
+	found, err := scanFound("read tab state", tx.QueryRowContext(ctx, `SELECT space, last, shared_order, revision FROM web_tab_states WHERE username = $1`, username).Scan(&state.Space, &last, &order, &revision))
+	if err != nil || !found {
+		return TabState{}, 0, err
 	}
 
 	if err := json.Unmarshal(last, &state.Last); err != nil {
@@ -750,11 +714,7 @@ SELECT $1, id, n - 1, name, color, collapsed FROM unnest($2::text[], $3::text[],
 		return false, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit tab state: %w", err)
-	}
-
-	return true, nil
+	return true, commitState(tx, "tab state")
 }
 
 func (s *SessionService) ClosedTabs(ctx context.Context, username string) ([]Tab, error) {
@@ -819,11 +779,7 @@ SELECT count(*) FROM edited`, space, path, search, base).Scan(&edited); err != n
 		return false, fmt.Errorf("edit shared search: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit shared search edit: %w", err)
-	}
-
-	return edited > 0, nil
+	return edited > 0, commitState(tx, "shared search edit")
 }
 
 func (s *SessionService) UnshareTab(ctx context.Context, space, path string) (*SearchPage, error) {
@@ -848,11 +804,7 @@ WHERE t.space = $1 AND t.path = $2 GROUP BY t.space, t.path, p.id`, space, path)
 		return nil, fmt.Errorf("unshare tab: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit unshare tab: %w", err)
-	}
-
-	return page, nil
+	return page, commitState(tx, "unshare tab")
 }
 
 type StripLayout struct {
@@ -892,28 +844,16 @@ func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (b
 
 func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID string) (ExternalMCPSessionState, bool, error) {
 	_, session, err := (externalMCPSessionScanner{}).scan(d.db.QueryRowContext(ctx, externalMCPSessionSQL+` AND external_id = $1`, strings.TrimSpace(externalConversationID)))
-	if errors.Is(err, sql.ErrNoRows) {
-		return ExternalMCPSessionState{}, false, nil
-	}
+	found, err := scanFound("read external MCP session", err)
 
-	if err != nil {
-		return ExternalMCPSessionState{}, false, fmt.Errorf("read external MCP session: %w", err)
-	}
-
-	return session, true, nil
+	return session, found, err
 }
 
 func (s *SessionService) ExternalMCPSessionByConversationID(conversationID string) (externalConversationID string, session ExternalMCPSessionState, ok bool, err error) {
 	externalConversationID, session, err = (externalMCPSessionScanner{}).scan(s.db.QueryRowContext(context.Background(), externalMCPSessionSQL+` AND (external_run = $1 OR conversation_id = $1)`, strings.TrimSpace(conversationID)))
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", ExternalMCPSessionState{}, false, nil
-	}
+	ok, err = scanFound("read external MCP session by conversation ID", err)
 
-	if err != nil {
-		return "", ExternalMCPSessionState{}, false, fmt.Errorf("read external MCP session by conversation ID: %w", err)
-	}
-
-	return externalConversationID, session, true, nil
+	return externalConversationID, session, ok, err
 }
 
 const externalMCPSessionSQL = `SELECT external_id, external_agent, COALESCE(external_run, ''), conversation_id, origin_pairs
@@ -954,14 +894,10 @@ func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, b
 		createdAt, updatedAt int64
 	)
 
-	err := d.db.QueryRowContext(ctx, `SELECT goal_objective, goal_max_turns, goal_turns_used, goal_status, goal_note, goal_created_at_unix_ns, goal_updated_at_unix_ns, goal_principal_name, goal_principal_email, goal_origin
-FROM conversations WHERE conversation_id = $1 AND goal_objective IS NOT NULL`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &createdAt, &updatedAt, &goal.PrincipalName, &goal.PrincipalEmail, &goal.Origin)
-	if errors.Is(err, sql.ErrNoRows) {
-		return GoalState{}, false, nil
-	}
-
-	if err != nil {
-		return GoalState{}, false, fmt.Errorf("read goal: %w", fmt.Errorf("scan goal: %w", err))
+	found, err := scanFound("read goal", d.db.QueryRowContext(ctx, `SELECT goal_objective, goal_max_turns, goal_turns_used, goal_status, goal_note, goal_created_at_unix_ns, goal_updated_at_unix_ns, goal_principal_name, goal_principal_email, goal_origin
+FROM conversations WHERE conversation_id = $1 AND goal_objective IS NOT NULL`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &createdAt, &updatedAt, &goal.PrincipalName, &goal.PrincipalEmail, &goal.Origin))
+	if err != nil || !found {
+		return GoalState{}, false, err
 	}
 
 	goal.CreatedAt = timeFromUnixNano(createdAt)
@@ -1076,11 +1012,9 @@ SELECT COALESCE(s.conversation_id, '') FROM gone LEFT JOIN settled s ON TRUE`, "
 
 func (d stateDAO) claimThreadQueueItem(ctx context.Context, conversationID, id string) (protocol.ThreadQueueItem, bool, error) {
 	item, err := scanThreadQueueItem(d.db.QueryRowContext(ctx, `DELETE FROM turns WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting' AND reason = $3 RETURNING `+waitingColumns, conversationID, id, waitQueued))
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return item, false, fmt.Errorf("claim thread queue item: %w", err)
-	}
+	found, err := scanFound("claim thread queue item", err)
 
-	return item, err == nil, nil
+	return item, found, err
 }
 
 func scanThreadQueueItem(scanner rowScanner) (protocol.ThreadQueueItem, error) {
@@ -1159,16 +1093,9 @@ type conversationJournal struct {
 }
 
 func (s *SessionService) LoadTurnStep(ctx context.Context, conversationID, key string) (value json.RawMessage, found bool, err error) {
-	err = queryScalar(ctx, s.db, "load turn step", `SELECT value FROM steps WHERE conversation_id = $1 AND key = $2`, &value, conversationID, key)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false, nil
-	}
+	found, err = scanFound("load turn step", s.db.QueryRowContext(ctx, `SELECT value FROM steps WHERE conversation_id = $1 AND key = $2`, conversationID, key).Scan(&value))
 
-	if err != nil {
-		return nil, false, err
-	}
-
-	return value, true, nil
+	return value, found, err
 }
 
 func (s *SessionService) SaveTurnStep(ctx context.Context, conversationID, key string, value json.RawMessage) error {
@@ -1370,13 +1297,9 @@ func (s *SessionService) headTurn(ctx context.Context, workerID string) (activeT
 		inbound, outbound []byte
 	)
 
-	err := s.db.QueryRowContext(ctx, laneTurnSQL+` LIMIT 1`, workerID).Scan(&turn.id, &turn.conversationID, &turn.phase, &inbound, &outbound)
-	if errors.Is(err, sql.ErrNoRows) {
-		return activeTurn{}, false, nil
-	}
-
-	if err != nil {
-		return activeTurn{}, false, fmt.Errorf("load active turn: %w", err)
+	found, err := scanFound("load active turn", s.db.QueryRowContext(ctx, laneTurnSQL+` LIMIT 1`, workerID).Scan(&turn.id, &turn.conversationID, &turn.phase, &inbound, &outbound))
+	if err != nil || !found {
+		return activeTurn{}, false, err
 	}
 
 	if err := json.Unmarshal(inbound, &turn.inbound); err != nil {
@@ -1398,11 +1321,10 @@ func (s *SessionService) headTurn(ctx context.Context, workerID string) (activeT
 
 func (s *SessionService) HasActiveTurn(ctx context.Context, conversationID string) (bool, error) {
 	var active bool
-	if err := queryScalar(ctx, s.db, "check active turn", `SELECT count(*) > 0 FROM turns WHERE conversation_id = $1 AND phase NOT IN ('waiting', 'done') AND takes_lane`, &active, conversationID); err != nil {
-		return false, err
-	}
 
-	return active, nil
+	err := queryScalar(ctx, s.db, "check active turn", `SELECT count(*) > 0 FROM turns WHERE conversation_id = $1 AND phase NOT IN ('waiting', 'done') AND takes_lane`, &active, conversationID)
+
+	return active, err
 }
 
 func (s *SessionService) TurnProgress(ctx context.Context, turnID string) (protocol.TurnProgress, error) {
@@ -1690,11 +1612,7 @@ SELECT 1`, channel, turnID, protocol.TerminalComplete, thread.ID, respondInThrea
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit turn move: %w", err)
-	}
-
-	return nil
+	return commitState(tx, "turn move")
 }
 
 func (s *SessionService) markTurnEnd(ctx context.Context, tx *sql.Tx, turnID string, finish *turnFinish) error {
@@ -1811,13 +1729,9 @@ func (f *turnFinish) applyEffects(ctx context.Context, tx stateStoreDB, turnID s
 
 	var raw json.RawMessage
 
-	err := tx.QueryRowContext(ctx, `SELECT value FROM steps WHERE conversation_id = $1 AND key = $2`, f.conversationID, turnID+producerEffectsStep).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("load producer effects: %w", err)
+	found, err := scanFound("load producer effects", tx.QueryRowContext(ctx, `SELECT value FROM steps WHERE conversation_id = $1 AND key = $2`, f.conversationID, turnID+producerEffectsStep).Scan(&raw))
+	if err != nil || !found {
+		return err
 	}
 
 	var effects []producerEffect
@@ -2052,11 +1966,7 @@ WHERE conversation_id = $1 AND input_id = $2 AND NOT takes_lane AND runner_id = 
 		return false, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit background job finish: %w", err)
-	}
-
-	return true, nil
+	return true, commitState(tx, "background job finish")
 }
 
 func (s *SessionService) restampBackgroundJob(ctx context.Context, job *backgroundJob, runnerID string) (bool, error) {
@@ -2073,11 +1983,9 @@ SELECT `+backgroundJobColumns+` FROM notes j LEFT JOIN conversations c USING (co
 func (s *SessionService) backgroundWake(ctx context.Context, conversationID string) (backgroundJob, bool, error) {
 	job, err := scanBackgroundJob(s.db.QueryRowContext(ctx, `SELECT `+backgroundJobColumns+` FROM turns j LEFT JOIN conversations c USING (conversation_id)
 WHERE j.conversation_id = $1 AND j.note = $2 AND j.wake AND j.claimed_by = '' ORDER BY GREATEST(j.run_at_unix_ns, $3), j.updated_at_unix_ns, j.input_id LIMIT 1`, conversationID, notePending, timeUnixNano(time.Now())))
-	if errors.Is(err, sql.ErrNoRows) {
-		return backgroundJob{}, false, nil
-	}
+	found, err := scanFound("read background wake", err)
 
-	return job, err == nil, err
+	return job, found, err
 }
 
 func (s *SessionService) notedBackgroundJobs(ctx context.Context, conversationID string, jobIDs []string) ([]backgroundJob, error) {

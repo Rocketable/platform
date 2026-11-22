@@ -353,8 +353,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	if err := c.validatePostHog(); err != nil {
-		return err
+	c.PostHog.Host = strings.TrimRight(cmp.Or(c.PostHog.Host, "https://us.i.posthog.com"), "/")
+	if c.PostHog.ProjectToken != "" && !strings.HasPrefix(c.PostHog.ProjectToken, "phc_") {
+		return errors.New("posthog.project_token must be a public project token (phc_...), never a personal API key")
 	}
 
 	if c.MCPExternal.Enabled && strings.TrimSpace(c.MCPExternal.ListenAddr) == "" {
@@ -576,15 +577,6 @@ func (c *Config) validateDecision() error {
 
 	if decision.MinConfidence < 0 || decision.MinConfidence > 1 {
 		return errors.New("auto_approver_decision.min_confidence must be between 0 and 1")
-	}
-
-	return nil
-}
-
-func (c *Config) validatePostHog() error {
-	c.PostHog.Host = strings.TrimRight(cmp.Or(c.PostHog.Host, "https://us.i.posthog.com"), "/")
-	if c.PostHog.ProjectToken != "" && !strings.HasPrefix(c.PostHog.ProjectToken, "phc_") {
-		return errors.New("posthog.project_token must be a public project token (phc_...), never a personal API key")
 	}
 
 	return nil

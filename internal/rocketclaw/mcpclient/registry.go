@@ -216,23 +216,16 @@ func (s *Session) connect(ctx context.Context, name string) (*mcp.ClientSession,
 
 func childEnv(overrides map[string]string) []string {
 	allow := []string{"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TMP", "TEMP", "USER", "LOGNAME", "SHELL"}
-	parent := os.Environ()
 	out := make([]string, 0, len(allow)+len(overrides))
 
 	for _, key := range allow {
-		if val, ok := overrides[key]; ok {
-			out = append(out, key+"="+val)
-
-			continue
+		val, ok := overrides[key]
+		if !ok {
+			val, ok = os.LookupEnv(key)
 		}
 
-		prefix := key + "="
-		for _, entry := range slices.Backward(parent) {
-			if strings.HasPrefix(entry, prefix) {
-				out = append(out, entry)
-
-				break
-			}
+		if ok {
+			out = append(out, key+"="+val)
 		}
 	}
 
@@ -249,23 +242,17 @@ func childEnv(overrides map[string]string) []string {
 
 func resolveCwd(workspace, cwd string) (string, error) {
 	ws := filepath.Clean(workspace)
-	if cwd == "" {
-		return ws, nil
+
+	abs := cwd
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(ws, cwd)
 	}
 
-	var abs string
-	if filepath.IsAbs(cwd) {
-		abs = filepath.Clean(cwd)
-	} else {
-		abs = filepath.Clean(filepath.Join(ws, cwd))
-	}
-
-	sep := string(filepath.Separator)
-	if abs != ws && !strings.HasPrefix(abs, ws+sep) {
+	if rel, err := filepath.Rel(ws, abs); err != nil || !filepath.IsLocal(rel) {
 		return "", fmt.Errorf("cwd %q escapes workspace", cwd)
 	}
 
-	return abs, nil
+	return filepath.Clean(abs), nil
 }
 
 func sameHostRedirects(req *http.Request, via []*http.Request) error {

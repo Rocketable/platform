@@ -123,7 +123,7 @@ func TestWebFetchRefusesNonTextContent(t *testing.T) {
 			got, err := webFetch(t.Context(), http.DefaultClient, testWebFetchParams(server.URL+"/doc", "markdown"))
 			require.NoError(t, err)
 
-			page := got.Data.(*webFetchResult).page
+			page := got.Data.(webFetchPage)
 			require.Equal(t, []any{cmp.Or(tt.wantErr, tt.body), tt.wantErr, tt.contentType, server.URL + "/doc", http.StatusOK}, []any{got.Output, page.Error, page.ContentType, page.URL, page.Status})
 
 			if tt.wantErr == "" {
@@ -166,7 +166,7 @@ func TestWebFetchStripsFragment(t *testing.T) {
 	got, err := tool.Call(t.Context(), json.RawMessage(`{"url":"`+server.URL+`/page?q=1#section"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
 	require.Equal(t, []string{"/page?q=1"}, requested)
-	require.Equal(t, server.URL+"/page?q=1", got.Data.(*webFetchResult).page.URL)
+	require.Equal(t, server.URL+"/page?q=1", got.Data.(webFetchPage).URL)
 }
 
 func TestWebFetchChecksEveryRedirectAgainstDenyRules(t *testing.T) {
@@ -216,7 +216,7 @@ webfetch:
 		got, err := webFetch(ctx, http.DefaultClient, testWebFetchParams(allowed.URL+path, "text"))
 		require.NoError(t, err)
 
-		return got.Data.(*webFetchResult).page
+		return got.Data.(webFetchPage)
 	}
 
 	page := fetch("/to-denied")
@@ -270,7 +270,7 @@ func TestWebFetchChallengeRetry(t *testing.T) {
 			require.NoError(t, err)
 
 			if tt.status == http.StatusForbidden {
-				require.Equal(t, []any{"HTTP 403", "retried content"}, []any{got.Output, got.Data.(*webFetchResult).page.Output})
+				require.Equal(t, []any{"HTTP 403", "retried content"}, []any{got.Output, got.Data.(webFetchPage).Output})
 			} else {
 				require.Equal(t, "retried content", got.Output)
 			}
@@ -290,7 +290,7 @@ func TestWebFetchAcceptsLargeBodies(t *testing.T) {
 	got, err := webFetch(t.Context(), http.DefaultClient, testWebFetchParams(server.URL, "text"))
 	require.NoError(t, err)
 	require.Len(t, got.Output, len(body))
-	require.Equal(t, body, got.Data.(*webFetchResult).page.Output)
+	require.Equal(t, body, got.Data.(webFetchPage).Output)
 }
 
 func TestWebFetchTimeout(t *testing.T) {
@@ -347,7 +347,9 @@ func TestWebFetchResultInExecute(t *testing.T) {
 				return nil, err
 			}
 
-			return result.Data.(*webFetchResult), nil
+			page := result.Data.(webFetchPage)
+
+			return webFetchValue(&page), nil
 		},
 	}}
 
@@ -418,7 +420,7 @@ func TestWebFetchReplaysFromJournal(t *testing.T) {
 		replayed, err := recordHostCall(ctx, "webfetch", args, false, toolHostCall{name: "webfetch", tool: &tool, output: nil})
 		require.NoError(t, err)
 
-		page := first.Data.(*webFetchResult).page
+		page := first.Data.(webFetchPage)
 		require.Equal(t, []any{"page", want, server.URL + path}, []any{page.Output, page.Error, page.URL})
 		require.Equal(t, first, replayed)
 	}
@@ -460,7 +462,7 @@ func TestEasyWebFetchNetworkTargets(t *testing.T) {
 		_, hosts := factory.assembleTools(agent)
 
 		got, err := hosts["webfetch"].Call(ctx, json.RawMessage(`{"url":"`+url+`"}`), nil, toolCallMetadata{})
-		if err == nil && got.Data.(*webFetchResult).page.Error != "" {
+		if err == nil && got.Data.(webFetchPage).Error != "" {
 			err = errors.New(got.Output)
 		}
 
@@ -541,7 +543,7 @@ func TestWebFetchMetadata(t *testing.T) {
 	got, err := webFetch(ctx, http.DefaultClient, testWebFetchParams(server.URL+"/start", "text"))
 	require.NoError(t, err)
 
-	page := got.Data.(*webFetchResult).page
+	page := got.Data.(webFetchPage)
 	require.LessOrEqual(t, page.TimingMS.FirstByte, page.TimingMS.Total)
 	require.Equal(t, []any{"final", "", server.URL + "/final?x=1", http.StatusOK, "OK", "text/plain"}, []any{page.Output, page.Error, page.URL, page.Status, page.StatusText, page.ContentType})
 	require.Equal(t, []string{"<redacted>", "one, two", "5"}, []string{page.Headers["set-cookie"], page.Headers["x-trace"], page.Headers["content-length"]})

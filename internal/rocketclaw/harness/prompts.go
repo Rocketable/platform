@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"os"
@@ -26,24 +25,9 @@ type promptExpansionEnvironment struct {
 }
 
 func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env []string, rt *sandbox.Runtime) (promptExpansionEnvironment, error) {
-	var zero promptExpansionEnvironment
-
-	if root == nil {
-		return zero, errors.New("prompt expansion root is required")
-	}
-
-	rootName := root.Name()
-	if rootName == "" {
-		return zero, errors.New("prompt expansion root name is required")
-	}
-
-	if _, err := root.Stat("."); err != nil {
-		return zero, fmt.Errorf("stat prompt expansion root: %w", err)
-	}
-
-	hostDir, err := filepath.Abs(rootName)
+	hostDir, err := filepath.Abs(root.Name())
 	if err != nil {
-		return zero, fmt.Errorf("resolve prompt expansion root: %w", err)
+		return promptExpansionEnvironment{}, fmt.Errorf("resolve prompt expansion root: %w", err)
 	}
 
 	return promptExpansionEnvironment{root: root, hostDir: hostDir, shellTemp: shellTemp, env: slices.Clone(env), sandbox: rt}, nil

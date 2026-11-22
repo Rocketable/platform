@@ -325,10 +325,6 @@ func removeWorkspaceRuntimeScriptSymlinksIfPresent(workspace string, logger *slo
 			return nil
 		}
 
-		if _, err := os.Readlink(path); err != nil {
-			return fmt.Errorf("read workspace script symlink %s: %w", path, err)
-		}
-
 		if !isRuntimeScriptSymlink(workspace, path) {
 			return nil
 		}

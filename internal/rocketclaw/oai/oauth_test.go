@@ -1074,7 +1074,7 @@ func TestCodexStreamingResponseObservesEventsAsTheyArrive(t *testing.T) {
 func TestStripInputIDsRemovesIDsWhenStoreFalse(t *testing.T) {
 	req := requestWithBody(`{"store":false,"context_management":[{"type":"compaction"}],"max_output_tokens":100,"input":[{"id":"item-1","type":"message"},{"id":"item-2","type":"function_call"},{"content":"summary","encrypted_content":"sealed","id":"cmp-1","recent":[{"id":"msg-1"}],"summary":{"text":"summary"},"type":"compaction"}]}`)
 
-	_, err := cleanCodexRequest(req)
+	_, _, err := cleanCodexRequest(req)
 	require.NoError(t, err)
 
 	data, err := io.ReadAll(req.Body)
@@ -1101,7 +1101,7 @@ func TestStripInputIDsRemovesIDsWhenStoreFalse(t *testing.T) {
 func TestCleanCodexRequestSendsTextInputAsAMessageList(t *testing.T) {
 	req := requestWithBody(`{"model":"gpt-6-luna","instructions":"Name it.","input":"hello","store":false}`)
 
-	_, err := cleanCodexRequest(req)
+	_, _, err := cleanCodexRequest(req)
 	require.NoError(t, err)
 
 	var body struct {
@@ -1131,7 +1131,7 @@ func TestCleanCodexRequestPreservesUntouchedBodies(t *testing.T) {
 			req := requestWithBody(tt.body)
 			req.Header.Set("Content-Type", tt.contentType)
 
-			_, err := cleanCodexRequest(req)
+			_, _, err := cleanCodexRequest(req)
 			require.NoError(t, err)
 			data, err := io.ReadAll(req.Body)
 			require.NoError(t, err)
@@ -1145,7 +1145,7 @@ func TestCleanCodexRequestReportsBodyReadError(t *testing.T) {
 	req := requestWithBody("")
 	req.Body = io.NopCloser(iotest.ErrReader(errRead))
 
-	threshold, err := cleanCodexRequest(req)
+	_, threshold, err := cleanCodexRequest(req)
 	require.Nil(t, threshold)
 	require.ErrorIs(t, err, errRead)
 	require.ErrorContains(t, err, "read OpenAI request body")
@@ -1154,7 +1154,7 @@ func TestCleanCodexRequestReportsBodyReadError(t *testing.T) {
 func TestCleanCodexRequestSkipsNonObjectMetadataAndInputItems(t *testing.T) {
 	req := requestWithBody(`{"store":false,"context_management":["skip",{"compact_threshold":"many"}],"input":["skip",{"id":"item-1","type":"message"},null,{"type":123,"id":"keep"},[1,2]]}`)
 
-	threshold, err := cleanCodexRequest(req)
+	_, threshold, err := cleanCodexRequest(req)
 	require.NoError(t, err)
 	require.Nil(t, threshold)
 
@@ -1177,7 +1177,7 @@ func TestCleanCodexRequestNoopsForNonPostOrNilBody(t *testing.T) {
 	req := requestWithBody(`{"input":[]}`)
 	req.Method = http.MethodGet
 
-	threshold, err := cleanCodexRequest(req)
+	_, threshold, err := cleanCodexRequest(req)
 	require.NoError(t, err)
 	require.Nil(t, threshold)
 
@@ -1188,7 +1188,7 @@ func TestCleanCodexRequestNoopsForNonPostOrNilBody(t *testing.T) {
 	req = requestWithBody(`{"input":[]}`)
 	req.Body = nil
 
-	threshold, err = cleanCodexRequest(req)
+	_, threshold, err = cleanCodexRequest(req)
 	require.NoError(t, err)
 	require.Nil(t, threshold)
 }
@@ -1197,7 +1197,7 @@ func TestCleanCodexRequestExtractsCompactionThreshold(t *testing.T) {
 	req := requestWithBody(`{"context_management":[{"type":"compaction","compact_threshold":12.5}],"input":[{"type":"message"}]}`)
 	req.GetBody = func() (io.ReadCloser, error) { return nil, errors.New("unprepared getter must be replaced") }
 
-	threshold, err := cleanCodexRequest(req)
+	_, threshold, err := cleanCodexRequest(req)
 	require.NoError(t, err)
 	require.NotNil(t, threshold)
 	require.InDelta(t, 12.5, *threshold, 0)
@@ -1229,7 +1229,7 @@ func TestCleanCodexRequestExtractsCompactionThreshold(t *testing.T) {
 		{name: "invalid later value", body: `{"context_management":[{"compact_threshold":12.5},{"compact_threshold":"many"}]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			threshold, err := cleanCodexRequest(requestWithBody(tc.body))
+			_, threshold, err := cleanCodexRequest(requestWithBody(tc.body))
 			require.NoError(t, err)
 			require.Equal(t, tc.want, threshold)
 		})
@@ -1239,7 +1239,7 @@ func TestCleanCodexRequestExtractsCompactionThreshold(t *testing.T) {
 func TestStripInputIDsKeepsIDsWhenStoreTrue(t *testing.T) {
 	req := requestWithBody(`{"store":true,"input":[{"id":"item-1","type":"message"}]}`)
 
-	_, err := cleanCodexRequest(req)
+	_, _, err := cleanCodexRequest(req)
 	require.NoError(t, err)
 
 	var body map[string]any
@@ -1680,7 +1680,7 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`)
-			threshold, err := cleanCodexRequest(req)
+			fields, threshold, err := cleanCodexRequest(req)
 			require.NoError(t, err)
 			require.NotNil(t, threshold)
 
@@ -1700,7 +1700,7 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 			transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), base: base}
 			resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(tt.responseBody), Header: make(http.Header)}
 
-			got, err := transport.codexCompaction(context.Background(), req, resp, threshold)
+			got, err := transport.codexCompaction(context.Background(), req, fields, resp, threshold)
 			require.Equal(t, sourceURL, *req.URL, "compaction must not change the source request URL")
 
 			if got != nil {

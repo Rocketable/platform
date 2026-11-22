@@ -161,11 +161,7 @@ func (r *Runtime) SaveBehavior(behavior *config.Behavior) error {
 			return fmt.Errorf("refresh cron jobs: %w", err)
 		}
 
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit behavior settings: %w", err)
-		}
-
-		return nil
+		return commitState(tx, "behavior settings")
 	}
 	setBehavior := func(behavior *config.Behavior) {
 		_ = r.Cfg.Do(func(cfg *config.Config) error {

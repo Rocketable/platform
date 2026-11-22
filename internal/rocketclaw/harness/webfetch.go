@@ -23,7 +23,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 	starjson "go.starlark.net/lib/json"
 	"go.starlark.net/starlark"
-	"go.starlark.net/syntax"
 )
 
 const (
@@ -89,120 +88,24 @@ type approvedRedirectContext struct{}
 
 type publicHopContext struct{}
 
-type webFetchResult struct {
-	page webFetchPage
-}
+func webFetchValue(fetched *webFetchPage) starlark.Value {
+	page := *fetched
+	page.Error = ""
+	data, _ := jsonv2.Marshal(page, jsonv2.Deterministic(true))
+	decoded, _ := starlark.Call(&starlark.Thread{Name: "webfetch"}, starjson.Module.Members["decode"], starlark.Tuple{starlark.String(data)}, nil)
+	decoded.Freeze()
 
-func (w *webFetchResult) String() string       { return w.page.Output }
-func (w *webFetchResult) Text() string         { return w.page.Output }
-func (w *webFetchResult) Type() string         { return "webfetch_result" }
-func (w *webFetchResult) Freeze()              {}
-func (w *webFetchResult) Truth() starlark.Bool { return w.page.Output != "" }
-func (w *webFetchResult) Ok() bool             { return true }
-
-func (w *webFetchResult) Len() int                   { return len(w.page.Output) }
-func (w *webFetchResult) Index(i int) starlark.Value { return codemode.TextIndex(w, i) }
-func (w *webFetchResult) Slice(start, end, step int) starlark.Value {
-	return codemode.TextSlice(w, start, end, step)
-}
-
-func (w *webFetchResult) Binary(op syntax.Token, y starlark.Value, side starlark.Side) (starlark.Value, error) {
-	z, err := codemode.TextBinary(w, op, y, side)
-	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+	fields := starlark.StringDict{}
+	for _, item := range decoded.(*starlark.Dict).Items() {
+		fields[string(item[0].(starlark.String))] = item[1]
 	}
 
-	return z, nil
-}
-
-func (w *webFetchResult) Hash() (uint32, error) {
-	hash, _ := starlark.String(w.page.Output).Hash()
-
-	return hash, nil
-}
-
-func (w *webFetchResult) Failure() *codemode.Error {
-	if w.page.Error == "" {
-		return nil
+	if fetched.Error != "" {
+		return codemode.NewFailure("webfetch", fetched.Error, fields)
 	}
 
-	details := starlark.StringDict{}
-	for _, name := range webFetchFields() {
-		details[name], _ = w.Attr(name)
-	}
-
-	return codemode.NewFailure("webfetch", w.page.Error, details)
+	return codemode.NewText("webfetch_result", page.Output, fields, data)
 }
-
-func (w *webFetchResult) MarshalJSON() ([]byte, error) {
-	encoded, err := jsonv2.Marshal(w.page, jsonv2.Deterministic(true))
-	if err != nil {
-		return nil, fmt.Errorf("encode webfetch_result: %w", err)
-	}
-
-	return encoded, nil
-}
-
-func webFetchFields() []string {
-	return []string{"content_type", "headers", "output", "redirects", "request", "status", "status_text", "timing_ms", "url"}
-}
-
-func (w *webFetchResult) Attr(name string) (starlark.Value, error) {
-	if v, ok := codemode.ResultAttr(w, nil, name); ok {
-		return v, nil
-	}
-
-	switch name {
-	case "url":
-		return starlark.String(w.page.URL), nil
-	case "status":
-		return starlark.MakeInt(w.page.Status), nil
-	case "status_text":
-		return starlark.String(w.page.StatusText), nil
-	case "content_type":
-		return starlark.String(w.page.ContentType), nil
-	case "output":
-		return starlark.String(w.page.Output), nil
-	case "headers":
-		return webFetchValue(w.page.Headers)
-	case "redirects":
-		return webFetchValue(w.page.Redirects)
-	case "request":
-		return webFetchValue(w.page.Request)
-	case "timing_ms":
-		return webFetchValue(w.page.TimingMS)
-	}
-
-	method, _ := starlark.String(w.page.Output).Attr(name)
-
-	return method, nil
-}
-
-func webFetchValue(field any) (starlark.Value, error) {
-	encoded, err := jsonv2.Marshal(field, jsonv2.Deterministic(true))
-	if err != nil {
-		return nil, fmt.Errorf("encode webfetch_result field: %w", err)
-	}
-
-	value, err := starlark.Call(&starlark.Thread{Name: "webfetch"}, starjson.Module.Members["decode"], starlark.Tuple{starlark.String(encoded)}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("decode webfetch_result field: %w", err)
-	}
-
-	return value, nil
-}
-
-func (w *webFetchResult) AttrNames() []string {
-	return codemode.ResultAttrNames(append(webFetchFields(), starlark.String("").AttrNames()...)...)
-}
-
-var (
-	_ codemode.Result    = (*webFetchResult)(nil)
-	_ codemode.Text      = (*webFetchResult)(nil)
-	_ starlark.HasAttrs  = (*webFetchResult)(nil)
-	_ starlark.Sliceable = (*webFetchResult)(nil)
-	_ starlark.HasBinary = (*webFetchResult)(nil)
-)
 
 func webFetch(ctx context.Context, client *http.Client, params webFetchToolParams) (ToolResult, error) {
 	rawURL, _, _ := strings.Cut(params.URL, "#")
@@ -214,10 +117,7 @@ func webFetch(ctx context.Context, client *http.Client, params webFetchToolParam
 		return ToolResult{}, errors.New("URL must not include credentials")
 	}
 
-	format := params.Format
-	if format == "" {
-		format = "markdown"
-	}
+	format := cmp.Or(params.Format, "markdown")
 
 	if format != "markdown" && format != "text" && format != "html" {
 		return ToolResult{}, fmt.Errorf("unsupported format %q", params.Format)
@@ -238,9 +138,8 @@ func webFetch(ctx context.Context, client *http.Client, params webFetchToolParam
 
 	finish := func(failure string) (ToolResult, error) {
 		page.Error, page.TimingMS.Total = failure, time.Since(start).Milliseconds()
-		result := &webFetchResult{page: page}
 
-		return ToolResult{Output: cmp.Or(page.Error, page.Output), Data: result}, nil
+		return ToolResult{Output: cmp.Or(page.Error, page.Output), Data: page}, nil
 	}
 
 	target, hopCtx, honestUA := rawURL, ctx, false
@@ -486,16 +385,11 @@ func doWebFetchRequest(ctx context.Context, client *http.Client, rawURL, format 
 	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
-	switch format {
-	case "markdown":
-		req.Header.Set("Accept", "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1")
-	case "text":
-		req.Header.Set("Accept", "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1")
-	case "html":
-		req.Header.Set("Accept", "text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, text/markdown;q=0.7, */*;q=0.1")
-	default:
-		req.Header.Set("Accept", "*/*")
-	}
+	req.Header.Set("Accept", cmp.Or(map[string]string{
+		"markdown": "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1",
+		"text":     "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1",
+		"html":     "text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, text/markdown;q=0.7, */*;q=0.1",
+	}[format], "*/*"))
 
 	resp, err := client.Do(req)
 	if err != nil {

@@ -18,10 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var (
-	skillFrontmatterPattern = regexp.MustCompile(`\A---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|\z)`)
-	skillNamePattern        = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-)
+var skillNamePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 type Skill struct {
 	Name          string
@@ -175,13 +172,7 @@ func (s Skills) Available(agent *Agent) []Skill {
 }
 
 func skillAllowedForAgent(skill *Skill, agent *Agent) bool {
-	if agent == nil {
-		return false
-	}
-
-	decision := agent.Permission.evaluate("skill", skill.Name)
-
-	return decision.Action == permissionAllow
+	return agent.Permission.evaluate("skill", skill.Name).Action == permissionAllow
 }
 
 func (s Skills) withReadPermissions(root *os.Root, agents Agents) Agents {
@@ -393,7 +384,7 @@ func loadSkill(fsys fs.FS, filePath string) (Skill, error) {
 		return Skill{}, fmt.Errorf("%s: read skill: %w", filePath, err)
 	}
 
-	match := skillFrontmatterPattern.FindSubmatchIndex(data)
+	match := AgentFrontmatterPattern.FindSubmatchIndex(data)
 	if match == nil {
 		return Skill{}, fmt.Errorf("%s: missing YAML frontmatter", filePath)
 	}

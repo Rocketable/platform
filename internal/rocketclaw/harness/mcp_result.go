@@ -3,7 +3,6 @@ package harness
 import (
 	"cmp"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -12,16 +11,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	starjson "go.starlark.net/lib/json"
 	"go.starlark.net/starlark"
-	"go.starlark.net/syntax"
 )
 
-type mcpResult struct {
-	tool, text string
-	content    *starlark.List
-	structured starlark.Value
-}
-
-func newMCPResult(tool, text string, result *mcp.CallToolResult) (*mcpResult, error) {
+func newMCPResult(tool, text string, result *mcp.CallToolResult) (starlark.Value, error) {
 	content := make([]starlark.Value, 0, len(result.Content))
 	files := map[string]int{}
 	file := func(kind string, block int, data []byte, mimeType string) starlark.Value {
@@ -87,74 +79,8 @@ func newMCPResult(tool, text string, result *mcp.CallToolResult) (*mcpResult, er
 	list.Freeze()
 	structured.Freeze()
 
-	return &mcpResult{tool: tool, text: text, content: list, structured: structured}, nil
+	server, name, _ := strings.Cut(tool, ".")
+	attrs := starlark.StringDict{"server": starlark.String(server), "tool": starlark.String(name), "text": starlark.String(text), "content": list, "structured": structured}
+
+	return codemode.NewText("mcp_result", text, attrs, nil), nil
 }
-
-func (m *mcpResult) String() string       { return m.text }
-func (m *mcpResult) Text() string         { return m.text }
-func (m *mcpResult) Type() string         { return "mcp_result" }
-func (m *mcpResult) Freeze()              {}
-func (m *mcpResult) Truth() starlark.Bool { return m.text != "" || m.content.Len() > 0 }
-func (m *mcpResult) Ok() bool             { return true }
-
-func (m *mcpResult) Len() int                   { return len(m.text) }
-func (m *mcpResult) Index(i int) starlark.Value { return codemode.TextIndex(m, i) }
-func (m *mcpResult) Slice(start, end, step int) starlark.Value {
-	return codemode.TextSlice(m, start, end, step)
-}
-
-func (m *mcpResult) Binary(op syntax.Token, y starlark.Value, side starlark.Side) (starlark.Value, error) {
-	z, err := codemode.TextBinary(m, op, y, side)
-	if err != nil {
-		return nil, fmt.Errorf("%w", err)
-	}
-
-	return z, nil
-}
-
-func (m *mcpResult) Hash() (uint32, error) {
-	return 0, errors.New("unhashable type: mcp_result")
-}
-
-func (m *mcpResult) MarshalJSON() ([]byte, error) {
-	encoded, _ := codemode.NewText(m.text, codemode.PlainText{}).MarshalJSON()
-
-	return encoded, nil
-}
-
-func (m *mcpResult) Attr(name string) (starlark.Value, error) {
-	if v, ok := codemode.ResultAttr(m, nil, name); ok {
-		return v, nil
-	}
-
-	server, tool, _ := strings.Cut(m.tool, ".")
-
-	switch name {
-	case "server":
-		return starlark.String(server), nil
-	case "tool":
-		return starlark.String(tool), nil
-	case "text":
-		return starlark.String(m.text), nil
-	case "content":
-		return m.content, nil
-	case "structured":
-		return m.structured, nil
-	}
-
-	method, _ := starlark.String(m.text).Attr(name)
-
-	return method, nil
-}
-
-func (m *mcpResult) AttrNames() []string {
-	return codemode.ResultAttrNames(append(starlark.String("").AttrNames(), "content", "server", "structured", "text", "tool")...)
-}
-
-var (
-	_ codemode.Result    = (*mcpResult)(nil)
-	_ codemode.Text      = (*mcpResult)(nil)
-	_ starlark.HasAttrs  = (*mcpResult)(nil)
-	_ starlark.Sliceable = (*mcpResult)(nil)
-	_ starlark.HasBinary = (*mcpResult)(nil)
-)

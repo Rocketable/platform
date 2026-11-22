@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -136,11 +135,7 @@ func CronStem(path string) string {
 }
 
 func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage) error {
-	if err := rejectShadowMutation(ctx, r.Sessions.db, inbound.ConversationID); err != nil {
-		return err
-	}
-
-	bridge, err := r.threads.recordedBridge(ctx, inbound.ConversationID)
+	bridge, err := r.mutableBridge(ctx, inbound.ConversationID)
 	if err != nil {
 		return err
 	}
@@ -220,11 +215,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 }
 
 func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessage, goal protocol.GoalRequest) error {
-	if err := rejectShadowMutation(ctx, r.Sessions.db, inbound.ConversationID); err != nil {
-		return err
-	}
-
-	bridge, err := r.threads.recordedBridge(ctx, inbound.ConversationID)
+	bridge, err := r.mutableBridge(ctx, inbound.ConversationID)
 	if err != nil {
 		return err
 	}
@@ -308,11 +299,7 @@ func (r *Runtime) PromoteQueueItem(ctx context.Context, conversationID, id strin
 }
 
 func (r *Runtime) EditQueueItem(ctx context.Context, conversationID, id, text, principal, username string) (bool, error) {
-	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
-		return false, err
-	}
-
-	b, err := r.threads.recordedBridge(ctx, conversationID)
+	b, err := r.mutableBridge(ctx, conversationID)
 	if err != nil {
 		return false, err
 	}
@@ -345,11 +332,7 @@ func (r *Runtime) EditQueueItem(ctx context.Context, conversationID, id, text, p
 
 	item, err := scanThreadQueueItem(tx.QueryRowContext(ctx, `SELECT `+waitingColumns+` FROM turns
 WHERE conversation_id = $1 AND input_id = $2 AND phase = $3 AND reason <> $4 AND delivery IN ($5, $6) FOR UPDATE`, conversationID, id, turnWaiting, waitScheduled, protocol.InboundKindEnqueue, protocol.InboundKindHeld))
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-
-	if err != nil {
+	if found, err := scanFound("read queue item to edit", err); err != nil || !found {
 		return false, err
 	}
 
@@ -452,11 +435,7 @@ UPDATE turns t SET position = s.slot - 1 FROM slots s WHERE t.conversation_id = 
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit thread queue reorder: %w", err)
-	}
-
-	return nil
+	return commitState(tx, "thread queue reorder")
 }
 
 func (r *Runtime) StashQueueItem(ctx context.Context, conversationID string, item *protocol.ThreadQueueItem) error {
@@ -498,11 +477,7 @@ func (r *Runtime) StashQueueItem(ctx context.Context, conversationID string, ite
 }
 
 func (r *Runtime) MoveToBackground(ctx context.Context, conversationID string) (bool, error) {
-	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
-		return false, err
-	}
-
-	bridge, err := r.threads.recordedBridge(ctx, conversationID)
+	bridge, err := r.mutableBridge(ctx, conversationID)
 	if err != nil {
 		return false, err
 	}
@@ -554,6 +529,14 @@ func (r *Runtime) CompletionNotes(ctx context.Context, history string, jobIDs []
 	}
 
 	return notes, nil
+}
+
+func (r *Runtime) mutableBridge(ctx context.Context, conversationID string) (*Bridge, error) {
+	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
+		return nil, err
+	}
+
+	return r.threads.recordedBridge(ctx, conversationID)
 }
 
 func listedBackgroundJobs(jobs []backgroundJob, conversationID string) []protocol.BackgroundJob {

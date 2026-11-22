@@ -3,7 +3,6 @@ package harness
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -180,18 +179,6 @@ func (c *shellTempConfig) effectivePermissions(permissions PermissionSet) Permis
 	return PermissionSet{Buckets: buckets, Sudo: permissions.Sudo, Easy: permissions.Easy, skillRead: permissions.skillRead}
 }
 
-func interpolateAllAgentPermissions(agents map[string]Agent, env map[string]string) map[string]Agent {
-	prepared := make(map[string]Agent, len(agents))
-
-	for name := range agents {
-		agent := agents[name]
-		InterpolatePermissions(&agent, env)
-		prepared[name] = agent
-	}
-
-	return prepared
-}
-
 func NewWithModelResolver(
 	resolver ModelResolver,
 	configInput *Config,
@@ -200,23 +187,7 @@ func NewWithModelResolver(
 	skills Skills,
 	defaultAgent string,
 ) (*Runtime, error) {
-	if resolver == nil {
-		return nil, errors.New("resolver is required")
-	}
-
-	if configInput == nil {
-		return nil, errors.New("config is required")
-	}
-
 	config := *configInput
-
-	if root == nil {
-		return nil, errors.New("root is required")
-	}
-
-	if config.ShellTempDir == "" {
-		return nil, errors.New("shell temp dir is required")
-	}
 
 	shellEnv, err := shellEnvList(config.ShellEnv)
 	if err != nil {
@@ -237,31 +208,22 @@ func NewWithModelResolver(
 		return nil, fmt.Errorf("retained result dir %q must be a relative path inside the spill dir", config.RetainedResultDir)
 	}
 
-	if agents.Items == nil {
-		return nil, errors.New("agents are required")
-	}
-
 	if err := validateAutoPermissionReviewers(agents); err != nil {
 		return nil, err
-	}
-
-	if skills.Items == nil {
-		return nil, errors.New("skills are required")
-	}
-
-	if defaultAgent == "" {
-		return nil, errors.New("defaultAgent is required")
-	}
-
-	if config.ChildSessions == nil {
-		return nil, errors.New("child sessions are required")
 	}
 
 	if _, ok := agents.Items[defaultAgent]; !ok {
 		return nil, fmt.Errorf("missing required default agent %q", defaultAgent)
 	}
 
-	agents.Items = interpolateAllAgentPermissions(agents.Items, config.ShellEnv)
+	prepared := make(map[string]Agent, len(agents.Items))
+	for name := range agents.Items {
+		agent := agents.Items[name]
+		InterpolatePermissions(&agent, config.ShellEnv)
+		prepared[name] = agent
+	}
+
+	agents.Items = prepared
 
 	agents = skills.withReadPermissions(root, agents)
 

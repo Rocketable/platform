@@ -169,7 +169,7 @@ func allocatedBytes(t *testing.T, fn func()) uint64 {
 
 func TestValuesShareContent(t *testing.T) {
 	content := strings.Repeat("x", 8<<20)
-	text := NewText(content, PlainText{})
+	text := NewText("text", content, nil, nil)
 	file := NewFile(FileSpec{Name: "a.pdf", Mime: "application/pdf", Content: content})
 
 	for _, tc := range []struct {
@@ -306,26 +306,11 @@ func TestHostResult(t *testing.T) {
 }
 
 func TestTextValueAttrsExtension(t *testing.T) {
-	attrs := &textAttrsMock{
-		AttrFunc: func(name string) (starlark.Value, error) {
-			switch name {
-			case "path":
-				return starlark.String("/w/notes.txt"), nil
-			case "start_line":
-				return starlark.MakeInt(5), nil
-			case "broken":
-				return nil, errors.New("boom")
-			default:
-				return nil, nil
-			}
-		},
-		AttrNamesFunc: func() []string { return []string{"path", "start_line"} },
-	}
+	attrs := starlark.StringDict{"path": starlark.String("/w/notes.txt"), "start_line": starlark.MakeInt(5)}
 
-	runScriptCases(t, map[string]starlark.Value{"r": NewText("five\nsix\nseven", attrs)}, []scriptCase{
+	runScriptCases(t, map[string]starlark.Value{"r": NewText("text", "five\nsix\nseven", attrs, nil)}, []scriptCase{
 		{expression: `r().path`, want: "/w/notes.txt"},
 		{expression: `[str(m) for m in r().search("^s")]`, want: `["/w/notes.txt:6: six","/w/notes.txt:7: seven"]`},
 		{expression: `[n for n in dir(r()) if n in ["ok", "path", "start_line", "upper", "lines"]]`, want: `["lines","ok","path","start_line","upper"]`},
-		{expression: `r().broken`, wantErr: "text.broken: boom"},
 	})
 }

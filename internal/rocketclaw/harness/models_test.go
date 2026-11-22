@@ -58,12 +58,6 @@ func testResolverClient(t *testing.T, output string) (client *openai.Client, req
 	return &resolvedClient, requestBodies
 }
 
-func TestNewWithModelResolverRequiresResolverBeforeInitialization(t *testing.T) {
-	_, err := NewWithModelResolver(nil, nil, nil, Agents{}, Skills{}, "")
-
-	require.EqualError(t, err, "resolver is required")
-}
-
 func TestNewWithModelResolverRejectsEmptyRootModelWithoutResolving(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)

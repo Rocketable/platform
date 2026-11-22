@@ -131,10 +131,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 		return bashFailure(fmt.Sprintf("Invalid timeout_ms value: %d. timeout_ms must be a positive number.", params.TimeoutMillisecond))
 	}
 
-	timeoutMillisecond := params.TimeoutMillisecond
-	if timeoutMillisecond == 0 {
-		timeoutMillisecond = defaultShellTimeout
-	}
+	timeoutMillisecond := cmp.Or(params.TimeoutMillisecond, defaultShellTimeout)
 
 	dir := filepath.Clean(cmp.Or(customShell.Dir, sss.root.Name()))
 	folders := append([]string{dir}, customShell.ReadOnly...)

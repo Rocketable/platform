@@ -52,7 +52,7 @@ This is what the Go code must do for the model to match it.
    every function, lambda and comprehension. Rewrite nothing else. The operator stays the same; each operand is still
    evaluated once, left to right; the new calls add no effects.
 2. **`$unbox(v)`.** A failure (`codemode.IsFailure`, checked first; every failure is an `error` value) is returned
-   as it is (the `opaque` policy). A successful text-like value (`codemode.Text`) gives `starlark.String(v.Text())`;
+   as it is (the `opaque` policy). A successful text-like value (a `*codemode.TextValue`) gives its text as a `starlark.String`;
    a `dict_result` gives its dict, a `gather_result` its list; every other value is returned unchanged. It looks at
    the top level only: a list that holds texts is returned as it is. A failure never equals or is `in` anything that
    is not a failure, ordering against it raises, and `x in failure` raises. Two failures are `==` exactly when their

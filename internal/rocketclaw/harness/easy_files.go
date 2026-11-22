@@ -56,18 +56,21 @@ func (v *easyFiles) ApplyPatch(patchText string) (starlark.Value, error) {
 }
 
 func (v *easyFiles) Glob(ctx context.Context, pattern, path string) (starlark.Value, error) {
-	var matches []globMatch
+	var (
+		matches []globMatch
+		partial bool
+	)
 
 	if errText := v.search(path, func(sfs *sandboxedFileSystem, name string) string {
-		found, errText := sfs.globMatches(ctx, pattern, name)
-		matches = append(matches, found...)
+		found, skipped, errText := sfs.globMatches(ctx, pattern, name)
+		matches, partial = append(matches, found...), partial || skipped
 
 		return errText
 	}); errText != "" {
 		return nil, errors.New(errText)
 	}
 
-	return newGlobResult(matches, globToolParams{Pattern: pattern, Path: path}), nil
+	return newGlobResult(matches, partial, globToolParams{Pattern: pattern, Path: path}), nil
 }
 
 func (v *easyFiles) Grep(ctx context.Context, pattern, searchPath, include string) (starlark.Value, error) {

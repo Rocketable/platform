@@ -407,10 +407,7 @@ func renderPermissionReviewTranscript(lines []string, items []responses.Response
 				}
 			}
 
-			line.Role, line.Text = "reasoning summary", strings.Join(parts, "\n")
-			if line.Text == "" {
-				line.Text = "<encrypted reasoning omitted>"
-			}
+			line.Role, line.Text = "reasoning summary", cmp.Or(strings.Join(parts, "\n"), "<encrypted reasoning omitted>")
 		case item.OfCompaction != nil:
 			line.Role, line.Text = "compaction", CompactionCheckpointText(item.OfCompaction)
 		default:

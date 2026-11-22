@@ -701,7 +701,7 @@ func TestExecuteDeliversTheSameResultInForegroundAndBackground(t *testing.T) {
 	require.Equal(t, toolCallOutput("call-1", TextToolResult(`{"chart":{"error":"probe: File not found: chart.png","ok":false},"note":"done"}`)), failed, "an error inside a returned dict is data, not a failure")
 	require.Equal(t, PublicProgressCompleted, PublicProgressFromTrace(loop.observations.trace)[0].State)
 
-	failedBash := &bashStarlarkResult{output: "File not found: chart.png", errorCode: "1"}
+	failedBash := newBashStarlarkResult("File not found: chart.png", "1")
 
 	answer := func(t *testing.T, jobs BackgroundJobs, background string, inReview bool, code string, probe func(context.Context) (ToolResult, error)) (string, PublicProgressState, error) {
 		t.Helper()
@@ -726,7 +726,7 @@ func TestExecuteDeliversTheSameResultInForegroundAndBackground(t *testing.T) {
 		failed     bool
 	}{
 		{"success", returnProbe, func(context.Context) (ToolResult, error) {
-			return ToolResult{Data: &bashStarlarkResult{output: "ok"}}, nil
+			return ToolResult{Data: newBashStarlarkResult("ok", "")}, nil
 		}, "ok", false},
 		{"returned error", returnProbe, missing, "probe: File not found: chart.png", true},
 		{"returned failed bash_result", returnProbe, func(context.Context) (ToolResult, error) { return ToolResult{Data: failedBash}, nil }, "bash: exit status 1\nFile not found: chart.png", true},

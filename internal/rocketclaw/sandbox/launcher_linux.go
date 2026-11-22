@@ -112,27 +112,20 @@ func (rt *Runtime) run(ctx context.Context, cmd *Command, host Host) (Result, er
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
+	cg, err := newExecCgroup(filepath.Join(rt.p.cgroup, execID))
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() { _ = cg.remove() }()
+
 	ln, err := listenIn(filepath.Join(dir, "run"), "command.sock")
 	if err != nil {
 		return Result{}, fmt.Errorf("listen: %w", err)
 	}
 
-	cg, err := newExecCgroup(filepath.Join(rt.p.cgroup, execID))
-	if err != nil {
-		_ = ln.Close()
-		return Result{}, err
-	}
-	defer func() { _ = cg.remove() }()
-
-	rel, err := cgroupRelative(cg.path)
-	if err != nil {
-		_ = ln.Close()
-		return Result{}, err
-	}
-
 	b := &broker{
 		execID: execID,
-		cgroup: rel,
+		cgroup: strings.TrimPrefix(cg.path, cgroupRoot),
 		names:  names,
 		host:   host,
 		log:    log,
@@ -326,18 +319,7 @@ func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *ex
 	}
 
 	if cmd.Stdin != "" {
-		stdin, err := c.StdinPipe()
-		if err != nil {
-			_ = readyW.Close()
-			_ = outW.Close()
-
-			return Result{}, fmt.Errorf("stdin pipe: %w", err)
-		}
-
-		go func() {
-			_, _ = io.WriteString(stdin, cmd.Stdin)
-			_ = stdin.Close()
-		}()
+		c.Stdin = strings.NewReader(cmd.Stdin)
 	}
 
 	errStart := c.Start()
@@ -416,7 +398,9 @@ func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *ex
 
 	res := Result{Output: output.Bytes(), TimedOut: timedOut, Truncated: out.spent() || hostOut.spent()}
 
-	oomKills, processLimitHits := cg.limitEvents()
+	oomKills, _ := cgroupKey(cg.path, "memory.events", "oom_kill")
+	processLimitHits, _ := cgroupKey(cg.path, "pids.events", "max")
+
 	if oomKills > 0 {
 		log.Warn(limitReached, "limit", "memory", "limit_bytes", memoryBytes, "oom_kills", oomKills)
 	}

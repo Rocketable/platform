@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"go.starlark.net/starlark"
-	"go.starlark.net/syntax"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -223,51 +222,27 @@ func readTyped(ctx context.Context, mu *sync.Mutex, attempt readAttempt, path st
 		start += strings.IndexByte(content[start:], '\n') + 1
 	}
 
-	text := content[start:]
-	attrs := &readText{path: path, mime: cmp.Or(mime.TypeByExtension(filepath.Ext(path)), "text/plain"), content: text, size: len(content), startLine: offset, totalLines: totalLines}
-
-	return codemode.NewText(text, attrs), nil
+	return newReadText(path, cmp.Or(mime.TypeByExtension(filepath.Ext(path)), "text/plain"), content[start:], len(content), offset, totalLines), nil
 }
 
-type readText struct {
-	path, mime, content         string
-	size, startLine, totalLines int
-}
+func newReadText(path, mimeType, content string, size, startLine, totalLines int) *codemode.TextValue {
+	numbered := starlark.NewBuiltin("numbered", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+			return nil, fmt.Errorf("numbered: %w", err)
+		}
 
-func (r *readText) Attr(name string) (starlark.Value, error) {
-	switch name {
-	case "path":
-		return starlark.String(r.path), nil
-	case "name":
-		return starlark.String(filepath.Base(r.path)), nil
-	case "mime":
-		return starlark.String(r.mime), nil
-	case "size":
-		return starlark.MakeInt(r.size), nil
-	case "start_line":
-		return starlark.MakeInt(r.startLine), nil
-	case "total_lines":
-		return starlark.MakeInt(r.totalLines), nil
-	case "numbered":
-		return starlark.NewBuiltin("numbered", func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-			if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
-				return nil, fmt.Errorf("numbered: %w", err)
-			}
+		var lines []string
+		for line := range strings.Lines(content) {
+			lines = append(lines, fmt.Sprintf("%d: %s", startLine+len(lines), strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")))
+		}
 
-			var lines []string
-			for line := range strings.Lines(r.content) {
-				lines = append(lines, fmt.Sprintf("%d: %s", r.startLine+len(lines), strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")))
-			}
+		return starlark.String(strings.Join(lines, "\n")), nil
+	})
 
-			return starlark.String(strings.Join(lines, "\n")), nil
-		}), nil
-	default:
-		return nil, nil
-	}
-}
-
-func (*readText) AttrNames() []string {
-	return []string{"mime", "name", "numbered", "path", "size", "start_line", "total_lines"}
+	return codemode.NewText("text", content, starlark.StringDict{
+		"path": starlark.String(path), "name": starlark.String(filepath.Base(path)), "mime": starlark.String(mimeType), "size": starlark.MakeInt(size),
+		"start_line": starlark.MakeInt(startLine), "total_lines": starlark.MakeInt(totalLines), "numbered": numbered,
+	}, nil)
 }
 
 func typedToolResult(v starlark.Value, err error) (ToolResult, error) {
@@ -278,235 +253,108 @@ func typedToolResult(v starlark.Value, err error) (ToolResult, error) {
 	return ToolResult{Output: v.String(), Data: v}, nil
 }
 
-func (m *globMatch) String() string       { return m.path }
-func (m *globMatch) Text() string         { return m.path }
-func (m *globMatch) Type() string         { return "path" }
-func (m *globMatch) Freeze()              {}
-func (m *globMatch) Truth() starlark.Bool { return true }
-func (m *globMatch) Ok() bool             { return true }
-
-func (m *globMatch) Len() int                   { return len(m.path) }
-func (m *globMatch) Index(i int) starlark.Value { return codemode.TextIndex(m, i) }
-func (m *globMatch) Slice(start, end, step int) starlark.Value {
-	return codemode.TextSlice(m, start, end, step)
+type searchMatch interface {
+	globMatch | grepMatch
+	value() starlark.Value
 }
 
-func (m *globMatch) Binary(op syntax.Token, y starlark.Value, side starlark.Side) (starlark.Value, error) {
-	z, err := codemode.TextBinary(m, op, y, side)
-	if err != nil {
-		return nil, fmt.Errorf("%w", err)
-	}
-
-	return z, nil
+func (m globMatch) value() starlark.Value {
+	return codemode.NewText("path", m.Path, starlark.StringDict{"path": starlark.String(m.Path), "name": starlark.String(filepath.Base(m.Path)), "mtime": starlark.MakeInt64(m.MTime)}, nil)
 }
 
-func (m *globMatch) Hash() (uint32, error) {
-	hash, _ := starlark.String(m.path).Hash()
+func (m grepMatch) value() starlark.Value { return codemode.NewMatch(m.Path, m.Line, m.Text) }
 
-	return hash, nil
+type searchResult[M searchMatch] struct {
+	kind, text string
+	matches    []M
+	attrs      starlark.StringDict
 }
 
-func (m *globMatch) MarshalJSON() ([]byte, error) {
-	encoded, err := json.Marshal(m.path)
-	if err != nil {
-		return nil, fmt.Errorf("encode path: %w", err)
-	}
-
-	return encoded, nil
-}
-
-func (m *globMatch) Attr(name string) (starlark.Value, error) {
-	if v, ok := codemode.ResultAttr(m, nil, name); ok {
-		return v, nil
-	}
-
-	switch name {
-	case "path":
-		return starlark.String(m.path), nil
-	case "name":
-		return starlark.String(filepath.Base(m.path)), nil
-	case "mtime":
-		return starlark.MakeInt64(m.mtime), nil
-	}
-
-	method, err := starlark.String(m.path).Attr(name)
-	if err != nil {
-		return nil, fmt.Errorf("path.%s: %w", name, err)
-	}
-
-	return method, nil
-}
-
-func (m *globMatch) AttrNames() []string {
-	return codemode.ResultAttrNames(append([]string{"mtime", "name", "path"}, starlark.String("").AttrNames()...)...)
-}
-
-type globResult struct {
-	paths  starlark.Tuple
-	search globToolParams
-}
-
-func newGlobResult(matches []globMatch, search globToolParams) *globResult {
+func newGlobResult(matches []globMatch, partial bool, search globToolParams) *searchResult[globMatch] {
 	slices.SortFunc(matches, func(a, b globMatch) int {
-		return cmp.Or(cmp.Compare(b.mtime, a.mtime), strings.Compare(a.path, b.path))
+		return cmp.Or(cmp.Compare(b.MTime, a.MTime), strings.Compare(a.Path, b.Path))
 	})
 
-	paths := make(starlark.Tuple, len(matches))
-	for i := range matches {
-		paths[i] = &matches[i]
-	}
-
-	return &globResult{paths: paths, search: search}
-}
-
-func (r *globResult) String() string {
-	if len(r.paths) == 0 {
-		return "No files found"
-	}
-
-	output := make([]string, len(r.paths))
-	for i, path := range r.paths {
-		output[i] = path.String()
-	}
-
-	return strings.Join(output, "\n")
-}
-
-func (r *globResult) Type() string               { return "glob_result" }
-func (r *globResult) Freeze()                    {}
-func (r *globResult) Truth() starlark.Bool       { return len(r.paths) > 0 }
-func (r *globResult) Ok() bool                   { return true }
-func (r *globResult) Len() int                   { return len(r.paths) }
-func (r *globResult) Index(i int) starlark.Value { return r.paths[i] }
-func (r *globResult) Iterate() starlark.Iterator { return r.paths.Iterate() }
-func (r *globResult) Slice(start, end, step int) starlark.Value {
-	return r.paths.Slice(start, end, step)
-}
-
-func (r *globResult) Hash() (uint32, error) {
-	return 0, errors.New("unhashable type: glob_result")
-}
-
-func (r *globResult) MarshalJSON() ([]byte, error) {
-	encoded, err := json.Marshal(r.paths)
-	if err != nil {
-		return nil, fmt.Errorf("encode glob_result: %w", err)
-	}
-
-	return encoded, nil
-}
-
-func (r *globResult) Attr(name string) (starlark.Value, error) {
-	if v, ok := codemode.ResultAttr(r, nil, name); ok {
-		return v, nil
-	}
-
-	switch name {
-	case "pattern":
-		return starlark.String(r.search.Pattern), nil
-	case "path":
-		return starlark.String(r.search.Path), nil
-	default:
-		return nil, nil
-	}
-}
-
-func (r *globResult) AttrNames() []string { return codemode.ResultAttrNames("path", "pattern") }
-
-type grepResult struct {
-	matches []grepMatch
-	items   starlark.Tuple
-	partial bool
-	search  grepToolParams
-}
-
-func newGrepResult(matches []grepMatch, partial bool, search grepToolParams) *grepResult {
-	slices.SortFunc(matches, func(a, b grepMatch) int {
-		return cmp.Or(cmp.Compare(b.mtime, a.mtime), strings.Compare(a.path, b.path), cmp.Compare(a.line, b.line))
-	})
-
-	items := make(starlark.Tuple, len(matches))
+	output := make([]string, len(matches))
 	for i, match := range matches {
-		items[i] = codemode.NewMatch(match.path, match.line, match.text)
+		output[i] = match.Path
 	}
 
-	return &grepResult{matches: matches, items: items, partial: partial, search: search}
+	return newSearchResult("glob_result", output, matches, partial, starlark.StringDict{"pattern": starlark.String(search.Pattern), "path": starlark.String(search.Path)})
 }
 
-func (r *grepResult) String() string {
-	if len(r.matches) == 0 {
-		return "No files found"
-	}
+func newGrepResult(matches []grepMatch, partial bool, search grepToolParams) *searchResult[grepMatch] {
+	slices.SortFunc(matches, func(a, b grepMatch) int {
+		return cmp.Or(cmp.Compare(b.MTime, a.MTime), strings.Compare(a.Path, b.Path), cmp.Compare(a.Line, b.Line))
+	})
 
-	output := []string{fmt.Sprintf("Found %d matches", len(r.matches))}
+	output := []string{fmt.Sprintf("Found %d matches", len(matches))}
 
 	current := ""
-	for _, match := range r.matches {
-		if current != match.path {
+	for _, match := range matches {
+		if current != match.Path {
 			if current != "" {
 				output = append(output, "")
 			}
 
-			current = match.path
-			output = append(output, match.path+":")
+			current = match.Path
+			output = append(output, match.Path+":")
 		}
 
-		output = append(output, fmt.Sprintf("  Line %d: %s", match.line, match.text))
+		output = append(output, fmt.Sprintf("  Line %d: %s", match.Line, match.Text))
 	}
 
-	if r.partial {
+	return newSearchResult("grep_result", output, matches, partial, starlark.StringDict{"pattern": starlark.String(search.Pattern), "path": starlark.String(search.Path), "include": starlark.String(search.Include)})
+}
+
+func newSearchResult[M searchMatch](kind string, output []string, matches []M, partial bool, attrs starlark.StringDict) *searchResult[M] {
+	if partial {
 		output = append(output, "", "(Some paths were inaccessible and skipped)")
 	}
 
-	return strings.Join(output, "\n")
-}
-
-func (r *grepResult) Type() string               { return "grep_result" }
-func (r *grepResult) Freeze()                    {}
-func (r *grepResult) Truth() starlark.Bool       { return len(r.items) > 0 }
-func (r *grepResult) Ok() bool                   { return true }
-func (r *grepResult) Len() int                   { return len(r.items) }
-func (r *grepResult) Index(i int) starlark.Value { return r.items[i] }
-func (r *grepResult) Iterate() starlark.Iterator { return r.items.Iterate() }
-func (r *grepResult) Slice(start, end, step int) starlark.Value {
-	return r.items.Slice(start, end, step)
-}
-
-func (r *grepResult) Hash() (uint32, error) {
-	return 0, errors.New("unhashable type: grep_result")
-}
-
-func (r *grepResult) MarshalJSON() ([]byte, error) {
-	encoded, err := json.Marshal(r.items)
-	if err != nil {
-		return nil, fmt.Errorf("encode grep_result: %w", err)
+	if len(matches) == 0 {
+		output = []string{"No files found"}
 	}
 
-	return encoded, nil
+	attrs["partial"] = starlark.Bool(partial)
+
+	return &searchResult[M]{kind: kind, text: strings.Join(output, "\n"), matches: matches, attrs: attrs}
 }
 
-func (r *grepResult) Attr(name string) (starlark.Value, error) {
+func (r *searchResult[M]) String() string             { return r.text }
+func (r *searchResult[M]) Type() string               { return r.kind }
+func (r *searchResult[M]) Freeze()                    {}
+func (r *searchResult[M]) Truth() starlark.Bool       { return len(r.matches) > 0 }
+func (r *searchResult[M]) Ok() bool                   { return true }
+func (r *searchResult[M]) Len() int                   { return len(r.matches) }
+func (r *searchResult[M]) Index(i int) starlark.Value { return r.matches[i].value() }
+func (r *searchResult[M]) Iterate() starlark.Iterator { return r.items().Iterate() }
+func (r *searchResult[M]) Slice(start, end, step int) starlark.Value {
+	return r.items().Slice(start, end, step)
+}
+
+func (r *searchResult[M]) items() starlark.Tuple {
+	items := make(starlark.Tuple, len(r.matches))
+	for i, match := range r.matches {
+		items[i] = match.value()
+	}
+
+	return items
+}
+
+func (r *searchResult[M]) Hash() (uint32, error) {
+	return 0, fmt.Errorf("unhashable type: %s", r.kind)
+}
+
+func (r *searchResult[M]) Attr(name string) (starlark.Value, error) {
 	if v, ok := codemode.ResultAttr(r, nil, name); ok {
 		return v, nil
 	}
 
-	switch name {
-	case "partial":
-		return starlark.Bool(r.partial), nil
-	case "pattern":
-		return starlark.String(r.search.Pattern), nil
-	case "path":
-		return starlark.String(r.search.Path), nil
-	case "include":
-		return starlark.String(r.search.Include), nil
-	default:
-		return nil, nil
-	}
+	return r.attrs[name], nil
 }
 
-func (r *grepResult) AttrNames() []string {
-	return codemode.ResultAttrNames("include", "partial", "path", "pattern")
-}
+func (r *searchResult[M]) AttrNames() []string { return codemode.ResultAttrNames(r.attrs.Keys()...) }
 
 type typedHostKind string
 
@@ -517,23 +365,17 @@ const (
 	typedHostGrep typedHostKind = "grep"
 )
 
-type typedHostMatch struct {
-	Path  string `json:"path"`
-	Line  int    `json:"line,omitempty"`
-	Text  string `json:"text,omitempty"`
-	MTime int64  `json:"mtime"`
-}
-
 type typedHostStep struct {
-	Kind       typedHostKind    `json:"kind"`
-	Path       string           `json:"path,omitempty"`
-	Mime       string           `json:"mime,omitempty"`
-	Size       int              `json:"size,omitempty"`
-	StartLine  int              `json:"start_line,omitempty"`
-	TotalLines int              `json:"total_lines,omitempty"`
-	SHA256     string           `json:"sha256,omitempty"`
-	Matches    []typedHostMatch `json:"matches,omitempty"`
-	Partial    bool             `json:"partial,omitempty"`
+	Kind       typedHostKind `json:"kind"`
+	Path       string        `json:"path,omitempty"`
+	Mime       string        `json:"mime,omitempty"`
+	Size       int           `json:"size,omitempty"`
+	StartLine  int           `json:"start_line,omitempty"`
+	TotalLines int           `json:"total_lines,omitempty"`
+	SHA256     string        `json:"sha256,omitempty"`
+	Glob       []globMatch   `json:"glob,omitempty"`
+	Grep       []grepMatch   `json:"grep,omitempty"`
+	Partial    bool          `json:"partial,omitempty"`
 }
 
 func typedHostStepOf(data any) *typedHostStep {
@@ -560,20 +402,10 @@ func typedHostStepOf(data any) *typedHostStep {
 		return &typedHostStep{Kind: typedHostText, Path: path, Mime: mimeType, Size: number("size"), StartLine: number("start_line"), TotalLines: number("total_lines")}
 	case *codemode.File:
 		return &typedHostStep{Kind: typedHostFile, Path: strings.TrimPrefix(v.Source(), "read "), SHA256: v.SHA256()}
-	case *globResult:
-		step := &typedHostStep{Kind: typedHostGlob, Matches: make([]typedHostMatch, len(v.paths))}
-		for i, path := range v.paths {
-			step.Matches[i] = typedHostMatch{Path: path.(*globMatch).path, MTime: path.(*globMatch).mtime}
-		}
-
-		return step
-	case *grepResult:
-		step := &typedHostStep{Kind: typedHostGrep, Matches: make([]typedHostMatch, len(v.matches)), Partial: v.partial}
-		for i, match := range v.matches {
-			step.Matches[i] = typedHostMatch{Path: match.path, Line: match.line, Text: match.text, MTime: match.mtime}
-		}
-
-		return step
+	case *searchResult[globMatch]:
+		return &typedHostStep{Kind: typedHostGlob, Glob: v.matches, Partial: bool(v.attrs["partial"].Truth())}
+	case *searchResult[grepMatch]:
+		return &typedHostStep{Kind: typedHostGrep, Grep: v.matches, Partial: bool(v.attrs["partial"].Truth())}
 	default:
 		return nil
 	}
@@ -595,44 +427,24 @@ func (s *typedHostStep) replay(ctx context.Context, output string, call hostCall
 
 		return result, nil
 	case typedHostText:
-		value = codemode.NewText(output, &readText{path: s.Path, mime: s.Mime, content: output, size: s.Size, startLine: s.StartLine, totalLines: s.TotalLines})
+		value = newReadText(s.Path, s.Mime, output, s.Size, s.StartLine, s.TotalLines)
 	case typedHostGlob:
-		matches := make([]globMatch, len(s.Matches))
-		for i, match := range s.Matches {
-			matches[i] = globMatch{path: match.Path, mtime: match.MTime}
-		}
-
 		var search globToolParams
 
 		_ = json.Unmarshal(raw, &search)
-		value = newGlobResult(matches, search)
+		value = newGlobResult(s.Glob, s.Partial, search)
 	case typedHostGrep:
-		matches := make([]grepMatch, len(s.Matches))
-		for i, match := range s.Matches {
-			matches[i] = grepMatch{path: match.Path, line: match.Line, text: match.Text, mtime: match.MTime}
-		}
-
 		var search grepToolParams
 
 		_ = json.Unmarshal(raw, &search)
-		value = newGrepResult(matches, s.Partial, search)
+		value = newGrepResult(s.Grep, s.Partial, search)
 	}
 
 	return ToolResult{Output: output, Data: value}, nil
 }
 
 var (
-	_ codemode.Result    = (*globMatch)(nil)
-	_ codemode.Text      = (*globMatch)(nil)
-	_ starlark.HasAttrs  = (*globMatch)(nil)
-	_ starlark.Sliceable = (*globMatch)(nil)
-	_ starlark.HasBinary = (*globMatch)(nil)
-	_ codemode.Result    = (*globResult)(nil)
-	_ starlark.Sliceable = (*globResult)(nil)
-	_ starlark.Iterable  = (*globResult)(nil)
-	_ starlark.HasAttrs  = (*globResult)(nil)
-	_ codemode.Result    = (*grepResult)(nil)
-	_ starlark.Sliceable = (*grepResult)(nil)
-	_ starlark.Iterable  = (*grepResult)(nil)
-	_ starlark.HasAttrs  = (*grepResult)(nil)
+	_ codemode.Result    = (*searchResult[globMatch])(nil)
+	_ starlark.Sliceable = (*searchResult[globMatch])(nil)
+	_ starlark.HasAttrs  = (*searchResult[grepMatch])(nil)
 )

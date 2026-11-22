@@ -517,13 +517,13 @@ func TestConvertExecuteReturn(t *testing.T) {
 		return d
 	}
 
-	glob := newGlobResult([]globMatch{{path: "/w/b.go", mtime: 1}, {path: "/w/a.go", mtime: 2}}, globToolParams{})
-	grep := newGrepResult([]grepMatch{{path: "/w/a.go", line: 3, text: "x"}}, false, grepToolParams{})
-	page := &webFetchResult{page: webFetchPage{ContentType: "text/plain", Output: "page", URL: "https://example.com/"}}
+	glob := newGlobResult([]globMatch{{Path: "/w/b.go", MTime: 1}, {Path: "/w/a.go", MTime: 2}}, false, globToolParams{})
+	grep := newGrepResult([]grepMatch{{Path: "/w/a.go", Line: 3, Text: "x"}}, false, grepToolParams{})
+	page := webFetchValue(&webFetchPage{ContentType: "text/plain", Output: "page", URL: "https://example.com/"})
 	tool, err := newMCPResult("figma.get", "flat", &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "flat"}}})
 	require.NoError(t, err)
 
-	failedBash := codemode.HostResult("bash", &bashStarlarkResult{output: "out", errorCode: "1"}, nil)
+	failedBash := codemode.HostResult("bash", newBashStarlarkResult("out", "1"), nil)
 
 	for _, tc := range []struct {
 		name  string
@@ -532,9 +532,9 @@ func TestConvertExecuteReturn(t *testing.T) {
 		files []string
 	}{
 		{"string", starlark.String("hi"), "hi", nil},
-		{"text is raw", codemode.NewText("1: not a line number\nsecond", codemode.PlainText{}), "1: not a line number\nsecond", nil},
+		{"text is raw", codemode.NewText("text", "1: not a line number\nsecond", nil, nil), "1: not a line number\nsecond", nil},
 		{"error", codemode.NewFailure("read", "File not found: x", nil), "read: File not found: x", nil},
-		{"bash result", &bashStarlarkResult{output: "out"}, "out", nil},
+		{"bash result", newBashStarlarkResult("out", ""), "out", nil},
 		{"failed bash result", failedBash, "bash: exit status 1\nout", nil},
 		{"other result", codemode.NewMatch("a.go", 3, "x"), "a.go:3: x", nil},
 		{"glob result", glob, "/w/a.go\n/w/b.go", nil},
@@ -547,7 +547,7 @@ func TestConvertExecuteReturn(t *testing.T) {
 			`{"bash":{"error":"bash: exit status 1","error_code":"1","ok":false,"output":"out"},"glob":["/w/a.go","/w/b.go"],"grep":[{"line":3,"path":"/w/a.go","text":"x"}],"page":{"url":"https://example.com/","status":0,"status_text":"","content_type":"text/plain","headers":{},"redirects":[],"request":{"method":"","url":"","headers":{}},"timing_ms":{"total":0,"first_byte":0},"output":"page"},"tool":"flat"}`,
 			nil,
 		},
-		{"dict result", codemode.NewDictResult(dict(starlark.String("b"), starlark.MakeInt(1))), `{"b":1}`, nil},
+		{"dict result", codemode.HostResult("decision", dict(starlark.String("b"), starlark.MakeInt(1)), nil), `{"b":1}`, nil},
 		{"int", starlark.MakeInt(3), "3", nil},
 		{"bool", starlark.True, "true", nil},
 		{"float", starlark.Float(1.5), "1.5", nil},
@@ -559,7 +559,7 @@ func TestConvertExecuteReturn(t *testing.T) {
 			dict(
 				starlark.String("d"), starlark.Tuple{scan},
 				starlark.String("b"), scan,
-				starlark.String("c"), starlark.NewList([]starlark.Value{chart, audio, codemode.NewText("raw", codemode.PlainText{}), codemode.NewFailure("read", "boom", nil)}),
+				starlark.String("c"), starlark.NewList([]starlark.Value{chart, audio, codemode.NewText("text", "raw", nil, nil), codemode.NewFailure("read", "boom", nil)}),
 				starlark.String("a"), chart,
 			),
 			`{"a":` + chartJSON + `,"b":` + scanJSON + `,"c":[` + chartJSON + `,{"mime":"audio/wav","name":"a.wav","not_attached":true,"size":4},"raw",{"error":"read: boom","ok":false}],"d":[` + scanJSON + `]}`,
@@ -595,7 +595,7 @@ func TestConvertExecuteReturn(t *testing.T) {
 	require.Equal(t, `[`+chartJSON+`,`+scanJSON+`]`, text, "a try_gather list returns like a list")
 	require.Len(t, files, 2)
 
-	for value, want := range map[starlark.Value]bool{codemode.NewFailure("read", "x", nil): true, failedBash: true, &bashStarlarkResult{output: "out"}: false, starlark.NewList([]starlark.Value{failedBash}): false} {
+	for value, want := range map[starlark.Value]bool{codemode.NewFailure("read", "x", nil): true, failedBash: true, newBashStarlarkResult("out", ""): false, starlark.NewList([]starlark.Value{failedBash}): false} {
 		_, _, failed, err := convertExecuteReturn(value, "")
 		require.NoError(t, err)
 		require.Equal(t, want, failed, "only a returned value whose .ok is False is a failure")

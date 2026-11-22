@@ -208,14 +208,8 @@ func stageRevertDB(ctx context.Context, db stateStoreDB, conversationID, before 
 		return "", "", errors.New("revert cannot go back past a message from a cron run, External MCP, or Slack")
 	}
 
-	if marker != "" {
-		idText, indexText, _ := strings.Cut(marker, ":")
-		id, _ := strconv.ParseInt(idText, 10, 64)
-
-		boundary, _ := strconv.Atoi(indexText)
-		if entry.ID > id || entry.ID == id && index >= boundary {
-			return "", "", errors.New("revert message is not visible")
-		}
+	if marker != "" && !afterRevertFloor(marker, before) {
+		return "", "", errors.New("revert message is not visible")
 	}
 
 	items, _ := harness.ReplayInputToParams(entry.Entry.ReplayInput[index : index+1])
@@ -317,12 +311,8 @@ UPDATE entries e SET entry_json = $2, search_text = k.search_text FROM kept k WH
 		return fmt.Errorf("prune reverted human queue: %w", err)
 	}
 
-	if _, err := db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, conversationID); err != nil {
-		return fmt.Errorf("commit revert marker: %w", err)
-	}
-
-	if _, err := db.ExecContext(ctx, `UPDATE conversations SET preview = NULL, last_updated = NULL WHERE conversation_id = $1`, conversationID); err != nil {
-		return fmt.Errorf("reset reverted summary: %w", err)
+	if _, err := db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '', preview = NULL, last_updated = NULL WHERE conversation_id = $1`, conversationID); err != nil {
+		return fmt.Errorf("commit revert marker and reset reverted summary: %w", err)
 	}
 
 	summary, err := loadSessionSummary(ctx, db, conversationID)
@@ -431,7 +421,7 @@ func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string
 		return "", "", err
 	}
 
-	_, eligible, predecessor, err := r.Sessions.RevertState(ctx, conversationID)
+	current, eligible, predecessor, err := r.Sessions.RevertState(ctx, conversationID)
 	if err != nil {
 		return "", "", err
 	}
@@ -441,8 +431,7 @@ func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string
 	}
 
 	if before == "" && predecessor == "" {
-		marker, _, _, err := r.Sessions.RevertState(ctx, conversationID)
-		return marker, "", err
+		return current, "", nil
 	}
 
 	target := cmp.Or(before, predecessor)
@@ -540,19 +529,11 @@ func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string
 		return "", "", err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return "", "", fmt.Errorf("commit staged revert: %w", err)
-	}
-
-	return marker, prompt, nil
+	return marker, prompt, commitState(tx, "staged revert")
 }
 
 func (r *Runtime) ClearRevert(ctx context.Context, conversationID string) error {
-	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
-		return err
-	}
-
-	b, err := r.threads.recordedBridge(ctx, conversationID)
+	b, err := r.mutableBridge(ctx, conversationID)
 	if err != nil {
 		return err
 	}
@@ -905,15 +886,11 @@ WHERE conversation_id = $1 AND takes_lane AND (input_id = $2 OR inbound_json->'M
 		return false, err
 	}
 
-	err = db.QueryRowContext(ctx, `SELECT item::text FROM entries e
+	found, err := scanFound("read saved Web input", db.QueryRowContext(ctx, `SELECT item::text FROM entries e
     CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
-    WHERE e.conversation_id = $1 AND item->>'input_id' = $2 LIMIT 1`, inbound.ConversationID, id).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-
-	if err != nil {
-		return false, fmt.Errorf("read saved Web input: %w", err)
+    WHERE e.conversation_id = $1 AND item->>'input_id' = $2 LIMIT 1`, inbound.ConversationID, id).Scan(&raw))
+	if err != nil || !found {
+		return false, err
 	}
 
 	items, err := harness.ReplayInputToParams([]json.RawMessage{raw})

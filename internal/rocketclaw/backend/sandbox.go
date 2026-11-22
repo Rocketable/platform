@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 )
 
@@ -15,10 +14,6 @@ type emulatedShells struct {
 	rt         *sandbox.Runtime
 	errSandbox error
 	sandbox    *sandbox.Runtime
-}
-
-func sandboxDir(cfg *config.Config) string {
-	return filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "sandbox")
 }
 
 func (r *Runtime) prepareSandbox() {
@@ -33,7 +28,8 @@ func (r *Runtime) prepareSandbox() {
 				continue
 			}
 
-			dir := sandboxDir(r.Cfg.Clone())
+			cfg := r.Cfg.Clone()
+			dir := filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "sandbox")
 
 			e.mu.Lock()
 			if e.rt == nil || e.rt.Err() != nil && !errors.Is(e.rt.Err(), sandbox.ErrPreparing) {

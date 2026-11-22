@@ -100,7 +100,6 @@ func (c *executeReturn) text(value starlark.Value) (string, error) {
 		}
 
 		return "", nil
-	case *codemode.DictResult, *codemode.GatherResult:
 	case codemode.Result:
 		return v.String(), nil
 	}
@@ -123,8 +122,6 @@ func (c *executeReturn) placeholders(value starlark.Value, path []starlark.Value
 		return c.placeholder(v)
 	case starlark.Tuple:
 		return starlark.Tuple(c.elements(v, path))
-	case *codemode.GatherResult:
-		return starlark.NewList(c.elements(v, path))
 	case *starlark.List:
 		if slices.Contains(path, value) {
 			return value
@@ -259,6 +256,10 @@ type storedExecuteFile struct {
 }
 
 func writeExecuteResult(root *os.Root, base, text string, files []returnedFile, keepAttached bool) error {
+	if err := root.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+		return fmt.Errorf("create dir: %w", err)
+	}
+
 	if _, oversized := clipExecuteHead(text); oversized {
 		if err := writeRootFile(root, base+".txt", text); err != nil {
 			return err
@@ -362,10 +363,6 @@ func retainExecuteResult(root *os.Root, dir, text string, files []returnedFile) 
 
 	sweepRetainedDir(root, dir)
 
-	if err := root.MkdirAll(dir, 0o700); err != nil {
-		return ToolResult{}, fmt.Errorf("create retained execute result dir: %w", err)
-	}
-
 	id := uuid.NewString()
 
 	if err := writeExecuteResult(root, filepath.Join(dir, id), text, files, true); err != nil {
@@ -415,11 +412,7 @@ func (l *looper) restoreTurnExecuteResults(turnID string) {
 
 	entries, _ := fs.ReadDir(l.promptExpansion.root.FS(), dir)
 	for _, entry := range entries {
-		if id, ok := strings.CutSuffix(entry.Name(), ".txt"); ok && entry.Type().IsRegular() {
-			l.spillResults[id] = dir + "/" + entry.Name()
-		}
-
-		if id, ok := strings.CutSuffix(entry.Name(), ".files.json"); ok && entry.Type().IsRegular() {
+		if id := strings.TrimSuffix(strings.TrimSuffix(entry.Name(), ".txt"), ".files.json"); id != entry.Name() && entry.Type().IsRegular() {
 			l.spillResults[id] = dir + "/" + id + ".txt"
 		}
 	}
@@ -459,10 +452,6 @@ func (l *looper) saveExecuteResult(text string, files []returnedFile) (ToolResul
 	id := uuid.NewString()
 
 	base := filepath.ToSlash(filepath.Join(l.spillRel, l.spillTurnID, id))
-	if err := l.promptExpansion.root.MkdirAll(filepath.Dir(base), 0o700); err != nil {
-		return ToolResult{}, fmt.Errorf("create execute spill dir: %w", err)
-	}
-
 	if err := writeExecuteResult(l.promptExpansion.root, base, text, files, false); err != nil {
 		return ToolResult{}, fmt.Errorf("write execute spill: %w", err)
 	}
@@ -487,12 +476,7 @@ func (l *looper) loadExecuteResult(ctx context.Context, retainedRel string, para
 
 	start := max(params.StartLine, 1)
 
-	limit := params.Limit
-	if limit == 0 {
-		limit = executeHeadMaxLines
-	}
-
-	limit = min(limit, executeHeadMaxLines)
+	limit := min(cmp.Or(params.Limit, executeHeadMaxLines), executeHeadMaxLines)
 
 	l.spillMu.Lock()
 	defer l.spillMu.Unlock()

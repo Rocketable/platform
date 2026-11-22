@@ -97,7 +97,7 @@ func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (
 			return nil, "", fmt.Errorf("%w: decode png: %w", errInboundAttachmentReductionFailed, err)
 		}
 
-		transformed, err := resizePNGWithinLimit(img, targetLimit)
+		transformed, err := shrinkImageWithinLimit(img, targetLimit, inboundPNGEncoder{})
 		if err == nil {
 			return transformed, mimeType, nil
 		}
@@ -109,40 +109,24 @@ func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (
 		return nil, "", fmt.Errorf("%w: decode image: %w", errInboundAttachmentReductionFailed, err)
 	}
 
-	flattened := flattenInboundImageForJPEG(img)
-
-	encoder := inboundJPEGEncoder{}
-
-	candidate, candidateSize, err := encoder.encodeWithinLimit(flattened, targetLimit)
+	candidate, err := shrinkImageWithinLimit(flattenInboundImageForJPEG(img), targetLimit, inboundJPEGEncoder{})
 	if err != nil {
 		return nil, "", err
 	}
 
-	if candidate == nil {
-		candidate, err = reduceResizedImageWithinLimit(flattened, candidateSize, targetLimit, encoder)
-		if err != nil {
-			return nil, "", err
-		}
-	}
-
 	return candidate, "image/jpeg", nil
-}
-
-func resizePNGWithinLimit(src image.Image, targetLimit int) ([]byte, error) {
-	encoded := encodeInboundPNG(src)
-
-	if len(encoded) <= targetLimit {
-		return encoded, nil
-	}
-
-	return reduceResizedImageWithinLimit(src, len(encoded), targetLimit, inboundPNGEncoder{})
 }
 
 type inboundImageEncoder interface {
 	encodeWithinLimit(image.Image, int) ([]byte, int, error)
 }
 
-func reduceResizedImageWithinLimit(src image.Image, currentSize, targetLimit int, encoder inboundImageEncoder) ([]byte, error) {
+func shrinkImageWithinLimit(src image.Image, targetLimit int, encoder inboundImageEncoder) ([]byte, error) {
+	candidate, currentSize, err := encoder.encodeWithinLimit(src, targetLimit)
+	if err != nil || candidate != nil {
+		return candidate, err
+	}
+
 	bounds := src.Bounds()
 
 	currentWidth, currentHeight := bounds.Dx(), bounds.Dy()
@@ -159,16 +143,12 @@ func reduceResizedImageWithinLimit(src image.Image, currentSize, targetLimit int
 		resized := image.NewNRGBA(image.Rect(0, 0, nextWidth, nextHeight))
 		xdraw.CatmullRom.Scale(resized, resized.Bounds(), src, bounds, xdraw.Over, nil)
 
-		candidate, candidateSize, err := encoder.encodeWithinLimit(resized, targetLimit)
-		if err != nil {
-			return nil, err
+		candidate, currentSize, err = encoder.encodeWithinLimit(resized, targetLimit)
+		if err != nil || candidate != nil {
+			return candidate, err
 		}
 
-		if candidate != nil {
-			return candidate, nil
-		}
-
-		currentWidth, currentHeight, currentSize = nextWidth, nextHeight, candidateSize
+		currentWidth, currentHeight = nextWidth, nextHeight
 	}
 
 	return nil, errInboundAttachmentReductionNotEnough
@@ -215,22 +195,16 @@ func (inboundJPEGEncoder) encodeWithinLimit(img image.Image, targetLimit int) (c
 type inboundPNGEncoder struct{}
 
 func (inboundPNGEncoder) encodeWithinLimit(img image.Image, targetLimit int) (candidate []byte, candidateSize int, err error) {
-	encoded := encodeInboundPNG(img)
-
-	if len(encoded) <= targetLimit {
-		return encoded, len(encoded), nil
-	}
-
-	return nil, len(encoded), nil
-}
-
-func encodeInboundPNG(img image.Image) []byte {
 	var buffer bytes.Buffer
 
 	encoder := png.Encoder{CompressionLevel: png.BestCompression}
 	_ = encoder.Encode(&buffer, img)
 
-	return buffer.Bytes()
+	if buffer.Len() <= targetLimit {
+		return buffer.Bytes(), buffer.Len(), nil
+	}
+
+	return nil, buffer.Len(), nil
 }
 
 func nextImageResizeDimensions(currentWidth, currentHeight, currentSize, targetLimit int) (nextWidth, nextHeight int) {

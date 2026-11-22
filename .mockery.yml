@@ -46,11 +46,6 @@ packages:
       runLockWork:
         config:
           structname: runLockWorkMock
-  github.com/Rocketable/platform/internal/rocketclaw/codemode:
-    interfaces:
-      TextAttrs:
-        config:
-          structname: textAttrsMock
   github.com/Rocketable/platform/internal/rocketclaw/config:
     interfaces:
       SecretFetcher:

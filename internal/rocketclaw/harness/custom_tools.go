@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -69,10 +70,7 @@ func customLooperTool(tool *Tool) (looperTool, error) {
 		return looperTool{}, err
 	}
 
-	permission := tool.Permission
-	if permission == "" {
-		permission = "tools"
-	}
+	permission := cmp.Or(tool.Permission, "tools")
 
 	visibilitySubjects := tool.VisibilitySubjects
 	if len(visibilitySubjects) == 0 {
