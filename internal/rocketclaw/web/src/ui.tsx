@@ -3473,9 +3473,8 @@ function foldFilters(query: string, agent?: string | null, room?: string | null)
 }
 type SavedSearches = Pick<SearchPageState, "searches" | "active">;
 
-// withQuery activates a saved search for query, the active one first, or adds one.
 function withQuery({ searches, active }: SavedSearches, query: string): SavedSearches {
-  const match = searches.toSorted((a, b) => Number(b.id === active) - Number(a.id === active)).find((item) => item.query === query);
+  const match = searches.find((item) => item.id === active && item.query === query) ?? searches.find((item) => item.query === query);
   const id = match?.id ?? crypto.getRandomValues(new Uint32Array(4)).join("-");
   return { searches: match ? searches : [...searches, { id, query }], active: id };
 }
