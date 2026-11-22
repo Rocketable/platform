@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { githubIssue, githubPR, loadIssue, loadPR, loadPRFiles } from "./github-pr";
+import { loadIssue, loadPR, loadPRFiles, parseGitHubReference } from "./github-pr";
 
 afterEach(() => { fetchSpy?.mockRestore(); });
 let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, "fetch">>;
@@ -8,13 +8,13 @@ const metadata = { title: "Example", body: "<img src=https://elsewhere.invalid/x
 const signal = () => new AbortController().signal;
 
 test("recognizes only GitHub HTTPS pull roots and known tabs before URL normalization", () => {
-  for (const suffix of ["", "/", "/files", "/commits?x=1#diff", "/checks#results"]) expect(githubPR(`https://github.com/sample/example/pull/7${suffix}`)).toEqual(ref);
-  for (const url of ["http://github.com/sample/example/pull/7", "https://github.com.evil.invalid/sample/example/pull/7", "https://user@github.com/sample/example/pull/7", "https://github.com:443/sample/example/pull/7", "https://github.com/sample/example/../example/pull/7", "https://github.com/sample/%2e%2e/pull/7", "https://github.com/sample/ex%2fample/pull/7", "https://github.com/sample/example/pull/0", "https://github.com/sample/example/pull/7/reviews", "https://github.com/sample/../pull/7", "https://github.com/sample/example/pull/9007199254740992"]) expect(githubPR(url)).toBeNull();
+  for (const suffix of ["", "/", "/files", "/commits?x=1#diff", "/checks#results"]) expect(parseGitHubReference(`https://github.com/sample/example/pull/7${suffix}`, "pull")).toEqual(ref);
+  for (const url of ["http://github.com/sample/example/pull/7", "https://github.com.evil.invalid/sample/example/pull/7", "https://user@github.com/sample/example/pull/7", "https://github.com:443/sample/example/pull/7", "https://github.com/sample/example/../example/pull/7", "https://github.com/sample/%2e%2e/pull/7", "https://github.com/sample/ex%2fample/pull/7", "https://github.com/sample/example/pull/0", "https://github.com/sample/example/pull/7/reviews", "https://github.com/sample/../pull/7", "https://github.com/sample/example/pull/9007199254740992"]) expect(parseGitHubReference(url, "pull")).toBeNull();
 });
 
 test("issue links use the numbered GitHub path and cannot preview a pull request as an issue", async () => {
-  expect(githubIssue("https://github.com/sample/example/issues/7#issuecomment-12")).toEqual(ref);
-  for (const href of ["https://other.invalid/sample/example/issues/7", "https://github.com/sample/../issues/7", "https://github.com/sample/example/issues/7/labels", "https://github.com/sample/example/pull/7"]) expect(githubIssue(href)).toBeNull();
+  expect(parseGitHubReference("https://github.com/sample/example/issues/7#issuecomment-12", "issue")).toEqual(ref);
+  for (const href of ["https://other.invalid/sample/example/issues/7", "https://github.com/sample/../issues/7", "https://github.com/sample/example/issues/7/labels", "https://github.com/sample/example/pull/7"]) expect(parseGitHubReference(href, "issue")).toBeNull();
   fetchSpy = spyOn(globalThis, "fetch").mockResolvedValueOnce(Response.json({ pull_request: {} }));
   await expect(loadIssue(ref, "", signal())).rejects.toThrow("not an issue");
   expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual(["https://api.github.com/repos/sample/example/issues/7"]);
