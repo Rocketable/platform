@@ -618,7 +618,7 @@ function SidebarMerge({ children }: { children: ReactNode }) {
   const name = useServer(), servers = useContext(ServerViews);
   const value = useMemo(() => {
     const here = servers[name] ?? { rows: [], refreshing: false, enumerationComplete: false, invalidateQueries: () => {} };
-    const all = Object.keys(servers).length > 1 ? Object.values(servers).flatMap((view) => view.rows).toSorted((a, b) => (Date.parse(b.updatedAt ?? "") || 0) - (Date.parse(a.updatedAt ?? "") || 0)) : here.rows;
+    const all = Object.keys(servers).length > 1 ? Object.values(servers).flatMap((view) => view.rows).sort((a, b) => (Date.parse(b.updatedAt ?? "") || 0) - (Date.parse(a.updatedAt ?? "") || 0)) : here.rows;
     return { ...here, all, servers };
   }, [servers, name]);
   return (
