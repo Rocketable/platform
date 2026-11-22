@@ -132,7 +132,7 @@ export function listedRows(held: SavedListing, result: Pick<EnumerationResult, "
 
 // Tab rows sent since the held version replace the held ones by location; a row with nothing set leaves.
 export function listedTabs(held: SavedListing, result: Pick<EnumerationResult, "tabs" | "since">): TabAttention[] {
-  const tabs = new Map([...result.since === held.version ? held.tabs ?? [] : [], ...result.tabs ?? []].map((tab) => [tab.path, tab]));
+  const tabs = [...result.since === held.version ? held.tabs ?? [] : [], ...result.tabs ?? []].reduce((byPath, tab) => byPath.set(tab.path, tab), new Map<string, TabAttention>());
   return [...tabs.values()].filter((tab) => tab.unreadAt || tab.parked || tab.until || tab.unfollowed);
 }
 
