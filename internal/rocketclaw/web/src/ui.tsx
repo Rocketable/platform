@@ -1657,9 +1657,9 @@ function TabNotifications() {
     if (!last || !("Notification" in window) || Notification.permission !== "granted") return;
     for (const mark of marks) {
       if (!last.servers.has(mark.server) || mark.quiet || mark.parked || mark.unreadAt === last.unread.get(key(mark)) || (document.hasFocus() && mark.server === server() && mark.path === pagePath())) continue;
-      if (!tabsOf(mark.server).open.some((tab) => tab.path === mark.path)) continue;
+      const tab = tabsOf(mark.server).open.find((item) => item.path === mark.path); if (!tab) continue;
       const { row } = mark, reply = row ? cleanText((row.server ? row.reply : row.preview) ?? "", {}).replace(/\s+/g, " ").trim() : "";
-      const title = !row ? tabLabel({ path: mark.path, search: tabsOf(mark.server).open.find((tab) => tab.path === mark.path)?.search }, { id: mark.path }, Search)[0] : row.server || !row.agent ? sessionTitle(row) : row.name || row.agent;
+      const title = !row ? tabLabel({ path: mark.path, search: tab.search }, { id: mark.path }, Search)[0] : row.server || !row.agent ? sessionTitle(row) : row.name || row.agent;
       // A notification replacing one with its tag alerts again in Chromium only with renotify, which TypeScript's DOM types omit.
       const options = { body: mark.note || (reply.length > 200 ? `${reply.slice(0, 199)}…` : reply || (row ? "Finished answering" : "")), tag: key(mark), renotify: true };
       let notification: Notification;
