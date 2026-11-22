@@ -1430,7 +1430,7 @@ function useTabs() {
     // Close, the attention items, the group commands, and the moves act on paths, the selected tabs of space; view is
     // this server's.
     commands: (path: string, view: SidebarView, paths = new Set([path]), space = state.tabs.find((item) => item.path === path)?.space ?? state.space): TabCommand[] => {
-      const tab = state.tabs.find((item) => item.path === path), there = tabsOf(space), inShared = sharedIn(space).includes(path);
+      const tab = state.tabs.find((item) => item.path === path), there = tabsOf(space), sharedRow = sharedTab(shared, space, path);
       const id = pathSession(path);
       const birthSpace = paths.size === 1 && id ? view.rows.find((row) => row.id === id && rowPath(row) === path)?.spaceId : undefined;
       const birth = state.spaces.find((item) => item.id === birthSpace);
@@ -1440,11 +1440,11 @@ function useTabs() {
       const keep = ({ unshared: kept }: SavedTabs) => kept && setState((current) => ({ ...current, tabs: current.tabs.some((item) => item.path === path)
         ? current.tabs.map((item) => item.path === path ? { ...item, search: { ...kept, searches: [...kept.searches, ...item.search?.searches.filter((own) => !kept.searches.some((other) => other.id === own.id)) ?? []] } } : item)
         : [...current.tabs, { path, space, search: kept }] }));
-      const share = inShared ? [{ key: "unshare", label: "Remove from Shared", run: () => void tabsCall(name, { unshare: { space, path } }, keep).catch(() => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] })) }]
+      const share = sharedRow ? [{ key: "unshare", label: "Remove from Shared", run: () => void tabsCall(name, { unshare: { space, path } }, keep).catch(() => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] })) }]
         : path === "/" ? [] : [{ key: "share", label: "Add to Shared", run: () => sharing.mutate({ share: { space, path, search: tab?.search } }) }];
-      const source = sharedTab(shared, space, path)?.search ?? tab?.search;
-      const selected = tab || !inShared ? state.tabs.filter((item) => paths.has(item.path)) : [{ path, space, search: source }];
-      const copy = viewed && isSearch(path) ? [{ key: "duplicate", label: "Duplicate", run: () => addSearch({ ...source!, name: `${searchTitle(source)} copy` }, inShared) }] : [];
+      const source = sharedRow?.search ?? tab?.search;
+      const selected = tab || !sharedRow ? state.tabs.filter((item) => paths.has(item.path)) : [{ path, space, search: source }];
+      const copy = viewed && isSearch(path) ? [{ key: "duplicate", label: "Duplicate", run: () => addSearch({ ...source!, name: `${searchTitle(source)} copy` }, !!sharedRow) }] : [];
       const attention = attentionItems(view, path, paths, attend, setPicking), closing = { key: "close", label: "Close", run: () => close([...paths]) };
       // The tab in view copies its whole address, with the view state in its query and fragment.
       const link = { key: "link", label: "Copy link", run: () => void copyText(viewed && path === pagePath() ? window.location.href : window.location.origin + serverPath(path, name), document.body) };
