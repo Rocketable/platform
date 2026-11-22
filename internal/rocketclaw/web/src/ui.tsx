@@ -1797,8 +1797,8 @@ function Cards({ stores, newChat }: { stores: TabStoreValue[]; newChat: () => vo
   const [menu, setMenu] = useState<CardMenu & { server: string }>(), [editing, setEditing] = useState<{ server: string; key: string }>(), [renaming, setRenaming] = useState<{ server: string; space: string }>();
   const [picked, setPicked] = useState<Picked>({ at: "", card: "", paths: new Set() }), focusing = useRef("");
   const loaded = stores.filter((tabs) => tabs.viewed || tabs.state.owner !== undefined), order = layout.order ?? [];
-  const entries = loaded.flatMap((tabs) => tabs.state.spaces.map((space) => ({ key: `${tabs.name}/${space.id}`, tabs, space })));
-  const rank = (key: string) => order.indexOf(key) + 1 || Infinity, sorted = entries.toSorted((a, b) => rank(a.key) - rank(b.key));
+  const rank = (key: string) => order.indexOf(key) + 1 || Infinity;
+  const sorted = loaded.flatMap((tabs) => tabs.state.spaces.map((space) => ({ key: `${tabs.name}/${space.id}`, tabs, space }))).sort((a, b) => rank(a.key) - rank(b.key));
   const place = (from: string, to: string, after: boolean) => {
     const keys = [...new Set([...order, ...sorted.map((entry) => entry.key)])].filter((key) => key !== from);
     saveLayout((current) => ({ ...current, order: keys.toSpliced(keys.indexOf(to) + Number(after), 0, from) }));
