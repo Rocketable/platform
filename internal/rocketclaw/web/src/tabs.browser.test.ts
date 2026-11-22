@@ -349,7 +349,7 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
 
 test("a RocketClaw session's tab menu and palette delete it after asking, showing a refusal and closing its tab", async () => {
   const started = performance.now();
-  const teardown = { pageErrorsChecked: false, browserCloseStarted: undefined as number | undefined, browserClosed: false };
+  const teardown: NonNullable<Parameters<typeof withPage>[2]> = { pageErrorsChecked: false, browserClosed: false, streamEvents: [] };
   let waitingFor = "open Chromium page", observed: (() => object) | undefined;
   let lastVisibleTabs: (string | null)[] | undefined;
   let firstDelete: object | undefined, refusalStatus: number | undefined, refusalTransport = "not requested", lastRefusalRegion = "not observed";
@@ -358,11 +358,15 @@ test("a RocketClaw session's tab menu and palette delete it after asking, showin
       const refusal = waitingFor === "show the running-turn refusal" || waitingFor === "confirm deletion from the tab menu"
         ? { refusalStatus, refusalTransport, lastRefusalRegion } : {};
       const cleanup = waitingFor === "check page errors";
-      const { pageErrorsChecked, browserCloseStarted, browserClosed } = teardown;
+      const { pageErrorsChecked, browserCloseStarted, browserClosed, browserDisconnectedAt, streamEvents } = teardown;
       const stage = cleanup && pageErrorsChecked ? (browserClosed ? "stop the test server" : "close Chromium") : waitingFor;
       const browserCloseStartedMs = browserCloseStarted === undefined ? undefined : Math.round(browserCloseStarted - started);
+      const close = stage === "close Chromium" ? {
+        browserDisconnectedMs: browserDisconnectedAt === undefined ? undefined : Math.round(browserDisconnectedAt - started),
+        streamEvents: streamEvents?.map(({ event, id, at }) => ({ event, id, elapsedMs: Math.round(at - started) })),
+      } : {};
       expect({ waitingFor: stage, elapsedMs: Math.round(performance.now() - started), lastVisibleTabs, ...observed?.(), ...refusal,
-        ...(cleanup ? { pageErrorsChecked, browserCloseStartedMs, browserClosed } : {}) },
+        ...(cleanup ? { pageErrorsChecked, browserCloseStartedMs, browserClosed } : {}), ...close },
         `Expected to finish: ${stage}`).toMatchObject({ waitingFor: "" });
     }
   });

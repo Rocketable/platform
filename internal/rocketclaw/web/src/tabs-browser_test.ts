@@ -78,14 +78,29 @@ function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: numb
   return Response.json(saved);
 }
 
-export async function withPage(options: object, run: (page: any, origin: string, prompts: { id: string; text: string }[], saved: Saved) => Promise<void>, teardown?: { pageErrorsChecked: boolean; browserCloseStarted?: number; browserClosed: boolean }) {
+export async function withPage(options: object, run: (page: any, origin: string, prompts: { id: string; text: string }[], saved: Saved) => Promise<void>, teardown?: {
+  pageErrorsChecked: boolean;
+  browserCloseStarted?: number;
+  browserClosed: boolean;
+  browserDisconnectedAt?: number;
+  streamEvents?: { event: "opened" | "canceled"; id: string | null; at: number }[];
+}) {
   const { chromium: engine } = await import(playwright!);
   const prompts: { id: string; text: string }[] = [];
   const sessions = structuredClone(rows);
   const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, sharedOrder: [] }, revision: 0, refused: 0, shared: [], closed: [], attention: [], sent: [], polls: 0, deletes: [] };
+  const streamEvents = teardown?.streamEvents;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/stream") return new Response(new ReadableStream({
+      start(controller) {
+        streamEvents?.push({ event: "opened", id: url.searchParams.get("id"), at: performance.now() });
+        controller.enqueue(": connected\n\n");
+      },
+      ...(streamEvents && { cancel() {
+        streamEvents.push({ event: "canceled", id: url.searchParams.get("id"), at: performance.now() });
+      } }),
+    }), { headers: { "Content-Type": "text/event-stream" } });
     // A session's attention rides its row; the other tabs' come as tab rows.
     if (url.pathname === "/api/ListSessions") {
       saved.polls++;
@@ -129,6 +144,7 @@ export async function withPage(options: object, run: (page: any, origin: string,
     }
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
+  if (teardown?.streamEvents) browser.once("disconnected", () => { teardown.browserDisconnectedAt = performance.now(); });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, ...options });
     const errors: string[] = [];
