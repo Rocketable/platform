@@ -6036,11 +6036,10 @@ function CronPage() {
   const rows = cronInSpace(jobs.data, useInSpace());
   const start = Date.now() - 12 * 3_600_000;
   const runNeedle = runQuery.trim().toLowerCase();
-  const matchingStems = new Set(rows.filter((job) => runNeedle === "" || [
+  const groups = [...Map.groupBy(rows, (job) => job.stem)].filter(([, items]) => runNeedle === "" || items.some((job) => [
     ...Object.values(job).flat(),
     ...[job.lastRun, ...(job.upcoming ?? [])].filter(Boolean).map((at) => `${cronWhen(at)} UTC`),
-  ].join(" ").toLowerCase().includes(runNeedle)).map((job) => job.stem));
-  const groups = [...Map.groupBy(rows, (job) => job.stem)].filter(([stem]) => matchingStems.has(stem)).map(([stem, items]) => ({
+  ].join(" ").toLowerCase().includes(runNeedle))).map(([stem, items]) => ({
     stem,
     job: items.find((item) => item.status !== "ran"),
     runs: items.filter((item) => item.status === "ran"),
@@ -6078,7 +6077,7 @@ function CronPage() {
           </div>
         ))}
       </section>
-      {preview && matchingStems.has(preview.stem) ? <CronRunPreview preview={preview} onClose={() => setPreview(null)} /> : null}
+      {preview && groups.some(({ stem }) => stem === preview.stem) ? <CronRunPreview preview={preview} onClose={() => setPreview(null)} /> : null}
       {run.dialog}
     </div>
   );
