@@ -20,9 +20,9 @@ export function FileDiff({ label, before, after }: { label: string; before: stri
 }
 
 function picked(review: AgentDraftReview, variant: string, picks: Record<string, Pick | undefined>): AgentDraftOpInput[] {
-  const settings = (review.settings ?? []).filter(({ key, live = "", draft = "" }) => picks[key] === "theirs" && live !== draft && (key !== "mode" || live));
-  return [...settings.map(({ key, live = "" }) => key === "mode" ? { kind: "set_mode", value: live } : { kind: "set_field", variant, key, value: live }),
-    ...(picks[""] === "theirs" && review.splices?.length ? [{ kind: "edit_body", variant, splices: review.splices }] : [])];
+  const ops: AgentDraftOpInput[] = (review.settings ?? []).filter(({ key, live = "", draft = "" }) => picks[key] === "theirs" && live !== draft && (key !== "mode" || live)).map(({ key, live = "" }) => key === "mode" ? { kind: "set_mode", value: live } : { kind: "set_field", variant, key, value: live });
+  if (picks[""] === "theirs" && review.splices?.length) ops.push({ kind: "edit_body", variant, splices: review.splices });
+  return ops;
 }
 
 export function Review({ review, name, variant, onSave }: { review: AgentDraftReview; name: string; variant: string; onSave: (ops: AgentDraftOpInput[]) => void }) {
