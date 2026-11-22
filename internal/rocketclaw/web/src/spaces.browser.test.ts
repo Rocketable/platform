@@ -1275,7 +1275,7 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
   const started = performance.now(), elapsed = () => Math.round(performance.now() - started);
   let waitingFor = "open browser", fixture: Saved | undefined;
   let lastRows: (string | null)[] | undefined, lastHeight: number | undefined, pollsBeforeReload: number | undefined;
-  const reload: { startedMs?: number; committedMs?: number; listingFinishedMs?: number; foxtrotWaitStartedMs?: number; foxtrotWaitFinishedMs?: number } = {};
+  const reload: { startedMs?: number; committedMs?: number; listingHeadersMs?: number; listingFinishedMs?: number; foxtrotWaitStartedMs?: number; foxtrotWaitFinishedMs?: number } = {};
   const firstReloadRequests: Record<string, string> = { Identity: "not requested", Protocol: "not requested", Tabs: "not requested", ListSessions: "not requested" };
   const snapshotReads: string[] = [];
   let renderedAfterReload: string | undefined;
@@ -1345,6 +1345,13 @@ test("Parked rows move among their space's by dragging or Shift+Arrow, in an ord
       const first = firstReloadRequests[rpc] === "not requested";
       if (first) firstReloadRequests[rpc] = "pending";
       if (first || rpc === "ListSessions") reloadRequests.set(request, { rpc, first });
+    });
+    page.on("response", (response: { request(): object; status(): number }) => {
+      const observed = reloadRequests.get(response.request());
+      if (observed?.rpc === "ListSessions" && observed.first) {
+        reload.listingHeadersMs = elapsed();
+        firstReloadRequests.ListSessions = `headers received (HTTP ${response.status()})`;
+      }
     });
     page.on("requestfinished", (request: object & { existingResponse(): { status(): number } | null }) => {
       const observed = reloadRequests.get(request);
