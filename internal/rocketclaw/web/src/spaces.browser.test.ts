@@ -1120,56 +1120,80 @@ test("every tab offers Unfollow, which then offers Follow, the two act on their 
   expect(await parked.getByText("Needs you").count()).toBe(0);
 }), 60_000);
 
-test("a space's card is drawn and acts the same whether its space is current: its groups under their names, its tabs with their whole menu, its unread tabs counted, and folded only the tab in view under a header that still marks its group's hidden tabs", () => withPage({}, async (page, origin, _prompts, saved) => {
-  saved.spaces.push({ id: "ops", name: "Ops" });
-  saved.state = { ...saved.state, space: "main", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [{ path: href("alpha"), space: "main" }, ...["bravo", "foxtrot", "golf", "charlie", "delta"].map((id) => ({ path: href(id), space: "ops", group: ["bravo", "foxtrot", "golf"].includes(id) ? "work" : undefined }))] };
-  const ops = page.getByRole("tablist", { name: "Ops tabs" }), fold = page.getByRole("button", { name: "Ops", exact: true });
-  const layout = () => ops.locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
-  const header = ops.locator('[data-group="work"]'), weight = () => header.getByRole("button", { name: "Work", exact: true }).locator("span").evaluate((name: HTMLElement) => getComputedStyle(name).fontWeight);
-  const lines = async (name: string) => {
-    await ops.getByRole("tab", { name, exact: true }).click({ button: "right" });
-    await page.getByRole("menuitem").first().waitFor();
-    const items = await menuLines(page);
-    await page.keyboard.press("Escape");
-    await page.getByRole("menu").waitFor({ state: "hidden" });
-    return items;
-  };
-  await page.goto(`${origin}${href("alpha")}`);
-  await ops.getByRole("tab", { name: "Golf", exact: true }).waitFor();
-  const away = [await layout(), await ops.getByRole("tab", { name: "Bravo", exact: true }).getAttribute("aria-description"), await lines("Golf")];
-  expect(away.slice(0, 2)).toEqual([["Work", "Bravo", "Foxtrot", "Golf", "Charlie", "Delta"], "Group Work, Space: Ops"]);
-  expect(await fold.getAttribute("aria-description")).toBe("1 waiting, Turn running");
-  expect(await page.locator('[data-card-key="/ops"]').getByText("Needs you", { exact: true }).first().isVisible()).toBe(true);
+test("a space's card is drawn and acts the same whether its space is current: its groups under their names, its tabs with their whole menu, its unread tabs counted, and folded only the tab in view under a header that still marks its group's hidden tabs", async () => {
+  const started = performance.now();
+  let pending = "start the browser", fixture: Saved | undefined;
+  onTestFinished(() => {
+    if (pending) console.error("Ops card test did not finish:", {
+      pending, elapsedMs: Math.round(performance.now() - started),
+      savedSpace: fixture?.state.space, savedFold: fixture?.layout?.folded?.["/ops"],
+    });
+  });
+  await withPage({}, async (page, origin, _prompts, saved) => {
+    fixture = saved;
+    pending = "load Alpha and show the Ops card";
+    saved.spaces.push({ id: "ops", name: "Ops" });
+    saved.state = { ...saved.state, space: "main", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [{ path: href("alpha"), space: "main" }, ...["bravo", "foxtrot", "golf", "charlie", "delta"].map((id) => ({ path: href(id), space: "ops", group: ["bravo", "foxtrot", "golf"].includes(id) ? "work" : undefined }))] };
+    const ops = page.getByRole("tablist", { name: "Ops tabs" }), fold = page.getByRole("button", { name: "Ops", exact: true });
+    const layout = () => ops.locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+    const header = ops.locator('[data-group="work"]'), weight = () => header.getByRole("button", { name: "Work", exact: true }).locator("span").evaluate((name: HTMLElement) => getComputedStyle(name).fontWeight);
+    const lines = async (name: string) => {
+      await ops.getByRole("tab", { name, exact: true }).click({ button: "right" });
+      await page.getByRole("menuitem").first().waitFor();
+      const items = await menuLines(page);
+      await page.keyboard.press("Escape");
+      await page.getByRole("menu").waitFor({ state: "hidden" });
+      return items;
+    };
+    await page.goto(`${origin}${href("alpha")}`);
+    await ops.getByRole("tab", { name: "Golf", exact: true }).waitFor();
+    pending = "read the inactive Ops card and Golf menu";
+    const away = [await layout(), await ops.getByRole("tab", { name: "Bravo", exact: true }).getAttribute("aria-description"), await lines("Golf")];
+    expect(away.slice(0, 2)).toEqual([["Work", "Bravo", "Foxtrot", "Golf", "Charlie", "Delta"], "Group Work, Space: Ops"]);
+    expect(await fold.getAttribute("aria-description")).toBe("1 waiting, Turn running");
+    expect(await page.locator('[data-card-key="/ops"]').getByText("Needs you", { exact: true }).first().isVisible()).toBe(true);
 
-  // Its Close closes the tab there, leaving the page where it is.
-  await ops.getByRole("tab", { name: "Delta", exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Close", exact: true }).click();
-  await until(() => !saved.state.tabs.some((tab) => tab.path === href("delta")));
-  expect(new URL(page.url()).pathname).toBe(href("alpha"));
+    // Its Close closes the tab there, leaving the page where it is.
+    pending = "close Delta from its tab menu";
+    await ops.getByRole("tab", { name: "Delta", exact: true }).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Close", exact: true }).click();
+    pending = "save the Delta close";
+    await until(() => !saved.state.tabs.some((tab) => tab.path === href("delta")));
+    expect(new URL(page.url()).pathname).toBe(href("alpha"));
 
-  // Folded, it lists nothing while the tab in view is elsewhere, and only that tab once its space is entered, under
-  // its group's header, bold for the hidden unread Foxtrot and needing this person for the hidden Golf.
-  await fold.click();
-  await fold.and(page.locator('[aria-expanded="false"]')).waitFor();
-  expect(await layout()).toEqual([]);
-  expect(await fold.getAttribute("aria-description")).toBe("1 waiting, Turn running");
-  await until(() => saved.layout?.folded?.["/ops"] === true);
-  await chooseSpace(page, "Ops", "menuitemradio");
-  await page.waitForURL(`**${href("bravo")}`);
-  expect(await layout()).toEqual(["Work", "Bravo"]);
-  await header.getByText("Needs you", { exact: true }).waitFor();
-  expect(await weight()).toBe("700");
-  await fold.click();
-  await fold.and(page.locator('[aria-expanded="true"]')).waitFor();
-  expect([await layout(), await ops.getByRole("tab", { name: "Bravo", exact: true }).getAttribute("aria-description"), await lines("Golf")]).toEqual([["Work", "Bravo", "Foxtrot", "Golf", "Charlie"], away[1], away[2]]);
-  expect(await header.getByText("Needs you").count()).toBe(0);
-  expect(await weight()).toBe("500");
+    // Folded, it lists nothing while the tab in view is elsewhere, and only that tab once its space is entered, under
+    // its group's header, bold for the hidden unread Foxtrot and needing this person for the hidden Golf.
+    pending = "click the Ops fold button while Main is current";
+    await fold.click();
+    pending = "render the folded Ops card";
+    await fold.and(page.locator('[aria-expanded="false"]')).waitFor();
+    expect(await layout()).toEqual([]);
+    expect(await fold.getAttribute("aria-description")).toBe("1 waiting, Turn running");
+    pending = "save the folded Ops card";
+    await until(() => saved.layout?.folded?.["/ops"] === true);
+    pending = "enter Ops on Bravo and show the folded group";
+    await chooseSpace(page, "Ops", "menuitemradio");
+    await page.waitForURL(`**${href("bravo")}`);
+    expect(await layout()).toEqual(["Work", "Bravo"]);
+    await header.getByText("Needs you", { exact: true }).waitFor();
+    expect(await weight()).toBe("700");
+    pending = "click the Ops unfold button while Ops is current";
+    await fold.click();
+    pending = "render the unfolded Ops card and read the Golf menu";
+    await fold.and(page.locator('[aria-expanded="true"]')).waitFor();
+    expect([await layout(), await ops.getByRole("tab", { name: "Bravo", exact: true }).getAttribute("aria-description"), await lines("Golf")]).toEqual([["Work", "Bravo", "Foxtrot", "Golf", "Charlie"], away[1], away[2]]);
+    expect(await header.getByText("Needs you").count()).toBe(0);
+    expect(await weight()).toBe("500");
 
-  // A row of another space's card opens in its space.
-  await page.getByRole("tablist", { name: "Main tabs" }).getByRole("tab", { name: "Alpha", exact: true }).click();
-  await page.waitForURL(`**${href("alpha")}`);
-  await page.locator(`button${current}[aria-label="Main"]`).waitFor();
-}));
+    // A row of another space's card opens in its space.
+    pending = "open Alpha in Main";
+    await page.getByRole("tablist", { name: "Main tabs" }).getByRole("tab", { name: "Alpha", exact: true }).click();
+    await page.waitForURL(`**${href("alpha")}`);
+    await page.locator(`button${current}[aria-label="Main"]`).waitFor();
+    pending = "finish the browser fixture";
+  });
+  pending = "";
+});
 
 test("with more than one space Parked is a tree whose spaces fold on their own and stay folded after a reload", () => withPage({}, async (page, origin, _prompts, saved) => {
   saved.spaces.push({ id: "ops", name: "Ops" });
