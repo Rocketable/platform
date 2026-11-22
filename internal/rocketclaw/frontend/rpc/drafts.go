@@ -105,7 +105,7 @@ func (s *Server) proposeDraftChanges(ctx context.Context, username string, reque
 		return nil, agentDraftError("ProposeDraftChanges", err)
 	}
 
-	ask := backend.AgentDraftAsk{Request: request.Request, Answer: request.Answer, Variant: request.Variant}
+	var transcript []byte
 
 	if draft.TestChat != "" {
 		history, err := s.history(ctx, &HistoryRequest{Id: draft.TestChat})
@@ -114,11 +114,11 @@ func (s *Server) proposeDraftChanges(ctx context.Context, username string, reque
 		}
 
 		for _, message := range history.Messages {
-			ask.Transcript += fmt.Sprintf("## %s\n%s\n\n", message.Role, message.Text)
+			transcript = fmt.Appendf(transcript, "## %s\n%s\n\n", message.Role, message.Text)
 		}
 	}
 
-	proposal, err := s.sessions.ProposeAgentDraftChanges(ctx, request.Id, username, &ask)
+	proposal, err := s.sessions.ProposeAgentDraftChanges(ctx, request.Id, username, &backend.AgentDraftAsk{Request: request.Request, Answer: request.Answer, Variant: request.Variant, Transcript: string(transcript)})
 	if err != nil {
 		return nil, agentDraftError("ProposeDraftChanges", err)
 	}
