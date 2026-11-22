@@ -911,7 +911,7 @@ INSERT INTO web_closed_tabs (username, path, space, search, closed_at) VALUES ('
 
 	shared, err := store.SharedTabs(ctx)
 	require.NoError(t, err)
-	require.Equal(t, []SharedTab{{Space: "main", Path: "/search/d", Search: &SearchPage{Name: "Deploys"}}, {Space: "main", Path: "/cron"}}, shared)
+	require.Equal(t, []Tab{{Space: "main", Path: "/search/d", Search: &SearchPage{Name: "Deploys"}}, {Space: "main", Path: "/cron"}}, shared)
 
 	closed, err := store.ClosedTabs(ctx, "alice")
 	require.NoError(t, err)

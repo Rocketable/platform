@@ -2562,7 +2562,7 @@ func TestWebSharedTabs(t *testing.T) {
 		t.Helper()
 		require.NoError(t, store.ShareTab(ctx, space, path, nil))
 	}
-	shared := func() []SharedTab {
+	shared := func() []Tab {
 		t.Helper()
 
 		tabs, err := store.SharedTabs(ctx)
@@ -2576,7 +2576,7 @@ func TestWebSharedTabs(t *testing.T) {
 	share("main", "/search")
 	share("main", "/s/bm9uZQ")
 	share("gone", "/cron")
-	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/s/YQ"}}, shared(),
+	assert.Equal(t, []Tab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/s/YQ"}}, shared(),
 		"oldest first; a legacy spelling is stored canonical; sharing again, a missing session, or a missing space changes nothing")
 
 	share(ops, "/cron")
@@ -2593,12 +2593,12 @@ func TestWebSharedTabs(t *testing.T) {
 	}
 	assert.Nil(t, unshare("main", "/s/YQ"))
 	assert.Nil(t, unshare("main", "/pages"))
-	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: ops, Path: "/cron"}, {Space: ops, Path: "/s/YQ"}, {Space: dev, Path: "/agents"}}, shared(),
+	assert.Equal(t, []Tab{{Space: "main", Path: "/search"}, {Space: ops, Path: "/cron"}, {Space: ops, Path: "/s/YQ"}, {Space: dev, Path: "/agents"}}, shared(),
 		"removing a tab from one space leaves it in another; removing one not shared changes nothing")
 
 	share("main", "/s/YQ")
 	require.NoError(t, store.DeleteSpace(ctx, ops))
-	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/cron"}, {Space: dev, Path: "/agents"}, {Space: "main", Path: "/s/YQ"}}, shared(),
+	assert.Equal(t, []Tab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/cron"}, {Space: dev, Path: "/agents"}, {Space: "main", Path: "/s/YQ"}}, shared(),
 		"a deleted space's tabs move to the first space, keeping when they were added; one shared there already stays once")
 
 	share(dev, "/s/YQ")
@@ -2607,7 +2607,7 @@ func TestWebSharedTabs(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.DeleteSpace(ctx, dev))
 	require.ErrorIs(t, store.DeleteSpace(ctx, "main"), ErrSpaceRejected)
-	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/cron"}, {Space: "main", Path: "/agents"}}, shared(),
+	assert.Equal(t, []Tab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/cron"}, {Space: "main", Path: "/agents"}}, shared(),
 		"deleting a session takes it out of every space; the last space keeps its tabs")
 
 	require.NoError(t, store.CreateSpace(ctx, "Docs"))
@@ -2622,7 +2622,7 @@ func TestWebSharedTabs(t *testing.T) {
 		t.Helper()
 
 		tabs := shared()
-		index := slices.IndexFunc(tabs, func(tab SharedTab) bool { return tab.Space == space && tab.Path == path })
+		index := slices.IndexFunc(tabs, func(tab Tab) bool { return tab.Space == space && tab.Path == path })
 		require.GreaterOrEqual(t, index, 0)
 
 		return tabs[index].Search
@@ -2649,13 +2649,13 @@ func TestWebSharedTabs(t *testing.T) {
 	assert.True(t, edit(docs, "/search/x", first, second))
 	assert.Equal(t, second, page(docs, "/search/x"))
 	assert.False(t, edit(docs, "/search/y", nil, second))
-	assert.False(t, slices.ContainsFunc(shared(), func(tab SharedTab) bool { return tab.Path == "/search/y" }))
+	assert.False(t, slices.ContainsFunc(shared(), func(tab Tab) bool { return tab.Path == "/search/y" }))
 	assertNoOrphanSearchPages(t, store)
 
 	require.NoError(t, store.ShareTab(ctx, "main", "/search/z", mine))
 	require.NoError(t, store.ShareTab(ctx, docs, "/search/z", first))
 	require.NoError(t, store.DeleteSpace(ctx, docs))
-	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/cron"}, {Space: "main", Path: "/agents"}, {Space: "main", Path: "/search/x", Search: second}, {Space: "main", Path: "/search/z", Search: mine}}, shared(),
+	assert.Equal(t, []Tab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/cron"}, {Space: "main", Path: "/agents"}, {Space: "main", Path: "/search/x", Search: second}, {Space: "main", Path: "/search/z", Search: mine}}, shared(),
 		"a deleted space's Search pages move with their tabs, keeping when they were added; one shared there already keeps its own page")
 	assertNoOrphanSearchPages(t, store)
 

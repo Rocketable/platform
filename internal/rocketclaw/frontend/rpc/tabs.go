@@ -40,7 +40,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 
 	var (
 		spaces   []backend.Space
-		shared   []backend.SharedTab
+		shared   []backend.Tab
 		layout   backend.StripLayout
 		state    backend.TabState
 		closed   []backend.Tab

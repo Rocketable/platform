@@ -766,16 +766,11 @@ WHERE t.username = $1 GROUP BY t.username, t.path, p.id ORDER BY t.closed_at DES
 	}, username)
 }
 
-type SharedTab struct {
-	Space, Path string
-	Search      *SearchPage
-}
-
-func (s *SessionService) SharedTabs(ctx context.Context) ([]SharedTab, error) {
+func (s *SessionService) SharedTabs(ctx context.Context) ([]Tab, error) {
 	return queryRows(ctx, s.db, `SELECT t.space, t.path, `+searchPageSQL+` FROM web_shared_tabs t
 `+searchPageJoinSQL+`
-GROUP BY t.space, t.path, p.id ORDER BY t.added_at, t.path`, "shared tabs", func(row rowScanner) (SharedTab, error) {
-		var tab SharedTab
+GROUP BY t.space, t.path, p.id ORDER BY t.added_at, t.path`, "shared tabs", func(row rowScanner) (Tab, error) {
+		var tab Tab
 		return tab, row.Scan(&tab.Space, &tab.Path, &tab.Search)
 	})
 }
