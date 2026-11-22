@@ -229,6 +229,9 @@ func newKwargsValueBuiltin(name string, schema map[string]any, call func(context
 		}
 
 		ctx := thread.Local(localCtx).(context.Context)
+		if err := context.Cause(ctx); err != nil {
+			return nil, fmt.Errorf("%s: %w", b.Name(), err)
+		}
 
 		return call(context.WithValue(ctx, callKeyContext{}, nextKey(thread)), callArgs)
 	})
