@@ -65,7 +65,7 @@ A script that finishes after leaving its turn (started with `background: true`, 
 
 - Storage is `Config.RetainedResultDir`, a path relative to `SpillDir`, so the spill-tree denials above cover it. RocketClaw sets it per conversation to `retained/<sha256(conversation ID)>`; handoff and agent editor runs use an unused directory.
 - The ID is a UUID naming `<id>.txt` directly in that directory, so an ID from another conversation is simply not found.
-- Expiry is the file's modification time plus 7 days. Each new retained write and each startup sweep expired files; deleting or pruning a conversation removes its directory, and a fork links the source's files. A load of an expired file removes it and answers `execute result expired`. There is no timer.
+- Expiry is the file's modification time plus 7 days. Each new retained write and each startup sweep expired files; deleting or pruning a conversation removes its directory, and a fork links the source's files. A load of an expired file removes it and answers `unknown or expired execute result`, as a load does once the file is gone. There is no timer.
 - `load_execute_result` resolves a live turn spill first, then a retained ID. Opening and expiry live in `openStoredExecuteResult`, and paging stays in `loadExecuteResult`.
 - The `execute` and `load_execute_result` descriptions still say IDs expire at turn end, because agents without `allow_background` must see an unchanged schema. Allowed agents read the 7-day lifetime in the `background` parameter's description, and the retained preview footer states it too.
 

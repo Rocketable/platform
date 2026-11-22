@@ -371,7 +371,7 @@ func (l *looper) openStoredExecuteResult(retainedRel, resultID string) (_ *os.Fi
 
 	if !live && time.Since(info.ModTime()) > retainedResultTTL {
 		_ = l.promptExpansion.root.Remove(path)
-		return nil, errors.New("execute result expired")
+		return nil, errUnknownExecuteResult
 	}
 
 	return file, nil
