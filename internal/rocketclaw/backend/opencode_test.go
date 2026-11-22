@@ -14,7 +14,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -751,7 +753,7 @@ func TestSyncOpenCodeMarksAskingStarts(t *testing.T) {
 	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
 	id := "opencode:box:ses_q"
 	path := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte(id))
-	sync := func(asking bool) []string {
+	syncAttention := func(asking bool) []string {
 		t.Helper()
 
 		fake.pending = map[string]map[string][]string{"/api/form": {"/srv/app": {}}, "/api/permission/request": {"/srv/app": {}}}
@@ -764,14 +766,14 @@ func TestSyncOpenCodeMarksAskingStarts(t *testing.T) {
 		return attentionOn(t, s, id)
 	}
 
-	require.Empty(t, sync(false))
+	require.Empty(t, syncAttention(false))
 
 	saved, err := s.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: path, Space: "main"}}}, 0)
 	require.NoError(t, err)
 	require.True(t, saved)
 	require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionPark, nil))
 
-	assert.Equal(t, []string{"alice quiet parked", "bob loud"}, sync(true), "the question makes Alice's park due")
+	assert.Equal(t, []string{"alice quiet parked", "bob loud"}, syncAttention(true), "the question makes Alice's park due")
 
 	require.NoError(t, s.tickParks(ctx))
 	require.NoError(t, s.tickParks(ctx))
@@ -779,9 +781,9 @@ func TestSyncOpenCodeMarksAskingStarts(t *testing.T) {
 
 	_, err = s.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
 	require.NoError(t, err)
-	assert.Empty(t, sync(true), "a session that goes on asking marks no one again")
-	assert.Empty(t, sync(false))
-	assert.Equal(t, []string{"alice loud", "bob loud"}, sync(true), "asking again marks again")
+	assert.Empty(t, syncAttention(true), "a session that goes on asking marks no one again")
+	assert.Empty(t, syncAttention(false))
+	assert.Equal(t, []string{"alice loud", "bob loud"}, syncAttention(true), "asking again marks again")
 }
 
 func TestOpenCodeShellsFollowEvents(t *testing.T) {
@@ -935,19 +937,26 @@ FROM generate_series(1, 1024) AS series(i)`)
 func TestSyncOpenCodePrunesOnItsOwnSchedule(t *testing.T) {
 	t.Parallel()
 
-	s := newOpenCodeTestService(t, "box")
-	fake := &fakeOpenCode{}
-	prunes, passes, release := make(chan struct{}, 10), make(chan struct{}, 10), make(chan struct{})
+	closedEvents := make(chan string)
+	close(closedEvents)
+
+	fake := &fakeOpenCode{events: closedEvents}
+	prunes, passes, release := make(chan struct{}, 1), make(chan struct{}, 1), make(chan struct{})
 	pruneArrived := make(chan struct{})
+
+	const unexpectedRetry = "a failed prune waits for the next day"
+
+	var reportRetryOverflow sync.Once
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Connection", "close")
+
 		switch {
 		case r.URL.Query().Get("order") == "asc":
-			prunes <- struct{}{}
-
 			select {
-			case <-pruneArrived:
+			case prunes <- struct{}{}:
 			default:
-				close(pruneArrived)
+				reportRetryOverflow.Do(func() { t.Error(unexpectedRetry) })
 			}
 
 			select {
@@ -965,52 +974,68 @@ func TestSyncOpenCodePrunesOnItsOwnSchedule(t *testing.T) {
 				return
 			}
 
-			passes <- struct{}{}
+			select {
+			case passes <- struct{}{}:
+			default:
+			}
 		}
 
 		fake.ServeHTTP(w, r)
 	}))
 	t.Cleanup(server.Close)
-	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
-		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "pw"}
-		cfg.Web.Tsnet = &config.TsnetConfig{}
 
-		return nil
-	}))
+	fixtureReady := make(chan struct{})
+	startupDeadline := make(chan (<-chan time.Time), 1)
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	go func() {
+		select {
+		case <-fixtureReady:
+			startupDeadline <- time.After(2 * openCodeSyncInterval)
+		case <-t.Context().Done():
+		}
+	}()
 
-	var syncing errgroup.Group
-	syncing.Go(func() error {
-		s.SyncOpenCode(ctx, s.definitions)
-		return nil
+	synctest.Test(t, func(t *testing.T) {
+		s := newOpenCodeTestService(t, "box")
+		require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
+			cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "pw"}
+			cfg.Web.Tsnet = &config.TsnetConfig{}
+
+			return nil
+		}))
+
+		close(fixtureReady)
+
+		watchdog := <-startupDeadline
+
+		var syncing errgroup.Group
+
+		syncing.Go(func() error {
+			s.SyncOpenCode(t.Context(), s.definitions)
+			return nil
+		})
+		t.Cleanup(func() { require.NoError(t, syncing.Wait()) })
+
+		select {
+		case <-prunes:
+			close(pruneArrived)
+		case <-watchdog:
+			require.FailNow(t, "the prune starts at startup, beside the first sync pass")
+		}
+
+		select {
+		case <-passes:
+		case <-watchdog:
+			require.FailNow(t, "a sync pass runs while the prune is slow")
+		}
+
+		close(release)
+		synctest.Wait()
+		synctest.Sleep(openCodeSyncInterval)
+		require.NotEmpty(t, passes, "sync keeps running after the prune failed")
+		synctest.Sleep(time.Second)
+		require.Empty(t, prunes, unexpectedRetry)
 	})
-
-	select {
-	case <-prunes:
-	case <-time.After(openCodeSyncInterval):
-		require.FailNow(t, "the prune starts at startup, beside the first sync pass")
-	}
-
-	select {
-	case <-passes:
-	case <-time.After(openCodeSyncInterval / 2):
-		require.FailNow(t, "a sync pass runs while the prune is slow")
-	}
-
-	close(release)
-
-	select {
-	case <-passes:
-	case <-time.After(2 * openCodeSyncInterval):
-		require.FailNow(t, "sync keeps running after the prune failed")
-	}
-
-	require.Never(t, func() bool { return len(prunes) > 0 }, time.Second, 10*time.Millisecond, "a failed prune waits for the next day")
-
-	cancel()
-	require.NoError(t, syncing.Wait())
 }
 
 func TestPruneOpenCodeListsEveryPageFirst(t *testing.T) {
