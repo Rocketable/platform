@@ -1699,8 +1699,23 @@ test("New session and the palette offer every RocketClaw's OpenCode servers from
   try {
     await addRemote(page, remote.url);
     saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }] };
+    pending = "open unknown server page";
+    await page.goto(`${origin}/r/nowhere/`);
+    pending = "open New session menu on unknown server page";
+    await page.getByRole("button", { name: "New session", exact: true }).click();
+    pending = "wait for far in New session menu";
+    await page.getByRole("menuitem", { name: "far", exact: true }).waitFor();
+    pending = "open command palette";
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Control+Shift+p");
+    pending = "search command palette for far";
+    await page.getByPlaceholder("Type a command").fill("new on far");
+    pending = "wait for far in command palette";
+    await page.getByRole("button", { name: "Sessions: New on far (work)", exact: true }).waitFor();
     pending = "open Alpha";
-    await page.goto(`${origin}${href("alpha")}`);
+    await page.keyboard.press("Escape");
+    await page.getByRole("tab", { name: "Alpha", exact: true }).click();
+    await page.waitForURL(`${origin}${href("alpha")}`);
     const created = page.waitForRequest((request: CreateRequest) => {
       const url = request.url();
       if (new URL(url).pathname === "/api/CreateSession") {
@@ -1733,19 +1748,6 @@ test("New session and the palette offer every RocketClaw's OpenCode servers from
     } finally {
       outcome.abort();
     }
-    pending = "open unknown server page";
-    await page.goto(`${origin}/r/nowhere/`);
-    pending = "open New session menu on unknown server page";
-    await page.getByRole("button", { name: "New session", exact: true }).click();
-    pending = "wait for far in New session menu";
-    await page.getByRole("menuitem", { name: "far", exact: true }).waitFor();
-    pending = "open command palette";
-    await page.keyboard.press("Escape");
-    await page.keyboard.press("Control+Shift+p");
-    pending = "search command palette for far";
-    await page.getByPlaceholder("Type a command").fill("new on far");
-    pending = "wait for far in command palette";
-    await page.getByRole("button", { name: "Sessions: New on far (work)", exact: true }).waitFor();
     pending = "";
   } finally {
     remote.server.stop(true);
