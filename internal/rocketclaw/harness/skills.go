@@ -16,8 +16,6 @@ import (
 	"unicode"
 
 	"golang.org/x/text/cases"
-	"golang.org/x/text/runes"
-	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
 	"gopkg.in/yaml.v3"
 )
@@ -529,7 +527,13 @@ func quoteSkillFrontmatterColons(frontmatter []byte) []byte {
 }
 
 func skillSortKey(id string) string {
-	stripped, _, _ := transform.String(transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn))), id)
+	stripped := strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Mn, r) {
+			return -1
+		}
+
+		return r
+	}, norm.NFD.String(id))
 
 	var key strings.Builder
 
