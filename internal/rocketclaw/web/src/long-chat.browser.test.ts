@@ -24,6 +24,11 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   const view = (first: number, last: number, extra: object) => ({ messages: Array.from({ length: last - first + 1 }, (_, i) => entry(first + i)).flat(), origin: "", delegations: [], revision: "", reset: true, replacedKeys: [], removedKeys: [], entryKeys: Array.from({ length: last - first + 1 }, (_, i) => String(first + i)), running: false, terminal: "", start: String(first), more: first > 1, ...extra });
   const pages: { before?: string; from?: string; limit?: number }[] = [];
   const opened = Promise.withResolvers<void>();
+  const earlierRequested = Promise.withResolvers<void>();
+  const releaseEarlier = Promise.withResolvers<void>();
+  const linkedRequested = Promise.withResolvers<void>();
+  const releaseLinked = Promise.withResolvers<void>();
+  const releaseEarlierError = Promise.withResolvers<void>();
   let fullReads = 0, streamRequests = 0, firstReadArrived = false;
   const streamOpened = Promise.withResolvers<void>();
   const steps = [{ name: "Chromium launch", atMs: 0 }];
@@ -68,7 +73,18 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
       }
       if (!input.before) return Response.json(view(turns - input.limit! + 1, turns, { revision: "tail", reset: !input.revision, ...(input.revision ? { messages: [], replacedKeys: [] } : {}) }));
       pages.push({ before: input.before, from: input.from, limit: input.limit });
-      if (input.before === "5") return Response.json({ message: "Earlier history unavailable", code: 13 }, { status: 503 });
+      if (input.before === "71") {
+        earlierRequested.resolve();
+        await releaseEarlier.promise;
+      }
+      if (input.before === "21" && input.from === "5") {
+        linkedRequested.resolve();
+        await releaseLinked.promise;
+      }
+      if (input.before === "5") {
+        await releaseEarlierError.promise;
+        return Response.json({ message: "Earlier history unavailable", code: 13 }, { status: 503 });
+      }
       const before = Number(input.before);
       return Response.json(view(input.from ? Number(input.from) : Math.max(1, before - input.limit!), before - 1, { reset: false }));
     }
@@ -185,13 +201,13 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     mark("show new tab group name");
     await page.getByRole("button", { name: named, exact: true }).waitFor();
 
-    mark("enable CPU throttling for history paging");
-    const cdp = await page.context().newCDPSession(page);
-    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 8 });
     mark("hover over transcript");
     await page.locator("#transcript-scroll").hover();
     mark("wheel to the top");
     await page.mouse.wheel(0, -100_000);
+    await earlierRequested.promise;
+    expect(await page.getByText("user 21", { exact: true }).count()).toBe(0);
+    releaseEarlier.resolve();
     mark("attach user 21 after scrolling");
     await page.getByText("user 21", { exact: true }).waitFor({ state: "attached" });
     mark("check earlier page and retained user 71 anchor");
@@ -234,9 +250,13 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
         return inViewport;
       };
     });
+    await linkedRequested.promise;
+    expect(await page.getByText("user 5", { exact: true }).count()).toBe(0);
+    releaseLinked.resolve();
     mark("wait for linked message 5:0 in viewport");
     await page.waitForFunction((inViewport: () => boolean) => inViewport(), linkedTurnInViewport);
     expect(pages[1]).toEqual({ before: "21", from: "5", limit: undefined });
+    releaseEarlierError.resolve();
     mark("show the earlier-history error");
     await page.getByText("Earlier history unavailable", { exact: true }).waitFor();
     mark("check loaded turns and composer after the history error");
@@ -248,6 +268,9 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     expect(browserDisconnectedAtMs, "Chromium disconnected before cleanup").toBeNull();
     mark("assertions complete");
   } finally {
+    releaseEarlier.resolve();
+    releaseLinked.resolve();
+    releaseEarlierError.resolve();
     closeStartedAtMs = elapsed();
     await browser.close();
     closeFinishedAtMs = elapsed();
