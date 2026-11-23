@@ -999,7 +999,7 @@ type ChatOriginFacts struct {
 	Run                    *protocol.CronRun
 }
 
-const chatOriginSQL = `, creating AS (
+const chatOriginSQL = `, creating AS NOT MATERIALIZED (
     SELECT *, COALESCE(cron_run, CASE WHEN kind <> 'slack_thread' OR created_by = $2 THEN first_source END, '') AS creating_source FROM visible_chats
 ), origins AS (
     SELECT c.*, COALESCE(c.external_id, '') AS external, COALESCE(c.external_agent, '') AS binding_agent,
