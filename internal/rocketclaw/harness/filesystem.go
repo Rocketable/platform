@@ -599,6 +599,7 @@ type grepMatch struct {
 	Line  int    `json:"line"`
 	Text  string `json:"text"`
 	MTime int64  `json:"mtime"`
+	match *codemode.Match
 }
 
 type ripgrepJSON struct {

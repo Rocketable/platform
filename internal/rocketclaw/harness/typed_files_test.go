@@ -316,6 +316,8 @@ func TestExecuteGrepReturnsMatches(t *testing.T) {
 	got := runTypedScript(t, sfs, `def main():
     m = grep(pattern="needle", include="*.txt")
     first = m[0]
+    if first != m[0] or first not in m[:] or [x == first for x in m] != [True, False]:
+        fail("grep lookups must return the same match objects")
     return {
         "type": type(m), "len": len(m), "str": str(m), "json": json.decode(json.encode(m)), "partial": m.partial, "truthy": bool(m),
         "match_type": type(first), "path": first.path, "line": first.line, "text": first.text,

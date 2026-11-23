@@ -262,7 +262,7 @@ func (m globMatch) value() starlark.Value {
 	return codemode.NewText("path", m.Path, starlark.StringDict{"path": starlark.String(m.Path), "name": starlark.String(filepath.Base(m.Path)), "mtime": starlark.MakeInt64(m.MTime)}, nil)
 }
 
-func (m grepMatch) value() starlark.Value { return codemode.NewMatch(m.Path, m.Line, m.Text) }
+func (m grepMatch) value() starlark.Value { return m.match }
 
 type searchResult[M searchMatch] struct {
 	kind, text string
@@ -291,7 +291,11 @@ func newGrepResult(matches []grepMatch, partial bool, search grepToolParams) *se
 	output := []string{fmt.Sprintf("Found %d matches", len(matches))}
 
 	current := ""
-	for _, match := range matches {
+
+	for i := range matches {
+		match := &matches[i]
+
+		match.match = codemode.NewMatch(match.Path, match.Line, match.Text)
 		if current != match.Path {
 			if current != "" {
 				output = append(output, "")
