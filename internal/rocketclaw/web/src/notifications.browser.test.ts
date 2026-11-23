@@ -301,13 +301,13 @@ test("a person marks tabs read or unread from the tab menu or the palette, each 
   }
 }, 60_000);
 
-test("a Cron tab's loud mark turns it bold and notifies with its note, a park that ends brings it back after it closed, a tab closed elsewhere never notifies, and a Shared-only row's notification opens it in its space", async () => {
+test("a Cron tab's loud mark turns it bold and notifies with its note, a park that ends brings it back after it closed, a tab closed elsewhere never notifies, a Shared-only row's notification opens it in its space, and an agent's navigation opens once in a focused window", async () => {
   const { chromium: engine } = await import(playwright!);
   const cron = `/cron/${encode("daily")}`, chat = `/s/${encode("chat")}`;
   const ops: SearchPage = { name: "Ops", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" };
   let state = { tabs: [{ path: chat, space: "main" }, { path: cron, space: "main" }], groups: [], space: "main", last: {} }, revision = 1, marks: TabAttention[] = [];
   const viewing: string[] = [];
-  let reloads = 0;
+  let reloads = 0, navigation = "";
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -315,7 +315,9 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
       // As the server does, the tab in view in a focused window is read.
       viewing.push(url.searchParams.get("viewing") ?? "");
       marks = marks.filter((mark) => mark.path !== viewing.at(-1));
-      const first = { sessions: [{ id: "chat", agent: "main", preview: "Chat work" }], owner: "tester", tabRevision: String(revision) };
+      const navigate = viewing.at(-1) ? navigation : "";
+      if (navigate) navigation = "";
+      const first = { sessions: [{ id: "chat", agent: "main", preview: "Chat work" }], owner: "tester", tabRevision: String(revision), navigate };
       return new Response(`data: ${JSON.stringify(first)}\n\ndata: ${JSON.stringify({ upstreamSuccess: true, tabs: marks })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     }
     if (!url.pathname.startsWith("/api/")) {
@@ -375,6 +377,14 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
     await page.evaluate(() => { window.focused = false; });
     await polls();
     expect(viewing.at(-1)).toBe("");
+    navigation = chat;
+    await polls();
+    expect(new URL(page.url()).pathname).toBe(cron);
+    await page.evaluate(() => { window.focused = true; });
+    await polls();
+    expect([new URL(page.url()).pathname, navigation]).toEqual([chat, ""]);
+    await polls();
+    expect(new URL(page.url()).pathname).toBe(chat);
 
     // A park of the Cron tab that ends after it closed brings it back, bold, with a notification, in this window, which stayed open.
     await page.evaluate(() => { window.focused = true; });
@@ -410,6 +420,51 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
     await polls();
     expect(state.tabs.map((tab) => tab.path)).not.toContain("/search/d");
     expect(await page.getByRole("tablist", { name: "Team tabs" }).locator('[data-tab="/search/d"]').count()).toBe(0);
+    expect(errors).toEqual([]);
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 60_000);
+
+test("a call that took the person to a page shows its link in the chat, which opens the page in place", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const chat = `/s/${encode("chat")}`, cron = `/cron/${encode("daily")}`;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", name: "Chat work", agent: "main" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (!url.pathname.startsWith("/api/")) {
+      const file = path.join(dist, url.pathname);
+      return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
+    }
+    switch (url.pathname) {
+      case "/api/Protocol": return Response.json({ protoSha256: "navigation" });
+      case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/ListConfig": return Response.json({ config: { workspace: "navigation" } });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
+      case "/api/ListSkills": return Response.json({ skills: [] });
+      case "/api/ListQueue": return Response.json({ items: [] });
+      case "/api/ListCronJobs": return Response.json({ jobs: [] });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: chat, space: "main" }], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [] });
+      case "/api/History": return Response.json({ messages: [{ role: "tool", text: "execute\n{}", complete: true, turnId: "t", entryKey: "t", itemId: "go", inputId: "", toolName: "execute", toolCallId: "go",
+        codeModeCalls: [{ name: "rocketclaw_navigate_for_me", arguments: JSON.stringify({ location: `https://rc.example${cron}` }), status: "ok", summary: `https://rc.example${cron}` }] }],
+        delegations: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: ["t"], running: false, terminal: "", backgroundJobs: [], pendingQuestions: [], start: "0", more: false });
+      default: return Response.json({});
+    }
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(error.message));
+    const base = `http://127.0.0.1:${server.port}`;
+    await page.goto(`${base}${chat}`);
+    const link = page.getByRole("link", { name: `Open ${cron}`, exact: true });
+    await link.waitFor();
+    expect([await link.textContent(), await link.getAttribute("href")]).toEqual([base + cron, cron]);
+    await link.click();
+    await page.waitForURL((url: URL) => url.pathname === cron);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

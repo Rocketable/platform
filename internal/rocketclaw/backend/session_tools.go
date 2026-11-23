@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,6 +29,7 @@ const (
 	sessionsWriteToolName     = "rocketclaw_sessions_write"
 	sessionsGetURLToolName    = "rocketclaw_sessions_get_url"
 	sessionsMoveToolName      = "rocketclaw_sessions_move"
+	navigateToolName          = "rocketclaw_navigate_for_me"
 	sessionsSubject           = "rocketclaw_sessions"
 	recipientSetting          = "rocketclaw_sessions_recipient"
 
@@ -672,12 +674,57 @@ func sessionsGetURLTool(threads *threadBridgeManager) harness.Tool {
 				return harness.ToolResult{}, err
 			}
 
-			url, err := threads.WebURL(params.SessionID)
+			link, err := threads.WebURL(params.SessionID)
 			if err != nil {
 				return harness.ToolResult{}, err
 			}
 
-			return harness.TextToolResult(url), nil
+			return harness.TextToolResult(link), nil
+		},
+	}
+}
+
+func navigateTool(threads *threadBridgeManager, username string) harness.Tool {
+	return harness.Tool{
+		Name: navigateToolName, TurnBound: true, Description: "Take the person who started your current work from the RocketClaw Web to another page of this server's Web, once: their Web window that has focus opens location within about 2 seconds, as if they clicked a link to it. No other window follows and no reload repeats it, and a newer call replaces one their window has not opened yet. " +
+			"location is a path such as /s/<id>, /oc/<id>, /pages/<space>/<agent>/<path> or /cron, or a URL on this server's Web, such as rocketclaw_sessions_get_url returns; other sites and other RocketClaw servers are refused. " +
+			"A call no window opens within 3 days lapses. Returns the page's URL, which the chat already shows with this call.",
+		Permission: "rocketclaw", VisibilitySubjects: []string{navigateToolName},
+		Subjects:   func(json.RawMessage) ([]string, error) { return []string{navigateToolName}, nil },
+		Parameters: map[string]any{"properties": map[string]any{"location": map[string]any{"type": "string"}}, "required": []string{"location"}},
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
+			var params struct {
+				Location string `json:"location"`
+			}
+			if err := json.Unmarshal(raw, &params); err != nil {
+				return harness.ToolResult{}, fmt.Errorf("parse %s: %w", navigateToolName, err)
+			}
+
+			origin, err := threads.webOrigin()
+			if err != nil {
+				return harness.ToolResult{}, err
+			}
+
+			web, err := url.Parse(origin)
+			if err != nil {
+				return harness.ToolResult{}, fmt.Errorf("parse Web origin: %w", err)
+			}
+
+			target, err := web.Parse(strings.TrimSpace(params.Location))
+			if err != nil {
+				return harness.ToolResult{}, fmt.Errorf("parse location: %w", err)
+			}
+
+			if path := target.Path; target.Scheme != web.Scheme || target.Host != web.Host || target.User != nil || !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || path == "/r" || strings.HasPrefix(path, "/r/") {
+				return harness.ToolResult{}, fmt.Errorf("location %q is not a page of this server's Web at %s", params.Location, origin)
+			}
+
+			target.Scheme, target.Host = "", ""
+			if err := threads.store.requestNavigation(ctx, username, target.String()); err != nil {
+				return harness.ToolResult{}, err
+			}
+
+			return harness.TextToolResult(origin + target.String()), nil
 		},
 	}
 }

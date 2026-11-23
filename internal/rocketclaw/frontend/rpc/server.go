@@ -184,10 +184,13 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		return err
 	}
 
-	var revision int64
+	var (
+		revision   int64
+		navigation string
+	)
 
 	if request.SameOrigin {
-		if revision, err = s.sessions.PollAttention(ctx, owner, request.Viewing, request.Hold); err != nil {
+		if revision, navigation, err = s.sessions.PollAttention(ctx, owner, request.Viewing, request.Hold); err != nil {
 			return fmt.Errorf("web tab view: %w", err)
 		}
 	}
@@ -197,7 +200,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		return fmt.Errorf("load web agents: %w", err)
 	}
 
-	first := &ListSessionsResponse{Owner: owner, OpencodeServers: make(map[string]string), AgentTags: make(map[string]*TagChoices), TabRevision: revision}
+	first := &ListSessionsResponse{Owner: owner, OpencodeServers: make(map[string]string), AgentTags: make(map[string]*TagChoices), TabRevision: revision, Navigate: navigation}
 
 	if !limit.Limited() {
 		for name, server := range s.cfg.Clone().OpenCode {

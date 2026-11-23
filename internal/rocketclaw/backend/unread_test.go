@@ -52,7 +52,7 @@ func sessionPath(conversationID string) string {
 func viewedAgo(t *testing.T, s *SessionService, person, conversationID string, ago time.Duration) {
 	t.Helper()
 
-	_, err := s.PollAttention(t.Context(), person, sessionPath(conversationID), false)
+	_, _, err := s.PollAttention(t.Context(), person, sessionPath(conversationID), false)
 	require.NoError(t, err)
 	_, err = s.db.ExecContext(t.Context(), `UPDATE web_tab_states SET viewed_at = viewed_at - make_interval(secs => $3) WHERE username = $1 AND viewing = $2`, person, sessionPath(conversationID), ago.Seconds())
 	require.NoError(t, err)
@@ -231,7 +231,7 @@ func TestMarkUnread(t *testing.T) {
 	heldView := func(conversationID string) {
 		t.Helper()
 
-		_, err := service.PollAttention(ctx, alice, sessionPath(conversationID), true)
+		_, _, err := service.PollAttention(ctx, alice, sessionPath(conversationID), true)
 		require.NoError(t, err)
 	}
 	turnEnds := func(conversationID, turnID string) {
@@ -304,7 +304,7 @@ func TestTabViewLocksStateBeforeAttention(t *testing.T) {
 
 	var view errgroup.Group
 	view.Go(func() error {
-		_, err := service.PollAttention(ctx, alice, path, false)
+		_, _, err := service.PollAttention(ctx, alice, path, false)
 		return err
 	})
 

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TimelineDetailCard } from "./timeline-detail-card";
-import { projectTimeline, setTimelineRows, subscribeTimelineRows, timelineCategories, timelineLevel, timelineLevels, timelineRows, type TimelineRows } from "./timeline-detail";
+import { navigations, projectTimeline, setTimelineRows, subscribeTimelineRows, timelineCategories, timelineLevel, timelineLevels, timelineRows, type TimelineRows } from "./timeline-detail";
 
 // bun test has no DOM; the store reads localStorage and listens on window.
 const saved = new Map<string, string>();
@@ -127,6 +127,18 @@ test("Messages only hides failed panels, other levels keep them, and delivered f
   expect(shape([call("f1", "rocketclaw_attach_files_to_response", "attached", [{ id: "file" }])], "messages")).toEqual(["f1+"]);
   expect(shape([call("f1", "execute", "tool call failed: after attaching", [{ id: "file" }])], "messages")).toEqual(["f1+"]);
   expect(shape([call("e1", "execute"), call("f1", "rocketclaw_attach_files_to_response", "attached", [{ id: "file" }]), call("e2", "execute")], "compact")).toEqual(["Used 1 tool[e1]", "f1+", "Used 1 tool[e2]"]);
+});
+
+test("a call that took the person to a page shows its link at every level, a failed or clipped one none", () => {
+  const navigate = (id: string, location: string, result = "https://rc.example/x") => ({ ...call(id, "rocketclaw_navigate_for_me", result), text: `rocketclaw_navigate_for_me\n${JSON.stringify({ location })}` });
+  const scripted = (status: string, args: string) => ({ ...call("e1", "execute"), codeModeCalls: [{ name: "bash", arguments: "{}", status: "ok" }, { name: "rocketclaw_navigate_for_me", arguments: args, status }] });
+  expect(navigations(navigate("n1", " https://rc.example/s/../oc/b?x=1#y "))).toEqual(["/oc/b?x=1#y"]);
+  expect(navigations(navigate("n1", "/cron", "tool call failed: rocketclaw_navigate_for_me: refused"))).toEqual([]);
+  expect(navigations(scripted("ok", JSON.stringify({ location: "/pages/Main/main/a.html" })))).toEqual(["/pages/Main/main/a.html"]);
+  expect(navigations(scripted("error", JSON.stringify({ location: "/cron" })))).toEqual([]);
+  expect(navigations(scripted("ok", '{"location":"/pages…[truncated]'))).toEqual([]);
+  expect(shape([navigate("n1", "/cron"), scripted("ok", JSON.stringify({ location: "/cron" }))], "messages")).toEqual(["n1+", "e1+"]);
+  expect(shape([call("e0", "execute"), scripted("error", JSON.stringify({ location: "/cron" }))], "compact")).toEqual(["Used 2 tools[e0,e1]"]);
 });
 
 test("a summary row keeps its first member's key as the turn grows", () => {

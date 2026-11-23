@@ -259,29 +259,37 @@ WHERE username = $1 AND path = ANY($2) AND unread_at IS NULL AND NOT parked AND 
 	return commitState(tx, "attention change")
 }
 
-func (s *SessionService) PollAttention(ctx context.Context, username, path string, hold bool) (int64, error) {
-	var revision int64
-
+func (s *SessionService) PollAttention(ctx context.Context, username, path string, hold bool) (revision int64, navigation string, err error) {
 	if path == "" {
 		_, err := scanFound("read tab state", s.db.QueryRowContext(ctx, `SELECT revision FROM web_tab_states WHERE username = $1`, username).Scan(&revision))
 
-		return revision, err
+		return revision, "", err
 	}
 
-	err := queryScalar(ctx, s.db, "record tab view", `WITH viewed AS (
+	err = s.db.QueryRowContext(ctx, `WITH viewed AS (
     SELECT $2::text AS path, $3::text AS conversation_id
 ), recorded AS (
     INSERT INTO web_tab_states (username, revision, viewing, viewed_at)
     SELECT $1, 0, COALESCE(`+tabPathSQL+`, v.path), now() FROM viewed v LEFT JOIN conversations c ON c.conversation_id = v.conversation_id
-    ON CONFLICT (username) DO UPDATE SET viewing = excluded.viewing, viewed_at = excluded.viewed_at
-    RETURNING viewing, revision
+    ON CONFLICT (username) DO UPDATE SET viewing = excluded.viewing, viewed_at = excluded.viewed_at, navigation = ''
+    RETURNING new.viewing, new.revision, CASE WHEN old.navigation_at > now() - interval '3 days' THEN old.navigation ELSE '' END AS navigation
 ), cleared AS (
     UPDATE web_tab_attention a SET unread_at = NULL FROM recorded r
     WHERE a.username = $1 AND a.path = r.viewing AND a.unread_at IS NOT NULL AND NOT ($4 AND a.quiet)
 )
-SELECT revision FROM recorded`, &revision, username, path, TabConversation(path), hold)
+SELECT revision, navigation FROM recorded`, username, path, TabConversation(path), hold).Scan(&revision, &navigation)
+	if err != nil {
+		return 0, "", fmt.Errorf("record tab view: %w", err)
+	}
 
-	return revision, err
+	return revision, navigation, nil
+}
+
+func (s *SessionService) requestNavigation(ctx context.Context, username, path string) error {
+	_, err := execState(ctx, s.db, "request navigation", `INSERT INTO web_tab_states (username, revision, navigation, navigation_at) VALUES ($1, 0, $2, now())
+ON CONFLICT (username) DO UPDATE SET navigation = excluded.navigation, navigation_at = excluded.navigation_at`, username, path)
+
+	return err
 }
 
 const parkTickEvery = 2 * time.Second

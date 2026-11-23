@@ -610,6 +610,13 @@ active tab.
   session list's poll, so a hidden window may notify late; a page load never
   notifies for marks that were already there. Notifications show only while a
   RocketClaw window is open; there is no push.
+- **An agent taking you to a page.** When an agent calls
+  `rocketclaw_navigate_for_me` for you, the next session-list poll of a window
+  of yours that has focus and shows this server opens that page, as a click on
+  a link to it would. That poll takes it, so no other window follows and a
+  reload never repeats it. Until a focused window polls, it waits, for at most
+  3 days; a newer call replaces it. The chat shows the page's link on the call,
+  even at Messages only, and clicking it opens the page in place.
 - **Mark as read and Mark as unread.** Every tab's menu, Shared rows
   included, offers **Mark as read** while a selected tab is bold and
   **Mark as unread** while one is read; with several tabs selected, each acts

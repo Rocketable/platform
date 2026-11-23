@@ -1757,7 +1757,8 @@ type ListSessionsResponse struct {
 	// since, or every one.
 	Tabs []*TabAttention `protobuf:"bytes,11,rep,name=tabs,proto3" json:"tabs,omitempty"`
 	// The first message carries the caller's tab-state revision, which a timer that brings a closed tab back raises.
-	TabRevision   int64 `protobuf:"varint,12,opt,name=tab_revision,json=tabRevision,proto3" json:"tab_revision,omitempty"`
+	TabRevision   int64  `protobuf:"varint,12,opt,name=tab_revision,json=tabRevision,proto3" json:"tab_revision,omitempty"`
+	Navigate      string `protobuf:"bytes,13,opt,name=navigate,proto3" json:"navigate,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1860,6 +1861,13 @@ func (x *ListSessionsResponse) GetTabRevision() int64 {
 		return x.TabRevision
 	}
 	return 0
+}
+
+func (x *ListSessionsResponse) GetNavigate() string {
+	if x != nil {
+		return x.Navigate
+	}
+	return ""
 }
 
 type TagChoices struct {
@@ -10728,7 +10736,7 @@ const file_web_proto_rawDesc = "" +
 	"\x06prompt\x18\x02 \x01(\v2\x14.rpc.TranscriptEventR\x06prompt\"$\n" +
 	"\x12ClearRevertRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x15\n" +
-	"\x13ClearRevertResponse\"\xd8\x04\n" +
+	"\x13ClearRevertResponse\"\xf4\x04\n" +
 	"\x14ListSessionsResponse\x12(\n" +
 	"\bsessions\x18\x01 \x03(\v2\f.rpc.SessionR\bsessions\x12\x14\n" +
 	"\x05owner\x18\x02 \x01(\tR\x05owner\x12)\n" +
@@ -10741,7 +10749,8 @@ const file_web_proto_rawDesc = "" +
 	"\x05since\x18\n" +
 	" \x01(\tR\x05since\x12%\n" +
 	"\x04tabs\x18\v \x03(\v2\x11.rpc.TabAttentionR\x04tabs\x12!\n" +
-	"\ftab_revision\x18\f \x01(\x03R\vtabRevision\x1aB\n" +
+	"\ftab_revision\x18\f \x01(\x03R\vtabRevision\x12\x1a\n" +
+	"\bnavigate\x18\r \x01(\tR\bnavigate\x1aB\n" +
 	"\x14OpencodeServersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aM\n" +

@@ -185,13 +185,13 @@ func TestSearchRunOutlivesItsRequest(t *testing.T) {
 
 	rt.leave(t, searchRunRequest("s", "a b", true))
 	scan = rt.scan(t)
-	_, err := rt.sessions.PollAttention(rt.alice, "alice@example.com", searchTab, false)
+	_, _, err := rt.sessions.PollAttention(rt.alice, "alice@example.com", searchTab, false)
 	require.NoError(t, err)
 	close(scan.finish)
 	require.NoError(t, <-rt.answer(searchRunRequest("s", "a b", false)))
 	assert.Empty(t, rt.marks(t), "the person viewing the tab is not marked")
 
-	_, err = rt.sessions.PollAttention(rt.alice, "alice@example.com", "/cron", false)
+	_, _, err = rt.sessions.PollAttention(rt.alice, "alice@example.com", "/cron", false)
 	require.NoError(t, err)
 	rt.leave(t, searchRunRequest("s", "a b", true))
 	scan = rt.scan(t)
