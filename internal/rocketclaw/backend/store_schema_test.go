@@ -164,7 +164,6 @@ INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, las
 SELECT 'chat-' || n, 'main', 'alice', 'web_chat', TRUE, now() FROM generate_series(1, 256) n;
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, reports_to)
 SELECT 'run-' || c || '-' || n, 'job', '', 'cron_run', FALSE, 'chat-' || c FROM generate_series(1, 4) c, generate_series(1, 256) n;
--- Runs 1-1 and 2-1 report before their chats' own entries, chat-3's runs after them; chat-4 has none.
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT conversation_id, '{}', '' FROM conversations, generate_series(1, 8) WHERE conversation_id <> 'chat-4'
 ORDER BY conversation_id NOT IN ('run-1-1', 'run-2-1'), conversation_id LIKE 'run-%', conversation_id;
@@ -1098,9 +1097,7 @@ INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, history
 SELECT 'turn-' || n, 'chat', '{}', '[]', n, 1, 1, 'done', 'stopped', '0 0 ["user","",' || to_json(md5(n::text)) || ',' || to_json(md5(n::text)) || ']' FROM generate_series(1, 4096) n;
 ANALYZE entries;
 ANALYZE turns;
--- Rows inserted since the migration wait in the indexes' pending lists, which a vacuum would merge.
 SELECT gin_clean_pending_list('entries_search_text'::regclass), gin_clean_pending_list('turns_search_text'::regclass);
--- Tables this small are cheaper to scan; turning sequential scans off proves the trigram indexes serve the search.
 SET enable_seqscan = off;`)
 	require.NoError(t, err)
 
