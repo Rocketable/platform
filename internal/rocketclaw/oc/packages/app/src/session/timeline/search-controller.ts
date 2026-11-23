@@ -303,8 +303,8 @@ export function createTranscriptSearch(
     }
 
     const rootRect = root.getBoundingClientRect()
-    const sticky = root.querySelector("[data-session-title]")
-    const inset = sticky instanceof HTMLElement ? sticky.offsetHeight : 0
+    // rocketclaw: the header itself is outside this scroller (upstream packages/app/src/session/timeline/search-controller.ts)
+    const inset = root.querySelector<HTMLElement>('[data-slot="session-header-inset"]')?.offsetHeight ?? 0
     const top = rect.top - rootRect.top + root.scrollTop - inset - (rootRect.height - rect.height) / 2
 
     return { type: "seek.ready", attempt: effect.attempt, top: Math.max(0, top) }

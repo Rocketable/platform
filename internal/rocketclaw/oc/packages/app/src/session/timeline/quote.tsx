@@ -497,7 +497,8 @@ function measureQuote(root: HTMLElement, selected: TimelineSelection, horizontal
   const view = root.getBoundingClientRect()
 
   if (!view.height || !view.width) return
-  const sticky = root.querySelector<HTMLElement>("[data-session-title]")
+  // rocketclaw: the header itself is outside this scroller (upstream packages/app/src/session/timeline/quote.tsx)
+  const sticky = root.querySelector<HTMLElement>('[data-slot="session-header-inset"]')
 
   const bounds = {
     top: view.top + (sticky?.offsetHeight ?? 0),

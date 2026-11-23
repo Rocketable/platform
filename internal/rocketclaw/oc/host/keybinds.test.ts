@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test"
 import { Glob } from "bun"
 import { DEFAULT_PALETTE_KEYBIND, matchKeybind, parseKeybind } from "@/shell/commands/command"
+import { createAppKeymap } from "@/shell/commands/keymap"
+import { inView } from "./fences"
 
 // OpenCode's default keybinds are string literals in the command registrations of the copied packages. The desktop
 // menu's accelerators belong to the desktop app's native menu, which the web view never has.
@@ -52,6 +54,36 @@ test("OpenCode's palette opens on mod+K and not on mod+Shift+P", () => {
   expect(
     matchKeybind(palette, new KeyboardEvent("keydown", { key: "P", code: "KeyP", ctrlKey: true, shiftKey: true })),
   ).toBe(false)
+})
+
+test("the keymap only acts on unhandled releases in the view", () => {
+  const root = document.createElement("div")
+  const portal = document.createElement("div")
+  const outside = document.createElement("button")
+  document.body.append(root, portal, outside)
+  const app = createAppKeymap({
+    blocked: () => false,
+    editable: () => false,
+    accepts: (event) => !event.defaultPrevented && inView({ root, portal, width: () => 0 }, event.target),
+  })
+  let releases = 0
+  const unregister = app.keymap.registerLayer({
+    bindings: [{ key: "ctrl+x", event: "release", cmd: () => { releases++ } }],
+  })
+  try {
+    for (const [target, handled] of [[outside, false], [root, true], [portal, false]] as const) {
+      const event = new KeyboardEvent("keyup", { key: "x", ctrlKey: true, bubbles: true, cancelable: true })
+      if (handled) event.preventDefault()
+      target.dispatchEvent(event)
+    }
+    expect(releases).toBe(1)
+  } finally {
+    unregister()
+    app.destroy()
+    root.remove()
+    portal.remove()
+    outside.remove()
+  }
 })
 
 test("no command registers a window-tab or home command", async () => {

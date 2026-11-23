@@ -254,6 +254,7 @@ test("mounting and disposing five times leaves nothing behind, and one palette o
   expect(listenerCount()).toBe(lasting)
 
   expect(document.getElementById("oc-theme") === null).toBe(true)
+  expect(document.getElementById("opencode-v2-icon-host")).toBeNull()
   expect(document.querySelector("[data-oc-view]") === null).toBe(true)
   expect([...html.attributes].map((attribute) => `${attribute.name}=${attribute.value}`)).toEqual(before)
   expect(document.body.className).toBe("")
@@ -261,6 +262,7 @@ test("mounting and disposing five times leaves nothing behind, and one palette o
 
   const view = show()
   await answered(view)
+  expect(document.getElementById("opencode-v2-icon-sprite")).not.toBeNull()
   press(document.body, "k", modK)
   await until(() => palettes())
   expect(palettes()).toBe(1)

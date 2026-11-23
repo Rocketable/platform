@@ -11,4 +11,6 @@ export const overrides: Record<string, string> = {
   // Pierre inserts this sheet into its shadow root; document scoping would make its selectors unreachable there.
   "../components/quote-highlight.css?inline":
     fileURLToPath(new URL("../packages/session-ui/src/components/quote-highlight.css", import.meta.url)) + "?raw",
+  "./tree-focus.css?inline":
+    fileURLToPath(new URL("../packages/gui-plugins/src/file/tree-focus.css", import.meta.url)) + "?raw",
 }

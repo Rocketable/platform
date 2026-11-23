@@ -125,8 +125,8 @@ export function createTimelineCursor(input: {
     const root = input.scroller()
 
     if (!root) return false
-    const sticky = root.querySelector("[data-session-title]")
-    const inset = sticky instanceof HTMLElement ? sticky.offsetHeight : 0
+    // rocketclaw: the sticky header moved outside the scroller; its spacer reserves the landing area (upstream packages/app/src/session/timeline/cursor.ts)
+    const inset = root.querySelector<HTMLElement>('[data-slot="session-header-inset"]')?.offsetHeight ?? 0
     const top = element.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop - inset
     root.scrollTo({ top: Math.max(0, top), behavior })
 
