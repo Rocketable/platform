@@ -28,8 +28,12 @@ func decodeJSON(thread *starlark.Thread, _ *starlark.Builtin, args starlark.Tupl
 			return args[0], nil
 		}
 
-		args = append(starlark.Tuple{unbox(args[0])}, args[1:]...)
-		_, text = args[0].(starlark.String)
+		value, boxed := unboxValue(args[0])
+		if boxed {
+			args = append(starlark.Tuple{value}, args[1:]...)
+		}
+
+		_, text = value.(starlark.String)
 	}
 
 	decoded, err := starlark.Call(thread, starjson.Module.Members["decode"], args, kwargs)
