@@ -17,8 +17,9 @@ import (
 func TestNormalizeInboundAttachmentsCentralizesModelPolicy(t *testing.T) {
 	t.Parallel()
 
+	first := tinyPNG()
 	content := &InboundContent{Attachments: []InboundAttachment{
-		{Name: " tiny.png ", MIMEType: "application/octet-stream", Data: tinyPNG()},
+		{Name: " tiny.png ", MIMEType: "application/octet-stream", Data: first},
 		{Name: "not-image.png", MIMEType: "image/png", Data: []byte("not an image")},
 		{Name: "empty.png", MIMEType: "image/png"},
 		{Name: "photo.jpg", MIMEType: " Image/PNG; Charset=UTF-8 "},
@@ -29,6 +30,7 @@ func TestNormalizeInboundAttachmentsCentralizesModelPolicy(t *testing.T) {
 	}}
 
 	normalizeInboundAttachments(content)
+	clear(first)
 
 	assert.Equal(t, AttachmentPresenceImages, content.AttachmentPresence)
 	assert.Equal(t, []InboundAttachment{
@@ -83,6 +85,7 @@ func TestFitInboundImageWithinLimitLeavesSmallImageUnchanged(t *testing.T) {
 	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/png", data, len(data))
 	require.NoError(t, err)
 	assert.Equal(t, data, transformed)
+	assert.Same(t, &data[0], &transformed[0])
 	assert.Equal(t, "image/png", transformedMIMEType)
 }
 

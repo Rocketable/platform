@@ -88,7 +88,7 @@ func normalizeInboundAttachments(content *InboundContent) {
 
 func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (transformedData []byte, transformedMIMEType string, err error) {
 	if len(data) <= targetLimit {
-		return slices.Clone(data), mimeType, nil
+		return data, mimeType, nil
 	}
 
 	var img image.Image
