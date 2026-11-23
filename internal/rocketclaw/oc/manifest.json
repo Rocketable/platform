@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/anomalyco/opencode",
-  "tag": "v2.4.0",
-  "commit": "44aed4fd144611879046ae923c25541f913780ad",
+  "tag": "v2.4.1",
+  "commit": "6f0514052a3c859894ad01bb14cc14dda1e44b96",
   "copied": [
     "LICENSE",
     "packages/app/happydom.ts",
@@ -141,6 +141,8 @@
     "packages/app/src/providers/models/selection-machine.test.ts",
     "packages/app/src/providers/models/selection-machine.ts",
     "packages/app/src/providers/models/selection.tsx",
+    "packages/app/src/providers/models/speed.test.ts",
+    "packages/app/src/providers/models/speed.ts",
     "packages/app/src/providers/models/tooltip.tsx",
     "packages/app/src/providers/models/unpaid.tsx",
     "packages/app/src/providers/models/variant.test.ts",
