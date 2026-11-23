@@ -157,6 +157,14 @@
     ]
   },
   {
+    "name": "an explicitly disabled dry run",
+    "command": "gh pr create --dry-run=0 --fill",
+    "output": "https://github.com/owner/repo/pull/7",
+    "created": [
+      "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
     "name": "a URL not alone on its line",
     "command": "gh pr create",
     "output": "Created https://github.com/owner/repo/pull/7\n[{\"url\":\"https://github.com/owner/repo/pull/7\"}]",
