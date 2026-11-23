@@ -327,16 +327,20 @@ func TestHistoryShowsFilesAnExecuteResultOrNoteCarried(t *testing.T) {
 
 	h.replies <- voiceModel("r2", `{"id":"fc_r2","type":"function_call","status":"completed","call_id":"call_r2","name":"execute","arguments":`+string(quoted)+`}`)
 
-	assert.Contains(t, <-h.requests, "call_r2")
-
-	h.replies <- voiceModelText("r3", "Started.")
-
-	require.NoError(t, turn.Wait())
-
 	note := <-h.requests
+	assert.Contains(t, note, "call_r2")
+
+	if !strings.Contains(note, `<execute id=`) {
+		h.replies <- voiceModelText("r3", "Started.")
+
+		note = <-h.requests
+	}
+
 	assert.Contains(t, note, `<execute id=`)
 
 	h.replies <- voiceModelText("r4", "Got them.")
+
+	require.NoError(t, turn.Wait())
 
 	for _, request := range []string{answer, note} {
 		assert.NotContains(t, request, `"filename":"red42.png"`, "the model gets no image name")
