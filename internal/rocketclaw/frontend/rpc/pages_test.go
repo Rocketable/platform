@@ -3,6 +3,7 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net"
 	"net/http"
@@ -163,6 +164,33 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 		{Agent: "reporter", Space: "Ops", Path: "x.html"},
 		{Agent: "reporter/review", Space: "Ops Team", Path: "a b/c.html"},
 	}}, listed), "unexpected pages: %v", listed)
+
+	version := func() string {
+		response := httptest.NewRecorder()
+		admitted.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/ListPages", strings.NewReader(`{"agent":"reporter","path":"x.html"}`)))
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+
+		var found struct {
+			Pages []struct {
+				Agent, Space, Path, UpdatedAt string
+			}
+		}
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &found))
+		require.Len(t, found.Pages, 1)
+		page := found.Pages[0]
+		require.Equal(t, "reporter", page.Agent)
+		require.Equal(t, "Ops", page.Space)
+		require.Equal(t, "x.html", page.Path)
+		require.NotEmpty(t, page.UpdatedAt)
+
+		return page.UpdatedAt
+	}
+	before := version()
+	require.Equal(t, before, version())
+	require.NoError(t, sessions.PutPage(t.Context(), &backend.Page{
+		Agent: "reporter", Kind: backend.PageFile, Name: "x.html", ContentType: "text/html", Body: []byte("<p>updated</p>"),
+	}))
+	require.NotEqual(t, before, version())
 
 	tabs, err := invoke[TabsResponse](ctx, connection, "Tabs", &TabsRequest{CreateSpace: "Ruzuku"})
 	require.NoError(t, err)

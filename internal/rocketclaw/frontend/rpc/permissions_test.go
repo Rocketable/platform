@@ -270,15 +270,19 @@ func TestSpacePermissions(t *testing.T) {
 		require.Equal(t, want.tags, found[i].TagIds)
 	}
 
-	pages, err := server.listPages(alice)
+	pages, err := server.listPages(alice, &ListPagesRequest{})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(&ListPagesResponse{Pages: []*PageEntry{{Agent: "ops-agent", Space: "Ops", Path: "index.html"}}}, pages), "%v", pages)
 
-	pages, err = server.listPages(bob)
+	pages, err = server.listPages(bob, &ListPagesRequest{})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(&ListPagesResponse{Pages: []*PageEntry{
 		{Agent: "loose", Path: "index.html"}, {Agent: "main-agent", Space: "Main", Path: "index.html"}, {Agent: "ops-agent", Space: "Ops", Path: "index.html"},
 	}}, pages), "%v", pages)
+
+	pages, err = server.listPages(alice, &ListPagesRequest{Agent: "main-agent", Path: "index.html"})
+	require.NoError(t, err)
+	require.Empty(t, pages.Pages)
 
 	for _, request := range []*PageRequest{{Path: "index.html"}, {Path: "rows", Data: true}} {
 		for agent, want := range map[string]codes.Code{"ops-agent": codes.OK, "main-agent": codes.NotFound, "loose": codes.NotFound} {

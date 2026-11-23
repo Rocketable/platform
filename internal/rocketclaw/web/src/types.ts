@@ -36,7 +36,7 @@ export type VoiceSettings = { agent: string; voice: string; transcript: boolean 
 // new session resumes.
 export type Agent = { name: string; model?: string; reasoning?: string; description?: string; verbosity?: string; prompt?: string; permissions?: string; origin?: string; customShell?: string; voices?: string[]; space?: string; rocketclaw?: string; sticky?: string; stickySession?: string };
 export type Skill = { name: string; description?: string; license?: string; compatibility?: string; content?: string; origin?: string };
-export type PageEntry = { agent: string; space?: string; path: string };
+export type PageEntry = { agent: string; space?: string; path: string; updatedAt?: string };
 export type ConfigView = { workspace?: string; overlays?: string[]; slackChannels?: { channel?: string; agents?: string[] }[]; mcpServerFacets?: { server?: string; facets?: string[] }[]; loggingLevel?: string; autoApproverModel?: string; instrumentationEnabled?: boolean; mcpExternal?: boolean; tailscaleUser?: string; providers?: string[]; behaviorJson?: string; canEdit?: boolean };
 export type AgentDraft = { id: string; revision: string; name: string; mode: string; variants: AgentDraftVariant[]; testChat: string; saveState: "editing" | "saving" | "waiting" | "live"; existing: boolean; externalMcp?: AgentDraftExternalMCP; pending?: AgentDraftPending };
 export type AgentDraftVariant = { name: string; settings: { key: string; value: string }[]; body: string };

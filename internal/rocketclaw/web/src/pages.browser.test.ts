@@ -28,6 +28,8 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
       case "/api/Protocol": return Response.json({ protoSha256: "pages" });
       case "/api/ListConfig": return Response.json({ config: { workspace: "pages" } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
+      case "/api/History": return Response.json({ messages: [], delegations: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, backgroundJobs: [], pendingQuestions: [], start: "0", more: false });
+      case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/ListPages": return Response.json({ pages });
       case "/api/UpdateSession": moves.push(input); return Response.json({});
       case "/api/Tabs": if (input.state) saved.state = input.state; return Response.json(saved);
@@ -86,6 +88,64 @@ test("a page link opens in the space named by its segment, ignoring case, on a f
   expect(page.url()).toBe(`${origin}/pages/Finance/reporter/index.html`);
   expect(await page.locator("[data-tab-lists] button[aria-description][aria-expanded]").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Main", "billing"]);
 }), 60_000);
+
+test("a hosted page updates beside a session without remounting its draft", () => withPage(["Main"], async (page, origin) => {
+  const route = `/s/${btoa("sample")}`;
+  const example = { agent: "reporter/review", path: "q3/read me.html", space: "Billing" };
+  const raw = "/pages-raw/reporter%2Freview/q3/read%20me.html";
+  let revision = "first", missing = false, offline = false, mounts = 0;
+  let hold = false;
+  const requested = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  await page.route(`**${raw}`, (route: any) => {
+    mounts++;
+    return route.fulfill({ contentType: "text/html", headers: { "Cache-Control": "no-store" }, body: `<h1>${revision}</h1>` });
+  });
+  await page.route("**/api/ListPages", async (route: any) => {
+    const { agent, path } = route.request().postDataJSON();
+    if (!path) return route.fulfill({ json: { pages: [example] } });
+    expect({ agent, path }).toEqual({ agent: example.agent, path: example.path });
+    if (hold) { requested.resolve(); await release.promise; }
+    if (offline) return route.fulfill({ status: 503, json: { message: "Unavailable" } });
+    return route.fulfill({ json: { pages: missing ? [] : [{ ...example, updatedAt: revision }] } });
+  });
+  await page.goto(`${origin}${route}`);
+  const composer = page.locator("main textarea").first();
+  await composer.fill("Unsent draft");
+  const draft = await composer.elementHandle();
+  await page.getByRole("button", { name: "Tab actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Hosted Pages", exact: true }).click({ timeout: 2500 });
+  const pane = page.getByRole("complementary", { name: "Hosted Pages", exact: true });
+  await pane.getByRole("link", { name: "reporter/review · q3/read me.html", exact: true }).click();
+  const frame = pane.frameLocator("iframe");
+  await frame.getByRole("heading", { name: "first" }).waitFor();
+  expect(await pane.locator("iframe").getAttribute("sandbox")).toBe("allow-scripts allow-popups allow-forms allow-modals allow-downloads");
+  const checksPage = (request: any) => request.url().endsWith("/api/ListPages") && request.postDataJSON().path === example.path;
+  await page.waitForResponse((response: any) => checksPage(response.request()));
+  await page.waitForRequest(checksPage);
+  expect(mounts).toBe(1);
+  revision = "second";
+  await frame.getByRole("heading", { name: "second" }).waitFor();
+  offline = true;
+  await pane.getByRole("alert").waitFor();
+  expect(await frame.getByRole("heading", { name: "second" }).isVisible()).toBe(true);
+  offline = false;
+  missing = true;
+  await pane.getByText("Page unavailable", { exact: true }).waitFor();
+  expect(await pane.locator("iframe").count()).toBe(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  hold = true;
+  try {
+    await requested.promise;
+    const canceled = page.waitForEvent("requestfailed", { predicate: (request: any) => request.url().endsWith("/api/ListPages") });
+    await page.getByRole("dialog", { name: "Hosted Pages", exact: true }).getByRole("button", { name: "Close hosted pages", exact: true }).click();
+    await canceled;
+  } finally { release.resolve(); }
+  expect(new URL(page.url()).pathname).toBe(route);
+  expect(new URL(page.url()).search).toBe("");
+  expect(await page.locator("iframe").count()).toBe(0);
+  expect(await draft.evaluate((node: Element) => node.isConnected)).toBe(true);
+  expect(await composer.inputValue()).toBe("Unsent draft");
+}), 30_000);
 
 test("a page's shared link and its Page Index link share one tab, and a - link opens in each space", () => withPage(["Main", "billing", "Space 2"], async (page, origin) => {
   await chooseSpace(page, "billing");
