@@ -7,9 +7,12 @@ JAVA = java -Djava.io.tmpdir=$(WORK)/java -XX:+UseParallelGC
 TLC = $(JAVA) -cp $(TOOLS) tlc2.TLC -noGenerateSpecTE -metadir $(WORK)/$@
 
 PASS = fixed
-FAIL = give-up-after-three block-shutdown witness-saved-after-refusals witness-gave-up-on-shutdown
+FAIL = give-up-after-three block-shutdown skip-clean-abandoned save-cancelled wake-while-stopping witness-saved-after-refusals witness-gave-up-on-shutdown
 EXPECTED_give-up-after-three = Temporal property SavedOnceDbWorks was violated
 EXPECTED_block-shutdown = Temporal property ShutdownNotBlocked was violated
+EXPECTED_skip-clean-abandoned = Invariant FinishedNeverKilled is violated
+EXPECTED_save-cancelled = Invariant CancelledNeverCompleted is violated
+EXPECTED_wake-while-stopping = Invariant NoWakeWhileStopping is violated
 EXPECTED_witness-saved-after-refusals = Invariant NeverSavedAfterRefusals is violated
 EXPECTED_witness-gave-up-on-shutdown = Invariant NeverGaveUpOnShutdown is violated
 

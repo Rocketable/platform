@@ -842,6 +842,10 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 	defer stop()
 
 	result, errRun := call.run(runCtx, raw)
+	if errRun == nil && runCtx.Err() != nil {
+		errRun = fmt.Errorf("%s stopped: %w", name, context.Cause(runCtx))
+	}
+
 	if errRun != nil && runCtx.Err() != nil {
 		return result, errors.Join(errRun, tc.observations.recordCodeModeCall(ctx, record.finish(result, errRun), false))
 	}

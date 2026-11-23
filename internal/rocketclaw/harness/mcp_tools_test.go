@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1208,4 +1210,43 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 
 	require.Len(t, records["cap"], 1+MaxCodeModeCalls, "the 201st call of one script adds no record")
 	require.Equal(t, record("cap", MaxCodeModeCalls-1, "emit", `{"text":"x"}`, codeModeCallOK, "", "", ""), records["cap"][MaxCodeModeCalls])
+}
+
+func TestHostToolsReportACancelledContextAsAnError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = root.Close() })
+	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o700))
+	require.NoError(t, root.WriteFile("notes.txt", []byte("ready\n"), 0o600))
+
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "page") }))
+	t.Cleanup(page.Close)
+
+	permissions := parsePermissionYAML(t, "read: allow\nglob: allow\ngrep: allow\nedit: allow\nbash: allow\nwebfetch: allow")
+	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell-tmp"))
+	factory := &toolFactory{baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}))}
+	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
+	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+	ctx, cancel := context.WithCancel(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations}))
+	cancel()
+
+	bound, _ := codeModeHostToolsFromContext(ctx)
+
+	for name, args := range map[string]map[string]any{
+		"read":        {"filePath": "notes.txt"},
+		"glob":        {"pattern": "*.txt"},
+		"grep":        {"pattern": "ready"},
+		"apply_patch": {"patchText": "*** Begin Patch\n*** Add File: added.txt\n+added\n*** End Patch"},
+		"bash":        {"command": "true"},
+		"webfetch":    {"url": page.URL},
+	} {
+		i := slices.IndexFunc(bound, func(tool codemode.HostTool) bool { return tool.Name == name })
+		require.GreaterOrEqual(t, i, 0, name)
+
+		_, err := bound[i].CallValue(ctx, args)
+		require.ErrorContains(t, err, context.Canceled.Error(), "%s: a call whose context was cancelled ends in an error, never a normal result", name)
+	}
 }
