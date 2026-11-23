@@ -47,6 +47,12 @@ func liveSlack() config.SlackConfig {
 func TestPublicProgressRealBrowser(t *testing.T) {
 	t.Parallel()
 
+	bundle := filepath.Join(t.TempDir(), "current.js")
+	build := exec.CommandContext(t.Context(), "bun", "build", "./src/main.tsx", "--target=browser", "--define", `process.env.NODE_ENV="production"`, "--outfile="+bundle)
+	build.Dir = "../../web"
+	output, err := build.CombinedOutput()
+	require.NoError(t, err, "%s", output)
+
 	finals := []string{"short", "empty", "stop", "calls"}
 	env := make([]string, 0, len(finals))
 	checks := make([]func(), 0, len(finals))
@@ -180,11 +186,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, connection.Close()) })
-		bundle := filepath.Join(t.TempDir(), "current.js")
-		build := exec.CommandContext(ctx, "bun", "build", "./src/main.tsx", "--target=browser", "--define", `process.env.NODE_ENV="production"`, "--outfile="+bundle)
-		build.Dir = "../../web"
-		output, err := build.CombinedOutput()
-		require.NoError(t, err, "%s", output)
+
 		stored, err := os.Open("../../internal/web/dist/index.html.gz")
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, stored.Close()) })
