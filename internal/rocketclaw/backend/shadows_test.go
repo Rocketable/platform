@@ -1127,11 +1127,11 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 					return
 				}
 
-				requests <- request.Model
-
 				if request.Model == "gpt-parent" {
 					select {
 					case <-firstParent:
+						requests <- request.Model
+
 						<-r.Context().Done()
 
 						cancelled <- true
@@ -1144,6 +1144,8 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 				if request.Model == "gpt-child" {
 					select {
 					case <-firstChild:
+						requests <- request.Model
+
 						<-r.Context().Done()
 
 						var stopped bool
@@ -1155,6 +1157,8 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 					default:
 					}
 				}
+
+				requests <- request.Model
 
 				w.Header().Set("Content-Type", "application/json")
 				writeRawRunMessage(t, w, "response", "message", "answer")
@@ -1184,7 +1188,10 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 			parent, err := manager.recordedBridge(t.Context(), parentID)
 			require.NoError(t, err)
 
+			var prematureFinal <-chan *protocol.OutboundMessage
+
 			if mutation == "external MCP removal" {
+				prematureFinal = finals
 				producer, err := manager.recordedBridge(t.Context(), ownerID)
 				require.NoError(t, err)
 
@@ -1198,10 +1205,17 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 			var started []string
 
 			for range 2 {
+				var startupTimeout <-chan time.Time
+				if prematureFinal == nil {
+					startupTimeout = time.After(3 * time.Second)
+				}
+
 				select {
 				case model := <-requests:
 					started = append(started, model)
-				case <-time.After(3 * time.Second):
+				case final := <-prematureFinal:
+					t.Fatalf("turn finished before removal: conversation=%s terminal=%s", final.ConversationID, final.Terminal)
+				case <-startupTimeout:
 					t.Logf("shadow mutation startup: received=%d models=%q want=[gpt-parent gpt-child] buffered_requests=%d finals=%d cancellations=%d database=%+v", len(started), started, len(requests), len(finals), len(cancelled), store.db.Stats())
 
 					for range len(finals) {
