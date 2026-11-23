@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"bytes"
-	"cmp"
 	"errors"
 	"fmt"
 	"image"
@@ -12,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	xdraw "golang.org/x/image/draw"
@@ -41,7 +41,10 @@ func normalizeInboundAttachments(content *InboundContent) {
 	for i := range content.Attachments {
 		attachment := content.Attachments[i]
 
-		name := cmp.Or(strings.TrimSpace(attachment.Name), fmt.Sprintf("attachment-%d", i+1))
+		name := strings.TrimSpace(attachment.Name)
+		if name == "" {
+			name = "attachment-" + strconv.Itoa(i+1)
+		}
 
 		data := attachment.Data
 
