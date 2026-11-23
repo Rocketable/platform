@@ -151,12 +151,12 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 		predeclared[tool.Name] = newKwargsValueBuiltin(tool.Name, tool)
 	}
 
-	for name, builtin := range concurrency {
-		if _, exists := predeclared[name]; exists {
+	for _, builtin := range concurrency {
+		if name := builtin.Name(); predeclared.Has(name) {
 			return nil, fmt.Errorf("builtin name collision %q", name)
 		}
 
-		predeclared[name] = builtin
+		predeclared[builtin.Name()] = builtin
 	}
 
 	predeclared[unboxBuiltin] = starlark.NewBuiltin(unboxBuiltin, func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {

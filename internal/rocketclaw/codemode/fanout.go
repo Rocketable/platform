@@ -40,16 +40,16 @@ func nextKey(thread *starlark.Thread) string {
 	return prefix + strconv.Itoa(steps)
 }
 
-func concurrencyBuiltins() starlark.StringDict {
+func concurrencyBuiltins() [6]*starlark.Builtin {
 	slots := semaphore.NewWeighted(MaxConcurrency)
 
-	return starlark.StringDict{
-		"gather":     starlark.NewBuiltin("gather", makeGather(slots, false)),
-		"try_gather": starlark.NewBuiltin("try_gather", makeGather(slots, true)),
-		"map":        starlark.NewBuiltin("map", makeMap(slots, false)),
-		"try_map":    starlark.NewBuiltin("try_map", makeMap(slots, true)),
-		"race":       starlark.NewBuiltin("race", makeRace(slots)),
-		"race_first": starlark.NewBuiltin("race_first", makeRace(slots)),
+	return [...]*starlark.Builtin{
+		starlark.NewBuiltin("gather", makeGather(slots, false)),
+		starlark.NewBuiltin("try_gather", makeGather(slots, true)),
+		starlark.NewBuiltin("map", makeMap(slots, false)),
+		starlark.NewBuiltin("try_map", makeMap(slots, true)),
+		starlark.NewBuiltin("race", makeRace(slots)),
+		starlark.NewBuiltin(concurrencyOpRaceFirst, makeRace(slots)),
 	}
 }
 
