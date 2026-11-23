@@ -58,26 +58,36 @@ func Handler(cfg *config.LockedConfig, serverName string) http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 
 		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/search", "/voice", "/pages", "/shortcuts", "/closed"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/search/") || strings.HasPrefix(r.URL.Path, "/s/") || strings.HasPrefix(r.URL.Path, "/r/") || strings.HasPrefix(r.URL.Path, "/oc/") || strings.HasPrefix(r.URL.Path, "/skills/") || strings.HasPrefix(r.URL.Path, "/agents/") || strings.HasPrefix(r.URL.Path, "/pages/") || strings.HasPrefix(r.URL.Path, "/cron/") {
-			live, index := cfg.Clone(), page
+			var (
+				posthog     config.PostHogConfig
+				rocketclaws map[string]config.RemoteRocketClawConfig
+			)
+
+			_ = cfg.Do(func(live *config.Config) error {
+				posthog, rocketclaws = live.PostHog, maps.Clone(live.RocketClaws)
+				return nil
+			})
+
+			index := page
 
 			if serverName != "" {
 				index = strings.Replace(index, "<title>RocketClaw</title>", "<title>"+html.EscapeString(serverName)+" - RocketClaw</title>", 1)
 			}
 
-			if live.PostHog.ProjectToken != "" {
-				data, _ := json.Marshal(live.PostHog)
+			if posthog.ProjectToken != "" {
+				data, _ := json.Marshal(posthog)
 				index = strings.Replace(index, "</head>", `<script id="posthog-config" type="application/json">`+string(data)+`</script></head>`, 1)
 			}
 
-			if len(live.RocketClaws) > 0 {
+			if len(rocketclaws) > 0 {
 				type remote struct {
 					Name string `json:"name"`
 					URL  string `json:"url"`
 				}
 
-				list := make([]remote, 0, len(live.RocketClaws))
-				for _, name := range slices.Sorted(maps.Keys(live.RocketClaws)) {
-					list = append(list, remote{name, live.RocketClaws[name].URL})
+				list := make([]remote, 0, len(rocketclaws))
+				for _, name := range slices.Sorted(maps.Keys(rocketclaws)) {
+					list = append(list, remote{name, rocketclaws[name].URL})
 				}
 
 				data, _ := json.Marshal(list)
