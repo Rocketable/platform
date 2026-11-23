@@ -1716,9 +1716,9 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return nil, err
 	}
 
-	words := strings.Fields(request.Text)
-	if request.Delivery == PromptDelivery_STASH {
-		words = nil
+	var words []string
+	if request.Delivery != PromptDelivery_STASH && strings.HasPrefix(strings.TrimLeftFunc(request.Text, unicode.IsSpace), "/") {
+		words = strings.Fields(request.Text)
 	}
 
 	if len(words) > 0 && words[0] == "/stop" {
