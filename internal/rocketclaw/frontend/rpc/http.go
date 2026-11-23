@@ -233,7 +233,10 @@ func (a *accessRecorder) Header() http.Header {
 }
 
 func (a *accessRecorder) WriteHeader(code int) {
-	a.status = cmp.Or(a.status, code)
+	if code >= http.StatusOK || code == http.StatusSwitchingProtocols {
+		a.status = cmp.Or(a.status, code)
+	}
+
 	a.writer.WriteHeader(code)
 }
 

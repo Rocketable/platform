@@ -297,6 +297,27 @@ func TestTailnetAccessLog(t *testing.T) {
 			require.NotContains(t, logged.String(), "secret", tt.name)
 		}
 	})
+
+	t.Run("informational response", func(t *testing.T) {
+		var logged bytes.Buffer
+
+		handler := NewTailnetHandler(whois, nil, &logged, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusEarlyHints)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		server := httptest.NewServer(handler)
+		t.Cleanup(server.Close)
+
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, http.NoBody)
+		require.NoError(t, err)
+		response, err := server.Client().Do(request)
+		require.NoError(t, err)
+		require.NoError(t, response.Body.Close())
+		server.Close()
+
+		require.Equal(t, http.StatusNoContent, response.StatusCode)
+		require.Contains(t, logged.String(), `"GET / HTTP/1.1" 204 0 `)
+	})
 }
 
 func TestTailnetIdentity(t *testing.T) {
