@@ -742,7 +742,11 @@ func bashExecutablePatternMatch(subject, pattern string) bool {
 			return true
 		}
 
-		fields, err := expand.Fields(&expand.Config{}, call.Args[0])
+		if !quotedLiteralWord(call.Args[0]) {
+			return false
+		}
+
+		fields, err := expand.Fields(literalWordConfig(), call.Args[0])
 		if err != nil || len(fields) != 1 {
 			return false
 		}

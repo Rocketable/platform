@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
+	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 func TestSandboxedShellSystemBash(t *testing.T) {
@@ -336,6 +339,25 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			require.ErrorIs(t, err, fs.ErrNotExist)
 		})
 	})
+}
+
+func TestLiteralWordConfig(t *testing.T) {
+	file, err := syntax.NewParser().Parse(strings.NewReader(`echo <(ls) $(ls) $'a\tb' $"c d"`), "")
+	require.NoError(t, err)
+
+	call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
+	require.True(t, ok)
+
+	_, err = expand.Literal(literalWordConfig(), call.Args[1])
+	require.ErrorIs(t, err, errProcessSubstitution)
+
+	_, err = expand.Literal(literalWordConfig(), call.Args[2])
+	_, isUnexpectedCommand := errors.AsType[expand.UnexpectedCommandError](err)
+	require.True(t, isUnexpectedCommand)
+
+	fields, err := expand.Fields(literalWordConfig(), call.Args[3:]...)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a\tb", "c d"}, fields)
 }
 
 func TestBashStaysInTheAgentFolder(t *testing.T) {

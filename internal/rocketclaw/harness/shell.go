@@ -63,7 +63,10 @@ func (s *bashStdin) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-var errBashStdin = errors.New("stdin must be text or a file object")
+var (
+	errBashStdin           = errors.New("stdin must be text or a file object")
+	errProcessSubstitution = errors.New("process substitution is not run")
+)
 
 type BashResult struct {
 	Output    string
@@ -308,6 +311,22 @@ func bashFailure(message string) BashResult {
 	}
 }
 
+func quotedLiteralWord(word *syntax.Word) bool {
+	for part := range syntax.Preorder(word) {
+		switch part.(type) {
+		case *syntax.Word, *syntax.Lit, *syntax.SglQuoted, *syntax.DblQuoted:
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+func literalWordConfig() *expand.Config {
+	return &expand.Config{ProcSubst: func(*syntax.ProcSubst) (string, error) { return "", errProcessSubstitution }}
+}
+
 func (sss *sandboxedShellSystem) deniedBashPath(customShell *CustomShell, dir, command, hostDir string) string {
 	parser := syntax.NewParser()
 
@@ -324,16 +343,8 @@ func (sss *sandboxedShellSystem) deniedBashPath(customShell *CustomShell, dir, c
 			return false
 		}
 
-		if word, ok := node.(*syntax.Word); ok {
-			for part := range syntax.Preorder(word) {
-				switch part.(type) {
-				case *syntax.Word, *syntax.Lit, *syntax.SglQuoted, *syntax.DblQuoted:
-				default:
-					return true
-				}
-			}
-
-			fields, err := expand.Fields(&expand.Config{}, word)
+		if word, ok := node.(*syntax.Word); ok && quotedLiteralWord(word) {
+			fields, err := expand.Fields(literalWordConfig(), word)
 			if err != nil {
 				denied = err.Error()
 				return false

@@ -240,5 +240,29 @@
     "created": [
       "https://github.com/o/r/pull/7"
     ]
+  },
+  {
+    "name": "a create whose arguments use ANSI-C and locale quoting",
+    "command": "gh pr create --title $'Fix\\tlogin' --body $\"See the notes\"",
+    "output": "https://github.com/o/r/pull/7\n",
+    "created": [
+      "https://github.com/o/r/pull/7"
+    ]
+  },
+  {
+    "name": "a process substitution",
+    "command": "diff <(gh pr view 7) <(gh pr view 8)",
+    "output": "< url: https://github.com/o/r/pull/7\n",
+    "mentioned": [
+      "https://github.com/o/r/pull/7"
+    ]
+  },
+  {
+    "name": "a parameter transformation bash rejects",
+    "command": "echo ${0@A$}",
+    "output": "https://github.com/o/r/pull/7\n",
+    "mentioned": [
+      "https://github.com/o/r/pull/7"
+    ]
   }
 ]

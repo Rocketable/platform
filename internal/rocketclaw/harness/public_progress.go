@@ -313,7 +313,11 @@ func PullRequestsIn(command, output string) (created, mentioned []string) {
 func ghCommand(call *syntax.CallExpr) (name string, arguments []string) {
 	fields := make([]string, 0, len(call.Args))
 	for _, word := range call.Args {
-		field, _ := expand.Literal(&expand.Config{}, word)
+		field := ""
+		if quotedLiteralWord(word) {
+			field, _ = expand.Literal(literalWordConfig(), word)
+		}
+
 		fields = append(fields, field)
 	}
 
