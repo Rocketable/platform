@@ -14,172 +14,205 @@ const route = (id: string) => `/oc/${encode(id)}`;
 // The box server's own address, which RocketClaw only ever sends as an origin.
 const box = "http://box.test:4096";
 
-test("thread PR pane reads with the OpenCode host's gh login beside the real embedded conversation", async () => {
+async function startThreadPRBrowser({ unavailable = true, pollClock = false, width }: { unavailable?: boolean; pollClock?: boolean; width?: number } = {}) {
   const { chromium: engine } = await import(playwright!);
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
   const { web, release, base, rows } = start();
   release();
   fake.sessions.get("ses_child")!.location = { directory: "/repo/child" };
-  const browser = await engine.launch({ executablePath: chromium, headless: true });
   const commands: { command: string; cwd: string }[] = [], removed: string[] = [], prompts: string[] = [];
   const outputs = new Map<string, string>();
-  let checkoutUnavailable = true;
-  let directory = "/repo";
-  let holdMetadata = false;
-  let includeIssue = false;
+  const checkout = { unavailable, directory: "/repo", holdMetadata: false, includeIssue: false };
   const pendingMetadata = Promise.withResolvers<void>(), releaseMetadata = Promise.withResolvers<void>();
-  try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    const errors: string[] = [];
-    page.on("pageerror", (error: Error) => errors.push(error.message));
-    page.on("request", (request: any) => { if (request.method() === "POST" && /\/session\/[^/]+\/(?:prompt|message|shell)(?:\?|$)/.test(request.url())) prompts.push(request.url()); });
-    await page.route("**/oc/box/api/**", async (request: any) => {
-      const url = new URL(request.request().url());
-      if (!url.searchParams.has("pull-request-discovery")) return request.continue();
-      if (url.pathname.endsWith("/message")) return request.fulfill({ json: { data: url.pathname.includes("/ses_a/") ? [{ type: "assistant", content: [
-        { type: "text", text: includeIssue ? "https://github.com/sample/fixture-repository-marker/issues/12" : "https://github.com/sample/fixture-repository-marker/pull/99" },
-        { type: "tool", name: "shell", state: { status: "completed", input: { command: "gh pr create --title 'Sample' --body 'Sample'" }, metadata: { exit: 0 }, content: [{ type: "text", text: "https://github.com/sample/fixture-repository-marker/pull/7" }] } },
-      ] }] : [], cursor: {} } });
-      if (url.pathname.endsWith("/api/session")) return request.fulfill({ json: { data: [], cursor: {} } });
-      if (url.pathname.includes("/session/")) return request.fulfill({ json: { data: { location: { directory: url.pathname.endsWith("/ses_child") ? "/repo/child" : directory }, time: { created: 1 } } } });
-      if (request.request().method() === "POST") {
-        const body = request.request().postDataJSON(); commands.push(body);
-        const command = body.command as string;
-        const output = command.includes("gh pr view") ? checkoutUnavailable ? "To get started with GitHub CLI, please run:  gh auth login" : JSON.stringify({ url: `https://github.com/sample/fixture-repository-marker/pull/${{ "/repo/child": 8, "/repo/next": 9 }[body.cwd as string] ?? 7}`, headRefName: "feature/pr-pane", mergedAt: null, closedAt: null })
-          : command.includes("/issues/12/comments") ? JSON.stringify([{ id: 1, body: "Private discussion fixture", user: { login: "demo-author" }, created_at: "2026-11-12T12:00:00Z" }])
-          : command.includes("/issues/12") ? JSON.stringify({ title: "Remote issue fixture", body: "Private issue description", state: "closed", labels: [], user: null, comments: 1 })
-          : command.includes("/files?") ? JSON.stringify([{ filename: "private-file-marker.ts", status: "modified", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+private-patch-marker <script>text only</script>" }])
-          : JSON.stringify({ title: command.includes("/pulls/8") ? "Second thread PR marker" : "Remote private PR marker", body: "Private description marker", state: "open", draft: true, merged: false, changed_files: 1, user: { login: "demo-author" }, updated_at: "2026-11-12T12:00:00Z", additions: 1, deletions: 0, head: { sha: "head", ref: "feature/pr-reader" }, base: { sha: "base", ref: "main" } });
-        const id = `sh_pr_${outputs.size}`; outputs.set(id, output);
-        if (holdMetadata && body.cwd === "/repo/moved" && command.endsWith("/pulls/7'")) { pendingMetadata.resolve(); await releaseMetadata.promise; }
-        return request.fulfill({ json: { data: { id, status: "exited", exit: command.includes("gh pr view") && checkoutUnavailable ? 1 : 0 } } });
-      }
-      const id = url.pathname.split("/").find((part) => part.startsWith("sh_pr_"))!;
-      if (request.request().method() === "DELETE") { removed.push(id); return request.fulfill({ status: 204 }); }
-      const output = outputs.get(id)!;
-      return request.fulfill({ json: { data: { output, cursor: output.length, size: output.length, truncated: false } } });
-    });
-    await page.goto(`${base}${route("opencode:box:ses_a")}`);
-    const view = page.locator("main [data-oc-view]");
-    await view.getByText("answer in ses_a", { exact: true }).waitFor();
-    const draft = view.locator('[contenteditable="true"]').first();
-    await draft.fill("OpenCode draft before reading a PR");
-    expect(await page.locator("#bottom-navigation").getByRole("button").count()).toBe(6);
-    await page.getByRole("button", { name: "Tab actions", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Pull requests and issues", exact: true }).click();
-    const pane = page.getByRole("complementary", { name: "Pull requests and issues", exact: true });
-    await pane.getByText("Remote private PR marker", { exact: true }).waitFor();
-    await pane.getByRole("alert").getByText("Could not read the current checkout's pull request using this OpenCode server's gh login.", { exact: true }).waitFor();
-    expect(await pane.getByLabel("Personal read token").count()).toBe(0);
-    // One PR needs no picker.
-    expect(await pane.getByRole("combobox", { name: "Thread pull request or issue" }).count()).toBe(0);
-    expect(await pane.textContent()).not.toContain("#99");
-    await draft.fill("OpenCode draft edited beside the PR");
-    await pane.getByRole("tab", { name: "Code", exact: true }).click();
-    await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
-    await pane.getByRole("button", { name: "File tree", exact: true }).click();
-    await pane.getByRole("treeitem", { name: "private-file-marker.ts", exact: true }).click();
-    await pane.getByText("private-patch-marker <script>text only</script>", { exact: true }).waitFor();
-    const resize = pane.getByRole("separator", { name: "Resize delegation panel", exact: true });
-    await resize.focus();
-    for (let step = 0; step < 16; step++) await resize.press("ArrowLeft");
-    const patchBox = (await pane.getByRole("region", { name: "File patch", exact: true }).boundingBox())!;
-    const treeBox = (await pane.getByRole("region", { name: "Changed files", exact: true }).boundingBox())!;
-    expect(treeBox.x).toBeGreaterThanOrEqual(patchBox.x + patchBox.width - 1);
-    checkoutUnavailable = false;
-    directory = "/repo/moved";
-    holdMetadata = true;
-    await pane.getByRole("button", { name: "Refresh", exact: true }).click();
-    await pendingMetadata.promise;
-    expect(await pane.getByText("Remote private PR marker", { exact: true }).count()).toBe(0);
-    expect(await pane.getByRole("treeitem").count()).toBe(0);
+  onTestFinished(async () => {
     releaseMetadata.resolve();
-    await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
-    expect(commands.filter(({ cwd, command }) => cwd === "/repo/moved" && command.includes("/files?"))).toHaveLength(1);
-    // Preserve the open pane across navigation: it must use the new thread's query and reader.
-    await page.evaluate((href: string) => { history.pushState(null, "", href); window.dispatchEvent(new PopStateEvent("popstate")); }, `${route("opencode:box:ses_child")}?pullRequests=1`);
-    await pane.getByText("Second thread PR marker", { exact: true }).waitFor();
-    expect(await pane.getByText("Remote private PR marker", { exact: true }).count()).toBe(0);
-    await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
-    expect(commands.some(({ cwd, command }) => cwd === "/repo/child" && command.includes("/pulls/8/files?"))).toBe(true);
-    await pane.getByText("Current checkout · feature/pr-pane", { exact: true }).waitFor();
-    await page.evaluate((href: string) => { history.pushState(null, "", href); window.dispatchEvent(new PopStateEvent("popstate")); }, `${route(`opencode:box:${linked}`)}?pullRequests=1`);
-    await pane.getByText("Remote private PR marker", { exact: true }).waitFor();
-    await pane.getByText("Current checkout · feature/pr-pane", { exact: true }).waitFor();
-    await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
-    await page.getByRole("tab", { name: "Alpha work", exact: true }).click();
-    await view.getByText("answer in ses_a", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Tab actions", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Pull requests and issues", exact: true }).click();
-    await pane.getByText("Remote private PR marker", { exact: true }).waitFor();
-    expect(await pane.getByText(/^Current checkout/).count()).toBe(0);
-    await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
-    await pane.getByRole("button", { name: "Close pull requests and issues", exact: true }).click();
-    expect(await draft.textContent()).toBe("OpenCode draft edited beside the PR");
-    directory = "/repo/next";
-    for (const minutes of [1, 2]) {
-      const posted = page.waitForResponse((response: any) => response.request().method() === "POST" && /"cwd":"\/repo\/next"/.test(response.request().postData()) && /\/pulls\/7'"/.test(response.request().postData()));
-      const shellID = posted.then(async (response: any) => {
-        const { data: { id } } = await response.json() as { data: { id: string } };
-        return id;
-      });
-      const deleted = page.waitForResponse(async (response: any) =>
-        response.request().method() === "DELETE" && new URL(response.url()).pathname === `/oc/box/api/shell/${await shellID}`);
-      rows[0].updatedAt = new Date(Date.now() + minutes * 60_000).toISOString();
-      await Promise.all([shellID, deleted]);
+    web.stop(true);
+    await browser.close();
+  });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  if (width !== undefined) await page.addInitScript((width: number) => localStorage.setItem("delegation-width", String(width)), width);
+  if (pollClock) await page.clock.install();
+  const errors: string[] = [];
+  page.on("pageerror", (error: Error) => errors.push(error.message));
+  page.on("request", (request: any) => { if (request.method() === "POST" && /\/session\/[^/]+\/(?:prompt|message|shell)(?:\?|$)/.test(request.url())) prompts.push(request.url()); });
+  await page.route("**/oc/box/api/**", async (request: any) => {
+    const url = new URL(request.request().url());
+    if (!url.searchParams.has("pull-request-discovery")) return request.continue();
+    if (url.pathname.endsWith("/message")) return request.fulfill({ json: { data: url.pathname.includes("/ses_a/") ? [{ type: "assistant", content: [
+      { type: "text", text: checkout.includeIssue ? "https://github.com/sample/fixture-repository-marker/issues/12" : "https://github.com/sample/fixture-repository-marker/pull/99" },
+      { type: "tool", name: "shell", state: { status: "completed", input: { command: "gh pr create --title 'Sample' --body 'Sample'" }, metadata: { exit: 0 }, content: [{ type: "text", text: "https://github.com/sample/fixture-repository-marker/pull/7" }] } },
+    ] }] : [], cursor: {} } });
+    if (url.pathname.endsWith("/api/session")) return request.fulfill({ json: { data: [], cursor: {} } });
+    if (url.pathname.includes("/session/")) return request.fulfill({ json: { data: { location: { directory: url.pathname.endsWith("/ses_child") ? "/repo/child" : checkout.directory }, time: { created: 1 } } } });
+    if (request.request().method() === "POST") {
+      const body = request.request().postDataJSON(); commands.push(body);
+      const command = body.command as string;
+      const output = command.includes("gh pr view") ? checkout.unavailable ? "To get started with GitHub CLI, please run:  gh auth login" : JSON.stringify({ url: `https://github.com/sample/fixture-repository-marker/pull/${{ "/repo/child": 8, "/repo/next": 9 }[body.cwd as string] ?? 7}`, headRefName: "feature/pr-pane", mergedAt: null, closedAt: null })
+        : command.includes("/issues/12/comments") ? JSON.stringify([{ id: 1, body: "Private discussion fixture", user: { login: "demo-author" }, created_at: "2026-11-12T12:00:00Z" }])
+        : command.includes("/issues/12") ? JSON.stringify({ title: "Remote issue fixture", body: "Private issue description", state: "closed", labels: [], user: null, comments: 1 })
+        : command.includes("/files?") ? JSON.stringify([{ filename: "private-file-marker.ts", status: "modified", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+private-patch-marker <script>text only</script>" }])
+        : JSON.stringify({ title: command.includes("/pulls/8") ? "Second thread PR marker" : "Remote private PR marker", body: "Private description marker", state: "open", draft: true, merged: false, changed_files: 1, user: { login: "demo-author" }, updated_at: "2026-11-12T12:00:00Z", additions: 1, deletions: 0, head: { sha: "head", ref: "feature/pr-reader" }, base: { sha: "base", ref: "main" } });
+      const id = `sh_pr_${outputs.size}`; outputs.set(id, output);
+      if (checkout.holdMetadata && body.cwd === "/repo/moved" && command.endsWith("/pulls/7'")) { pendingMetadata.resolve(); await releaseMetadata.promise; }
+      return request.fulfill({ json: { data: { id, status: "exited", exit: command.includes("gh pr view") && checkout.unavailable ? 1 : 0 } } });
     }
-    expect(await pane.count()).toBe(0);
+    const id = url.pathname.split("/").find((part) => part.startsWith("sh_pr_"))!;
+    if (request.request().method() === "DELETE") { removed.push(id); return request.fulfill({ status: 204 }); }
+    const output = outputs.get(id)!;
+    return request.fulfill({ json: { data: { output, cursor: output.length, size: output.length, truncated: false } } });
+  });
+  await page.goto(`${base}${route("opencode:box:ses_a")}`);
+  const view = page.locator("main [data-oc-view]");
+  await view.getByText("answer in ses_a", { exact: true }).waitFor();
+  const draft = view.locator('[contenteditable="true"]').first();
+  const pane = page.getByRole("complementary", { name: "Pull requests and issues", exact: true });
+  const open = async () => {
     await page.getByRole("button", { name: "Tab actions", exact: true }).click();
     await page.getByRole("menuitem", { name: "Pull requests and issues", exact: true }).click();
+    await page.locator('[role="menu"]').waitFor({ state: "detached" });
     await pane.getByText("Remote private PR marker", { exact: true }).waitFor();
-    await pane.getByRole("combobox", { name: "Thread pull request or issue" }).click();
-    const options = page.getByRole("option");
-    await options.first().waitFor();
-    expect(await options.allTextContents()).toEqual(["sample/fixture-repository-marker #7", "sample/fixture-repository-marker #9"]);
-    await page.keyboard.press("Escape");
-    const selectDescription = () => pane.getByText("Private description marker", { exact: true }).evaluate((node: HTMLElement) => {
-      const range = document.createRange();
-      range.selectNodeContents(node);
-      window.getSelection()!.removeAllRanges();
-      window.getSelection()!.addRange(range);
-    });
-    const chips = view.locator("[data-slot=attachment-card-label]");
-    await pane.getByRole("tab", { name: "Summary", exact: true }).click();
-    await selectDescription();
-    await page.getByRole("button", { name: "Quote", exact: true }).click();
-    await chips.getByText("sample/fixture-repository-marker#7", { exact: true }).waitFor();
-    expect(await draft.textContent()).toBe("OpenCode draft edited beside the PR");
-    await pane.getByRole("tab", { name: "Code", exact: true }).click();
-    const firstLine = pane.locator('[data-line-type="change-addition"][data-column-number="1"]');
-    await firstLine.click();
-    await pane.getByRole("textbox", { name: "Note", exact: true }).fill("Why this line?");
-    await pane.getByRole("button", { name: "Add to agent", exact: true }).click();
-    await chips.filter({ hasText: "+private-patch-marker" }).waitFor();
-    await view.getByText("Why this line?", { exact: true }).first().waitFor();
-    expect(await draft.textContent()).toBe("OpenCode draft edited beside the PR");
-    await view.locator("[data-component=task-tool-card]").first().click();
-    await view.getByText("answer in ses_child").waitFor();
-    await pane.getByRole("tab", { name: "Summary", exact: true }).click();
-    await selectDescription();
-    await page.waitForTimeout(300);
-    expect(await page.getByRole("button", { name: "Quote", exact: true }).count()).toBe(0);
-    await pane.getByRole("tab", { name: "Code", exact: true }).click();
-    await firstLine.click();
-    await page.waitForTimeout(300);
-    expect(await pane.getByRole("textbox", { name: "Note", exact: true }).count()).toBe(0);
-    includeIssue = true;
-    await pane.getByRole("button", { name: "Refresh", exact: true }).click();
-    await pane.getByRole("combobox", { name: "Thread pull request or issue" }).click();
-    await page.getByRole("option", { name: "sample/fixture-repository-marker #12 · issue", exact: true }).click();
-    await pane.getByRole("heading", { name: "Remote issue fixture" }).waitFor();
-    await pane.getByText("Private discussion fixture", { exact: true }).waitFor();
-    expect(await pane.getByLabel("Personal read token").count()).toBe(0);
-    expect(commands.some(({ command }) => command.endsWith("/issues/12/comments?per_page=100&page=1'"))).toBe(true);
-    await pane.getByRole("button", { name: "Close pull requests and issues", exact: true }).click();
+  };
+  const assertShellReads = () => {
     expect(commands.every(({ cwd, command }) => ["/repo", "/repo/child", "/repo/moved", "/repo/next"].includes(cwd) && /^GH_PROMPT_DISABLED=1 gh (?:pr view \$\(git symbolic-ref -q HEAD >\/dev\/null \|\| jj log .+ \| head -n1\) --json|api --hostname github.com --method GET)/.test(command))).toBe(true);
     expect(removed).toHaveLength(commands.length);
     expect(prompts).toEqual([]);
     expect(errors).toEqual([]);
-  } finally { releaseMetadata.resolve(); await browser.close(); web.stop(true); }
+  };
+  return { page, view, draft, pane, rows, checkout, commands, pendingMetadata, releaseMetadata, open, assertShellReads };
+}
+
+test("thread PR pane refreshes the OpenCode checkout and its files without losing the draft", async () => {
+  const { page, draft, pane, checkout, commands, pendingMetadata, releaseMetadata, open, assertShellReads } = await startThreadPRBrowser({ width: 624 });
+  await draft.fill("OpenCode draft before reading a PR");
+  expect(await page.locator("#bottom-navigation").getByRole("button").count()).toBe(6);
+  await open();
+  await pane.getByRole("alert").getByText("Could not read the current checkout's pull request using this OpenCode server's gh login.", { exact: true }).waitFor();
+  expect(await pane.getByLabel("Personal read token").count()).toBe(0);
+  expect(await pane.getByRole("combobox", { name: "Thread pull request or issue" }).count()).toBe(0);
+  expect(await pane.textContent()).not.toContain("#99");
+  await draft.fill("OpenCode draft edited beside the PR");
+  await pane.getByRole("tab", { name: "Code", exact: true }).click();
+  await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
+  await pane.getByRole("button", { name: "File tree", exact: true }).click();
+  await pane.getByRole("treeitem", { name: "private-file-marker.ts", exact: true }).click();
+  await pane.getByText("private-patch-marker <script>text only</script>", { exact: true }).waitFor();
+  const resize = pane.getByRole("separator", { name: "Resize delegation panel", exact: true });
+  await resize.press("ArrowLeft");
+  expect(await resize.getAttribute("aria-valuenow")).toBe("640");
+  const patchBox = (await pane.getByRole("region", { name: "File patch", exact: true }).boundingBox())!;
+  const treeBox = (await pane.getByRole("region", { name: "Changed files", exact: true }).boundingBox())!;
+  expect(treeBox.x).toBeGreaterThanOrEqual(patchBox.x + patchBox.width - 1);
+  checkout.unavailable = false;
+  checkout.directory = "/repo/moved";
+  checkout.holdMetadata = true;
+  await pane.getByRole("button", { name: "Refresh", exact: true }).click();
+  await pendingMetadata.promise;
+  expect(await pane.getByText("Remote private PR marker", { exact: true }).count()).toBe(0);
+  expect(await pane.getByRole("treeitem").count()).toBe(0);
+  releaseMetadata.resolve();
+  await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
+  expect(commands.filter(({ cwd, command }) => cwd === "/repo/moved" && command.includes("/files?"))).toHaveLength(1);
+  expect(await draft.textContent()).toBe("OpenCode draft edited beside the PR");
+  assertShellReads();
+}, 30_000);
+
+test("thread PR pane follows the selected OpenCode thread and keeps its draft", async () => {
+  const { page, view, draft, pane, commands, open, assertShellReads } = await startThreadPRBrowser({ unavailable: false });
+  await draft.fill("OpenCode draft edited beside the PR");
+  await open();
+  await pane.getByRole("tab", { name: "Code", exact: true }).click();
+  await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
+  await page.evaluate((href: string) => { history.pushState(null, "", href); window.dispatchEvent(new PopStateEvent("popstate")); }, `${route("opencode:box:ses_child")}?pullRequests=1`);
+  await pane.getByText("Second thread PR marker", { exact: true }).waitFor();
+  expect(await pane.getByText("Remote private PR marker", { exact: true }).count()).toBe(0);
+  await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
+  expect(commands.some(({ cwd, command }) => cwd === "/repo/child" && command.includes("/pulls/8/files?"))).toBe(true);
+  await pane.getByText("Current checkout · feature/pr-pane", { exact: true }).waitFor();
+  await page.evaluate((href: string) => { history.pushState(null, "", href); window.dispatchEvent(new PopStateEvent("popstate")); }, `${route(`opencode:box:${linked}`)}?pullRequests=1`);
+  await pane.getByText("Remote private PR marker", { exact: true }).waitFor();
+  await pane.getByText("Current checkout · feature/pr-pane", { exact: true }).waitFor();
+  await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
+  await page.getByRole("tab", { name: "Alpha work", exact: true }).click();
+  await view.getByText("answer in ses_a", { exact: true }).waitFor();
+  await open();
+  expect(await pane.getByText(/^Current checkout/).count()).toBe(0);
+  await pane.getByText("1 of 1 files loaded", { exact: true }).waitFor();
+  await pane.getByRole("button", { name: "Close pull requests and issues", exact: true }).click();
+  expect(await draft.textContent()).toBe("OpenCode draft edited beside the PR");
+  assertShellReads();
+}, 30_000);
+
+test("thread PR pane stays closed across OpenCode revisions and updates its picker on reopening", async () => {
+  const { page, pane, rows, checkout, open, assertShellReads } = await startThreadPRBrowser({ pollClock: true });
+  await open();
+  await pane.getByRole("button", { name: "Close pull requests and issues", exact: true }).click();
+  checkout.unavailable = false;
+  checkout.directory = "/repo/next";
+  for (const minutes of [1, 2]) {
+    const posted = page.waitForResponse((response: any) => response.request().method() === "POST" && /"cwd":"\/repo\/next"/.test(response.request().postData()) && /\/pulls\/7'"/.test(response.request().postData()));
+    const shellID = posted.then(async (response: any) => {
+      const { data: { id } } = await response.json() as { data: { id: string } };
+      return id;
+    });
+    const deleted = page.waitForResponse(async (response: any) =>
+      response.request().method() === "DELETE" && new URL(response.url()).pathname === `/oc/box/api/shell/${await shellID}`);
+    rows[0].updatedAt = new Date(Date.now() + minutes * 60_000).toISOString();
+    await Promise.all([shellID, deleted, page.clock.fastForward(2_000)]);
+  }
+  expect(await pane.count()).toBe(0);
+  await open();
+  await pane.getByRole("combobox", { name: "Thread pull request or issue" }).click();
+  const options = page.getByRole("option");
+  await options.first().waitFor();
+  expect(await options.allTextContents()).toEqual(["sample/fixture-repository-marker #7", "sample/fixture-repository-marker #9"]);
+  await page.keyboard.press("Escape");
+  assertShellReads();
+}, 30_000);
+
+test("thread PR pane adds quotes and diff notes without sending from the OpenCode draft", async () => {
+  const { page, view, draft, pane, checkout, commands, open, assertShellReads } = await startThreadPRBrowser({ unavailable: false });
+  await draft.fill("OpenCode draft edited beside the PR");
+  await open();
+  const selectDescription = () => pane.getByText("Private description marker", { exact: true }).evaluate((node: HTMLElement) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+  });
+  const chips = view.locator("[data-slot=attachment-card-label]");
+  await pane.getByRole("tab", { name: "Summary", exact: true }).click();
+  await selectDescription();
+  await page.getByRole("button", { name: "Quote", exact: true }).click();
+  await chips.getByText("sample/fixture-repository-marker#7", { exact: true }).waitFor();
+  expect(await draft.textContent()).toBe("OpenCode draft edited beside the PR");
+  await pane.getByRole("tab", { name: "Code", exact: true }).click();
+  const firstLine = pane.locator('[data-line-type="change-addition"][data-column-number="1"]');
+  await firstLine.click();
+  await pane.getByRole("textbox", { name: "Note", exact: true }).fill("Why this line?");
+  await pane.getByRole("button", { name: "Add to agent", exact: true }).click();
+  await chips.filter({ hasText: "+private-patch-marker" }).waitFor();
+  await view.getByText("Why this line?", { exact: true }).first().waitFor();
+  expect(await draft.textContent()).toBe("OpenCode draft edited beside the PR");
+  await view.locator("[data-component=task-tool-card]").first().click();
+  await view.getByText("answer in ses_child").waitFor();
+  await pane.getByRole("tab", { name: "Summary", exact: true }).click();
+  await selectDescription();
+  await page.waitForTimeout(300);
+  expect(await page.getByRole("button", { name: "Quote", exact: true }).count()).toBe(0);
+  await pane.getByRole("tab", { name: "Code", exact: true }).click();
+  await firstLine.click();
+  await page.waitForTimeout(300);
+  expect(await pane.getByRole("textbox", { name: "Note", exact: true }).count()).toBe(0);
+  checkout.includeIssue = true;
+  await pane.getByRole("button", { name: "Refresh", exact: true }).click();
+  await pane.getByRole("combobox", { name: "Thread pull request or issue" }).click();
+  await page.getByRole("option", { name: "sample/fixture-repository-marker #12 · issue", exact: true }).click();
+  await pane.getByRole("heading", { name: "Remote issue fixture" }).waitFor();
+  await pane.getByText("Private discussion fixture", { exact: true }).waitFor();
+  expect(await pane.getByLabel("Personal read token").count()).toBe(0);
+  expect(commands.some(({ command }) => command.endsWith("/issues/12/comments?per_page=100&page=1'"))).toBe(true);
+  await pane.getByRole("button", { name: "Close pull requests and issues", exact: true }).click();
+  assertShellReads();
 }, 30_000);
 
 // A RocketClaw Web serving the built view at /oc-ui/ and the fake OpenCode server behind /oc/box/api/.
