@@ -13,7 +13,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -51,7 +50,6 @@ func (r BashResult) String() string {
 }
 
 type sandboxedShellSystem struct {
-	mu               sync.Mutex
 	root             *os.Root
 	spillRel         string
 	shellTemp        shellTempConfig
@@ -62,7 +60,6 @@ type sandboxedShellSystem struct {
 
 func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, rt *sandbox.Runtime) *sandboxedShellSystem {
 	return &sandboxedShellSystem{
-		mu:               sync.Mutex{},
 		root:             root,
 		shellTemp:        *shellTemp,
 		env:              slices.Clone(env),
@@ -100,9 +97,6 @@ func shellEnvList(shellEnv map[string]string) ([]string, error) {
 }
 
 func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomShell, params bashParams) BashResult {
-	sss.mu.Lock()
-	defer sss.mu.Unlock()
-
 	if strings.TrimSpace(params.Command) == "" {
 		return bashFailure("command is required")
 	}

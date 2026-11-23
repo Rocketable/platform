@@ -86,6 +86,20 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		require.Contains(t, got.Output, "started")
 		require.NotContains(t, got.Output, "finished")
 	})
+	t.Run("calls run side by side", func(t *testing.T) {
+		results := make(chan BashResult, 2)
+
+		for _, command := range []string{
+			"touch side-a; for i in $(seq 200); do [ -e side-b ] && exit 0; sleep 0.01; done; exit 1",
+			"touch side-b; for i in $(seq 200); do [ -e side-a ] && exit 0; sleep 0.01; done; exit 1",
+		} {
+			go func() { results <- sss.Bash(t.Context(), &CustomShell{}, bashParams{Command: command}) }()
+		}
+
+		for range 2 {
+			require.True(t, (<-results).Success, "each command sees the other one running")
+		}
+	})
 	t.Run("captures stderr", func(t *testing.T) {
 		got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "echo stdout_msg && echo stderr_msg >&2", TimeoutMillisecond: 0, Workdir: "", Description: "stderr"}).String()
 		require.Contains(t, got, "stdout_msg")
