@@ -77,7 +77,7 @@ func (m membership) Has(needle starlark.Value) (bool, error) {
 		return containsUnboxed(c.(starlark.Iterable), needle, false)
 	case *starlark.Dict, *starlark.Set:
 		if IsFailure(needle) {
-			return containsUnboxed(c.(starlark.Iterable), needle, true)
+			return false, nil
 		}
 
 		found, err := starlark.Binary(syntax.IN, needle, c)
