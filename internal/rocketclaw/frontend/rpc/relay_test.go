@@ -249,7 +249,7 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 		return &apitype.WhoIsResponse{Node: node, UserProfile: &tailcfg.UserProfile{LoginName: "zoe@example.com"}}, nil
 	}}
 	proxy, _, _ = startProxyTestRPC(t, upstream.URL)
-	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, []string{"https://local.tail1234.ts.net"}, proxy))
+	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, []string{"https://local.tail1234.ts.net"}, io.Discard, proxy))
 	t.Cleanup(tailnet.Close)
 
 	for _, listener := range []*httptest.Server{web, tailnet} {

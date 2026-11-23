@@ -693,6 +693,14 @@ With `--aws-secrets-manager-arn ARN`, the three commands read providers from the
 
 RocketClaw logs a health line once a minute with memory, Go scheduler, and database connection figures.
 
+RocketClaw writes its log to standard error and an access log of the Web page to standard output, so the two stay apart. The access log has one line for every HTTP request the tailnet node serves, refused ones included, in the Combined Log Format followed by how long the request took, in whole milliseconds:
+
+```text
+100.64.0.7 - alice@example.com [23/Nov/2026:06:34:36 +0000] "POST /api/Reload HTTP/1.1" 200 15 "-" "curl/8.7.1" 3ms
+```
+
+The login is the caller's Tailscale login, or `-` when RocketClaw has none for the request. The byte count is the size of the response body, after compression. A stream's line is written when it ends. Lines leave out the query string and every header except `Referer` and `User-Agent`, and quotes and control characters in the quoted fields are escaped.
+
 When profiling is enabled, RocketClaw also samples blocking events at an average of one per 10 milliseconds spent blocked and one in 100 mutex contention events.
 
 `rocketclaw run` turns on Go profiling at `127.0.0.1:6060` by default, and so do `--pprof` and `--pprof=true`. Use `--pprof=HOST:PORT` to serve it elsewhere, for example `rocketclaw run --pprof=127.0.0.1:6061`, or `--pprof=false` to turn it off. Any other value stops RocketClaw at startup with an error. Keep the host `127.0.0.1`: even there, any process on the machine can reach the port, and profiles can contain private data, so do not expose the port and do not share downloaded profiles. To inspect a remote machine, forward its profiling port over SSH; for the default port:

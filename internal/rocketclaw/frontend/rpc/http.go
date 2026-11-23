@@ -1,6 +1,8 @@
 package rpc
 
 import (
+	"bufio"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -9,6 +11,7 @@ import (
 	"io"
 	"math"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -16,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/internal/web"
@@ -218,10 +222,74 @@ type tailnetWhoIs interface {
 	WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error)
 }
 
-func NewTailnetHandler(client tailnetWhoIs, trusted []string, next http.Handler) http.Handler {
+type accessRecorder struct {
+	writer http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (a *accessRecorder) Header() http.Header {
+	return a.writer.Header()
+}
+
+func (a *accessRecorder) WriteHeader(code int) {
+	a.status = cmp.Or(a.status, code)
+	a.writer.WriteHeader(code)
+}
+
+func (a *accessRecorder) Write(body []byte) (int, error) {
+	a.status = cmp.Or(a.status, http.StatusOK)
+	n, err := a.writer.Write(body)
+	a.bytes += n
+
+	if err != nil {
+		return n, fmt.Errorf("write response: %w", err)
+	}
+
+	return n, nil
+}
+
+func (a *accessRecorder) Flush() {
+	_ = a.FlushError()
+}
+
+func (a *accessRecorder) FlushError() error {
+	if err := http.NewResponseController(a.writer).Flush(); err != nil {
+		return fmt.Errorf("flush response: %w", err)
+	}
+
+	return nil
+}
+
+func (a *accessRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	connection, buffered, err := http.NewResponseController(a.writer).Hijack()
+	if err != nil {
+		return nil, nil, fmt.Errorf("hijack response: %w", err)
+	}
+
+	a.status = cmp.Or(a.status, http.StatusSwitchingProtocols)
+
+	return connection, buffered, nil
+}
+
+func (a *accessRecorder) Unwrap() http.ResponseWriter {
+	return a.writer
+}
+
+func NewTailnetHandler(client tailnetWhoIs, trusted []string, accessLog io.Writer, next http.Handler) http.Handler {
 	ancestors := strings.Join(append([]string{"frame-ancestors 'self'"}, trusted...), " ")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start, login, recorded := time.Now(), "-", &accessRecorder{writer: w}
+		w = recorded
+
+		defer func(r *http.Request) {
+			host, _, _ := net.SplitHostPort(r.RemoteAddr)
+			_, _ = fmt.Fprintf(accessLog, "%s - %s [%s] %s %d %d %s %s %dms\n", host, login, start.Format("02/Jan/2006:15:04:05 -0700"),
+				strconv.Quote(r.Method+" "+r.URL.EscapedPath()+" "+r.Proto), cmp.Or(recorded.status, http.StatusOK), recorded.bytes,
+				strconv.Quote(cmp.Or(r.Referer(), "-")), strconv.Quote(cmp.Or(r.UserAgent(), "-")), time.Since(start).Milliseconds())
+		}(r)
+
 		if bridge, _ := path.Match("/opencode/*/mcp", r.URL.Path); bridge {
 			next.ServeHTTP(w, r)
 			return
@@ -244,7 +312,8 @@ func NewTailnetHandler(client tailnetWhoIs, trusted []string, next http.Handler)
 			return
 		}
 
-		r = r.Clone(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-tailnet-login-bin", who.UserProfile.LoginName, "rocketclaw-tailnet-name-bin", who.UserProfile.DisplayName))
+		login = who.UserProfile.LoginName
+		r = r.Clone(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-tailnet-login-bin", login, "rocketclaw-tailnet-name-bin", who.UserProfile.DisplayName))
 
 		if page {
 			if r.Method == http.MethodOptions {

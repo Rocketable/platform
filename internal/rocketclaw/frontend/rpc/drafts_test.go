@@ -139,7 +139,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 	whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) {
 		return &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "alice@example.com"}}, nil
 	}}
-	handler := NewTailnetHandler(whois, nil, NewHTTPHandler(connection, new(config.LockedConfig), ""))
+	handler := NewTailnetHandler(whois, nil, io.Discard, NewHTTPHandler(connection, new(config.LockedConfig), ""))
 
 	for _, method := range []string{"TestModel", "CreateAgentDraft", "ListAgentDrafts", "GetAgentDraft", "ApplyAgentDraftOp", "SetAgentDraftPresence", "AgentSettings", "DraftPrompt", "RestartDraftChat", "DraftLayers", "SaveDraft", "StopWaiting", "ProposeDraftChanges", "DecideProposal"} {
 		response := httptest.NewRecorder()
