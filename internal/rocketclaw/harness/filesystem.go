@@ -534,7 +534,7 @@ func computeReplacements(originalLines []string, filePath string, chunks []updat
 }
 
 func seekSequence(lines, pattern []string, startIndex int, eof bool) int {
-	if len(pattern) == 0 {
+	if len(pattern) == 0 || len(pattern) > len(lines)-startIndex {
 		return -1
 	}
 
@@ -542,17 +542,6 @@ func seekSequence(lines, pattern []string, startIndex int, eof bool) int {
 		func(a, b string) bool { return a == b },
 		func(a, b string) bool { return strings.TrimRight(a, " \t") == strings.TrimRight(b, " \t") },
 		func(a, b string) bool { return strings.TrimSpace(a) == strings.TrimSpace(b) },
-		func(a, b string) bool {
-			replacer := strings.NewReplacer(
-				"\u2018", "'", "\u2019", "'", "\u201A", "'", "\u201B", "'",
-				"\u201C", `"`, "\u201D", `"`, "\u201E", `"`, "\u201F", `"`,
-				"\u2010", "-", "\u2011", "-", "\u2012", "-", "\u2013", "-", "\u2014", "-", "\u2015", "-",
-				"\u2026", "...",
-				"\u00A0", " ",
-			)
-
-			return replacer.Replace(strings.TrimSpace(a)) == replacer.Replace(strings.TrimSpace(b))
-		},
 	}
 	for _, compare := range comparators {
 		if match := tryMatch(lines, pattern, startIndex, compare, eof); match != -1 {
@@ -560,7 +549,17 @@ func seekSequence(lines, pattern []string, startIndex int, eof bool) int {
 		}
 	}
 
-	return -1
+	replacer := strings.NewReplacer(
+		"\u2018", "'", "\u2019", "'", "\u201A", "'", "\u201B", "'",
+		"\u201C", `"`, "\u201D", `"`, "\u201E", `"`, "\u201F", `"`,
+		"\u2010", "-", "\u2011", "-", "\u2012", "-", "\u2013", "-", "\u2014", "-", "\u2015", "-",
+		"\u2026", "...",
+		"\u00A0", " ",
+	)
+
+	return tryMatch(lines, pattern, startIndex, func(a, b string) bool {
+		return replacer.Replace(strings.TrimSpace(a)) == replacer.Replace(strings.TrimSpace(b))
+	}, eof)
 }
 
 func tryMatch(lines, pattern []string, startIndex int, compare func(string, string) bool, eof bool) int {
