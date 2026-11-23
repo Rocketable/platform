@@ -151,7 +151,7 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	assert.Equal(t, "Starlark source defining def main().", codeProp["description"])
 
 	prompt := withCodeModeSystemPrompt("base", model, hosts, nil)
-	assert.Contains(t, prompt, "base\n\n## Code Mode\n\nThese tools exist only inside execute scripts:\n")
+	assert.Contains(t, prompt, "base\n\n## Code Mode\n\nThese tools cannot be called directly. They only work inside code you pass to execute:\n")
 	assert.Contains(t, prompt, "\n- read(")
 	assert.NotContains(t, prompt, "MCP servers")
 	assert.NotContains(t, hosts["bash"].Definition.Description.Value, "r'''")

@@ -128,9 +128,9 @@ The harness agent style that asks the model to write a short script and run it t
 
 ### Execute
 
-The model-facing tool that runs a Code Mode script and returns one string to the model.
+The model-facing tool that runs a Code Mode script and returns what the script returns to the model: text, or files such as images and PDFs.
 
-Host tools inside the script return full strings to the script. Only the string Execute sends back to the model is clipped when it is oversized.
+Host tools inside the script return their full results to the script. Only what Execute returns to the model is held back when it is oversized, for the model to load in pages.
 
 ### Host Tool
 

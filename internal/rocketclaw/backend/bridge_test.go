@@ -2465,6 +2465,11 @@ func TestAskUserQuestionToolDescriptionRejectsCatchAllOptions(t *testing.T) {
 
 	assert.Contains(t, tool.Description, "only for concrete predefined choices")
 	assert.Contains(t, tool.Description, "do not include catch-all choices")
+
+	catalogLine, _, _ := strings.Cut(tool.Description, "\n")
+	assert.LessOrEqual(t, len(catalogLine), 120, "the Code Mode catalog clips longer first lines")
+	assert.Contains(t, catalogLine, "options: list of {label, value, description} dicts")
+	assert.Contains(t, catalogLine, "multiple: True or False")
 }
 
 func TestAskUserQuestionToolFiltersRedundantCustomOptions(t *testing.T) {

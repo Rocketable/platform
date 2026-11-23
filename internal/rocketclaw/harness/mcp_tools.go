@@ -114,7 +114,7 @@ func codeModeSystemPrompt(hosts map[string]looperTool, servers []string) string 
 	lines := []string{"## Code Mode", ""}
 
 	if len(hosts) > 0 {
-		lines = append(lines, "These tools exist only inside execute scripts:")
+		lines = append(lines, "These tools cannot be called directly. They only work inside code you pass to execute:")
 
 		for _, name := range slices.Sorted(maps.Keys(hosts)) {
 			tool := hosts[name]
