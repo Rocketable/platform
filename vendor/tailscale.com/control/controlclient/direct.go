@@ -62,7 +62,6 @@ import (
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/httpbody"
 	"tailscale.com/util/singleflight"
-	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/vizerror"
@@ -110,6 +109,7 @@ type Direct struct {
 
 	persist                 persist.PersistView
 	authKey                 string
+	tailnet                 string // optional recommended/required tailnet for registration; see [tailcfg.RegisterRequest.Tailnet]
 	tryingNewKey            key.NodePrivate
 	expiry                  time.Time         // or zero value if none/unknown
 	hostinfo                *tailcfg.Hostinfo // always non-nil
@@ -140,6 +140,7 @@ type Options struct {
 	GetMachinePrivateKey func() (key.MachinePrivate, error) // returns the machine key to use
 	ServerURL            string                             // URL of the tailcontrol server
 	AuthKey              string                             // optional node auth key for auto registration
+	Tailnet              string                             // optional recommended/required tailnet for registration; see [tailcfg.RegisterRequest.Tailnet]
 	Clock                tstime.Clock
 	Hostinfo             *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
 	DiscoPublicKey       key.DiscoPublic
@@ -376,6 +377,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		logf:              opts.Logf,
 		persist:           opts.Persist.View(),
 		authKey:           opts.AuthKey,
+		tailnet:           opts.Tailnet,
 		debugFlags:        opts.DebugFlags,
 		netMon:            netMon,
 		health:            opts.HealthTracker,
@@ -588,6 +590,11 @@ var macOSScreenTime = health.Register(&health.Warnable{
 	ImpactsConnectivity: true,
 })
 
+// ErrNodeRemoved is wrapped by the error returned from a map request that
+// control responded to with a 404, which it only does once the node, or the
+// user or login that owns it, has been deleted.
+var ErrNodeRemoved = errors.New("node removed from tailnet")
+
 type rateLimitError struct {
 	msg        string
 	retryAfter time.Duration
@@ -719,7 +726,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		oldNodeKey = persist.OldPrivateNodeKey.Public()
 	}
 	if persist.NetworkLockKey.IsZero() {
-		persist.NetworkLockKey = key.NewNLPrivate()
+		persist.NetworkLockKey = key.NewTLPrivate()
 	}
 
 	nlPub := persist.NetworkLockKey.Public()
@@ -751,10 +758,6 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		return regen, opt.URL, nil, err
 	}
 
-	tailnet, err := c.polc.GetString(pkey.Tailnet, "")
-	if err != nil {
-		c.logf("unable to provide Tailnet field in register request. err: %v", err)
-	}
 	now := c.clock.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
 		Version:          1,
@@ -766,7 +769,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		Timestamp:        &now,
 		Ephemeral:        (opt.Flags & LoginEphemeral) != 0,
 		NodeKeySignature: nodeKeySignature,
-		Tailnet:          tailnet,
+		Tailnet:          c.tailnet,
 	}
 	if opt.Logout {
 		request.Expiry = time.Unix(123, 0) // far in the past
@@ -1184,6 +1187,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			vlogf("netmap: ending timeout goroutine")
 			return
 		case <-watchdogTimedOut:
+			metricMapRequestWatchdogTimeout.Add(1)
 			c.logf("map response long-poll timed out!")
 			cancel()
 			return
@@ -1212,8 +1216,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		}
 		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
-		return fmt.Errorf("initial fetch failed %d: %.200s",
+		err := fmt.Errorf("initial fetch failed %d: %.200s",
 			res.StatusCode, strings.TrimSpace(string(msg)))
+		if res.StatusCode == http.StatusNotFound {
+			err = fmt.Errorf("%w: %w", ErrNodeRemoved, err)
+		}
+		return err
 	}
 	defer res.Body.Close()
 
@@ -1996,6 +2004,10 @@ var (
 	metricMapRequests     = clientmetric.NewCounter("controlclient_map_requests")
 	metricMapRequestsLite = clientmetric.NewCounter("controlclient_map_requests_lite")
 	metricMapRequestsPoll = clientmetric.NewCounter("controlclient_map_requests_poll")
+
+	// Includes both the initial HTTP request and waits for map responses;
+	// this is not exclusively a streaming keepalive timeout or a reconnect.
+	metricMapRequestWatchdogTimeout = clientmetric.NewCounter("controlclient_map_request_watchdog_timeout")
 
 	metricMapResponseMessages   = clientmetric.NewCounter("controlclient_map_response_message") // any message type
 	metricMapResponsePings      = clientmetric.NewCounter("controlclient_map_response_ping")

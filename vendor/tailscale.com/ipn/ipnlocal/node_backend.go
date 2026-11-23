@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 
 	"go4.org/netipx"
-	"tailscale.com/appc"
 	"tailscale.com/feature/buildfeatures"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
@@ -39,6 +38,7 @@ import (
 	"tailscale.com/util/slicesx"
 	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 // nodeBackend is node-specific [LocalBackend] state. It is usually the current node.
@@ -272,20 +272,32 @@ func (nb *nodeBackend) NodeByKey(k key.NodePublic) (_ tailcfg.NodeID, ok bool) {
 	return nid, ok
 }
 
-// PeerAllowedIPs returns the prefixes from which the peer with the
-// given public key is currently allowed to originate traffic, or
-// ok=false if the key is unknown or the peer currently contributes no
-// prefixes.
-func (nb *nodeBackend) PeerAllowedIPs(k key.NodePublic) ([]netip.Prefix, bool) {
+// PeerWGConfig returns the [wgcfg.PeerConfig] to use for the peer with the
+// given public key, or ok=false if the key is unknown or the peer currently
+// contributes no routes.
+func (nb *nodeBackend) PeerWGConfig(k key.NodePublic) (_ wgcfg.PeerConfig, ok bool) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	id, ok := nb.nodeByKey[k]
 	if !ok {
-		return nil, false
+		return wgcfg.PeerConfig{}, false
 	}
-	// Holding nb.mu satisfies routeMgr's serialization requirement:
-	// all routeMgr mutations also run under nb.mu.
-	return nb.routeMgr.PeerAllowedIPs(id)
+
+	peer, ok := nb.peers[id]
+	if !ok {
+		return wgcfg.PeerConfig{}, false
+	}
+
+	hybrid := peerUsesHybridHandshakes(peer)
+	allowedIPs, ok := nb.routeMgr.PeerAllowedIPs(id)
+	if !ok {
+		return wgcfg.PeerConfig{}, false
+	}
+	return wgcfg.PeerConfig{AllowedIPs: allowedIPs, Hybrid: hybrid}, true
+}
+
+func peerUsesHybridHandshakes(peer tailcfg.NodeView) bool {
+	return peer.Cap() >= 152 && !peer.HasCap(nodecap.DisableHybridHandshakes)
 }
 
 // NodeByWireGuardString returns the node ID of the peer whose
@@ -648,7 +660,24 @@ func (nb *nodeBackend) netMapWithPeers() *netmap.NetworkMap {
 	return nm
 }
 
-func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.NodePublic, routeChanged routemanager.PeersWithRouteChanges) {
+// netmapResult describes the side effects of applying a new netmap
+// that the caller must propagate.
+type netmapResult struct {
+	// ChangedAllowedIPs are the peers whose allowed source prefixes
+	// changed; the caller syncs those peers to the WireGuard device.
+	ChangedAllowedIPs routemanager.PeersWithRouteChanges
+
+	// DiscoChanged is the set of peers whose disco key changed in a
+	// way that requires a WireGuard session reset (see
+	// [nodeBackend.discoChanged]).
+	DiscoChanged set.Set[key.NodePublic]
+
+	// HandshakeTypeChanged is the set of peers whose handshake type (standard
+	// or hybrid post-quantum) changed.
+	HandshakeTypeChanged set.Set[key.NodePublic]
+}
+
+func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (res netmapResult) {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
 	nb.netMap = nm
@@ -656,7 +685,7 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.Node
 	nb.updateNodeByKeyLocked()
 	nb.updateNodeByStableIDLocked()
 	nb.updateNodeByNameLocked()
-	discoChanged, routeChanged = nb.updatePeersLocked()
+	res = nb.updatePeersLocked()
 	nb.signalKeyWaitersForTestLocked()
 	if nm != nil {
 		nb.userProfiles = maps.Clone(nm.UserProfiles)
@@ -669,7 +698,15 @@ func (nb *nodeBackend) SetNetMap(nm *netmap.NetworkMap) (discoChanged []key.Node
 		nb.packetFilter = nil
 		nb.derpMapViewPub.Publish(tailcfg.DERPMapView{})
 	}
-	return discoChanged, routeChanged
+	return res
+}
+
+// peerNodeKeys returns the node public keys of all current peers.
+// These are the keys used by the WireGuard device to identify peers.
+func (nb *nodeBackend) peerNodeKeys() []key.NodePublic {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	return slices.Collect(maps.Keys(nb.nodeByKey))
 }
 
 // AwaitNodeKeyForTest returns a channel that is closed once a peer with the
@@ -851,17 +888,21 @@ func (nb *nodeBackend) ExtraDNSByName(hostname string) (_ netip.Addr, ok bool) {
 	return ip, ok
 }
 
-func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, routeChanged routemanager.PeersWithRouteChanges) {
+func (nb *nodeBackend) updatePeersLocked() (res netmapResult) {
 	nm := nb.netMap
 	oldIDs := slices.Collect(maps.Keys(nb.peers))
 
-	// Snapshot the previous disco keys (by node key) before the peers
-	// map is repopulated, to detect restarted peers below.
-	var prevDisco map[key.NodePublic]key.DiscoPublic
+	// Snapshot the previous disco keys and hybrid handshake status (by node key)
+	// before the peers map is repopulated, to report changes to caller.
+	var (
+		prevDisco  map[key.NodePublic]key.DiscoPublic
+		prevHybrid map[key.NodePublic]bool
+	)
 	for _, p := range nb.peers {
 		if !p.DiscoKey().IsZero() {
 			mak.Set(&prevDisco, p.Key(), p.DiscoKey())
 		}
+		mak.Set(&prevHybrid, p.Key(), peerUsesHybridHandshakes(p))
 	}
 
 	if nm == nil {
@@ -876,7 +917,12 @@ func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, route
 
 	for _, p := range nb.peers {
 		if prev, ok := prevDisco[p.Key()]; ok && nb.discoChanged(p.Key(), prev, p.DiscoKey()) {
-			discoChanged = append(discoChanged, p.Key())
+			res.DiscoChanged.Make()
+			res.DiscoChanged.Add(p.Key())
+		}
+		if prev, ok := prevHybrid[p.Key()]; ok && peerUsesHybridHandshakes(p) != prev {
+			res.HandshakeTypeChanged.Make()
+			res.HandshakeTypeChanged.Add(p.Key())
 		}
 	}
 
@@ -892,8 +938,9 @@ func (nb *nodeBackend) updatePeersLocked() (discoChanged []key.NodePublic, route
 	for _, p := range nb.peers {
 		rt.UpsertPeer(p)
 	}
-	res := rt.Commit()
-	return discoChanged, res.AllowedIPs
+	routeRes := rt.Commit()
+	res.ChangedAllowedIPs = routeRes.AllowedIPs
+	return res
 }
 
 // discoChanged reports whether a peer's disco key change from prev to
@@ -907,7 +954,9 @@ func (nb *nodeBackend) discoChanged(pub key.NodePublic, prev, cur key.DiscoPubli
 		return false
 	}
 
-	nb.logf("nodeBackend: peer %s disco key changed from %q to %q", pub.ShortString(), prev, cur)
+	if !prev.IsZero() {
+		nb.logf("nodeBackend: peer %s disco key changed from %q to %q", pub.ShortString(), prev, cur)
+	}
 	return true
 }
 
@@ -965,16 +1014,16 @@ func (nb *nodeBackend) updateRouteManagerPrefs(p routePrefs) routemanager.PeersW
 // updateRouteManagerExtras pushes extra WireGuard-only allowed IPs
 // into the route manager, obtained by calling fn (the
 // [ipnext.Hooks.ExtraWireGuardAllowedIPs] hook) with a sequence of
-// the current peers.
+// the current peers' node IDs.
 //
 // It returns the peers whose allowed source prefixes changed as a
 // result.
-func (nb *nodeBackend) updateRouteManagerExtras(fn func(peers iter.Seq2[tailcfg.NodeID, key.NodePublic]) map[tailcfg.NodeID][]netip.Prefix) routemanager.PeersWithRouteChanges {
+func (nb *nodeBackend) updateRouteManagerExtras(fn func(peers iter.Seq[tailcfg.NodeID]) map[tailcfg.NodeID][]netip.Prefix) routemanager.PeersWithRouteChanges {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	extras := fn(func(yield func(tailcfg.NodeID, key.NodePublic) bool) {
-		for id, p := range nb.peers {
-			if !yield(id, p.Key()) {
+	extras := fn(func(yield func(tailcfg.NodeID) bool) {
+		for id := range nb.peers {
+			if !yield(id) {
 				return
 			}
 		}
@@ -1056,6 +1105,10 @@ type netmapDeltaResult struct {
 	// RemovedPeers is a slice of peer stable node IDs (if any) that were
 	// removed by applying the delta.
 	RemovedPeers []tailcfg.StableNodeID
+
+	// HandshakeTypeChanged is the set of peers whose handshake type (standard
+	// or hybrid post-quantum) changed.
+	HandshakeTypeChanged set.Set[key.NodePublic]
 }
 
 // UpdateNetmapDelta applies the given netmap mutations to the live
@@ -1093,6 +1146,10 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (res netmap
 						res.DiscoChanged.Make()
 						res.DiscoChanged.Add(m.Node.Key())
 					}
+				}
+				if peerUsesHybridHandshakes(old) != peerUsesHybridHandshakes(m.Node) {
+					res.HandshakeTypeChanged.Make()
+					res.HandshakeTypeChanged.Add(m.Node.Key())
 				}
 				// Evict index entries derived from the old node value
 				// before re-adding them from the new one below, so a
@@ -1149,8 +1206,11 @@ func (nb *nodeBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (res netmap
 		if !ok {
 			nv, ok := nb.peers[nid]
 			if !ok {
-				// TODO(bradfitz): unexpected metric?
-				return res, false
+				// The peer may have been filtered out by tailnet lock,
+				// which control doesn't know about, so it keeps sending
+				// patches for it. Skip it rather than abandoning the rest
+				// of the batch.
+				continue
 			}
 			n = nv.AsStruct()
 			mak.Set(&mutableNodes, nv.ID(), n)
@@ -1184,10 +1244,10 @@ func (nb *nodeBackend) setFilter(f *filter.Filter) {
 	nb.filterAtomic.Store(f)
 }
 
-func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, goos string) *dns.Config {
+func (nb *nodeBackend) dnsConfigForNetmap(prefs ipn.PrefsView, selfExpired bool, goos string, extraRoutes map[string][]*dnstype.Resolver) *dns.Config {
 	nb.mu.Lock()
 	defer nb.mu.Unlock()
-	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, nb.logf, goos)
+	return dnsConfigForNetmap(nb.netMap, nb.peers, prefs, selfExpired, nb.logf, goos, extraRoutes)
 }
 
 // magicDNSHostAddrs returns the MagicDNS A/AAAA answer for fqdn from
@@ -1260,20 +1320,19 @@ func (nb *nodeBackend) magicDNSSubdomainHost(fqdn dnsname.FQDN) bool {
 }
 
 // nodeByFQDNLocked returns the node (peer or self) with the given
-// MagicDNS FQDN. If fqdn is a short name (has no suffix),
-// it is resolved only if MagicDNS is enabled.
-// nb.mu must be held.
+// MagicDNS FQDN. nb.mu must be held.
+//
+// Single-label names (e.g. "foo.") never match, even though
+// nb.nodeByName also holds short-name keys for [nodeBackend.NodeByName].
+// The OS resolver applies the MagicDNS search domain to short names
+// before they reach quad-100, so a single-label query is a name in
+// the root zone, not a tailnet name.
 func (nb *nodeBackend) nodeByFQDNLocked(fqdn dnsname.FQDN) (_ tailcfg.NodeView, ok bool) {
-	nm := nb.netMap
-	if nm == nil {
-		return tailcfg.NodeView{}, false
-	}
 	// The resolver already lowercases query names, but lowercase
 	// again (nearly free when already lowercase) so that no other
 	// caller of the [resolver.MagicDNSHosts] hook can miss on case.
 	canon := strings.ToLower(strings.TrimSuffix(string(fqdn), "."))
-	// Don't resolve bare hostnames (e.g. "foo") if MagicDNS is disabled.
-	if !nm.DNS.Proxied && !strings.Contains(canon, ".") {
+	if !strings.Contains(canon, ".") {
 		return tailcfg.NodeView{}, false
 	}
 	nid, ok := nb.nodeByName[canon]
@@ -1432,7 +1491,12 @@ func useWithExitNodeRoutes(routes map[string][]*dnstype.Resolver) map[string][]*
 //
 // The goos is runtime.GOOS usually, except in tests, where it may
 // vary to test any OS's behavior from any host.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, goos string) *dns.Config {
+//
+// extraRoutes are split DNS routes supplied by extensions via
+// [ipnext.Hooks.ExtraDNSRoutes]. They are added alongside nm's own DNS
+// routes and get the same treatment, including the UseWithExitNode
+// filtering when an exit node proxies DNS.
+func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, prefs ipn.PrefsView, selfExpired bool, logf logger.Logf, goos string, extraRoutes map[string][]*dnstype.Resolver) *dns.Config {
 	if nm == nil {
 		return nil
 	}
@@ -1604,15 +1668,6 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		}
 	}
 
-	// conn25 split DNS routes are calculated from the domains in the SelfNode.CapMap
-	// section of the netmap, so need to be assembled separately.
-	// TODO(tailscale/corp#37125): make this a hook the extension can add
-	// to reduce dependency from ipnlocal to appc.
-	var conn25AppRoutes map[string][]*dnstype.Resolver
-	if buildfeatures.HasConn25 && !prefs.AppConnector().Advertise {
-		conn25AppRoutes = appc.AppDNSRoutes(nm.HasCap, nm.SelfNode)
-	}
-
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
 	// to run a DoH DNS proxy, then send all our DNS traffic through it,
 	// unless we find resolvers with UseWithExitNode set, in which case we use that.
@@ -1628,7 +1683,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 			}
 
 			addSplitDNSRoutes(useWithExitNodeRoutes(nm.DNS.Routes))
-			addSplitDNSRoutes(useWithExitNodeRoutes(conn25AppRoutes))
+			addSplitDNSRoutes(useWithExitNodeRoutes(extraRoutes))
 			coverExtraRecords()
 			return dcfg
 		}
@@ -1647,7 +1702,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 
 	// Add split DNS routes, with no regard to exit node configuration.
 	addSplitDNSRoutes(nm.DNS.Routes)
-	addSplitDNSRoutes(conn25AppRoutes)
+	addSplitDNSRoutes(extraRoutes)
 	coverExtraRecords()
 
 	// Set FallbackResolvers as the default resolvers in the

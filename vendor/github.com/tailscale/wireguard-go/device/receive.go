@@ -71,13 +71,11 @@ func (peer *Peer) keepKeyFreshReceiving() {
 	}
 }
 
-/* Receives incoming datagrams for the device
- *
- * Every time the bind is updated a new routine is started for
- * IPv4 and IPv6 (separately)
- */
-func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.ReceiveFunc) {
-	recvName := recv.PrettyName()
+// RoutineReceiveIncoming receives incoming datagrams from one of the bind's
+// receive queues. A new routine is started for each queue every time the bind
+// is updated.
+// recvName identifies the queue in logs; see [conn.NamesOf].
+func (device *Device) RoutineReceiveIncoming(recvName string, maxBatchSize int, recv conn.ReceiveFunc) {
 	defer func() {
 		device.log.Verbosef("Routine: receive incoming %s - stopped", recvName)
 		device.queue.decryption.wg.Done()
@@ -98,7 +96,6 @@ func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.Receive
 		bufDirty    bool
 		err         error
 		count       int
-		deathSpiral int
 		elemsByPeer = make(map[*Peer]*QueueInboundElementsContainer, maxBatchSize)
 	)
 
@@ -118,17 +115,8 @@ func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.Receive
 				return
 			}
 			device.log.Verbosef("Failed to receive %s packet: %v", recvName, err)
-			if neterr, ok := err.(net.Error); ok && !neterr.Temporary() {
-				return
-			}
-			if deathSpiral < 10 {
-				deathSpiral++
-				time.Sleep(time.Second / 3)
-				continue
-			}
-			return
+			continue // Pacing is the Bind's responsibility; see [conn.ReceiveFunc].
 		}
-		deathSpiral = 0
 
 		// handle each packet in the batch
 		for _, meta := range packets[:count] {
@@ -139,7 +127,7 @@ func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.Receive
 			// check size of packet
 
 			packet := meta.Bytes(buf.slab)
-			msgType := binary.LittleEndian.Uint32(packet[:4])
+			msgType, _ := parseTypeField(packet)
 
 			switch msgType {
 
@@ -192,12 +180,12 @@ func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.Receive
 			// otherwise it is a fixed size & handshake related packet
 
 			case MessageInitiationType:
-				if len(packet) != MessageInitiationSize {
+				if len(packet) != MessageInitiationSize && len(packet) != MessageHybridInitiationSize {
 					continue
 				}
 
 			case MessageResponseType:
-				if len(packet) != MessageResponseSize {
+				if len(packet) != MessageResponseSize && len(packet) != MessageHybridResponseSize {
 					continue
 				}
 
@@ -366,10 +354,19 @@ func (device *Device) RoutineHandshake(id int) {
 			peer.timersAnyAuthenticatedPacketTraversal()
 			peer.timersAnyAuthenticatedPacketReceived()
 
-			device.log.Verbosef("%v - Received handshake initiation", peer)
+			handshakeType := ""
+			if msg.HasKEM {
+				if msg.IsRetry {
+					handshakeType = " (hybrid, retry)"
+				} else {
+					handshakeType = " (hybrid)"
+				}
+			}
+			device.log.Verbosef("%v - Received handshake initiation%s", peer, handshakeType)
+
 			peer.rxBytes.Add(uint64(len(elem.packet)))
 
-			peer.SendHandshakeResponse()
+			peer.SendHandshakeResponse(msg.IsRetry)
 
 		case MessageResponseType:
 
@@ -393,7 +390,16 @@ func (device *Device) RoutineHandshake(id int) {
 				goto skip
 			}
 
-			device.log.Verbosef("%v - Received handshake response", peer)
+			handshakeType := ""
+			if msg.HasKEM {
+				if msg.IsRetry {
+					handshakeType = " (hybrid, retry)"
+				} else {
+					handshakeType = " (hybrid)"
+				}
+			}
+			device.log.Verbosef("%v - Received handshake response%s", peer, handshakeType)
+
 			peer.rxBytes.Add(uint64(len(elem.packet)))
 
 			// update timers
@@ -410,7 +416,11 @@ func (device *Device) RoutineHandshake(id int) {
 				goto skip
 			}
 
-			device.config.metrics.HandshakeInitiatorCompleted.Add(1)
+			if msg.HasKEM {
+				device.config.metrics.HandshakeHybridInitiatorCompleted.Add(1)
+			} else {
+				device.config.metrics.HandshakeInitiatorCompleted.Add(1)
+			}
 			peer.timersSessionDerived()
 			peer.timersHandshakeComplete()
 			peer.SendPriorityMessage()
@@ -478,10 +488,14 @@ func (peer *Peer) processInboundContainer(elemsContainer *QueueInboundElementsCo
 
 		validTailPacket = i
 		if peer.ReceivedWithKeypair(elem.keypair) {
-			peer.device.config.metrics.HandshakeResponderCompleted.Add(1)
+			if elem.keypair.isHybrid {
+				peer.device.config.metrics.HandshakeHybridResponderCompleted.Add(1)
+			} else {
+				peer.device.config.metrics.HandshakeResponderCompleted.Add(1)
+			}
 			peer.timersHandshakeComplete()
 			peer.SendPriorityMessage()
-			peer.SendStagedPackets()
+			peer.SendStagedPackets(0)
 		}
 		if ep, ok := elem.packetMeta.Endpoint.(conn.PeerAwareEndpoint); ok {
 			ep.FromPeer(peer.handshake.remoteStatic)
@@ -517,7 +531,7 @@ func (peer *Peer) processInboundContainer(elemsContainer *QueueInboundElementsCo
 				continue
 			}
 			field := elem.packet[IPv6offsetPayloadLength : IPv6offsetPayloadLength+2]
-			length := binary.BigEndian.Uint16(field)
+			length := uint32(binary.BigEndian.Uint16(field))
 			length += ipv6.HeaderLen
 			if int(length) > len(elem.packet) {
 				continue

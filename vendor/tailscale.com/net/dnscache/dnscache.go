@@ -72,6 +72,16 @@ const (
 	srcFallback = "fallback" // Resolver.LookupIPFallback (DERP-based bootstrap DNS)
 )
 
+// ErrNoFallback is returned (possibly wrapped) by a
+// [Resolver.LookupIPFallback] func to say that it doesn't handle the
+// requested host, so the Resolver should return its original error
+// without logging or counting a fallback attempt.
+//
+// net/dnsfallback returns it for any host that isn't one of Tailscale's
+// own, as part of slowly retiring the DERP-based fallback DNS entirely.
+// See https://github.com/tailscale/tailscale/issues/21028.
+var ErrNoFallback = errors.New("no fallback DNS for host")
+
 var (
 	metricDiskFallbackHit    = clientmetric.NewCounter("dnscache_disk_fallback_hit")
 	metricDiskFallbackMiss   = clientmetric.NewCounter("dnscache_disk_fallback_miss")
@@ -122,6 +132,10 @@ type Resolver struct {
 
 	// LookupIPFallback optionally provides a backup DNS mechanism
 	// to use if Forward returns an error or no results.
+	//
+	// If it returns an error wrapping [ErrNoFallback], the Resolver
+	// behaves as if LookupIPFallback were nil for that host and
+	// returns the original error.
 	LookupIPFallback func(ctx context.Context, host string) ([]netip.Addr, error)
 
 	// TTL is how long to keep entries cached
@@ -163,7 +177,7 @@ type ipCacheEntry struct {
 	ip      netip.Addr   // either v4 or v6
 	ip6     netip.Addr   // nil if no v4 or no v6
 	allIPs  []netip.Addr // 1+ v4 and/or v6
-	expires time.Time
+	expires time.Time    // fresh until then; zero means expired (see expireIPCache)
 }
 
 func (r *Resolver) fwd() *net.Resolver {
@@ -310,6 +324,18 @@ func (r *Resolver) lookupIPCache(host string) (ip, ip6 netip.Addr, allIPs []neti
 	return zaddr, zaddr, nil, false
 }
 
+// expireIPCache marks host's cache entry, if any, as expired by zeroing
+// its expires time, so the next lookup goes to the network. The entry
+// remains available to [Resolver.UseLastGood].
+func (r *Resolver) expireIPCache(host string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ent, ok := r.ipCache[host]; ok {
+		ent.expires = time.Time{}
+		r.ipCache[host] = ent
+	}
+}
+
 func (r *Resolver) lookupIPCacheExpired(host string) (ip, ip6 netip.Addr, allIPs []netip.Addr, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -373,15 +399,18 @@ func (r *Resolver) lookupIP(ctx context.Context, host string) (ip, ip6 netip.Add
 	if (err != nil || len(ips) == 0) && r.LookupIPFallback != nil {
 		lookupCtx, lookupCancel := context.WithTimeout(ctx, 30*time.Second)
 		defer lookupCancel()
-		if err != nil {
-			r.dlogf("resolving %q using fallback resolver due to error", host)
-		} else {
-			r.dlogf("resolving %q using fallback resolver due to no returned IPs", host)
-		}
-		src = srcFallback
-		ips, err = r.LookupIPFallback(lookupCtx, host)
-		if err == nil && len(ips) > 0 {
-			metricDERPFallbackOK.Add(1)
+		fbIPs, fbErr := r.LookupIPFallback(lookupCtx, host)
+		if !errors.Is(fbErr, ErrNoFallback) {
+			if err != nil {
+				r.dlogf("tried fallback resolver for %q due to error", host)
+			} else {
+				r.dlogf("tried fallback resolver for %q due to no returned IPs", host)
+			}
+			src = srcFallback
+			ips, err = fbIPs, fbErr
+			if err == nil && len(ips) > 0 {
+				metricDERPFallbackOK.Add(1)
+			}
 		}
 	}
 	if err != nil {
@@ -499,15 +528,39 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 		}
 	}()
 
-	ip, _, allIPs, err := d.dnsCache.LookupIP(ctx, host)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve %q: %w", host, err)
+	ip, _, allIPs, fromCache := d.dnsCache.lookupIPCache(host)
+	if fromCache {
+		d.dnsCache.dlogf("%q = %v (cached)", host, ip)
+	} else {
+		ip, _, allIPs, err = d.dnsCache.LookupIP(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve %q: %w", host, err)
+		}
 	}
 
+	c, err := dc.dialIPs(ctx, ip, allIPs)
+	if err == nil || !fromCache || ctx.Err() != nil {
+		return c, err
+	}
+
+	// The cached IPs might be stale. Expire the cache entry (keeping it
+	// around for UseLastGood) and look up host again, dialing any new IPs.
+	d.dnsCache.expireIPCache(host)
+	if _, _, allIPs, err2 := d.dnsCache.LookupIP(ctx, host); err2 == nil {
+		if c, err2 := dc.raceDial(ctx, allIPs); err2 == nil {
+			return c, nil
+		}
+	}
+	return nil, err
+}
+
+// dialIPs dials ip if it's the only candidate in allIPs, or else races
+// dials to all of allIPs.
+func (dc *dialCall) dialIPs(ctx context.Context, ip netip.Addr, allIPs []netip.Addr) (net.Conn, error) {
 	// If we only have one candidate, just dial that, no matter what the
 	// address family is.
 	if len(allIPs) == 1 {
-		d.dnsCache.dlogf("dialing %s, %s for %s", network, ip, address)
+		dc.d.dnsCache.dlogf("dialing %s, %s for %s", dc.network, ip, dc.address)
 		return dc.dialOne(ctx, ip.Unmap())
 	}
 

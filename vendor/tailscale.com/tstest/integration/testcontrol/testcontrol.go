@@ -124,6 +124,10 @@ type Server struct {
 	// for service updates. If empty, the default is "true".
 	CollectServices opt.Bool
 
+	// OverrideDisableUPnP, if true, stops the server from sending the
+	// [nodecap.DisableUPnP] capability to every node.
+	OverrideDisableUPnP bool
+
 	// ExplicitBaseURL or HTTPTestServer must be set.
 	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
 	HTTPTestServer  *httptest.Server // if non-nil, used to get BaseURL
@@ -195,6 +199,10 @@ type Server struct {
 	nodeKeyAuthed set.Set[key.NodePublic]
 	msgToSend     map[key.NodePublic][]any // FIFO queue per node; values are *tailcfg.PingRequest or *tailcfg.MapResponse
 	allExpired    bool                     // All nodes will be told their node key is expired.
+
+	// machineSSHHandler, if non-nil, serves Noise requests under
+	// /machine/ssh/. See [Server.SetMachineSSHHandler].
+	machineSSHHandler http.Handler
 
 	// tkaStorage records the Tailnet Lock state, if any.
 	// If nil, Tailnet Lock is not enabled in the Tailnet.
@@ -418,6 +426,7 @@ func (s *Server) initMux() {
 	s.mux.HandleFunc("/machine/tka/", s.serveTKA)
 	s.mux.HandleFunc("/machine/webclient/", s.serveWebClient)
 	s.mux.HandleFunc("/machine/", s.serveMachine)
+	s.mux.HandleFunc("/machine/ssh/", s.serveMachineSSH)
 	s.mux.HandleFunc("/ts2021", s.serveNoiseUpgrade)
 	s.mux.HandleFunc("/c2n/", s.serveC2N)
 }
@@ -573,6 +582,33 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// SetMachineSSHHandler sets the handler for Noise requests from nodes to
+// paths under /machine/ssh/. Tests can point a [tailcfg.SSHAction]'s
+// HoldAndDelegate URL (or a [tailcfg.SSHRecorderFailureAction]'s NotifyURL)
+// at such a path, with any host, to model the control plane's check mode
+// and SSH event endpoints. A nil h, the default, makes those requests fail
+// with 404 Not Found.
+func (s *Server) SetMachineSSHHandler(h http.Handler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.machineSSHHandler = h
+}
+
+func (s *Server) serveMachineSSH(w http.ResponseWriter, r *http.Request) {
+	if _, ok := r.Context().Value(peerMachinePublicContextKey{}).(key.MachinePublic); !ok {
+		http.Error(w, "Noise transport required", http.StatusForbidden)
+		return
+	}
+	s.mu.Lock()
+	h := s.machineSSHHandler
+	s.mu.Unlock()
+	if h == nil {
+		http.NotFound(w, r)
+		return
+	}
+	h.ServeHTTP(w, r)
+}
+
 // serveWebClient handles the Noise-protected web client auth flow endpoints
 // posted to /machine/webclient/init/<src>/to/<dst> and
 // /machine/webclient/wait/<src>/to/<dst>/<id>. It is the test-control
@@ -677,6 +713,20 @@ func (s *Server) SetSubnetRoutes(nodeKey key.NodePublic, routes []netip.Prefix) 
 				sendUpdate(s.updates[n.ID], updatePeerChanged)
 			}
 		}
+	}
+}
+
+// SetDNSConfig sets the DNS configuration and notifies all nodes.
+// If dns is nil, it sends an empty DNSConfig to clear the configuration.
+func (s *Server) SetDNSConfig(dns *tailcfg.DNSConfig) {
+	if dns == nil {
+		dns = new(tailcfg.DNSConfig)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.DNSConfig = dns
+	for _, n := range s.nodes {
+		sendUpdate(s.updates[n.ID], updateSelfChanged)
 	}
 }
 
@@ -1657,7 +1707,9 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	s.mu.Unlock()
 
 	node.CapMap = nodeCapMap
-	node.Capabilities = append(node.Capabilities, nodecap.DisableUPnP)
+	if !s.OverrideDisableUPnP {
+		node.Capabilities = append(node.Capabilities, nodecap.DisableUPnP)
+	}
 	if sshPolicy != nil {
 		mak.Set(&node.CapMap, nodecap.SSH, nil)
 	}

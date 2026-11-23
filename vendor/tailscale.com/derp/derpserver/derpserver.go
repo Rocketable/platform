@@ -166,6 +166,7 @@ type Server struct {
 	_                          align64
 	packetsForwardedOut        expvar.Int
 	packetsForwardedIn         expvar.Int
+	onForwardedInForTest       func()     // if non-nil, called after each forwarded packet is read; see BenchmarkForwardPacketSerial
 	peerGoneDisconnectedFrames expvar.Int // number of peer disconnected frames sent
 	peerGoneNotHereFrames      expvar.Int // number of peer not here frames sent
 	gotPing                    expvar.Int // number of ping frames from client
@@ -184,13 +185,24 @@ type Server struct {
 	multiForwarderDeleted      expvar.Int
 	removePktForwardOther      expvar.Int
 	sclientWriteTimeouts       expvar.Int
-	avgQueueDuration           *uint64          // In milliseconds; accessed atomically
-	tcpRtt                     metrics.LabelMap // histogram
+	avgQueueDuration           *uint64            // In milliseconds; accessed atomically
+	tcpRtt                     metrics.LabelMap   // histogram
+	tcpSavedSynMSS             *metrics.Histogram // MSS advertised in clients' saved SYN packets
+	tcpSavedSynStatus          metrics.LabelMap   // breakdown of TCP_SAVED_SYN retrieval outcomes
 	meshUpdateBatchSize        *metrics.Histogram
 	meshUpdateLoopCount        *metrics.Histogram
 	bufferedWriteFrames        *metrics.Histogram // how many frames (or groups of related frames) the writer writes per flush
 	rateLimitPerClientWaited   expvar.Int         // number of times per-client rate limit caused a wait
 	// TODO(illotum): add metrics for rate limited wait time, consider total seconds vs a histogram.
+
+	// tcpSaveSyn, when true, enables recording of each client's advertised
+	// TCP MSS from the SYN packet the kernel saved on its socket, which
+	// requires that the listening socket had TCP_SAVE_SYN set (Linux only;
+	// see cmd/derper's --tcp-save-syn flag).
+	tcpSaveSyn atomic.Bool
+
+	// savedSynNextErrorLog is the next allowed error-log time in Unix nanoseconds.
+	savedSynNextErrorLog atomic.Int64
 
 	// verifyClientsLocalTailscaled only accepts client connections to the DERP
 	// server if the clientKey is a known peer in the network, as specified by a
@@ -247,6 +259,11 @@ type Server struct {
 	// maps from netip.AddrPort to a client's public key
 	keyOfAddr  map[netip.AddrPort]key.NodePublic
 	rateConfig RateConfig // per-client DERP frame rate limiting config
+	// rateExemptAddrs is the set of client public IPs (from
+	// rateConfig.ExemptAddrs, unmapped) whose rate limit is overridden to 0.
+	// It is only consulted when a client's limiter is (re)configured, never
+	// on the per-frame path.
+	rateExemptAddrs set.Set[netip.Addr]
 }
 
 // clientSet represents 1 or more *sclients.
@@ -419,6 +436,8 @@ func New(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		peerGoneWatchers:    map[key.NodePublic]set.HandleSet[func(key.NodePublic)]{},
 		avgQueueDuration:    new(uint64),
 		tcpRtt:              metrics.LabelMap{Label: "le"},
+		tcpSavedSynMSS:      metrics.NewHistogram([]float64{536, 1220, 1240, 1360, 1400, 1420, 1440, 1452, 1460, 8940}),
+		tcpSavedSynStatus:   metrics.LabelMap{Label: "status"},
 		meshUpdateBatchSize: metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000}),
 		meshUpdateLoopCount: metrics.NewHistogram([]float64{0, 1, 2, 5, 10, 20, 50, 100}),
 		bufferedWriteFrames: metrics.NewHistogram([]float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 50, 100}),
@@ -557,6 +576,7 @@ func genDroppedCounters() {
 		dropReasonQueueTail,
 		dropReasonWriteError,
 		dropReasonDupClient,
+		dropReasonForwardError,
 	}
 
 	for _, dr := range dropReasons {
@@ -633,6 +653,13 @@ func (s *Server) SetTCPWriteTimeout(d time.Duration) {
 	s.tcpWriteTimeout = d
 }
 
+// SetTCPSaveSyn enables recording TCP MSS from saved SYN packets on Linux.
+// The listener must have TCP_SAVE_SYN set. It is safe to call concurrently
+// with Accept.
+func (s *Server) SetTCPSaveSyn(enabled bool) {
+	s.tcpSaveSyn.Store(enabled)
+}
+
 // minRateLimitTokenBucketSize represents the minimum size of a token bucket
 // applied for the purposes of rate limiting a DERP connection per received DERP
 // frame.
@@ -653,6 +680,12 @@ type RateConfig struct {
 	// will be increased to [minRateLimitTokenBucketSize] before application. Only
 	// relevant if PerClientRateLimitBytesPerSec is nonzero.
 	PerClientRateBurstBytes uint64 `json:",omitzero"`
+	// ExemptAddrs are client public IPv4 or IPv6 addresses that are exempt
+	// from rate limiting. Clients connecting from these addresses have their
+	// rate limit overridden to 0 (unlimited). IPv4-mapped IPv6 addresses are
+	// treated as their IPv4 equivalent. Only relevant if
+	// PerClientRateLimitBytesPerSec is nonzero.
+	ExemptAddrs []netip.Addr `json:",omitempty"`
 }
 
 // LoadRateConfig reads and JSON-unmarshals a [RateConfig] from the file at path.
@@ -668,6 +701,11 @@ func LoadRateConfig(path string) (RateConfig, error) {
 	if err := json.Unmarshal(b, &rc); err != nil {
 		return RateConfig{}, fmt.Errorf("error parsing rate config: %w", err)
 	}
+	for i, ip := range rc.ExemptAddrs {
+		if !ip.IsValid() {
+			return RateConfig{}, fmt.Errorf("error parsing rate config: invalid ExemptAddrs[%d]", i)
+		}
+	}
 	return rc, nil
 }
 
@@ -679,31 +717,60 @@ func (s *Server) LoadAndApplyRateConfig(path string) error {
 		return err
 	}
 	applied := s.UpdateRateLimits(rc)
-	s.logf("rate config applied: client-rate=%d bytes/sec, client-burst=%d bytes",
-		applied.PerClientRateLimitBytesPerSec, applied.PerClientRateBurstBytes)
+	s.logf("rate config applied: client-rate=%d bytes/sec, client-burst=%d bytes, exempt-addrs=%v",
+		applied.PerClientRateLimitBytesPerSec, applied.PerClientRateBurstBytes, applied.ExemptAddrs)
 	return nil
 }
 
 // UpdateRateLimits sets the receive rate limits, updating all existing client
 // connections. It returns the applied config, which may differ from rc. If the
-// per-client rate limits is 0, rate limiting is disabled. Mesh peers are always
-// exempt from rate limiting.
+// per-client rate limits is 0, rate limiting is disabled. Mesh peers and
+// clients connecting from one of rc.ExemptAddrs are always exempt from rate
+// limiting.
 func (s *Server) UpdateRateLimits(rc RateConfig) (applied RateConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var exempt set.Set[netip.Addr]
 	if rc.PerClientRateLimitBytesPerSec == 0 {
 		// all rate limiting is disabled
 		rc = RateConfig{}
 	} else {
 		rc.PerClientRateBurstBytes = max(rc.PerClientRateBurstBytes, minRateLimitTokenBucketSize)
+		var addrs []netip.Addr
+		for _, ip := range rc.ExemptAddrs {
+			if !ip.IsValid() {
+				continue
+			}
+			ip = ip.Unmap()
+			if exempt.Contains(ip) {
+				continue
+			}
+			exempt.Make()
+			exempt.Add(ip)
+			addrs = append(addrs, ip)
+		}
+		rc.ExemptAddrs = addrs
 	}
 	s.rateConfig = rc
+	s.rateExemptAddrs = exempt
 	for _, cs := range s.clients.All() {
-		cs.ForeachClient(func(c *sclient) {
-			c.setRateLimit(rc.PerClientRateLimitBytesPerSec, rc.PerClientRateBurstBytes)
-		})
+		cs.ForeachClient(s.applyRateLimitLocked)
 	}
 	return rc
+}
+
+// applyRateLimitLocked configures c's receive rate limiter from the server's
+// current rate config. Clients whose remote IP is in [Server.rateExemptAddrs]
+// have their limit overridden to 0, which leaves [sclient.recvLim] nil so that
+// [sclient.rateLimit] does no extra per-frame work for them.
+//
+// s.mu must be held.
+func (s *Server) applyRateLimitLocked(c *sclient) {
+	bytesPerSec := s.rateConfig.PerClientRateLimitBytesPerSec
+	if bytesPerSec != 0 && s.rateExemptAddrs.Contains(c.remoteIPPort.Addr().Unmap()) {
+		bytesPerSec = 0
+	}
+	c.setRateLimit(bytesPerSec, s.rateConfig.PerClientRateBurstBytes)
 }
 
 // HasMeshKey reports whether the server is configured with a mesh key.
@@ -883,7 +950,7 @@ func (s *Server) registerClient(c *sclient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	c.setRateLimit(s.rateConfig.PerClientRateLimitBytesPerSec, s.rateConfig.PerClientRateBurstBytes)
+	s.applyRateLimitLocked(c)
 
 	cs, ok := s.clients.Load(c.key)
 	if !ok {
@@ -1152,8 +1219,14 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		return fmt.Errorf("client %v rejected: %v", clientKey, err)
 	}
 
-	// At this point we trust the client so we don't time out.
+	// At this point we trust the client so we don't time out the
+	// connection as a whole. Instead each write from here on, starting
+	// with the ServerInfo frame below, gets the client's own timeout.
 	nc.SetDeadline(time.Time{})
+	canMesh := s.isMeshPeer(clientInfo)
+	if err := bw.setWriteTimeout(nc, s.writeTimeout(canMesh)); err != nil {
+		return fmt.Errorf("set write timeout: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -1169,7 +1242,7 @@ func (s *Server) accept(ctx context.Context, nc derp.Conn, brw *bufio.ReadWriter
 		ctx:            ctx,
 		remoteIPPort:   remoteIPPort,
 		connectedAt:    s.clock.Now(),
-		canMesh:        s.isMeshPeer(clientInfo),
+		canMesh:        canMesh,
 		isNotIdealConn: IdealNodeContextKey.Value(ctx) != "",
 		peerGoneLim:    rate.NewLimiter(rate.Every(time.Second), 3),
 	}
@@ -1227,6 +1300,9 @@ func (s *Server) debugLogf(format string, v ...any) {
 func (c *sclient) run(ctx context.Context) error {
 	defer c.stopWriter()
 
+	// Reading TCP_SAVED_SYN frees the saved packet in the kernel.
+	c.recordSavedSyn()
+
 	// Allow disabling RTT stats collection to reduce
 	// CPU and syscalls on servers with high connection
 	// counts
@@ -1234,7 +1310,11 @@ func (c *sclient) run(ctx context.Context) error {
 		c.startStatsLoop(ctx)
 	}
 
-	c.keepAliveTimer = c.s.clock.AfterFunc(keepAliveInterval(), c.onKeepAliveTimer)
+	// Assign keepAliveTimer before arming it with Reset: its func
+	// resets it (in writePending), and Reset is what orders this
+	// assignment before the func runs.
+	c.keepAliveTimer = c.s.clock.AfterFunc(365*24*time.Hour, c.onKeepAliveTimer)
+	c.keepAliveTimer.Reset(keepAliveInterval())
 
 	for {
 		ft, fl, err := derp.ReadFrameHeader(c.br)
@@ -1400,6 +1480,9 @@ func (c *sclient) handleFrameForwardPacket(_ derp.FrameType, fl uint32) error {
 	}
 	contents := *buf
 	s.packetsForwardedIn.Add(1)
+	if f := s.onForwardedInForTest; f != nil {
+		f()
+	}
 	c.packetsRecv.Add(1)
 	c.bytesRecv.Add(uint64(len(contents)))
 
@@ -1489,8 +1572,12 @@ func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 				c.debugLogf("SendPacket for %s, forwarding via %s: %v", dstKey.ShortString(), fwd, err)
 			}
 			if err != nil {
-				// TODO:
-				return nil
+				// The forwarder reconnects on its own; the packet
+				// is lost. Frames the forwarder had accepted and
+				// then failed to write are counted separately, by
+				// derp.ForwardWriteDrops (counter_forward_write_dropped_frames here),
+				// as this path only sees the packet it was handed.
+				s.recordDrop(contents, c.key, dstKey, dropReasonForwardError)
 			}
 			return nil
 		}
@@ -1519,8 +1606,9 @@ func (c *sclient) handleFrameSendPacket(_ derp.FrameType, fl uint32) error {
 	return c.sendPkt(dst, p)
 }
 
-// setRateLimit updates the receive rate limiter. When bytesPerSec is 0, or the
-// client is a mesh peer, the limiter is set to nil so that [sclient.rateLimit] is a no-op.
+// setRateLimit updates the receive rate limiter. When bytesPerSec is 0 (rate
+// limiting disabled or the client's address is exempt), or the client is a mesh
+// peer, the limiter is set to nil so that [sclient.rateLimit] is a no-op.
 func (c *sclient) setRateLimit(bytesPerSec, burst uint64) {
 	if c.canMesh || bytesPerSec == 0 {
 		c.recvLim.Store(nil)
@@ -1559,8 +1647,8 @@ func rateLimitWait(ctx context.Context, lim *xrate.Limiter, n int, now time.Time
 // within the buffered reader to fill back in with data from
 // the TCP socket. Pacing reads acts as a form of natural
 // backpressure via TCP flow control.
-// When rate limiting is disabled or the client is a mesh peer, recvLim is nil
-// and this is a no-op.
+// When rate limiting is disabled, the client is a mesh peer, or the client's
+// address is exempt, recvLim is nil and this is a no-op.
 func (c *sclient) rateLimit(n int) error {
 	if lim := c.recvLim.Load(); lim != nil {
 		newTimer := func(d time.Duration) (<-chan time.Time, func() bool) {
@@ -1618,6 +1706,7 @@ const (
 	dropReasonQueueTail        dropReason = "queue_tail"          // destination queue is full, dropped packet at queue tail
 	dropReasonWriteError       dropReason = "write_error"         // OS write() failed
 	dropReasonDupClient        dropReason = "dup_client"          // the public key is connected 2+ times (active/active, fighting)
+	dropReasonForwardError     dropReason = "fwd_error"           // the mesh forwarder to the destination's node returned an error
 )
 
 func (s *Server) recordDrop(packetBytes []byte, srcKey, dstKey key.NodePublic, reason dropReason) {
@@ -2118,8 +2207,9 @@ type sclient struct {
 	peerGoneLim *rate.Limiter
 
 	// recvLim is the receive rate limiter. When rate limiting is enabled for a
-	// non-mesh client, it points to a [xrate.Limiter]. When rate limiting
-	// is disabled or the client is a mesh peer, it is nil and [sclient.rateLimit]
+	// non-mesh, non-exempt client, it points to a [xrate.Limiter]. When rate
+	// limiting is disabled, the client is a mesh peer, or the client's remote
+	// IP is in [RateConfig.ExemptAddrs], it is nil and [sclient.rateLimit]
 	// is a no-op. Updated atomically by [sclient.setRateLimit] so that
 	// [sclient.rateLimit] can load it without holding [Server.mu].
 	//
@@ -2713,9 +2803,10 @@ func (c *sclient) writePending(pend writerPending) (frames int, carry writerPend
 	return frames, pend & queues, nil
 }
 
-func (c *sclient) setWriteDeadline() {
-	d := c.s.tcpWriteTimeout
-	if c.canMesh {
+// writeTimeout returns how long each write to a client's
+// connection gets before it fails, or zero for no limit.
+func (s *Server) writeTimeout(canMesh bool) time.Duration {
+	if canMesh {
 		// Trusted peers get more tolerance.
 		//
 		// The "canMesh" is a bit of a misnomer; mesh peers typically run over a
@@ -2724,32 +2815,36 @@ func (c *sclient) setWriteDeadline() {
 		// use the private mesh key to subscribe to connect/disconnect events
 		// and might hit throttling and need more time to get the initial dump
 		// of connected peers.
-		d = privilegedWriteTimeout
+		return privilegedWriteTimeout
 	}
-	if d == 0 {
-		// A zero value should disable the write deadline per
-		// --tcp-write-timeout docs. The flag should only be applicable for
-		// non-mesh connections, again per its docs. If mesh happened to use a
-		// zero value constant above it would be a bug, so we don't bother
-		// with a condition on c.canMesh.
-		return
-	}
+	return s.tcpWriteTimeout
+}
+
+// deadlineWriter writes to a client's connection, giving each write
+// a timeout to complete within. It sits under the client's buffered writer, so
+// each write is a flush of that buffer.
+// See [lazyBufioWriter.setWriteTimeout].
+type deadlineWriter struct {
+	nc      derp.Conn
+	timeout time.Duration // non-zero
+}
+
+func (w *deadlineWriter) Write(p []byte) (int, error) {
 	// Ignore the error from setting the write deadline. In practice,
 	// setting the deadline will only fail if the connection is closed
 	// or closing, so the subsequent Write() will fail anyway.
-	_ = c.nc.SetWriteDeadline(time.Now().Add(d))
+	_ = w.nc.SetWriteDeadline(time.Now().Add(w.timeout))
+	return w.nc.Write(p)
 }
 
 // sendKeepAlive sends a keep-alive frame, without flushing.
 func (c *sclient) sendKeepAlive() error {
-	c.setWriteDeadline()
 	return derp.WriteFrameHeader(c.bw.bw(), derp.FrameKeepAlive, 0)
 }
 
 // sendPong sends a pong reply, without flushing.
 func (c *sclient) sendPong(data [8]byte) error {
 	c.s.sentPong.Add(1)
-	c.setWriteDeadline()
 	if err := derp.WriteFrameHeader(c.bw.bw(), derp.FramePong, uint32(len(data))); err != nil {
 		return err
 	}
@@ -2774,7 +2869,6 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason derp.PeerGoneReasonTy
 	case derp.PeerGoneReasonNotHere:
 		c.s.peerGoneNotHereFrames.Add(1)
 	}
-	c.setWriteDeadline()
 	data := make([]byte, 0, peerGoneFrameLen)
 	data = peer.AppendTo(data)
 	data = append(data, byte(reason))
@@ -2788,7 +2882,6 @@ func (c *sclient) sendPeerGone(peer key.NodePublic, reason derp.PeerGoneReasonTy
 
 // sendPeerPresent sends a peerPresent frame, without flushing.
 func (c *sclient) sendPeerPresent(peer key.NodePublic, ipPort netip.AddrPort, flags derp.PeerPresentFlags, appName string) error {
-	c.setWriteDeadline()
 	frameLen := peerPresentBaseLen + len(appName)
 	if err := derp.WriteFrameHeader(c.bw.bw(), derp.FramePeerPresent, uint32(frameLen)); err != nil {
 		return err
@@ -2868,8 +2961,6 @@ func (c *sclient) sendPacket(srcKey key.NodePublic, contents []byte) (err error)
 			c.debugLogf("sendPacket from %s: %v", srcKey.ShortString(), err)
 		}
 	}()
-
-	c.setWriteDeadline()
 
 	withKey := !srcKey.IsZero()
 	pktLen := len(contents)
@@ -3104,6 +3195,11 @@ func (s *Server) ExpVar(rateLimitEnabled bool) expvar.Var {
 	m.Set("peer_gone_not_here_frames", &s.peerGoneNotHereFrames)
 	m.Set("packets_forwarded_out", &s.packetsForwardedOut)
 	m.Set("packets_forwarded_in", &s.packetsForwardedIn)
+	// Forwarded packets the mesh clients accepted, and so were counted
+	// in packets_forwarded_out, but then failed to write. Process-wide,
+	// across all this process's derp.Clients.
+	m.Set("counter_forward_write_dropped_frames", expvar.Func(func() any { return derp.ForwardDroppedFrames.Load() }))
+	m.Set("counter_forward_write_dropped_bytes", expvar.Func(func() any { return derp.ForwardDroppedBytes.Load() }))
 	m.Set("multiforwarder_created", &s.multiForwarderCreated)
 	m.Set("multiforwarder_deleted", &s.multiForwarderDeleted)
 	m.Set("packet_forwarder_delete_other_value", &s.removePktForwardOther)
@@ -3112,6 +3208,8 @@ func (s *Server) ExpVar(rateLimitEnabled bool) expvar.Var {
 		return math.Float64frombits(atomic.LoadUint64(s.avgQueueDuration))
 	}))
 	m.Set("counter_tcp_rtt", &s.tcpRtt)
+	m.Set("histogram_tcp_saved_syn_mss", s.tcpSavedSynMSS)
+	m.Set("counter_tcp_saved_syn_status", &s.tcpSavedSynStatus)
 	m.Set("counter_mesh_update_batch_size", s.meshUpdateBatchSize)
 	m.Set("counter_mesh_update_loop_count", s.meshUpdateLoopCount)
 	m.Set("counter_buffered_write_frames", s.bufferedWriteFrames)
@@ -3307,9 +3405,14 @@ func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// use 16KiB for the buffer to allow
+// batching more DERP frames into a single flush
+// within a single TLS record, reducing syscalls
+const bufioWriterSize = 16 << 10
+
 var bufioWriterPool = &sync.Pool{
 	New: func() any {
-		return bufio.NewWriterSize(io.Discard, 2<<10)
+		return bufio.NewWriterSize(io.Discard, bufioWriterSize)
 	},
 }
 
@@ -3330,6 +3433,23 @@ func (w *lazyBufioWriter) bw() *bufio.Writer {
 		w.lbw.Reset(w.w)
 	}
 	return w.lbw
+}
+
+// setWriteTimeout makes nc the underlying writer and gives each write
+// to it, from now on, timeout to complete; zero leaves writes without
+// a deadline. It first flushes anything buffered, through the previous
+// writer, so it's safe to call between batches but not concurrently
+// with a writer.
+func (w *lazyBufioWriter) setWriteTimeout(nc derp.Conn, timeout time.Duration) error {
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if timeout == 0 {
+		w.w = nc
+		return nil
+	}
+	w.w = &deadlineWriter{nc: nc, timeout: timeout}
+	return nil
 }
 
 func (w *lazyBufioWriter) Available() int { return w.bw().Available() }
