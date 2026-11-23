@@ -242,6 +242,10 @@ func (w *argumentWalk) failure(v starlark.Value, position string) starlark.Value
 	case *File:
 		switch {
 		case slices.Contains(w.allowed, position):
+			if w.files == nil {
+				w.files = make(map[string]*File)
+			}
+
 			w.files[v.SHA256()] = v
 		case w.refused == nil:
 			w.refused, w.refusedArg = v, w.arg
@@ -269,7 +273,7 @@ func newKwargsValueBuiltin(callable string, tool HostTool) *starlark.Builtin {
 	resolved := sync.OnceValues(func() (*jsonschema.Resolved, error) { return resolveSchema(tool.InputSchema) })
 
 	return starlark.NewBuiltin(tool.Name, func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		walk := argumentWalk{allowed: tool.FileArgs, files: map[string]*File{}}
+		walk := argumentWalk{allowed: tool.FileArgs}
 
 		for _, arg := range args {
 			if failure := walk.failure(arg, ""); failure != nil {
