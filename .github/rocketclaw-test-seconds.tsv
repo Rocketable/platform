@@ -33,7 +33,6 @@
 6.0	TestHoldRunLockWaitsForReleaseOrCancellation
 5.7	TestFitInboundImageWithinLimitResizesPNG
 5.2	TestShutdownKeepsRunLockAliveDuringBash
-5.1	TestGrepInventoryAllocations
 5.0	TestSessionMigrationsSerializeStartup
 4.7	TestObserveEntriesJSONAllocationBudget
 4.6	TestStdioCallTool
