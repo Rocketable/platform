@@ -1842,7 +1842,7 @@ export async function appScenario(part: "lists" | "composer") {
       expect(await grouped.textContent()).toBe("Used 1 tool");
       expect(await detailPage.evaluate(() => localStorage.getItem("timeline-detail"))).toBeNull();
       await grouped.click();
-      ctrl.history = [...detailItems, step("tool", "skill\n{\"name\":\"release\"}", { toolName: "skill", toolCallId: "load" }), step("assistant", "Build is green")]
+      ctrl.history = [...detailItems, step("tool", "skill\n{\"id\":\"release\"}", { toolName: "skill", toolCallId: "load" }), step("assistant", "Build is green")]
         .map((item, index) => ({ ...item, entryKey: "detail", itemId: `detail:${index}`, inputId: "", turnId: "", complete: true }));
       (await transcriptStream("timeline-detail").promise).enqueue(`data: ${JSON.stringify({ conversationId: "timeline-detail", revision: "hint" })}\n\n`);
       await detailPage.getByText("Build is green", { exact: true }).waitFor();

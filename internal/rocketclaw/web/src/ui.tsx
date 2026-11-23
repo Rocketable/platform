@@ -4043,14 +4043,14 @@ export function comparisonRows(parents: Turn[], children: Turn[], binding: Shado
 function toolTitle(line: Line) {
   const name = line.toolName;
   if (!name) return "Tool result";
-  let input: { name?: string; code?: string; command?: string; path?: string; description?: string };
+  let input: { id?: string; code?: string; command?: string; path?: string; description?: string };
   try {
     input = JSON.parse(line.text.slice(name.length + 1));
   } catch {
     return name;
   }
   if (!input || typeof input !== "object") return name;
-  if (name === "skill" && typeof input.name === "string") return `Skill · ${input.name}`;
+  if (name === "skill" && typeof input.id === "string") return `Skill · ${input.id}`;
   if (name === "execute" && typeof input.description === "string" && input.description.trim() !== "") return input.description;
   if (name === "execute" && typeof input.code === "string") {
     const operation = input.code.match(/\b(bash|read|glob|grep)\(\s*(?:command|filePath|pattern)\s*=\s*r?("""|'''|"|')([\s\S]*?)\2/);

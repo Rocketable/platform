@@ -1728,14 +1728,13 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 		{Name: "second", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
 	}}
 	firstTool := testLooperTool("first")
-	firstTool.CallReplay = func(_ context.Context, args json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, []responses.ResponseInputItemUnionParam, error) {
+	firstTool.Call = func(_ context.Context, args json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 		callsMu.Lock()
 		defer callsMu.Unlock()
 
 		calls = append(calls, "first:"+string(args))
-		developerInput := testInputMessage(responses.EasyInputMessageRoleDeveloper, "first instructions", "")
 
-		return TextToolResult("first-result"), []responses.ResponseInputItemUnionParam{developerInput}, nil
+		return TextToolResult("first-result"), nil
 	}
 	secondTool := testLooperTool("second")
 	secondTool.Call = func(_ context.Context, args json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
@@ -1776,26 +1775,22 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 	require.Len(t, newParams(mock), 2)
 
 	second := newParams(mock)[1].Input.OfInputItemList
-	require.Len(t, second, 6)
+	require.Len(t, second, 5)
 	require.Equal(t, "function_call_output", *second[3].GetType())
 	require.Equal(t, "call-1", *second[3].GetCallID())
 	require.Contains(t, marshalJSON(t, second[3]), `"first-result"`)
 	require.Equal(t, "function_call_output", *second[4].GetType())
 	require.Equal(t, "call-2", *second[4].GetCallID())
 	require.Contains(t, marshalJSON(t, second[4]), `"second-result"`)
-	require.Equal(t, "message", *second[5].GetType())
-	require.Equal(t, "developer", *second[5].GetRole())
-	require.Contains(t, marshalJSON(t, second[5]), "first instructions")
 
 	history, _, err := loadSession(sessionEntries(saved), "openai")
 	require.NoError(t, err)
-	require.Len(t, history, 7)
+	require.Len(t, history, 6)
 	require.Equal(t, "function_call", *history[1].GetType())
 	require.Equal(t, "function_call", *history[2].GetType())
 	require.Equal(t, "function_call_output", *history[3].GetType())
 	require.Equal(t, "function_call_output", *history[4].GetType())
 	require.Equal(t, "message", *history[5].GetType())
-	require.Equal(t, "message", *history[6].GetType())
 }
 
 func TestLooperJournalsCompletedToolOutputBeforeContinuation(t *testing.T) {
@@ -2422,8 +2417,8 @@ func TestLooperAppliesWebFetchURLPermissions(t *testing.T) {
 func TestLooperGatesSkillByName(t *testing.T) {
 	mock := mockResponses(
 		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{
-			testFunctionCall("tool-1", "call-1", "skill", `{"name":"git-review"}`),
-			testFunctionCall("tool-2", "call-2", "skill", `{"name":"docs-helper"}`),
+			testFunctionCall("tool-1", "call-1", "skill", `{"id":"git-review"}`),
+			testFunctionCall("tool-2", "call-2", "skill", `{"id":"docs-helper"}`),
 		}),
 		responseWithMessage("resp-final", "done"),
 	)
@@ -2437,20 +2432,20 @@ func TestLooperGatesSkillByName(t *testing.T) {
 	skillTool.Permission = "skill"
 	skillTool.Subjects = func(raw json.RawMessage) ([]string, error) {
 		var params struct {
-			Name string `json:"name"`
+			ID string `json:"id"`
 		}
 		require.NoError(t, json.Unmarshal(raw, &params))
 
-		return []string{params.Name}, nil
+		return []string{params.ID}, nil
 	}
 	skillTool.Call = func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 		var params struct {
-			Name string `json:"name"`
+			ID string `json:"id"`
 		}
 		require.NoError(t, json.Unmarshal(raw, &params))
-		calls = append(calls, params.Name)
+		calls = append(calls, params.ID)
 
-		return TextToolResult("loaded " + params.Name), nil
+		return TextToolResult("loaded " + params.ID), nil
 	}
 	looper.Tools = map[string]looperTool{"skill": skillTool}
 	output := make(chan ChatResponse, 10)
@@ -2644,8 +2639,7 @@ Use this skill for docs.
 		t.Run("unknown skill", func(t *testing.T) {
 			got := run(t, agentWithSkillPermission(), "missing-skill")
 
-			require.Contains(t, got, `skill "missing-skill" not found`)
-			require.Contains(t, got, "Available skills: docs-helper")
+			require.Contains(t, got, "Unable to load skill missing-skill")
 		})
 
 		t.Run("denied skill", func(t *testing.T) {
@@ -2742,7 +2736,7 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	}}, make(chan os.Signal, 1))
 	calls, errRead := factory.promptExpansion.root.ReadFile("calls")
 	require.NoError(t, errRead)
-	require.ErrorContains(t, err, `skill "missing-skill" not found`)
+	require.ErrorContains(t, err, "Unable to load skill missing-skill")
 	require.Empty(t, steers)
 	require.Equal(t, "first\n", string(calls), "failure must not execute later skill shells")
 	require.Len(t, newParams(mock), 1, "failed batch must not reach a continuation request")
@@ -2835,7 +2829,7 @@ func TestLooperPrintsReasoningSummary(t *testing.T) {
 func TestLooperStreamsReasoningBeforeToolCalls(t *testing.T) {
 	first := testResponse("resp-tool", []responses.ResponseOutputItemUnion{
 		testReasoningOutputItem("resp-tool-reasoning", "encrypted", "**Planning tool use**"),
-		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "skill", `{"name":"current-time"}`)}).Output[0],
+		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "skill", `{"id":"current-time"}`)}).Output[0],
 	})
 	mock := mockResponses(first, responseWithMessage("resp-final", "done"))
 	looper := testLooper(mock)
@@ -3817,11 +3811,11 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 		{Texts: []string{"and skip tests"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last", PlainIfUnknown: true}},
 	}
 	want := []string{
-		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\n<skill_metadata>\nname: docs-helper\ndescription: Docs\nlicense: \ncompatibility: \nlocation: docs-helper/SKILL.md\nmetadata: null\n</skill_metadata>\n\nInstructions first fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
+		`{"content":"<skill_content name=\"docs-helper\">\n# Skill: docs-helper\n\nInstructions first fresh\n\nBase directory for this skill: /virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
 		`{"content":[{"type":"input_text","text":"use the other file"},{"type":"input_image","detail":"auto","filename":"screen.png","image_url":"data:image/png;base64,c2NyZWVu"}],"role":"user","type":"message"}`,
 		`{"content":[{"type":"input_image","detail":"auto","filename":"photo.jpg","image_url":"data:image/jpeg;base64,cGhvdG8="}],"role":"user","type":"message"}`,
 		`{"content":"/tmp is full","role":"user","type":"message"}`,
-		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\n<skill_metadata>\nname: docs-helper\ndescription: Docs\nlicense: \ncompatibility: \nlocation: docs-helper/SKILL.md\nmetadata: null\n</skill_metadata>\n\nInstructions last fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
+		`{"content":"<skill_content name=\"docs-helper\">\n# Skill: docs-helper\n\nInstructions last fresh\n\nBase directory for this skill: /virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
 		`{"content":"and skip tests","role":"user","type":"message"}`,
 	}
 	mock := mockResponses(

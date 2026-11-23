@@ -320,15 +320,17 @@ func compileEasySections(agent *Agent, cfg *AgentLoadConfig, action PermissionAc
 		_ = permission.Set("skill", "*", PermissionAllow)
 	}
 
-	for _, folder := range folders {
-		if fs.WalkDir(cfg.Skills, folder, func(name string, entry fs.DirEntry, err error) error {
-			if err == nil && !entry.IsDir() && path.Base(name) == "SKILL.md" {
-				_ = permission.Set("skill", path.Base(path.Dir(name)), PermissionAllow)
-			}
+	skills, _ := discoverSkills(cfg.Skills)
 
-			return err
-		}) != nil {
+	for _, folder := range folders {
+		if info, err := fs.Stat(cfg.Skills, folder); err != nil || !info.IsDir() {
 			return fmt.Errorf("skills: folder %q does not exist", folder)
+		}
+
+		for _, skill := range skills {
+			if path.Base(skill) == "SKILL.md" && strings.HasPrefix(skill, path.Clean(folder)+"/") {
+				_ = permission.Set("skill", path.Base(path.Dir(skill)), PermissionAllow)
+			}
 		}
 	}
 

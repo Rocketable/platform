@@ -398,86 +398,42 @@ func (f *toolFactory) availableSkillSubjects() []string {
 }
 
 type skillNotFoundError struct {
-	name      string
-	available []string
+	name string
 }
 
 func (e skillNotFoundError) Error() string {
-	return fmt.Sprintf("skill %q not found. Available skills: %s", e.name, strings.Join(e.available, ", "))
+	return "Unable to load skill " + e.name
 }
 
 type skillToolParams struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	ID        string `json:"id"`
+	Arguments string `json:"arguments,omitempty"`
 	Direct    bool   `json:"direct,omitempty"`
 }
 
 func (f *toolFactory) skillTool() looperTool {
-	tool := paramsTool(functionTool("skill", f.skillDescription(), map[string]any{
-		"arguments": map[string]any{"type": "string"},
-		"name":      map[string]any{"type": "string"},
+	return paramsTool(functionTool("skill", "Load a specialized skill's instructions and resources into the current conversation when the task at hand matches its description.\n\nThe skill ID must match an available skill or a skill explicitly referenced by the user.", map[string]any{
+		"id": map[string]any{"type": "string", "description": "The ID of an available skill or a skill explicitly referenced by the user"},
 	}), "skill", func(input skillToolParams) ([]string, error) {
-		return []string{input.Name}, nil
+		return []string{input.ID}, nil
 	}, func(ctx context.Context, input skillToolParams) (ToolResult, error) {
-		output, err := f.renderSkillToolOutput(ctx, input, false)
+		output, err := f.renderSkillToolOutput(ctx, input)
 
 		return TextToolResult(output), err
 	})
-	tool.CallReplay = func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, []responses.ResponseInputItemUnionParam, error) {
-		var input skillToolParams
-		if err := decodeToolParams(raw, &input); err != nil {
-			return ToolResult{}, nil, err
-		}
-
-		output, err := f.renderSkillToolOutput(ctx, input, true)
-		if err != nil {
-			return ToolResult{}, nil, err
-		}
-
-		message := inputMessageParam(responses.EasyInputMessageRoleDeveloper, easyInputStringContent(output))
-
-		return TextToolResult("skill " + input.Name + " loaded"), []responses.ResponseInputItemUnionParam{message}, nil
-	}
-
-	return tool
 }
 
-func (f *toolFactory) renderSkillToolOutput(ctx context.Context, input skillToolParams, includeMetadata bool) (string, error) {
-	skill, ok := f.skills.Items[input.Name]
+func (f *toolFactory) renderSkillToolOutput(ctx context.Context, input skillToolParams) (string, error) {
+	skill, ok := f.skills.Items[input.ID]
 	if !ok {
-		return "", skillNotFoundError{name: input.Name, available: f.availableSkillSubjects()}
+		return "", skillNotFoundError{name: input.ID}
 	}
 
 	dir := path.Dir(skill.Location)
 
-	files, err := f.skills.skillFiles(dir)
+	files, err := f.skills.skillFiles(skill.Location)
 	if err != nil {
 		return "", err
-	}
-
-	lines := []string{
-		fmt.Sprintf(`<skill_content name=%q>`, skill.Name),
-		"# skill: " + skill.Name,
-		"",
-	}
-
-	if includeMetadata {
-		metadata, err := json.MarshalIndent(skill.Metadata, "", "  ")
-		if err != nil {
-			return "", fmt.Errorf("render skill metadata: %w", err)
-		}
-
-		lines = append(lines,
-			"<skill_metadata>",
-			"name: "+skill.Name,
-			"description: "+skill.Description,
-			"license: "+skill.License,
-			"compatibility: "+skill.Compatibility,
-			"location: "+skill.Location,
-			"metadata: "+string(metadata),
-			"</skill_metadata>",
-			"",
-		)
 	}
 
 	content := strings.TrimSpace(skill.Content)
@@ -487,20 +443,24 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, input skillTool
 		content = f.promptExpansion.expandShellCommands(ctx, content)
 	}
 
-	lines = append(lines,
-		renderSkillArguments(content, input.Arguments, input.Direct),
+	if input.Direct {
+		content = renderSkillArguments(content, input.Arguments)
+	}
+
+	lines := append([]string{
+		fmt.Sprintf(`<skill_content name=%q>`, skill.DisplayName),
+		"# Skill: " + skill.DisplayName,
 		"",
-		"Base directory for this skill: file://"+filepath.ToSlash(filepath.Join(f.skills.Root, filepath.FromSlash(dir))),
+		content,
+		"",
+		"Base directory for this skill: " + filepath.Join(f.skills.Root, filepath.FromSlash(dir)),
 		"Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
 		"Note: file list is sampled.",
 		"",
 		"<skill_files>",
-		strings.Join(files, "\n"),
-		"</skill_files>",
-		"</skill_content>",
-	)
+	}, files...)
 
-	output := strings.Join(lines, "\n")
+	output := strings.Join(append(lines, "</skill_files>", "</skill_content>"), "\n")
 
 	if !easy && f.expandPromptShellCommands.SkillPrompts {
 		output = f.promptExpansion.expandShellCommands(ctx, output)
@@ -514,7 +474,7 @@ var (
 	skillPlaceholderPattern = regexp.MustCompile(`\$(ARGUMENTS|[1-9]\d*)`)
 )
 
-func renderSkillArguments(output, arguments string, appendUnused bool) string {
+func renderSkillArguments(output, arguments string) string {
 	positions := skillArgumentPattern.FindAllString(arguments, -1)
 	for i, argument := range positions {
 		if len(argument) >= 2 && (argument[0] == '"' || argument[0] == '\'') && argument[len(argument)-1] == argument[0] {
@@ -557,36 +517,11 @@ func renderSkillArguments(output, arguments string, appendUnused bool) string {
 
 		return positions[index-1]
 	})
-	if appendUnused && !hasPlaceholder && arguments != "" {
+	if !hasPlaceholder && arguments != "" {
 		output += "\n\n" + arguments
 	}
 
 	return output
-}
-
-func (f *toolFactory) skillDescription() string {
-	list := f.skills.Available(f.agent)
-
-	lines := []string{
-		"Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.",
-		"",
-		"Use this tool to inject the skill's instructions and resources into current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc in the same directory as the skill.",
-		"",
-		"The skill name must match one of the skills listed in your system prompt.",
-		"",
-	}
-	if len(list) == 0 {
-		lines = append(lines, "No skills are currently available.")
-	} else {
-		lines = append(lines,
-			"The following skills provide specialized sets of instructions for particular tasks.",
-			"Invoke this tool to load a skill when a task matches one of the available skills listed below:",
-			"",
-			formatSkills("## Available skills", list),
-		)
-	}
-
-	return strings.Join(lines, "\n")
 }
 
 func functionTool(name, description string, properties map[string]any) *responses.FunctionToolParam {

@@ -48,7 +48,7 @@ If the human gives only a simple skill name, convert it into a safe directory na
 - use hyphens between words
 - avoid spaces and punctuation
 
-The skill `name` must match the leaf directory name that contains `SKILL.md`.
+The skill's ID is the name of the leaf directory that contains `SKILL.md`. The frontmatter `name` is only a display label and defaults to the ID.
 
 If the human gives an explicit skill path, keep it inside the `skills/` tree and ensure the final file is named `SKILL.md`.
 
@@ -58,7 +58,7 @@ The simple default write target is:
 
 When updating an existing skill, derive the overlay path by taking the effective runtime path in `.rocketclaw/skills/.../SKILL.md` and writing the edited result into the matching path under `skills/.../SKILL.md`.
 
-When renaming or moving a skill, write the updated copy to the new target path in `skills/.../SKILL.md` and update the frontmatter `name` to match the new leaf directory name.
+When renaming or moving a skill, write the updated copy to the new target path in `skills/.../SKILL.md`. The new leaf directory name is the skill's new ID.
 
 ## File handling
 
@@ -66,7 +66,7 @@ If the requested skill already exists:
 
 - read the current effective file from `.rocketclaw/skills/.../SKILL.md`
 - use that content as the starting point
-- preserve existing instructions and frontmatter fields unless the human asked to change them or they conflict with the required `name` and target directory relationship
+- preserve existing instructions and frontmatter fields unless the human asked to change them
 - write the updated result into `skills/`
 
 If the requested change is a rename or move:
@@ -82,9 +82,7 @@ If the requested skill does not exist, create it directly in `skills/`.
 
 Create or update the skill as a markdown skill file with YAML frontmatter.
 
-The resulting frontmatter must include at least:
-- `name`
-- `description`
+Include a `description` in the frontmatter: the model is offered only skills that have one. `name` is optional.
 
 Preserve any other valid frontmatter keys unless the human asked to change them.
 
@@ -106,7 +104,7 @@ When updating an existing skill, preserve body content that the human did not as
 
 - Do not write the file into `.rocketclaw`; write it into `skills/`.
 - Always copy existing skill content from `.rocketclaw` into `skills/` before editing it.
-- The skill `name` in frontmatter must exactly match the leaf directory name containing `SKILL.md`.
+- The skill ID is the leaf directory name containing `SKILL.md`, not the frontmatter `name`.
 - Route permission-bearing agent changes through `main-create-or-update-agent` instead of editing agent permissions inside this skill.
 - Make all requested skill-definition edits before calling `rocketclaw_restart`; do not call it between intermediate edits.
 - Be truthful about overlay limitations when a rename or move cannot remove an old embedded source path.

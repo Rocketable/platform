@@ -708,7 +708,6 @@ Content
 
 	skill := skills.Items["example"]
 	require.Equal(t, "Structured metadata should load", skill.Description)
-	require.Equal(t, map[string]any{"tools": true}, skill.Metadata["openclaw"])
 }
 
 func TestRocketCodeReadsAllowedSkillFilesFromConfiguredRuntimeDirectory(t *testing.T) {

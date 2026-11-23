@@ -258,15 +258,17 @@ func TestNewAllowsReadingFilesFromAllowedSkills(t *testing.T) {
 		"skills/parent/private.txt":        []byte("private"),
 		"skills/parent/review.txt":         []byte("review"),
 		"skills/parent/reference/guide.md": []byte("guide"),
-		"skills/parent/broken/SKILL.md":    []byte("---\nname: broken\n---\n"),
-		"skills/parent/broken/asset.txt":   []byte("broken asset"),
+		"skills/parent/nested/SKILL.md":    []byte("---\nname: nested\n---\n"),
+		"skills/parent/nested/asset.txt":   []byte("nested asset"),
+		"skills/broken/SKILL.md":           []byte("---\nname: [broken\n---\n"),
+		"skills/broken/asset.txt":          []byte("broken asset"),
 	}
 	for name, description := range map[string]string{
-		"parent":       "Parent",
-		"parent/child": "Child",
-		"other":        "Other",
-		"aaa/dupe":     "First duplicate",
-		"zzz/dupe":     "Second duplicate",
+		"parent":   "Parent",
+		"child":    "Child",
+		"other":    "Other",
+		"aaa/dupe": "First duplicate",
+		"zzz/dupe": "Second duplicate",
 	} {
 		seed[filepath.Join("skills", name, "SKILL.md")] = fmt.Appendf(nil, "---\nname: %s\ndescription: %s\n---\n", filepath.Base(name), description)
 		seed[filepath.Join("skills", name, "asset.txt")] = []byte(name + " asset")
@@ -308,16 +310,17 @@ read:
 		{path: "skills/zzz/dupe/asset.txt", action: permissionAllow},
 		{path: "skills/parent/private.txt", action: permissionDeny},
 		{path: "skills/parent/review.txt", action: permissionAuto},
-		{path: "skills/parent/child/asset.txt", action: permissionDeny},
+		{path: "skills/parent/nested/asset.txt", action: permissionAllow},
+		{path: "skills/child/asset.txt", action: permissionDeny},
 		{path: "skills/other/asset.txt", action: permissionDeny},
 		{path: "skills/aaa/dupe/asset.txt", action: permissionDeny},
-		{path: "skills/parent/broken/asset.txt", action: permissionDeny},
+		{path: "skills/broken/asset.txt", action: permissionDeny},
 	} {
 		action, _ := loop.Permissions.Evaluate("read", tt.path)
 		require.Equal(t, tt.action, action, tt.path)
 	}
 
-	caseVariantChild := "skills/parent/CHILD/asset.txt"
+	caseVariantChild := "skills/CHILD/asset.txt"
 	if _, err := root.Stat(caseVariantChild); err == nil {
 		action, _ := loop.Permissions.Evaluate("read", caseVariantChild)
 		require.Equal(t, PermissionDeny, action)
@@ -343,7 +346,7 @@ read:
 	require.NoError(t, err)
 	require.False(t, decision.denied)
 
-	deniedArgs := json.RawMessage(`{"filePath":"skills/parent/child/asset.txt"}`)
+	deniedArgs := json.RawMessage(`{"filePath":"skills/child/asset.txt"}`)
 	decision, err = loop.permissionDecision("read", &readTool, deniedArgs)
 	require.NoError(t, err)
 	require.True(t, decision.denied)
@@ -352,9 +355,10 @@ read:
 	require.NoError(t, err)
 	require.Equal(t, "parent asset", result.Output)
 
-	skillResult, err := loop.Tools["skill"].Call(context.Background(), json.RawMessage(`{"name":"parent"}`), nil, emptyToolCallMetadata())
+	skillResult, err := loop.Tools["skill"].Call(context.Background(), json.RawMessage(`{"id":"parent"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
-	require.NotContains(t, skillResult.Output, "parent/broken/asset.txt")
+	require.Contains(t, skillResult.Output, "parent/nested/asset.txt</file>")
+	require.NotContains(t, skillResult.Output, "SKILL.md")
 
 	action, matched := agents.Items["main"].Permission.Evaluate("read", "skills/parent/asset.txt")
 	require.Equal(t, PermissionDeny, action)
@@ -362,7 +366,7 @@ read:
 
 	factory := loop.PermissionReviewer.(*toolFactory)
 	worker := factory.agents.Items["worker"]
-	action, _ = worker.Permission.Evaluate("read", "skills/parent/child/asset.txt")
+	action, _ = worker.Permission.Evaluate("read", "skills/child/asset.txt")
 	require.Equal(t, PermissionAllow, action)
 	action, _ = worker.Permission.Evaluate("read", "skills/parent/asset.txt")
 	require.Equal(t, PermissionDeny, action)

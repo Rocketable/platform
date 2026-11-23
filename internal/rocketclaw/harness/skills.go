@@ -15,19 +15,22 @@ import (
 	"strings"
 	"unicode"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/runes"
+	"golang.org/x/text/transform"
+	"golang.org/x/text/unicode/norm"
 	"gopkg.in/yaml.v3"
 )
 
-var skillNamePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-
 type Skill struct {
-	Name          string
-	Description   string
-	License       string
-	Compatibility string
-	Metadata      map[string]any
-	Location      string
-	Content       string
+	Name                   string
+	DisplayName            string
+	Description            string
+	License                string
+	Compatibility          string
+	DisableModelInvocation bool
+	Location               string
+	Content                string
 }
 
 type Skills struct {
@@ -44,11 +47,12 @@ type SkillLoadResult struct {
 }
 
 type skillFrontmatter struct {
-	Name          string         `yaml:"name"`
-	Description   string         `yaml:"description"`
-	License       string         `yaml:"license"`
-	Compatibility string         `yaml:"compatibility"`
-	Metadata      map[string]any `yaml:"metadata"`
+	Name                   string         `yaml:"name"`
+	Description            string         `yaml:"description"`
+	License                string         `yaml:"license"`
+	Compatibility          string         `yaml:"compatibility"`
+	Metadata               map[string]any `yaml:"metadata"`
+	DisableModelInvocation any            `yaml:"disable-model-invocation"`
 }
 
 type skillReadDir struct {
@@ -57,58 +61,130 @@ type skillReadDir struct {
 	folded  bool
 }
 
+var skillFrontmatterEntry = regexp.MustCompile(`^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$`)
+
 func LoadSkills(fsys fs.FS, root string) SkillLoadResult {
 	result := SkillLoadResult{
 		Skills: Skills{Root: root, Items: map[string]Skill{}, fsys: fsys},
 		Errors: nil,
 	}
 
-	paths := []string{}
+	paths, errs := discoverSkills(fsys)
+	result.Errors = errs
 
-	err := fs.WalkDir(fsys, ".", func(filePath string, d fs.DirEntry, err error) error {
-		if err != nil {
-			result.Errors = append(result.Errors, fmt.Errorf("walk %q: %w", filePath, err))
-			return nil
+	for _, filePath := range paths {
+		id := strings.TrimSuffix(filePath, ".md")
+		if dir := path.Dir(filePath); path.Base(filePath) == "SKILL.md" {
+			result.Skills.dirs = append(result.Skills.dirs, dir)
+
+			id = path.Base(dir)
+			if dir == "." {
+				id = filepath.Base(root)
+			}
 		}
 
-		if d.IsDir() || path.Base(filePath) != "SKILL.md" {
-			return nil
-		}
-
-		paths = append(paths, filePath)
-
-		return nil
-	})
-	if err != nil {
-		result.Errors = append(result.Errors, fmt.Errorf("walk skills: %w", err))
-	}
-
-	sort.Strings(paths)
-
-	for i, filePath := range paths {
-		paths[i] = path.Dir(filePath)
-
-		skill, err := loadSkill(fsys, filePath)
+		skill, err := loadSkill(fsys, filePath, id)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			continue
 		}
 
 		if existing, ok := result.Skills.Items[skill.Name]; ok {
-			result.Errors = append(result.Errors, fmt.Errorf("%s: duplicate skill name %q overrides %s", filePath, skill.Name, existing.Location))
+			result.Errors = append(result.Errors, fmt.Errorf("%s: duplicate skill id %q overrides %s", filePath, skill.Name, existing.Location))
 		}
 
 		result.Skills.Items[skill.Name] = skill
 	}
 
-	slices.Sort(paths)
-	result.Skills.dirs = slices.Clip(slices.Compact(paths))
+	slices.Sort(result.Skills.dirs)
 
 	return result
 }
 
+func skillIgnoredName(name string) bool {
+	switch name {
+	case "node_modules", ".git", ".venv", "venv", "__pycache__":
+		return true
+	}
+
+	return false
+}
+
+func discoverSkills(fsys fs.FS) ([]string, []error) {
+	type dir struct {
+		path  string
+		depth int
+	}
+
+	var (
+		paths []string
+		errs  []error
+	)
+
+	queue := []dir{{path: ".", depth: 0}}
+	for i := 0; i < len(queue); i++ {
+		current := queue[i]
+
+		entries, err := fs.ReadDir(fsys, current.path)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("walk %q: %w", current.path, err))
+			continue
+		}
+
+		var files, dirs []string
+
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".") || skillIgnoredName(entry.Name()) {
+				continue
+			}
+
+			child := path.Join(current.path, entry.Name())
+
+			mode := entry.Type()
+			if mode&fs.ModeSymlink != 0 {
+				info, err := fs.Stat(fsys, child)
+				if err != nil {
+					continue
+				}
+
+				mode = info.Mode().Type()
+			}
+
+			switch {
+			case mode.IsDir():
+				dirs = append(dirs, child)
+			case mode.IsRegular():
+				files = append(files, entry.Name())
+			}
+		}
+
+		if slices.Contains(files, "SKILL.md") {
+			paths = append(paths, path.Join(current.path, "SKILL.md"))
+			continue
+		}
+
+		if current.depth == 0 {
+			for _, file := range files {
+				if strings.HasSuffix(file, ".md") {
+					paths = append(paths, file)
+				}
+			}
+		}
+
+		if current.depth < 6 {
+			for _, child := range dirs {
+				queue = append(queue, dir{path: child, depth: current.depth + 1})
+			}
+		}
+	}
+
+	slices.Sort(paths)
+
+	return paths, errs
+}
+
 func (s Skills) FindAvailable(query string, agent *Agent) string {
-	list := s.Available(agent)
+	list := s.advertised(agent)
 	if len(list) == 0 {
 		return "No skills are currently available."
 	}
@@ -147,25 +223,35 @@ func (s Skills) FindAvailable(query string, agent *Agent) string {
 		return cmp.Or(cmp.Compare(b.score, a.score), cmp.Compare(len(a.skill.Name), len(b.skill.Name)), strings.Compare(a.skill.Name, b.skill.Name))
 	})
 
-	for i, match := range matches {
-		list[i] = match.skill
+	for i := range matches {
+		list[i] = matches[i].skill
 	}
 
 	return formatSkills("## Matching skills", list[:len(matches)])
 }
 
 func (s Skills) Available(agent *Agent) []Skill {
+	return s.listed(func(skill *Skill) bool { return skillAllowedForAgent(skill, agent) })
+}
+
+func (s Skills) advertised(agent *Agent) []Skill {
+	return s.listed(func(skill *Skill) bool {
+		return skill.Description != "" && !skill.DisableModelInvocation && agent.Permission.evaluate("skill", skill.Name).Action != permissionDeny
+	})
+}
+
+func (s Skills) listed(keep func(*Skill) bool) []Skill {
 	list := make([]Skill, 0, len(s.Items))
 	for _, skill := range s.Items {
-		if !skillAllowedForAgent(&skill, agent) {
-			continue
+		if keep(&skill) {
+			list = append(list, skill)
 		}
-
-		list = append(list, skill)
 	}
 
 	slices.SortFunc(list, func(a, b Skill) int {
-		return strings.Compare(a.Name, b.Name)
+		return cmp.Or(strings.Compare(skillSortKey(a.Name), skillSortKey(b.Name)),
+			strings.Compare(cases.Fold().String(norm.NFD.String(a.Name)), cases.Fold().String(norm.NFD.String(b.Name))),
+			strings.Compare(b.Name, a.Name))
 	})
 
 	return list
@@ -288,8 +374,18 @@ func formatSkills(heading string, skills []Skill) string {
 func composeSystemPromptWithSkills(base string, skills Skills, agent *Agent) string {
 	prompts := []string{strings.TrimSpace(base)}
 
-	if len(skills.Available(agent)) > 0 {
-		prompts = append(prompts, "skills provide specialized instructions and workflows for specific tasks."+"\n"+"When a task may benefit from specialized instructions, call the find_skills tool to search all available skills, then call the skill tool to load the selected skill.")
+	if list := skills.advertised(agent); len(list) > 0 {
+		lines := append(make([]string, 0, 5*len(list)+5),
+			"Skills provide specialized instructions and workflows for specific tasks.",
+			"Use the skill tool to load a skill when a task matches its description.",
+			"The user may also invoke a skill directly. When that happens, its instructions appear in the conversation as a <skill_content> block, the same shape the skill tool returns. A skill that is already present this way does not need to be invoked again.",
+			"<available_skills>",
+		)
+		for _, skill := range list {
+			lines = append(lines, "  <skill>", "    <id>"+skill.Name+"</id>", "    <name>"+skill.DisplayName+"</name>", "    <description>"+skill.Description+"</description>", "  </skill>")
+		}
+
+		prompts = append(prompts, strings.Join(append(lines, "</available_skills>"), "\n"))
 	}
 
 	if prompt := PermissionPrompt(agent.Permission); prompt != "" {
@@ -378,64 +474,97 @@ func PermissionPrompt(permissions PermissionSet) string {
 	return strings.Join(lines, "\n")
 }
 
-func loadSkill(fsys fs.FS, filePath string) (Skill, error) {
+func loadSkill(fsys fs.FS, filePath, id string) (Skill, error) {
 	data, err := fs.ReadFile(fsys, filePath)
 	if err != nil {
 		return Skill{}, fmt.Errorf("%s: read skill: %w", filePath, err)
 	}
 
-	match := AgentFrontmatterPattern.FindSubmatchIndex(data)
-	if match == nil {
-		return Skill{}, fmt.Errorf("%s: missing YAML frontmatter", filePath)
-	}
-
 	var frontmatter skillFrontmatter
-	if err := yaml.Unmarshal(data[match[2]:match[3]], &frontmatter); err != nil {
-		return Skill{}, fmt.Errorf("%s: parse YAML frontmatter: %w", filePath, err)
+
+	content := data
+	if match := AgentFrontmatterPattern.FindSubmatchIndex(data); match != nil {
+		if err := yaml.Unmarshal(data[match[2]:match[3]], &frontmatter); err != nil {
+			frontmatter = skillFrontmatter{}
+			if yaml.Unmarshal(quoteSkillFrontmatterColons(data[match[2]:match[3]]), &frontmatter) != nil {
+				return Skill{}, fmt.Errorf("%s: parse YAML frontmatter: %w", filePath, err)
+			}
+		}
+
+		content = data[match[1]:]
 	}
 
-	if err := validateSkillFrontmatter(filePath, frontmatter); err != nil {
-		return Skill{}, err
+	disabled, _ := skillFlag(frontmatter.DisableModelInvocation)
+	if autoinvoke, ok := skillFlag(frontmatter.Metadata["opencode/autoinvoke"]); ok {
+		disabled = !autoinvoke
 	}
 
 	return Skill{
-		Name:          frontmatter.Name,
-		Description:   frontmatter.Description,
-		License:       frontmatter.License,
-		Compatibility: frontmatter.Compatibility,
-		Metadata:      frontmatter.Metadata,
-		Location:      filePath,
-		Content:       string(data[match[1]:]),
+		Name:                   id,
+		DisplayName:            cmp.Or(frontmatter.Name, id),
+		Description:            frontmatter.Description,
+		License:                frontmatter.License,
+		Compatibility:          frontmatter.Compatibility,
+		DisableModelInvocation: disabled,
+		Location:               filePath,
+		Content:                string(content),
 	}, nil
 }
 
-func validateSkillFrontmatter(filePath string, frontmatter skillFrontmatter) error {
-	if frontmatter.Name == "" {
-		return fmt.Errorf("%s: missing required frontmatter field %q", filePath, "name")
+func quoteSkillFrontmatterColons(frontmatter []byte) []byte {
+	lines := strings.Split(strings.ReplaceAll(string(frontmatter), "\r\n", "\n"), "\n")
+	for i, line := range lines {
+		entry := skillFrontmatterEntry.FindStringSubmatch(line)
+		if entry == nil {
+			continue
+		}
+
+		value := strings.TrimSpace(entry[2])
+		if value != ">" && value != "|" && !strings.HasPrefix(value, `"`) && !strings.HasPrefix(value, "'") && strings.Contains(value, ":") {
+			lines[i] = entry[1] + ": |-\n  " + value
+		}
 	}
 
-	if len(frontmatter.Name) > 64 {
-		return fmt.Errorf("%s: skill name exceeds 64 characters", filePath)
+	return []byte(strings.Join(lines, "\n"))
+}
+
+func skillSortKey(id string) string {
+	stripped, _, _ := transform.String(transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn))), id)
+
+	var key strings.Builder
+
+	for _, r := range cases.Fold().String(stripped) {
+		switch {
+		case unicode.IsLetter(r):
+			key.WriteByte(2)
+		case unicode.IsDigit(r):
+			key.WriteByte(1)
+		default:
+			key.WriteByte(0)
+		}
+
+		key.WriteRune(r)
 	}
 
-	if !skillNamePattern.MatchString(frontmatter.Name) {
-		return fmt.Errorf("%s: invalid skill name %q", filePath, frontmatter.Name)
+	return key.String()
+}
+
+func skillFlag(value any) (enabled, set bool) {
+	switch value := value.(type) {
+	case bool:
+		return value, true
+	case int:
+		return value == 1, value == 0 || value == 1
+	case string:
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "true", "yes", "on", "1":
+			return true, true
+		case "false", "no", "off", "0":
+			return false, true
+		}
 	}
 
-	expectedDir := path.Base(path.Dir(filePath))
-	if frontmatter.Name != expectedDir {
-		return fmt.Errorf("%s: skill name %q does not match directory %q", filePath, frontmatter.Name, expectedDir)
-	}
-
-	if frontmatter.Description == "" {
-		return fmt.Errorf("%s: missing required frontmatter field %q", filePath, "description")
-	}
-
-	if len(frontmatter.Description) > 1024 {
-		return fmt.Errorf("%s: skill description exceeds 1024 characters", filePath)
-	}
-
-	return nil
+	return false, false
 }
 
 func scoreSkill(normalizedQuery string, tokens []string, skill *Skill) int {
@@ -484,7 +613,7 @@ func scoreSkill(normalizedQuery string, tokens []string, skill *Skill) int {
 	return score
 }
 
-func (s Skills) skillFiles(dir string) ([]string, error) {
+func (s Skills) skillFiles(location string) ([]string, error) {
 	files := []string{}
 
 	fsys := s.fsys
@@ -492,13 +621,19 @@ func (s Skills) skillFiles(dir string) ([]string, error) {
 		return nil, errors.New("skills filesystem is not available")
 	}
 
+	if path.Base(location) != "SKILL.md" {
+		return files, nil
+	}
+
+	dir := path.Dir(location)
+
 	err := fs.WalkDir(fsys, dir, func(filePath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		if d.IsDir() {
-			if _, nestedSkill := slices.BinarySearch(s.dirs, filePath); filePath != dir && nestedSkill {
+			if filePath != dir && skillIgnoredName(d.Name()) {
 				return fs.SkipDir
 			}
 
