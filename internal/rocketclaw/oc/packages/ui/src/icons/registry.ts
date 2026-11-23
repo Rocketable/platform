@@ -19,6 +19,15 @@ const spriteHostID = "opencode-v2-icon-host"
 
 const spriteID = "opencode-v2-icon-registered"
 
+// rocketclaw: the last view releases the icon host and its motion observer (upstream packages/ui/src/icons/registry.ts)
+let stopSpriteMotion: (() => void) | undefined
+
+export function disposeIconSprites() {
+  stopSpriteMotion?.()
+  stopSpriteMotion = undefined
+  document.getElementById(spriteHostID)?.remove()
+}
+
 /**
  * A single unhidden host for the SVG icon sprites. Kobalte's `ariaHideOutside` skips adding an already
  * `aria-hidden="true"` element to its hidden set and would otherwise walk and hide every `<symbol>` child one by one.
@@ -181,7 +190,8 @@ function sprite() {
     svg.setCurrentTime(0)
   }
 
-  observeReducedMotion(settle)
+  // rocketclaw: release this observer with the icon host (upstream packages/ui/src/icons/registry.ts)
+  stopSpriteMotion = observeReducedMotion(settle)
   settle()
 
   return svg

@@ -389,6 +389,33 @@ test("a message link opens a remote session at that prompt, also when the sessio
     await more.dispatchEvent("click");
     await page.locator("[data-oc-portal]").getByRole("menuitem", { name: "Copy link", exact: true }).click();
     await until(async () => await page.evaluate(() => navigator.clipboard.readText()) === `${base}${link("msg_ses_a_1")}`);
+
+    await view.getByText("question 1 in ses_a", { exact: true }).evaluate((node: HTMLElement) => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+    const quote = page.locator('[data-oc-portal] [data-component="timeline-quote"]');
+    await quote.waitFor();
+    await view.evaluate((root: HTMLElement) => {
+      const viewport = root.querySelector<HTMLElement>('[data-slot="session-timeline-scroll"] [data-scrollable]')!;
+      const header = root.querySelector<HTMLElement>("[data-session-title]")!;
+      const selected = window.getSelection()!.getRangeAt(0).getBoundingClientRect();
+      viewport.scrollTop += selected.bottom - header.getBoundingClientRect().bottom + 8;
+    });
+    await quote.waitFor({ state: "hidden" });
+    await page.evaluate(() => window.getSelection()!.removeAllRanges());
+
+    await view.locator("[data-component=composer] [contenteditable=true]").click();
+    await page.keyboard.press("ControlOrMeta+f");
+    await view.getByPlaceholder("Find...", { exact: true }).fill("answer 3 in ses_a");
+    await until(() => view.getByText("answer 3 in ses_a", { exact: true }).evaluate((node: HTMLElement) => {
+      const viewport = node.closest<HTMLElement>("[data-scrollable]")!.getBoundingClientRect();
+      const inset = node.closest<HTMLElement>("[data-scrollable]")!.querySelector<HTMLElement>('[data-slot="session-header-inset"]')!.offsetHeight;
+      const match = node.getBoundingClientRect();
+      return Math.abs((match.top + match.bottom) / 2 - (viewport.top + viewport.height / 2 + inset)) <= 4;
+    }));
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
@@ -460,6 +487,25 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     expect(fake.requests.some((request) => request.startsWith("GET /oc/box/api/session/ses_a"))).toBe(true);
     expect(calls.filter(({ path, body }) => (path === "/api/History" || path === "/stream" || path === "/api/ListQueue") && body.id?.startsWith("opencode:"))).toEqual([]);
     expect(await look()).toEqual(before);
+    expect(await view.evaluate(async (root: HTMLElement) => {
+      const check = async (parent: HTMLElement) => {
+        const scope = document.createElement("div");
+        scope.dataset.focusScope = "";
+        const focused = document.createElement("button");
+        scope.append(focused, document.createElement("button"));
+        parent.append(scope);
+        try {
+          focused.focus();
+          if (parent === root) document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+          focused.remove();
+          await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+          return document.activeElement === document.body;
+        } finally {
+          scope.remove();
+        }
+      };
+      return [await check(document.body), await check(root)];
+    })).toEqual([true, true]);
     await page.screenshot({ path: path.join(shots, "opencode-session.png") });
 
     // Leaving and coming back leaves one view and one event stream.

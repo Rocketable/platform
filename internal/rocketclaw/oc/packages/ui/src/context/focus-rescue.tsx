@@ -1,3 +1,6 @@
+// rocketclaw: focus rescue belongs to the mounted view (upstream packages/ui/src/context/focus-rescue.tsx)
+import { themeTargets } from "@rocketclaw/host/fences"
+
 // Chromium leaves focus on <body> when the focused element is removed, disabled or stops being editable, and fires no
 // event. Inside a focus scope ([data-focus-scope]: a list, a tab strip, a chip row), move it to the next item, or to the
 // previous one when the last item went, and widen to the enclosing scope when the inner one has nothing left.
@@ -50,10 +53,16 @@ export function installFocusRescue() {
     document.removeEventListener("focusin", track, true)
     document.removeEventListener("keydown", useKeyboard, true)
     document.removeEventListener("pointerdown", usePointer, true)
-    history.splice(0).forEach((entry) => entry.observer.disconnect())
-    clearTimeout(pending)
-    pending = undefined
+    // rocketclaw: use the same cleanup when the user leaves the view (upstream packages/ui/src/context/focus-rescue.tsx)
+    clearHistory()
   }
+}
+
+// rocketclaw: leaving the view cancels any pending focus rescue (upstream packages/ui/src/context/focus-rescue.tsx)
+function clearHistory() {
+  history.splice(0).forEach((entry) => entry.observer.disconnect())
+  clearTimeout(pending)
+  pending = undefined
 }
 
 // A rescued control shows its ring only while the keyboard is moving focus. Typing, shortcuts and a key pressed on a
@@ -62,16 +71,27 @@ const NAVIGATION = new Set(["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRi
 
 const useKeyboard = (event: KeyboardEvent) => {
   if (event.ctrlKey || event.altKey || event.metaKey || !NAVIGATION.has(event.key)) return
+  // rocketclaw: see the import (upstream packages/ui/src/context/focus-rescue.tsx)
+  if (!inside(event.target)) return
   keyboard = true
 }
 
-const usePointer = () => {
+const usePointer = (event: PointerEvent) => {
+  // rocketclaw: see the import (upstream packages/ui/src/context/focus-rescue.tsx)
+  if (!inside(event.target)) return clearHistory()
   keyboard = false
+}
+
+// rocketclaw: see the import (upstream packages/ui/src/context/focus-rescue.tsx)
+function inside(target: EventTarget | null) {
+  return target instanceof Node && themeTargets().some((root) => root.contains(target))
 }
 
 function track(event: FocusEvent) {
   if (!(event.target instanceof HTMLElement)) return
   const element = event.target
+  // rocketclaw: never observe controls on the surrounding page (upstream packages/ui/src/context/focus-rescue.tsx)
+  if (!inside(element)) return clearHistory()
 
   if (history.at(-1)?.element === element) return
 
@@ -166,7 +186,8 @@ function pick(spot: Spot) {
   const anchor = spot.type === "removed" ? spot.parent : spot.element
   const start = (anchor instanceof Element ? anchor : anchor.parentElement)?.closest<HTMLElement>(SCOPE)
 
-  if (!start) return
+  // rocketclaw: rescuing focus must not enter a surrounding RocketClaw scope (upstream packages/ui/src/context/focus-rescue.tsx)
+  if (!start || !inside(start)) return
 
   if (spot.type === "stayed") {
     const owner = spot.element.parentElement?.closest<HTMLElement>(FOCUSABLE)
@@ -183,6 +204,8 @@ function pick(spot: Spot) {
   if (replacement) return replacement
 
   for (let scope: HTMLElement | null = start; scope; scope = scope.parentElement?.closest<HTMLElement>(SCOPE) ?? null) {
+    // rocketclaw: see the scope check above (upstream packages/ui/src/context/focus-rescue.tsx)
+    if (!inside(scope)) break
     const items = within(scope, false)
     const target = items.find((item) => after(spot, item)) ?? items.findLast((item) => !after(spot, item))
 

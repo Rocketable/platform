@@ -15,6 +15,7 @@ import { ServerConnection } from "@/runtime/server/registry"
 import { useCommand } from "@/shell/commands/command"
 import { sessionHref } from "@/shell/routes/session"
 import { useDialog } from "@opencode/ui/context/dialog"
+import { disposeIconSprites } from "@opencode/ui/icons/registry"
 import { tag } from "../manifest.json"
 import { terminateMarkdownWorker } from "../packages/session-ui/src/components/markdown-worker"
 import "./defaults"
@@ -119,6 +120,7 @@ export function mount(element: HTMLElement, options: MountOptions): Mounted {
 
       if (remaining > 0) return
       document.getElementById("oc-theme")?.remove()
+      disposeIconSprites()
       terminateWorkerPools()
       terminateMarkdownWorker()
     },

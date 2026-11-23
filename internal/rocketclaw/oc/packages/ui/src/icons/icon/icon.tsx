@@ -13,7 +13,8 @@ const spriteID = "opencode-v2-icon-sprite"
 
 const symbol = (name: string) => `opencode-v2-icon-${name}`
 
-let spriteInserted = false
+// rocketclaw: the last view removes the sprite; a remount recreates it (upstream packages/ui/src/icons/icon/icon.tsx)
+const inserted = new WeakSet<Element>()
 
 function spriteContent() {
   return artworkNames()
@@ -22,15 +23,15 @@ function spriteContent() {
 }
 
 function ensureSprite() {
-  if (spriteInserted) return
-
   if (typeof document === "undefined") return
   // Hot reload preserves the DOM sprite, but its symbols may be from an older module.
   const existing = document.getElementById(spriteID)
 
   if (existing) {
+    // rocketclaw: see the sprite declaration (upstream packages/ui/src/icons/icon/icon.tsx)
+    if (inserted.has(existing)) return
     existing.innerHTML = spriteContent()
-    spriteInserted = true
+    inserted.add(existing)
 
     return
   }
@@ -44,7 +45,8 @@ function ensureSprite() {
   svg.style.overflow = "hidden"
   svg.innerHTML = spriteContent()
   ensureIconSpriteHost().append(svg)
-  spriteInserted = true
+  // rocketclaw: see the sprite declaration (upstream packages/ui/src/icons/icon/icon.tsx)
+  inserted.add(svg)
 }
 
 export interface IconProps extends ComponentProps<"svg"> {
