@@ -129,16 +129,18 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 	predeclared["json"] = &starlarkstruct.Module{Name: "json", Members: members}
 
 	for name, tool := range catalog {
+		server, method := tool.Server, tool.Name
+		subject := server + "." + method
 		predeclared[name] = newKwargsValueBuiltin(name, HostTool{
-			Name:        tool.Server + "." + tool.Name,
+			Name:        subject,
 			InputSchema: tool.InputSchema,
 			Details:     mcpCallDetails(tool),
 			CallValue: func(ctx context.Context, callArgs map[string]any) (starlark.Value, error) {
-				if err := decide(ctx, tool.Server+"."+tool.Name, callArgs); err != nil {
+				if err := decide(ctx, subject, callArgs); err != nil {
 					return nil, err
 				}
 
-				return call(ctx, tool.Server, tool.Name, callArgs)
+				return call(ctx, server, method, callArgs)
 			},
 		})
 	}
