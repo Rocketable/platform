@@ -830,6 +830,144 @@ func TestCodeModeCallsSavedOnTheirOwn(t *testing.T) {
 	require.Empty(t, saved, "a cleared row takes its records with it and cannot be recreated by one")
 }
 
+func TestCodeModeCallsReachTheirSavedTurn(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat})
+	journal := conversationJournal{store: s, conversationID: "main", log: slog.New(slog.DiscardHandler)}
+	require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: "turn-1", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "").ReplayInput}))
+
+	record := func(host, status string) json.RawMessage {
+		return json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"exec","key":"turn-1/call/exec/host/` + host + `","name":"bash","status":"` + status + `"}`)
+	}
+	save := func(host, status string) {
+		t.Helper()
+		require.NoError(t, journal.SaveCodeModeCall(ctx, "turn-1", "turn-1/call/exec/host/"+host, record(host, status)))
+	}
+	calls := func() []string {
+		var shown []string
+
+		for _, entry := range testHistoryEntries(t, s, "main") {
+			for _, call := range harness.CodeModeCallsFromTrace(entry.Entry.OutputTrace) {
+				shown = append(shown, strings.TrimPrefix(call.Key, "turn-1/call/exec/host/")+" "+string(call.Status))
+			}
+		}
+
+		return shown
+	}
+
+	save("0", "ok")
+	save("1", "running")
+
+	entry := testSessionEntry("hello", "done")
+	entry.TurnID, entry.OutputTrace = "turn-1", []json.RawMessage{record("0", "running")}
+	_, err := s.finishTurn(ctx, "turn-1", &turnFinish{conversationID: "main", entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage("main", "done")})
+	require.NoError(t, err)
+	require.Equal(t, []string{"0 ok", "1 running"}, calls(), "the saved turn takes the records saved after its snapshot")
+
+	next, stop := iter.Pull2(s.Changes(ctx, "main"))
+	defer stop()
+
+	_, err, ok := next()
+	require.True(t, ok)
+	require.NoError(t, err)
+
+	save("1", "ok")
+
+	_, err, ok = next()
+	require.True(t, ok, "a record saved after the turn notifies the chat")
+	require.NoError(t, err)
+	require.Equal(t, []string{"0 ok", "1 ok"}, calls(), "a delivering turn's record lands in its saved turn")
+
+	require.NoError(t, s.closeTurn(ctx, "turn-1"))
+	save("2", "ok")
+	require.Equal(t, []string{"0 ok", "1 ok", "2 ok"}, calls(), "a closed turn's saved turn takes a new record in order")
+	require.Empty(t, testTurnStepKeys(t, s, "main"), "no record waits in a step")
+}
+
+func TestRestartEndsAKilledScriptsRunningCalls(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+
+	call := func(key, status string) json.RawMessage {
+		return json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"exec","key":"` + key + `","name":"bash","status":"` + status + `"}`)
+	}
+
+	require.NoError(t, upsertTestTurn(ctx, store, &testCheckpoint{TurnID: "turn-1", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "").ReplayInput}))
+	saved := testSessionEntry("hello", "started")
+	saved.TurnID, saved.OutputTrace = "turn-1", []json.RawMessage{call("turn-1/call/a/host/0", "ok"), call("turn-1/call/a/host/1", "running"), call("turn-1/call/ab/host/0", "running")}
+	_, err := store.finishTurn(ctx, "turn-1", &turnFinish{conversationID: "main", entries: []harness.SessionEntry{*saved}, outbound: protocol.NewOutboundMessage("main", "started")})
+	require.NoError(t, err)
+	require.NoError(t, store.closeTurn(ctx, "turn-1"))
+
+	require.NoError(t, upsertTestTurn(ctx, store, &testCheckpoint{TurnID: "turn-2", ConversationKey: "main", ReplayInput: testSessionEntry("again", "").ReplayInput}))
+	journal := conversationJournal{store: store, conversationID: "main", log: slog.New(slog.DiscardHandler)}
+	require.NoError(t, journal.SaveCodeModeCall(ctx, "turn-2", "turn-2/call/c/host/0", call("turn-2/call/c/host/0", "running")))
+
+	for _, id := range []string{"turn-1/call/a", "turn-2/call/c"} {
+		job := testBackgroundJob("main", id)
+		job.callID = id[strings.LastIndexByte(id, '/')+1:]
+		createTestBackgroundJob(t, store, job)
+	}
+
+	registry, _ := newTestBackgroundRegistry(store)
+	_, err = registry.recoverJobs(ctx)
+	require.NoError(t, err)
+	require.Equal(t, backgroundKilled, testBackgroundRow(t, store, "main", "turn-1/call/a").status)
+
+	var shown []string
+
+	for _, entry := range testHistoryEntries(t, store, "main") {
+		for _, record := range harness.CodeModeCallsFromTrace(entry.Entry.OutputTrace) {
+			shown = append(shown, record.Key+" "+string(record.Status))
+		}
+	}
+
+	require.Equal(t, []string{"turn-1/call/a/host/0 ok", "turn-1/call/a/host/1 cancelled", "turn-1/call/ab/host/0 running", "turn-2/call/c/host/0 cancelled"}, shown,
+		"a killed job's running calls end, in a saved turn and in a running one, and no other job's call does")
+}
+
+func TestRestartDuringRecoveryStillEndsAKilledScriptsCalls(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+	require.NoError(t, upsertTestTurn(ctx, store, &testCheckpoint{TurnID: "turn-1", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "").ReplayInput}))
+
+	journal := conversationJournal{store: store, conversationID: "main", log: slog.New(slog.DiscardHandler)}
+	require.NoError(t, journal.SaveCodeModeCall(ctx, "turn-1", "turn-1/call/a/host/0", json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"exec","key":"turn-1/call/a/host/0","name":"bash","status":"running"}`)))
+
+	job := testBackgroundJob("main", "turn-1/call/a")
+	job.callID = "a"
+	createTestBackgroundJob(t, store, job)
+
+	_, err := store.db.ExecContext(ctx, `CREATE FUNCTION refuse_cancel() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'server stopping'; END $$;
+CREATE TRIGGER refuse_cancel BEFORE UPDATE ON steps FOR EACH ROW EXECUTE FUNCTION refuse_cancel()`)
+	require.NoError(t, err)
+
+	first, _ := newTestBackgroundRegistry(store)
+	_, err = first.recoverJobs(ctx)
+	require.ErrorContains(t, err, "server stopping", "the first start stops while it ends the killed job's calls")
+
+	_, err = store.db.ExecContext(ctx, `DROP TRIGGER refuse_cancel ON steps`)
+	require.NoError(t, err)
+
+	next, _ := newTestBackgroundRegistry(store)
+	_, err = next.recoverJobs(ctx)
+	require.NoError(t, err)
+
+	saved, err := journal.CodeModeCalls(ctx, "turn-1")
+	require.NoError(t, err)
+	require.Equal(t, "cancelled", string(harness.CodeModeCallsFromTrace(saved)[0].Status), "the next start still ends the call")
+	require.Equal(t, backgroundKilled, testBackgroundRow(t, store, "main", "turn-1/call/a").status)
+}
+
 func TestJournalSavesTurnItemsOnce(t *testing.T) {
 	t.Parallel()
 

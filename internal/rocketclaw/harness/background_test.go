@@ -237,7 +237,10 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 					return
 				}
 
-				require.Equal(t, []CodeModeCall{{Type: codeModeCallTraceType, ParentCallID: "call-1", Key: "turn/call/call-1/host/0", Name: "probe", Arguments: "{}", Status: codeModeCallRunning}}, loop.observations.calls)
+				probe := CodeModeCall{Type: codeModeCallTraceType, ParentCallID: "call-1", Key: "turn/call/call-1/host/0", Name: "probe", Arguments: "{}", Status: codeModeCallOK, Summary: "probed", Outcome: permissionReviewOutcomeAllow, Reason: "ok"}
+				again := probe
+				again.Key = "turn/call/call-1/host/1"
+				require.Equal(t, []CodeModeCall{probe, again}, loop.observations.calls, "the script's calls keep saving after its turn ends")
 
 				require.Equal(t, "probedprobed", finished)
 				require.Equal(t, []bool{tc.job.Detached, true}, detached, "the script sees when its job leaves the turn")
