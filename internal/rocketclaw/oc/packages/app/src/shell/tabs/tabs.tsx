@@ -8,6 +8,7 @@ import { usePluginServers } from "@/runtime/plugin/servers"
 import { createEffect, createSignal, getOwner, onCleanup, startTransition, untrack, type Accessor } from "solid-js"
 import { useLocation, useNavigate } from "@solidjs/router"
 import { usePlatform } from "@/runtime/platform/platform"
+import { useSettings } from "@/settings/model"
 import { uuid } from "@opencode/util/uuid"
 import { SessionTabsRemovedDetail } from "@/shell/titlebar/session-events"
 import { sessionHref } from "@/shell/routes/session"
@@ -60,7 +61,11 @@ export type PendingSession = {
   selection: ComposerSelection
   composer: ComposerState
   // rocketclaw: only the pending view's shape; the draft creation screen is excluded (upstream packages/app/src/shell/tabs/tabs.tsx)
-  view: Accessor<{ readonly status: "session.new.worktree.creating" | "session.new.starting"; readonly preparingMcp: boolean }>
+  view: Accessor<{
+    readonly status: "session.new.worktree.creating" | "session.new.starting"
+    readonly preparingMcp: boolean
+    readonly directory?: string
+  }>
 }
 
 export type TabInfo = typeof TabStorage.Info.Type
@@ -108,6 +113,7 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
     const servers = useServers()
     const pluginServers = usePluginServers()
     const platform = usePlatform()
+    const settings = useSettings()
     const [store, setStore, _, ready] = persisted(Persist.window("tabs"), TabStorage.Tabs, [])
 
     const [recent, setRecent, , recentReady] = persisted(Persist.window("tabs.recent"), TabStorage.Recent, {
@@ -116,6 +122,11 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
 
     const [info, setInfo, , infoReady] = persisted(Persist.window("tabs.info"), TabStorage.Infos, {})
     const [regions, setRegions, , regionsReady] = persisted(Persist.window("tabs.panes"), TabStorage.Regions, {})
+    // Whether the side region is open in every tab while the shared side panel setting is on.
+    const [sharedSide, setSharedSide] = persisted(Persist.window("tabs.panes.shared"), TabStorage.SharedSide, {})
+
+    const shared = (region: TabRegion) => region === "side" && settings.general.sharedSidePanel()
+
     const [closed, setClosed, , closedReady] = persisted(Persist.window("tabs.closed"), TabStorage.Closed, [])
     const [promotion, setPromotion] = createSignal(INITIAL_TAB_PROMOTION_STATE)
 
@@ -871,10 +882,15 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       region(tab: Tab | undefined, region: TabRegion, fallback = false) {
         if (!tab) return fallback
 
+        if (shared(region)) return sharedSide.opened ?? fallback
+
         return regions[tabKey(tab)]?.[region] ?? fallback
       },
       setRegion(tab: Tab | undefined, region: TabRegion, opened: boolean) {
         if (!tab) return
+
+        if (shared(region)) return setSharedSide("opened", opened)
+
         const key = tabKey(tab)
         const current = regions[key]
 

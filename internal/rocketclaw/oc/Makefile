@@ -11,6 +11,9 @@ cloc:
 lint:
 	bunx tsc --noEmit
 
+build:
+	go -C .. generate ./internal/web
+
 # Each package's flags and preloads follow its upstream package.json test scripts and bunfig.toml.
 test:
 	cd packages/app && bun test --conditions=solid --only-failures --isolate --preload ../ui/test/solid-jsx.ts --preload ./happydom.ts ./src
@@ -23,4 +26,4 @@ test:
 	cd packages/util && bun test --only-failures
 	bun test --conditions=browser --isolate --preload ./host/test/solid-dom.ts --preload ./packages/app/happydom.ts host
 
-.PHONY: cloc lint test
+.PHONY: cloc lint test build

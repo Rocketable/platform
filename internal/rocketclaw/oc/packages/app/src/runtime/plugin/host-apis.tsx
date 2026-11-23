@@ -15,7 +15,6 @@ import {
   type MountedSession,
   type NotifyOptions,
   type NotifyResult,
-  type OpenOptions,
   type PanelSidebar,
   type PanelState,
   type ServerRef,
@@ -26,8 +25,9 @@ import {
   type StorageScope,
   type Tabs,
 } from "@opencode/plugin/gui"
-import { BuiltinPanel, type BuiltinStoreFrom, type BuiltinStoreOptions } from "@opencode/plugin/gui/builtin"
+import { BuiltinPanel, BuiltinPromptGate, type BuiltinOpenOptions, type BuiltinStoreFrom, type BuiltinStoreOptions } from "@opencode/plugin/gui/builtin"
 import { usePlatform } from "@/runtime/platform/platform"
+import { startDragOut } from "@/runtime/platform/drag-out"
 import { same } from "@/runtime/persistence/equality"
 import { Persist, persisted, removePersisted } from "@/runtime/persistence/storage"
 import { useGlobal, type ServerCtx } from "@/runtime/server/runtime"
@@ -43,6 +43,7 @@ import { useCurrentRoute, useLayout } from "@/shell/state/layout"
 import { sessionPaneTab, sessionTabPane, type SessionPane } from "@/shell/state/session-tabs"
 import { terminalFontFamily, useSettings } from "@/settings/model"
 import { useSettingsSurface } from "@/settings/surface"
+import { fitsSidePane } from "@/session/session-panel-width"
 import { formatKeybindParts, useCommand } from "@/shell/commands/command"
 import { createMediaQuery } from "@solid-primitives/media"
 import { useIsRouting, useLocation } from "@solidjs/router"
@@ -63,6 +64,7 @@ import {
   createProjectRequestState,
   createSideRegionState,
   selectMobileView,
+  selectPanelState,
   selectWaitingProjectServer,
   transitionMobileView,
   transitionProjectRequest,
@@ -73,6 +75,7 @@ import {
 } from "./host-layout-machine"
 import { usePluginHost, type HostApiFactories } from "./host"
 import { createLocatedWrites } from "./located"
+import { settlePromptGates } from "./prompt-gate"
 import { createSessionPanelMenu } from "./panel-menu"
 import type { Region } from "./panels"
 import {
@@ -94,7 +97,8 @@ type Attached = {
   scope: (server: string) => ServerScope
   /** Records a session-scoped store so layout pruning drops it with the session. */
   scoped: (name: string) => void
-  layout: Omit<Layout, "narrow" | "settings" | "project" | "draft" | "command" | "stored" | "side"> & {
+  layout: Omit<Layout, "narrow" | "settings" | "project" | "draft" | "command" | "stored" | "side" | "open"> & {
+    open(key: string, session: SessionRef, options?: BuiltinOpenOptions): void
     stored(plugin: string, session: SessionRef): readonly string[]
     /** `width` and `resize` take the panel's host key, `${plugin}:${panel id}`. */
     side: Layout["side"]
@@ -302,9 +306,7 @@ export function createHostApis() {
         return true
       },
       openExternal(url) {
-        if (platform.openLocalFile && URL.canParse(url) && new URL(url).protocol === "file:")
-          return platform.openLocalFile(url)
-        platform.openExternal(url)
+        if (/^(?:https?:\/\/|mailto:)/i.test(url) && URL.canParse(url)) platform.openExternal(url)
       },
     }),
     desktop: () =>
@@ -316,6 +318,7 @@ export function createHostApis() {
             reveal: (path) => platform.revealPath?.(path) ?? Promise.resolve(false),
             installed: (app) => platform.checkAppExists?.(app) ?? Promise.resolve(false),
             forceFocus: (enabled) => platform.setForceFocus?.(enabled) ?? Promise.resolve(),
+            dragOut: (event, path) => startDragOut(platform, event, path),
             async pick(options) {
               if (options?.directory) {
                 const picked = await platform.openDirectoryPickerDialog({
@@ -450,6 +453,7 @@ export function createHostApis() {
     // Before the interface mounts, reads return what an empty layout holds and writes wait for it.
     layout: (plugin) => ({
       narrow,
+      fitsSide: () => fitsSidePane(document.querySelector("[data-pane-row]")?.getBoundingClientRect().width ?? 0),
       ready: () => current()?.layout.ready() ?? false,
       open: (key, session, options) => write((value) => value.layout.open(key, session, options)),
       close: (key, session) => write((value) => value.layout.close(key, session)),
@@ -831,7 +835,7 @@ export function createPluginAttachment(apis: HostApis) {
     key: string,
     session: SessionRef,
     value: string,
-    options: OpenOptions | undefined,
+    options: BuiltinOpenOptions | undefined,
     via: "open" | "toggle",
   ) => {
     const wasOpen = sideOpened(session)
@@ -850,17 +854,25 @@ export function createPluginAttachment(apis: HostApis) {
     })
   }
 
-  const place = (key: string, session: SessionRef, value: string, options: OpenOptions | undefined) => {
+  // Opening the tab a pane already selects changes no selection, so a New tab view over it would stay. The region
+  // hears of the open before the write, while the pane's selection is still the one on screen, and replaces that view
+  // as a tab that becomes the selection does.
+  const uncover = (session: SessionRef, key: string) => {
+    if (mountedSession(session)) region()?.opening(key)
+  }
+
+  const place = (key: string, session: SessionRef, value: string, options: BuiltinOpenOptions | undefined) => {
     const item = provider(key)
     const placement = options?.tab ?? "open"
 
     // An append adds the tab quietly: no selection, no region change, no preview replacement.
-    if (placement === "append") return layout.panel.append(value, key)
+    if (placement === "append") return layout.panel.append(value, key, options?.after)
 
     // A select keeps the narrow-screen view, as a background open does, and shows the tab's pane too.
     if (placement === "select")
       return batch(() => {
-        layout.panel.append(value, key)
+        uncover(session, key)
+        layout.panel.append(value, key, options?.after)
         layout.panel.focus(value, key)
         reveal(session, value, key)
       })
@@ -876,6 +888,8 @@ export function createPluginAttachment(apis: HostApis) {
         if (mountedSession(session) && !known.some((entry) => entry.key === key && !entry.tab.transient)) return
       }
 
+      uncover(session, key)
+
       // Pinned tabs are listed without being stored; opening one only selects it.
       if (known.some((entry) => entry.key === key && entry.tab.pinned)) layout.panel.focus(value, key)
       else if (placement === "preview") layout.panel.preview(value, key, transient)
@@ -886,7 +900,7 @@ export function createPluginAttachment(apis: HostApis) {
     })
   }
 
-  const open = (key: string, session: SessionRef, options?: OpenOptions) =>
+  const open = (key: string, session: SessionRef, options?: BuiltinOpenOptions) =>
     withLocated(session, (value) => openAt(key, session, value, options, "open"))
 
   const closeAt = (key: string, session: SessionRef, value: string) => {
@@ -936,9 +950,12 @@ export function createPluginAttachment(apis: HostApis) {
     const pane = mounted ? mounted.paneOf(key) : sessionTabPane(panel, key)
     const shown = mounted ? mounted.pane(pane).active() : sessionPaneTab(panel, pane)
 
-    if (shown !== key) return panel.all.includes(key) ? "open" : "closed"
-
-    return paneOpened(session, pane) ? "visible" : "active"
+    return selectPanelState({
+      stored: panel.all.includes(key),
+      selected: shown === key,
+      covered: !!mounted?.newTab(pane),
+      paneOpen: paneOpened(session, pane),
+    })
   }
 
   const hide = (key: string, session: SessionRef) =>
@@ -1217,6 +1234,17 @@ export function createPluginAttachment(apis: HostApis) {
     attach: () => apis.attach(mounted),
     /** The routed `MountedSession`. */
     current,
+    /**
+     * What a send to a session waits for before its request goes out: the `BuiltinPromptGate` of every plugin that
+     * ships with the app, which prepares the session for its next step. A session no open tab owns has no gate.
+     */
+    ready(server: string, sessionID: string) {
+      const session = untrack(sessions).find((item) => item.key === `${server}\n${sessionID}`)
+
+      if (!session) return Promise.resolve()
+
+      return settlePromptGates(untrack(() => host.items(BuiltinPromptGate)), host.builtin, session)
+    },
     closed,
     /** Opens and selects a side tab by key, as a reopened closed tab comes back. */
     openTab: (key: string, session: SessionRef) => open(key, session, { tab: "select" }),

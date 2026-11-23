@@ -25,6 +25,15 @@
       "node"
     ],
     "paths": {
+      "@opencode/app/loopback": [
+        "./packages/app/src/runtime/server/loopback.ts"
+      ],
+      "@opencode/gui-plugins/schemes": [
+        "./packages/gui-plugins/src/schemes.ts"
+      ],
+      "@opencode/ui/icons/registry": [
+        "./packages/ui/src/icons/registry.ts"
+      ],
       "@/*": [
         "./packages/app/src/*"
       ],
