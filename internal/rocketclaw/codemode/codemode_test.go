@@ -219,7 +219,11 @@ func TestRunDecideDenyDoesNotCall(t *testing.T) {
 
 	_, err := runToString(t.Context(), `def main():
     return demo_echo(message="hi").unwrap()
-`, tools, func(context.Context, string, map[string]any) error {
+`, tools, func(_ context.Context, subject string, _ map[string]any) error {
+		if subject != "demo.echo" {
+			t.Errorf("permission subject = %q, want demo.echo", subject)
+		}
+
 		return errors.New("denied")
 	}, func(context.Context, string, string, map[string]any) (starlark.Value, error) {
 		called = true
