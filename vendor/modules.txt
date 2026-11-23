@@ -531,7 +531,7 @@ github.com/tidwall/gjson
 # github.com/tidwall/match v1.2.0
 ## explicit; go 1.15
 github.com/tidwall/match
-# github.com/tidwall/pretty v1.3.0
+# github.com/tidwall/pretty v1.3.1
 ## explicit; go 1.16
 github.com/tidwall/pretty
 # github.com/tidwall/sjson v1.2.11
@@ -848,7 +848,7 @@ google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# gvisor.dev/gvisor v0.0.0-20261122231547-2bdff1a445e1
+# gvisor.dev/gvisor v0.0.0-20261123012057-7940eac392b5
 ## explicit; go 1.27.3
 gvisor.dev/gvisor/pkg/atomicbitops
 gvisor.dev/gvisor/pkg/bits
