@@ -53,7 +53,7 @@ type Peer struct {
 	// deleteOnIdle indicates whether the peer should be deleted when idle
 	// because it was auto-created via a Device.PeerLookupFunc.
 	//
-	// This field should only be set once, before the peer is started.
+	// This field should only be set once, before the peer is published.
 	deleteOnIdle bool
 
 	endpoint struct {
@@ -87,7 +87,13 @@ type Peer struct {
 
 	// queue channel write operations must be wrapped by [Peer.doIfRunning]
 	queue struct {
-		staged   chan *QueueOutboundElementsContainer // staged packets before a handshake is available
+		// nonceMu serializes nonce stamping during the outbound enqueue in
+		// [Peer.SendStagedPackets] and [Peer.SendPriorityMessage].
+		nonceMu sync.Mutex
+		// staged holds packets awaiting symmetric session establishment. staged
+		// queue operations must be accounted against [Device.queue.stagedCount]
+		// when a global staged queue limit is in effect.
+		staged   chan *QueueOutboundElementsContainer
 		outbound chan *QueueOutboundElementsContainer // sequential ordering of udp transmission
 		inbound  chan *QueueInboundElementsContainer  // sequential ordering of tun writing
 	}
@@ -97,8 +103,9 @@ type Peer struct {
 	persistentKeepaliveInterval atomic.Uint32
 
 	// flowID pins this peer's decrypted packets to a single TUN write queue
-	// when the device is a [tun.MultiQueueDevice].
-	// See [Peer.writeTUN].
+	// when the device is a [tun.MultiQueueDevice], and its encrypted packets
+	// to a single bind socket when the bind is a [conn.MultiSocketBind].
+	// See [Peer.writeTUN] and [Peer.SendBuffers].
 	//
 	// The kernel picks a TUN queue by 5-tuple for new (or quiescent,
 	// TUN_FLOW_EXPIRE=3s) flows. A pin learned from our writes overrides
@@ -114,7 +121,19 @@ type Peer struct {
 	flowID uint32
 }
 
+// NewPeer creates and publishes an unconfigured peer for pk.
+//
+// Safe to configure post-factum in [Device.IpcSetOperation] because of the
+// global ipc mutex.
 func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
+	return device.newPeer(pk, nil, false /* deleteOnIdle */)
+}
+
+// newPeer creates a peer for pk, applies conf and deleteOnIdle, and then
+// publishes the peer into device.peers.keyMap.
+//
+// conf may be nil, in which case the peer is left unconfigured.
+func (device *Device) newPeer(pk NoisePublicKey, conf *NewPeerConfig, deleteOnIdle bool) (*Peer, error) {
 	if device.isClosed() {
 		return nil, errors.New("device closed")
 	}
@@ -149,23 +168,38 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 		return nil, errAddExistingPeer
 	}
 
+	// This field is read without locks, safe to write only because the peer
+	// is not yet reachable by any other goroutine.
+	peer.deleteOnIdle = deleteOnIdle
+
 	// pre-compute DH
 	handshake := &peer.handshake
 	handshake.mutex.Lock()
 	handshake.precomputedStaticStatic, _ = device.staticIdentity.privateKey.sharedSecret(pk)
 	handshake.remoteStatic = pk
+	if conf != nil {
+		handshake.presharedKey = conf.PresharedKey
+		handshake.hybridHandshake = conf.Hybrid
+	}
 	handshake.mutex.Unlock()
 
 	// reset endpoint
 	peer.endpoint.Lock()
 	peer.endpoint.val = nil
 	peer.endpoint.clearSrcOnTx = false
+	if conf != nil && conf.Endpoint != nil {
+		peer.endpoint.val = conf.Endpoint
+	}
 	peer.endpoint.Unlock()
 
 	// init timers
 	peer.timersInit()
 
-	// add
+	if conf != nil {
+		peer.SetAllowedIPs(conf.AllowedIPs)
+	}
+
+	// add, concurrent access after this point
 	device.peers.keyMap[pk] = peer
 
 	return peer, nil
@@ -200,6 +234,14 @@ func (p *Peer) SetPresharedKey(psk NoisePresharedKey) {
 	p.handshake.presharedKey = psk
 }
 
+// SetHybridHandshake sets whether this peer should use hybrid post-quantum handshakes.
+// Both peers must use the same setting for communication to be possible.
+func (p *Peer) SetHybridHandshake(hybrid bool) {
+	p.handshake.mutex.Lock()
+	defer p.handshake.mutex.Unlock()
+	p.handshake.hybridHandshake = hybrid
+}
+
 // SendBuffers sends buffers to peer. WireGuard packet data in each element of
 // buffers must be preceded by MessageEncapsulatingTransportSize number of
 // bytes.
@@ -223,7 +265,7 @@ func (peer *Peer) SendBuffers(buffers [][]byte) error {
 	}
 	peer.endpoint.Unlock()
 
-	err := peer.device.net.bind.Send(buffers, endpoint, MessageEncapsulatingTransportSize)
+	err := peer.device.net.sendTo(int(peer.flowID), buffers, endpoint, MessageEncapsulatingTransportSize)
 	if err == nil {
 		var totalLen uint64
 		for _, b := range buffers {
@@ -284,8 +326,8 @@ func (peer *Peer) Start() {
 	device.log.Verbosef("%v - Starting", peer)
 
 	// init inbound & outbound packet queues
-	peer.queue.outbound = make(chan *QueueOutboundElementsContainer, device.config.queueOutboundSize)
-	peer.queue.inbound = make(chan *QueueInboundElementsContainer, device.config.queueInboundSize)
+	peer.queue.outbound = make(chan *QueueOutboundElementsContainer, device.config.peerQueueOutboundSize)
+	peer.queue.inbound = make(chan *QueueInboundElementsContainer, device.config.peerQueueInboundSize)
 
 	// reset routine state
 	peer.runningState.queueReaders.Wait()
@@ -342,7 +384,7 @@ func (peer *Peer) ZeroAndFlushAll() {
 	handshake.Clear()
 	handshake.mutex.Unlock()
 
-	peer.FlushStagedPackets()
+	peer.FlushStagedPackets(0)
 
 	peer.sessionState.Lock()
 	peer.sessionState.sessionExpires = time.Time{}

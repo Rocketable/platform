@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  *
  * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (c) Tailscale Inc & contributors
  */
 
 package tun
@@ -137,8 +138,11 @@ func (f optionFunc) apply(config *config) {
 	f(config)
 }
 
+type logFunc func(format string, args ...any)
+
 type config struct {
-	queues int // Tun fd's in IFF_MULTI_QUEUE group to open.
+	queues int // Tun fds in IFF_MULTI_QUEUE group to open.
+	logf   logFunc
 }
 
 func defaultConfig() config {
@@ -150,18 +154,28 @@ func defaultConfig() config {
 // WithQueues requests that the [Device] be created with n queues. n must be at
 // least 1.
 //
-// Only Linux implements multiqueue TUN. Errors are returned if more queues
-// are requested than the Linux kernel supports (at the time of writing,
-// v7.0 has MAX_TAP_QUEUES at 256) or if the per-process limit was reached.
-//
-// Implementations may choose to return more read queues than was requested.
+// Implementations may return a different number of queues than was requested.
 // Callers must consult [QueuesOf] rather than assume they got n.
 //
-// EXPERIMENTAL: Current implementation introduces nonce reordering with more
-// than one queue.
+// Only Linux implements multiqueue TUN. Error is returned if no queues could
+// be created.
+// Asking for more queues than the kernel allows (v7.0 has MAX_TAP_QUEUES at
+// 256), or than the per-process file limit permits, yields a shorter group.
+//
+// WARNING Overlay flows initiated locally experience a TUN queue switch
+// when Linux kernel adopts our pin during the return Write. This introduces
+// a flow reordering event after initiation or a 3s pause. See Peer.flowID.
 func WithQueues(n int) Option {
 	return optionFunc(func(config *config) {
 		config.queues = n
+	})
+}
+
+// WithLogf sets the logger for Linux TUN queue fallback and ownership errors.
+// [CreateTUN] calls logf synchronously. A nil function disables logging.
+func WithLogf(logf func(format string, args ...any)) Option {
+	return optionFunc(func(config *config) {
+		config.logf = logf
 	})
 }
 

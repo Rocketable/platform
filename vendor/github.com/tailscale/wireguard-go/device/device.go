@@ -45,6 +45,7 @@ type Device struct {
 		stopping sync.WaitGroup
 		sync.RWMutex
 		bind          conn.Bind // bind interface
+		sendTo        func(flow int, bufs [][]byte, ep conn.Endpoint, offset int) error
 		netlinkCancel *rwcancel.RWCancel
 		port          uint16 // listening port
 		fwmark        uint32 // mark value (0 = disabled)
@@ -75,20 +76,25 @@ type Device struct {
 	cookieChecker CookieChecker
 
 	pool struct {
-		inboundElementsContainer  *WaitPool
-		outboundElementsContainer *WaitPool
-		inboundElements           *WaitPool
-		outboundElements          *WaitPool
-		packetBufs                *WaitPool
+		inboundElementsContainer  *sync.Pool
+		outboundElementsContainer *sync.Pool
+		inboundElements           *sync.Pool
+		outboundElements          *sync.Pool
+		packetBufs                *sync.Pool
 		// smallPacketBufs aliases packetBufs when no distinct small packet pool
 		// is used. See [Device.PopulatePools].
-		smallPacketBufs *WaitPool
+		smallPacketBufs *sync.Pool
 	}
 
 	queue struct {
 		encryption *outboundQueue
 		decryption *inboundQueue
 		handshake  *handshakeQueue
+		// stagedCount is the count of packet containers outstanding across all
+		// [Peer.queue.staged]. Only relevant when [Device.config.queueStagedGlobalLimit]
+		// is nonzero. This count is updated only after enqueuing packets for
+		// staging, so its value is eventually (not immediately) consistent.
+		stagedCount atomic.Int64
 	}
 
 	tun struct {
@@ -106,21 +112,32 @@ type Device struct {
 }
 
 type config struct {
-	queueStagedSize            int
-	queueOutboundSize          int
-	queueInboundSize           int
-	queueHandshakeSize         int
-	preallocatedBuffersPerPool uint32
-	metrics                    Metrics
+	queueStagedSize        int
+	queueOutboundSize      int
+	queueInboundSize       int
+	peerQueueOutboundSize  int // zero inherits queueOutboundSize
+	peerQueueInboundSize   int // zero inherits queueInboundSize
+	queueHandshakeSize     int
+	queueStagedGlobalLimit int64
+	metrics                Metrics
+}
+
+func (c *config) resolve() {
+	if c.peerQueueOutboundSize == 0 {
+		c.peerQueueOutboundSize = c.queueOutboundSize
+	}
+	if c.peerQueueInboundSize == 0 {
+		c.peerQueueInboundSize = c.queueInboundSize
+	}
 }
 
 func defaultConfig() config {
 	return config{
-		queueStagedSize:            DefaultQueueStagedSize,
-		queueOutboundSize:          DefaultQueueOutboundSize,
-		queueInboundSize:           DefaultQueueInboundSize,
-		queueHandshakeSize:         DefaultQueueHandshakeSize,
-		preallocatedBuffersPerPool: DefaultPreallocatedBuffersPerPool,
+		queueStagedSize:        DefaultQueueStagedSize,
+		queueOutboundSize:      DefaultQueueOutboundSize,
+		queueInboundSize:       DefaultQueueInboundSize,
+		queueHandshakeSize:     DefaultQueueHandshakeSize,
+		queueStagedGlobalLimit: DefaultQueueStagedGlobalLimit,
 	}
 }
 
@@ -144,21 +161,41 @@ func WithQueueStagedSize(size int) Option {
 	})
 }
 
-// WithQueueOutboundSize sets the capacity of each peer's outbound packet queue.
-// It also sets the capacity of the device-wide outbound queue, whose total
-// capacity is size multiplied by the number of TUN queues.
-// [DefaultQueueOutboundSize] is the default.
+// WithQueueOutboundSize sets the capacity of the device-wide outbound packet
+// queue, defaulting to [DefaultQueueOutboundSize].
+//
+// This also limits the per-peer outbound packet queue, unless overridden by
+// [WithPeerQueueOutboundSize].
 func WithQueueOutboundSize(size int) Option {
 	return optionFunc(func(config *config) {
 		config.queueOutboundSize = size
 	})
 }
 
-// WithQueueInboundSize sets the capacity of the device and per-peer inbound
-// packet queues. [DefaultQueueInboundSize] is the default.
+// WithQueueInboundSize sets the capacity of the device-wide outbound packet
+// queue, defaulting to [DefaultQueueInboundSize].
+//
+// This also limits the per-peer outbound packet queue, unless overridden by
+// [WithPeerQueueInboundSize].
 func WithQueueInboundSize(size int) Option {
 	return optionFunc(func(config *config) {
 		config.queueInboundSize = size
+	})
+}
+
+// WithPeerQueueOutboundSize sets the capacity of each peer's outbound packet
+// queue, overriding [WithQueueOutboundSize].
+func WithPeerQueueOutboundSize(size int) Option {
+	return optionFunc(func(config *config) {
+		config.peerQueueOutboundSize = size
+	})
+}
+
+// WithPeerQueueInboundSize sets the capacity of each peer's inbound packet
+// queue, overriding [WithQueueInboundSize].
+func WithPeerQueueInboundSize(size int) Option {
+	return optionFunc(func(config *config) {
+		config.peerQueueInboundSize = size
 	})
 }
 
@@ -170,14 +207,18 @@ func WithQueueHandshakeSize(size int) Option {
 	})
 }
 
-// WithPreallocatedBuffersPerPool sets the maximum number of packet memory
-// pool outstanding items. A value of zero is unlimited. Care must be taken to
-// not set a size that is too small, which can lead to immediate deadlock, or
-// increase the probability of deadlock once packets start flowing.
-// See tailscale/corp#46396. [DefaultPreallocatedBuffersPerPool] is the default.
-func WithPreallocatedBuffersPerPool(size uint32) Option {
+// WithQueueStagedGlobalLimit sets the maximum number of packet container objects
+// outstanding across all staged queues. [DefaultQueueStagedGlobalLimit] is the
+// default. Non-positive values disable it. It counts objects which are
+// long-lived, i.e. objects sitting in queues awaiting handshake. It is not an
+// exact limit, it may temporarily over or undercount. It exists to limit the
+// amount of memory consumed by packets. Packets awaiting handshake will be
+// dropped if limit is exceeded. If limit is greater than zero, and less than
+// the size of an individual peer's staged queue ([WithQueueStagedSize]), it
+// will be silently raised to match.
+func WithQueueStagedGlobalLimit(limit int) Option {
 	return optionFunc(func(config *config) {
-		config.preallocatedBuffersPerPool = size
+		config.queueStagedGlobalLimit = int64(limit)
 	})
 }
 
@@ -194,21 +235,37 @@ type Metrics struct {
 	// MessageInitiationTXAttemptInitial counts non-retry handshake
 	// initiation messages passed to the network send path.
 	MessageInitiationTXAttemptInitial Counter
+	// MessageHybridInitiationTXAttemptInitial counts non-retry hybrid
+	// handshake initiation messages passed to the network send path.
+	MessageHybridInitiationTXAttemptInitial Counter
 	// MessageInitiationTXAttemptRetry counts retry handshake initiation
 	// messages passed to the network send path.
 	MessageInitiationTXAttemptRetry Counter
+	// MessageHybridInitiationTXAttemptRetry counts retry hybrid handshake
+	// initiation messages passed to the network send path.
+	MessageHybridInitiationTXAttemptRetry Counter
 	// MessageResponseTXAttempt counts handshake response messages passed to the
 	// network send path.
 	MessageResponseTXAttempt Counter
+	// MessageHybridResponseTXAttempt counts hybrid handshake response messages passed
+	// to the network send path.
+	MessageHybridResponseTXAttempt Counter
 	// MessageCookieReplyTXAttempt counts cookie reply messages passed to the
 	// network send path.
 	MessageCookieReplyTXAttempt Counter
 	// HandshakeInitiatorCompleted counts symmetric session establishment on the
 	// initiator side.
 	HandshakeInitiatorCompleted Counter
+	// HandshakeHybridInitiatorCompleted counts hybrid symmetric session establishment
+	// on the initiator side.
+	HandshakeHybridInitiatorCompleted Counter
 	// HandshakeResponderCompleted counts responder-side handshake completions,
 	// observed when an authenticated transport packet confirms the new keypair.
 	HandshakeResponderCompleted Counter
+	// HandshakeHybridResponderCompleted counts responder-side hybrid handshake
+	// completions, observed when an authenticated transport packet confirms the
+	// new keypair.
+	HandshakeHybridResponderCompleted Counter
 	// MessageTransportRXDroppedReplay counts inbound transport packets rejected by the
 	// replay filter.
 	MessageTransportRXDroppedReplay Counter
@@ -224,11 +281,20 @@ func (m *Metrics) fillNils() {
 	if m.MessageInitiationTXAttemptInitial == nil {
 		m.MessageInitiationTXAttemptInitial = noopCounter{}
 	}
+	if m.MessageHybridInitiationTXAttemptInitial == nil {
+		m.MessageHybridInitiationTXAttemptInitial = noopCounter{}
+	}
 	if m.MessageInitiationTXAttemptRetry == nil {
 		m.MessageInitiationTXAttemptRetry = noopCounter{}
 	}
+	if m.MessageHybridInitiationTXAttemptRetry == nil {
+		m.MessageHybridInitiationTXAttemptRetry = noopCounter{}
+	}
 	if m.MessageResponseTXAttempt == nil {
 		m.MessageResponseTXAttempt = noopCounter{}
+	}
+	if m.MessageHybridResponseTXAttempt == nil {
+		m.MessageHybridResponseTXAttempt = noopCounter{}
 	}
 	if m.MessageCookieReplyTXAttempt == nil {
 		m.MessageCookieReplyTXAttempt = noopCounter{}
@@ -236,8 +302,14 @@ func (m *Metrics) fillNils() {
 	if m.HandshakeInitiatorCompleted == nil {
 		m.HandshakeInitiatorCompleted = noopCounter{}
 	}
+	if m.HandshakeHybridInitiatorCompleted == nil {
+		m.HandshakeHybridInitiatorCompleted = noopCounter{}
+	}
 	if m.HandshakeResponderCompleted == nil {
 		m.HandshakeResponderCompleted = noopCounter{}
+	}
+	if m.HandshakeHybridResponderCompleted == nil {
+		m.HandshakeHybridResponderCompleted = noopCounter{}
 	}
 	if m.MessageTransportRXDroppedReplay == nil {
 		m.MessageTransportRXDroppedReplay = noopCounter{}
@@ -411,7 +483,7 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 
 	lockedPeers := make([]*Peer, 0, len(device.peers.keyMap))
 	for _, peer := range device.peers.keyMap {
-		peer.handshake.mutex.RLock()
+		peer.handshake.mutex.Lock()
 		lockedPeers = append(lockedPeers, peer)
 	}
 
@@ -420,9 +492,9 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 	publicKey := sk.publicKey()
 	for key, peer := range device.peers.keyMap {
 		if peer.handshake.remoteStatic.Equals(publicKey) {
-			peer.handshake.mutex.RUnlock()
+			peer.handshake.mutex.Unlock()
 			removePeerLocked(device, peer, key)
-			peer.handshake.mutex.RLock()
+			peer.handshake.mutex.Lock()
 		}
 	}
 
@@ -442,7 +514,7 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 	}
 
 	for _, peer := range lockedPeers {
-		peer.handshake.mutex.RUnlock()
+		peer.handshake.mutex.Unlock()
 	}
 	for _, peer := range expiredPeers {
 		peer.ExpireCurrentKeypairs()
@@ -456,11 +528,13 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger, opts ...Opt
 	for _, opt := range opts {
 		opt.apply(&device.config)
 	}
+	device.config.resolve()
 	device.config.metrics.fillNils()
 	device.state.state.Store(uint32(deviceStateDown))
 	device.closed = make(chan struct{})
 	device.log = logger
 	device.net.bind = bind
+	device.net.sendTo = conn.SendToOf(bind)
 	device.tun.device = tunDevice
 	mtu, err := device.tun.device.MTU()
 	if err != nil {
@@ -486,20 +560,19 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger, opts ...Opt
 	device.PopulatePools()
 
 	// create queues
-
 	device.queue.handshake = newHandshakeQueue(device.config.queueHandshakeSize)
-	// Scale to the number of producers
-	device.queue.encryption = newOutboundQueue(
-		device.config.queueOutboundSize * len(device.tun.queues),
-	)
+	device.queue.encryption = newOutboundQueue(device.config.queueOutboundSize)
 	device.queue.decryption = newInboundQueue(device.config.queueInboundSize)
+	if device.config.queueStagedGlobalLimit > 0 {
+		device.config.queueStagedGlobalLimit = max(0, int64(device.config.queueStagedSize), device.config.queueStagedGlobalLimit)
+	}
 
 	// start workers
 
-	cpus := runtime.NumCPU()
+	workers := runtime.GOMAXPROCS(0)
 	device.state.stopping.Wait()
-	device.queue.encryption.wg.Add(cpus) // One for each RoutineHandshake
-	for i := 0; i < cpus; i++ {
+	device.queue.encryption.wg.Add(workers) // One for each RoutineHandshake
+	for i := 0; i < workers; i++ {
 		go device.RoutineEncryption(i + 1)
 		go device.RoutineDecryption(i + 1)
 		go device.RoutineHandshake(i + 1)
@@ -553,7 +626,7 @@ func (device *Device) LookupPeer(pk NoisePublicKey) *Peer {
 		return nil
 	}
 
-	p, err := device.NewPeer(pk)
+	p, err := device.newPeer(pk, conf, true /* deleteOnIdle */)
 	if err != nil {
 		if errors.Is(err, errAddExistingPeer) {
 			device.peers.RLock()
@@ -562,14 +635,6 @@ func (device *Device) LookupPeer(pk NoisePublicKey) *Peer {
 		}
 		device.log.Errorf("Failed to create peer: %v", err)
 		return nil
-	}
-	p.SetPresharedKey(conf.PresharedKey)
-	p.SetAllowedIPs(conf.AllowedIPs)
-	p.deleteOnIdle = true
-	if conf.Endpoint != nil {
-		p.endpoint.Lock()
-		p.endpoint.val = conf.Endpoint
-		p.endpoint.Unlock()
 	}
 	p.Start()
 	return p
@@ -638,6 +703,16 @@ type NewPeerConfig struct {
 	// PresharedKey is the initial pre-shared key for the new peer. The zero
 	// value disables the optional WireGuard pre-shared-key layer.
 	PresharedKey NoisePresharedKey
+
+	// Hybrid is whether to use a hybrid post-quantum handshake with this peer.
+	//
+	// The hybrid handshake grants forward secrecy to session traffic in the face of a
+	// quantum attacker. That is, an attacker who records traffic today and acquires a quantum
+	// computer in the future will not be able to decrypt the recorded traffic.
+	//
+	// Both peers must agree on this setting to communicate, there is no fallback between
+	// handshake types.
+	Hybrid bool
 
 	// Endpoint, if non-nil, sets the endpoint for newly created peers.
 	// The endpoint is pinned for the lifetime of the peer.
@@ -944,8 +1019,9 @@ func (device *Device) BindUpdate() error {
 	device.queue.decryption.wg.Add(len(recvFns)) // each RoutineReceiveIncoming goroutine writes to device.queue.decryption
 	device.queue.handshake.wg.Add(len(recvFns))  // each RoutineReceiveIncoming goroutine writes to device.queue.handshake
 	batchSize := netc.bind.BatchSize()
-	for _, fn := range recvFns {
-		go device.RoutineReceiveIncoming(batchSize, fn)
+	names := conn.NamesOf(netc.bind, recvFns)
+	for i, fn := range recvFns {
+		go device.RoutineReceiveIncoming(names[i], batchSize, fn)
 	}
 
 	device.log.Verbosef("UDP bind has been updated")

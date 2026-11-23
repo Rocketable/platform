@@ -140,6 +140,7 @@ type userspaceEngine struct {
 	closing        bool             // Close was called (even if we're still closing)
 	statusCallback StatusCallback
 	endpoints      []tailcfg.Endpoint
+	lastStatusAsOf time.Time                           // AsOf of the last status from getStatus
 	pendOpen       map[flowtrackTuple]*pendingOpenFlow // see pendopen.go
 
 	// pongCallback is the map of response handlers waiting for disco or TSMP
@@ -430,6 +431,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		EventBus:       e.eventBus,
 		Logf:           logf,
 		Port:           conf.ListenPort,
+		UDPSockets:     envknob.MaxQueues(), // in sync with tun queues
 		EndpointsFunc:  endpointsFn,
 		DERPActiveFunc: e.RequestStatus,
 		IdleFunc:       e.tundev.IdleDuration,
@@ -606,7 +608,6 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 
 	eventbus.SubscribeFunc(ec, func(update events.DiscoKeyAdvertisement) {
-		e.logf("[v1] wgengine: got TSMP disco key advertisement from %v via eventbus", update.Src)
 		if e.magicConn == nil {
 			e.logf("wgengine: no magicConn")
 			return
@@ -633,7 +634,7 @@ func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper, gro *gro.GRO) (filter.
 		header := p.ICMP4Header()
 		header.ToResponse()
 		outp := packet.Generate(&header, p.Payload())
-		t.InjectOutbound(outp)
+		t.TryInjectOutbound(outp)
 		// We already responded to it, but it's not an error.
 		// Proceed with regular delivery. (Since this code is only
 		// used in fake mode, regular delivery just means throwing
@@ -713,6 +714,7 @@ func (e *userspaceEngine) SyncDevicePeer(k key.NodePublic) {
 	if peer, ok := e.wgdev.LookupActivePeer(k.Raw32()); ok {
 		peer.SetPresharedKey(conf.PresharedKey)
 		peer.SetAllowedIPs(conf.AllowedIPs)
+		peer.SetHybridHandshake(conf.Hybrid)
 	}
 }
 
@@ -1043,9 +1045,17 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	// (See comment in userspaceEngine's declaration.)
 	derpConns := e.magicConn.DERPs()
 
+	// Stamp AsOf when endpoints are read, strictly increasing, so the
+	// status consumer's AsOf ordering check discards any status carrying
+	// stale endpoints, even with coarse clocks.
 	e.mu.Lock()
 	closing := e.closing
 	localAddrs := slices.Clone(e.endpoints)
+	asOf := time.Now()
+	if !asOf.After(e.lastStatusAsOf) {
+		asOf = e.lastStatusAsOf.Add(1)
+	}
+	e.lastStatusAsOf = asOf
 	e.mu.Unlock()
 
 	if closing {
@@ -1071,7 +1081,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	}
 
 	return &Status{
-		AsOf:       time.Now(),
+		AsOf:       asOf,
 		LocalAddrs: localAddrs,
 		Peers:      peers,
 		DERPs:      derpConns,

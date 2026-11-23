@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -425,14 +426,6 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 	}
 
 	return nil
-}
-
-// ServeConfig provides a view of the current serve mappings.
-// If serving is not configured, the returned view is not Valid.
-func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.serveConfig
 }
 
 // ServeConfigETag provides a view of the current serve mappings and an ETag,
@@ -842,11 +835,16 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		if host, _, err := net.SplitHostPort(hostname); err == nil {
 			hostname = host
 		}
+		// DNS names are case-insensitive, and a trailing dot marks a name
+		// as fully qualified. Serve config keys are lowercase with no
+		// trailing dot, so normalize the Host header to match.
+		hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
 		if !strings.HasSuffix(hostname, tcd) {
 			hostname += tcd
 		}
 	} else {
-		hostname = r.TLS.ServerName
+		// TLS rejects a trailing dot in SNI but does not lowercase it.
+		hostname = strings.ToLower(r.TLS.ServerName)
 	}
 
 	sctx, ok := serveHTTPContextKey.ValueOk(r.Context())
@@ -1026,6 +1024,13 @@ func (rp *reverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p.Transport = rp.getTransport()
 	}
+	// Let the Transport keep reading the request body after the response
+	// starts. Otherwise the HTTP/1 server closes the body at that point and
+	// the Transport closes its backend connection under the response it is
+	// copying (golang/go#40747). The HTTP/2 server always allows this.
+	if err := http.NewResponseController(w).EnableFullDuplex(); err != nil {
+		rp.logf("serve: enable full duplex: %v", err)
+	}
 	p.ServeHTTP(w, r)
 }
 
@@ -1153,11 +1158,13 @@ func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
 
 func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	// Clear any incoming values squatting in the headers.
-	r.Out.Header.Del("Tailscale-User-Login")
-	r.Out.Header.Del("Tailscale-User-Name")
-	r.Out.Header.Del("Tailscale-User-Profile-Pic")
-	r.Out.Header.Del("Tailscale-Funnel-Request")
-	r.Out.Header.Del("Tailscale-Headers-Info")
+	delHeaderVariants(r.Out.Header,
+		"Tailscale-User-Login",
+		"Tailscale-User-Name",
+		"Tailscale-User-Profile-Pic",
+		"Tailscale-Funnel-Request",
+		"Tailscale-Headers-Info",
+	)
 
 	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
 	if !ok {
@@ -1182,6 +1189,25 @@ func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
 	r.Out.Header.Set("Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers")
 }
 
+// delHeaderVariants deletes each header in 'names' from 'h', along with any
+// header whose name matches case-insensitively after replacing '_' with '-'.
+//
+// Any backends that map headers to CGI-style variables (e.g. PHP;
+// HTTP_TAILSCALE_USER_LOGIN) would treat "Tailscale_User_Login" the same as
+// "Tailscale-User-Login". If we just used a plain [http.Header.Del], clients
+// could spoof the headers we set.
+func delHeaderVariants(h http.Header, names ...string) {
+	for k := range h {
+		norm := strings.ReplaceAll(k, "_", "-")
+		for _, name := range names {
+			if strings.EqualFold(norm, name) {
+				delete(h, k)
+				break
+			}
+		}
+	}
+}
+
 // encTailscaleHeaderValue cleans or encodes as necessary v, to be suitable in
 // an HTTP header value. See
 // https://github.com/tailscale/tailscale/issues/11603.
@@ -1199,7 +1225,7 @@ func encTailscaleHeaderValue(v string) string {
 
 func (b *LocalBackend) addAppCapabilitiesHeader(r *httputil.ProxyRequest) error {
 	const appCapabilitiesHeaderName = "Tailscale-App-Capabilities"
-	r.Out.Header.Del(appCapabilitiesHeaderName)
+	delHeaderVariants(r.Out.Header, appCapabilitiesHeaderName)
 
 	c, ok := serveHTTPContextKey.ValueOk(r.Out.Context())
 	if !ok || c.Funnel != nil {
@@ -1289,7 +1315,20 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Request, fileOrDir, mountPoint string) {
-	fi, err := os.Stat(fileOrDir)
+	// The directory that contains fileOrDir, and fileOrDir itself if it's a
+	// directory, may be writable by users who can't configure Serve.
+	// os.Stat, os.Open and http.Dir all follow symlinks, so such a user could
+	// make tailscaled serve any file it can read. Instead, resolve fileOrDir
+	// through an os.Root of its parent directory, and serve a directory
+	// through an os.Root of its own. An os.Root refuses symlinks whose target
+	// leaves the root, and absolute symlinks, but still follows relative
+	// symlinks that stay inside it.
+	parent, name, err := openParentRoot(fileOrDir)
+	var fi os.FileInfo
+	if err == nil {
+		defer parent.Close()
+		fi, err = parent.Stat(name)
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.NotFound(w, r)
@@ -1304,7 +1343,7 @@ func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Reque
 			http.NotFound(w, r)
 			return
 		}
-		f, err := os.Open(fileOrDir)
+		f, err := parent.Open(name)
 		if err != nil {
 			b.logf("error opening %s: %v", fileOrDir, err)
 			http.Error(w, "an error occurred reading the file or directory", 500)
@@ -1323,27 +1362,107 @@ func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var fs http.Handler = http.FileServer(http.Dir(fileOrDir))
+	root, err := parent.OpenRoot(name)
+	if err != nil {
+		b.logf("error opening %s: %v", fileOrDir, err)
+		http.Error(w, "an error occurred reading the file or directory", 500)
+		return
+	}
+	defer root.Close()
+
+	var fs http.Handler = http.FileServer(confinedDir{root})
 	if mountPoint != "/" {
 		fs = http.StripPrefix(strings.TrimSuffix(mountPoint, "/"), fs)
 	}
 	fs.ServeHTTP(&fixLocationHeaderResponseWriter{
 		ResponseWriter: w,
 		mountPoint:     mountPoint,
+		reqPath:        r.URL.Path,
 	}, r)
 }
 
+// openParentRoot opens the directory that contains p as an os.Root, and
+// returns it with the name of p's last element inside it. A filesystem root
+// has no parent, so for one it returns an os.Root of p itself, and ".".
+func openParentRoot(p string) (parent *os.Root, name string, err error) {
+	p = filepath.Clean(p)
+	dir := filepath.Dir(p)
+	name = filepath.Base(p)
+	if dir == p {
+		name = "."
+	}
+	parent, err = os.OpenRoot(dir)
+	return parent, name, err
+}
+
+// confinedDir is an http.FileSystem like http.Dir, except that it opens files
+// through an os.Root, so a symlink whose target leaves the root, or an
+// absolute symlink, is refused instead of followed.
+//
+// It isn't http.FS(root.FS()) because that would report a refused symlink as
+// a server error rather than as not found.
+type confinedDir struct {
+	root *os.Root
+}
+
+// Open implements http.FileSystem.
+func (d confinedDir) Open(name string) (http.File, error) {
+	// Turn the name into a path relative to the root the same way http.Dir
+	// does, including its check for names that aren't valid local paths.
+	rel := path.Clean("/" + name)[1:]
+	if rel == "" {
+		rel = "."
+	}
+	rel, err := filepath.Localize(rel)
+	if err != nil {
+		// http.Dir reports these as not found, too.
+		return nil, os.ErrNotExist
+	}
+	f, err := d.root.Open(rel)
+	if err != nil {
+		// os.Root reports a path that leaves the root with an error that is
+		// neither ErrNotExist nor ErrPermission. Report that, and any other
+		// unexpected error, as not found, so a refused path is neither
+		// served nor confirmed to exist.
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, os.ErrPermission) {
+			return nil, os.ErrNotExist
+		}
+		return nil, err
+	}
+	return f, nil
+}
+
 // fixLocationHeaderResponseWriter is an http.ResponseWriter wrapper that, upon
-// flushing HTTP headers, prefixes any Location header with the mount point.
+// flushing HTTP headers, rewrites any Location header to be under the mount
+// point. http.FileServer sends redirects relative to the (prefix-stripped)
+// request URL, so a relative Location is resolved against the original request
+// path.
 type fixLocationHeaderResponseWriter struct {
 	http.ResponseWriter
 	mountPoint string
+	reqPath    string    // original request path, before the mount point is stripped
 	fixOnce    sync.Once // guards call to fix
 }
 
 func (w *fixLocationHeaderResponseWriter) fix() {
 	h := w.ResponseWriter.Header()
 	if v := h.Get("Location"); v != "" {
+		if ref, err := url.Parse(v); err == nil && ref.Scheme == "" && ref.Host == "" && !strings.HasPrefix(v, "/") && strings.HasPrefix(w.reqPath, w.mountPoint) {
+			// Resolve against the original request path, which keeps any
+			// parent directories below the mount point and removes dot
+			// segments. The query string, if any, is carried along.
+			u := (&url.URL{Path: w.reqPath}).ResolveReference(ref)
+			loc := u.EscapedPath()
+			if u.RawQuery != "" {
+				loc += "?" + u.RawQuery
+			}
+			// Collapse leading slashes so a request path like "//foo"
+			// can't produce a protocol-relative Location.
+			h.Set("Location", "/"+strings.TrimLeft(loc, "/"))
+			return
+		}
+		// Not expected from http.FileServer, which only sends relative
+		// Locations; kept as a safety net.
 		h.Set("Location", w.mountPoint+v)
 	}
 }
@@ -1418,14 +1537,19 @@ func (b *LocalBackend) getTLSServeCertForPort(port uint16, forVIPService tailcfg
 		if cert, ok := b.getACMETLSALPNCert(hi); ok {
 			return cert, nil
 		}
-		_, ok := b.webServerConfig(hi.ServerName, forVIPService, port)
+		// Serve config keys and cert domains are lowercase; SNI is not
+		// guaranteed to be. The ACME challenge lookup above keeps the
+		// name as sent, since it is matched against the name the ACME
+		// server dials.
+		name := strings.ToLower(hi.ServerName)
+		_, ok := b.webServerConfig(name, forVIPService, port)
 		if !ok {
 			return nil, errors.New("no webserver configured for name/port")
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		pair, err := b.GetCertPEM(ctx, hi.ServerName)
+		pair, err := b.GetCertPEM(ctx, name)
 		if err != nil {
 			return nil, err
 		}

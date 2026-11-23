@@ -509,7 +509,7 @@ github.com/tailscale/peercred
 # github.com/tailscale/web-client-prebuilt v0.0.0-20260917222731-e0ed2d0d0fea
 ## explicit; go 1.21
 github.com/tailscale/web-client-prebuilt
-# github.com/tailscale/wireguard-go v0.0.0-20261106233718-9e0ab45c16ca
+# github.com/tailscale/wireguard-go v0.0.0-20261121000637-a8c4fbf26d6c
 ## explicit; go 1.26.0
 github.com/tailscale/wireguard-go/conn
 github.com/tailscale/wireguard-go/conn/winrio
@@ -848,7 +848,7 @@ google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# gvisor.dev/gvisor v0.0.0-20261123184027-c5a0a0c131d3
+# gvisor.dev/gvisor v0.0.0-20261123204041-0d93122549be
 ## explicit; go 1.27.3
 gvisor.dev/gvisor/pkg/atomicbitops
 gvisor.dev/gvisor/pkg/bits
@@ -903,7 +903,7 @@ mvdan.cc/sh/v3/syntax
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
-# tailscale.com v1.104.7
+# tailscale.com v1.106.0
 ## explicit; go 1.27.4
 tailscale.com
 tailscale.com/appc
@@ -936,6 +936,7 @@ tailscale.com/feature/condregister/netlog
 tailscale.com/feature/condregister/oauthkey
 tailscale.com/feature/condregister/portmapper
 tailscale.com/feature/condregister/useproxy
+tailscale.com/feature/exitnodehealth
 tailscale.com/feature/favorites/pintype
 tailscale.com/feature/netlog
 tailscale.com/feature/oauthkey
@@ -973,6 +974,7 @@ tailscale.com/net/dns/resolvconffile
 tailscale.com/net/dns/resolver
 tailscale.com/net/dnscache
 tailscale.com/net/dnsfallback
+tailscale.com/net/dnsfallback/fallbacknames
 tailscale.com/net/flowtrack
 tailscale.com/net/ipset
 tailscale.com/net/memnet
@@ -993,6 +995,7 @@ tailscale.com/net/portmapper/portmappertype
 tailscale.com/net/proxymux
 tailscale.com/net/routecheck
 tailscale.com/net/routecheck/peernode
+tailscale.com/net/routelimits
 tailscale.com/net/routemanager
 tailscale.com/net/sockopts
 tailscale.com/net/socks5
@@ -1055,6 +1058,7 @@ tailscale.com/types/result
 tailscale.com/types/structs
 tailscale.com/types/tkatype
 tailscale.com/types/views
+tailscale.com/util/authretry
 tailscale.com/util/backoff
 tailscale.com/util/bufiox
 tailscale.com/util/checkchange
@@ -1077,6 +1081,7 @@ tailscale.com/util/hashx
 tailscale.com/util/httpbody
 tailscale.com/util/httpm
 tailscale.com/util/lineiter
+tailscale.com/util/lru
 tailscale.com/util/mak
 tailscale.com/util/must
 tailscale.com/util/nocasemaps

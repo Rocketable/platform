@@ -49,6 +49,10 @@ type message interface {
 
 // osMon is the interface that each operating system-specific
 // implementation of the link monitor must implement.
+//
+// Lock order: Monitor.mu is acquired after any osMon lock. An osMon
+// may acquire Monitor.mu (e.g. winMon calls Monitor.isActive from OS
+// callbacks); Monitor must not call osMon methods while holding it.
 type osMon interface {
 	Close() error
 
@@ -72,7 +76,7 @@ type Monitor struct {
 	b       *eventbus.Client
 	changed *eventbus.Publisher[ChangeDelta]
 
-	om     osMon         // nil means not supported on this platform
+	om     osMon         // nil means not supported on this platform; its methods must not be called with mu held
 	change chan bool     // send false to wake poller, true to also force ChangeDeltas be sent
 	stop   chan struct{} // closed on Stop
 	static bool          // static Monitor that doesn't actually monitor
@@ -403,10 +407,14 @@ func New(bus *eventbus.Bus, logf logger.Logf) (*Monitor, error) {
 }
 
 // NewStatic returns a Monitor that's a one-time snapshot of the network state
-// but doesn't actually monitor for changes. It should only be used in tests
-// and situations like cleanups or short-lived CLI programs.
+// but doesn't actually monitor for changes. It should only be used in tests,
+// situations like cleanups or short-lived CLI programs, and userspace-only
+// programs that don't need to react to network changes.
+//
+// It doesn't fail if the network state can't be read, such as in sandboxes
+// without netlink access. The snapshot is then empty.
 func NewStatic() *Monitor {
-	m := &Monitor{static: true}
+	m := &Monitor{static: true, ifState: &State{}} // callers expect non-nil
 	if st, err := m.interfaceStateUncached(); err == nil {
 		m.ifState = st
 	}
@@ -522,14 +530,14 @@ func (m *Monitor) Close() error {
 	if m.wallTimer != nil {
 		m.wallTimer.Stop()
 	}
+	started := m.started
+	m.mu.Unlock()
 
+	// Close the OS monitor without holding m.mu; see the osMon lock order.
 	var err error
 	if m.om != nil {
 		err = m.om.Close()
 	}
-
-	started := m.started
-	m.mu.Unlock()
 
 	if started {
 		m.goroutines.Wait()

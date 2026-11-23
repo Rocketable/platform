@@ -83,6 +83,7 @@ func (elem *QueueOutboundElement) clearPointers() {
 // SendKeepalive queues a keepalive if no packets are queued for
 // peer.
 func (peer *Peer) SendKeepalive() {
+	var stagedDelta int
 	if len(peer.queue.staged) == 0 {
 		elem := peer.device.GetOutboundElement()
 		elem.buffer = peer.device.getSmallPacketBuf()
@@ -92,6 +93,7 @@ func (peer *Peer) SendKeepalive() {
 		if queued := peer.doIfRunning(func() {
 			select {
 			case peer.queue.staged <- elemsContainer:
+				stagedDelta++
 				peer.device.log.Verbosef("%v - Sending keepalive packet", peer)
 			default:
 				peer.device.PutOutboundElement(elem)
@@ -102,7 +104,7 @@ func (peer *Peer) SendKeepalive() {
 			peer.device.PutOutboundElementsContainer(elemsContainer)
 		}
 	}
-	peer.SendStagedPackets()
+	peer.SendStagedPackets(stagedDelta)
 }
 
 // SendPriorityMessage invokes the [PeerPriorityMessageFunc] callback if one is
@@ -148,6 +150,8 @@ func (peer *Peer) SendPriorityMessage() {
 	elem.packet = buf.slab[offset : offset+n]
 	elem.plaintextOffset = offset
 	elem.peer = peer
+	peer.queue.nonceMu.Lock()
+	defer peer.queue.nonceMu.Unlock()
 	elem.nonce = keypair.sendNonce.Add(1) - 1
 	if elem.nonce >= RejectAfterMessages {
 		keypair.sendNonce.Store(RejectAfterMessages)
@@ -185,15 +189,29 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	peer.handshake.lastSentHandshake = time.Now()
 	peer.handshake.mutex.Unlock()
 
-	peer.device.log.Verbosef("%v - Sending handshake initiation", peer)
-
 	msg, err := peer.device.CreateMessageInitiation(peer)
 	if err != nil {
-		peer.device.log.Errorf("%v - Failed to create initiation message: %v", peer, err)
+		if err != errPeerStopped {
+			peer.device.log.Errorf("%v - Failed to create initiation message: %v", peer, err)
+		}
 		return err
 	}
+	handshakeType := ""
+	if msg.HasKEM {
+		if isRetry {
+			handshakeType = " (hybrid, retry)"
+		} else {
+			handshakeType = " (hybrid)"
+		}
+		msg.IsRetry = isRetry
+	}
+	peer.device.log.Verbosef("%v - Sending handshake initiation%s", peer, handshakeType)
 
-	buf := make([]byte, MessageEncapsulatingTransportSize+MessageInitiationSize)
+	sz := MessageInitiationSize
+	if msg.HasKEM {
+		sz = MessageHybridInitiationSize
+	}
+	buf := make([]byte, MessageEncapsulatingTransportSize+sz)
 	packet := buf[MessageEncapsulatingTransportSize:]
 	_ = msg.marshal(packet)
 	peer.cookieGenerator.AddMacs(packet)
@@ -202,9 +220,17 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	peer.timersAnyAuthenticatedPacketSent()
 
 	if isRetry {
-		peer.device.config.metrics.MessageInitiationTXAttemptRetry.Add(1)
+		if msg.HasKEM {
+			peer.device.config.metrics.MessageHybridInitiationTXAttemptRetry.Add(1)
+		} else {
+			peer.device.config.metrics.MessageInitiationTXAttemptRetry.Add(1)
+		}
 	} else {
-		peer.device.config.metrics.MessageInitiationTXAttemptInitial.Add(1)
+		if msg.HasKEM {
+			peer.device.config.metrics.MessageHybridInitiationTXAttemptInitial.Add(1)
+		} else {
+			peer.device.config.metrics.MessageInitiationTXAttemptInitial.Add(1)
+		}
 	}
 	err = peer.SendBuffers([][]byte{buf})
 	if err != nil {
@@ -215,20 +241,34 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	return err
 }
 
-func (peer *Peer) SendHandshakeResponse() error {
+func (peer *Peer) SendHandshakeResponse(isRetry bool) error {
 	peer.handshake.mutex.Lock()
 	peer.handshake.lastSentHandshake = time.Now()
 	peer.handshake.mutex.Unlock()
 
-	peer.device.log.Verbosef("%v - Sending handshake response", peer)
-
 	response, err := peer.device.CreateMessageResponse(peer)
 	if err != nil {
-		peer.device.log.Errorf("%v - Failed to create response message: %v", peer, err)
+		if err != errPeerStopped {
+			peer.device.log.Errorf("%v - Failed to create response message: %v", peer, err)
+		}
 		return err
 	}
+	handshakeType := ""
+	if response.HasKEM {
+		if isRetry {
+			handshakeType = " (hybrid, retry)"
+		} else {
+			handshakeType = " (hybrid)"
+		}
+		response.IsRetry = isRetry
+	}
+	peer.device.log.Verbosef("%v - Sending handshake response%s", peer, handshakeType)
 
-	buf := make([]byte, MessageEncapsulatingTransportSize+MessageResponseSize)
+	sz := MessageResponseSize
+	if response.HasKEM {
+		sz = MessageHybridResponseSize
+	}
+	buf := make([]byte, MessageEncapsulatingTransportSize+sz)
 	packet := buf[MessageEncapsulatingTransportSize:]
 	_ = response.marshal(packet)
 	peer.cookieGenerator.AddMacs(packet)
@@ -243,7 +283,11 @@ func (peer *Peer) SendHandshakeResponse() error {
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
 
-	peer.device.config.metrics.MessageResponseTXAttempt.Add(1)
+	if response.HasKEM {
+		peer.device.config.metrics.MessageHybridResponseTXAttempt.Add(1)
+	} else {
+		peer.device.config.metrics.MessageResponseTXAttempt.Add(1)
+	}
 	// TODO: allocation could be avoided
 	err = peer.SendBuffers([][]byte{buf})
 	if err != nil {
@@ -267,7 +311,7 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 	_ = reply.marshal(packet)
 	device.config.metrics.MessageCookieReplyTXAttempt.Add(1)
 	// TODO: allocation could be avoided
-	device.net.bind.Send([][]byte{buf}, initiatingElem.packetMeta.Endpoint, MessageEncapsulatingTransportSize)
+	device.net.sendTo(0, [][]byte{buf}, initiatingElem.packetMeta.Endpoint, MessageEncapsulatingTransportSize)
 
 	return nil
 }
@@ -429,8 +473,8 @@ func (device *Device) RoutineReadFromTUN(id int, queue tun.Reader) {
 		}
 
 		for peer, elemsForPeer := range elemsByPeer {
-			peer.StagePackets(elemsForPeer)
-			peer.SendStagedPackets()
+			stagedDelta := peer.StagePackets(elemsForPeer)
+			peer.SendStagedPackets(stagedDelta)
 			delete(elemsByPeer, peer)
 		}
 
@@ -453,16 +497,27 @@ func (device *Device) RoutineReadFromTUN(id int, queue tun.Reader) {
 	}
 }
 
-func (peer *Peer) StagePackets(elems *QueueOutboundElementsContainer) {
+// StagePackets attempts to enqueue elements into the peer's staging queue.
+// If the queue is full, its oldest member is dropped to make room.
+// If the peer is not running, the data is quietly dropped.
+//
+// It returns a delta for len(peer.queue.staged) operations, which must be
+// passed in a subsequent call to [Peer.SendStagedPackets], where global stage
+// queue accounting changes are committed.
+//
+// [Peer.nonceMu] relies on this function being non-blocking.
+func (peer *Peer) StagePackets(elems *QueueOutboundElementsContainer) (stagedDelta int) {
 	if running := peer.doIfRunning(func() {
 		for {
 			select {
 			case peer.queue.staged <- elems:
+				stagedDelta++
 				return
 			default:
 			}
 			select {
 			case tooOld := <-peer.queue.staged:
+				stagedDelta--
 				for _, elem := range tooOld.elems {
 					peer.device.PutOutboundElement(elem)
 				}
@@ -476,17 +531,48 @@ func (peer *Peer) StagePackets(elems *QueueOutboundElementsContainer) {
 		}
 		peer.device.PutOutboundElementsContainer(elems)
 	}
+	return stagedDelta
 }
 
-// SendStagedPackets sends any staged packets to Peer.
-func (peer *Peer) SendStagedPackets() {
+// SendStagedPackets sends any staged packets to Peer, if a valid keypair and
+// nonce are available.
+//
+// It accepts a delta for preceding len(peer.queue.staged) operations. Said
+// delta gets combined with what it performs, and committed to device-wide stage
+// queue accounting, if a global staged queue limit is configured.
+//
+// SendStagedPackets accepts stagedDelta in order to intentionally delay
+// device-wide stage queue accounting commit until the end of this func. This
+// strategy limits staged queue accounting to long-lived elements, i.e. those
+// awaiting a future handshake, and does not include elements that stage and are
+// immediately transmitted.
+func (peer *Peer) SendStagedPackets(stagedDelta int) {
+	defer func() {
+		if peer.device.config.queueStagedGlobalLimit > 0 {
+			stagedCount := peer.device.queue.stagedCount.Add(int64(stagedDelta))
+			if stagedCount > peer.device.config.queueStagedGlobalLimit {
+				// TODO(jwhited): count when this happens
+				peer.FlushStagedPackets(int(stagedCount - peer.device.config.queueStagedGlobalLimit))
+			}
+		}
+	}()
+
+	// SendStagedPackets may be called concurrently. Serialize nonce assignment
+	// with outbound enqueue so packets are transmitted in nonce order; excessive
+	// reordering can cause the receiver's replay filter to drop packets.
+	//
+	// Unlock explicitly before each return to avoid holding nonceMu across
+	// SendHandshakeInitiation, whose expensive work would stall TUN readers.
+	peer.queue.nonceMu.Lock()
 top:
 	if len(peer.queue.staged) == 0 || !peer.device.isUp() {
+		peer.queue.nonceMu.Unlock()
 		return
 	}
 
 	keypair := peer.keypairs.Current()
 	if keypair == nil || keypair.sendNonce.Load() >= RejectAfterMessages || time.Since(keypair.created) >= RejectAfterTime {
+		peer.queue.nonceMu.Unlock()
 		peer.SendHandshakeInitiation(false)
 		return
 	}
@@ -495,6 +581,7 @@ top:
 		var elemsContainerOOO *QueueOutboundElementsContainer
 		select {
 		case elemsContainer := <-peer.queue.staged:
+			stagedDelta--
 			i := 0
 			for _, elem := range elemsContainer.elems {
 				elem.peer = peer
@@ -516,7 +603,7 @@ top:
 			elemsContainer.elems = elemsContainer.elems[:i]
 
 			if elemsContainerOOO != nil {
-				peer.StagePackets(elemsContainerOOO) // XXX: Out of order, but we can't front-load go chans
+				stagedDelta += peer.StagePackets(elemsContainerOOO) // XXX: Out of order, but we can't front-load go chans
 			}
 
 			if len(elemsContainer.elems) == 0 {
@@ -530,15 +617,26 @@ top:
 				goto top
 			}
 		default:
+			peer.queue.nonceMu.Unlock()
 			return
 		}
 	}
 }
 
-func (peer *Peer) FlushStagedPackets() {
+// FlushStagedPackets drains elements from [Peer.queue.staged] up to limit. If
+// limit is zero, FlushStagedPackets drains all elements.
+func (peer *Peer) FlushStagedPackets(limit int) {
+	var flushed int
+	defer func() {
+		peer.device.queue.stagedCount.Add(-(int64(flushed)))
+	}()
 	for {
+		if limit > 0 && flushed == limit {
+			return
+		}
 		select {
 		case elemsContainer := <-peer.queue.staged:
+			flushed++
 			for _, elem := range elemsContainer.elems {
 				peer.device.PutOutboundElement(elem)
 			}
