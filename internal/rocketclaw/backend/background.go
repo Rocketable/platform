@@ -140,10 +140,11 @@ type backgroundRegistry struct {
 	mu       sync.Mutex
 	runs     map[backgroundKey]*backgroundRun
 	finished chan struct{}
+	stopping chan struct{}
 }
 
 func newBackgroundRegistry(store *SessionService, notes backgroundNotes, log *slog.Logger) *backgroundRegistry {
-	return &backgroundRegistry{store: store, notes: notes, log: log, runnerID: rand.Text(), runs: map[backgroundKey]*backgroundRun{}, finished: make(chan struct{})}
+	return &backgroundRegistry{store: store, notes: notes, log: log, runnerID: rand.Text(), runs: map[backgroundKey]*backgroundRun{}, finished: make(chan struct{}), stopping: make(chan struct{})}
 }
 
 type turnRoot struct {
@@ -316,15 +317,15 @@ func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *b
 	}
 
 	finished, err := r.store.finishBackgroundJob(context.WithoutCancel(ctx), &end)
-	for attempt := 1; err != nil && attempt < 3; attempt++ {
-		time.Sleep(time.Duration(attempt) * 100 * time.Millisecond)
+	for wait := 100 * time.Millisecond; err != nil; wait = min(2*wait, time.Minute) {
+		select {
+		case <-r.stopping:
+			r.log.Error("finish background job", "conversation_id", key.conversationID, "job_id", key.jobID, "error", err)
+			return
+		case <-time.After(wait):
+		}
 
 		finished, err = r.store.finishBackgroundJob(context.WithoutCancel(ctx), &end)
-	}
-
-	if err != nil {
-		r.log.Error("finish background job", "conversation_id", key.conversationID, "job_id", key.jobID, "error", err)
-		return
 	}
 
 	if finished && end.noteState == notePending {
@@ -668,6 +669,8 @@ func (r *backgroundRegistry) abandon(conversationID string) {
 
 func (r *backgroundRegistry) shutdown() {
 	r.mu.Lock()
+	close(r.stopping)
+
 	for _, run := range r.runs {
 		if !run.attached {
 			run.cancel(errBackgroundAbandoned)
