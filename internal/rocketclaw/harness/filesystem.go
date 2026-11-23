@@ -854,18 +854,13 @@ func (sfs *sandboxedFileSystem) allowedRipgrepFiles(ctx context.Context, hostRoo
 		return nil, errText
 	}
 
-	listed := strings.Split(outputText, "\n")
+	return sfs.filterRipgrepFiles(hostRoot, strings.Split(outputText, "\n")), errText
+}
 
-	allowed := listed[:0]
-	for _, file := range listed {
-		if sfs.deniedPath(filepath.Join(hostRoot, file)) != "" {
-			continue
-		}
-
-		allowed = append(allowed, file)
-	}
-
-	return allowed, errText
+func (sfs *sandboxedFileSystem) filterRipgrepFiles(hostRoot string, listed []string) []string {
+	return slices.DeleteFunc(listed, func(file string) bool {
+		return sfs.deniedPath(filepath.Join(hostRoot, file)) != ""
+	})
 }
 
 func ripgrep(ctx context.Context, hostRoot string, args ...string) (stdout []byte, errText string) {

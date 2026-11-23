@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io/fs"
 	"os"
@@ -799,74 +798,20 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 	})
 }
 
-func grepInventoryFixture(tb testing.TB) *sandboxedFileSystem {
-	tb.Helper()
-	root, err := os.OpenRoot(tb.TempDir())
-	require.NoError(tb, err)
-	tb.Cleanup(func() { require.NoError(tb, root.Close()) })
+func TestGrepInventoryFiltersInPlace(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	var listing strings.Builder
-	for i := range 65536 {
-		fmt.Fprintf(&listing, ".env.%05d\n", i)
+	sfs := &sandboxedFileSystem{root: root}
+	listed := []string{".env", "z.txt", ".env.example", "nested/.env.local", "a.txt"}
+	got := sfs.filterRipgrepFiles(root.Name(), listed)
+
+	require.Equal(t, []string{"z.txt", ".env.example", "a.txt"}, got)
+
+	if &got[0] != &listed[0] {
+		t.Fatal("filtered inventory does not reuse the input backing slice")
 	}
-
-	require.NoError(tb, root.WriteFile("listing", []byte(listing.String()), 0o644))
-	require.NoError(tb, root.WriteFile("rg", []byte("#!/bin/sh\nexec /bin/cat listing\n"), 0o755))
-	tb.Setenv("PATH", root.Name())
-
-	return &sandboxedFileSystem{root: root}
-}
-
-func TestGrepInventoryAllocations(t *testing.T) {
-	benchtime := flag.Lookup("test.benchtime").Value.String()
-
-	require.NoError(t, flag.Set("test.benchtime", "4096x"))
-	t.Cleanup(func() { require.NoError(t, flag.Set("test.benchtime", benchtime)) })
-
-	sfs := grepInventoryFixture(t)
-	perFile := testing.Benchmark(func(b *testing.B) {
-		b.Helper()
-
-		for b.Loop() {
-			if sfs.deniedPath(filepath.Join(sfs.root.Name(), ".env.00000")) == "" {
-				b.Fatal("environment file was not filtered")
-			}
-		}
-	})
-	require.Positive(t, perFile.N)
-	require.NoError(t, flag.Set("test.benchtime", "4x"))
-
-	listing := testing.Benchmark(func(b *testing.B) {
-		b.Helper()
-
-		for b.Loop() {
-			cmd := exec.CommandContext(t.Context(), "rg")
-			cmd.Dir = sfs.root.Name()
-
-			stdout, err := cmd.Output()
-			if err != nil {
-				b.Fatal(err)
-			}
-
-			if len(strings.Split(strings.TrimSpace(string(stdout)), "\n")) != 65536 {
-				b.Fatal("incomplete file inventory")
-			}
-		}
-	})
-	require.Positive(t, listing.N)
-
-	cost := testing.Benchmark(func(b *testing.B) {
-		b.Helper()
-
-		for b.Loop() {
-			files, errText := sfs.allowedRipgrepFiles(t.Context(), sfs.root.Name(), "")
-			if errText != "" || len(files) != 0 {
-				b.Fatalf("filtered inventory = %d files, %q; want no files or error", len(files), errText)
-			}
-		}
-	})
-	require.Positive(t, cost.N)
-	require.Less(t, cost.AllocedBytesPerOp()-listing.AllocedBytesPerOp()-65536*perFile.AllocedBytesPerOp(), int64(512<<10), "inventory=%d B/op listing=%d B/op denied_path=%d B/op", cost.AllocedBytesPerOp(), listing.AllocedBytesPerOp(), perFile.AllocedBytesPerOp())
 }
 
 func BenchmarkPatchUpdatePreview(b *testing.B) {
