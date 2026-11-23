@@ -680,3 +680,67 @@ func TestShutdownStopsBackgroundFinishRetries(t *testing.T) {
 	require.Equal(t, backgroundRunning, testBackgroundRow(t, store, "main", "turn-1/call/f").status, "the next start reports the job killed")
 	require.Empty(t, notes)
 }
+
+func TestShutdownKeepsAResultThatReturnedAsItStopped(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+	registry, notes := newTestBackgroundRegistry(store)
+	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
+	stopped := make(chan struct{})
+	returned := &backgroundWorkMock{RunBackgroundFunc: func(ctx context.Context) (string, error) {
+		go func() {
+			registry.shutdown()
+			close(stopped)
+		}()
+
+		<-ctx.Done()
+
+		return "done", nil
+	}, DetachFunc: func() bool { return true }}
+	cancelled := &backgroundWorkMock{RunBackgroundFunc: func(ctx context.Context) (string, error) {
+		<-ctx.Done()
+
+		return "", context.Cause(ctx)
+	}, DetachFunc: func() bool { return true }}
+
+	_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/c", Kind: harness.BackgroundKindExecute, Detached: true}, cancelled)
+	require.NoError(t, err)
+	_, err = turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/r", Kind: harness.BackgroundKindExecute, Detached: true}, returned)
+	require.NoError(t, err)
+	<-stopped
+
+	require.Empty(t, notes, "no note wakes a turn while the server shuts down")
+
+	row := testBackgroundRow(t, store, "main", "turn-1/call/r")
+	require.Equal(t, []any{backgroundCompleted, notePending, "done"}, []any{row.status, row.noteState, row.result}, "work that returned is saved as it returned")
+	require.Equal(t, backgroundRunning, testBackgroundRow(t, store, "main", "turn-1/call/c").status, "cancelled work is left for the next start")
+
+	woken := make(chan string, 4)
+	next := newBackgroundRegistry(store, &backgroundNotesMock{noteReadyFunc: func(conversationID string) { woken <- conversationID }}, testLogger())
+	resume, err := next.recoverJobs(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, resume(t.Context()))
+	require.Equal(t, "main", <-woken, "the next start delivers the note")
+	require.Equal(t, backgroundKilled, testBackgroundRow(t, store, "main", "turn-1/call/c").status)
+	require.Equal(t, backgroundCompleted, testBackgroundRow(t, store, "main", "turn-1/call/r").status)
+}
+
+func TestTaskWaitReportsACancelledContextAsAnError(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	registry, _ := newTestBackgroundRegistry(store)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+	require.NoError(t, store.startSubagent(t.Context(), "main", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a", Turn: "turn-1", Call: "a"}, Agent: "researcher"}))
+	_, err := store.db.ExecContext(t.Context(), `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id) VALUES ('turn-a', 'main/a', '{"Metadata":{"web_message_id":"main/turn-1/call/a"}}', '[]', 1, 1, 0)`)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(errBackgroundAbandoned)
+
+	answer, _, err := registry.awaitSubagent(ctx, "main/a", "main/turn-1/call/a")
+	require.ErrorIs(t, err, errBackgroundAbandoned, "a task whose wait was cancelled ends in an error, never an answer")
+	require.Empty(t, answer)
+}

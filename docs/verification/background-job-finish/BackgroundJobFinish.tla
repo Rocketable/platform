@@ -35,6 +35,12 @@ define
 
     ExactlyOnce == delivered <= 1
 
+    FinishedNeverKilled == outcome = "ok" /\ row = "killed" => gaveUp
+
+    CancelledNeverCompleted == outcome = "cancelled" => row # "completed"
+
+    NoWakeWhileStopping == ~wokeWhileStopping
+
     SavedOnceDbWorks == outcome = "ok" /\ ~dbForever ~> row = "completed" \/ stopping
 
     SavedNoteDelivered == row \in {"completed", "failed"} ~> delivered = 1
@@ -125,7 +131,7 @@ Deliver:
 end process;
 
 end algorithm; *)
-\* BEGIN TRANSLATION (chksum(pcal) = "6b82f0d5" /\ chksum(tla) = "a13979ab")
+\* BEGIN TRANSLATION (chksum(pcal) = "69dde584" /\ chksum(tla) = "3fc749de")
 VARIABLES pc, fails, dbForever, attempts, outcome, row, note, woken, 
           delivered, gaveUp, wokeWhileStopping, stopping, stopped, restarted
 
@@ -140,6 +146,12 @@ TypeOK ==
     /\ attempts \in 0..(MaxFails + 1)
 
 ExactlyOnce == delivered <= 1
+
+FinishedNeverKilled == outcome = "ok" /\ row = "killed" => gaveUp
+
+CancelledNeverCompleted == outcome = "cancelled" => row # "completed"
+
+NoWakeWhileStopping == ~wokeWhileStopping
 
 SavedOnceDbWorks == outcome = "ok" /\ ~dbForever ~> row = "completed" \/ stopping
 

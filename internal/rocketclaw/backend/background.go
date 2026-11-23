@@ -296,7 +296,7 @@ func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *b
 	}
 
 	cause := context.Cause(ctx)
-	if attached || errors.Is(cause, errBackgroundAbandoned) {
+	if attached || errors.Is(cause, errBackgroundAbandoned) && errWork != nil {
 		return
 	}
 
@@ -328,8 +328,12 @@ func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *b
 		finished, err = r.store.finishBackgroundJob(context.WithoutCancel(ctx), &end)
 	}
 
-	if finished && end.noteState == notePending {
-		r.notes.noteReady(key.conversationID)
+	select {
+	case <-r.stopping:
+	default:
+		if finished && end.noteState == notePending {
+			r.notes.noteReady(key.conversationID)
+		}
 	}
 }
 
