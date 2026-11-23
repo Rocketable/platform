@@ -198,6 +198,7 @@ func TestAgentDraftChatWebMessages(t *testing.T) {
 	request := ct.collect(t, "COL-A/MSG-1")["COL-A/MSG-1"]
 	require.Contains(t, request, `[Web principal="Alice"`)
 	require.Contains(t, request, askUserQuestionToolName+"(", "a person's Web message may be asked back")
+	require.Contains(t, request, navigateToolName+"(", "a person's Web message may take them to another page")
 
 	dt.edit(t, &AgentDraftOp{Kind: AgentDraftSetField, Variant: "b", Key: "sticky"})
 
@@ -328,6 +329,7 @@ func TestAgentDraftChatExternalMCP(t *testing.T) {
 		}
 
 		require.NotContains(t, request, askUserQuestionToolName+"(", answer)
+		require.NotContains(t, request, navigateToolName+"(", answer)
 	}
 
 	for _, pairs := range []map[string]string{{"customer_id": "acme-043"}, {"ticket": "77"}} {

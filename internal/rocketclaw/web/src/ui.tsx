@@ -24,7 +24,7 @@ import { Switch } from "@/components/ui/switch";
 import { flushSync } from "react-dom";
 import { PaletteChooser, setThemeMode, THEME_MODES, ThemeModeChooser, useTheme } from "@/components/theme";
 import { CodeBlock, InlineText, MarkdownText, OUTPUT_KEY, TranscriptText, cleanText, copyText, mentionIds, setPreference, useCleanText, usePreference, useSlackNames } from "./transcript-text";
-import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
+import { navigations, projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { BehaviorSettings } from "./behavior-settings";
 import { ThreadPRContent, ThreadPRWatch, threadGitHubLabel } from "./thread-pr-panel";
@@ -708,6 +708,7 @@ function ServerSessions({ children }: { children: ReactNode }) {
         // OpenCode tabs mount once they know their server, without waiting for the rows.
         if (!ac.signal.aborted && captured === gen.current) setView((current) => ({ ...current, remote }));
       }).then((result) => {
+        if (result.navigate) navigate(result.navigate, false, name);
         if (ac.signal.aborted || captured !== gen.current) {
           return;
         }
@@ -4211,6 +4212,7 @@ function ToolLinks({ line, title }: { line: Line; title: string }) {
   const links = [
     delegation && { href: panelHref(delegation), text: "Open delegation", label: `Open delegation: ${title}`, icon: <Bot /> },
     skill && { href: panelHref(skill, "skill"), text: "View skill", label: `View skill: ${skill}`, icon: <Sparkles /> },
+    ...[...new Set(navigations(line))].map((path) => ({ href: path, text: location.origin + serverPath(path), label: `Open ${path}`, icon: <Link2 /> })),
   ].filter((link) => !!link);
   return links.length ? <Trace className="mb-2">{links.map((link) => <Link key={link.text} href={link.href} aria-label={link.label}>
     <TraceLine><TraceIcon>{link.icon}</TraceIcon><TraceTitle>{link.text}</TraceTitle><TraceIcon><ChevronRight /></TraceIcon></TraceLine>

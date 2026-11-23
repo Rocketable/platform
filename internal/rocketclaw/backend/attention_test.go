@@ -82,7 +82,7 @@ func TestAttentionMatrix(t *testing.T) {
 		return func(t *testing.T, service *SessionService, username, path string) {
 			t.Helper()
 
-			_, err := service.PollAttention(ctx, username, path, hold)
+			_, _, err := service.PollAttention(ctx, username, path, hold)
 			require.NoError(t, err)
 		}
 	}
@@ -766,7 +766,7 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 		t.Helper()
 		require.NoError(t, service.tickParks(ctx))
 
-		got, err := service.PollAttention(ctx, alice, "", false)
+		got, _, err := service.PollAttention(ctx, alice, "", false)
 		require.NoError(t, err)
 
 		return got

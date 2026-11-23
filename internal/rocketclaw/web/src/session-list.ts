@@ -154,6 +154,7 @@ export type EnumerationResult = {
   tabs?: TabAttention[];
   // From the first message: the person's tab-state revision.
   tabRevision?: string;
+  navigate?: string;
 };
 
 // onRemote receives the server's metadata from the listing's first message, before any row.
@@ -171,7 +172,7 @@ export async function readSessionEnumeration(
   let upstreamSuccess = false;
   const result: EnumerationResult = {
     received: [], complete: false, mismatch: false, remote: undefined,
-    version: undefined, since: undefined, removed: undefined, tabs: undefined, tabRevision: undefined,
+    version: undefined, since: undefined, removed: undefined, tabs: undefined, tabRevision: undefined, navigate: undefined,
   };
   const cancel = () => clearTimeout(timer);
   const flush = () => {
@@ -191,7 +192,7 @@ export async function readSessionEnumeration(
           break;
         }
         result.remote = { servers: batch.opencodeServers ?? {}, agentTags: Object.fromEntries(Object.entries(batch.agentTags ?? {}).map(([agent, choices]) => [agent, choices.tags ?? []])) };
-        result.tabRevision = batch.tabRevision;
+        ({ tabRevision: result.tabRevision, navigate: result.navigate } = batch);
         onRemote(result.remote);
       }
       upstreamSuccess = batch.upstreamSuccess ?? false;

@@ -534,7 +534,7 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			child.shadow = true
 
 			prohibited := make([]harness.Tool, 0, 8)
-			for _, name := range []string{askUserQuestionToolName, sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName} {
+			for _, name := range []string{askUserQuestionToolName, navigateToolName, sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName} {
 				prohibited = append(prohibited, harness.Tool{Name: name})
 			}
 

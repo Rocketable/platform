@@ -108,13 +108,29 @@ export function setTimelineRows(next: TimelineRows) {
   publish(next);
 }
 
-type TimelineItem = { id: string; role: string; text: string; toolName?: string; toolParts?: TimelineItem[]; attachments?: unknown[]; state?: string };
+type TimelineItem = { id: string; role: string; text: string; toolName?: string; toolParts?: TimelineItem[]; attachments?: unknown[]; state?: string; codeModeCalls?: { name: string; arguments?: string; status?: string }[] };
 type TimelineGroup<T> = { kind: "group"; key: string; label: string; members: { line: T; open: boolean }[] };
 // OpenCode's timelineCategory sends shell, execute and bash to Shell; RocketClaw's task and skill tools have their own categories.
 const categoryByTool: Partial<Record<string, TimelineCategory>> = { execute: "execute", bash: "execute", task: "subagents", skill: "skills" };
 const categoryByRole: Partial<Record<string, TimelineCategory>> = { thinking: "thinking", developer: "notices" };
 // In-band failures from internal/rocketclaw/harness looper.go and replay.go; "tool call rejected" is the repeat guard.
 export const timelineFailure = /^(tool call (failed|denied|aborted)|subagent task aborted)/;
+
+const navigateTool = "rocketclaw_navigate_for_me";
+
+export function navigations(line: TimelineItem) {
+  const result = line.toolParts?.[0]?.text;
+  const direct = line.toolName === navigateTool && result && !timelineFailure.test(result) ? [line.text.slice(navigateTool.length + 1)] : [];
+  const scripted = (line.codeModeCalls ?? []).flatMap((call) => call.name === navigateTool && call.status === "ok" ? [call.arguments ?? ""] : []);
+  return [...direct, ...scripted].flatMap((args) => {
+    try {
+      const target = new URL(JSON.parse(args).location.trim(), "http://localhost");
+      return [target.pathname + target.search + target.hash];
+    } catch {
+      return [];
+    }
+  });
+}
 
 // Placement follows OpenCode 7440ff784408a8a095b58ef908de3fc6ee66ca66, packages/session-ui/src/timeline/projection.ts
 // (renderable, toolGroupType, groupContent): replies and separate items end a run of grouped items.
@@ -130,7 +146,7 @@ export function projectTimeline<T extends TimelineItem>(items: T[], rows: Timeli
     const { placement, details } = rows[id];
     // Categories without a Collapse setting start closed, as OpenCode's do, except at Everything.
     const open = collapsible.has(id) ? details === "expanded" : level === "everything";
-    const pinned = [line, ...(line.toolParts ?? [])].some((part) => part.attachments?.length);
+    const pinned = [line, ...(line.toolParts ?? [])].some((part) => part.attachments?.length) || navigations(line).length > 0;
     const failed = line.role === "tool" && (line.state === "background" || (level !== "messages" && timelineFailure.test((line.toolName ? line.toolParts?.[0]?.text : line.text) ?? "")));
     if (placement === "hidden" && !pinned && !failed) continue;
     if (placement === "grouped" && !pinned) {

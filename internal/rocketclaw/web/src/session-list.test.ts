@@ -113,13 +113,13 @@ describe("session list reconciliation", () => {
   test("reports the first message's metadata and the completion's changes", async () => {
     const remotes: Remote[] = [];
     async function* batches() {
-      yield { owner: "alice", opencodeServers: { box: "https://box" }, agentTags: { main: { tags: ["bug"] }, bare: {} }, tabRevision: "7" };
+      yield { owner: "alice", opencodeServers: { box: "https://box" }, agentTags: { main: { tags: ["bug"] }, bare: {} }, tabRevision: "7", navigate: "/cron" };
       expect(remotes).toEqual([{ servers: { box: "https://box" }, agentTags: { main: ["bug"], bare: [] } }]);
       yield { sessions: [{ id: "b" }] };
       yield { upstreamSuccess: true, version: "v2", since: "v1", removed: ["a"], tabs: [{ path: "/cron/a", unreadAt: "1" }] };
     }
     const result = await readSessionEnumeration("alice", batches(), () => [], () => {}, undefined, (remote) => remotes.push(remote));
-    expect(result).toEqual({ received: [{ id: "b" }], complete: true, mismatch: false, remote: remotes[0], version: "v2", since: "v1", removed: ["a"], tabs: [{ path: "/cron/a", unreadAt: "1" }], tabRevision: "7" });
+    expect(result).toEqual({ received: [{ id: "b" }], complete: true, mismatch: false, remote: remotes[0], version: "v2", since: "v1", removed: ["a"], tabs: [{ path: "/cron/a", unreadAt: "1" }], tabRevision: "7", navigate: "/cron" });
     expect(remotes).toHaveLength(1);
   });
 

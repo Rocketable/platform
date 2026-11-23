@@ -2310,7 +2310,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	originHeader := reviewOriginHeader(origin)
 
 	if msg.Human && msg.Source == protocol.SourceWeb {
-		customTools = append(customTools, askUserQuestionTool(b.config.UserQuestionAsker, msg))
+		customTools = append(customTools, askUserQuestionTool(b.config.UserQuestionAsker, msg), navigateTool(b.threads, msg.Metadata[protocol.InboundPrincipalEmailMetadataKey]))
 	}
 
 	if channel != "" {
@@ -2749,7 +2749,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 
 	if b.shadow || b.underShadow {
 		tools = slices.DeleteFunc(tools, func(tool harness.Tool) bool {
-			return slices.Contains([]string{askUserQuestionToolName, sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName}, tool.Name)
+			return slices.Contains([]string{askUserQuestionToolName, navigateToolName, sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName}, tool.Name)
 		})
 	}
 
@@ -2880,7 +2880,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 		skills = harness.LoadSkills(skillsFS, filepath.Join(cfg.Workspace, runtimeDir, "skills")).Skills
 	}
 
-	tools := []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName, respondInThreadToolName}
+	tools := []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName, navigateToolName, respondInThreadToolName}
 
 	for name := range agents.Items {
 		agent := agents.Items[name]

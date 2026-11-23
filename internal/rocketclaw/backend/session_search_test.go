@@ -414,7 +414,7 @@ func TestSearchSessionsUnread(t *testing.T) {
 VALUES ('alice', $6, $1, now(), FALSE), ('alice', $7, $2, now(), TRUE), ('alice', $8, $3, now(), FALSE), ('alice', $9, $4, now(), FALSE), ('bob', $10, $5, now(), FALSE)`,
 		searchChatA, searchChatH, searchChatD, searchChatW, searchChatB, path(searchChatA), path(searchChatH), path(searchChatD), path(searchChatW), path(searchChatB))
 	require.NoError(t, err)
-	_, err = s.PollAttention(ctx, "alice", path(searchChatW), false)
+	_, _, err = s.PollAttention(ctx, "alice", path(searchChatW), false)
 	require.NoError(t, err)
 
 	for _, tc := range []struct {

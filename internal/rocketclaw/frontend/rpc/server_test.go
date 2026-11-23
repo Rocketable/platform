@@ -3098,7 +3098,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.ErrorContains(t, err, "resolve web conversation visibility")
 		require.Nil(t, selected)
 
-		_, err = lockedSessions.PollAttention(t.Context(), "alice", "/cron", false)
+		_, _, err = lockedSessions.PollAttention(t.Context(), "alice", "/cron", false)
 		require.ErrorContains(t, err, "record tab view")
 		err = selectedServer.listPending(t.Context(), &HistoryResponse{}, &HistoryRequest{Id: id})
 		require.ErrorContains(t, err, "read web cron trace")

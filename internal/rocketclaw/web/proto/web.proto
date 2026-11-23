@@ -250,6 +250,7 @@ message ListSessionsResponse {
   repeated TabAttention tabs = 11;
   // The first message carries the caller's tab-state revision, which a timer that brings a closed tab back raises.
   int64 tab_revision = 12;
+  string navigate = 13;
 }
 
 message TagChoices {

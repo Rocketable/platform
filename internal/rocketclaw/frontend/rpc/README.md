@@ -195,7 +195,12 @@ Parks end on the server, not in this call: a loop in the web process wakes every
 person's parks that came due, and a closed tab whose park ended goes back where
 it was. The first
 message carries `tab_revision`, the caller's tab-state revision, which a woken
-closed tab raises so the page reloads its tabs. The final message carries `tabs`,
+closed tab raises so the page reloads its tabs. When `viewing` is set, it also
+carries `navigate`, the path on this server that an agent's
+`rocketclaw_navigate_for_me` asked to take the caller to, and the same statement
+that records the view clears it, so exactly one focused window gets it once; the
+page opens it as a click would. A path asked for more than 3 days earlier is
+dropped instead. The final message carries `tabs`,
 the caller's attention rows of locations that are not sessions, only those
 changed since `since`, or all of them; a row with only its path says the
 location has none any more.

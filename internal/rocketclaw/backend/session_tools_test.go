@@ -22,6 +22,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestSessionTagToolsBridge(t *testing.T) {
@@ -771,6 +772,88 @@ func TestSessionsGetURLTool(t *testing.T) {
 		_, err := tool.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"session_id":%q}`, id)), nil)
 		require.ErrorContains(t, err, "is not a top-level session", id)
 	}
+}
+
+func TestNavigateTool(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	tool := navigateTool(&threadBridgeManager{runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Origin: "https://rc.example"}}}), store: service}, alice)
+
+	for _, tc := range []struct{ location, want string }{
+		{"/s/eA", "https://rc.example/s/eA"},
+		{" https://rc.example/oc/b?x=1#y ", "https://rc.example/oc/b?x=1#y"},
+		{"https://other.example/s/eA", ""},
+		{"http://rc.example/s/eA", ""},
+		{"https://me@rc.example/s/eA", ""},
+		{"//other.example/s/eA", ""},
+		{"/%2F/other.example", ""},
+		{"javascript:alert(1)", ""},
+		{"/r/other/s/eA", ""},
+		{"/s/../r/other", ""},
+		{"", ""},
+		{"/s/../cron", "https://rc.example/cron"},
+	} {
+		raw, _ := json.Marshal(map[string]string{"location": tc.location})
+
+		result, err := tool.Call(t.Context(), raw, nil)
+		if tc.want == "" {
+			require.ErrorContains(t, err, "is not a page of this server's Web", tc.location)
+
+			continue
+		}
+
+		require.NoError(t, err, tc.location)
+		assert.Equal(t, tc.want, result.Output, tc.location)
+	}
+
+	_, navigation, err := service.PollAttention(t.Context(), alice, "/", false)
+	require.NoError(t, err)
+	assert.Equal(t, "/cron", navigation, "a newer call replaces one no window took")
+
+	_, err = tool.Call(t.Context(), json.RawMessage(`{"location":"/cron"}`), nil)
+	require.NoError(t, err)
+	_, err = service.db.ExecContext(t.Context(), `UPDATE web_tab_states SET navigation_at = now() - interval '3 days' WHERE username = $1`, alice)
+	require.NoError(t, err)
+	_, navigation, err = service.PollAttention(t.Context(), alice, "/", false)
+	require.NoError(t, err)
+	assert.Empty(t, navigation, "a call no window took within 3 days lapses")
+
+	_, err = tool.Call(t.Context(), json.RawMessage(`{"location":"/pages"}`), nil)
+	require.NoError(t, err)
+
+	tx, err := service.db.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+
+	defer func() { _ = tx.Rollback() }()
+
+	var holder int
+	require.NoError(t, tx.QueryRowContext(t.Context(), `SELECT pg_backend_pid() FROM web_tab_states WHERE username = $1 FOR UPDATE`, alice).Scan(&holder))
+
+	var (
+		windows errgroup.Group
+		taken   [2]string
+	)
+	for i := range taken {
+		windows.Go(func() (err error) {
+			_, taken[i], err = service.PollAttention(t.Context(), alice, "/", false)
+			return err
+		})
+	}
+
+	require.Eventually(t, func() bool {
+		var blocked int
+		require.NoError(t, service.db.QueryRowContext(t.Context(), `WITH RECURSIVE waiting AS (
+    SELECT $1::int AS pid
+    UNION SELECT a.pid FROM pg_stat_activity a JOIN waiting w ON w.pid = ANY(pg_blocking_pids(a.pid))
+)
+SELECT count(*) - 1 FROM waiting`, holder).Scan(&blocked))
+
+		return blocked == 2
+	}, 5*time.Second, time.Millisecond, "both windows wait for the state lock")
+	require.NoError(t, tx.Commit())
+	require.NoError(t, windows.Wait())
+	assert.ElementsMatch(t, []string{"", "/pages"}, taken[:], "two windows polling at once take it once")
 }
 
 func TestSessionsMoveTool(t *testing.T) {

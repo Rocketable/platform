@@ -104,7 +104,27 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 		assert.NotContains(t, tool.InputSchema.(map[string]any)["properties"], "source", tool.Name)
 	}
 
-	assert.ElementsMatch(t, []string{"store", "read", "kv_store", "kv_read", "delete", "list", "get_tags", "toggle_tag"}, names)
+	assert.ElementsMatch(t, []string{"store", "read", "kv_store", "kv_read", "delete", "list", "get_tags", "toggle_tag", "navigate_for_me"}, names)
+
+	fake.messages = map[string][]openCodeTestMessage{
+		"ses_a": {{Type: "user", Username: bob, Created: 1}, {Type: "user", Username: alice, Created: 2}},
+		"ses_c": {{Type: "user", Username: alice, Created: 1}, {Type: "user", Created: 2}},
+	}
+
+	assert.Equal(t, "https://rc.example/s/eA?x=1", must("ses_child", "navigate_for_me", map[string]string{"location": "https://rc.example/s/eA?x=1"}))
+
+	for _, caller := range []string{"ses_b", "ses_c"} {
+		out, failed := call(caller, "navigate_for_me", map[string]string{"location": "/cron"})
+		assert.True(t, failed, out)
+	}
+
+	taken := func(person, viewing string) string {
+		_, navigation, err := s.PollAttention(ctx, person, viewing, false)
+		require.NoError(t, err)
+
+		return navigation
+	}
+	assert.Equal(t, []string{"", "", "/s/eA?x=1", ""}, []string{taken(alice, ""), taken(bob, "/"), taken(alice, "/"), taken(alice, "/")}, "only a focused window of the person who asked takes it, once")
 
 	assert.JSONEq(t, `{"tags":["customer"]}`, must("ses_a", "toggle_tag", map[string]string{"tag": " customer "}))
 	assert.JSONEq(t, `{"tags":["customer"]}`, must("ses_child", "get_tags", none))
