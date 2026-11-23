@@ -10,6 +10,7 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -259,7 +260,12 @@ func PullRequestsIn(command, output string) (created, mentioned []string) {
 				case "pr create", "pr new":
 					creates++
 					dryRun = dryRun || slices.ContainsFunc(arguments, func(argument string) bool {
-						return argument == "--dry-run" || strings.HasPrefix(argument, "--dry-run=")
+						if value, ok := strings.CutPrefix(argument, "--dry-run="); ok {
+							enabled, err := strconv.ParseBool(value)
+							return err != nil || enabled
+						}
+
+						return argument == "--dry-run"
 					})
 
 					return false
