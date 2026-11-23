@@ -587,16 +587,14 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     await page.waitForFunction((node: HTMLElement) => document.activeElement === node, await actions.elementHandle());
     expect(await composer.inputValue()).toBe("Draft still editable beside the PR pane");
     await page.keyboard.press("Escape");
-    // The watch's first look sets what counts as new, so let it answer before the thread creates another PR.
+    // The watch's first look answers from what the pane already read, and sets what counts as new.
     const subagentLook = () => page.waitForResponse((response: any) => response.url().includes("/api/History?pull-request-discovery") && response.request().postDataJSON().id === child);
-    let look = subagentLook();
     await page.setViewportSize({ width: 1440, height: 900 });
-    await look;
     await page.getByRole("button", { name: "Show pull requests and issues", exact: true }).waitFor();
     expect(await prs.count()).toBe(0);
     mention = true;
     for (const at of ["2026-01-03T00:00:00Z", "2026-01-04T00:00:00Z"]) {
-      look = subagentLook();
+      const look = subagentLook();
       updatedAt = at;
       await look;
     }

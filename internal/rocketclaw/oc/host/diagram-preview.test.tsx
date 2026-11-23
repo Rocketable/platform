@@ -11,7 +11,7 @@ test("diagram preview gestures stay inside the mounted view and leave with it", 
   document.body.append(root, outside)
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg")
   const dispose = render(() => (
-    <ViewContext.Provider value={{ root, portal: root, width: () => 1000 }}>
+    <ViewContext.Provider value={{ root, portal: root, width: () => 1000, visible: () => true }}>
       <Dialog open modal={false}>
         <DiagramPreview svg={svg} />
       </Dialog>

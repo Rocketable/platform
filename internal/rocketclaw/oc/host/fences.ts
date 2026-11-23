@@ -16,7 +16,10 @@ export type View = {
   root: HTMLElement
   portal: HTMLElement
   width: Accessor<number>
+  visible: Accessor<boolean>
 }
+
+export const hidden = "data-oc-hidden"
 
 // Upstream's page-wide targets, which copied tests that render without a mount still get.
 export const ViewContext = createContext<View>({
@@ -27,6 +30,7 @@ export const ViewContext = createContext<View>({
     return document.body
   },
   width: () => window.innerWidth,
+  visible: () => true,
 })
 
 const mounted: View[] = []
@@ -54,10 +58,11 @@ export function themeTargets(): HTMLElement[] {
 
 /**
  * Whether a document-level key or drop event belongs to the view: its target is inside the container or the portal
- * root, or is the body, where focus lands after the composer blurs.
+ * root, or is the body, where focus lands after the composer blurs, while the view is visible.
  */
 export function inView(view: View, target: EventTarget | null) {
   return (
-    target === document.body || (target instanceof Node && (view.root.contains(target) || view.portal.contains(target)))
+    (target === document.body && view.visible()) ||
+    (target instanceof Node && (view.root.contains(target) || view.portal.contains(target)))
   )
 }

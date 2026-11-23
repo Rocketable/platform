@@ -1,7 +1,7 @@
 ---
 title: Faster OpenCode tab switching on slow links
 date: 2026-11-02
-status: accepted, step 1 only
+status: step 1 built; step 2, for every server at once, built 2026-11-22 (docs/plans/2026-11-22-1942-feat-keep-opencode-view-plan.md)
 ---
 
 # Faster OpenCode tab switching on slow links

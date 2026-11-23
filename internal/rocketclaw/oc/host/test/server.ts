@@ -1,4 +1,5 @@
-// A fake OpenCode server behind RocketClaw's proxy route, http://host.test/oc/box/api, for the host tests. It serves
+// A fake OpenCode server behind RocketClaw's proxy routes, such as http://host.test/oc/box/api, for the host tests; every
+// server name reaches the same sessions. It serves
 // what the session view loads, streams events until the request is aborted, and can reject or drop requests.
 import { tag } from "../../manifest.json"
 
@@ -193,7 +194,7 @@ function route(method: string, path: string, query: URLSearchParams) {
 export const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const request = new Request(input, init)
   const target = new URL(request.url)
-  const path = target.pathname.replace(/^\/oc\/box\/api/, "")
+  const path = target.pathname.replace(/^\/oc\/[^/]+\/api/, "")
   server.requests.push(`${request.method} ${target.pathname}`)
 
   if (server.state === "down") throw new TypeError("fetch failed")

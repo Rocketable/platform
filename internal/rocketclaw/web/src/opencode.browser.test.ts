@@ -463,7 +463,7 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
     const tabs = page.getByRole("tablist", { name: "Main tabs" });
-    const view = page.locator("main [data-oc-view]");
+    const view = page.locator("main [data-oc-view]:not([data-oc-hidden])");
     const palette = page.locator("[data-oc-portal] .command-palette");
     const rocketPalette = (mode: "sessions" | "commands") => page.getByPlaceholder(mode === "sessions" ? "Search sessions and commands" : "Type a command");
     const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
@@ -536,14 +536,20 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     })).toEqual([true, true]);
     await page.screenshot({ path: path.join(shots, "opencode-session.png") });
 
-    // Leaving and coming back leaves one view and one event stream.
+    // Leaving hides the view on its one event stream; coming back shows it again without reading the session again.
+    const transcriptReads: string[] = [];
+    page.on("request", (request: { url(): string }) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/oc/box/api/session/ses_a/message" && !url.searchParams.has("pull-request-discovery")) transcriptReads.push(url.search);
+    });
     await page.goBack();
-    await until(async () => await view.count() === 0 && fake.streams === 0);
+    await page.locator("main [data-oc-view][data-oc-hidden]:not([data-oc-portal])").waitFor({ state: "attached" });
+    expect([await view.count(), fake.streams]).toEqual([0, 1]);
     await page.goForward();
     await view.getByText("answer in ses_a").waitFor();
-    await until(() => fake.streams === 1);
     await Bun.sleep(200);
     expect([await page.locator("[data-oc-view]:not([data-oc-portal])").count(), fake.streams]).toEqual([1, 1]);
+    expect(transcriptReads).toEqual([]);
 
     // Escape belongs to the view: twice from the composer, and twice after clicking timeline text, the tab stays.
     const tabCount = await tabs.getByRole("tab").count();
@@ -715,9 +721,10 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     });
     await view.locator('[data-pane-content="side"] [data-component="terminal"]').waitFor();
 
-    // Leaving the session closes the terminal's socket with the rest of the view.
+    // Leaving the session keeps the hidden view's terminal open where it was.
     await page.goBack();
-    await until(async () => await view.count() === 0 && terminals.open === 0 && fake.streams === 0);
+    await page.locator("main [data-oc-view][data-oc-hidden]:not([data-oc-portal])").waitFor({ state: "attached" });
+    expect([terminals.open, fake.streams]).toEqual([1, 1]);
     await page.goForward();
     await view.getByText("answer in ses_a").waitFor();
     await view.locator('[data-pane-content="side"] [data-component="terminal"]').waitFor();
@@ -800,6 +807,102 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await confirm.getByRole("button", { name: "Cancel", exact: true }).and(page.locator(":focus")).waitFor();
     await confirm.getByRole("button", { name: "Delete session", exact: true }).click();
     await until(async () => !fake.sessions.has("ses_a") && !page.url().includes(route("opencode:box:ses_a")) && await tabs.getByRole("tab", { name: "Alpha work", exact: true }).count() === 0);
+    expect(errors).toEqual([]);
+  } finally {
+    await browser.close();
+    web.stop(true);
+  }
+}, 60_000);
+
+test("one OpenCode view loads with the page, waits hidden behind other tabs, and moves between servers without reloading", async () => {
+  const { chromium: engine } = await import(playwright!);
+  reset();
+  const remote = (server: string, id: string, preview: string): Session => ({ id: `opencode:${server}:${id}`, kind: "REMOTE_OPENCODE", remoteSessionId: id, preview, server, directory: "/repo" });
+  const rows = [remote("box", "ses_a", "Alpha work"), remote("box", linked, "Linked work"), remote("far", "ses_a", "Far work"), { id: "chat", preview: "Native chat", agent: "main" }];
+  const chat = `/s/${encode("chat")}`;
+  const transcripts: string[] = [];
+  const web = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (/^\/oc\/(box|far)\/api\//.test(url.pathname)) {
+      if (/\/session\/[^/]+\/message$/.test(url.pathname) && !url.searchParams.has("pull-request-discovery")) transcripts.push(url.pathname);
+      return openCode(request);
+    }
+    if (url.pathname.startsWith("/oc-ui/")) return unpacked(path.join(ocDist, url.pathname.slice("/oc-ui/".length)));
+    if (url.pathname === "/stream" || url.pathname === "/typing") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, opencodeServers: { box, far: "http://far.test:4096" } })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (!url.pathname.startsWith("/api/")) {
+      const file = path.join(dist, url.pathname);
+      if (await Bun.file(`${file}.gz`).exists()) return unpacked(file);
+      return new Response(await unpacked(path.join(dist, "index.html")).text(), { headers: { "Content-Type": "text/html" } });
+    }
+    const input = await request.json() as { id?: string };
+    switch (url.pathname) {
+      case "/api/Protocol": return Response.json({ protoSha256: "opencode" });
+      case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
+      case "/api/ListQueue": return Response.json({ items: [] });
+      case "/api/ListConfig": return Response.json({ config: {} });
+      case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [route("opencode:box:ses_a"), route(`opencode:box:${linked}`), route("opencode:far:ses_a"), chat].map((tab) => ({ path: tab, space: "main" })), groups: [], space: "main", last: {} } });
+      default: return Response.json({});
+    }
+  } });
+  const base = `http://127.0.0.1:${web.port}`;
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(error.message));
+    const view = page.locator("main [data-oc-view]:not([data-oc-hidden])");
+    const views = page.locator("[data-oc-view]:not([data-oc-portal])");
+    const visit = (href: string) => page.evaluate((target: string) => { history.pushState(null, "", target); window.dispatchEvent(new PopStateEvent("popstate")); }, href);
+    const message = page.getByRole("textbox", { name: "Message", exact: true });
+
+    // A chat shows first; the view loads behind it, on one live stream per server, and reads each server's first
+    // open session.
+    await page.goto(`${base}${chat}`);
+    await page.locator("main [data-oc-view][data-oc-hidden]").getByText("answer in ses_a").waitFor({ state: "attached" });
+    await until(() => fake.streams === 2 && transcripts.includes("/oc/far/api/session/ses_a/message"));
+    const underPointer = () => page.evaluate(() => [...document.querySelectorAll("main, main *")].map((node) => node.getBoundingClientRect()).filter(({ width, height }) => width && height)
+      .some(({ x, y, width, height }) => document.elementFromPoint(x + width / 2, y + height / 2)?.closest("[data-oc-view]")));
+    await visit("/shortcuts");
+    await page.getByRole("main").getByRole("listitem").first().waitFor();
+    expect(await underPointer()).toBe(false);
+    await visit(chat);
+    await message.click();
+    await page.keyboard.press("ControlOrMeta+k");
+    await Bun.sleep(200);
+    expect(await page.locator("[data-oc-portal] .command-palette").count()).toBe(0);
+    expect(await page.evaluate(() => {
+      const find = new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true });
+      document.body.dispatchEvent(find);
+      return find.defaultPrevented;
+    })).toBe(false);
+
+    // Opening its tab, or another server's, shows the session the view already holds and moves the same view.
+    const read = transcripts.length;
+    await visit(route("opencode:box:ses_a"));
+    await view.getByText("answer in ses_a").waitFor();
+    await visit(route("opencode:far:ses_a"));
+    await view.getByText("answer in ses_a").waitFor();
+    expect(transcripts.slice(read)).toEqual([]);
+    const moved = transcripts.length;
+    await visit(route("opencode:box:ses_a"));
+    await view.getByText("answer in ses_a").waitFor();
+    await visit(chat);
+    await visit(route("opencode:far:ses_a"));
+    await view.getByText("answer in ses_a").waitFor();
+    expect(transcripts.slice(moved)).toEqual([]);
+    expect([await views.count(), fake.streams]).toEqual([1, 2]);
+
+    // A menu open in the view as RocketClaw's key leaves for the chat closes, and the chat takes clicks.
+    await view.locator("[aria-label='More options']").first().click();
+    await page.locator("[data-oc-portal] [role=menu]").waitFor();
+    await visit(chat);
+    expect(await underPointer()).toBe(false);
+    await message.click({ timeout: 2000 });
+    await message.fill("still mine");
+    expect(await page.evaluate(() => document.body.style.pointerEvents)).toBe("");
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
@@ -1033,7 +1136,7 @@ test("mobile keyboards keep the composer, model controls and bottom bar above th
       const nativeBounds = await native.boundingBox();
       expect(nativeBounds!.y).toBeGreaterThanOrEqual(0);
       expect(nativeBounds!.y + nativeBounds!.height).toBeLessThanOrEqual(410);
-      expect((await page.getByRole("button", { name: "Send", exact: true }).boundingBox())!.y).toBeLessThan(410);
+      expect((await page.locator("[data-composer-submit]").boundingBox())!.y).toBeLessThan(410);
       await page.close();
     }
   } finally {

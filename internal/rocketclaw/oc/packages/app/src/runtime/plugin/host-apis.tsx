@@ -1176,8 +1176,9 @@ export function createPluginAttachment(apis: HostApis) {
     draft: (input) => {
       const server = servers.list.find((conn) => ServerConnection.key(conn) === input.server)
 
-      // rocketclaw: RocketClaw starts a new session in its own tab (upstream packages/app/src/runtime/plugin/host-apis.tsx)
-      if (server) navigation.newSession(input.directory)
+      // rocketclaw: RocketClaw starts a new session in its own tab, on the server asked for (upstream
+      // packages/app/src/runtime/plugin/host-apis.tsx)
+      if (server) navigation.newSession(input.directory, ServerConnection.key(server))
     },
     command: (id) => void run(id),
     font: () => terminalFontFamily(settings.appearance.terminalFont()),
