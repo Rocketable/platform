@@ -425,7 +425,7 @@ ON CONFLICT (conversation_id, key) DO UPDATE SET value = (steps.value::jsonb || 
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := lockRunHistories(ctx, tx, b.config.ConversationID); err != nil {
+	if _, _, err := lockRunHistories(ctx, tx, b.config.ConversationID); err != nil {
 		return err
 	}
 
@@ -758,15 +758,12 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 		b.mu.Lock()
 	}
 
-	var (
-		marker string
-		paused bool
-	)
+	var paused bool
 
-	errState := b.config.SessionService.db.QueryRowContext(ctx, `SELECT COALESCE(max(revert_message_id), ''), COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, b.config.ConversationID).Scan(&marker, &paused)
+	errState := b.config.SessionService.db.QueryRowContext(ctx, `SELECT COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, b.config.ConversationID).Scan(&paused)
 
 	paused = paused && request.turnID == ""
-	if b.historyMutation || marker != "" || paused || errState != nil {
+	if b.historyMutation || paused || errState != nil {
 		err := errState
 		switch {
 		case err != nil:
@@ -922,22 +919,15 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 		return false, err
 	}
 
-	var (
-		marker                string
-		slackSession, blocked bool
-	)
+	var slackSession, blocked bool
 
 	err = tx.QueryRowContext(ctx, `WITH `+rootUnsettledSQL+`, lane AS (
     SELECT count(*) > 0 AS busy FROM turns WHERE conversation_id = $1 AND phase = 'running' AND takes_lane
 )
-SELECT COALESCE(max(c.revert_message_id), ''), COALESCE(bool_or(c.kind = 'slack_thread'), FALSE), u.held OR l.busy
-FROM unsettled u CROSS JOIN lane l LEFT JOIN conversations c ON c.conversation_id = $1 GROUP BY u.held, l.busy`, owner.config.ConversationID).Scan(&marker, &slackSession, &blocked)
+SELECT COALESCE(bool_or(c.kind = 'slack_thread'), FALSE), u.held OR l.busy
+FROM unsettled u CROSS JOIN lane l LEFT JOIN conversations c ON c.conversation_id = $1 GROUP BY u.held, l.busy`, owner.config.ConversationID).Scan(&slackSession, &blocked)
 	if err != nil {
-		return false, fmt.Errorf("read activation cutoff: %w", err)
-	}
-
-	if marker != "" {
-		return false, nil
+		return false, fmt.Errorf("read activation lane: %w", err)
 	}
 
 	if request.turnID != "" {
@@ -1151,17 +1141,12 @@ func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 		return nil
 	}
 
-	var (
-		marker string
-		paused bool
-	)
-
-	err := b.config.SessionService.db.QueryRowContext(ctx, `SELECT COALESCE(max(revert_message_id), ''), COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, b.config.ConversationID).Scan(&marker, &paused)
-	if err != nil {
-		return fmt.Errorf("read later-work cutoff: %w", err)
+	var paused bool
+	if err := queryScalar(ctx, b.config.SessionService.db, "read later-work pause", `SELECT COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, &paused, b.config.ConversationID); err != nil {
+		return err
 	}
 
-	if marker != "" || paused {
+	if paused {
 		return nil
 	}
 

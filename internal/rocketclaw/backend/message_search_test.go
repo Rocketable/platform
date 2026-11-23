@@ -300,19 +300,14 @@ func TestMessagePrincipalsFollowHistory(t *testing.T) {
 	search, _ := searchTestSessions(t, s, noSlackLookups{}, "", SearchFields)
 	require.Equal(t, all["chat"], search.Principals)
 
-	marker, _, err := stageRevertDB(ctx, s.db, "chat", fmt.Sprintf("%d:2", first))
+	_, _, err = stageRevertDB(ctx, s.db, "chat", fmt.Sprintf("%d:2", first), protocol.RevertBefore)
 	require.NoError(t, err)
-	require.Equal(t, map[string][]string{"chat": {"Ann", "Cron Writer"}}, storedPrincipals(t, s), "a staged undo hides later messages' principals")
+	require.Equal(t, all, storedPrincipals(t, s), "moving the current point keeps every branch's participants")
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	_, err = s.AppendEntryID(ctx, "chat", testReplayEntry(`{"type":"message","role":"user","prompt_header":"[Web principal=\"Cid\"]","content":"[Web principal=\"Cid\"]\n\nother"}`))
 	require.NoError(t, err)
-
-	defer func() { _ = tx.Rollback() }()
-
-	require.NoError(t, lockSessionHistory(ctx, tx, "chat"))
-	require.NoError(t, commitRevertDB(ctx, tx, "chat", marker))
-	require.NoError(t, tx.Commit())
-	require.Equal(t, map[string][]string{"chat": {"Ann", "Cron Writer"}}, storedPrincipals(t, s), "the clipped entry keeps only its earlier principals")
+	search, _ = searchTestSessions(t, s, noSlackLookups{}, "", SearchFields)
+	require.Equal(t, []string{"Ann", "Bob", "Cid", "Cron Writer"}, search.Principals, "Bob wrote only on the branch left behind and stays a participant")
 
 	_, err = s.DeleteSession(ctx, "chat")
 	require.NoError(t, err)
@@ -356,7 +351,7 @@ func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
 
 	_, err := s.db.ExecContext(ctx, `CREATE FUNCTION reject_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'write unavailable'; END $$`)
 	require.NoError(t, err)
-	first, err := s.AppendEntryID(ctx, "chat", prompt("Ann"))
+	_, err = s.AppendEntryID(ctx, "chat", prompt("Ann"))
 	require.NoError(t, err)
 	_, err = s.AppendEntryID(ctx, "cron:daily", prompt("Cron"))
 	require.NoError(t, err)
@@ -387,10 +382,6 @@ func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
 		}},
 		{"bind", "conversations", "principals", bind},
 		{"bind text", "entries", "search_text", bind},
-		{"stage undo", "conversations", "principals", inTx(func(tx *sql.Tx) error {
-			_, _, err := stageRevertDB(ctx, tx, "chat", fmt.Sprintf("%d:0", first))
-			return err
-		})},
 		{"delete", "conversations", "principals", func() error { _, err := s.DeleteSession(ctx, "chat"); return err }},
 		{"prune", "conversations", "principals", inTx(func(tx *sql.Tx) error { _, err := deleteOwnedHistory(ctx, tx, []string{"chat"}); return err })},
 	} {
@@ -408,11 +399,6 @@ func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
 	require.ErrorContains(t, err, `relation "attachments" does not exist`)
 	_, err = s.db.ExecContext(ctx, `ALTER TABLE unavailable_attachments RENAME TO attachments`)
 	require.NoError(t, err)
-
-	_, _, err = stageRevertDB(ctx, s.db, "chat", fmt.Sprintf("%d:0", first))
-	require.NoError(t, err)
-	reject("conversations", "principals")
-	require.ErrorContains(t, rt.ClearRevert(ctx, "chat"), "write unavailable", "redo")
 }
 
 func TestMessageSearchSkipsRunEntriesBeforeAttach(t *testing.T) {
@@ -474,37 +460,6 @@ func bindTestRun(t *testing.T, s *SessionService, run, chat string) {
 	_, _, err = (stateDAO{db: tx}).bindRun(t.Context(), run, chat)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
-}
-
-func TestMessageSearchFollowsCommittedRevert(t *testing.T) {
-	t.Parallel()
-
-	s := newTestSessionService(t)
-	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
-
-	id, err := s.AppendEntryID(ctx, "main", testReplayEntry(
-		`{"type":"message","role":"user","content":"keep prompt"}`,
-		`{"type":"message","role":"assistant","content":"keep answer"}`,
-		`{"type":"message","role":"user","content":"drop prompt"}`,
-		`{"type":"message","role":"assistant","content":"drop answer"}`,
-	))
-	require.NoError(t, err)
-	_, err = s.AppendEntryID(ctx, "main", testSessionEntry("later prompt", "later answer"))
-	require.NoError(t, err)
-
-	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:2", id))
-	require.NoError(t, err)
-	require.Len(t, messageSearchTestRows(t, s, "main"), 6, "a staged undo hides rows at query time")
-
-	bridge := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
-	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})}
-	require.NoError(t, rt.StashQueueItem(ctx, "main", &protocol.ThreadQueueItem{ID: "replacement", Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindHeld, Message: "edited"}))
-
-	require.Equal(t, []messageSearchTestRow{
-		{id, 0, 0, "user", "keep prompt", "keep prompt"},
-		{id, 1, 0, "assistant", "keep answer", "keep answer"},
-	}, messageSearchTestRows(t, s, "main"))
 }
 
 func TestMessageSearchIndexesEndedTurns(t *testing.T) {
@@ -741,7 +696,7 @@ func messageSearchDecodeFixture() []string {
 	return lines
 }
 
-func TestSearchMessagesShowsWhatHistoryShows(t *testing.T) {
+func TestSearchMessagesReadEveryBranch(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)
@@ -786,23 +741,39 @@ func TestSearchMessagesShowsWhatHistoryShows(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, all, hits, "the stopped turn sits after its anchor entry")
 
-	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", third))
+	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", third), protocol.RevertBefore)
 	require.NoError(t, err)
 	hits, err = s.SearchMessages(ctx, "needle", nil)
 	require.NoError(t, err)
-	require.Equal(t, all[:7], hits, "an undo at a turn's first message hides the whole entry")
+	require.Equal(t, all, hits, "moving the current point hides nothing from search")
 
-	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = 'main'`)
+	branch, err := s.AppendEntryID(ctx, "main", testReplayEntry(
+		`{"type":"message","role":"user","content":"needle 10"}`,
+		`{"type":"message","role":"assistant","content":"needle 11"}`,
+		`{"type":"message","role":"user","content":"later"}`,
+	))
 	require.NoError(t, err)
-	hits, err = s.SearchMessages(ctx, "needle", nil)
+	marker, _, err := stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:1", branch), protocol.RevertThrough)
 	require.NoError(t, err)
-	require.Equal(t, all, hits, "Redo returns the messages")
+	require.Equal(t, fmt.Sprintf("%d:2", branch), marker)
 
-	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:2", first))
-	require.NoError(t, err)
 	hits, err = s.SearchMessages(ctx, "needle", nil)
 	require.NoError(t, err)
-	require.Equal(t, all[:2], hits, "the undo hides later messages and the stopped turn anchored after it")
+	require.Equal(t, slices.Concat(all, []MessageSearchHit{
+		{"main", "user", "needle 10", fmt.Sprintf("%d:0", branch)},
+		{"main", "assistant", "needle 11", fmt.Sprintf("%d:1", branch)},
+	}), hits, "a word only on the branch left behind still finds the chat")
+
+	opened, err := s.ObserveHistory(ctx, "main", "", third, 0, 0, &HistoryInventory{})
+	require.NoError(t, err)
+	require.Equal(t, marker, opened.Inventory.Marker)
+	require.Len(t, opened.Entries, 1)
+	require.Equal(t, branch, opened.Entries[0].ID, "opening a hit on the other branch reads the current path")
+
+	current, _, _, err := s.RevertState(ctx, "main")
+	require.NoError(t, err)
+	require.Equal(t, marker, current, "searching and opening a hit leave the current point where it was")
+	require.Equal(t, []string{"message:needle 1", "message:needle 2", "message:needle 3", "message:needle 4", "message:needle 5", "message:needle 6", "message:needle 10", "message:needle 11"}, observedEntryTexts(t, s, "main"))
 
 	_, err = s.db.ExecContext(ctx, `UPDATE entries SET search_text = '0 0 ["needle"' WHERE id = $1`, first)
 	require.NoError(t, err)
@@ -853,14 +824,7 @@ func TestSearchMessagesMatchesGoReference(t *testing.T) {
 			}
 		}
 
-		if chat%3 == 0 {
-			_, _, err := stageRevertDB(ctx, s.db, id, prompts[rng.IntN(len(prompts))])
-			require.NoError(t, err)
-		}
-
-		transcript := testHistoryEntries(t, s, id)
-
-		for _, entry := range transcript {
+		for _, entry := range testHistoryEntries(t, s, id) {
 			for i, raw := range entry.Entry.ReplayInput {
 				var message struct{ Role, Content string }
 				require.NoError(t, json.Unmarshal(raw, &message))
@@ -876,6 +840,11 @@ func TestSearchMessagesMatchesGoReference(t *testing.T) {
 
 				want = append(want, hit)
 			}
+		}
+
+		if chat%3 == 0 {
+			_, _, err := stageRevertDB(ctx, s.db, id, prompts[rng.IntN(len(prompts))], protocol.RevertBefore)
+			require.NoError(t, err)
 		}
 	}
 

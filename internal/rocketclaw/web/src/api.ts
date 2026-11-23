@@ -1,6 +1,6 @@
 import { hashKey, type QueryKey } from "@tanstack/react-query";
 import { server, serverURL } from "./navigation";
-import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, StripLayout, TranscriptEvent, VoiceSettings } from "./types";
+import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, StripLayout, TranscriptEvent, TreeNode, VoiceSettings } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -88,6 +88,7 @@ export const queries = {
     const body = await rpc<Omit<HistoryView, "origin"> & { origin: string }>("History", input, signal);
     return { ...body, origin: body.origin ? JSON.parse(body.origin) as ChatOrigin : undefined };
   } }),
+  messageTree: (input: { id: string }, revision?: string) => ({ queryKey: ["messageTree", input, revision], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ nodes: TreeNode[] }>("MessageTree", input, signal)).nodes }),
   queue: (input: { id: string }) => ({ queryKey: ["queue", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ items: QueueItem[] }>("ListQueue", input, signal)).items }),
   // The server answers for the signed-in person; the username keeps one person's settings out of another's cache.
   voiceSettings: (username: string) => ({ queryKey: ["voiceSettings", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<VoiceSettings>("VoiceSettings", {}, signal) }),
@@ -95,8 +96,9 @@ export const queries = {
 };
 
 export const mutations = {
-  stageRevert: (input: { id: string; messageId?: string }) => rpc<{ revertMessageId: string; prompt?: TranscriptEvent }>("StageRevert", input),
-  clearRevert: (input: { id: string }) => rpc("ClearRevert", input),
+  stageRevert: (input: { id: string; messageId?: string; boundary?: "BEFORE" | "THROUGH" }) => rpc<{ revertMessageId: string; prompt?: TranscriptEvent }>("StageRevert", input),
+  deleteBranch: (input: { id: string; messageId: string; dryRun?: boolean }) => rpc<{ messages: number; nestedBranches: number; subagentSessions: number; queuedMessages: number; current: boolean }>("DeleteBranch", input),
+  summarizeBranch: (input: { id: string; branchId: string; instructions: string }) => rpc<{ appended: boolean }>("SummarizeBranch", input),
   forkSession: (input: { id: string; before?: string }) => rpc<{ id: string; prompt: TranscriptEvent }>("ForkSession", input),
   popQueueItem: (input: { id: string; itemId: string }) => rpc("PopQueueItem", input),
   createSession: async ({ server: remote, ...input }: { name?: string; agent?: string; sourceConversationId?: string; opencodeServer?: string; directory?: string; spaceId?: string; server?: string }) => rpc<{ id: string; resumed?: boolean }>("CreateSession", input, undefined, remote),

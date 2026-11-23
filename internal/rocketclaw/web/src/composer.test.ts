@@ -17,7 +17,7 @@ const { slashMatches } = await import(`data:text/javascript;base64,${Buffer.from
 test("command picker lists commands before skills and distinguishes colliding invocations", () => {
   const skills = [{ name: "review", description: "Review changes" }, { name: "stop", description: "Inspect logs" }];
   expect(slashMatches("/", skills).map((item: { invocation: string }) => item.invocation)).toEqual([
-    "/fork ", "/handoff ", "/undo ", "/redo ", "/goal ", "/stop ", "/agent ", "/enqueue ", "/stash ", "/steer ", "/skill ", "/review ", "/skill stop ",
+    "/fork ", "/handoff ", "/undo ", "/tree ", "/goal ", "/stop ", "/agent ", "/enqueue ", "/stash ", "/steer ", "/skill ", "/review ", "/skill stop ",
   ]);
   expect(slashMatches("/st", skills).map((item: { invocation: string }) => item.invocation)).toEqual(["/stop ", "/stash ", "/steer ", "/skill stop "]);
   expect(slashMatches("/st", [{ name: "Stop" }]).at(-1).invocation).toBe("/skill Stop ");

@@ -584,17 +584,17 @@ func (s *SessionService) sessionToolSummaries(ctx context.Context, ids []string,
 
 			for _, limit := range []int{1, 0} {
 				err := readRows(ctx, s.db, `WITH `+sessionHistorySQL+`, counted AS (
-    SELECT id, entry_json, count(*) OVER () AS turns FROM viewed_rows
+    SELECT id, entry, revert_index, count(*) OVER () AS turns FROM effective_entries
 ), newest AS (
     SELECT c.*, e.entry_timestamp FROM counted c JOIN entries e USING (id) ORDER BY c.id DESC LIMIT NULLIF($2, 0)
 ), fields AS (
-    SELECT n.id, n.turns, COALESCE(f."timestamp", n.entry_timestamp) AS "timestamp", f.replay_input FROM newest n,
-        json_to_record(CASE WHEN $3 THEN n.entry_json END) AS f("timestamp" text, replay_input json)
+    SELECT n.id, n.turns, n.revert_index, COALESCE(f."timestamp", n.entry_timestamp) AS "timestamp", f.replay_input FROM newest n,
+        jsonb_to_record(CASE WHEN $3 THEN n.entry END) AS f("timestamp" text, replay_input jsonb)
 )
 SELECT f.turns, json_build_object('timestamp', f."timestamp", 'replay_input',
-    json_agg(i.item ORDER BY i.n) FILTER (WHERE i.n IS NOT NULL AND COALESCE(i.item->>'type', 'message') = 'message')) FROM fields f
-LEFT JOIN LATERAL json_array_elements(f.replay_input) WITH ORDINALITY AS i(item, n) ON TRUE
-GROUP BY f.id, f.turns, f."timestamp" ORDER BY f.id DESC`, "session tool entries", func(row rowScanner) error {
+    json_agg(i.item ORDER BY i.n) FILTER (WHERE i.n IS NOT NULL AND (f.revert_index < 0 OR i.n <= f.revert_index) AND COALESCE(i.item->>'type', 'message') = 'message')) FROM fields f
+LEFT JOIN LATERAL jsonb_array_elements(f.replay_input) WITH ORDINALITY AS i(item, n) ON TRUE
+GROUP BY f.id, f.turns, f.revert_index, f."timestamp" ORDER BY f.id DESC`, "session tool entries", func(row rowScanner) error {
 					var (
 						raw   []byte
 						entry harness.SessionEntry

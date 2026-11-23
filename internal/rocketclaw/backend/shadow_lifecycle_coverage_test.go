@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -272,66 +271,6 @@ func TestShadowLifecycleDefinitionFailureAndRetry(t *testing.T) {
 	}
 }
 
-func TestShadowLifecycleRevertRollback(t *testing.T) {
-	t.Parallel()
-
-	store, _ := newShadowTestStore(t)
-
-	for _, step := range []struct{ table, event string }{
-		{"entries", "DELETE"}, {"conversations", "UPDATE"},
-		{"steps", "DELETE"},
-	} {
-		t.Run(step.table+" "+step.event, func(t *testing.T) {
-			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
-			require.NoError(t, err)
-			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
-
-			entry := testSessionEntry("discarded", "answer")
-			entry.TurnID = "parent-turn"
-			id, err := store.AppendEntryID(t.Context(), "parent", entry)
-			require.NoError(t, err)
-			children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "revert children")
-			require.NoError(t, err)
-
-			for _, child := range children {
-				entry.TurnID = child + "-turn"
-
-				_, err := store.AppendEntryID(t.Context(), child, entry)
-				require.NoError(t, err)
-				_, err = store.db.ExecContext(t.Context(), `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, child_turn_id, inbound_json) VALUES ($1, 'parent', 'parent-turn', $2, '{}')`, child, entry.TurnID)
-				require.NoError(t, err)
-			}
-
-			marker, _, err := stageRevertDB(t.Context(), store.db, "parent", fmt.Sprintf("%d:0", id))
-			require.NoError(t, err)
-			rejectShadowLifecycleWrite(t, store, step.table, step.event)
-
-			tx, err := store.db.BeginTx(t.Context(), nil)
-			require.NoError(t, err)
-			err = commitRevertDB(t.Context(), tx, "parent", marker)
-			require.ErrorContains(t, err, "shadow lifecycle write unavailable")
-			require.NoError(t, tx.Rollback())
-
-			var rows int
-
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM entries`).Scan(&rows))
-			require.Equal(t, 3, rows, "failed branch commit retains physical rows on both sides")
-
-			_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_shadow_lifecycle_write ON `+step.table)
-			require.NoError(t, err)
-
-			tx, err = store.db.BeginTx(t.Context(), nil)
-			require.NoError(t, err)
-			require.NoError(t, commitRevertDB(t.Context(), tx, "parent", marker))
-			require.NoError(t, tx.Commit())
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM entries`).Scan(&rows))
-			require.Zero(t, rows)
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns`).Scan(&rows))
-			require.Zero(t, rows, "retry removes discarded manifests rather than reexecuting them")
-		})
-	}
-}
-
 func TestShadowLifecycleSettlementFailureReleasesFamily(t *testing.T) {
 	t.Parallel()
 
@@ -452,7 +391,7 @@ func TestShadowLifecycleUnavailableStateDoesNotStartWork(t *testing.T) {
 			case "clear":
 				_, err = store.DeleteSession(t.Context(), "parent")
 			case "revert":
-				_, err = (&Runtime{Sessions: store}).settleShadowRevert(t.Context(), "parent", &ObservedSessionEntry{})
+				_, err = (&Runtime{Sessions: store}).settleShadowRevert(t.Context(), "parent")
 			case "history":
 				_, err = store.ObserveHistory(t.Context(), "parent", "", 0, 0, 0, &HistoryInventory{})
 			}
@@ -484,7 +423,7 @@ func TestShadowLifecycleDeferredCommitFailureAndRetry(t *testing.T) {
 
 			entry := testSessionEntry("start", "answer")
 			entry.TurnID = request.turnID
-			id, err := store.AppendEntryID(t.Context(), "parent", entry)
+			_, err = store.AppendEntryID(t.Context(), "parent", entry)
 			require.NoError(t, err)
 
 			var child string
@@ -513,7 +452,7 @@ CREATE CONSTRAINT TRIGGER reject_shadow_commit AFTER UPDATE ON shadow_turns DEFE
 				case "revert":
 					var workers []*Bridge
 
-					workers, err = (&Runtime{Sessions: store, threads: &threadBridgeManager{store: store}}).settleShadowRevert(t.Context(), "parent", &ObservedSessionEntry{ID: id, Entry: *entry})
+					workers, err = (&Runtime{Sessions: store, threads: &threadBridgeManager{store: store}}).settleShadowRevert(t.Context(), "parent")
 					releaseHistory(workers)
 				}
 

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +32,7 @@ func TestRevertQueueAdmissionAndRetry(t *testing.T) {
 	require.NoError(t, s.PutThreadQueueItem("stashed-before", &protocol.ThreadQueueItem{ID: "stashed-before", ConversationID: "main", Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindHeld, Message: "for later"}))
 
 	marker := fmt.Sprintf("%d:0", id)
-	_, _, err = stageRevertDB(ctx, s.db, "main", marker)
+	_, _, err = stageRevertDB(ctx, s.db, "main", marker, protocol.RevertBefore)
 	require.NoError(t, err)
 
 	bridge := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
@@ -41,10 +42,7 @@ func TestRevertQueueAdmissionAndRetry(t *testing.T) {
 	require.NoError(t, rt.StashQueueItem(ctx, "main", &item))
 	current, _, _, err := s.RevertState(ctx, "main")
 	require.NoError(t, err)
-	require.Empty(t, current, "STASH acceptance must commit the branch")
-
-	_, _, err = stageRevertDB(ctx, s.db, "main", marker)
-	require.Error(t, err, "accepted branch must delete the abandoned request")
+	require.Equal(t, marker, current, "admission leaves the current point where the move put it")
 	require.NoError(t, rt.StashQueueItem(ctx, "main", &item))
 
 	queue, err := s.ThreadQueueForConversation("main")
@@ -113,49 +111,30 @@ func TestRevertSettlesAndPreservesWaitingWork(t *testing.T) {
 
 	channelRequest.queueItemID = "channel"
 	require.NoError(t, b.enqueue(t.Context(), &channelRequest, "waiting channel"))
-	marker, prompt, err := rt.StageRevert(t.Context(), "main", fmt.Sprintf("%d:0", id))
+	marker, prompt, err := rt.StageRevert(t.Context(), "main", fmt.Sprintf("%d:0", id), protocol.RevertBefore)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("%d:0", id), marker)
 	require.Equal(t, "replace", prompt)
 	require.NoError(t, <-done)
 	require.Equal(t, "main", readFinal(t, finals).ConversationID)
 
-	queue, err := s.ThreadQueueForConversation("main")
-	require.NoError(t, err)
-	require.Equal(t, "steer", queue[0].ID, "an unconsumed steer keeps its place ahead of later work")
-	require.Len(t, queue, 4)
-	require.Equal(t, "channel", queue[1].ID, "channel requests follow uninjected steers")
-	require.Empty(t, requests, "staging must start no successor")
-
-	select {
-	case <-completion.done:
-		t.Fatal("uninjected steer was falsely reported complete")
-	default:
-	}
-
-	visible, err := rt.QueueItems("main")
-	require.NoError(t, err)
-	require.Empty(t, visible)
-	_, err = rt.PopQueueItem(t.Context(), "main", "queued-1")
-	require.Error(t, err, "queue mutations cannot release a hidden suffix")
-	_, err = rt.PromoteQueueItem(t.Context(), "main", "queued-1")
-	require.Error(t, err)
-	require.NoError(t, rt.ClearRevert(t.Context(), "main"))
-
 	goal, found, err := s.Goal("main")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, GoalStatusStopped, goal.Status, "Redo does not restart a stopped goal")
+	require.Equal(t, GoalStatusStopped, goal.Status, "a move stops the goal")
 	readFinal(t, finals)
 	readFinal(t, finals)
-	require.Contains(t, <-requests, "waiting steer")
+
+	steered := <-requests
+	require.Contains(t, steered, "waiting steer", "an unconsumed steer keeps its place ahead of later work")
+	require.NotContains(t, steered, "abandoned", "queued work runs from the new current point")
 	require.Contains(t, <-requests, "waiting channel")
 
 	select {
 	case <-completion.done:
 		require.NoError(t, completion.err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("preserved steer completion did not return on Redo")
+		t.Fatal("preserved steer completion did not return after the move")
 	}
 
 	<-channelDone.done
@@ -194,7 +173,10 @@ func TestRevertWaitsForDeliverySettlement(t *testing.T) {
 					continue
 				}
 
-				go func() { _, _, err := rt.StageRevert(t.Context(), "main", fmt.Sprintf("%d:0", id)); staged <- err }()
+				go func() {
+					_, _, err := rt.StageRevert(t.Context(), "main", fmt.Sprintf("%d:0", id), protocol.RevertBefore)
+					staged <- err
+				}()
 
 				require.Eventually(t, func() bool { b.mu.Lock(); defer b.mu.Unlock(); return b.historyMutation }, time.Second, time.Millisecond)
 
@@ -229,90 +211,6 @@ func TestRevertWaitsForDeliverySettlement(t *testing.T) {
 func TestRevertStorageLifecycle(t *testing.T) {
 	t.Parallel()
 
-	t.Run("mapped mid-turn suffix", func(t *testing.T) {
-		s, _ := newShadowTestStore(t)
-		ctx := t.Context()
-		require.NoError(t, s.UpsertThread("parent", ThreadState{Agent: "primary"}))
-
-		first := testSessionEntry("first", "kept")
-		first.TurnID = "first"
-		_, err := s.AppendEntryID(ctx, "parent", first)
-		require.NoError(t, err)
-
-		second := testSessionEntry("second", "reply")
-		second.TurnID = "second"
-		second.ReplayInput = append(second.ReplayInput, testSessionEntry("steer", "later reply").ReplayInput...)
-		id, err := s.AppendEntryID(ctx, "parent", second)
-		require.NoError(t, err)
-		children, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY shadow_agent`, "mapped children")
-		require.NoError(t, err)
-		_, err = s.db.ExecContext(ctx, `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json)
-VALUES ($1, 'parent', 'earlier-unmaterialized', '{}')`, children[1])
-		require.NoError(t, err)
-
-		for _, child := range children {
-			kept := testSessionEntry("first", "independent kept answer")
-			kept.TurnID = child + "-first"
-			_, err := s.AppendEntryID(ctx, child, kept)
-			require.NoError(t, err)
-
-			for _, turn := range []string{"first", "second", "future-without-entry"} {
-				_, err := s.db.ExecContext(ctx, `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, child_turn_id, inbound_json, inputs)
-VALUES ($1, 'parent', $2, $3, '{}', '[{"id":"input","text":"prepared"}]')`, child, turn, child+"-"+turn)
-				require.NoError(t, err)
-			}
-		}
-
-		for range 2 {
-			entry := testSessionEntry("second", "discarded child answer")
-			entry.TurnID = children[0] + "-second"
-			_, err := s.AppendEntryID(ctx, children[0], entry)
-			require.NoError(t, err)
-		}
-
-		_, err = s.db.ExecContext(ctx, `UPDATE shadow_turns SET child_turn_id = '' WHERE child_conversation_id = $1 AND parent_turn_id <> 'first'`, children[1])
-		require.NoError(t, err)
-		_, err = s.db.ExecContext(ctx, `DELETE FROM shadow_turns WHERE child_conversation_id = $1 AND parent_turn_id = 'second'`, children[1])
-		require.NoError(t, err)
-		marker, _, err := stageRevertDB(ctx, s.db, "parent", fmt.Sprintf("%d:2", id))
-		require.NoError(t, err)
-		entries, err := s.ObserveEntries(ctx, children[0])
-		require.NoError(t, err)
-		require.Len(t, entries, 1, "a steer cutoff hides the whole correlated child turn")
-
-		var stopped int
-		require.NoError(t, s.db.QueryRowContext(ctx, `SELECT count(*) FROM shadow_turns WHERE parent_turn_id <> 'first' AND terminal = $1 AND input_closed`, protocol.TerminalStopped).Scan(&stopped))
-		require.Equal(t, 3, stopped, "an inactive group's earlier unmaterialized manifest is not part of the suffix")
-
-		manager := newThreadBridgeManager(s.definitions, s, s.log, &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
-			cfg.SessionService = s
-			return NewConversation(s.definitions, discardPublisher{}, cfg, s.log)
-		}})
-		rt := &Runtime{Sessions: s, threads: manager}
-		require.NoError(t, rt.ClearRevert(ctx, "parent"))
-		entries, err = s.ObserveEntries(ctx, children[0])
-		require.NoError(t, err)
-		require.Len(t, entries, 3, "Redo restores stored rows")
-
-		_, claimed, err := s.claimShadowTurn(ctx, children[1])
-		require.NoError(t, err)
-		require.False(t, claimed, "Redo never restarts stopped effects")
-
-		marker, _, err = stageRevertDB(ctx, s.db, "parent", marker)
-		require.NoError(t, err)
-		tx, err := s.db.BeginTx(ctx, nil)
-		require.NoError(t, err)
-		require.NoError(t, commitRevertDB(ctx, tx, "parent", marker))
-		require.NoError(t, tx.Commit())
-
-		entries, err = s.ObserveEntries(ctx, children[0])
-		require.NoError(t, err)
-		require.Len(t, entries, 1, "commit keeps only earlier independent child history")
-
-		remaining, err := queryStrings(ctx, s.db, `SELECT parent_turn_id FROM shadow_turns ORDER BY 1`, "remaining comparisons")
-		require.NoError(t, err)
-		require.Equal(t, []string{"earlier-unmaterialized", "first", "first"}, remaining, "only future unmaterialized manifests belong to the discarded branch")
-	})
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ('main', 'planner', '', 'web_chat', TRUE)`)
@@ -328,23 +226,26 @@ VALUES ($1, 'parent', $2, $3, '{}', '[{"id":"input","text":"prepared"}]')`, chil
 	require.Equal(t, fmt.Sprintf("%d:0", second), previous)
 
 	for _, invalid := range []string{"bad", "1:delivery", "01:0", "1:-1", fmt.Sprintf("%d:1", first), fmt.Sprintf("%d:99", first)} {
-		_, _, err := stageRevertDB(ctx, s.db, "main", invalid)
+		_, _, err := stageRevertDB(ctx, s.db, "main", invalid, protocol.RevertBefore)
 		require.Error(t, err)
 	}
 
-	marker, text, err := stageRevertDB(ctx, s.db, "main", "")
+	marker, text, err := stageRevertDB(ctx, s.db, "main", "", protocol.RevertBefore)
 	require.NoError(t, err)
 	require.Equal(t, "second", text)
 	require.Equal(t, fmt.Sprintf("%d:0", second), marker)
-	marker, text, err = stageRevertDB(ctx, s.db, "main", "")
+	marker, text, err = stageRevertDB(ctx, s.db, "main", "", protocol.RevertBefore)
 	require.NoError(t, err)
 	require.Equal(t, "first", text)
 	require.Equal(t, fmt.Sprintf("%d:0", first), marker)
 
-	for _, stale := range []string{fmt.Sprintf("%d:0", second), marker} {
-		_, _, err := stageRevertDB(ctx, s.db, "main", stale)
-		require.ErrorContains(t, err, "not visible")
-	}
+	marker, text, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:1", second), protocol.RevertThrough)
+	require.NoError(t, err)
+	require.Empty(t, marker, "a point the path no longer shows is still a node to move to")
+	require.Empty(t, text, "moving through a reply leaves the message box alone")
+
+	marker, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", first), protocol.RevertBefore)
+	require.NoError(t, err)
 
 	entries, err := s.ObserveEntries(ctx, "main")
 	require.NoError(t, err)
@@ -361,19 +262,13 @@ VALUES ($1, 'parent', $2, $3, '{}', '[{"id":"input","text":"prepared"}]')`, chil
 	require.True(t, eligible)
 	require.Empty(t, previous)
 
-	_, text, err = stageRevertDB(ctx, s.db, "main", "")
+	_, text, err = stageRevertDB(ctx, s.db, "main", "", protocol.RevertBefore)
 	require.NoError(t, err)
 	require.Empty(t, text, "Undo at the beginning does not replace the draft")
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	current, _, _, err := s.RevertState(ctx, "main")
 	require.NoError(t, err)
-	require.NoError(t, lockSessionHistory(ctx, tx, "main"))
-	require.NoError(t, commitRevertDB(ctx, tx, "main", marker))
-	require.NoError(t, tx.Rollback())
-
-	marker, _, _, err = s.RevertState(ctx, "main")
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("%d:0", first), marker, "failed admission preserves the marker and suffix")
+	require.Equal(t, marker, current)
 
 	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = 'main'`)
 	require.NoError(t, err)
@@ -382,67 +277,56 @@ VALUES ($1, 'parent', $2, $3, '{}', '[{"id":"input","text":"prepared"}]')`, chil
 	require.Len(t, entries, 2)
 }
 
-func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
+func TestMoveKeepsSubagentsWithTheirBranch(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ('main', 'planner', '', 'web_chat', TRUE)`)
-	require.NoError(t, err)
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat})
 
-	call := func(id string) json.RawMessage {
-		return json.RawMessage(`{"type":"function_call","call_id":"` + id + `","name":"task","arguments":"{}"}`)
+	turn := func(id, user, call, reply string) *harness.SessionEntry {
+		entry := testReplayEntry(`{"type":"message","role":"user","content":"`+user+`"}`, `{"type":"function_call","call_id":"`+call+`","name":"task","arguments":"{}"}`,
+			`{"type":"message","role":"assistant","content":"`+reply+`"}`)
+		entry.TurnID = id
+
+		return entry
 	}
 
-	first := testSessionEntry("first", "reply")
-	first.TurnID, first.ReplayInput = "turn-1", append(first.ReplayInput, call("call_k"))
-	_, err = s.AppendEntryID(ctx, "main", first)
+	_, err := s.AppendEntryID(ctx, "main", turn("turn-1", "first", "call_k", "one"))
 	require.NoError(t, err)
-
-	second := testSessionEntry("second", "reply")
-	second.TurnID, second.ReplayInput = "turn-2", append(second.ReplayInput, call("call_r"), call("call_b"))
-	secondID, err := s.AppendEntryID(ctx, "main", second)
+	second, err := s.AppendEntryID(ctx, "main", turn("turn-2", "second", "call_r", "two"))
 	require.NoError(t, err)
+	recordLegacyDelegations(t, s, "main", "call_k", "call_r")
 
-	recordLegacyDelegations(t, s, "main", "call_k")
-
-	for _, key := range []harness.ChildKey{{Path: "/call_k-aaaaaaaa", Turn: "turn-1", Call: "call_k"}, {Path: "/call_r-bbbbbbbb", Turn: "turn-2", Call: "call_r"}, {Path: "/call_b-cccccccc", Turn: "turn-2", Call: "call_b"}} {
-		require.NoError(t, s.startSubagent(ctx, "main", &harness.SubagentWrite{Key: key, Agent: "helper"}))
-	}
-
-	children := []string{"main/call_k", "main/call_k-aaaaaaaa", "main/call_r-bbbbbbbb", "main/call_b-cccccccc"}
-	for _, child := range children {
+	for _, child := range []string{"main/call_k", "main/call_r"} {
 		_, err := s.AppendEntryID(ctx, child, testSessionEntry("work", "done"))
 		require.NoError(t, err)
 	}
 
-	job := testBackgroundJob("main", "turn-2/call/call_b")
-	job.kind, job.subagentKey = turnNote, "/call_b-cccccccc"
-	createTestBackgroundJob(t, s, job)
+	delegations := func() []string {
+		listed, err := s.Delegations(ctx, "main", "", 0, 0)
+		require.NoError(t, err)
 
-	seedActiveTurn(t, s, "main", "turn-2", nil)
+		ids := make([]string, 0, len(listed))
+		for _, delegation := range listed {
+			ids = append(ids, delegation.ID)
+		}
 
-	for _, key := range []string{"turn-2/call/call_b/step", "turn-2/call/call_r"} {
-		require.NoError(t, s.SaveTurnStep(ctx, "main", key, json.RawMessage(`{}`)))
+		return ids
 	}
 
-	marker, _, err := stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", secondID))
+	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", second), protocol.RevertBefore)
 	require.NoError(t, err)
+	require.Equal(t, []string{"main/call_k"}, delegations(), "a subagent whose call is off the path is not listed")
 
-	staged, err := s.ObserveEntries(ctx, "main/call_k-aaaaaaaa")
+	hidden, err := s.ObserveEntries(ctx, "main/call_r")
 	require.NoError(t, err)
-	require.Len(t, staged, 1, "a staged revert keeps a kept call's subagent readable")
+	require.Len(t, hidden, 1, "a move never prunes a subagent session")
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	marker, _, err := stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:2", second), protocol.RevertThrough)
 	require.NoError(t, err)
-	require.NoError(t, lockSessionHistory(ctx, tx, "main"))
-	require.NoError(t, commitRevertDB(ctx, tx, "main", marker))
-	require.NoError(t, tx.Commit())
-
-	kept, err := queryStrings(ctx, s.db, `SELECT DISTINCT conversation_id FROM entries WHERE conversation_id <> 'main' ORDER BY conversation_id`, "kept delegations")
-	require.NoError(t, err)
-	require.Equal(t, []string{"main/call_b-cccccccc", "main/call_k", "main/call_k-aaaaaaaa"}, kept)
-	require.Equal(t, []string{"turn-2/call/call_b/step"}, testTurnStepKeys(t, s, "main"), "the running job keeps its journal")
+	require.Empty(t, marker, "moving through the newest reply returns to the newest point")
+	require.Equal(t, []string{"main/call_k", "main/call_r"}, delegations(), "moving back shows the same session again")
 }
 
 func TestRevertEligibility(t *testing.T) {
@@ -472,14 +356,10 @@ func TestRevertEligibility(t *testing.T) {
 		require.Equal(t, want, allowed, id)
 
 		if !want {
-			_, _, err = stageRevertDB(ctx, s.db, id, "")
+			_, _, err = stageRevertDB(ctx, s.db, id, "", protocol.RevertBefore)
 			require.ErrorIs(t, err, errRevertConversation, id)
-			_, _, err = rt.StageRevert(ctx, id, "")
+			_, _, err = rt.StageRevert(ctx, id, "", protocol.RevertBefore)
 			require.ErrorIs(t, err, errRevertConversation, id)
-		}
-
-		if !want && id != "missing" {
-			require.ErrorIs(t, rt.ClearRevert(ctx, id), errRevertConversation, id)
 		}
 	}
 }
@@ -536,7 +416,7 @@ func TestRevertFloor(t *testing.T) {
 		for _, text := range append(slices.Clone(tc.undoable), tc.ahead...) {
 			tx, err := s.db.BeginTx(ctx, nil)
 			require.NoError(t, err)
-			_, _, err = stageRevertDB(ctx, tx, chat, ids[text])
+			_, _, err = stageRevertDB(ctx, tx, chat, ids[text], protocol.RevertBefore)
 			require.Equal(t, slices.Contains(tc.undoable, text), err == nil, "%s: undo %s: %v", tc.name, text, err)
 			require.NoError(t, tx.Rollback())
 		}
@@ -544,7 +424,7 @@ func TestRevertFloor(t *testing.T) {
 
 	const thread = "Slack-thread"
 
-	_, prompt, err := stageRevertDB(ctx, s.db, thread, "")
+	_, prompt, err := stageRevertDB(ctx, s.db, thread, "", protocol.RevertBefore)
 	require.NoError(t, err)
 	require.Equal(t, "human2", prompt)
 
@@ -558,42 +438,22 @@ func TestRevertFloor(t *testing.T) {
 	marker, _, _, err := s.RevertState(ctx, thread)
 	require.NoError(t, err)
 	require.Empty(t, marker)
-	require.Equal(t, []string{"message:mcp1", "message:reply", "message:slack1", "message:reply", "message:human1", "message:reply", "message:slack2", "message:reply", "message:human2", "message:reply", "message:slack3", "message:reply"},
-		observedEntryTexts(t, s, thread), "nothing was cut")
-}
+	require.Equal(t, []string{"message:mcp1", "message:reply", "message:slack1", "message:reply", "message:human1", "message:reply", "message:slack2", "message:reply", "message:slack3", "message:reply"},
+		observedEntryTexts(t, s, thread), "the arrival continues from the current point")
 
-func TestRevertPausesScheduledClaims(t *testing.T) {
-	t.Parallel()
+	var kept bool
+	require.NoError(t, queryScalar(ctx, s.db, "undone entry", `SELECT count(*) = 1 FROM entries WHERE conversation_id = $1 AND entry_json::text LIKE '%human2%'`, &kept, thread))
+	require.True(t, kept, "the undone message stays stored")
 
-	s := newTestSessionService(t)
-	ctx := t.Context()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ('main', 'planner', '', 'web_chat', TRUE)`)
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"bound-chat": KindWebChat, "bound-run": KindCronRun})
+	_, err = s.AppendEntryID(ctx, "bound-run", message("", "older report"))
 	require.NoError(t, err)
-	id, err := s.AppendEntryID(ctx, "main", testSessionEntry("first", "reply"))
+	before, err := s.AppendEntryID(ctx, "bound-chat", message(`,"prompt_header":"[Web principal=\"Ann\"]"`, "before the report"))
 	require.NoError(t, err)
-	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
+	_, _, err = (stateDAO{db: s.db}).bindRun(ctx, "bound-run", "bound-chat")
 	require.NoError(t, err)
-
-	now := time.Now().UTC()
-	scheduled := protocol.ScheduledMessageState{ConversationID: "main", Agent: "planner", Message: "later", DueAt: now, Recurring: true, Interval: time.Hour}
-	require.NoError(t, s.PutScheduledMessage("later", &scheduled))
-	_, claimed, err := s.ClaimScheduledMessage("later", "main", now, now)
-	require.NoError(t, err)
-	require.False(t, claimed, "a staged suffix must not advance recurrence or start automatic work")
-
-	stored, err := s.ScheduledMessagesForConversation("main")
-	require.NoError(t, err)
-	require.Equal(t, scheduled, stored["later"])
-
-	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = 'main'`)
-	require.NoError(t, err)
-	advanced, claimed, err := s.ClaimScheduledMessage("later", "main", now, now)
-	require.NoError(t, err)
-	require.True(t, claimed)
-	require.Equal(t, now.Add(time.Hour), advanced.DueAt)
-	_, claimed, err = s.ClaimScheduledMessage("later", "main", now, now)
-	require.NoError(t, err)
-	require.False(t, claimed, "clearing the gate must not duplicate the original scheduled claim")
+	_, _, err = stageRevertDB(ctx, s.db, "bound-chat", fmt.Sprintf("%d:1", before), protocol.RevertThrough)
+	require.ErrorContains(t, err, "past a message from a cron run", "the report's older ID still sits after the point on the path")
 }
 
 func TestPauseGatesTurnAdmission(t *testing.T) {
@@ -755,50 +615,6 @@ func TestClaimReleasesHeldRequestCaller(t *testing.T) {
 	assert.Empty(t, bridge.waiting, "no request stays held for a claimed row")
 }
 
-func TestPausedMessageSettlesStagedRevert(t *testing.T) {
-	t.Parallel()
-
-	s := newTestSessionService(t)
-	ctx := t.Context()
-	rt := pausedTestChat(t, s, "main")
-	id, err := s.AppendEntryID(ctx, "main", testSessionEntry("abandoned", "answer"))
-	require.NoError(t, err)
-	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
-	require.NoError(t, err)
-
-	require.NoError(t, rt.PostPausedMessage(ctx, pausedWebMessage("main", "Ann", &protocol.InboundContent{Text: "lunch at noon?"})))
-
-	marker, _, _, err := s.RevertState(ctx, "main")
-	require.NoError(t, err)
-	assert.Empty(t, marker, "the undo committed")
-	assert.Equal(t, []string{
-		"message:\"Bob\" paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you.",
-		"message:[Web principal=\"Ann\"]\n\nlunch at noon?",
-	}, observedEntryTexts(t, s, "main"))
-}
-
-func TestAgentPauseSettlesStagedRevert(t *testing.T) {
-	t.Parallel()
-
-	s := newTestSessionService(t)
-	ctx := t.Context()
-	rt := pausedTestChat(t, s, "main")
-	id, err := s.AppendEntryID(ctx, "main", testSessionEntry("abandoned", "answer"))
-	require.NoError(t, err)
-	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
-	require.NoError(t, err)
-
-	require.NoError(t, rt.SetAgentPaused(ctx, "main", "Ann", false))
-
-	marker, _, _, err := s.RevertState(ctx, "main")
-	require.NoError(t, err)
-	assert.Empty(t, marker, "the undo committed")
-	assert.Equal(t, []string{
-		"message:\"Bob\" paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you.",
-		"message:\"Ann\" resumed the agent.",
-	}, observedEntryTexts(t, s, "main"))
-}
-
 func TestAgentPauseStorageFailures(t *testing.T) {
 	t.Parallel()
 
@@ -809,20 +625,19 @@ func TestAgentPauseStorageFailures(t *testing.T) {
 	for _, tt := range []struct {
 		name, failure, restore, want string
 		calls                        []string
-		staged                       bool
 	}{
 		{"pause column", `ALTER TABLE conversations RENAME COLUMN paused TO unavailable_paused`, `ALTER TABLE conversations RENAME COLUMN unavailable_paused TO paused`,
-			`column "paused" does not exist`, []string{"read", "resume", "post", "promote", "open input"}, false},
-		{"revert state", `ALTER TABLE conversations RENAME COLUMN continues TO unavailable_continues`, `ALTER TABLE conversations RENAME COLUMN unavailable_continues TO continues`,
-			"continues", []string{"resume", "post"}, true},
+			`column "paused" does not exist`, []string{"read", "resume", "post", "promote", "open input"}},
+		{"run history", `ALTER TABLE conversations RENAME COLUMN continues TO unavailable_continues`, `ALTER TABLE conversations RENAME COLUMN unavailable_continues TO continues`,
+			"continues", []string{"resume", "post"}},
 		{"pause write", reject + `CREATE TRIGGER reject_pause BEFORE UPDATE ON conversations FOR EACH ROW EXECUTE FUNCTION reject_pause()`, `DROP FUNCTION reject_pause() CASCADE`,
-			"pause store failed", []string{"resume"}, false},
+			"pause store failed", []string{"resume"}},
 		{"line write", reject + `CREATE TRIGGER reject_pause BEFORE INSERT ON entries FOR EACH ROW EXECUTE FUNCTION reject_pause()`, `DROP FUNCTION reject_pause() CASCADE`,
-			"pause store failed", []string{"resume", "post"}, false},
+			"pause store failed", []string{"resume", "post"}},
 		{"commit", reject + `CREATE CONSTRAINT TRIGGER reject_pause AFTER INSERT ON entries DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_pause()`, `DROP FUNCTION reject_pause() CASCADE`,
-			"pause store failed", []string{"resume", "post"}, false},
+			"pause store failed", []string{"resume", "post"}},
 		{"goal", `ALTER TABLE conversations RENAME COLUMN goal_objective TO unavailable_goal_objective`, `ALTER TABLE conversations RENAME COLUMN unavailable_goal_objective TO goal_objective`,
-			"load resumed goal", []string{"resume"}, false},
+			"load resumed goal", []string{"resume"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := t.Context()
@@ -832,13 +647,6 @@ func TestAgentPauseStorageFailures(t *testing.T) {
 			rt := pausedTestChat(t, s, "main")
 			b, err := rt.threads.recordedBridge(ctx, "main")
 			require.NoError(t, err)
-
-			if tt.staged {
-				id, err := s.AppendEntryID(ctx, "main", testSessionEntry("abandoned", "answer"))
-				require.NoError(t, err)
-				_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
-				require.NoError(t, err)
-			}
 
 			_, err = s.db.ExecContext(ctx, tt.failure)
 			require.NoError(t, err)
@@ -885,7 +693,7 @@ func TestRevertProviderPrefixAndCompletedRetry(t *testing.T) {
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager, Cfg: b.runtime}
 	runTestBridge(t, b)
-	_, _, err = rt.StageRevert(t.Context(), "main", fmt.Sprintf("%d:2", id))
+	_, _, err = rt.StageRevert(t.Context(), "main", fmt.Sprintf("%d:2", id), protocol.RevertBefore)
 	require.NoError(t, err)
 
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "replacement"}, true)
@@ -902,7 +710,7 @@ func TestRevertProviderPrefixAndCompletedRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	marker := fmt.Sprintf("%d:0", entries[1].ID)
-	_, _, err = rt.StageRevert(t.Context(), "main", marker)
+	_, _, err = rt.StageRevert(t.Context(), "main", marker, protocol.RevertBefore)
 	require.NoError(t, err)
 	require.NoError(t, rt.RunTurn(t.Context(), inbound))
 	current, _, _, err := s.RevertState(t.Context(), "main")
@@ -940,19 +748,11 @@ func TestRevertCompletedFallbackAndPreparationFailure(t *testing.T) {
 	require.False(t, active)
 
 	marker := fmt.Sprintf("%d:0", id)
-	_, _, err = rt.StageRevert(t.Context(), "main", marker)
+	_, _, err = rt.StageRevert(t.Context(), "main", marker, protocol.RevertBefore)
 	require.NoError(t, err)
 	require.NoError(t, rt.RunTurn(t.Context(), inbound))
 	inbound.AttachmentPresence = protocol.AttachmentPresenceImages
 	require.ErrorContains(t, rt.RunTurn(t.Context(), inbound), "different content")
-
-	restarted := newBridge()
-	restarted.config.ConversationID = "main"
-	require.NoError(t, restarted.pickLaterWork(t.Context(), false))
-	admitted, err := restarted.activateInbound(t.Context(), &bridgeRequest{inbound: inbound})
-	require.NoError(t, err)
-	require.False(t, admitted, "restarted activation must honor the durable gate")
-	require.Empty(t, restarted.requestCh)
 	require.Empty(t, requests)
 }
 
@@ -969,7 +769,7 @@ func TestRevertHistorySnapshot(t *testing.T) {
 	require.NotEmpty(t, view.Predecessor)
 
 	marker := fmt.Sprintf("%d:0", id)
-	_, _, err = stageRevertDB(t.Context(), s.db, "main", marker)
+	_, _, err = stageRevertDB(t.Context(), s.db, "main", marker, protocol.RevertBefore)
 	require.NoError(t, err)
 	view, err = s.ObserveHistory(t.Context(), "main", "", 0, 0, 1, &view.Inventory)
 	require.NoError(t, err)
@@ -990,7 +790,7 @@ func TestRevertAdmissionRollbackAndConcurrentIdentity(t *testing.T) {
 	require.NoError(t, err)
 
 	marker := fmt.Sprintf("%d:0", id)
-	_, _, err = stageRevertDB(t.Context(), s.db, "main", marker)
+	_, _, err = stageRevertDB(t.Context(), s.db, "main", marker, protocol.RevertBefore)
 	require.NoError(t, err)
 
 	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
@@ -1027,7 +827,7 @@ func TestRevertAdmissionRollbackAndConcurrentIdentity(t *testing.T) {
 	require.NoError(t, s.UpsertThread("other", ThreadState{Agent: "main"}))
 	other, err := s.AppendEntryID(t.Context(), "other", testSessionEntry("other history", "kept"))
 	require.NoError(t, err)
-	_, _, err = stageRevertDB(t.Context(), s.db, "other", fmt.Sprintf("%d:0", other))
+	_, _, err = stageRevertDB(t.Context(), s.db, "other", fmt.Sprintf("%d:0", other), protocol.RevertBefore)
 	require.NoError(t, err)
 
 	otherBridge := &Bridge{config: Config{ConversationID: "other", SessionService: s}, log: b.log, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
@@ -1037,8 +837,6 @@ func TestRevertAdmissionRollbackAndConcurrentIdentity(t *testing.T) {
 	current, _, _, err = s.RevertState(t.Context(), "other")
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("%d:0", other), current)
-	_, _, err = stageRevertDB(t.Context(), s.db, "main", marker)
-	require.Error(t, err)
 }
 
 func TestRevertGoalIdentityAndPrompt(t *testing.T) {
@@ -1058,7 +856,7 @@ func TestRevertGoalIdentityAndPrompt(t *testing.T) {
 	_, err := s.finishTurn(t.Context(), "goal-turn", &turnFinish{conversationID: strings.TrimSpace("main"), entries: []harness.SessionEntry{*replay}, outbound: &protocol.OutboundMessage{ConversationID: "main"}})
 	require.NoError(t, err)
 	require.NoError(t, s.closeTurn(t.Context(), "goal-turn"))
-	_, prompt, err := stageRevertDB(t.Context(), s.db, "main", "")
+	_, prompt, err := stageRevertDB(t.Context(), s.db, "main", "", protocol.RevertBefore)
 	require.NoError(t, err)
 	require.Equal(t, "/goal max-turns=3 objective", prompt)
 	accepted, err := reconcileWebDB(t.Context(), s.db, inbound)
@@ -1085,8 +883,7 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 	rt := &Runtime{Sessions: s, threads: manager}
 
 	require.ErrorContains(t, b.enqueue(ctx, &bridgeRequest{inbound: inbound}, "fresh racing input"), "busy")
-	require.ErrorContains(t, rt.ClearRevert(ctx, "main"), "busy")
-	_, _, err := rt.StageRevert(ctx, "main", "bad")
+	_, _, err := rt.StageRevert(ctx, "main", "bad", protocol.RevertBefore)
 	require.Error(t, err)
 	_, err = rt.PromoteQueueItem(ctx, "main", "waiting")
 	require.ErrorContains(t, err, "busy")
@@ -1125,13 +922,13 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, queue, "the recorded input no longer has a queue owner")
 
-	_, _, err = rt.StageRevert(ctx, "main", fmt.Sprintf("%d:0", id))
+	_, _, err = rt.StageRevert(ctx, "main", fmt.Sprintf("%d:0", id), protocol.RevertBefore)
 	require.ErrorContains(t, err, "busy")
 
 	b.historyMutation = false
-	_, _, err = rt.StageRevert(ctx, "main", fmt.Sprintf("%d:0", id))
+	_, _, err = rt.StageRevert(ctx, "main", fmt.Sprintf("%d:0", id), protocol.RevertBefore)
 	require.NoError(t, err)
-	marker, prompt, err := rt.StageRevert(ctx, "main", "")
+	marker, prompt, err := rt.StageRevert(ctx, "main", "", protocol.RevertBefore)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("%d:0", id), marker)
 	require.Empty(t, prompt, "Undo at the beginning is a no-op")
@@ -1159,10 +956,10 @@ func TestRevertLatestUnsavedTurn(t *testing.T) {
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager}
 
-	_, _, err = rt.StageRevert(ctx, "main", "older-input")
+	_, _, err = rt.StageRevert(ctx, "main", "older-input", protocol.RevertBefore)
 	require.ErrorContains(t, err, "not in the latest turn", "a saved entry cannot be ordered before later turns")
 
-	marker, prompt, err := rt.StageRevert(ctx, "main", "latest-input")
+	_, prompt, err := rt.StageRevert(ctx, "main", "latest-input", protocol.RevertBefore)
 	require.NoError(t, err)
 	require.Equal(t, "redo latest", prompt)
 
@@ -1178,49 +975,6 @@ func TestRevertLatestUnsavedTurn(t *testing.T) {
 	}
 	require.Contains(t, keys(), "turn:main:older")
 	require.NotContains(t, keys(), "turn:main:latest", "Revert hides the latest turn")
-
-	require.NoError(t, rt.ClearRevert(ctx, "main"))
-
-	restored := keys()["turn:main:latest"]
-	require.Equal(t, fmt.Sprintf("%d:0", restored.ID), marker, "the cutoff names the saved turn")
-	require.Equal(t, protocol.TerminalStopped, restored.Terminal, "Redo shows the turn as stopped")
-	require.Len(t, restored.Entry.ReplayInput, 2, "Redo restores the partial reply")
-	require.Empty(t, restored.Entry.ResponseID)
-}
-
-func TestRevertMarkerGatesDoNotReadReplay(t *testing.T) {
-	t.Parallel()
-
-	s := newTestSessionService(t)
-	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
-	_, err := s.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","replay_input":{}}', '')`)
-	require.NoError(t, err)
-
-	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
-	manager := newThreadBridgeManager(nil, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
-	manager.bridges["main"] = b
-	queue, err := manager.queueItems("main")
-	require.NoError(t, err)
-	require.Empty(t, queue)
-	require.NoError(t, b.pickLaterWork(ctx, false))
-
-	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "new", true)
-	activated, err := b.activateInbound(ctx, &bridgeRequest{inbound: inbound})
-	require.NoError(t, err)
-	require.True(t, activated, "activation's locked marker check must not parse old replay")
-
-	var boundary int64
-	require.NoError(t, s.db.QueryRowContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","replay_input":[{"type":"message","role":"user","content":"selected"}]}', '') RETURNING id`).Scan(&boundary))
-	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = 'main'`, fmt.Sprintf("%d:0", boundary))
-	require.NoError(t, err)
-	queue, err = manager.queueItems("main")
-	require.NoError(t, err)
-	require.Empty(t, queue)
-
-	activated, err = b.activateInbound(ctx, &bridgeRequest{inbound: inbound})
-	require.NoError(t, err)
-	require.False(t, activated)
 }
 
 func TestRevertPreservationFailureCompletesOwners(t *testing.T) {
@@ -1262,7 +1016,7 @@ func TestRevertPreservationFailureCompletesOwners(t *testing.T) {
 			case "channel":
 				b.requestCh <- request
 
-				_, _, err = rt.StageRevert(ctx, "main", fmt.Sprintf("%d:0", id))
+				_, _, err = rt.StageRevert(ctx, "main", fmt.Sprintf("%d:0", id), protocol.RevertBefore)
 			case "handle":
 				b.handle(ctx, &request)
 
@@ -1305,7 +1059,7 @@ func TestRevertPreservationFailureCompletesOwners(t *testing.T) {
 	}
 }
 
-func TestRevertBranchCancelsPreservedOwners(t *testing.T) {
+func TestSendAfterRevertKeepsPreservedOwners(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)
@@ -1313,7 +1067,7 @@ func TestRevertBranchCancelsPreservedOwners(t *testing.T) {
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
 	id, err := s.AppendEntryID(ctx, "main", testSessionEntry("old", "answer"))
 	require.NoError(t, err)
-	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
+	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id), protocol.RevertBefore)
 	require.NoError(t, err)
 
 	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
@@ -1343,14 +1097,19 @@ func TestRevertBranchCancelsPreservedOwners(t *testing.T) {
 
 	item := protocol.ThreadQueueItem{ID: "replacement", Source: protocol.SourceWeb, Kind: protocol.InboundKindHeld, Message: "edited"}
 	require.NoError(t, rt.StashQueueItem(ctx, "main", &item))
-	<-withdrawn.done
-	require.ErrorIs(t, withdrawn.err, context.Canceled)
-	require.Empty(t, b.waiting)
+
+	select {
+	case <-withdrawn.done:
+		t.Fatal("a send after a move dropped a queued request")
+	default:
+	}
+
+	require.Len(t, b.waiting, 1)
 
 	queue, err := s.ThreadQueueForConversation("main")
 	require.NoError(t, err)
-	require.Len(t, queue, 1)
-	require.Equal(t, "replacement", queue[0].ID)
+	require.Len(t, queue, 2, "queued messages survive the move")
+	require.Equal(t, []string{"withdraw", "replacement"}, []string{queue[0].ID, queue[1].ID})
 }
 
 func TestRevertLegacyQueuePromotionAndEnqueue(t *testing.T) {
@@ -1440,26 +1199,9 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 
 	s := newTestSessionService(t)
 
-	const (
-		laterAsSlack  = `UPDATE entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input,0,prompt_header}', '"[Slack]"')::json WHERE COALESCE(entry_json->>'turn_id', '') = '';`
-		markerChanges = `CREATE TRIGGER reject_branch BEFORE UPDATE ON conversations FOR EACH ROW WHEN (OLD.revert_message_id <> NEW.revert_message_id) EXECUTE FUNCTION reject_branch()`
-	)
-
 	for _, failure := range []struct{ name, setup, want string }{
-		{"entries delete", `CREATE TRIGGER reject_branch BEFORE DELETE ON entries FOR EACH ROW EXECUTE FUNCTION reject_branch()`, "branch write failed"},
-		{"entries update", `CREATE TRIGGER reject_branch BEFORE UPDATE ON entries FOR EACH ROW EXECUTE FUNCTION reject_branch()`, "branch write failed"},
-		{"done turns delete", `CREATE TRIGGER reject_branch BEFORE DELETE ON turns FOR EACH ROW WHEN (OLD.phase = 'done') EXECUTE FUNCTION reject_branch()`, "branch write failed"},
-		{"steps delete", `CREATE TRIGGER reject_branch BEFORE DELETE ON steps FOR EACH ROW EXECUTE FUNCTION reject_branch()`, "branch write failed"},
-		{"waiting turns delete", `CREATE TRIGGER reject_branch BEFORE DELETE ON turns FOR EACH ROW WHEN (OLD.phase = 'waiting') EXECUTE FUNCTION reject_branch()`, "branch write failed"},
-		{"conversations update", `CREATE TRIGGER reject_branch BEFORE UPDATE ON conversations FOR EACH ROW EXECUTE FUNCTION reject_branch()`, "branch write failed"},
 		{"waiting turns insert", `CREATE TRIGGER reject_branch BEFORE INSERT ON turns FOR EACH ROW WHEN (NEW.phase = 'waiting') EXECUTE FUNCTION reject_branch()`, "branch write failed"},
-		{"marker commit", markerChanges, "commit revert marker"},
-		{"summary reset", `CREATE TRIGGER reject_branch BEFORE UPDATE ON conversations FOR EACH ROW WHEN (OLD.last_updated IS NOT NULL AND NEW.last_updated IS NULL) EXECUTE FUNCTION reject_branch()`, "reset reverted summary"},
-		{"unknown marker", `UPDATE conversations SET revert_message_id = '999:0'`, ErrRevertMessageGone.Error()},
-		{"unreadable kept summary", `UPDATE entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input,0,prompt_header}', '42')::json WHERE entry_json->>'turn_id' = 'old-turn'`, "decode session summary replay input"},
 		{"unreadable admitted input", `UPDATE turns SET inbound_json = '{"Text":5,"Metadata":{"web_message_id":"replacement"}}' WHERE id = 'old-turn'`, "decode admitted Web input"},
-		{"later Slack message cancel", laterAsSlack + markerChanges, "cancel staged revert"},
-		{"later Slack message principals", laterAsSlack + `CREATE TRIGGER reject_branch BEFORE UPDATE ON conversations FOR EACH ROW WHEN (OLD.revert_message_id = NEW.revert_message_id) EXECUTE FUNCTION reject_branch()`, "refresh message principals"},
 	} {
 		t.Run(failure.name, func(t *testing.T) {
 			_, err := s.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
@@ -1482,7 +1224,7 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 			require.NoError(t, s.PutThreadQueueItem("waiting", &protocol.ThreadQueueItem{ID: "waiting", ConversationID: "main", Source: protocol.SourceWeb, Message: "pending"}))
 
 			marker := fmt.Sprintf("%d:2", id)
-			_, _, err = stageRevertDB(ctx, s.db, "main", marker)
+			_, _, err = stageRevertDB(ctx, s.db, "main", marker, protocol.RevertBefore)
 			require.NoError(t, err)
 			_, err = s.db.ExecContext(ctx, `CREATE FUNCTION reject_branch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'branch write failed'; END $$`)
 			require.NoError(t, err)
@@ -1517,7 +1259,7 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 			require.ErrorContains(t, err, failure.want)
 			require.False(t, fresh)
 			require.NoError(t, s.db.QueryRowContext(ctx, snapshot).Scan(&after))
-			require.JSONEq(t, before, after, "cutoff, suffix, journals, pending inputs and summary must all survive failed admission")
+			require.JSONEq(t, before, after, "history, journals, pending inputs and summary must all survive failed admission")
 		})
 	}
 }
@@ -1540,9 +1282,8 @@ func TestRevertStorageFailuresAreNotEmptySuccess(t *testing.T) {
 	require.ErrorContains(t, err, "database is closed")
 	require.Empty(t, marker)
 
-	_, _, err = rt.StageRevert(ctx, "main", "1:0")
+	_, _, err = rt.StageRevert(ctx, "main", "1:0", protocol.RevertBefore)
 	require.ErrorContains(t, err, "database is closed")
-	require.ErrorContains(t, rt.ClearRevert(ctx, "main"), "database is closed")
 	require.ErrorContains(t, rt.RunTurn(ctx, inbound), "database is closed")
 	require.ErrorContains(t, rt.StartGoal(ctx, inbound, protocol.GoalRequest{Objective: "new"}), "database is closed")
 	_, err = rt.PopQueueItem(ctx, "main", "new")
@@ -1561,13 +1302,12 @@ func TestRevertStorageFailuresAreNotEmptySuccess(t *testing.T) {
 	require.ErrorContains(t, completion.err, "database is closed")
 	_, err = s.Delegations(ctx, "main", "", 0, 0)
 	require.ErrorContains(t, err, "database is closed")
-	_, _, err = stageRevertDB(ctx, s.db, "main", "1:0")
+	_, _, err = stageRevertDB(ctx, s.db, "main", "1:0", protocol.RevertBefore)
 	require.ErrorContains(t, err, "database is closed")
-	_, err = revertTargetDB(ctx, s.db, "main", "1:0")
+	_, err = revertTargetDB(ctx, s.db, "main", "1:0", protocol.RevertBefore)
 	require.ErrorContains(t, err, "read revert boundary")
 	_, err = saveRevertTurnDB(ctx, s.db, "main", "new", "turn")
 	require.ErrorContains(t, err, "read reverted input")
-	require.ErrorContains(t, commitRevertDB(ctx, s.db, "main", "1:0"), "lock session history")
 
 	preserved := &turnCompletion{done: make(chan struct{})}
 
@@ -1638,7 +1378,7 @@ func TestRevertStageFailurePreservesHistory(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			_, _, err = rt.StageRevert(ctx, "main", fmt.Sprintf("%d:0", id))
+			_, _, err = rt.StageRevert(ctx, "main", fmt.Sprintf("%d:0", id), protocol.RevertBefore)
 			require.ErrorContains(t, err, tc.want)
 			require.False(t, b.historyMutation, "failed staging must release the transient barrier")
 
@@ -1674,7 +1414,8 @@ func TestRevertCorruptHistoryCannotBeAdmitted(t *testing.T) {
 
 			var id int64
 			require.NoError(t, s.db.QueryRowContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, $2, '') RETURNING id`, corrupt.owner, corrupt.raw).Scan(&id))
-			_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
+			require.NoError(t, linkHistoryDB(ctx, s.db, "main", corrupt.owner, id))
+			_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id), protocol.RevertBefore)
 			require.ErrorContains(t, err, corrupt.want)
 
 			_, err = s.ObserveHistory(ctx, "main", "", 0, 0, 0, &HistoryInventory{})
@@ -1761,4 +1502,88 @@ func TestRetriedSteerWithSkippedFileIsAcceptedAfterItsTurn(t *testing.T) {
 	accepted, err := reconcileWebDB(t.Context(), s.db, send())
 	require.NoError(t, err)
 	require.True(t, accepted, "the same steer sent again after its turn is the one already taken")
+}
+
+func TestUndoThenSendKeepsBothBranches(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"chat": KindWebChat})
+
+	a, err := s.AppendEntryID(ctx, "chat", testSessionEntry("A", "a"))
+	require.NoError(t, err)
+	b, err := s.AppendEntryID(ctx, "chat", testSessionEntry("B", "b"))
+	require.NoError(t, err)
+	c, err := s.AppendEntryID(ctx, "chat", testReplayEntry(`{"type":"message","role":"user","input_id":"sent-c","content":"C"}`, `{"type":"message","role":"assistant","content":"c"}`))
+	require.NoError(t, err)
+
+	_, prompt, err := stageRevertDB(ctx, s.db, "chat", "", protocol.RevertBefore)
+	require.NoError(t, err)
+	require.Equal(t, "C", prompt)
+
+	bridge := &Bridge{config: Config{ConversationID: "chat", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
+	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})}
+	resent := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: "C"}, true)
+	resent.ConversationID, resent.Metadata["web_message_id"] = "chat", "resent-c"
+	fresh, err := rt.admitWeb(ctx, bridge, resent, protocol.GoalRequest{})
+	require.NoError(t, err)
+	require.True(t, fresh, "the restored text sent again carries a new message ID and is admitted")
+
+	sibling, err := s.AppendEntryID(ctx, "chat", testSessionEntry("C'", "c'"))
+	require.NoError(t, err)
+
+	require.Equal(t, []historyLink{{a, 0, -1}, {b, a, -1}, {c, b, -1}, {sibling, b, -1}}, chatHistoryLinks(t, s, "chat"), "C and C' are siblings after B")
+	require.Equal(t, []string{"message:A", "message:a", "message:B", "message:b", "message:C'", "message:c'"}, observedEntryTexts(t, s, "chat"))
+
+	marker, prompt, err := stageRevertDB(ctx, s.db, "chat", fmt.Sprintf("%d:1", c), protocol.RevertThrough)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("%d:2", c), marker)
+	require.Empty(t, prompt)
+	require.Equal(t, []string{"message:A", "message:a", "message:B", "message:b", "message:C", "message:c"}, observedEntryTexts(t, s, "chat"))
+
+	entries := testHistoryEntries(t, s, "chat")
+
+	keys := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		keys = append(keys, entry.Key)
+	}
+
+	require.Equal(t, []string{strconv.FormatInt(a, 10), strconv.FormatInt(b, 10), strconv.FormatInt(c, 10)}, keys, "the transcript shows A, B, C")
+
+	next, err := s.AppendEntryID(ctx, "chat", testSessionEntry("D", "d"))
+	require.NoError(t, err)
+	require.Equal(t, historyLink{next, c, 2}, chatHistoryLinks(t, s, "chat")[4], "the next message continues from C")
+}
+
+func TestRevertUnsavedTurnOnALowerBranch(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	kept, err := s.AppendEntryID(ctx, "main", testSessionEntry("kept", "answer"))
+	require.NoError(t, err)
+	sibling, err := s.AppendEntryID(ctx, "main", testSessionEntry("sibling", "higher ID"))
+	require.NoError(t, err)
+	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", sibling), protocol.RevertBefore)
+	require.NoError(t, err)
+
+	require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: "in-flight", ConversationKey: "main", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","input_id":"in-flight-input","content":"retry"}`),
+		json.RawMessage(`{"type":"message","role":"assistant","content":"partial"}`),
+	}}))
+	require.NoError(t, terminateTestTurn(ctx, s, "in-flight", protocol.TerminalStopped))
+
+	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
+	manager := newThreadBridgeManager(nil, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
+	manager.bridges["main"] = b
+	rt := &Runtime{Sessions: s, threads: manager}
+
+	_, prompt, err := rt.StageRevert(ctx, "main", "in-flight-input", protocol.RevertBefore)
+	require.NoError(t, err, "the sibling's higher ID is not on this branch")
+	require.Equal(t, "retry", prompt)
+
+	links := chatHistoryLinks(t, s, "main")
+	require.Equal(t, kept, links[len(links)-1].parent, "the saved turn continues from its own branch")
 }

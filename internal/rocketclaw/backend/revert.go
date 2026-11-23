@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,48 +30,41 @@ const popQueueItemSQL = `WITH tail AS (
 UPDATE turns t SET reason = $5, delivery = $3, park_after = '', inbound_json = jsonb_set(t.inbound_json::jsonb, '{Kind}', to_jsonb($3::text)), position = tail.position
 FROM tail WHERE t.conversation_id = $1 AND t.input_id = $2 AND t.phase = 'waiting' AND t.delivery = $4`
 
-const sessionHistorySQL = `RECURSIVE starts AS (
-    SELECT $1::text AS id
-), ` + ancestorsSQL + `, reverted_parents AS (
-    SELECT p.conversation_id, l.call_id, split_part(p.revert_message_id, ':', 1)::bigint AS entry_id, split_part(p.revert_message_id, ':', 2)::integer AS replay_index
-    FROM ancestors a JOIN conversations l ON l.conversation_id = a.conversation_id JOIN conversations p ON p.conversation_id = l.parent_conversation_id
-    WHERE p.revert_message_id <> ''
-), kept_calls AS (
-    SELECT DISTINCT p.conversation_id FROM reverted_parents p JOIN entries e ON e.conversation_id = p.conversation_id
-    CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) WITH ORDINALITY AS items(item, ordinal)
-    WHERE item->>'type' = 'function_call' AND item->>'call_id' = p.call_id
-        AND (e.id < p.entry_id OR e.id = p.entry_id AND ordinal <= p.replay_index)
-), visibility AS (
-    SELECT count(*) FILTER (WHERE k.conversation_id IS NULL) = 0 AS readable FROM reverted_parents p LEFT JOIN kept_calls k USING (conversation_id)
-), viewer AS (
-    SELECT v.readable, COALESCE(c.revert_message_id, '') AS marker
-    FROM visibility v LEFT JOIN conversations c ON c.conversation_id = $1
+const sessionHistorySQL = `RECURSIVE cutoff AS (
+    SELECT COALESCE(max(revert_message_id), '') AS marker FROM conversations WHERE conversation_id = $1
 ), reporting_runs AS (
     SELECT conversation_id FROM conversations WHERE reports_to = $1
     UNION SELECT continues FROM conversations WHERE conversation_id = $1 AND continues IS NOT NULL
 ), viewed_rows AS (
-    SELECT e.id, e.conversation_id, e.entry_json, FALSE AS reported FROM entries e CROSS JOIN viewer v
-    WHERE e.conversation_id = $1 AND v.readable
-    UNION ALL
-    SELECT e.id, e.conversation_id, e.entry_json, TRUE FROM reporting_runs r JOIN entries e USING (conversation_id) CROSS JOIN viewer v
-    WHERE v.readable
+    SELECT e.id, e.conversation_id, e.entry_json FROM history_links l JOIN entries e ON e.id = l.entry_id WHERE l.conversation_id = $1
 ), attributed_rows AS (
-    SELECT id, entry_json, entry_json::jsonb AS entry, reported AS synced,
-        CASE WHEN reported THEN conversation_id ELSE '' END AS source_conversation_id
+    SELECT id, entry_json, entry_json::jsonb AS entry, conversation_id <> $1 AS synced,
+        CASE WHEN conversation_id <> $1 THEN conversation_id ELSE '' END AS source_conversation_id
     FROM viewed_rows
 ), physical_entries AS (
     SELECT id, entry_json, source_conversation_id, synced, CASE WHEN synced AND jsonb_typeof(entry->'replay_input') = 'array'
         THEN jsonb_set(entry, '{replay_input}', jsonb_path_query_array(entry->'replay_input', '$[*] ? (!(@.type == "compaction" || @.type == "compaction_summary"))'))
         ELSE entry END AS entry
     FROM attributed_rows
-), cutoff AS (
-    SELECT marker FROM viewer
+), marker_point AS (
+    SELECT NULLIF(split_part(marker, ':', 1), '')::bigint AS entry_id, NULLIF(split_part(marker, ':', 2), '')::integer AS length FROM cutoff
+), latest_link AS (
+    SELECT entry_id FROM history_links WHERE conversation_id = $1 ORDER BY seq DESC LIMIT 1
+), leaf AS (
+    SELECT $1::text AS conversation_id, CASE WHEN m.length = 0 THEN l.parent_entry_id ELSE COALESCE(m.entry_id, n.entry_id) END AS entry_id,
+        CASE WHEN m.length = 0 THEN l.parent_length ELSE m.length END AS length
+    FROM marker_point m LEFT JOIN latest_link n ON TRUE LEFT JOIN history_links l ON l.conversation_id = $1 AND l.entry_id = m.entry_id
+), current_path AS (
+    SELECT conversation_id, entry_id, length FROM leaf
+    UNION ALL SELECT p.conversation_id, l.parent_entry_id, l.parent_length FROM current_path p
+    JOIN history_links l ON l.conversation_id = p.conversation_id AND l.entry_id = p.entry_id WHERE l.parent_entry_id IS NOT NULL
 ), effective_entries AS (
-    SELECT e.*, CASE WHEN e.id = NULLIF(split_part(c.marker, ':', 1), '')::bigint
-        THEN split_part(c.marker, ':', 2)::integer ELSE -1 END AS revert_index, c.marker
-    FROM physical_entries e CROSS JOIN cutoff c
-    WHERE c.marker = '' OR e.id < split_part(c.marker, ':', 1)::bigint
-        OR e.id = split_part(c.marker, ':', 1)::bigint AND split_part(c.marker, ':', 2)::integer > 0
+    SELECT e.*, CASE WHEN p.length < jsonb_array_length(CASE WHEN jsonb_typeof(e.entry->'replay_input') = 'array' THEN e.entry->'replay_input' END)
+        THEN p.length ELSE -1 END AS revert_index
+    FROM current_path p JOIN physical_entries e ON e.id = p.entry_id
+), off_path_turns AS (
+    SELECT a.id FROM turns a LEFT JOIN current_path p ON p.entry_id = a.history_anchor_id
+    WHERE a.conversation_id = $1 AND a.terminal <> '' AND a.history_anchor_id <> 0 AND p.entry_id IS NULL
 )`
 
 func clipRevertEntry(entry *harness.SessionEntry, index int) {
@@ -89,20 +81,29 @@ func clipRevertEntry(entry *harness.SessionEntry, index int) {
 	}
 }
 
-func revertBoundary(ctx context.Context, db stateStoreDB, conversationID, messageID string) (ObservedSessionEntry, int, error) {
+func parseMessageID(messageID string) (id int64, index int, err error) {
 	idText, indexText, ok := strings.Cut(messageID, ":")
 	id, errID := strconv.ParseInt(idText, 10, 64)
 
 	index, errIndex := strconv.Atoi(indexText)
 	if !ok || errID != nil || errIndex != nil || id <= 0 || index < 0 || strconv.FormatInt(id, 10) != idText || strconv.Itoa(index) != indexText {
-		return ObservedSessionEntry{}, 0, ErrInvalidRevertMessage
+		return 0, 0, ErrInvalidRevertMessage
+	}
+
+	return id, index, nil
+}
+
+func revertBoundary(ctx context.Context, db stateStoreDB, conversationID, messageID string, boundary protocol.RevertBoundary) (ObservedSessionEntry, int, error) {
+	id, index, err := parseMessageID(messageID)
+	if err != nil {
+		return ObservedSessionEntry{}, 0, err
 	}
 
 	entry := ObservedSessionEntry{ID: id}
 
 	var raw string
 
-	err := db.QueryRowContext(ctx, `WITH `+sessionHistorySQL+`
+	err = db.QueryRowContext(ctx, `WITH `+sessionHistorySQL+`
 SELECT entry_json::text, synced FROM physical_entries WHERE id = $2`, conversationID, id).Scan(&raw, &entry.Synced)
 	if errors.Is(err, sql.ErrNoRows) {
 		return entry, 0, ErrRevertMessageGone
@@ -124,18 +125,25 @@ SELECT entry_json::text, synced FROM physical_entries WHERE id = $2`, conversati
 		return entry, 0, ErrRevertMessageGone
 	}
 
-	items, err := harness.ReplayInputToParams(entry.Entry.ReplayInput[index : index+1])
+	end := index + 1
+	if boundary == protocol.RevertThrough {
+		end = min(index+2, len(entry.Entry.ReplayInput))
+	}
+
+	items, err := harness.ReplayInputToParams(entry.Entry.ReplayInput[index:end])
 	if err != nil {
 		return entry, 0, fmt.Errorf("decode revert boundary: %w", err)
 	}
 
-	role, _, found, err := ReplayInputMessageRoleText(&items[0], entry.Entry.ReplayInput[index])
-	if err != nil {
-		return entry, 0, err
+	roles := []string{"", "user"}
+	for i := range items {
+		if roles[i], _, _, err = ReplayInputMessageRoleText(&items[i], entry.Entry.ReplayInput[index+i]); err != nil {
+			return entry, 0, err
+		}
 	}
 
-	if !found || role != "user" {
-		return entry, 0, errors.New("revert boundary must be a user message")
+	if roles[0] != "user" && (boundary != protocol.RevertThrough || roles[0] != "assistant" && roles[1] != "user") {
+		return entry, 0, errors.New("revert boundary must be a user message, or an agent reply to move through")
 	}
 
 	return entry, index, nil
@@ -154,9 +162,10 @@ func revertStateDB(ctx context.Context, db stateStoreDB, conversationID string) 
 	err = db.QueryRowContext(ctx, `WITH `+sessionHistorySQL+`, chat AS (
     SELECT kind FROM conversations WHERE conversation_id = $1
 ), floor AS (
-    SELECT e.id, items.ordinal - 1 AS idx FROM physical_entries e LEFT JOIN chat m ON TRUE
+    SELECT e.id, items.ordinal - 1 AS idx FROM effective_entries e LEFT JOIN chat m ON TRUE
     CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry->'replay_input', 'null'::jsonb)) WITH ORDINALITY AS items(item, ordinal)
-    WHERE e.synced OR item->>'role' = 'user' AND (item->>'prompt_header' !~ '^\[(Web|System)[ \]]' OR item->>'prompt_header' IS NULL AND m.kind = 'slack_thread')
+    WHERE (e.revert_index < 0 OR items.ordinal <= e.revert_index)
+        AND `+outsideItemSQL+`
     ORDER BY e.id DESC, items.ordinal DESC LIMIT 1
 ), previous AS (
     SELECT e.id::text || ':' || (ordinal - 1)::text AS id FROM effective_entries e LEFT JOIN floor f ON TRUE
@@ -173,16 +182,7 @@ FROM cutoff c LEFT JOIN chat m ON TRUE LEFT JOIN previous p ON TRUE LEFT JOIN fl
 	return marker, eligible, predecessor, floor, nil
 }
 
-func afterRevertFloor(id, floor string) bool {
-	var entry, index, floorEntry, floorIndex int64
-
-	_, _ = fmt.Sscanf(id, "%d:%d", &entry, &index)
-	_, _ = fmt.Sscanf(floor, "%d:%d", &floorEntry, &floorIndex)
-
-	return entry > floorEntry || entry == floorEntry && index > floorIndex
-}
-
-func stageRevertDB(ctx context.Context, db stateStoreDB, conversationID, before string) (cutoff, prompt string, err error) {
+func stageRevertDB(ctx context.Context, db stateStoreDB, conversationID, target string, boundary protocol.RevertBoundary) (marker, prompt string, err error) {
 	marker, eligible, predecessor, floor, err := revertStateDB(ctx, db, conversationID)
 	if err != nil {
 		return "", "", err
@@ -192,127 +192,73 @@ func stageRevertDB(ctx context.Context, db stateStoreDB, conversationID, before 
 		return "", "", errRevertConversation
 	}
 
-	if before == "" {
-		before = predecessor
-		if before == "" {
+	if target == "" {
+		target, boundary = predecessor, protocol.RevertBefore
+		if target == "" {
 			return marker, "", nil
 		}
 	}
 
-	entry, index, err := revertBoundary(ctx, db, conversationID, before)
+	entry, index, err := revertBoundary(ctx, db, conversationID, target, boundary)
 	if err != nil {
 		return "", "", err
 	}
 
-	if !afterRevertFloor(before, floor) {
-		return "", "", errors.New("revert cannot go back past a message from a cron run, External MCP, or Slack")
+	length := index
+	if boundary == protocol.RevertThrough {
+		length++
 	}
 
-	if marker != "" && !afterRevertFloor(marker, before) {
-		return "", "", errors.New("revert message is not visible")
+	if floor != "" {
+		var kept bool
+		if err := queryScalar(ctx, db, "read revert floor ancestry", `WITH RECURSIVE target AS (
+    SELECT $2::bigint AS entry_id, $3::integer AS length
+    UNION ALL SELECT l.parent_entry_id, l.parent_length FROM target t JOIN history_links l ON l.conversation_id = $1 AND l.entry_id = t.entry_id
+    WHERE l.parent_entry_id IS NOT NULL
+)
+SELECT count(*) > 0 FROM target WHERE entry_id = split_part($4, ':', 1)::bigint AND (length IS NULL OR length > split_part($4, ':', 2)::integer)`, &kept, conversationID, entry.ID, length, floor); err != nil {
+			return "", "", err
+		}
+
+		if !kept {
+			return "", "", errors.New("revert cannot go back past a message from a cron run, External MCP, or Slack")
+		}
 	}
 
-	items, _ := harness.ReplayInputToParams(entry.Entry.ReplayInput[index : index+1])
-	_, text, _, err := ReplayInputMessageRoleText(&items[0], entry.Entry.ReplayInput[index])
+	if boundary != protocol.RevertThrough {
+		items, _ := harness.ReplayInputToParams(entry.Entry.ReplayInput[index : index+1])
+		if _, prompt, _, err = ReplayInputMessageRoleText(&items[0], entry.Entry.ReplayInput[index]); err != nil {
+			return "", "", err
+		}
 
-	var goalPrompt string
-	if err := db.QueryRowContext(ctx, `WITH goal AS (SELECT inbound_json->'Metadata'->>'web_goal_prompt' AS prompt FROM turns
+		var goalPrompt string
+		if err := db.QueryRowContext(ctx, `WITH goal AS (SELECT inbound_json->'Metadata'->>'web_goal_prompt' AS prompt FROM turns
     WHERE conversation_id = $1 AND phase <> 'waiting' AND takes_lane AND inbound_json->'Metadata'->>'web_message_id' = $2 LIMIT 1)
 SELECT COALESCE(max(prompt), '') FROM goal`, conversationID, items[0].OfMessage.ExtraFields()["input_id"]).Scan(&goalPrompt); err != nil {
-		return "", "", fmt.Errorf("read reverted goal prompt: %w", err)
+			return "", "", fmt.Errorf("read reverted goal prompt: %w", err)
+		}
+
+		prompt = cmp.Or(goalPrompt, prompt)
 	}
 
-	if goalPrompt != "" {
-		text = goalPrompt
-	}
-
-	if _, err := db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $2 WHERE conversation_id = $1`, conversationID, before); err != nil {
-		return "", "", fmt.Errorf("stage revert: %w", err)
-	}
-
-	if err := stageShadowRevertDB(ctx, db, conversationID, &entry); err != nil {
+	if err := queryScalar(ctx, db, "stage revert", `WITH latest AS (
+    SELECT entry_id FROM history_links WHERE conversation_id = $1 ORDER BY seq DESC LIMIT 1
+)
+UPDATE conversations c SET revert_message_id = CASE WHEN l.entry_id = $3 AND $4 THEN '' ELSE $2 END
+FROM latest l WHERE c.conversation_id = $1 RETURNING c.revert_message_id`, &marker, conversationID, fmt.Sprintf("%d:%d", entry.ID, length), entry.ID, length == len(entry.Entry.ReplayInput)); err != nil {
 		return "", "", err
 	}
 
-	if err := refreshPrincipals(ctx, db, []string{conversationID}); err != nil {
+	if err := stageShadowRevertDB(ctx, db, conversationID); err != nil {
 		return "", "", err
 	}
 
-	return before, text, err
+	return marker, prompt, refreshPathSummary(ctx, db, conversationID)
 }
 
-func commitRevertDB(ctx context.Context, db stateStoreDB, conversationID, marker string) error {
-	if err := lockShadowHistory(ctx, db, conversationID); err != nil {
+func refreshPathSummary(ctx context.Context, db stateStoreDB, conversationID string) error {
+	if _, err := execState(ctx, db, "reset moved summary", `UPDATE conversations SET preview = NULL, last_updated = NULL WHERE conversation_id = $1`, conversationID); err != nil {
 		return err
-	}
-
-	entry, index, err := revertBoundary(ctx, db, conversationID, marker)
-	if err != nil {
-		return err
-	}
-
-	if err := commitShadowRevertDB(ctx, db, conversationID, &entry); err != nil {
-		return err
-	}
-
-	discarded, err := queryStrings(ctx, db, `WITH cut_turns AS (
-    SELECT DISTINCT entry_json->>'turn_id' AS id FROM entries WHERE conversation_id = $1 AND id >= $2
-)
-SELECT a.id FROM turns a LEFT JOIN cut_turns c USING (id)
-WHERE a.conversation_id = $1 AND (a.history_anchor_id >= $2 OR a.id = $3 OR c.id IS NOT NULL)`, "discarded revert turns", conversationID, entry.ID, entry.Entry.TurnID)
-	if err != nil {
-		return err
-	}
-
-	if err := pruneRevertDelegations(ctx, db, conversationID); err != nil {
-		return err
-	}
-
-	if _, err := db.ExecContext(ctx, `WITH owned AS (
-    SELECT input_id AS job_id FROM turns WHERE conversation_id = $1 AND NOT takes_lane AND phase = 'running'
-), discarded AS (
-    SELECT DISTINCT s.key FROM steps s JOIN unnest($2::text[]) d(id) ON s.key = d.id OR starts_with(s.key, d.id || '/')
-    LEFT JOIN owned j ON starts_with(s.key, j.job_id || '/') WHERE s.conversation_id = $1 AND j.job_id IS NULL
-)
-DELETE FROM steps s USING discarded d WHERE s.conversation_id = $1 AND s.key = d.key`, conversationID, discarded); err != nil {
-		return fmt.Errorf("prune revert journals: %w", err)
-	}
-
-	if _, err := db.ExecContext(ctx, `DELETE FROM turns WHERE conversation_id = $1 AND id = ANY($2)`, conversationID, discarded); err != nil {
-		return fmt.Errorf("prune revert turns: %w", err)
-	}
-
-	if err := recordRunning(ctx, db, []string{conversationID}); err != nil {
-		return err
-	}
-
-	if _, err := db.ExecContext(ctx, `DELETE FROM entries WHERE conversation_id = $1 AND (id > $2 OR id = $2 AND $3 = 0)`, conversationID, entry.ID, index); err != nil {
-		return fmt.Errorf("prune revert suffix: %w", err)
-	}
-
-	if index > 0 {
-		clipRevertEntry(&entry.Entry, index)
-
-		data, err := json.Marshal(entry.Entry)
-		if err != nil {
-			return fmt.Errorf("encode revert prefix: %w", err)
-		}
-
-		if _, err := db.ExecContext(ctx, `WITH kept AS (
-    SELECT string_agg(l.line, E'\n' ORDER BY l.n) AS search_text FROM entries e
-    CROSS JOIN LATERAL string_to_table(e.search_text, E'\n') WITH ORDINALITY AS l(line, n) WHERE e.id = $1 AND split_part(l.line, ' ', 1)::integer < $3
-)
-UPDATE entries e SET entry_json = $2, search_text = k.search_text FROM kept k WHERE e.id = $1`, entry.ID, string(data), index); err != nil {
-			return fmt.Errorf("save revert prefix: %w", err)
-		}
-	}
-
-	if _, err := db.ExecContext(ctx, `DELETE FROM turns WHERE conversation_id = $1 AND phase = 'waiting' AND source = $2 AND reason <> $3`, conversationID, protocol.SourceWeb, waitStashed); err != nil {
-		return fmt.Errorf("prune reverted human queue: %w", err)
-	}
-
-	if _, err := db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '', preview = NULL, last_updated = NULL WHERE conversation_id = $1`, conversationID); err != nil {
-		return fmt.Errorf("commit revert marker and reset reverted summary: %w", err)
 	}
 
 	summary, err := loadSessionSummary(ctx, db, conversationID)
@@ -341,6 +287,10 @@ SELECT conversation_id FROM children WHERE NOT kept`, "discarded revert delegati
 		return err
 	}
 
+	return deleteDelegationsDB(ctx, db, children)
+}
+
+func deleteDelegationsDB(ctx context.Context, db stateStoreDB, children []string) error {
 	for _, table := range []string{"entries", "turns", "steps", "conversations"} {
 		if _, err := db.ExecContext(ctx, `DELETE FROM `+table+` WHERE conversation_id = ANY($1)`, children); err != nil {
 			return fmt.Errorf("prune revert delegation: %w", err)
@@ -370,22 +320,17 @@ SELECT COALESCE(saved.message_id, ''), COALESCE(recorded.turn_id, '') FROM saved
 	return messageID, turnID, nil
 }
 
-func revertTargetDB(ctx context.Context, db stateStoreDB, conversationID, target string) (ObservedSessionEntry, error) {
-	messageID, turnID := target, ""
+func revertTargetDB(ctx context.Context, db stateStoreDB, conversationID, target string, boundary protocol.RevertBoundary) (turnID string, err error) {
+	messageID := target
 	if !strings.Contains(target, ":") {
-		var err error
-		if messageID, turnID, err = revertInputDB(ctx, db, conversationID, target); err != nil {
-			return ObservedSessionEntry{}, err
+		if messageID, turnID, err = revertInputDB(ctx, db, conversationID, target); err != nil || messageID == "" {
+			return turnID, err
 		}
 	}
 
-	if messageID == "" {
-		return ObservedSessionEntry{ID: math.MaxInt64, Entry: harness.SessionEntry{TurnID: turnID}}, nil
-	}
+	_, _, err = revertBoundary(ctx, db, conversationID, messageID, boundary)
 
-	boundary, _, err := revertBoundary(ctx, db, conversationID, messageID)
-
-	return boundary, err
+	return turnID, err
 }
 
 func saveRevertTurnDB(ctx context.Context, db stateStoreDB, conversationID, inputID, turnID string) (string, error) {
@@ -394,11 +339,11 @@ func saveRevertTurnDB(ctx context.Context, db stateStoreDB, conversationID, inpu
 		return messageID, err
 	}
 
-	appended, err := appendQueriedEntries(ctx, db, conversationID, "reverted turn", `WITH turn AS (
+	appended, err := appendQueriedEntries(ctx, db, conversationID, "reverted turn", `WITH `+sessionHistorySQL+`, turn AS (
     SELECT id, history_anchor_id, created_at_unix_ns, replay, record FROM turns
     WHERE conversation_id = $1 AND id = $2 AND record IS NOT NULL
 ), later AS (
-    SELECT t.id FROM turn t JOIN entries e ON e.conversation_id = $1 AND e.id > t.history_anchor_id
+    SELECT t.id FROM turn t JOIN effective_entries e ON NOT e.synced AND e.id > t.history_anchor_id
     UNION SELECT t.id FROM turn t JOIN turns l ON l.conversation_id = $1 AND l.phase <> 'waiting' AND l.takes_lane AND l.created_at_unix_ns > t.created_at_unix_ns
 )
 SELECT '{"replay_input":' || COALESCE(t.replay::text, 'null') || ',' || substr((t.record::jsonb - 'response_id')::text, 2)
@@ -416,7 +361,7 @@ FROM turn t LEFT JOIN later USING (id) WHERE later.id IS NULL`, conversationID, 
 	return messageID, err
 }
 
-func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string) (marker, prompt string, err error) {
+func (r *Runtime) StageRevert(ctx context.Context, conversationID, target string, boundary protocol.RevertBoundary) (marker, prompt string, err error) {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
 		return "", "", err
 	}
@@ -430,49 +375,65 @@ func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string
 		return "", "", errRevertConversation
 	}
 
-	if before == "" && predecessor == "" {
+	if target == "" && predecessor == "" {
 		return current, "", nil
 	}
 
-	target := cmp.Or(before, predecessor)
-
-	boundary, err := revertTargetDB(ctx, r.Sessions.db, conversationID, target)
+	turnID, err := revertTargetDB(ctx, r.Sessions.db, conversationID, cmp.Or(target, predecessor), boundary)
 	if err != nil {
 		return "", "", err
 	}
 
-	b, err := r.threads.recordedBridge(ctx, conversationID)
+	b, err := r.holdHistory(ctx, conversationID)
 	if err != nil {
 		return "", "", err
 	}
 
-	b.mu.Lock()
-	if b.historyMutation {
-		b.mu.Unlock()
-		return "", "", errors.New("conversation history is busy")
-	}
-
-	b.historyMutation, b.inputOpen = true, false
-	settlement := b.settlement
-
-	b.mu.Unlock()
 	defer func() {
 		releaseHistory([]*Bridge{b})
 
-		if err != nil {
-			_ = b.pickLaterWork(ctx, false)
-		}
+		_ = b.pickLaterWork(context.WithoutCancel(ctx), false)
 	}()
+
+	return r.moveCurrentPoint(ctx, b, conversationID, target, turnID, boundary)
+}
+
+func (r *Runtime) holdHistory(ctx context.Context, conversationID string) (*Bridge, error) {
+	b, err := r.threads.recordedBridge(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.historyMutation {
+		return nil, errHistoryBusy
+	}
+
+	b.historyMutation = true
+
+	return b, nil
+}
+
+func (r *Runtime) moveCurrentPoint(ctx context.Context, b *Bridge, conversationID, target, turnID string, boundary protocol.RevertBoundary) (marker, prompt string, err error) {
+	b.mu.Lock()
+	settlement := b.settlement
+	b.mu.Unlock()
 
 	if err := r.Sessions.StopGoal(conversationID); err != nil {
 		return "", "", err
 	}
 
-	workers, err := r.settleShadowRevert(ctx, conversationID, &boundary)
+	workers, err := r.settleShadowRevert(ctx, conversationID)
 	if err != nil {
 		return "", "", err
 	}
 	defer releaseHistory(workers)
+
+	b.mu.Lock()
+	b.inputOpen = false
+	b.mu.Unlock()
 
 	b.InterruptActiveTurn()
 
@@ -518,70 +479,18 @@ func (r *Runtime) StageRevert(ctx context.Context, conversationID, before string
 		return "", "", errors.Join(err, errors.New("revert requires settled delivery"))
 	}
 
-	if !strings.Contains(target, ":") {
-		if before, err = saveRevertTurnDB(ctx, tx, conversationID, target, boundary.Entry.TurnID); err != nil {
+	if target != "" && !strings.Contains(target, ":") {
+		if target, err = saveRevertTurnDB(ctx, tx, conversationID, target, turnID); err != nil {
 			return "", "", err
 		}
 	}
 
-	marker, prompt, err = stageRevertDB(ctx, tx, conversationID, before)
+	marker, prompt, err = stageRevertDB(ctx, tx, conversationID, target, boundary)
 	if err != nil {
 		return "", "", err
 	}
 
 	return marker, prompt, commitState(tx, "staged revert")
-}
-
-func (r *Runtime) ClearRevert(ctx context.Context, conversationID string) error {
-	b, err := r.mutableBridge(ctx, conversationID)
-	if err != nil {
-		return err
-	}
-
-	b.mu.Lock()
-	if b.historyMutation {
-		b.mu.Unlock()
-		return errors.New("conversation history is busy")
-	}
-
-	b.historyMutation = true
-	b.mu.Unlock()
-
-	tx, err := r.Sessions.db.BeginTx(ctx, nil)
-	if err == nil {
-		defer func() { _ = tx.Rollback() }()
-
-		err = lockShadowHistory(ctx, tx, conversationID)
-	}
-
-	if err == nil {
-		_, eligible, _, _, errState := revertStateDB(ctx, tx, conversationID)
-
-		err = errState
-		if err == nil && !eligible {
-			err = errRevertConversation
-		}
-	}
-
-	if err == nil {
-		_, err = tx.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1 OR shadow_parent = $1`, conversationID)
-	}
-
-	if err == nil {
-		err = refreshPrincipals(ctx, tx, []string{conversationID})
-	}
-
-	if err == nil {
-		err = tx.Commit()
-	}
-
-	releaseHistory([]*Bridge{b})
-
-	if err != nil {
-		return fmt.Errorf("clear revert: %w", err)
-	}
-
-	return b.pickLaterWork(ctx, false)
 }
 
 func (b *Bridge) preserveRevertRequestLocked(ctx context.Context, request *bridgeRequest) (err error) {
@@ -696,16 +605,9 @@ func (r *Runtime) mutateWebQueue(ctx context.Context, conversationID, id string,
 		return false, err
 	}
 
-	var (
-		marker string
-		paused bool
-	)
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(max(revert_message_id), ''), COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, conversationID).Scan(&marker, &paused); err != nil {
-		return false, fmt.Errorf("read queue mutation cutoff: %w", err)
-	}
-
-	if marker != "" {
-		return false, errors.New("conversation history is reverted")
+	var paused bool
+	if err := queryScalar(ctx, tx, "read queue mutation pause", `SELECT COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, &paused, conversationID); err != nil {
+		return false, err
 	}
 
 	if paused && kind == protocol.InboundKindSteer {
@@ -794,11 +696,6 @@ func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, inbound *protocol.Inb
 		return false, err
 	}
 
-	committed, err := settleRevertDB(ctx, tx, inbound.ConversationID)
-	if err != nil {
-		return false, err
-	}
-
 	if goal.Objective != "" {
 		if err := beginGoalDB(ctx, tx, inbound.ConversationID, &GoalState{Objective: goal.Objective, MaxTurns: goal.MaxTurns, PrincipalName: inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], PrincipalEmail: inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey], Origin: reviewOriginHeader(inbound)}); err != nil {
 			return false, err
@@ -820,45 +717,7 @@ func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, inbound *protocol.Inb
 		return false, fmt.Errorf("commit Web admission: %w", err)
 	}
 
-	if committed {
-		b.dropRevertedWaitingLocked()
-	}
-
 	return true, nil
-}
-
-func settleRevertDB(ctx context.Context, db stateStoreDB, conversationID string) (bool, error) {
-	var marker string
-	if err := queryScalar(ctx, db, "read admission cutoff", `SELECT COALESCE(max(revert_message_id), '') FROM conversations WHERE conversation_id = $1`, &marker, conversationID); err != nil || marker == "" {
-		return false, err
-	}
-
-	marker, _, _, floor, err := revertStateDB(ctx, db, conversationID)
-	if err != nil {
-		return false, err
-	}
-
-	if !afterRevertFloor(marker, floor) {
-		if _, err := db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1 OR shadow_parent = $1`, conversationID); err != nil {
-			return false, fmt.Errorf("cancel staged revert: %w", err)
-		}
-
-		return false, refreshPrincipals(ctx, db, []string{conversationID})
-	}
-
-	return true, commitRevertDB(ctx, db, conversationID, marker)
-}
-
-func (b *Bridge) dropRevertedWaitingLocked() {
-	for i := range b.waiting {
-		waiting := &b.waiting[i]
-		if waiting.completion != nil {
-			waiting.completion.err = context.Canceled
-			close(waiting.completion.done)
-		}
-	}
-
-	b.waiting = nil
 }
 
 func reconcileWebDB(ctx context.Context, db stateStoreDB, inbound *protocol.InboundMessage) (bool, error) {

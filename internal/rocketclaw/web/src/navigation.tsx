@@ -17,12 +17,13 @@ export const pagePath = () => location.pathname.slice(server() ? server().length
 
 // A permission review can open at the approver's answer that gave a reason: the one saved under its
 // review turn, or, for reviews saved before turns were named, the first that gave the reason.
-export function panelHref(id?: string, panel: "delegation" | "skill" | "shadow" | "pullRequests" | "pagePreview" = "delegation", reason?: string, turn?: string) {
+export function panelHref(id?: string, panel: "delegation" | "skill" | "shadow" | "pullRequests" | "pagePreview" | "tree" = "delegation", reason?: string, turn?: string) {
   const params = new URLSearchParams(location.search);
   params.delete("delegation");
   params.delete("skill");
   params.delete("pullRequests");
   params.delete("pagePreview");
+  params.delete("tree");
   params.delete("reason");
   params.delete("answer");
   if (id) params.set(panel, id);

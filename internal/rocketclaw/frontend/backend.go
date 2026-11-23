@@ -18,8 +18,8 @@ type Backend interface {
 	SwitchConversationAgent(string, string) (bool, error)
 	RunningAgent(string) string
 	RunTurn(context.Context, *protocol.InboundMessage) error
-	StageRevert(context.Context, string, string) (string, string, error)
-	ClearRevert(context.Context, string) error
+	StageRevert(context.Context, string, string, protocol.RevertBoundary) (string, string, error)
+	DeleteBranch(context.Context, string, string, bool) (protocol.BranchDeletion, error)
 	AgentPaused(context.Context, string) (bool, error)
 	SetAgentPaused(context.Context, string, string, bool) error
 	PostPausedMessage(context.Context, *protocol.InboundMessage) error

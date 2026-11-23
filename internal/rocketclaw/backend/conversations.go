@@ -86,9 +86,16 @@ func (r *Runtime) ContinueRun(ctx context.Context, run, conversationID string, s
 	}
 
 	if !shared {
-		if _, err := execState(ctx, tx, "link continued run", `UPDATE conversations c SET continues = $2, cron_run = $2,
-    preview = COALESCE(p.preview, c.preview), last_updated = COALESCE(p.last_updated, c.last_updated) FROM conversations p WHERE c.conversation_id = $1 AND c.continues IS NULL AND p.conversation_id = $2`, conversationID, run); err != nil {
+		continued, err := execRows(ctx, tx, "link continued run", `UPDATE conversations c SET continues = $2, cron_run = $2,
+    preview = COALESCE(p.preview, c.preview), last_updated = COALESCE(p.last_updated, c.last_updated) FROM conversations p WHERE c.conversation_id = $1 AND c.continues IS NULL AND p.conversation_id = $2`, conversationID, run)
+		if err != nil {
 			return "", err
+		}
+
+		if continued > 0 {
+			if err := linkHistoryDB(ctx, tx, conversationID, run, 0); err != nil {
+				return "", err
+			}
 		}
 
 		if err := refreshPrincipals(ctx, tx, []string{conversationID}); err != nil {
@@ -319,15 +326,6 @@ func (r *Runtime) EditQueueItem(ctx context.Context, conversationID, id, text, p
 
 	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
 		return false, err
-	}
-
-	var marker string
-	if err := queryScalar(ctx, tx, "read queue edit cutoff", `SELECT COALESCE(revert_message_id, '') FROM conversations WHERE conversation_id = $1`, &marker, conversationID); err != nil {
-		return false, err
-	}
-
-	if marker != "" {
-		return false, errors.New("conversation history is reverted")
 	}
 
 	item, err := scanThreadQueueItem(tx.QueryRowContext(ctx, `SELECT `+waitingColumns+` FROM turns

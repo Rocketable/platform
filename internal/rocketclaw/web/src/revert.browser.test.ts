@@ -3,8 +3,6 @@ import path from "node:path";
 import { unpacked } from "./test-browsers";
 import type { TranscriptEvent } from "./types";
 
-// OpenCode V2 packages/app/src/session/revert.ts and
-// packages/session-ui/src/message/message-content.tsx: message action, Undo/Redo.
 for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`revert and owned local drafts at ${width}px`, async () => {
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
   const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
@@ -26,7 +24,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       case "/api/ListConfig": return rejectedConfig ? Response.json({ message: "Config rejected", code: 16 }, { status: 401 }) : Response.json({ config: { workspace } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
-      case "/api/ListQueue": return Response.json({ items: marker ? [] : [{ id: "pending", text: "Waiting request", delivery: "STASH" }] });
+      case "/api/ListQueue": return Response.json({ items: [{ id: "pending", text: "Waiting request", delivery: "STASH" }] });
       case "/api/History": {
         const index = marker ? messages.findIndex((item) => item.messageId === marker) : messages.length;
         const visible = messages.slice(0, index);
@@ -38,7 +36,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
         marker = messages[index].messageId!;
         return Response.json({ revertMessageId: marker, prompt: messages[index] });
       }
-      case "/api/ClearRevert": marker = ""; return Response.json({});
       case "/api/Prompt": prompts.push(input); return Response.json({ privateText: "" });
       case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
@@ -62,9 +59,8 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     expect(await input.evaluate((node: HTMLTextAreaElement) => node === document.activeElement && node.selectionStart === node.value.length && node.selectionEnd === node.value.length)).toBe(true);
     // Composer restoration precedes the queue and history refreshes.
     await page.getByText("Second answer", { exact: true }).waitFor({ state: "detached" });
-    await page.getByText("Waiting request", { exact: true }).waitFor({ state: "detached" });
     expect(await page.getByText("Second answer", { exact: true }).count()).toBe(0);
-    expect(await page.getByText("Waiting request", { exact: true }).count()).toBe(0);
+    expect(await page.getByText("Waiting request", { exact: true }).count()).toBe(1);
     expect(prompts).toHaveLength(0);
     await input.fill("Edited replacement");
     await page.getByRole("button", { name: "Add files", exact: true }).click();
@@ -79,16 +75,10 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     await page.reload();
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "Edited replacement");
     await page.getByText("draft.txt", { exact: true }).waitFor();
-    // A revert shows no notice; Redo is a command and leaves no command text behind.
     expect(await page.getByText("History reverted", { exact: false }).count()).toBe(0);
-    await input.fill("/redo"); await page.getByRole("button", { name: "Send", exact: true }).click();
-    await page.getByText("Second answer", { exact: true }).waitFor();
-    expect(await input.inputValue()).toBe("");
-    await input.fill("/undo"); await page.getByRole("button", { name: "Send", exact: true }).click();
-    await page.waitForFunction(() => document.querySelector("textarea")?.value === "Second request");
-    expect(await page.getByText("draft.txt", { exact: true }).count()).toBe(0);
     await input.fill("/undo"); await page.getByRole("button", { name: "Send", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "First request");
+    expect(await page.getByText("draft.txt", { exact: true }).count()).toBe(0);
     await page.waitForFunction(() => !document.querySelector("[data-message-id]"));
     expect(await page.locator("[data-message-id]").count()).toBe(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -292,7 +282,6 @@ test("revert an unsaved latest turn by input ID", async () => {
         return Response.json({ messages: visible, origin: "", delegations: [], revision: marker || "running", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(visible.map((item) => item.entryKey))], running: !marker, terminal: "", start: "0", more: false, revertEligible: true, revertMessageId: marker, revertFloor: "1:0", canUndo: true });
       }
       case "/api/StageRevert": staged.push(input.messageId); marker = "9:0"; return Response.json({ revertMessageId: marker, prompt: messages[3] });
-      case "/api/ClearRevert": marker = ""; return Response.json({});
       case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
@@ -321,7 +310,8 @@ test("revert an unsaved latest turn by input ID", async () => {
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "Live request");
     await page.getByText("Working answer", { exact: true }).waitFor({ state: "detached" });
     expect(staged).toEqual(["live-input"]);
-    await input.fill("/redo"); await input.press("Enter");
+    marker = "";
+    await page.reload();
     await page.getByText("Working answer", { exact: true }).waitFor();
     await live.hover();
     await live.getByRole("button", { name: "Revert message", exact: true }).click();

@@ -41,8 +41,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -554,6 +556,8 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 	_, err = seeded.db.ExecContext(t.Context(), `INSERT INTO entries (id, conversation_id, entry_json, entry_timestamp) VALUES
         (9007199254741001, 'chat', '{"type":"turn","replay_input":[{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\n  /skill exact\n"},{"type":"message","role":"assistant","content":"answer"}]}', '')`)
 	require.NoError(t, err)
+	_, err = seeded.db.ExecContext(t.Context(), `INSERT INTO history_links (conversation_id, entry_id) VALUES ('chat', 9007199254741001)`)
+	require.NoError(t, err)
 
 	engine := &mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}
 	server := &Server{sessions: sessions, cfg: config.NewLockedConfig(cfg), backend: engine}
@@ -563,11 +567,20 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 	require.True(t, initial.RevertEligible)
 	require.True(t, initial.CanUndo)
 
+	tree, err := server.messageTree(ctx, &MessageTreeRequest{Id: "chat"})
+	require.NoError(t, err)
+	require.True(t, proto.Equal(&MessageTreeResponse{Nodes: []*MessageTreeNode{
+		{Id: "9007199254741001:0", Role: "user", Text: "/skill exact", Pickable: true, OnPath: true},
+		{Id: "9007199254741001:1", ParentId: "9007199254741001:0", Role: "assistant", Text: "answer", Pickable: true, Through: true, OnPath: true, Current: true},
+	}}, tree), "%v", tree)
+
 	const marker = "9007199254741001:0"
 
-	engine.StageRevertFunc = func(_ context.Context, id, before string) (string, string, error) {
+	engine.StageRevertFunc = func(_ context.Context, id, before string, boundary protocol.RevertBoundary) (string, string, error) {
 		require.Equal(t, "chat", id)
 		require.Equal(t, marker, before)
+		require.Equal(t, protocol.RevertBefore, boundary)
+
 		_, err := seeded.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $2 WHERE conversation_id = $1`, "chat", marker)
 		require.NoError(t, err)
 
@@ -586,22 +599,32 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 	require.Equal(t, marker, hidden.RevertMessageId)
 	require.Empty(t, hidden.Messages)
 
-	engine.ClearRevertFunc = func(_ context.Context, id string) error {
-		require.Equal(t, "chat", id)
-
-		_, err := seeded.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, "chat")
-		require.NoError(t, err)
-
-		return nil
+	engine.StageRevertFunc = func(_ context.Context, _, through string, boundary protocol.RevertBoundary) (string, string, error) {
+		require.Equal(t, protocol.RevertThrough, boundary)
+		return through, "", nil
 	}
-	_, err = server.clearRevert(ctx, &ClearRevertRequest{Id: "chat"})
+	moved, err := server.stageRevert(ctx, &StageRevertRequest{Id: "chat", MessageId: "9007199254741001:1", Boundary: RevertBoundary_THROUGH})
 	require.NoError(t, err)
-	restored, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1, Revision: hidden.Revision})
-	require.NoError(t, err)
-	require.True(t, restored.Reset_)
-	require.Equal(t, initial.Messages, restored.Messages)
+	require.Nil(t, moved.Prompt, "moving through a reply leaves the message box alone")
 	_, err = server.stageRevert(t.Context(), &StageRevertRequest{Id: "chat", MessageId: marker})
 	require.Error(t, err, "authentication is checked before mutation")
+
+	engine.DeleteBranchFunc = func(_ context.Context, id, first string, dryRun bool) (protocol.BranchDeletion, error) {
+		require.Equal(t, "chat", id)
+		require.True(t, dryRun)
+
+		if first != marker {
+			return protocol.BranchDeletion{}, backend.ErrRevertMessageGone
+		}
+
+		return protocol.BranchDeletion{Messages: 3, NestedBranches: 1, SubagentSessions: 2, QueuedMessages: 4, Current: true}, nil
+	}
+	counts, err := server.deleteBranch(ctx, &DeleteBranchRequest{Id: "chat", MessageId: marker, DryRun: true})
+	require.NoError(t, err)
+	require.True(t, proto.Equal(&DeleteBranchResponse{Messages: 3, NestedBranches: 1, SubagentSessions: 2, QueuedMessages: 4, Current: true}, counts), "%v", counts)
+
+	_, err = server.deleteBranch(ctx, &DeleteBranchRequest{Id: "chat", MessageId: "9:0", DryRun: true})
+	require.Equal(t, codes.NotFound, status.Code(err))
 }
 
 func TestReloadRealBackendBrowser(t *testing.T) {

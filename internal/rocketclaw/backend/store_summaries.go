@@ -3,7 +3,6 @@ package backend
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -56,36 +55,38 @@ SELECT DISTINCT a.id FROM ancestors a JOIN conversations b ON b.conversation_id 
 func loadSessionSummary(ctx context.Context, db stateStoreDB, conversationID string) (protocol.SessionSummary, error) {
 	summary := protocol.SessionSummary{ConversationID: conversationID}
 
-	var preview []byte
+	var (
+		preview []byte
+		updated sql.NullTime
+	)
 
-	err := db.QueryRowContext(ctx, `SELECT preview, last_updated FROM conversations WHERE conversation_id = $1 AND last_updated IS NOT NULL`, conversationID).Scan(&preview, &summary.LastUpdated)
-	if err == nil {
-		summary.LastMessage = string(preview)
+	err := db.QueryRowContext(ctx, `SELECT preview, last_updated FROM conversations WHERE conversation_id = $1`, conversationID).Scan(&preview, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
 		return summary, nil
 	}
 
-	if !errors.Is(err, sql.ErrNoRows) {
+	if err != nil {
 		return summary, fmt.Errorf("read session summary: %w", err)
 	}
 
-	err = readRows(ctx, db, `SELECT entry_json, entry_timestamp FROM entries WHERE conversation_id = $1 ORDER BY id`, "session summary history", func(row rowScanner) error {
-		var (
-			raw       sql.RawBytes
-			timestamp string
-		)
-		if err := row.Scan(&raw, &timestamp); err != nil {
-			return fmt.Errorf("scan session summary history: %w", err)
+	if updated.Valid {
+		summary.LastMessage, summary.LastUpdated = string(preview), updated.Time
+		return summary, nil
+	}
+
+	entries, err := (stateDAO{db: db}).observedEntries(ctx, conversationID)
+	if err != nil {
+		return summary, err
+	}
+
+	for i := range entries {
+		entry := &entries[i].Entry
+		if err := projectSessionSummary(&summary, entry, entry.Timestamp.UTC().Format(time.RFC3339Nano)); err != nil {
+			return summary, err
 		}
+	}
 
-		var entry harness.SessionEntry
-		if err := json.Unmarshal(raw, &entry); err != nil {
-			return fmt.Errorf("parse session summary history: %w", err)
-		}
-
-		return projectSessionSummary(&summary, &entry, timestamp)
-	}, conversationID)
-
-	return summary, err
+	return summary, nil
 }
 
 func projectSessionSummary(summary *protocol.SessionSummary, entry *harness.SessionEntry, timestamp string) error {

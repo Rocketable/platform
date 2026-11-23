@@ -468,15 +468,6 @@ func (s *SessionService) ClaimScheduledMessage(id, conversationID string, dueAt,
 		return protocol.ScheduledMessageState{}, false, err
 	}
 
-	var marker string
-	if err := queryScalar(context.Background(), tx, "read scheduled cutoff", `SELECT COALESCE(max(revert_message_id), '') FROM conversations WHERE conversation_id = $1`, &marker, conversationID); err != nil {
-		return protocol.ScheduledMessageState{}, false, err
-	}
-
-	if marker != "" {
-		return protocol.ScheduledMessageState{}, false, nil
-	}
-
 	if message.Recurring {
 		message.DueAt = now.UTC().Add(message.Interval)
 		if _, err := execState(context.Background(), tx, "advance scheduled message", `WITH parked AS (UPDATE turns SET park_after = '' WHERE park_after = $1)
@@ -740,20 +731,111 @@ func (s *SessionService) AppendEntryID(ctx context.Context, conversationID strin
 	return id, commitState(tx, "session append")
 }
 
-func revertFloorSuffix(ctx context.Context, db stateStoreDB, conversationID string) (floor, first string, err error) {
-	var eligible bool
-	if _, eligible, _, floor, err = revertStateDB(ctx, db, conversationID); err != nil || floor == "" || !eligible {
-		return "", "", err
+func revertFloorCut(ctx context.Context, db stateStoreDB, conversationID string) (cut string, rows int64, err error) {
+	_, eligible, _, floor, err := revertStateDB(ctx, db, conversationID)
+	if err != nil || floor == "" || !eligible {
+		return "", 0, err
 	}
 
-	err = queryScalar(ctx, db, "read first message after the revert floor", `WITH `+sessionHistorySQL+`, after AS (
-    SELECT e.id, items.ordinal - 1 AS idx FROM physical_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry->'replay_input', 'null'::jsonb)) WITH ORDINALITY AS items(item, ordinal)
-    WHERE item->>'role' = 'user' AND (e.id > split_part($2, ':', 1)::bigint OR e.id = split_part($2, ':', 1)::bigint AND items.ordinal - 1 > split_part($2, ':', 2)::integer)
-    ORDER BY e.id, items.ordinal LIMIT 1
+	err = db.QueryRowContext(ctx, `WITH RECURSIVE floor_items AS (
+    SELECT items.ordinal - 1 AS idx, e.conversation_id = $1 AND items.ordinal - 1 > split_part($2, ':', 2)::integer AND item->>'role' = 'user' AS later_user FROM entries e
+    CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN json_typeof(e.entry_json->'replay_input') = 'array' THEN e.entry_json::jsonb->'replay_input' ELSE '[]' END) WITH ORDINALITY AS items(item, ordinal)
+    WHERE e.id = split_part($2, ':', 1)::bigint
+), cut AS (
+    SELECT split_part($2, ':', 1)::bigint AS entry_id, COALESCE(min(idx) FILTER (WHERE later_user), count(*)) AS length, bool_or(later_user) AS clipped FROM floor_items
+), kept AS (
+    SELECT entry_id FROM cut
+    UNION ALL SELECT l.parent_entry_id FROM kept k JOIN history_links l ON l.conversation_id = $1 AND l.entry_id = k.entry_id WHERE l.parent_entry_id IS NOT NULL
+), doomed AS (
+    SELECT e.id FROM entries e LEFT JOIN kept k ON k.entry_id = e.id WHERE e.conversation_id = $1 AND k.entry_id IS NULL
 )
-SELECT COALESCE(max(id::text || ':' || idx::text), '') FROM after`, &first, conversationID, floor)
+SELECT c.entry_id::text || ':' || c.length::text, count(d.id) + CASE WHEN c.clipped THEN 1 ELSE 0 END
+FROM cut c LEFT JOIN doomed d ON TRUE GROUP BY c.entry_id, c.length, c.clipped`, conversationID, floor).Scan(&cut, &rows)
+	if err != nil {
+		return "", 0, fmt.Errorf("read history after the revert floor: %w", err)
+	}
 
-	return floor, first, err
+	return cut, rows, nil
+}
+
+func deleteAfterRevertFloorDB(ctx context.Context, db stateStoreDB, conversationID, cut string) error {
+	if _, err := db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $2 WHERE conversation_id = $1`, conversationID, cut); err != nil {
+		return fmt.Errorf("cut history after the revert floor: %w", err)
+	}
+
+	if err := stageShadowRevertDB(ctx, db, conversationID); err != nil {
+		return err
+	}
+
+	if err := pruneRevertDelegations(ctx, db, conversationID); err != nil {
+		return err
+	}
+
+	ids, err := queryStrings(ctx, db, `SELECT conversation_id FROM conversations WHERE conversation_id = $1 OR shadow_parent = $1`, "histories after the revert floor", conversationID)
+	if err != nil {
+		return err
+	}
+
+	for _, id := range ids {
+		if _, err := db.ExecContext(ctx, `WITH `+sessionHistorySQL+`, doomed AS (
+    SELECT e.id, e.entry_json->>'turn_id' AS turn_id FROM entries e LEFT JOIN current_path p ON p.entry_id = e.id WHERE e.conversation_id = $1 AND p.entry_id IS NULL
+), discarded AS (
+    DELETE FROM turns t USING doomed d WHERE t.conversation_id = $1 AND t.phase = 'done' AND (t.id = d.turn_id OR t.history_anchor_id = d.id) RETURNING t.id
+), journals AS (
+    DELETE FROM steps s USING discarded d WHERE s.conversation_id = $1 AND (s.key = d.id OR starts_with(s.key, d.id || '/'))
+), unlinked AS (
+    DELETE FROM history_links l USING doomed d WHERE l.conversation_id = $1 AND l.entry_id = d.id
+)
+DELETE FROM entries e USING doomed d WHERE e.id = d.id`, id); err != nil {
+			return fmt.Errorf("delete history after the revert floor: %w", err)
+		}
+	}
+
+	id, index, _ := parseMessageID(cut)
+	if err := clipEntryDB(ctx, db, id, index); err != nil {
+		return err
+	}
+
+	if _, err := db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1 OR shadow_parent = $1`, conversationID); err != nil {
+		return fmt.Errorf("settle history after the revert floor: %w", err)
+	}
+
+	if err := recordRunning(ctx, db, ids); err != nil {
+		return err
+	}
+
+	return refreshPathSummary(ctx, db, conversationID)
+}
+
+func clipEntryDB(ctx context.Context, db stateStoreDB, id int64, index int) error {
+	var (
+		raw   []byte
+		entry harness.SessionEntry
+	)
+	if err := queryScalar(ctx, db, "read clipped entry", `SELECT entry_json FROM entries WHERE id = $1`, &raw, id); err != nil {
+		return err
+	}
+
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return fmt.Errorf("decode clipped entry: %w", err)
+	}
+
+	if index >= len(entry.ReplayInput) {
+		return nil
+	}
+
+	clipRevertEntry(&entry, index)
+
+	data, _ := json.Marshal(entry)
+	if _, err := db.ExecContext(ctx, `WITH kept AS (
+    SELECT string_agg(l.line, E'\n' ORDER BY l.n) AS search_text FROM entries e
+    CROSS JOIN LATERAL string_to_table(e.search_text, E'\n') WITH ORDINALITY AS l(line, n) WHERE e.id = $1 AND split_part(l.line, ' ', 1)::integer < $3
+)
+UPDATE entries e SET entry_json = $2, search_text = k.search_text FROM kept k WHERE e.id = $1`, id, string(data), index); err != nil {
+		return fmt.Errorf("save clipped entry: %w", err)
+	}
+
+	return nil
 }
 
 func (s *SessionService) DeleteSession(ctx context.Context, conversationID string) (int64, error) {
@@ -775,7 +857,7 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, ErrRemoteSession
 	}
 
-	if floor, first, err := revertFloorSuffix(ctx, s.db, conversationID); err != nil || floor != "" && first == "" {
+	if cut, rows, err := revertFloorCut(ctx, s.db, conversationID); err != nil || cut != "" && rows == 0 {
 		return 0, err
 	}
 
@@ -787,17 +869,13 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 
 	defer func() { _ = tx.Rollback() }()
 
-	if floor, first, err := revertFloorSuffix(ctx, tx, conversationID); err != nil || floor != "" {
-		var rows int64
-		if err == nil && first != "" {
-			err = queryScalar(ctx, tx, "count entries after the revert floor", `SELECT count(*) FROM entries WHERE conversation_id = $1 AND id >= split_part($2, ':', 1)::bigint`, &rows, conversationID, first)
-			if err == nil {
-				err = commitRevertDB(ctx, tx, conversationID, first)
-			}
+	if cut, rows, err := revertFloorCut(ctx, tx, conversationID); err != nil || cut != "" {
+		if err == nil && rows > 0 {
+			err = deleteAfterRevertFloorDB(ctx, tx, conversationID, cut)
+		}
 
-			if err == nil {
-				err = refreshPrincipals(ctx, tx, []string{conversationID})
-			}
+		if err == nil {
+			err = refreshPrincipals(ctx, tx, []string{conversationID})
 		}
 
 		if err != nil {
@@ -807,7 +885,10 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return rows, commitState(tx, "history wipe")
 	}
 
-	rows, err := execRows(ctx, tx, "delete rocketcode session", `DELETE FROM entries WHERE conversation_id = ANY($1)`, ids)
+	rows, err := execRows(ctx, tx, "delete rocketcode session", `WITH unlinked AS (
+    DELETE FROM history_links l USING entries e WHERE l.conversation_id = ANY($1) AND e.id = l.entry_id AND e.conversation_id = l.conversation_id
+)
+DELETE FROM entries WHERE conversation_id = ANY($1)`, ids)
 	if err != nil {
 		return 0, err
 	}
@@ -933,8 +1014,9 @@ const delegationsSQL = `WITH ` + sessionHistorySQL + `, ` + turnReplaySQL + `, s
     WHERE e.id >= $3 AND ($4::bigint = 0 OR e.id < $4)
         AND item->>'type' = 'function_call' AND (e.revert_index < 0 OR ordinal <= e.revert_index)
     UNION ALL
-    SELECT $1, r.turn_id, r.item->>'call_id' FROM turn_replay r CROSS JOIN viewer v LEFT JOIN saved_turns saved USING (turn_id)
-    WHERE $4::bigint = 0 AND v.readable AND v.marker = '' AND saved.turn_id IS NULL AND r.item->>'type' = 'function_call'
+    SELECT $1, r.turn_id, r.item->>'call_id' FROM turn_replay r JOIN turns a ON a.conversation_id = $1 AND a.id = r.turn_id
+    LEFT JOIN off_path_turns o ON o.id = a.id LEFT JOIN saved_turns saved ON saved.turn_id = r.turn_id
+    WHERE $4::bigint = 0 AND o.id IS NULL AND saved.turn_id IS NULL AND r.item->>'type' = 'function_call'
 ), children AS (
     SELECT DISTINCT c.conversation_id AS id, p.producer, c.call_id, c.call_turn IS NULL AS legacy, c.kind FROM calls p
     JOIN conversations c ON c.parent_conversation_id = p.producer AND c.call_id = p.call_id
@@ -1383,7 +1465,10 @@ INSERT INTO pending_attachment_deletions (id) SELECT id FROM removed`, ids, cuto
 			return 0, false, err
 		}
 
-		rows, err = execRows(ctx, tx, "prune old sticky messages", `DELETE FROM entries WHERE conversation_id = ANY($1) AND entry_timestamp < $2`, ids, cutoff.UTC().Format(time.RFC3339Nano))
+		rows, err = execRows(ctx, tx, "prune old sticky messages", `WITH unlinked AS (
+    DELETE FROM history_links l USING entries e WHERE l.conversation_id = ANY($1) AND e.id = l.entry_id AND e.conversation_id = l.conversation_id AND e.entry_timestamp < $2
+)
+DELETE FROM entries WHERE conversation_id = ANY($1) AND entry_timestamp < $2`, ids, cutoff.UTC().Format(time.RFC3339Nano))
 		if err != nil {
 			return 0, false, err
 		}
@@ -1614,7 +1699,7 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID s
 
 	data = removeSessionEntryNUL(data)
 
-	reportsTo, err := lockRunHistories(ctx, db, conversationID)
+	reportsTo, viewers, err := lockRunHistories(ctx, db, conversationID)
 	if err != nil {
 		return 0, err
 	}
@@ -1646,9 +1731,15 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID s
 		return 0, fmt.Errorf("append rocketcode session entry: %w", err)
 	}
 
+	for _, viewer := range viewers {
+		if err := linkHistoryDB(ctx, db, viewer, conversationID, id); err != nil {
+			return 0, err
+		}
+	}
+
 	if len(principals) > 0 {
 		if _, err := execState(ctx, db, "add message principals", `WITH current AS (
-    SELECT conversation_id, principals FROM conversations WHERE (conversation_id = $1 OR continues = $3) AND revert_message_id = '' AND NOT principals @> $2::text[]
+    SELECT conversation_id, principals FROM conversations WHERE (conversation_id = $1 OR continues = $3) AND NOT principals @> $2::text[]
 ), merged AS (
     SELECT c.conversation_id, array_agg(DISTINCT p.principal) AS principals FROM current c CROSS JOIN LATERAL unnest(c.principals || $2::text[]) AS p(principal)
     GROUP BY c.conversation_id
@@ -1692,13 +1783,31 @@ func projectEntrySummary(ctx context.Context, db stateStoreDB, conversationID st
 	return saveSessionSummary(ctx, db, summary)
 }
 
-func lockRunHistories(ctx context.Context, db stateStoreDB, conversationID string) (string, error) {
-	var reportsTo string
+func lockRunHistories(ctx context.Context, db stateStoreDB, conversationID string) (reportsTo string, viewers []string, err error) {
 	if err := queryScalar(ctx, db, "read run destination", `SELECT COALESCE(max(reports_to), '') FROM conversations WHERE conversation_id = $1`, &reportsTo, conversationID); err != nil {
-		return "", err
+		return "", nil, err
 	}
 
-	return reportsTo, lockHistories(ctx, db, slices.DeleteFunc([]string{conversationID, reportsTo}, func(id string) bool { return id == "" }))
+	if viewers, err = queryStrings(ctx, db, `SELECT conversation_id FROM conversations WHERE conversation_id = $1 OR continues = $1
+UNION SELECT reports_to FROM conversations WHERE conversation_id = $1 AND reports_to IS NOT NULL`, "history viewers", conversationID); err != nil {
+		return "", nil, err
+	}
+
+	return reportsTo, viewers, lockHistories(ctx, db, viewers)
+}
+
+func linkHistoryDB(ctx context.Context, db stateStoreDB, viewer, source string, from int64) error {
+	_, err := execState(ctx, db, "link history", `WITH `+sessionHistorySQL+`, fresh AS (
+    SELECT e.id, lag(e.id) OVER (ORDER BY e.id) AS previous FROM entries e
+    LEFT JOIN history_links l ON l.conversation_id = $1 AND l.entry_id = e.id WHERE e.conversation_id = $2 AND e.id >= $3 AND l.entry_id IS NULL
+), linked AS (
+    INSERT INTO history_links (conversation_id, entry_id, parent_entry_id, parent_length)
+    SELECT $1, f.id, COALESCE(f.previous, p.entry_id), CASE WHEN f.previous IS NULL THEN p.length END FROM fresh f LEFT JOIN leaf p ON TRUE ORDER BY f.id
+    RETURNING conversation_id
+)
+UPDATE conversations c SET revert_message_id = '' FROM linked l WHERE c.conversation_id = l.conversation_id AND c.revert_message_id <> ''`, viewer, source, from)
+
+	return err
 }
 
 func visibleEntry(observed *ObservedSessionEntry) error {

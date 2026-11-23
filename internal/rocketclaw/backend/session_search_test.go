@@ -150,7 +150,7 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 		{searchChatA, "user", `Writer "One"`, "needle"},
 		{searchChatB, "user", `Writer "One"`, "other prompt"},
 		{searchChatB, "user", "Writer Attachment", ""},
-		{"written-web", "user", "Writer Cut", "hidden by cutoff"},
+		{"written-web", "user", "Writer Cut", "left on another branch"},
 		{searchChatW, "assistant", `Writer "One"`, "needle"},
 		{searchChatH, "user", "", `[Web principal="Writer \"One\""] needle`},
 		{"external_mcp:private", "user", `Writer "One"`, "needle"},
@@ -194,11 +194,11 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 		require.True(t, slices.Equal(tc.ids, ids), "%s: chats %q", tc.query, ids)
 	}
 
-	_, _, err := stageRevertDB(ctx, s.db, "written-web", fmt.Sprintf("%d:0", authored))
+	_, _, err := stageRevertDB(ctx, s.db, "written-web", fmt.Sprintf("%d:0", authored), protocol.RevertBefore)
 	require.NoError(t, err)
 	filtered, matches := searchTestSessions(t, s, slack, `principal:"Writer Cut"`, SearchFields)
-	require.Empty(t, matches)
-	require.Equal(t, []string{`Writer "One"`, "Writer Attachment", "Writer Two"}, filtered.Principals)
+	require.Len(t, matches, 1, "a person who wrote only on a branch left behind stays a participant")
+	require.Equal(t, []string{`Writer "One"`, "Writer Attachment", "Writer Cut", "Writer Two"}, filtered.Principals)
 
 	search, err := s.searchSessionsWithin(ctx, `principal:"Writer \"One\"" principal:"Writer Two"`, &sessionListParams{}, slack)
 	require.NoError(t, err)

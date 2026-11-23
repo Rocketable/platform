@@ -33,9 +33,6 @@ var _ frontend.Backend = &backendMock{}
 //			BackgroundJobsFunc: func(context1 context.Context, s string) ([]protocol.BackgroundJob, bool, error) {
 //				panic("mock out the BackgroundJobs method")
 //			},
-//			ClearRevertFunc: func(context1 context.Context, s string) error {
-//				panic("mock out the ClearRevert method")
-//			},
 //			CompletionNotesFunc: func(context1 context.Context, s string, strings []string) ([]protocol.BackgroundJob, error) {
 //				panic("mock out the CompletionNotes method")
 //			},
@@ -44,6 +41,9 @@ var _ frontend.Backend = &backendMock{}
 //			},
 //			CreateConversationFunc: func(context1 context.Context, conversation protocol.Conversation) error {
 //				panic("mock out the CreateConversation method")
+//			},
+//			DeleteBranchFunc: func(context1 context.Context, s string, s1 string, b bool) (protocol.BranchDeletion, error) {
+//				panic("mock out the DeleteBranch method")
 //			},
 //			DeleteQueueItemFunc: func(context1 context.Context, s string, s1 string) (bool, error) {
 //				panic("mock out the DeleteQueueItem method")
@@ -93,7 +93,7 @@ var _ frontend.Backend = &backendMock{}
 //			SlackWarningFunc: func() string {
 //				panic("mock out the SlackWarning method")
 //			},
-//			StageRevertFunc: func(context1 context.Context, s string, s1 string) (string, string, error) {
+//			StageRevertFunc: func(context1 context.Context, s string, s1 string, revertBoundary protocol.RevertBoundary) (string, string, error) {
 //				panic("mock out the StageRevert method")
 //			},
 //			StartGoalFunc: func(context1 context.Context, inboundMessage *protocol.InboundMessage, goalRequest protocol.GoalRequest) error {
@@ -130,9 +130,6 @@ type backendMock struct {
 	// BackgroundJobsFunc mocks the BackgroundJobs method.
 	BackgroundJobsFunc func(context1 context.Context, s string) ([]protocol.BackgroundJob, bool, error)
 
-	// ClearRevertFunc mocks the ClearRevert method.
-	ClearRevertFunc func(context1 context.Context, s string) error
-
 	// CompletionNotesFunc mocks the CompletionNotes method.
 	CompletionNotesFunc func(context1 context.Context, s string, strings []string) ([]protocol.BackgroundJob, error)
 
@@ -141,6 +138,9 @@ type backendMock struct {
 
 	// CreateConversationFunc mocks the CreateConversation method.
 	CreateConversationFunc func(context1 context.Context, conversation protocol.Conversation) error
+
+	// DeleteBranchFunc mocks the DeleteBranch method.
+	DeleteBranchFunc func(context1 context.Context, s string, s1 string, b bool) (protocol.BranchDeletion, error)
 
 	// DeleteQueueItemFunc mocks the DeleteQueueItem method.
 	DeleteQueueItemFunc func(context1 context.Context, s string, s1 string) (bool, error)
@@ -191,7 +191,7 @@ type backendMock struct {
 	SlackWarningFunc func() string
 
 	// StageRevertFunc mocks the StageRevert method.
-	StageRevertFunc func(context1 context.Context, s string, s1 string) (string, string, error)
+	StageRevertFunc func(context1 context.Context, s string, s1 string, revertBoundary protocol.RevertBoundary) (string, string, error)
 
 	// StartGoalFunc mocks the StartGoal method.
 	StartGoalFunc func(context1 context.Context, inboundMessage *protocol.InboundMessage, goalRequest protocol.GoalRequest) error
@@ -238,13 +238,6 @@ type backendMock struct {
 			// S is the s argument value.
 			S string
 		}
-		// ClearRevert holds details about calls to the ClearRevert method.
-		ClearRevert []struct {
-			// Context1 is the context1 argument value.
-			Context1 context.Context
-			// S is the s argument value.
-			S string
-		}
 		// CompletionNotes holds details about calls to the CompletionNotes method.
 		CompletionNotes []struct {
 			// Context1 is the context1 argument value.
@@ -271,6 +264,17 @@ type backendMock struct {
 			Context1 context.Context
 			// Conversation is the conversation argument value.
 			Conversation protocol.Conversation
+		}
+		// DeleteBranch holds details about calls to the DeleteBranch method.
+		DeleteBranch []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// S1 is the s1 argument value.
+			S1 string
+			// B is the b argument value.
+			B bool
 		}
 		// DeleteQueueItem holds details about calls to the DeleteQueueItem method.
 		DeleteQueueItem []struct {
@@ -396,6 +400,8 @@ type backendMock struct {
 			S string
 			// S1 is the s1 argument value.
 			S1 string
+			// RevertBoundary is the revertBoundary argument value.
+			RevertBoundary protocol.RevertBoundary
 		}
 		// StartGoal holds details about calls to the StartGoal method.
 		StartGoal []struct {
@@ -447,10 +453,10 @@ type backendMock struct {
 	lockAgentPaused             sync.RWMutex
 	lockAnswerQuestion          sync.RWMutex
 	lockBackgroundJobs          sync.RWMutex
-	lockClearRevert             sync.RWMutex
 	lockCompletionNotes         sync.RWMutex
 	lockContinueRun             sync.RWMutex
 	lockCreateConversation      sync.RWMutex
+	lockDeleteBranch            sync.RWMutex
 	lockDeleteQueueItem         sync.RWMutex
 	lockEditQueueItem           sync.RWMutex
 	lockMoveToBackground        sync.RWMutex
@@ -592,42 +598,6 @@ func (mock *backendMock) BackgroundJobsCalls() []struct {
 	return calls
 }
 
-// ClearRevert calls ClearRevertFunc.
-func (mock *backendMock) ClearRevert(context1 context.Context, s string) error {
-	if mock.ClearRevertFunc == nil {
-		panic("backendMock.ClearRevertFunc: method is nil but Backend.ClearRevert was just called")
-	}
-	callInfo := struct {
-		Context1 context.Context
-		S        string
-	}{
-		Context1: context1,
-		S:        s,
-	}
-	mock.lockClearRevert.Lock()
-	mock.calls.ClearRevert = append(mock.calls.ClearRevert, callInfo)
-	mock.lockClearRevert.Unlock()
-	return mock.ClearRevertFunc(context1, s)
-}
-
-// ClearRevertCalls gets all the calls that were made to ClearRevert.
-// Check the length with:
-//
-//	len(mockedBackend.ClearRevertCalls())
-func (mock *backendMock) ClearRevertCalls() []struct {
-	Context1 context.Context
-	S        string
-} {
-	var calls []struct {
-		Context1 context.Context
-		S        string
-	}
-	mock.lockClearRevert.RLock()
-	calls = mock.calls.ClearRevert
-	mock.lockClearRevert.RUnlock()
-	return calls
-}
-
 // CompletionNotes calls CompletionNotesFunc.
 func (mock *backendMock) CompletionNotes(context1 context.Context, s string, strings []string) ([]protocol.BackgroundJob, error) {
 	if mock.CompletionNotesFunc == nil {
@@ -745,6 +715,50 @@ func (mock *backendMock) CreateConversationCalls() []struct {
 	mock.lockCreateConversation.RLock()
 	calls = mock.calls.CreateConversation
 	mock.lockCreateConversation.RUnlock()
+	return calls
+}
+
+// DeleteBranch calls DeleteBranchFunc.
+func (mock *backendMock) DeleteBranch(context1 context.Context, s string, s1 string, b bool) (protocol.BranchDeletion, error) {
+	if mock.DeleteBranchFunc == nil {
+		panic("backendMock.DeleteBranchFunc: method is nil but Backend.DeleteBranch was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+		S1       string
+		B        bool
+	}{
+		Context1: context1,
+		S:        s,
+		S1:       s1,
+		B:        b,
+	}
+	mock.lockDeleteBranch.Lock()
+	mock.calls.DeleteBranch = append(mock.calls.DeleteBranch, callInfo)
+	mock.lockDeleteBranch.Unlock()
+	return mock.DeleteBranchFunc(context1, s, s1, b)
+}
+
+// DeleteBranchCalls gets all the calls that were made to DeleteBranch.
+// Check the length with:
+//
+//	len(mockedBackend.DeleteBranchCalls())
+func (mock *backendMock) DeleteBranchCalls() []struct {
+	Context1 context.Context
+	S        string
+	S1       string
+	B        bool
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+		S1       string
+		B        bool
+	}
+	mock.lockDeleteBranch.RLock()
+	calls = mock.calls.DeleteBranch
+	mock.lockDeleteBranch.RUnlock()
 	return calls
 }
 
@@ -1331,23 +1345,25 @@ func (mock *backendMock) SlackWarningCalls() []struct {
 }
 
 // StageRevert calls StageRevertFunc.
-func (mock *backendMock) StageRevert(context1 context.Context, s string, s1 string) (string, string, error) {
+func (mock *backendMock) StageRevert(context1 context.Context, s string, s1 string, revertBoundary protocol.RevertBoundary) (string, string, error) {
 	if mock.StageRevertFunc == nil {
 		panic("backendMock.StageRevertFunc: method is nil but Backend.StageRevert was just called")
 	}
 	callInfo := struct {
-		Context1 context.Context
-		S        string
-		S1       string
+		Context1       context.Context
+		S              string
+		S1             string
+		RevertBoundary protocol.RevertBoundary
 	}{
-		Context1: context1,
-		S:        s,
-		S1:       s1,
+		Context1:       context1,
+		S:              s,
+		S1:             s1,
+		RevertBoundary: revertBoundary,
 	}
 	mock.lockStageRevert.Lock()
 	mock.calls.StageRevert = append(mock.calls.StageRevert, callInfo)
 	mock.lockStageRevert.Unlock()
-	return mock.StageRevertFunc(context1, s, s1)
+	return mock.StageRevertFunc(context1, s, s1, revertBoundary)
 }
 
 // StageRevertCalls gets all the calls that were made to StageRevert.
@@ -1355,14 +1371,16 @@ func (mock *backendMock) StageRevert(context1 context.Context, s string, s1 stri
 //
 //	len(mockedBackend.StageRevertCalls())
 func (mock *backendMock) StageRevertCalls() []struct {
-	Context1 context.Context
-	S        string
-	S1       string
+	Context1       context.Context
+	S              string
+	S1             string
+	RevertBoundary protocol.RevertBoundary
 } {
 	var calls []struct {
-		Context1 context.Context
-		S        string
-		S1       string
+		Context1       context.Context
+		S              string
+		S1             string
+		RevertBoundary protocol.RevertBoundary
 	}
 	mock.lockStageRevert.RLock()
 	calls = mock.calls.StageRevert

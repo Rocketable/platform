@@ -90,6 +90,7 @@ func BenchmarkLoadSessionSummaryHistory(b *testing.B) {
 
 	entry := testSessionEntry("question", text)
 	entry.OutputTrace = []json.RawMessage{trace}
+	entry.Timestamp = time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 	data, err := json.Marshal(entry)
 	require.NoError(b, err)
 	_, err = service.db.ExecContext(b.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ('benchmark', 'main', '', 'web_chat', TRUE)`)
@@ -97,6 +98,7 @@ func BenchmarkLoadSessionSummaryHistory(b *testing.B) {
 	_, err = service.db.ExecContext(b.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT 'benchmark', $1, '2000-01-02T03:04:05Z' FROM generate_series(1, 32)`, string(data))
 	require.NoError(b, err)
+	require.NoError(b, linkHistoryDB(b.Context(), service.db, "benchmark", "benchmark", 0))
 	tx, err := service.db.BeginTx(b.Context(), nil)
 
 	require.NoError(b, err)
@@ -900,6 +902,7 @@ func insertSessionEntryWithoutSummary(t *testing.T, service *SessionService, con
 	data = removeSessionEntryNUL(data)
 	_, err = service.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, $2, $3)`, conversationID, string(data), entry.Timestamp.UTC().Format(time.RFC3339Nano))
 	require.NoError(t, err)
+	require.NoError(t, linkHistoryDB(t.Context(), service.db, conversationID, conversationID, 0))
 }
 
 func TestEntryPreviewCommitsWithItsEntry(t *testing.T) {
@@ -947,6 +950,34 @@ func TestEntryPreviewCommitsWithItsEntry(t *testing.T) {
 	_, err = service.AppendEntryID(ctx, "chat", second)
 	require.NoError(t, err)
 	require.Equal(t, "second 1970-01-01T00:00:02Z", preview(service.db))
+}
+
+func TestChatPreviewFollowsTheCurrentPath(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, (&Runtime{Sessions: s}).CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "main"}))
+	_, err := s.AppendEntryID(ctx, "chat", testSessionEntry("start", "ready"))
+	require.NoError(t, err)
+	branch, err := s.AppendEntryID(ctx, "chat", testSessionEntry("first try", "first answer"))
+	require.NoError(t, err)
+	_, _, err = stageRevertDB(ctx, s.db, "chat", fmt.Sprintf("%d:0", branch), protocol.RevertBefore)
+	require.NoError(t, err)
+	require.Equal(t, "ready", sidebarSummaries(t, s)["chat"].LastMessage)
+
+	sibling, err := s.AppendEntryID(ctx, "chat", testSessionEntry("second try", "second answer"))
+	require.NoError(t, err)
+	require.Equal(t, "second answer", sidebarSummaries(t, s)["chat"].LastMessage)
+
+	for _, tc := range []struct {
+		entry int64
+		want  string
+	}{{branch, "first answer"}, {sibling, "second answer"}} {
+		_, _, err := stageRevertDB(ctx, s.db, "chat", fmt.Sprintf("%d:1", tc.entry), protocol.RevertThrough)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, sidebarSummaries(t, s)["chat"].LastMessage)
+	}
 }
 
 func TestChatEntryFactsFollowWrites(t *testing.T) {
@@ -1002,6 +1033,6 @@ func TestChatEntryFactsFollowWrites(t *testing.T) {
 	require.NoError(t, err)
 
 	hasEntries, source = facts("attached")
-	require.False(t, hasEntries)
-	require.Equal(t, "early", source, "clearing the chat keeps its run's entry, as undo does")
+	require.True(t, hasEntries, "the chat's own entry sits before its run's entry on the path, so clearing keeps it, as undo does")
+	require.Equal(t, "early", source)
 }

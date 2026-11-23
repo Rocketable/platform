@@ -311,6 +311,29 @@ func TestSessionToolsStoredContract(t *testing.T) {
 	require.Equal(t, "timestamp\trole\tcontent\n2026-09-24T12:00:00Z\tuser\t[Slack principal=\"Operator\"]\\n\\nsend it\n2026-09-24T12:00:00Z\tuser\tno header\n", result.Output)
 }
 
+func TestSessionsListSummarizesTheCurrentPath(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"chat": KindWebChat})
+
+	base := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	kept := testReplayEntry(`{"type":"message","role":"user","content":"kept"}`, `{"type":"message","role":"assistant","content":"answer"}`, `{"type":"message","role":"user","content":"dropped"}`)
+	kept.Timestamp = base
+	first, err := service.AppendEntryID(ctx, "chat", kept)
+	require.NoError(t, err)
+	_, err = service.AppendEntryID(ctx, "chat", testSessionEntryAt(base.Add(time.Hour), "left behind"))
+	require.NoError(t, err)
+	_, _, err = stageRevertDB(ctx, service.db, "chat", fmt.Sprintf("%d:2", first), protocol.RevertBefore)
+	require.NoError(t, err)
+
+	result, err := listSessionsTool(service, &threadBridgeManager{slackLookups: noSlackLookups{}}).Call(ctx, json.RawMessage(`{"criteria":"","since":"2000-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`), nil)
+	require.NoError(t, err)
+	require.Equal(t, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\nchat\t1\t2026-09-24T12:00:00Z\tkept\tanswer\n", result.Output)
+}
+
 func TestSessionTranscriptRowAllocations(t *testing.T) {
 	escape := strings.NewReplacer("\\", "\\\\", "\t", "\\t", "\r", "\\r", "\n", "\\n")
 	role, body := "role\twith\ttabs", strings.Repeat("sample transcript text\n", 4096)
@@ -517,6 +540,7 @@ func TestSessionToolsErrors(t *testing.T) {
 	recordTestConversations(t, service, "main", map[string]ConversationKind{"broken": KindWebChat, "valid": KindWebChat})
 	_, err = service.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id,entry_json,entry_timestamp) VALUES ('broken','{"timestamp":false}','2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
+	require.NoError(t, linkHistoryDB(t.Context(), service.db, "broken", "broken", 0))
 	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`), nil)
 	require.Error(t, err)
 	_, err = get.Call(t.Context(), json.RawMessage(`{"conversation_id":"broken","limit":100,"before_entry_id":0}`), nil)

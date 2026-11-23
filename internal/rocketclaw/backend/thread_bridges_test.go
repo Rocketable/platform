@@ -969,32 +969,6 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 		require.ErrorContains(t, err, "history is busy")
 		assert.Empty(t, queueIDs(t, store, "web:busy"))
 	})
-
-	t.Run("staged revert", func(t *testing.T) {
-		const target = "web:reverted"
-
-		bridge := runningTestBridge(t, store, manager, target)
-		bridge.inputOpen = false
-		_, err := store.db.ExecContext(t.Context(), `UPDATE conversations SET revert_message_id = 'staged' WHERE conversation_id = $1`, target)
-		require.NoError(t, err)
-
-		for _, mode := range []sessionWriteMode{sessionWriteEnqueue, sessionWriteSteer} {
-			outcome, _, err := manager.writeSession(t.Context(), target, string(mode), mode, agentWrite(string(mode)), nil)
-			require.NoError(t, err)
-			assert.Equal(t, sessionQueued, outcome)
-		}
-
-		var marker string
-		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT revert_message_id FROM conversations WHERE conversation_id = $1`, target).Scan(&marker))
-		assert.Equal(t, "staged", marker, "a write never commits a staged revert")
-		assert.Empty(t, bridge.requestCh)
-		assert.Equal(t, []string{"enqueue", "steer"}, queueIDs(t, store, target))
-
-		_, err = store.db.ExecContext(t.Context(), `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, target)
-		require.NoError(t, err)
-		require.NoError(t, manager.PickLaterWork(t.Context(), target))
-		assert.Equal(t, "enqueue", (<-bridge.requestCh).queueItemID, "the writes run once the revert is cancelled")
-	})
 }
 
 func TestWriteSessionStopRunsFirst(t *testing.T) {

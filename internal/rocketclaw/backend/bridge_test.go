@@ -2859,7 +2859,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmodel: gpt-6.1-sol\npermission:\n  edit:\n    '.tmp/${ROCKETCLAW_METADATA_A}/note.txt': allow\n  read: allow\n  bash: auto\n---\nPrompt\n")
 
 	managedBridge := &Bridge{runtime: bridge.runtime, config: Config{ConversationID: managedConversationID, Agent: "planner", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-	_, err = service.db.ExecContext(t.Context(), `UPDATE conversations SET reports_to = $1 WHERE conversation_id = $2`, managedConversationID, bridge.config.ConversationID)
+	_, _, err = (stateDAO{db: service.db}).bindProducer(t.Context(), bridge.config.ConversationID, managedConversationID)
 	require.NoError(t, err)
 
 	managedEntries, err := service.ObserveEntries(context.Background(), managedConversationID)

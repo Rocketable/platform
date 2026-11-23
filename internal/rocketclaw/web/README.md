@@ -299,7 +299,7 @@ it: the page then reads what changed since its revision. It also tells the serve
 every 10 seconds that it is open, since the server lists only editors seen in the
 last 30 seconds.
 
-## Revert, Undo, and Redo
+## Message Tree, Revert and Undo
 
 Recorded user messages in Web chats, Slack threads, and shadows have a **Revert
 message** action alongside Copy. Hover on desktop, tap on touch screens, or focus
@@ -309,20 +309,27 @@ it stay, and their Revert is disabled. Hidden cron and External MCP runs and
 delegation histories do not support Revert. Pending inputs keep their withdrawal
 controls.
 
-Revert stops and settles active work, hides the selected request and everything
-after it, and replaces that session's composer text and files with the request.
-It sends nothing and keeps the current agent and submitting identity.
-`/undo` (also in the command palette) moves to the previous recorded request;
-repeated Undo can leave an empty conversation. **Redo** or `/redo` restores the
-whole hidden suffix without changing the composer. The command palette lists Redo
-as **Redo history** only while history is reverted; the transcript shows no marker
-for it.
+Revert stops and settles active work, moves the chat's current point to just
+before the selected request, and replaces that session's composer text and files
+with the request. It sends nothing, deletes nothing and keeps the current agent
+and submitting identity. `/undo` (also in the command palette) moves to the
+previous recorded request; repeated Undo can leave an empty conversation.
 
-The cutoff survives reload and daemon restart. Waiting human work stays stored
-but hidden until Redo, which restores its order. Sending a new prompt—including
-Queue or Stash—commits the new branch in the same session and drops the abandoned
-history and waiting human inputs. Redo is then unavailable. Preparation or
-admission failure keeps the cutoff and edited draft recoverable.
+The current point survives reload and daemon restart. Queued work stays and runs
+from the new point. Sending a new prompt starts a new branch at the current
+point; the messages that were after it stay as another branch.
+
+**Message Tree.** `/tree`, or the panel toggle, opens a side panel with every
+branch of the chat: one line per request and agent reply, the current branch
+first, with folding and a switch that shows only your messages. Picking an agent
+reply, or the end of another branch, continues from it; picking a request goes
+back to just before it, as Revert does. A pick never clears text you typed.
+Lines before the newest cron, External MCP or Slack message are disabled. The
+first line of each other branch offers **Summarize**, which adds a summary of
+that branch to the current one as a `[System]` message, and **Delete**, which
+confirms what it removes and then deletes that branch, its nested branches and
+their subagent sessions permanently. Sidebar search finds words on any branch;
+everything else shows the current branch.
 
 Composer content is saved locally in IndexedDB, including supported file bytes,
 scoped to this browser origin, authenticated username, configured workspace and
@@ -333,9 +340,9 @@ draft hydration and editing until both are accepted. **New session** clears the
 Home draft from local storage before opening a fresh composer; storage failures
 are reported without discarding its content. Clearing browser site data deletes drafts.
 
-**Revert changes conversation history only.** It does not undo files, tool
-effects, delivered messages or scheduled registrations. Scheduled execution
-pauses while reverted and may resume when the cutoff clears.
+**Moving changes conversation history only.** It does not undo files, tool
+effects, delivered messages or scheduled registrations, and deleting a branch
+does not close pull requests it created.
 
 The frontend is a client-side React SPA. Bun builds static assets directly into
 `../internal/web/dist/`: `index.html`, hashed JavaScript and
@@ -1222,8 +1229,8 @@ another agent's message or a one-off scheduled message, are refused; a repeating
 scheduled message waits. Press the button again, or **Resume agent** in the
 palette, to resume: the history records who resumed it, a goal that stopped
 continuing continues if nothing is running, and queued work runs. Pausing or
-resuming while history is reverted settles it as sending does, so Redo is no
-longer available. A fork of a paused session starts resumed.
+resuming after Undo continues from the current point. A fork of a
+paused session starts resumed.
 Use **Composer actions (…) → Stash** to save the draft and its attachments without sending, whether the
 chat is idle or busy. Press **⌘ Option Enter** on macOS or **Ctrl Alt Enter** on
 Windows/Linux to stash, including when command suggestions are open.

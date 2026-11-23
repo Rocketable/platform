@@ -130,7 +130,11 @@ RETURNING new.reports_to, old.reports_to IS NULL`, conversationID, destination).
 		return "", false, fmt.Errorf("bind producer destination: %w", err)
 	}
 
-	return owner, bound, nil
+	if bound {
+		err = linkHistoryDB(ctx, d.db, owner, conversationID, 0)
+	}
+
+	return owner, bound, err
 }
 
 func (d stateDAO) bindRun(ctx context.Context, run, destination string) (owner string, schedules map[string]protocol.ScheduledMessageState, err error) {
@@ -1260,6 +1264,14 @@ SELECT COALESCE(bool_or(attached), FALSE) FROM bound`, conversationID, string(re
 		}
 
 		if attached {
+			if err := lockSessionHistory(ctx, db, inbound.SyncDestination); err != nil {
+				return err
+			}
+
+			if err := linkHistoryDB(ctx, db, inbound.SyncDestination, conversationID, 0); err != nil {
+				return err
+			}
+
 			if _, err := execState(ctx, db, "refresh attached chat entry facts", entryFactsSQL+`
 UPDATE conversations SET has_entries = f.has_entries, first_source = f.first_source FROM facts f WHERE conversation_id = $1`, inbound.SyncDestination); err != nil {
 				return err
@@ -1268,19 +1280,13 @@ UPDATE conversations SET has_entries = f.has_entries, first_source = f.first_sou
 	}
 
 	now := timeUnixNano(time.Now())
-	if _, err := db.ExecContext(ctx, `WITH runs AS (
-    SELECT conversation_id FROM conversations WHERE reports_to = $2
-    UNION SELECT continues FROM conversations WHERE conversation_id = $2 AND continues IS NOT NULL
-), shown AS (
-    SELECT max(id) AS id FROM entries WHERE conversation_id = $2
-    UNION ALL SELECT max(e.id) FROM runs r JOIN entries e USING (conversation_id)
-), running AS (
-    UPDATE conversations SET running = TRUE WHERE conversation_id = $2
+	if _, err := db.ExecContext(ctx, `WITH `+sessionHistorySQL+`, running AS (
+    UPDATE conversations SET running = TRUE WHERE conversation_id = $1
 )
 INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id)
-SELECT $1, $2, $3, '[]', $4, $4, COALESCE(max(id), 0) FROM shown
+SELECT $2, $1, $3, '[]', $4, $4, COALESCE(max(entry_id), 0) FROM leaf
 ON CONFLICT (id) DO UPDATE SET inbound_json = excluded.inbound_json, output_trace_json = excluded.output_trace_json, created_at_unix_ns = excluded.created_at_unix_ns,
-    updated_at_unix_ns = excluded.updated_at_unix_ns, history_anchor_id = excluded.history_anchor_id`, turnID, conversationID, string(removeSessionEntryNUL(data)), now); err != nil {
+    updated_at_unix_ns = excluded.updated_at_unix_ns, history_anchor_id = excluded.history_anchor_id`, conversationID, turnID, string(removeSessionEntryNUL(data)), now); err != nil {
 		return fmt.Errorf("start active turn: %w", err)
 	}
 
@@ -1422,7 +1428,7 @@ func (s *SessionService) finishTurn(ctx context.Context, turnID string, finish *
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := lockRunHistories(ctx, tx, finish.conversationID); err != nil {
+	if _, _, err := lockRunHistories(ctx, tx, finish.conversationID); err != nil {
 		return nil, err
 	}
 
