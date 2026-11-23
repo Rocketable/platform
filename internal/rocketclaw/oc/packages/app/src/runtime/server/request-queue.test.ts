@@ -8,6 +8,7 @@ function setup(input?: {
   stallMs?: number
   headersTimeoutMs?: number
   setupHeadersTimeoutMs?: number
+  prefix?: string
 }) {
   const pending: Array<{ url: string; signal: AbortSignal; resolve: () => void }> = []
   const logs: Array<{ message: string; data: RequestStallSnapshot }> = []
@@ -19,6 +20,7 @@ function setup(input?: {
     stallMs: input?.stallMs,
     headersTimeoutMs: input?.headersTimeoutMs,
     setupHeadersTimeoutMs: input?.setupHeadersTimeoutMs,
+    prefix: () => input?.prefix ?? "",
     now: () => clock,
     log: (message, data) => logs.push({ message, data }),
     fetch: Object.assign(
@@ -159,6 +161,18 @@ describe("createRequestQueue", () => {
     expect(input.queue.inflight()).toBe(1)
   })
 
+  test("never counts the event stream of a server under a path prefix against the budget", async () => {
+    const input = setup({ limit: 1, prefix: "/opencode" })
+    void input.queue.fetch("http://server/opencode/api/session")
+    void input.queue.fetch("http://server/opencode/api/event")
+    await input.settle()
+    expect(input.pending.map((item) => new URL(item.url).pathname).toSorted()).toEqual([
+      "/opencode/api/event",
+      "/opencode/api/session",
+    ])
+    expect(input.queue.inflight()).toBe(1)
+  })
+
   test("a queued request leaves without being sent as soon as its caller aborts, while every slot stays stuck", async () => {
     const input = setup({ limit: 1, stallMs: 5 })
     const controller = new AbortController()
@@ -238,8 +252,9 @@ describe("createRequestQueue", () => {
   test.each(["http://host/oc/box/api/event", "http://host/oc/api/api/event"])(
     "never counts the event stream under a server path prefix: %s",
     async (event) => {
-      const input = setup({ limit: 1 })
-      void input.queue.fetch("http://host/oc/box/api/session")
+      const prefix = new URL(event).pathname.replace(/\/api\/event$/, "")
+      const input = setup({ limit: 1, prefix })
+      void input.queue.fetch(`http://host${prefix}/api/session`)
       void input.queue.fetch(event)
       await input.settle()
       expect(input.pending).toHaveLength(2)
@@ -250,7 +265,7 @@ describe("createRequestQueue", () => {
   // rocketclaw: the setup deadline also holds under a server path prefix
   // (upstream packages/app/src/runtime/server/request-queue.test.ts)
   test("worktree creation under a server path prefix gets the setup deadline", async () => {
-    const input = setup({ limit: 4, headersTimeoutMs: 10, setupHeadersTimeoutMs: 200 })
+    const input = setup({ limit: 4, headersTimeoutMs: 10, setupHeadersTimeoutMs: 200, prefix: "/oc/box" })
     const create = input.queue.fetch("http://host/oc/box/api/worktree?location[directory]=%2Fa", { method: "POST" })
     const other = input.queue.fetch("http://host/oc/box/api/session").catch((cause: unknown) => cause)
 

@@ -256,6 +256,7 @@ export function SessionUIProvider(
           openSession={openReferencedSession}
           sessionTitle={sessionTitle}
           sessionMenu={(target) => setReferenceMenu({ ...target })}
+          codeWrap={settings.general.wrapCodeBlocks()}
         >
           <SessionExportProvider>{props.children}</SessionExportProvider>
           <SessionReferenceMenu

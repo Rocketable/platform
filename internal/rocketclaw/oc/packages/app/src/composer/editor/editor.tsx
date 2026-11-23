@@ -177,6 +177,12 @@ export function ComposerEditor(props: ComposerEditorProps) {
     })
   })
   let sync = INITIAL_EDITOR_SYNC_STATE
+  let firstFocus = true
+  // A press puts the caret where it lands, and focus follows in the same task.
+  let pressed = false
+  let pressTimer: ReturnType<typeof setTimeout> | undefined
+
+  onCleanup(() => clearTimeout(pressTimer))
 
   const updateCursor = () => {
     const cursor = editor && getCursorPosition(editor)
@@ -430,7 +436,18 @@ export function ComposerEditor(props: ComposerEditorProps) {
                   if (caret.top < bounds.top + 16) viewport.scrollTop += caret.top - bounds.top - 16
                 })
               }}
-              onFocus={() => props.controller.dispatch({ type: "focus.editor" })}
+              onPointerDown={() => {
+                pressed = true
+                clearTimeout(pressTimer)
+                pressTimer = setTimeout(() => (pressed = false))
+              }}
+              onFocus={() => {
+                // A request dock can replace the editor. Focus on the new editor that no press caused must keep the
+                // draft's caret.
+                if (firstFocus && !pressed) props.controller.restoreCaret()
+                firstFocus = false
+                props.controller.dispatch({ type: "focus.editor" })
+              }}
             />
             <Show when={!props.controller.value()}>
               <div
@@ -533,8 +550,9 @@ export function ComposerEditor(props: ComposerEditorProps) {
                   size="small"
                   class="me-3 gap-1.5 px-1.5"
                   onClick={() => {
-                    props.controller.dispatch({ type: "mode.normal" })
+                    // Before the mode change unmounts this button, so focus keeps its ring state.
                     props.controller.restoreFocus()
+                    props.controller.dispatch({ type: "mode.normal" })
                   }}
                 >
                   {i18n.t("ui.promptInput.exitShell")}
@@ -784,7 +802,7 @@ function ComposerAttachments(props: {
         (props.files?.length ?? 0) > 0
       }
     >
-      <div data-component="composer-attachments" data-slot="composer-attachments" class="relative">
+      <div data-component="composer-attachments" data-slot="composer-attachments" data-focus-scope class="relative">
         <div
           data-slot="composer-attachments-scroll"
           class="flex flex-nowrap gap-2 overflow-x-auto no-scrollbar px-2 pt-2 pb-1"
@@ -1631,8 +1649,8 @@ function ComposerEditorTouchBar(props: { controller: ComposerEditorModel; docked
             class="h-11 rounded-lg px-3 text-[15px] leading-5"
             onMouseDown={keep}
             onClick={() => {
-              props.controller.dispatch({ type: "mode.normal" })
               props.controller.restoreFocus()
+              props.controller.dispatch({ type: "mode.normal" })
             }}
           >
             {i18n.t("ui.promptInput.exitShell")}

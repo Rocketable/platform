@@ -1,4 +1,3 @@
-import { Tabs } from "@opencode/ui/tabs"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { createEffect, createMemo, For, on, onCleanup, onMount, Show, Switch, Match, type Accessor } from "solid-js"
 import { createStore } from "solid-js/store"
@@ -25,7 +24,7 @@ import { SettingsProjects } from "./workspaces/projects"
 import { SettingsExtensions } from "./providers/extensions"
 import { SettingsAbout } from "./about/about"
 import { SettingsServerDataScope } from "./server-scope"
-import { SettingsNavigation, type SettingsNavGroup } from "./navigation"
+import { SettingsNavigation, SettingsPanel, type SettingsNavGroup } from "./navigation"
 import { SettingsProjectGeneral } from "./workspaces/project"
 import { ProjectSettingsExtensions } from "./workspaces/project-extensions"
 import { useSettingsSurface } from "./surface"
@@ -138,6 +137,7 @@ export function SettingsScreen() {
     <div
       ref={root}
       data-testid="settings-screen"
+      data-focus-scope
       class="settings-screen"
       tabIndex={-1}
       onKeyDown={(event) => {
@@ -244,25 +244,25 @@ function RootSettings() {
       onBack={() => surface.close()}
       onChange={change}
     >
-      <Tabs.Content value="general" class="settings-panel">
+      <SettingsPanel value="general">
         <SettingsGeneral />
-      </Tabs.Content>
-      <Tabs.Content value="appearance" class="settings-panel">
+      </SettingsPanel>
+      <SettingsPanel value="appearance">
         <SettingsAppearance />
-      </Tabs.Content>
-      <Tabs.Content value="notifications" class="settings-panel">
+      </SettingsPanel>
+      <SettingsPanel value="notifications">
         <SettingsNotifications />
-      </Tabs.Content>
-      <Tabs.Content value="shortcuts" class="settings-panel">
+      </SettingsPanel>
+      <SettingsPanel value="shortcuts">
         <SettingsKeybinds active={surface.view().tab === "shortcuts"} />
-      </Tabs.Content>
+      </SettingsPanel>
       <PluginSettingsPages />
-      <Tabs.Content value="experimental" class="settings-panel">
+      <SettingsPanel value="experimental">
         <SettingsExperimental />
-      </Tabs.Content>
-      <Tabs.Content value="about" class="settings-panel settings-about">
+      </SettingsPanel>
+      <SettingsPanel value="about" class="settings-about">
         <SettingsAbout active={surface.view().tab === "about"} />
-      </Tabs.Content>
+      </SettingsPanel>
       <Show
         when={reachable()}
         keyed
@@ -271,13 +271,13 @@ function RootSettings() {
             {(entry) => (
               <For each={serverTabs}>
                 {(item) => (
-                  <Tabs.Content value={item.value} class="settings-panel">
+                  <SettingsPanel value={item.value}>
                     <SettingsServerUnavailable
                       entry={entry()}
                       title={language.t(serverPages[item.value].title)}
                       description={language.t(serverPages[item.value].description)}
                     />
-                  </Tabs.Content>
+                  </SettingsPanel>
                 )}
               </For>
             )}
@@ -286,7 +286,7 @@ function RootSettings() {
       >
         {(server) => (
           <SettingsServerDataScope server={server}>
-            <Tabs.Content value="providers" class="settings-panel">
+            <SettingsPanel value="providers">
               <SettingsProviders
                 directory={undefined}
                 onSelectProvider={(providerID) => {
@@ -294,22 +294,22 @@ function RootSettings() {
                   surface.select("models")
                 }}
               />
-            </Tabs.Content>
-            <Tabs.Content value="models" class="settings-panel">
+            </SettingsPanel>
+            <SettingsPanel value="models">
               <SettingsModels
                 active={surface.view().tab === "models"}
                 provider={state.modelProvider}
                 onConsumeTarget={() => setState("modelProvider", undefined)}
               />
-            </Tabs.Content>
-            <Tabs.Content value="extensions" class="settings-panel">
+            </SettingsPanel>
+            <SettingsPanel value="extensions">
               <SettingsExtensions
                 directory={activeDirectory()}
                 subtab={surface.view().subtab}
                 onSubtab={(value) => surface.subtab(value)}
               />
-            </Tabs.Content>
-            <Tabs.Content value="projects" class="settings-panel">
+            </SettingsPanel>
+            <SettingsPanel value="projects">
               <SettingsProjects
                 server={server}
                 active={surface.view().tab === "projects"}
@@ -320,22 +320,22 @@ function RootSettings() {
                   })
                 }
               />
-            </Tabs.Content>
-            <Tabs.Content value="workspaces" class="settings-panel">
+            </SettingsPanel>
+            <SettingsPanel value="workspaces">
               <SettingsWorkspaces
                 activeDirectory={activeDirectory()}
                 resetProjectFilter={() => state.worktreeFilterReset}
               />
-            </Tabs.Content>
+            </SettingsPanel>
           </SettingsServerDataScope>
         )}
       </Show>
-      <Tabs.Content value="servers" class="settings-panel">
+      <SettingsPanel value="servers">
         {/* rocketclaw: one configured server, with no manager or switcher (upstream packages/app/src/settings/shell.tsx) */}
         <Show when={multiple() ? undefined : inventory()[0]}>
           {(entry) => <SettingsServerGeneral entry={entry()} />}
         </Show>
-      </Tabs.Content>
+      </SettingsPanel>
     </SettingsNavigation>
   )
 }
@@ -370,19 +370,19 @@ function ProjectSettings(props: { server: ServerConnection.Any; project: LocalPr
           onBack={() => surface.back()}
           onChange={(value) => surface.select(value)}
         >
-          <Tabs.Content value="general" class="settings-panel">
+          <SettingsPanel value="general">
             <SettingsProjectGeneral
               server={props.server}
               project={props.project}
               onOpenServer={() => surface.openServers(ServerConnection.key(props.server))}
             />
-          </Tabs.Content>
-          <Tabs.Content value="workspaces" class="settings-panel">
+          </SettingsPanel>
+          <SettingsPanel value="workspaces">
             <SettingsWorkspaces projectID={props.project.id} activeDirectory={activeDirectory()} />
-          </Tabs.Content>
-          <Tabs.Content value="extensions" class="settings-panel">
+          </SettingsPanel>
+          <SettingsPanel value="extensions">
             <ProjectSettingsExtensions subtab={surface.view().subtab} onSubtab={(value) => surface.subtab(value)} />
-          </Tabs.Content>
+          </SettingsPanel>
         </SettingsNavigation>
       </LocationProvider>
     </SettingsServerDataScope>

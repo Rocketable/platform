@@ -16,7 +16,7 @@ class Upload extends EventTarget {
   url = ""
   headers = new Map<string, string>()
   status = 200
-  response = { data: { path: "/srv/tmp/uploads/a.txt" } }
+  responseText = JSON.stringify({ data: { path: "/srv/tmp/uploads/a.txt" } })
   upload = new EventTarget()
 
   open(_method: string, url: URL) {
@@ -25,6 +25,10 @@ class Upload extends EventTarget {
 
   setRequestHeader(name: string, value: string) {
     this.headers.set(name.toLowerCase(), value)
+  }
+
+  getResponseHeader(name: string) {
+    return name === "content-type" ? "application/json" : null
   }
 
   send() {

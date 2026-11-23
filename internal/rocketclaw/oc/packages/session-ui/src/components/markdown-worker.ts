@@ -6,7 +6,7 @@ import {
   type MarkdownWorkerEvent,
   type WorkerRejectReason,
 } from "./markdown-worker-machine"
-import type { MarkdownWorkerRequest, MarkdownWorkerResponse, MarkdownWorkerState } from "./markdown-worker-protocol"
+import type { MarkdownHTML, MarkdownWorkerRequest, MarkdownWorkerResponse, MarkdownWorkerState } from "./markdown-worker-protocol"
 
 // rocketclaw: RocketClaw ends the worker when its last view unmounts, after every markdown view released its keys; the
 // next view starts a new one (upstream packages/session-ui/src/components/markdown-worker.ts)
@@ -30,7 +30,7 @@ export class MarkdownWorkerUnavailableError extends Error {}
 type Settle<T> = { readonly resolve: (value: T) => void; readonly reject: (error: Error) => void }
 
 type Resolver =
-  | (Settle<string> & { readonly kind: "parse" })
+  | (Settle<MarkdownHTML> & { readonly kind: "parse" })
   | (Settle<Projection> & { readonly kind: "project" })
   | (Settle<MarkdownWorkerState> & { readonly kind: "highlight" })
 
@@ -167,7 +167,7 @@ export function createMarkdownWorkerClient(spawn: () => MarkdownWorkerPort) {
   }
 
   // Callers that cancel by id need no AbortController, listener or promise per parse.
-  const startParse = (text: string, settle: Settle<string>) => {
+  const startParse = (text: string, settle: Settle<MarkdownHTML>) => {
     const id = state.issued + 1
     request({ type: "parse.requested", text }, { kind: "parse", resolve: settle.resolve, reject: settle.reject })
 
@@ -193,7 +193,7 @@ export function createMarkdownWorkerClient(spawn: () => MarkdownWorkerPort) {
     parseMarkdown(text: string, signal?: AbortSignal) {
       if (signal?.aborted) return Promise.reject(markdownWorkerDisposed)
 
-      return new Promise<string>((resolve, reject) => {
+      return new Promise<MarkdownHTML>((resolve, reject) => {
         if (!signal) {
           startParse(text, { resolve, reject })
 

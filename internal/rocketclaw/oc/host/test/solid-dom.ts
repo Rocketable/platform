@@ -1,6 +1,7 @@
 import { plugin } from "bun"
 import { mock } from "bun:test"
 import { transformAsync } from "@babel/core"
+import { dirname, resolve } from "node:path"
 
 // Host tests render the app's Solid components, so TSX compiles with Solid's DOM compiler, as Vite's Solid plugin
 // does in the build. Upstream's preload (packages/ui/test/solid-jsx.ts) targets Solid's hyperscript runtime, under
@@ -8,9 +9,14 @@ import { transformAsync } from "@babel/core"
 plugin({
   name: "solid-dom",
   setup(build) {
-    // Vite's asset imports and import.meta.glob (the theme list) load nothing here: the tests never read them.
-    build.onResolve({ filter: /\?(worker&url|url|raw|inline)$/ }, (args) => ({ path: args.path, namespace: "vite" }))
-    build.onLoad({ filter: /.*/, namespace: "vite" }, () => ({ contents: `export default ""`, loader: "js" }))
+    build.onResolve({ filter: /\?(worker&url|url|raw|inline)$/ }, ({ path, importer }) => ({
+      path: path.endsWith(".svg?raw") && path.startsWith(".") ? resolve(dirname(importer), path) : path,
+      namespace: "vite",
+    }))
+    build.onLoad({ filter: /.*/, namespace: "vite" }, async ({ path }) => {
+      const content = path.endsWith(".svg?raw") ? await Bun.file(path.slice(0, -4)).text() : ""
+      return { contents: `export default ${JSON.stringify(content)}`, loader: "js" }
+    })
     build.onLoad({ filter: /\.tsx$/ }, async (args) => {
       const source = (await Bun.file(args.path).text()).replace(/import\.meta\.glob(<[^>]*>)?\([^)]*\)/g, "({})")
       const result = await transformAsync(source, {

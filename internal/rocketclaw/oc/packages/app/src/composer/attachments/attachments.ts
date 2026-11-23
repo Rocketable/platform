@@ -1,6 +1,7 @@
 import { onCleanup, onMount, useContext } from "solid-js"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createBlobReference } from "@/runtime/persistence/drafts"
+import { dragOutText, draggingOut } from "@/runtime/platform/drag-out"
 import { uuid } from "@opencode/util/uuid"
 import type { ComposerPrompt } from "../types"
 import type { ImageAttachmentPart, PathAttachmentPart } from "../state"
@@ -215,7 +216,10 @@ export function createComposerAttachments(
     if (input.isDialogActive()) return
     event.preventDefault()
     clearDrag()
-    const plainText = event.dataTransfer?.getData("text/plain")
+
+    const plainText =
+      event.dataTransfer?.getData("text/plain") ||
+      dragOutText(Array.from(event.dataTransfer?.files ?? []).map((file) => input.getPathForFile?.(file) ?? ""))
 
     if (plainText?.startsWith("file:")) {
       const path = plainText.slice("file:".length)
@@ -277,6 +281,8 @@ export function createComposerAttachments(
 // Files from the system and file rows from the workspace tree (which also carry a file URL) drop as attachments.
 // A text selection carries neither, so dragging it shows no dropzone.
 function dragType(data: DataTransfer | null) {
+  if (draggingOut()) return "@mention"
+
   if (data?.types.includes("Files")) return "image"
 
   if (data?.types.includes("text/uri-list")) return "@mention"
