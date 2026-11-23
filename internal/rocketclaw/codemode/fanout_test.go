@@ -170,6 +170,19 @@ func TestMapConcurrencyLimit(t *testing.T) {
 	})
 }
 
+func TestFanoutReusesTupleStorage(t *testing.T) {
+	tuple := starlark.Tuple{starlark.String("item")}
+
+	values, err := listOrTuple(tuple)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(values) != len(tuple) || &values[0] != &tuple[0] {
+		t.Fatal("fan-out input does not reuse tuple storage")
+	}
+}
+
 func TestConcurrencyRejectsInvalidArguments(t *testing.T) {
 	for _, tc := range []struct {
 		name, expression, want string

@@ -157,7 +157,7 @@ func listOrTuple(value starlark.Value) ([]starlark.Value, error) {
 	case *starlark.List:
 		return slices.Collect(v.Elements()), nil
 	case starlark.Tuple:
-		return slices.Clone(v), nil
+		return v, nil
 	default:
 		return nil, errors.New("must be a list or tuple")
 	}
