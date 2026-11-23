@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +32,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/tailcfg"
 )
 
 func TestHTTPEventFramingAllocationBudget(t *testing.T) {
@@ -230,6 +233,100 @@ func TestHTTPRefusesOtherSites(t *testing.T) {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
 		require.Equal(t, tt.code, response.Code, tt.name)
+	}
+}
+
+func TestHTTPAccessLog(t *testing.T) {
+	var logs bytes.Buffer
+
+	previous := slog.Default()
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug, ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+		switch {
+		case attr.Key == slog.TimeKey:
+			return slog.Attr{}
+		case attr.Key == "duration_ms" && attr.Value.Kind() == slog.KindInt64:
+			return slog.String(attr.Key, "measured")
+		default:
+			return attr
+		}
+	}})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	transport := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
+		method, _ := grpc.MethodFromServerStream(stream)
+		switch method {
+		case "/rpc.Web/ListSessionEntries":
+			return status.Error(codes.NotFound, "no such session")
+		case "/rpc.Web/WatchTyping":
+			require.NoError(t, stream.RecvMsg(&WatchTypingRequest{}))
+			return stream.SendMsg(&TypingEvent{})
+		case "/rpc.Web/ReportTyping":
+			require.NoError(t, stream.RecvMsg(&ReportTypingRequest{}))
+			return stream.SendMsg(&ReportTypingResponse{})
+		case "/rpc.Web/Join":
+			require.NoError(t, stream.RecvMsg(&JoinRequest{}))
+			require.NoError(t, stream.SendMsg(&ConversationChange{}))
+
+			return status.Error(codes.Unavailable, "restarting")
+		default:
+			require.NoError(t, stream.RecvMsg(&ReloadRequest{}))
+			return stream.SendMsg(&ReloadResponse{Message: "reloaded"})
+		}
+	}))
+	listener, err := net.Listen("unix", testSocketPath(t))
+	require.NoError(t, err)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() { transport.Stop(); require.NoError(t, serving.Wait()) })
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	alice := &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "alice@example.com"}}
+	tagged := &apitype.WhoIsResponse{Node: &tailcfg.Node{Tags: []string{"tag:server"}}, UserProfile: &tailcfg.UserProfile{LoginName: "tagged-devices"}}
+	script := http.Header{"Content-Type": {"application/json"}, "User-Agent": {"curl/8.7.1"}, "Authorization": {"Bearer secret-token"}, "Cookie": {"session=secret-cookie"}}
+	page := http.Header{"Content-Type": {"application/json"}, "User-Agent": {"Mozilla/5.0 (X11; Linux x86_64)"}, "Origin": {"https://rocketclaw.example.ts.net"}, "Sec-Fetch-Site": {"same-origin"}, "Cookie": {"session=secret-cookie"}}
+	events := http.Header{"Accept": {"text/event-stream"}, "User-Agent": {"Mozilla/5.0 (X11; Linux x86_64)"}, "Sec-Fetch-Site": {"same-origin"}}
+
+	for _, tt := range []struct {
+		name, method, path, body string
+		header                   http.Header
+		who                      *apitype.WhoIsResponse
+		want                     string
+	}{
+		{"unary from a script", http.MethodPost, "/api/Reload", `{"reason":"secret-body"}`, script, alice,
+			`level=INFO msg="rpc request" method=Reload login=alice@example.com http_method=POST content_type=application/json user_agent=curl/8.7.1 origin="" remote_addr=100.64.0.7:41641 status=200 code=OK reason=""`},
+		{"unary failure from the page", http.MethodPost, "/api/ListSessionEntries", `{"id":"secret-chat"}`, page, alice,
+			`level=INFO msg="rpc request" method=ListSessionEntries login=alice@example.com http_method=POST content_type=application/json user_agent="Mozilla/5.0 (X11; Linux x86_64)" origin=https://rocketclaw.example.ts.net remote_addr=100.64.0.7:41641 status=404 code=NotFound reason=""`},
+		{"cross-site", http.MethodPost, "/api/Prompt", `{"id":"secret-chat","text":"secret-prompt"}`, http.Header{"Content-Type": {"application/json"}, "Origin": {"https://evil.example"}, "Sec-Fetch-Site": {"cross-site"}}, alice,
+			`level=INFO msg="rpc request" method=Prompt login=alice@example.com http_method=POST content_type=application/json user_agent="" origin=https://evil.example remote_addr=100.64.0.7:41641 status=403 code="" reason="cross-origin request detected from Sec-Fetch-Site header"`},
+		{"unauthenticated", http.MethodPost, "/api/Reload", `{"reason":"secret-body"}`, script, tagged,
+			`level=INFO msg="rpc request" method=Reload login=tagged-devices http_method=POST content_type=application/json user_agent=curl/8.7.1 origin="" remote_addr=100.64.0.7:41641 status=401 code=Unauthenticated reason="tailnet caller has no Tailscale user"`},
+		{"unknown method", http.MethodPost, "/api/RemovedMethod", `{"id":"secret-chat"}`, script, alice,
+			`level=INFO msg="rpc request" method=RemovedMethod login=alice@example.com http_method=POST content_type=application/json user_agent=curl/8.7.1 origin="" remote_addr=100.64.0.7:41641 status=404 code="" reason="unknown method"`},
+		{"frequent call from the page", http.MethodPost, "/api/ReportTyping", `{"id":"secret-chat","typing":true}`, page, alice,
+			`level=DEBUG msg="rpc request" method=ReportTyping login=alice@example.com http_method=POST content_type=application/json user_agent="Mozilla/5.0 (X11; Linux x86_64)" origin=https://rocketclaw.example.ts.net remote_addr=100.64.0.7:41641 status=200 code=OK reason=""`},
+		{"refused frequent call", http.MethodGet, "/api/ListSessions?viewing=secret-chat", "", http.Header{"Origin": {"https://evil.example"}, "Sec-Fetch-Site": {"cross-site"}}, alice,
+			`level=DEBUG msg="rpc request" method=ListSessions login=alice@example.com http_method=GET content_type="" user_agent="" origin=https://evil.example remote_addr=100.64.0.7:41641 status=403 code="" reason="cross-origin request detected from Sec-Fetch-Site header"`},
+		{"stream", http.MethodGet, "/typing?id=secret-chat", "", events, alice,
+			`level=INFO msg="rpc request" method=WatchTyping login=alice@example.com http_method=GET content_type="" user_agent="Mozilla/5.0 (X11; Linux x86_64)" origin="" remote_addr=100.64.0.7:41641 status=200 code=OK reason=""`},
+		{"stream failure", http.MethodGet, "/stream?id=secret-chat", "", events, alice,
+			`level=INFO msg="rpc request" method=Join login=alice@example.com http_method=GET content_type="" user_agent="Mozilla/5.0 (X11; Linux x86_64)" origin="" remote_addr=100.64.0.7:41641 status=200 code=Unavailable reason=""`},
+	} {
+		whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) { return tt.who, nil }}
+		handler := NewTailnetHandler(whois, nil, NewHTTPHandler(connection, new(config.LockedConfig), ""))
+
+		request := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+		request.Header = tt.header
+		request.RemoteAddr = "100.64.0.7:41641"
+
+		logs.Reset()
+		handler.ServeHTTP(httptest.NewRecorder(), request)
+		require.Equal(t, tt.want+" duration_ms=measured\n", logs.String(), tt.name)
+		require.NotContains(t, logs.String(), "secret", tt.name)
 	}
 }
 

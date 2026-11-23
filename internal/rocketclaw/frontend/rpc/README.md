@@ -775,6 +775,23 @@ and exits with code 1 when it needs a login, has no HTTPS name or cannot listen 
 port 443; when the listener stops serving later, the server exits with code 255 to be
 started again. Tailscale's log upload is off. Never use `tailscale funnel`.
 
+The tailnet handler also writes the access log, because every Web request passes
+through it. For paths under `/api/`, `/stream` and `/typing` it wraps the response
+writer in `rpcAccess` and, when the request ends, logs one line
+`msg="rpc request"` with `method` (`Join` for `/stream`, `WatchTyping` for `/typing`,
+otherwise the path after `/api/`), `login`, `http_method`, `content_type`,
+`user_agent`, `origin` (as the caller sent it, before a trusted page's is rewritten),
+`remote_addr`, `status`, `code`, `reason` and `duration_ms`. `httpRPCError`, the event
+stream's `event: error` and a failed download record the RPC code; a request that ends
+otherwise below HTTP 400 logs `OK`. The WhoIs refusal, `refuseOtherSites` and the
+`/api/` catch-all record a `reason`. A stream logs when it closes, so its duration is
+the whole stream; a stream the browser closes usually ends `Canceled`. Bodies, query
+strings, cookies and `Authorization` are never logged. The line is at info level, which
+PostHog also receives when configured, except for the methods in `webBackgroundMethods` (`Protocol`,
+`Identity`, `ListSessions`, `ReportTyping`), which the Web page calls on a 2-second
+timer or while someone types and so log at debug level. The level follows the method
+name, so a refused call to one of them is debug and an unknown method is info.
+
 The `web.tsnet` listener also serves the RocketClaw pages its config trusts, so one
 page can operate several RocketClaws. A request whose `Origin` exactly matches an entry
 of `trusted_rocketclaws` is such a page; no other origin is, not even another page on

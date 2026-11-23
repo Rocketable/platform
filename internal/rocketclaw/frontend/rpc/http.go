@@ -1,12 +1,14 @@
 package rpc
 
 import (
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"mime"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/internal/web"
@@ -39,9 +42,14 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 
 	var gzipWriters sync.Pool
 
+	unknown := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		accessOf(w).reason = "unknown method"
+		http.NotFound(w, r)
+	})
+
 	mux.Handle("GET /", app)
-	mux.Handle("GET /api/", http.NotFoundHandler())
-	mux.Handle("POST /api/", http.NotFoundHandler())
+	mux.Handle("GET /api/", unknown)
+	mux.Handle("POST /api/", unknown)
 
 	handleOpenCode(mux, connection, cfg)
 
@@ -182,7 +190,9 @@ func refuseOtherSites(protection *http.CrossOriginProtection, next http.Handler)
 		}
 
 		if err := protection.Check(&checked); err != nil {
+			accessOf(w).reason = err.Error()
 			http.Error(w, err.Error(), http.StatusForbidden)
+
 			return
 		}
 
@@ -227,6 +237,13 @@ func NewTailnetHandler(client tailnetWhoIs, trusted []string, next http.Handler)
 			return
 		}
 
+		if r.URL.Path == "/stream" || r.URL.Path == "/typing" || strings.HasPrefix(r.URL.Path, "/api/") {
+			access := &rpcAccess{writer: w}
+			defer access.log(r, time.Now())
+
+			w = access
+		}
+
 		w.Header().Set("Content-Security-Policy", ancestors)
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 
@@ -239,8 +256,16 @@ func NewTailnetHandler(client tailnetWhoIs, trusted []string, next http.Handler)
 		}
 
 		who, err := client.WhoIs(r.Context(), r.RemoteAddr)
+		if err == nil {
+			accessOf(w).login = who.UserProfile.LoginName
+		}
+
 		if err != nil || who.Node.IsTagged() || who.UserProfile.LoginName == "" {
-			httpRPCError(w, status.Error(codes.Unauthenticated, "tailnet caller has no Tailscale user"))
+			const refusal = "tailnet caller has no Tailscale user"
+
+			accessOf(w).reason = refusal
+			httpRPCError(w, status.Error(codes.Unauthenticated, refusal))
+
 			return
 		}
 
@@ -336,6 +361,8 @@ func httpDownload(w http.ResponseWriter, stream grpc.ClientStream, file *Attachm
 		}
 
 		if err != nil {
+			accessOf(w).code = status.Code(err).String()
+
 			panic(http.ErrAbortHandler)
 		}
 	}
@@ -385,6 +412,7 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 		}
 
 		if err != nil {
+			accessOf(w).code = status.Code(err).String()
 			body, _ := json.Marshal(struct {
 				Code    codes.Code `json:"code"`
 				Message string     `json:"message"`
@@ -520,10 +548,68 @@ func httpRPCError(w http.ResponseWriter, err error) {
 		httpCode = http.StatusNotImplemented
 	}
 
+	accessOf(w).code = code.String()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpCode)
 	_ = json.NewEncoder(w).Encode(struct {
 		Code    codes.Code `json:"code"`
 		Message string     `json:"message"`
 	}{code, status.Convert(err).Message()})
+}
+
+const webBackgroundMethods = "Protocol Identity ListSessions ReportTyping"
+
+type rpcAccess struct {
+	writer http.ResponseWriter
+	status int
+	code   string
+	login  string
+	reason string
+}
+
+func accessOf(w http.ResponseWriter) *rpcAccess {
+	if access, ok := w.(*rpcAccess); ok {
+		return access
+	}
+
+	return &rpcAccess{}
+}
+
+func (a *rpcAccess) Header() http.Header {
+	return a.writer.Header()
+}
+
+func (a *rpcAccess) WriteHeader(statusCode int) {
+	a.status = cmp.Or(a.status, statusCode)
+	a.writer.WriteHeader(statusCode)
+}
+
+func (a *rpcAccess) Write(body []byte) (int, error) {
+	a.status = cmp.Or(a.status, http.StatusOK)
+
+	n, err := a.writer.Write(body)
+	if err != nil {
+		return n, fmt.Errorf("write web response: %w", err)
+	}
+
+	return n, nil
+}
+
+func (a *rpcAccess) Unwrap() http.ResponseWriter {
+	return a.writer
+}
+
+func (a *rpcAccess) log(r *http.Request, start time.Time) {
+	answered, code := cmp.Or(a.status, http.StatusOK), a.code
+	if code == "" && answered < http.StatusBadRequest {
+		code = codes.OK.String()
+	}
+
+	method, level := cmp.Or(map[string]string{"/stream": "Join", "/typing": "WatchTyping"}[r.URL.Path], strings.TrimPrefix(r.URL.Path, "/api/")), slog.LevelInfo
+	if slices.Contains(strings.Fields(webBackgroundMethods), method) {
+		level = slog.LevelDebug
+	}
+
+	slog.Log(r.Context(), level, "rpc request", "method", method, "login", a.login, "http_method", r.Method, "content_type", r.Header.Get("Content-Type"), "user_agent", r.UserAgent(), "origin", r.Header.Get("Origin"),
+		"remote_addr", r.RemoteAddr, "status", answered, "code", code, "reason", a.reason, "duration_ms", time.Since(start).Milliseconds())
 }
