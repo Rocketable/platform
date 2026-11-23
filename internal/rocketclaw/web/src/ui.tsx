@@ -15,7 +15,7 @@ import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field
 import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceInputsPending, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
-import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
+import type { ChatOrigin, HistoryView, MessageMatch, PageEntry, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
 import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, Fragment, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
@@ -858,7 +858,7 @@ function TabTitle() {
   const title = useCleanText(label);
   const [anchor, setAnchor] = useState<MenuAnchor>(), [editing, setEditing] = useState("");
   const menu = anchor && { path: pathname, anchor, space: state.space, shared: !own };
-  const items = menu ? [...pullRequestItems(menu, true, tabs.name), ...menuItems(tabs, menu, view, new Set([pathname]), () => setEditing(pathname), (doomed) => setCommand({ mode: "delete", source: doomed }))] : [];
+  const items = menu ? [...threadPanelItems(menu, true, tabs.name), ...menuItems(tabs, menu, view, new Set([pathname]), () => setEditing(pathname), (doomed) => setCommand({ mode: "delete", source: doomed }))] : [];
   return <header className="flex shrink-0 items-center gap-2 border-b px-4 py-1.5 text-sm">
     <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
     {editing === pathname ? <TabRename session={session} tab={{ path: pathname, search: tab?.search }} shared={!own} space={state.space} placeholder={title} endEdit={() => setEditing("")} /> : <span className="truncate font-semibold">{title}</span>}
@@ -880,7 +880,7 @@ function SidebarToggle({ open, toggle }: { open: boolean; toggle: () => void }) 
 function PanelToggle() {
   const session = pathSession(usePathname());
   const search = new URLSearchParams(useSearch());
-  const open = ["delegation", "skill", "pullRequests"].some((panel) => search.has(panel));
+  const open = ["delegation", "skill", "pullRequests", "pagePreview"].some((panel) => search.has(panel));
   const label = open ? "Hide right pane" : "Show pull requests and issues";
   const Icon = open ? PanelRightClose : PanelRightOpen;
   const toggle = () => navigate(panelHref(open ? undefined : "1", "pullRequests"));
@@ -1728,8 +1728,11 @@ function menuItems(tabs: TabStoreValue, menu: CardMenu, view: ServerView, target
   return [...renaming, ...tabs.commands(menu.path, view, targets, menu.space), ...session ? [{ key: "delete", label: "Delete session", run: () => remove(session.id) }] : []];
 }
 
-const pullRequestItems = (menu: { path: string }, single: boolean, name: string): TabCommand[] =>
-  pathSession(menu.path) && single ? [{ key: "pull-requests", label: threadGitHubLabel, run: () => navigate(`${menu.path}?pullRequests=1`, false, name) }] : [];
+const threadPanelItems = (menu: { path: string }, single: boolean, name: string): TabCommand[] =>
+  pathSession(menu.path) && single ? [
+    { key: "pull-requests", label: threadGitHubLabel, run: () => navigate(`${menu.path}?pullRequests=1`, false, name) },
+    { key: "hosted-pages", label: "Hosted Pages", run: () => navigate(menu.path === pagePath() && name === server() ? panelHref("1", "pagePreview") : `${menu.path}?pagePreview=1`, false, name) },
+  ] : [];
 
 type TabStoreValue = ReturnType<typeof useTabs>;
 // A card's tabs, which its rows rename and edit through; outside a card, the page's.
@@ -2062,7 +2065,7 @@ function SharedGroup({ tabs, space, paths, folded, label, waiting, folds, editin
 function CardMenuPopup({ tabs, menu, setMenu, picked, setEditing, node }: { tabs: TabStoreValue; menu?: CardMenu; setMenu: (menu?: CardMenu & { server: string }) => void; picked: Picked; setEditing: (key?: string) => void; node: RefObject<HTMLDivElement | null> }) {
   const view = useContext(Sidebar), { setCommand } = useContext(SessionCommands);
   const selection = menu ? selectionIn(tabs, picked, menu.space) : new Set<string>(), targets = menu && !selection.has(menu.path) ? new Set([menu.path]) : selection;
-  const items = !menu ? [] : [...pullRequestItems(menu, targets.size === 1, tabs.name), ...menuItems(tabs, menu, view, targets, () => setEditing(menu.shared ? `shared:${menu.space}:${menu.path}` : menu.path), (id) => setCommand({ mode: "delete", source: id }))];
+  const items = !menu ? [] : [...threadPanelItems(menu, targets.size === 1, tabs.name), ...menuItems(tabs, menu, view, targets, () => setEditing(menu.shared ? `shared:${menu.space}:${menu.path}` : menu.path), (id) => setCommand({ mode: "delete", source: id }))];
   // Only this person's tabs leave their card; Shared rows stay where they are.
   return <TabMenu items={items} anchor={menu?.anchor} close={() => setMenu(undefined)} refocus={(key) => !menu?.shared && /^(close|park|unpark)/.test(key) ? selected(node, menu && `${tabs.name}/${menu.space}`) ?? true : true} />;
 }
@@ -2174,8 +2177,8 @@ function ParkedBox({ collapsed, children }: { collapsed: boolean; children: Reac
 function ParkedSection({ tabs }: { tabs: TabStoreValue }) {
   const [menu, setMenu] = useState<ParkedMenu>(), [editing, setEditing] = useState<string>(), list = useRef<HTMLDivElement>(null), sidebar = useContext(Sidebar), { setCommand } = useContext(SessionCommands);
   const send = (server: string): Attend => (paths, action, until) => void tabsCall(server, { attention: { paths, action, until } }).then(sidebar.servers[server].invalidateQueries, () => undefined);
-  const items = !menu ? [] : menu.server === tabs.name ? [...pullRequestItems(menu, true, menu.server), ...menuItems(tabs, menu, sidebar, new Set([menu.path]), () => setEditing(menu.path), (id) => setCommand({ mode: "delete", source: id }))]
-    : [...pullRequestItems(menu, true, menu.server), ...attentionItems(sidebar.servers[menu.server], menu.path, [menu.path], send(menu.server), tabs.setPicking)];
+  const items = !menu ? [] : menu.server === tabs.name ? [...threadPanelItems(menu, true, menu.server), ...menuItems(tabs, menu, sidebar, new Set([menu.path]), () => setEditing(menu.path), (id) => setCommand({ mode: "delete", source: id }))]
+    : [...threadPanelItems(menu, true, menu.server), ...attentionItems(sidebar.servers[menu.server], menu.path, [menu.path], send(menu.server), tabs.setPicking)];
   return <TabStore.Provider value={tabs}>
     <ParkedTabs tabs={tabs} list={list} editing={editing} endEdit={() => setEditing(undefined)} openMenu={setMenu} close={(path) => { flushSync(() => tabs.close([path])); selected(list)?.focus(); }} />
     <TabMenu items={items} anchor={menu?.anchor} close={() => setMenu(undefined)} refocus={(key) => /^(close|park|unpark)/.test(key) ? selected(list) ?? true : true} />
@@ -2501,7 +2504,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               </TabPane>
              </ServerGate></main></div>
               {showChat ? <><DelegationPanel id={route.id} /><SkillPanel /></> : null}
-              <ThreadPRPanel drafts={drafts} onDraftChange={onDraftChange} />
+               <ThreadPRPanel drafts={drafts} onDraftChange={onDraftChange} />
+               <HostedPagePanel />
            </div>
           </div>
           </TabActions></SessionCommands></DraftScope>
@@ -3291,22 +3295,25 @@ function RemoteSession({ id }: { id: string }) {
 function HostedPage({ page }: { page: string }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [token] = useState(() => crypto.getRandomValues(new Uint32Array(4)).join("-"));
+  const name = useServer(), origin = serverURL(name);
   const agent = decodeURIComponent(page.split("/")[0]);
   useEffect(() => {
     const read = async ({ source, data }: MessageEvent) => {
       if (source !== frame.current?.contentWindow || data?.type !== "rocketclaw.read" || data.token !== token) return;
-      const reply = await rpc<{ body: string }>("GetPage", { agent, path: data.key, data: true }).then(
+      const reply = await rpc<{ body: string }>("GetPage", { agent, path: data.key, data: true }, undefined, name).then(
         ({ body }) => ({ value: JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(body), (char) => char.charCodeAt(0)))) }),
         (error: Error) => ({ error: error.message }));
-      (source as Window).postMessage({ type: "rocketclaw.read", id: data.id, ...reply }, "*");
+      if (source === frame.current?.contentWindow) (source as Window).postMessage({ type: "rocketclaw.read", id: data.id, ...reply }, "*");
     };
     addEventListener("message", read);
     return () => removeEventListener("message", read);
-  }, [agent, token]);
+  }, [agent, name, token]);
   if (!page) return null;
-  if (/\.pdf$/i.test(page)) return <p className="m-auto p-4 text-sm"><a href={`${serverURL()}/pages-raw/${page}`} target="_blank" rel="noopener noreferrer" className="underline">Open PDF</a></p>;
-  return <iframe ref={frame} title={pageLabel(page)} sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads" className="min-h-0 w-full flex-1 border-0" src={`${serverURL()}/pages-raw/${page}#rc=${token}`} />;
+  if (/\.pdf$/i.test(page)) return <p className="m-auto p-4 text-sm"><a href={`${origin}/pages-raw/${page}`} target="_blank" rel="noopener noreferrer" className="underline">Open PDF</a></p>;
+  return <iframe ref={frame} title={pageLabel(page)} sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads" className="min-h-0 w-full flex-1 border-0" src={`${origin}/pages-raw/${page}#rc=${token}`} />;
 }
+
+const hostedPagePath = ({ agent, path }: PageEntry) => [agent, ...path.split("/")].map(encodeURIComponent).join("/");
 
 function PageIndex({ show }: { show: boolean }) {
   const pages = useQuery({ ...queries.pages(), staleTime: 10_000, enabled: show });
@@ -3318,16 +3325,72 @@ function PageIndex({ show }: { show: boolean }) {
       {pages.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
       {pages.error ? <p className="text-sm text-destructive">{pages.error.message}</p> : null}
       {pages.data?.length === 0 ? <p className="text-sm text-muted-foreground">No pages</p> : null}
-      {[...Map.groupBy(pages.data ?? [], (page) => page.space ?? "")].toSorted(([a], [b]) => a.localeCompare(b)).map(([space, rows]) => <section key={space} className="flex flex-col gap-1">
-        <h2 className="text-xs font-medium text-muted-foreground">{space || "No space"}</h2>
-        <ul className="flex flex-col gap-1">
-          {rows.map((page) => <li key={`${page.agent}/${page.path}`}>
-            <Link href={pageSpace(state, `/pages/${encodeURIComponent(space || "-")}/${encodeURIComponent(page.agent)}/${page.path.split("/").map(encodeURIComponent).join("/")}`)[0]} className="block break-words py-1 text-sm hover:underline">{page.agent} · {page.path}</Link>
-          </li>)}
-        </ul>
-      </section>)}
+      <HostedPageLinks pages={pages.data ?? []} state={state} />
     </div>
   );
+}
+
+function HostedPageLinks({ pages, state }: { pages: PageEntry[]; state?: TabState }) {
+  return [...Map.groupBy(pages, (page) => page.space ?? "")].toSorted(([a], [b]) => a.localeCompare(b)).map(([space, rows]) => <section key={space} className="flex flex-col gap-1">
+    <h2 className="text-xs font-medium text-muted-foreground">{space || "No space"}</h2>
+    <ul className="flex flex-col gap-1">
+      {rows.map((page) => {
+        const path = hostedPagePath(page);
+        const href = state ? pageSpace(state, `/pages/${encodeURIComponent(space || "-")}/${path}`)[0] : panelHref(path, "pagePreview");
+        return <li key={path}><Link href={href} className="block break-words py-1 text-sm hover:underline">{page.agent} · {page.path}</Link></li>;
+      })}
+    </ul>
+  </section>);
+}
+
+function HostedPagePanel() {
+  const pathname = usePathname(), name = useServer();
+  const selection = new URLSearchParams(useSearch()).get("pagePreview");
+  if (!pathSession(pathname) || !selection) return null;
+  const close = () => navigate(panelHref());
+  return <SidePanel label="Hosted Pages" close={close}>
+    <header className="flex shrink-0 items-center gap-2 border-b p-2 text-xs lg:pr-12">
+      <span className="min-w-0 flex-1 truncate font-medium">Hosted Pages</span>
+      {selection === "1" ? null : <Link href={panelHref("1", "pagePreview")} className="shrink-0 underline hover:text-foreground">Choose another page</Link>}
+      <Button variant="ghost" size="icon-sm" aria-label="Close hosted pages" onClick={close}><X /></Button>
+    </header>
+    {selection === "1" ? <HostedPagePicker /> : <LiveHostedPage key={JSON.stringify([name, pathname, selection])} name={name} pathname={pathname} selection={selection} />}
+  </SidePanel>;
+}
+
+function HostedPagePicker() {
+  const pages = useQuery(queries.pages());
+  return <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
+    {pages.isPending ? <p role="status" className="text-sm">Loading pages…</p> : null}
+    {pages.isError ? <p role="alert" className="text-sm text-destructive">Could not load pages</p> : null}
+    {pages.data?.length === 0 ? <p className="text-sm">No pages</p> : null}
+    <HostedPageLinks pages={pages.data ?? []} />
+  </div>;
+}
+
+function pageSelection(selection: string) {
+  const [agent, ...path] = selection.split("/");
+  try { return { agent: decodeURIComponent(agent), path: path.map(decodeURIComponent).join("/") }; }
+  catch { return { agent: "", path: "" }; }
+}
+
+function LiveHostedPage({ name, pathname, selection }: { name: string; pathname: string; selection: string }) {
+  const view = useId();
+  const input = pageSelection(selection), valid = !!(input.agent && input.path);
+  const page = useQuery({
+    queryKey: [{ server: name }, "hostedPage", pathname, input, view],
+    queryFn: ({ signal }) => rpc<{ pages?: PageEntry[] }>("ListPages", input, signal, name).then(
+      ({ pages }) => pages?.find((page) => page.agent === input.agent && page.path === input.path) ?? null,
+      (error: Error) => { if (error instanceof RPCError && [7, 16].includes(error.code)) return null; throw error; },
+    ),
+    enabled: valid, retry: false, gcTime: 0, refetchInterval: 2000,
+  });
+  const current = page.data;
+  if (!valid || current === null) return <p className="p-3 text-sm">Page unavailable</p>;
+  return <>
+    {page.isError ? <p role="alert" className="p-3 text-sm text-destructive">Could not refresh page</p> : current ? null : <p role="status" className="p-3 text-sm">Loading page…</p>}
+    {current ? <HostedPage key={current.updatedAt} page={hostedPagePath(current)} /> : null}
+  </>;
 }
 
 // The palette of a session whose agent can pause offers Pause agent, or Resume agent while it is paused.

@@ -84,8 +84,15 @@ Issues do not open the pane automatically. Private issues in native sessions
 need a personal token with **Issues: read**; OpenCode sessions use the server's
 existing GitHub login. Issue previews do not load embedded images.
 
+The conversation tab's **⋯ → Hosted Pages** menu opens the Page Index in the
+right pane. Choose one HTML page to keep it beside the conversation on desktop
+or in a sheet on narrow screens. The pane checks for new saves while the tab is
+in view. New saves reload the sandboxed page; closing the pane leaves the chat
+and draft alone.
+
 On desktop the pane also opens by itself, on that PR, when a session in the thread
-creates a PR or one of its created PRs gets a new head commit. Discovery then runs
+creates a PR or one of its created PRs gets a new head commit, unless a Hosted Page
+or its picker is open. Discovery then runs
 after every update of that thread, open pane or not. Head commits are read through
 an OpenCode server's `gh` login only, so for a native RocketClaw thread only a new
 PR opens the pane. The first look at a thread, a PR missing from one look, a head

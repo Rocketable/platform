@@ -545,7 +545,10 @@ message Page {
   bytes body = 3;
 }
 
-message ListPagesRequest {}
+message ListPagesRequest {
+  string agent = 1;
+  string path = 2;
+}
 
 // ListPagesResponse lists the HTML files of agents that still exist.
 message ListPagesResponse {
@@ -556,6 +559,7 @@ message PageEntry {
   string agent = 1;
   string space = 2;
   string path = 3;
+  optional string updated_at = 4;
 }
 
 message RunCronJobRequest {

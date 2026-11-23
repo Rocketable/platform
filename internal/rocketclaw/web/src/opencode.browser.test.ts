@@ -284,6 +284,34 @@ function start() {
   return { web, calls, release, terminals, creates, entryFailures, typing, rows, holdOpenCode, base: `http://127.0.0.1:${web.port}` };
 }
 
+test("a hosted page opens beside the embedded OpenCode session", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const { web, release, base } = start();
+  release();
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  const entry = { agent: "opencode:box:ses_a", path: "index.html", space: "Main", updatedAt: "first" };
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.route("**/api/ListPages", (route: any) => route.fulfill({ json: { pages: [entry] } }));
+    await page.route("**/pages-raw/opencode%3Abox%3Ases_a/index.html", (route: any) => route.fulfill({ contentType: "text/html", body: "<h1>Live report</h1>" }));
+    await page.goto(`${base}${route(entry.agent)}`);
+    const view = page.locator("main [data-oc-view]");
+    await view.getByText("answer in ses_a", { exact: true }).waitFor();
+    const draft = view.locator('[contenteditable="true"]').first();
+    await draft.fill("Unsent OpenCode draft");
+    const composer = await draft.elementHandle();
+    await page.getByRole("button", { name: "Tab actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Hosted Pages", exact: true }).click();
+    const pane = page.getByRole("complementary", { name: "Hosted Pages", exact: true });
+    await pane.getByRole("link", { name: `${entry.agent} · ${entry.path}`, exact: true }).click();
+    await pane.frameLocator("iframe").getByRole("heading", { name: "Live report" }).waitFor();
+    expect(await view.getByText("answer in ses_a", { exact: true }).isVisible()).toBe(true);
+    await pane.getByRole("button", { name: "Close hosted pages", exact: true }).click();
+    expect(await composer.evaluate((element: Element) => element.isConnected)).toBe(true);
+    expect(await draft.textContent()).toBe("Unsent OpenCode draft");
+  } finally { await browser.close(); web.stop(true); }
+}, 30_000);
+
 test("remote diagrams and HTML find keep their content inside the view", async () => {
   const { chromium: engine } = await import(playwright!);
   const { web, release, base } = start();

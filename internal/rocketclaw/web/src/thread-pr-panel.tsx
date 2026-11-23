@@ -47,7 +47,7 @@ export function ThreadPRWatch({ id, version }: { id: string; version?: string })
     if (!heads.data) return;
     const result = changedPR(seen.current, heads.data);
     seen.current = result.seen;
-    if (result.changed) navigate(panelHref(result.changed, "pullRequests"));
+    if (result.changed && !new URLSearchParams(location.search).has("pagePreview")) navigate(panelHref(result.changed, "pullRequests"));
   }, [heads.data]);
   return null;
 }

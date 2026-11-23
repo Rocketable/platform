@@ -4414,6 +4414,8 @@ func (x *Page) GetBody() []byte {
 
 type ListPagesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	Agent         string                 `protobuf:"bytes,1,opt,name=agent,proto3" json:"agent,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4446,6 +4448,20 @@ func (x *ListPagesRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ListPagesRequest.ProtoReflect.Descriptor instead.
 func (*ListPagesRequest) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *ListPagesRequest) GetAgent() string {
+	if x != nil {
+		return x.Agent
+	}
+	return ""
+}
+
+func (x *ListPagesRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
 }
 
 // ListPagesResponse lists the HTML files of agents that still exist.
@@ -4498,6 +4514,7 @@ type PageEntry struct {
 	Agent         string                 `protobuf:"bytes,1,opt,name=agent,proto3" json:"agent,omitempty"`
 	Space         string                 `protobuf:"bytes,2,opt,name=space,proto3" json:"space,omitempty"`
 	Path          string                 `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	UpdatedAt     *string                `protobuf:"bytes,4,opt,name=updated_at,json=updatedAt,proto3,oneof" json:"updated_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4549,6 +4566,13 @@ func (x *PageEntry) GetSpace() string {
 func (x *PageEntry) GetPath() string {
 	if x != nil {
 		return x.Path
+	}
+	return ""
+}
+
+func (x *PageEntry) GetUpdatedAt() string {
+	if x != nil && x.UpdatedAt != nil {
+		return *x.UpdatedAt
 	}
 	return ""
 }
@@ -10779,14 +10803,19 @@ const file_web_proto_rawDesc = "" +
 	"\x04Page\x12\x14\n" +
 	"\x05space\x18\x01 \x01(\tR\x05space\x12!\n" +
 	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x12\n" +
-	"\x04body\x18\x03 \x01(\fR\x04body\"\x12\n" +
-	"\x10ListPagesRequest\"9\n" +
+	"\x04body\x18\x03 \x01(\fR\x04body\"<\n" +
+	"\x10ListPagesRequest\x12\x14\n" +
+	"\x05agent\x18\x01 \x01(\tR\x05agent\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"9\n" +
 	"\x11ListPagesResponse\x12$\n" +
-	"\x05pages\x18\x01 \x03(\v2\x0e.rpc.PageEntryR\x05pages\"K\n" +
+	"\x05pages\x18\x01 \x03(\v2\x0e.rpc.PageEntryR\x05pages\"~\n" +
 	"\tPageEntry\x12\x14\n" +
 	"\x05agent\x18\x01 \x01(\tR\x05agent\x12\x14\n" +
 	"\x05space\x18\x02 \x01(\tR\x05space\x12\x12\n" +
-	"\x04path\x18\x03 \x01(\tR\x04path\"'\n" +
+	"\x04path\x18\x03 \x01(\tR\x04path\x12\"\n" +
+	"\n" +
+	"updated_at\x18\x04 \x01(\tH\x00R\tupdatedAt\x88\x01\x01B\r\n" +
+	"\v_updated_at\"'\n" +
 	"\x11RunCronJobRequest\x12\x12\n" +
 	"\x04stem\x18\x01 \x01(\tR\x04stem\"$\n" +
 	"\x12RunCronJobResponse\x12\x0e\n" +
@@ -11723,6 +11752,7 @@ func file_web_proto_init() {
 		return
 	}
 	file_web_proto_msgTypes[38].OneofWrappers = []any{}
+	file_web_proto_msgTypes[56].OneofWrappers = []any{}
 	file_web_proto_msgTypes[95].OneofWrappers = []any{}
 	file_web_proto_msgTypes[97].OneofWrappers = []any{}
 	file_web_proto_msgTypes[99].OneofWrappers = []any{}
