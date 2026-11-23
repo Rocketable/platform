@@ -1,4 +1,5 @@
 import { expect, onTestFinished, test } from "bun:test";
+import { EventEmitter, once } from "node:events";
 import path from "node:path";
 import { unpacked } from "./test-browsers";
 import type { Session } from "./types";
@@ -228,8 +229,7 @@ function start() {
   const entry = new Promise<void>((resolve) => { release = resolve; });
   let failCreate = true;
   let failFork = true;
-  // Terminal sockets the view holds open, counted where OpenCode would serve them.
-  const terminals = { open: 0, input: [] as string[] };
+  const terminals = { open: 0, connections: 0, input: [] as string[], events: new EventEmitter() };
   const openCodeGates = new Map<string, () => Promise<void>>();
   const holdOpenCode = (request: string) => {
     const arrived = Promise.withResolvers<void>(), released = Promise.withResolvers<void>();
@@ -248,11 +248,18 @@ function start() {
   const typing = new Map<ReadableStreamDefaultController<string>, string>();
   const web = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, websocket: { open(socket) {
     terminals.open++;
+    terminals.connections++;
     socket.send(JSON.stringify({ type: "attached", inputProtocol: 1, info: { size: { cols: 80, rows: 24 } }, role: "controller" }));
     socket.send(JSON.stringify({ type: "replay_complete" }));
-  }, close() { terminals.open--; }, message(_socket, message) {
-    // v2.2.4 sends binary frames: kind, two 16-bit dimensions, then input bytes; size-only frames aren't keystrokes.
-    if (typeof message !== "string" && message[0] === 1) terminals.input.push(message.subarray(5).toString());
+  }, close() {
+    terminals.open--;
+    terminals.events.emit("close");
+  }, message(_socket, message) {
+    if (typeof message !== "string" && message[0] === 1) {
+      const input = message.subarray(5).toString();
+      terminals.input.push(input);
+      terminals.events.emit("input", input);
+    }
   } }, async fetch(request, server) {
     const url = new URL(request.url);
     if (/^\/oc\/box\/api\/experimental\/persistent-pty\/[^/]+\/connect$/.test(url.pathname)) return server.upgrade(request) ? undefined : new Response("not a WebSocket", { status: 400 });
@@ -750,21 +757,34 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
       }
     }
 
-    // Moving the terminal uses OpenCode's real drag state; the host must keep that choice after remounting.
     await view.locator('[data-slot="session-review-toggle"]').click();
     await view.locator('[data-pane-tab^="terminal:"]').dragTo(view.locator('[data-pane-content="side"]'), {
       targetPosition: { x: 40, y: 40 },
       steps: 10,
     });
-    await view.locator('[data-pane-content="side"] [data-component="terminal"]').waitFor();
+    const sideTerminal = view.locator('[data-pane-content="side"] [data-component="terminal"]');
+    const sendToSideTerminal = async (key: string) => {
+      await sideTerminal.locator("textarea").focus();
+      const input = once(terminals.events, "input");
+      await page.keyboard.press(key);
+      expect(await input).toEqual([key]);
+    };
+    await sideTerminal.waitFor();
+    await sendToSideTerminal("y");
+    if (terminals.open > 1) await once(terminals.events, "close");
+    expect(terminals.open).toBe(1);
+    const sideConnections = terminals.connections;
+    const beforeLeaving = fake.requests.length;
 
-    // Leaving the session keeps the hidden view's terminal open where it was.
     await page.goBack();
     await page.locator("main [data-oc-view][data-oc-hidden]:not([data-oc-portal])").waitFor({ state: "attached" });
-    expect([terminals.open, fake.streams]).toEqual([1, 1]);
+    expect([terminals.open, fake.streams, terminals.connections]).toEqual([1, 1, sideConnections]);
     await page.goForward();
     await view.getByText("answer in ses_a").waitFor();
-    await view.locator('[data-pane-content="side"] [data-component="terminal"]').waitFor();
+    await sideTerminal.waitFor();
+    await sendToSideTerminal("z");
+    expect([terminals.open, fake.streams, terminals.connections]).toEqual([1, 1, sideConnections]);
+    expect(fake.requests.slice(beforeLeaving)).not.toContain("GET /oc/box/api/event");
     // The restored terminal must not take focus during the remaining keyboard checks.
     await view.locator('[data-pane-tab^="terminal:"]').getByRole("button", { name: "Close tab", exact: true }).click();
     await until(() => terminals.open === 0);
