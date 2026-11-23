@@ -133,7 +133,6 @@ type looperTool struct {
 	Definition         responses.FunctionToolParam
 	Hosted             responses.ToolUnionParam
 	Call               func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error)
-	CallReplay         func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, []responses.ResponseInputItemUnionParam, error)
 	Permission         string
 	Subjects           func(json.RawMessage) ([]string, error)
 	VisibilitySubjects []string
@@ -1081,7 +1080,7 @@ func (l *looper) directSkillInput(ctx context.Context, input *PromptInputDirectS
 		return nil, fmt.Errorf("skill %q is not available to the active agent", name)
 	}
 
-	raw, err := json.Marshal(skillToolParams{Name: name, Arguments: input.Arguments, Direct: true})
+	raw, err := json.Marshal(skillToolParams{ID: name, Arguments: input.Arguments, Direct: true})
 	if err != nil {
 		return nil, fmt.Errorf("marshal direct skill input: %w", err)
 	}
@@ -1103,17 +1102,13 @@ func (l *looper) directSkillInput(ctx context.Context, input *PromptInputDirectS
 		return nil, fmt.Errorf("skill %q is not visible to the active agent", name)
 	}
 
-	result, replayInput, err := tool.CallReplay(ctx, raw, nil, toolCallMetadata{})
+	result, err := tool.Call(ctx, raw, nil, toolCallMetadata{})
 	if _, missing := errors.AsType[skillNotFoundError](err); missing && input.PlainIfUnknown {
 		return nil, nil
 	}
 
 	if err != nil {
 		return nil, err
-	}
-
-	if len(replayInput) > 0 {
-		return &replayInput[0], nil
 	}
 
 	return new(inputMessageParam(responses.EasyInputMessageRoleDeveloper, easyInputStringContent(result.Output))), nil
@@ -1826,12 +1821,6 @@ func (l *looper) dispatchToolCalls(
 		call := &calls[i]
 
 		group.Go(func() error {
-			var (
-				result      ToolResult
-				replayInput []responses.ResponseInputItemUnionParam
-				err         error
-			)
-
 			metadata := toolCallMetadata{callID: call.callID, subagentIndex: call.subagentIndex, subagentTotal: call.subagentTotal, observations: l.observations, progress: &call.progress}
 
 			callCtx, span := l.Observability.startToolSpan(groupCtx, call.name, call.callID, call.tool.Permission, metadata)
@@ -1848,11 +1837,7 @@ func (l *looper) dispatchToolCalls(
 			runCtx, stop := callContext(callCtx, call.tool.resumable)
 			defer stop()
 
-			if call.tool.CallReplay != nil {
-				result, replayInput, err = call.tool.CallReplay(runCtx, call.args, output, metadata)
-			} else {
-				result, err = call.tool.Call(runCtx, call.args, output, metadata)
-			}
+			result, err := call.tool.Call(runCtx, call.args, output, metadata)
 
 			if _, ok := errors.AsType[progressPersistenceError](err); ok {
 				return err
@@ -1879,15 +1864,13 @@ func (l *looper) dispatchToolCalls(
 				if result, errStop = l.failedCallResult(runCtx, call.name, err); errStop != nil {
 					return errStop
 				}
-
-				replayInput = nil
 			}
 
 			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", err != nil))
 
-			outputs[call.outputIndex] = dispatchedToolOutput{Param: toolCallOutput(call.callID, result), ReplayInput: replayInput}
+			outputs[call.outputIndex] = dispatchedToolOutput{Param: toolCallOutput(call.callID, result)}
 
-			return l.recordCall(groupCtx, key, &outputs[call.outputIndex].Param, replayInput, state)
+			return l.recordCall(groupCtx, key, &outputs[call.outputIndex].Param, state)
 		})
 	}
 
@@ -1964,8 +1947,8 @@ func (l *looper) replayCall(ctx context.Context, outputs []dispatchedToolOutput,
 	return true, err
 }
 
-func (l *looper) recordCall(ctx context.Context, key string, output *responses.ResponseInputItemFunctionCallOutputParam, replayInput []responses.ResponseInputItemUnionParam, state PublicProgressState) error {
-	recorded, err := ReplayInputFromParams(append([]responses.ResponseInputItemUnionParam{{OfFunctionCallOutput: output}}, replayInput...))
+func (l *looper) recordCall(ctx context.Context, key string, output *responses.ResponseInputItemFunctionCallOutputParam, state PublicProgressState) error {
+	recorded, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfFunctionCallOutput: output}})
 	if err != nil {
 		return err
 	}

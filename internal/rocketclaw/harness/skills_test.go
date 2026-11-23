@@ -79,12 +79,11 @@ Use for docs.
 		require.Equal(t, "Create consistent releases and changelogs", skill.Description)
 		require.Equal(t, "MIT", skill.License)
 		require.Equal(t, "rocketcode", skill.Compatibility)
-		require.Equal(t, map[string]any{"audience": "maintainers", "workflow": "github"}, skill.Metadata)
 		require.Equal(t, "git-release/SKILL.md", skill.Location)
 		require.Equal(t, "\n## What I do\n- Draft release notes\n", skill.Content)
 	})
 
-	t.Run("reports files missing frontmatter", func(t *testing.T) {
+	t.Run("loads files without frontmatter", func(t *testing.T) {
 		benchtime := flag.Lookup("test.benchtime").Value.String()
 
 		require.NoError(t, flag.Set("test.benchtime", "4x"))
@@ -103,11 +102,10 @@ Use for docs.
 			}
 		})
 
-		require.Empty(t, result.Skills.Items)
+		require.Empty(t, result.Errors)
 		require.Equal(t, []string{"bad-skill"}, result.Skills.dirs)
-		require.Len(t, result.Errors, 1)
-		require.Equal(t, `bad-skill/SKILL.md: missing YAML frontmatter`, result.Errors[0].Error())
-		require.Less(t, cost.AllocedBytesPerOp(), int64(len(content)*3/2))
+		require.Equal(t, Skill{Name: "bad-skill", DisplayName: "bad-skill", Location: "bad-skill/SKILL.md", Content: content}, result.Skills.Items["bad-skill"])
+		require.Less(t, cost.AllocedBytesPerOp(), int64(len(content)*5/2))
 	})
 
 	t.Run("reports invalid YAML frontmatter", func(t *testing.T) {
@@ -118,32 +116,82 @@ Use for docs.
 		require.Contains(t, result.Errors[0].Error(), "bad-yaml/SKILL.md: parse YAML frontmatter:")
 	})
 
-	t.Run("reports missing required fields", func(t *testing.T) {
+	t.Run("takes the id from the path and the name as a label", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			"missing-name/SKILL.md":        mapFile("---\ndescription: Missing name\n---\n"),
 			"missing-description/SKILL.md": mapFile("---\nname: missing-description\n---\n"),
+			"git-release/SKILL.md":         mapFile("---\nname: Git Release\n---\n"),
 		}
 
 		result := LoadSkills(fsys, "/tmp/skills")
 
-		require.Empty(t, result.Skills.Items)
-		require.Len(t, result.Errors, 2)
-		require.Equal(t, `missing-description/SKILL.md: missing required frontmatter field "description"`, result.Errors[0].Error())
-		require.Equal(t, `missing-name/SKILL.md: missing required frontmatter field "name"`, result.Errors[1].Error())
+		require.Empty(t, result.Errors)
+
+		names := map[string]string{}
+
+		for id, skill := range result.Skills.Items {
+			require.Equal(t, id, skill.Name)
+			names[id] = skill.DisplayName
+		}
+
+		require.Equal(t, map[string]string{"missing-name": "missing-name", "missing-description": "missing-description", "git-release": "Git Release"}, names)
 	})
 
-	t.Run("enforces skill name rules", func(t *testing.T) {
-		fsys := fstest.MapFS{
-			"BadName/SKILL.md":      mapFile("---\nname: BadName\ndescription: Invalid\n---\n"),
-			"mismatch-dir/SKILL.md": mapFile("---\nname: different-name\ndescription: Invalid\n---\n"),
+	t.Run("discovers skills as OpenCode does", func(t *testing.T) {
+		fsys := fstest.MapFS{"notes.txt": mapFile("notes"), "nested/README.md": mapFile("readme")}
+		for _, name := range []string{
+			"review.md", "git-release/SKILL.md", "git-release/inner/SKILL.md", "teams/release/SKILL.md",
+			".hidden/skill/SKILL.md", "node_modules/skill/SKILL.md", "teams/.private/SKILL.md",
+			"deep/1/2/3/4/5/SKILL.md", "deeper/1/2/3/4/5/6/SKILL.md",
+		} {
+			fsys[name] = mapFile("---\ndescription: " + name + "\n---\n")
 		}
 
 		result := LoadSkills(fsys, "/tmp/skills")
 
-		require.Empty(t, result.Skills.Items)
-		require.Len(t, result.Errors, 2)
-		require.Equal(t, `BadName/SKILL.md: invalid skill name "BadName"`, result.Errors[0].Error())
-		require.Equal(t, `mismatch-dir/SKILL.md: skill name "different-name" does not match directory "mismatch-dir"`, result.Errors[1].Error())
+		require.Empty(t, result.Errors)
+
+		locations := map[string]string{}
+		for id, skill := range result.Skills.Items {
+			locations[id] = skill.Location
+		}
+
+		require.Equal(t, map[string]string{"review": "review.md", "git-release": "git-release/SKILL.md", "release": "teams/release/SKILL.md", "5": "deep/1/2/3/4/5/SKILL.md"}, locations)
+		require.Equal(t, []string{"deep/1/2/3/4/5", "git-release", "teams/release"}, result.Skills.dirs)
+
+		root := LoadSkills(fstest.MapFS{"SKILL.md": mapFile("root"), "inner/SKILL.md": mapFile("inner"), "flat.md": mapFile("flat")}, "/tmp/skills")
+		require.Equal(t, []string{"skills"}, slices.Collect(maps.Keys(root.Skills.Items)))
+		require.Equal(t, "root", root.Skills.Items["skills"].Content)
+	})
+
+	t.Run("retries frontmatter values with unquoted colons", func(t *testing.T) {
+		result := LoadSkills(fstest.MapFS{"example/SKILL.md": mapFile("---\r\nname: Example: One\r\ndescription: Use when: releasing\r\nlicense: 'MIT: yes'\r\n---\r\nBody\r\n")}, "/tmp/skills")
+		require.Empty(t, result.Errors)
+		require.Equal(t, Skill{Name: "example", DisplayName: "Example: One", Description: "Use when: releasing", License: "MIT: yes", Location: "example/SKILL.md", Content: "Body\r\n"}, result.Skills.Items["example"])
+
+		result = LoadSkills(fstest.MapFS{"example/SKILL.md": mapFile("---\nname: Example: One\nmetadata:\n  note: a: b\n---\n")}, "/tmp/skills")
+		require.Len(t, result.Errors, 1)
+		require.ErrorContains(t, result.Errors[0], "example/SKILL.md: parse YAML frontmatter:")
+	})
+
+	t.Run("reads model invocation flags", func(t *testing.T) {
+		for frontmatter, want := range map[string]bool{
+			"":                                       false,
+			"disable-model-invocation: true":         true,
+			"disable-model-invocation: 'Yes '":       true,
+			"disable-model-invocation: 1":            true,
+			"disable-model-invocation: 0":            false,
+			"disable-model-invocation: maybe":        false,
+			"metadata: {opencode/autoinvoke: false}": true,
+			"metadata: {opencode/autoinvoke: off}":   true,
+			"metadata: {opencode/autoinvoke: 2}":     false,
+			"metadata: {opencode/autoinvoke: true}\ndisable-model-invocation: true": false,
+			"metadata: {opencode/autoinvoke: 0}\ndisable-model-invocation: false":   true,
+		} {
+			result := LoadSkills(fstest.MapFS{"example/SKILL.md": mapFile("---\nname: example\n" + frontmatter + "\n---\n")}, "/tmp/skills")
+			require.Empty(t, result.Errors, frontmatter)
+			require.Equal(t, want, result.Skills.Items["example"].DisableModelInvocation, frontmatter)
+		}
 	})
 
 	t.Run("reports duplicate skill names and keeps the last discovered skill", func(t *testing.T) {
@@ -158,29 +206,13 @@ Use for docs.
 		require.Equal(t, "zzz/dupe/SKILL.md", result.Skills.Items["dupe"].Location)
 		require.Equal(t, "Second", result.Skills.Items["dupe"].Description)
 		require.Len(t, result.Errors, 1)
-		require.Equal(t, `zzz/dupe/SKILL.md: duplicate skill name "dupe" overrides aaa/dupe/SKILL.md`, result.Errors[0].Error())
-	})
-
-	t.Run("accepts structured metadata values", func(t *testing.T) {
-		result := LoadSkills(fstest.MapFS{"example/SKILL.md": mapFile(`---
-name: example
-description: Example skill
-metadata:
-  openclaw:
-    tools: true
----
-Example content.
-`)}, "/tmp/skills")
-
-		require.Empty(t, result.Errors)
-		require.Len(t, result.Skills.Items, 1)
-		require.Equal(t, map[string]any{"openclaw": map[string]any{"tools": true}}, result.Skills.Items["example"].Metadata)
+		require.Equal(t, `zzz/dupe/SKILL.md: duplicate skill id "dupe" overrides aaa/dupe/SKILL.md`, result.Errors[0].Error())
 	})
 
 	t.Run("continues loading valid skills when some are invalid", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			"good-skill/SKILL.md": mapFile("---\nname: good-skill\ndescription: Valid\n---\nready\n"),
-			"bad-skill/SKILL.md":  mapFile("---\nname: bad-skill\n---\n"),
+			"bad-skill/SKILL.md":  mapFile("---\nname: [unterminated\n---\n"),
 		}
 
 		result := LoadSkills(fsys, "/tmp/skills")
@@ -188,81 +220,84 @@ Example content.
 		require.Len(t, result.Skills.Items, 1)
 		require.Equal(t, "ready\n", result.Skills.Items["good-skill"].Content)
 		require.Len(t, result.Errors, 1)
-		require.Equal(t, `bad-skill/SKILL.md: missing required frontmatter field "description"`, result.Errors[0].Error())
+		require.ErrorContains(t, result.Errors[0], "bad-skill/SKILL.md: parse YAML frontmatter:")
 	})
 }
 
 func TestSkillDescriptions(t *testing.T) {
 	skills := Skills{Root: "/tmp/skills", Items: map[string]Skill{
-		"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Metadata: nil, Location: "docs-helper/SKILL.md", Content: ""},
-		"git-review":  {Name: "git-review", Description: "Review git changes", License: "", Compatibility: "", Metadata: nil, Location: "git-review/SKILL.md", Content: ""},
+		"docs-helper": {Name: "docs-helper", DisplayName: "Docs Helper", Description: "Write docs", Location: "docs-helper/SKILL.md"},
+		"git-review":  {Name: "git-review", DisplayName: "git-review", Description: "Review git changes", Location: "git-review/SKILL.md"},
 	}, dirs: nil, fsys: nil}
 
-	t.Run("tool description lists explicitly allowed skills", func(t *testing.T) {
+	t.Run("tool description does not list skills", func(t *testing.T) {
 		factory := testSkillFactory(t, skills, agentWithSkillPermission())
 
-		description := factory.skillDescription()
-
-		require.Equal(t, strings.Join([]string{
-			"Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.",
-			"",
-			"Use this tool to inject the skill's instructions and resources into current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc in the same directory as the skill.",
-			"",
-			"The skill name must match one of the skills listed in your system prompt.",
-			"",
-			"The following skills provide specialized sets of instructions for particular tasks.",
-			"Invoke this tool to load a skill when a task matches one of the available skills listed below:",
-			"",
-			"## Available skills",
-			"- **docs-helper**: Write docs",
-			"- **git-review**: Review git changes",
-		}, "\n"), description)
+		require.Equal(t, "Load a specialized skill's instructions and resources into the current conversation when the task at hand matches its description.\n\n"+
+			"The skill ID must match an available skill or a skill explicitly referenced by the user.", factory.skillTool().Definition.Description.Value)
 	})
 
-	t.Run("tool description filters denied skills", func(t *testing.T) {
-		factory := testSkillFactory(t, skills, agentWithSkillRules(
+	t.Run("system prompt lists advertised skills", func(t *testing.T) {
+		require.Equal(t, strings.Join([]string{
+			"base prompt",
+			"",
+			"Skills provide specialized instructions and workflows for specific tasks.",
+			"Use the skill tool to load a skill when a task matches its description.",
+			"The user may also invoke a skill directly. When that happens, its instructions appear in the conversation as a <skill_content> block, the same shape the skill tool returns. A skill that is already present this way does not need to be invoked again.",
+			"<available_skills>",
+			"  <skill>",
+			"    <id>docs-helper</id>",
+			"    <name>Docs Helper</name>",
+			"    <description>Write docs</description>",
+			"  </skill>",
+			"  <skill>",
+			"    <id>git-review</id>",
+			"    <name>git-review</name>",
+			"    <description>Review git changes</description>",
+			"  </skill>",
+			"</available_skills>",
+			"",
+			"## Skill Permissions",
+			"",
+			"Rules are listed in order. The last matching rule wins.",
+			"",
+			"- Allow `*`.",
+			"",
+			"## Permission Wildcard Rules",
+			"",
+			"- `*` matches any text.",
+			"- `?` matches any single character.",
+			"- Path separators are normalized to `/`.",
+			"- A pattern ending in space-star, like `git status *`, also matches the command without extra arguments.",
+		}, "\n"), composeSystemPromptWithSkills("base prompt", skills, agentWithSkillPermission()))
+	})
+
+	t.Run("system prompt filters denied skills", func(t *testing.T) {
+		prompt := composeSystemPromptWithSkills("base prompt", skills, agentWithSkillRules(
 			PermissionRule{Pattern: "*", Action: permissionDeny},
 			PermissionRule{Pattern: "docs-helper", Action: permissionAllow},
 		))
 
-		description := factory.skillDescription()
-
-		require.Contains(t, description, "- **docs-helper**: Write docs")
-		require.NotContains(t, description, "git-review")
-	})
-
-	t.Run("tool description when no skills are allowed", func(t *testing.T) {
-		factory := testSkillFactory(t, skills, agentWithSkillRules(PermissionRule{Pattern: "*", Action: permissionDeny}))
-
-		require.Equal(t, strings.Join([]string{
-			"Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.",
-			"",
-			"Use this tool to inject the skill's instructions and resources into current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc in the same directory as the skill.",
-			"",
-			"The skill name must match one of the skills listed in your system prompt.",
-			"",
-			"No skills are currently available.",
-		}, "\n"), factory.skillDescription())
-	})
-
-	t.Run("system prompt instructs discovery without listing skills", func(t *testing.T) {
-		prompt := composeSystemPromptWithSkills("base prompt", skills, agentWithSkillPermission())
-
-		require.Contains(t, prompt, "base prompt")
-		require.Contains(t, prompt, "skills provide specialized instructions and workflows for specific tasks.")
-		require.Contains(t, prompt, "When a task may benefit from specialized instructions, call the find_skills tool to search all available skills, then call the skill tool to load the selected skill.")
-		require.NotContains(t, prompt, "<available_skills>")
-		require.NotContains(t, prompt, "docs-helper")
+		require.Contains(t, prompt, "<id>docs-helper</id>")
 		require.NotContains(t, prompt, "git-review")
+	})
+
+	t.Run("system prompt omits skills when none are advertised", func(t *testing.T) {
+		prompt := composeSystemPromptWithSkills("base prompt", skills, agentWithSkillRules(PermissionRule{Pattern: "*", Action: permissionDeny}))
+
+		require.NotContains(t, prompt, "Skills provide")
+		require.NotContains(t, prompt, "<available_skills>")
 	})
 }
 
 func TestSkillsAvailable(t *testing.T) {
 	skills := Skills{Items: map[string]Skill{
-		"z-last":   {Name: "z-last"},
-		"a-first":  {Name: "a-first"},
-		"a-denied": {Name: "a-denied"},
-		"a-review": {Name: "a-review"},
+		"z-last":   {Name: "z-last", Description: "Last"},
+		"a-first":  {Name: "a-first", Description: "First"},
+		"a-denied": {Name: "a-denied", Description: "Denied"},
+		"a-review": {Name: "a-review", Description: "Review"},
+		"b-silent": {Name: "b-silent"},
+		"b-manual": {Name: "b-manual", Description: "Manual", DisableModelInvocation: true},
 	}}
 	agent := agentWithSkillRules(
 		PermissionRule{Pattern: "*", Action: permissionDeny},
@@ -271,9 +306,22 @@ func TestSkillsAvailable(t *testing.T) {
 		PermissionRule{Pattern: "*-review", Action: permissionAuto},
 	)
 
-	require.Equal(t, []Skill{skills.Items["a-first"], skills.Items["z-last"]}, skills.Available(agent))
-	require.Equal(t, "## Matching skills\n- **a-first**: \n- **z-last**: ", skills.FindAvailable("", agent))
+	require.Equal(t, []Skill{skills.Items["a-first"], skills.Items["b-manual"], skills.Items["b-silent"], skills.Items["z-last"]}, skills.Available(agent))
+	require.Equal(t, "## Matching skills\n- **a-first**: First\n- **a-review**: Review\n- **z-last**: Last", skills.FindAvailable("", agent))
+	require.Equal(t, []Skill{skills.Items["a-first"], skills.Items["a-review"], skills.Items["z-last"]}, skills.advertised(agent))
 	require.Empty(t, skills.Available(agentWithSkillRules(PermissionRule{Pattern: "*", Action: permissionDeny})))
+
+	ordered := Skills{Items: map[string]Skill{}}
+	for _, id := range []string{"Zeta", "beta-2", "a1", "alpha", "beta", "Beta", "éclair", "a_b"} {
+		ordered.Items[id] = Skill{Name: id}
+	}
+
+	ids := make([]string, 0, len(ordered.Items))
+	for _, skill := range ordered.Available(agentWithSkillPermission()) {
+		ids = append(ids, skill.Name)
+	}
+
+	require.Equal(t, []string{"a_b", "a1", "alpha", "beta", "Beta", "beta-2", "éclair", "Zeta"}, ids)
 }
 
 func TestPermissionPrompt(t *testing.T) {
@@ -351,8 +399,8 @@ func TestSystemPromptWorkingDirectory(t *testing.T) {
 
 func TestFindSkillsTool(t *testing.T) {
 	skills := Skills{Root: "/tmp/skills", Items: map[string]Skill{
-		"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Metadata: nil, Location: "docs-helper/SKILL.md", Content: "documentation guides"},
-		"git-review":  {Name: "git-review", Description: "Review git changes", License: "", Compatibility: "", Metadata: nil, Location: "git-review/SKILL.md", Content: "git status diff"},
+		"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Location: "docs-helper/SKILL.md", Content: "documentation guides"},
+		"git-review":  {Name: "git-review", Description: "Review git changes", License: "", Compatibility: "", Location: "git-review/SKILL.md", Content: "git status diff"},
 	}, dirs: nil, fsys: nil}
 
 	t.Run("finds explicitly allowed skills not presented in system prompt", func(t *testing.T) {
@@ -381,7 +429,7 @@ func TestFindSkillsTool(t *testing.T) {
 
 func TestFindSkillsToolVisibilityFollowsSkillPermission(t *testing.T) {
 	skills := Skills{Root: "/tmp/skills", Items: map[string]Skill{
-		"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Metadata: nil, Location: "docs-helper/SKILL.md", Content: ""},
+		"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Location: "docs-helper/SKILL.md", Content: ""},
 	}, dirs: nil, fsys: nil}
 
 	t.Run("hidden when all skills are denied", func(t *testing.T) {
@@ -482,7 +530,7 @@ func TestSkillsRender(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "git-release", "scripts"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "git-release", "reference"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "git-release", "SKILL.md"), []byte(`---
-name: git-release
+name: Git Release
 description: Create consistent releases and changelogs
 license: MIT
 compatibility: rocketcode
@@ -505,44 +553,33 @@ metadata:
 
 	t.Run("renders skill content with sampled file list", func(t *testing.T) {
 		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
-		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil, emptyToolCallMetadata())
+		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"id":"git-release"}`), nil, emptyToolCallMetadata())
 		require.NoError(t, err)
 
-		got := result.Output
+		files := make([]string, 0, 10)
+		for i := range 10 {
+			files = append(files, fmt.Sprintf("<file>%s/git-release/reference/file-%02d.txt</file>", root, i))
+		}
 
-		require.Contains(t, got, `<skill_content name="git-release">`)
-		require.Contains(t, got, "# skill: git-release")
-		require.Contains(t, got, "## What I do\n- Draft release notes")
-		require.Contains(t, got, "Base directory for this skill: file://"+filepath.ToSlash(filepath.Join(root, "git-release")))
-		require.Contains(t, got, "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.")
-		require.Contains(t, got, "Note: file list is sampled.")
-		require.Contains(t, got, "<skill_files>")
-		require.Contains(t, got, "<file>"+filepath.ToSlash(filepath.Join(root, "git-release", "reference", "file-00.txt"))+"</file>")
-		require.NotContains(t, got, filepath.ToSlash(filepath.Join(root, "git-release", "scripts", "demo.sh")))
-		require.NotContains(t, got, "SKILL.md")
-		require.Equal(t, 10, strings.Count(got, "<file>"))
-	})
-
-	t.Run("replay returns a short tool result and developer replay input", func(t *testing.T) {
-		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
-		result, replayInput, err := factory.skillTool().CallReplay(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil, emptyToolCallMetadata())
-		require.NoError(t, err)
-
-		require.Equal(t, "skill git-release loaded", result.Output)
-		require.Len(t, replayInput, 1)
-		got := marshalJSON(t, replayInput[0])
-		require.Contains(t, got, `"role":"developer"`)
-		require.Contains(t, got, `skill_metadata`)
-		require.Contains(t, got, `metadata: {\n  \"audience\": \"maintainers\"\n}`)
-		require.Contains(t, got, "license: MIT")
-		require.Contains(t, got, "compatibility: rocketcode")
-		require.Contains(t, got, `## What I do\n- Draft release notes`)
+		require.Equal(t, strings.Join(slices.Concat([]string{
+			`<skill_content name="Git Release">`,
+			"# Skill: Git Release",
+			"",
+			"## What I do",
+			"- Draft release notes",
+			"",
+			"Base directory for this skill: " + root + "/git-release",
+			"Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
+			"Note: file list is sampled.",
+			"",
+			"<skill_files>",
+		}, files, []string{"</skill_files>", "</skill_content>"}), "\n"), result.Output)
 	})
 
 	t.Run("returns an error for unknown skills", func(t *testing.T) {
 		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
-		_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"missing-skill"}`), nil, emptyToolCallMetadata())
-		require.EqualError(t, err, `skill "missing-skill" not found. Available skills: git-release`)
+		_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"id":"missing-skill"}`), nil, emptyToolCallMetadata())
+		require.EqualError(t, err, "Unable to load skill missing-skill")
 	})
 }
 
@@ -551,28 +588,39 @@ func TestSkillsRenderUsesLoadedFS(t *testing.T) {
 		"docs-helper/SKILL.md": mapFile(`---
 name: docs-helper
 description: Write docs
+disable-model-invocation: true
 ---
 
 Use for docs.
 `),
 		"docs-helper/reference/guide.md": mapFile("guide\n"),
 		"docs-helper/reference/link.md":  {Data: []byte("guide.md"), Mode: fs.ModeSymlink, ModTime: time.Time{}, Sys: nil},
+		"docs-helper/node_modules/x.js":  mapFile("x"),
+		"docs-helper/.env":               mapFile("hidden"),
+		"review.md":                      mapFile("Review it."),
 	}, "/virtual/skills").Skills
 
 	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
-	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil, emptyToolCallMetadata())
+	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"id":"docs-helper"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
 
 	got := result.Output
 	require.Contains(t, got, "<file>/virtual/skills/docs-helper/reference/guide.md</file>")
+	require.Contains(t, got, "<file>/virtual/skills/docs-helper/.env</file>")
 	require.NotContains(t, got, "link.md")
+	require.NotContains(t, got, "node_modules")
+
+	result, err = factory.skillTool().Call(context.Background(), json.RawMessage(`{"id":"review"}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	require.Equal(t, "<skill_content name=\"review\">\n# Skill: review\n\nReview it.\n\nBase directory for this skill: /virtual/skills\n"+
+		"Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n</skill_files>\n</skill_content>", result.Output)
 }
 
 func TestSkillsRenderRequiresLoadedFS(t *testing.T) {
-	skills := Skills{Root: "/virtual/skills", Items: map[string]Skill{"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Metadata: nil, Location: "docs-helper/SKILL.md", Content: "Use for docs."}}, dirs: []string{"docs-helper"}, fsys: nil}
+	skills := Skills{Root: "/virtual/skills", Items: map[string]Skill{"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Location: "docs-helper/SKILL.md", Content: "Use for docs."}}, dirs: []string{"docs-helper"}, fsys: nil}
 	factory := testSkillFactory(t, skills, agentWithSkillPermission())
 
-	_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil, emptyToolCallMetadata())
+	_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"id":"docs-helper"}`), nil, emptyToolCallMetadata())
 
 	require.EqualError(t, err, "skills filesystem is not available")
 }
@@ -602,18 +650,18 @@ Args: $ARGUMENTS
 	factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
 	factory.promptExpansion = env
 
-	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"!`+"`"+`cat SECRET.md`+"`"+`"}`), nil, emptyToolCallMetadata())
+	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"id":"arg-skill","arguments":"!`+"`"+`cat SECRET.md`+"`"+`","direct":true}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
 
 	require.Contains(t, result.Output, "Generated: secret-output")
 	require.Contains(t, result.Output, "Args: secret-output")
 	require.Equal(t, 2, strings.Count(result.Output, "secret-output"))
 
-	result, err = factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"unused"}`), nil, emptyToolCallMetadata())
+	result, err = factory.skillTool().Call(context.Background(), json.RawMessage(`{"id":"arg-skill"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
-	require.False(t, strings.HasSuffix(result.Output, "\n\nunused"), result.Output)
+	require.Contains(t, result.Output, "Args: $ARGUMENTS\n")
 
-	result, err = factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"appended","direct":true}`), nil, emptyToolCallMetadata())
+	result, err = factory.skillTool().Call(context.Background(), json.RawMessage(`{"id":"arg-skill","arguments":"appended","direct":true}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
 	require.Contains(t, result.Output, "Args: appended")
 }
@@ -628,15 +676,10 @@ No placeholder here.
 `), "arg-skill/$ARGUMENTS.txt": mapFile("resource")}, "/virtual/skills").Skills
 	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
 
-	output, err := factory.renderSkillToolOutput(t.Context(), skillToolParams{Name: "arg-skill", Arguments: "literal request", Direct: true}, true)
+	output, err := factory.renderSkillToolOutput(t.Context(), skillToolParams{ID: "arg-skill", Arguments: "literal request", Direct: true})
 	require.NoError(t, err)
 	require.Contains(t, output, "No placeholder here.\n\nliteral request\n\nBase directory")
-	require.Contains(t, output, "description: $ARGUMENTS and $1 are metadata")
 	require.Contains(t, output, "<file>/virtual/skills/arg-skill/$ARGUMENTS.txt</file>")
-
-	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"literal request"}`), nil, emptyToolCallMetadata())
-	require.NoError(t, err)
-	require.NotContains(t, result.Output, "literal request")
 }
 
 func TestSkillsRenderShellCommands(t *testing.T) {
@@ -667,7 +710,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 		factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
 		factory.promptExpansion, err = newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, &sandbox.Runtime{})
 		require.NoError(t, err)
-		result, err := factory.skillTool().Call(t.Context(), json.RawMessage(`{"name":"main-convert-agent-to-easy"}`), nil, emptyToolCallMetadata())
+		result, err := factory.skillTool().Call(t.Context(), json.RawMessage(`{"id":"main-convert-agent-to-easy"}`), nil, emptyToolCallMetadata())
 		require.NoError(t, err)
 		require.Contains(t, result.Output, strings.TrimSpace(skills.Items["main-convert-agent-to-easy"].Content))
 		require.NotContains(t, result.Output, "dynamic-output")
@@ -675,7 +718,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 
 	t.Run("leaves shell commands literal by default", func(t *testing.T) {
 		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
-		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill","arguments":"MEMORY.md"}`), nil, emptyToolCallMetadata())
+		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"id":"dynamic-skill","arguments":"MEMORY.md","direct":true}`), nil, emptyToolCallMetadata())
 
 		require.NoError(t, err)
 
@@ -695,7 +738,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 		factory.promptExpansion = env
 		tool := factory.skillTool()
 
-		got, err := tool.Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill","arguments":"MEMORY.md"}`), nil, emptyToolCallMetadata())
+		got, err := tool.Call(context.Background(), json.RawMessage(`{"id":"dynamic-skill","arguments":"MEMORY.md","direct":true}`), nil, emptyToolCallMetadata())
 
 		require.NoError(t, err)
 		require.Contains(t, got.Output, "Generated: dynamic-output")
@@ -729,7 +772,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 				factory.promptExpansion.customShell = CustomShell{Path: shell}
 
 				model, _ := factory.assembleTools(tc.agent)
-				got, err := model["skill"].Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill","arguments":"MEMORY.md"}`), nil, emptyToolCallMetadata())
+				got, err := model["skill"].Call(context.Background(), json.RawMessage(`{"id":"dynamic-skill","arguments":"MEMORY.md","direct":true}`), nil, emptyToolCallMetadata())
 
 				require.NoError(t, err)
 				require.Contains(t, got.Output, tc.want)

@@ -145,7 +145,7 @@ func TestEasySkillExpandsInHostBash(t *testing.T) {
 	agent.CustomShell = CustomShell{Path: writeCustomShell(t, factory.promptExpansion.root), Emulated: true, Secrets: map[string]string{"SECRET_KEY": "s3cr3t"}}
 
 	model, _ := factory.assembleTools(agent)
-	got, err := model["skill"].Call(t.Context(), json.RawMessage(`{"name":"easy-skill","arguments":"!`+"`printf x > pwned`"+`","direct":true}`), nil, toolCallMetadata{})
+	got, err := model["skill"].Call(t.Context(), json.RawMessage(`{"id":"easy-skill","arguments":"!`+"`printf x > pwned`"+`","direct":true}`), nil, toolCallMetadata{})
 	require.NoError(t, err)
 
 	workspace, err := filepath.EvalSymlinks(factory.promptExpansion.hostDir)
