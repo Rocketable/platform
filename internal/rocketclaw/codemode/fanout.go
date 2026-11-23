@@ -156,7 +156,7 @@ func resolveConcurrency(value starlark.Value) (int, error) {
 func listOrTuple(value starlark.Value) ([]starlark.Value, error) {
 	switch v := unbox(value).(type) {
 	case *starlark.List:
-		return slices.Collect(v.Elements()), nil
+		return slices.AppendSeq(slices.Grow([]starlark.Value(nil), v.Len()), v.Elements()), nil
 	case starlark.Tuple:
 		return v, nil
 	default:
