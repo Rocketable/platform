@@ -123,9 +123,11 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 	}
 
 	concurrency := concurrencyBuiltins()
+	comparisons := comparisonBuiltins()
 	members := maps.Clone(starjson.Module.Members)
 	members["decode"] = starlark.NewBuiltin("json.decode", decodeJSON)
-	predeclared := starlark.StringDict{"json": &starlarkstruct.Module{Name: "json", Members: members}}
+	predeclared := make(starlark.StringDict, len(catalog)+len(host)+len(concurrency)+len(comparisons)+1)
+	predeclared["json"] = &starlarkstruct.Module{Name: "json", Members: members}
 
 	for name, tool := range catalog {
 		predeclared[name] = newKwargsValueBuiltin(name, HostTool{
@@ -158,7 +160,7 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 		predeclared[name] = builtin
 	}
 
-	maps.Copy(predeclared, comparisonBuiltins())
+	maps.Copy(predeclared, comparisons)
 
 	if err := context.Cause(ctx); err != nil {
 		return nil, fmt.Errorf("codemode context: %w", err)
