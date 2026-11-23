@@ -67,6 +67,16 @@ linters:
               desc: use higher-level synchronization primitives instead of sync/atomic
             - pkg: "unsafe$"
               desc: avoid unsafe in project code
+        shell-expand:
+          files:
+            - $all
+            - "!$test"
+            - "!**/internal/rocketclaw/harness/permission.go"
+            - "!**/internal/rocketclaw/harness/public_progress.go"
+            - "!**/internal/rocketclaw/harness/shell.go"
+          deny:
+            - pkg: "mvdan.cc/sh/v3/expand$"
+              desc: expand panics on dynamic shell words; expand only words quotedLiteralWord accepts (docs/solutions/runtime-errors/mvdan-expand-panicked-on-dynamic-shell-words.md)
     gocritic:
       enable-all: true
     ireturn:

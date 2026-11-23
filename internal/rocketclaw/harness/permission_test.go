@@ -276,6 +276,11 @@ func TestPermissionSetEvaluate(t *testing.T) {
 		})
 	}
 
+	t.Run("process substitution executable", func(t *testing.T) {
+		script := "<(ls) a/b"
+		require.Equal(t, PermissionDeny, parsePermissionYAML(t, `bash: {"*/*": allow}`).evaluate("bash", script, script).Action)
+	})
+
 	t.Run("rule exceptions win regardless of order", func(t *testing.T) {
 		removalFirst := PermissionSet{Buckets: []PermissionBucket{{Name: "mcp", Rules: []PermissionRule{{Pattern: "s.*", Action: PermissionAllow, Except: []string{"s.delete_*"}}}}}}
 		overlapping := PermissionSet{Buckets: []PermissionBucket{{Name: "mcp", Rules: []PermissionRule{
