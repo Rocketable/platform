@@ -21,7 +21,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		return nil, err
 	}
 
-	names := s.cfg.Clone().PermittedSpaces(username)
+	names := s.cfg.PermittedSpaces(username)
 	if names != nil {
 		if err := s.sessions.CreateLimitSpaces(ctx, names); err != nil {
 			return nil, fmt.Errorf("web tabs: %w", err)

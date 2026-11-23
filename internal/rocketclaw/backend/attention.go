@@ -155,7 +155,7 @@ SELECT space, own FROM tabs`, "search tabs", func(row rowScanner) (tab, error) {
 		return err
 	}
 
-	limit := SpaceLimit{names: s.definitions.Clone().PermittedSpaces(username)}
+	limit := SpaceLimit{names: s.definitions.PermittedSpaces(username)}
 
 	if !slices.ContainsFunc(tabs, func(t tab) bool { return t.own || limit.AllowsSpaceName(t.space) }) {
 		return nil

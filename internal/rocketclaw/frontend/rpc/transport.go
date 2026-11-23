@@ -316,7 +316,7 @@ func (s *Server) identity(ctx context.Context) (*IdentityResponse, error) {
 	}
 
 	response := &IdentityResponse{Username: username, Principal: principal, SandboxError: s.backend.SandboxError()}
-	if s.cfg.Clone().PermittedSpaces(username) != nil {
+	if s.cfg.PermittedSpaces(username) != nil {
 		response.Limited = new(true)
 	}
 

@@ -376,7 +376,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 		}
 	}
 
-	if s.definitions.Clone().PermittedSpaces(username) != nil {
+	if s.definitions.PermittedSpaces(username) != nil {
 		search.Principals = nil
 		for _, row := range rows {
 			search.Principals = append(search.Principals, principals[row.Conversation.ID]...)
