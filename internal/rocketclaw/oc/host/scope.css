@@ -30,6 +30,10 @@
   pointer-events: auto;
 }
 
+[data-oc-view][data-oc-hidden] {
+  opacity: 0;
+}
+
 [data-component="rocketclaw-version-pill"],
 [data-component="rocketclaw-server-banner"] {
   position: absolute;

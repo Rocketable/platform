@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
+import { hidden } from "@rocketclaw/host/fences"
 import {
   createFindHostRegistryState,
   INITIAL_FILE_FIND_STATE,
@@ -86,7 +87,9 @@ function installShortcuts() {
         () => hostForNode(document.activeElement) ?? hostForNode(event.target),
       )
 
-      if (!host) return
+      // rocketclaw: a file or diff in a view hidden behind another RocketClaw tab leaves find to the page (upstream
+      // packages/session-ui/src/pierre/file-find.ts)
+      if (!host || host.element()?.closest(`[${hidden}]`)) return
       event.preventDefault()
       event.stopPropagation()
 

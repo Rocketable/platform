@@ -15,11 +15,11 @@ export const threadGitHubLabel = "Pull requests and issues";
 
 function useThreadPRs(id: string, version?: string, initial = "") {
   const remote = id.startsWith("opencode:");
-  const found = useQuery({ queryKey: ["threadPRs", id, version], queryFn: ({ signal }) => loadThreadPRs(id, signal), placeholderData: keepPreviousData, retry: false, gcTime: 0, refetchOnWindowFocus: false });
+  const found = useQuery({ queryKey: ["threadPRs", id, version], queryFn: ({ signal }) => loadThreadPRs(id, signal), placeholderData: keepPreviousData, retry: false, staleTime: Infinity, refetchOnWindowFocus: false });
   const checkout = useQuery({ queryKey: ["checkoutPR", id, version], enabled: remote, queryFn: ({ signal }) => {
     const { api, sessionID } = openCodePRAPI(id);
     return discoverOpenCodePR(api, sessionID, signal);
-  }, placeholderData: keepPreviousData, retry: false, gcTime: 0, refetchOnWindowFocus: false });
+  }, placeholderData: keepPreviousData, retry: false, staleTime: Infinity, refetchOnWindowFocus: false });
   const mentioned = useMemo(() => new Set(found.data?.mentioned), [found.data]);
   const urls = useMemo(() => [...new Set([...(found.data?.created ?? []), ...mentioned, ...(checkout.data?.url ? [checkout.data.url] : [])])].filter((url) => parseGitHubReference(url, "pull")).concat(found.data?.issues ?? []), [found.data, mentioned, checkout.data]);
   const [selected, setSelected] = useState(initial);
@@ -38,7 +38,7 @@ function useThreadPRs(id: string, version?: string, initial = "") {
 export function ThreadPRWatch({ id, version }: { id: string; version?: string }) {
   const { found, source, loading } = useThreadPRs(id, version);
   const created = found.data?.created ?? [];
-  const heads = useQuery({ queryKey: ["threadPRHeads", id, version, created], enabled: !loading && !found.error, retry: false, gcTime: 0, refetchOnWindowFocus: false, queryFn: ({ signal }) => Promise.all(created.map(async (url): Promise<[string, string | undefined]> => {
+  const heads = useQuery({ queryKey: ["threadPRHeads", id, version, created], enabled: !loading && !found.error, retry: false, staleTime: Infinity, refetchOnWindowFocus: false, queryFn: ({ signal }) => Promise.all(created.map(async (url): Promise<[string, string | undefined]> => {
     const { owner, repo, number } = parseGitHubReference(url, "pull")!;
     return [url, source ? await readOpenCodePR<PullRequest>(source, `repos/${owner}/${repo}/pulls/${number}`, signal).then((pr) => pr.head.sha, () => undefined) : undefined];
   })) });

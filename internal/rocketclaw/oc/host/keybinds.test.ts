@@ -64,7 +64,7 @@ test("the keymap only acts on unhandled releases in the view", () => {
   const app = createAppKeymap({
     blocked: () => false,
     editable: () => false,
-    accepts: (event) => !event.defaultPrevented && inView({ root, portal, width: () => 0 }, event.target),
+    accepts: (event) => !event.defaultPrevented && inView({ root, portal, width: () => 0, visible: () => true }, event.target),
   })
   let releases = 0
   const unregister = app.keymap.registerLayer({

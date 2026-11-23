@@ -1,6 +1,7 @@
 # Remote OpenCode tab view: bounded verification
 
-`ViewSession.tla` models which session a RocketClaw remote OpenCode tab shows. The Web's sidebar marks the tab its
+`ViewSession.tla` models which session a RocketClaw remote OpenCode tab shows, with the page's one view serving two
+OpenCode servers that each hold a session with the same ID. The Web's sidebar marks the tab its
 route names; the copied OpenCode view inside the tab shows what its own router shows. Once nothing is moving, both
 must name the same session, or a subagent of it. The design as built is `ViewHistory` in
 `internal/rocketclaw/oc/host/navigation.tsx`, driven by `RemoteSession` in `internal/rocketclaw/web/src/ui.tsx`.
@@ -40,7 +41,12 @@ stateDiagram-v2
 
 ## What each check proves
 
-On 2026-11-21, `make all` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
+On 2026-11-22, `make all` passed with TLC `2026.11.19.180144` (rev `bc1b506`), OpenJDK `21.0.13.1` and Lean 4.36.0.
+Every check except `id-keys` sets `Keys = "pair"`, how the code compares sessions since the view serves several
+servers: by server and ID (`routeKey` in `oc/host/navigation.tsx`, the keep keys in `oc/host/session-tab.tsx`,
+`show(server, …)` in `oc/host/mount.tsx`, full `opencode:<server>:<id>` IDs in `web/src/ui.tsx`). With pair keys the
+model explores exactly the states the one-server model did: telling sessions apart by server and ID is all the second
+server changes.
 
 Requirements, checked once nothing is moving (`Quiet`: no transition pending, the Web's effect has told the view
 everything, no child still syncing):
@@ -58,6 +64,7 @@ everything, no child still syncing):
 | `before` | the design before: no stale guard, `Outside = "navigate"` | `Agreement` violated | violated, as expected |
 | `stale-only` | stale guard, `Outside = "navigate"` | `Agreement` violated | violated, as expected |
 | `open-only` | no stale guard, `Outside = "open"` | `NoHijack` violated | violated, as expected |
+| `id-keys` | as built, but sessions compared by ID alone, as the one-server code did | `Agreement` violated: moving to another server's session with the same ID leaves the view on the first | violated, as expected |
 
 `view-child` and `view-request` show the passing `view` check is not passing because the model never reaches those
 states. Checks that must fail run with one TLC worker, so the first counterexample, and the invariant it names, is the
@@ -81,5 +88,28 @@ Rerun 2026-11-18 after the `tla2tools.jar` pin moved to build `bc1b506` (one ups
 ## Limits
 
 - Bounded: three top-level sessions and one subagent, at most 2 tab choices by the person and 2 navigations by the app.
-- One server and one view; other servers' tabs, several browser windows and network failures are not modeled.
+- Two servers and one view; three top-level sessions, two of them on different servers with the same ID. Several
+  browser windows and network failures are not modeled.
 - Liveness is not checked: no temporal property says the view eventually agrees.
+
+## Lean proof
+
+`SessionTabs.lean` states the prune of OpenCode's own tab list (`SessionTab` in `internal/rocketclaw/oc/host/session-tab.tsx`)
+as a filter over any list of tabs and proves, for every input:
+
+| Theorem | What it says |
+|---|---|
+| `shown_tab_stays` | The tab of the session the view shows is never pruned. |
+| `open_tab_stays_on_every_server` | A session open as a RocketClaw tab keeps its tab, whatever its server. |
+| `other_tabs_stay` | Tabs that are not sessions are never pruned. |
+| `closed_tab_goes` | Every session tab left is the shown one or one open as a RocketClaw tab. |
+| `prune_keeps_its_own_result` | Pruning again changes nothing. |
+| `matching_ids_alone_keeps_a_closed_tab_of_another_server` | Comparing IDs alone keeps a closed tab whose ID matches another server's open session; comparing server and ID drops it. |
+
+`make lean` (part of `make`) downloads Lean 4.36.0 into the repository's `.tmp/lean/`, checks its SHA-256 and runs
+`lean` on the file; any unproved or false theorem fails the target. Recorded run 2026-11-22, linux aarch64: the file
+checked in under a second. The theorems depend only on `propext` and `Quot.sound`; none uses `sorry` or
+`native_decide`. A deliberately false theorem, that comparing IDs alone keeps only shown or open tabs, was rejected.
+
+Limits: the code removes tabs from the last index back, one `removeTab` at a time; the proof takes that as the same as
+filtering the list, and is about the rule, not about Solid or OpenCode's tab store.

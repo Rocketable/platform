@@ -10,7 +10,7 @@ test("the hero follows the view's motion setting, not the host page's", async ()
   root.dataset.motion = "reduce"
   document.documentElement.dataset.motion = "full"
   Object.defineProperties(canvas, { clientWidth: { value: 480 }, clientHeight: { value: 176 } })
-  const unregister = register({ root, portal: root, width: () => 480 })
+  const unregister = register({ root, portal: root, width: () => 480, visible: () => true })
   const frames = spyOn(globalThis, "requestAnimationFrame").mockReturnValue(1)
   const stop = mountGoUpsellHero(canvas)
   try {

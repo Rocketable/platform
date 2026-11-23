@@ -225,8 +225,9 @@ export function createCommandPaletteModel(props: { filesOnly?: () => boolean; on
 
       if (directory) serverCtx.projects.touch(directory)
 
-      // rocketclaw: another session opens in its own RocketClaw tab (upstream packages/app/src/shell/commands/palette.ts)
-      navigation.openSession(item.sessionID)
+      // rocketclaw: another session, of any server, opens in its own RocketClaw tab (upstream
+      // packages/app/src/shell/commands/palette.ts)
+      navigation.openSession(item.sessionID, item.server)
 
       return
     }

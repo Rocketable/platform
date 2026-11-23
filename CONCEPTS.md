@@ -323,6 +323,12 @@ A session on a configured OpenCode coding server that RocketClaw keeps a synced 
 
 Its subagents run as child sessions on that server that record it as their parent, so its own history does not hold their work; anything that asks what the session did must read its child sessions too, and theirs.
 
+### OpenCode View
+
+The copy of OpenCode's own web interface that a Web page runs to show Remote OpenCode Sessions; a page has at most one, and it serves every configured OpenCode coding server.
+
+It loads as soon as the page has a tab of a Remote OpenCode Session on a configured server, in any Space, even while another tab shows, and goes only when the last such tab closes or the page switches to a Remote RocketClaw. Opening another Remote OpenCode Session, on the same server or another, moves the view instead of rebuilding it. While any other tab shows, the view stays loaded but hidden: it keeps its size and its connection to each server, takes no keys, clicks or drops, shows none of its menus or dialogs, and never marks a session viewed, because a session's viewed state on an OpenCode server is shared by every client of that server. OpenCode's sounds for sessions open as tabs still play while it is hidden.
+
 ### MCP Bridge
 
 The MCP server RocketClaw serves for each configured OpenCode coding server, through which an agent in a Remote OpenCode Session reads and changes that session's tags and publishes its Hosted Pages.

@@ -1,8 +1,9 @@
-import { ErrorBoundary, createEffect, createMemo, Match, on, Show, Switch, type ParentProps } from "solid-js"
+import { ErrorBoundary, createEffect, createMemo, Match, on, Show, Switch, useContext, type ParentProps } from "solid-js"
 import { Title } from "@solidjs/meta"
 import { useParams } from "@solidjs/router"
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
+import { ViewContext } from "@rocketclaw/host/fences"
 import { DataProvider } from "@opencode/session-ui/context"
 import { SessionUserMessage } from "@opencode/session-ui/message"
 import { TextShimmer } from "@opencode/ui/text-shimmer"
@@ -256,13 +257,17 @@ function MarkSessionViewed(props: { sessionID: () => string | undefined }) {
   makeEventListener(window, "focus", update)
   makeEventListener(window, "blur", update)
   makeEventListener(document, "visibilitychange", update)
+  // rocketclaw: a view hidden behind another RocketClaw tab is not in front of its user (upstream
+  // packages/app/src/session/route.tsx)
+  const view = useContext(ViewContext)
+  const focused = () => focus.window && view.visible()
 
   const viewed = createMemo<SessionViewedState>(
     (previous) =>
       transitionSessionViewed(previous, {
         type: "changed",
         sessionID: props.sessionID(),
-        focused: focus.window,
+        focused: focused(),
         ready: notification.session.ready(),
       }),
     INITIAL_SESSION_VIEWED_STATE,
@@ -279,7 +284,7 @@ function MarkSessionViewed(props: { sessionID: () => string | undefined }) {
   createEffect(() => {
     const sessionID = props.sessionID()
 
-    if (!sessionID || !focus.window) return
+    if (!sessionID || !focused()) return
     notification.session.markViewed(sessionID)
   })
 

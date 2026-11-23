@@ -2,7 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test"
 import { observeViewerScheme } from "@opencode/session-ui/pierre/file-runtime"
 import { tag } from "../manifest.json"
 import type { Navigation } from "./api"
-import { fetch, linked, reset, server, url } from "./test/server"
+import { fetch, linked, origin, reset, server, url } from "./test/server"
 
 // happy-dom has no IndexedDB; the drafts live in memory for the whole file, so a remount finds them.
 const drafts = await import("@/runtime/persistence/drafts")
@@ -94,30 +94,33 @@ globalThis.fetch = fetch
 const { mount } = await import("./mount")
 
 const mac = /(Mac|iPod|iPhone|iPad)/.test(navigator.platform)
-const calls = { opened: [] as string[], created: [] as string[], closed: 0, reported: [] as string[] }
+const calls = { opened: [] as string[], created: [] as string[], closed: 0, reported: [] as string[], servers: [] as string[] }
 
 const navigation: Navigation = {
-  openSession: (id) => calls.opened.push(id),
-  newSession: (directory) => calls.created.push(directory),
-  forkSession: async (id, before) => {
+  openSession: (_, id) => calls.opened.push(id),
+  newSession: (_, directory) => calls.created.push(directory),
+  forkSession: async (_, id, before) => {
     const response = await fetch(`${url}/api/session/${id}/fork`, { method: "POST", body: JSON.stringify({ before }) })
     const body: { data: { id: string } } = await response.json()
     return body.data.id
   },
   closeTab: () => calls.closed++,
-  reportSession: (id) => calls.reported.push(id),
-  messageLink: (id, message) => (id === "ses_a" ? `https://rocketclaw.test/oc/${id}?message=${message}` : ""),
+  reportSession: (server, id) => {
+    calls.servers.push(server)
+    calls.reported.push(id)
+  },
+  messageLink: (server, id, message) => (id === "ses_a" ? `https://rocketclaw.test/oc/${server}/${id}?message=${message}` : ""),
 }
 
 const shown: Array<() => void> = []
 
-function show(width = 1400, sessionID = "ses_a") {
+function show(width = 1400, sessionID = "ses_a", servers: Record<string, string> = { box: url }) {
   const element = document.createElement("div")
   document.body.append(element)
   // The view measures its container as it mounts; happy-dom lays nothing out.
   const measure = HTMLElement.prototype.getBoundingClientRect
   HTMLElement.prototype.getBoundingClientRect = () => DOMRect.fromRect({ width, height: 800 })
-  const view = mount(element, { server: "box", url, sessionID, navigation })
+  const view = mount(element, { servers, server: "box", sessionID, navigation })
   HTMLElement.prototype.getBoundingClientRect = measure
   const root = element.firstElementChild as HTMLElement
   const portal = document.querySelector<HTMLElement>("[data-oc-portal]:last-of-type")!
@@ -167,7 +170,7 @@ const palettes = () => document.querySelectorAll(".command-palette").length
 afterEach(() => {
   shown.splice(0).forEach((dispose) => dispose())
   reset()
-  Object.assign(calls, { opened: [], created: [], closed: 0, reported: [] })
+  Object.assign(calls, { opened: [], created: [], closed: 0, reported: [], servers: [] })
   document.documentElement.className = ""
 })
 
@@ -282,12 +285,12 @@ test("navigating into a child session stays in the view and reports the child", 
 test("moving the view to another session shows it in place on the same live stream, and closes an open palette", async () => {
   const view = show()
   await answered(view)
-  view.keep(["ses_a"])
+  view.keep({ box: ["ses_a"] })
   const streams = server.streams
   press(document.body, "k", modK)
   await until(() => palettes())
 
-  view.show(linked)
+  view.show("box", linked)
   await answered(view, linked)
   expect(view.root.textContent?.includes("answer in ses_a")).toBe(false)
   expect(calls.reported.at(-1)).toBe(linked)
@@ -303,7 +306,7 @@ test("a message of the session the view shows moves to it without closing an ope
   press(document.body, "k", modK)
   await until(() => palettes())
 
-  view.show("ses_a", "msg_ses_a_1")
+  view.show("box", "ses_a", "msg_ses_a_1")
   await until(() => calls.reported.at(-1) === "ses_a")
   expect(palettes()).toBe(1)
 
@@ -340,16 +343,16 @@ test("going forward again into a child session keeps its panels working", async 
 test("moving the view on before a session shows makes no session look like its child", async () => {
   const view = show()
   await answered(view)
-  view.show(linked)
+  view.show("box", linked)
   await answered(view, linked)
-  view.show("ses_a")
+  view.show("box", "ses_a")
   await answered(view)
 
   // The view moves on to ses_child before it shows the linked session again.
-  view.show(linked)
-  view.show("ses_child")
+  view.show("box", linked)
+  view.show("box", "ses_child")
   await answered(view, "ses_child")
-  view.show("ses_a")
+  view.show("box", "ses_a")
   await answered(view)
   await until(() => view.root.querySelector("[data-component=composer] [contenteditable=true]"))
 })
@@ -358,8 +361,8 @@ test("moving the view back before the session it left for shows stays on the ses
   const view = show()
   await answered(view)
 
-  view.show(linked)
-  view.show("ses_a")
+  view.show("box", linked)
+  view.show("box", "ses_a")
   // Without the fix the router lands on the linked session as soon as it loads, well within this wait.
   await new Promise((resolve) => setTimeout(resolve, 1000))
   expect(calls.reported.at(-1)).toBe("ses_a")
@@ -373,15 +376,15 @@ test("closing the shown tab moves the view to the tab RocketClaw shows, not to t
   const other: string = (await response.json()).data.id
   const view = show()
   await answered(view)
-  view.keep(["ses_a", linked, other])
+  view.keep({ box: ["ses_a", linked, other] })
 
   for (const id of [linked, other, "ses_a"]) {
-    view.show(id)
+    view.show("box", id)
     await answered(view, id)
   }
 
-  view.show(other)
-  view.keep([linked, other])
+  view.show("box", other)
+  view.keep({ box: [linked, other] })
   // Without the fix the view lands on the linked session, ses_a's neighbour among OpenCode's tabs.
   await new Promise((resolve) => setTimeout(resolve, 1000))
   expect(calls.reported.at(-1)).toBe(other)
@@ -404,18 +407,99 @@ test("Back stops at the session the view was moved to", async () => {
   expect(history.get()).toBe("/b/child")
 })
 
+test("one view moves between servers' sessions, each read through its own server's proxy route", async () => {
+  const before = server.requests.length
+  const view = show(1400, "ses_a", { box: url, far: `${origin}/oc/far` })
+  await answered(view)
+  view.keep({ box: ["ses_a"], far: [linked] })
+
+  view.show("far", linked)
+  await answered(view, linked)
+  expect(server.requests).toContain(`GET /oc/far/api/session/${linked}/message`)
+  expect(calls.servers.at(-1)).toBe("far")
+  expect(calls.reported.at(-1)).toBe(linked)
+
+  view.show("box", "ses_a")
+  await answered(view, "ses_a")
+  expect(calls.servers.at(-1)).toBe("box")
+  expect(server.requests.slice(before).filter((request) => request === "GET /oc/box/api/session/ses_a/message")).toHaveLength(1)
+
+  view.show("far", "ses_a")
+  await until(() => calls.servers.at(-1) === "far" && calls.reported.at(-1) === "ses_a")
+  await answered(view, "ses_a")
+  expect(server.requests.slice(before)).toContain("GET /oc/far/api/session/ses_a/message")
+  const copied: string[] = []
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => void copied.push(text) } })
+  try {
+    const more = await until(() => view.root.querySelector<HTMLElement>("[data-slot=user-message-menu] [aria-label='More actions']"))
+    more.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }))
+    more.click()
+    const item = await until(() => byText(view.portal, "[role=menuitem]", "Copy link"))
+    for (const type of ["pointerdown", "pointerup"])
+      item.dispatchEvent(new PointerEvent(type, { bubbles: true, button: 0, pointerType: "mouse" }))
+    item.click()
+    await until(() => copied.length)
+    expect(copied).toEqual(["https://rocketclaw.test/oc/far/ses_a?message=msg_ses_a_1"])
+  } finally {
+    Reflect.deleteProperty(navigator, "clipboard")
+  }
+})
+
+test("a hidden view takes no key from the page and closes its palette and menus, until it shows again", async () => {
+  const view = show()
+  await answered(view)
+  view.openPalette()
+  await until(() => palettes())
+
+  view.setVisible(false)
+  await until(() => palettes() === 0)
+  for (const element of [view.root, view.portal]) {
+    expect(element.hasAttribute("data-oc-hidden")).toBe(true)
+    expect(element.inert).toBe(true)
+  }
+  press(document.body, "k", modK)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  expect(palettes()).toBe(0)
+
+  view.setVisible(true)
+  expect(view.root.inert || view.portal.inert).toBe(false)
+  const more = await until(() => view.root.querySelector<HTMLElement>("[data-slot=user-message-menu] [aria-label='More actions']"))
+  more.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }))
+  more.click()
+  await until(() => view.portal.querySelector("[role=menu]"))
+  view.setVisible(false)
+  expect(view.portal.querySelector("[role=menu]")?.hasAttribute("data-closed")).toBe(true)
+  view.setVisible(true)
+  press(document.body, "k", modK)
+  await until(() => palettes())
+}, 20_000)
+
+test("a hidden view marks no session viewed, and marks it once it shows", async () => {
+  Object.assign(server.sessions.get("ses_a")!.time, { idle: 2 })
+  const before = server.requests.length
+  const viewed = () => server.requests.slice(before).includes("POST /oc/box/api/session/ses_a/view")
+  const view = show()
+  view.setVisible(false)
+  await answered(view)
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  expect(viewed()).toBe(false)
+
+  view.setVisible(true)
+  await until(viewed)
+})
+
 test("each session keeps its own draft while the view moves between them", async () => {
   const view = show()
   await answered(view)
   await type(view, "draft for a")
   const composer = () => view.root.querySelector("[data-component=composer]")?.textContent ?? ""
 
-  view.show(linked)
+  view.show("box", linked)
   await answered(view, linked)
   await new Promise((resolve) => setTimeout(resolve, 200))
   expect(composer().includes("draft for a")).toBe(false)
 
-  view.show("ses_a")
+  view.show("box", "ses_a")
   await answered(view)
   await until(() => composer().includes("draft for a"))
 })
@@ -433,11 +517,11 @@ test("only the sessions open as RocketClaw tabs stay among the view's tabs, and 
   }
   const view = show()
   await answered(view)
-  view.show(linked)
+  view.show("box", linked)
   await answered(view, linked)
   await until(() => tabs().includes('"ses_a"'))
 
-  view.keep([linked])
+  view.keep({ box: [linked] })
   await until(() => !tabs().includes('"ses_a"'))
   expect(tabs().includes(`"${linked}"`)).toBe(true)
   await new Promise((resolve) => setTimeout(resolve, 200))
@@ -660,7 +744,7 @@ test("a prompt's menu copies RocketClaw's link to it, only in the tab's own sess
       item.dispatchEvent(new PointerEvent(type, { bubbles: true, button: 0, pointerType: "mouse" }))
     item.click()
     await until(() => copied.length)
-    expect(copied).toEqual(["https://rocketclaw.test/oc/ses_a?message=msg_ses_a_1"])
+    expect(copied).toEqual(["https://rocketclaw.test/oc/box/ses_a?message=msg_ses_a_1"])
     view.dispose()
 
     const child = show(1400, "ses_child")
@@ -736,7 +820,7 @@ test("the view takes no quote in a subagent's session, and tells subscribers whe
   let changes = 0
   const unsubscribe = view.subscribeQuotable(() => changes++)
 
-  view.show("ses_child")
+  view.show("box", "ses_child")
   await answered(view, "ses_child")
   await until(() => changes > 0 && !view.quotable())
   unsubscribe()

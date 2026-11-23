@@ -1,7 +1,7 @@
 ---
 title: The Web Shares One Connection, and Keeping Views Mounted Needs a Remount Audit
 date: 2026-10-07
-last_updated: 2026-11-17
+last_updated: 2026-11-22
 category: docs/solutions/architecture-patterns/
 module: internal/rocketclaw/web
 problem_type: architecture_pattern
@@ -105,13 +105,17 @@ part 2 below.
   sent go down. A poll naming a listing the server no longer holds gets every row again. That happens
   after a server restart, or once more than 8 pollers have run since. The full first listing is still
   there. Later changes cut two other bursts: Cron, Agents, Skills and Config are no longer preloaded on
-  every page load, and switching between one server's OpenCode tabs moves its one view instead of
-  rebuilding it (`docs/specs/2026-11-02-opencode-tab-switch-design.md`). Sending only tab sessions in
+  every page load, and the page keeps one OpenCode view for every server, mounted behind other tabs,
+  and moves it between sessions instead of rebuilding it
+  (`docs/plans/2026-11-22-1942-feat-keep-opencode-view-plan.md`). Sending only tab sessions in
   full and moving search to the server is planned in
   `docs/plans/2026-11-01-1608-perf-slim-sidebar-list-plan.md`.
 - **Keeping views mounted trades bursts for steady traffic.** A hidden view's streams and polls keep
-  using the connection. Keeping the OpenCode view alive behind RocketClaw tabs was rejected (same spec,
-  "Ruled out"), because one session's state could leak into another. Part 2 shows why that risk is real.
+  using the connection. The one OpenCode view stays mounted behind other tabs and holds one event
+  stream and health check per configured server. Several OpenCode views at once stay ruled out
+  (`docs/specs/2026-11-02-opencode-tab-switch-design.md`, "Ruled out"), because one session's state
+  could leak into another; Part 2 shows why that risk is real. Hiding the one view safely is
+  `fence-the-hidden-opencode-view-and-test-it-where-it-can-fail.md`.
 
 #### Diagnosing small requests that wait
 

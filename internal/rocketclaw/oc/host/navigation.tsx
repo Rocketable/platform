@@ -1,24 +1,31 @@
 import { createMemoryHistory, useBeforeLeave, useLocation, type LocationChange } from "@solidjs/router"
-import { createContext, createEffect, createMemo, useContext } from "solid-js"
+import { createContext, createEffect, useContext } from "solid-js"
 import { useLanguage } from "@/runtime/i18n/language"
 import type { ServerConnection } from "@/runtime/server/registry"
 import { useGlobal } from "@/runtime/server/runtime"
 import { COMMAND_SEARCH_ID, useCommand } from "@/shell/commands/command"
+import { requireServerKey } from "@/shell/routes/session"
 import { useDialog } from "@opencode/ui/context/dialog"
-import type { Navigation } from "./api"
 
-const inertNavigation: Navigation = {
+export type ViewNavigation = {
+  openSession(sessionID: string, server?: ServerConnection.Key): void
+  newSession(directory: string, server?: ServerConnection.Key): void
+  forkSession(sessionID: string, before: string): Promise<string>
+  closeTab(): void
+  messageLink(sessionID: string, messageID: string): string
+}
+
+const inertNavigation: ViewNavigation = {
   openSession: () => {},
   newSession: () => {},
   forkSession: async () => {
     throw new Error("Session navigation is unavailable")
   },
   closeTab: () => {},
-  reportSession: () => {},
   messageLink: () => "",
 }
 
-export const NavigationContext = createContext<Navigation>(inertNavigation)
+export const NavigationContext = createContext<ViewNavigation>(inertNavigation)
 
 /**
  * The view's memory history. Moving the view to another session pushes that session and makes it the floor: Back,
@@ -66,9 +73,15 @@ export function createViewHistory(start: string) {
   }
 }
 
+const sessionRoute = /^\/server\/([^/]+)\/session\/([^/]+)$/
+
 export function routeSession(pathname: string) {
-  return /^\/server\/[^/]+\/session\/([^/]+)$/.exec(pathname)?.[1]
+  return sessionRoute.exec(pathname)?.[2]
 }
+
+export const routeServer = (pathname: string) => requireServerKey(sessionRoute.exec(pathname)![1])
+
+const routeKey = (pathname: string) => sessionRoute.exec(pathname)?.slice(1).join("/")
 
 /**
  * Moves through the view's own history, where child sessions and settings open (KTD17). Back and forward have no
@@ -83,6 +96,7 @@ export function ViewHistory(props: {
   history: ReturnType<typeof createViewHistory>
   server: ServerConnection.Key
   sessionID: string
+  report: (server: ServerConnection.Key, sessionID: string) => void
 }) {
   const command = useCommand()
   const language = useLanguage()
@@ -90,18 +104,20 @@ export function ViewHistory(props: {
   const navigation = useContext(NavigationContext)
   const location = useLocation()
   const global = useGlobal()
-  const session = createMemo(() => routeSession(location.pathname))
 
   useBeforeLeave((event) => {
-    if (routeSession(event.from.pathname) !== routeSession(props.history.get().split(/[?#]/)[0]))
-      return event.preventDefault()
-    const to = routeSession(String(event.to).split(/[?#]/)[0])
-    const sessions = global.serverCtx(props.server)?.data.session
+    if (routeKey(event.from.pathname) !== routeKey(props.history.get().split(/[?#]/)[0])) return event.preventDefault()
+    const path = String(event.to).split(/[?#]/)[0]
+    const to = routeSession(path)
 
-    if (!to || to === props.sessionID || sessions?.root(to) === props.sessionID) return
+    if (!to) return
+    const server = routeServer(path)
+    const sessions = global.serverCtx(server)?.data.session
+
+    if (server === props.server && (to === props.sessionID || sessions?.root(to) === props.sessionID)) return
     event.preventDefault()
 
-    if (!sessions?.get(to)?.parentID) navigation.openSession(to)
+    if (!sessions?.get(to)?.parentID) navigation.openSession(to, server)
   })
 
   command.register(() => [
@@ -129,9 +145,10 @@ export function ViewHistory(props: {
   ])
 
   createEffect(() => {
-    const id = session()
+    const path = location.pathname
+    const id = routeSession(path)
 
-    if (id) navigation.reportSession(id)
+    if (id) props.report(routeServer(path), id)
   })
 
   return null
