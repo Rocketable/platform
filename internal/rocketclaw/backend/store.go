@@ -1174,7 +1174,7 @@ func (s *SessionService) sidebarSessions(ctx context.Context, username string, c
 }
 
 func (s *SessionService) sidebarRows(ctx context.Context, username string, chats []string) ([]*SidebarSession, error) {
-	limit, err := s.SpaceLimitFor(ctx, s.definitions.Clone().PermittedSpaces(username))
+	limit, err := s.SpaceLimitFor(ctx, s.definitions.PermittedSpaces(username))
 	if err != nil {
 		return nil, err
 	}

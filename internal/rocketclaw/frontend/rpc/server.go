@@ -2243,7 +2243,7 @@ func (s *Server) spaceLimit(ctx context.Context) (username string, limit backend
 		return "", backend.SpaceLimit{}, err
 	}
 
-	limit, err = s.sessions.SpaceLimitFor(ctx, s.cfg.Clone().PermittedSpaces(username))
+	limit, err = s.sessions.SpaceLimitFor(ctx, s.cfg.PermittedSpaces(username))
 	if err != nil {
 		return "", backend.SpaceLimit{}, fmt.Errorf("read web space limit: %w", err)
 	}

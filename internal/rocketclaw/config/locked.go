@@ -32,6 +32,13 @@ func (c *LockedConfig) Clone() *Config {
 	return &cfg
 }
 
+func (c *LockedConfig) PermittedSpaces(login string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return slices.Clone(c.cfg.PermittedSpaces(login))
+}
+
 func (c *LockedConfig) Do(work func(cfg *Config) error) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

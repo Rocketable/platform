@@ -18,7 +18,7 @@ func TestLockedConfig(t *testing.T) {
 		MCPExternal: MCPExternalConfig{Users: map[string]string{"alice": "invented"}},
 		MCPServers:  map[string]MCPServerConfig{"tools": {Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}, Tools: map[string][]string{"read": {"list_*"}}}},
 		Slack:       SlackConfig{Channels: []SlackChannelConfig{{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}}},
-		Permissions: map[string][]string{"alice": {"Ops"}},
+		Permissions: map[string][]string{"alice": {"Ops"}, "bob": {}},
 		Web:         WebConfig{Admins: []string{"alice"}, Tsnet: &TsnetConfig{Hostname: "rocketclaw", Tags: []string{"tag:rocketclaw"}, Origin: "https://rocketclaw.example.ts.net"}},
 	}
 
@@ -49,7 +49,15 @@ func TestLockedConfig(t *testing.T) {
 	require.Equal(t, map[string]string{"alice": "invented"}, snapshot.MCPExternal.Users)
 	require.Equal(t, MCPServerConfig{Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}, Tools: map[string][]string{"read": {"list_*"}}}, snapshot.MCPServers["tools"])
 	require.Equal(t, SlackChannelConfig{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}, snapshot.Slack.Channels[0])
-	require.Equal(t, map[string][]string{"alice": {"Ops"}}, snapshot.Permissions)
+	require.Equal(t, map[string][]string{"alice": {"Ops"}, "bob": {}}, snapshot.Permissions)
+
+	spaces := locked.PermittedSpaces("ALICE")
+	require.Equal(t, []string{"Ops"}, spaces)
+	spaces[0] = "changed"
+
+	require.Equal(t, []string{"Ops"}, locked.PermittedSpaces("alice"))
+	require.Equal(t, []string{}, locked.PermittedSpaces("bob"))
+	require.Nil(t, locked.PermittedSpaces("carol"))
 	require.Equal(t, []string{"alice"}, snapshot.Web.Admins)
 	require.Equal(t, &TsnetConfig{Hostname: "rocketclaw", Tags: []string{"tag:rocketclaw"}, Origin: "https://rocketclaw.example.ts.net"}, snapshot.Web.Tsnet)
 
