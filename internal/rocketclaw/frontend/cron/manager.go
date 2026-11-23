@@ -241,14 +241,7 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCron
 	startedAt := time.Now()
 	result, err := m.run.Run(context.WithoutCancel(ctx), job.Agent, job.Prompt, raw)
 
-	outcome := "reported"
-	if err != nil {
-		outcome = "failed"
-	} else if !result.Reported {
-		outcome = "intentional_silence"
-	}
-
-	m.log.Info("one-off cronjob returned", "event", "cron_completed", "outcome", outcome, "conversation_id", raw.ConversationID, "destination_conversation_id", result.ConversationID, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
+	m.log.Info("one-off cronjob returned", "event", "cron_completed", "outcome", runOutcome(result, err), "conversation_id", raw.ConversationID, "destination_conversation_id", result.ConversationID, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
 
 	if err != nil {
 		return result, fmt.Errorf("run one-off cronjob: %w", err)
@@ -394,14 +387,7 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	started := time.Now()
 	result, err := m.run.Run(context.WithoutCancel(ctx), definition.job.Agent, prompt, progress)
 
-	outcome := "reported"
-	if err != nil {
-		outcome = "failed"
-	} else if !result.Reported {
-		outcome = "intentional_silence"
-	}
-
-	log.Info("completed cronjob", "event", "cron_completed", "outcome", outcome, "destination_conversation_id", result.ConversationID, "duration_ms", time.Since(started).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
+	log.Info("completed cronjob", "event", "cron_completed", "outcome", runOutcome(result, err), "destination_conversation_id", result.ConversationID, "duration_ms", time.Since(started).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
 
 	if err != nil && ctx.Err() == nil {
 		log.Error("cronjob failed", "human_visible", false, "error_type", fmt.Sprintf("%T", err))
@@ -410,6 +396,18 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 
 func cronTraceConversationID(prefix, relativePath string, ts time.Time) string {
 	return prefix + relativePath + ":" + ts.UTC().Format("20060102T150405.000000000Z") + ":" + rand.Text()
+}
+
+func runOutcome(result protocol.CronRunResult, err error) string {
+	if err != nil {
+		return "failed"
+	}
+
+	if !result.Reported {
+		return "intentional_silence"
+	}
+
+	return "reported"
 }
 
 func (m *Manager) preparePrompt(body string) string {
