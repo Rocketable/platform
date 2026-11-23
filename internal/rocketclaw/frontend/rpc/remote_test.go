@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -206,7 +207,7 @@ WHERE username = 'alice' RETURNING viewed_at < now() - interval '10 seconds'`).S
 	t.Cleanup(local.Close)
 
 	mu.Lock()
-	tailnet = NewTailnetHandler(whois, []string{named("local", local)}, versioned("work", NewHTTPHandler(remoteRPC, new(config.LockedConfig), "")))
+	tailnet = NewTailnetHandler(whois, []string{named("local", local)}, io.Discard, versioned("work", NewHTTPHandler(remoteRPC, new(config.LockedConfig), "")))
 	mu.Unlock()
 
 	runWebTest(t, "src/remote-transport.test.ts", "ROCKETCLAW_REMOTE_TEST_LOCAL="+named("local", local), "ROCKETCLAW_REMOTE_TEST_REMOTE="+named("work", remote), "ROCKETCLAW_REMOTE_TEST_WORKSPACE="+remoteConfig.Workspace, "ROCKETCLAW_REMOTE_TEST_SUFFIX="+suffix)

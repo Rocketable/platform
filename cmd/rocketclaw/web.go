@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
@@ -35,7 +36,7 @@ func startWebRPC(rt *backend.Runtime, tailnet *tailnetNode, channels rpc.Channel
 	var serving errgroup.Group
 
 	https := &http.Server{
-		Handler:   rpc.NewTailnetHandler(tailnet.client, rt.Cfg.Clone().TrustedRocketClaws, handler),
+		Handler:   rpc.NewTailnetHandler(tailnet.client, rt.Cfg.Clone().TrustedRocketClaws, os.Stdout, handler),
 		TLSConfig: &tls.Config{GetCertificate: tailnet.client.GetCertificate},
 	}
 
