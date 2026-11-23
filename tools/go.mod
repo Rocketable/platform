@@ -2,7 +2,7 @@ module github.com/Rocketable/platform/tools
 
 go 1.27.4
 
-require github.com/vektra/mockery/v3 v3.9.1
+require github.com/vektra/mockery/v3 v3.9.2
 
 require (
 	github.com/brunoga/deep v1.3.1 // indirect
