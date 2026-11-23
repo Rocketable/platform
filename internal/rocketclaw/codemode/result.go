@@ -23,7 +23,7 @@ type Result interface {
 }
 
 func ResultAttrNames(extra ...string) []string {
-	names := append(slices.Clone(extra), "error", "ok", "or_else", "unwrap")
+	names := append(append(make([]string, 0, len(extra)+4), extra...), "error", "ok", "or_else", "unwrap")
 	slices.Sort(names)
 
 	return slices.Compact(names)
