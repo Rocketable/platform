@@ -2609,8 +2609,10 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		require.Equal(t, source, trace.Messages[0].Text)
 	}
 
-	_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $1 WHERE conversation_id = ANY($2)`, id, sources)
-	require.NoError(t, err)
+	for _, source := range sources {
+		_, err = (&backend.Runtime{Sessions: sessions}).ContinueRun(ctx, source, id, true)
+		require.NoError(t, err)
+	}
 
 	observed, err := sessions.ObserveEntries(ctx, id)
 	require.NoError(t, err)

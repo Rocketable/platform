@@ -224,10 +224,20 @@ message BackgroundJob {
   string note = 9;
 }
 
-message StageRevertRequest { string id = 1; string message_id = 2; }
+enum RevertBoundary {
+  BEFORE = 0;
+  THROUGH = 1;
+}
+
+message StageRevertRequest { string id = 1; string message_id = 2; RevertBoundary boundary = 3; }
 message StageRevertResponse { string revert_message_id = 1; TranscriptEvent prompt = 2; }
-message ClearRevertRequest { string id = 1; }
-message ClearRevertResponse {}
+message DeleteBranchRequest { string id = 1; string message_id = 2; bool dry_run = 3; }
+message DeleteBranchResponse { int32 messages = 1; int32 nested_branches = 2; int32 subagent_sessions = 3; int32 queued_messages = 4; bool current = 5; }
+message MessageTreeRequest { string id = 1; }
+message MessageTreeNode { string id = 1; string parent_id = 2; string role = 3; string text = 4; bool outside = 5; bool pickable = 6; bool through = 7; bool on_path = 8; bool current = 9; string branch_id = 10; bool deletable = 11; }
+message MessageTreeResponse { repeated MessageTreeNode nodes = 1; }
+message SummarizeBranchRequest { string id = 1; string branch_id = 2; string instructions = 3; }
+message SummarizeBranchResponse { bool appended = 1; }
 
 // A listing streams its first message, then one message per sent row, then the completion.
 message ListSessionsResponse {
@@ -1331,7 +1341,9 @@ service Web {
   rpc History(HistoryRequest) returns (HistoryResponse);
   rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse);
   rpc StageRevert(StageRevertRequest) returns (StageRevertResponse);
-  rpc ClearRevert(ClearRevertRequest) returns (ClearRevertResponse);
+  rpc DeleteBranch(DeleteBranchRequest) returns (DeleteBranchResponse);
+  rpc MessageTree(MessageTreeRequest) returns (MessageTreeResponse);
+  rpc SummarizeBranch(SummarizeBranchRequest) returns (SummarizeBranchResponse);
   rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
   rpc SearchSessions(SearchSessionsRequest) returns (SearchSessionsResponse);
   rpc SlackNames(SlackNamesRequest) returns (SlackNamesResponse);

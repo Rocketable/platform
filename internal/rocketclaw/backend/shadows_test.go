@@ -185,7 +185,9 @@ func TestShadowSeedAndFork(t *testing.T) {
 	require.NoError(t, store.SaveAttachment(t.Context(), "parent", "", &attachment, true))
 
 	entry := testSessionEntry("attachment:original", "seed answer")
-	entry.ReplayInput = append(entry.ReplayInput, json.RawMessage(`{"type":"message","role":"user","prompt_header":"[System]","input_id":"finished running","content":"Completion Note"}`))
+	entry.ReplayInput = append(entry.ReplayInput, json.RawMessage(`{"type":"message","role":"user","prompt_header":"[System]","input_id":"finished running","content":"Completion Note"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"task","name":"task","arguments":"{}"}`))
+	entry.TurnID = "turn-1"
 	_, err = store.AppendEntryID(t.Context(), "parent", entry)
 	require.NoError(t, err)
 	require.NoError(t, store.startSubagent(t.Context(), "parent", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, Agent: "helper"}))
@@ -1304,7 +1306,7 @@ ORDER BY c.conversation_id, t.id, s.id LIMIT 20`, "shadow mutation startup state
 
 			rt := &Runtime{Sessions: store, threads: manager}
 			if mutation == "revert" {
-				_, _, err = rt.StageRevert(t.Context(), "parent", fmt.Sprintf("%d:0", entries[0].ID))
+				_, _, err = rt.StageRevert(t.Context(), "parent", fmt.Sprintf("%d:0", entries[0].ID), protocol.RevertBefore)
 			} else {
 				_, err = store.DeleteSession(t.Context(), "parent")
 			}
@@ -1318,10 +1320,6 @@ ORDER BY c.conversation_id, t.id, s.id LIMIT 20`, "shadow mutation startup state
 			require.NoError(t, err)
 			require.Empty(t, entries, "settlement must not write a visible discarded suffix")
 
-			if mutation == "revert" {
-				require.NoError(t, rt.ClearRevert(t.Context(), "parent"))
-			}
-
 			shutdown()
 
 			manager, _ = newTestBridgeManager(t, cfg, store, finals)
@@ -1329,7 +1327,7 @@ ORDER BY c.conversation_id, t.id, s.id LIMIT 20`, "shadow mutation startup state
 			store.historyWorkers = manager
 			require.NoError(t, manager.StartActiveTurns(t.Context()))
 
-			require.Empty(t, requests, "redo and restart must not repeat stopped work")
+			require.Empty(t, requests, "restart must not repeat stopped work")
 			defer func() {
 				if !t.Failed() {
 					return
@@ -2012,4 +2010,91 @@ func TestHistoryMutationSharesLockOrder(t *testing.T) {
 			require.NoError(t, <-deleted)
 		})
 	}
+}
+
+func TestShadowChildrenFollowTheParentsMove(t *testing.T) {
+	t.Parallel()
+
+	s, _ := newShadowTestStore(t)
+	ctx := t.Context()
+	require.NoError(t, s.UpsertThread("parent", ThreadState{Agent: "primary"}))
+	children, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'parent' ORDER BY 1`, "shadow children")
+	require.NoError(t, err)
+	require.Len(t, children, 2)
+
+	compare := func(turn string) int64 {
+		entry := testSessionEntry(turn, turn+" answer")
+		entry.TurnID = turn
+		id, err := s.AppendEntryID(ctx, "parent", entry)
+		require.NoError(t, err)
+
+		for _, child := range children {
+			entry := testSessionEntry(turn, child+" compares "+turn)
+			entry.TurnID = child + "-" + turn
+			_, err := s.AppendEntryID(ctx, child, entry)
+			require.NoError(t, err)
+			_, err = s.db.ExecContext(ctx, `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, child_turn_id, inbound_json, terminal)
+VALUES ($1, 'parent', $2, $3, '{}', 'complete')`, child, turn, entry.TurnID)
+			require.NoError(t, err)
+		}
+
+		return id
+	}
+	shown := func(want ...string) {
+		t.Helper()
+
+		bindings, err := shadowHistoryDB(ctx, s.db, "parent", "", 0, 0)
+		require.NoError(t, err)
+
+		require.Len(t, bindings, len(children))
+
+		for _, binding := range bindings {
+			child := binding.ChildConversationID
+
+			turns := make([]string, 0, len(binding.Turns))
+			for _, turn := range binding.Turns {
+				turns = append(turns, turn.ParentTurnID)
+			}
+
+			require.Equal(t, want, turns, "the parent lists the comparisons on its path")
+
+			var answers []string
+
+			for _, text := range observedEntryTexts(t, s, child) {
+				if _, answer, ok := strings.Cut(text, child+" compares "); ok {
+					answers = append(answers, answer)
+				}
+			}
+
+			require.Equal(t, want, answers, "the child's own path follows the parent")
+		}
+	}
+
+	compare("a")
+	c := compare("c")
+	_, _, err = stageRevertDB(ctx, s.db, "parent", "", protocol.RevertBefore)
+	require.NoError(t, err)
+	shown("a")
+
+	compare("c2")
+	shown("a", "c2")
+
+	_, _, err = stageRevertDB(ctx, s.db, "parent", fmt.Sprintf("%d:1", c), protocol.RevertThrough)
+	require.NoError(t, err)
+	shown("a", "c")
+
+	_, _, err = stageRevertDB(ctx, s.db, "parent", "", protocol.RevertBefore)
+	require.NoError(t, err)
+	shown("a")
+
+	var latest int64
+	require.NoError(t, queryScalar(ctx, s.db, "newest parent entry", `SELECT max(id) FROM entries WHERE conversation_id = 'parent'`, &latest))
+	marker, _, err := stageRevertDB(ctx, s.db, "parent", fmt.Sprintf("%d:1", latest), protocol.RevertThrough)
+	require.NoError(t, err)
+	require.Empty(t, marker)
+	shown("a", "c2")
+
+	var stored int
+	require.NoError(t, queryScalar(ctx, s.db, "comparison entries", `SELECT count(*) FROM entries WHERE conversation_id = ANY($1)`, &stored, children))
+	require.Equal(t, 6, stored, "moves delete no comparison")
 }

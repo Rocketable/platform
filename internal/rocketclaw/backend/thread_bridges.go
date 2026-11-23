@@ -348,11 +348,6 @@ func (r *Runtime) recordAgentPauseLocked(ctx context.Context, b *Bridge, convers
 		return false, err
 	}
 
-	committed, err := settleRevertDB(ctx, tx, conversationID)
-	if err != nil {
-		return false, err
-	}
-
 	if _, err := execState(ctx, tx, "record agent pause", `UPDATE conversations SET paused = $2 WHERE conversation_id = $1`, conversationID, paused); err != nil {
 		return false, err
 	}
@@ -363,10 +358,6 @@ func (r *Runtime) recordAgentPauseLocked(ctx context.Context, b *Bridge, convers
 
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit agent pause: %w", err)
-	}
-
-	if committed {
-		b.dropRevertedWaitingLocked()
 	}
 
 	b.inputOpen = b.inputOpen && !paused
@@ -429,11 +420,6 @@ func (r *Runtime) postPausedMessageLocked(ctx context.Context, b *Bridge, inboun
 		return true, nil
 	}
 
-	committed, err := settleRevertDB(ctx, tx, inbound.ConversationID)
-	if err != nil {
-		return false, err
-	}
-
 	if _, err := appendSessionEntryDB(ctx, tx, inbound.ConversationID, line); err != nil {
 		return false, err
 	}
@@ -449,10 +435,6 @@ func (r *Runtime) postPausedMessageLocked(ctx context.Context, b *Bridge, inboun
 
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit paused message: %w", err)
-	}
-
-	if committed {
-		b.dropRevertedWaitingLocked()
 	}
 
 	return false, nil
@@ -971,11 +953,6 @@ func (m *threadBridgeManager) recordedBridge(ctx context.Context, conversationID
 }
 
 func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.ThreadQueueItem, error) {
-	var marker string
-	if err := queryScalar(context.Background(), m.store.db, "read queue cutoff", `SELECT COALESCE(max(revert_message_id), '') FROM conversations WHERE conversation_id = $1`, &marker, conversationID); err != nil || marker != "" {
-		return nil, err
-	}
-
 	items, err := m.store.ThreadQueueForConversation(conversationID)
 	if err != nil {
 		return nil, fmt.Errorf("list thread queue: %w", err)

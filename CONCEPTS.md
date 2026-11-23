@@ -77,6 +77,17 @@ Only a session a person started in the Web pauses, whatever its agent's sticky s
 
 While paused, a person's plain message posts straight into the chat under their name at once, above a reply still running, and starts no turn; queued and stashed items, Goals, Scheduled Messages, other agents' writes and Completion Note wakes wait, and Voice Hand-offs, `/goal` and promoting a queued item are refused. A reply already running finishes without taking steers, and a turn already starting when someone pauses still runs; Send never answers the agent's pending question, which its card still does. A message sent as someone resumes reaches the agent as usual. The chat records who paused and who resumed the agent, and a fork whose copy ends paused starts live with a line saying the forker resumed it. Resuming starts no turn just to read what was said; waiting work runs in its usual order, and the next turn reads the paused messages as people talking among themselves. Background Jobs keep running; only their wakes wait.
 
+### Message Tree
+
+A native chat's history as a tree: every message continues from an earlier one, so going back with Undo, Revert or a pick in the Message Tree panel and then sending starts a new branch instead of deleting what came after.
+*Avoid:* session tree (that is a conversation's subagent and shadow sessions)
+
+Each chat has one Current Point, shared by everyone viewing it. The model, the transcript, Fork, Handoff and the pull requests pane read only the path that ends there; sidebar search reads every branch. Only deleting a branch, or the chat, removes the chat's own messages; deleting a run whose reports the chat shows removes just those reports, and the path through them stays whole. A branch holding a cron, External MCP or Slack message cannot be deleted. Remote OpenCode Sessions keep OpenCode's own history.
+
+### Current Point
+
+The message where a native chat's path ends: the end of the newest message unless someone moved it. Undo, Revert and the Message Tree panel move it; it can never move before the newest cron, External MCP or Slack message on the path, and the next message continues from it.
+
 ### Scheduled Message
 
 A message an agent schedules into its own conversation to arrive after a delay, once or repeating until the conversation's schedule is reset; when due it runs as a turn of that conversation.
@@ -465,3 +476,4 @@ A running turn saves each item of its record once, as a step of its own, instead
 - **Buffered Follow-Up**: a mid-turn Slack message held until the active turn completed. Replaced by Slack Steer, itself later removed; a mid-turn mention now waits in the Thread Queue.
 - **Quickbench, BAR, ELO Scorer**: an internal benchmarking tool that ran agent variations and ranked them with an ELO judge, with its benchmark units and scorers. Removed when Slack, External MCP, and cron moved onto one Backend.
 - **Mute, Snooze**: a person's switch that stopped a session tab's desktop notifications, for good or until a time, while its Unread title still showed. Replaced by Parked. The `followed` rule of that design, kept and not muted, is gone too; Followed now names only whether the server marks a tab.
+- **Redo**: a command that restored the whole conversation that Undo or Revert had hidden in a native chat. Removed when Undo and Revert stopped deleting history; the Message Tree is the way back.

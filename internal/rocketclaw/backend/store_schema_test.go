@@ -16,7 +16,6 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/jackc/pgx/v5"
@@ -112,6 +111,7 @@ SELECT 'unrelated-history-' || n, 'main', '', 'web_chat', TRUE FROM generate_ser
 ALTER TABLE entries DISABLE TRIGGER entries_transcript_change, DISABLE TRIGGER shadow_entries_change;
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES
     ('parent-history', '{"replay_input":[{"type":"function_call","call_id":"cobalt"},{"type":"function_call","call_id":"amber"},{"type":"function_call","call_id":"missing"}]}', '2000-01-01T00:00:00Z');
+INSERT INTO history_links (conversation_id, entry_id) SELECT conversation_id, id FROM entries WHERE conversation_id = 'parent-history';
 WITH children(conversation_id) AS (VALUES ('parent-history/amber'), ('parent-history/cobalt'))
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT conversation_id, '{}', '2000-01-01T00:00:00Z'
@@ -274,53 +274,6 @@ FROM pg_prepared_statements WHERE statement LIKE '%mcp_external_metadata%' AND s
 		}
 	}
 
-	t.Log(strings.Join(plan, "\n"))
-}
-
-func TestHistoryVisibilityUsesRevertedParentIndex(t *testing.T) {
-	t.Parallel()
-
-	store := newColdTestSessionServiceAt(t, t.TempDir())
-	store.db.SetMaxOpenConns(1)
-
-	ctx := t.Context()
-	_, err := store.db.ExecContext(ctx, `
-INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
-SELECT 'unrelated-' || n, 'main', '', 'web_chat', TRUE FROM generate_series(1, 4096) n;
-INSERT INTO conversations (conversation_id, agent, created_by, revert_message_id, kind, listed)
-VALUES ('parent', 'main', '', '10:1', 'web_chat', TRUE), ('ordinary', 'main', '', '', 'web_chat', TRUE);`)
-	require.NoError(t, err)
-	recordLegacyDelegations(t, store, "parent", "kept", "discarded")
-	_, err = store.db.ExecContext(ctx, `
-INSERT INTO entries (id, conversation_id, entry_json, entry_timestamp) VALUES
-    (10, 'parent', '{"replay_input":[{"type":"function_call","call_id":"kept"},{"type":"function_call","call_id":"discarded"}]}', ''),
-    (20, 'parent/kept', '{}', ''), (30, 'parent/discarded', '{}', ''), (40, 'ordinary', '{}', '');
-ANALYZE conversations;
-ANALYZE entries;
-SET plan_cache_mode = force_generic_plan;`)
-	require.NoError(t, err)
-
-	for _, tc := range []struct {
-		conversationID string
-		id             int64
-	}{
-		{"parent/kept", 20}, {"parent/discarded", 0}, {"ordinary", 40}, {"missing", 0},
-	} {
-		view, err := store.ObserveHistory(ctx, tc.conversationID, "", 0, 0, 1, &HistoryInventory{})
-		require.NoError(t, err)
-		require.Equal(t, tc.id, view.Inventory.From)
-		require.Equal(t, tc.id, view.Inventory.Oldest)
-	}
-
-	queries, err := queryStrings(ctx, store.db, `SELECT format('EXPLAIN EXECUTE %I(%s)', name,
-    (SELECT string_agg('NULL', ',') FROM unnest(parameter_types)))
-FROM pg_prepared_statements WHERE statement = $1`, "history statement", transcriptPageSQL)
-	require.NoError(t, err)
-	require.Len(t, queries, 1)
-	plan, err := queryStrings(ctx, store.db, queries[0], "history visibility plan")
-	require.NoError(t, err)
-	require.Contains(t, strings.Join(plan, "\n"), "managed_conversations_reverted")
-	require.NotContains(t, strings.Join(plan, "\n"), "Seq Scan on conversations parent")
 	t.Log(strings.Join(plan, "\n"))
 }
 
@@ -611,12 +564,12 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM legacy_thread_queue`).Scan(&kept))
 	require.Equal(t, 1, kept)
 
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql")
+	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
 	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql"}, ledger)
+	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql"}, ledger)
 
 	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
 	require.NoError(t, err)
@@ -641,7 +594,8 @@ func TestHistoryRequiresConversationMigration(t *testing.T) {
 		require.NoError(t, err)
 		_, err = store.db.ExecContext(ctx, `INSERT INTO steps (conversation_id, key, value) VALUES ($1, 'step', '{}')`, id)
 		require.NoError(t, err)
-		require.NoError(t, startTurnDB(ctx, store.db, id+"-turn", id, protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)))
+		_, err = store.db.ExecContext(ctx, `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns) VALUES ($1 || '-turn', $1, '{}', '[]', 0, 0)`, id)
+		require.NoError(t, err)
 	}
 
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
@@ -654,6 +608,136 @@ func TestHistoryRequiresConversationMigration(t *testing.T) {
 
 	_, err = store.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('gone', '{}', '')`)
 	require.ErrorContains(t, err, "entries_conversation_fkey")
+}
+
+func TestHistoryLinksMigration(t *testing.T) {
+	t.Parallel()
+
+	store := newColdTestSessionServiceAt(t, t.TempDir())
+	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"linear": KindWebChat, "staged": KindWebChat, "run": KindCronRun, "continuing": KindWebChat,
+		"reported": KindWebChat, "reporter": KindCronRun, "steered": KindWebChat, "gapped": KindWebChat, "elsewhere": KindWebChat})
+	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 107)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'linear' WHERE conversation_id = 'run';
+UPDATE conversations SET continues = 'run' WHERE conversation_id = 'continuing';
+UPDATE conversations SET reports_to = 'reported' WHERE conversation_id = 'reporter'`)
+	require.NoError(t, err)
+
+	insert := func(conversationID string, texts ...string) int64 {
+		items := make([]string, 0, len(texts))
+		for i, text := range texts {
+			items = append(items, fmt.Sprintf(`{"type":"message","role":%q,"content":%q}`, []string{"user", "assistant"}[i%2], text))
+		}
+
+		var id int64
+		require.NoError(t, store.db.QueryRowContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, $2, '') RETURNING id`,
+			conversationID, `{"type":"turn","replay_input":[`+strings.Join(items, ",")+`]}`).Scan(&id))
+
+		return id
+	}
+
+	first, report, second := insert("linear", "a", "b"), insert("run", "report", "done"), insert("linear", "c", "d")
+	kept, hidden := insert("staged", "u1", "a1", "u2", "a2"), insert("staged", "later", "reply")
+	_, err = store.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = 'staged'`, fmt.Sprintf("%d:2", kept))
+	require.NoError(t, err)
+
+	asked := insert("reported", "q1", "a1", "q2", "a2")
+	insert("reporter", "cron", "news")
+
+	var steered int64
+	require.NoError(t, store.db.QueryRowContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('steered', $1, '') RETURNING id`,
+		`{"type":"turn","replay_input":[{"type":"message","role":"user","content":"w1"},{"type":"message","role":"assistant","content":"w2"},`+
+			`{"type":"message","role":"user","content":"from slack","prompt_header":"[Slack principal=bob]"},{"type":"message","role":"assistant","content":"w3"}]}`).Scan(&steered))
+
+	g1 := insert("gapped", "g1", "r1")
+	gap := insert("elsewhere", "other", "reply")
+	insert("gapped", "g2", "r2")
+
+	for chat, marker := range map[string]string{"reported": fmt.Sprintf("%d:2", asked), "steered": fmt.Sprintf("%d:2", steered), "gapped": fmt.Sprintf("%d:0", gap)} {
+		_, err = store.db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $2 WHERE conversation_id = $1`, chat, marker)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	for id, want := range map[string][]int64{"linear": {first, report, second}, "run": {report}, "continuing": {report}, "staged": {kept}} {
+		view, err := store.ObserveHistory(ctx, id, "", 0, 0, 0, &HistoryInventory{})
+		require.NoError(t, err)
+
+		ids := make([]int64, 0, len(view.Entries))
+		for _, entry := range view.Entries {
+			ids = append(ids, entry.ID)
+			require.Equal(t, entry.ID == report && id != "run", entry.Synced, id)
+		}
+
+		require.Equal(t, want, ids, id)
+	}
+
+	require.Equal(t, []string{"message:a", "message:b", "message:report", "message:done", "message:c", "message:d"}, observedEntryTexts(t, store, "linear"))
+	require.Equal(t, []string{"message:u1", "message:a1"}, observedEntryTexts(t, store, "staged"), "a staged marker stays the current point")
+
+	marker, _, _, err := store.RevertState(ctx, "staged")
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("%d:2", kept), marker)
+
+	var stored bool
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) = 1 FROM entries WHERE id = $1`, hidden).Scan(&stored))
+	require.True(t, stored, "the hidden suffix stays stored")
+
+	require.Equal(t, []string{"message:q1", "message:a1", "message:q2", "message:a2", "message:cron", "message:news"}, observedEntryTexts(t, store, "reported"), "a report after the marker cancels it, as the old settle did")
+	require.Equal(t, []string{"message:w1", "message:w2", "message:from slack", "message:w3"}, observedEntryTexts(t, store, "steered"), "an outside message after the marker cancels it")
+	require.Equal(t, []string{"message:g1", "message:r1"}, observedEntryTexts(t, store, "gapped"), "a marker on an entry the chat does not show keeps the entries before it")
+
+	for chat, want := range map[string]string{"reported": "", "steered": "", "gapped": fmt.Sprintf("%d:2", g1)} {
+		marker, _, _, err := store.RevertState(ctx, chat)
+		require.NoError(t, err)
+		require.Equal(t, want, marker, chat)
+	}
+}
+
+func TestHistoryReadFollowsLinkIndexes(t *testing.T) {
+	t.Parallel()
+
+	store := newColdTestSessionServiceAt(t, t.TempDir())
+	store.db.SetMaxOpenConns(1)
+
+	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"long": KindWebChat})
+	_, err := store.db.ExecContext(ctx, `
+ALTER TABLE conversations SET (autovacuum_enabled = false);
+ALTER TABLE entries SET (autovacuum_enabled = false);
+ALTER TABLE history_links SET (autovacuum_enabled = false);
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
+SELECT 'other-' || n, 'main', '', 'web_chat', TRUE FROM generate_series(1, 4096) n;
+ALTER TABLE entries DISABLE TRIGGER entries_transcript_change, DISABLE TRIGGER shadow_entries_change;
+INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
+SELECT CASE WHEN n % 2 = 0 THEN 'long' ELSE 'other-' || (n + 1) / 2 END, '{"type":"turn","replay_input":[]}', '' FROM generate_series(1, 8192) n;
+ALTER TABLE entries ENABLE TRIGGER entries_transcript_change, ENABLE TRIGGER shadow_entries_change;
+INSERT INTO history_links (conversation_id, entry_id, parent_entry_id)
+SELECT conversation_id, id, lag(id) OVER (PARTITION BY conversation_id ORDER BY id) FROM entries ORDER BY id;
+ANALYZE conversations;
+ANALYZE entries;
+ANALYZE history_links;
+SET plan_cache_mode = force_generic_plan;`)
+	require.NoError(t, err)
+
+	entries, err := store.ObserveEntries(ctx, "long")
+	require.NoError(t, err)
+	require.Len(t, entries, 4096)
+
+	queries, err := queryStrings(ctx, store.db, `SELECT format('EXPLAIN EXECUTE %I(%s)', name,
+    array_to_string(array_fill('NULL'::text, ARRAY[cardinality(parameter_types)]), ','))
+FROM pg_prepared_statements WHERE statement LIKE '%revert_index FROM effective_entries' || chr(10) || 'ORDER BY id'`, "history read statement")
+	require.NoError(t, err)
+	require.Len(t, queries, 1)
+	plan, err := queryStrings(ctx, store.db, queries[0], "history read plan")
+	require.NoError(t, err)
+	t.Log(strings.Join(plan, "\n"))
+	require.Contains(t, strings.Join(plan, "\n"), "Index Scan Backward using history_links_leaf", "the current point is the newest link")
+	require.Regexp(t, `WorkTable Scan on current_path[^\n]*\n\s*->  Index Scan using history_links_pkey`, strings.Join(plan, "\n"), "each step of the walk is one indexed link")
+	require.NotContains(t, strings.Join(plan, "\n"), "Seq Scan on entries")
+	require.NotContains(t, strings.Join(plan, "\n"), "Seq Scan on history_links")
 }
 
 func TestAgentDraftsMigrationDown(t *testing.T) {
@@ -825,10 +909,8 @@ func TestDropGuardrailEntriesMigration(t *testing.T) {
 	require.NoError(t, err)
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"sub": KindSubagent})
 
-	for _, kind := range []string{"guardrail", "turn"} {
-		_, err = appendSessionEntryDB(ctx, store.db, "sub", &harness.SessionEntry{Type: kind})
-		require.NoError(t, err)
-	}
+	_, err = store.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('sub', '{"type":"guardrail"}', ''), ('sub', '{"type":"turn"}', '')`)
+	require.NoError(t, err)
 
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
@@ -1095,8 +1177,10 @@ INSERT INTO entries (conversation_id, entry_json, entry_timestamp, search_text)
 SELECT 'chat', '{}', '', '0 0 ["user","",' || to_json(md5(n::text)) || ',' || to_json(md5(n::text)) || ']' FROM generate_series(1, 4096) n;
 INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, history_anchor_id, created_at_unix_ns, updated_at_unix_ns, phase, terminal, search_text)
 SELECT 'turn-' || n, 'chat', '{}', '[]', n, 1, 1, 'done', 'stopped', '0 0 ["user","",' || to_json(md5(n::text)) || ',' || to_json(md5(n::text)) || ']' FROM generate_series(1, 4096) n;
+INSERT INTO history_links (conversation_id, entry_id, parent_entry_id) SELECT conversation_id, id, lag(id) OVER (ORDER BY id) FROM entries ORDER BY id;
 ANALYZE entries;
 ANALYZE turns;
+ANALYZE history_links;
 SELECT gin_clean_pending_list('entries_search_text'::regclass), gin_clean_pending_list('turns_search_text'::regclass);
 SET enable_seqscan = off;`)
 	require.NoError(t, err)

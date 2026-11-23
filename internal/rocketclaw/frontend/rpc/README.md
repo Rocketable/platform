@@ -60,33 +60,36 @@ replaced, evicted or stopped meanwhile, the person no longer has the tab, or
 they are looking at it.
 Other callers share one search per query while someone waits for it.
 
-`StageRevert` accepts a visible session ID and an optional recorded user
-`message_id`; omission selects Undo's predecessor from complete effective
-history, not the loaded page. It settles the runtime bridge, stages an exclusive
-durable cutoff, and returns the actual marker and editable `TranscriptEvent`
-prompt without its generated header. `ClearRevert` clears the entire cutoff and
-wakes preserved work, with no composer payload. Both require a top-level pure
-Web session; Slack, MCP-bound/private, Cron-origin and delegation sessions are
-ineligible even through direct calls.
+`StageRevert` accepts a visible session ID, an optional recorded `message_id`
+on any branch of the chat, and a `boundary`; omission selects Undo's
+predecessor from complete effective history, not the loaded page. `BEFORE`, the
+default, ends the chat's current point just before that user message; `THROUGH`
+ends it after that user message or agent reply. It settles the runtime bridge,
+moves the current point without deleting anything, and returns the actual
+marker, plus for `BEFORE` the editable `TranscriptEvent` prompt without its
+generated header. It requires a top-level pure Web session; Slack,
+MCP-bound/private, Cron-origin and delegation sessions are ineligible even
+through direct calls.
 
 History returns `revert_eligible`, `revert_message_id` and `can_undo`, including
 an empty first-message cutoff. Its opaque revision includes the cutoff; a change
 resets page bounds, inventory and delegation links from one database snapshot.
 Committed marker changes use the existing Join wake-up channel. Clients must
 reject outstanding reads across mutations/resets, not compare cutoff values
-alone: Stage followed by Redo can restore the same value. IDs are opaque decimal
+alone: a later move can return to the same value. IDs are opaque decimal
 strings with replay indices; do not convert them to JavaScript numbers.
 
-Prepared new prompt admission reconciles message identity under the history
-lock and atomically prunes the abandoned suffix, clears the cutoff, rebuilds the
-summary and stores the new queue owner. Retries of accepted IDs do not prune
-again. `/agent` and `/stop` are controls and leave the cutoff intact. Pending
-human work is hidden while staged, restored in order on Redo, and removed when
-a replacement is accepted. Automatic recovery, schedules and goal continuation
-cannot execute behind the cutoff. Uploads remain available to restored drafts.
-Revert never compensates files, external tool effects, deliveries or scheduled
-registrations. Deploy migration 026 with the regenerated protocol and Web assets;
-clear staged cutoffs before a schema downgrade to avoid exposing hidden history.
+Every append links the new entry at the current point and clears the marker,
+so a prompt sent after a move starts a new branch; nothing is pruned. `/agent`
+and `/stop` are controls and leave the marker intact. Queued work keeps running
+from the current point. Uploads remain available to restored drafts.
+`MessageTree` returns every branch's user messages and agent replies with the
+flags the panel needs; `DeleteBranch` (with a dry run) permanently deletes a
+branch, first moving off it when the chat is on it; `SummarizeBranch` appends a
+summary of another branch at the current point.
+Moves never compensate files, external tool effects, deliveries or scheduled
+registrations. Migration 108 adds history links and is forward-only: rolling back
+after people have branched shows every branch interleaved.
 In-progress turns and saved turns share source-qualified turn keys; `item_id` is
 render identity, while `message_id` identifies saved entry positions for commands.
 History returns the recorded turn in order, including developer messages, thinking summaries, tool

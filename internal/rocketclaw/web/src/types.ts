@@ -16,6 +16,7 @@ export type ChatOrigin = { kind: string; sourcePath?: string; stem?: string; run
 export type ShadowTurn = { parentSourceConversationId: string; parentTurnId: string; childTurnId: string; order: string; running: boolean; terminal: string; revision: string };
 export type ShadowBinding = { parentConversationId: string; parentAgent: string; shadowAgent: string; childConversationId: string; turns: ShadowTurn[] };
 export type HistoryView = { messages: TranscriptEvent[]; origin?: ChatOrigin; delegations: string[]; reviewRationales?: Record<string, string>; revision: string; reset: boolean; replacedKeys: string[]; removedKeys: string[]; entryKeys: string[]; running: boolean; terminal: string; start: string; more: boolean; revertEligible?: boolean; revertMessageId?: string; revertFloor?: string; canUndo?: boolean; movable: boolean; backgroundJobs: BackgroundJob[]; pendingQuestions?: PendingQuestion[]; shadows?: ShadowBinding[]; lineage?: { id: string; kind?: ConversationKind; agent?: string }[] };
+export type TreeNode = { id: string; parentId: string; role: string; text: string; outside: boolean; pickable: boolean; through: boolean; onPath: boolean; current: boolean; branchId: string; deletable: boolean };
 export type MessageMatch = { conversationId: string; message: TranscriptEvent; rocketclaw?: string };
 export type SearchMessagesResponse = { matches?: MessageMatch[]; tagIds?: string[] };
 // Term offsets are UTF-16 positions in the sent query; an empty match field means only message text matched.

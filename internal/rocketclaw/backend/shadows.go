@@ -246,21 +246,7 @@ func settleHistoryWorkers(ctx context.Context, workers []*Bridge) error {
 	return nil
 }
 
-const shadowRevertSQL = `WITH parent_saves AS (
-    SELECT entry_json->>'turn_id' AS turn_id, bool_or(id >= $2) AS later, bool_or(id < $2) AS earlier FROM entries WHERE conversation_id = $1 GROUP BY 1
-), parent_shadows AS (
-    SELECT s.id, s.child_conversation_id, s.parent_turn_id, p.later, p.earlier FROM shadow_turns s
-    LEFT JOIN parent_saves p ON p.turn_id = s.parent_turn_id WHERE s.parent_source_conversation_id = $1
-), cut_floor AS (
-    SELECT COALESCE(min(id) FILTER (WHERE parent_turn_id = $3), max(id) FILTER (WHERE earlier), 0) AS id FROM parent_shadows
-), child_cuts AS (
-    SELECT s.child_conversation_id, COALESCE(min(s.id) FILTER (WHERE s.parent_turn_id = $3), min(s.id) FILTER (WHERE s.later OR s.later IS NULL AND s.id > f.id)) AS id
-    FROM parent_shadows s CROSS JOIN cut_floor f GROUP BY s.child_conversation_id
-), affected AS (
-    SELECT t.* FROM shadow_turns t JOIN child_cuts c USING (child_conversation_id) WHERE t.parent_source_conversation_id = $1 AND t.id >= c.id
-) `
-
-func (r *Runtime) settleShadowRevert(ctx context.Context, parent string, boundary *ObservedSessionEntry) ([]*Bridge, error) {
+func (r *Runtime) settleShadowRevert(ctx context.Context, parent string) ([]*Bridge, error) {
 	tx, err := r.Sessions.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin comparison cancellation: %w", err)
@@ -271,12 +257,11 @@ func (r *Runtime) settleShadowRevert(ctx context.Context, parent string, boundar
 		return nil, err
 	}
 
-	if err := stageShadowRevertDB(ctx, tx, parent, boundary); err != nil {
-		return nil, err
-	}
-
-	children, err := queryStrings(ctx, tx, shadowRevertSQL+`SELECT DISTINCT a.child_conversation_id FROM affected a
-JOIN turns t ON t.conversation_id = a.child_conversation_id AND t.id = a.child_turn_id WHERE t.phase NOT IN ('waiting', 'done') ORDER BY 1`, "reverted live children", parent, boundary.ID, boundary.Entry.TurnID)
+	children, err := queryStrings(ctx, tx, `WITH stopped AS (
+    UPDATE shadow_turns SET terminal = $2, input_closed = TRUE WHERE parent_source_conversation_id = $1 AND terminal = '' RETURNING child_conversation_id, child_turn_id
+)
+SELECT DISTINCT s.child_conversation_id FROM stopped s
+JOIN turns t ON t.conversation_id = s.child_conversation_id AND t.id = s.child_turn_id WHERE t.phase NOT IN ('waiting', 'done') ORDER BY 1`, "moved live children", parent, protocol.TerminalStopped)
 	if err != nil {
 		return nil, err
 	}
@@ -301,63 +286,25 @@ func lockShadowHistory(ctx context.Context, db stateStoreDB, parent string) erro
 	return lockHistories(ctx, db, ids)
 }
 
-func stageShadowRevertDB(ctx context.Context, db stateStoreDB, parent string, entry *ObservedSessionEntry) error {
-	if _, err := db.ExecContext(ctx, shadowRevertSQL+`UPDATE shadow_turns t SET terminal = $4, input_closed = TRUE
-FROM affected a WHERE t.id = a.id AND t.terminal = ''`, parent, entry.ID, entry.Entry.TurnID, protocol.TerminalStopped); err != nil {
-		return fmt.Errorf("cancel reverted comparisons: %w", err)
-	}
-
-	_, err := execState(ctx, db, "stage comparison boundaries", shadowRevertSQL+`, cuts AS (
-    SELECT a.child_conversation_id, e.id FROM affected a JOIN entries e ON e.conversation_id = a.child_conversation_id AND e.entry_json->>'turn_id' = a.child_turn_id
-    UNION ALL SELECT a.child_conversation_id, t.history_anchor_id + 1 FROM affected a JOIN turns t ON t.conversation_id = a.child_conversation_id AND t.id = a.child_turn_id
-), boundaries AS (
-    SELECT child_conversation_id, min(id) AS id FROM cuts GROUP BY child_conversation_id
+func stageShadowRevertDB(ctx context.Context, db stateStoreDB, parent string) error {
+	_, err := execState(ctx, db, "follow the parent's current point", `WITH `+sessionHistorySQL+`, path_turns AS (
+    SELECT DISTINCT entry->>'turn_id' AS turn_id FROM effective_entries WHERE NOT synced AND revert_index < 0
+), compared AS (
+    SELECT s.child_conversation_id, e.id, p.turn_id IS NOT NULL AS kept,
+        jsonb_array_length(CASE WHEN json_typeof(e.entry_json->'replay_input') = 'array' THEN e.entry_json::jsonb->'replay_input' ELSE '[]' END) AS length
+    FROM shadow_turns s JOIN entries e ON e.conversation_id = s.child_conversation_id AND e.entry_json->>'turn_id' = s.child_turn_id
+    LEFT JOIN path_turns p ON p.turn_id = s.parent_turn_id WHERE s.parent_source_conversation_id = $1 AND s.child_turn_id <> ''
+), points AS (
+    SELECT DISTINCT ON (child_conversation_id) child_conversation_id, id, kept, length FROM compared
+    ORDER BY child_conversation_id, kept DESC, CASE WHEN kept THEN -id ELSE id END
+), latest AS (
+    SELECT DISTINCT ON (l.conversation_id) l.conversation_id, l.entry_id FROM history_links l JOIN points p ON p.child_conversation_id = l.conversation_id
+    ORDER BY l.conversation_id, l.seq DESC
 )
-UPDATE conversations m SET revert_message_id = b.id::text || ':0' FROM boundaries b WHERE m.conversation_id = b.child_conversation_id`, parent, entry.ID, entry.Entry.TurnID)
+UPDATE conversations c SET revert_message_id = CASE WHEN NOT p.kept THEN p.id::text || ':0' WHEN p.id = l.entry_id THEN '' ELSE p.id::text || ':' || p.length END
+FROM points p JOIN latest l ON l.conversation_id = p.child_conversation_id WHERE c.conversation_id = p.child_conversation_id`, parent)
 
 	return err
-}
-
-func commitShadowRevertDB(ctx context.Context, db stateStoreDB, parent string, entry *ObservedSessionEntry) error {
-	children, err := queryStrings(ctx, db, shadowRevertSQL+`SELECT DISTINCT child_conversation_id FROM affected ORDER BY 1`, "discarded shadow histories", parent, entry.ID, entry.Entry.TurnID)
-	if err != nil {
-		return err
-	}
-
-	for _, child := range children {
-		if err := pruneRevertDelegations(ctx, db, child); err != nil {
-			return err
-		}
-
-		if _, err := db.ExecContext(ctx, `DELETE FROM entries e USING conversations m WHERE e.conversation_id = $1 AND m.conversation_id = $1
-    AND m.revert_message_id <> '' AND e.id >= split_part(m.revert_message_id, ':', 1)::bigint`, child); err != nil {
-			return fmt.Errorf("rewind comparison history: %w", err)
-		}
-
-		if _, err := db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '', preview = NULL, last_updated = NULL WHERE conversation_id = $1`, child); err != nil {
-			return fmt.Errorf("clear comparison cutoff and summary: %w", err)
-		}
-
-		summary, err := loadSessionSummary(ctx, db, child)
-		if err != nil {
-			return err
-		}
-
-		if err := saveSessionSummary(ctx, db, summary); err != nil {
-			return err
-		}
-	}
-
-	_, errExec := execState(ctx, db, "discard comparison branch", shadowRevertSQL+`, journals AS (
-DELETE FROM steps s USING affected a WHERE s.conversation_id = a.child_conversation_id
-    AND (s.key = a.child_turn_id OR starts_with(s.key, a.child_turn_id || '/'))
-), child_turns AS (DELETE FROM turns t USING affected a WHERE t.conversation_id = a.child_conversation_id AND t.id = a.child_turn_id)
-DELETE FROM shadow_turns t USING affected a WHERE t.id = a.id`, parent, entry.ID, entry.Entry.TurnID)
-	if errExec != nil {
-		return errExec
-	}
-
-	return recordRunning(ctx, db, children)
 }
 
 type turnInputSnapshot struct {

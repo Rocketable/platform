@@ -394,10 +394,10 @@ test("cutoff resets remove optimistic suffix and older pages without changing lo
   applyHistoryDelta(draft, view([], { revertEligible: true, revertMessageId: "1:0", canUndo: false }));
   expect(draft.lines).toEqual([]);
   expect(draft).toMatchObject({ text: "my draft", files: [], agent: "main", busy: false, revertMessageId: "1:0" });
-  expect(pendingInputs(draft, [{ id: "waiting", text: "waiting", delivery: "QUEUE" }])).toEqual({ parked: [], queued: [] });
+  expect(pendingInputs(draft, [{ id: "waiting", text: "waiting", delivery: "QUEUE" }]).queued).toEqual([{ id: "waiting", text: "waiting", delivery: "QUEUE" }]);
 });
 
-test("history request ownership rejects an old page even after stage and Redo restore the same marker", async () => {
+test("history request ownership rejects an old page even after two moves return to the same marker", async () => {
   const draft = { lines: historyLines([event("tail", "t", "user", "tail")]), revision: "normal", busy: false, start: "50", more: true, historyEpoch: 0 };
   const response = Promise.withResolvers<Response>();
   const original = globalThis.fetch;
@@ -405,7 +405,7 @@ test("history request ownership rejects an old page even after stage and Redo re
   try {
     const reading = readEarlierHistory("session", draft, () => {});
     draft.historyEpoch++;
-    draft.historyEpoch++; // Stage then Redo, returning to the same bounds and marker.
+    draft.historyEpoch++;
     response.resolve(Response.json({ ...view([event("stale", "s", "user", "stale")], { start: "1" }), origin: "" }));
     await reading;
     expect(draft.lines.map((line: Line) => line.text)).toEqual(["tail"]);
@@ -450,7 +450,7 @@ for (const phase of ["tail", "comparison"] as const) test(`a reset during a ${ph
   }
 });
 
-test("revert replaces only the captured untouched draft, Redo leaves it alone, and failures keep edits", async () => {
+test("revert replaces only the captured untouched draft and failures keep edits", async () => {
   const original = globalThis.fetch;
   const response = Promise.withResolvers<Response>();
   const requests: { id: string; messageId?: string }[] = [];
@@ -466,8 +466,8 @@ test("revert replaces only the captured untouched draft, Redo leaves it alone, a
   const owner = { sessionId: "first", text: "previous", files: [{ id: "old", file: new File(["old"], "old.txt") }], agent: "current", edit: 0, submission: 0, sending: false, historyEpoch: 0, lines: [] };
   const other = { text: "another session" };
   try {
-    const staging = revertComposer(owner, "9007199254740993:4", false, async () => {}, () => {});
-    await revertComposer(owner, "other-message", false, async () => {}, () => {});
+    const staging = revertComposer(owner, "9007199254740993:4", async () => {}, () => {});
+    await revertComposer(owner, "other-message", async () => {}, () => {});
     response.resolve(Response.json({ revertMessageId: "9007199254740993:4", prompt: { text: "  /skill original\n", attachments: [attachment] } }));
     await staging;
     expect(owner).toMatchObject({ text: "  /skill original\n", agent: "current", focus: 1 });
@@ -479,26 +479,22 @@ test("revert replaces only the captured untouched draft, Redo leaves it alone, a
     const restored = owner.files;
     expect(other.text).toBe("another session");
     expect(requests).toEqual([{ id: "first", messageId: "9007199254740993:4" }]);
-    await revertComposer(owner, undefined, true, async () => {}, () => {});
-    expect(owner.text).toBe("  /skill original\n");
-    expect(owner.files).toBe(restored);
-    expect(owner).toMatchObject({ error: "" });
     const delayed = Promise.withResolvers<Response>();
     globalThis.fetch = Object.assign(async () => delayed.promise, { preconnect: original.preconnect });
-    const late = revertComposer(owner, undefined, false, async () => {}, () => {});
+    const late = revertComposer(owner, undefined, async () => {}, () => {});
     owner.text = "newer edit"; owner.edit++;
     delayed.resolve(Response.json({ revertMessageId: "1:0", prompt: { text: "old" } }));
     await late;
     expect(owner.text).toBe("newer edit");
     globalThis.fetch = Object.assign(async (url: URL | RequestInfo) => String(url).startsWith("/api/DownloadAttachment?") ? new Response("missing", { status: 404 }) : Response.json({ prompt: { text: "must not replace edits", attachments: [attachment] } }), { preconnect: original.preconnect });
-    await revertComposer(owner, undefined, false, async () => {}, () => {});
+    await revertComposer(owner, undefined, async () => {}, () => {});
     expect(owner).toMatchObject({ text: "newer edit", error: "Could not restore restored.bin", reverting: false });
     expect(owner.files).toBe(restored);
     globalThis.fetch = Object.assign(async () => Response.json({ message: "mutation failed", code: 13 }, { status: 500 }), { preconnect: original.preconnect });
-    await revertComposer(owner, undefined, false, async () => {}, () => {});
+    await revertComposer(owner, undefined, async () => {}, () => {});
     expect(owner).toMatchObject({ text: "newer edit", error: "mutation failed", reverting: false });
     globalThis.fetch = Object.assign(async () => Response.json({ prompt: { text: "without files", attachments: [] } }), { preconnect: original.preconnect });
-    await revertComposer(owner, undefined, false, async () => {}, () => {});
+    await revertComposer(owner, undefined, async () => {}, () => {});
     expect(owner).toMatchObject({ text: "without files", files: [], error: "", reverting: false });
   } finally { globalThis.fetch = original; }
 });

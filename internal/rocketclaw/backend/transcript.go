@@ -79,13 +79,12 @@ func observeTranscriptDB(ctx context.Context, db stateStoreDB, conversationID st
 	return queryRows(ctx, db, `WITH `+sessionHistorySQL+`, saved_turns AS (
     SELECT DISTINCT CASE WHEN synced THEN source_conversation_id ELSE $1 END AS conversation_id, entry->>'turn_id' AS turn_id FROM physical_entries
 ), readable_turns AS (
-    SELECT a.*, c.marker, CASE WHEN a.conversation_id = $1 THEN a.history_anchor_id ELSE 9223372036854775807 END AS anchor
-    FROM turns a CROSS JOIN cutoff c CROSS JOIN visibility v
+    SELECT a.*, CASE WHEN a.conversation_id = $1 THEN a.history_anchor_id ELSE 9223372036854775807 END AS anchor
+    FROM turns a LEFT JOIN off_path_turns o ON o.id = a.id
     LEFT JOIN saved_turns saved ON saved.conversation_id = a.conversation_id AND saved.turn_id = a.id
     LEFT JOIN reporting_runs r ON r.conversation_id = a.conversation_id
-    WHERE v.readable AND a.takes_lane AND saved.turn_id IS NULL AND (a.conversation_id = $1
-            AND (c.marker = '' OR a.history_anchor_id < split_part(c.marker, ':', 1)::bigint)
-        OR r.conversation_id IS NOT NULL AND a.terminal = '' AND c.marker = '')
+    WHERE a.takes_lane AND saved.turn_id IS NULL AND (a.conversation_id = $1 AND o.id IS NULL
+        OR r.conversation_id IS NOT NULL AND a.terminal = '')
 ), shown_turns AS (
     SELECT * FROM readable_turns a WHERE (a.phase NOT IN ('waiting', 'done') OR a.terminal <> '')
         AND CASE WHEN $4::bigint = 0 THEN a.terminal = '' OR a.anchor >= $3
@@ -98,7 +97,7 @@ func observeTranscriptDB(ctx context.Context, db stateStoreDB, conversationID st
     JOIN steps i ON i.conversation_id = a.conversation_id AND starts_with(i.key, a.id || '/replay_input/') GROUP BY a.conversation_id, a.id
 ), transcript AS (
     SELECT e.id, e.entry_json::text AS entry_json, e.source_conversation_id, e.synced,
-        FALSE AS active, COALESCE(a.terminal, '') AS terminal, 0::bigint AS checkpoint_timestamp, '' AS turn_id, 0 AS checkpoint, e.id AS position, e.revert_index, e.marker,
+        FALSE AS active, COALESCE(a.terminal, '') AS terminal, 0::bigint AS checkpoint_timestamp, '' AS turn_id, 0 AS checkpoint, e.id AS position, e.revert_index,
         COALESCE(e.entry->>'turn_id', '') AS entry_turn
     FROM effective_entries e LEFT JOIN shadow_turns t
         ON t.child_conversation_id = CASE WHEN e.synced THEN e.source_conversation_id ELSE $1 END AND t.child_turn_id = e.entry->>'turn_id'
@@ -111,13 +110,13 @@ func observeTranscriptDB(ctx context.Context, db stateStoreDB, conversationID st
     SELECT 0, COALESCE('{"replay_input":' || COALESCE(readable_replay(a.replay)::text, 'null') || ',' || substr(a.record::text, 2),
         '{"replay_input":' || COALESCE(r.replay::text, 'null') || ',' || substr((`+turnRecordSQL+`)::text, 2)),
         CASE WHEN a.conversation_id = $1 THEN '' ELSE a.conversation_id END, a.conversation_id <> $1,
-        a.terminal = '', a.terminal, a.created_at_unix_ns, a.id, 1, a.anchor, -1, a.marker, a.id
+        a.terminal = '', a.terminal, a.created_at_unix_ns, a.id, 1, a.anchor, -1, a.id
     FROM shown_turns a LEFT JOIN steps s ON s.conversation_id = a.conversation_id AND s.key = a.id
     LEFT JOIN turn_replays r ON r.conversation_id = a.conversation_id AND r.id = a.id
 ), fingerprinted AS (
     SELECT *, CASE WHEN entry_turn <> '' THEN 'turn:' || CASE WHEN synced THEN source_conversation_id ELSE $1 END || ':' || entry_turn
         ELSE id::text END AS key,
-        md5(entry_json || terminal || checkpoint_timestamp::text || CASE WHEN revert_index >= 0 THEN marker ELSE '' END) AS revision
+        md5(entry_json || terminal || checkpoint_timestamp::text || CASE WHEN revert_index >= 0 THEN revert_index::text ELSE '' END) AS revision
     FROM transcript
 )
 SELECT id, CASE WHEN $2::jsonb->>key IS DISTINCT FROM revision THEN entry_json END,

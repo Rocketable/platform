@@ -174,8 +174,14 @@ func (s *SessionService) copySessionPrefix(ctx context.Context, db stateStoreDB,
 
 	if _, err := db.ExecContext(ctx, `WITH RECURSIVE producers AS (
     SELECT DISTINCT unnest($2::text[]) AS id
+), copied_calls AS (
+    SELECT e.entry_json->>'turn_id' AS turn_id, i->>'call_id' AS call_id FROM entries e, jsonb_array_elements(e.entry_json::jsonb->'replay_input') i
+    WHERE e.conversation_id = $1 AND i->>'type' = 'function_call'
+), called AS (
+    SELECT DISTINCT p.id AS producer, c.conversation_id FROM producers p JOIN conversations c ON c.parent_conversation_id = p.id
+    JOIN copied_calls k ON k.call_id = c.call_id AND (c.call_turn IS NULL OR c.call_turn = k.turn_id)
 ), delegations AS (
-    SELECT p.id AS producer, c.* FROM producers p JOIN conversations c ON c.parent_conversation_id = p.id
+    SELECT d.producer, c.* FROM called d JOIN conversations c USING (conversation_id)
     UNION ALL SELECT d.producer, c.* FROM delegations d JOIN conversations c ON c.parent_conversation_id = d.conversation_id
 ), copied_conversations AS (
     INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, retention, call_turn, call_id)
@@ -184,7 +190,8 @@ func (s *SessionService) copySessionPrefix(ctx context.Context, db stateStoreDB,
 ), copied_entries AS (INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT $1 || substr(e.conversation_id, length(d.producer) + 1), e.entry_json, e.entry_timestamp
 FROM delegations d JOIN entries e USING (conversation_id)
-ORDER BY e.id), noted_jobs AS (
+ORDER BY e.id RETURNING id, conversation_id), copied_links AS (INSERT INTO history_links (conversation_id, entry_id, parent_entry_id)
+SELECT conversation_id, id, lag(id) OVER (PARTITION BY conversation_id ORDER BY id) FROM copied_entries ORDER BY id), noted_jobs AS (
     SELECT DISTINCT unnest(string_to_array(i->>'input_id', ' ')) AS job_id FROM entries e, jsonb_array_elements(e.entry_json::jsonb->'replay_input') i
     WHERE e.conversation_id = $1 AND (i->>'prompt_header' = '[System]' OR starts_with(i->>'prompt_header', '[System '))
 )

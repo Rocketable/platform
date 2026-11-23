@@ -1,6 +1,7 @@
 ---
 title: A Hold On Queued Work Is Checked When The Turn Starts, Not Stored As A Held Row
 date: 2026-11-18
+last_updated: 2026-11-23
 category: docs/solutions/architecture-patterns/
 module: internal/rocketclaw/backend
 problem_type: architecture_pattern
@@ -10,6 +11,7 @@ applies_when:
   - "Adding a rule that some conversation must start no turn until something elsewhere settles"
   - "Reaching for the Thread Queue's held waiting reason to park work"
   - "Changing activateInbound, pickLaterWork, releaseHeldInputs or the goal hold"
+  - "Writing an RPC that holds a conversation's history or queue and wakes the queue when it is done"
 tags:
   - thread-queue
   - held
@@ -17,6 +19,7 @@ tags:
   - sticky-slack
   - thread-session
   - queue-gate
+  - context-without-cancel
 ---
 
 # A Hold On Queued Work Is Checked When The Turn Starts, Not Stored As A Held Row
@@ -47,10 +50,12 @@ A stored hold is only as strong as every path that can clear it or skip it, and 
 
 The hold also needs a wake. Without one, a refused turn waits until something else happens to wake that conversation. The model's `no-wake-on-release` check shows this: it must fail on `Settles`.
 
+The wake must also outlive the request that took the hold. A Web RPC that holds a conversation's history (Undo, Revert, a Message Tree pick, branch delete) sets `historyMutation`, and `pickLaterWork` starts nothing while that flag is set. The RPC's deferred release then wakes the queue. `pickLaterWork` reads the database with the context it is given (`internal/rocketclaw/backend/bridge.go:1145`), and the deferred call drops its error. So a wake passed the request context does nothing once the browser has gone away, for example during a long interrupt, and the waiting rows sit until another input or a restart. Review of the message-tree branch found this in `StageRevert` and `DeleteBranch` (reliability P2). Both now wake with `context.WithoutCancel(ctx)` (`internal/rocketclaw/backend/revert.go:392-396`, `internal/rocketclaw/backend/branches.go:160-164`). No test covers it yet. A deterministic one needs a way to cancel the request after the hold is taken and before the deferred wake runs.
+
 ## When to Apply
 
 - Any rule of the form "this conversation's queue must not start a turn while X". Put it in `activateInbound` for new turns, next to the goal hold and the root hold, and mirror it in `pickLaterWork` only as a skip.
-- Wake the held conversations when X ends.
+- Wake the held conversations when X ends, with a context that the caller's cancellation cannot stop (`context.WithoutCancel`), on every return path.
 - Use `held` only for what it is: an item parked until the next input to that conversation, such as a stopped parent's subagent prompt (`CONCEPTS.md`, Subagent Session).
 
 ## Examples

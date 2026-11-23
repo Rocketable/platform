@@ -167,14 +167,14 @@ SELECT c.conversation_id, c.kind, c.agent FROM ancestors a JOIN conversations c 
 }
 
 const shadowHistorySQL = `WITH ` + sessionHistorySQL + `, owners AS (
-    SELECT $1::text AS id FROM viewer WHERE readable AND ($2 = '' OR $2 = $1)
+    SELECT $1::text AS id WHERE $2 = '' OR $2 = $1
     UNION
     SELECT source_conversation_id FROM effective_entries
     WHERE synced AND ($2 = '' OR source_conversation_id = $2)
         AND id >= $3 AND ($4::bigint = 0 OR id < $4)
     UNION
-    SELECT r.conversation_id FROM reporting_runs r CROSS JOIN viewer v
-    WHERE $4::bigint = 0 AND v.readable AND v.marker = '' AND ($2 = '' OR r.conversation_id = $2)
+    SELECT r.conversation_id FROM reporting_runs r
+    WHERE $4::bigint = 0 AND ($2 = '' OR r.conversation_id = $2)
 ), bindings AS (
     SELECT b.shadow_parent AS parent_conversation_id, b.parent_agent, b.shadow_agent, b.conversation_id AS child_conversation_id
     FROM conversations b JOIN owners o ON o.id = b.shadow_parent
@@ -211,12 +211,13 @@ SELECT t.child_conversation_id, t.parent_source_conversation_id, t.parent_turn_i
     COALESCE(NULLIF(t.terminal, ''), NULLIF(a.terminal, ''),
         CASE WHEN t.child_turn_id <> '' AND (a.id IS NULL OR a.phase <> 'running') THEN 'complete' ELSE '' END),
     md5(COALESCE(c.saved, '') || COALESCE(turn_trace(a.id, a.output_trace_json)::text, '') || COALESCE(s.value::text, a.record::text, ''))
-FROM child_turns t CROSS JOIN cutoff k LEFT JOIN child_entries c ON c.id = t.id
+FROM child_turns t LEFT JOIN child_entries c ON c.id = t.id
 LEFT JOIN turns a ON a.conversation_id = t.child_conversation_id AND a.id = t.child_turn_id
 LEFT JOIN steps s ON s.conversation_id = t.child_conversation_id AND s.key = t.child_turn_id
 LEFT JOIN shown_parents p ON p.turn_id = t.parent_turn_id AND p.source = t.parent_source_conversation_id
 LEFT JOIN saved_parents v ON v.turn_id = t.parent_turn_id AND v.source = t.parent_source_conversation_id
-WHERE p.turn_id IS NOT NULL OR $4::bigint = 0 AND k.marker = '' AND v.turn_id IS NULL
+LEFT JOIN off_path_turns o ON o.id = t.parent_turn_id AND t.parent_source_conversation_id = $1
+WHERE p.turn_id IS NOT NULL OR $4::bigint = 0 AND v.turn_id IS NULL AND o.id IS NULL
 ORDER BY t.id`, "shadow turns", func(row rowScanner) error {
 		var (
 			child string

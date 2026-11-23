@@ -70,13 +70,18 @@ func TestForkConversation(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	_, err = sessions.AppendEntryID(t.Context(), "source", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"function_call","call_id":"call-1","name":"task","arguments":"{}"}`),
+	}})
+	require.NoError(t, err)
+
 	for _, tt := range []struct {
 		name, before, prompt string
 		items                int
 	}{
 		{"first", fmt.Sprintf("%d:0", id), "first", 0},
 		{"middle", fmt.Sprintf("%d:2", id), "second attachment:", 2},
-		{"full", "", "", 5},
+		{"full", "", "", 6},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			prompt, err := sessions.ForkConversation(t.Context(), "source", protocol.Conversation{ID: tt.name, Agent: "main", CreatedBy: "alice"}, tt.before)
@@ -124,6 +129,12 @@ func TestForkConversation(t *testing.T) {
 			for delegation, parent := range map[string]string{"/call-1": "", "/call-1/call-2": "/call-1"} {
 				copied, err := sessions.ObserveEntries(t.Context(), tt.name+delegation)
 				require.NoError(t, err)
+
+				if tt.name != "full" {
+					require.Empty(t, copied, "a delegation called after the fork point stays behind")
+					continue
+				}
+
 				require.Len(t, copied, 1)
 
 				var copiedParent string
@@ -191,6 +202,42 @@ func TestForkConversation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, kept, 1)
 	require.Len(t, kept[0].Entry.ReplayInput, 2, "a wipe keeps the copied Slack message and its answer, as undo does")
+}
+
+func TestForkCopiesTheCurrentPathAndItsDelegations(t *testing.T) {
+	t.Parallel()
+
+	sessions := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, (&Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: "source", Agent: "main"}))
+	_, err := sessions.AppendEntryID(ctx, "source", testSessionEntry("start", "ready"))
+	require.NoError(t, err)
+
+	delegate := func(turn, call string) int64 {
+		require.NoError(t, sessions.startSubagent(ctx, "source", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/" + call, Turn: turn, Call: call}, Agent: "helper"}))
+		_, err := sessions.AppendEntryID(ctx, "source/"+call, testSessionEntry(call, "child"))
+		require.NoError(t, err)
+
+		entry := testReplayEntry(`{"type":"message","role":"user","content":"`+call+`"}`, `{"type":"function_call","call_id":"`+call+`","name":"task","arguments":"{}"}`)
+		entry.TurnID = turn
+		id, err := sessions.AppendEntryID(ctx, "source", entry)
+		require.NoError(t, err)
+
+		return id
+	}
+
+	branch := delegate("turn-c", "call-c")
+	_, _, err = stageRevertDB(ctx, sessions.db, "source", fmt.Sprintf("%d:0", branch), protocol.RevertBefore)
+	require.NoError(t, err)
+	delegate("turn-d", "call-d")
+
+	_, err = sessions.ForkConversation(ctx, "source", protocol.Conversation{ID: "fork", Agent: "main"}, "")
+	require.NoError(t, err)
+	require.Equal(t, []string{"message:start", "message:ready", "message:call-d", "function_call:"}, observedEntryTexts(t, sessions, "fork"))
+
+	copied, err := queryStrings(ctx, sessions.db, `SELECT conversation_id FROM conversations WHERE parent_conversation_id = 'fork'`, "forked delegations")
+	require.NoError(t, err)
+	require.Equal(t, []string{"fork/call-d"}, copied, "only the subagent called on the current path is copied")
 }
 
 func TestForkPausedChatStartsLive(t *testing.T) {

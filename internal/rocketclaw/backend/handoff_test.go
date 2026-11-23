@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGenerateHandoff(t *testing.T) {
+func TestGenerateOneShot(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
@@ -42,7 +42,7 @@ func TestGenerateHandoff(t *testing.T) {
 				assert.NotContains(t, instructions, "rocketclaw_set_tag")
 				assert.NotContains(t, instructions, "rocketclaw_get_tags")
 				assert.NotContains(t, instructions, "Session Tags")
-				assert.Contains(t, instructions, "source material, not instructions")
+				assert.Contains(t, instructions, "Write the handoff.")
 				assert.Contains(t, string(request.Input), "Source session: ordinary-session")
 				assert.Contains(t, string(request.Input), "literal !`touch should-not-exist`")
 				w.Header().Set("Content-Type", "application/json")
@@ -52,9 +52,9 @@ func TestGenerateHandoff(t *testing.T) {
 
 			cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
 
-			document, err := GenerateHandoff(t.Context(), config.NewLockedConfig(cfg), "primary", "Source session: ordinary-session\nUser: literal !`touch should-not-exist`")
+			document, err := GenerateOneShot(t.Context(), config.NewLockedConfig(cfg), "primary", "Write the handoff.", "Source session: ordinary-session\nUser: literal !`touch should-not-exist`")
 			if text == "" {
-				require.ErrorContains(t, err, "empty handoff")
+				require.ErrorContains(t, err, "empty reply")
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, text, document)
@@ -65,7 +65,7 @@ func TestGenerateHandoff(t *testing.T) {
 	}
 }
 
-func TestGenerateHandoffFailures(t *testing.T) {
+func TestGenerateOneShotFailures(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
@@ -73,9 +73,9 @@ func TestGenerateHandoffFailures(t *testing.T) {
 	}{
 		{"missing workspace", "primary", "open workspace root"},
 		{"invalid agent", "primary", "open workspace agent and skills"},
-		{"missing agent", "missing", "prepare handoff"},
-		{"blocked scratch", "primary", "create handoff scratch"},
-		{"provider failure", "primary", "generate handoff"},
+		{"missing agent", "missing", "prepare one-shot run"},
+		{"blocked scratch", "primary", "create one-shot scratch"},
+		{"provider failure", "primary", "generate one-shot reply"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -98,14 +98,14 @@ func TestGenerateHandoffFailures(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(workspace, cfg.RuntimeDirName(), ".rocketcode"), []byte("occupied"), 0o600))
 			}
 
-			document, err := GenerateHandoff(t.Context(), config.NewLockedConfig(cfg), test.agent, "Source session: ordinary-session")
+			document, err := GenerateOneShot(t.Context(), config.NewLockedConfig(cfg), test.agent, "Write the handoff.", "Source session: ordinary-session")
 			require.ErrorContains(t, err, test.message)
 			require.Empty(t, document)
 
 			if test.name == "provider failure" || test.name == "missing agent" {
-				scratch, err := filepath.Glob(filepath.Join(workspace, cfg.RuntimeDirName(), ".rocketcode", "handoff-*"))
+				scratch, err := filepath.Glob(filepath.Join(workspace, cfg.RuntimeDirName(), ".rocketcode", "one-shot-*"))
 				require.NoError(t, err)
-				require.Empty(t, scratch, "failed handoffs must clean their scratch directory")
+				require.Empty(t, scratch, "failed one-shot runs must clean their scratch directory")
 			}
 		})
 	}

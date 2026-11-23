@@ -24,6 +24,10 @@ func (s *Server) pageCall(ctx context.Context, request any) (any, error) {
 		return s.reportTyping(ctx, request)
 	case *FindPullRequestsRequest:
 		return s.findPullRequests(ctx, request)
+	case *MessageTreeRequest:
+		return s.messageTree(ctx, request)
+	case *SummarizeBranchRequest:
+		return s.summarizeBranch(ctx, request)
 	default:
 		return &ProtocolResponse{ProtoSha256: protoSHA256}, nil
 	}

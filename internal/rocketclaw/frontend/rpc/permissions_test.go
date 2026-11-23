@@ -509,6 +509,10 @@ func TestSpacePermissionTurns(t *testing.T) {
 			_, err := h.server.handoff(ctx, &HandoffRequest{Id: "switched"})
 			return err
 		}, nil},
+		{"SummarizeBranch", func(ctx context.Context) error {
+			_, err := h.server.summarizeBranch(ctx, &SummarizeBranchRequest{Id: "switched", BranchId: "1:0"})
+			return err
+		}, nil},
 		{"Prompt", func(ctx context.Context) error {
 			_, err := prompt(ctx, "switched", "hello", PromptDelivery_QUEUE)
 			return err
@@ -529,6 +533,10 @@ func TestSpacePermissionTurns(t *testing.T) {
 			require.Equal(t, *tc.bob, status.Code(tc.feed(bob)), tc.name)
 		}
 	}
+
+	refused, err := h.rt.Sessions.ObserveEntries(t.Context(), "switched")
+	require.NoError(t, err)
+	require.Empty(t, refused, "refused commands append nothing")
 
 	_, err = h.rt.Sessions.AppendEntryID(t.Context(), "ops-chat", &harness.SessionEntry{Timestamp: time.Now().UTC()})
 	require.NoError(t, err)

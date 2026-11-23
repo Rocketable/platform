@@ -78,12 +78,7 @@ func TestRevertTranscriptPrefix(t *testing.T) {
 
 	child, err := s.ObserveEntries(ctx, "main/discarded-child")
 	require.NoError(t, err)
-	require.Empty(t, child, "direct access cannot reveal a hidden child")
-
-	childCheckpoint := &testCheckpoint{TurnID: "child-checkpoint", ConversationKey: "main/discarded-child", ReplayInput: testSessionEntry("child live", "child output").ReplayInput}
-	require.NoError(t, upsertTestTurn(ctx, s, childCheckpoint))
-	child = testHistoryEntries(t, s, "main/discarded-child")
-	require.Empty(t, child, "hidden child checkpoints must not bypass the prefix")
+	require.Len(t, child, 1, "a child stays readable by direct link")
 
 	var (
 		physical harness.SessionEntry
@@ -92,26 +87,6 @@ func TestRevertTranscriptPrefix(t *testing.T) {
 	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT entry_json FROM entries WHERE id = $1`, boundary).Scan(&raw))
 	require.NoError(t, json.Unmarshal([]byte(raw), &physical))
 	require.Equal(t, *entry, physical, "staging must leave saved bytes intact")
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	require.NoError(t, lockSessionHistory(ctx, tx, "main"))
-	require.NoError(t, commitRevertDB(ctx, tx, "main", fmt.Sprintf("%d:4", boundary)))
-	require.NoError(t, tx.Commit())
-
-	replay, err = s.ObserveEntries(ctx, "main")
-	require.NoError(t, err)
-	require.Len(t, replay, 2)
-	require.Equal(t, entry.ReplayInput[:4], replay[1].Entry.ReplayInput)
-
-	child, err = s.ObserveEntries(ctx, "main/discarded-child")
-	require.NoError(t, err)
-	require.Empty(t, child, "commit deletes discarded child history")
-	child = testHistoryEntries(t, s, "main/discarded-child")
-	require.Empty(t, child, "discarded child checkpoints must not reappear after commit")
-	child, err = s.ObserveEntries(ctx, "main/kept-child")
-	require.NoError(t, err)
-	require.Len(t, child, 1)
 }
 
 func TestHistoryTranscript(t *testing.T) {
@@ -1104,6 +1079,7 @@ func TestTranscriptObservationReportsUnreadableStoredEntries(t *testing.T) {
 	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat})
 	_, err := s.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","output_trace":1}', '')`)
 	require.NoError(t, err)
+	require.NoError(t, linkHistoryDB(t.Context(), s.db, "main", "main", 0))
 	_, err = s.ObserveHistory(t.Context(), "main", "", 0, 0, 0, &HistoryInventory{})
 	require.ErrorContains(t, err, "decode transcript entry")
 }
@@ -1278,23 +1254,63 @@ func TestUndoKeepsHiddenRunEntries(t *testing.T) {
 	entries, err := s.ObserveEntries(ctx, chat)
 	require.NoError(t, err)
 
-	_, _, err = stageRevertDB(ctx, s.db, chat, fmt.Sprintf("%d:0", entries[1].ID))
+	_, _, err = stageRevertDB(ctx, s.db, chat, fmt.Sprintf("%d:0", entries[1].ID), protocol.RevertBefore)
 	require.ErrorContains(t, err, "past a message")
 
 	kept := []string{"message:first question", "message:first answer", "message:reminder prompt", "message:reminder answer"}
-	tx, err := s.db.BeginTx(ctx, nil)
+	_, _, err = stageRevertDB(ctx, s.db, chat, fmt.Sprintf("%d:0", second), protocol.RevertBefore)
 	require.NoError(t, err)
-	marker, _, err := stageRevertDB(ctx, tx, chat, fmt.Sprintf("%d:0", second))
-	require.NoError(t, err)
-	require.NoError(t, commitRevertDB(ctx, tx, chat, marker))
-	require.NoError(t, tx.Commit())
 	require.Equal(t, kept, observedEntryTexts(t, s, chat))
 
 	_, err = s.AppendEntryID(ctx, chat, testSessionEntry("third question", "third answer"))
 	require.NoError(t, err)
 	deleted, err := s.DeleteSession(ctx, chat)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), deleted)
+	require.Equal(t, int64(2), deleted, "both branches after the reminder are deleted")
 	require.Equal(t, kept, observedEntryTexts(t, s, chat))
 	require.Equal(t, []string{"message:reminder prompt", "message:reminder answer"}, observedEntryTexts(t, s, run), "the run's next turn sees the same history")
+}
+
+func TestFailedTurnStaysOnItsBranch(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat})
+
+	for _, text := range []string{"A", "B"} {
+		_, err := s.AppendEntryID(ctx, "main", testSessionEntry(text, "reply"))
+		require.NoError(t, err)
+	}
+
+	c, err := s.AppendEntryID(ctx, "main", testSessionEntry("C", "reply"))
+	require.NoError(t, err)
+	_, _, err = stageRevertDB(ctx, s.db, "main", "", protocol.RevertBefore)
+	require.NoError(t, err)
+	sibling, err := s.AppendEntryID(ctx, "main", testSessionEntry("C'", "reply"))
+	require.NoError(t, err)
+
+	failed := &testCheckpoint{TurnID: "failed", ConversationKey: "main", ReplayInput: testSessionEntry("after C'", "partial").ReplayInput}
+	require.NoError(t, upsertTestTurn(ctx, s, failed))
+	require.NoError(t, terminateTestTurn(ctx, s, failed.TurnID, protocol.TerminalFailed))
+
+	keys := func() []string {
+		entries := testHistoryEntries(t, s, "main")
+
+		keys := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			keys = append(keys, entry.Key)
+		}
+
+		return keys
+	}
+	require.Equal(t, []string{strconv.FormatInt(c-2, 10), strconv.FormatInt(c-1, 10), strconv.FormatInt(sibling, 10), "turn:main:failed"}, keys())
+
+	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:1", c), protocol.RevertThrough)
+	require.NoError(t, err)
+	require.Equal(t, []string{strconv.FormatInt(c-2, 10), strconv.FormatInt(c-1, 10), strconv.FormatInt(c, 10)}, keys(), "the failure belongs to C', not C")
+
+	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:1", sibling), protocol.RevertThrough)
+	require.NoError(t, err)
+	require.Contains(t, keys(), "turn:main:failed", "moving back to C' shows its failure again")
 }

@@ -508,7 +508,7 @@ func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, me
 	switch method {
 	case "Prompt":
 		required = "id text"
-	case "History", "ForkSession", "StageRevert", "ClearRevert", "Handoff", "UpdateSession", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "DeleteSession", "ListQueue", "ReportTyping":
+	case "History", "ForkSession", "StageRevert", "MessageTree", "Handoff", "UpdateSession", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "DeleteSession", "ListQueue", "ReportTyping":
 		required = "id"
 	case "SearchMessages", "SearchSessions":
 		required = "query"
@@ -520,6 +520,10 @@ func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, me
 		required = "conversationId"
 	case "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "EditQueueItem":
 		required = "id itemId"
+	case "DeleteBranch":
+		required = "id messageId"
+	case "SummarizeBranch":
+		required = "id branchId"
 	case "ReorderQueue":
 		required = "id itemIds"
 	case "StopBackgroundJob":

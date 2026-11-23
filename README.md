@@ -71,6 +71,10 @@ The web page is the main way to work with RocketClaw. It is built into RocketCla
 
 RocketClaw identifies each browser by its Tailscale login, which the node looks up for each connection. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features.
 
+#### Message Tree
+
+A native chat's history is a tree. Undo, Revert and picking a line in the Message Tree panel (`/tree`) move the chat's current point without deleting anything, and the next message starts a new branch, so earlier attempts stay one click away. Everyone viewing the chat shares its current point. The model, Fork, Handoff and the pull requests pane see only the current branch; sidebar search finds words on any branch. From the panel you can bring a summary of another branch into the current one, or delete a branch permanently. Moving never undoes file edits or other effects. Remote OpenCode Sessions keep OpenCode's own history.
+
 #### Voice
 
 The Voice page (`/voice`) and the voice button in each session's composer let you talk to an agent out loud. The browser sends audio straight to OpenAI's GPT-Live voice model. Each task the voice model hands off becomes a Web message in the conversation, marked `media=Voice`. Hand-offs enter the conversation in the order they arrive, without waiting for the agent: each one joins the running turn or starts the next. The voice model hears nothing about the agent's work while it runs. When a turn the call handed off finishes, its final reply is spoken once, as written. A reply over about 990 tokens (3,960 bytes) is not spoken: the voice says it is on the screen, and the Voice page switches to its transcript and shows the reply there as written. A message you type during the call cancels the spoken reply of every earlier hand-off; only a later hand-off is spoken again. It also mutes the voice at once, mid-sentence if need be, until the voice answers something you say after it. Messages other people type in the same chat neither cancel nor mute anything in your call, even when they join the turn running your hand-off. When the agent asks a question, the voice model says "I need your input. Please respond in the app." and reads the question and its options. Answer it in the app: spoken words never answer a question. Each person has one live call at a time: starting voice on the desk ends their call on the phone, while other people's calls, even on the same conversation, keep running. The Voice page offers only agents with `sticky: user` (see [Sticky agents](#sticky-agents)) and calls the person's own session of the chosen one, starting it the first time. The built-in `voice` agent is one (see [Built-in agents](#built-in-agents)): an [easy mode agent](#easy-mode-agents) with every section but `subagents` turned on behind review, whose instructions cover working behind a voice call. The page selects the person's last choice, else `voice`, else the first agent offered. When no `sticky: user` agent is available, for example because an admin turned `voice` off, the page says so instead. Its agent, voice and transcript choice belong to the person and are kept by RocketClaw, so they are the same on every device and survive restarts. Ending a call never stops the agent's work.
@@ -667,11 +671,11 @@ does not prevent the real tool effects described above.
 New shadows on existing sessions begin at the next parent turn, seeded from the
 retained parent history without rerunning old work. Removing a file stops future
 turns, not work already admitted. Switching agents changes the shadows for future
-turns and retains earlier comparisons. Forks get fresh shadow sessions. Revert
-hides whole corresponding shadow turns; Redo restores saved comparisons without
-rerunning effects. Neither operation undoes files or external writes. Clearing
-history clears comparisons but keeps bindings for future work; deleting a parent
-deletes its owned shadow sessions.
+turns and retains earlier comparisons. Forks get fresh shadow sessions. Undo and
+Revert move the parent back without deleting anything, and its shadows follow,
+hiding whole corresponding shadow turns. Neither undoes files or external
+writes. Clearing history clears comparisons but keeps bindings for future work;
+deleting a parent deletes its owned shadow sessions.
 
 ## Skills
 

@@ -173,7 +173,7 @@ ON b.shadow_parent = v.parent ORDER BY v.parent, v.turn_id, b.shadow_agent`)
 	require.NoError(t, err)
 	cut, err := store.ObserveHistory(ctx, "parent", "", 0, 0, 0, &HistoryInventory{})
 	require.NoError(t, err)
-	require.Len(t, cut.Shadows, 2, "reverted producer output does not expose a binding")
+	require.Len(t, cut.Shadows, 4, "a reporting run's bindings stay at the tail, where its next output lands")
 	require.Len(t, cut.Shadows[0].Turns, 1, "a mid-turn cutoff hides the whole paired child turn")
 	require.Equal(t, "T1", cut.Shadows[0].Turns[0].ParentTurnID)
 }
@@ -249,7 +249,7 @@ func TestShadowPublicMutationsAreReadOnly(t *testing.T) {
 	require.NoError(t, store.startSubagent(ctx, child, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, Agent: "primary"}))
 
 	for _, id := range []string{child, child + "/task"} {
-		for _, action := range []string{"fork", "delete", "upload", "stage", "redo", "prompt", "cancel", "goal", "pop", "promote", "delete queue", "reorder", "stash", "switch", "move background", "stop background", "answer"} {
+		for _, action := range []string{"fork", "delete", "upload", "stage", "prompt", "cancel", "goal", "pop", "promote", "delete queue", "reorder", "stash", "switch", "move background", "stop background", "answer"} {
 			var err error
 
 			switch action {
@@ -260,9 +260,7 @@ func TestShadowPublicMutationsAreReadOnly(t *testing.T) {
 			case "upload":
 				err = store.SaveAttachment(ctx, id, "", &protocol.OutboundAttachment{ID: "off-contract-upload", Data: []byte("data")}, true)
 			case "stage":
-				_, _, err = runtime.StageRevert(ctx, id, "")
-			case "redo":
-				err = runtime.ClearRevert(ctx, id)
+				_, _, err = runtime.StageRevert(ctx, id, "", protocol.RevertBefore)
 			case "prompt", "cancel":
 				inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "must not run", true)
 

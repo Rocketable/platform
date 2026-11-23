@@ -51,6 +51,13 @@ const (
 	GoalActionContinue GoalAction = "goal_continuation"
 )
 
+type RevertBoundary string
+
+const (
+	RevertBefore  RevertBoundary = "before"
+	RevertThrough RevertBoundary = "through"
+)
+
 type Source string
 
 const (

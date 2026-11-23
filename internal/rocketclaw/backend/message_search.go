@@ -135,22 +135,11 @@ func PromptPrincipal(header string) string {
 }
 
 const searchableSQL = `, chats AS (
-    SELECT c.conversation_id, c.reports_to, c.continues, NULLIF(split_part(c.revert_message_id, ':', 1), '')::bigint AS cut_entry,
-        NULLIF(split_part(c.revert_message_id, ':', 2), '')::integer AS cut_index
-    FROM conversations c JOIN searched USING (conversation_id)
-), shown AS MATERIALIZED (
-    SELECT c.conversation_id AS source, c.* FROM chats c WHERE c.reports_to IS NULL
-    UNION ALL SELECT r.conversation_id, c.* FROM chats c JOIN conversations r ON r.reports_to = c.conversation_id
-    UNION ALL SELECT r.conversation_id, c.* FROM chats c JOIN conversations r ON r.conversation_id = c.continues
-    WHERE r.reports_to IS DISTINCT FROM c.conversation_id
-), shown_rows AS (
-    SELECT s.conversation_id, e.id AS entry_id, e.id AS position, NULL::bigint AS created_at_unix_ns, '' AS turn_id, s.cut_entry, s.cut_index, e.search_text
-    FROM shown s JOIN entries e ON e.conversation_id = s.source COLLATE "C"
-    UNION ALL SELECT c.conversation_id, 0, a.history_anchor_id, a.created_at_unix_ns, a.id, c.cut_entry, c.cut_index, a.search_text
-    FROM chats c JOIN turns a USING (conversation_id)
+    SELECT c.conversation_id, c.reports_to FROM conversations c JOIN searched USING (conversation_id)
 ), searchable AS (
-    SELECT conversation_id, entry_id, position, created_at_unix_ns, turn_id, search_text, CASE WHEN entry_id = cut_entry THEN cut_index ELSE -1 END AS cut
-    FROM shown_rows WHERE cut_entry IS NULL OR position < cut_entry OR entry_id = cut_entry
+    SELECT c.conversation_id, e.search_text FROM chats c JOIN history_links l USING (conversation_id) JOIN entries e ON e.id = l.entry_id
+    WHERE c.reports_to IS NULL
+    UNION ALL SELECT c.conversation_id, a.search_text FROM chats c JOIN turns a USING (conversation_id)
 )`
 
 func refreshPrincipals(ctx context.Context, db stateStoreDB, conversationIDs []string) error {
@@ -159,10 +148,10 @@ func refreshPrincipals(ctx context.Context, db stateStoreDB, conversationIDs []s
     UNION SELECT reports_to FROM conversations WHERE conversation_id = ANY($1) AND reports_to IS NOT NULL
     UNION SELECT conversation_id FROM conversations WHERE continues = ANY($1)
 )`+searchableSQL+`, principals AS (
-    SELECT s.conversation_id, array_agg(DISTINCT p.m[2]::json #>> '{}') AS principals FROM searchable s
+    SELECT s.conversation_id, array_agg(DISTINCT p.m[1]::json #>> '{}') AS principals FROM searchable s
     CROSS JOIN LATERAL string_to_table(s.search_text, E'\n') AS l(line)
-    CROSS JOIN LATERAL regexp_matches(l.line, '^(\d+) \d+ \["\w+",("(?:[^"\\]|\\.)+")') AS p(m)
-    WHERE s.cut < 0 OR p.m[1]::integer < s.cut GROUP BY s.conversation_id
+    CROSS JOIN LATERAL regexp_matches(l.line, '^\d+ \d+ \["\w+",("(?:[^"\\]|\\.)+")') AS p(m)
+    GROUP BY s.conversation_id
 )
 UPDATE conversations c SET principals = COALESCE(p.principals, '{}') FROM chats h LEFT JOIN principals p USING (conversation_id)
 WHERE c.conversation_id = h.conversation_id`, conversationIDs)
@@ -224,21 +213,15 @@ WHERE id = $1 AND search_text IS DISTINCT FROM NULLIF($2, '')`, turnID, text)
 const visibleChatsSQL = `visible_chats AS NOT MATERIALIZED (SELECT * FROM conversations WHERE listed AND ($1 = '' OR conversation_id = $1))`
 
 const searchMessagesSQL = `WITH found AS (
-    SELECT e.conversation_id, e.id, e.search_text, r.reports_to FROM entries e LEFT JOIN conversations r ON r.conversation_id = e.conversation_id
-    WHERE e.search_text LIKE ANY ($1::text[])
+    SELECT id, search_text FROM entries WHERE search_text LIKE ANY ($1::text[])
 ), matching AS (
-    SELECT COALESCE(reports_to, conversation_id) AS conversation_id, id AS entry_id, id AS position, NULL::bigint AS created_at_unix_ns, '' AS turn_id, search_text FROM found
-    UNION ALL SELECT w.conversation_id, f.id AS entry_id, f.id AS position, NULL::bigint AS created_at_unix_ns, '' AS turn_id, f.search_text FROM found f JOIN conversations w ON w.continues = f.conversation_id
-    WHERE f.reports_to IS DISTINCT FROM w.conversation_id
+    SELECT l.conversation_id, f.id AS entry_id, f.id AS position, NULL::bigint AS created_at_unix_ns, '' AS turn_id, f.search_text
+    FROM found f JOIN history_links l ON l.entry_id = f.id
     UNION ALL SELECT conversation_id, 0, history_anchor_id, created_at_unix_ns, id, search_text FROM turns WHERE search_text LIKE ANY ($1::text[])
-), cuts AS (
-    SELECT m.*, NULLIF(split_part(c.revert_message_id, ':', 1), '')::bigint AS cut_entry,
-        NULLIF(split_part(c.revert_message_id, ':', 2), '')::integer AS cut_index
-    FROM matching m JOIN conversations c ON c.conversation_id = m.conversation_id AND c.listed
 )
-SELECT conversation_id, entry_id, CASE WHEN entry_id = cut_entry THEN cut_index ELSE -1 END, search_text FROM cuts
-WHERE cut_entry IS NULL OR position < cut_entry OR entry_id = cut_entry
-ORDER BY conversation_id, position, created_at_unix_ns NULLS FIRST, turn_id`
+SELECT m.conversation_id, m.entry_id, m.search_text FROM matching m
+JOIN conversations c ON c.conversation_id = m.conversation_id AND c.listed AND c.reports_to IS NULL
+ORDER BY m.conversation_id, m.position, m.created_at_unix_ns NULLS FIRST, m.turn_id`
 
 func containsPattern(text string) string {
 	return "%" + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(text) + "%"
@@ -290,9 +273,8 @@ func (s *SessionService) SearchMessages(ctx context.Context, needle string, tagP
 		var (
 			conversationID, text string
 			entryID              int64
-			cut                  int
 		)
-		if err := row.Scan(&conversationID, &entryID, &cut, &text); err != nil {
+		if err := row.Scan(&conversationID, &entryID, &text); err != nil {
 			return fmt.Errorf("scan message search row: %w", err)
 		}
 
@@ -306,7 +288,7 @@ func (s *SessionService) SearchMessages(ctx context.Context, needle string, tagP
 				return fmt.Errorf("decode message search text: %w", err)
 			}
 
-			if cut >= 0 && replay >= cut || !slices.ContainsFunc(needles, func(needle string) bool { return strings.Contains(fields[3], needle) }) {
+			if !slices.ContainsFunc(needles, func(needle string) bool { return strings.Contains(fields[3], needle) }) {
 				continue
 			}
 
