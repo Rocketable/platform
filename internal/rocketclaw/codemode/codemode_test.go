@@ -526,7 +526,7 @@ func TestRunFileArguments(t *testing.T) {
 		expression, want string
 	}{
 		{`bash(command="cat > x", stdin=f())`, `{"command":"cat \u003e x","stdin":` + descriptor + `}`},
-		{`decision(images=[f(), "a.png"])`, `{"images":[` + descriptor + `,"a.png"]}`},
+		{`decision(images=[f(), {}, "a.png"])`, `{"images":[` + descriptor + `,{},"a.png"]}`},
 		{`decision(images=try_gather([f]))`, `{"images":[` + descriptor + `]}`},
 		{`decision(images=f()).error`, refused("decision", "images")},
 		{`bash(command=f()).error`, refused("bash", "command")},

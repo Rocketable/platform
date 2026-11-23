@@ -263,9 +263,15 @@ func (w *argumentWalk) failure(v starlark.Value, position string) starlark.Value
 			}
 		}
 	case *starlark.Dict:
-		for _, pair := range v.Items() {
-			for _, part := range pair {
-				if failure := w.failure(part, position+"{}"); failure != nil {
+		if v.Len() == 0 {
+			break
+		}
+
+		entryPosition := position + "{}"
+
+		for key, value := range v.Entries() {
+			for _, part := range [2]starlark.Value{key, value} {
+				if failure := w.failure(part, entryPosition); failure != nil {
 					return failure
 				}
 			}
