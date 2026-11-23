@@ -1404,6 +1404,10 @@ func TestOpenCodeAPITool(t *testing.T) {
 	assert.Equal(t, "opencode", tool.Permission)
 	assert.Equal(t, []string{"box", "spare"}, tool.VisibilitySubjects)
 
+	firstLine, _, _ := strings.Cut(tool.Description, "\n")
+	assert.LessOrEqual(t, len(firstLine), 120)
+	assert.Contains(t, firstLine, "params: list of {name, value} dicts")
+
 	tests := []struct {
 		name, input, want, wantErr string
 	}{
