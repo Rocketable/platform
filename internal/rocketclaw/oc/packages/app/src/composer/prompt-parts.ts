@@ -8,7 +8,7 @@ export function serializePrompt(prompt: Prompt): Prompt {
   return prompt.map((part) => {
     if (!("content" in part)) return part
     const mention = part.type === "session" ? parseSessionMention(part.id) : undefined
-    const content = mention ? serializeSessionMention(mention) : part.content
+    const content = mention ? serializeSessionMention(mention) : part.type === "person" ? `<@${part.id}>` : part.content
 
     const next = {
       ...part,

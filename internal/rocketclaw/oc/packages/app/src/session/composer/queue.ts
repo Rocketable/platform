@@ -277,6 +277,7 @@ export function createSessionQueue(input: {
 
     const replacement = await editedPromptInput(
       input.sessionID,
+      operation.moved[operation.original],
       location().directory,
       operation.item,
       operation.prompt,
@@ -285,7 +286,7 @@ export function createSessionQueue(input: {
 
     // Admit before cancelling so a failed replacement never discards the original. A queued edit rebuilds its position
     // in one rewrite, which leaves the queue unchanged if any admission fails.
-    const admission = { ...replacement, id: operation.moved[operation.original], delivery: operation.delivery }
+    const admission = { ...replacement, delivery: operation.delivery }
 
     if (operation.delivery === "queue")
       return rewrite(operation.attempt, progress, undefined, {
@@ -525,6 +526,7 @@ function storedFileUri(file: PromptAttachment) {
 // queued edit.
 async function editedPromptInput(
   sessionID: string,
+  id: string,
   directory: string,
   item: QueuedPrompt | undefined,
   prompt: Prompt,
@@ -538,6 +540,9 @@ async function editedPromptInput(
 
   const request = buildPromptRequest({ prompt, context: [], images, text, sessionDirectory: directory })
   const payload = item?.payload
+  // rocketclaw: bind only new selections to the replacement prompt (upstream packages/app/src/session/composer/queue.ts).
+  const { rocketclaw_mention: _, ...metadata } = payload?.metadata ?? {}
+  const people = prompt.flatMap((part) => part.type === "person" ? [part.id] : [])
   const display = item ? queuedPromptText(item) : ""
   const notes = payload && display && payload.text.startsWith(display) ? payload.text.slice(display.length) : ""
 
@@ -571,6 +576,7 @@ async function editedPromptInput(
   ]
 
   return {
+    id,
     sessionID,
     text: request.text + notes,
     files: [
@@ -601,10 +607,11 @@ async function editedPromptInput(
     // Comments survive while their notes stay out of the edited text; when the editor showed the
     // notes as text (a prompt with no display text), the edit owns them and the comments go.
     metadata: {
-      ...payload?.metadata,
+      ...metadata,
       comments: notes ? (payload?.metadata?.["comments"] ?? []) : [],
       displayText: request.displayText,
       attachments: request.attachments,
+      ...(people.length > 0 && { rocketclaw_mention: { messageID: id, ids: people } }),
     },
   }
 }

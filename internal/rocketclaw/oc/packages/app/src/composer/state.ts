@@ -30,6 +30,7 @@ export type {
   NoteComment,
   NoteContextItem,
   PathAttachmentPart,
+  PersonPart,
   Prompt,
   PromptModel,
   QuoteComment,

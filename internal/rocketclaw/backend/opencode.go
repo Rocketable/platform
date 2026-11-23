@@ -20,6 +20,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -68,6 +69,8 @@ func (e *openCodeError) Error() string {
 type openCodeShells struct {
 	mu      sync.Mutex
 	running map[string]string
+
+	mentions []*protocol.InboundMessage
 }
 
 func (shells *openCodeShells) follow(ctx context.Context, name string, server config.OpenCodeConfig) {
@@ -152,8 +155,9 @@ func (shells *openCodeShells) follow(ctx context.Context, name string, server co
 	}
 }
 
-func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedConfig) {
-	startup := cfg.Clone()
+func (r *Runtime) SyncOpenCode(ctx context.Context) {
+	s := r.Sessions
+	startup := r.Cfg.Clone()
 
 	var workers errgroup.Group
 	defer func() { _ = workers.Wait() }()
@@ -201,8 +205,16 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedCon
 
 	for {
 		for name, server := range servers {
-			if s.pushOpenCodeNames(ctx, name, server) == nil && s.syncOpenCode(ctx, name, server, shells[name]) == nil && origin != "" {
-				addOpenCodeBridges(ctx, origin, name, server)
+			if s.pushOpenCodeNames(ctx, name, server) == nil && s.syncOpenCode(ctx, name, server, shells[name]) == nil {
+				for _, inbound := range shells[name].mentions {
+					r.threads.sendWebMentions(ctx, inbound)
+				}
+
+				shells[name].mentions = nil
+
+				if origin != "" {
+					addOpenCodeBridges(ctx, origin, name, server)
+				}
 			}
 		}
 
@@ -299,6 +311,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		cursors                             []*int64
 		markedIDs, markedUsers, ended       []string
 		markedWaking, failures              []bool
+		mentions                            []*protocol.InboundMessage
 	)
 
 	for i, session := range sessions.Data {
@@ -310,23 +323,16 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		var cursor *int64
 
 		if !busy && (last.ran || session.Time.Updated > last.updated.UnixMilli()) {
-			var idle struct {
-				Data []struct {
-					Time struct {
-						Created int64 `json:"created"`
-					} `json:"time"`
-					Outcome string `json:"outcome"`
-				} `json:"data"`
-			}
+			if through, failed, senders := readOpenCodeIdle(ctx, name, server, session.ID, last.through); through != nil {
+				cursor = through
 
-			if openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(session.ID)+"/message?type=idle&order=desc&limit=1", nil, &idle) == nil && len(idle.Data) > 0 && idle.Data[0].Time.Created > last.through {
-				if senders, err := openCodeSenders(ctx, name, server, session.ID, last.through, idle.Data[0].Time.Created); err == nil {
-					cursor = &idle.Data[0].Time.Created
+				ended, failures = append(ended, id), append(failures, failed)
 
-					ended, failures = append(ended, id), append(failures, idle.Data[0].Outcome == "failed")
-
-					for _, sender := range append(senders, "") {
-						markedIDs, markedUsers, markedWaking = append(markedIDs, id), append(markedUsers, sender), append(markedWaking, false)
+				markedIDs, markedUsers, markedWaking = append(markedIDs, id), append(markedUsers, ""), append(markedWaking, false)
+				for _, sender := range senders {
+					markedIDs, markedUsers, markedWaking = append(markedIDs, id), append(markedUsers, sender.Metadata.Username), append(markedWaking, false)
+					if inbound := sender.trustedMention(s.definitions.OpenCodeMentionKey(), id); inbound != nil {
+						mentions = append(mentions, inbound)
 					}
 				}
 			}
@@ -335,7 +341,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		if asking[session.ID] && !last.asking {
 			senders, _ := openCodeSenders(ctx, name, server, session.ID, last.through, math.MaxInt64)
 			for _, sender := range senders {
-				markedIDs, markedUsers, markedWaking = append(markedIDs, id), append(markedUsers, sender), append(markedWaking, true)
+				markedIDs, markedUsers, markedWaking = append(markedIDs, id), append(markedUsers, sender.Metadata.Username), append(markedWaking, true)
 			}
 		}
 
@@ -373,8 +379,14 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		askings = append(askings, asking[session.ID])
 	}
 
-	return s.storeOpenCodeSync(ctx, []any{name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds,
-		agents, models, KindRemote, cursors, markedIDs, markedUsers, askings, markedWaking}, ended, failures)
+	if err := s.storeOpenCodeSync(ctx, []any{name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds,
+		agents, models, KindRemote, cursors, markedIDs, markedUsers, askings, markedWaking}, ended, failures); err != nil {
+		return err
+	}
+
+	shells.mentions = mentions
+
+	return nil
 }
 
 func (s *SessionService) storeOpenCodeSync(ctx context.Context, synced []any, ended []string, failures []bool) error {
@@ -418,31 +430,53 @@ WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7
 	return commitState(tx, "opencode sync")
 }
 
-func openCodeSenders(ctx context.Context, name string, server config.OpenCodeConfig, session string, since, until int64) ([]string, error) {
-	var prompts struct {
+type openCodeSender struct {
+	ID       string `json:"id"`
+	Text     string `json:"text"`
+	Metadata struct {
+		Username string          `json:"rocketclaw_username"`
+		Mention  json.RawMessage `json:"rocketclaw_mention"`
+	} `json:"metadata"`
+	Time struct {
+		Created int64 `json:"created"`
+	} `json:"time"`
+}
+
+func readOpenCodeIdle(ctx context.Context, name string, server config.OpenCodeConfig, session string, after int64) (through *int64, failed bool, prompts []openCodeSender) {
+	var idle struct {
 		Data []struct {
-			Metadata struct {
-				Username string `json:"rocketclaw_username"`
-			} `json:"metadata"`
 			Time struct {
 				Created int64 `json:"created"`
 			} `json:"time"`
+			Outcome string `json:"outcome"`
 		} `json:"data"`
+	}
+
+	if openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(session)+"/message?type=idle&order=desc&limit=1", nil, &idle) != nil ||
+		len(idle.Data) == 0 || idle.Data[0].Time.Created <= after {
+		return nil, false, nil
+	}
+
+	senders, err := openCodeSenders(ctx, name, server, session, after, idle.Data[0].Time.Created)
+	if err != nil {
+		return nil, false, nil
+	}
+
+	return &idle.Data[0].Time.Created, idle.Data[0].Outcome == "failed", senders
+}
+
+func openCodeSenders(ctx context.Context, name string, server config.OpenCodeConfig, session string, since, until int64) ([]openCodeSender, error) {
+	var prompts struct {
+		Data []openCodeSender `json:"data"`
 	}
 
 	if err := openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(session)+"/message?type=user&order=desc&limit=50", nil, &prompts); err != nil {
 		return nil, err
 	}
 
-	var senders []string
-
-	for _, prompt := range prompts.Data {
-		if prompt.Time.Created > since && prompt.Time.Created <= until {
-			senders = append(senders, prompt.Metadata.Username)
-		}
-	}
-
-	return senders, nil
+	return slices.DeleteFunc(prompts.Data, func(prompt openCodeSender) bool {
+		return prompt.Time.Created <= since || prompt.Time.Created > until
+	}), nil
 }
 
 func openCodeRoot(ctx context.Context, name string, server config.OpenCodeConfig, roots map[string]bool, id string) string {

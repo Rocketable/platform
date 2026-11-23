@@ -325,11 +325,44 @@ func sharedSearch[T any](ctx context.Context, s *Server, key string, work search
 }
 
 func (s *Server) slackNames(ctx context.Context, request *SlackNamesRequest) (*SlackNamesResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
+	if request.SharedSessionId == "" {
+		if _, _, err := s.principal(ctx); err != nil {
+			return nil, err
+		}
+
+		return &SlackNamesResponse{Names: s.channels.SlackNames(ctx, request.GetIds())}, nil
+	}
+
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil {
 		return nil, err
 	}
 
-	return &SlackNamesResponse{Names: s.channels.SlackNames(ctx, request.GetIds())}, nil
+	if err := s.visibleConversation(ctx, request.SharedSessionId); err != nil {
+		return nil, err
+	}
+
+	kind, err := s.sessions.ConversationKind(ctx, request.SharedSessionId)
+	if err != nil {
+		return nil, fmt.Errorf("read mention session: %w", err)
+	}
+
+	if kind != backend.KindWebChat && kind != backend.KindRemote {
+		return &SlackNamesResponse{}, nil
+	}
+
+	shared, err := s.sessions.SharedTabs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read shared tabs for mention: %w", err)
+	}
+
+	if !slices.ContainsFunc(shared, func(tab backend.Tab) bool {
+		return limit.AllowsSpaceID(tab.Space) && backend.TabConversation(tab.Path) == request.SharedSessionId
+	}) {
+		return &SlackNamesResponse{}, nil
+	}
+
+	return &SlackNamesResponse{Names: s.channels.SessionMentionNames(ctx, request.Query)}, nil
 }
 
 func (s *Server) findPullRequests(ctx context.Context, request *FindPullRequestsRequest) (*FindPullRequestsResponse, error) {

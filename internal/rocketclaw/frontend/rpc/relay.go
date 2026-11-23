@@ -24,7 +24,7 @@ func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, cfg *config
 
 	proxies := make(map[string]http.Handler, len(servers))
 	for name, server := range servers {
-		proxies[name] = http.StripPrefix("/oc/"+name, openCodeProxy(server))
+		proxies[name] = http.StripPrefix("/oc/"+name, openCodeProxy(name, server, cfg.OpenCodeMentionKey()))
 	}
 
 	for method := range strings.FieldsSeq("GET POST PUT PATCH DELETE") {
@@ -57,7 +57,7 @@ func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, cfg *config
 	}
 }
 
-func openCodeProxy(server config.OpenCodeConfig) http.Handler {
+func openCodeProxy(name string, server config.OpenCodeConfig, mentionKey string) http.Handler {
 	upstream, _ := url.Parse(server.URL)
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
@@ -83,7 +83,24 @@ func openCodeProxy(server config.OpenCodeConfig) http.Handler {
 				}
 
 				md, _ := metadata.FromOutgoingContext(r.In.Context())
-				stamped["rocketclaw_username"], _ = json.Marshal(md.Get("rocketclaw-username")[0])
+				sender := md.Get("rocketclaw-username")[0]
+				stamped["rocketclaw_username"], _ = json.Marshal(sender)
+
+				var (
+					id      string
+					mention backend.OpenCodeMention
+				)
+
+				_ = json.Unmarshal(body["id"], &id)
+				errMention := json.Unmarshal(stamped["rocketclaw_mention"], &mention)
+				delete(stamped, "rocketclaw_mention")
+
+				if errMention == nil && id != "" && mention.MessageID == id && len(mention.IDs) > 0 {
+					session, _ := strings.CutSuffix(strings.TrimPrefix(r.In.URL.Path, "/api/session/"), "/prompt")
+					mention.Signature = mention.Sign(mentionKey, "opencode:"+name+":"+session, sender)
+					stamped["rocketclaw_mention"], _ = json.Marshal(mention)
+				}
+
 				body["metadata"], _ = json.Marshal(stamped)
 				raw, _ = json.Marshal(body)
 			}

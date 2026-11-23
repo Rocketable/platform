@@ -32,6 +32,10 @@ describe("Composer history", () => {
 
     const dedupedComments = prependHistoryEntry(commentsOnly, DEFAULT_PROMPT, [comment("c1")])
     expect(dedupedComments).toBe(commentsOnly)
+
+    const riley = { type: "person", id: "U1", content: "@Riley", start: 0, end: 6 } as const
+    const distinct = prependHistoryEntry(prependHistoryEntry([], [riley]), [{ ...riley, id: "U2" }])
+    expect(distinct.map((entry) => entry.prompt)).toEqual([[{ ...riley, id: "U2" }], [riley]])
   })
 
   test("removeHistoryEntry drops the entry recorded for a prompt and leaves others alone", () => {

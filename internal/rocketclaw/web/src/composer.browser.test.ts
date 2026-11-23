@@ -12,7 +12,7 @@ const shots = path.resolve(import.meta.dir, "../../../../.tmp/web-screenshots");
 for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, false], [390, false]] as const) {
   test(`native composer at ${width}px with ${touch ? "touch" : "desktop"} input`, async () => {
     const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
-    const calls: { text: string; delivery?: string }[] = [];
+    const calls: { text: string; delivery?: string; mentionIds?: string[] }[] = [];
     const queue: QueueItem[] = [];
     let running = false;
     let stream: ReadableStreamDefaultController<string>;
@@ -31,6 +31,7 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
         case "/api/ListAgents": return Response.json({ agents: [{ name: "Build", model: "OpenAI / GPT-6.1 Sol", reasoning: "high" }], currentAgent: "Build" });
         case "/api/ListSkills": return Response.json({ skills: [] });
         case "/api/ListQueue": return Response.json({ items: queue });
+        case "/api/SlackNames": return Response.json({ names: { U123: "Teammate" } });
         case "/api/Prompt": {
           const prompt = await request.json() as { text: string; delivery: QueueItem["delivery"]; messageId: string };
           calls.push(prompt);
@@ -71,6 +72,15 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
       await firstPrompt;
       await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
       expect(calls[0]).toMatchObject({ text: touch ? "First line\n" : "First line", delivery: "STEER" });
+
+      if (width === 1280) {
+        await input.fill("Note for @Team");
+        await page.getByRole("button", { name: "@Teammate" }).waitFor();
+        await input.press("Tab");
+        expect(await input.inputValue()).toBe("Note for @Teammate ");
+        await Promise.all([page.waitForResponse("**/api/Prompt"), input.press("Enter")]);
+        expect(calls.at(-1)).toMatchObject({ text: "Note for <@U123> ", mentionIds: ["U123"], delivery: "STEER" });
+      }
 
       running = true;
       stream!.enqueue(`data: ${JSON.stringify({ conversationId: "composer", revision: "running" })}\n\n`);

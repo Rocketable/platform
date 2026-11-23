@@ -25,6 +25,15 @@ var _ ChannelAgentChoices = &mockChannels{}
 //			RenameThreadSessionFunc: func(ctx context.Context, conversationID string, name string)  {
 //				panic("mock out the RenameThreadSession method")
 //			},
+//			SendSessionMentionFunc: func(context1 context.Context, s string, s1 string) error {
+//				panic("mock out the SendSessionMention method")
+//			},
+//			SessionMentionNamesFunc: func(context1 context.Context, s string) map[string]string {
+//				panic("mock out the SessionMentionNames method")
+//			},
+//			SessionMentionRecipientFunc: func(context1 context.Context, s string) (string, error) {
+//				panic("mock out the SessionMentionRecipient method")
+//			},
 //			SidebarChannelAgentChoicesFunc: func(context1 context.Context, s string) (string, []string, error) {
 //				panic("mock out the SidebarChannelAgentChoices method")
 //			},
@@ -46,6 +55,15 @@ type mockChannels struct {
 
 	// RenameThreadSessionFunc mocks the RenameThreadSession method.
 	RenameThreadSessionFunc func(ctx context.Context, conversationID string, name string)
+
+	// SendSessionMentionFunc mocks the SendSessionMention method.
+	SendSessionMentionFunc func(context1 context.Context, s string, s1 string) error
+
+	// SessionMentionNamesFunc mocks the SessionMentionNames method.
+	SessionMentionNamesFunc func(context1 context.Context, s string) map[string]string
+
+	// SessionMentionRecipientFunc mocks the SessionMentionRecipient method.
+	SessionMentionRecipientFunc func(context1 context.Context, s string) (string, error)
 
 	// SidebarChannelAgentChoicesFunc mocks the SidebarChannelAgentChoices method.
 	SidebarChannelAgentChoicesFunc func(context1 context.Context, s string) (string, []string, error)
@@ -74,6 +92,29 @@ type mockChannels struct {
 			// Name is the name argument value.
 			Name string
 		}
+		// SendSessionMention holds details about calls to the SendSessionMention method.
+		SendSessionMention []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// S1 is the s1 argument value.
+			S1 string
+		}
+		// SessionMentionNames holds details about calls to the SessionMentionNames method.
+		SessionMentionNames []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+		}
+		// SessionMentionRecipient holds details about calls to the SessionMentionRecipient method.
+		SessionMentionRecipient []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+		}
 		// SidebarChannelAgentChoices holds details about calls to the SidebarChannelAgentChoices method.
 		SidebarChannelAgentChoices []struct {
 			// Context1 is the context1 argument value.
@@ -98,6 +139,9 @@ type mockChannels struct {
 	}
 	lockChannelAgentChoices        sync.RWMutex
 	lockRenameThreadSession        sync.RWMutex
+	lockSendSessionMention         sync.RWMutex
+	lockSessionMentionNames        sync.RWMutex
+	lockSessionMentionRecipient    sync.RWMutex
 	lockSidebarChannelAgentChoices sync.RWMutex
 	lockSlackNames                 sync.RWMutex
 	lockSlackTagsMatching          sync.RWMutex
@@ -176,6 +220,118 @@ func (mock *mockChannels) RenameThreadSessionCalls() []struct {
 	mock.lockRenameThreadSession.RLock()
 	calls = mock.calls.RenameThreadSession
 	mock.lockRenameThreadSession.RUnlock()
+	return calls
+}
+
+// SendSessionMention calls SendSessionMentionFunc.
+func (mock *mockChannels) SendSessionMention(context1 context.Context, s string, s1 string) error {
+	if mock.SendSessionMentionFunc == nil {
+		panic("mockChannels.SendSessionMentionFunc: method is nil but ChannelAgentChoices.SendSessionMention was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}{
+		Context1: context1,
+		S:        s,
+		S1:       s1,
+	}
+	mock.lockSendSessionMention.Lock()
+	mock.calls.SendSessionMention = append(mock.calls.SendSessionMention, callInfo)
+	mock.lockSendSessionMention.Unlock()
+	return mock.SendSessionMentionFunc(context1, s, s1)
+}
+
+// SendSessionMentionCalls gets all the calls that were made to SendSessionMention.
+// Check the length with:
+//
+//	len(mockedChannelAgentChoices.SendSessionMentionCalls())
+func (mock *mockChannels) SendSessionMentionCalls() []struct {
+	Context1 context.Context
+	S        string
+	S1       string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}
+	mock.lockSendSessionMention.RLock()
+	calls = mock.calls.SendSessionMention
+	mock.lockSendSessionMention.RUnlock()
+	return calls
+}
+
+// SessionMentionNames calls SessionMentionNamesFunc.
+func (mock *mockChannels) SessionMentionNames(context1 context.Context, s string) map[string]string {
+	if mock.SessionMentionNamesFunc == nil {
+		panic("mockChannels.SessionMentionNamesFunc: method is nil but ChannelAgentChoices.SessionMentionNames was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+	}{
+		Context1: context1,
+		S:        s,
+	}
+	mock.lockSessionMentionNames.Lock()
+	mock.calls.SessionMentionNames = append(mock.calls.SessionMentionNames, callInfo)
+	mock.lockSessionMentionNames.Unlock()
+	return mock.SessionMentionNamesFunc(context1, s)
+}
+
+// SessionMentionNamesCalls gets all the calls that were made to SessionMentionNames.
+// Check the length with:
+//
+//	len(mockedChannelAgentChoices.SessionMentionNamesCalls())
+func (mock *mockChannels) SessionMentionNamesCalls() []struct {
+	Context1 context.Context
+	S        string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+	}
+	mock.lockSessionMentionNames.RLock()
+	calls = mock.calls.SessionMentionNames
+	mock.lockSessionMentionNames.RUnlock()
+	return calls
+}
+
+// SessionMentionRecipient calls SessionMentionRecipientFunc.
+func (mock *mockChannels) SessionMentionRecipient(context1 context.Context, s string) (string, error) {
+	if mock.SessionMentionRecipientFunc == nil {
+		panic("mockChannels.SessionMentionRecipientFunc: method is nil but ChannelAgentChoices.SessionMentionRecipient was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+	}{
+		Context1: context1,
+		S:        s,
+	}
+	mock.lockSessionMentionRecipient.Lock()
+	mock.calls.SessionMentionRecipient = append(mock.calls.SessionMentionRecipient, callInfo)
+	mock.lockSessionMentionRecipient.Unlock()
+	return mock.SessionMentionRecipientFunc(context1, s)
+}
+
+// SessionMentionRecipientCalls gets all the calls that were made to SessionMentionRecipient.
+// Check the length with:
+//
+//	len(mockedChannelAgentChoices.SessionMentionRecipientCalls())
+func (mock *mockChannels) SessionMentionRecipientCalls() []struct {
+	Context1 context.Context
+	S        string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+	}
+	mock.lockSessionMentionRecipient.RLock()
+	calls = mock.calls.SessionMentionRecipient
+	mock.lockSessionMentionRecipient.RUnlock()
 	return calls
 }
 

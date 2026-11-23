@@ -126,9 +126,12 @@ export function quoteComment(item: QuoteContextItem) {
 export function buildPromptRequest(input: BuildPromptRequestInput): PromptRequest {
   const prompt = serializePrompt(input.prompt)
 
-  const text = input.prompt.some((part) => part.type === "session")
+  const text = input.prompt.some((part) => part.type === "session" || part.type === "person")
     ? prompt.map((part) => ("content" in part ? part.content : "")).join("")
     : input.text
+  const displayText = input.prompt.some((part) => part.type === "person")
+    ? prompt.map((part, index) => part.type === "person" ? (input.prompt[index] as typeof part).content : "content" in part ? part.content : "").join("")
+    : text
 
   const skills = prompt.filter(isSkillAttachment).map((attachment) => ({
     id: attachment.id,
@@ -229,7 +232,7 @@ export function buildPromptRequest(input: BuildPromptRequestInput): PromptReques
         return formatCommentNote(comment)
       }),
     ].join("\n"),
-    displayText: text,
+    displayText,
     files: [...files, ...context, ...inline],
     agents,
     skills,

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -88,6 +89,7 @@ func startProxyTestRPC(t *testing.T, upstream string) (http.Handler, *backend.Se
 
 	servers := map[string]config.OpenCodeConfig{"box": {URL: upstream, Password: "pw"}}
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenCode: servers, Permissions: map[string][]string{"bob": {"Ops"}}, Web: config.WebConfig{Tsnet: &config.TsnetConfig{Origin: "https://claw.example.ts.net"}}}
+	locked := config.NewLockedConfig(cfg)
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
@@ -96,7 +98,7 @@ func startProxyTestRPC(t *testing.T, upstream string) (http.Handler, *backend.Se
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, locked, &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error {
@@ -115,7 +117,7 @@ func startProxyTestRPC(t *testing.T, upstream string) (http.Handler, *backend.Se
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	return NewHTTPHandler(connection, config.NewLockedConfig(cfg), ""), sessions, openTestTurns(t, dsn).db
+	return NewHTTPHandler(connection, locked, ""), sessions, openTestTurns(t, dsn).db
 }
 
 func TestOpenCodeProxy(t *testing.T) {
@@ -187,6 +189,8 @@ func TestOpenCodeProxy(t *testing.T) {
 		{http.MethodPost, "/api/session/s1/prompt", `{"parts":[],"metadata":{"displayText":"hi","agent":"build"}}`, `{"parts":[],"metadata":{"displayText":"hi","agent":"build","rocketclaw_username":"alice"}}`},
 		{http.MethodPost, "/api/session/s1/prompt", `{"parts":[]}`, `{"parts":[],"metadata":{"rocketclaw_username":"alice"}}`},
 		{http.MethodPost, "/api/session/s1/prompt", `{"metadata":{"rocketclaw_username":"mallory"}}`, `{"metadata":{"rocketclaw_username":"alice"}}`},
+		{http.MethodPost, "/api/session/s1/prompt", `{"id":"msg_new","metadata":{"rocketclaw_mention":{"messageID":"msg_old","ids":["U123"],"signature":"copied"}}}`, `{"id":"msg_new","metadata":{"rocketclaw_username":"alice"}}`},
+		{http.MethodPost, "/api/session/s1/prompt", `{"id":"msg_new","metadata":{"rocketclaw_mention":{"messageID":"msg_new","ids":["U123",42]}}}`, `{"id":"msg_new","metadata":{"rocketclaw_username":"alice"}}`},
 		{http.MethodPost, "/api/session/s1/prompt", `not json`, `not json`},
 		{http.MethodPost, "/api/session/s1/prompt", ``, ``},
 		{http.MethodPost, "/api/session/s1/command", `{"metadata":{"rocketclaw_username":"mallory"}}`, `{"metadata":{"rocketclaw_username":"mallory"}}`},
@@ -204,6 +208,24 @@ func TestOpenCodeProxy(t *testing.T) {
 			assert.JSONEq(t, test.want, fake.body, test.body)
 		}
 	}
+
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://rocketclaw.example/oc/box/api/session/s1/prompt",
+		strings.NewReader(`{"id":"msg_new","metadata":{"rocketclaw_username":"mallory","rocketclaw_mention":{"messageID":"msg_new","ids":["U123"]}}}`))
+	response = httptest.NewRecorder()
+	signedIn("alice", handler).ServeHTTP(response, request)
+	require.Equal(t, http.StatusOK, response.Code)
+
+	var stamped struct {
+		Metadata struct {
+			Username string                  `json:"rocketclaw_username"`
+			Mention  backend.OpenCodeMention `json:"rocketclaw_mention"`
+		} `json:"metadata"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(fake.body), &stamped))
+	assert.Equal(t, "alice", stamped.Metadata.Username)
+	assert.Equal(t, "msg_new", stamped.Metadata.Mention.MessageID)
+	assert.Equal(t, []string{"U123"}, stamped.Metadata.Mention.IDs)
+	assert.Regexp(t, `^[0-9a-f]{64}$`, stamped.Metadata.Mention.Signature)
 
 	fake.calls = nil
 
@@ -342,7 +364,7 @@ func TestOpenCodeProxyLogsOnlyFailuresTheBrowserWaitsFor(t *testing.T) {
 	log.SetOutput(&logged)
 	t.Cleanup(func() { log.SetOutput(previous) })
 
-	proxy := openCodeProxy(config.OpenCodeConfig{URL: gone.URL})
+	proxy := openCodeProxy("gone", config.OpenCodeConfig{URL: gone.URL}, "test-key")
 
 	response := httptest.NewRecorder()
 	proxy.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/event", http.NoBody))

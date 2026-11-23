@@ -101,6 +101,9 @@ function isPromptEqual(entryA: PromptHistoryStoredEntry, entryB: PromptHistorySt
 
     if (partA.type === "session" && (partB.type !== "session" || partA.id !== partB.id)) return false
 
+    // rocketclaw: keep different people with the same display name distinct (upstream packages/app/src/composer/history/entry.ts).
+    if (partA.type === "person" && (partB.type !== "person" || partA.id !== partB.id || partA.content !== partB.content)) return false
+
     if (partA.type === "file") {
       if (partA.path !== (partB.type === "file" ? partB.path : "")) return false
       const a = partA.selection

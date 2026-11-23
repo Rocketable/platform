@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"fmt"
@@ -712,6 +713,29 @@ func TestPausedMessageMarksOtherReaders(t *testing.T) {
 	turns, err := queryStrings(ctx, service.db, `SELECT id FROM turns WHERE conversation_id = $1`, "chat turns", "web:lunch")
 	require.NoError(t, err)
 	assert.Empty(t, turns)
+
+	require.NoError(t, service.ShareTab(ctx, "main", path, nil))
+
+	directory := &slackLookupMock{
+		SessionMentionRecipientFunc: func(_ context.Context, id string) (string, error) {
+			require.Equal(t, "U123", id)
+			return bob, nil
+		},
+		SendSessionMentionFunc: func(_ context.Context, recipientID, conversationID string) error {
+			require.Equal(t, "U123", recipientID)
+			require.Equal(t, "web:lunch", conversationID)
+
+			return nil
+		},
+	}
+	rt.threads.slackLookups = directory
+
+	mention := pausedWebMessage("web:lunch", "Alice", &protocol.InboundContent{Text: "See <@U123>"})
+	mention.Metadata[protocol.InboundWebMentionIDsMetadataKey] = "U123"
+	require.NoError(t, rt.PostPausedMessage(ctx, mention))
+	require.NoError(t, rt.PostPausedMessage(ctx, mention))
+	require.Len(t, directory.SendSessionMentionCalls(), 1)
+	require.Equal(t, "new note=Mentioned you", attentionOf(t, service, bob, path))
 }
 
 func TestAttentionAutoPark(t *testing.T) {

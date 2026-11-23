@@ -4,6 +4,7 @@ import type {
   FileAttachmentPart,
   ImageAttachmentPart,
   PathAttachmentPart,
+  PersonPart,
   Prompt,
   SkillPart,
   SessionPart,
@@ -16,6 +17,8 @@ export type ComposerAgentPart = AgentPart
 export type ComposerSkillPart = SkillPart
 
 export type ComposerSessionPart = SessionPart
+
+export type ComposerPersonPart = PersonPart
 
 export type ComposerAttachment = ImageAttachmentPart | PathAttachmentPart
 
@@ -47,7 +50,7 @@ export type ComposerOption = {
 
 export type ComposerSuggestion = {
   id: string
-  kind: "agent" | "command" | "file" | "reference" | "resource" | "skill" | "session" | "history"
+  kind: "agent" | "command" | "file" | "reference" | "resource" | "skill" | "session" | "history" | "person"
   label: string
   title?: string
   trigger?: string
@@ -56,5 +59,5 @@ export type ComposerSuggestion = {
   keybind?: string[]
   recent?: boolean
   history?: ComposerHistoryEntry
-  mention?: ComposerFilePart | ComposerAgentPart | ComposerSkillPart | ComposerSessionPart
+  mention?: ComposerFilePart | ComposerAgentPart | ComposerSkillPart | ComposerSessionPart | ComposerPersonPart
 }

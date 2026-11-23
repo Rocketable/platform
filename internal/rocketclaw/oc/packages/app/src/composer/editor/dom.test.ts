@@ -97,6 +97,18 @@ const editor = (...nodes: Node[]) => {
 
 const prompt = (...parts: ComposerPrompt): ComposerPrompt => parts
 
+test("a person pill only matches the selected ID", () => {
+  const element = document.createElement("span")
+  element.dataset.mention = "person"
+  element.dataset.id = "U1"
+  element.textContent = "@Riley"
+  const root = editor(element)
+  const person = { type: "person", id: "U1", content: "@Riley", start: 0, end: 6 } as const
+
+  expect(editorMatchesPrompt(root, prompt(person))).toBe(true)
+  expect(editorMatchesPrompt(root, prompt({ ...person, id: "U2" }))).toBe(false)
+})
+
 test.each<{ name: string; dom: () => HTMLElement; prompt: ComposerPrompt; matches: boolean }>([
   { name: "one text node", dom: () => editor(text("hello")), prompt: prompt(part("hello")), matches: true },
   {

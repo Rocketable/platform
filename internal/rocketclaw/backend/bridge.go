@@ -176,7 +176,7 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $5 AND reason = $6 RETU
 
 func copyProvenance(dst, src *protocol.InboundMessage) {
 	dst.Source, dst.Human = src.Source, src.Human
-	for _, key := range []string{protocol.InboundOriginMetadataKey, protocol.InboundMediaMetadataKey, protocol.InboundPrincipalMetadataKey, protocol.InboundPrincipalNameMetadataKey, protocol.InboundPrincipalEmailMetadataKey, protocol.InboundSenderSessionMetadataKey, protocol.InboundSenderAgentMetadataKey, protocol.InboundSenderActionMetadataKey} {
+	for _, key := range []string{protocol.InboundOriginMetadataKey, protocol.InboundMediaMetadataKey, protocol.InboundPrincipalMetadataKey, protocol.InboundPrincipalNameMetadataKey, protocol.InboundPrincipalEmailMetadataKey, protocol.InboundSenderSessionMetadataKey, protocol.InboundSenderAgentMetadataKey, protocol.InboundSenderActionMetadataKey, protocol.InboundWebMentionIDsMetadataKey} {
 		if value, ok := src.Metadata[key]; ok {
 			dst.Metadata[key] = value
 		} else {

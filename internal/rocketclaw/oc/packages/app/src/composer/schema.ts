@@ -68,6 +68,14 @@ export const SessionPart = Persistence.struct({
 
 export type SessionPart = typeof SessionPart.Type
 
+export const PersonPart = Persistence.struct({
+  type: Schema.Literal("person"),
+  ...PartBase,
+  id: Schema.String,
+})
+
+export type PersonPart = typeof PersonPart.Type
+
 const ImageFields = {
   type: Schema.Literal("image"),
   id: Schema.String,
@@ -131,6 +139,7 @@ export const ContentPart = Schema.Union([
   AgentPart,
   SkillPart,
   SessionPart,
+  PersonPart,
   ImageAttachmentPart,
   PathAttachmentPart,
 ])

@@ -621,6 +621,9 @@ function renderComposerEditor(editor: HTMLDivElement, prompt: ComposerPrompt) {
 
       if (part.type === "session") mention.title = part.id
 
+      // rocketclaw: match a person pill by its directory ID (upstream packages/app/src/composer/editor/editor.tsx).
+      if (part.type === "person") mention.dataset.id = part.id
+
       if (part.type === "agent") mention.dataset.name = part.name
 
       if (part.type === "skill") {
@@ -668,7 +671,13 @@ function parseComposerEditor(editor: HTMLDivElement) {
     const content = element.textContent ?? ""
     const original = mentionParts.get(element)
 
-    if (original?.type === "session") {
+    // rocketclaw: changing a person's label removes the notification selection (upstream packages/app/src/composer/editor/editor.tsx).
+    if (original?.type === "person" && original.content !== content) {
+      buffer = content
+      return
+    }
+
+    if (original?.type === "session" || original?.type === "person") {
       parts.push({ ...original, content, start: position, end: position + content.length })
       position += content.length
 
@@ -1753,6 +1762,8 @@ function ComposerEditorTouchBar(props: { controller: ComposerEditorModel; docked
 
 function ComposerSuggestionIcon(props: { item: ComposerSuggestion }) {
   if (props.item.kind === "session") return <Icon name="comment" class="shrink-0" />
+
+  if (props.item.kind === "person") return null
 
   if (props.item.kind === "agent") return <Icon name="brain" size="small" class="shrink-0 text-icon-info-active" />
 

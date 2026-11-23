@@ -22,6 +22,9 @@ type slackFrontend interface {
 	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
 	SlackNames(context.Context, []string) map[string]string
 	SlackTagsMatching(context.Context, string) []string
+	SessionMentionNames(context.Context, string) map[string]string
+	SessionMentionRecipient(context.Context, string) (string, error)
+	SendSessionMention(context.Context, string, string) error
 	RenameThreadSession(ctx context.Context, conversationID, name string)
 	StartEvents(context.Context, frontend.Backend) <-chan struct{}
 	Start(context.Context)
@@ -43,6 +46,18 @@ func (inertSlack) SlackNames(context.Context, []string) map[string]string {
 }
 
 func (inertSlack) SlackTagsMatching(context.Context, string) []string {
+	return nil
+}
+
+func (inertSlack) SessionMentionNames(context.Context, string) map[string]string {
+	return nil
+}
+
+func (inertSlack) SessionMentionRecipient(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (inertSlack) SendSessionMention(context.Context, string, string) error {
 	return nil
 }
 

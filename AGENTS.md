@@ -170,7 +170,7 @@ JOIN shadow_parents p USING (conversation_id);
 ## RocketClaw-Specific Requirements
 
 - The emulated shell's Ubuntu image is pinned by `internal/rocketclaw/sandbox/snapshot.gen.go` and the `packages.<arch>.lock` files beside it. Never edit them by hand: `go generate ./internal/rocketclaw/sandbox` moves them to the newest Ubuntu snapshot and leaves them alone when no package changed. Commit what it writes.
-- The Web interface is RocketClaw's primary interface. Slack is a convenience surface with one job: answering @mentions from allowlisted users. Only `sticky: slack` agents answer there: a channel's Channel Session posts at the top of the channel, and a Thread Session posts in its thread; cron reports and External MCP sessions are Web chats, and nothing else in Slack drives an agent.
+- The Web interface is RocketClaw's primary interface. Slack answers @mentions from allowlisted users and sends direct notifications when people tag teammates in Shared Web sessions. Only `sticky: slack` agents answer there: a channel's Channel Session posts at the top of the channel, and a Thread Session posts in its thread; cron reports and External MCP sessions are Web chats, and nothing else in Slack drives an agent. Agents cannot tag teammates.
 
 ## Harness-Specific Requirements
 

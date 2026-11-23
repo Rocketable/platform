@@ -2629,10 +2629,12 @@ func (x *SearchSessionsResponse) GetPrincipals() []string {
 
 // SlackNamesRequest asks for display names of Slack IDs.
 type SlackNamesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ids           []string               `protobuf:"bytes,1,rep,name=ids,proto3" json:"ids,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Ids             []string               `protobuf:"bytes,1,rep,name=ids,proto3" json:"ids,omitempty"`
+	SharedSessionId string                 `protobuf:"bytes,2,opt,name=shared_session_id,json=sharedSessionId,proto3" json:"shared_session_id,omitempty"`
+	Query           string                 `protobuf:"bytes,3,opt,name=query,proto3" json:"query,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *SlackNamesRequest) Reset() {
@@ -2670,6 +2672,20 @@ func (x *SlackNamesRequest) GetIds() []string {
 		return x.Ids
 	}
 	return nil
+}
+
+func (x *SlackNamesRequest) GetSharedSessionId() string {
+	if x != nil {
+		return x.SharedSessionId
+	}
+	return ""
+}
+
+func (x *SlackNamesRequest) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
 }
 
 // SlackNamesResponse maps IDs to bare display strings without a leading @ or #.
@@ -3575,6 +3591,7 @@ type PromptRequest struct {
 	Delivery      PromptDelivery         `protobuf:"varint,3,opt,name=delivery,proto3,enum=rpc.PromptDelivery" json:"delivery,omitempty"`
 	AttachmentIds []string               `protobuf:"bytes,4,rep,name=attachment_ids,json=attachmentIds,proto3" json:"attachment_ids,omitempty"`
 	MessageId     string                 `protobuf:"bytes,5,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	MentionIds    []string               `protobuf:"bytes,6,rep,name=mention_ids,json=mentionIds,proto3" json:"mention_ids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3642,6 +3659,13 @@ func (x *PromptRequest) GetMessageId() string {
 		return x.MessageId
 	}
 	return ""
+}
+
+func (x *PromptRequest) GetMentionIds() []string {
+	if x != nil {
+		return x.MentionIds
+	}
+	return nil
 }
 
 type PromptResponse struct {
@@ -10812,9 +10836,11 @@ const file_web_proto_rawDesc = "" +
 	"mentionIds\x12\x1e\n" +
 	"\n" +
 	"principals\x18\t \x03(\tR\n" +
-	"principalsJ\x04\b\a\x10\bJ\x04\b\b\x10\t\"%\n" +
+	"principalsJ\x04\b\a\x10\bJ\x04\b\b\x10\t\"g\n" +
 	"\x11SlackNamesRequest\x12\x10\n" +
-	"\x03ids\x18\x01 \x03(\tR\x03ids\"\x88\x01\n" +
+	"\x03ids\x18\x01 \x03(\tR\x03ids\x12*\n" +
+	"\x11shared_session_id\x18\x02 \x01(\tR\x0fsharedSessionId\x12\x14\n" +
+	"\x05query\x18\x03 \x01(\tR\x05query\"\x88\x01\n" +
 	"\x12SlackNamesResponse\x128\n" +
 	"\x05names\x18\x01 \x03(\v2\".rpc.SlackNamesResponse.NamesEntryR\x05names\x1a8\n" +
 	"\n" +
@@ -10895,14 +10921,16 @@ const file_web_proto_rawDesc = "" +
 	"\x04size\x18\x04 \x01(\x03R\x04size\x12/\n" +
 	"\x13original_unverified\x18\x05 \x01(\bR\x12originalUnverified\x12\x12\n" +
 	"\x04data\x18\x06 \x01(\fR\x04data\x12'\n" +
-	"\x0fconversation_id\x18\a \x01(\tR\x0econversationId\"\xaa\x01\n" +
+	"\x0fconversation_id\x18\a \x01(\tR\x0econversationId\"\xcb\x01\n" +
 	"\rPromptRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12/\n" +
 	"\bdelivery\x18\x03 \x01(\x0e2\x13.rpc.PromptDeliveryR\bdelivery\x12%\n" +
 	"\x0eattachment_ids\x18\x04 \x03(\tR\rattachmentIds\x12\x1d\n" +
 	"\n" +
-	"message_id\x18\x05 \x01(\tR\tmessageId\"3\n" +
+	"message_id\x18\x05 \x01(\tR\tmessageId\x12\x1f\n" +
+	"\vmention_ids\x18\x06 \x03(\tR\n" +
+	"mentionIds\"3\n" +
 	"\x0ePromptResponse\x12!\n" +
 	"\fprivate_text\x18\x01 \x01(\tR\vprivateText\"\x81\x02\n" +
 	"\aCronJob\x12\x12\n" +

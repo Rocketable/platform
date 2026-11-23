@@ -85,10 +85,23 @@ func newSlackNamesConnector(transport http.RoundTripper) *Connector {
 }
 
 func TestSlackNamesResolvesDisplayRealAndGroup(t *testing.T) {
-	transport := &slackNameRoundTripper{users: slackNamesUsersJSON, groups: slackNamesGroupsJSON}
+	transport := &slackNameRoundTripper{
+		users: `{"ok":true,"members":[
+			{"id":"U1","name":"riley.a","profile":{"display_name":"Riley"}},
+			{"id":"U2","real_name":"Bea"},
+			{"id":"U3","real_name":"Riley Robot","is_bot":true},
+			{"id":"U4","real_name":"Riley App","is_app_user":true},
+			{"id":"U5","real_name":"Riley Retired","deleted":true},
+			{"id":"USLACKBOT","real_name":"Riley Helper"},
+			{"id":"U6","name":"riley.b","profile":{"display_name":"Riley"}}
+		]}`,
+		groups: slackNamesGroupsJSON,
+	}
 	connector := newSlackNamesConnector(transport)
-	names := connector.SlackNames(t.Context(), []string{"U1", "U2", "S1"})
-	require.Equal(t, map[string]string{"U1": "alan", "U2": "Bea", "S1": "cs-operators"}, names)
+	names := connector.SlackNames(t.Context(), []string{"U1", "U2", "U3", "S1"})
+	require.Equal(t, map[string]string{"U1": "Riley", "U2": "Bea", "U3": "Riley Robot", "S1": "cs-operators"}, names)
+	require.Equal(t, map[string]string{"U1": "Riley (riley.a)", "U2": "Bea", "U6": "Riley (riley.b)"}, connector.SessionMentionNames(t.Context(), ""))
+	require.Equal(t, map[string]string{"U1": "Riley (riley.a)", "U6": "Riley (riley.b)"}, connector.SessionMentionNames(t.Context(), "RILEY"))
 
 	usersList, userGroups, usersInfo := transport.counts()
 	require.Equal(t, 1, usersList)

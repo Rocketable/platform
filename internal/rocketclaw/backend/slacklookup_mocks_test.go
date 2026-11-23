@@ -19,6 +19,12 @@ var _ slackLookup = &slackLookupMock{}
 //
 //		// make and configure a mocked slackLookup
 //		mockedslackLookup := &slackLookupMock{
+//			SendSessionMentionFunc: func(context1 context.Context, s string, s1 string) error {
+//				panic("mock out the SendSessionMention method")
+//			},
+//			SessionMentionRecipientFunc: func(context1 context.Context, s string) (string, error) {
+//				panic("mock out the SessionMentionRecipient method")
+//			},
 //			SidebarChannelAgentChoicesFunc: func(context1 context.Context, s string) (string, []string, error) {
 //				panic("mock out the SidebarChannelAgentChoices method")
 //			},
@@ -32,6 +38,12 @@ var _ slackLookup = &slackLookupMock{}
 //
 //	}
 type slackLookupMock struct {
+	// SendSessionMentionFunc mocks the SendSessionMention method.
+	SendSessionMentionFunc func(context1 context.Context, s string, s1 string) error
+
+	// SessionMentionRecipientFunc mocks the SessionMentionRecipient method.
+	SessionMentionRecipientFunc func(context1 context.Context, s string) (string, error)
+
 	// SidebarChannelAgentChoicesFunc mocks the SidebarChannelAgentChoices method.
 	SidebarChannelAgentChoicesFunc func(context1 context.Context, s string) (string, []string, error)
 
@@ -40,6 +52,22 @@ type slackLookupMock struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
+		// SendSessionMention holds details about calls to the SendSessionMention method.
+		SendSessionMention []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// S1 is the s1 argument value.
+			S1 string
+		}
+		// SessionMentionRecipient holds details about calls to the SessionMentionRecipient method.
+		SessionMentionRecipient []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+		}
 		// SidebarChannelAgentChoices holds details about calls to the SidebarChannelAgentChoices method.
 		SidebarChannelAgentChoices []struct {
 			// Context1 is the context1 argument value.
@@ -55,8 +83,86 @@ type slackLookupMock struct {
 			S string
 		}
 	}
+	lockSendSessionMention         sync.RWMutex
+	lockSessionMentionRecipient    sync.RWMutex
 	lockSidebarChannelAgentChoices sync.RWMutex
 	lockSlackTagsMatching          sync.RWMutex
+}
+
+// SendSessionMention calls SendSessionMentionFunc.
+func (mock *slackLookupMock) SendSessionMention(context1 context.Context, s string, s1 string) error {
+	if mock.SendSessionMentionFunc == nil {
+		panic("slackLookupMock.SendSessionMentionFunc: method is nil but slackLookup.SendSessionMention was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}{
+		Context1: context1,
+		S:        s,
+		S1:       s1,
+	}
+	mock.lockSendSessionMention.Lock()
+	mock.calls.SendSessionMention = append(mock.calls.SendSessionMention, callInfo)
+	mock.lockSendSessionMention.Unlock()
+	return mock.SendSessionMentionFunc(context1, s, s1)
+}
+
+// SendSessionMentionCalls gets all the calls that were made to SendSessionMention.
+// Check the length with:
+//
+//	len(mockedslackLookup.SendSessionMentionCalls())
+func (mock *slackLookupMock) SendSessionMentionCalls() []struct {
+	Context1 context.Context
+	S        string
+	S1       string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}
+	mock.lockSendSessionMention.RLock()
+	calls = mock.calls.SendSessionMention
+	mock.lockSendSessionMention.RUnlock()
+	return calls
+}
+
+// SessionMentionRecipient calls SessionMentionRecipientFunc.
+func (mock *slackLookupMock) SessionMentionRecipient(context1 context.Context, s string) (string, error) {
+	if mock.SessionMentionRecipientFunc == nil {
+		panic("slackLookupMock.SessionMentionRecipientFunc: method is nil but slackLookup.SessionMentionRecipient was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+	}{
+		Context1: context1,
+		S:        s,
+	}
+	mock.lockSessionMentionRecipient.Lock()
+	mock.calls.SessionMentionRecipient = append(mock.calls.SessionMentionRecipient, callInfo)
+	mock.lockSessionMentionRecipient.Unlock()
+	return mock.SessionMentionRecipientFunc(context1, s)
+}
+
+// SessionMentionRecipientCalls gets all the calls that were made to SessionMentionRecipient.
+// Check the length with:
+//
+//	len(mockedslackLookup.SessionMentionRecipientCalls())
+func (mock *slackLookupMock) SessionMentionRecipientCalls() []struct {
+	Context1 context.Context
+	S        string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+	}
+	mock.lockSessionMentionRecipient.RLock()
+	calls = mock.calls.SessionMentionRecipient
+	mock.lockSessionMentionRecipient.RUnlock()
+	return calls
 }
 
 // SidebarChannelAgentChoices calls SidebarChannelAgentChoicesFunc.

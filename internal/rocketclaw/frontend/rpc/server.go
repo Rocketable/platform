@@ -89,6 +89,9 @@ type ChannelAgentChoices interface {
 	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
 	SlackNames(context.Context, []string) map[string]string
 	SlackTagsMatching(context.Context, string) []string
+	SessionMentionNames(context.Context, string) map[string]string
+	SessionMentionRecipient(context.Context, string) (string, error)
+	SendSessionMention(context.Context, string, string) error
 	RenameThreadSession(ctx context.Context, conversationID, name string)
 }
 
@@ -1716,12 +1719,17 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return nil, err
 	}
 
-	var words []string
+	var (
+		words   []string
+		command string
+	)
+
 	if request.Delivery != PromptDelivery_STASH && strings.HasPrefix(strings.TrimLeftFunc(request.Text, unicode.IsSpace), "/") {
 		words = strings.Fields(request.Text)
+		command = words[0]
 	}
 
-	if len(words) > 0 && words[0] == "/stop" {
+	if command == "/stop" {
 		if len(words) != 1 {
 			return nil, fmt.Errorf("web stop: %w", status.Error(codes.InvalidArgument, "stop takes no arguments"))
 		}
@@ -1741,7 +1749,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return nil, fmt.Errorf("web prompt: %w", status.Error(codes.FailedPrecondition, "A test chat takes messages only from its agent editor's Send."))
 	}
 
-	if len(words) > 0 && words[0] == "/agent" {
+	if command == "/agent" {
 		return s.agentReply(ctx, request.Id, words)
 	}
 
@@ -1752,11 +1760,11 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 
 	delivery := request.Delivery
 
-	if len(words) > 0 && slices.Contains([]string{"/enqueue", "/stash", "/steer"}, words[0]) {
-		text = strings.TrimLeftFunc(strings.TrimPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), words[0]), unicode.IsSpace)
+	if slices.Contains([]string{"/enqueue", "/stash", "/steer"}, command) {
+		text = strings.TrimLeftFunc(strings.TrimPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), command), unicode.IsSpace)
 		delivery = map[string]PromptDelivery{
 			"/enqueue": PromptDelivery_QUEUE, "/stash": PromptDelivery_STASH, "/steer": PromptDelivery_STEER,
-		}[words[0]]
+		}[command]
 	}
 
 	kind := protocol.InboundKindSteer
@@ -1801,6 +1809,9 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	inbound.Metadata[protocol.InboundPrincipalMetadataKey], inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey] = principal, principal, username
 
 	inbound.Metadata["web_message_id"] = cmp.Or(request.MessageId, rand.Text())
+	if conversation == backend.KindWebChat && len(request.MentionIds) > 0 {
+		inbound.Metadata[protocol.InboundWebMentionIDsMetadataKey] = strings.Join(request.MentionIds, ",")
+	}
 
 	if kind == protocol.InboundKindEnqueue || kind == protocol.InboundKindHeld {
 		item := &protocol.ThreadQueueItem{

@@ -68,6 +68,8 @@ type threadBridgeManager struct {
 type slackLookup interface {
 	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
 	SlackTagsMatching(context.Context, string) []string
+	SessionMentionRecipient(context.Context, string) (string, error)
+	SendSessionMention(context.Context, string, string) error
 }
 
 type noSlackLookups struct{}
@@ -77,6 +79,14 @@ func (noSlackLookups) SidebarChannelAgentChoices(context.Context, string) (name 
 }
 
 func (noSlackLookups) SlackTagsMatching(context.Context, string) []string {
+	return nil
+}
+
+func (noSlackLookups) SessionMentionRecipient(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (noSlackLookups) SendSessionMention(context.Context, string, string) error {
 	return nil
 }
 
@@ -389,53 +399,57 @@ func (r *Runtime) PostPausedMessage(ctx context.Context, inbound *protocol.Inbou
 	}
 
 	b.mu.Lock()
-	live, err := r.postPausedMessageLocked(ctx, b, inbound, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: replay})
+	live, posted, err := r.postPausedMessageLocked(ctx, b, inbound, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: replay})
 	b.mu.Unlock()
 
 	if live {
 		return r.RunTurn(ctx, inbound)
 	}
 
+	if posted {
+		r.threads.sendWebMentions(ctx, inbound)
+	}
+
 	return err
 }
 
-func (r *Runtime) postPausedMessageLocked(ctx context.Context, b *Bridge, inbound *protocol.InboundMessage, line *harness.SessionEntry) (bool, error) {
+func (r *Runtime) postPausedMessageLocked(ctx context.Context, b *Bridge, inbound *protocol.InboundMessage, line *harness.SessionEntry) (live, posted bool, err error) {
 	if b.historyMutation {
-		return false, errors.New("conversation history is busy")
+		return false, false, errors.New("conversation history is busy")
 	}
 
 	tx, err := r.Sessions.beginStateTx(ctx, "paused message")
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 
 	defer func() { _ = tx.Rollback() }()
 
 	if err := lockShadowHistory(ctx, tx, inbound.ConversationID); err != nil {
-		return false, err
+		return false, false, err
 	}
 
 	accepted, err := reconcileWebDB(ctx, tx, inbound)
 	if err != nil || accepted {
-		return false, err
+		return false, false, err
 	}
 
 	var paused bool
 	if err := queryScalar(ctx, tx, "read paused message chat", `SELECT COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, &paused, inbound.ConversationID); err != nil {
-		return false, err
+		return false, false, err
 	}
 
 	if !paused {
-		return true, nil
+		return true, false, nil
 	}
 
 	committed, err := settleRevertDB(ctx, tx, inbound.ConversationID)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 
 	if _, err := appendSessionEntryDB(ctx, tx, inbound.ConversationID, line); err != nil {
-		return false, err
+		return false, false, err
 	}
 
 	if _, err := execState(ctx, tx, "mark paused message readers", `WITH readers AS (
@@ -444,18 +458,18 @@ func (r *Runtime) postPausedMessageLocked(ctx context.Context, b *Bridge, inboun
     )`+sessionReadersSQL+`
     SELECT username, path, conversation_id, waking, note FROM readers WHERE username <> $2
 )`+markTabsSQL+` SELECT count(*) FROM marked`, inbound.ConversationID, inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey]); err != nil {
-		return false, err
+		return false, false, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit paused message: %w", err)
+		return false, false, fmt.Errorf("commit paused message: %w", err)
 	}
 
 	if committed {
 		b.dropRevertedWaitingLocked()
 	}
 
-	return false, nil
+	return false, true, nil
 }
 
 func (r *Runtime) SwitchConversationAgent(conversationID, agent string) (bool, error) {
@@ -625,7 +639,12 @@ func (m *threadBridgeManager) WebURL(conversationID string) (string, error) {
 		return "", err
 	}
 
-	return origin + "/s/" + base64.RawURLEncoding.EncodeToString([]byte(conversationID)), nil
+	prefix := "/s/"
+	if strings.HasPrefix(conversationID, "opencode:") {
+		prefix = "/oc/"
+	}
+
+	return origin + prefix + base64.RawURLEncoding.EncodeToString([]byte(conversationID)), nil
 }
 
 func (m *threadBridgeManager) InterruptTurn(ctx context.Context, turnID string) error {

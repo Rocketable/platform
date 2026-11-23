@@ -13,6 +13,7 @@ const MaxInboundTextAttachmentBytes = 256 << 10
 
 const (
 	InboundRawTextMetadataKey        = "rocketclaw_raw_text"
+	InboundWebMentionIDsMetadataKey  = "rocketclaw_web_mention_ids"
 	InboundOriginMetadataKey         = "rocketclaw_origin"
 	InboundMediaMetadataKey          = "rocketclaw_media"
 	InboundPrincipalMetadataKey      = "rocketclaw_principal"

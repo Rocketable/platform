@@ -67,7 +67,7 @@ func startWebRPC(rt *backend.Runtime, tailnet *tailnetNode, channels rpc.Channel
 
 	if len(cfg.OpenCode) > 0 {
 		serving.Go(func() error {
-			rt.Sessions.SyncOpenCode(ctxSync, rt.Cfg)
+			rt.SyncOpenCode(ctxSync)
 			return nil
 		})
 	}

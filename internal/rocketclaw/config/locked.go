@@ -1,19 +1,26 @@
 package config
 
 import (
+	"crypto/rand"
 	"maps"
 	"slices"
 	"sync"
 )
 
 type LockedConfig struct {
+	openCodeMentionKey string
+
 	mu sync.Mutex
 
 	cfg Config
 }
 
 func NewLockedConfig(cfg *Config) *LockedConfig {
-	return &LockedConfig{cfg: clone(cfg)}
+	return &LockedConfig{cfg: clone(cfg), openCodeMentionKey: rand.Text()}
+}
+
+func (c *LockedConfig) OpenCodeMentionKey() string {
+	return c.openCodeMentionKey
 }
 
 func (c *LockedConfig) Store(cfg *Config) {

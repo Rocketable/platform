@@ -303,6 +303,8 @@ function start() {
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "opencode" });
       case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/SlackNames":
+        return Response.json({ names: input.sharedSessionId === "opencode:box:ses_a" ? { U123: "Teammate" } : {} });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       // New session needs the config to scope its draft.
       case "/api/ListConfig": return Response.json({ config: {} });
@@ -1300,15 +1302,30 @@ test("OpenCode's composer reports typing for the session the view shows, and the
     const held = Promise.withResolvers<void>();
     let requested = 0;
     await page.route("**/api/ReportTyping", async (request: any) => { if (++requested === 1) await held.promise; await request.continue(); });
-    await composer.pressSequentially("hello");
+    await composer.pressSequentially("Note for @Team");
+    await page.getByText("@Teammate", { exact: true }).click();
     await until(() => requested === 1);
+    const mention = page.waitForRequest("**/oc/box/api/session/ses_a/prompt");
     await composer.press("Enter");
+    const submitted = (await mention).postDataJSON();
+    expect(submitted).toMatchObject({
+      text: "Note for <@U123> ",
+      metadata: { displayText: "Note for @Teammate ", rocketclaw_mention: { messageID: submitted.id, ids: ["U123"] } },
+    });
     await until(() => sent.includes("prompt"));
     await reported(12, ses("ses_a", false));
     expect(await composer.textContent()).toBe("");
     held.resolve();
     await reported(12, ses("ses_a", true), ses("ses_a", false));
     await page.unroute("**/api/ReportTyping");
+
+    await composer.press("ArrowUp");
+    expect(await composer.textContent()).toBe("Note for @Teammate ");
+    const replay = page.waitForRequest("**/oc/box/api/session/ses_a/prompt");
+    await composer.press("Enter");
+    const recalled = (await replay).postDataJSON();
+    expect(recalled.text).toBe("Note for @Teammate ");
+    expect(recalled.metadata?.rocketclaw_mention).toBeUndefined();
 
     // The pill shows another person's typing below OpenCode's header and RocketClaw's version pill, clear of the
     // composer and what sits above it, and lets clicks through to the conversation.

@@ -32,6 +32,7 @@ import { SelectionQuote, type DiffNote, type PRComposer } from "./github-pr-prev
 import type { GitHubPR } from "./github-pr";
 import { reportTyping, TypingPill } from "./typing";
 import { SlackWarning } from "./slack-warning";
+import { encodeMentions, shiftMentions, useSessionMentions, type SessionMention } from "./session-mentions";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -751,7 +752,7 @@ function ServerSessions({ children }: { children: ReactNode }) {
 }
 
 type PendingFile = { id: string; file: File };
-type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; missing?: boolean; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; reviewRationales?: Record<string, string>; shadows?: ShadowBinding[]; earlierShadows?: { from: string; before: string; shadows: ShadowBinding[] }[]; movable?: boolean; jobs?: BackgroundJob[]; questions?: PendingQuestion[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; revertFloor?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
+type ComposerDraft = { text: string; mentions?: SessionMention[]; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; missing?: boolean; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; reviewRationales?: Record<string, string>; shadows?: ShadowBinding[]; earlierShadows?: { from: string; before: string; shadows: ShadowBinding[] }[]; movable?: boolean; jobs?: BackgroundJob[]; questions?: PendingQuestion[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; revertFloor?: string; canUndo?: boolean; reverting?: boolean; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
 // latest is the newest turn's entry key: its unsaved messages revert by input ID.
 const RevertActions = createContext<{ available: boolean; pending: boolean; latest?: string; floor?: string; run: (messageId?: string, redo?: boolean) => Promise<void> } | undefined>(undefined);
 const DraftScope = createContext<string | undefined>(undefined);
@@ -2612,7 +2613,9 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
       sidebar.invalidateQueries();
       navigate(sessionPath(id), false, name);
       void mutations.prompt({ id, text: document, messageId: optimistic.id }, name).catch((err: Error) => {
-        draft.text = [document, draft.text].filter(Boolean).join("\n\n");
+        const next = [document, draft.text].filter(Boolean).join("\n\n");
+        draft.mentions = shiftMentions(draft.mentions, draft.text, next);
+        draft.text = next;
         draft.edit++;
         draft.lines = draft.lines.filter((line) => line.id !== optimistic.id);
         draft.error = err.message;
@@ -5177,6 +5180,7 @@ async function prepareResumedDraft(id: string, scope: string, drafts: Map<string
       void queryClient.invalidateQueries({ queryKey: ["queue"] });
       if (draft.edit !== edit) throw new Error("The old draft was stashed, but this session's draft changed. Review it before trying again.");
       draft.text = "";
+      draft.mentions = undefined;
       draft.files = [];
       draft.agent = "";
       draft.edit++;
@@ -5203,7 +5207,7 @@ async function sendComposer(input: {
   currentAgent: string;
   goSession: (id: string, resumed?: boolean) => void;
   resumeSession: (id: string) => Promise<ComposerDraft>;
-  prompt: { mutateAsync: (value: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }) => Promise<string> };
+  prompt: { mutateAsync: (value: Parameters<typeof mutations.prompt>[0]) => Promise<string> };
   create: { mutateAsync: (value: { agent?: string }) => Promise<{ id: string; resumed?: boolean }> };
   scrollToEnd: () => boolean;
   setAgentOpen: (value: boolean) => void;
@@ -5226,6 +5230,7 @@ async function sendComposer(input: {
   let submission = ++draft.submission;
   input.onDraftChange();
   const agent = draft.agent;
+  const mentions = draft.mentions;
   let dispatchedEdit: number | undefined;
   let enqueue = followUp !== "STEER" && !stopping;
   input.scrollToEnd();
@@ -5241,6 +5246,7 @@ async function sendComposer(input: {
         const target = await input.resumeSession(sessionId);
         draft.sending = false;
         draft.text = "";
+        draft.mentions = undefined;
         draft.files = [];
         draft.agent = "";
         draft.edit++;
@@ -5279,11 +5285,12 @@ async function sendComposer(input: {
     }
     // Prompt waits for the whole turn. Consume only this submission before waiting.
     draft.text = "";
+    draft.mentions = undefined;
     reportTyping(name, input.sessionId, false);
     draft.files = [];
     draft.agent = "";
     dispatchedEdit = ++draft.edit;
-    const response = input.prompt.mutateAsync({ id: sessionId, text: input.text, delivery, messageId: optimistic.id, ...(attachments.length ? { attachmentIds: attachments.map((file) => file.id) } : {}) });
+    const response = input.prompt.mutateAsync({ id: sessionId, ...encodeMentions(input.text, mentions), delivery, messageId: optimistic.id, ...(attachments.length ? { attachmentIds: attachments.map((file) => file.id) } : {}) });
     draft.sending = false;
     draft.focus = (draft.focus ?? 0) + 1;
     input.onDraftChange();
@@ -5306,6 +5313,7 @@ async function sendComposer(input: {
     if (dispatchedEdit === undefined) draft.sending = false;
     else if (draft.edit === dispatchedEdit && draft.submission === submission) {
       draft.text = input.text;
+      draft.mentions = mentions;
       draft.files = input.files;
       draft.agent = agent;
       draft.edit++;
@@ -5344,6 +5352,7 @@ async function revertComposer(draft: ComposerDraft, messageId: string | undefine
         const files = await restoreFiles(result.prompt.attachments ?? []);
         if (draft.edit === edit && draft.submission === submission) {
           draft.text = result.prompt.text;
+          draft.mentions = undefined;
           draft.files = files;
           draft.edit++;
           draft.focus = (draft.focus ?? 0) + 1;
@@ -5503,6 +5512,7 @@ function SessionComposer({
   const [, setTyped] = useState(0);
   // Typing redraws only this composer; a whole-app redraw per keystroke made long chats lag.
   const setText = (value: string) => {
+    draft.mentions = shiftMentions(draft.mentions, draft.text, value);
     draft.text = value;
     draft.edit++;
     reportTyping(name, id, value !== "");
@@ -5615,6 +5625,7 @@ function SessionComposer({
         sessionId={id}
         text={text}
         setText={setText}
+        insertMention={(value, mention) => { setText(value); (draft.mentions ??= []).push(mention); }}
         matches={matches}
         pick={pick}
         applySlash={applySlash}
@@ -5667,6 +5678,7 @@ function Composer({
   sessionId,
   text,
   setText,
+  insertMention,
   matches,
   pick,
   applySlash,
@@ -5698,6 +5710,7 @@ function Composer({
   sessionId: string;
   text: string;
   setText: (value: string) => void;
+  insertMention: (value: string, mention: SessionMention) => void;
   matches: ReturnType<typeof slashMatches>;
   pick: number;
   applySlash: (invocation: string) => void;
@@ -5737,6 +5750,7 @@ function Composer({
     messageInput.current?.focus();
   });
   const empty = text.trim() === "" && files.length === 0;
+  const mention = useSessionMentions(sessionId, text, messageInput, insertMention);
   const agent = catalog.find((item) => item.name === selected);
   const actions = <>
     <VoiceToggle sessionId={sessionId} agent={selected} sending={sending} call={call} />
@@ -5759,6 +5773,7 @@ function Composer({
         messageInput.current!.setSelectionRange(value.length, value.length);
       }} />
       <div className="relative mx-auto w-full max-w-3xl">
+        {mention.menu}
         {matches.length > 0 ? (
           <ul className="absolute inset-x-0 bottom-full z-10 mb-2 max-h-[50dvh] overflow-y-auto rounded-2xl border bg-popover text-popover-foreground shadow-md">
             {matches.map((cmd, index) => (
@@ -5793,11 +5808,14 @@ function Composer({
               setSlashOff(false);
               setAgentOpen(false);
               setText(event.target.value);
+              mention.update(event.target.selectionStart);
             }}
+            onSelect={(event) => mention.update(event.currentTarget.selectionStart)}
             placeholder={placeholder}
             className="min-h-[60px] max-h-[180px] overflow-y-auto"
             onKeyDown={(event) => {
               if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.repeat) return;
+              if (mention.keyDown(event)) return;
               if (touch && event.key === "Enter" && !event.metaKey && !event.ctrlKey) return;
               if (event.key === "Enter" && event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
                 event.preventDefault();

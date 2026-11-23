@@ -86,10 +86,11 @@ type Connector struct {
 	factsWake chan struct{}
 	inbound   errgroup.Group
 
-	nameMu       sync.Mutex
-	nameByID     map[string]string
-	namesAt      time.Time
-	namesRetryAt time.Time
+	nameMu        sync.Mutex
+	nameByID      map[string]string
+	mentionPeople map[string]string
+	namesAt       time.Time
+	namesRetryAt  time.Time
 }
 
 type channelObservation struct {
@@ -241,6 +242,61 @@ func (c *Connector) SlackTagsMatching(ctx context.Context, needle string) []stri
 	}
 
 	return ids
+}
+
+func (c *Connector) SessionMentionNames(ctx context.Context, query string) map[string]string {
+	c.nameMu.Lock()
+	defer c.nameMu.Unlock()
+
+	c.refreshNames(ctx)
+
+	query = strings.ToLower(query)
+
+	names := make(map[string]string)
+
+	for id, name := range c.mentionPeople {
+		if strings.Contains(strings.ToLower(name), query) {
+			names[id] = name
+		}
+	}
+
+	return names
+}
+
+func (c *Connector) SessionMentionRecipient(ctx context.Context, id string) (string, error) {
+	if len(id) < 2 || !strings.ContainsAny(id[:1], "UW") || strings.Trim(id[1:], "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") != "" {
+		return "", nil
+	}
+
+	user, err := c.api.GetUserInfoContext(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("look up session mention recipient: %w", err)
+	}
+
+	if user.ID != id || user.Deleted || user.IsBot || user.IsAppUser || !user.IsEmailConfirmed {
+		return "", nil
+	}
+
+	return user.Profile.Email, nil
+}
+
+func (c *Connector) SendSessionMention(ctx context.Context, recipientID, conversationID string) error {
+	link, err := c.threadRouter.WebURL(conversationID)
+	if err != nil {
+		return fmt.Errorf("get session mention link: %w", err)
+	}
+
+	dm, _, _, err := c.api.OpenConversationContext(ctx, &slack.OpenConversationParameters{Users: []string{recipientID}})
+	if err != nil {
+		return fmt.Errorf("open session mention conversation: %w", err)
+	}
+
+	text := "You were mentioned in a session. <" + link + "|Open session>"
+	if _, _, err := c.api.PostMessageContext(ctx, dm.ID, slack.MsgOptionText(text, false), slack.MsgOptionDisableLinkUnfurl(), slack.MsgOptionDisableMediaUnfurl()); err != nil {
+		return fmt.Errorf("send session mention: %w", err)
+	}
+
+	return nil
 }
 
 func slackDirectoryID(id string) bool {
@@ -1364,8 +1420,26 @@ func (c *Connector) refreshNames(ctx context.Context) {
 	}
 
 	next := make(map[string]string, len(users))
+	c.mentionPeople = make(map[string]string)
+	duplicates := make(map[string]int)
+
 	for i := range users {
-		next[users[i].ID] = slackDisplayName(&users[i])
+		user := &users[i]
+
+		name := slackDisplayName(user)
+		next[user.ID] = name
+
+		if name != "" && user.ID != "USLACKBOT" && !user.Deleted && !user.IsBot && !user.IsAppUser {
+			c.mentionPeople[user.ID] = name
+			duplicates[strings.ToLower(name)]++
+		}
+	}
+
+	for i := range users {
+		user := &users[i]
+		if name, ok := c.mentionPeople[user.ID]; ok && duplicates[strings.ToLower(name)] > 1 {
+			c.mentionPeople[user.ID] = name + " (" + cmp.Or(user.Name, user.ID) + ")"
+		}
 	}
 
 	if groups, errGroups := c.api.GetUserGroupsContext(ctx, slack.GetUserGroupsOptionIncludeDisabled(true)); errGroups == nil {

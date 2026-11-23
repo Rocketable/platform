@@ -977,6 +977,7 @@ async function admitPrompt(
 
   // A retried admission reuses the first commit rather than switching again.
   let committed: Promise<unknown> | undefined
+  const people = value.prompt.flatMap((part) => part.type === "person" ? [part.id] : [])
 
   const admission = {
     id: value.id,
@@ -997,6 +998,7 @@ async function admitPrompt(
       attachments: request.attachments,
       agent: value.selection.agent,
       model: selectionModel(value.selection),
+      ...(people.length > 0 && { rocketclaw_mention: { messageID: value.id, ids: people } }),
     },
     // The data layer runs this in the prompt's turn of the send chain. The selection's commit follows what the
     // plugins prepare, so a send cancelled meanwhile stops here and nothing of it reaches the server.

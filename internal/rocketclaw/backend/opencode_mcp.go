@@ -110,11 +110,11 @@ func (r *Runtime) callOpenCodeTool(ctx context.Context, name string, server conf
 			return "", fmt.Errorf("read who prompted OpenCode session %s: %w", id, err)
 		}
 
-		if len(senders) == 0 || senders[0] == "" {
+		if len(senders) == 0 || senders[0].Metadata.Username == "" {
 			return "", errors.New("nobody sent this session's latest prompt from the RocketClaw Web, so there is nobody to take anywhere")
 		}
 
-		username = senders[0]
+		username = senders[0].Metadata.Username
 	}
 
 	tools := r.openCodeTools(conversation, space, username)

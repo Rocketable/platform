@@ -40,6 +40,8 @@ const (
 	AttentionSent          AttentionAction = "sent"
 )
 
+const sharedMentionNote = "Mentioned you"
+
 const markTabsSQL = `, strongest AS (
     SELECT DISTINCT ON (username, path) username, path, conversation_id, waking, note FROM readers
     ORDER BY username, path, waking DESC
@@ -58,7 +60,8 @@ const markTabsSQL = `, strongest AS (
         resume_until = CASE WHEN a.parked AND NOT a.resumes AND excluded.unread_at IS DISTINCT FROM now() THEN a.until ELSE a.resume_until END,
         unread_at = COALESCE(excluded.unread_at, a.unread_at),
         quiet = CASE WHEN excluded.unread_at IS NULL THEN a.quiet ELSE a.parked END,
-        note = CASE WHEN excluded.unread_at IS NULL THEN a.note ELSE excluded.note END
+        note = CASE WHEN excluded.unread_at IS NULL OR a.unread_at IS NOT NULL AND a.note = '` + sharedMentionNote + `'
+            THEN a.note ELSE excluded.note END
     WHERE NOT a.unfollowed
     RETURNING a.path
 )`
@@ -94,6 +97,39 @@ const turnEventsSQL = `, inbounds AS (
     UNION SELECT t.conversation_id, t.kind, t.waking, i.inbound->'Metadata'->>'` + protocol.InboundPrincipalEmailMetadataKey + `' FROM turn t CROSS JOIN inbounds i
     WHERE i.inbound->>'Source' = '` + string(protocol.SourceWeb) + `' AND i.inbound->>'Human' = 'true'
 )`
+
+func (s *SessionService) MarkSharedMention(ctx context.Context, conversationID, sender, recipient string) (bool, error) {
+	cfg := s.definitions.Clone()
+
+	from, err := s.SpaceLimitFor(ctx, cfg.PermittedSpaces(sender))
+	if err != nil {
+		return false, err
+	}
+
+	to, err := s.SpaceLimitFor(ctx, cfg.PermittedSpaces(recipient))
+	if err != nil {
+		return false, err
+	}
+
+	var eligible bool
+
+	err = queryScalar(ctx, s.db, "mark shared mention", `WITH eligible AS (
+    SELECT DISTINCT $2::text AS username, `+tabPathSQL+` AS path, c.conversation_id
+    FROM conversations c JOIN web_shared_tabs t USING (conversation_id)
+    JOIN web_tab_states p ON p.username = $2
+    WHERE c.conversation_id = $1 AND c.parent_conversation_id IS NULL AND c.shadow_parent IS NULL
+        AND c.kind IN ('`+string(KindWebChat)+`', '`+string(KindRemote)+`')
+        AND (NOT $3 OR c.kind = '`+string(KindWebChat)+`' AND t.space = ANY($4)
+            AND (c.space_id = ANY($4) OR c.space_id IS NULL AND c.agent = ANY($5)))
+        AND (NOT $6 OR c.kind = '`+string(KindWebChat)+`' AND t.space = ANY($7)
+            AND (c.space_id = ANY($7) OR c.space_id IS NULL AND c.agent = ANY($8)))
+), readers AS (
+    SELECT username, path, conversation_id, FALSE AS waking, '`+sharedMentionNote+`' AS note FROM eligible
+)`+markTabsSQL+`
+SELECT count(*) > 0 FROM eligible`, &eligible, conversationID, recipient, from.Limited(), from.ids, from.agents, to.Limited(), to.ids, to.agents)
+
+	return eligible, err
+}
 
 func (s *SessionService) markLocation(ctx context.Context, tx *sql.Tx, page, space, note string, match func(rest string) bool) error {
 	type tab struct {
@@ -238,7 +274,7 @@ ON CONFLICT (username, path) DO UPDATE SET
     unread_at = CASE $4::text WHEN 'read' THEN NULL WHEN 'unfollow' THEN NULL WHEN 'unread' THEN now() ELSE a.unread_at END,
     quiet = CASE $4::text WHEN 'unread' THEN TRUE WHEN 'park' THEN a.quiet OR a.unread_at IS NOT NULL
         WHEN 'park_done' THEN a.quiet OR a.unread_at IS NOT NULL ELSE a.quiet END,
-    note = CASE WHEN $4::text IN ('unread', 'unfollow') THEN '' ELSE a.note END,
+    note = CASE WHEN $4::text IN ('unread', 'unfollow') OR $4::text = 'read' AND a.note = '`+sharedMentionNote+`' THEN '' ELSE a.note END,
     parked = CASE $4::text WHEN 'park' THEN TRUE WHEN 'park_done' THEN TRUE WHEN 'unpark' THEN FALSE ELSE a.parked END,
     until = CASE WHEN $4::text IN ('park', 'park_done', 'unpark') THEN excluded.until ELSE a.until END,
     auto_park = COALESCE(excluded.auto_park, a.auto_park),
@@ -274,7 +310,8 @@ func (s *SessionService) PollAttention(ctx context.Context, username, path strin
     ON CONFLICT (username) DO UPDATE SET viewing = excluded.viewing, viewed_at = excluded.viewed_at, navigation = ''
     RETURNING new.viewing, new.revision, CASE WHEN old.navigation_at > now() - interval '3 days' THEN old.navigation ELSE '' END AS navigation
 ), cleared AS (
-    UPDATE web_tab_attention a SET unread_at = NULL FROM recorded r
+    UPDATE web_tab_attention a SET unread_at = NULL,
+        note = CASE WHEN a.note = '`+sharedMentionNote+`' THEN '' ELSE a.note END FROM recorded r
     WHERE a.username = $1 AND a.path = r.viewing AND a.unread_at IS NOT NULL AND NOT ($4 AND a.quiet)
 )
 SELECT revision, navigation FROM recorded`, username, path, TabConversation(path), hold).Scan(&revision, &navigation)
@@ -388,7 +425,8 @@ FROM web_tab_states WHERE username = $1 FOR UPDATE`, username).Scan(&viewing))
 )
 UPDATE web_tab_attention a SET parked = FALSE, until = NULL, worked = a.worked AND a.resumes,
     unread_at = CASE WHEN a.path = $2 OR a.unfollowed THEN a.unread_at ELSE now() END, quiet = a.quiet AND (a.path = $2 OR a.unfollowed),
-    note = CASE WHEN a.path = $2 OR a.unfollowed OR a.unread_at >= a.until THEN a.note ELSE 'Park ended' END
+    note = CASE WHEN a.path = $2 OR a.unfollowed OR a.unread_at >= a.until
+        OR a.unread_at IS NOT NULL AND a.note = '`+sharedMentionNote+`' THEN a.note ELSE 'Park ended' END
 FROM due d WHERE a.username = $1 AND a.path = d.path AND a.until <= now()
 RETURNING a.path`, "wake tab timers", username, viewing)
 	if err != nil {

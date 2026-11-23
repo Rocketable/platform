@@ -5,6 +5,7 @@ import type {
   ComposerFilePart,
   ComposerSkillPart,
   ComposerSessionPart,
+  ComposerPersonPart,
   ComposerPersistedState,
   ComposerPrompt,
 } from "../types"
@@ -75,7 +76,7 @@ export function createComposerEditorActions(input: ComposerStateStoreInput) {
       setStore()("context", "items", (items) => items.filter((item) => item.key !== key))
     },
     addMention(
-      mention: ComposerFilePart | ComposerAgentPart | ComposerSkillPart | ComposerSessionPart,
+      mention: ComposerFilePart | ComposerAgentPart | ComposerSkillPart | ComposerSessionPart | ComposerPersonPart,
       range?: { start: number; end: number },
     ) {
       const prompt = withOffsets(store().prompt)
@@ -143,7 +144,7 @@ function insertMention(
   prompt: ComposerPrompt,
   start: number,
   end: number,
-  mention: ComposerFilePart | ComposerAgentPart | ComposerSkillPart | ComposerSessionPart,
+  mention: ComposerFilePart | ComposerAgentPart | ComposerSkillPart | ComposerSessionPart | ComposerPersonPart,
 ): ComposerPrompt {
   let position = 0
   let inserted = false

@@ -737,6 +737,8 @@ func (b *Bridge) publishConsumed(ctx context.Context, inbound *protocol.InboundM
 
 		if err := b.config.SessionService.SaveTurnStep(context.WithoutCancel(ctx), b.config.ConversationID, key, json.RawMessage("true")); err != nil {
 			b.log.Error("record consumed web input", "error", err)
+		} else if header != "" {
+			b.threads.sendWebMentions(ctx, inbound)
 		}
 	}
 }

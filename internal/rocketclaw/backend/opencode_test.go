@@ -45,9 +45,12 @@ type fakeOpenCode struct {
 
 type openCodeTestMessage struct {
 	Type     string
+	ID       string
+	Text     string
 	Username string
 	Created  int64
 	Outcome  string
+	Mention  *OpenCodeMention
 }
 
 func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -179,10 +182,16 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			type wireMessage struct {
-				Type     string            `json:"type"`
-				Metadata map[string]string `json:"metadata"`
-				Outcome  string            `json:"outcome,omitempty"`
-				Time     struct {
+				Type     string `json:"type"`
+				ID       string `json:"id"`
+				Text     string `json:"text"`
+				Metadata struct {
+					DisplayText string           `json:"displayText"`
+					Username    string           `json:"rocketclaw_username,omitempty"`
+					Mention     *OpenCodeMention `json:"rocketclaw_mention,omitempty"`
+				} `json:"metadata"`
+				Outcome string `json:"outcome,omitempty"`
+				Time    struct {
 					Created int64 `json:"created"`
 				} `json:"time"`
 			}
@@ -190,11 +199,8 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			data := []wireMessage{}
 			for _, message := range slices.Backward(history) {
 				if message.Type == query.Get("type") && len(data) < limit {
-					wire := wireMessage{Type: message.Type, Metadata: map[string]string{"displayText": "hi"}, Outcome: message.Outcome}
-					if message.Username != "" {
-						wire.Metadata["rocketclaw_username"] = message.Username
-					}
-
+					wire := wireMessage{Type: message.Type, ID: message.ID, Text: message.Text, Outcome: message.Outcome}
+					wire.Metadata.DisplayText, wire.Metadata.Username, wire.Metadata.Mention = "hi", message.Username, message.Mention
 					wire.Time.Created = message.Created
 					data = append(data, wire)
 				}
@@ -593,6 +599,8 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	id, err := s.CreateOpenCodeSession(ctx, "box", box, "/srv/app", "")
 	require.NoError(t, err)
 
+	shells := &openCodeShells{}
+
 	unread := func(username string) []string {
 		ids := []string{}
 
@@ -621,16 +629,21 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 
 		fake.messages["ses_new"] = append(fake.messages["ses_new"], messages...)
 
-		require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+		require.NoError(t, s.syncOpenCode(ctx, "box", box, shells))
 	}
 	prompt := func(username string, created int64) openCodeTestMessage {
 		return openCodeTestMessage{Type: "user", Username: username, Created: created}
 	}
 	idle := func(created int64) openCodeTestMessage { return openCodeTestMessage{Type: "idle", Created: created} }
 
-	turn(5000, true, prompt("alice", 5100))
+	mention := &OpenCodeMention{MessageID: "msg_mention", IDs: []string{"U123"}}
+	mention.Signature = mention.Sign(s.definitions.OpenCodeMentionKey(), id, "alice")
+	turn(5000, true, openCodeTestMessage{Type: "user", ID: mention.MessageID, Text: "See <@U123>", Username: "alice", Created: 5100, Mention: mention})
 	assert.Empty(t, fake.reads, "a busy session reads no messages")
+	assert.Empty(t, shells.mentions)
 	turn(5000, false, idle(5200))
+	require.Len(t, shells.mentions, 1)
+	assert.Equal(t, id, shells.mentions[0].ConversationID)
 	assert.Equal(t, []string{id}, unread("alice"))
 	assert.Empty(t, unread("bob"))
 
@@ -640,6 +653,7 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	assert.Equal(t, []string{path}, paths, "the mark is on the tab path the Web spells")
 
 	turn(6000, false, prompt("bob", 5900), prompt("", 5950), idle(6000))
+	assert.Empty(t, shells.mentions, "the cursor does not deliver the same selection again")
 	assert.Equal(t, []string{id}, unread("bob"))
 	assert.Empty(t, unread("alice"))
 
@@ -983,7 +997,7 @@ func TestSyncOpenCodePrunesOnItsOwnSchedule(t *testing.T) {
 
 	var syncing errgroup.Group
 	syncing.Go(func() error {
-		s.SyncOpenCode(ctx, s.definitions)
+		(&Runtime{Sessions: s, Cfg: s.definitions}).SyncOpenCode(ctx)
 		return nil
 	})
 

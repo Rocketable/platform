@@ -1141,6 +1141,8 @@ func TestRuntimeQueueEditMakesTheEditorTheSender(t *testing.T) {
 		request := bridgeRequest{inbound: write, queueItemID: id}
 		if live {
 			bridge.waiting = []bridgeRequest{request}
+		} else {
+			request.inbound.Metadata[protocol.InboundWebMentionIDsMetadataKey] = "U123"
 		}
 
 		changed, err := rt.EditQueueItem(t.Context(), "main", id, "from Bob", "Bob", "bob@example.com")

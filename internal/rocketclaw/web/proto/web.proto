@@ -338,6 +338,8 @@ message SearchSessionsResponse {
 // SlackNamesRequest asks for display names of Slack IDs.
 message SlackNamesRequest {
   repeated string ids = 1;
+  string shared_session_id = 2;
+  string query = 3;
 }
 
 // SlackNamesResponse maps IDs to bare display strings without a leading @ or #.
@@ -462,6 +464,7 @@ message PromptRequest {
   PromptDelivery delivery = 3;
   repeated string attachment_ids = 4;
   string message_id = 5;
+  repeated string mention_ids = 6;
 }
 
 message PromptResponse {

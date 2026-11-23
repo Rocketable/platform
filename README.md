@@ -175,7 +175,7 @@ Agents act with their own permissions, not the person's. An agent in a limited p
 
 ### Slack
 
-Slack has one job: quick help when an allowed user mentions the bot. Everything else happens in the web page, including cron reports and MCP sessions.
+Slack answers mentions from allowed users and delivers direct notifications when people tag teammates in Shared sessions on the web page. A notification links to the session without including the message or a preview. The recipient must have signed in to RocketClaw Web with their confirmed Slack email and have access to the shared session. Cron reports and MCP sessions stay on the web page.
 
 Slack is optional. Without `slack.bot_token` and `slack.app_token`, RocketClaw starts without Slack and `slack.channels` may be empty. With the tokens, both are required and `slack.channels` needs at least one row.
 
@@ -193,6 +193,7 @@ Set up the Slack app with the bot events `app_mention`, `channel_rename` and `gr
 
 - `users:read` and `usergroups:read`, so the web page shows names instead of Slack IDs.
 - `users:read.email`, so a mention's turn gets the sender's email as `ROCKETCLAW_PRINCIPAL_EMAIL` (see [Agents and permissions](#agents-and-permissions)). Without it, Slack turns get only `ROCKETCLAW_PRINCIPAL_NAME`.
+- `im:write`, so the app can open a direct conversation to deliver a teammate mention. The delivery also uses `users:read.email`.
 - `channels:read` and `channels:history`, so the bot can expand threads forwarded from public channels. It never joins channels on its own. `channels:read` also delivers `channel_rename`.
 - `groups:read`, only for private channels, so the bot receives `group_rename`.
 

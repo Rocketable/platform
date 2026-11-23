@@ -67,6 +67,30 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
   const serverSDK = useServerSDK()
   const tabs = useTabs()
   const prompt = adapter.state
+  const [people, setPeople] = createSignal<ComposerSuggestion[]>([])
+  const searchPeople = async (query: string, signal: AbortSignal) => {
+    setPeople([])
+    if (adapter.kind !== "active-session" || server.conn.type !== "http") return
+    const proxy = new URL(server.conn.http.url)
+    const name = /^\/oc\/([^/]+)\/?$/.exec(proxy.pathname)?.[1]
+    if (!name || proxy.origin !== location.origin) return
+    const session = adapter.session().id
+    const response = await fetch("/api/SlackNames", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [], sharedSessionId: `opencode:${name}:${session}`, query }),
+      signal,
+    })
+    if (!response.ok || signal.aborted || adapter.session().id !== session) return
+    const { names = {} } = (await response.json()) as { names?: Record<string, string> }
+    if (signal.aborted || adapter.session().id !== session) return
+    setPeople(Object.entries(names).sort(([, left], [, right]) => left.localeCompare(right)).slice(0, 8).map(([id, name]) => ({
+      id: `person:${id}`,
+      kind: "person",
+      label: `@${name}`,
+      mention: { type: "person", id, content: `@${name}`, start: 0, end: 0 },
+    })))
+  }
   // Editor actions write the captured store directly, rather than going through the context methods.
   createEffect(
     on(
@@ -229,6 +253,7 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
   })
 
   const context = createMemo<ComposerSuggestion[]>(() => [
+    ...people(),
     ...references(),
     ...skills().map((skill) => ({
       id: `skill:${skill.id}`,
@@ -358,7 +383,13 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
   const controller = createComposerEditor({
     store: prompt.store,
     history: {
-      entries: (mode) => history.entries(mode).map((entry) => ({ prompt: entry.prompt, metadata: entry.comments })),
+      // rocketclaw: recalled history shows names without renewing notifications (upstream packages/app/src/composer/model.ts).
+      entries: (mode) => history.entries(mode).map((entry) => ({
+        prompt: entry.prompt.map((part) => part.type === "person"
+          ? { type: "text" as const, content: part.content, start: part.start, end: part.end }
+          : part),
+        metadata: entry.comments,
+      })),
       add: (value, mode) => history.add(value, mode, mode === "shell" ? [] : historyComments()),
       capture: historyComments,
       // SAFETY: `entries` stores each entry's comments as its metadata, and the editor restores only metadata it read there.
@@ -367,7 +398,9 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
     commands,
     context,
     // The server narrows by the first word; the title match then needs the whole query.
-    requestSessionSearch: (word, signal) => sessions.search(word, signal).then(() => undefined),
+    requestSessionSearch: async (word, signal) => {
+      await Promise.all([sessions.search(word, signal), searchPeople(word, signal).catch(() => undefined)])
+    },
     searchSessions: (query) => {
       const project = sdk().current?.project.id
 
