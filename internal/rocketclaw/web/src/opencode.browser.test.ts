@@ -311,6 +311,10 @@ function start() {
       }
       case "/api/Tabs":
         return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), space: "main" }], groups: [], space: "main", last: {} } });
+      case "/api/FindPullRequests": {
+        const runs = input.runs as { command: string; output: string }[];
+        return Response.json({ created: runs.filter((run) => run.command.startsWith("gh pr create")).map((run) => run.output), mentioned: [] });
+      }
       default: return Response.json({});
     }
   } });

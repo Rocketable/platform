@@ -100,16 +100,22 @@ that could not be read, and PRs that were only mentioned never open it.
 
 Discovery reads the thread's whole session tree: its own history, its subagent
 sessions at any depth, and its shadow sessions. Each successful recorded shell
-call contributes PRs, classified the way t3code does. A call that runs
-`gh pr list`, `gh pr status`, `gh search prs` or `gh api` contributes nothing. A
-PR URL that a `gh pr create` prints alone on a line is created, unless another
-command in the script names that PR, the call is a dry run, or the call prints
-more such URLs than it has create commands. Every other GitHub PR URL in the
-output is mentioned. Failed and running calls, prompts and permission-review plans
-contribute nothing. The pane lists created PRs first and marks mentioned ones in
-its picker. Native RocketClaw records both lists from each bash call's full command
-and output; older history without those lists falls back to the bounded call
-summary, which can miss a PR. Discovery reads older history pages too. It runs when
+call contributes PRs. The server reads the call's command with a shell parser, so
+quoted text, comments and heredoc bodies are never taken for commands, and a `gh`
+command counts wherever it runs: after `VAR=$(…)`, inside `$(…)`, in a pipe, a
+function or an `if`. A PR URL that a `gh pr create` prints alone on a line is
+created, unless another command in the script names that PR, the call is a dry
+run, or the call prints more such URLs than it has create commands. Every other
+GitHub PR URL in the output is mentioned, except in a call that also runs
+`gh pr list`, `gh pr status`, `gh search prs` or `gh api`, whose output can list
+unrelated PRs: that call contributes only its created PRs. Failed and running
+calls, prompts and permission-review plans contribute nothing. The pane lists
+created PRs first and marks mentioned ones in its picker. Native RocketClaw records
+both lists from each bash call's full command and output; older history without
+those lists falls back to the bounded call summary, which can miss a PR. For
+OpenCode, the browser sends each successful call's command and the output lines
+that hold GitHub links to the server, which applies the same rules. Discovery
+reads older history pages too. It runs when
 the pane opens, refreshes after thread updates, and can be repeated with the
 header's **Refresh** button, which also reads the PR shown again.
 

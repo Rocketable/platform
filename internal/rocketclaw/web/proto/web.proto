@@ -1080,6 +1080,18 @@ message DeleteSessionRequest {
 
 message DeleteSessionResponse {}
 
+message ShellRun {
+  string command = 1;
+  string output = 2;
+}
+
+message FindPullRequestsRequest { repeated ShellRun runs = 1; }
+
+message FindPullRequestsResponse {
+  repeated string created = 1;
+  repeated string mentioned = 2;
+}
+
 message IdentityRequest {}
 
 // sandbox_error is why emulated shells cannot run, empty when they can or no agent uses one. limited is set,
@@ -1357,4 +1369,5 @@ service Web {
   rpc LoadSessionEntries(SessionEntriesRequest) returns (LoadSessionEntriesResponse);
   rpc DeleteSessionEntries(SessionEntriesRequest) returns (DeleteSessionEntriesResponse);
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+  rpc FindPullRequests(FindPullRequestsRequest) returns (FindPullRequestsResponse);
 }

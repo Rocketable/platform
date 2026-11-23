@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
+	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 type PublicProgressKind string
@@ -160,6 +163,15 @@ func (r *CodeModeCall) String() string {
 	return text
 }
 
+func (r *CodeModeCall) PullRequests() (created, mentioned []string) {
+	var bash bashParams
+	if len(r.CreatedPullRequests)+len(r.MentionedPullRequests) > 0 || r.Name != "bash" || r.Status != codeModeCallOK || !strings.Contains(r.Summary, "https://github.com/") || json.Unmarshal([]byte(r.Arguments), &bash) != nil {
+		return r.CreatedPullRequests, r.MentionedPullRequests
+	}
+
+	return PullRequestsIn(bash.Command, r.Summary)
+}
+
 func codeModeCallRecord(ctx context.Context, name string, raw json.RawMessage) CodeModeCall {
 	tc, _ := toolCallContextFrom(ctx)
 
@@ -202,7 +214,7 @@ func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
 	}
 
 	if command != "" && r.Status == codeModeCallOK && strings.Contains(text, "https://github.com/") {
-		r.CreatedPullRequests, r.MentionedPullRequests = pullRequestsIn(command, text)
+		r.CreatedPullRequests, r.MentionedPullRequests = PullRequestsIn(command, text)
 	}
 
 	text = strings.TrimRightFunc(text, unicode.IsSpace)
@@ -229,33 +241,42 @@ const (
 var (
 	pullRequestMention = regexp.MustCompile(githubPullRequest + `\b`)
 	pullRequestLine    = regexp.MustCompile(`(?m)^[ \t]*` + githubPullRequest + `(?:/(?:files|commits|checks))?/?(?:[?#]\S*)?[ \t\r]*$`)
-	pullRequestCreate  = regexp.MustCompile("(?:^|[;&|({`\\n]|\\b(?:do|then|else)\\s)\\s*(?:(?:\\w+=\\S*|env|time|nohup|timeout\\s+\\S+)\\s+)*gh\\s+pr\\s+(?:create|new)")
-	pullRequestDryRun  = regexp.MustCompile(`gh\s+pr\s+(?:create|new)(?:\s[^\n;&|]*)?\s--dry-run(?:[=\s]|$)`)
-	pullRequestNumber  = regexp.MustCompile(`(?:^|[\s#/=("'])(\d+)`)
-	pullRequestListing = regexp.MustCompile(`\bgh\s+(?:pr\s+(?:list|status)|search\s+prs|api)\b`)
-	quotedDryRun       = regexp.MustCompile(`^['"]--dry-run(?:=[^'"]*)?['"]$`)
-	heredocStart       = regexp.MustCompile(`<<-?[ \t]*(?:'(\w+)'|"(\w+)"|(\w+))`)
+	pullRequestNumber  = regexp.MustCompile(`(?:^|[\s#/=(])(\d+)`)
 )
 
-func pullRequestsIn(command, output string) (created, mentioned []string) {
-	code := shellCode(command)
-	if pullRequestListing.MatchString(code) {
-		return nil, nil
+func PullRequestsIn(command, output string) (created, mentioned []string) {
+	var (
+		creates         int
+		dryRun, listing bool
+		named           []string
+	)
+
+	if file, err := syntax.NewParser().Parse(strings.NewReader(command), ""); err == nil {
+		syntax.Walk(file, func(node syntax.Node) bool {
+			switch node := node.(type) {
+			case *syntax.CallExpr:
+				switch name, arguments := ghCommand(node); name {
+				case "pr create", "pr new":
+					creates++
+					dryRun = dryRun || slices.ContainsFunc(arguments, func(argument string) bool {
+						return argument == "--dry-run" || strings.HasPrefix(argument, "--dry-run=")
+					})
+
+					return false
+				case "pr list", "pr status", "search prs", "api":
+					listing = true
+				}
+			case *syntax.Lit:
+				named = appendPullRequestNumbers(named, node.Value)
+			case *syntax.SglQuoted:
+				named = appendPullRequestNumbers(named, node.Value)
+			}
+
+			return true
+		})
 	}
 
-	if creates := createCommands(code); creates > 0 && !pullRequestDryRun.MatchString(code) {
-		var named []string
-
-		for _, segment := range shellSegments(command) {
-			if createCommands(shellCode(segment)) == 0 {
-				for _, number := range pullRequestNumber.FindAllStringSubmatchIndex(segment, -1) {
-					if number[3] == len(segment) || strings.IndexByte("\t\n\f\r );&|/\"'", segment[number[3]]) >= 0 {
-						named = append(named, segment[number[2]:number[3]])
-					}
-				}
-			}
-		}
-
+	if creates > 0 && !dryRun {
 		for _, match := range pullRequestLine.FindAllStringSubmatch(output, -1) {
 			url := "https://github.com/" + match[1] + "/" + match[2] + "/pull/" + match[3]
 			if slices.Contains(created, url) || slices.Contains(named, match[3]) {
@@ -269,134 +290,53 @@ func pullRequestsIn(command, output string) (created, mentioned []string) {
 		}
 	}
 
+	created = created[:min(len(created), maxPullRequestLinks)]
+	if listing {
+		return created, nil
+	}
+
 	for _, url := range pullRequestMention.FindAllString(output, -1) {
 		if len(mentioned) < maxPullRequestLinks && !slices.Contains(created, url) && !slices.Contains(mentioned, url) {
 			mentioned = append(mentioned, url)
 		}
 	}
 
-	return created[:min(len(created), maxPullRequestLinks)], mentioned
+	return created, mentioned
 }
 
-func createCommands(code string) int {
-	count := 0
-
-	for _, match := range pullRequestCreate.FindAllStringIndex(code, -1) {
-		if match[1] == len(code) || strings.IndexByte(" \t\r\n;&|)", code[match[1]]) >= 0 {
-			count++
-		}
+func ghCommand(call *syntax.CallExpr) (name string, arguments []string) {
+	fields := make([]string, 0, len(call.Args))
+	for _, word := range call.Args {
+		field, _ := expand.Literal(&expand.Config{}, word)
+		fields = append(fields, field)
 	}
 
-	return count
+	for len(fields) > 1 && (fields[0] == "env" || fields[0] == "nohup" || fields[0] == "timeout" || strings.Contains(fields[0], "=")) {
+		if fields[0] == "timeout" {
+			fields = fields[1:]
+		}
+
+		fields = fields[1:]
+	}
+
+	switch {
+	case len(fields) < 2 || path.Base(fields[0]) != "gh":
+		return "", nil
+	case fields[1] == "api" || len(fields) == 2:
+		return fields[1], fields[2:]
+	default:
+		return fields[1] + " " + fields[2], fields[3:]
+	}
 }
 
-func shellCode(script string) string {
-	var (
-		withoutBodies strings.Builder
-		heredocs      []string
-	)
-
-	for line := range strings.Lines(script) {
-		if len(heredocs) > 0 {
-			if strings.Trim(line, " \t\n") == heredocs[0] {
-				heredocs = heredocs[1:]
-			}
-
-			continue
-		}
-
-		if !strings.HasSuffix(line, "\n") {
-			withoutBodies.WriteString(line)
-
-			continue
-		}
-
-		last := 0
-
-		for _, marker := range heredocStart.FindAllStringSubmatchIndex(line, -1) {
-			if marker[0] > 0 && line[marker[0]-1] == '<' {
-				continue
-			}
-
-			withoutBodies.WriteString(line[last:marker[0]])
-			last = marker[1]
-
-			for group := 2; group < len(marker); group += 2 {
-				if marker[group] >= 0 {
-					heredocs = append(heredocs, line[marker[group]:marker[group+1]])
-				}
-			}
-		}
-
-		withoutBodies.WriteString(line[last:])
-	}
-
-	script = withoutBodies.String()
-
-	var code strings.Builder
-
-	for i := 0; i < len(script); i++ {
-		switch c := script[i]; {
-		case c == '\\':
-			code.WriteString(script[i:min(i+2, len(script))])
-			i++
-		case c == '\'' || c == '"':
-			end := i + 1
-			for ; end < len(script) && script[end] != c; end++ {
-				if c == '"' && script[end] == '\\' {
-					end++
-				}
-			}
-
-			if quotedDryRun.MatchString(script[i:min(end+1, len(script))]) {
-				code.WriteString("--dry-run")
-			} else {
-				code.WriteString("''")
-			}
-
-			i = end
-		case c == '#' && (i == 0 || strings.IndexByte(" \t\n;&|(", script[i-1]) >= 0):
-			for i+1 < len(script) && script[i+1] != '\n' {
-				i++
-			}
-		default:
-			code.WriteByte(c)
+func appendPullRequestNumbers(numbers []string, text string) []string {
+	for _, number := range pullRequestNumber.FindAllStringSubmatchIndex(text, -1) {
+		if number[3] == len(text) || strings.IndexByte("\t\n\f\r );&|/", text[number[3]]) >= 0 {
+			numbers = append(numbers, text[number[2]:number[3]])
 		}
 	}
 
-	return code.String()
-}
-
-func shellSegments(script string) []string {
-	var (
-		segments []string
-		quote    byte
-		start    int
-	)
-
-	for i := 0; i < len(script); i++ {
-		switch c := script[i]; {
-		case quote == '"' && c == '\\':
-			i++
-		case quote != 0:
-			if c == quote {
-				quote = 0
-			}
-		case c == '\'' || c == '"':
-			quote = c
-		case c == '\\':
-			i++
-		case c == ';' || c == '|' || c == '\n' || strings.HasPrefix(script[i:], "&&"):
-			segments = append(segments, script[start:i])
-			if strings.HasPrefix(script[i:], "&&") || strings.HasPrefix(script[i:], "||") {
-				i++
-			}
-
-			start = i + 1
-		}
-	}
-
-	return append(segments, script[start:])
+	return numbers
 }
 
 type turnObservations struct {

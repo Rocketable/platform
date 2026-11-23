@@ -16,7 +16,7 @@ posthog.init(config.project_token, {
     // The replay network plugin applies this to bodies, headers AND network_timing entries.
     maskCapturedNetworkRequestFn: (request) => {
       const url = new URL(request.name, location.href);
-      return url.hostname === "api.github.com" || url.pathname.endsWith("/api/History") || url.searchParams.has("pull-request-discovery") ? null : request;
+      return url.hostname === "api.github.com" || url.pathname.endsWith("/api/History") || url.pathname.endsWith("/api/FindPullRequests") || url.searchParams.has("pull-request-discovery") ? null : request;
     },
   },
 });

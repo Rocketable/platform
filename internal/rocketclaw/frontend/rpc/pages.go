@@ -22,6 +22,8 @@ func (s *Server) pageCall(ctx context.Context, request any) (any, error) {
 		return s.tabs(ctx, request)
 	case *ReportTypingRequest:
 		return s.reportTyping(ctx, request)
+	case *FindPullRequestsRequest:
+		return s.findPullRequests(ctx, request)
 	default:
 		return &ProtocolResponse{ProtoSha256: protoSHA256}, nil
 	}

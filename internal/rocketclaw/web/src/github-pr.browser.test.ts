@@ -93,6 +93,7 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
       if (url.pathname === "/styles.css") return route.fulfill({ body: built.css, contentType: "text/css" });
       if (url.pathname === "/api/Identity") return route.fulfill({ json: { username: "synthetic-viewer" } });
       if (url.pathname.endsWith("/api/History")) return route.fulfill({ json: { messages: [{ codeModeCalls: [{ summary: "private-history-summary-marker" }] }] } });
+      if (url.pathname.endsWith("/api/FindPullRequests")) return route.fulfill({ json: { created: ["https://github.com/o/r/pull/1"], mentioned: ["private-found-pull-request-marker"] } });
       if (url.pathname === "/oc/box/api/shell/sh_private/output" && url.searchParams.has("pull-request-discovery")) return route.fulfill({ json: { data: { output: "private-lookup-network-marker" } } });
       if (url.hostname === "preview.test" && url.pathname === "/") return route.fulfill({ contentType: "text/html", body: `<html><head><link rel="stylesheet" href="/styles.css"><script id="posthog-config" type="application/json">{"project_token":"synthetic-project","host":"https://telemetry.test"}</script></head><body><div id="root"></div><script type="module" src="/entry.js"></script></body></html>` });
       unexpected.push(url.hostname);
@@ -118,7 +119,7 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     await page.getByRole("button", { name: "recordable-positive-control" }).click();
     await page.evaluate(async () => { await fetch("https://public-control.test/control", { headers: { "x-public-control": "visible-header" } }).then((response) => response.json()); });
     await page.evaluate(async () => { await fetch("/oc/box/api/shell/sh_private/output?pull-request-discovery=1&location[directory]=/private-lookup-folder-marker", { headers: { "x-private-lookup": "private-lookup-header-marker" } }).then((response) => response.json()); });
-    await page.evaluate(async () => { for (const url of ["/api/History", "/r/remote/api/History"]) await fetch(url, { method: "POST", body: "{}" }).then((response) => response.json()); });
+    await page.evaluate(async () => { for (const url of ["/api/History", "/r/remote/api/History", "/api/FindPullRequests", "/r/remote/api/FindPullRequests"]) await fetch(url, { method: "POST", body: JSON.stringify({ runs: [{ command: "private-run-command-marker", output: "" }] }) }).then((response) => response.json()); });
     await preview.click();
     const viewer = () => page.getByRole("dialog", { name: "Pull request preview", exact: true });
     await viewer().getByText(metadata.title, { exact: true }).waitFor();
@@ -368,7 +369,7 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     expect(posthogPayloads.length).toBeGreaterThan(0);
     expect(posthogPayloads.join("\n")).toContain("network-positive-control");
     expect(posthogPayloads.join("\n")).toContain("recordable-positive-control");
-    for (const secret of ["synthetic-token-marker", "hidden-token-marker", "quota-token-marker", "Synthetic title marker", "description-marker", "file-marker-", "patch-marker", "fixture-repository-marker", "secret-error-marker", "private-lookup-network-marker", "private-lookup-folder-marker", "private-lookup-header-marker", "private-history-summary-marker"]) {
+    for (const secret of ["synthetic-token-marker", "hidden-token-marker", "quota-token-marker", "Synthetic title marker", "description-marker", "file-marker-", "patch-marker", "fixture-repository-marker", "secret-error-marker", "private-lookup-network-marker", "private-lookup-folder-marker", "private-lookup-header-marker", "private-history-summary-marker", "private-found-pull-request-marker", "private-run-command-marker"]) {
       expect(data).not.toContain(secret);
       expect(posthogPayloads.join("\n")).not.toContain(secret);
       expect(storage).not.toContain(secret);
@@ -421,7 +422,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
         const text = input.id === session ? `[Synthetic change](${href}) ${issueLink}` : input.id === child ? "Existing delegation fixture" : "Other conversation fixture";
         const bash = (command: string, call: object) => ({ name: "bash", arguments: JSON.stringify({ command }), status: "ok" as const, ...call });
         const mentioned = href.replace(/7\/files$/, "9"), subagentCreated = href.replace(/7\/files$/, "8");
-        const calls = input.id === session ? [...mention ? [bash("gh pr view 9", { summary: `url:\t${mentioned}`, mentionedPullRequests: [mentioned] })] : [], bash("gh pr create --title 'Sample change' --body 'Sample'", { summary: href.replace(/\/files$/, "") })]
+        const calls = input.id === session ? [...mention ? [bash("gh pr view 9", { summary: `url:\t${mentioned}`, mentionedPullRequests: [mentioned] })] : [], bash("gh pr create --title 'Sample change' --body 'Sample'", { summary: href.replace(/\/files$/, ""), createdPullRequests: [href.replace(/\/files$/, "")] })]
           : input.id === child && second ? [bash("gh pr create --fill", { summary: subagentCreated, createdPullRequests: [subagentCreated] })] : [];
         const created: TranscriptEvent[] = calls.length ? [{ ...message(input.id, "execute\n{}"), role: "tool", toolName: "execute", toolCallId: "pr-create", itemId: "pr-create", codeModeCalls: calls }] : [];
         const task: TranscriptEvent[] = input.id === session ? [{ ...message(input.id, "task\n{}"), role: "tool", toolName: "task", toolCallId: "task", itemId: "task", delegation: child }] : [];

@@ -202,11 +202,35 @@
     ]
   },
   {
-    "name": "a quoted heredoc marker is read as a heredoc",
+    "name": "a heredoc marker inside quotes is text",
     "command": "echo \"see <<EOF usage\"\ngh pr create --fill",
     "output": "https://github.com/owner/repo/pull/7",
-    "mentioned": [
+    "created": [
       "https://github.com/owner/repo/pull/7"
+    ]
+  },
+  {
+    "name": "a check for an open PR before the create records the created PR",
+    "command": "GIT_DIR=$(jj git root) gh pr list --head a --state open --json number; GIT_DIR=$(jj git root) gh pr create --head a --title 'x: fix' --body-file body.md",
+    "output": "[]\nhttps://github.com/o/r/pull/7\n",
+    "created": [
+      "https://github.com/o/r/pull/7"
+    ]
+  },
+  {
+    "name": "a create after an assignment from a command",
+    "command": "GIT_DIR=$(jj git root) gh pr create --fill",
+    "output": "https://github.com/o/r/pull/7\n",
+    "created": [
+      "https://github.com/o/r/pull/7"
+    ]
+  },
+  {
+    "name": "a create inside a command substitution",
+    "command": "url=$(gh pr create --fill) && echo \"$url\"",
+    "output": "https://github.com/o/r/pull/7\n",
+    "created": [
+      "https://github.com/o/r/pull/7"
     ]
   }
 ]
