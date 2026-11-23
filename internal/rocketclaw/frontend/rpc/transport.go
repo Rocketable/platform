@@ -19,7 +19,7 @@ import (
 
 const maxIDBytes = 1024
 
-const webUnaryMethods, editorMethods = "Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions SlackNames Handoff ListAgents CreateSession ListConfig SaveBehaviorSettings ListSkills UpdateSession ListCronJobs RunCronJob ListSessionEntries LoadSessionEntries DeleteSessionEntries DeleteSession ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs GetPage ListPages ReportTyping", "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat DraftLayers SaveDraft StopWaiting ProposeDraftChanges DecideProposal"
+const webUnaryMethods, editorMethods = "Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions SlackNames Handoff ListAgents CreateSession ListConfig SaveBehaviorSettings ListSkills UpdateSession ListCronJobs RunCronJob ListSessionEntries LoadSessionEntries DeleteSessionEntries DeleteSession ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs GetPage ListPages ReportTyping FindPullRequests", "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat DraftLayers SaveDraft StopWaiting ProposeDraftChanges DecideProposal"
 
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}

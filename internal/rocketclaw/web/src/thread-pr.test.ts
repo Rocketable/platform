@@ -1,15 +1,9 @@
 import { expect, test } from "bun:test";
-import shared from "../../harness/testdata/pr-discovery-cases.json";
-import { changedPR, loadThreadPRs, pullRequestsIn } from "./thread-pr";
+import { changedPR, loadThreadPRs } from "./thread-pr";
 
 const url = "https://github.com/owner/repo/pull/7";
 const pr = (n: number) => `https://github.com/owner/repo/pull/${n}`;
 const issue = "https://github.com/owner/repo/issues/6";
-
-test("a successful command's created and mentioned PRs follow the harness rule", () => {
-  const cases = shared as { name: string; command: string; output: string; created?: string[]; mentioned?: string[] }[];
-  for (const c of cases) expect(pullRequestsIn(c.command, c.output), c.name).toEqual({ created: c.created ?? [], mentioned: c.mentioned ?? [] });
-});
 
 test("a PR changes when it is new or its head commit moves, not on the first look, a missed look or an unread head", () => {
   const other = "https://github.com/owner/repo/pull/8";
@@ -38,13 +32,12 @@ test("native discovery reads every page of the thread, its subagents at any dept
       "": { messages: [
         { delegation: "thread/sub", role: "user", text: `[Track this](${issue}#issuecomment-1)` },
         { role: "assistant", text: `${issue}. https://other.example/${issue} ${issue}00stuff` },
-        { codeModeCalls: [bash("gh pr create --fill", { summary: "Warning: 1 uncommitted change", createdPullRequests: [pr(1)] }), bash("gh pr create --fill", { status: "error", summary: pr(90) }), bash("gh pr create --fill", { status: "running", summary: pr(93) })] },
+        { codeModeCalls: [bash("gh pr create --fill", { summary: "Warning: 1 uncommitted change", createdPullRequests: [pr(1)] }), bash("gh pr create --fill", { status: "error", summary: pr(90), createdPullRequests: [pr(90)] }), bash("gh pr create --fill", { status: "running", summary: pr(93), createdPullRequests: [pr(93)] })] },
       ], start: "20", more: true },
       "20": { messages: [{ codeModeCalls: [
-        bash("gh pr create --fill", { summary: pr(2) }),
-        bash("gh pr view 5", { summary: `url:\t${pr(5)}` }),
+        bash("gh pr create --fill", { summary: pr(2), createdPullRequests: [pr(2)] }),
+        bash("gh pr view 5", { summary: `url:\t${pr(5)}`, mentionedPullRequests: [pr(5)] }),
         bash("gh pr list", { summary: pr(91) }),
-        bash("gh pr list && gh pr create --fill", { summary: pr(92) }),
       ] }], shadows: [{ childConversationId: "shadow" }], start: "0", more: false },
     },
     "thread/sub": { "": { messages: [{ delegation: "thread/sub/nested", codeModeCalls: [bash("gh pr create --fill", { summary: pr(3), createdPullRequests: [pr(3)] })] }] } },
@@ -71,9 +64,15 @@ test("native discovery reads every page of the thread, its subagents at any dept
 type Message = { id: string; type: string; time?: { completed?: number }; [field: string]: unknown };
 type Fake = Record<string, { messages: Message[]; updated: number; children: string[] }>;
 
-function openCodeServer(sessions: Fake, requests: string[]) {
-  return (async (input) => {
+function openCodeServer(sessions: Fake, requests: string[], runs: { command: string; output: string }[] = []) {
+  return (async (input, init) => {
     const target = new URL(String(input), "https://web.test");
+    if (target.pathname === "/api/FindPullRequests") {
+      const sent = (JSON.parse(String(init?.body)) as { runs: typeof runs }).runs;
+      runs.push(...sent);
+      const urls = (run: (typeof runs)[number]) => run.output.match(/https:\/\/github\.com\/\S+/g) ?? [];
+      return Response.json({ created: sent.filter((run) => run.command.includes("gh pr create")).flatMap(urls), mentioned: sent.filter((run) => !run.command.includes("gh pr create")).flatMap(urls) });
+    }
     if (target.searchParams.get("pull-request-discovery") !== "1") throw new Error("Unmarked request");
     requests.push(target.pathname + target.search);
     const limit = Number(target.searchParams.get("limit"));
@@ -95,7 +94,7 @@ const createReply = (id: string, n: number, more: object = done) => ({ id, type:
 
 test("OpenCode discovery reads paged tool and shell history of the thread and its subagents, not text mentions or failed commands", async () => {
   const original = globalThis.fetch;
-  const requests: string[] = [];
+  const requests: string[] = [], runs: { command: string; output: string }[] = [];
   const filler = Array.from({ length: 200 }, (_, index) => ({ id: `msg_${String(index).padStart(3, "0")}`, type: "user", payload: { text: "" } }));
   const sessions: Fake = {
     ses_one: { updated: 1, children: ["ses_ship", "ses_late"], messages: [
@@ -114,9 +113,10 @@ test("OpenCode discovery reads paged tool and shell history of the thread and it
     ses_late: { updated: 1, children: [], messages: [createReply("msg_1", 13)] },
     ses_nested: { updated: 1, children: [], messages: [{ ...createReply("msg_1", 12), content: [shellTool("create() { gh pr create \"$@\"; }\ncreate --head a", `${pr(12)}\n`), shellTool("gh pr view 14", `title:\tFix\nurl:\t${pr(14)}\n`)] }] },
   };
-  globalThis.fetch = openCodeServer(sessions, requests);
+  globalThis.fetch = openCodeServer(sessions, requests, runs);
   try {
     expect(await loadThreadPRs("opencode:box:ses_one", new AbortController().signal)).toEqual({ created: [url, pr(8), pr(11), pr(13), pr(12)], mentioned: [pr(14)], issues: [issue] });
+    expect(runs.map((run) => run.output).toSorted()).toEqual([url, pr(8), pr(11), pr(12), pr(13), `url:\t${pr(14)}`].toSorted());
     const pages = requests.filter((request) => request.startsWith("/oc/box/api/session/ses_one/message"));
     expect(pages).toHaveLength(2);
     expect(new URL(pages[1], "https://web.test").searchParams.get("cursor")).toBe("msg_005");

@@ -332,6 +332,21 @@ func (s *Server) slackNames(ctx context.Context, request *SlackNamesRequest) (*S
 	return &SlackNamesResponse{Names: s.channels.SlackNames(ctx, request.GetIds())}, nil
 }
 
+func (s *Server) findPullRequests(ctx context.Context, request *FindPullRequestsRequest) (*FindPullRequestsResponse, error) {
+	if _, _, err := s.principal(ctx); err != nil {
+		return nil, err
+	}
+
+	response := &FindPullRequestsResponse{}
+
+	for _, run := range request.GetRuns() {
+		created, mentioned := harness.PullRequestsIn(run.GetCommand(), run.GetOutput())
+		response.Created, response.Mentioned = append(response.Created, created...), append(response.Mentioned, mentioned...)
+	}
+
+	return response, nil
+}
+
 func (s *Server) handoff(ctx context.Context, request *HandoffRequest) (*HandoffResponse, error) {
 	if err := s.visibleConversation(ctx, request.Id); err != nil {
 		return nil, err

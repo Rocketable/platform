@@ -88,13 +88,15 @@ Each command in `Commands` carries one evidence kind, the classifier's result
 for that command: `create` (a successful `gh pr create` printed the URL alone
 on a line), `mention` (any other PR URL in a successful command's output),
 `listing` (the command runs `gh pr list`, `gh pr status`, `gh search prs` or
-`gh api`) or `failed` (the command failed or is still running). Success means
+`gh api` and creates no PR the classifier can tell apart from the listing) or
+`failed` (the command failed or is still running). Success means
 native bash `status === "ok"`, or completed/exited OpenCode bash/shell with
 exit 0. The model checks how these kinds propagate to the list and to the
 automatic opening, **not whether any arbitrary command/output string is
 classified correctly**. Truthful tool records, the meaning of `gh pr create`,
-and classifier soundness are assumptions; the shared Go/TypeScript test table
-is the evidence for the classifier. `CreatedEvidence` and `AcceptedEvidence`
+and classifier soundness are assumptions; the Go test table, which the browser's
+OpenCode discovery also uses through the server, is the evidence for the
+classifier. `CreatedEvidence` and `AcceptedEvidence`
 are derived from these constants, not from model state, so a mutation that
 misclassifies or mislabels a URL cannot hide its own violation.
 

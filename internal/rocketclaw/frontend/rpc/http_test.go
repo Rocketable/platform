@@ -185,6 +185,42 @@ func TestHTTPBoundary(t *testing.T) {
 	}
 }
 
+func TestHTTPFindPullRequests(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("unix", testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() {
+		transport.Stop()
+		require.NoError(t, serving.Wait())
+	})
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	handler := NewHTTPHandler(connection, new(config.LockedConfig), "")
+	body := `{"runs":[
+		{"command":"GIT_DIR=$(jj git root) gh pr list --head a --json number; GIT_DIR=$(jj git root) gh pr create --head a --fill","output":"https://github.com/o/r/pull/7"},
+		{"command":"gh pr view 5","output":"url:\thttps://github.com/o/r/pull/5"}
+	]}`
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/FindPullRequests", strings.NewReader(body)))
+	require.Equal(t, http.StatusUnauthorized, response.Code)
+
+	response = httptest.NewRecorder()
+	signedIn("alice", handler).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/FindPullRequests", strings.NewReader(body)))
+	require.Equal(t, http.StatusOK, response.Code)
+	require.JSONEq(t, `{"created":["https://github.com/o/r/pull/7"],"mentioned":["https://github.com/o/r/pull/5"]}`, response.Body.String())
+}
+
 func TestHTTPRefusesOtherSites(t *testing.T) {
 	t.Parallel()
 
