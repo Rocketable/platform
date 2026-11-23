@@ -186,6 +186,17 @@ func TestFitInboundImageWithinLimitFallsBackToJPEG(t *testing.T) {
 	require.EqualError(t, errors.Unwrap(chain.Unwrap()[1]), errJPEGText)
 }
 
+func TestFlattenInboundImageForJPEGCompositesOnWhite(t *testing.T) {
+	t.Parallel()
+
+	img := image.NewNRGBA(image.Rect(5, 7, 8, 8))
+	img.SetNRGBA(5, 7, color.NRGBA{R: 255, A: 128})
+	img.SetNRGBA(6, 7, color.NRGBA{G: 255})
+	img.SetNRGBA(7, 7, color.NRGBA{B: 255, A: 255})
+
+	assert.Equal(t, []byte{255, 127, 127, 255, 255, 255, 255, 255, 0, 0, 255, 255}, flattenInboundImageForJPEG(img).Pix)
+}
+
 func TestFitInboundImageWithinLimitReportsDecodeFailure(t *testing.T) {
 	t.Parallel()
 

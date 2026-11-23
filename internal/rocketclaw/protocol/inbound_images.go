@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/color"
+	"image/draw"
 	"image/jpeg"
 	"image/png"
 	"math"
@@ -158,16 +158,8 @@ func flattenInboundImageForJPEG(src image.Image) *image.NRGBA {
 	bounds := src.Bounds()
 
 	flattened := image.NewNRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, a := src.At(x, y).RGBA()
-			alpha := float64(a) / 0xffff
-			blend := func(channel uint32) uint8 {
-				return uint8(math.Round((float64(channel>>8) * alpha) + (255 * (1 - alpha))))
-			}
-			flattened.Set(x-bounds.Min.X, y-bounds.Min.Y, color.NRGBA{R: blend(r), G: blend(g), B: blend(b), A: 0xff})
-		}
-	}
+	draw.Draw(flattened, flattened.Bounds(), image.White, image.Point{}, draw.Src)
+	draw.Draw(flattened, flattened.Bounds(), src, bounds.Min, draw.Over)
 
 	return flattened
 }
