@@ -17,6 +17,19 @@ func CallLine(ctx context.Context) (number int, code string) {
 	}
 
 	source, _ := ctx.Value(sourceContext{}).(string)
+	for range number - 1 {
+		end := strings.IndexAny(source, "\r\n")
+		ending := source[end]
 
-	return number, strings.TrimSpace(strings.Split(source, "\n")[number-1])
+		source = source[end+1:]
+		if ending == '\r' {
+			source = strings.TrimPrefix(source, "\n")
+		}
+	}
+
+	if end := strings.IndexAny(source, "\r\n"); end >= 0 {
+		source = source[:end]
+	}
+
+	return number, strings.TrimSpace(source)
 }
