@@ -4748,6 +4748,110 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 	assert.Len(t, scheduled, 1, "its private schedule reaches the destination with the wake's sync")
 }
 
+func TestBackgroundScriptCallsReachTheHistoryAfterItsTurn(t *testing.T) {
+	t.Parallel()
+
+	gates := ""
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if n > 0 {
+			answerNoteTest(w, r, n, body)
+			return
+		}
+
+		code := "def main():\n    for gate in ['one', 'two', 'three']:\n        bash(command='until [ -f " + gates + "/' + gate + ' ]; do sleep 0.05; done; echo ' + gate)\n"
+		writeRawRunFunctionCall(t, w, "resp_0", "execute", map[string]any{"code": code, "description": "gates", "background": true})
+	})
+	gates = nt.cfg.Workspace
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
+
+	manager, _ := nt.run(t, ignoreOutbound)
+	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("go")))
+	readFinalFor(t, nt.finals, nt.conversationID)
+	nt.waitIdle(t, manager, nt.conversationID)
+	nt.request(t)
+	nt.request(t)
+
+	calls := func() []string {
+		var shown []string
+
+		for _, entry := range testHistoryEntries(t, nt.service, nt.conversationID) {
+			for _, call := range harness.CodeModeCallsFromTrace(entry.Entry.OutputTrace) {
+				shown = append(shown, call.Name+" "+string(call.Status)+" "+call.Summary)
+			}
+		}
+
+		return shown
+	}
+	open := func(gate string) { require.NoError(t, os.WriteFile(filepath.Join(gates, gate), nil, 0o600)) }
+
+	require.Eventually(t, func() bool { return slices.Equal(calls(), []string{"bash running "}) }, 10*time.Second, 10*time.Millisecond, "the waiting call shows after its turn ended")
+
+	open("one")
+	require.Eventually(t, func() bool { return slices.Equal(calls(), []string{"bash ok one", "bash running "}) }, 10*time.Second, 10*time.Millisecond, "the list follows the script live")
+
+	open("two")
+	open("three")
+	assert.Contains(t, lastRequestMessage(t, nt.request(t)), "<execute id=")
+	readFinalFor(t, nt.finals, nt.conversationID)
+	nt.waitIdle(t, manager, nt.conversationID)
+	require.Equal(t, []string{"bash ok one", "bash ok two", "bash ok three"}, calls(), "a reloaded History shows every call finished")
+}
+
+func TestBackgroundScriptEndsACallWhoseRecordFailedToSave(t *testing.T) {
+	t.Parallel()
+
+	gates := ""
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if n > 0 {
+			answerNoteTest(w, r, n, body)
+			return
+		}
+
+		code := "def main():\n    for gate in ['one', 'two']:\n        bash(command='until [ -f " + gates + "/' + gate + ' ]; do sleep 0.05; done; echo ' + gate)\n    return 'done'\n"
+		writeRawRunFunctionCall(t, w, "resp_0", "execute", map[string]any{"code": code, "description": "gates", "background": true})
+	})
+	gates = nt.cfg.Workspace
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
+
+	_, err := nt.service.db.ExecContext(t.Context(), `CREATE SEQUENCE refused_saves;
+CREATE FUNCTION refuse_first_finished_call() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.entry_json::jsonb @? '$.output_trace[*] ? (@.status == "ok")' THEN
+        IF nextval('refused_saves') = 1 THEN RAISE EXCEPTION 'database restarting'; END IF;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER refuse_first_finished_call BEFORE UPDATE ON entries FOR EACH ROW EXECUTE FUNCTION refuse_first_finished_call()`)
+	require.NoError(t, err)
+
+	manager, _ := nt.run(t, ignoreOutbound)
+	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("go")))
+	readFinalFor(t, nt.finals, nt.conversationID)
+	nt.waitIdle(t, manager, nt.conversationID)
+	nt.request(t)
+	nt.request(t)
+
+	calls := func() []string {
+		var shown []string
+
+		for _, entry := range testHistoryEntries(t, nt.service, nt.conversationID) {
+			for _, call := range harness.CodeModeCallsFromTrace(entry.Entry.OutputTrace) {
+				shown = append(shown, call.Name+" "+string(call.Status))
+			}
+		}
+
+		return shown
+	}
+
+	require.Eventually(t, func() bool { return slices.Equal(calls(), []string{"bash running"}) }, 10*time.Second, 10*time.Millisecond)
+	require.NoError(t, os.WriteFile(filepath.Join(gates, "one"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(gates, "two"), nil, 0o600))
+
+	nt.request(t)
+	readFinalFor(t, nt.finals, nt.conversationID)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.NotContains(t, calls(), "bash running", "a call whose final record failed to save is not shown running after its job ended")
+}
+
 func TestTurnBoundPlatformTools(t *testing.T) {
 	t.Parallel()
 

@@ -1253,19 +1253,61 @@ WHERE t.id = $1 ORDER BY e.n`, "stopped turn trace", scanJSON, turnID)
 	return journal.SaveTrace(ctx, turnID, trace)
 }
 
+const mergeCodeModeCallsSQL = `, saved AS (
+    SELECT id, entry_json::jsonb AS entry FROM entries WHERE conversation_id = $1 AND entry_json->>'turn_id' = $2
+), kept AS (
+    SELECT s.id, COALESCE(r.value, t.item) AS item, 0 AS added, t.n, r.n AS replaced FROM saved s
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.entry->'output_trace', '[]')) WITH ORDINALITY t(item, n)
+    LEFT JOIN records r ON r.value->>'type' = t.item->>'type' AND r.value->>'key' = t.item->>'key'
+), traces AS (
+    SELECT id, item, added, n FROM kept
+    UNION ALL SELECT s.id, r.value, 1, r.n FROM saved s CROSS JOIN records r LEFT JOIN kept k ON k.id = s.id AND k.replaced = r.n WHERE k.id IS NULL
+), merged AS (
+    SELECT id, jsonb_agg(item ORDER BY added, n) AS trace FROM traces GROUP BY id
+)
+UPDATE entries e SET entry_json = jsonb_set(s.entry, '{output_trace}', m.trace)::json FROM saved s JOIN merged m USING (id)
+WHERE e.id = s.id AND s.entry IS DISTINCT FROM jsonb_set(s.entry, '{output_trace}', m.trace)`
+
 func (j conversationJournal) SaveCodeModeCall(ctx context.Context, turnID, key string, record json.RawMessage) error {
 	rowID, _, _ := strings.Cut(turnID, "/")
+	record = removeSessionEntryNUL(record)
 
-	_, err := execState(ctx, j.store.db, "save code mode call", `WITH turn AS (
+	tx, err := j.store.beginStateTx(ctx, "code mode call save")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var live bool
+	if err := queryScalar(ctx, tx, "lock code mode call turn", `WITH turn AS (
+    SELECT phase = 'running' AND terminal = '' AS live FROM turns WHERE id = $1 FOR UPDATE
+)
+SELECT COALESCE(bool_or(live), FALSE) FROM turn`, &live, rowID); err != nil {
+		return err
+	}
+
+	if live {
+		_, err = execState(ctx, tx, "save code mode call", `WITH turn AS (
     SELECT id, conversation_id FROM turns WHERE id = $1 AND terminal = ''
 ), saved AS (
     INSERT INTO steps (conversation_id, key, value) SELECT conversation_id, id || '/code_mode/' || $2, $3 FROM turn
     ON CONFLICT (conversation_id, key) DO UPDATE SET value = excluded.value RETURNING key
 )
 UPDATE turns a SET output_trace_json = a.output_trace_json, updated_at_unix_ns = $4 FROM saved WHERE a.id = $1`,
-		rowID, key, string(removeSessionEntryNUL(record)), timeUnixNano(time.Now()))
+			rowID, key, string(record), timeUnixNano(time.Now()))
+	} else {
+		_, err = execState(ctx, tx, "save code mode call in its saved turn", `WITH records AS (SELECT $3::jsonb AS value, 1::bigint AS n)`+mergeCodeModeCallsSQL, j.conversationID, turnID, string(record))
+	}
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit code mode call save: %w", err)
+	}
+
+	return nil
 }
 
 func (j conversationJournal) CodeModeCalls(ctx context.Context, turnID string) ([]json.RawMessage, error) {
@@ -1518,10 +1560,8 @@ FROM shadow_turns t WHERE a.id = $1 AND t.child_turn_id = $1 AND $2 = 'stopped' 
 		return nil, err
 	}
 
-	for i := range finish.entries {
-		if _, err := appendSessionEntryDB(ctx, tx, finish.conversationID, &finish.entries[i]); err != nil {
-			return nil, err
-		}
+	if err := finish.appendEntries(ctx, tx, turnID); err != nil {
+		return nil, err
 	}
 
 	if err := finish.applyEffects(ctx, tx, turnID); err != nil {
@@ -1790,6 +1830,20 @@ func (f *turnFinish) applyEffects(ctx context.Context, tx stateStoreDB, turnID s
 	return err
 }
 
+func (f *turnFinish) appendEntries(ctx context.Context, db stateStoreDB, turnID string) error {
+	for i := range f.entries {
+		if _, err := appendSessionEntryDB(ctx, db, f.conversationID, &f.entries[i]); err != nil {
+			return err
+		}
+	}
+
+	_, err := execState(ctx, db, "keep late code mode calls", `WITH records AS (
+    SELECT value::jsonb AS value, id AS n FROM steps WHERE conversation_id = $1 AND starts_with(key, $2 || '/code_mode/')
+)`+mergeCodeModeCallsSQL, f.conversationID, turnID)
+
+	return err
+}
+
 func (f *turnFinish) preserveStoppedInput(ctx context.Context, db stateStoreDB, turnID string) error {
 	if f.terminal != protocol.TerminalStopped || len(f.entries) > 0 {
 		return nil
@@ -1968,6 +2022,13 @@ func (s *SessionService) finishBackgroundJob(ctx context.Context, job *backgroun
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	turnID := strings.TrimSuffix(job.jobID, "/call/"+job.callID)
+	rowID, _, _ := strings.Cut(turnID, "/")
+
+	if _, err := execState(ctx, tx, "lock background job turn", `SELECT FROM turns WHERE id = $1 FOR UPDATE`, rowID); err != nil {
+		return false, err
+	}
+
 	finished, err := execRows(ctx, tx, "finish background job", `UPDATE turns SET phase = 'done', terminal = CASE WHEN $4 = $9 THEN '' ELSE $4 END, note = $5, wake = $6, result = $7, updated_at_unix_ns = $8
 WHERE conversation_id = $1 AND input_id = $2 AND NOT takes_lane AND runner_id = $3 AND phase = 'running'`, job.conversationID, job.jobID, job.runnerID, job.status, job.noteState, job.wake, strings.ReplaceAll(job.result, "\x00", ""), timeUnixNano(time.Now()), backgroundCompleted)
 	if err != nil || finished == 0 {
@@ -1976,6 +2037,18 @@ WHERE conversation_id = $1 AND input_id = $2 AND NOT takes_lane AND runner_id = 
 
 	if _, err := tx.ExecContext(ctx, deleteUnownedStepsSQL+`t.conversation_id = $1 AND starts_with(t.key, $2 || '/')`, job.conversationID, job.jobID); err != nil {
 		return false, fmt.Errorf("clear background job steps: %w", err)
+	}
+
+	if _, err := execState(ctx, tx, "cancel background job calls", `WITH cancelled_steps AS (
+    UPDATE steps SET value = jsonb_set(value::jsonb, '{status}', '"cancelled"')::json
+    WHERE conversation_id = $1 AND starts_with(key, $4 || '/code_mode/' || $3 || '/') AND value->>'status' = 'running'
+), records AS (
+    SELECT jsonb_set(t.item, '{status}', '"cancelled"') AS value, t.n FROM entries e
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.entry_json::jsonb->'output_trace', '[]')) WITH ORDINALITY t(item, n)
+    WHERE e.conversation_id = $1 AND e.entry_json->>'turn_id' = $2 AND t.item->>'type' = 'rocketcode_code_mode_call'
+        AND t.item->>'status' = 'running' AND starts_with(t.item->>'key', $3 || '/')
+)`+mergeCodeModeCallsSQL, job.conversationID, turnID, job.jobID, rowID); err != nil {
+		return false, err
 	}
 
 	if err := tx.Commit(); err != nil {

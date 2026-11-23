@@ -523,10 +523,6 @@ func (o *turnObservations) recordCodeModeCall(ctx context.Context, record *CodeM
 		record.Outcome, record.Reason = review.Outcome, review.Rationale
 	}
 
-	if o.closed {
-		return nil
-	}
-
 	if o.err != nil {
 		return o.err
 	}
