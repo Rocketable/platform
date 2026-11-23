@@ -46,19 +46,6 @@ func wrapCall(name string, e syntax.Expr) *syntax.CallExpr {
 	}
 }
 
-func comparisonBuiltins() starlark.StringDict {
-	unary := func(name string, fn func(starlark.Value) starlark.Value) *starlark.Builtin {
-		return starlark.NewBuiltin(name, func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
-			return fn(args[0]), nil
-		})
-	}
-
-	return starlark.StringDict{
-		unboxBuiltin:   unary(unboxBuiltin, unbox),
-		membersBuiltin: unary(membersBuiltin, func(v starlark.Value) starlark.Value { return membership{container: unbox(v)} }),
-	}
-}
-
 type membership struct {
 	container starlark.Value
 }

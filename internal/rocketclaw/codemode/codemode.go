@@ -123,10 +123,9 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 	}
 
 	concurrency := concurrencyBuiltins()
-	comparisons := comparisonBuiltins()
 	members := maps.Clone(starjson.Module.Members)
 	members["decode"] = starlark.NewBuiltin("json.decode", decodeJSON)
-	predeclared := make(starlark.StringDict, len(catalog)+len(host)+len(concurrency)+len(comparisons)+1)
+	predeclared := make(starlark.StringDict, len(catalog)+len(host)+len(concurrency)+3)
 	predeclared["json"] = &starlarkstruct.Module{Name: "json", Members: members}
 
 	for name, tool := range catalog {
@@ -160,7 +159,12 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 		predeclared[name] = builtin
 	}
 
-	maps.Copy(predeclared, comparisons)
+	predeclared[unboxBuiltin] = starlark.NewBuiltin(unboxBuiltin, func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+		return unbox(args[0]), nil
+	})
+	predeclared[membersBuiltin] = starlark.NewBuiltin(membersBuiltin, func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+		return membership{container: unbox(args[0])}, nil
+	})
 
 	if err := context.Cause(ctx); err != nil {
 		return nil, fmt.Errorf("codemode context: %w", err)
