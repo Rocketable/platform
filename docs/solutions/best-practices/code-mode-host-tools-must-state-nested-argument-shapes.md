@@ -1,6 +1,7 @@
 ---
 title: Code Mode Host Tools Must State Nested Argument Shapes in Their First Description Line
 date: 2026-11-23
+last_updated: 2026-11-23
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/harness
 problem_type: best_practice
@@ -95,12 +96,14 @@ The new description fixed every call for both models. The eval could not measure
 - When reviewing a host tool description: read only its first 120 characters and ask whether a model could write a valid call from them and the untyped signature.
 - When a session shows repeated `invalid arguments` failures on one tool.
 
-These host tools had the same gap when this was written and were not changed:
+Two more host tools had the same gap and got the same fix later:
 
-- `rocketclaw_attach_files_to_response` (`attachFilesTool`, `internal/rocketclaw/backend/bridge.go:3094`) requires `path`, `name`, `mime_type`, `content` and `content_base64` on every attachment (`bridge.go:3108`). Its description does not name them.
-- `opencode_api` (`openCodeAPITool`, `internal/rocketclaw/backend/opencode.go:704`) takes `params` as a list of `{name, value}` objects (`opencode.go:713`). That shape is not in the first 120 characters.
+- `rocketclaw_attach_files_to_response` (`attachFilesTool`, `internal/rocketclaw/backend/bridge.go`) requires `path`, `name`, `mime_type`, `content` and `content_base64` on every attachment. Its first line now names all five, and `TestAttachFilesToolReadsWorkspacePath` checks it.
+- `opencode_api` (`openCodeAPITool`, `internal/rocketclaw/backend/opencode.go`) takes `params` as a list of `{name, value}` objects. Its first line now says so, and `TestOpenCodeAPITool` checks it.
 
-A generic test could enforce this rule: every host tool whose schema holds object items must name those item fields in its first description line. It would fail on the two tools above until their descriptions change, so it was not added here.
+Naming the keys was not enough when every key is required. With `attachments: list of {path, name, mime_type, content, content_base64} dicts` as the first line, models still left out the keys they did not use: 2 of 6 calls were valid, against 0 of 6 with the old text. Adding `"" if unused` to the first line made 6 of 6 valid (Claude Opus 5.5 and GPT-6.2-sol, three runs each). The same eval took `opencode_api` from 0 of 6 to 6 of 6. So when a schema requires keys a caller may not need, the first line must also say what to pass for them.
+
+A generic test could enforce this rule: every host tool whose schema holds object items must name those item fields in its first description line. The per-tool checks above cover the three tools that have such fields today; a new tool gets no check unless its author adds one.
 
 ## Examples
 

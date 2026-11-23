@@ -3113,7 +3113,7 @@ func attachFilesTool(root *os.Root, shell *harness.CustomShell, sessions *Sessio
 		"required": []string{"attachments"},
 	}
 
-	return harness.Tool{Name: attachFilesToolName, TurnBound: true, Description: "Queue files to attach to the final human-visible response. Call before the final response finishes.", Permission: "rocketclaw", VisibilitySubjects: []string{attachFilesToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{attachFilesToolName}, nil }, Parameters: parameters, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
+	return harness.Tool{Name: attachFilesToolName, TurnBound: true, Description: "Attach files to your reply. attachments: list of {path, name, mime_type, content, content_base64} dicts, \"\" if unused\nEvery dict needs all five keys. Fill one source: path (a file in your workspace), content (text) or content_base64.\nAn empty name becomes the path's file name and an empty mime_type is guessed.\nCall before the final response finishes.", Permission: "rocketclaw", VisibilitySubjects: []string{attachFilesToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{attachFilesToolName}, nil }, Parameters: parameters, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		var input attachFilesInput
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return harness.ToolResult{}, fmt.Errorf("parse response attachments: %w", err)

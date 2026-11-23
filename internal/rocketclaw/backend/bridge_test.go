@@ -1437,6 +1437,10 @@ func TestAttachFilesToolReadsWorkspacePath(t *testing.T) {
 	items := attachmentsSchema["items"].(map[string]any)
 	assert.ElementsMatch(t, []string{"path", "name", "mime_type", "content", "content_base64"}, items["required"])
 
+	catalogLine, _, _ := strings.Cut(tool.Description, "\n")
+	assert.LessOrEqual(t, len(catalogLine), 120, "the Code Mode catalog clips longer first lines")
+	assert.Contains(t, catalogLine, `attachments: list of {path, name, mime_type, content, content_base64} dicts, "" if unused`)
+
 	result, err := tool.Call(t.Context(), []byte(`{"attachments":[{"path":"reports/latest.txt","name":"","mime_type":"","content":"","content_base64":""}]}`), nil)
 	require.NoError(t, err)
 	require.NotEqual(t, "queued attachments for final response", result.Output, "successful tool replay must carry immutable attachment IDs")

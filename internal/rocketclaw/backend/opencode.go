@@ -706,8 +706,9 @@ func openCodeAPITool(servers map[string]config.OpenCodeConfig) harness.Tool {
 	text := map[string]any{"type": "string"}
 
 	return harness.Tool{Name: openCodeAPIToolName, Permission: "opencode", VisibilitySubjects: names,
-		Description: "Call a remote OpenCode server's HTTP API, as `opencode api` does. operation is an OpenAPI operation ID such as session.list, or a method and path such as GET /api/session; GET /openapi.json lists the operations. " +
-			"Each param fills the {name} path placeholder it names, otherwise it joins the query string, as location[directory] does to pick a project. body is the JSON request body, empty for none. " +
+		Description: "Call a remote OpenCode server's HTTP API. params: list of {name, value} dicts; body: JSON request body or \"\" for none.\n" +
+			"Works as `opencode api` does. operation is an OpenAPI operation ID such as session.list, or a method and path such as GET /api/session; GET /openapi.json lists the operations.\n" +
+			"Each param fills the {name} path placeholder it names, otherwise it joins the query string, as location[directory] does to pick a project.\n" +
 			"Returns the response body, or the status when it is empty. Event streams are refused.",
 		Parameters: map[string]any{"properties": map[string]any{"server": map[string]any{"type": "string", "enum": names}, "operation": text, "body": text,
 			"params": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"name": text, "value": text}}}}},
