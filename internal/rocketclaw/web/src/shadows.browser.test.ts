@@ -21,8 +21,8 @@ for (const width of [1440, 390, 320]) test(`shadow comparison at ${width}px`, as
   histories.get("parent")!.messages[0].attachments = [{ id: "image", name: "loaded-later.png", mimeType: "image/png", conversationId: "parent" }];
   const streams: string[] = [], reads: string[] = [];
   let controller: ReadableStreamDefaultController<string>;
-  let image: ReadableStreamDefaultController<Uint8Array>;
   const imageRequested = Promise.withResolvers<void>();
+  const releaseImage = Promise.withResolvers<void>();
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") {
@@ -30,7 +30,11 @@ for (const width of [1440, 390, 320]) test(`shadow comparison at ${width}px`, as
       return new Response(new ReadableStream<string>({ start(stream) { controller = stream; stream.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     }
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "parent", agent: "main" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/DownloadAttachment") return new Response(new ReadableStream<Uint8Array>({ start(stream) { image = stream; imageRequested.resolve(); } }), { headers: { "Content-Type": "image/svg+xml" } });
+    if (url.pathname === "/api/DownloadAttachment") {
+      imageRequested.resolve();
+      await releaseImage.promise;
+      return new Response('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400"><rect width="400" height="400" fill="gray"/></svg>', { headers: { "Content-Type": "image/svg+xml" } });
+    }
     if (!url.pathname.startsWith("/api/")) {
       const file = path.join(dist, url.pathname);
       return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
@@ -107,8 +111,7 @@ for (const width of [1440, 390, 320]) test(`shadow comparison at ${width}px`, as
     await page.locator('img[alt="loaded-later.png"]').waitFor({ state: "attached" });
     await page.locator('img[alt="loaded-later.png"]').evaluate((node: HTMLImageElement) => node.scrollIntoView());
     await imageRequested.promise;
-    image!.enqueue(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400"><rect width="400" height="400" fill="gray"/></svg>'));
-    image!.close();
+    releaseImage.resolve();
     await page.locator('img[alt="loaded-later.png"]').evaluate((node: HTMLImageElement) => node.decode());
     if (width >= 1024) await alignment();
     const tabs = page.getByRole("tab", { name: "main/a", exact: true });
