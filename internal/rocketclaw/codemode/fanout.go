@@ -42,14 +42,15 @@ func nextKey(thread *starlark.Thread) string {
 
 func concurrencyBuiltins() [6]*starlark.Builtin {
 	slots := semaphore.NewWeighted(MaxConcurrency)
+	race := makeRace(slots)
 
 	return [...]*starlark.Builtin{
 		starlark.NewBuiltin("gather", makeGather(slots, false)),
 		starlark.NewBuiltin("try_gather", makeGather(slots, true)),
 		starlark.NewBuiltin("map", makeMap(slots, false)),
 		starlark.NewBuiltin("try_map", makeMap(slots, true)),
-		starlark.NewBuiltin("race", makeRace(slots)),
-		starlark.NewBuiltin(concurrencyOpRaceFirst, makeRace(slots)),
+		starlark.NewBuiltin("race", race),
+		starlark.NewBuiltin(concurrencyOpRaceFirst, race),
 	}
 }
 
