@@ -602,3 +602,81 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 	require.Equal(t, settled, rows(), "a second start replays nothing")
 	require.Empty(t, again.continueSubagentCalls())
 }
+
+func refuseBackgroundFinish(t *testing.T, store *SessionService, refusals int) {
+	t.Helper()
+
+	_, err := store.db.ExecContext(t.Context(), fmt.Sprintf(`CREATE SEQUENCE finish_attempts;
+CREATE FUNCTION refuse_finish() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.phase = 'done' AND OLD.phase = 'running' AND nextval('finish_attempts') <= %d THEN RAISE EXCEPTION 'database restarting'; END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER refuse_finish BEFORE UPDATE ON turns FOR EACH ROW EXECUTE FUNCTION refuse_finish()`, refusals))
+	require.NoError(t, err)
+}
+
+func finishAttempts(t *testing.T, store *SessionService) int {
+	t.Helper()
+
+	var attempts int
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM finish_attempts`).Scan(&attempts))
+
+	return attempts
+}
+
+func TestBackgroundJobFinishRetriesUntilSaved(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+	refuseBackgroundFinish(t, store, 3)
+	registry, notes := newTestBackgroundRegistry(store)
+	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
+	done := &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (string, error) { return "done", nil }, DetachFunc: func() bool { return true }}
+
+	_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/f", Kind: harness.BackgroundKindExecute, Detached: true}, done)
+	require.NoError(t, err)
+
+	select {
+	case conversationID := <-notes:
+		require.Equal(t, "main", conversationID)
+	case <-time.After(10 * time.Second):
+		t.Fatal("no note after the save went through")
+	}
+
+	row := testBackgroundRow(t, store, "main", "turn-1/call/f")
+	require.Equal(t, []any{backgroundCompleted, notePending, "done"}, []any{row.status, row.noteState, row.result})
+	require.Equal(t, 4, finishAttempts(t, store), "three refused saves, then one that worked")
+	require.Empty(t, notes, "one note")
+}
+
+func TestShutdownStopsBackgroundFinishRetries(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+	refuseBackgroundFinish(t, store, 1_000_000)
+	registry, notes := newTestBackgroundRegistry(store)
+	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
+	done := &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (string, error) { return "done", nil }, DetachFunc: func() bool { return true }}
+
+	_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/f", Kind: harness.BackgroundKindExecute, Detached: true}, done)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return finishAttempts(t, store) >= 2 }, 10*time.Second, 10*time.Millisecond, "the save is being retried")
+
+	stopped := make(chan struct{})
+
+	go func() {
+		registry.shutdown()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown waited for the retries")
+	}
+
+	require.Equal(t, backgroundRunning, testBackgroundRow(t, store, "main", "turn-1/call/f").status, "the next start reports the job killed")
+	require.Empty(t, notes)
+}
