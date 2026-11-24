@@ -293,7 +293,7 @@ func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
 	assert.Contains(t, tool.Description, "Use rocketclaw_reload instead")
 	assert.Contains(t, tool.Description, "agents/")
 	assert.Contains(t, tool.Description, "skills/")
-	assert.Contains(t, tool.Description, "cron/")
+	assert.Contains(t, tool.Description, "scripts/")
 	assert.Contains(t, tool.Description, "reason field")
 	assert.Contains(t, tool.Description, "memory, ledger, audit, report")
 	assert.Contains(t, tool.Description, "source-code")

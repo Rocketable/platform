@@ -42,8 +42,8 @@ func sidebarChatAllocationCheck(tb testing.TB) func() {
 		stem  string
 	}{
 		{facts: ChatOriginFacts{ConversationID: "sample-chat"}},
-		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: cron}, cron: true, stem: "Weekly report"},
-		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: &protocol.CronRun{Path: "cron/.md", OneOff: true}}, cron: true},
+		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: cron}, cron: true, stem: "cron/Weekly report.md"},
+		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: &protocol.CronRun{Path: "cron/.md", OneOff: true}}, cron: true, stem: "cron/.md"},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: &protocol.CronRun{Path: "agents/marketing.md#*/5 * * * *"}}, cron: true, stem: "marketing"},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Binding: binding}},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Binding: binding, Run: cron}},
@@ -79,13 +79,13 @@ func cronOriginAllocationCheck(tb testing.TB) func() {
 	tb.Helper()
 
 	facts := ChatOriginFacts{ConversationID: "example-chat", CreatingSource: "example-run", ProducerAgent: "Helper Ω",
-		Run: &protocol.CronRun{Path: "cron/Weekly %s.md", At: time.Date(2001, time.January, 2, 3, 4, 5, 0, time.UTC)}}
+		Run: &protocol.CronRun{Path: "agents/Weekly %s.md#30m", At: time.Date(2001, time.January, 2, 3, 4, 5, 0, time.UTC)}}
 
-	const want = "cron source: cron/weekly %s.md stem: weekly %s run kind: scheduled run id: example-run agent: helper ω ran at: 2001-01-02t03:04:05z"
+	const want = "cron source: agents/weekly %s.md#30m stem: weekly %s · 30m run kind: scheduled run id: example-run agent: helper ω ran at: 2001-01-02t03:04:05z"
 
 	return func() {
 		origin, text := DecideOrigin(&facts)
-		if origin.(cronOrigin).Stem != "Weekly %s" || text != want {
+		if origin.(cronOrigin).Stem != "Weekly %s · 30m" || text != want {
 			tb.Fatalf("origin = %#v, text = %q", origin, text)
 		}
 	}

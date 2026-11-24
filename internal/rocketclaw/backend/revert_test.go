@@ -453,7 +453,7 @@ func TestRevertFloor(t *testing.T) {
 	_, _, err = (stateDAO{db: s.db}).bindRun(ctx, "bound-run", "bound-chat")
 	require.NoError(t, err)
 	_, _, err = stageRevertDB(ctx, s.db, "bound-chat", fmt.Sprintf("%d:1", before), protocol.RevertThrough)
-	require.ErrorContains(t, err, "past a message from a cron run", "the report's older ID still sits after the point on the path")
+	require.ErrorContains(t, err, "past a message from a routine run", "the report's older ID still sits after the point on the path")
 }
 
 func TestPauseGatesTurnAdmission(t *testing.T) {

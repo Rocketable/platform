@@ -469,36 +469,6 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	}
 }
 
-func TestValidateRuntimeAssetsWarnsAboutCronsWithoutLoadedAgent(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "helper", "---\nmodel: gpt-6.1-sol\n---\nPrompt\n")
-	writeAgent(t, workspace, "personal", "---\nmodel: gpt-6.1-sol\nsticky: user\n---\nPrompt\n")
-	writeAgent(t, workspace, "channel", "---\nmodel: gpt-6.1-sol\nsticky: slack\n---\nPrompt\n")
-	writeAgent(t, workspace, "shared", "---\nmodel: gpt-6.1-sol\nsticky: global\nspace: Marketing\n---\nPrompt\n")
-	writeAgent(t, workspace, "easy", "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\n---\nPrompt\n")
-	cronDir := filepath.Join(workspace, config.DefaultRuntimeDir, "cron")
-	require.NoError(t, os.MkdirAll(cronDir, 0o755))
-
-	for name, agent := range map[string]string{
-		"blank": "", "helped": "agent: helper\n", "main-run": "agent: main\n", "mine": "agent: personal\n", "channel-run": "agent: channel\n",
-		"easy-run": "agent: easy\n", "elsewhere": "agent: shared\nspace: Finance\n", "same-space": "agent: shared\nspace: marketing\n",
-	} {
-		require.NoError(t, os.WriteFile(filepath.Join(cronDir, name+".md"), []byte("---\nschedule: 1h\n"+agent+"---\nBody\n"), 0o600))
-	}
-
-	cfg := &config.Config{Workspace: workspace, EmbeddedAgents: config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Disabled: true}}}
-	warnings, err := validateRuntimeAssets(config.NewLockedConfig(cfg), config.DefaultRuntimeDir, slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
-	require.Equal(t, "Cron cron/blank.md names no agent, so it does not run."+
-		" Cron cron/channel-run.md uses agent channel, which is sticky: slack, so it does not run."+
-		" Cron cron/easy-run.md uses agent easy, which is an easy agent scheduled with its routines, so it does not run."+
-		" Cron cron/elsewhere.md uses agent shared, which is sticky: global in space Marketing, not Finance, so it does not run."+
-		" Cron cron/main-run.md uses agent main, which is not loaded, so it does not run."+
-		" Cron cron/mine.md uses agent personal, which is sticky: user, so it does not run.", warnings)
-}
-
 func TestLoadRocketCodeDefinitionsReportsInvalidTypedFrontmatter(t *testing.T) {
 	t.Parallel()
 

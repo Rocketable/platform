@@ -30,7 +30,7 @@ exist. A positive `before` reads a settled, unfollowed page of older entries: th
 newest `limit` of them, or every entry from `from` onward. If older history is
 cleared, the next limited read resets. A chat's origin still comes from its first
 entry when that entry is not returned. SearchSessions applies the same origin rules
-when it matches the query against every chat the caller may see; cron runs and
+when it matches the query against every chat the caller may see; routine runs and
 private External MCP conversations never match.
 
 `WatchTyping` (`GET /typing?id=`) and `ReportTyping` (`POST /api/ReportTyping`) relay
@@ -68,7 +68,7 @@ ends it after that user message or agent reply. It settles the runtime bridge,
 moves the current point without deleting anything, and returns the actual
 marker, plus for `BEFORE` the editable `TranscriptEvent` prompt without its
 generated header. It requires a top-level pure Web session; Slack,
-MCP-bound/private, Cron-origin and delegation sessions are ineligible even
+MCP-bound/private, routine-origin and delegation sessions are ineligible even
 through direct calls.
 
 History returns `revert_eligible`, `revert_message_id` and `can_undo`, including
@@ -133,10 +133,10 @@ Jobs and reports `moved`; with nothing eligible it changes nothing.
 `StopBackgroundJob` stops one running job by ID, records it as stopped by user, and
 reports `stopped`, false when the job had already finished. Stopping a `task` job also
 stops its subagent session's running turn and that subagent's own jobs. It reaches the conversation's own jobs
-and jobs of hidden cron or External MCP runs whose sync
+and jobs of hidden routine or External MCP runs whose sync
 destination is this conversation, the same scope as the agent's
 `rocketclaw_stop_background_job`. Both authorize like the queue RPCs and are
-refused for private cron and External MCP conversations. History adds a `movable`
+refused for private routine and External MCP conversations. History adds a `movable`
 flag, true while such a call runs attached to its turn, and a `backgroundJobs`
 list with label, kind, state, tool call ID, subagent key, who stopped it, and a
 `hidden` mark. The list holds jobs that are running or whose Completion Note is
@@ -169,20 +169,20 @@ on the next snapshot without changing previews or timestamps. HTTP retains the s
 mutation RPC or event is added.
 
 Session discovery starts from explicitly recorded conversations with stored entries,
-excluding private Cron locators and recorded MCP X bindings. It does not discover
+excluding private routine run locators and recorded MCP X bindings. It does not discover
 orphaned entry rows or backfill records. `CreateSession` records a fresh opaque ID
 with the selected loaded agent. For a sticky agent it first looks for the agent's sticky
 session (`StickySessions`): the chat whose stored `sticky` value, set once at creation,
 matches the agent's mode, created by the caller's login for `sticky: user`. A chat born
 `off` never counts. When one exists it
 returns that ID with `resumed` set and creates nothing. `RunCronJob` likewise runs a
-`sticky: global` agent's cron in that session, and refuses a `sticky: user` or
-`sticky: slack` agent with `FailedPrecondition`. A `sticky: slack` agent answers only in
+`sticky: global` agent's routine in that session; a `sticky: user` or
+`sticky: slack` agent cannot have routines, so it never meets one. A `sticky: slack` agent answers only in
 Slack: `ListAgents` and `CreateSession` leave it out of new sessions, while its Slack
 sessions still open and list it as their agent.
 A unique index allows one `user` chat per agent and login, and one `global` chat per
 agent. A concurrent first request waits for the other's insert and then finds that chat,
-so cron reports, due reminders and Web requests share one session rather than creating
+so routine reports, due reminders and Web requests share one session rather than creating
 duplicates.
 `ListSessions` streams one conversation per response message in list order, each
 with the caller's attention on it: `unread_at` (empty once read), `marked_unread`
@@ -190,7 +190,7 @@ with the caller's attention on it: `unread_at` (empty once read), `marked_unread
 `until_done` (the park lasts until the session is idle after its work, with no time)
 and `note` (the notification text a timer wrote).
 Its `viewing` field names the location of the caller's focused tab, of any kind,
-such as `/s/<id>` or `/cron`. The HTTP adapter sets `same_origin` only for
+such as `/s/<id>` or `/routines`. The HTTP adapter sets `same_origin` only for
 same-origin requests (the only other requests that reach it are links another
 site opens), and only such a request, before the listing, records the
 view and clears that location's mark unless `hold` is set and the mark is quiet.
@@ -253,7 +253,7 @@ document and answers as `ListConfig` does. A non-admin, or an admin limited to
 spaces, gets `PermissionDenied`.
 Malformed JSON and every rejected save get `InvalidArgument` with the reason. A
 rejected save changes nothing: the stored document, live settings, runtime assets,
-External MCP agents, and cron jobs all stay as they were.
+External MCP agents, and routines all stay as they were.
 `ListSkills` uses the existing rooted runtime-definition loader and returns loaded
 skill text and metadata; origin is the loader's relative definition location.
 With `ListSkills.agent`, it returns only skills allowed for that loaded agent,
@@ -273,40 +273,44 @@ agent as plain text; `/skill name` reports the missing skill instead.
 Normal Send during a turn queues; Cmd/Ctrl+Enter steers. Skills are loaded when consumed.
 
 `ListCronJobs` uses the same started Cron manager as scheduled execution.
-It exposes parsed definitions and each schedule's next trigger within 24 hours,
+It exposes the routines in agent files, each named `<agent> · <schedule>` with
+run path `agents/<agent>.md#<schedule>`, and each schedule's next trigger within 24 hours,
 using persisted due times for recurring schedules rather than restarting their
-intervals on a read. `RunCronJob` loads the selected stem through that manager,
+intervals on a read. The manager reads no `cron/` folder; one left over is
+ignored. `RunCronJob` finds the selected routine through that manager by its
+`<agent> · <schedule>` name only, failing with `no routine "<name>"` for any other,
 runs its fresh private X, and returns the actual destination Y only after the
 existing runner's RunTurn and Sync finish successfully.
 
 Backend entry reads expose generic source conversation provenance; RPC
-decodes the Cron prefix and the timestamp/random suffix from the right. The stored
+decodes the `cron:` prefix and the timestamp/random suffix from the right. The stored
 path label is used as-is, including previously stored underscores, without matching
 current definitions. Each run X is one row, whatever chats hold its output. Only X's
 own history and turns count; subagent and review sessions under X are not read. The
 row links to a recorded human Y that X reports to or that continues X, the greatest
 ID if several. Rows sort newest-first by the source run timestamp,
 with X as tie-breaker.
-Recorded private Cron conversations with saved entries or a running, failed, or
+Recorded private routine run conversations with saved entries or a running, failed, or
 stopped turn also supply run timestamps through the same metadata query, without
 reading replay content. Runs cannot revert, so no revert cutoff applies to them.
 When no human chat holds the run's output, Web's **Open chat** action uses
-`CreateSession.source_conversation_id`, which accepts a recorded Cron
+`CreateSession.source_conversation_id`, which accepts a recorded routine run
 producer and creates or reuses `web:<source ID>`, which continues the run: it shows
 the run's messages under their own IDs before its own, without copying them, and
 adopts a run that reports to no chat. Creation is idempotent, including concurrent
-opens. This creates a writable Web conversation, without Cron execution. It offers
+opens. This creates a writable Web conversation, without running the routine. It offers
 every loaded agent. Creation selects the agent the run recorded; when that agent is
 missing or turned off, nothing is created and the error names the agent. Reopening
 does not overwrite a conversation's selection. A scheduled run with a non-empty reply
-opens the same `web:<source ID>` chat on delivery, for the cron's agent; when that
+opens the same `web:<source ID>` chat on delivery, for the routine's agent; when that
 agent is missing or turned off by then, no chat is opened and the error is logged.
-Authenticated users can read Cron producer history through `History`; this does not
+Authenticated users can read routine run producer history through `History`; this does not
 grant prompt, queue, deletion, or other mutation access to producers. Web previews a
 run from that history.
 Missing source entries cannot supply history; no migration, backfill, or history
-rewrite is performed. Web lists runs by cron, including crons whose definition is
-gone. `History.source_conversation_id` optionally restricts
+rewrite is performed. Web lists runs by routine, including routines whose definition is
+gone. Runs of retired cron files stay listed under their raw path, such as
+`cron/daily.md`, and still open. `History.source_conversation_id` optionally restricts
 the authorized destination's history to one source run before replay decoding;
 it does not change access to other private source conversations.
 
@@ -497,7 +501,7 @@ against that conversation's current history or queued references on every call,
 including uploads referenced by its selected staged user boundary for composer
 restoration—not arbitrary uploads or other references in the hidden suffix—
 then returns exact original bytes in 256 KiB chunks. Merely knowing an ID is not
-authorization. Private Cron producers and recorded private external MCP sessions
+authorization. Private routine run producers and recorded private external MCP sessions
 are denied, as are callers without a tailnet login. Deleting history revokes its references.
 Queued references remain valid until removed or consumed.
 
@@ -659,7 +663,7 @@ HTTPS on port 443 of its tailnet name; see [Identity boundary](#identity-boundar
 The HTTP adapter connects to gRPC entirely in memory inside the same process.
 No Web environment variables or filesystem sockets are needed.
 
-The normal RocketClaw command still starts its existing Slack/Cron runtime. The
+The normal RocketClaw command still starts its existing Slack and routine runtime. The
 isolated transport tests below do not start Slack or touch runtime configuration.
 
 Open `/s/<base64url-conversation-id>` in the Web UI to read the conversation.
@@ -676,7 +680,7 @@ The `DeleteSessionEntries` RPC removes saved entries and retained failed/stopped
 turns for that exact conversation ID, not an unfinished turn or its
 conversation or goal record, and retains its session tags. Ordinary GC remains
 responsible for those records; permanent session pruning removes tag metadata too.
-In a chat with a message from a cron run, External MCP, or Slack it removes only
+In a chat with a message from a routine run, External MCP, or Slack it removes only
 the Web messages after the newest such message, as undo does.
 
 The `DeleteSession` RPC deletes a Web chat or Slack thread for everyone as
@@ -838,8 +842,8 @@ The checks sit where requests already pass:
   and its shared-search key names the caller only for a limited person.
 - One session: `visibleConversation` reads the top-level conversation by parent
   link (`TopLevelSession`) and checks its Birth Space, agent, and kind. Shadows
-  reach it through `readableConversation`. History of a cron trace checks the
-  cron's space instead (`cronInLimit`): its own `space`, else its agent's.
+  reach it through `readableConversation`. History of a routine run trace checks
+  the routine's space instead (`cronInLimit`), which is its agent's.
 - Agent choice: `agentChoices` and `ListAgents` drop agents outside the limit, which
   covers `CreateSession`, `ForkSession`, `VoiceSettings`, and `/agent`. `sameSpace`
   still offers every remaining choice when the current agent is outside the
@@ -855,7 +859,8 @@ The checks sit where requests already pass:
   refused hand-off sends a notice and its lines wait for a later one.
 - Handlers outside those paths check for themselves: `Tabs` (only the person's
   spaces and Shared tabs, and creates missing listed spaces), `GetPage` and
-  `ListPages`, `ListCronJobs` and `RunCronJob` (the cron's space and its agent),
+  `ListPages`, `ListCronJobs` and `RunCronJob` (the routine's space and its agent;
+  `RunCronJob` refuses others with "this routine or its agent is outside your spaces"),
   `ListSessions`' first frame (no OpenCode servers, only their agents' tags),
   `ListConfig` (see above), `ListSkills` (only skills their agents may use), and
   `Reload`, because reloaded agent files can widen a limit.

@@ -1668,7 +1668,7 @@ SELECT COALESCE(max(r.cron_path), ''), COALESCE(max(r.space), ''), COALESCE(max(
 			space = agents.Items[agent].Space
 		}
 
-		if err := s.markLocation(ctx, tx, "/cron", space, "Run finished", func(rest string) bool { return decodeSessionID(rest) == stem }); err != nil {
+		if err := s.markLocation(ctx, tx, "/routines", space, "Run finished", func(rest string) bool { return decodeSessionID(rest) == stem }); err != nil {
 			return err
 		}
 	}

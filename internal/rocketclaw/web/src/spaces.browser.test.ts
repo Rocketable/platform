@@ -124,8 +124,8 @@ test("New session offers every agent, and a space shows its own and spaceless cr
   };
   const runnable = async () => {
     await page.keyboard.press("Control+Shift+p");
-    await page.getByRole("button", { name: "Cron: Run", exact: true }).click();
-    const palette = page.getByRole("dialog", { name: "Run cron", exact: true });
+    await page.getByRole("button", { name: "Routines: Run", exact: true }).click();
+    const palette = page.getByRole("dialog", { name: "Run routine", exact: true });
     await palette.getByRole("button", { name: "daily", exact: true }).waitFor();
     const listed = await palette.getByRole("button").allTextContents();
     await page.keyboard.press("Escape");
@@ -139,7 +139,7 @@ test("New session offers every agent, and a space shows its own and spaceless cr
   // Main shows only spaceless cron jobs: opsreport hides with its run. Every session lists the agents the server offers.
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
   expect(await agents()).toEqual(["main", "opsbot"]);
-  await openSaved(page, origin, "/cron", "Cron", saved);
+  await openSaved(page, origin, "/routines", "Routines", saved);
   expect(await dashboard()).toEqual(["daily", "retired"]);
   await openSaved(page, origin, "/", "New session", saved);
   expect(await agents()).toEqual(["main", "opsbot"]);
@@ -150,9 +150,9 @@ test("New session offers every agent, and a space shows its own and spaceless cr
   expect(await agents()).toEqual(["main", "opsbot"]);
   expect(await runnable()).toEqual(["daily", "opsreport"]);
   await chooseSpace(page, "Main", "menuitemradio");
-  await menu(page, "Cron", "Move to space", "ops");
+  await menu(page, "Routines", "Move to space", "ops");
   await chooseSpace(page, "ops", "menuitemradio");
-  await strip(page).getByRole("tab", { name: "Cron", exact: true }).click();
+  await strip(page).getByRole("tab", { name: "Routines", exact: true }).click();
   expect(await dashboard()).toEqual(["daily", "opsreport", "retired"]);
 }), 60_000);
 
@@ -835,7 +835,7 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   const header = page.getByRole("button", { name: "Parked", exact: true }), sent = (count: number) => until(() => saved.sent.length === count);
   // The person's tabs are in Ops, Bravo and Charlie in its Work group; Hotel, in Main, is parked until they unpark it.
   saved.spaces.push({ id: "ops", name: "Ops" });
-  saved.state = { ...saved.state, space: "ops", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [...[href("alpha"), href("bravo"), href("charlie"), href("delta"), "/cron"].map((path, i) => ({ path, space: "ops", group: i === 1 || i === 2 ? "work" : undefined })), { path: href("hotel"), space: "main" }] };
+  saved.state = { ...saved.state, space: "ops", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [...[href("alpha"), href("bravo"), href("charlie"), href("delta"), "/routines"].map((path, i) => ({ path, space: "ops", group: i === 1 || i === 2 ? "work" : undefined })), { path: href("hotel"), space: "main" }] };
   saved.attention = [{ path: href("hotel"), parked: true }];
   await page.goto(`${origin}${href("alpha")}`);
   await header.waitFor();
@@ -848,13 +848,13 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   await row("Bravo").waitFor();
   await sent(1);
   expect(saved.sent).toEqual([{ paths: [href("bravo")], action: "PARK" }]);
-  expect(await order(page)).toEqual(["Alpha", "Work", "Charlie", "Delta", "Cron"]);
+  expect(await order(page)).toEqual(["Alpha", "Work", "Charlie", "Delta", "Routines"]);
   // A timed park is reckoned in the browser's local time, and its row says when it ends.
-  await menu(page, "Cron", "Park", "Tomorrow 9:00");
+  await menu(page, "Routines", "Park", "Tomorrow 9:00");
   await sent(2);
   const nine = await page.evaluate(() => { const at = new Date(); at.setDate(at.getDate() + 1); at.setHours(9, 0, 0, 0); return at.toISOString(); });
-  expect([saved.sent[1], nine.slice(10)]).toEqual([{ paths: ["/cron"], action: "PARK", until: nine }, "T03:30:00.000Z"]);
-  await parked.locator('[role="tab"][aria-label="Cron"][aria-description^="Space: Ops, Parked until "]').waitFor();
+  expect([saved.sent[1], nine.slice(10)]).toEqual([{ paths: ["/routines"], action: "PARK", until: nine }, "T03:30:00.000Z"]);
+  await parked.locator('[role="tab"][aria-label="Routines"][aria-description^="Space: Ops, Parked until "]').waitFor();
   // Parked from its keyboard menu, Charlie leaves Work empty, whose header stays, though Work was saved before every
   // group held its place, and focus moves to the strip's selected tab.
   await tab("Charlie").focus();
@@ -882,7 +882,7 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
 
   // Close on a Parked row closes the tab. Reopened, one whose park has a time is still parked; one parked until unparked
   // is an ordinary tab, as closing it ended its park.
-  for (const [name, path] of [["Cron", "/cron"], ["Hotel", href("hotel")]]) {
+  for (const [name, path] of [["Routines", "/routines"], ["Hotel", href("hotel")]]) {
     await parked.getByRole("button", { name: `Close ${name}` }).click();
     await row(name).waitFor({ state: "detached" });
     await until(() => saved.closed[0]?.path === path);
@@ -895,11 +895,11 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   await page.locator(`button${current}[aria-label="Main"]`).waitFor();
   await tab("Hotel").waitFor();
   await page.keyboard.press("Control+Alt+t");
-  await page.waitForURL("**/cron");
-  await row("Cron").waitFor();
-  expect(await tab("Cron").count()).toBe(0);
+  await page.waitForURL("**/routines");
+  await row("Routines").waitFor();
+  expect(await tab("Routines").count()).toBe(0);
 
-  // Bulk closes take this space's parked tabs too: Close others closes the parked Cron with the rest of Ops.
+  // Bulk closes take this space's parked tabs too: Close others closes the parked Routines tab with the rest of Ops.
   await menu(page, "Alpha", "Close others");
   await until(() => saved.state.tabs.map((item) => item.path).join() === [href("alpha"), href("hotel"), "group:work"].join());
   await header.waitFor({ state: "detached" });
@@ -918,10 +918,10 @@ test("Park until it is done is offered for a session, not a page, and parks the 
     await page.getByRole("menu").first().waitFor({ state: "hidden" });
     return items;
   };
-  await openSaved(page, origin, "/cron", "Cron", saved);
+  await openSaved(page, origin, "/routines", "Routines", saved);
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
   const times = ["1 hour", "4 hours", "Tomorrow 9:00", "Next Monday 9:00", "Pick a time…"];
-  expect(await parkMenu("Cron")).toEqual([...times, "—", "Until I unpark"]);
+  expect(await parkMenu("Routines")).toEqual([...times, "—", "Until I unpark"]);
   expect(await parkMenu("Alpha")).toEqual(["Until it is done", "—", ...times, "—", "Until I unpark"]);
 
   await menu(page, "Alpha", "Park", "Until it is done");
@@ -931,8 +931,8 @@ test("Park until it is done is offered for a session, not a page, and parks the 
   expect(await parked.getByRole("tab", { name: "Alpha", exact: true }).locator("svg").getAttribute("class")).toContain("lucide-message-square");
 
   // Cmd/Ctrl+Shift+S parks the session in view the same way, and on a page parks nothing.
-  await strip(page).getByRole("tab", { name: "Cron", exact: true }).click();
-  await page.waitForURL(`${origin}/cron`);
+  await strip(page).getByRole("tab", { name: "Routines", exact: true }).click();
+  await page.waitForURL(`${origin}/routines`);
   await page.keyboard.press("Control+Shift+s");
   await openSaved(page, origin, href("bravo"), "Bravo", saved);
   await page.keyboard.press("Control+Shift+s");
@@ -950,9 +950,9 @@ test("Auto-park is offered for a session's tab, not a page's, and turns on and o
     await page.getByRole("menu").waitFor({ state: "hidden" });
     return listed;
   };
-  await openSaved(page, origin, "/cron", "Cron", saved);
+  await openSaved(page, origin, "/routines", "Routines", saved);
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
-  expect(await items("Cron")).not.toContain("Auto-park when I send");
+  expect(await items("Routines")).not.toContain("Auto-park when I send");
 
   await menu(page, "Alpha", "Auto-park when I send");
   await until(() => saved.sent.length === 1);
@@ -1063,12 +1063,12 @@ test("a new chat created while another page shows opens when New session shows a
   await box.fill("hello");
   await box.press("Enter");
   await requested.promise;
-  await page.evaluate(() => { history.pushState(null, "", "/cron"); dispatchEvent(new PopStateEvent("popstate")); });
-  await page.waitForURL("**/cron");
+  await page.evaluate(() => { history.pushState(null, "", "/routines"); dispatchEvent(new PopStateEvent("popstate")); });
+  await page.waitForURL("**/routines");
   held.resolve();
   await until(() => prompts.some((prompt) => prompt.id === "fresh"));
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  expect(new URL(page.url()).pathname).toBe("/cron");
+  expect(new URL(page.url()).pathname).toBe("/routines");
   await page.evaluate(() => { history.pushState(null, "", "/"); dispatchEvent(new PopStateEvent("popstate")); });
   await page.waitForURL(`**${href("fresh")}`);
 }), 30_000);
@@ -1083,24 +1083,24 @@ test("every tab offers Unfollow, which then offers Follow, the two act on their 
     await page.getByRole("menu").waitFor({ state: "hidden" });
     return items;
   };
-  saved.state = { ...saved.state, space: "main", tabs: [href("alpha"), href("charlie"), "/cron", href("golf")].map((path) => ({ path, space: "main" })) };
+  saved.state = { ...saved.state, space: "main", tabs: [href("alpha"), href("charlie"), "/routines", href("golf")].map((path) => ({ path, space: "main" })) };
   saved.shared = [{ space: "main", path: href("bravo") }];
   saved.attention = [{ path: href("golf"), parked: true, unfollowed: true }];
   await page.goto(`${origin}${href("alpha")}`);
-  await tab("Cron").waitFor();
+  await tab("Routines").waitFor();
   const after = (items: string[], item: string) => items[items.indexOf(item) + 1];
-  expect([after(await lines("Alpha"), "Auto-park when I send"), after(await lines("Cron"), "Park"), after(await sharedMenu(page, "Bravo"), "Auto-park when I send")]).toEqual(["Unfollow", "Unfollow", "Unfollow"]);
+  expect([after(await lines("Alpha"), "Auto-park when I send"), after(await lines("Routines"), "Park"), after(await sharedMenu(page, "Bravo"), "Auto-park when I send")]).toEqual(["Unfollow", "Unfollow", "Unfollow"]);
   await page.keyboard.press("Escape");
   await page.getByRole("menu").waitFor({ state: "hidden" });
 
-  await menu(page, "Cron", "Unfollow");
+  await menu(page, "Routines", "Unfollow");
   await until(() => saved.sent.length === 1);
   await focus(page);
-  await tab("Cron").click({ button: "right" });
+  await tab("Routines").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Follow", exact: true }).click();
   await page.getByRole("menu").waitFor({ state: "hidden" });
   await until(() => saved.sent.length === 2);
-  expect(saved.sent).toEqual([{ paths: ["/cron"], action: "UNFOLLOW" }, { paths: ["/cron"], action: "FOLLOW" }]);
+  expect(saved.sent).toEqual([{ paths: ["/routines"], action: "UNFOLLOW" }, { paths: ["/routines"], action: "FOLLOW" }]);
 
   await menu(page, "Alpha", "Unfollow");
   await focus(page);

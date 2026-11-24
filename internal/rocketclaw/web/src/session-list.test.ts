@@ -39,7 +39,7 @@ test("only an unfinished operator as the last word is left out while typing", ()
     ["sort:", "sort:", true],
     ["sort:ne", "sort:ne", true],
     ["outage is:fork", "is:fork", true],
-    ["cron:", "cron:", true],
+    ["routine:", "routine:", true],
     ["outage TAG:", "TAG:", true],
     ["agent:", "agent:", true],
     ["room:", "room:", true],
@@ -91,11 +91,11 @@ describe("session list reconciliation", () => {
     expect(listedRows(held, { received: [{ id: "only" }] }), "a listing since nothing held sent every row").toEqual([{ id: "only" }]);
     expect(listedRows(held, { received: [{ id: "only" }], since: "v0" })).toEqual([{ id: "only" }]);
     // Tab rows sent since replace the held ones by location, and one with only its path leaves.
-    const tabs = { ...held, tabs: [{ path: "/cron/a", unreadAt: "1" }, { path: "/pages/b", parked: true }, { path: "/search/c", until: "2" }] };
-    expect(listedTabs(tabs, { tabs: [{ path: "/pages/b" }, { path: "/search/c", unreadAt: "3", note: "Search finished" }, { path: "/cron/d", unreadAt: "4" }], since: "v1" }))
-      .toEqual([{ path: "/cron/a", unreadAt: "1" }, { path: "/search/c", unreadAt: "3", note: "Search finished" }, { path: "/cron/d", unreadAt: "4" }]);
-    expect(listedTabs(tabs, { tabs: [{ path: "/cron/d", unreadAt: "4" }] }), "a listing since nothing held sent every row").toEqual([{ path: "/cron/d", unreadAt: "4" }]);
-    expect(listedTabs(tabs, { tabs: [{ path: "/cron/a", unfollowed: true }], since: "v1" }), "an unfollowed row stays without a mark").toContainEqual({ path: "/cron/a", unfollowed: true });
+    const tabs = { ...held, tabs: [{ path: "/routines/a", unreadAt: "1" }, { path: "/pages/b", parked: true }, { path: "/search/c", until: "2" }] };
+    expect(listedTabs(tabs, { tabs: [{ path: "/pages/b" }, { path: "/search/c", unreadAt: "3", note: "Search finished" }, { path: "/routines/d", unreadAt: "4" }], since: "v1" }))
+      .toEqual([{ path: "/routines/a", unreadAt: "1" }, { path: "/search/c", unreadAt: "3", note: "Search finished" }, { path: "/routines/d", unreadAt: "4" }]);
+    expect(listedTabs(tabs, { tabs: [{ path: "/routines/d", unreadAt: "4" }] }), "a listing since nothing held sent every row").toEqual([{ path: "/routines/d", unreadAt: "4" }]);
+    expect(listedTabs(tabs, { tabs: [{ path: "/routines/a", unfollowed: true }], since: "v1" }), "an unfollowed row stays without a mark").toContainEqual({ path: "/routines/a", unfollowed: true });
   });
 
   test("orders rows by the server's rule", () => {
@@ -113,13 +113,13 @@ describe("session list reconciliation", () => {
   test("reports the first message's metadata and the completion's changes", async () => {
     const remotes: Remote[] = [];
     async function* batches() {
-      yield { owner: "alice", opencodeServers: { box: "https://box" }, agentTags: { main: { tags: ["bug"] }, bare: {} }, tabRevision: "7", navigate: "/cron" };
+      yield { owner: "alice", opencodeServers: { box: "https://box" }, agentTags: { main: { tags: ["bug"] }, bare: {} }, tabRevision: "7", navigate: "/routines" };
       expect(remotes).toEqual([{ servers: { box: "https://box" }, agentTags: { main: ["bug"], bare: [] } }]);
       yield { sessions: [{ id: "b" }] };
-      yield { upstreamSuccess: true, version: "v2", since: "v1", removed: ["a"], tabs: [{ path: "/cron/a", unreadAt: "1" }] };
+      yield { upstreamSuccess: true, version: "v2", since: "v1", removed: ["a"], tabs: [{ path: "/routines/a", unreadAt: "1" }] };
     }
     const result = await readSessionEnumeration("alice", batches(), () => [], () => {}, undefined, (remote) => remotes.push(remote));
-    expect(result).toEqual({ received: [{ id: "b" }], complete: true, mismatch: false, remote: remotes[0], version: "v2", since: "v1", removed: ["a"], tabs: [{ path: "/cron/a", unreadAt: "1" }], tabRevision: "7", navigate: "/cron" });
+    expect(result).toEqual({ received: [{ id: "b" }], complete: true, mismatch: false, remote: remotes[0], version: "v2", since: "v1", removed: ["a"], tabs: [{ path: "/routines/a", unreadAt: "1" }], tabRevision: "7", navigate: "/routines" });
     expect(remotes).toHaveLength(1);
   });
 

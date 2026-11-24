@@ -133,12 +133,12 @@ test("a call that took the person to a page shows its link at every level, a fai
   const navigate = (id: string, location: string, result = "https://rc.example/x") => ({ ...call(id, "rocketclaw_navigate_for_me", result), text: `rocketclaw_navigate_for_me\n${JSON.stringify({ location })}` });
   const scripted = (status: string, args: string) => ({ ...call("e1", "execute"), codeModeCalls: [{ name: "bash", arguments: "{}", status: "ok" }, { name: "rocketclaw_navigate_for_me", arguments: args, status }] });
   expect(navigations(navigate("n1", " https://rc.example/s/../oc/b?x=1#y "))).toEqual(["/oc/b?x=1#y"]);
-  expect(navigations(navigate("n1", "/cron", "tool call failed: rocketclaw_navigate_for_me: refused"))).toEqual([]);
+  expect(navigations(navigate("n1", "/routines", "tool call failed: rocketclaw_navigate_for_me: refused"))).toEqual([]);
   expect(navigations(scripted("ok", JSON.stringify({ location: "/pages/Main/main/a.html" })))).toEqual(["/pages/Main/main/a.html"]);
-  expect(navigations(scripted("error", JSON.stringify({ location: "/cron" })))).toEqual([]);
+  expect(navigations(scripted("error", JSON.stringify({ location: "/routines" })))).toEqual([]);
   expect(navigations(scripted("ok", '{"location":"/pages…[truncated]'))).toEqual([]);
-  expect(shape([navigate("n1", "/cron"), scripted("ok", JSON.stringify({ location: "/cron" }))], "messages")).toEqual(["n1+", "e1+"]);
-  expect(shape([call("e0", "execute"), scripted("error", JSON.stringify({ location: "/cron" }))], "compact")).toEqual(["Used 2 tools[e0,e1]"]);
+  expect(shape([navigate("n1", "/routines"), scripted("ok", JSON.stringify({ location: "/routines" }))], "messages")).toEqual(["n1+", "e1+"]);
+  expect(shape([call("e0", "execute"), scripted("error", JSON.stringify({ location: "/routines" }))], "compact")).toEqual(["Used 2 tools[e0,e1]"]);
 });
 
 test("a summary row keeps its first member's key as the turn grows", () => {

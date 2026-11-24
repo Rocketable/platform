@@ -564,12 +564,12 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM legacy_thread_queue`).Scan(&kept))
 	require.Equal(t, 1, kept)
 
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql")
+	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql", "112_routines_tab_paths.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
 	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql"}, ledger)
+	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql", "112_routines_tab_paths.sql"}, ledger)
 
 	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
 	require.NoError(t, err)
@@ -876,7 +876,7 @@ INSERT INTO web_tabs (username, path, position, pinned, preview, group_id, space
 
 	state, _, err := store.TabState(ctx, "alice")
 	require.NoError(t, err)
-	require.Equal(t, []Tab{{Path: "/search", Group: "g", Space: "main"}, {Path: "/cron", Space: "main"}}, state.Tabs, "pinned and preview tabs stay open in place as ordinary tabs")
+	require.Equal(t, []Tab{{Path: "/search", Group: "g", Space: "main"}, {Path: "/routines", Space: "main"}}, state.Tabs, "pinned and preview tabs stay open in place as ordinary tabs")
 }
 
 func TestDropSpawnedByMigration(t *testing.T) {
@@ -963,7 +963,7 @@ INSERT INTO web_tabs (username, path, position, space, last) VALUES ('alice', '/
 
 	state, _, err := store.TabState(ctx, "alice")
 	require.NoError(t, err)
-	require.Equal(t, TabState{Tabs: []Tab{{Path: "/search", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/search", "ops": "/cron"}, SharedOrder: []string{}}, state)
+	require.Equal(t, TabState{Tabs: []Tab{{Path: "/search", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/search", "ops": "/routines"}, SharedOrder: []string{}}, state)
 
 	rows, err := queryStrings(ctx, store.db, `SELECT path FROM web_tabs ORDER BY path`, "tab rows")
 	require.NoError(t, err)
@@ -1001,16 +1001,51 @@ INSERT INTO web_closed_tabs (username, path, space, search, closed_at) VALUES ('
 		{Path: "/search/a", Space: "main", Search: &SearchPage{Name: "Triage", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}, {ID: "2", Name: "Mine", Query: "principal:alice"}}, Active: "2"}},
 		{Path: "/search/b", Space: "main", Search: &SearchPage{Searches: []SavedSearch{{ID: "1", Query: "a"}, {ID: "1", Query: "b"}}, Active: "9"}},
 		{Path: "/search/c", Space: "main", Search: &SearchPage{Name: "Empty", Active: "1"}},
-		{Path: "/cron", Space: "main"},
+		{Path: "/routines", Space: "main"},
 	}, state.Tabs)
 
 	shared, err := store.SharedTabs(ctx)
 	require.NoError(t, err)
-	require.Equal(t, []Tab{{Space: "main", Path: "/search/d", Search: &SearchPage{Name: "Deploys"}}, {Space: "main", Path: "/cron"}}, shared)
+	require.Equal(t, []Tab{{Space: "main", Path: "/search/d", Search: &SearchPage{Name: "Deploys"}}, {Space: "main", Path: "/routines"}}, shared)
 
 	closed, err := store.ClosedTabs(ctx, "alice")
 	require.NoError(t, err)
 	require.Equal(t, []Tab{{Path: "/search/e", Space: "main", Search: &SearchPage{}}}, closed)
+}
+
+func TestRoutinesTabPathsMigration(t *testing.T) {
+	t.Parallel()
+
+	store := newColdTestSessionServiceAt(t, t.TempDir())
+	ctx := t.Context()
+	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 111)
+	require.NoError(t, err)
+
+	_, err = store.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, space, revision, last, shared_order, card_order, navigation) VALUES
+    ('alice', 'main', 1, '{"main": "/cron", "ops": "/cron/ZGFpbHk", "dev": "/cronjobs"}', '["/cron/ZGFpbHk", "/agents"]', E'["main", "parked\\n/cron", "parked\\n/cronjobs"]', '/cron/ZGFpbHk'),
+    ('bob', 'main', 1, '{}', '[]', '[]', '');
+INSERT INTO web_tabs (username, path, position, space) VALUES ('alice', '/cron', 0, 'main'), ('alice', '/cron/ZGFpbHk', 1, 'main'), ('alice', '/cronjobs', 2, 'main');
+INSERT INTO web_shared_tabs (space, path) VALUES ('main', '/cron/ZGFpbHk'), ('main', '/agents');
+INSERT INTO web_closed_tabs (username, path, space, closed_at) VALUES ('alice', '/cron', 'main', now());
+INSERT INTO web_tab_attention (username, path) VALUES ('alice', '/cron/ZGFpbHk')`)
+	require.NoError(t, err)
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	paths, err := queryStrings(ctx, store.db, `SELECT 'tab ' || path FROM web_tabs UNION ALL SELECT 'shared ' || path FROM web_shared_tabs
+UNION ALL SELECT 'closed ' || path FROM web_closed_tabs UNION ALL SELECT 'attention ' || path FROM web_tab_attention
+UNION ALL SELECT username || ' ' || last::text || ' ' || shared_order::text || ' ' || card_order::text || ' ' || navigation FROM web_tab_states ORDER BY 1`, "tab paths")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		`alice {"dev": "/cronjobs", "ops": "/routines/ZGFpbHk", "main": "/routines"} ["/routines/ZGFpbHk", "/agents"] ["main", "parked\n/routines", "parked\n/cronjobs"] /routines/ZGFpbHk`,
+		"attention /routines/ZGFpbHk",
+		`bob {} [] [] `,
+		"closed /routines",
+		"shared /agents",
+		"shared /routines/ZGFpbHk",
+		"tab /cronjobs",
+		"tab /routines",
+		"tab /routines/ZGFpbHk",
+	}, paths)
 }
 
 func TestDropTopShelfMigration(t *testing.T) {
@@ -1064,7 +1099,7 @@ INSERT INTO web_tabs (username, path, conversation_id, position, space, unread_a
 
 	state, revision, err := store.TabState(ctx, "alice")
 	require.NoError(t, err)
-	require.Equal(t, []Tab{{Path: "/s/YQ", Space: "main"}, {Path: "/cron", Space: "main"}}, state.Tabs)
+	require.Equal(t, []Tab{{Path: "/s/YQ", Space: "main"}, {Path: "/routines", Space: "main"}}, state.Tabs)
 	require.Equal(t, int64(2), revision)
 
 	left, err := queryStrings(ctx, store.db, `SELECT 'attention ' || path FROM web_tab_attention

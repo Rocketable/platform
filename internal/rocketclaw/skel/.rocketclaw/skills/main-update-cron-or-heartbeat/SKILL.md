@@ -1,32 +1,35 @@
 ---
 name: main-update-cron-or-heartbeat
-description: Mandatory skill for any request to create or modify cron/ (aka the heartbeat definition, aka the cronjob configuration) or an agent's routines
+description: Mandatory skill for any request to create or change when an agent runs on its own, through the routines in its agent file (also called a cron, cronjob, schedule or heartbeat)
 ---
 ## Purpose
 
-Use this skill whenever the human wants to create, update, or otherwise modify the cronjob instructions used by rocketclaw.
+Use this skill whenever the human wants to create, update, remove, or ask about an agent's schedule: the `routines` in its agent file.
 
-This skill is mandatory for any `cron/` and `cron/HEARTBEAT.md` change.
+Routines are the only way to schedule an agent. People may still call one a cron, a cronjob, a schedule or the heartbeat; each means a routine.
 
-Do not edit `cron/*.md` outside this skill.
-
-If the request touches heartbeat behavior, heartbeat content, or the `schedule:` frontmatter value, this is the skill that must be used.
-
-If the request touches cron behavior, cron content, or the `schedule:` frontmatter value, this is the skill that must be used.
+This skill is mandatory for any `routines` change. Do not edit `routines` outside this skill.
 
 ## Runtime paths
 
-Only use this runtime path:
+Only use these runtime paths:
 
-- `cron`
+- current effective agent: `.rocketclaw/agents/<agent>.md`
+- writable overlay agent: `agents/<agent>.md`
 
-## Every cron names its agent
+Edit the agent file the way `main-create-or-update-agent` says: read the effective file, copy it into `agents/` before editing, never edit `.rocketclaw` directly, keep every other key and the body unchanged, and call `rocketclaw_reload` exactly once after all edits. The reload reports a routine that fails loading and names its file; fix it before you finish.
 
-Every cron file must name the agent that runs it with an `agent:` frontmatter value, such as `agent: reporter`. There is no default agent: a cron file without `agent:`, or whose agent is missing or turned off, still loads but never runs, and each trigger and Run now fails with an error naming the cron. When the human has not said which agent should run a new cron, ask. When you touch a cron file that has no `agent:`, ask the human which agent should run it and add it. The built-in `main` agent may run a cron, reporting into its one shared session; the built-in `voice` agent is `sticky: user` and cannot.
+## Which agents can have routines
+
+- Any agent file, advanced or easy, can have `routines`.
+- `main` and `voice` are built in and have no agent file, so they cannot have routines. To schedule work for them, create a new agent through `main-create-or-update-agent`.
+- `routines` on a `sticky: user` or `sticky: slack` agent fail loading with `routines: a sticky: user agent cannot have routines` (or `sticky: slack`). Never add them there.
+- A `sticky: global` agent's routine runs report into its one shared session instead of a chat per run.
+- Only top-level agents' routines run. A shadow's own `routines` never run, and routine runs get no shadows.
+
+When the human has not said which agent should run a new routine, ask.
 
 ## Routines
-
-Any agent can schedule itself with `routines` in its own agent file, edited through `main-create-or-update-agent` (overlay in `agents/`, then `rocketclaw_reload`). Before writing a cron file, read its agent's `.rocketclaw/agents/<agent>.md`. If it has `mode: easy`, do not write a cron file: one whose `agent` is an easy agent never runs, and the Web warning strip and `rocketclaw_reload` report `uses agent <agent>, which is an easy agent scheduled with its routines`. Schedule it with `routines` instead. An advanced agent may use routines, cron files, or both. If the agent has `sticky: user` or `sticky: slack`, schedule it neither way: a cron file naming it never runs and is reported as `uses agent <agent>, which is sticky: user` (or `sticky: slack`), and routines on it fail with `routines: a sticky: user agent cannot have routines` (or `sticky: slack`). A `sticky: global` agent's runs report into its one shared session instead of a chat per run. Its cron must inherit the agent's space or explicitly name the same space; a cron naming a different space never runs.
 
 ```yaml
 routines:
@@ -34,71 +37,59 @@ routines:
   - "30m"
 ```
 
-- Each entry is a schedule string, or a one-entry map from schedule to instruction.
-- A schedule uses the cron-file syntax below, one schedule per entry: 5-field cron, a Go duration, or an `@daily`-style shortcut. `@every` fails loading.
-- An entry with an instruction sends it as the prompt; a bare entry sends `Scheduled run (<schedule>).` Runs report like cron runs, in the agent's `space`.
-- A routine is its agent plus its schedule text: editing the instruction keeps it, changing the schedule starts a new one, and the same schedule twice in one file fails loading.
-- Only top-level agents' routines run; a shadow's own `routines` never run, and routine runs get no shadows.
+- Each entry is a schedule alone, or a one-entry map from schedule to instruction.
+- An entry with an instruction sends it as the prompt; a bare entry sends `Scheduled run (<schedule>).`
+- The instruction expands prompt-shell expressions like an agent body does (see `main-create-or-update-agent`); they run through the agent's `shell` when it has one. Use a YAML block scalar for an instruction with several lines.
+- A routine runs in its agent's `space`. There is no `space` per routine: when a routine must run in another space, it needs its own agent in that space.
+- A non-empty reply opens a new Web chat with the report, run by the agent; an empty reply reports nothing.
+- A routine is its agent plus its schedule text: editing the instruction keeps it, changing the schedule starts a new one, and the same schedule twice in one file fails loading. Renaming the agent leaves its earlier routine runs under the old name.
+- A routine whose previous run is still running is not started again until that run finishes.
+- The Web's Routines page (`/routines`) lists each routine as `<agent> · <schedule>`. Its play button, or "Routines: Run" in the command palette, runs one now.
 
-## Heartbeat interval
+Routines repeat. For a single future run, use `rocketclaw_schedule_message`: it creates a delayed prompt inside the current conversation/session, including the current Slack thread when applicable, and its eventual output appears in that same session/thread.
 
-Changing the `schedule:` interval is allowed, but the value must conform to Go `time.ParseDuration` syntax or to cronjob syntax (`man 5 crontab`). It can be a single value or a list of values:
+## Overlapping routines
 
-Valid Examples:
-- Go `time.ParseDuration` format
-```
----
-schedule: "5s"
----
-```
-- Crontab format
-```
----
-schedule: "*/5 * * * *"
----
-```
-- Many schedules
-```
----
-schedule:
-  - "5s"
-  - "*/5 * * * *"
----
+Two routines of one agent that come due on the same minute start two runs side by side. Nothing combines them, because each can carry a different instruction. For example, these both run on Monday at 9:00:
+
+```yaml
+routines:
+  - "0 9 * * 1-5": "Triage new issues."
+  - "0 9 * * 1": "Write the weekly strategy note."
 ```
 
-The `schedule:` frontmatter value is the cronjob frequency or cadence.
+When the human wants one run, write schedules that do not overlap: `"0 9 * * 2-5"` for the triage, plus a Monday entry whose instruction does both. Before adding or changing a schedule, compare it with the agent's other routines, and when two would come due on the same minute, tell the human and ask whether that is what they want.
 
-A cron has no Slack channel. A non-empty reply opens a new Web chat with the report, run by the cron's agent; an empty reply reports nothing. Remove a leftover `channel:` line when you touch a cron file.
+## Schedules
 
-The optional `space:` frontmatter value is one Web space name, such as `space: "Billing"`. Without it, the cron uses its agent's `space`. Its runs are born in that space, which is created when missing. Web's Cron page and Run cron palette show a cron only in the space of that name, ignoring case; a cron with no space shows in every space. Set or change `space:` only when the human asks.
+A schedule is one of:
 
-Cron schedules and routines repeat. For a single future run, use `rocketclaw_schedule_message`: it creates a delayed prompt inside the current conversation/session, including the current Slack thread when applicable, and its eventual output appears in that same session/thread.
+- a 5-field cron expression (`man 5 crontab`), such as `"*/5 * * * *"`
+- a Go `time.ParseDuration` duration greater than zero, such as `15m`, `90s` or `1h30m`
+- an `@daily`-style shortcut, such as `@hourly`, `@daily`, `@weekly` or `@monthly`
 
-Interpret requests like these as referring to the `schedule:` value:
+`@every` fails loading; write the duration instead. Quote every schedule in YAML. One entry holds one schedule; for several schedules, write several entries.
+
+Interpret requests like these as referring to a routine's schedule:
 
 - "run the heartbeat more frequently"
-- "slow the heartbeat down"
-- "set the heartbeat to every 5 minutes"
+- "slow the cron down"
+- "set it to every 5 minutes"
 - "what is the heartbeat frequency right now?"
 
 That means:
 
-- if the human asks about the heartbeat frequency, read it from the `schedule:` frontmatter value
-- if the human asks to change how often the heartbeat runs, update the `schedule:` frontmatter value
-- if the human only asks to change heartbeat content or instructions, leave `schedule:` untouched
+- if the human asks how often an agent runs, read the schedules from its `routines`
+- if the human asks to change how often it runs, change that entry's schedule and keep its instruction
+- if the human only asks to change what it does, change the instruction and leave the schedule untouched
+- if it is unclear which agent or routine they mean, list the agents with routines and ask
 
-Examples of valid durations include:
-
-- `15m`
-- `90s`
-- `1h30m`
-
-If `go` is available, validate any intended interval before writing it.
+If `go` is available, validate any intended duration before writing it.
 
 You can use this exact validation pattern:
 
 ```bash
-s='THE INTENDED DURATION GOES HERE'; f=$(mktemp /tmp/pd-XXXXXX.go); printf '%s\n' 'package main; import ("fmt"; "os"; "time"); func main() { d, err := time.ParseDuration(os.Args[1]); if err != nil { fmt.Println("bad:", err); os.Exit(1) }; fmt.Println("ok:", d) }' > "$f"; go run "$f" "$s"; rm -f "$f"
+s='THE INTENDED DURATION GOES HERE'; mkdir -p .tmp; f=$(mktemp .tmp/pd-XXXXXX.go); printf '%s\n' 'package main; import ("fmt"; "os"; "time"); func main() { d, err := time.ParseDuration(os.Args[1]); if err != nil { fmt.Println("bad:", err); os.Exit(1) }; fmt.Println("ok:", d) }' > "$f"; go run "$f" "$s"; rm -f "$f"
 ```
 
 Check for Go first with either:
@@ -110,27 +101,25 @@ If `go` is available and the duration fails validation, do not write the file un
 
 If `go` is not available, be conservative:
 
-- only write the requested interval if it is already clearly in normal `time.ParseDuration` format
+- only write the requested interval if it is already clearly in normal `time.ParseDuration` format or a 5-field cron expression
 - if it looks ambiguous or invalid, ask the human to clarify instead of guessing
 
-## Body and instruction updates
+## Instruction updates
 
-When the human asks to change cronjob body/content/instructions (including heartbeat instructions), ask what the cron reply should be, specifically:
+When the human asks to create a routine or change what one does, ask what its reply should be, specifically:
 
 - contents
 - structure
 - rules for silence, if any
 
-Do this only for body/instruction changes. Do not ask these questions for schedule-only edits.
+Do this only for instruction changes. Do not ask these questions for schedule-only edits.
 
-## File handling
+## Migrating leftover cron files
 
-If `cron/HEARTBEAT.md` does not exist, create it with `schedule:` and `agent:` frontmatter values and the body the human asked for.
+RocketClaw no longer reads `cron/` folders, in the workspace or in overlays, and ignores files left there without a warning. If `cron/*.md` (such as `cron/HEARTBEAT.md`) or `.rocketclaw/overlays/<clone>/cron/*.md` still exists, it no longer runs. When the human asks about one, or you find one while doing this skill, tell them and offer to migrate it:
 
-When `cron/HEARTBEAT.md` already exists:
-
-- read it
-- do not create a new file
-- preserve the existing `schedule:` value unless the human explicitly asked to change it
-- update the existing file in place
-- update only the heartbeat body/content, plus a missing `agent:` (see [Every cron names its agent](#every-cron-names-its-agent))
+1. Read the file. Its `agent:` names the agent that ran it; its `schedule:` holds one schedule or a list; its body is the prompt.
+2. Add one `routines` entry per schedule to that agent, with the body as the instruction, following the rules above. When the file had no `agent:`, or names `main`, `voice`, or a `sticky: user` or `sticky: slack` agent, ask which agent should run it.
+3. When the file's `space:` differs from the agent's `space`, the routine would run in the agent's space instead. Ask whether that is fine, or whether the job needs its own agent in that space.
+4. Delete the workspace `cron/` file. A file in an overlay clone cannot be deleted from the workspace: tell the human to move it into an agent in that overlay's repository and delete it there.
+5. Call `rocketclaw_reload` once, after all edits.

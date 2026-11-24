@@ -1022,7 +1022,7 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 	for i := range jobs {
 		job := &jobs[i]
 
-		row := &CronJob{Stem: backend.CronStem(job.RelativePath), Schedule: strings.Join(job.Schedules, ", "), Body: job.Body, Agent: job.Agent, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
+		row := &CronJob{Stem: backend.CronStem(job.RelativePath), Schedule: job.Schedule, Body: job.Body, Agent: job.Agent, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
 
 		spaces[row.Stem] = row.Space
 		if !limit.AllowsSpaceName(row.Space) {
@@ -1088,11 +1088,7 @@ func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*R
 
 	space := cmp.Or(job.Space, agents.Items[job.Agent].Space)
 	if !limit.AllowsSpaceName(space) || !limit.AllowsAgent(job.Agent) {
-		return nil, fmt.Errorf("run web cron job: %w", status.Error(codes.PermissionDenied, "this cron or its agent is outside your spaces"))
-	}
-
-	if err := backend.CheckCronAgent(agents, &job); err != nil {
-		return nil, fmt.Errorf("run web cron job: %w", status.Error(codes.FailedPrecondition, err.Error()))
+		return nil, fmt.Errorf("run web cron job: %w", status.Error(codes.PermissionDenied, "this routine or its agent is outside your spaces"))
 	}
 
 	conversation := protocol.Conversation{ID: rand.Text(), Agent: job.Agent, CreatedBy: principal, Space: space}
@@ -1613,7 +1609,7 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 		}
 
 		if !limit.AllowsAgent(thread.Agent) {
-			return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.PermissionDenied, "this cron run's agent is outside your spaces"))
+			return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.PermissionDenied, "this routine run's agent is outside your spaces"))
 		}
 
 		request.Agent, id = thread.Agent, "web:"+source
@@ -2271,7 +2267,7 @@ func (s *Server) cronInLimit(limit backend.SpaceLimit, stem string) error {
 	}
 
 	if job, errLoad := s.cronjobs.LoadOneOffCronjob(stem); errLoad != nil || !limit.AllowsSpaceName(cmp.Or(job.Space, agents.Items[job.Agent].Space)) {
-		return fmt.Errorf("web cron: %w", status.Error(codes.PermissionDenied, "this cron is outside your spaces"))
+		return fmt.Errorf("web cron: %w", status.Error(codes.PermissionDenied, "this routine is outside your spaces"))
 	}
 
 	return nil

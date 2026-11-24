@@ -2802,7 +2802,7 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 	lines := []string{
 		"## Runtime Overlays",
 		"",
-		"Overlays are configured git repositories whose agents/, skills/, cron/, and scripts/ trees are merged into this RocketClaw runtime at startup. They let shared runtime assets be maintained outside this workspace. Effective runtime assets are built from embedded assets first, then configured overlays in selected runtime config order, then local workspace overlays last.",
+		"Overlays are configured git repositories whose agents/, skills/, and scripts/ trees are merged into this RocketClaw runtime at startup. They let shared runtime assets be maintained outside this workspace. Effective runtime assets are built from embedded assets first, then configured overlays in selected runtime config order, then local workspace overlays last.",
 		"",
 		"Configured overlays, in application order:",
 	}
@@ -2822,9 +2822,9 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 		"- Edit the listed clone path when the requested change belongs to that overlay.",
 		"- Commit and push overlay repository changes before reload or restart.",
 		"- Every clone under "+filepath.Join(cfg.RuntimeDirName(), "overlays")+" is replaced by a fresh download on every startup, restart, reload, agent editor save, and overlay list save; anything not pushed is lost.",
-		"- Do not treat generated effective files under "+filepath.Join(cfg.RuntimeDirName(), "agents")+", "+filepath.Join(cfg.RuntimeDirName(), "skills")+", "+filepath.Join(cfg.RuntimeDirName(), "cron")+", or "+filepath.Join(cfg.RuntimeDirName(), "scripts")+" as source of truth.",
+		"- Do not treat generated effective files under "+filepath.Join(cfg.RuntimeDirName(), "agents")+", "+filepath.Join(cfg.RuntimeDirName(), "skills")+", or "+filepath.Join(cfg.RuntimeDirName(), "scripts")+" as source of truth.",
 		"- Reload RocketClaw after already-configured overlay source changes so overlays are fetched and merged again. To change which overlays are configured, an admin opens Settings ("+cfg.Web.Tsnet.Origin+"/config) → Behavior settings → Edit → Overlays and saves.",
-		"- Local workspace agents/, skills/, cron/, and scripts/ override configured overlays.",
+		"- Local workspace agents/, skills/, and scripts/ override configured overlays.",
 	)
 
 	return strings.Join(lines, "\n")
@@ -3060,7 +3060,7 @@ func parseReasonArg(raw json.RawMessage, op string) (string, error) {
 }
 
 func restartTool(requestRestart runtimeRestarter) harness.Tool {
-	return harness.Tool{Name: restartToolName, TurnBound: true, Description: "Restart rocketclaw only after completing an explicitly requested setup change that requires restart, such as changes to setup fields in rocketclaw.json or femtoclaw.json. Behavior Settings (the auto-approver model, Slack channels, the overlay list, and the rest) are edited by an admin on the Web Config page and apply on save without a restart. Use rocketclaw_reload instead for agents/, skills/, cron/, scripts/, or already-configured overlay repository content changes. The reason field must explain why rocketclaw needs to restart. Do not call this after memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.", Permission: "rocketclaw", VisibilitySubjects: []string{restartToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{restartToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
+	return harness.Tool{Name: restartToolName, TurnBound: true, Description: "Restart rocketclaw only after completing an explicitly requested setup change that requires restart, such as changes to setup fields in rocketclaw.json or femtoclaw.json. Behavior Settings (the auto-approver model, Slack channels, the overlay list, and the rest) are edited by an admin on the Web Config page and apply on save without a restart. Use rocketclaw_reload instead for agents/, skills/, scripts/, or already-configured overlay repository content changes. The reason field must explain why rocketclaw needs to restart. Do not call this after memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.", Permission: "rocketclaw", VisibilitySubjects: []string{restartToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{restartToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		reason, err := parseReasonArg(raw, "restart")
 		if err != nil {
 			return harness.ToolResult{}, err
@@ -3071,7 +3071,7 @@ func restartTool(requestRestart runtimeRestarter) harness.Tool {
 }
 
 func reloadTool(requestReload runtimeReloader) harness.Tool {
-	return harness.Tool{Name: reloadToolName, Description: "Reload rocketclaw runtime assets after changing agents/, skills/, cron/, scripts/, or already-configured overlay repository content. The reason field must explain what runtime assets changed. This validates staged runtime assets before changing the live runtime. It does not reread rocketclaw.json or femtoclaw.json. Behavior Settings, including the overlay list, are edited by an admin on the Web Config page and apply on save.", Permission: "rocketclaw", VisibilitySubjects: []string{reloadToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{reloadToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
+	return harness.Tool{Name: reloadToolName, Description: "Reload rocketclaw runtime assets after changing agents/, skills/, scripts/, or already-configured overlay repository content. The reason field must explain what runtime assets changed. This validates staged runtime assets before changing the live runtime. It does not reread rocketclaw.json or femtoclaw.json. Behavior Settings, including the overlay list, are edited by an admin on the Web Config page and apply on save.", Permission: "rocketclaw", VisibilitySubjects: []string{reloadToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{reloadToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		reason, err := parseReasonArg(raw, "reload")
 		if err != nil {
 			return harness.ToolResult{}, err

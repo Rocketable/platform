@@ -42,11 +42,9 @@ func TestRuntimeReload(t *testing.T) {
 			}
 
 			require.NoError(t, root.WriteFile("agents/primary.md", []byte(updated), 0o600))
-			require.NoError(t, root.Mkdir("cron", 0o755))
-			require.NoError(t, root.WriteFile("cron/unnamed.md", []byte("---\nschedule: 1h\n---\nBody\n"), 0o600))
 			require.NoError(t, root.WriteFile("rocketclaw.json", []byte("invalid config"), 0o600))
 
-			const warnings = "Slack channel #ops uses agent primary, which is not sticky: slack, so it does not answer mentions there. Cron cron/unnamed.md names no agent, so it does not run."
+			const warnings = "Slack channel #ops uses agent primary, which is not sticky: slack, so it does not answer mentions there."
 
 			assembler := &frontendAssemblerMock{GateFunc: passGate, ValidateAssetsFunc: func(*config.Config, string) error {
 				if scenario == "invalid-frontend" {

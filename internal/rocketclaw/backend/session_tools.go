@@ -390,9 +390,9 @@ ORDER BY r.latest DESC, r.conversation_id COLLATE "C" LIMIT $3`
 func listSessionsTool(service *SessionService, threads *threadBridgeManager) harness.Tool {
 	return harness.Tool{
 		Name: sessionsListToolName, Description: fmt.Sprintf("List durable conversations of this State Store, newest first. Supply all five fields: criteria, since (required), until (empty for no upper bound), limit (1 to %d) and include_message_preview. Returns TSV with a header, one session per row with entry counts, timestamps and optional message previews. "+
-			"Empty criteria lists every stored conversation by latest entry, including private MCP and cron sessions. "+
-			"Other criteria is a Web /search query and returns what /search would: only the chats Web lists, never private External MCP or cron producer chats, filtered before the limit; order then uses each chat's summary time, and since and until the later of it and when the chat's newest running or waiting turn was created, so current work counts as recent. "+
-			"Query language: tag:V, cron:V, agent:V and room:V match V exactly and case-sensitively; space:V matches the complete Birth Space name ignoring case, not tab placement; model:V matches part of the agent's configured model, ignoring case; V may be a JSON-quoted string such as tag:\"Needs review\"; is:forked and is:cron; is:running (a running turn or background work), is:queued (waiting turns other than scheduled ones), is:waiting (waiting on a person: a pending question, form or permission request) and is:external (bound to External MCP), all but is:waiting counting the hidden runs reporting to a chat as its own; sort:newest or sort:oldest. agent:V also matches chats showing a hidden cron or External MCP run of agent V. Room terms match any one room and agent terms any one agent; other filters use AND. Unknown or malformed terms are searched as text. "+
+			"Empty criteria lists every stored conversation by latest entry, including private MCP and routine sessions. "+
+			"Other criteria is a Web /search query and returns what /search would: only the chats Web lists, never private External MCP or routine producer chats, filtered before the limit; order then uses each chat's summary time, and since and until the later of it and when the chat's newest running or waiting turn was created, so current work counts as recent. "+
+			"Query language: tag:V, routine:V, agent:V and room:V match V exactly and case-sensitively; space:V matches the complete Birth Space name ignoring case, not tab placement; model:V matches part of the agent's configured model, ignoring case; V may be a JSON-quoted string such as tag:\"Needs review\"; is:forked and is:routine; is:running (a running turn or background work), is:queued (waiting turns other than scheduled ones), is:waiting (waiting on a person: a pending question, form or permission request) and is:external (bound to External MCP), all but is:waiting counting the hidden runs reporting to a chat as its own; sort:newest or sort:oldest. agent:V also matches chats showing a hidden cron or External MCP run of agent V. Room terms match any one room and agent terms any one agent; other filters use AND. Unknown or malformed terms are searched as text. "+
 			"All remaining text is ONE case-insensitive phrase, not separate keywords, matched against name, room, agent, preview, session label, chat origin and message text. "+
 			"With criteria, rows add name, agent, room, tags and matched (the field holding the phrase, or messages when only message text did), and a messages block lists up to 3 matching messages per listed chat; rocketclaw_sessions_get with a row's before_entry_id and limit 1 shows that message. Messages of stopped turns are not listed. "+
 			"Trailing lines show how criteria was read and whether the limit cut results.", maxListedSessions),
@@ -667,7 +667,7 @@ func currentSessionIDTool(conversationID string) harness.Tool {
 
 func sessionsGetURLTool(threads *threadBridgeManager) harness.Tool {
 	return harness.Tool{
-		Name: sessionsGetURLToolName, Description: "Return only the clickable Web URL of a top-level session, one Web lists. Fails for Delegation Histories, private External MCP and cron producer conversations, and unknown IDs.",
+		Name: sessionsGetURLToolName, Description: "Return only the clickable Web URL of a top-level session, one Web lists. Fails for Delegation Histories, private External MCP and routine producer conversations, and unknown IDs.",
 		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject},
 		Subjects:   func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
 		Parameters: map[string]any{"properties": map[string]any{"session_id": map[string]any{"type": "string"}}, "required": []string{"session_id"}},
@@ -696,7 +696,7 @@ func sessionsGetURLTool(threads *threadBridgeManager) harness.Tool {
 func navigateTool(threads *threadBridgeManager, username string) harness.Tool {
 	return harness.Tool{
 		Name: navigateToolName, TurnBound: true, Description: "Take the person who started your current work from the RocketClaw Web to another page of this server's Web, once: their Web window that has focus opens location within about 2 seconds, as if they clicked a link to it. No other window follows and no reload repeats it, and a newer call replaces one their window has not opened yet. " +
-			"location is a path such as /s/<id>, /oc/<id>, /pages/<space>/<path> or /cron, or a URL on this server's Web, such as rocketclaw_sessions_get_url returns; other sites and other RocketClaw servers are refused. " +
+			"location is a path such as /s/<id>, /oc/<id>, /pages/<space>/<path> or /routines, or a URL on this server's Web, such as rocketclaw_sessions_get_url returns; other sites and other RocketClaw servers are refused. " +
 			"A call no window opens within 3 days lapses. Returns the page's URL, which the chat already shows with this call.",
 		Permission: "rocketclaw", VisibilitySubjects: []string{navigateToolName},
 		Subjects:   func(json.RawMessage) ([]string, error) { return []string{navigateToolName}, nil },

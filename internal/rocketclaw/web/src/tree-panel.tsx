@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { mutations, queries } from "./api";
 import type { TreeNode } from "./types";
 
-export const floorReason = "Revert can't go back past a message from a cron run, External MCP, or Slack";
+export const floorReason = "Revert can't go back past a message from a routine run, External MCP, or Slack";
 
 type TreeRow = { node: TreeNode; point: boolean; connectors: string };
 type Deletion = Awaited<ReturnType<typeof mutations.deleteBranch>>;

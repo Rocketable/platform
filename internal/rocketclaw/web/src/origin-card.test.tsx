@@ -26,7 +26,7 @@ test("ordinary origin is absent", () => {
 
 test("cron card retains the run details behind its summary", () => {
   const html = renderToStaticMarkup(<OriginCard origin={{ kind: "cron", stem: "HEARTBEAT", sourcePath: "cron/HEARTBEAT.md", runKind: "scheduled", runId: "cron:run-1", agent: "cron", ranAt: "2026-09-22T17:00:06Z" }} />);
-  expect(html).toContain("Cron · HEARTBEAT");
+  expect(html).toContain("Routine · HEARTBEAT");
   for (const value of ["cron/HEARTBEAT.md", "scheduled", "cron:run-1", "2026-09-22T17:00:06Z"]) expect(html).toContain(value);
   expect(html).not.toContain('open=""');
 });

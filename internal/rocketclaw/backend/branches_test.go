@@ -393,7 +393,7 @@ func TestDeleteBranchHoldingACronReportIsRefused(t *testing.T) {
 
 	rows, path := branchTestRows(t, s), observedEntryTexts(t, s, "chat")
 	_, err = rt.DeleteBranch(ctx, "chat", fmt.Sprintf("%d:0", branch), false)
-	require.ErrorContains(t, err, "past a message from a cron run")
+	require.ErrorContains(t, err, "past a message from a routine run")
 	require.Equal(t, rows, branchTestRows(t, s), "nothing is deleted")
 	require.Equal(t, path, observedEntryTexts(t, s, "chat"))
 }

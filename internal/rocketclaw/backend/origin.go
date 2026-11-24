@@ -83,7 +83,7 @@ func DecideOrigin(facts *ChatOriginFacts) (origin any, text string) {
 		kind = cronOneOff
 	}
 
-	cron := cronOrigin{Kind: originCron, SourcePath: facts.Run.Path, Stem: strings.TrimSuffix(strings.TrimPrefix(facts.Run.Path, "cron/"), ".md"), RunKind: kind, RunID: facts.CreatingSource, Agent: facts.ProducerAgent, RanAt: facts.Run.At.Format(time.RFC3339Nano)}
+	cron := cronOrigin{Kind: originCron, SourcePath: facts.Run.Path, Stem: CronStem(facts.Run.Path), RunKind: kind, RunID: facts.CreatingSource, Agent: facts.ProducerAgent, RanAt: facts.Run.At.Format(time.RFC3339Nano)}
 
 	return cron, strings.ToLower("Cron Source: " + cron.SourcePath + " Stem: " + cron.Stem + " Run kind: " + string(cron.RunKind) + " Run ID: " + cron.RunID + " Agent: " + cron.Agent + " Ran at: " + cron.RanAt)
 }

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -86,13 +85,13 @@ func TestSpacePermissions(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	for id, path := range map[string]string{"cron:ops": "cron/ops-report.md", "cron:main": "cron/main-report.md", "cron:gone": "cron/gone.md"} {
+	for id, path := range map[string]string{"cron:ops": "agents/ops-report.md#1h", "cron:main": "agents/main-report.md#1h", "cron:gone": "agents/gone.md#1h"} {
 		require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: id, Agent: "loose", CreatedBy: "cron", Run: &protocol.CronRun{Path: path, At: at}}))
 		_, err := sessions.AppendEntryID(t.Context(), id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: at})
 		require.NoError(t, err)
 	}
 
-	crons := map[string]protocol.OneOffCronjob{"ops-report": {Agent: "loose", Space: "Ops"}, "main-report": {Agent: "main-agent"}, "ops-agent-report": {Agent: "ops-agent", Space: "Ops"}}
+	crons := map[string]protocol.OneOffCronjob{"ops-report · 1h": {Agent: "loose", Space: "Ops"}, "main-report · 1h": {Agent: "main-agent"}, "ops-agent-report · 1h": {Agent: "ops-agent", Space: "Ops"}}
 	ran := make(chan string, 2)
 	release := make(chan struct{})
 	core := withoutBackgroundJobs()
@@ -114,7 +113,7 @@ func TestSpacePermissions(t *testing.T) {
 		ran <- job.Agent
 		return protocol.CronRunResult{}, nil
 	}, JobsFunc: func() ([]cronfrontend.Job, error) {
-		return []cronfrontend.Job{{RelativePath: "cron/ops-report.md", Agent: "loose", Space: "Ops"}, {RelativePath: "cron/main-report.md", Agent: "main-agent"}}, nil
+		return []cronfrontend.Job{{RelativePath: "agents/ops-report.md#1h", Agent: "loose", Space: "Ops"}, {RelativePath: "agents/main-report.md#1h", Agent: "main-agent"}}, nil
 	}})
 
 	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-tailnet-login-bin", "alice@example.com", "rocketclaw-tailnet-name-bin", "Alice"))
@@ -338,7 +337,7 @@ func TestSpacePermissions(t *testing.T) {
 	require.Equal(t, "reloaded", reloaded.Message)
 	require.Len(t, core.ReloadCalls(), 1)
 
-	for ctx, want := range map[context.Context][]string{alice: {"cron/ops-report.md", "cron:ops"}, bob: {"cron/ops-report.md", "cron/main-report.md", "cron:gone", "cron:main", "cron:ops"}} {
+	for ctx, want := range map[context.Context][]string{alice: {"agents/ops-report.md#1h", "cron:ops"}, bob: {"agents/ops-report.md#1h", "agents/main-report.md#1h", "cron:gone", "cron:main", "cron:ops"}} {
 		listed, err := server.listCronJobs(ctx)
 		require.NoError(t, err)
 
@@ -350,18 +349,18 @@ func TestSpacePermissions(t *testing.T) {
 		require.Equal(t, want, origins)
 	}
 
-	for _, stem := range []string{"main-report", "ops-report"} {
+	for _, stem := range []string{"main-report · 1h", "ops-report · 1h"} {
 		_, err := server.runCronJob(alice, &RunCronJobRequest{Stem: stem})
 		require.Equal(t, codes.PermissionDenied, status.Code(err), stem)
 	}
 
-	for ctx, stem := range map[context.Context]string{alice: "ops-agent-report", bob: "main-report"} {
+	for ctx, stem := range map[context.Context]string{alice: "ops-agent-report · 1h", bob: "main-report · 1h"} {
 		_, err := server.runCronJob(ctx, &RunCronJobRequest{Stem: stem})
 		require.NoError(t, err, stem)
 		require.Equal(t, crons[stem].Agent, <-ran, stem)
 	}
 
-	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "cron:ops-agent", Agent: "ops-agent", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/ops-agent-report.md", At: at}}))
+	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "cron:ops-agent", Agent: "ops-agent", CreatedBy: "cron", Run: &protocol.CronRun{Path: "agents/ops-agent-report.md#1h", At: at}}))
 	_, err = sessions.AppendEntryID(t.Context(), "cron:ops-agent", &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: at})
 	require.NoError(t, err)
 
@@ -686,7 +685,7 @@ func TestRunCronJobFollowsStickyAgent(t *testing.T) {
 	core := withoutBackgroundJobs()
 	core.CreateConversationFunc = func(context.Context, protocol.Conversation) error { return nil }
 	server := New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{LoadOneOffCronjobFunc: func(stem string) (protocol.OneOffCronjob, error) {
-		return protocol.OneOffCronjob{RelativePath: "cron/" + stem + ".md", Agent: strings.TrimPrefix(stem, "blank")}, nil
+		return protocol.OneOffCronjob{RelativePath: "agents/" + stem + ".md#1h", Agent: stem}, nil
 	}, RunOneOffCronjobFunc: func(_ context.Context, job *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
 		ran <- job.ConversationID
 		return protocol.CronRunResult{}, nil
@@ -702,19 +701,4 @@ func TestRunCronJobFollowsStickyAgent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, "lobby", started.Id)
 	require.Equal(t, started.Id, <-ran)
-
-	db := openTestTurns(t, dsn).db
-
-	var before, after int
-	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations`).Scan(&before))
-
-	for stem, want := range map[string]string{"mine": "cron/mine.md uses agent mine, which is sticky: user", "channel": "cron/channel.md uses agent channel, which is sticky: slack", "blank": "cron/blank.md names no agent", "gone": "cron/gone.md uses agent gone, which is not loaded"} {
-		_, err = server.runCronJob(alice, &RunCronJobRequest{Stem: stem})
-		require.Equal(t, codes.FailedPrecondition, status.Code(err), stem)
-		require.ErrorContains(t, err, want)
-	}
-
-	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations`).Scan(&after))
-	require.Equal(t, before, after, "a refused run creates no chat")
-	require.Empty(t, ran)
 }

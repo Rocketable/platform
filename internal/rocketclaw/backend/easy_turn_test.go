@@ -81,10 +81,10 @@ func TestResolveWorkingDirectory(t *testing.T) {
 		require.ErrorContains(t, err, "workingDirectory "+dir+" must not", dir)
 	}
 
-	require.NoError(t, root.Symlink(filepath.Join(shared, "cron"), "cron"))
+	require.NoError(t, root.Symlink(filepath.Join(shared, "scripts"), "scripts"))
 
 	_, err = resolveWorkingDirectory(&config.Config{Workspace: linked}, t.TempDir(), nil)
-	require.ErrorContains(t, err, "workingDirectory: lstat "+filepath.Join(shared, "cron"))
+	require.ErrorContains(t, err, "workingDirectory: lstat "+filepath.Join(shared, "scripts"))
 }
 
 func TestEasyTurnShell(t *testing.T) {

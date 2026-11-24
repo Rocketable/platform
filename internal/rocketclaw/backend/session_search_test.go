@@ -58,8 +58,8 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 	require.NoError(t, s.RegisterExternalMCPConversation("ext-1", "main", &ExternalMCPSessionState{Agent: "producer", PrivateConversationID: "external_mcp:private", ManagedConversationID: searchChatX, OriginPairs: map[string]string{"Ticket": "T-1"}}))
 
 	for id, run := range map[string]*protocol.CronRun{
-		daily:  {Path: "cron/daily.md", At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-		weekly: {Path: "cron/Weekly report.md", At: time.Date(2026, 1, 3, 3, 4, 5, 0, time.UTC), OneOff: true},
+		daily:  {Path: "agents/daily.md#1h", At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
+		weekly: {Path: "agents/Weekly report.md#1h", At: time.Date(2026, 1, 3, 3, 4, 5, 0, time.UTC), OneOff: true},
 	} {
 		_, err := s.recordConversation(ctx, &protocol.Conversation{ID: id, Run: run}, conversationFacts{}, harness.AgentStickyOff)
 		require.NoError(t, err)
@@ -263,22 +263,22 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 		{"outage is:fork", nil, "outage is:fork", nil},
 		{"is:foo", nil, "is:foo", nil},
 		{"sort:bogus", nil, "sort:bogus", nil},
-		{"is:cron", []string{"is=cron"}, "", []string{searchChatD, searchChatE}},
-		{"IS:CRON", []string{"is=cron"}, "", []string{searchChatD, searchChatE}},
+		{"is:routine", []string{"is=routine"}, "", []string{searchChatD, searchChatE}},
+		{"IS:ROUTINE", []string{"is=routine"}, "", []string{searchChatD, searchChatE}},
 		{"is:cr", nil, "is:cr", nil},
-		{"is:cron is:forked", []string{"is=cron", "is=forked"}, "", nil},
-		{"cron:daily", []string{"cron=daily"}, "", []string{searchChatD}},
-		{"is:cron CRON:daily", []string{"is=cron", "cron=daily"}, "", []string{searchChatD}},
-		{`cron:"Weekly report"`, []string{"cron=Weekly report"}, "", []string{searchChatE}},
-		{"cron:dai", []string{"cron=dai"}, "", nil},
-		{"cron:Daily", []string{"cron=Daily"}, "", nil},
-		{"cron:unknown", []string{"cron=unknown"}, "", nil},
-		{"cron:daily sort:newest cron:daily", []string{"cron=daily", "sort=newest", "cron=daily"}, "", []string{searchChatD}},
-		{`cron:daily cron:"Weekly report"`, []string{"cron=daily", "cron=Weekly report"}, "", nil},
-		{"cron:daily report", []string{"cron=daily"}, "report", nil},
-		{"cron:", nil, "cron:", []string{searchChatD, searchChatE}},
-		{`cron:""`, nil, `cron:""`, nil},
-		{`cron:"bad\q"`, nil, `cron:"bad\q"`, nil},
+		{"is:routine is:forked", []string{"is=routine", "is=forked"}, "", nil},
+		{"routine:daily", []string{"routine=daily"}, "", []string{searchChatD}},
+		{"is:routine ROUTINE:daily", []string{"is=routine", "routine=daily"}, "", []string{searchChatD}},
+		{`routine:"Weekly report"`, []string{"routine=Weekly report"}, "", []string{searchChatE}},
+		{"routine:dai", []string{"routine=dai"}, "", nil},
+		{"routine:Daily", []string{"routine=Daily"}, "", nil},
+		{"routine:unknown", []string{"routine=unknown"}, "", nil},
+		{"routine:daily sort:newest routine:daily", []string{"routine=daily", "sort=newest", "routine=daily"}, "", []string{searchChatD}},
+		{`routine:daily routine:"Weekly report"`, []string{"routine=daily", "routine=Weekly report"}, "", nil},
+		{"routine:daily report", []string{"routine=daily"}, "report", nil},
+		{"routine:", nil, "routine:", nil},
+		{`routine:""`, nil, `routine:""`, nil},
+		{`routine:"bad\q"`, nil, `routine:"bad\q"`, nil},
 		{"agent:main", []string{"agent=main"}, "", []string{searchChatX, searchChatA, searchChatD, searchChatE}},
 		{"AGENT:other", []string{"agent=other"}, "", []string{searchChatW}},
 		{"agent:main agent:other", []string{"agent=main", "agent=other"}, "", []string{searchChatX, searchChatA, searchChatW, searchChatD, searchChatE}},
@@ -353,7 +353,7 @@ func TestSearchSessionsFilters(t *testing.T) {
 	_, matches := searchTestSessions(t, s, slack, "tag:customer", SearchFilters)
 	require.Equal(t, []searchTestMatch{{searchChatA, "", ""}}, matches)
 
-	for _, query := range []string{"tag:customer", "agent:other", "is:cron", `space:"Blue garden"`} {
+	for _, query := range []string{"tag:customer", "agent:other", "is:routine", `space:"Blue garden"`} {
 		_, bare := searchTestSessions(t, s, slack, query, SearchFilters)
 		require.NotEmpty(t, bare, query)
 

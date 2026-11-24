@@ -1,6 +1,6 @@
 ---
 name: main-convert-agent-to-easy
-description: YOU MUST USE THIS SKILL to convert a rocketclaw agent from advanced mode to easy mode, including its shadows and the cron files that run it
+description: YOU MUST USE THIS SKILL to convert a rocketclaw agent from advanced mode to easy mode, including its shadows
 ---
 ## Purpose
 
@@ -13,9 +13,8 @@ Follow `main-create-or-update-agent` for the easy format itself (its "Easy mode 
 ## Runtime paths
 
 - current effective agent: `.rocketclaw/agents/<name>.md`; its shadows: `.rocketclaw/agents/<name>/*.md`
-- current effective cron files: `.rocketclaw/cron/*.md`
-- writable overlays: `agents/`, `cron/`
-- configured git overlay clones: `.rocketclaw/overlays/<clone>/agents/`, `.rocketclaw/overlays/<clone>/cron/`
+- writable overlay: `agents/`
+- configured git overlay clones: `.rocketclaw/overlays/<clone>/agents/`
 - effective skills: `.rocketclaw/skills/`
 
 Never edit `.rocketclaw` directly. Write no scratch files; if one is unavoidable, put it under `.tmp/` in the workspace.
@@ -26,17 +25,15 @@ For each agent to convert, read the effective file and find:
 
 1. Its origin: the workspace overlay `agents/<name>.md`, a git overlay clone `.rocketclaw/overlays/*/agents/<name>.md` (later overlays in the `overlays` list of `rocketclaw.json` win), or the embedded skeleton.
 2. Its shadows under `.rocketclaw/agents/<name>/`. A shadow whose mode differs from its parent's is dropped with a warning, so every shadow is converted too, with the same questions.
-3. The cron files that run it: every `.rocketclaw/cron/*.md` (not `*.example.md`) whose `agent` is `<name>`, and the origin of each. For each local cron to delete, also inspect same-path copies in every git overlay: deletion exposes the highest remaining layer, which may target this agent even if a lower copy does not.
-4. Other agents that point at it: `task` rules whose subject matches `<name>` (wildcards included) and `auto(<name>)` reviewer rules in any effective agent.
+3. Other agents that point at it: `task` rules whose subject matches `<name>` (wildcards included) and `auto(<name>)` reviewer rules in any effective agent.
 
-Use `rg` over `.rocketclaw/agents` and `.rocketclaw/cron` for steps 3 and 4.
+Use `rg` over `.rocketclaw/agents` for step 3.
 
 ## Step 2: stop on blockers
 
 Stop and tell the human, without writing anything, when:
 
-- The agent is `main`, or any agent whose job is to edit `agents/`, `cron/`, `skills/`, `scripts/`, `rocketclaw.json` or the workspace itself. An easy agent's files are limited to its `workingDirectory`, which may not be or contain the workspace, nor be, contain or lie inside those folders. Cron files without `agent` never run.
-- A cron file that runs the agent comes from a git overlay or the embedded skeleton, including one exposed by deleting a local override. A cron file naming an easy agent never runs, and a workspace overlay cannot delete it. The human must remove it from its source first. Check the resulting layers before any writes, not just the currently effective cron files.
+- The agent is `main`, or any agent whose job is to edit `agents/`, `skills/`, `scripts/`, `rocketclaw.json` or the workspace itself. An easy agent's files are limited to its `workingDirectory`, which may not be or contain the workspace, nor be, contain or lie inside those folders.
 - Another agent uses it as a reviewer through `auto(<name>)`. Easy agents always have the shell and file tools, so they make poor reviewers. Ask whether to keep this agent advanced, or to change those rules first through `main-create-or-update-agent`.
 
 ## Step 3: map what maps
@@ -60,7 +57,7 @@ Start the new frontmatter with `mode: easy`. Write only easy keys. A section lef
 | `permission.rocketclaw.rocketclaw_set_tag` tag groups | `tags`, same lists, plus the `tags` group. |
 | `permission.decision` | `decision`: the `provider/model` names the rules allow, expanding wildcards into the models the human names; their calls now run without review, so list each `auto` rule in the review question. No rule means leave the key out (no `decision` tool). |
 | `approver.decision` | Dropped; tell the human. It applied only when another agent used this one as `auto(<name>)`. Never copy it into the easy `approver.decision`, which checks this agent's own calls. |
-| `routines`, and cron files that run it | `routines`: the agent's own entries unchanged, plus one per cron schedule (see "Cron files"). |
+| `routines` | `routines`, unchanged. Prompt-shell expressions in their instructions now run in the easy agent's shell, the emulated shell unless it keeps a wrapper; tell the human when one needs a host program. |
 | body | Kept, with the changes under "Body". |
 
 `rocketclaw` groups:
@@ -90,18 +87,6 @@ Collect every open question first, tell the human how many there are, then ask t
 7. Callers: list the agents whose `task` rules reach it. No agent can `task` an easy agent; ask whether to switch those callers to `rocketclaw_sessions` through `main-create-or-update-agent`, or keep this agent advanced. Callers that switch must be in this agent's `delegatedFrom` when it is a list, or their writes are refused.
 8. Review: everything turned on is now reviewed by one approver, the guardian, except skills, `task`, the `decision` models it lists, web search and the always-on RocketClaw tools (reload, scheduled messages, attaching files, goal updates, questions). List each other `allow` that skipped review, each `deny` rule, each `auto(<reviewer>)` rule, and each `auto` rule in `permission.decision`. Ask for `approver.prompt` rules that keep the intent of the denies (for example "Deny any `rm`"), and write each of them into `approver.decision.prompt` too: with `approver.prompt` alone the agent is never pre-gated by a decision model, and with both, the decision model reads only `approver.decision.prompt`. Ask whether `approver.model` should change. Leaving `approver.decision.model` out keeps the decision model `rocketclaw.json` sets, as the advanced agent had. Tell the human that the approver's prompt guides a model's review and is not a guaranteed block, unlike `deny`.
 9. `additionalInstructions`, when set: ask whether to move its text into the body.
-10. Each cron question under "Cron files".
-
-## Cron files
-
-Each local `cron/<file>.md` that runs the agent becomes routine entries:
-
-- Each schedule becomes one entry, with the cron body as its instruction: `- "<schedule>": "<body>"`. A file with several schedules gives several entries with the same instruction. Use a YAML block scalar for a body with several lines.
-- Routines report in the agent's `space`. When the cron file's `space` differs, ask which one to keep.
-- The same schedule twice fails loading. When two cron files, or a cron file and one of the agent's routines, share a schedule, ask how to merge their instructions.
-- Tell the human that past runs stay under `cron/<file>.md`, and routine runs are recorded as `agents/<name>.md#<schedule>`.
-
-After writing the agent, delete each converted local `cron/<file>.md`, or reload fails.
 
 ## Body
 
@@ -113,7 +98,7 @@ After writing the agent, delete each converted local `cron/<file>.md`, or reload
 
 ## Step 4: confirm, write, apply
 
-1. Show the human the complete new file for the agent and each shadow, the routines, the files to delete, and a short list of what behaves differently. Write nothing until they confirm.
-2. Write `agents/<name>.md` and each shadow `agents/<name>/<shadow>.md`. Delete the converted `cron/` files. Make the agreed changes to other agents through `main-create-or-update-agent`.
+1. Show the human the complete new file for the agent and each shadow, the routines, and a short list of what behaves differently. Write nothing until they confirm.
+2. Write `agents/<name>.md` and each shadow `agents/<name>/<shadow>.md`. Make the agreed changes to other agents through `main-create-or-update-agent`.
 3. Call `rocketclaw_reload` exactly once, after every edit.
 4. When the agent came from a git overlay, tell the human that `agents/<name>.md` now overrides that overlay's copy, so later changes to the overlay's copy are hidden. Suggest committing the new file to the overlay repository and then deleting the workspace copy.

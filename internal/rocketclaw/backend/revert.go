@@ -221,7 +221,7 @@ SELECT count(*) > 0 FROM target WHERE entry_id = split_part($4, ':', 1)::bigint 
 		}
 
 		if !kept {
-			return "", "", errors.New("revert cannot go back past a message from a cron run, External MCP, or Slack")
+			return "", "", errors.New("revert cannot go back past a message from a routine run, External MCP, or Slack")
 		}
 	}
 

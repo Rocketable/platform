@@ -5,7 +5,7 @@ import type { TreeNode } from "./types";
 
 type Node = { id: string; parent: string; role: "user" | "assistant"; text: string; branch?: string };
 
-const floorReason = "Revert can't go back past a message from a cron run, External MCP, or Slack";
+const floorReason = "Revert can't go back past a message from a routine run, External MCP, or Slack";
 const outside = (node: Partial<TreeNode> & Pick<TreeNode, "id" | "text">): TreeNode => ({ parentId: "", role: "user", outside: false, pickable: false, through: false, onPath: true, current: false, branchId: "", deletable: false, ...node });
 const reported = [
   outside({ id: "1:0", text: "Before report" }),

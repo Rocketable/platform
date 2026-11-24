@@ -300,7 +300,7 @@ test("revert an unsaved latest turn by input ID", async () => {
     expect(await revert("Saved request").count()).toBe(1);
     // A message at or before the floor, say a Slack message, keeps its Revert, disabled, saying why.
     expect(await revert("Saved request").isDisabled()).toBe(true);
-    expect(await revert("Saved request").locator("..").getAttribute("title")).toBe("Revert can't go back past a message from a cron run, External MCP, or Slack");
+    expect(await revert("Saved request").locator("..").getAttribute("title")).toBe("Revert can't go back past a message from a routine run, External MCP, or Slack");
     // An older stopped turn cannot be reverted, so its Revert stays in place, disabled, saying why.
     expect(await revert("Stopped request").isDisabled()).toBe(true);
     expect(await revert("Stopped request").locator("..").getAttribute("title")).toBe("This message can't be reverted");

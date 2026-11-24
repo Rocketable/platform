@@ -125,9 +125,9 @@ function slackRooms(sessions: { id: string; title?: string; kind?: ConversationK
 
 // The query's last word, and whether it is an unfinished operator: a bare key, a strict prefix of an is:/sort: keyword, or an unclosed quote.
 function typingWord(query: string) {
-  const word = /(?:^|\s)((?:tag|cron|agent|room|principal|server|model|space):"(?:[^"\\]|\\.)*\\?|\S*)$/i.exec(query)![1];
+  const word = /(?:^|\s)((?:tag|routine|agent|room|principal|server|model|space):"(?:[^"\\]|\\.)*\\?|\S*)$/i.exec(query)![1];
   const lower = word.toLowerCase();
-  return { word, unfinished: /^(?:tag|cron|agent|room|principal|server|model|space):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:forked", "is:cron", "is:unread", "is:running", "is:queued", "is:waiting", "is:external", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
+  return { word, unfinished: /^(?:tag|routine|agent|room|principal|server|model|space):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:forked", "is:routine", "is:unread", "is:running", "is:queued", "is:waiting", "is:external", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
 }
 
 function termValue(value: string) {
@@ -468,8 +468,8 @@ function sessionTitle(session: Session) {
 function useRoute() {
   const pathname = usePathname() || "/";
   return {
-    cron: pathname === "/cron",
-    timeline: pathname.startsWith("/cron/") ? decodeSessionId(pathname.slice("/cron/".length)) : "",
+    cron: pathname === "/routines",
+    timeline: pathname.startsWith("/routines/") ? decodeSessionId(pathname.slice("/routines/".length)) : "",
     agents: pathname === "/agents",
     editor: /^\/agents\/(new|drafts\/[^/]+)$/.test(pathname),
     skills: pathname === "/skills",
@@ -1001,7 +1001,7 @@ type Space = { id: string; name: string };
 // last names each space's last active tab; sharedOrder is this person's order of Shared tabs by path.
 type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string; last: Record<string, string>; sharedOrder: string[] };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
-const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/agents/new": ["Create New Agent", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard], "/closed": ["Recently closed", History] };
+const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/routines": ["Routines", Clock], "/agents": ["Agents", Bot], "/agents/new": ["Create New Agent", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard], "/closed": ["Recently closed", History] };
 
 // A Search page is /search or a location under it, each its own tab; it is titled with its name, else the query it shows.
 const isSearch = (path: string) => /^\/search(\/|$)/.test(path);
@@ -1016,7 +1016,7 @@ function pageLabel(page: string) {
 // A skill's or cron's page tab is titled with its name, and a hosted page's tab with its label.
 function pageTab(path: string): [string, typeof Search] | undefined {
   if (path.startsWith("/pages/")) return [pageLabel(path.slice("/pages/".length)), FileText];
-  if (path.startsWith("/cron/")) return [decodeSessionId(path.slice("/cron/".length)), Clock];
+  if (path.startsWith("/routines/")) return [decodeSessionId(path.slice("/routines/".length)), Clock];
   if (path.startsWith("/agents/drafts/")) return ["Agent draft", Bot];
   return pageTabs[path] ?? (path.startsWith("/skills/") ? [path.slice("/skills/".length), Sparkles] : undefined);
 }
@@ -2736,9 +2736,9 @@ function paletteRows(
     ...actions,
     { key: "new", label: "Sessions: New", run: newChat },
     { key: "search", label: "Sessions: Search", run: () => tabs.open(freshSearch()) },
-    { key: "run-cron", label: "Cron: Run", keep: true, run: () => openCron("cron") },
-    { key: "cron-timeline", label: "Cron: Timeline", keep: true, run: () => openCron("timeline") },
-    ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["closed", "Tabs: Recently closed"], ["shortcuts", "Help: Keyboard Shortcuts"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
+    { key: "run-cron", label: "Routines: Run", keep: true, run: () => openCron("cron") },
+    { key: "cron-timeline", label: "Routines: Timeline", keep: true, run: () => openCron("timeline") },
+    ...([["voice", "Voice"], ["routines", "Routines: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["closed", "Tabs: Recently closed"], ["shortcuts", "Help: Keyboard Shortcuts"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
   ].filter((item) => tier(item.label) < 3).sort((a, b) => {
     // Better matches come first. Within a tier, recently run commands lead, except Timeline levels, which always keep the Config slider's order.
@@ -2855,10 +2855,10 @@ function usePaletteSessions(query: string, sessions: boolean, entered: boolean) 
 }
 
 // The keys of filter terms; the server reads the same keys.
-const filterKeys = "tag|cron|agent|room|principal|server|model|space|is|sort";
+const filterKeys = "tag|routine|agent|room|principal|server|model|space|is|sort";
 
 const paletteCopy = { sessions: { title: "Go to session or command", desc: "Search and open a session, or run a command.", placeholder: "Search sessions and commands" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
-  cron: { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" }, timeline: { title: "Cron timeline", desc: "Pick a cron to see all of its runs.", placeholder: "Search cron jobs" } };
+  cron: { title: "Run routine", desc: "Search and run a routine.", placeholder: "Search routines" }, timeline: { title: "Routine timeline", desc: "Pick a routine to see all of its runs.", placeholder: "Search routines" } };
 type PaletteMode = keyof typeof paletteCopy;
 
 // "Sessions: New on <server>" turns the palette into a folder picker for a remote OpenCode
@@ -3836,8 +3836,8 @@ function searchChoices(word: string, rows: Session[], catalog: Agent[], principa
   const typed = new RegExp(`^(${filterKeys}):"?(.*?)"?$`, "is").exec(word);
   const key = typed?.[1].toLowerCase() ?? "", needle = typed?.[2].toLowerCase() ?? "";
   const remote = (field: "server" | "agent" | "model") => [...new Set(rows.flatMap((row) => row.server && row[field] ? [row[field]!] : []))];
-  const names = key === "space" ? spaces.map(({ name }) => name) : key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "cron" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"]
-    : key === "server" ? remote("server") : key === "model" ? [...new Set([...catalog.flatMap(({ model }) => model ? [model] : []), ...remote("model")])] : ["forked", "cron", "unread", "running", "queued", "waiting", "external"];
+  const names = key === "space" ? spaces.map(({ name }) => name) : key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "routine" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"]
+    : key === "server" ? remote("server") : key === "model" ? [...new Set([...catalog.flatMap(({ model }) => model ? [model] : []), ...remote("model")])] : ["forked", "routine", "unread", "running", "queued", "waiting", "external"];
   const agents = key === "agent" ? [...catalog.filter((agent, i) => catalog.findIndex(({ name }) => name === agent.name) === i).map(({ name, model, reasoning, rocketclaw }) => ({ key: name, detail: [rocketclaw, model, reasoning].filter(Boolean).join(" · ") })), ...remote("agent").filter((name) => !catalog.some((agent) => agent.name === name)).map((name) => ({ key: name, detail: "OpenCode" }))] : [];
   const quoted = word.includes(':"');
   const spelling = (name: string) => quoted ? JSON.stringify(name).slice(1, -1) : name;
@@ -4901,7 +4901,7 @@ export function OriginCard({ origin }: { origin?: ChatOrigin }) {
   return (
     <details aria-label="Chat origin" className="group/origin mb-3 min-w-0 rounded-lg border">
       <summary className="cursor-pointer px-3 py-2 text-xs font-medium break-words">
-        {origin.kind === "cron" ? `Cron · ${origin.stem}` : `External MCP · ${origin.externalConversationId}`} · {origin.agent}
+        {origin.kind === "cron" ? `Routine · ${origin.stem}` : `External MCP · ${origin.externalConversationId}`} · {origin.agent}
         <span className="ml-2 text-muted-foreground group-open/origin:hidden">show more</span>
         <span className="ml-2 hidden text-muted-foreground group-open/origin:inline">show less</span>
       </summary>
@@ -6037,7 +6037,7 @@ function cronInSpace(jobs: CronJob[] = [], inSpace: (item: { space?: string }) =
   return jobs.filter((job) => !away.has(job.stem));
 }
 
-const cronPath = (stem: string) => `/cron/${encodeSessionId(stem)}`;
+const cronPath = (stem: string) => `/routines/${encodeSessionId(stem)}`;
 const cronDay = (day: string) => new Date(day).toLocaleDateString("en-US", { dateStyle: "medium", timeZone: "UTC" });
 
 function cronGap(ms: number) {
@@ -6045,7 +6045,7 @@ function cronGap(ms: number) {
   return minutes < 60 ? `${minutes}m` : hours < 24 ? `${hours}h ${minutes % 60}m` : `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
-// One cron's runs, the same rows the Cron page lists, as a journal. A failed load keeps what is shown and retries until it loads.
+// One cron's runs, the same rows the Routines page lists, as a journal. A failed load keeps what is shown and retries until it loads.
 function CronTimeline({ stem }: { stem: string }) {
   const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, retry: true });
   const rows = cronInSpace(jobs.data, useInSpace()).filter((job) => job.stem === stem);
@@ -6054,7 +6054,7 @@ function CronTimeline({ stem }: { stem: string }) {
   const wide = useMedia("(min-width: 64rem)");
   const run = useCronRun();
   if (!jobs.data) return <p role="status" className="p-4 text-sm text-muted-foreground">Loading…</p>;
-  if (rows.length === 0) return <p className="p-4 text-sm text-muted-foreground">No cron named {stem} in this space.</p>;
+  if (rows.length === 0) return <p className="p-4 text-sm text-muted-foreground">No routine named {stem} in this space.</p>;
   const job = rows.find((item) => item.status !== "ran");
   const runs = rows.filter((item) => item.status === "ran");
   const times = runs.map((run) => Date.parse(run.lastRun));
@@ -6084,7 +6084,7 @@ function CronTimeline({ stem }: { stem: string }) {
 function CronOverview({ stem, job, runs, gaps, runButton }: { stem: string; job?: CronJob; runs: CronJob[]; gaps: number[]; runButton: ReactNode }) {
   const last = relativeTime(runs[0]?.lastRun ?? "");
   return <>
-    <PageTitle><Link href="/cron" className="text-muted-foreground hover:underline">Cron</Link> / {stem} <span className="ml-1 rounded-full border px-2 align-middle text-xs font-normal">{job ? "Active" : "Retired"}</span></PageTitle>
+    <PageTitle><Link href="/routines" className="text-muted-foreground hover:underline">Routines</Link> / {stem} <span className="ml-1 rounded-full border px-2 align-middle text-xs font-normal">{job ? "Active" : "Retired"}</span></PageTitle>
     <div className="flex flex-col gap-2 text-xs text-muted-foreground">
       <p className="flex items-center gap-1">{runButton}{[job?.agent, "Times in UTC"].filter(Boolean).join(" · ")}</p>
       {job?.schedule ? <ul aria-label="Schedule" className="flex flex-wrap gap-1">{job.schedule.split(", ").map((at) => <li key={at} className="rounded-md bg-muted px-2 py-0.5 font-mono">{at}</li>)}</ul> : null}
@@ -6152,7 +6152,7 @@ function useCronRun() {
     dialog: <Dialog open={confirmStem !== ""} onOpenChange={(open) => { if (!open) setConfirmStem(""); }}>
       <DialogContent finalFocus={confirmTrigger}>
         <DialogTitle>Run {confirmStem}?</DialogTitle>
-        <DialogDescription>Start this cron job now?</DialogDescription>
+        <DialogDescription>Start this routine now?</DialogDescription>
         <div className="mt-6 flex justify-end gap-2">
           <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
           <Button onClick={() => {
@@ -6183,7 +6183,7 @@ function CronPage() {
   }));
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
-      <PageTitle>Cron</PageTitle>
+      <PageTitle>Routines</PageTitle>
       <Input aria-label="Search" value={runQuery} onChange={(event) => setRunQuery(event.target.value)} placeholder="Search" />
       {jobs.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
       {jobs.error ? <p className="text-sm text-destructive">{jobs.error.message}</p> : null}
