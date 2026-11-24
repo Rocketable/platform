@@ -447,7 +447,7 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, input skillTool
 		content = renderSkillArguments(content, input.Arguments)
 	}
 
-	lines := append([]string{
+	lines := slices.Concat([]string{
 		fmt.Sprintf(`<skill_content name=%q>`, skill.DisplayName),
 		"# Skill: " + skill.DisplayName,
 		"",
@@ -458,9 +458,9 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, input skillTool
 		"Note: file list is sampled.",
 		"",
 		"<skill_files>",
-	}, files...)
+	}, files, []string{"</skill_files>", "</skill_content>"})
 
-	output := strings.Join(append(lines, "</skill_files>", "</skill_content>"), "\n")
+	output := strings.Join(lines, "\n")
 
 	if !easy && f.expandPromptShellCommands.SkillPrompts {
 		output = f.promptExpansion.expandShellCommands(ctx, output)
