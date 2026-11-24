@@ -6,7 +6,7 @@ import type { SearchPage, StripLayout, TabAttention } from "./types";
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
-const rows: { id: string; name: string; agent: string; running?: boolean; background?: boolean; spaceId?: string; unreadAt?: string; asking?: boolean; forkedFrom?: string }[] = [
+const rows: { id: string; name: string; agent: string; running?: boolean; background?: boolean; spaceId?: string; unreadAt?: string; asking?: boolean; forkedFrom?: string; automation?: boolean }[] = [
   { id: "alpha", name: "Alpha", agent: "main" },
   { id: "bravo", name: "Bravo", agent: "main" },
   { id: "charlie", name: "Charlie", agent: "main" },
@@ -18,6 +18,7 @@ const rows: { id: string; name: string; agent: string; running?: boolean; backgr
   // Golf's running turn waits on the person's answer.
   { id: "golf", name: "Golf", agent: "main", running: true, asking: true },
   { id: "hotel", name: "Hotel", agent: "main", forkedFrom: "alpha" },
+  { id: "india", name: "India", agent: "main", automation: true },
 ];
 export const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
 export type SharedTab = { space: string; path: string; search?: SearchPage };
