@@ -68,23 +68,31 @@ func StarlarkName(server, mcpToolName string) string {
 
 func SanitizeTool(mcpToolName string) string {
 	var b strings.Builder
-	b.Grow(len(mcpToolName))
 
-	for _, r := range mcpToolName {
-		if r <= unicode.MaxASCII && (r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)) {
-			b.WriteByte(byte(r))
-			continue
+	for i, r := range mcpToolName {
+		if r > unicode.MaxASCII || r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			if b.Cap() == 0 {
+				b.Grow(len(mcpToolName))
+				b.WriteString(mcpToolName[:i])
+			}
+
+			r = '_'
 		}
 
-		b.WriteByte('_')
+		if b.Cap() != 0 {
+			b.WriteByte(byte(r))
+		}
 	}
 
-	s := b.String()
-	if s == "" || s[0] >= '0' && s[0] <= '9' {
-		return "_" + s
+	if b.Cap() != 0 {
+		mcpToolName = b.String()
 	}
 
-	return s
+	if mcpToolName == "" || mcpToolName[0] >= '0' && mcpToolName[0] <= '9' {
+		return "_" + mcpToolName
+	}
+
+	return mcpToolName
 }
 
 func BuildCatalog(tools []ToolDesc) (map[string]ToolDesc, error) {
