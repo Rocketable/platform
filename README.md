@@ -130,7 +130,7 @@ One web page can operate several RocketClaws. Name each other RocketClaw and its
 On each remote, list the local page's address in `trusted_rocketclaws`, exactly as the browser shows it:
 
 ```json
-"trusted_rocketclaws": ["https://hally.tail1234.ts.net"]
+"trusted_rocketclaws": ["https://team.tail1234.ts.net"]
 ```
 
 Names use only `a-z`, `0-9`, and `-`, and each URL or trusted address is an `https` origin with no path. Changes take effect on restart.

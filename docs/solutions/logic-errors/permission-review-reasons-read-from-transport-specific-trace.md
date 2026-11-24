@@ -24,10 +24,10 @@ tags:
 # Permission Review Reasons Were Read From a Transport-Specific Trace
 
 ## Problem
-The Web showed no reason for any Permission Review on wallace, which reaches models over HTTPS. The old reader (`PermissionReviewRationale`) only accepted a reason backed by a `rocketcode_public_progress` text record in the review entry's `OutputTrace`. Only transports whose responses RocketClaw reads as a stream write those records (`responseObservations` in `internal/rocketclaw/harness/responses_websocket.go`). Then that was only the Responses WebSocket transport, so HTTP reviews never had one. ChatGPT sign-in requests write them too since PR #1086; plain API-key HTTPS requests still never do.
+The Web showed no reason for any Permission Review on a deployment that reaches models over HTTPS. The old reader (`PermissionReviewRationale`) only accepted a reason backed by a `rocketcode_public_progress` text record in the review entry's `OutputTrace`. Only transports whose responses RocketClaw reads as a stream write those records (`responseObservations` in `internal/rocketclaw/harness/responses_websocket.go`). Then that was only the Responses WebSocket transport, so HTTP reviews never had one. ChatGPT sign-in requests write them too since PR #1086; plain API-key HTTPS requests still never do.
 
 ## Symptoms
-- All 110 saved reviews in wallace chat `AHWNE3GO6MMDBJ3V7OGHZDRH2S` had a final answer such as `{"outcome":"allow","rationale":"..."}` in `ReplayInput`, and none had a progress record.
+- Every saved review in an affected chat on that deployment had a final answer such as `{"outcome":"allow","rationale":"..."}` in `ReplayInput`, and none had a progress record.
 - Tests passed because they built reviews with the WebSocket trace shape.
 
 ## What Didn't Work

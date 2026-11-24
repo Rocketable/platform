@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	slackNamesUsersJSON  = `{"ok":true,"members":[{"id":"U1","real_name":"Alan Smith","profile":{"display_name":"alan"}},{"id":"U2","real_name":"Bea","profile":{"display_name":""}}]}`
+	slackNamesUsersJSON  = `{"ok":true,"members":[{"id":"U1","real_name":"Sam Smith","profile":{"display_name":"sam"}},{"id":"U2","real_name":"Bea","profile":{"display_name":""}}]}`
 	slackNamesGroupsJSON = `{"ok":true,"usergroups":[{"id":"S1","handle":"cs-operators"}]}`
 )
 
@@ -88,7 +88,7 @@ func TestSlackNamesResolvesDisplayRealAndGroup(t *testing.T) {
 	transport := &slackNameRoundTripper{users: slackNamesUsersJSON, groups: slackNamesGroupsJSON}
 	connector := newSlackNamesConnector(transport)
 	names := connector.SlackNames(t.Context(), []string{"U1", "U2", "S1"})
-	require.Equal(t, map[string]string{"U1": "alan", "U2": "Bea", "S1": "cs-operators"}, names)
+	require.Equal(t, map[string]string{"U1": "sam", "U2": "Bea", "S1": "cs-operators"}, names)
 
 	usersList, userGroups, usersInfo := transport.counts()
 	require.Equal(t, 1, usersList)
@@ -101,7 +101,7 @@ func TestSlackNamesReloadsAfter8Hours(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		transport := &slackNameRoundTripper{users: slackNamesUsersJSON, groups: slackNamesGroupsJSON}
 		connector := newSlackNamesConnector(transport)
-		require.Equal(t, "alan", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
+		require.Equal(t, "sam", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
 		require.Equal(t, "cs-operators", connector.SlackNames(t.Context(), []string{"S1"})["S1"])
 
 		usersList, userGroups, _ := transport.counts()
@@ -112,7 +112,7 @@ func TestSlackNamesReloadsAfter8Hours(t *testing.T) {
 		transport.groups = `{"ok":true,"usergroups":[{"id":"S1","handle":"ops"}]}`
 
 		time.Sleep(8*time.Hour - time.Nanosecond)
-		require.Equal(t, "alan", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
+		require.Equal(t, "sam", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
 
 		usersList, userGroups, _ = transport.counts()
 		require.Equal(t, 1, usersList)
@@ -171,17 +171,17 @@ func TestSlackNamesFailedReloadKeepsNamesAndRetries(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		transport := &slackNameRoundTripper{users: slackNamesUsersJSON, groups: slackNamesGroupsJSON}
 		connector := newSlackNamesConnector(transport)
-		require.Equal(t, "alan", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
+		require.Equal(t, "sam", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
 
 		transport.users = `{"ok":false,"error":"fatal_error"}`
 
 		time.Sleep(8 * time.Hour)
-		require.Equal(t, "alan", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
+		require.Equal(t, "sam", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
 
 		usersList, userGroups, _ := transport.counts()
 		require.Equal(t, 2, usersList)
 		require.Equal(t, 1, userGroups)
-		require.Equal(t, "alan", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
+		require.Equal(t, "sam", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
 		require.Empty(t, connector.SlackTagsMatching(t.Context(), "zzz"))
 
 		usersList, userGroups, _ = transport.counts()
@@ -189,7 +189,7 @@ func TestSlackNamesFailedReloadKeepsNamesAndRetries(t *testing.T) {
 		require.Equal(t, 1, userGroups)
 
 		time.Sleep(time.Minute)
-		require.Equal(t, "alan", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
+		require.Equal(t, "sam", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
 
 		usersList, userGroups, _ = transport.counts()
 		require.Equal(t, 3, usersList)
@@ -206,7 +206,7 @@ func TestSlackNamesUserInfoCanceledIsNotCached(t *testing.T) {
 		},
 	}
 	connector := newSlackNamesConnector(transport)
-	require.Equal(t, "alan", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
+	require.Equal(t, "sam", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
 
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -217,12 +217,12 @@ func TestSlackNamesUserInfoCanceledIsNotCached(t *testing.T) {
 func TestSlackNamesUserGroupsMissingScopeStaysFresh(t *testing.T) {
 	transport := &slackNameRoundTripper{users: slackNamesUsersJSON, groups: `{"ok":false,"error":"missing_scope"}`}
 	connector := newSlackNamesConnector(transport)
-	require.Equal(t, map[string]string{"U1": "alan"}, connector.SlackNames(t.Context(), []string{"U1", "S1"}))
+	require.Equal(t, map[string]string{"U1": "sam"}, connector.SlackNames(t.Context(), []string{"U1", "S1"}))
 
 	usersList, userGroups, _ := transport.counts()
 	require.Equal(t, 1, usersList)
 	require.Equal(t, 1, userGroups)
-	require.Equal(t, map[string]string{"U1": "alan"}, connector.SlackNames(t.Context(), []string{"U1", "S1"}))
+	require.Equal(t, map[string]string{"U1": "sam"}, connector.SlackNames(t.Context(), []string{"U1", "S1"}))
 
 	usersList, userGroups, _ = transport.counts()
 	require.Equal(t, 1, usersList)
@@ -256,7 +256,7 @@ func TestSlackTagsMatching(t *testing.T) {
 	slices.Sort(ids)
 	require.Equal(t, []string{"S1"}, ids)
 
-	ids = connector.SlackTagsMatching(t.Context(), "ALAN")
+	ids = connector.SlackTagsMatching(t.Context(), "SAM")
 	slices.Sort(ids)
 	require.Equal(t, []string{"U1"}, ids)
 	require.Empty(t, connector.SlackTagsMatching(t.Context(), "missing"))
@@ -265,7 +265,7 @@ func TestSlackTagsMatching(t *testing.T) {
 	require.Equal(t, 1, usersList)
 	require.Equal(t, 1, userGroups)
 	require.Equal(t, 0, usersInfo)
-	require.Equal(t, "alan", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
+	require.Equal(t, "sam", connector.SlackNames(t.Context(), []string{"U1"})["U1"])
 
 	usersList, userGroups, usersInfo = transport.counts()
 	require.Equal(t, 1, usersList)
@@ -276,7 +276,7 @@ func TestSlackTagsMatching(t *testing.T) {
 func TestSlackTagsMatchingFailedLoad(t *testing.T) {
 	transport := &slackNameRoundTripper{users: `{"ok":false,"error":"fatal_error"}`, groups: slackNamesGroupsJSON}
 	connector := newSlackNamesConnector(transport)
-	require.Empty(t, connector.SlackTagsMatching(t.Context(), "alan"))
+	require.Empty(t, connector.SlackTagsMatching(t.Context(), "sam"))
 
 	usersList, userGroups, usersInfo := transport.counts()
 	require.Equal(t, 1, usersList)

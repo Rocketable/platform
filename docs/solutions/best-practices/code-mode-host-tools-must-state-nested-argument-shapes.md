@@ -42,7 +42,7 @@ In Code Mode, host tools exist only inside `execute` scripts. The model learns a
 
 The schema is still enforced. A call that breaks it fails with `invalid arguments: validate args: ...` (`internal/rocketclaw/codemode/codemode.go:329`), and the message names only the first problem.
 
-`ask_user_question` requires `question`, `details`, `options` and `multiple`, and every option must be an object with `label`, `value` and `description`. Its old description never said so. Real sessions on Wallace (Claude Opus 5.5, conversation `T3K3WU4KAWGZV45XSSCAKA6T35`) and on a local instance (entries 4835 and 7198) show the same sequence:
+`ask_user_question` requires `question`, `details`, `options` and `multiple`, and every option must be an object with `label`, `value` and `description`. Its old description never said so. Real sessions on a deployment (Claude Opus 5.5) and on a local instance show the same sequence:
 
 1. Options passed as plain strings: `has type "string", want "object"`.
 2. A search, which returned the untyped signature.
@@ -72,7 +72,7 @@ The same change reworded the catalog heading to "These tools cannot be called di
 
 A model that cannot see the shape guesses from habit: plain strings for choices, JSON `false` for booleans. Every wrong guess costs a full script run and a model round trip, and side effects in the script run again.
 
-The effect was measured. Claude Opus 5.5 and GPT-6.2-sol subagents each got the real RocketClaw prompt and tool list, built from this code, in two scenarios: the Wallace conversation at the point where the agent had to ask, and a user who asked to be asked with buttons. Three independent subagents ran each model, prompt version and scenario (36 runs):
+The effect was measured. Claude Opus 5.5 and GPT-6.2-sol subagents each got the real RocketClaw prompt and tool list, built from this code, in two scenarios: the deployment's conversation at the point where the agent had to ask, and a user who asked to be asked with buttons. Three independent subagents ran each model, prompt version and scenario (36 runs):
 
 | Prompt version | Valid `ask_user_question` calls, of those attempted | Runs that called the tool at the top level |
 |---|---|---|

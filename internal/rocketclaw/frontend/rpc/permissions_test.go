@@ -74,7 +74,7 @@ func TestSpacePermissions(t *testing.T) {
 
 		content := "needle"
 		if chat.ID == "main-born" {
-			content += " <@U05MD4PEVHN>"
+			content += " <@U01ABCDEF23>"
 		}
 
 		_, err := sessions.AppendEntryID(t.Context(), chat.ID, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: at, ReplayInput: []json.RawMessage{
@@ -99,7 +99,7 @@ func TestSpacePermissions(t *testing.T) {
 	core.ContinueRunFunc = func(_ context.Context, _, id string, _ bool) (string, error) { return id, nil }
 	server := New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{SlackTagsMatchingFunc: func(context.Context, string) []string {
 		<-release
-		return []string{"U05MD4PEVHN"}
+		return []string{"U01ABCDEF23"}
 	}}, &mockCronJobs{LoadOneOffCronjobFunc: func(stem string) (protocol.OneOffCronjob, error) {
 		job, ok := crons[stem]
 		if !ok {
@@ -261,7 +261,7 @@ func TestSpacePermissions(t *testing.T) {
 	close(release)
 	require.NoError(t, searches.Wait())
 
-	for i, want := range []struct{ hits, tags []string }{{theirs, nil}, {every, []string{"U05MD4PEVHN"}}} {
+	for i, want := range []struct{ hits, tags []string }{{theirs, nil}, {every, []string{"U01ABCDEF23"}}} {
 		var hits []string
 		for _, match := range found[i].Matches {
 			hits = append(hits, match.ConversationId)

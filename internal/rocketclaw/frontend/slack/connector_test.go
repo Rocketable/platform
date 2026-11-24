@@ -2778,7 +2778,7 @@ func TestStripSlackBotMention(t *testing.T) {
 		want string
 	}{
 		{name: "plain mention", text: " <@U999> hello ", want: "hello "},
-		{name: "aliased mention", text: "<@U999|Wallace> hello", want: "hello"},
+		{name: "aliased mention", text: "<@U999|Robot> hello", want: "hello"},
 		{name: "different mention", text: "<@U111> hello", want: "<@U111> hello"},
 		{name: "empty text", text: " ", want: ""},
 	} {
@@ -2810,7 +2810,7 @@ func TestConfiguredChannelAllowsUserOnlyOnMatchingChannel(t *testing.T) {
 }
 
 func TestSlackPrincipal(t *testing.T) {
-	const userID = "U0ADDPB7P4K"
+	const userID = "U02ABCDEF34"
 
 	for _, tc := range []struct {
 		name    string
@@ -2821,8 +2821,8 @@ func TestSlackPrincipal(t *testing.T) {
 		email   string
 		want    []string
 	}{
-		{name: "display name", userID: userID, ok: true, display: "Ulderico", real: "Other", email: "u@example.com", want: []string{"Ulderico (U0ADDPB7P4K)", "Ulderico", "u@example.com"}},
-		{name: "real name when display empty", userID: userID, ok: true, real: "Ulderico Cirello", want: []string{"Ulderico Cirello (U0ADDPB7P4K)", "Ulderico Cirello", ""}},
+		{name: "display name", userID: userID, ok: true, display: "Jane", real: "Other", email: "u@example.com", want: []string{"Jane (U02ABCDEF34)", "Jane", "u@example.com"}},
+		{name: "real name when display empty", userID: userID, ok: true, real: "Jane Doe", want: []string{"Jane Doe (U02ABCDEF34)", "Jane Doe", ""}},
 		{name: "no name", userID: userID, ok: true, email: "u@example.com", want: []string{userID, "", ""}},
 		{name: "users.info error", userID: userID, want: []string{userID, "", ""}},
 		{name: "empty user ID", want: []string{"", "", ""}},

@@ -69,7 +69,7 @@ RocketClaw's Web is multiplayer: several people can have one chat open, and a `s
 
 ### Sources
 
-- Prototype (machine-local, best effort; a missing prototype is not a blocker and this plan governs any disagreement): `/Users/ucirello/Projects/platform/.tmp/workspaces/20261113-other-user-is-typing/.tmp/ce-prototype/2026-11-13-other-user-typing/`. Read `decisions.md`; `01-typing-indicator/screens/001-typing-variants.html`, variant 4 "Floating pill" with "top of the chat"; `demo/site/pill-*.mp4` show the chosen position against the rejected one.
+- Prototype (machine-local, best effort; a missing prototype is not a blocker and this plan governs any disagreement): `<repo-root>/.tmp/workspaces/20261113-other-user-is-typing/.tmp/ce-prototype/2026-11-13-other-user-typing/`. Read `decisions.md`; `01-typing-indicator/screens/001-typing-variants.html`, variant 4 "Floating pill" with "top of the chat"; `demo/site/pill-*.mp4` show the chosen position against the rejected one.
 - `docs/solutions/architecture-patterns/web-keep-alive-views-connection-budget.md`: hidden views keep their streams open; open new streams only for what is on screen.
 
 ---

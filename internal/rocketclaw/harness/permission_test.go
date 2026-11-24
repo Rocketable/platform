@@ -368,15 +368,15 @@ func TestReadPermissionInheritsEditAllow(t *testing.T) {
 		action                                PermissionAction
 		matched                               bool
 	}{
-		{name: "inherits exact edit allow", yaml: `edit: {"HALLY_GOOGLE_WORKSPACE.md": allow}`, subject: "HALLY_GOOGLE_WORKSPACE.md", action: permissionAllow, matched: true, bucket: "edit"},
+		{name: "inherits exact edit allow", yaml: `edit: {"TEAM_NOTES.md": allow}`, subject: "TEAM_NOTES.md", action: permissionAllow, matched: true, bucket: "edit"},
 		{name: "inherits glob edit allow", yaml: `edit: {"memories/*.md": allow}`, subject: "memories/today.md", action: permissionAllow, matched: true, bucket: "edit"},
 		{name: "inherits edit auto", yaml: `edit: {"memories/*.md": auto}`, subject: "memories/today.md", action: permissionAuto, matched: true, bucket: "edit"},
 		{name: "inherits edit auto reviewer", yaml: `edit: {"memories/*.md": auto(file-reviewer)}`, subject: "memories/today.md", action: permissionAuto, matched: true, bucket: "edit", reviewer: "file-reviewer"},
-		{name: "unmatched path remains denied", yaml: `edit: {"HALLY_GOOGLE_WORKSPACE.md": allow}`, subject: "other.md", action: permissionDeny, matched: false, bucket: ""},
-		{name: "explicit read deny overrides edit allow", yaml: `edit: {"HALLY_GOOGLE_WORKSPACE.md": allow}
-read: {"HALLY_GOOGLE_WORKSPACE.md": deny}`, subject: "HALLY_GOOGLE_WORKSPACE.md", action: permissionDeny, matched: true, bucket: "read"},
-		{name: "explicit read allow overrides edit deny", yaml: `edit: {"HALLY_GOOGLE_WORKSPACE.md": deny}
-read: {"HALLY_GOOGLE_WORKSPACE.md": allow}`, subject: "HALLY_GOOGLE_WORKSPACE.md", action: permissionAllow, matched: true, bucket: "read"},
+		{name: "unmatched path remains denied", yaml: `edit: {"TEAM_NOTES.md": allow}`, subject: "other.md", action: permissionDeny, matched: false, bucket: ""},
+		{name: "explicit read deny overrides edit allow", yaml: `edit: {"TEAM_NOTES.md": allow}
+read: {"TEAM_NOTES.md": deny}`, subject: "TEAM_NOTES.md", action: permissionDeny, matched: true, bucket: "read"},
+		{name: "explicit read allow overrides edit deny", yaml: `edit: {"TEAM_NOTES.md": deny}
+read: {"TEAM_NOTES.md": allow}`, subject: "TEAM_NOTES.md", action: permissionAllow, matched: true, bucket: "read"},
 		{name: "final edit deny does not inherit", yaml: `edit: {"*": allow, "secret.md": deny}`, subject: "secret.md", action: permissionDeny, matched: false, bucket: ""},
 		{name: "non matching read rule still allows edit inheritance", yaml: `read: {"private.md": deny}
 edit: {"public.md": allow}`, subject: "public.md", action: permissionAllow, matched: true, bucket: "edit"},

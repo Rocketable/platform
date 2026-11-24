@@ -87,12 +87,12 @@ Looking up these attributes in PostHog does not help when debugging. After mappi
 
 What PostHog/posthog#66614 reports: an OpenInference span (`openinference.span.kind=LLM`, `llm.*`) exported to `/i/v0/ai/otel` returns success and never appears as a generation. A control span with `gen_ai.operation.name=chat` appears fully populated.
 
-What RocketClaw saw on its local deploy, Hally, while PR #680 was built:
+What RocketClaw saw on a local deployment while PR #680 was built:
 
 | State | What PostHog AI Observability showed |
 | --- | --- |
 | GenAI attributes, no `user.id` | `rocketclaw.turn` trace present, person a random UUID |
-| Plus `user.id` from the principal's email | person `ulderico@rocketable.com`, reply text on the model call, Input column "–" |
+| Plus `user.id` from the principal's email | person `jane.doe@example.com`, reply text on the model call, Input column "–" |
 | Plus `$ai_input_state` on `rocketclaw.turn` | shipped in PR #680, Input column not yet checked in the UI |
 
 The person fix is one call in `Bridge.runTurn`:

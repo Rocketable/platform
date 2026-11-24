@@ -169,7 +169,7 @@ Every item was investigated in depth; full findings and options are in `2026-11-
 | `harness.Looper` interface has no users | `harness/looper.go:288-291` |
 | `guest_env` field of the sandbox wire protocol is never set or read in production (both ends are this binary); tests, including a hostile-guest security test, set it | `sandbox/wire/wire.proto:30`, `harness/emulated_linux_test.go:310` |
 | Exported methods only tests call: `externalmcp.Server.URL`, `SessionService.ObserveTranscript`, `TranscriptPage`, `UpsertExternalMCPSession` | `frontend/externalmcp/server.go:128`, `backend/transcript.go:95,193`, `backend/store.go:315` |
-| `harness/opencode.json`, a developer's local OpenCode config with `/Users/ucirello` paths | Nothing refers to it |
+| `harness/opencode.json`, a developer's local OpenCode config with machine-specific home-folder paths | Nothing refers to it |
 
 **Reachable from outside (dead as far as this repository shows; confirm before removing):**
 

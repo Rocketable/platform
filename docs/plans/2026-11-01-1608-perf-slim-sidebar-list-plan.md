@@ -16,7 +16,7 @@ execution: code
 - **Authority:** The Product Contract's Requirements win on behavior; Key Technical Decisions win on mechanism; units override neither.
 - **Execution profile:** Two pull requests. PR1 makes refreshes and reloads send only changes, caps text, and sends server metadata first (U1–U4, U9). PR2 adds the two detail levels and server-driven search (U5–U8). PR2 is built on top of PR1.
 - **Stop conditions:** Stop and ask if a unit would need to change OpenCode's own code or requests (R9), or if the measured reaction time cannot reach 200 ms without a mechanism this plan does not list.
-- **Who finishes:** The implementing agent lands both PRs with tests and the before/after measurement; the human partner deploys and confirms on Hally.
+- **Who finishes:** The implementing agent lands both PRs with tests and the before/after measurement; the human partner deploys and confirms on the deployment.
 
 ---
 
@@ -28,7 +28,7 @@ The sidebar stream stops sending every session in full. Full rows go only to ses
 
 ### Problem Frame
 
-On Hally, the Web UI took 15–20 s to open a remote OpenCode session from a desktop browser, and switching between OpenCode tabs made it worse. The browser reaches Hally through a Tailscale relay, so the link is slow, and every request shares one HTTP/2 connection.
+On a deployment, the Web UI took 15–20 s to open a remote OpenCode session from a desktop browser, and switching between OpenCode tabs made it worse. The browser reaches that deployment through a Tailscale relay, so the link is slow, and every request shares one HTTP/2 connection.
 
 A HAR from that browser showed small requests such as `Identity` and `Tabs` waiting up to 17 s for their first byte, then all released together. A goroutine dump taken during a stall showed finished responses waiting to be written behind the connection's only writer, blocked in `gonet.(*TCPConn).Write`. The server was idle; the link was full.
 
@@ -77,7 +77,7 @@ Some rows carry about 100 KB of preview text the UI never shows, and every row e
 ### Success Criteria
 
 - On a browser throttled to 50 KB/s against a server with about 5,000 sessions, the measured tab switch, sidebar click, and cmd+p open are each 200 ms or less: after a warm reload, and during a cold load.
-- On Hally, a fresh HAR shows no RocketClaw request waiting behind the sidebar stream, and refreshes and reloads of at most 2 KB when nothing changed.
+- On that deployment, a fresh HAR shows no RocketClaw request waiting behind the sidebar stream, and refreshes and reloads of at most 2 KB when nothing changed.
 
 ### Scope Boundaries
 
@@ -88,7 +88,7 @@ Some rows carry about 100 KB of preview text the UI never shows, and every row e
 
 #### Deferred to Follow-Up Work
 
-- Letting devices reach Hally directly instead of through a relay, by giving its tsnet node a fixed UDP port published from the container.
+- Letting devices reach the deployment directly instead of through a relay, by giving its tsnet node a fixed UDP port published from the container.
 
 ---
 
@@ -123,7 +123,7 @@ sequenceDiagram
 
 ### Assumptions
 
-- Chrome's network throttling approximates a slow link per request but does not reproduce TCP send-buffer backlog; the final check on Hally covers that.
+- Chrome's network throttling approximates a slow link per request but does not reproduce TCP send-buffer backlog; the final check on the deployment covers that.
 
 ### Risks
 
@@ -315,7 +315,7 @@ Waits on: PR1, needed before this group can start: these units change the listin
 | `make test` with `ROCKETCLAW_PLAYWRIGHT_MODULE` and `ROCKETCLAW_CHROMIUM` set; trust browser results only after the build prints `Built SPA:` | every PR |
 | Coverage and CLOC budgets (`SOURCE_CLOC_BUDGET`, Web `TS_CLOC_BUDGET` 9300) without editing them | every PR |
 | Throttled measurement from U1: tab switch, sidebar click, and cmd+p open at 200 ms or less at 50 KB/s, after a warm reload and during a cold load; refresh and reload at most 2 KB when nothing changed | U1 (before), U8 (after) |
-| HAR from the human partner's browser on Hally after deploy: no request waiting behind the sidebar stream | after PR2 deploys |
+| HAR from the human partner's browser on the deployment after deploy: no request waiting behind the sidebar stream | after PR2 deploys |
 
 ---
 

@@ -15,9 +15,9 @@ execution: code
 - **Objective:** An operator can hand any agent a named, bounded slice of an outside MCP service (for example "read Stripe freely, review every Stripe write"), and no agent reaches an MCP tool the operator did not grant it by name.
 - **Means:** Server facets compile into the existing `mcp` permission bucket through one grant compiler shared by every agent kind (KTD3, KTD5).
 - **Product authority:** The decisions in this Product Contract were made with the user in a brainstorm on 2026-11-19. Outbound MCP client work outside facets and grants (connections, results, credentials, sandboxing) is not active scope.
-- **Execution profile:** One pull request in this repository. Wallace overlay PRs are opened only if U8's check finds an agent file that needs one.
-- **Stop conditions:** Stop and report if U8 finds Wallace's config fails the new validation or a Wallace agent cannot keep the MCP tools it has used under R1-R11, or if the Go or TypeScript source CLOC budget would be exceeded.
-- **Who finishes:** The implementing agent opens the PR; the user merges it and deploys Hally and Wallace with the hand edits U8 lists.
+- **Execution profile:** One pull request in this repository. Overlay PRs for the first deployment are opened only if U8's check finds an agent file that needs one.
+- **Stop conditions:** Stop and report if U8 finds the first deployment's config fails the new validation or one of its agents cannot keep the MCP tools it has used under R1-R11, or if the Go or TypeScript source CLOC budget would be exceeded.
+- **Who finishes:** The implementing agent opens the PR; the user merges it and deploys both deployments with the hand edits U8 lists.
 - **Open blockers:** None.
 
 ---
@@ -34,7 +34,7 @@ Operators want agents such as a `business-accountant` to use an outside service 
 
 Today each `mcp_servers` entry has exactly two fixed groups, `tools.read` and `tools.write` (`internal/rocketclaw/config/config.go:145-160`), and only easy agents can refer to them (`internal/rocketclaw/harness/easy.go:246-279`). Advanced agents must write raw `server.tool` wildcard rules in their `mcp` permission bucket. An easy agent whose file never mentions MCP, or that writes `mcp: auto`, gets every tool of every server, and `{server: auto}` reaches tools in no group. A `sudo` group cannot exist, and a new server silently becomes available to every easy agent that left `mcp:` out.
 
-In production, Wallace runs one server (`gog_gene`, Google Workspace) with `read` and `write` groups that three Ruzuku easy agents use as `gog_gene: [read, write]`; its `voice` easy agent leaves `mcp:` out and so holds every `gog_gene` tool without ever having called one. Hally runs a `memory` server that `main`, `main-slack`, `sudo`, and `sudo-slack` reach through raw `mcp` rules such as `"memory.*": allow`.
+In production, a first deployment runs one server (`gworkspace`, Google Workspace) with `read` and `write` groups that three of a customer's easy agents use as `gworkspace: [read, write]`; its `voice` easy agent leaves `mcp:` out and so holds every `gworkspace` tool without ever having called one. A second deployment runs a `memory` server that `main`, `sudo`, and two Slack-facing agents, `ops-agent-slack` and `admin-agent-slack`, reach through raw `mcp` rules such as `"memory.*": allow`.
 
 ### Key Decisions
 
@@ -47,7 +47,7 @@ In production, Wallace runs one server (`gog_gene`, Google Workspace) with `read
 - **MCP is always opt-in.** An agent that names no server and facet gets no MCP tools, in easy and advanced mode alike. Governs R7. (session-settled: user-directed — chosen over keeping "omitted means everything" and over "omitted means every facet": MCP servers hold real credentials.)
 - **Sudo agents are the one exception.** They get every facet of every server without listing anything. Governs R8. (session-settled: user-directed — chosen over no exceptions: sudo agents such as the generated `main` should not need edits for each new server.)
 - **When granted facets overlap at different levels, the more careful level wins.** A tool in both an `allow` facet and an `auto` facet is reviewed. Governs R6. This was not discussed with the user; it is the conservative reading of the per-facet levels and is easy to reverse.
-- **Facets stay under the server's existing `tools` key.** Wallace's `gog_gene` config, which lives in AWS Secrets Manager, keeps working without an edit. Governs R1. (session-settled: user-approved — chosen over a new key: no production config change is needed to deploy.)
+- **Facets stay under the server's existing `tools` key.** The first deployment's `gworkspace` config, which lives in AWS Secrets Manager, keeps working without an edit. Governs R1. (session-settled: user-approved — chosen over a new key: no production config change is needed to deploy.)
 - **Secret references stay as they are.** The existing `{"aws":{"arn":…,"key":…}}` reference already works anywhere in `rocketclaw.json`, including MCP `env` and `headers` (`internal/rocketclaw/config/merge.go:27-66`). (session-settled: user-approved — chosen over adding references to secrets that hold a single plain string: the user can work with JSON secrets.)
 - **Old-style agent files get no special handling.** A file naming an unknown server or facet fails to load through the normal check; an easy file with no `mcp:` line loads with no MCP. Governs R7, R9. (session-settled: user-directed — chosen over fail-to-load with a dedicated migration error and over silent loss alone: production agent files are fixed by PRs before merge instead, per R13.)
 
@@ -81,18 +81,18 @@ In production, Wallace runs one server (`gog_gene`, Google Workspace) with `read
 
 **Rollout**
 
-- R14. Before the change merges, every agent file Wallace loads (its workspace and each overlay repo) is checked against the new rules, and any file that would fail to load or lose an MCP tool it has used gets a PR in its owning repo, merged first.
-- R15. The change's PR lists the hand edits Hally needs at deploy time, because any agent file that fails to load stops RocketClaw from starting: facets on Hally's `memory` server, facet grants in place of the raw `mcp` rules in `main`, `main-slack`, `sudo`, and `sudo-slack`, and deletion of the `context7.*` rules in `cron`, `sudo-anthropic`, and `sudo-anthropic-slack`, whose server is not configured.
+- R14. Before the change merges, every agent file the first deployment loads (its workspace and each overlay repo) is checked against the new rules, and any file that would fail to load or lose an MCP tool it has used gets a PR in its owning repo, merged first.
+- R15. The change's PR lists the hand edits the second deployment needs at deploy time, because any agent file that fails to load stops RocketClaw from starting: facets on its `memory` server, facet grants in place of the raw `mcp` rules in `main`, `ops-agent-slack`, `sudo`, and `admin-agent-slack`, and deletion of the `context7.*` rules in three other agents, whose server is not configured.
 
 ### Acceptance Examples
 
 - AE1. **Covers R1, R2, R6, R10.** **Given** Stripe facets `read: ["list_*", "get_*", "retrieve_balance", "-get_secret_*"]`, `write: ["create_*", "update_*"]`, `sudo: ["*"]`, and an advanced `business-accountant` with `stripe: {read: allow, write: auto}`, **when** it calls `list_invoices`, `create_refund`, `delete_customer`, and `get_secret_key`, **then** `list_invoices` runs without review, `create_refund` is reviewed, and `delete_customer` and `get_secret_key` are unavailable.
 - AE2. **Covers R2.** **Given** a facet `["-delete_*", "*"]` and another `["*", "-delete_*"]`, **then** both contain every tool except those starting with `delete_`.
 - AE3. **Covers R6.** **Given** an advanced agent with `stripe: {read: allow, sudo: auto}` and a tool `list_invoices` in both facets, **when** it calls `list_invoices`, **then** the call is reviewed.
-- AE4. **Covers R7.** **Given** configured `stripe` and `gog_gene` servers and an easy agent whose file has no `mcp:` line, **then** the agent sees no MCP tools.
+- AE4. **Covers R7.** **Given** configured `stripe` and `gworkspace` servers and an easy agent whose file has no `mcp:` line, **then** the agent sees no MCP tools.
 - AE5. **Covers R8, R10.** **Given** a sudo agent and a `stripe` server whose facets match every tool except `archive_account`, **then** the agent can use every faceted tool and cannot use `archive_account`.
 - AE6. **Covers R9.** **Given** an agent with `stripe: [admin]` and no `admin` facet on `stripe`, **then** loading fails with an error naming the agent, `stripe`, and `admin`.
-- AE7. **Covers R1, R5, R14.** **Given** Wallace's current `gog_gene` config with `tools.read` and `tools.write`, **then** `ruzuku-general-manager`, `deals-ruzuku`, and `deals-ruzuku-slack` load unchanged with the same `gog_gene` tools as today, and `voice` loads with none.
+- AE7. **Covers R1, R5, R14.** **Given** the first deployment's current `gworkspace` config with `tools.read` and `tools.write`, **then** `acme-general-manager`, `deals-agent`, and `deals-agent-slack` load unchanged with the same `gworkspace` tools as today, and `voice` loads with none.
 - AE8. **Covers R16.** **Given** an easy agent with `stripe: [read]` that delegates a `task` with `tools: ["bash"]`, **then** the subagent sees no MCP tools; the same delegation with no `tools` list sees the `read` facet.
 
 ### Scope Boundaries
@@ -111,11 +111,11 @@ In production, Wallace runs one server (`gog_gene`, Google Workspace) with `read
 
 ### Dependencies / Assumptions
 
-- Wallace's `gog_gene` server config lives in AWS Secrets Manager, not a repo. With R1 keeping the `tools` key, it needs no change.
-- As of 2026-11-19, the only Wallace agents that call `gog_gene` are `deals-ruzuku` and `ruzuku-general-manager`; `voice` never has. No Wallace agent uses raw MCP rules or dotted `tools:` entries.
+- The first deployment's `gworkspace` server config lives in AWS Secrets Manager, not a repo. With R1 keeping the `tools` key, it needs no change.
+- As of 2026-11-19, the only agents in the first deployment that call `gworkspace` are `deals-agent` and `acme-general-manager`; `voice` never has. None of its agents uses raw MCP rules or dotted `tools:` entries.
 - The change touches permission compilation, not connection, retry, or crash-recovery state, so no formal state model is required (pack: formal-modeling, stateful-design.md).
-- Any top-level agent file that fails to load stops RocketClaw from starting (`internal/rocketclaw/backend/app.go:434`). Old-form agent files fail on the new binary and new-form files fail on the old one, so Hally's agent edits land together with the deploy.
-- All seven of Hally's MCP-using agents are advanced agents without `sudo:`, so none is covered by R8.
+- Any top-level agent file that fails to load stops RocketClaw from starting (`internal/rocketclaw/backend/app.go:434`). Old-form agent files fail on the new binary and new-form files fail on the old one, so the second deployment's agent edits land together with the deploy.
+- All seven of the second deployment's MCP-using agents are advanced agents without `sudo:`, so none is covered by R8.
 
 ### Sources / Research
 
@@ -123,7 +123,7 @@ In production, Wallace runs one server (`gog_gene`, Google Workspace) with `read
 - Prior designs: `docs/plans/2026-08-08-001-mcp-code-mode-plan.md`, `docs/specs/2026-10-30-easy-mode-agents-design.md` (lines 105-110 define today's easy `mcp:` forms).
 - Planning research for this plan: `internal/rocketclaw/harness/agents.go:262-268` (sudo skips `permission:`), `internal/rocketclaw/harness/permission.go:142-250,404-442` (parsing and last-match-wins), `internal/rocketclaw/harness/skills.go:327-364` (permission prompt), `internal/rocketclaw/harness/rocketcode.go:181` (permission set copy), `internal/rocketclaw/frontend/rpc/server.go:1242-1258` and `internal/rocketclaw/web/proto/web.proto:581-597` (config view), `internal/rocketclaw/web/src/agent-editor/model-picker.tsx:31` (editor control fed by the config query), `docs/solutions/` learnings on react-doctor limits and on keeping permission review requests stable.
 
-**Product Contract preservation:** changed R11 and added R16 — the subagent `tools:` list now removes MCP instead of narrowing it, because research showed "no longer narrows" would hand subagents every parent facet; R15 corrected to cover all seven Hally agents after research showed none is sudo and a failed load stops startup. AE8 added for R16. Outstanding Questions resolved in KTD6, KTD2, and KTD12.
+**Product Contract preservation:** changed R11 and added R16 — the subagent `tools:` list now removes MCP instead of narrowing it, because research showed "no longer narrows" would hand subagents every parent facet; R15 corrected to cover all seven of the second deployment's agents after research showed none is sudo and a failed load stops startup. AE8 added for R16. Outstanding Questions resolved in KTD6, KTD2, and KTD12.
 
 ---
 
@@ -131,7 +131,7 @@ In production, Wallace runs one server (`gog_gene`, Google Workspace) with `read
 
 ### Key Technical Decisions
 
-- KTD1. **Facets are a name-to-patterns map under the server's `tools` key.** `encoding/json` v1 decodes Wallace's existing `{"read": [...], "write": [...]}` unchanged, and the fixed two-field groups type goes away. Agent loading receives server → facet → patterns. Covers R1 (inherits the user-approved Key Decision to keep the `tools` key).
+- KTD1. **Facets are a name-to-patterns map under the server's `tools` key.** `encoding/json` v1 decodes the first deployment's existing `{"read": [...], "write": [...]}` unchanged, and the fixed two-field groups type goes away. Agent loading receives server → facet → patterns. Covers R1 (inherits the user-approved Key Decision to keep the `tools` key).
 - KTD2. **Config validation closes the silent cases.** Facet names use letters, digits, `_`, and `-`. Patterns, after an optional leading `-`, use MCP tool-name characters (letters, digits, `_`, `-`, `.`, `/`) plus `*` and `?`, which rejects `${...}` text that permission interpolation would rewrite in only some rules. Server names no longer allow `.`, so `server.` prefixes are unambiguous; no production server name has one. The read/write overlap check is deleted. Covers R1-R3.
 - KTD3. **Removals compile into a per-rule exclusion list.** Each facet becomes one `mcp` rule per pattern without `-`, each carrying all of that facet's removals; evaluation skips a rule when an exclusion matches. Plain last-match-wins rules cannot express "removals win" when two facets overlap (`["*","-p*"]` with `["*","-q*"]`). Rejected: deciding membership at tool-listing time, which needs facet config inside the harness and a second per-call check path. Covers R2.
 - KTD4. **Rules are emitted allow facets first, then auto facets, each in sorted server and facet order.** Under last-match-wins the more careful level wins on overlap, and sorted output keeps the system prompt stable across turns. Covers R6.
@@ -143,7 +143,7 @@ In production, Wallace runs one server (`gog_gene`, Google Workspace) with `read
 - KTD10. **Permission review requests keep `server.tool` subjects, and the reviewer prompt is unchanged.** Naming facets in review requests would need matching reviewer-prompt changes tested against the real reviewer model (learning: permission-review request wording). Covers R6.
 - KTD11. **The permission prompt shows exclusions, and the sudo sentence says outside MCP tools follow the MCP rules above.** Without both, the prompt tells the model about access it lacks. Covers R2, R8.
 - KTD12. **The config view carries each server's facet names.** A new `ConfigView` field replaces the server-name list (old field number reserved). The Config page shows facets as chips, and the agent editor's MCP setting shows configured servers and facets from the existing config query, as the model picker does. Covers R12.
-- KTD13. **Rollout loads every Wallace agent with the new loader before merge.** One bad file stops a server, so reading frontmatter by eye is not enough. Covers R14.
+- KTD13. **Rollout loads every agent of the first deployment with the new loader before merge.** One bad file stops a server, so reading frontmatter by eye is not enough. Covers R14.
 
 ### High-Level Technical Design
 
@@ -182,14 +182,14 @@ flowchart LR
   3. Clone each facet's pattern slice in `LockedConfig`.
 - **Patterns to follow:** `validateMCPServers` error style `mcp_servers[%q]: …`; table cases in `TestValidateMCPServers`.
 - **Test scenarios:**
-  - Covers AE7. Wallace's shape `{"read": [...], "write": [...]}` decodes into two facets with the same patterns.
+  - Covers AE7. The first deployment's shape `{"read": [...], "write": [...]}` decodes into two facets with the same patterns.
   - Three facets `read`, `write`, `sudo: ["*"]` that overlap pass validation.
   - A facet name with a space or `.` fails.
   - A pattern containing `$` or a space fails.
   - A server name containing `.` fails.
   - Mutating a cloned config's facet slice does not change the locked config.
   - Delete the old "tool in both groups" and "shared pattern" overlap cases.
-- **Verification:** Config tests pass and Wallace's current config shape decodes without edits.
+- **Verification:** Config tests pass and the first deployment's current config shape decodes without edits.
 
 ### U2. Rule exclusions and prompt rendering
 
@@ -297,17 +297,17 @@ flowchart LR
 
 ### U8. Rollout check and hand edits
 
-- **Goal:** Deploying the change starts Wallace and Hally with every agent loaded and every used MCP tool kept.
+- **Goal:** Deploying the change starts both deployments with every agent loaded and every used MCP tool kept.
 - **Requirements:** R14, R15; KTD13.
 - **Dependencies:** U1-U5.
 - **Files:** none in this repository; scratch work stays under `.tmp/`.
 - **Approach:**
-  1. Copy Wallace's merged agent folder and its effective `mcp_servers` entries with their facet patterns (no credential values) into `.tmp/`, run the new config validation on them, then load every agent with the new loader.
-  2. For any file that fails or loses a used `gog_gene` tool, open a PR in its owning repo (`WallaceMaschine`, `overlay-*`, `wallace-zoelie`) whose content also loads on the current release; if no such content exists, stop per the Goal Capsule.
-  3. Copy Hally's agent folder and `mcp_servers` entries into `.tmp/`, apply the R15 edits and suggested `memory` facets, and run the same validation and load.
-  4. Write into the PR body: the Hally edits from R15, a note to keep the original seven files for a rollback to the previous release, and a deploy step to rerun the Wallace load against its then-current agents just before deploying and hold the deploy if any fails.
+  1. Copy the first deployment's merged agent folder and its effective `mcp_servers` entries with their facet patterns (no credential values) into `.tmp/`, run the new config validation on them, then load every agent with the new loader.
+  2. For any file that fails or loses a used `gworkspace` tool, open a PR in its owning repo (the deployment's repository or one of its overlay repositories) whose content also loads on the current release; if no such content exists, stop per the Goal Capsule.
+  3. Copy the second deployment's agent folder and `mcp_servers` entries into `.tmp/`, apply the R15 edits and suggested `memory` facets, and run the same validation and load.
+  4. Write into the PR body: the second deployment's edits from R15, a note to keep the original seven files for a rollback to the previous release, and a deploy step to rerun the first deployment's load against its then-current agents just before deploying and hold the deploy if any fails.
 - **Test expectation:** none -- operational check; its evidence is the load result recorded in the PR body.
-- **Verification:** The PR body records the config-validation and load results for Wallace and for Hally with its edits applied, plus the Hally edit, rollback, and pre-deploy steps.
+- **Verification:** The PR body records the config-validation and load results for the first deployment and for the second deployment with its edits applied, plus the second deployment's edit, rollback, and pre-deploy steps.
 
 ---
 
@@ -320,7 +320,7 @@ flowchart LR
 | Lint | `make lint` (root; includes react-doctor in `internal/rocketclaw/web`) | all |
 | Full tests | `make test` (root; includes CLOC budgets) | all |
 | Generated code | `go generate ./internal/rocketclaw/frontend/rpc` leaves no diff after commit | U6 |
-| Rollout | U8 load check of every Wallace agent | U8 |
+| Rollout | U8 load check of every agent of the first deployment | U8 |
 
 ---
 

@@ -50,7 +50,7 @@ With remote RocketClaws, tabs live per server and per space. Reaching a chat on 
 
 **Opening**
 - R5. Clicking an item opens its page on its server and in its space, without creating a tab, and the item stays highlighted while its page shows.
-- R6. Each item shows its server and space, for example "wallace · Main".
+- R6. Each item shows its server and space, for example "work · Main".
 - R7. A shelved Search page opens without a tab; its edits save into the shelf. A tab of the same Search page in that space takes precedence, as it does over Shared.
 
 **Notifications**

@@ -32,9 +32,9 @@ stateDiagram-v2
 - **Session folder** (`folder`): a Git branch, a jj workspace with a bookmark at or below `@`, a folder where no branch can be named (`detached`), or a folder that is not a repository (`notRepo`).
 - **gh login** (`login`): working or broken.
 - **What `gh pr view` prints** (`GhView`): checked by hand on 2026-11-20 with gh 2.104.0 and jj 0.47.1, using the exact command from `internal/rocketclaw/web/src/opencode-pr.ts:46`:
-  - in `/Users/ucirello`, which is not a repository: `failed to run git: fatal: not a git repository`, exit 1;
+  - in `$HOME`, a home folder that is not a repository: `failed to run git: fatal: not a git repository`, exit 1;
   - in a colocated jj repository with no bookmark: `could not determine current branch: failed to run git: not on any branch`, exit 1;
-  - `gh api --method GET repos/Rocketable/platform/pulls/1548` in `/Users/ucirello`: exit 0.
+  - `gh api --method GET repos/Rocketable/platform/pulls/1548` in `$HOME`: exit 0.
   The model does not assume which error `gh` prints first when both the folder and the login are bad, so it allows either.
 - **Classifier** (`CLASSIFIER`): `current` is `opencode-pr.ts:47-58` before this fix, which counted only "no pull requests found for branch" as no checkout PR. `fixed` is the same lines after it: it also counts the "not a git repository" and "not on any branch" outputs above as no checkout PR. `broad` counts every failure as no checkout PR.
 - **Concurrent lookups**: the checkout lookup, the history walk, and the PR reader run as separate processes. The reader waits for both lookups, as `thread-pr-panel.tsx:21-27` and `:75` do.
@@ -57,7 +57,7 @@ On 2026-11-21, `make check` passed with TLC `2026.11.19.180144` (rev `bc1b506`) 
 | `current-claim` | current | all four | `AlertMeansLoginFailed` violated | violated, through `detached` | 153 / 137 |
 | `too-broad` | broad | all four | `LoginFailureAlerts` violated | violated | 117 / 113 |
 
-The `screenshot` trace matches the report: the session folder is `/Users/ucirello`, the login works, the history walk finds #1548, `gh pr view` fails with "not a git repository", the banner shows, and the reader shows the PR.
+The `screenshot` trace matches the report: the session folder is the home folder `$HOME`, the login works, the history walk finds #1548, `gh pr view` fails with "not a git repository", the banner shows, and the reader shows the PR.
 
 ## Findings
 

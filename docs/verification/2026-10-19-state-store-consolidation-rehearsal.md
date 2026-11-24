@@ -4,7 +4,7 @@
 
 This release moves the State Store to its new tables in eleven migrations, `049` to `059`. They all run at one startup of the new binary, after `048_shadow_step_limit` from the release before if an install does not have it yet. Each one commits on its own and ends with a self-check; if a check fails, the migration aborts and the binary exits.
 
-Rehearse on copies of Wallace and Gene first, then follow the same steps in the scheduled downtime. Nothing here has been run on Wallace or Gene yet. No tool automates these comparisons yet; the steps below are manual.
+Rehearse on copies of both production deployments first, then follow the same steps in the scheduled downtime. Below, they are called the first deployment and the second deployment. Nothing here has been run on either deployment yet. No tool automates these comparisons yet; the steps below are manual.
 
 Keep secrets, database addresses, and captured conversation content out of this file and out of the repository.
 
@@ -29,7 +29,7 @@ SHOW server_version;
 SELECT extname, extversion FROM pg_extension WHERE extname = 'pg_trgm';
 ```
 
-Wallace runs 18.4. Confirm that Gene runs 18.4 or newer, and that the copies run the same major version as the server they came from. `pg_trgm` is already installed by the previous release's search. If it is missing, `055` must create it, which needs the right privilege.
+The first deployment runs 18.4. Confirm that the second deployment runs 18.4 or newer, and that the copies run the same major version as the server they came from. `pg_trgm` is already installed by the previous release's search. If it is missing, `055` must create it, which needs the right privilege.
 
 Also check that nothing will cut a long startup short:
 
@@ -42,7 +42,7 @@ Both should be `0` for RocketClaw's role. Also check that the service manager do
 
 ### Free disk
 
-`053` rewrites every saved turn step into one row per item (about 1.1 GB on Wallace). `054` copies the steps of unfinished turns into `steps` and keeps the old rows in `legacy_turn_steps`, next to the moved copies. `055` writes search text onto the entries of listed chats and of runs that report to one, and builds two trigram indexes. Expect the database to grow by at least twice the turn-step data, plus WAL.
+`053` rewrites every saved turn step into one row per item (about 1.1 GB on the first deployment). `054` copies the steps of unfinished turns into `steps` and keeps the old rows in `legacy_turn_steps`, next to the moved copies. `055` writes search text onto the entries of listed chats and of runs that report to one, and builds two trigram indexes. Expect the database to grow by at least twice the turn-step data, plus WAL.
 
 ```sql
 -- old schema
@@ -98,7 +98,7 @@ WHERE j.note_state = 'pending' AND j.sync_destination <> COALESCE(r.reports_to, 
 
 If it returns rows, let the owning conversation take its next turn so the note is consumed before the downtime. If that is not possible, stop and decide how to handle them first. This is the open U13 decision in the release notes: these jobs follow the run's `reports_to`, or keep a redirect per job.
 
-### Wallace's 641 MB running turn
+### A large running turn
 
 `049` refuses to run while any turn is running. Find the large running turns:
 
@@ -114,9 +114,9 @@ GROUP BY r.conversation_id, r.id, r.phase
 ORDER BY sum(pg_column_size(s.value)) DESC;
 ```
 
-On a Wallace copy (set up as in section 2), start the **current** binary, open that conversation in Web, and stop the turn. It passes if the turn row becomes `phase = 'done'` with `terminal = 'stopped'`, and the binary then shuts down normally. If stopping fails, hangs, or runs the server out of memory, do not stop it in production: let it finish, and schedule the downtime after it completes.
+On a copy of the first deployment (set up as in section 2), start the **current** binary, open that conversation in Web, and stop the turn. It passes if the turn row becomes `phase = 'done'` with `terminal = 'stopped'`, and the binary then shuts down normally. If stopping fails, hangs, or runs the server out of memory, do not stop it in production: let it finish, and schedule the downtime after it completes.
 
-Web cannot stop a turn that the query in section 3, step 4 lists. On the October 20 copy, the largest running turn is one of those: `turn-1791490122634033525`, with 184 MB of stored steps. Rehearse that step's script on the copy instead.
+Web cannot stop a turn that the query in section 3, step 4 lists. On the October 20 copy, the largest running turn is one of those, with 184 MB of stored steps. Rehearse that step's script on the copy instead.
 
 Also note the largest saved turn records. `053` splits each one in memory, so watch the server's memory while `053` runs:
 
@@ -128,7 +128,7 @@ FROM turn_steps ORDER BY pg_column_size(value) DESC LIMIT 5;
 
 ## 2. Rehearsal on a copy
 
-Rehearse on Wallace and on Gene, one copy at a time.
+Rehearse on the first deployment and on the second deployment, one copy at a time.
 
 1. **Make the copy.** Restore the latest backup into an isolated PostgreSQL server of the same major version. Give the copy its own copy of the workspace. Give it a config that cannot reach anything real: no Slack tokens, `mcp_external.enabled` set to false, and no cron files in its workspace. A copy runs tools for real in its workspace, and saved queued work starts again when a binary starts.
 2. **Pick the sample.** Using the old schema, write down the conversation IDs to compare:
@@ -156,8 +156,8 @@ Rehearse on Wallace and on Gene, one copy at a time.
    SELECT id, applied_at, took FROM applied WHERE id >= '049' ORDER BY id;
    ```
 
-   Expect `053` (rewrites about 1.1 GB on Wallace) and `054` (keeps old rows next to moved copies) to take longest. `049` and `059` each read every saved entry in full to compare its bytes. On a copy of Wallace taken on 2026-10-20, all eleven files took 5 min 54 s together on a 12 GB, 8-core machine, the longest being `049` (2 min 1 s), `053` and `054` (about 1 min each). Record `pg_database_size` again.
-6. **Check the result.** See section 4. Run the before/after harness in `internal/rocketclaw/backend/testdata/equivalence` on the same restored copy: it drains the copy with the previous code, reads every surface people and agents use with the previous code, migrates a clone with this code, reads them again, and writes a report. Every surface must pass; the only expected differences are the ones the report lists as known. On the 2026-10-20 Wallace copy, all 20 surfaces passed (run on 2026-10-21). For a spot check by hand, capture the same responses as in step 3 with the new binary, and diff each pair:
+   Expect `053` (rewrites about 1.1 GB on the first deployment) and `054` (keeps old rows next to moved copies) to take longest. `049` and `059` each read every saved entry in full to compare its bytes. On a copy of the first deployment taken on 2026-10-20, all eleven files took 5 min 54 s together on a 12 GB, 8-core machine, the longest being `049` (2 min 1 s), `053` and `054` (about 1 min each). Record `pg_database_size` again.
+6. **Check the result.** See section 4. Run the before/after harness in `internal/rocketclaw/backend/testdata/equivalence` on the same restored copy: it drains the copy with the previous code, reads every surface people and agents use with the previous code, migrates a clone with this code, reads them again, and writes a report. Every surface must pass; the only expected differences are the ones the report lists as known. On the 2026-10-20 copy of the first deployment, all 20 surfaces passed (run on 2026-10-21). For a spot check by hand, capture the same responses as in step 3 with the new binary, and diff each pair:
 
    ```sh
    jq -S 'del(.. | .revision?)' old/History-chat.json > old.json
@@ -186,7 +186,7 @@ Rehearse on Wallace and on Gene, one copy at a time.
    WHERE schemaname = current_schema() AND relname IN ('conversations', 'entries', 'turns') ORDER BY relname;
    ```
 
-   Then look in the plans for sequential scans over `entries` or `conversations`. Synthetic tests at 6,000 listed chats measured a 112–163 ms session list (main: 124–137 ms) and a 121–174 ms rare-word search (main: 176–228 ms). If the list is still slow on Wallace's copy, the planned next step is to store each chat's creating source on its conversation row (about seven write paths keep it exact). That is a follow-up change. Record the numbers, and decide whether it must land before the downtime.
+   Then look in the plans for sequential scans over `entries` or `conversations`. Synthetic tests at 6,000 listed chats measured a 112–163 ms session list (main: 124–137 ms) and a 121–174 ms rare-word search (main: 176–228 ms). If the list is still slow on the first deployment's copy, the planned next step is to store each chat's creating source on its conversation row (about seven write paths keep it exact). That is a follow-up change. Record the numbers, and decide whether it must land before the downtime.
 8. **Record the results** for each copy: server version, database size before and after, each file's time, the total, list and search times for the old and new binaries, bucket and kind counts, and whether every diff was empty.
 
 ## 3. The downtime
@@ -217,7 +217,7 @@ Rehearse on Wallace and on Gene, one copy at a time.
 3. **Snapshot.** Take a database snapshot you know how to restore, such as `pg_dump --format=custom` of the whole database or a stopped-server volume snapshot. Keep the previous binary next to it. The migrations do not touch attachment storage, and nothing writes attachments during the downtime.
 4. **Clear turns stuck on a deleted destination.** Run this with the previous binary stopped, after the snapshot.
 
-   A hidden run's turn runs on the chat it reports to (its `SyncDestination`). When that chat has been deleted, the previous binary's startup skips the turn ("active turn worker conversation is not recorded"). No chat can stop it from Web, since only that chat's bridge finds the turn. So the turn stays `running` forever, and `049` refuses to run. On Wallace there are two: hidden cron runs from October 8 and October 16 whose Web chats were deleted.
+   A hidden run's turn runs on the chat it reports to (its `SyncDestination`). When that chat has been deleted, the previous binary's startup skips the turn ("active turn worker conversation is not recorded"). No chat can stop it from Web, since only that chat's bridge finds the turn. So the turn stays `running` forever, and `049` refuses to run. On the first deployment there are two: hidden cron runs whose Web chats were deleted.
 
    This query lists them:
 
@@ -232,7 +232,7 @@ Rehearse on Wallace and on Gene, one copy at a time.
    WHERE w.conversation_id IS NULL;
    ```
 
-   Expect `turn-1791490122634033525` and `turn-1792189340153184567` on Wallace, and no rows on Gene unless a chat a hidden run reports to has been deleted there too.
+   Expect those two turns on the first deployment, and no rows on the second deployment unless a chat a hidden run reports to has been deleted there too.
 
    The script below writes what the previous binary's own stop would write. It runs `finishTurn` as stopped, then `closeTurn`. The turn ends `done`, `stopped`, with the same stopped final as `outbound_json`. Its inputs leave the Thread Queue. Its claimed Completion Notes are released. Its steps under `<turn>/` are deleted, except a running Background Job's. The turn's own record step stays, as it does for every stopped turn. The script refuses any stuck turn it cannot copy the binary's stop for: one that is delivering, one outside a cron run, one with human input or a goal, and one with shadow turns. If it refuses, roll back and stop: that turn needs a decision.
 
@@ -340,9 +340,9 @@ Rehearse on Wallace and on Gene, one copy at a time.
    SELECT count(*) AS unfinished_after FROM unfinished;
    ```
 
-   On Wallace, expect 2 stuck turns, `unfinished_before` 2, 2 stopped turns, 0 released queue items, 0 released Completion Notes, 874 deleted turn steps (as on the October 20 copy; nothing adds steps to a stuck turn), 0 deleted search rows, and `unfinished_after` 0. On a rehearsal copy taken while other turns ran, `unfinished_before` and `unfinished_after` also count those turns. On Gene with no stuck turns, every count is 0. If the counts match, type `COMMIT;`. Otherwise type `ROLLBACK;` and stop. Then run step 2's query again: it must return nothing.
+   On the first deployment, expect 2 stuck turns, `unfinished_before` 2, 2 stopped turns, 0 released queue items, 0 released Completion Notes, 874 deleted turn steps (as on the October 20 copy; nothing adds steps to a stuck turn), 0 deleted search rows, and `unfinished_after` 0. On a rehearsal copy taken while other turns ran, `unfinished_before` and `unfinished_after` also count those turns. On the second deployment with no stuck turns, every count is 0. If the counts match, type `COMMIT;`. Otherwise type `ROLLBACK;` and stop. Then run step 2's query again: it must return nothing.
 
-   On a Wallace copy, this script was compared with the previous binary's stop code, which a test ran on a second copy through a bridge built for the deleted chat. The `active_turns`, `turn_steps`, `thread_queue`, `session_entries`, `background_jobs`, and `message_search` rows matched, apart from `updated_at_unix_ns`.
+   On a copy of the first deployment, this script was compared with the previous binary's stop code, which a test ran on a second copy through a bridge built for the deleted chat. The `active_turns`, `turn_steps`, `thread_queue`, `session_entries`, `background_jobs`, and `message_search` rows matched, apart from `updated_at_unix_ns`.
 5. **Start the new binary**, and wait for `initialized rocketclaw state store schema` with `migrations=11`.
 6. **Check** as in section 4. Then open a few old Web links, check that a Slack thread still routes to its conversation, and check that an existing External MCP conversation ID still reaches its thread. Then let people back in.
 
@@ -418,7 +418,7 @@ These are intended. Diffs that show only these are expected.
 - History: running turns' transcript fingerprints change format once, so open clients refetch once. The session list and search no longer report whether summaries or the search index are complete; both always are. The Web protocol changes, so open pages reload themselves after the upgrade.
 - Undo: Slack threads, External MCP threads, and chats a cron run started or continues can now undo. In every chat, undo reaches only the Web messages after the newest message from a cron run, External MCP, or Slack; a Slack thread's unlabeled older messages count as Slack. A cron, External MCP, or Slack message that arrives after an undo is staged cancels it at the next Web message instead of being cut. The debug "delete session entries" call removes only what undo can, so a cron report stays in its chat and in the run.
 - Delegations: each subagent and review records its parent and the call that started it; 051 matches every existing one against the rules that named it and refuses if any is left over. A history page's delegation list now also names the subagents its calls started, so a subagent panel no longer closes in a chat with a staged undo. A review made inside a subagent's guardrail run nests under that subagent instead of the top-level chat. Forks and newly attached shadows copy their delegations' records.
-- Delegation links: 142 task rows saved before 2026-10-17, in 54 conversations (53 of them hidden cron or External MCP runs), saved a two-part subagent key, and their "Open delegation" link now opens nothing. They expire with their conversations, by mid-November.
+- Delegation links: task rows saved before 2026-10-17, almost all in hidden cron or External MCP runs, saved a two-part subagent key, and their "Open delegation" link now opens nothing. They expire with their conversations, by mid-November.
 - Remote OpenCode sessions open only at `/oc/<id>`; an older `/s/<id>` link to one no longer opens it.
 - Background Jobs follow their run's `reports_to`. A job started before a run was bound to a chat is now listed and woken in that chat.
 - Cron: runs that fall due during the downtime are not made up. Startup rebuilds each cron line from its file, and the next run is the next scheduled time. The overlap check now counts a run's running or delivering turns, including a run resumed after a restart.

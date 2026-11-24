@@ -10,7 +10,7 @@ describe("session id", () => {
   });
 
   it("accepts percent-encoded raw ids", () => {
-    const id = "slack-thread:C0BC7HARQ5B:1786456859.534779";
+    const id = "slack-thread:C01ABCDEF45:1786456859.534779";
     expect(decodeSessionId(encodeURIComponent(id))).toBe(id);
     expect(decodeSessionId(id)).toBe(id);
   });

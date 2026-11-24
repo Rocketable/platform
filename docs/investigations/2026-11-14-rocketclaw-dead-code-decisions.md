@@ -31,7 +31,7 @@ Each item: what it is, whether the "dead" claim held, how it got here, what remo
 
 **What it is.** A tag on each saved message: `both`, `sandbox` (only the hidden cron/External MCP run's own agent sees it) or `visible` (only the chat the run reports to shows it). It let v0.2.0 keep both originals and old copies without showing anything twice.
 
-**Claim corrected.** Go code never writes a non-default value (only insert: `backend/store.go:1862`; `fork.go:206` copies without it). But old migration `049_hidden_run_entries.sql`, shipped in `zvyvxzwnvvvk` (v0.2.0, 2026-10-19), set `visible` and `sandbox` on existing rows (old file lines 159-163). Migrations were squashed into `001_baseline.sql` by `pyprsknurqwz` (v0.2.5). Any database upgraded through v0.2.0 that had hidden runs holds such rows. The plan names Wallace and Gene.
+**Claim corrected.** Go code never writes a non-default value (only insert: `backend/store.go:1862`; `fork.go:206` copies without it). But old migration `049_hidden_run_entries.sql`, shipped in `zvyvxzwnvvvk` (v0.2.0, 2026-10-19), set `visible` and `sandbox` on existing rows (old file lines 159-163). Migrations were squashed into `001_baseline.sql` by `pyprsknurqwz` (v0.2.5). Any database upgraded through v0.2.0 that had hidden runs holds such rows. The plan names two production deployments upgraded that way.
 
 **Read sites** (more than first reported): `revert.go:60-70`, `session_tools.go:416-419`, `store_dao.go:171`, `message_search.go:165,261`, `store_summaries.go:133`, `store.go:1238,1240,1992,2013`, prune kind `store.go:635,641,659-665,718-724,766-768,1557-1569`.
 
@@ -158,7 +158,7 @@ Last production use: 10b and 10c ended in `mxswstvmmnly` (2026-10-06); 10d ended
 
 ## 11. `harness/opencode.json`
 
-**Claim confirmed.** A 40-line personal OpenCode config: `allow` read/external-directory permissions for `/Users/ucirello/go/src/github.com/Rocketable/{opencode,mastra}` and `~/go/pkg/mod`, and `parallelToolCalls: false` for OpenAI. In the first import (`mysnnpqqnsry`, 2026-06-02), moved unchanged in `oxutlymlnmql` (2026-10-29). Nothing refers to it. OpenCode loads it only when started inside `harness/`, where it widens permissions. No secrets, but it reveals a username and folder layout.
+**Claim confirmed.** A 40-line personal OpenCode config: `allow` read/external-directory permissions for two personal source checkouts under `$HOME/go/src` and `~/go/pkg/mod`, and `parallelToolCalls: false` for OpenAI. In the first import (`mysnnpqqnsry`, 2026-06-02), moved unchanged in `oxutlymlnmql` (2026-10-29). Nothing refers to it. OpenCode loads it only when started inside `harness/`, where it widens permissions. No secrets, but it reveals a username and folder layout.
 
 **Options.** Delete, or move its contents to a personal global OpenCode config.
 
@@ -166,9 +166,9 @@ Last production use: 10b and 10c ended in `mxswstvmmnly` (2026-10-06); 10d ended
 
 **Claim confirmed.** `Config.Environment` is validated (`config/config.go:445,805-821`) and cloned (`config/locked.go:55`) and nothing else. Added with the first import (`mysnnpqqnsry`); no commit in this repo ever applied it. Not in README, CHEATSHEET, CONCEPTS, skel skills, or the Web Config page. Advertised in `rocketclaw.example.json:8-10`.
 
-**Deployments.** Hally's config has no `environment` key. Wallace's live config and any merged Secrets Manager secret were not visible.
+**Deployments.** One deployment's config has no `environment` key. Another deployment's live config and any merged Secrets Manager secret were not visible.
 
-**Decoding is not strict** (`config/config.go:359`, plain `json.Unmarshal`; Hally's config already carries unknown keys and loads), so files that keep the key still load. A malformed entry, which fails startup today, would be ignored.
+**Decoding is not strict** (`config/config.go:359`, plain `json.Unmarshal`; one deployment's config already carries unknown keys and loads), so files that keep the key still load. A malformed entry, which fails startup today, would be ignored.
 
 **Removal cost.** ~23 production lines, ~31 test lines (`TestValidateEnvironmentEntries`, `TestLockedConfig` lines, one `server_test.go` line), 3 example lines, optionally `frontend/rpc/README.md:224` wording.
 
@@ -186,7 +186,7 @@ Last production use: 10b and 10c ended in `mxswstvmmnly` (2026-10-06); 10d ended
 
 ## 14. `ROCKETCLAW_SLACK_API_URL`
 
-**Claim confirmed.** `frontend/slack/connector.go:152-154` sends all Slack Web API calls (including Socket Mode setup) to that URL. Added in `zpuutpqywksv` (2026-09-03) with the assemble test; `pyzkzvtq` (2026-10-30) made the serve test use it. Only `cmd/rocketclaw/assemble_test.go:58` and `serve_test.go:126` set it. No CI, deploy skill or doc mentions it. Hally's environment does not set it; Wallace's was not visible. slack-go documents `OptionAPIURL` as "only useful for testing".
+**Claim confirmed.** `frontend/slack/connector.go:152-154` sends all Slack Web API calls (including Socket Mode setup) to that URL. Added in `zpuutpqywksv` (2026-09-03) with the assemble test; `pyzkzvtq` (2026-10-30) made the serve test use it. Only `cmd/rocketclaw/assemble_test.go:58` and `serve_test.go:126` set it. No CI, deploy skill or doc mentions it. One deployment's environment does not set it; another's was not visible. slack-go documents `OptionAPIURL` as "only useful for testing".
 
 **A legitimate use exists in principle:** GovSlack (`slack-gov.com`) or an egress proxy.
 

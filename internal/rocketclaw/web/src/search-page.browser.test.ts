@@ -1200,9 +1200,9 @@ test("message matches jump after history loads and last close returns to the las
 
 test("search formats rows, windows around matches, and resolves tag names", async () => {
   const { chromium: engine } = await import(playwright!);
-  const preview = "<!subteam^S0BA868QQ90> *Allen now says he would buy a Windows computer if memory is the cause.*\n\nsee [docs](https://example.com/a)\n```\ncode line\n```";
+  const preview = "<!subteam^S01ABCDEF56> *Sam now says he would buy a Windows computer if memory is the cause.*\n\nsee [docs](https://example.com/a)\n```\ncode line\n```";
   const long = ["alpha", "bravo", "charlie", "delta", "echo", "the windows line", "foxtrot", "golf", "hotel", "india"].join("\n");
-  const tagged = ["keep-out-before", "pad-a", "pad-b", "<!subteam^S0BA868QQ90> tagged here", "pad-c", "pad-d", "keep-out-after"].join("\n");
+  const tagged = ["keep-out-before", "pad-a", "pad-b", "<!subteam^S01ABCDEF56> tagged here", "pad-c", "pad-d", "keep-out-after"].join("\n");
   const code = ["before 0", "before 1", "before 2", "MATCH", "after 0", "after 1", "after 2"];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
@@ -1211,12 +1211,12 @@ test("search formats rows, windows around matches, and resolves tag names", asyn
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "search-format" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
-    if (url.pathname === "/api/SlackNames") return Response.json({ names: { S0BA868QQ90: "cs-operators" } });
+    if (url.pathname === "/api/SlackNames") return Response.json({ names: { S01ABCDEF56: "cs-operators" } });
     if (url.pathname === "/api/SearchSessions") {
       const { query } = await request.json() as { query: string };
       if (query === "tag:x") return Response.json(response(query, [{ conversationId: "formatted", text: preview }], ["tag:x"], { needle: "" }));
       if (query === "windows") return Response.json(response(query, [{ conversationId: "long", field: "" }], [], { messages: [{ conversationId: "long", message: { messageId: "1:0", role: "assistant", text: "*found windows here*", complete: true } }, { conversationId: "long", message: { messageId: "1:1", role: "assistant", text: long, complete: true } }] }));
-      if (query === "cs-operators") return Response.json(response(query, [{ conversationId: "long", field: "" }], [], { messages: [{ conversationId: "long", message: { messageId: "2:0", role: "assistant", text: tagged, complete: true } }], mentionIds: ["S0BA868QQ90"] }));
+      if (query === "cs-operators") return Response.json(response(query, [{ conversationId: "long", field: "" }], [], { messages: [{ conversationId: "long", message: { messageId: "2:0", role: "assistant", text: tagged, complete: true } }], mentionIds: ["S01ABCDEF56"] }));
       if (query === "fenced" || query === "streaming") return Response.json(response(query, [{ conversationId: "long", field: "" }], [], { messages: [{ conversationId: "long", message: { messageId: "3:0", role: "assistant", text: ["keep-out-before", "padding", "```text", ...code.map((line) => line.replace("MATCH", query)), ...(query === "fenced" ? ["```", "padding", "keep-out-after"] : [])].join("\n"), complete: query === "fenced" } }] }));
       return Response.json(response(query));
     }
@@ -1231,12 +1231,12 @@ test("search formats rows, windows around matches, and resolves tag names", asyn
     const root = `http://127.0.0.1:${server.port}`;
     const results = page.getByLabel("Search results");
     await page.goto(`${root}/search?q=tag:x`);
-    const group = results.getByRole("group", { name: "@cs-operators Allen now says he would buy a Windows computer if memory is the cause." });
+    const group = results.getByRole("group", { name: "@cs-operators Sam now says he would buy a Windows computer if memory is the cause." });
     await group.waitFor();
-    expect(await group.getAttribute("aria-label")).toBe("@cs-operators Allen now says he would buy a Windows computer if memory is the cause.");
+    expect(await group.getAttribute("aria-label")).toBe("@cs-operators Sam now says he would buy a Windows computer if memory is the cause.");
     const heading = group.getByRole("heading").getByRole("link");
-    expect(await heading.getAttribute("title")).toBe("@cs-operators Allen now says he would buy a Windows computer if memory is the cause.");
-    expect(await heading.locator("strong").textContent()).toBe("Allen now says he would buy a Windows computer if memory is the cause.");
+    expect(await heading.getAttribute("title")).toBe("@cs-operators Sam now says he would buy a Windows computer if memory is the cause.");
+    expect(await heading.locator("strong").textContent()).toBe("Sam now says he would buy a Windows computer if memory is the cause.");
     expect(await results.locator("pre").textContent()).toContain("code line");
     const row = results.locator("a").filter({ has: page.locator("pre") });
     expect(await row.locator("a, button").count()).toBe(0);

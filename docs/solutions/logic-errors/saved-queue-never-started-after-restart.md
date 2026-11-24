@@ -30,7 +30,7 @@ RocketClaw could save a waiting message and then stop before that conversation's
 ## Symptoms
 
 - A conversation with only saved queue rows stayed idle after restart.
-- Wallace production had six historical queued rows and no active checkpoints; they did not start on their own.
+- A production deployment had historical queued rows and no active checkpoints; they did not start on their own.
 - A historyless recorded conversation with a queue row could be pruned at startup, so the payload disappeared with the conversation record.
 
 ## What Didn't Work
@@ -74,7 +74,7 @@ The same startup pass also wakes conversations that hold a parked "Stopped by" l
 
 A private External MCP turn's row runs on its destination worker (the chat its conversation reports to, `conversations.reports_to`, recorded from `SyncDestination` when the turn starts); after it finishes, both sides pick later work. Schedule deletion and park-link clearing share one transaction so a failed delete cannot unpark waiting rows.
 
-The code change landed in [PR #68](https://github.com/Rocketable/platform/pull/68). Production cleanup of Wallace's six historical rows remains operator work and is not part of the fix.
+The code change landed in [PR #68](https://github.com/Rocketable/platform/pull/68). Production cleanup of the deployment's historical rows remains operator work and is not part of the fix.
 
 ## Why This Works
 
@@ -87,4 +87,4 @@ Keep a real-store startup test that seeds queued rows with no other work, assert
 ## Related Issues
 
 - [PR #68](https://github.com/Rocketable/platform/pull/68): recover saved queues on startup
-- Investigation: `docs/investigations/2026-09-20-wallace-stranded-mcp-queue.md`
+- Investigation: `docs/investigations/2026-09-20-stranded-mcp-queue.md`

@@ -29,12 +29,12 @@ tags:
 
 ## Problem
 
-A Remote OpenCode Session created while its owner was in the space Alan published reports that landed in Alan, although the owner had moved the session's tab to Ruzuku. "Move to space" on the page tabs did not move the pages either. A page's space comes from its session's Birth Space, and nothing in the Web changed that.
+A Remote OpenCode Session created while its owner was in the space Ops published reports that landed in Ops, although the owner had moved the session's tab to Acme. "Move to space" on the page tabs did not move the pages either. A page's space comes from its session's Birth Space, and nothing in the Web changed that.
 
 ## Symptoms
 
-- Page links read `/pages/Alan/opencode%3A.../index.html` while the session's tab was in Ruzuku.
-- "Move to space" → "Ruzuku" on a page tab moved the tab only. The link still named Alan, Ruzuku's Page Index did not list the page, and a person limited to Ruzuku still could not open it.
+- Page links read `/pages/Ops/opencode%3A.../index.html` while the session's tab was in Acme.
+- "Move to space" → "Acme" on a page tab moved the tab only. The link still named Ops, Acme's Page Index did not list the page, and a person limited to Acme still could not open it.
 - The agent guessed at tags and reconnecting the bridge, then asked the person to move the session, which only moves a tab.
 
 ## What Didn't Work

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-opencode_root="${OPENCODE_ROOT:-/Users/ucirello/go/src/github.com/Rocketable/opencode}"
+opencode_root="${OPENCODE_ROOT:-$HOME/go/src/github.com/Rocketable/opencode}"
 dest="$repo_root/testdata/opencode"
 raw_src_dir="$dest/raw/packages/opencode/src"
 raw_test_dir="$dest/raw/packages/opencode/test/tool"

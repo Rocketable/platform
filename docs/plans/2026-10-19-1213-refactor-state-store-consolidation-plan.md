@@ -13,12 +13,12 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** People and agents get correct answers quickly from RocketClaw's State Store, at Wallace's size and as it grows, because each fact is stored in one place and each screen is one simple read. Nothing people see or agents do changes.
+- **Objective:** People and agents get correct answers quickly from RocketClaw's State Store, at a large deployment's size and as it grows, because each fact is stored in one place and each screen is one simple read. Nothing people see or agents do changes.
 - **Means:** Rebuild the State Store around a few core tables (conversations, turns, messages, steps, schedules) and remove the copy step that moves hidden-run history into visible chats.
 - **Product authority:** The Product Contract wins on behavior; the Planning Contract's KTDs win on mechanism within it. Key Decisions record the choices the user made.
 - **Execution profile:** `ce-work` implements the units in the Sequencing order on one branch, each unit landing green; all migrations ship in one release.
 - **Stop conditions:** Stop and report if a unit cannot stay within the source CLOC budget, if a migration's in-place verification fails on a test or rehearsal database, if evidence shows a settled decision cannot work, or if `main` adds or alters a State Store table that KTD1's table map and the 044 manifest do not yet cover.
-- **Who ships:** `ce-work` builds and verifies; the user merges, rehearses on copies of Wallace and Gene, and runs the scheduled downtime.
+- **Who ships:** `ce-work` builds and verifies; the user merges, rehearses on copies of both production deployments, and runs the scheduled downtime.
 - **Open blockers:** None.
 
 ---
@@ -27,13 +27,13 @@ execution: code
 
 ### Summary
 
-The State Store moves from 28 tables to about five core tables plus the small tables that own unrelated things. Every conversation, hidden runs included, is one row whose facts live on that row. Every unit of work is one turn with a state. Messages are stored once, on their turn, and a sandbox tag decides which agent sees them, so hidden-run history is no longer copied. Wallace and Gene move in one scheduled downtime with all history kept.
+The State Store moves from 28 tables to about five core tables plus the small tables that own unrelated things. Every conversation, hidden runs included, is one row whose facts live on that row. Every unit of work is one turn with a state. Messages are stored once, on their turn, and a sandbox tag decides which agent sees them, so hidden-run history is no longer copied. Both production deployments move in one scheduled downtime with all history kept.
 
 ### Problem Frame
 
-Answering almost anything in RocketClaw means stitching many tables together. One session-list row reads 10 of the 28 tables, three of them more than once. Whether a chat is listed is never stored: it is worked out by proving the chat is absent from three other tables and by reading its ID. About 13 SQL clauses and 17 Go checks parse conversation IDs to learn what a conversation is. On Wallace, 13,346 of the 26,658 conversations with history have no record at all; they are hidden-run histories and review histories, recognized only by their names.
+Answering almost anything in RocketClaw means stitching many tables together. One session-list row reads 10 of the 28 tables, three of them more than once. Whether a chat is listed is never stored: it is worked out by proving the chat is absent from three other tables and by reading its ID. About 13 SQL clauses and 17 Go checks parse conversation IDs to learn what a conversation is. On the larger deployment, about half of the conversations with history have no record at all; they are hidden-run histories and review histories, recognized only by their names.
 
-The cost shows up as slowness first, then wrong answers. Postgres planned the session-origin query for 1 visible chat and got 6,865, which turned every search and list refresh into a 10-second wait until PR #506 rewrote that one query. Previews, the search index, and remote sessions are copies kept in step by hand. Hidden runs keep their own history and copy it into the visible chat afterwards, with side effects (scheduled reminders, the final reply) held back until that copy runs. A running turn rewrites its whole record on every save; on Wallace one such record is 641 MB, and the step journal holds 1.38 GB for 2 running turns.
+The cost shows up as slowness first, then wrong answers. Postgres planned the session-origin query for 1 visible chat and got 6,865, which turned every search and list refresh into a 10-second wait until PR #506 rewrote that one query. Previews, the search index, and remote sessions are copies kept in step by hand. Hidden runs keep their own history and copy it into the visible chat afterwards, with side effects (scheduled reminders, the final reply) held back until that copy runs. A running turn rewrites its whole record on every save; on the larger deployment one such record is 641 MB, and the step journal holds 1.38 GB for 2 running turns.
 
 Each fix so far has added another place for data to live. For example, remote OpenCode sessions got their own table because startup pruning would have deleted them from the main one. The user wants that cycle to stop.
 
@@ -108,7 +108,7 @@ stateDiagram-v2
 
 **Migration**
 
-- R22. Wallace and Gene move to the new store in one scheduled downtime, rehearsed first on copies of their databases.
+- R22. Both production deployments move to the new store in one scheduled downtime, rehearsed first on copies of their databases.
 - R23. All existing history is kept, and every history without a conversation record today becomes a conversation row of the right kind.
 - R24. Recurring cron runs that fall inside the migration downtime are not made up afterwards.
 - R25. After migration, existing Web links, Slack thread routing, and External MCP conversation IDs keep working.
@@ -141,7 +141,7 @@ stateDiagram-v2
 
 ### Success Criteria
 
-- On Wallace's data, the session list and a session search each answer in under about 100 ms, and that time stays roughly flat as chats grow.
+- On the larger deployment's data, the session list and a session search each answer in under about 100 ms, and that time stays roughly flat as chats grow.
 - The State Store has about five core tables plus the small tables named in R7, down from 28.
 - R2 and R8 hold everywhere: the roughly 13 SQL clauses and 17 Go checks that parse IDs today are gone.
 - A long turn's save costs about the same at its hundredth step as at its first.
@@ -158,7 +158,7 @@ stateDiagram-v2
 ### Dependencies / Assumptions
 
 - PostgreSQL remains the State Store.
-- Copies of the Wallace and Gene databases can be made for rehearsal, as earlier migrations did (`docs/verification/2026-09-10-sidebar.md`).
+- Copies of both production deployments' databases can be made for rehearsal, as earlier migrations did (`docs/verification/2026-09-10-sidebar.md`).
 - Rolling back means restoring the pre-migration database, since startup refuses migrations the running binary does not know (`docs/plans/2026-10-04-2254-feat-durable-conversation-work-plan.md`).
 
 ### Outstanding Questions
@@ -228,7 +228,7 @@ Product Contract preservation: changed: R18, R24 — corrected to describe today
   - (session-settled: user-approved — proposed over keeping a whole-turn record rewritten on every save.)
   - Conflict call-out on R4: a "message" here is a saved entry, because Web paging, undo, search hits, and `rocketclaw_sessions_get` address messages by entry ID and replay index. Step rows are scratch that is cleared at turn end.
   - Implements R4, R6, R25.
-- KTD6. **A stopped or failed turn keeps its partial record on its done turn row, not in `steps`.** Today that record lives only in `turn_steps`, which is the 1.1 GB found on Wallace. Moving it to the turn row keeps its position (the turn's anchor), its empty message ID, and its search behavior exactly as today, and lets `steps` be cleared at every turn end. A run that fails writes no entry, so it never shows in its visible chat. Implements R4, R6, R9.
+- KTD6. **A stopped or failed turn keeps its partial record on its done turn row, not in `steps`.** Today that record lives only in `turn_steps`, which is the 1.1 GB found on the larger deployment. Moving it to the turn row keeps its position (the turn's anchor), its empty message ID, and its search behavior exactly as today, and lets `steps` be cleared at every turn end. A run that fails writes no entry, so it never shows in its visible chat. Implements R4, R6, R9.
 - KTD7. **`turns` replaces `active_turns`, `thread_queue`, `scheduled_messages` one-time rows, `background_jobs`, and `shadow_turns`.**
   - Fields:
     - a state: waiting, running, delivering, or done, where a delivering turn keeps its outbound reply so restart resumes delivery instead of re-running the model;
@@ -372,9 +372,9 @@ U1, U10, U11, and U12 add no migration. Before each unit, rebase on `main` and r
 ### Assumptions
 
 - RocketClaw runs one process per State Store database; a second process on the same database is not supported (KTD7).
-- Wallace runs PostgreSQL 18.4, and Gene runs a version at least as new. U9's rehearsal confirms Gene.
-- The release's migrations fit in the scheduled downtime on Wallace's data. U9's rehearsal measures this.
-- Wallace's running turns, background jobs, and shadow turns are finished or stopped before the snapshot, so the 044 refusal does not fire. If stopping Wallace's 641 MB turn fails on the current binary in the rehearsal, the turn is left to complete before the downtime instead.
+- The larger deployment runs PostgreSQL 18.4, and the other deployment runs a version at least as new. U9's rehearsal confirms the other deployment.
+- The release's migrations fit in the scheduled downtime on the larger deployment's data. U9's rehearsal measures this.
+- The larger deployment's running turns, background jobs, and shadow turns are finished or stopped before the snapshot, so the 044 refusal does not fire. If stopping its 641 MB turn fails on the current binary in the rehearsal, the turn is left to complete before the downtime instead.
 - R9's "turns belong to the visible conversation" is read as "shown in and laned with the visible conversation" (KTD3), because a cron run exists before any visible chat does.
 - R4's "message" is a saved entry, with its replay items journaled one at a time while the turn runs (KTD5), because Web, undo, search, and `rocketclaw_sessions_get` address messages by entry ID and replay index.
 
@@ -686,7 +686,7 @@ U1, U10, U11, and U12 add no migration. Before each unit, rebase on `main` and r
 
 ### U9. Legacy hand-off, rehearsal runbook, and docs
 
-**Goal:** The release is safe to run on Wallace and Gene, and the docs describe the new store.
+**Goal:** The release is safe to run on both production deployments, and the docs describe the new store.
 **Requirements:** R22–R25; Success Criteria (KTD10, KTD11).
 **Dependencies:** All other units.
 **Files:**
@@ -698,11 +698,11 @@ U1, U10, U11, and U12 add no migration. Before each unit, rebase on `main` and r
 1. Migration 052 checks the whole manifest once more. It then renames the source tables with the `legacy_` prefix, drops their foreign keys and triggers, and runs `ANALYZE`.
 2. The runbook covers:
    - stopping cron and connectors from starting new work, then finishing or stopping running turns, background jobs, and unfinished shadow turns, and shutting down only when a query using 044's exact refusal predicate returns nothing;
-   - on a Wallace copy with the current binary, stopping the 641 MB turn to confirm it stops cleanly, or else letting it complete before the downtime;
+   - on a copy of the larger deployment with the current binary, stopping the 641 MB turn to confirm it stops cleanly, or else letting it complete before the downtime;
    - checking before the downtime that every visible chat is marked indexed, which 048 requires;
    - snapshotting the database;
    - starting the new binary;
-   - timing the migrations on copies of Wallace and Gene, including the largest record;
+   - timing the migrations on copies of both production deployments, including the largest record;
    - diffing the old and new binaries' history, search, undo eligibility, and `rocketclaw_sessions_get` pages on the same copy;
    - recording bucket and per-kind counts;
    - checking session list and search times;
@@ -726,7 +726,7 @@ U1, U10, U11, and U12 add no migration. Before each unit, rebase on `main` and r
 | Full gate | `make test`, including coverage of at least 91.7% and both source CLOC budgets | Every unit |
 | CLOC delta | `make cloc` before and after the unit | Every unit |
 | Browser behavior | `make test` with `ROCKETCLAW_PLAYWRIGHT_MODULE` set to a `playwright-core` matching the cached Chromium | U2, U4, U5, U6, U8, U10, U11 |
-| Rehearsal | The U9 runbook on copies of Wallace and Gene: migration time, every self-check passing, old-versus-new diffs empty, and the session list and a search each under about 100 ms with `EXPLAIN ANALYZE` | Before the scheduled downtime, by the user |
+| Rehearsal | The U9 runbook on copies of both production deployments: migration time, every self-check passing, old-versus-new diffs empty, and the session list and a search each under about 100 ms with `EXPLAIN ANALYZE` | Before the scheduled downtime, by the user |
 
 ---
 
