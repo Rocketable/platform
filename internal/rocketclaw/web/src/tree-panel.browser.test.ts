@@ -128,6 +128,25 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`messa
     await input.waitFor({ state: "visible" });
     await page.waitForFunction(() => !document.querySelector("textarea")?.closest("fieldset")?.disabled);
 
+    const chat = new URL(page.url()).pathname;
+    await page.keyboard.press("Control+Shift+p");
+    await page.getByPlaceholder("Type a command").fill("message tree");
+    const entries = () => page.getByRole("dialog").getByRole("button", { name: /(Show|Hide) message tree/ }).allTextContents();
+    await page.getByRole("button", { name: "Sessions: Show message tree" }).waitFor();
+    expect(await entries()).toEqual(["Sessions: Show message tree"]);
+    await page.keyboard.press("Enter");
+    await row("Agent New answer").waitFor();
+    expect(opened()).toBe(true);
+    await page.keyboard.press("Control+p");
+    await page.getByPlaceholder("Search sessions and commands").fill("message tree");
+    await page.getByRole("button", { name: "Sessions: Hide message tree" }).waitFor();
+    expect(await entries()).toEqual(["Sessions: Hide message tree"]);
+    await page.keyboard.press("Enter");
+    await closed();
+    expect(new URL(page.url()).pathname).toBe(chat);
+    await row("Agent New answer").waitFor({ state: "detached" });
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+
     await input.fill("/tree");
     if (width < 640) await page.getByRole("button", { name: "Send", exact: true }).click();
     else await input.press("Enter");

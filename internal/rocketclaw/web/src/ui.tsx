@@ -2926,7 +2926,9 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
   const draft = drafts.get(id);
-  const commands = id ? slashCommands.filter(({ name }) => (name !== "undo" || draft?.revertEligible && (draft.canUndo || !draft.revertMessageId && !!unsavedRequest(draft.lines))) && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: ["fork", "handoff", "stop", "agent"].includes(name) ? `Sessions: ${label}` : `Command: ${label} (/${name})`, disabled: [!draft?.hydrated, draft?.sending, draft?.reverting].some(Boolean), run: () => {
+  const treeOpen = new URL(origin.href, location.origin).searchParams.has("tree");
+  const tree = origin.path.startsWith("/s/") ? [{ key: "tree", label: `Sessions: ${treeOpen ? "Hide" : "Show"} message tree`, run: () => navigate(panelHref(treeOpen ? undefined : "1", "tree")) }] : [];
+  const commands = id ? slashCommands.filter(({ name }) => name !== "tree" && (name !== "undo" || draft?.revertEligible && (draft.canUndo || !draft.revertMessageId && !!unsavedRequest(draft.lines))) && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: ["fork", "handoff", "stop", "agent"].includes(name) ? `Sessions: ${label}` : `Command: ${label} (/${name})`, disabled: [!draft?.hydrated, draft?.sending, draft?.reverting].some(Boolean), run: () => {
     if (name === "fork" || name === "handoff") setCommand({ mode: name, source: id });
     else composer.current!(name);
   } })) : [];
@@ -2978,7 +2980,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   // The folder picker leaves session search, so typed folders are never sent as a search.
   const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(""); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent, opencode);
   const cronJobs = cronInSpace(jobs.data, useInSpace());
-  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, cronJobs, newChat, tabs, (cron) => { setQuery(""); setPick(""); setMode(cron); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...spaceCommands, ...keyCommands, ...attention ? [{ key: "attention-next", label: "Sessions: Next needing you", run: attention }] : [], ...timeline, ...outputs], recent, origin.space));
+  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, cronJobs, newChat, tabs, (cron) => { setQuery(""); setPick(""); setMode(cron); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...tree, ...commands, ...tabCommands, ...spaceCommands, ...keyCommands, ...attention ? [{ key: "attention-next", label: "Sessions: Next needing you", run: attention }] : [], ...timeline, ...outputs], recent, origin.space));
   // Draw more rows only as scrolling or the keyboard needs them; every choice stays reachable.
   const { shown, next, selected, handoffsOnly } = usePalettePage(items, pick, `${mode}:${query}`);
   const choose = (item: (typeof items)[number]) => {
