@@ -281,8 +281,16 @@ func TestRunInvalidSchemaArgsDoesNotCall(t *testing.T) {
 }
 
 func TestSanitizeAndStarlarkName(t *testing.T) {
-	if got := SanitizeTool("create-issue"); got != "create_issue" {
-		t.Fatalf("SanitizeTool(create-issue) = %q, want create_issue", got)
+	for _, tc := range []struct{ input, want string }{
+		{"", "_"},
+		{"create_issue", "create_issue"},
+		{"create-issue", "create_issue"},
+		{"8tools", "_8tools"},
+		{"8-fé\xff", "_8_f__"},
+	} {
+		if got := SanitizeTool(tc.input); got != tc.want {
+			t.Errorf("SanitizeTool(%q) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 
 	if got := StarlarkName("server", "create-issue"); got != "server_create_issue" {
