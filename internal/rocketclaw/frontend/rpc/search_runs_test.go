@@ -124,7 +124,7 @@ func (rt *searchRunTest) marks(t *testing.T) []string {
 	for _, mark := range attention {
 		if !mark.UnreadAt.IsZero() {
 			marks = append(marks, fmt.Sprintf("%s quiet=%t: %s", mark.Path, mark.Quiet, mark.Note))
-			require.NoError(t, rt.sessions.ChangeAttention(rt.alice, "alice@example.com", []string{mark.Path}, backend.AttentionRead, nil))
+			require.NoError(t, rt.sessions.ChangeAttention(rt.alice, "alice@example.com", []string{mark.Path}, backend.AttentionRead, nil, 0))
 		}
 	}
 

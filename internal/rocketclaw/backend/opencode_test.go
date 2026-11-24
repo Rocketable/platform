@@ -29,6 +29,7 @@ import (
 type fakeOpenCode struct {
 	sessions  []openCodeSession
 	active    []string
+	activeAt  [][]string
 	created   []string
 	replies   map[string]string
 	parents   map[string]string
@@ -61,8 +62,13 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "GET /api/session":
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": f.sessions})
 	case "GET /api/session/active":
+		answer := f.active
+		if len(f.activeAt) > 0 {
+			answer, f.activeAt = f.activeAt[0], f.activeAt[1:]
+		}
+
 		active := map[string]any{}
-		for _, id := range f.active {
+		for _, id := range answer {
 			active[id] = map[string]string{"type": "running"}
 		}
 
@@ -624,6 +630,8 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
+
+	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error { cfg.OpenCode["box"] = box; return nil }))
 	id, err := s.CreateOpenCodeSession(ctx, "box", box, "/srv/app", "")
 	require.NoError(t, err)
 
@@ -687,7 +695,7 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	assert.Empty(t, unread("bob"))
 	assert.Empty(t, unread(""))
 
-	require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionParkUntilDone, nil))
+	require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionParkUntilDone, nil, 0))
 
 	fake.sessions = []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", 7040)}
 
@@ -711,7 +719,7 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	assert.Equal(t, "new", attentionOf(t, s, "alice", path), "an idle remote session ends it")
 
 	for i, outcome := range []string{"interrupted", "failed"} {
-		require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionParkUntilDone, nil))
+		require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionParkUntilDone, nil, 0))
 
 		created := int64(7060 + 10*i)
 		fake.sessions = []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", created)}
@@ -803,7 +811,7 @@ func TestSyncOpenCodeMarksAskingStarts(t *testing.T) {
 	saved, err := s.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: path, Space: "main"}}}, 0)
 	require.NoError(t, err)
 	require.True(t, saved)
-	require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionPark, nil))
+	require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionPark, nil, 0))
 
 	assert.Equal(t, []string{"alice quiet parked", "bob loud"}, sync(true), "the question makes Alice's park due")
 
@@ -835,10 +843,11 @@ func TestOpenCodeShellsFollowEvents(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	shells := &openCodeShells{running: map[string]string{"sh_stale": "ses_z"}}
+	wake := make(chan struct{}, 1)
 	done := make(chan struct{})
 
 	go func() {
-		shells.follow(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "pw"})
+		shells.follow(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "pw"}, wake)
 		close(done)
 	}()
 
@@ -851,6 +860,8 @@ func TestOpenCodeShellsFollowEvents(t *testing.T) {
 		}
 	}
 	require.Eventually(t, running(map[string]string{"sh_kept": "ses_b"}), 5*time.Second, 10*time.Millisecond, "connecting replaces stale shells with the loaded locations'")
+	require.Eventually(t, func() bool { return len(wake) == 1 }, 5*time.Second, 10*time.Millisecond, "connecting wakes the sync, since events before it were missed")
+	<-wake
 
 	for _, event := range []string{
 		`{"type":"shell.created","data":{"info":{"id":"sh_new","status":"running","metadata":{"sessionID":"ses_c"}}}}`,
@@ -861,6 +872,13 @@ func TestOpenCodeShellsFollowEvents(t *testing.T) {
 	}
 
 	require.Eventually(t, running(map[string]string{"sh_new": "ses_c"}), 5*time.Second, 10*time.Millisecond)
+	assert.Empty(t, wake, "events that are not a session's status leave the sync asleep")
+
+	fake.events <- `{"type":"session.status","data":{"sessionID":"ses_c","status":{"type":"idle"}}}`
+
+	fake.events <- `{"type":"session.status","data":{"sessionID":"ses_c","status":{"type":"busy"}}}`
+
+	require.Eventually(t, func() bool { return len(wake) == 1 }, 5*time.Second, 10*time.Millisecond, "a session's status wakes the sync, and wakes that arrive together become one")
 
 	close(fake.events)
 	<-done
@@ -1464,4 +1482,151 @@ func TestOpenCodeAPITool(t *testing.T) {
 			assert.Equal(t, harness.TextToolResult(tt.want), result)
 		})
 	}
+}
+
+func TestOpenCodeParkWaitsForItsOwnPrompt(t *testing.T) {
+	t.Parallel()
+
+	s := newOpenCodeTestService(t, "box")
+	ctx := t.Context()
+	fake := &fakeOpenCode{messages: map[string][]openCodeTestMessage{}}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
+
+	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error { cfg.OpenCode["box"] = box; return nil }))
+	id, err := s.CreateOpenCodeSession(ctx, "box", box, "/srv/app", "")
+	require.NoError(t, err)
+	require.NoError(t, s.SetAutoParkAll(ctx, "alice", true))
+
+	path := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte(id))
+	updated := int64(5000)
+	opencode := func(busy bool, messages ...openCodeTestMessage) {
+		t.Helper()
+
+		updated += 100
+		fake.sessions = []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", updated)}
+
+		fake.active = nil
+		if busy {
+			fake.active = []string{"ses_new"}
+		}
+
+		fake.messages["ses_new"] = append(fake.messages["ses_new"], messages...)
+	}
+	prompt := func(created int64) openCodeTestMessage {
+		return openCodeTestMessage{Type: "user", Username: "alice", Created: created}
+	}
+	idle := func(created int64, outcome string) openCodeTestMessage {
+		return openCodeTestMessage{Type: "idle", Created: created, Outcome: outcome}
+	}
+	sync := func() {
+		t.Helper()
+		require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+		require.NoError(t, s.tickParks(ctx))
+	}
+	sent := func(admitted int64) {
+		t.Helper()
+		require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionSent, nil, admitted))
+	}
+	parked := func() bool {
+		t.Helper()
+		return strings.Contains(attentionOf(t, s, "alice", path), "parked until=done")
+	}
+
+	listing, stop := s.WatchListing("alice")
+	defer stop()
+
+	opencode(true, prompt(5100))
+	sync()
+	assert.Len(t, s.parkWake, 1, "a sync wakes the park-ending step")
+	<-s.parkWake
+	assert.Len(t, listing, 1, "a sync that finds the session running rings every window")
+	<-listing
+
+	opencode(true)
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	assert.Empty(t, listing, "a sync that only sees the session's update time move rings nobody")
+
+	opencode(false, idle(5200, ""))
+	sent(5300)
+	sync()
+	assert.True(t, parked(), "the turn that ended before OpenCode admitted the prompt leaves its park")
+
+	opencode(true, prompt(5300))
+	sync()
+	assert.True(t, parked())
+
+	opencode(false, idle(5400, ""))
+	sync()
+	assert.False(t, parked(), "the idle marker after the admitted prompt ends its park")
+
+	opencode(false, prompt(5500), idle(5600, ""))
+	sync()
+	sent(5500)
+	require.NoError(t, s.tickParks(ctx))
+	assert.False(t, parked(), "a turn that ended before its park was recorded ends the park at once")
+
+	opencode(false, idle(5700, "failed"))
+	sent(5800)
+	sync()
+	assert.True(t, parked(), "a failed turn from before the admitted prompt leaves its park")
+
+	opencode(true, prompt(5800))
+	sync()
+	opencode(false, idle(5900, "failed"))
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	assert.Contains(t, attentionOf(t, s, "alice", path), "parked until=due", "a failed turn after the admitted prompt ends its park at once")
+	require.NoError(t, s.tickParks(ctx))
+
+	opencode(true, prompt(6000))
+	sync()
+	sent(6050)
+	opencode(true, idle(6100, ""))
+
+	fake.activeAt = [][]string{{}}
+
+	sync()
+	assert.True(t, parked(), "a prompt admitted while a turn settles keeps its park while OpenCode runs it next")
+
+	opencode(false, idle(6200, ""))
+	sync()
+	assert.False(t, parked(), "the successor turn's idle marker ends the park")
+
+	opencode(true, prompt(6250))
+	sync()
+	sent(6250)
+	opencode(true, idle(6260, "failed"))
+
+	fake.activeAt = [][]string{{}}
+
+	sync()
+	assert.True(t, parked(), "a failed turn that OpenCode moves straight past keeps the park until the session goes idle")
+
+	opencode(false, idle(6270, ""))
+	sync()
+	assert.False(t, parked())
+
+	opencode(false, idle(6300, ""))
+	require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionParkUntilDone, nil, 0))
+	sync()
+	assert.True(t, parked(), "Park until it is done on an idle session waits for the next round of work, even before the last idle marker is synced")
+
+	opencode(false, idle(6400, ""))
+	sync()
+	assert.False(t, parked(), "a turn OpenCode starts by itself ends the park")
+
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"chat": KindWebChat})
+
+	native := "/s/" + base64.RawURLEncoding.EncodeToString([]byte("chat"))
+
+	server.Close()
+	require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path, native}, AttentionParkUntilDone, nil, 0), "an unreachable OpenCode server refuses none of the parks")
+	assert.True(t, parked())
+	assert.Contains(t, attentionOf(t, s, "alice", native), "parked until=done")
+
+	var afterIdle int64
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT after_idle FROM web_tab_attention WHERE username = 'alice' AND path = $1`, path).Scan(&afterIdle))
+	assert.Equal(t, int64(6400), afterIdle, "the park waits past the last idle marker the sync stored")
 }

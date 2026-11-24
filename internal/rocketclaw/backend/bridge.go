@@ -998,6 +998,8 @@ UPDATE turns SET id = $3, phase = $4, reason = NULL WHERE conversation_id = $1 A
 		return false, fmt.Errorf("commit turn start: %w", err)
 	}
 
+	b.config.SessionService.ringListing()
+
 	request.turnID = turnID
 	b.takeHeldCaller(request)
 

@@ -564,12 +564,12 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM legacy_thread_queue`).Scan(&kept))
 	require.Equal(t, 1, kept)
 
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql")
+	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
 	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql"}, ledger)
+	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql"}, ledger)
 
 	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
 	require.NoError(t, err)
@@ -1323,4 +1323,52 @@ func TestExternalMCPMetadataMigration(t *testing.T) {
 	require.Equal(t, map[string]string{"ticket": "T-2"}, decode(read(`SELECT inbound_json FROM turns WHERE id = 'bare'`)).Metadata)
 	require.Equal(t, map[string]string{protocol.InboundPrincipalMetadataKey: "alice", protocol.InboundRawTextMetadataKey: "hi", "ticket": "own", "note": "n"}, decode(read(`SELECT inbound_json FROM turns WHERE id = 'newer'`)).Metadata)
 	require.JSONEq(t, `{"Source":"system","Metadata":null}`, read(`SELECT inbound_json FROM turns WHERE id = 'system'`))
+}
+
+func TestParkAfterIdleMigration(t *testing.T) {
+	t.Parallel()
+
+	store := newColdTestSessionServiceAt(t, t.TempDir())
+	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"native": KindWebChat})
+	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 110)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, kind, created_by, listed, retention, server, remote_session, title, directory, name, last_updated, read_through, synced_at)
+VALUES ('opencode:box:waiting', 'main', 'remote', '', FALSE, 'remote', 'box', 'waiting', '', '/srv', '', now(), 5000, now()),
+    ('opencode:box:background', 'main', 'remote', '', FALSE, 'remote', 'box', 'background', '', '/srv', '', now(), 6000, now()),
+    ('opencode:box:asking', 'main', 'remote', '', FALSE, 'remote', 'box', 'asking', '', '/srv', '', now(), 7000, now());
+INSERT INTO web_tab_attention (username, path, conversation_id, parked, until, worked, resume_until, resumes) VALUES
+    ('alice', '/oc/waiting', 'opencode:box:waiting', TRUE, 'infinity', FALSE, NULL, FALSE),
+    ('alice', '/oc/background', 'opencode:box:background', TRUE, 'infinity', TRUE, NULL, FALSE),
+    ('alice', '/oc/asking', 'opencode:box:asking', FALSE, NULL, FALSE, 'infinity', TRUE),
+    ('alice', '/s/native', 'native', TRUE, 'infinity', FALSE, NULL, FALSE)`)
+	require.NoError(t, err)
+
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	thresholds := map[string]*int64{}
+
+	require.NoError(t, readRows(ctx, store.db, `SELECT path, after_idle FROM web_tab_attention`, "thresholds", func(row rowScanner) error {
+		var (
+			path      string
+			afterIdle sql.NullInt64
+		)
+		if err := row.Scan(&path, &afterIdle); err != nil {
+			return fmt.Errorf("scan threshold: %w", err)
+		}
+
+		thresholds[path] = nil
+		if afterIdle.Valid {
+			thresholds[path] = &afterIdle.Int64
+		}
+
+		return nil
+	}))
+	require.Equal(t, map[string]*int64{"/oc/waiting": new(int64(5000)), "/oc/background": new(int64(5999)), "/oc/asking": new(int64(7000)), "/s/native": nil}, thresholds,
+		"a park still waiting for its turn waits for the next idle marker, also while a question pauses it; one that only waits on background work ends when that stops")
+
+	require.NoError(t, store.tickParks(ctx))
+	require.Contains(t, attentionOf(t, store, "alice", "/oc/waiting"), "parked until=done")
+	require.Contains(t, attentionOf(t, store, "alice", "/oc/background"), "until=due", "the park-ending step finds it done")
+	require.Contains(t, attentionOf(t, store, "alice", "/oc/asking"), "parked until=done", "a park a question paused comes back once nothing is asked")
 }

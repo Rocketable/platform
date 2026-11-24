@@ -393,6 +393,10 @@ message TypingEvent {
   bool typing = 2;
 }
 
+message WatchListingRequest {}
+
+message ListingChanged {}
+
 message TranscriptEvent {
   string text = 1;
   reserved 2;
@@ -1250,6 +1254,7 @@ message AttentionChange {
   repeated string paths = 1;
   AttentionAction action = 2;
   string until = 3;
+  int64 admitted = 4;
 }
 
 // TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space,
@@ -1333,6 +1338,7 @@ service Web {
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc Join(JoinRequest) returns (stream ConversationChange);
   rpc WatchTyping(WatchTypingRequest) returns (stream TypingEvent);
+  rpc WatchListing(WatchListingRequest) returns (stream ListingChanged);
   rpc ReportTyping(ReportTypingRequest) returns (ReportTypingResponse);
   rpc Voice(VoiceRequest) returns (stream VoiceEvent);
   rpc VoiceSettings(VoiceSettingsRequest) returns (VoiceSettingsResponse);

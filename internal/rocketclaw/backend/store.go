@@ -99,6 +99,10 @@ type SessionService struct {
 	}
 	spillDir string
 	shells   emulatedShells
+	parkWake chan struct{}
+
+	listingMu       sync.Mutex
+	listingWatchers map[chan struct{}]string
 
 	lastTurnIDMu sync.Mutex
 	lastTurnID   int64
@@ -212,7 +216,7 @@ func newSessionService(ctx context.Context, cfg *config.Config, db *sql.DB, logg
 		return nil, hideDSN(err, cfg.DatabaseURL, "initialize rocketclaw state store")
 	}
 
-	return &SessionService{db: db, log: logger, attachments: attachments, definitions: config.NewLockedConfig(cfg), jobs: noConversationJobs{}, historyWorkers: noHistoryWorkers{}, spillDir: rocketcodeSpillDir(cfg)}, nil
+	return &SessionService{db: db, log: logger, attachments: attachments, definitions: config.NewLockedConfig(cfg), jobs: noConversationJobs{}, historyWorkers: noHistoryWorkers{}, spillDir: rocketcodeSpillDir(cfg), parkWake: make(chan struct{}, 1), listingWatchers: map[chan struct{}]string{}}, nil
 }
 
 func (s *SessionService) UpsertThread(conversationID string, thread ThreadState) error {

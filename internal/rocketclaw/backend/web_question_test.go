@@ -181,10 +181,10 @@ func TestWebQuestionMarksItsReaders(t *testing.T) {
 	}
 
 	until := time.Now().Add(time.Hour)
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{sessionPath(session)}, AttentionPark, &until))
-	require.NoError(t, service.ChangeAttention(ctx, carol, []string{sessionPath(session)}, AttentionPark, nil))
-	require.NoError(t, service.ChangeAttention(ctx, dave, []string{sessionPath(session)}, AttentionUnread, nil))
-	require.NoError(t, service.ChangeAttention(ctx, dave, []string{sessionPath(session)}, AttentionPark, nil))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{sessionPath(session)}, AttentionPark, &until, 0))
+	require.NoError(t, service.ChangeAttention(ctx, carol, []string{sessionPath(session)}, AttentionPark, nil, 0))
+	require.NoError(t, service.ChangeAttention(ctx, dave, []string{sessionPath(session)}, AttentionUnread, nil, 0))
+	require.NoError(t, service.ChangeAttention(ctx, dave, []string{sessionPath(session)}, AttentionPark, nil, 0))
 
 	ask := func(conversationID, key string) []string {
 		t.Helper()

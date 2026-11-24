@@ -25,7 +25,8 @@ import (
 
 const (
 	openCodeSyncLimit    = 100
-	openCodeSyncInterval = 5 * time.Second
+	openCodeCallTimeout  = 5 * time.Second
+	openCodeSyncInterval = 2 * time.Second
 	openCodePrunePage    = 2_000
 	openCodePruneEvery   = 24 * time.Hour
 	openCodeShellsEvery  = 15 * time.Minute
@@ -70,7 +71,7 @@ type openCodeShells struct {
 	running map[string]string
 }
 
-func (shells *openCodeShells) follow(ctx context.Context, name string, server config.OpenCodeConfig) {
+func (shells *openCodeShells) follow(ctx context.Context, name string, server config.OpenCodeConfig, wake chan<- struct{}) {
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(server.URL, "/")+"/api/event", http.NoBody)
 	request.SetBasicAuth("opencode", server.Password)
 
@@ -149,25 +150,31 @@ func (shells *openCodeShells) follow(ctx context.Context, name string, server co
 			delete(shells.running, event.Data.ID)
 			shells.mu.Unlock()
 		}
+
+		if event.Type == "server.connected" || event.Type == "session.status" {
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		}
 	}
 }
 
 func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedConfig) {
 	startup := cfg.Clone()
+	origin := startup.Web.Tsnet.Origin
 
 	var workers errgroup.Group
 	defer func() { _ = workers.Wait() }()
 
-	shells := make(map[string]*openCodeShells, len(startup.OpenCode))
-
 	for name, server := range startup.OpenCode {
-		running := &openCodeShells{running: map[string]string{}}
-		shells[name] = running
+		shells := &openCodeShells{running: map[string]string{}}
+		wake := make(chan struct{}, 1)
 
 		workers.Go(func() error {
 			for {
 				connection, cancel := context.WithTimeout(ctx, openCodeShellsEvery)
-				running.follow(connection, name, server)
+				shells.follow(connection, name, server, wake)
 
 				cancel()
 
@@ -192,25 +199,24 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedCon
 				}
 			}
 		})
-	}
 
-	ticker := time.NewTicker(openCodeSyncInterval)
-	defer ticker.Stop()
+		workers.Go(func() error {
+			ticker := time.NewTicker(openCodeSyncInterval)
+			defer ticker.Stop()
 
-	servers, origin := startup.OpenCode, startup.Web.Tsnet.Origin
+			for {
+				if s.pushOpenCodeNames(ctx, name, server) == nil && s.syncOpenCode(ctx, name, server, shells) == nil && origin != "" {
+					addOpenCodeBridges(ctx, origin, name, server)
+				}
 
-	for {
-		for name, server := range servers {
-			if s.pushOpenCodeNames(ctx, name, server) == nil && s.syncOpenCode(ctx, name, server, shells[name]) == nil && origin != "" {
-				addOpenCodeBridges(ctx, origin, name, server)
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-ticker.C:
+				case <-wake:
+				}
 			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+		})
 	}
 }
 
@@ -299,6 +305,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		cursors                                    []*int64
 		markedIDs, markedUsers, ended              []string
 		markedWaking, failures                     []bool
+		idleAt                                     []int64
 	)
 
 	for i, session := range sessions.Data {
@@ -323,7 +330,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 				if senders, err := openCodeSenders(ctx, name, server, session.ID, last.through, idle.Data[0].Time.Created); err == nil {
 					cursor = &idle.Data[0].Time.Created
 
-					ended, failures = append(ended, id), append(failures, idle.Data[0].Outcome == "failed")
+					ended, failures, idleAt = append(ended, id), append(failures, idle.Data[0].Outcome == "failed"), append(idleAt, idle.Data[0].Time.Created)
 
 					for _, sender := range append(senders, "") {
 						markedIDs, markedUsers, markedWaking = append(markedIDs, id), append(markedUsers, sender), append(markedWaking, false)
@@ -373,11 +380,26 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		askings, automations = append(askings, asking[session.ID]), append(automations, automation[session.ID])
 	}
 
-	return s.storeOpenCodeSync(ctx, []any{name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds,
-		agents, models, KindRemote, cursors, markedIDs, markedUsers, askings, markedWaking, automations}, ended, failures)
+	return s.storeOpenCodeSync(ctx, name, server, ids, running, []any{name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds,
+		agents, models, KindRemote, cursors, markedIDs, markedUsers, askings, markedWaking, automations}, ended, failures, idleAt)
 }
 
-func (s *SessionService) storeOpenCodeSync(ctx context.Context, synced []any, ended []string, failures []bool) error {
+func (s *SessionService) storeOpenCodeSync(ctx context.Context, name string, server config.OpenCodeConfig, ids []string, running []bool, synced []any, ended []string, failures []bool, idleAt []int64) error {
+	if len(ended) > 0 {
+		var again struct {
+			Data map[string]json.RawMessage `json:"data"`
+		}
+		if err := openCodeCall(ctx, name, server, http.MethodGet, "/api/session/active", nil, &again); err != nil {
+			return err
+		}
+
+		for i, id := range ended {
+			if _, busy := again.Data[strings.TrimPrefix(id, "opencode:"+name+":")]; busy {
+				running[slices.Index(ids, id)], failures[i] = true, false
+			}
+		}
+	}
+
 	tx, err := s.beginStateTx(ctx, "opencode sync")
 	if err != nil {
 		return err
@@ -385,7 +407,9 @@ func (s *SessionService) storeOpenCodeSync(ctx context.Context, synced []any, en
 
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := execState(ctx, tx, "sync opencode sessions", `WITH incoming AS (
+	var changed bool
+
+	if err := queryScalar(ctx, tx, "sync opencode sessions", `WITH incoming AS (
     SELECT *, substr(conversation_id, char_length('opencode:' || $1::text || ':') + 1) AS remote_session FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::bigint[], $18::boolean[], $20::boolean[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, read_through, asking, automation)
 ), upserted AS (
     INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session, name, read_through, asking, automation)
@@ -398,24 +422,39 @@ func (s *SessionService) storeOpenCodeSync(ctx context.Context, synced []any, en
         read_through = GREATEST(excluded.read_through, conversations.read_through)
 ), asked AS (
     SELECT i.conversation_id FROM incoming i LEFT JOIN conversations o USING (conversation_id) WHERE i.asking AND o.asking IS NOT TRUE
+), flipped AS (
+    SELECT i.conversation_id FROM incoming i LEFT JOIN conversations o USING (conversation_id)
+    WHERE (o.running, o.background, o.asking, o.automation) IS DISTINCT FROM (i.running, i.background, i.asking, i.automation)
 ), events AS (
     SELECT m.conversation_id, $14 AS kind, m.waking, m.username FROM unnest($16::text[], $17::text[], $19::boolean[]) AS m(conversation_id, username, waking)
     LEFT JOIN asked a USING (conversation_id) WHERE NOT m.waking OR a.conversation_id IS NOT NULL
     UNION SELECT conversation_id, $14, TRUE, '' FROM asked
 )`+sessionReadersSQL+markTabsSQL+`, removed AS (
     DELETE FROM conversations WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $9 AND ($7 OR last_updated >= $8)
+), swept AS (
+    UPDATE conversations SET synced_at = now(), running = FALSE, background = FALSE, asking = FALSE, automation = FALSE
+    WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7 OR last_updated >= $8))
+), changes AS (
+    SELECT conversation_id FROM flipped UNION ALL SELECT path FROM marked
 )
-UPDATE conversations SET synced_at = now(), running = FALSE, background = FALSE, asking = FALSE, automation = FALSE
-WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7 OR last_updated >= $8))`,
-		synced...); err != nil {
+SELECT count(*) > 0 FROM changes`, &changed, synced...); err != nil {
 		return err
 	}
 
-	if _, err := execState(ctx, tx, "end opencode turn parks", endTurnParksSQL, ended, failures); err != nil {
+	if _, err := execState(ctx, tx, "end opencode turn parks", endTurnParksSQL, ended, failures, idleAt); err != nil {
 		return err
 	}
 
-	return commitState(tx, "opencode sync")
+	if err := commitState(tx, "opencode sync"); err != nil {
+		return err
+	}
+
+	if changed || len(ended) > 0 {
+		s.ringListing()
+		s.ringParks()
+	}
+
+	return nil
 }
 
 func openCodeSenders(ctx context.Context, name string, server config.OpenCodeConfig, session string, since, until int64) ([]string, error) {
@@ -691,7 +730,7 @@ var ErrTagNotAllowed = errors.New("the session's agent does not allow this tag")
 var ErrRemoteSession = errors.New("a remote OpenCode session's history stays on its server")
 
 func openCodeCall(ctx context.Context, name string, server config.OpenCodeConfig, method, path string, body, out any) error {
-	ctx, cancel := context.WithTimeout(ctx, openCodeSyncInterval)
+	ctx, cancel := context.WithTimeout(ctx, openCodeCallTimeout)
 	defer cancel()
 
 	var payload io.Reader = http.NoBody
