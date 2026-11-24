@@ -253,14 +253,16 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
 test("revert an unsaved latest turn by input ID", async () => {
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
   const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
+  const liveText = "Ask @Riley ";
   const event = (entryKey: string, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ entryKey, itemId: `${entryKey}:${role}`, inputId: "", turnId: entryKey, role, text, complete: true, ...extra });
   const messages = [
     event("1", "user", "Saved request", { messageId: "1:0", inputId: "saved-input" }), event("1", "assistant", "Saved answer", { messageId: "1:1" }),
     event("turn:chat:stopped", "user", "Stopped request", { inputId: "stopped-input" }),
-    event("turn:chat:live", "user", "Live request", { inputId: "live-input" }), event("turn:chat:live", "assistant", "Working answer", { complete: false }),
+    event("turn:chat:live", "user", liveText, { inputId: "live-input" }), event("turn:chat:live", "assistant", "Working answer", { complete: false }),
   ];
   let marker = "";
   const staged: (string | undefined)[] = [];
+  const prompts: { text?: string; mentionIds?: string[] }[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -269,13 +271,15 @@ test("revert an unsaved latest turn by input ID", async () => {
       const file = path.join(dist, url.pathname);
       return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
     }
-    const input = await request.json() as { messageId?: string };
+    const input = await request.json() as { messageId?: string; text?: string; mentionIds?: string[] };
     switch (url.pathname) {
       case "/api/Identity": return Response.json({ username: "alice", principal: "Alice" });
       case "/api/Protocol": return Response.json({ protoSha256: "revert-unsaved" });
       case "/api/ListConfig": return Response.json({ config: { workspace: "first" } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
+      case "/api/SlackNames": return Response.json({ names: { U42: "Riley" } });
+      case "/api/Prompt": prompts.push(input); return Response.json({});
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/History": {
         const visible = marker ? messages.slice(0, 3) : messages;
@@ -295,8 +299,8 @@ test("revert an unsaved latest turn by input ID", async () => {
     const message = (text: string) => page.locator('[data-slot="message"]').filter({ hasText: text });
     // Message actions stay invisible until hover, so count hidden buttons too.
     const revert = (text: string) => message(text).getByRole("button", { name: "Revert message", exact: true, includeHidden: true });
-    const live = message("Live request");
-    await revert("Live request").waitFor({ state: "attached" });
+    const live = message(liveText.trimEnd());
+    await revert(liveText.trimEnd()).waitFor({ state: "attached" });
     expect(await revert("Saved request").count()).toBe(1);
     // A message at or before the floor, say a Slack message, keeps its Revert, disabled, saying why.
     expect(await revert("Saved request").isDisabled()).toBe(true);
@@ -307,17 +311,24 @@ test("revert an unsaved latest turn by input ID", async () => {
     // Like OpenCode's undo, /undo starts from the newest request, not the newest saved one.
     const input = page.locator("textarea");
     await input.fill("/undo"); await input.press("Enter");
-    await page.waitForFunction(() => document.querySelector("textarea")?.value === "Live request");
+    await page.waitForFunction((text: string) => document.querySelector("textarea")?.value === text, liveText);
     await page.getByText("Working answer", { exact: true }).waitFor({ state: "detached" });
     expect(staged).toEqual(["live-input"]);
     marker = "";
     await page.reload();
     await page.getByText("Working answer", { exact: true }).waitFor();
+    await input.fill("Ask @Ril");
+    await page.getByRole("button", { name: "@Riley", exact: true }).click();
+    expect(await input.inputValue()).toBe(liveText);
     await live.hover();
     await live.getByRole("button", { name: "Revert message", exact: true }).click();
-    await page.waitForFunction(() => document.querySelector("textarea")?.value === "Live request");
+    expect(await input.inputValue()).toBe(liveText);
     await page.getByText("Working answer", { exact: true }).waitFor({ state: "detached" });
     expect(staged).toEqual(["live-input", "live-input"]);
+    await Promise.all([page.waitForResponse("**/api/Prompt"), input.press("Enter")]);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toMatchObject({ text: liveText });
+    expect(prompts[0]).not.toHaveProperty("mentionIds");
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }
 }, 60_000);

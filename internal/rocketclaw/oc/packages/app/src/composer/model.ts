@@ -37,6 +37,8 @@ import { composerSubmitView } from "./machine"
 import { isComposerPopoverOpen } from "./suggestions/machine"
 import { useAttachmentDestination } from "./attachments/destination"
 import { parseClientSlashCommand } from "./client-slash-command"
+// rocketclaw: host integration for teammate tags (upstream packages/app/src/composer/model.ts).
+import { createSessionPeople, stripPersonTags } from "@rocketclaw/host/session-mentions"
 
 export type ComposerModel = ComposerEditorModel & {
   readonly model: ComposerControls["model"]
@@ -67,6 +69,8 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
   const serverSDK = useServerSDK()
   const tabs = useTabs()
   const prompt = adapter.state
+  // rocketclaw: keep directory results scoped to the composer (upstream packages/app/src/composer/model.ts).
+  const directory = createSessionPeople()
   // Editor actions write the captured store directly, rather than going through the context methods.
   createEffect(
     on(
@@ -229,6 +233,8 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
   })
 
   const context = createMemo<ComposerSuggestion[]>(() => [
+    // rocketclaw: show people alongside the other suggestions (upstream packages/app/src/composer/model.ts).
+    ...directory.people(),
     ...references(),
     ...skills().map((skill) => ({
       id: `skill:${skill.id}`,
@@ -358,7 +364,8 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
   const controller = createComposerEditor({
     store: prompt.store,
     history: {
-      entries: (mode) => history.entries(mode).map((entry) => ({ prompt: entry.prompt, metadata: entry.comments })),
+      // rocketclaw: recalling history never reactivates its notifications (upstream packages/app/src/composer/model.ts).
+      entries: (mode) => history.entries(mode).map((entry) => ({ prompt: stripPersonTags(entry.prompt), metadata: entry.comments })),
       add: (value, mode) => history.add(value, mode, mode === "shell" ? [] : historyComments()),
       capture: historyComments,
       // SAFETY: `entries` stores each entry's comments as its metadata, and the editor restores only metadata it read there.
@@ -367,7 +374,12 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
     commands,
     context,
     // The server narrows by the first word; the title match then needs the whole query.
-    requestSessionSearch: (word, signal) => sessions.search(word, signal).then(() => undefined),
+    // rocketclaw: directory results share the composer's cancellable search (upstream packages/app/src/composer/model.ts).
+    requestSessionSearch: async (word, signal) => {
+      if (adapter.kind === "active-session" && server.conn.type === "http") {
+        await Promise.allSettled([sessions.search(word, signal), directory.search(server.conn.http.url, word, signal)])
+      } else await sessions.search(word, signal)
+    },
     searchSessions: (query) => {
       const project = sdk().current?.project.id
 

@@ -25,8 +25,14 @@ var _ ChannelAgentChoices = &mockChannels{}
 //			RenameThreadSessionFunc: func(ctx context.Context, conversationID string, name string)  {
 //				panic("mock out the RenameThreadSession method")
 //			},
+//			SendSessionMentionFunc: func(ctx context.Context, userID string, link string) error {
+//				panic("mock out the SendSessionMention method")
+//			},
 //			SidebarChannelAgentChoicesFunc: func(context1 context.Context, s string) (string, []string, error) {
 //				panic("mock out the SidebarChannelAgentChoices method")
+//			},
+//			SlackMentionEmailFunc: func(ctx context.Context, userID string) string {
+//				panic("mock out the SlackMentionEmail method")
 //			},
 //			SlackNamesFunc: func(context1 context.Context, strings []string) map[string]string {
 //				panic("mock out the SlackNames method")
@@ -47,8 +53,14 @@ type mockChannels struct {
 	// RenameThreadSessionFunc mocks the RenameThreadSession method.
 	RenameThreadSessionFunc func(ctx context.Context, conversationID string, name string)
 
+	// SendSessionMentionFunc mocks the SendSessionMention method.
+	SendSessionMentionFunc func(ctx context.Context, userID string, link string) error
+
 	// SidebarChannelAgentChoicesFunc mocks the SidebarChannelAgentChoices method.
 	SidebarChannelAgentChoicesFunc func(context1 context.Context, s string) (string, []string, error)
+
+	// SlackMentionEmailFunc mocks the SlackMentionEmail method.
+	SlackMentionEmailFunc func(ctx context.Context, userID string) string
 
 	// SlackNamesFunc mocks the SlackNames method.
 	SlackNamesFunc func(context1 context.Context, strings []string) map[string]string
@@ -74,12 +86,28 @@ type mockChannels struct {
 			// Name is the name argument value.
 			Name string
 		}
+		// SendSessionMention holds details about calls to the SendSessionMention method.
+		SendSessionMention []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// UserID is the userID argument value.
+			UserID string
+			// Link is the link argument value.
+			Link string
+		}
 		// SidebarChannelAgentChoices holds details about calls to the SidebarChannelAgentChoices method.
 		SidebarChannelAgentChoices []struct {
 			// Context1 is the context1 argument value.
 			Context1 context.Context
 			// S is the s argument value.
 			S string
+		}
+		// SlackMentionEmail holds details about calls to the SlackMentionEmail method.
+		SlackMentionEmail []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// UserID is the userID argument value.
+			UserID string
 		}
 		// SlackNames holds details about calls to the SlackNames method.
 		SlackNames []struct {
@@ -98,7 +126,9 @@ type mockChannels struct {
 	}
 	lockChannelAgentChoices        sync.RWMutex
 	lockRenameThreadSession        sync.RWMutex
+	lockSendSessionMention         sync.RWMutex
 	lockSidebarChannelAgentChoices sync.RWMutex
+	lockSlackMentionEmail          sync.RWMutex
 	lockSlackNames                 sync.RWMutex
 	lockSlackTagsMatching          sync.RWMutex
 }
@@ -179,6 +209,46 @@ func (mock *mockChannels) RenameThreadSessionCalls() []struct {
 	return calls
 }
 
+// SendSessionMention calls SendSessionMentionFunc.
+func (mock *mockChannels) SendSessionMention(ctx context.Context, userID string, link string) error {
+	if mock.SendSessionMentionFunc == nil {
+		panic("mockChannels.SendSessionMentionFunc: method is nil but ChannelAgentChoices.SendSessionMention was just called")
+	}
+	callInfo := struct {
+		Ctx    context.Context
+		UserID string
+		Link   string
+	}{
+		Ctx:    ctx,
+		UserID: userID,
+		Link:   link,
+	}
+	mock.lockSendSessionMention.Lock()
+	mock.calls.SendSessionMention = append(mock.calls.SendSessionMention, callInfo)
+	mock.lockSendSessionMention.Unlock()
+	return mock.SendSessionMentionFunc(ctx, userID, link)
+}
+
+// SendSessionMentionCalls gets all the calls that were made to SendSessionMention.
+// Check the length with:
+//
+//	len(mockedChannelAgentChoices.SendSessionMentionCalls())
+func (mock *mockChannels) SendSessionMentionCalls() []struct {
+	Ctx    context.Context
+	UserID string
+	Link   string
+} {
+	var calls []struct {
+		Ctx    context.Context
+		UserID string
+		Link   string
+	}
+	mock.lockSendSessionMention.RLock()
+	calls = mock.calls.SendSessionMention
+	mock.lockSendSessionMention.RUnlock()
+	return calls
+}
+
 // SidebarChannelAgentChoices calls SidebarChannelAgentChoicesFunc.
 func (mock *mockChannels) SidebarChannelAgentChoices(context1 context.Context, s string) (string, []string, error) {
 	if mock.SidebarChannelAgentChoicesFunc == nil {
@@ -212,6 +282,42 @@ func (mock *mockChannels) SidebarChannelAgentChoicesCalls() []struct {
 	mock.lockSidebarChannelAgentChoices.RLock()
 	calls = mock.calls.SidebarChannelAgentChoices
 	mock.lockSidebarChannelAgentChoices.RUnlock()
+	return calls
+}
+
+// SlackMentionEmail calls SlackMentionEmailFunc.
+func (mock *mockChannels) SlackMentionEmail(ctx context.Context, userID string) string {
+	if mock.SlackMentionEmailFunc == nil {
+		panic("mockChannels.SlackMentionEmailFunc: method is nil but ChannelAgentChoices.SlackMentionEmail was just called")
+	}
+	callInfo := struct {
+		Ctx    context.Context
+		UserID string
+	}{
+		Ctx:    ctx,
+		UserID: userID,
+	}
+	mock.lockSlackMentionEmail.Lock()
+	mock.calls.SlackMentionEmail = append(mock.calls.SlackMentionEmail, callInfo)
+	mock.lockSlackMentionEmail.Unlock()
+	return mock.SlackMentionEmailFunc(ctx, userID)
+}
+
+// SlackMentionEmailCalls gets all the calls that were made to SlackMentionEmail.
+// Check the length with:
+//
+//	len(mockedChannelAgentChoices.SlackMentionEmailCalls())
+func (mock *mockChannels) SlackMentionEmailCalls() []struct {
+	Ctx    context.Context
+	UserID string
+} {
+	var calls []struct {
+		Ctx    context.Context
+		UserID string
+	}
+	mock.lockSlackMentionEmail.RLock()
+	calls = mock.calls.SlackMentionEmail
+	mock.lockSlackMentionEmail.RUnlock()
 	return calls
 }
 

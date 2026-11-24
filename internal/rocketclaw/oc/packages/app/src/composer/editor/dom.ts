@@ -113,6 +113,8 @@ function matchMention(element: HTMLElement, prompt: ComposerPrompt) {
   if (element.dataset.mention !== kind || (label ?? element.textContent) !== part.content) return false
 
   if (part.type === "session" && element.title !== part.id) return false
+  // rocketclaw: an equal display name can still be a different tag (upstream packages/app/src/composer/editor/dom.ts).
+  if (part.type === "person" && element.dataset.id !== part.id) return false
 
   if (part.type === "agent" && element.dataset.name !== part.name) return false
 

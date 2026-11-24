@@ -739,11 +739,12 @@ test("composer renders exact input before Prompt completes and history failure d
   const originalFetch = globalThis.fetch;
   const idle = Promise.withResolvers<Response>();
   const dispatched = Promise.withResolvers<void>();
-  const completion = Promise.withResolvers<string>();
+  const completion = Promise.withResolvers<{ privateText?: string; mentionWarning?: string }>();
+  const warnings: string[] = [];
   const requests: { id: string; delivery: string; text: string; messageId: string }[] = [];
   globalThis.fetch = Object.assign(async () => idle.promise, { preconnect: originalFetch.preconnect });
   const refreshHistory = () => readHistoryDelta("opaque", draft, () => {});
-  const send = (text: string) => sendComposer({ draft, onDraftChange: () => {}, text, files: [], busy: draft.busy, sessionId: "opaque", selected: "main", currentAgent: "main", prompt: { mutateAsync: (request: typeof requests[number]) => { requests.push(request); dispatched.resolve(); return request.delivery === "QUEUE" ? Promise.resolve("") : completion.promise; } }, scrollToEnd: () => true, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, refreshHistory });
+  const send = (text: string) => sendComposer({ draft, onDraftChange: () => {}, text, files: [], busy: draft.busy, sessionId: "opaque", selected: "main", currentAgent: "main", prompt: { mutateAsync: (request: typeof requests[number]) => { requests.push(request); dispatched.resolve(); return request.delivery === "QUEUE" ? Promise.resolve({}) : completion.promise; } }, scrollToEnd: () => true, setAgentOpen: () => {}, setSendError: (error: string) => { if (error) warnings.push(error); }, refreshHistory });
   try {
     const loading = refreshHistory();
     const sending = send(draft.text);
@@ -759,9 +760,10 @@ test("composer renders exact input before Prompt completes and history failure d
     expect(requests[1].delivery).toBe("QUEUE");
     expect(draft.lines.map((line) => line.text)).toEqual(["prior answer", "  exact human input\n"]);
     globalThis.fetch = Object.assign(async () => { throw new Error("refresh failed"); }, { preconnect: originalFetch.preconnect });
-    completion.resolve("private report");
+    completion.resolve({ privateText: "private report", mentionWarning: "A teammate could not be notified." });
     await sending;
     expect(draft.text).toBe("");
+    expect(warnings).toEqual(["A teammate could not be notified."]);
     expect(draft.historyError).toBe("refresh failed");
     expect(draft.busy).toBe(true);
     expect(draft.lines.at(-2)?.complete).toBe(true);
@@ -840,7 +842,7 @@ test("resumed draft upload and stash stay on their owning server after navigatio
 
 for (const busy of [true, false]) test(`private commands retire only their own parked input and stay anchored: busy=${busy}`, async () => {
   const draft = { text: "/agent", files: [], agent: "", edit: 0, submission: 0, sending: false, consumed: new Set<string>(), parked: [{ id: "ordinary", role: "user", text: "same" }] as Line[], lines: historyLines([event("turn", "turn:0", "assistant", "working")]) as Line[], busy };
-  await sendComposer({ draft, text: draft.text, files: [], delivery: "STEER", busy, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, refreshHistory: async () => { applyHistoryDelta(draft, view([], { reset: false, entryKeys: ["turn"], running: busy })); }, prompt: { mutateAsync: async () => "Agent: main" } });
+  await sendComposer({ draft, text: draft.text, files: [], delivery: "STEER", busy, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, refreshHistory: async () => { applyHistoryDelta(draft, view([], { reset: false, entryKeys: ["turn"], running: busy })); }, prompt: { mutateAsync: async () => ({ privateText: "Agent: main" }) } });
   expect(draft.parked.map((line) => line.id)).toEqual(["ordinary"]);
   expect(draft.lines.map((line) => line.text)).toEqual(["working", "/agent", "Agent: main"]);
   expect(draft.lines.slice(1).every((line) => line.complete)).toBe(true);
@@ -855,9 +857,9 @@ for (const busy of [true, false]) test(`private commands retire only their own p
 test("identical active sends queue while steers park until History confirms their own IDs", async () => {
   const draft = { text: "same", files: [], agent: "", edit: 0, submission: 0, sending: false, parked: [] as Line[], lines: [] as Line[], busy: true };
   const requests: { messageId: string; delivery: string }[] = [];
-  const completions = [Promise.withResolvers<string>(), Promise.withResolvers<string>()];
+  const completions = [Promise.withResolvers<object>(), Promise.withResolvers<object>()];
   let refreshed = 0;
-  const send = (delivery: string) => sendComposer({ draft, text: "same", files: [], delivery, busy: true, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, refreshHistory: async () => { refreshed++; }, prompt: { mutateAsync: (request: { messageId: string; delivery: string }) => { requests.push(request); return request.delivery === "QUEUE" ? Promise.resolve("") : completions[requests.filter((item) => item.delivery === "STEER").length - 1].promise; } } });
+  const send = (delivery: string) => sendComposer({ draft, text: "same", files: [], delivery, busy: true, sessionId: "opaque", selected: "", currentAgent: "main", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, refreshHistory: async () => { refreshed++; }, prompt: { mutateAsync: (request: { messageId: string; delivery: string }) => { requests.push(request); return request.delivery === "QUEUE" ? Promise.resolve({}) : completions[requests.filter((item) => item.delivery === "STEER").length - 1].promise; } } });
   await send("QUEUE");
   const first = send("STEER"); await Promise.resolve();
   const second = send("STEER"); await Promise.resolve();
@@ -867,8 +869,8 @@ test("identical active sends queue while steers park until History confirms thei
   const consumed = requests[2].messageId;
   applyHistoryDelta(draft, view([event("turn", "turn:0", "user", "same", { inputId: consumed })], { running: true }));
   expect(draft.parked.map((line) => line.id)).toEqual([requests[1].messageId]);
-  completions[1].resolve(""); await second;
-  completions[0].resolve(""); await first;
+  completions[1].resolve({}); await second;
+  completions[0].resolve({}); await first;
   expect(refreshed).toBe(2);
   expect(draft.parked.map((line) => line.id)).toEqual([requests[1].messageId]);
 });
@@ -898,7 +900,7 @@ test("promotion keeps chat unchanged until History confirms consumption", async 
   const completion = Promise.withResolvers<void>();
   const calls: string[] = [];
   const draft = { submission: 0, sending: false, busy: false };
-  const promotion = promoteComposer({ draft, onDraftChange: () => {}, id: "session", itemId: "server-queue-id", busy: draft.busy, selected: "main", currentAgent: "main", prompt: { mutateAsync: async () => "" }, steerQueueItem: { mutateAsync: async (request: { itemId: string }) => { calls.push(request.itemId); await completion.promise; } }, setSendError: (error: string) => { expect(error).toBe(""); } });
+  const promotion = promoteComposer({ draft, onDraftChange: () => {}, id: "session", itemId: "server-queue-id", busy: draft.busy, selected: "main", currentAgent: "main", prompt: { mutateAsync: async () => ({}) }, steerQueueItem: { mutateAsync: async (request: { itemId: string }) => { calls.push(request.itemId); await completion.promise; } }, setSendError: (error: string) => { expect(error).toBe(""); } });
   expect(draft.busy).toBe(true);
   await Bun.sleep(0);
   expect(calls).toEqual(["server-queue-id"]);

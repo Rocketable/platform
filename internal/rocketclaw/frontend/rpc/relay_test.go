@@ -107,7 +107,7 @@ func (u *proxyUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func startProxyTestRPC(t *testing.T, upstream string) (http.Handler, *backend.SessionService, *sql.DB) {
+func startProxyTestRPC(t *testing.T, upstream string, channels ChannelAgentChoices) (http.Handler, *backend.SessionService, *sql.DB) {
 	t.Helper()
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -123,7 +123,7 @@ func startProxyTestRPC(t *testing.T, upstream string) (http.Handler, *backend.Se
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), channels, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error {
@@ -152,7 +152,30 @@ func TestOpenCodeProxy(t *testing.T) {
 	upstream := httptest.NewServer(fake)
 	t.Cleanup(upstream.Close)
 
-	handler, _, db := startProxyTestRPC(t, upstream.URL)
+	channels := &mockChannels{SendSessionMentionFunc: func(_ context.Context, id, link string) error {
+		assert.Equal(t, "https://claw.example.ts.net/oc/b3BlbmNvZGU6Ym94OnMy", link)
+
+		if id == "U4" {
+			return errors.New("delivery refused")
+		}
+
+		return nil
+	}}
+	channels.SlackMentionEmailFunc = func(_ context.Context, id string) string {
+		assert.Len(t, channels.SendSessionMentionCalls(), 4)
+
+		switch id {
+		case "U1":
+			return "riley@example.com"
+		case "U2":
+			return "bob"
+		case "U3":
+			return "sam@example.com"
+		default:
+			return ""
+		}
+	}
+	handler, sessions, db := startProxyTestRPC(t, upstream.URL, channels)
 
 	serve := func(method, target, login string, header http.Header) *httptest.ResponseRecorder {
 		var body io.Reader
@@ -280,6 +303,46 @@ VALUES ('opencode:box:s2', '', '', 'remote', FALSE, 'remote', 'box', 's2', '', '
 	on, afterIdle := parked()
 	assert.True(t, on, "an admitted prompt parks its tab until the session is done")
 	assert.Equal(t, sql.NullInt64{Int64: 1_795_551_291_768, Valid: true}, afterIdle, "the park waits for an idle marker after OpenCode admitted the prompt, even when OpenCode compressed its answer")
+
+	_, err = db.ExecContext(t.Context(), `INSERT INTO web_tab_states (username, revision) VALUES ('Riley@example.com', 0), ('bob', 0), ('sam@example.com', 0)`)
+	require.NoError(t, err)
+	require.NoError(t, sessions.ChangeAttention(t.Context(), "sam@example.com", []string{"/oc/b3BlbmNvZGU6Ym94OnMy"}, backend.AttentionPark, nil, 0))
+
+	post := func(tags string) *httptest.ResponseRecorder {
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/oc/box/api/session/s2/prompt", strings.NewReader(`{"text":"Hi @Riley","metadata":{"rocketclaw_mention_ids":`+tags+`}}`))
+		response := httptest.NewRecorder()
+		signedIn("alice", handler).ServeHTTP(response, request)
+
+		return response
+	}
+
+	fake.refuse = true
+
+	require.Equal(t, http.StatusConflict, post(`["U1"]`).Code)
+
+	fake.refuse = false
+
+	for _, test := range []struct{ tags, warning string }{
+		{`["U1","U2","U3","U4","U5","U6"]`, "Teammate notifications could not be sent."},
+		{`{"U1":true}`, "Invalid teammate tags."},
+	} {
+		response = post(test.tags)
+		require.Equal(t, http.StatusOK, response.Code)
+		require.Equal(t, test.warning, response.Header().Get(mentionWarningHeader))
+		require.JSONEq(t, `{"text":"Hi @Riley","metadata":{"rocketclaw_username":"alice"}}`, fake.body)
+		require.Empty(t, channels.SendSessionMentionCalls())
+	}
+
+	response = post(`["U1","U1","U2","U3","U4"]`)
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, "One or more teammate notifications could not be sent.", response.Header().Get(mentionWarningHeader))
+	require.JSONEq(t, `{"text":"Hi @Riley","metadata":{"rocketclaw_username":"alice"}}`, fake.body)
+	require.Len(t, channels.SendSessionMentionCalls(), 4)
+
+	var marked string
+	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT coalesce(string_agg(username, ',' ORDER BY username), '') FROM web_tab_attention
+WHERE conversation_id = 'opencode:box:s2' AND unread_at IS NOT NULL`).Scan(&marked))
+	require.Equal(t, "Riley@example.com", marked)
 }
 
 func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
@@ -289,7 +352,7 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 	upstream := httptest.NewServer(fake)
 	t.Cleanup(upstream.Close)
 
-	proxy, _, _ := startProxyTestRPC(t, upstream.URL)
+	proxy, _, _ := startProxyTestRPC(t, upstream.URL, &mockChannels{})
 	web := httptest.NewServer(signedIn("alice", proxy))
 	t.Cleanup(web.Close)
 
@@ -302,7 +365,7 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 
 		return &apitype.WhoIsResponse{Node: node, UserProfile: &tailcfg.UserProfile{LoginName: "zoe@example.com"}}, nil
 	}}
-	proxy, _, _ = startProxyTestRPC(t, upstream.URL)
+	proxy, _, _ = startProxyTestRPC(t, upstream.URL, &mockChannels{})
 	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, []string{"https://local.tail1234.ts.net"}, io.Discard, proxy))
 	t.Cleanup(tailnet.Close)
 
@@ -350,6 +413,7 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, response.StatusCode, "a trusted page passes the relay's origin check")
 	assert.Equal(t, []string{"https://local.tail1234.ts.net"}, response.Header.Values("Access-Control-Allow-Origin"))
+	assert.Equal(t, mentionWarningHeader, response.Header.Get("Access-Control-Expose-Headers"))
 
 	tagged = true
 	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, tailnet.URL+"/oc/box/api/session", http.NoBody)
@@ -417,7 +481,7 @@ func TestWatchListing(t *testing.T) {
 	upstream := httptest.NewServer(&proxyUpstream{})
 	t.Cleanup(upstream.Close)
 
-	handler, sessions, _ := startProxyTestRPC(t, upstream.URL)
+	handler, sessions, _ := startProxyTestRPC(t, upstream.URL, &mockChannels{})
 	web := httptest.NewServer(signedIn("alice", handler))
 	t.Cleanup(web.Close)
 

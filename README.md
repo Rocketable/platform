@@ -180,7 +180,7 @@ Agents act with their own permissions, not the person's. An agent in a limited p
 
 ### Slack
 
-Slack has one job: quick help for allowed users, when they mention the bot or, with ambient listening on, when the bot decides a message is for it. Everything else happens in the web page, including routine reports and MCP sessions.
+Slack gives quick help for allowed users, when they mention the bot or, with ambient listening on, when the bot decides a message is for it. It also sends a direct message with a link when a person tags a teammate in a native or OpenCode chat. The link does not grant access. If the teammate's Slack email matches a known Web login that can open the chat, RocketClaw marks the session tab unread without changing parked tabs. Routine reports and MCP sessions stay in the web page.
 
 Slack is optional. Without `slack.bot_token` and `slack.app_token`, RocketClaw starts without Slack and `slack.channels` may be empty. With the tokens, both are required and `slack.channels` needs at least one row.
 
@@ -197,6 +197,7 @@ Slack has no commands. `/stop`, `/agent`, `/goal`, `/enqueue`, skill names, and 
 Set up the Slack app with the bot events `app_mention`, `channel_rename` and `group_rename`, plus `message.channels` and `message.groups` for ambient listening, and these bot scopes, then reinstall it:
 
 - `users:read` and `usergroups:read`, so the web page shows names instead of Slack IDs.
+- `chat:write` and `im:write`, to post replies and send direct notifications for tags in Web chats.
 - `users:read.email`, so a mention's turn gets the sender's email as `ROCKETCLAW_PRINCIPAL_EMAIL` (see [Agents and permissions](#agents-and-permissions)). Without it, Slack turns get only `ROCKETCLAW_PRINCIPAL_NAME`.
 - `channels:read` and `channels:history`, so the bot can expand threads forwarded from public channels and read public threads for ambient listening. It never joins channels on its own. `channels:read` also delivers `channel_rename`.
 - `groups:read` and `groups:history`, only for private channels, so the bot receives `group_rename` and can read private threads for ambient listening.

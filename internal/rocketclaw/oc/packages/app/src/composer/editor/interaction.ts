@@ -318,6 +318,9 @@ export function createComposerEditor(input: {
     filterKeys: ["label"],
     skipFilter: (item) => item.kind === "session" || (item.kind === "file" && !item.recent),
     groupBy: (item) => {
+      // rocketclaw: separate people from files (upstream packages/app/src/composer/editor/interaction.ts).
+      if (item.kind === "person") return "person"
+
       if (item.kind === "session") return "session"
 
       if (item.kind === "reference") return "reference"
@@ -333,7 +336,8 @@ export function createComposerEditor(input: {
       return "file"
     },
     sortGroupsBy: (a, b) => {
-      const order = ["skill", "agent", "session", "reference", "resource", "recent", "file"]
+      // rocketclaw: rank people before other suggestions (upstream packages/app/src/composer/editor/interaction.ts).
+      const order = ["person", "skill", "agent", "session", "reference", "resource", "recent", "file"]
 
       return order.indexOf(a.category) - order.indexOf(b.category)
     },

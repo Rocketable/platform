@@ -302,6 +302,7 @@ func NewTailnetHandler(client tailnetWhoIs, trusted []string, accessLog io.Write
 		page := origin != "" && slices.Contains(trusted, origin)
 		if page {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Expose-Headers", mentionWarningHeader)
 			w.Header().Add("Vary", "Origin")
 		}
 
