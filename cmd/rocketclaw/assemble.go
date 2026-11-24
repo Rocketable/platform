@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -22,6 +23,7 @@ type slackFrontend interface {
 	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
 	SlackNames(context.Context, []string) map[string]string
 	SlackTagsMatching(context.Context, string) []string
+	PostHarnessFeedback(ctx context.Context, channel, threadTS, text string) (channelID, ts string, err error)
 	RenameThreadSession(ctx context.Context, conversationID, name string)
 	StartEvents(context.Context, frontend.Backend) <-chan struct{}
 	Start(context.Context)
@@ -44,6 +46,10 @@ func (inertSlack) SlackNames(context.Context, []string) map[string]string {
 
 func (inertSlack) SlackTagsMatching(context.Context, string) []string {
 	return nil
+}
+
+func (inertSlack) PostHarnessFeedback(context.Context, string, string, string) (channelID, ts string, err error) {
+	return "", "", errors.New("slack is not configured")
 }
 
 func (inertSlack) RenameThreadSession(context.Context, string, string) {}
@@ -114,7 +120,7 @@ func (a *processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []fun
 
 	stops = append(stops, startWebRPC(rt, a.tailnet, slack, cronjobs))
 
-	rt.AttachSlack(slack)
+	rt.AttachSlack(slack, slack)
 	slack.Start(rt.RunCtx)
 
 	return done, stops, nil

@@ -246,6 +246,8 @@ func TestPermissionSetEvaluate(t *testing.T) {
 		{name: "background default off", yaml: `{}`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: false},
 		{name: "background enabled", yaml: `rocketclaw: {allow_background: allow}`, permission: "rocketclaw", subject: "allow_background", action: PermissionAllow, matched: true},
 		{name: "background disabled", yaml: `rocketclaw: {allow_background: deny}`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: true},
+		{name: "harness feedback default on", yaml: `{}`, permission: "rocketclaw", subject: "harness_feedback", action: PermissionAllow, matched: false},
+		{name: "harness feedback denied", yaml: `rocketclaw: {harness_feedback: deny}`, permission: "rocketclaw", subject: "harness_feedback", action: PermissionDeny, matched: true},
 		{name: "tag groups are not action rules", yaml: `rocketclaw: {rocketclaw_set_tag: [[red, yellow, green]]}`, permission: "rocketclaw", subject: "rocketclaw_set_tag", action: PermissionDeny, matched: false},
 		{name: "tag groups preserve other rules", yaml: `rocketclaw: {rocketclaw_set_tag: [[red, yellow, green]], rocketclaw_sessions: allow}`, permission: "rocketclaw", subject: "rocketclaw_sessions", action: PermissionAllow, matched: true},
 		{name: "scalar tag rule stays scalar", yaml: `rocketclaw: {rocketclaw_set_tag: auto}`, permission: "rocketclaw", subject: "rocketclaw_set_tag", action: PermissionAuto, matched: true},

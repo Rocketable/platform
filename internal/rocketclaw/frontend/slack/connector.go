@@ -373,6 +373,22 @@ func (c *Connector) RenameThreadSession(ctx context.Context, conversationID, nam
 	}
 }
 
+func (c *Connector) PostHarnessFeedback(ctx context.Context, channel, threadTS, text string) (channelID, ts string, err error) {
+	text = slackTruncatedText(text, slackBlockTextLimit)
+	options := []slack.MsgOption{slack.MsgOptionText(text, false), slack.MsgOptionBlocks(slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, text, false, false), nil, nil)), slack.MsgOptionDisableMarkdown(), slack.MsgOptionParse(false)}
+
+	if threadTS != "" {
+		options = append(options, slack.MsgOptionTS(threadTS))
+	}
+
+	channelID, ts, err = c.api.PostMessageContext(ctx, channel, options...)
+	if err != nil {
+		return "", "", fmt.Errorf("post harness feedback to Slack: %w", err)
+	}
+
+	return channelID, ts, nil
+}
+
 func slackReplyDestination(replyTarget *protocol.SlackReplyTarget) (channelID, threadTS string) {
 	return strings.TrimSpace(replyTarget.ChannelID), strings.TrimSpace(replyTarget.ThreadTS)
 }

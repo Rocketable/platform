@@ -1329,10 +1329,14 @@ func TestAttachSlack(t *testing.T) {
 	require.Empty(t, choices)
 	require.Empty(t, manager.slackLookups.SlackTagsMatching(t.Context(), "alan"))
 
-	slack := new(slackLookupMock)
+	_, _, err = manager.feedback.PostHarnessFeedback(t.Context(), "C1", "", "report")
+	require.EqualError(t, err, "slack is not connected")
+
+	slack, feedback := new(slackLookupMock), new(harnessFeedbackPosterMock)
 	rt := &Runtime{threads: manager}
-	rt.AttachSlack(slack)
+	rt.AttachSlack(slack, feedback)
 	require.Same(t, slack, manager.slackLookups)
+	require.Same(t, feedback, manager.feedback)
 }
 
 func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {

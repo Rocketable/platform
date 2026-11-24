@@ -28,6 +28,7 @@ const (
 	mcpPermissionBucket       = "mcp"
 	codeModeApproveSubject    = "code_mode_approve"
 	AllowBackgroundSubject    = "allow_background"
+	HarnessFeedbackToolName   = "harness_feedback"
 )
 
 func compileMCPGrant(permission *PermissionSet, facets map[string]map[string][]string, grant map[string]map[string]PermissionAction) error {

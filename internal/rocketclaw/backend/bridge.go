@@ -2317,6 +2317,10 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		customTools = append(customTools, respondInThreadTool(b.config.SessionService, b.config.ConversationID, turnID))
 	}
 
+	if runtimeCfg.Slack.FeedbackChannel != "" {
+		customTools = append(customTools, harnessFeedbackTool(b.config.SessionService, b.threads, resolver, runtimeCfg, agentName, self))
+	}
+
 	customTools = append(customTools, sessionsWriteTool(b, origin, msg, rootAgent, self, agents))
 	customTools = append(customTools, pageSpace{sessions: b.config.SessionService, threads: b.threads, agent: rootAgent, space: agents.Items[rootAgent].Space}.nativeTools(root, &agent.CustomShell)...)
 

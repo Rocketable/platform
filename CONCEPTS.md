@@ -34,7 +34,7 @@ A configured Slack channel entry named `@` that supplies agents and an allowlist
 
 ### Report Thread
 
-A Slack thread an earlier version posted a cron report or an External MCP session into: its conversation, now a Web chat created by cron or bound to the session, or an unrecorded thread whose root RocketClaw's own bot posted without the mark Channel Session answers carry. The last case covers threads whose record expired; a thread under a Channel Session answer is a Thread Session, not a Report Thread.
+A Slack thread an earlier version posted a cron report or an External MCP session into: its conversation, now a Web chat created by cron or bound to the session, or an unrecorded thread whose root RocketClaw's own bot posted without the mark Channel Session answers carry. The last case covers threads whose record expired and the threads of Harness Feedback issues; a thread under a Channel Session answer is a Thread Session, not a Report Thread.
 
 A Report Thread is read-only. RocketClaw ignores every reply and mention in it, showing no working state and posting no reply, and posts nothing more into it. Read-only means RocketClaw ignores input, not that Slack locks the thread. Work on it continues in Web.
 
@@ -155,6 +155,11 @@ Each command runs in a fresh sandbox with no network. Only the agent's declared 
 A small record of one Host Tool or MCP call a Code Mode script made, which Web lists under the script's Execute call and an agent reading the session also sees. When the whole script had a Permission Review, one more record holds only that decision.
 
 It holds the call's name, its clipped arguments, a status, a one-line summary of the output, and the outcome and reason of the call's Permission Review when it had one; it never holds the output. While its Harness Turn runs, each record is saved on its own when the call starts and when it finishes, so the turn's other saves never rewrite it; the finished turn keeps its records. An Execute call keeps a bounded number of records, and none are added after the turn ends.
+
+### Harness Feedback
+
+A report an agent files with the `harness_feedback` tool about a problem with the harness itself, such as a confusing tool error or a missing capability, while the Behavior Setting `slack.feedback_channel` names a channel. Every agent has the tool unless its permissions deny it. The title model groups the report with the issues reported in the last 14 days: a new issue posts at the top of that channel, and a repeat posts in its issue's thread and keeps the issue open for grouping. Grouping, posting and saving run one report at a time.
+*Avoid:* bug report (that is a person's report)
 
 ### Spill
 

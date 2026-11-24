@@ -364,7 +364,7 @@ func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, s
 		decision.Action = permissionAuto
 	}
 
-	if permission == "rocketclaw" && subject == codeModeApproveSubject && !ps.Sudo {
+	if permission == "rocketclaw" && (subject == codeModeApproveSubject || subject == HarnessFeedbackToolName) && !ps.Sudo {
 		decision.Action = permissionAllow
 	}
 

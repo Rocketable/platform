@@ -11,7 +11,7 @@ import type { ConfigView } from "./types";
 type Channel = { channel: string; agents?: string[]; allowed_user_ids?: string[] };
 type Behavior = {
   auto_approver_model: string;
-  slack: { channels: Channel[] | null };
+  slack: { channels: Channel[] | null; feedback_channel?: string };
   logging: { level: string };
   overlays: string[] | null;
 };
@@ -49,6 +49,7 @@ function BehaviorFields({ draft, disabled, onChange }: { draft: Behavior; disabl
     <>
       <Group title="Slack channels">
         <Channels channels={draft.slack.channels ?? []} disabled={disabled} onChange={(channels) => onChange({ slack: { ...draft.slack, channels } })} />
+        <Setting label="Harness feedback channel"><Input aria-label="Harness feedback channel" className="w-64" placeholder="Channel ID, off when empty" value={draft.slack.feedback_channel ?? ""} onChange={(event) => onChange({ slack: { ...draft.slack, feedback_channel: event.target.value } })} /></Setting>
       </Group>
       <Group title="Server">
         <Setting label="Auto-approver model"><Input aria-label="Auto-approver model" className="w-64" placeholder="Default" value={draft.auto_approver_model} onChange={(event) => onChange({ auto_approver_model: event.target.value })} /></Setting>

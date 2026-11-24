@@ -280,9 +280,9 @@ func (r *Runtime) PublishOutbound(ctx context.Context, message *protocol.Outboun
 	return errDelivery
 }
 
-func (r *Runtime) AttachSlack(slack slackLookup) {
+func (r *Runtime) AttachSlack(slack slackLookup, feedback harnessFeedbackPoster) {
 	r.threads.mu.Lock()
-	r.threads.slackLookups = slack
+	r.threads.slackLookups, r.threads.feedback = slack, feedback
 	r.threads.mu.Unlock()
 }
 

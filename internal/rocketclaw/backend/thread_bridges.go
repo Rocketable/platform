@@ -63,11 +63,16 @@ type threadBridgeManager struct {
 	pending      map[string]directBridge
 	stopping     bool
 	slackLookups slackLookup
+	feedback     harnessFeedbackPoster
 }
 
 type slackLookup interface {
 	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
 	SlackTagsMatching(context.Context, string) []string
+}
+
+type harnessFeedbackPoster interface {
+	PostHarnessFeedback(ctx context.Context, channel, threadTS, text string) (channelID, ts string, err error)
 }
 
 type noSlackLookups struct{}
@@ -80,6 +85,10 @@ func (noSlackLookups) SlackTagsMatching(context.Context, string) []string {
 	return nil
 }
 
+func (noSlackLookups) PostHarnessFeedback(context.Context, string, string, string) (channelID, ts string, err error) {
+	return "", "", errors.New("slack is not connected")
+}
+
 var _ protocol.PrimaryTextRouter = (*threadBridgeManager)(nil)
 
 func newThreadBridgeManager(runtime *config.LockedConfig, store *SessionService, logger *slog.Logger, factory bridgeFactory) *threadBridgeManager {
@@ -87,7 +96,7 @@ func newThreadBridgeManager(runtime *config.LockedConfig, store *SessionService,
 		log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, factory: factory,
 		wake:    make(chan struct{}, 1),
 		bridges: map[string]directBridge{}, pending: map[string]directBridge{},
-		slackLookups: noSlackLookups{},
+		slackLookups: noSlackLookups{}, feedback: noSlackLookups{},
 	}
 }
 

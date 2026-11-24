@@ -36,7 +36,7 @@ Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or t
 
 `rocketclaw run` exits with code 0 after a shutdown signal, with 1 on an error, including a Web node that fails its startup check (see [Tailnet setup](#tailnet-setup)), and with 255 when it asks to be started again: after the `rocketclaw_restart` tool, or when the Web page stops serving while it runs. It does not start itself again.
 
-Behavior Settings live in PostgreSQL instead: `auto_approver_model`, `slack.channels`, `logging.level`, and `overlays`. The first start copies them from the file once every startup check passes. After that, RocketClaw ignores them in the file and logs a warning naming each one it ignored. The people named in the file's `web.admins` (their Tailscale logins, for example `"web": {"admins": ["alice@example.com"]}`) edit them on the Config page, one control per setting. A save is checked whole and applies to the running server at once, or is refused and changes nothing. Everyone else sees the page read-only.
+Behavior Settings live in PostgreSQL instead: `auto_approver_model`, `slack.channels`, `slack.feedback_channel`, `logging.level`, and `overlays`. The first start copies them from the file once every startup check passes. After that, RocketClaw ignores them in the file and logs a warning naming each one it ignored. The people named in the file's `web.admins` (their Tailscale logins, for example `"web": {"admins": ["alice@example.com"]}`) edit them on the Config page, one control per setting. A save is checked whole and applies to the running server at once, or is refused and changes nothing. Everyone else sees the page read-only.
 
 If the stored settings stop RocketClaw from starting (the error starts with `stored behavior settings:`), fix them in place with `psql` on the `database_url` database:
 
@@ -175,7 +175,7 @@ Agents act with their own permissions, not the person's. An agent in a limited p
 
 ### Slack
 
-Slack has one job: quick help when an allowed user mentions the bot. Everything else happens in the web page, including cron reports and MCP sessions.
+Slack has two jobs: quick help when an allowed user mentions the bot, and the harness feedback channel below. Everything else happens in the web page, including cron reports and MCP sessions.
 
 Slack is optional. Without `slack.bot_token` and `slack.app_token`, RocketClaw starts without Slack and `slack.channels` may be empty. With the tokens, both are required and `slack.channels` needs at least one row.
 
@@ -186,6 +186,10 @@ Only a mention from an allowed user starts work. Messages without a mention, inc
 While a turn runs, the thread shows Slack's own working state with a Stop button, or that it needs someone while a question the turn asked in Web waits. A turn that runs scripts or subagents posts one checklist of them, updated as each finishes. When the turn ends, its answer and any files post as new replies. The answer ends with a footer: the agent, how the turn ended (done, failed, or stopped), and an Open in Web link. A turn without an answer posts the footer alone.
 
 Slack threads that earlier versions posted cron reports or MCP sessions into are read-only: the bot ignores every reply and mention in them. Their conversations are Web chats now; keep working there.
+
+#### Harness feedback channel
+
+Set `slack.feedback_channel` to a channel ID, with the bot invited to that channel, and every agent gets a `harness_feedback` tool for reporting problems with RocketClaw itself, such as a confusing tool error or a missing capability. An agent's permissions can turn it off with `rocketclaw: {harness_feedback: deny}`. The title model (`title_model`) compares each report with the issues reported in the last 14 days. A new issue posts a top-level message, and a repeat posts a reply in that issue's thread, so the channel shows one message per issue. Each post names the agent and links its session. The bot ignores replies and mentions in these threads, like other read-only threads. Leave the setting empty to turn the tool off.
 
 Slack has no commands. `/stop`, `/agent`, `/goal`, `/enqueue`, skill names, and any other `/` text after the mention reach the agent as plain text. Start the message with the mention: Slack takes a message that begins with `/` as one of its own slash commands and never posts it. There is no agent picker, steering, queue card, question button, or reaction control. Mention turns cannot use `ask_user_question`, so the agent asks in its reply or hands the work to Web. Use Web to switch agents, run commands and skills, start goals, manage queued work, and stop any turn. Web messages used in a Slack thread are still posted there, and every reply in that conversation still goes to Slack.
 

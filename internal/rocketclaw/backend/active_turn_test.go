@@ -1167,7 +1167,7 @@ func TestSlackRespondInThreadOfferedOnlyOnChannelSessionMentions(t *testing.T) {
 	manager, _ := nt.run(t, ignoreOutbound)
 	(&Runtime{threads: manager}).AttachSlack(&slackLookupMock{SidebarChannelAgentChoicesFunc: func(_ context.Context, channel string) (string, []string, error) {
 		return "room-" + channel, nil, nil
-	}})
+	}}, noSlackLookups{})
 
 	wake := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "ask", false)
 	wake.Metadata = map[string]string{backgroundNotesMetadataKey: "job-1"}

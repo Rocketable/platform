@@ -45,7 +45,8 @@ type Config struct {
 type Behavior struct {
 	AutoApproverModel string `json:"auto_approver_model"`
 	Slack             struct {
-		Channels []SlackChannelConfig `json:"channels"`
+		Channels        []SlackChannelConfig `json:"channels"`
+		FeedbackChannel string               `json:"feedback_channel"`
 	} `json:"slack"`
 	Logging  LoggingConfig `json:"logging"`
 	Overlays []string      `json:"overlays"`
@@ -54,14 +55,14 @@ type Behavior struct {
 func (c *Config) Behavior() Behavior {
 	var b Behavior
 
-	b.AutoApproverModel, b.Slack.Channels = c.AutoApproverModel, c.Slack.Channels
+	b.AutoApproverModel, b.Slack.Channels, b.Slack.FeedbackChannel = c.AutoApproverModel, c.Slack.Channels, c.Slack.FeedbackChannel
 	b.Logging, b.Overlays = c.Logging, c.Overlays
 
 	return b
 }
 
 func (c *Config) SetBehavior(b *Behavior) {
-	c.AutoApproverModel, c.Slack.Channels = b.AutoApproverModel, b.Slack.Channels
+	c.AutoApproverModel, c.Slack.Channels, c.Slack.FeedbackChannel = b.AutoApproverModel, b.Slack.Channels, b.Slack.FeedbackChannel
 	c.Logging, c.Overlays = b.Logging, b.Overlays
 }
 
@@ -168,9 +169,10 @@ type RemoteRocketClawConfig struct {
 }
 
 type SlackConfig struct {
-	BotToken string               `json:"bot_token"`
-	AppToken string               `json:"app_token"`
-	Channels []SlackChannelConfig `json:"channels,omitempty"`
+	BotToken        string               `json:"bot_token"`
+	AppToken        string               `json:"app_token"`
+	Channels        []SlackChannelConfig `json:"channels,omitempty"`
+	FeedbackChannel string               `json:"feedback_channel,omitempty"`
 }
 
 func (s SlackConfig) Channel(name string) (SlackChannelConfig, bool) {
@@ -487,7 +489,7 @@ func (c *Config) validateSlack() error {
 		}
 	}
 
-	c.Slack.Channels = normalized
+	c.Slack.Channels, c.Slack.FeedbackChannel = normalized, strings.TrimSpace(c.Slack.FeedbackChannel)
 	if len(c.Slack.Channels) == 0 && c.Slack.BotToken != "" {
 		return errors.New("slack.channels is required")
 	}
