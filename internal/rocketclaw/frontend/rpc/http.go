@@ -13,7 +13,6 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"net/url"
 	"path"
 	"slices"
 	"strconv"
@@ -81,12 +80,9 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 		})
 	}
 
-	for _, route := range []string{"GET /api/ListSessions", "GET /stream", "GET /typing", "GET /api/DownloadAttachment", "POST /api/UploadAttachment", "POST /api/Voice"} {
+	for _, route := range []string{"GET /api/ListSessions", "GET /stream", "GET /typing", "GET /listing", "GET /api/DownloadAttachment", "POST /api/UploadAttachment", "POST /api/Voice"} {
 		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
-			method, query, required := strings.TrimPrefix(r.URL.Path, "/api/"), url.Values(nil), ""
-			if method != "Voice" {
-				query = r.URL.Query()
-			}
+			method, query, required := strings.TrimPrefix(r.URL.Path, "/api/"), r.URL.Query(), ""
 
 			var request, response proto.Message
 
@@ -105,6 +101,8 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 				method, request, response, required = "Join", &JoinRequest{Id: query.Get("id")}, &ConversationChange{}, "id"
 			case "/typing":
 				method, request, response, required = "WatchTyping", &WatchTypingRequest{Id: query.Get("id")}, &TypingEvent{}, "id"
+			case "/listing":
+				method, request, response = "WatchListing", &WatchListingRequest{}, &ListingChanged{}
 			case "DownloadAttachment", "UploadAttachment":
 				request = &Attachment{ConversationId: query.Get("conversationId"), Id: query.Get("id"), Name: query.Get("name")}
 				response, required = &Attachment{}, map[string]string{"DownloadAttachment": "conversationId id", "UploadAttachment": "conversationId name"}[method]

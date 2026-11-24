@@ -2,8 +2,10 @@ package rpc
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -46,16 +48,29 @@ func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, cfg *config
 				return
 			}
 
-			if parts := strings.Split(r.PathValue("path"), "/"); r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "session" && parts[2] == "prompt" {
-				tab := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte("opencode:"+r.PathValue("server")+":"+parts[1]))
-				_ = connection.Invoke(r.Context(), "/rpc.Web/Tabs", &TabsRequest{Attention: &AttentionChange{Paths: []string{tab}, Action: AttentionAction_SENT}}, &TabsResponse{})
-				_ = backend.AddOpenCodeSessionBridge(r.Context(), cfg, r.PathValue("server"), parts[1])
+			ctx := metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-username", identity.Username)
+
+			parts := strings.Split(r.PathValue("path"), "/")
+			if r.Method != http.MethodPost || len(parts) != 3 || parts[0] != "session" || parts[2] != "prompt" {
+				proxy.ServeHTTP(w, r.WithContext(ctx))
+				return
 			}
 
-			proxy.ServeHTTP(w, r.WithContext(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-username", identity.Username)))
+			_ = backend.AddOpenCodeSessionBridge(r.Context(), cfg, r.PathValue("server"), parts[1])
+
+			var admitted int64
+
+			proxy.ServeHTTP(w, r.WithContext(context.WithValue(ctx, admissionKey{}, &admitted)))
+
+			if admitted > 0 {
+				tab := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte("opencode:"+r.PathValue("server")+":"+parts[1]))
+				_ = connection.Invoke(context.WithoutCancel(r.Context()), "/rpc.Web/Tabs", &TabsRequest{Attention: &AttentionChange{Paths: []string{tab}, Action: AttentionAction_SENT, Admitted: admitted}}, &TabsResponse{})
+			}
 		})
 	}
 }
+
+type admissionKey struct{}
 
 func openCodeProxy(server config.OpenCodeConfig) http.Handler {
 	upstream, _ := url.Parse(server.URL)
@@ -72,6 +87,8 @@ func openCodeProxy(server config.OpenCodeConfig) http.Handler {
 			if prompt, _ := path.Match("/api/session/*/prompt", r.In.URL.Path); !prompt || r.In.Method != http.MethodPost || r.Out.Body == nil {
 				return
 			}
+
+			r.Out.Header.Del("Accept-Encoding")
 
 			raw, _ := io.ReadAll(r.Out.Body)
 
@@ -92,6 +109,26 @@ func openCodeProxy(server config.OpenCodeConfig) http.Handler {
 			r.Out.ContentLength = int64(len(raw))
 		},
 		ModifyResponse: func(response *http.Response) error {
+			if admitted, ok := response.Request.Context().Value(admissionKey{}).(*int64); ok && response.StatusCode/100 == 2 {
+				raw, err := io.ReadAll(response.Body)
+				if err != nil {
+					return fmt.Errorf("read OpenCode prompt answer: %w", err)
+				}
+
+				var accepted struct {
+					Data struct {
+						Time struct {
+							Created int64 `json:"created"`
+						} `json:"time"`
+					} `json:"data"`
+				}
+				if json.Unmarshal(raw, &accepted) == nil {
+					*admitted = accepted.Data.Time.Created
+				}
+
+				response.Body = io.NopCloser(bytes.NewReader(raw))
+			}
+
 			response.Header.Del("Set-Cookie")
 			response.Header.Del("WWW-Authenticate")
 			response.Header.Del("Access-Control-Allow-Origin")

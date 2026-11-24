@@ -1559,6 +1559,7 @@ SELECT COALESCE(MIN(wake_attempts), 0) FROM released`, finish.conversationID, tu
 		return nil, fmt.Errorf("commit turn finish: %w", err)
 	}
 
+	s.ringListing()
 	s.jobs.turnFinished(owners)
 
 	return finish.outbound, nil
@@ -1679,7 +1680,7 @@ SELECT count(*) FROM marked`, finish.conversationID, turnID); err != nil {
 		return fmt.Errorf("mark turn readers unread: %w", err)
 	}
 
-	_, err := execState(ctx, tx, "end turn parks", endTurnParksSQL, []string{finish.conversationID}, []bool{finish.terminal == protocol.TerminalFailed})
+	_, err := execState(ctx, tx, "end turn parks", endTurnParksSQL, []string{finish.conversationID}, []bool{finish.terminal == protocol.TerminalFailed}, []int64{0})
 
 	return err
 }
@@ -1860,8 +1861,14 @@ others AS (SELECT count(*) AS n FROM turns a JOIN turn t USING (conversation_id)
 idle AS (UPDATE conversations c SET running = o.n > 0 FROM turn t, others o WHERE c.conversation_id = t.conversation_id),
 kept AS (SELECT count(*) = 0 AS undelivered FROM delivered)
 UPDATE turns SET phase = $1 FROM kept WHERE id = $2 AND undelivered`, turnDone, turnID)
+	if err != nil {
+		return err
+	}
 
-	return err
+	s.ringParks()
+	s.ringListing()
+
+	return nil
 }
 
 type turnKind string

@@ -97,4 +97,5 @@ SHA-256 matches `TLA_SHA256` and whose manifest names revision `bc1b506`.
 - Several people and several tabs are abstracted to the one person and one tab above; a Shared tab is checked as
   that person's ordinary tab (`SharedQuiet = FALSE`, the built rule).
 - The model does not see how the server tells that a session is idle, whether a queued turn becomes visible before
-  the turn ending ahead of it is closed, or what OpenCode reports; it trusts the work flag. Those are Go tests.
+  the turn ending ahead of it is closed, or what OpenCode reports; it trusts the work flag. Those are Go tests, and
+  `docs/verification/session-done/` checks how an OpenCode park learns its session is done.

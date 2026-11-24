@@ -628,6 +628,16 @@ function SidebarMerge({ children }: { children: ReactNode }) {
   );
 }
 
+function useListingRings(name: string, enabled: boolean, onRing: () => void) {
+  const rang = useEffectEvent(onRing);
+  useEffect(() => {
+    if (!enabled) return;
+    const stream = new EventSource(`${serverURL(name)}/listing`);
+    stream.onmessage = () => rang();
+    return () => stream.close();
+  }, [name, enabled]);
+}
+
 // A server's session list. A remote that stops answering keeps its last rows, offline; only a refusal clears them.
 function ServerSessions({ children }: { children: ReactNode }) {
   const name = useContext(ServerName);
@@ -651,6 +661,11 @@ function ServerSessions({ children }: { children: ReactNode }) {
   const listing = useRef<SavedListing>({ version: "", rows: [] });
   const ownerRef = useRef(owner);
   const protocolRef = useRef(scope);
+  const ring = useRef(() => {});
+  useListingRings(name, owner !== undefined && !identityRejected, () => {
+    ring.current();
+    if (!here) void tabs.refetch();
+  });
   const bump = useCallback(() => {
     gen.current += 1;
     setGeneration((value) => value + 1);
@@ -680,8 +695,20 @@ function ServerSessions({ children }: { children: ReactNode }) {
     const currentOwner = owner;
     const currentProtocol = scope;
     const ac = new AbortController();
+    let rung = new AbortController();
+    ring.current = () => rung.abort();
+    const next = () => {
+      if (ac.signal.aborted || captured !== gen.current) return;
+      const { signal } = rung, fetched = Date.now();
+      void delay(2000, AbortSignal.any([ac.signal, signal])).then(async () => {
+        const floor = fetched + 500 - Date.now();
+        if (floor > 0) await delay(floor, ac.signal);
+        await tick();
+      });
+    };
     const tick = async () => {
       if (ac.signal.aborted || captured !== gen.current) return;
+      rung = new AbortController();
       setView((current) => ({ ...current, refreshing: true, enumerationComplete: false }));
       // With nothing shown yet, the saved listing shows at once and its version makes the poll send only changes.
       if (!listing.current.version && !rowsRef.current.length) {
@@ -731,11 +758,9 @@ function ServerSessions({ children }: { children: ReactNode }) {
         } else {
           setView((current) => ({ ...current, enumerationComplete: false, refreshing: false, remote: result.remote ?? current.remote }));
         }
-      }).then(() => {
-        if (!ac.signal.aborted && captured === gen.current) void delay(2000, ac.signal).then(tick);
-      });
+      }).then(next);
     };
-    tick();
+    void tick();
     return () => {
       ac.abort();
       invalidatePendingSaves(currentOwner, currentProtocol);

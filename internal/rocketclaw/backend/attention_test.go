@@ -75,7 +75,7 @@ func TestAttentionMatrix(t *testing.T) {
 	act := func(action AttentionAction, until *time.Time) step {
 		return func(t *testing.T, service *SessionService, username, path string) {
 			t.Helper()
-			require.NoError(t, service.ChangeAttention(ctx, username, []string{path}, action, until))
+			require.NoError(t, service.ChangeAttention(ctx, username, []string{path}, action, until, 0))
 		}
 	}
 	view := func(hold bool) step {
@@ -264,9 +264,9 @@ func TestAttentionDecidesOnLockedRow(t *testing.T) {
 		require.NoError(t, changes.Wait())
 	}
 
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{"/cron"}, AttentionPark, nil))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{"/cron"}, AttentionPark, nil, 0))
 	held(func(tx *sql.Tx) { markTab(t, tx, alice, "/cron", turnEnd) }, func() error {
-		return service.ChangeAttention(ctx, alice, []string{"/cron"}, AttentionUnpark, nil)
+		return service.ChangeAttention(ctx, alice, []string{"/cron"}, AttentionUnpark, nil, 0)
 	})
 	assert.Equal(t, "new quiet note=news", attentionOf(t, service, alice, "/cron"))
 
@@ -287,7 +287,7 @@ func TestAttentionDecidesOnLockedRow(t *testing.T) {
 	path := "/s/" + base64.RawURLEncoding.EncodeToString([]byte("web:first"))
 
 	held(func(tx *sql.Tx) { markTab(t, tx, alice, path, turnEnd) }, func() error {
-		return service.ChangeAttention(ctx, alice, []string{path}, AttentionPark, &soon)
+		return service.ChangeAttention(ctx, alice, []string{path}, AttentionPark, &soon, 0)
 	})
 	assert.Equal(t, "new quiet parked until=soon note=news", attentionOf(t, service, alice, path))
 
@@ -476,8 +476,10 @@ func TestAttentionParkUntilDone(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, saved)
 
-		require.NoError(t, service.ChangeAttention(ctx, alice, []string{session.Path, "/cron"}, AttentionParkUntilDone, nil))
+		require.NoError(t, service.ChangeAttention(ctx, alice, []string{session.Path, "/cron"}, AttentionParkUntilDone, nil, 0))
 		assert.Equal(t, "read parked until=done", attentionOf(t, service, alice, session.Path))
+		assert.Len(t, service.parkWake, 1, "a park until it is done wakes the park-ending step, in case its work is already over")
+		<-service.parkWake
 		assert.Equal(t, "none", attentionOf(t, service, alice, "/cron"), "a location that is no session is skipped")
 
 		for row, err := range service.sidebarSessions(ctx, alice, []string{"web:done"}) {
@@ -497,7 +499,13 @@ func TestAttentionParkUntilDone(t *testing.T) {
 		tick(t)
 		assert.Equal(t, "new quiet parked until=done worked", attentionOf(t, service, alice, session.Path), "a turn still delivering is work")
 
+		select {
+		case <-service.parkWake:
+		default:
+		}
+
 		require.NoError(t, service.closeTurn(ctx, "turn:first"))
+		assert.Len(t, service.parkWake, 1, "a closed turn wakes the park-ending step")
 		tick(t)
 		assert.Equal(t, "new quiet parked until=done worked", attentionOf(t, service, alice, session.Path), "a queued message is work")
 
@@ -585,8 +593,8 @@ UPDATE conversations SET goal_objective = 'ship', goal_status = 'active' WHERE c
 		"parking again waits for new work": {do: func(t *testing.T, chat, path string) {
 			t.Helper()
 			turn(t, chat, chat+":turn", "")
-			require.NoError(t, service.ChangeAttention(ctx, bob, []string{path}, AttentionUnpark, nil))
-			require.NoError(t, service.ChangeAttention(ctx, bob, []string{path}, AttentionParkUntilDone, nil))
+			require.NoError(t, service.ChangeAttention(ctx, bob, []string{path}, AttentionUnpark, nil, 0))
+			require.NoError(t, service.ChangeAttention(ctx, bob, []string{path}, AttentionParkUntilDone, nil, 0))
 			tick(t)
 		}, want: "new quiet parked until=done"},
 		"a failed turn after a question drops the park": {do: func(t *testing.T, chat, path string) {
@@ -618,7 +626,7 @@ UPDATE conversations SET goal_objective = 'ship', goal_status = 'active' WHERE c
 			path := sessionPath(chat)
 
 			recordTestConversations(t, service, "main", map[string]ConversationKind{chat: KindWebChat})
-			require.NoError(t, service.ChangeAttention(ctx, bob, []string{path}, AttentionParkUntilDone, nil))
+			require.NoError(t, service.ChangeAttention(ctx, bob, []string{path}, AttentionParkUntilDone, nil, 0))
 			tc.do(t, chat, path)
 			assert.Equal(t, tc.want, attentionOf(t, service, bob, path))
 		})
@@ -657,7 +665,7 @@ UPDATE conversations SET goal_objective = 'ship', goal_status = 'active' WHERE c
 			t.Helper()
 			markTab(t, service.db, carol, path, question)
 			tick(t)
-			require.NoError(t, service.ChangeAttention(ctx, carol, []string{path}, AttentionPark, nil))
+			require.NoError(t, service.ChangeAttention(ctx, carol, []string{path}, AttentionPark, nil, 0))
 			tick(t)
 		}, want: "new quiet parked note=news"},
 	} {
@@ -666,7 +674,7 @@ UPDATE conversations SET goal_objective = 'ship', goal_status = 'active' WHERE c
 			path := sessionPath(chat)
 
 			recordTestConversations(t, service, "main", map[string]ConversationKind{chat: KindWebChat})
-			require.NoError(t, service.ChangeAttention(ctx, carol, []string{path}, AttentionPark, tc.until))
+			require.NoError(t, service.ChangeAttention(ctx, carol, []string{path}, AttentionPark, tc.until, 0))
 
 			if tc.do == nil {
 				tc.do = func(t *testing.T, path string) {
@@ -697,7 +705,7 @@ func TestPausedMessageMarksOtherReaders(t *testing.T) {
 		require.True(t, saved)
 	}
 
-	require.NoError(t, service.ChangeAttention(ctx, "carol@example.com", []string{path}, AttentionParkUntilDone, nil))
+	require.NoError(t, service.ChangeAttention(ctx, "carol@example.com", []string{path}, AttentionParkUntilDone, nil, 0))
 	require.NoError(t, rt.PostPausedMessage(ctx, pausedWebMessage("web:lunch", "Alice", &protocol.InboundContent{Text: "lunch at noon?"})))
 	require.NoError(t, service.tickParks(ctx))
 
@@ -724,12 +732,12 @@ func TestAttentionAutoPark(t *testing.T) {
 
 	recordTestConversations(t, service, "main", map[string]ConversationKind{"web:auto": KindWebChat})
 
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{path}, AttentionPark, &soon))
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{path, "/cron"}, AttentionAutoPark, nil))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{path}, AttentionPark, &soon, 0))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{path, "/cron"}, AttentionAutoPark, nil, 0))
 	assert.Equal(t, "read parked until=soon", attentionOf(t, service, alice, path))
 	assert.Equal(t, "none", attentionOf(t, service, alice, "/cron"))
 
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{path}, AttentionUnpark, nil))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{path}, AttentionUnpark, nil, 0))
 	assert.Equal(t, "read", attentionOf(t, service, alice, path), "the choice keeps the row")
 
 	on, err := service.AutoParkAll(ctx, alice)
@@ -776,9 +784,9 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 	a, search, cron := Tab{Path: "/s/YQ", Group: "g", Space: "main"}, Tab{Path: "/search/x", Group: "g", Space: "main", Search: page}, Tab{Path: "/cron", Space: "ops"}
 	group := []TabGroup{{ID: "g", Name: "Work"}}
 	save(&TabState{Tabs: []Tab{a, search, cron}, Groups: group, Space: "main"})
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{"/search/x"}, AttentionPark, &soon))
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{"/cron"}, AttentionPark, &soon))
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{a.Path, "/agents"}, AttentionPark, &soon))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{"/search/x"}, AttentionPark, &soon, 0))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{"/cron"}, AttentionPark, &soon, 0))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{a.Path, "/agents"}, AttentionPark, &soon, 0))
 	save(&TabState{Tabs: []Tab{a}, Groups: group, Space: "main"})
 	due()
 
@@ -822,7 +830,7 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 
 	revision++
 
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{"/search/x"}, AttentionPark, &soon))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{"/search/x"}, AttentionPark, &soon, 0))
 	save(&TabState{Tabs: []Tab{a, cron}, Groups: group, Space: "main"})
 	save(&TabState{Tabs: []Tab{{Path: a.Path, Space: "main"}}, Space: "main"})
 	due()
@@ -834,7 +842,7 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 
 	revision++
 
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{a.Path}, AttentionPark, &soon))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{a.Path}, AttentionPark, &soon, 0))
 	save(&TabState{Space: "main"})
 	markTab(t, service.db, alice, a.Path, question)
 	markTab(t, service.db, alice, "/search/x", question)
@@ -845,4 +853,33 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 	assert.Equal(t, []Tab{{Path: a.Path, Space: "main"}}, state.Tabs)
 	assert.Equal(t, "new resume=soon note=news", attentionOf(t, service, alice, a.Path), "a question remembers the park it ends")
 	assert.Equal(t, "new note=news", attentionOf(t, service, alice, "/search/x"))
+}
+
+func TestListingRings(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+
+	alice, stopAlice := service.WatchListing("alice")
+	defer stopAlice()
+
+	bob, stopBob := service.WatchListing("bob")
+
+	require.NoError(t, service.ChangeAttention(ctx, "alice", []string{"/cron"}, AttentionUnread, nil, 0))
+	assert.Len(t, alice, 1, "a change to her tabs rings her windows")
+	assert.Empty(t, bob, "and nobody else's")
+
+	require.NoError(t, service.closeTurn(ctx, "no-turn"))
+	require.NoError(t, service.closeTurn(ctx, "no-turn"))
+	assert.Len(t, alice, 1, "rings a window has not read yet become one, and never block the commit")
+	assert.Len(t, bob, 1, "a closed turn rings every window, since anyone may see the session")
+
+	stopBob()
+	<-alice
+	<-bob
+
+	require.NoError(t, service.closeTurn(ctx, "no-turn"))
+	assert.Len(t, alice, 1)
+	assert.Empty(t, bob, "a window that stopped watching is not rung")
 }

@@ -774,7 +774,9 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	httpServer := httptest.NewServer(signedIn("alice", NewHTTPHandler(connection, config.NewLockedConfig(cfg), "")))
+	httpServer := httptest.NewUnstartedServer(signedIn("alice", NewHTTPHandler(connection, config.NewLockedConfig(cfg), "")))
+	httpServer.EnableHTTP2 = true
+	httpServer.StartTLS()
 	t.Cleanup(httpServer.Close)
 	runWebTest(t, "src/revert-transport.test.ts", "ROCKETCLAW_REVERT_TEST_URL="+httpServer.URL)
 

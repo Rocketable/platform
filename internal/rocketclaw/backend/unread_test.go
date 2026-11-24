@@ -197,11 +197,11 @@ func TestTurnEndReachesKeepersAndSharedViewers(t *testing.T) {
 
 	_, err = service.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
 	require.NoError(t, err)
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{sessionPath(session)}, AttentionPark, nil))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{sessionPath(session)}, AttentionPark, nil, 0))
 	assert.Equal(t, []string{alice + " quiet parked", bob + " loud", erin + " loud"},
 		turnEnds("turn:alice", webMessage(protocol.InboundKindPrompt, "ask", alice)))
 
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{sessionPath(session)}, AttentionUnpark, nil))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{sessionPath(session)}, AttentionUnpark, nil, 0))
 	assert.Equal(t, []string{alice + " quiet", bob + " loud", erin + " loud"}, attentionOn(t, service, session))
 }
 
@@ -226,7 +226,7 @@ func TestMarkUnread(t *testing.T) {
 			paths = append(paths, sessionPath(id))
 		}
 
-		require.NoError(t, service.ChangeAttention(ctx, alice, paths, AttentionUnread, nil))
+		require.NoError(t, service.ChangeAttention(ctx, alice, paths, AttentionUnread, nil, 0))
 	}
 	heldView := func(conversationID string) {
 		t.Helper()
@@ -292,7 +292,7 @@ func TestTabViewLocksStateBeforeAttention(t *testing.T) {
 
 	path := sessionPath(conversationID)
 	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
-	require.NoError(t, service.ChangeAttention(ctx, alice, []string{path}, AttentionUnread, nil))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{path}, AttentionUnread, nil, 0))
 
 	tx, err := service.db.BeginTx(ctx, nil)
 	require.NoError(t, err)

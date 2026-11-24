@@ -455,7 +455,7 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 		pages[i] = fmt.Sprint("/pages/main/agent/", i)
 	}
 
-	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", pages, backend.AttentionPark, &soon))
+	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", pages, backend.AttentionPark, &soon, 0))
 
 	full, done, _ := list(&ListSessionsRequest{})
 	require.Greater(t, full, 2<<10)
@@ -465,8 +465,8 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 	require.LessOrEqual(t, quiet, 2<<10, "a quiet refresh must not grow with the session or tab row count")
 	require.Empty(t, done.Tabs)
 
-	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", pages[:1], backend.AttentionPark, nil))
-	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", pages[1:2], backend.AttentionUnpark, nil))
+	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", pages[:1], backend.AttentionPark, nil, 0))
+	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", pages[1:2], backend.AttentionUnpark, nil, 0))
 
 	_, done, _ = list(&ListSessionsRequest{Since: done.Version})
 	require.Equal(t, []string{pages[0] + " parked=true timer=false", pages[1] + " parked=false timer=false"}, tabs(done), "a changed row, and one with only its path for a row gone")
@@ -475,7 +475,7 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 	require.Empty(t, tabs(done), "each change is sent once")
 
 	path := func(id string) string { return "/s/" + base64.RawURLEncoding.EncodeToString([]byte(id)) }
-	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-00")}, backend.AttentionPark, &soon))
+	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-00")}, backend.AttentionPark, &soon, 0))
 
 	_, done, sessions := list(&ListSessionsRequest{Since: done.Version, SameOrigin: true})
 	require.Len(t, sessions, 1)
@@ -484,7 +484,7 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 	require.Empty(t, tabs(done))
 
 	require.NoError(t, server.sessions.SetAutoParkAll(ctx, "alice", true))
-	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-00")}, backend.AttentionNoAutoPark, nil))
+	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-00")}, backend.AttentionNoAutoPark, nil, 0))
 
 	_, _, sessions = list(&ListSessionsRequest{})
 	require.Equal(t, []bool{false, true}, []bool{sessions["chat-00"].AutoPark, sessions["chat-01"].AutoPark})

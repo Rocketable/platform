@@ -185,7 +185,7 @@ func (s *Server) changeAttention(ctx context.Context, username string, change *A
 		}
 	}
 
-	if err := s.sessions.ChangeAttention(ctx, username, change.Paths, action, until); err != nil {
+	if err := s.sessions.ChangeAttention(ctx, username, change.Paths, action, until, change.Admitted); err != nil {
 		return fmt.Errorf("web tab attention: %w", err)
 	}
 

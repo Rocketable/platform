@@ -2809,7 +2809,7 @@ func TestWebClosedTabs(t *testing.T) {
 	}
 
 	soon := time.Now().Add(time.Hour)
-	require.NoError(t, store.ChangeAttention(ctx, "alice", []string{"/cron"}, AttentionPark, &soon))
+	require.NoError(t, store.ChangeAttention(ctx, "alice", []string{"/cron"}, AttentionPark, &soon, 0))
 	save("alice", pages...)
 	save("alice")
 

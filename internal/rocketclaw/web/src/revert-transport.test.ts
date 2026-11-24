@@ -5,7 +5,7 @@ test("real HTTP Revert commits only retained context and converges across viewer
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
   try {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, ignoreHTTPSErrors: true });
     const first = await context.newPage(), second = await context.newPage();
     const url = process.env.ROCKETCLAW_REVERT_TEST_URL!;
     const errors: string[] = [];

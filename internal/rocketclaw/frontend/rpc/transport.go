@@ -56,7 +56,7 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 		return withoutDatabaseText("UploadAttachment", s.uploadAttachment(stream))
 	}}, {StreamName: "DownloadAttachment", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
 		return withoutDatabaseText("DownloadAttachment", s.downloadAttachment(stream))
-	}}, serverStream("Join", s.join), serverStream("WatchTyping", s.watchTyping), serverStream("Voice", s.voice), serverStream("ListSessions", s.listSessions)}
+	}}, serverStream("Join", s.join), serverStream("WatchTyping", s.watchTyping), serverStream("WatchListing", s.watchListing), serverStream("Voice", s.voice), serverStream("ListSessions", s.listSessions)}
 	registrar.RegisterService(&desc, s)
 }
 

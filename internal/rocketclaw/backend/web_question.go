@@ -88,9 +88,13 @@ func (q *webQuestions) AskUserQuestion(ctx context.Context, req *protocol.AskUse
 }
 
 func (q *webQuestions) change(ctx context.Context, ctes, conversationID, key string, value ...any) error {
-	_, err := execState(ctx, q.store.db, fmt.Sprintf("write turn step %q", key), `WITH `+ctes+` SELECT pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_object('conversationId', $1::text, 'revision', pg_current_xact_id()::text)::text)`, append([]any{conversationID, key}, value...)...)
+	if _, err := execState(ctx, q.store.db, fmt.Sprintf("write turn step %q", key), `WITH `+ctes+` SELECT pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_object('conversationId', $1::text, 'revision', pg_current_xact_id()::text)::text)`, append([]any{conversationID, key}, value...)...); err != nil {
+		return err
+	}
 
-	return err
+	q.store.ringListing()
+
+	return nil
 }
 
 func (r *Runtime) PendingQuestions(ctx context.Context, conversationID string) ([]protocol.AskUserQuestionRequest, error) {

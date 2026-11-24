@@ -3,8 +3,10 @@ package rpc
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
 	"testing"
 
@@ -31,6 +34,8 @@ import (
 type proxyUpstream struct {
 	auth, origin, cookie, uri, body, bridge string
 	calls                                   []string
+	admitted                                int64
+	refuse                                  bool
 }
 
 func (u *proxyUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +63,28 @@ func (u *proxyUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Set-Cookie", "opencode_session=secret")
 	w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
+
+	if prompt, _ := path.Match("/api/session/*/prompt", r.URL.Path); prompt && r.Method == http.MethodPost {
+		if u.refuse {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+
+		var out io.Writer = w
+
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			w.Header().Set("Content-Encoding", "gzip")
+
+			compressed := gzip.NewWriter(w)
+			defer func() { _ = compressed.Close() }()
+
+			out = compressed
+		}
+
+		_, _ = fmt.Fprintf(out, `{"data":{"id":"msg_1","time":{"created":%d}}}`, u.admitted)
+
+		return
+	}
 
 	switch r.URL.Path {
 	case "/api/event":
@@ -125,10 +152,15 @@ func TestOpenCodeProxy(t *testing.T) {
 	upstream := httptest.NewServer(fake)
 	t.Cleanup(upstream.Close)
 
-	handler, sessions, db := startProxyTestRPC(t, upstream.URL)
+	handler, _, db := startProxyTestRPC(t, upstream.URL)
 
 	serve := func(method, target, login string, header http.Header) *httptest.ResponseRecorder {
-		request := httptest.NewRequestWithContext(t.Context(), method, "http://rocketclaw.example"+target, nil)
+		var body io.Reader
+		if method == http.MethodPost {
+			body = strings.NewReader(`{"parts":[]}`)
+		}
+
+		request := httptest.NewRequestWithContext(t.Context(), method, "http://rocketclaw.example"+target, body)
 
 		maps.Copy(request.Header, header)
 
@@ -214,18 +246,40 @@ func TestOpenCodeProxy(t *testing.T) {
 	_, err := db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, title, name, directory, last_updated, synced_at)
 VALUES ('opencode:box:s2', '', '', 'remote', FALSE, 'remote', 'box', 's2', '', '', '/srv', now(), now())`)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, serve(http.MethodPost, "/oc/box/api/session/s2/prompt", "alice", nil).Code)
 
-	listed := 0
+	parked := func() (bool, sql.NullInt64) {
+		t.Helper()
 
-	for chat, err := range sessions.SidebarChats(t.Context(), "alice", &mockChannels{}, []string{"opencode:box:s2"}) {
+		var (
+			parked    bool
+			afterIdle sql.NullInt64
+		)
+
+		err := db.QueryRowContext(t.Context(), `SELECT parked AND until = 'infinity', after_idle FROM web_tab_attention WHERE username = 'alice' AND conversation_id = 'opencode:box:s2'`).Scan(&parked, &afterIdle)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, sql.NullInt64{}
+		}
+
 		require.NoError(t, err)
-		assert.True(t, chat.Session.Attention.Parked && chat.Session.Attention.UntilDone, "%+v", chat.Session.Attention)
 
-		listed++
+		return parked, afterIdle
 	}
 
-	assert.Equal(t, 1, listed)
+	fake.refuse = true
+
+	require.Equal(t, http.StatusConflict, serve(http.MethodPost, "/oc/box/api/session/s2/prompt", "alice", nil).Code)
+
+	on, _ := parked()
+	assert.False(t, on, "a prompt OpenCode refused parks nothing")
+
+	fake.refuse, fake.admitted = false, 1_795_551_291_768
+	response = serve(http.MethodPost, "/oc/box/api/session/s2/prompt", "alice", http.Header{"Accept-Encoding": {"gzip, deflate, br, zstd"}})
+	require.Equal(t, http.StatusOK, response.Code)
+	assert.JSONEq(t, `{"data":{"id":"msg_1","time":{"created":1795551291768}}}`, response.Body.String(), "the browser gets OpenCode's answer")
+
+	on, afterIdle := parked()
+	assert.True(t, on, "an admitted prompt parks its tab until the session is done")
+	assert.Equal(t, sql.NullInt64{Int64: 1_795_551_291_768, Valid: true}, afterIdle, "the park waits for an idle marker after OpenCode admitted the prompt, even when OpenCode compressed its answer")
 }
 
 func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
@@ -355,4 +409,58 @@ func TestOpenCodeProxyLogsOnlyFailuresTheBrowserWaitsFor(t *testing.T) {
 	cancel()
 	proxy.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/event", http.NoBody))
 	assert.Empty(t, logged.String())
+}
+
+func TestWatchListing(t *testing.T) {
+	t.Parallel()
+
+	upstream := httptest.NewServer(&proxyUpstream{})
+	t.Cleanup(upstream.Close)
+
+	handler, sessions, _ := startProxyTestRPC(t, upstream.URL)
+	web := httptest.NewServer(signedIn("alice", handler))
+	t.Cleanup(web.Close)
+
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, web.URL+"/listing", http.NoBody)
+	require.NoError(t, err)
+
+	response, err := web.Client().Do(request)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = response.Body.Close() })
+	require.Equal(t, "text/event-stream", response.Header.Get("Content-Type"))
+
+	events := bufio.NewReader(response.Body)
+	next := func() string {
+		t.Helper()
+
+		for {
+			line, err := events.ReadString('\n')
+			require.NoError(t, err)
+
+			if data, ok := strings.CutPrefix(line, "data: "); ok {
+				return strings.TrimSpace(data)
+			}
+		}
+	}
+
+	assert.Equal(t, "{}", next(), "a watch opens with an event, so a window that reconnects fetches what it missed")
+
+	require.NoError(t, sessions.ChangeAttention(t.Context(), "alice", []string{"/cron"}, backend.AttentionUnread, nil, 0))
+	assert.Equal(t, "{}", next(), "a change to her tabs reaches her window at once")
+
+	whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) {
+		return &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoe@example.com"}}, nil
+	}}
+	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, []string{"https://other.tail1234.ts.net"}, io.Discard, handler))
+	t.Cleanup(tailnet.Close)
+
+	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, tailnet.URL+"/listing", http.NoBody)
+	require.NoError(t, err)
+	request.Header.Set("Origin", "https://other.tail1234.ts.net")
+
+	remote, err := tailnet.Client().Do(request)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = remote.Body.Close() })
+	assert.Equal(t, http.StatusOK, remote.StatusCode)
+	assert.Equal(t, []string{"https://other.tail1234.ts.net"}, remote.Header.Values("Access-Control-Allow-Origin"), "another server's page can watch this server's listing")
 }

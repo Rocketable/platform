@@ -801,5 +801,7 @@ WHERE jsonb_array_length(h.inputs) > 0 AND b.n = 0`, child).Scan(&id, &data, &sh
 		return activeTurn{}, false, fmt.Errorf("commit shadow turn claim: %w", err)
 	}
 
+	s.ringListing()
+
 	return activeTurn{id: turnID, conversationID: child, phase: turnRunning, inbound: inbound}, true, nil
 }

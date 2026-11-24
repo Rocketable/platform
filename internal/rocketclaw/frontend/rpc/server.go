@@ -1772,7 +1772,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	}
 
 	if kind != protocol.InboundKindHeld && !paused {
-		if err := s.sessions.ChangeAttention(ctx, username, []string{"/s/" + base64.RawURLEncoding.EncodeToString([]byte(request.Id))}, backend.AttentionSent, nil); err != nil {
+		if err := s.sessions.ChangeAttention(ctx, username, []string{"/s/" + base64.RawURLEncoding.EncodeToString([]byte(request.Id))}, backend.AttentionSent, nil, 0); err != nil {
 			return nil, fmt.Errorf("web prompt: %w", err)
 		}
 	}

@@ -511,7 +511,11 @@ neither. A remote lets only its own pages and the pages it trusts frame it, so a
 remote's hosted page shows only on a page the remote trusts. Query keys belong
 to the page's server unless they start with `{ server }`.
 
-The session list polls each server on its own schedule and merges their rows by
+The session list polls each server every two seconds, and sooner when that
+server's `/listing` stream says something it shows changed, such as a turn
+starting or ending, a park ending or a question: half a second after its last
+fetch at most, so a busy server cannot keep a window fetching back to back. It
+merges their rows by
 recency; a row is its chat on its server. `viewing` goes only to the page's
 server. A remote that stops answering keeps its rows, greyed and offline; only a
 refusal clears them. Search fans out to every server, and a failing remote drops
@@ -691,15 +695,16 @@ active tab.
 - **Auto-park.** A session you auto-park parks its tab until it is done each
   time you send it a message: Send, Steer, a queued message, or a `/goal`, but
   not a stash or a command the server answers itself, such as `/agent`. For a
-  remote OpenCode session it is each prompt you send from its view; one sent
+  remote OpenCode session it is each prompt you send from its view, parked once
+  OpenCode accepts it and until OpenCode ends the turn that runs it; one sent
   before RocketClaw has listed the session does not park. Config's **Tabs**
   section has **Auto-park sessions**, your choice for every session, on until
   you turn it off, and a
   session tab's menu, Shared rows included, offers **Auto-park
   when I send** or **Stop auto-parking** for that session alone, which then
   wins over the Config choice. Both are yours alone and kept by the server, so
-  they follow you to every device. A message queued behind a running turn
-  parks until that turn ends, not until its own does.
+  they follow you to every device. A message queued behind a running turn of
+  a RocketClaw session parks until that turn ends, not until its own does.
 - **Follow.** Every tab starts followed. Its menu, Shared and parked rows
   included, ends the attention items with **Unfollow**, or **Follow** once you
   unfollowed it; with several tabs selected, Unfollow acts on the followed
