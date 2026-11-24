@@ -139,6 +139,46 @@ func TestPageTools(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestPageReadOpensOtherOwnersPagesInItsSpace(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	threads := &threadBridgeManager{runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Origin: "https://rc.example"}}}), store: store}
+	_, err := store.db.ExecContext(t.Context(), `WITH spaces AS (INSERT INTO web_spaces (name) VALUES ('Ruzuku'), ('Billing') RETURNING id, name)
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, space_id)
+SELECT 'opencode:box:' || name, 'build', '', 'remote', FALSE, 'remote', 'box', name, id FROM spaces`)
+	require.NoError(t, err)
+
+	call := func(owner pageSpace, name, input string) (string, error) {
+		tools := owner.tools()
+
+		result, err := tools[slices.IndexFunc(tools, func(tool harness.Tool) bool { return tool.Name == name })].Call(t.Context(), json.RawMessage(input), nil)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", name, err)
+		}
+
+		return result.Output, nil
+	}
+
+	for _, space := range []string{"Ruzuku", "Billing"} {
+		session := "opencode:box:" + space
+		_, err := call(pageSpace{sessions: store, threads: threads, agent: session, space: space, conversation: session}, "rocketclaw_store", `{"path":"audit/report.html","content":"<p>`+space+`</p>"}`)
+		require.NoError(t, err)
+	}
+
+	deals := pageSpace{sessions: store, threads: threads, agent: "deals", space: "ruzuku"}
+	out, err := call(deals, "rocketclaw_read", `{"agent":"opencode:box:Ruzuku","path":"audit/report.html"}`)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"content_type":"text/html","content":"<p>Ruzuku</p>"}`, out)
+
+	_, err = call(deals, "rocketclaw_read", `{"agent":"opencode:box:Billing","path":"audit/report.html"}`)
+	require.EqualError(t, err, `rocketclaw_read: page file "audit/report.html" not found`)
+
+	out, err = call(pageSpace{sessions: store, threads: threads, agent: "main"}, "rocketclaw_read", `{"agent":"opencode:box:Billing","path":"audit/report.html"}`)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"content_type":"text/html","content":"<p>Billing</p>"}`, out)
+}
+
 func TestPageStoreMarksPageTabs(t *testing.T) {
 	t.Parallel()
 

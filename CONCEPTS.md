@@ -412,7 +412,7 @@ Whether a person wants the server to mark a tab Unread for them. Every tab, Shar
 
 A file an agent published, served by RocketClaw under a URL that names the agent's space, the agent, and the file path.
 
-It belongs to the agent, not to a space: when the agent's space changes, its pages move with it and links under the old space name redirect. Only people the Web admits can open one, and a person with a Space Limit only when the page's space is in it. Page scripts run walled off from RocketClaw and can only read their own agent's Page Data.
+It belongs to the agent, not to a space: when the agent's space changes, its pages move with it and links under the old space name redirect. Only people the Web admits can open one, and a person with a Space Limit only when the page's space is in it. An agent with the page tools reads its own pages and, by the same rule, any other agent's or session's page in its own space; an agent with no space reads every page. Page scripts run walled off from RocketClaw and can only read their own agent's Page Data.
 
 An agent in a remote OpenCode session publishes through its coding server's MCP bridge instead. Such a page belongs to that session, which stands in for the agent: it lives in the session's Birth Space, and it is deleted with the session's RocketClaw copy or with that space. A session with no Birth Space cannot publish pages. Moving one of its pages' tabs to another space in the Web moves the session's Birth Space there, so all its pages follow.
 

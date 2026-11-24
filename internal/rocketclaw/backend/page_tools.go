@@ -20,6 +20,7 @@ import (
 
 type pageToolInput struct {
 	Path          string          `json:"path"`
+	Agent         string          `json:"agent"`
 	Key           string          `json:"key"`
 	Content       string          `json:"content"`
 	ContentBase64 string          `json:"content_base64"`
@@ -114,8 +115,20 @@ func (p pageSpace) nativeTools(root *os.Root, shell *harness.CustomShell) []harn
 }
 
 func (p pageSpace) tools() []harness.Tool {
-	get := func(ctx context.Context, kind PageKind, name string) (Page, error) {
-		page, ok, err := p.sessions.Page(ctx, p.agent, kind, name)
+	get := func(ctx context.Context, owner string, kind PageKind, name string) (Page, error) {
+		page, ok, err := p.sessions.Page(ctx, owner, kind, name)
+		if ok && owner != p.agent {
+			var spaces []string
+			if p.space != "" {
+				spaces = append(spaces, p.space)
+			}
+
+			var limit SpaceLimit
+
+			limit, err = p.sessions.SpaceLimitFor(ctx, spaces)
+			ok = limit.AllowsSpaceName(page.Space) || limit.AllowsAgent(owner)
+		}
+
 		if err == nil && !ok {
 			err = fmt.Errorf("page %s %q not found", kind, name)
 		}
@@ -148,8 +161,8 @@ func (p pageSpace) tools() []harness.Tool {
 
 			return p.storeFile(ctx, input.Path, &file)
 		}),
-		tool("rocketclaw_read", "Return this agent's Hosted Page file at path as JSON with content_type and content, or content_base64 when it is not UTF-8 text.", map[string]any{"path": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
-			page, err := get(ctx, PageFile, input.Path)
+		tool("rocketclaw_read", "Return a Hosted Page file at path as JSON with content_type and content, or content_base64 when it is not UTF-8 text. Leave agent empty for this agent's own pages; to read a page another agent or session published, such as a pasted /pages/<space>/<agent>/<path> link, set agent to that link's URL-decoded <agent> segment and path to the rest. Another owner's page reads only when it is in this agent's space.", map[string]any{"path": str, "agent": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
+			page, err := get(ctx, cmp.Or(input.Agent, p.agent), PageFile, input.Path)
 			if err != nil {
 				return "", err
 			}
@@ -177,7 +190,7 @@ func (p pageSpace) tools() []harness.Tool {
 			return "stored " + input.Key, p.put(ctx, PageData, input.Key, "application/json", input.Value)
 		}),
 		tool("rocketclaw_kv_read", "Return the JSON value this agent stored as Page Data at key.", map[string]any{"key": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
-			page, err := get(ctx, PageData, input.Key)
+			page, err := get(ctx, p.agent, PageData, input.Key)
 			return string(page.Body), err
 		}),
 		tool("rocketclaw_delete", "Delete this agent's Hosted Page file at path, or its Page Data at key; give exactly one, leaving the other empty.", map[string]any{"path": str, "key": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
