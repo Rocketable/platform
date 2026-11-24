@@ -231,12 +231,29 @@ func newReadText(path, mimeType, content string, size, startLine, totalLines int
 			return nil, fmt.Errorf("numbered: %w", err)
 		}
 
-		var lines []string
+		var (
+			output strings.Builder
+			digits [20]byte
+		)
+
+		lineNumber := startLine
 		for line := range strings.Lines(content) {
-			lines = append(lines, fmt.Sprintf("%d: %s", startLine+len(lines), strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")))
+			number := strconv.AppendInt(digits[:0], int64(lineNumber), 10)
+
+			if output.Len() > 0 {
+				output.WriteByte('\n')
+			} else {
+				output.Grow(len(content) + len(number) + len(": "))
+			}
+
+			output.Write(number)
+			output.WriteString(": ")
+			output.WriteString(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"))
+
+			lineNumber++
 		}
 
-		return starlark.String(strings.Join(lines, "\n")), nil
+		return starlark.String(output.String()), nil
 	})
 
 	return codemode.NewText("text", content, starlark.StringDict{
