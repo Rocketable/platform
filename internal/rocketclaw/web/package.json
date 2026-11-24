@@ -20,7 +20,7 @@
     "@tanstack/react-query": "^5.108.4",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.5.2",
-    "lucide-react": "^1.78.0",
+    "lucide-react": "^1.79.0",
     "postcss": "^8.5.33",
     "posthog-js": "^1.454.2",
     "react": "^19.3.1",
