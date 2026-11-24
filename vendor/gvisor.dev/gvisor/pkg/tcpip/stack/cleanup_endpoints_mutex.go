@@ -55,6 +55,18 @@ func (m *cleanupEndpointsMutex) NestedUnlock(i cleanupEndpointslockNameIndex) {
 	m.mu.Unlock()
 }
 
+// LockBypass locks m without executing the validator.
+// +checklocksignore
+func (m *cleanupEndpointsMutex) LockBypass() {
+	m.mu.Lock()
+}
+
+// UnlockBypass undoes a single LockBypass call.
+// +checklocksignore
+func (m *cleanupEndpointsMutex) UnlockBypass() {
+	m.mu.Unlock()
+}
+
 // DO NOT REMOVE: The following function is automatically replaced.
 func cleanupEndpointsinitLockNames() {}
 

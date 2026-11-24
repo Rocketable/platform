@@ -55,6 +55,18 @@ func (m *forwarderRequestMutex) NestedUnlock(i forwarderRequestlockNameIndex) {
 	m.mu.Unlock()
 }
 
+// LockBypass locks m without executing the validator.
+// +checklocksignore
+func (m *forwarderRequestMutex) LockBypass() {
+	m.mu.Lock()
+}
+
+// UnlockBypass undoes a single LockBypass call.
+// +checklocksignore
+func (m *forwarderRequestMutex) UnlockBypass() {
+	m.mu.Unlock()
+}
+
 // DO NOT REMOVE: The following function is automatically replaced.
 func forwarderRequestinitLockNames() {}
 
