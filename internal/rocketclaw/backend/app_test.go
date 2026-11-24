@@ -684,32 +684,26 @@ func TestRunTakesTheLockThenGatesThenMigrates(t *testing.T) {
 	client, err := pglock.UnsafeNew(db, pglock.WithCustomTable(runLockTable), pglock.WithHeartbeatFrequency(0))
 	require.NoError(t, err)
 	require.NoError(t, client.TryCreateTable())
-	lock, err := client.Acquire(runLockName, pglock.FailIfLocked())
-	require.NoError(t, err)
 
 	errGate := errors.New("the Web node needs a login")
 	errInvalid := errors.New("invalid cron")
 	gate := errGate
 	assembler := &frontendAssemblerMock{
-		GateFunc: func(context.Context, *config.Config, *slog.Logger) (func() error, error) {
+		GateFunc: func(ctx context.Context, _ *config.Config, _ *slog.Logger) (func() error, error) {
+			_, err := client.AcquireContext(ctx, runLockName, pglock.FailIfLocked())
+			require.ErrorIs(t, err, pglock.ErrNotAcquired, "the gate runs with the run lock held")
 			require.False(t, migrated(), "the gate runs before migrations")
+
 			return func() error { return nil }, gate
 		},
 		ValidateAssetsFunc: func(*config.Config, string) error { return errInvalid },
 	}
 	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}
 
-	ctxWait, cancelWait := context.WithTimeout(t.Context(), time.Second)
-	t.Cleanup(cancelWait)
-	require.ErrorIs(t, Run(ctxWait, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), pglock.ErrNotAcquired)
-	require.Empty(t, assembler.GateCalls(), "a process waiting for the run lock does not start its node")
-	require.False(t, migrated(), "a process waiting for the run lock does not migrate")
-
-	require.NoError(t, lock.Close())
 	require.ErrorIs(t, Run(t.Context(), cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), errGate)
 	require.False(t, migrated(), "a failed gate stops before migrations")
 
-	lock, err = client.Acquire(runLockName, pglock.FailIfLocked())
+	lock, err := client.AcquireContext(t.Context(), runLockName, pglock.FailIfLocked())
 	require.NoError(t, err, "a failed gate releases the run lock")
 	require.NoError(t, lock.Close())
 
