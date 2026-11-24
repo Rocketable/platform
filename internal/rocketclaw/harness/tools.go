@@ -475,6 +475,15 @@ var (
 )
 
 func renderSkillArguments(output, arguments string) string {
+	tokens := skillPlaceholderPattern.FindAllString(output, -1)
+	if len(tokens) == 0 {
+		if arguments == "" {
+			return output
+		}
+
+		return output + "\n\n" + arguments
+	}
+
 	positions := skillArgumentPattern.FindAllString(arguments, -1)
 	for i, argument := range positions {
 		if len(argument) >= 2 && (argument[0] == '"' || argument[0] == '\'') && argument[len(argument)-1] == argument[0] {
@@ -485,7 +494,7 @@ func renderSkillArguments(output, arguments string) string {
 	indices := map[string]int{}
 	highest := 0
 
-	for _, token := range skillPlaceholderPattern.FindAllString(output, -1) {
+	for _, token := range tokens {
 		if token == "$ARGUMENTS" {
 			continue
 		}
@@ -499,9 +508,7 @@ func renderSkillArguments(output, arguments string) string {
 		highest = max(highest, index)
 	}
 
-	hasPlaceholder := highest > 0 || strings.Contains(output, "$ARGUMENTS")
-
-	output = skillPlaceholderPattern.ReplaceAllStringFunc(output, func(token string) string {
+	return skillPlaceholderPattern.ReplaceAllStringFunc(output, func(token string) string {
 		if token == "$ARGUMENTS" {
 			return arguments
 		}
@@ -517,11 +524,6 @@ func renderSkillArguments(output, arguments string) string {
 
 		return positions[index-1]
 	})
-	if !hasPlaceholder && arguments != "" {
-		output += "\n\n" + arguments
-	}
-
-	return output
 }
 
 func functionTool(name, description string, properties map[string]any) *responses.FunctionToolParam {
