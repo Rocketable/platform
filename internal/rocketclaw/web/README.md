@@ -319,8 +319,10 @@ The current point survives reload and daemon restart. Queued work stays and runs
 from the new point. Sending a new prompt starts a new branch at the current
 point; the messages that were after it stay as another branch.
 
-**Message Tree.** `/tree`, or the panel toggle, opens a side panel with every
-branch of the chat: one line per request and agent reply, the current branch
+**Message Tree.** `/tree`, or "Show message tree" in the command palette
+(Cmd/Ctrl+P or Cmd/Ctrl+Shift+P), opens a side panel with every branch of the
+chat; while it is open, the palette offers "Hide message tree" instead. The
+panel has one line per request and agent reply, the current branch
 first, with folding and a switch that shows only your messages. Picking an agent
 reply, or the end of another branch, continues from it; picking a request goes
 back to just before it, as Revert does. A pick never clears text you typed.
