@@ -81,6 +81,10 @@ type SessionSearch struct {
 }
 
 func parseSessionQuery(query string) (terms []SearchTerm, text string) {
+	if !strings.ContainsRune(query, ':') {
+		return nil, strings.TrimSpace(query)
+	}
+
 	var rest strings.Builder
 
 	kept, units := 0, 0
