@@ -189,7 +189,7 @@ func (p *printer) body(list []syntax.Stmt) {
 
 func (p *printer) list(left string, items []syntax.Expr, right string, kind closing) {
 	wide, comment := p.measure(func(q *printer) { q.list(left, items, right, kind) })
-	broken := wide && len(items) > 1 || comment
+	broken := wide && len(items) > 1 || comment || len(p.pending) > 0 && len(items) > 0
 
 	p.write(left)
 
