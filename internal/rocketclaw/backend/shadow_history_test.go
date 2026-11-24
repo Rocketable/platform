@@ -19,8 +19,8 @@ func TestShadowHistoryWaitingInventory(t *testing.T) {
 	store, _ := newShadowTestStore(t)
 	ctx := t.Context()
 	runtime := &Runtime{Sessions: store}
-	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main"}))
-	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "other", Agent: "main"}))
+	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "primary"}))
+	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "other", Agent: "primary"}))
 	_, err := store.db.ExecContext(ctx, `INSERT INTO shadow_turns
 (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json)
 SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE shadow_parent IS NOT NULL`)
@@ -33,7 +33,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 
 	for i, shadow := range view.Shadows {
 		require.Equal(t, "parent", shadow.ParentConversationID)
-		require.Equal(t, []string{"main/a", "main/z"}[i], shadow.ShadowAgent)
+		require.Equal(t, []string{"primary/a", "primary/z"}[i], shadow.ShadowAgent)
 		require.Len(t, shadow.Turns, 1)
 		require.Equal(t, "parent", shadow.Turns[0].ParentSourceConversationID)
 		require.Equal(t, "waiting", shadow.Turns[0].ParentTurnID)
@@ -73,7 +73,7 @@ func TestShadowHistorySourcePagesAndChildRevision(t *testing.T) {
 
 	runtime := &Runtime{Sessions: store}
 	for _, id := range []string{"parent", "producer", "other"} {
-		require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
+		require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "primary", CreatedBy: "alice"}))
 	}
 
 	first := testSessionEntry("same prompt", "first answer")
@@ -184,7 +184,7 @@ func TestShadowHistoryIsAbsentFromOrdinaryEnumeration(t *testing.T) {
 	store, _ := newShadowTestStore(t)
 	ctx := t.Context()
 	runtime := &Runtime{Sessions: store}
-	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main"}))
+	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "primary"}))
 	children, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL`, "test children")
 	require.NoError(t, err)
 
@@ -240,13 +240,13 @@ func TestShadowPublicMutationsAreReadOnly(t *testing.T) {
 	t.Cleanup(shutdown)
 
 	runtime := &Runtime{Sessions: store, Cfg: store.definitions, threads: manager}
-	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main"}))
+	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "primary"}))
 
 	var child string
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY shadow_agent LIMIT 1`).Scan(&child))
 	_, err := store.AppendEntryID(ctx, child, testSessionEntry("retained input", "retained answer"))
 	require.NoError(t, err)
-	require.NoError(t, store.startSubagent(ctx, child, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, Agent: "main"}))
+	require.NoError(t, store.startSubagent(ctx, child, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, Agent: "primary"}))
 
 	for _, id := range []string{child, child + "/task"} {
 		for _, action := range []string{"fork", "delete", "upload", "stage", "redo", "prompt", "cancel", "goal", "pop", "promote", "delete queue", "reorder", "stash", "switch", "move background", "stop background", "answer"} {
@@ -254,7 +254,7 @@ func TestShadowPublicMutationsAreReadOnly(t *testing.T) {
 
 			switch action {
 			case "fork":
-				_, err = store.ForkConversation(ctx, id, protocol.Conversation{ID: "off-contract-fork", Agent: "main"}, "")
+				_, err = store.ForkConversation(ctx, id, protocol.Conversation{ID: "off-contract-fork", Agent: "primary"}, "")
 			case "delete":
 				_, err = store.DeleteSession(ctx, id)
 			case "upload":
@@ -287,7 +287,7 @@ func TestShadowPublicMutationsAreReadOnly(t *testing.T) {
 			case "stash":
 				err = runtime.StashQueueItem(ctx, id, &protocol.ThreadQueueItem{ID: "item", Source: protocol.SourceWeb})
 			case "switch":
-				_, err = runtime.SwitchConversationAgent(id, "main")
+				_, err = runtime.SwitchConversationAgent(id, "primary")
 			case "move background":
 				_, err = runtime.MoveToBackground(t.Context(), id)
 			case "stop background":
@@ -318,16 +318,16 @@ func TestShadowHistoryChangeSignals(t *testing.T) {
 
 	runtime := &Runtime{Sessions: store}
 	for _, id := range []string{"parent", "producer", "unrelated"} {
-		require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
+		require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "primary"}))
 	}
 
 	_, err := store.db.ExecContext(ctx, `UPDATE conversations SET producer_inbound_json = '{"SyncDestination":"parent"}', reports_to = 'parent' WHERE conversation_id = 'producer'`)
 	require.NoError(t, err)
 
 	var child, producerChild string
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'parent' AND shadow_agent = 'main/a'`).Scan(&child))
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'producer' AND shadow_agent = 'main/a'`).Scan(&producerChild))
-	require.NoError(t, store.startSubagent(ctx, child, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, Agent: "main"}))
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'parent' AND shadow_agent = 'primary/a'`).Scan(&child))
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'producer' AND shadow_agent = 'primary/a'`).Scan(&producerChild))
+	require.NoError(t, store.startSubagent(ctx, child, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, Agent: "primary"}))
 	conn, err := store.db.Conn(ctx)
 
 	require.NoError(t, err)

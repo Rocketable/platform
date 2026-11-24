@@ -1350,12 +1350,27 @@ WHERE m.conversation_id = $1`, source).Scan(&data, &owner, &active); err != nil 
 			return fmt.Errorf("load web agents: %w", err)
 		}
 
-		if definitions.Items[inbound.Cronjob.Agent].Sticky == harness.AgentStickyGlobal {
+		agent, loaded := definitions.Items[inbound.Cronjob.Agent]
+		if agent.Sticky == harness.AgentStickyGlobal {
 			if err := tx.Commit(); err != nil {
 				return fmt.Errorf("commit producer handoff check: %w", err)
 			}
 
 			return b.openCronReport(ctx, &protocol.OutboundMessage{Cronjob: inbound.Cronjob})
+		}
+
+		if !loaded {
+			if _, err := execState(ctx, tx, "drop cron follow-ups", `DELETE FROM turns WHERE conversation_id = $1 AND phase = 'waiting' AND reason = $2 AND run_at_unix_ns <= $3`, source, waitScheduled, timeUnixNano(time.Now())); err != nil {
+				return err
+			}
+
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("commit cron follow-up drop: %w", err)
+			}
+
+			b.log.Error("cron follow-up dropped: agent is not loaded", "agent", inbound.Cronjob.Agent)
+
+			return nil
 		}
 
 		var recorded bool
@@ -1364,17 +1379,11 @@ WHERE m.conversation_id = $1`, source).Scan(&data, &owner, &active); err != nil 
 		}
 
 		if !recorded {
-			choices := slices.DeleteFunc(definitions.PrimaryNames(), func(name string) bool { return definitions.Items[name].Sticky != harness.AgentStickyOff })
-			if len(choices) == 0 {
-				return errors.New("create canonical web conversation: no loaded agents")
-			}
-
-			space := cmp.Or(inbound.Cronjob.Space, definitions.Items[inbound.Cronjob.Agent].Space)
-			if _, err := dao.createConversation(ctx, protocol.Conversation{ID: web, Agent: choices[0], CreatedBy: string(ThreadCreatedByCron), Space: space}, conversationFacts{kind: KindWebChat, cronRun: source}, harness.AgentStickyOff); err != nil {
+			if _, err := dao.createConversation(ctx, protocol.Conversation{ID: web, Agent: inbound.Cronjob.Agent, CreatedBy: string(ThreadCreatedByCron), Space: cmp.Or(inbound.Cronjob.Space, agent.Space)}, conversationFacts{kind: KindWebChat, cronRun: source}, harness.AgentStickyOff); err != nil {
 				return err
 			}
 
-			if _, err := b.config.SessionService.reconcileShadows(ctx, tx, web, choices[0]); err != nil {
+			if _, err := b.config.SessionService.reconcileShadows(ctx, tx, web, inbound.Cronjob.Agent); err != nil {
 				return err
 			}
 		}
@@ -1922,7 +1931,12 @@ func (b *Bridge) openCronReport(ctx context.Context, outbound *protocol.Outbound
 		return fmt.Errorf("load cron agents: %w", err)
 	}
 
-	agent := agents.Items[outbound.Cronjob.Agent]
+	agent, ok := agents.Items[outbound.Cronjob.Agent]
+	if !ok {
+		b.log.Error("cron report chat not opened: agent is not loaded", "agent", outbound.Cronjob.Agent)
+		return nil
+	}
+
 	destination := protocol.Conversation{ID: "web:" + b.config.ConversationID, Agent: outbound.Cronjob.Agent, CreatedBy: string(ThreadCreatedByCron), Space: cmp.Or(outbound.Cronjob.Space, agent.Space)}
 	facts := conversationFacts{kind: KindWebChat, cronRun: b.config.ConversationID}
 
@@ -2823,19 +2837,19 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 
 func loadRocketCodeDefinitionsIn(root *os.Root, locked *config.LockedConfig, runtimeDir string, layer map[string]string) (agents harness.Agents, skills harness.Skills, err error) {
 	err = locked.Do(func(cfg *config.Config) error {
-		agents, skills, err = readRocketCodeDefinitionsIn(root, cfg, runtimeDir, layer, true)
+		agents, skills, _, err = readRocketCodeDefinitionsIn(root, cfg, runtimeDir, layer, true)
 		return err
 	})
 
 	return agents, skills, err
 }
 
-func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir string, layer map[string]string, includeSkills bool) (harness.Agents, harness.Skills, error) {
+func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir string, layer map[string]string, includeSkills bool) (harness.Agents, harness.Skills, []string, error) {
 	rootFS := root.FS()
 
 	agentsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(runtimeDir, "agents")))
 	if err != nil {
-		return harness.Agents{}, harness.Skills{}, fmt.Errorf("open agents dir: %w", err)
+		return harness.Agents{}, harness.Skills{}, nil, fmt.Errorf("open agents dir: %w", err)
 	}
 
 	if layer != nil {
@@ -2855,11 +2869,13 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 
 			return nil
 		}); err != nil {
-			return harness.Agents{}, harness.Skills{}, fmt.Errorf("read agents dir: %w", err)
+			return harness.Agents{}, harness.Skills{}, nil, fmt.Errorf("read agents dir: %w", err)
 		}
 
 		for name, text := range layer {
-			files[name] = &fstest.MapFile{Data: []byte(text)}
+			if agent, _, _ := strings.Cut(strings.TrimSuffix(name, ".md"), "/"); !skel.BuiltinAgent(agent) {
+				files[name] = &fstest.MapFile{Data: []byte(text)}
+			}
 		}
 
 		agentsFS = files
@@ -2867,12 +2883,53 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 
 	skillsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(runtimeDir, "skills")))
 	if err != nil {
-		return harness.Agents{}, harness.Skills{}, fmt.Errorf("open skills dir: %w", err)
+		return harness.Agents{}, harness.Skills{}, nil, fmt.Errorf("open skills dir: %w", err)
 	}
 
 	agents, err := loadAgentDefinitions(agentsFS, skillsFS, cfg)
 	if err != nil {
-		return harness.Agents{}, harness.Skills{}, err
+		return harness.Agents{}, harness.Skills{}, nil, err
+	}
+
+	builtin, err := loadAgentDefinitions(skel.BuiltinAgents(), skillsFS, cfg)
+	if err != nil {
+		return harness.Agents{}, harness.Skills{}, nil, fmt.Errorf("load built-in agents: %w", err)
+	}
+
+	about := strings.ReplaceAll(strings.TrimSpace(skel.About), "{revision}", cmp.Or(cfg.Revision, "main"))
+	switch {
+	case cfg.Revision == "":
+		about += "\n\nThis build's revision is unknown, so these links point at the main branch and may not match the running code."
+	case cfg.RevisionModified:
+		about += "\n\nThis build has local changes, so these links may not match the running code."
+	}
+
+	var warnings []string
+
+	for _, embedded := range [...]struct {
+		name    string
+		setting config.EmbeddedAgentConfig
+	}{{"main", cfg.EmbeddedAgents.Main}, {"voice", cfg.EmbeddedAgents.Voice}} {
+		if embedded.setting.Disabled {
+			delete(agents.Items, embedded.name)
+			continue
+		}
+
+		agent := builtin.Items[embedded.name]
+		if provider, _, qualified := strings.Cut(embedded.setting.Model, "/"); qualified && !slices.Contains(cfg.ProviderNames(), provider) {
+			warnings = append(warnings, "Agent "+embedded.name+" uses its shipped model because its Behavior Settings model names provider "+provider+", which is not configured.")
+		} else if embedded.setting.Model != "" {
+			agent.Model, agent.ReasoningEffort = harness.ParseModelRef(embedded.setting.Model)
+		}
+
+		agent.Prompt += "\n\n" + about
+		agents.Items[embedded.name] = agent
+	}
+
+	agents, errsReviewer := agents.WithoutInvalidReviewers()
+	for _, err := range errsReviewer {
+		errReviewer, _ := errors.AsType[*harness.AgentReviewerError](err)
+		warnings = append(warnings, "Agent "+errReviewer.Agent+" was not loaded: "+errReviewer.Err.Error()+".")
 	}
 
 	var skills harness.Skills
@@ -2894,7 +2951,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 				continue
 			}
 
-			return harness.Agents{}, harness.Skills{}, fmt.Errorf("%s: %w", agent.Location, err)
+			return harness.Agents{}, harness.Skills{}, nil, fmt.Errorf("%s: %w", agent.Location, err)
 		}
 
 		agent.Permission.Buckets = slices.DeleteFunc(agent.Permission.Buckets, func(bucket harness.PermissionBucket) bool {
@@ -2926,7 +2983,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 		agents.Items[name] = agent
 	}
 
-	return agents, skills, nil
+	return agents, skills, warnings, nil
 }
 
 func loadAgentDefinitions(agentsFS, skillsFS fs.FS, cfg *config.Config) (harness.Agents, error) {
@@ -2975,7 +3032,7 @@ func LoadRuntimeAgents(cfg *config.LockedConfig, runtimeDir string) (agents harn
 	defer func() { _ = root.Close() }()
 
 	err = cfg.Do(func(current *config.Config) error {
-		agents, _, err = readRocketCodeDefinitionsIn(root, current, runtimeDir, nil, false)
+		agents, _, _, err = readRocketCodeDefinitionsIn(root, current, runtimeDir, nil, false)
 		return err
 	})
 

@@ -24,8 +24,8 @@ test("real child-only changes refresh paired shadow turns through the parent str
       if (requestURL.pathname === "/api/History" && !requestURL.searchParams.has("pull-request-discovery")) pendingReads--;
     });
     await page.goto(`${url}/s/${btoa("parent")}`);
-    const a = page.getByRole("tab", { name: "main/a", exact: true });
-    const b = page.getByRole("tab", { name: "main/b", exact: true });
+    const a = page.getByRole("tab", { name: "primary/a", exact: true });
+    const b = page.getByRole("tab", { name: "primary/b", exact: true });
     for (const turn of [1, 2]) {
       await page.locator("textarea").fill("Repeated prompt");
       await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -39,8 +39,8 @@ test("real child-only changes refresh paired shadow turns through the parent str
     expect(await rows.count()).toBe(2);
     const before = await (await page.request.post(`${url}/api/History`, { data: { id: "parent" } })).json() as HistoryView;
     expect(before.shadows).toHaveLength(2);
-    const bindingA = before.shadows!.find((binding) => binding.shadowAgent === "main/a")!;
-    const bindingB = before.shadows!.find((binding) => binding.shadowAgent === "main/b")!;
+    const bindingA = before.shadows!.find((binding) => binding.shadowAgent === "primary/a")!;
+    const bindingB = before.shadows!.find((binding) => binding.shadowAgent === "primary/b")!;
     expect(bindingA.childConversationId).not.toBe(bindingB.childConversationId);
     const turnIDs = bindingA.turns.map((turn) => turn.parentTurnId);
     expect(new Set(turnIDs).size).toBe(2);
@@ -68,7 +68,7 @@ test("real child-only changes refresh paired shadow turns through the parent str
     const after = await (await page.request.post(`${url}/api/History`, { data: { id: "parent" } })).json() as HistoryView;
     expect(after.revision).not.toBe(before.revision);
     expect(await rows.evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => (node.children[0] as HTMLElement).innerText))).toEqual(parentText);
-    expect(after.shadows!.find((binding) => binding.shadowAgent === "main/a")!.turns.every((turn) => turn.terminal === "complete" && !turn.running && !!turn.childTurnId)).toBe(true);
+    expect(after.shadows!.find((binding) => binding.shadowAgent === "primary/a")!.turns.every((turn) => turn.terminal === "complete" && !turn.running && !!turn.childTurnId)).toBe(true);
     const alignment = async () => {
       const differences = await rows.evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => {
         const parentHeader = node.children[0].querySelector("p")!;

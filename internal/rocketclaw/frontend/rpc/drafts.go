@@ -213,7 +213,7 @@ func (s *Server) draftLayers(ctx context.Context, request *DraftLayersRequest) (
 		return nil, agentDraftError("DraftLayers", err)
 	}
 
-	response := &DraftLayersResponse{HiddenBy: layers.HiddenBy, Replaces: layers.Replaces, Recreated: layers.Recreated, Next: layers.Next, Branch: layers.Branch, Unpushable: layers.Unpushable}
+	response := &DraftLayersResponse{HiddenBy: layers.HiddenBy, Replaces: layers.Replaces, Next: layers.Next, Branch: layers.Branch, Unpushable: layers.Unpushable}
 	for _, layer := range layers.Layers {
 		response.Layers = append(response.Layers, &AgentLayer{Layer: layer.Layer, Ref: layer.Ref, File: layer.File})
 	}

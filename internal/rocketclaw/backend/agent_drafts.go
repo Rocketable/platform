@@ -54,10 +54,7 @@ const (
 	AgentDraftLive    AgentDraftSaveState = "live"
 )
 
-const (
-	agentDraftWorkspaceLayer = "workspace"
-	agentDraftBuiltinLayer   = "built-in"
-)
+const agentDraftWorkspaceLayer = "workspace"
 
 const notifyAgentDraft = `pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_object('conversationId', 'draft:' || draft_id, 'revision', pg_current_xact_id()::text)::text)`
 
@@ -161,6 +158,22 @@ type AgentDraftOpError struct{ Problem string }
 
 func (e *AgentDraftOpError) Error() string { return e.Problem }
 
+func checkAgentDraftName(name string) error {
+	if !agentDraftNamePattern.MatchString(name) {
+		return &AgentDraftNameError{Name: name}
+	}
+
+	return builtinAgentDraftError(name)
+}
+
+func builtinAgentDraftError(name string) error {
+	if skel.BuiltinAgent(name) {
+		return &AgentDraftOpError{Problem: fmt.Sprintf("%q belongs to a built-in agent: give the draft another name.", name)}
+	}
+
+	return nil
+}
+
 func AgentDraftTemplates() []string {
 	entries, _ := agentDraftTemplates.ReadDir("agent_templates")
 	names := make([]string, 0, len(entries))
@@ -173,8 +186,8 @@ func AgentDraftTemplates() []string {
 }
 
 func (s *SessionService) CreateAgentDraft(ctx context.Context, author string, origin AgentDraftOrigin) (*AgentDraft, error) {
-	if !agentDraftNamePattern.MatchString(origin.Name) {
-		return nil, &AgentDraftNameError{Name: origin.Name}
+	if err := checkAgentDraftName(origin.Name); err != nil {
+		return nil, err
 	}
 
 	effective, bases, err := s.agentLayerFiles(origin.Name)
@@ -231,6 +244,10 @@ func (s *SessionService) LoadAgentDraft(ctx context.Context, id string) (*AgentD
 
 func (s *SessionService) captureAgentDraft(ctx context.Context, id string, metadata map[string]string) (draft *AgentDraft, live *string, files map[string]string, err error) {
 	draft, err = s.LoadAgentDraft(ctx, id)
+	if err == nil {
+		err = builtinAgentDraftError(draft.Name)
+	}
+
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -482,8 +499,8 @@ func (s *SessionService) agentDraftChanges(ctx context.Context, draft *AgentDraf
 			}
 		}
 	case AgentDraftRename:
-		if !agentDraftNamePattern.MatchString(op.Value) {
-			return nil, &AgentDraftNameError{Name: op.Value}
+		if err := checkAgentDraftName(op.Value); err != nil {
+			return nil, err
 		}
 
 		var err error

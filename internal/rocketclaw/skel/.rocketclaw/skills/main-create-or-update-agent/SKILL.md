@@ -24,6 +24,12 @@ Only use these runtime paths:
 - after all requested `agents/` overlay edits are complete, call `rocketclaw_reload` exactly once so the runtime validates and reloads the updated agent definitions. Use `rocketclaw_restart` instead only when setup fields in `rocketclaw.json` changed. Model mappings, Slack channel agents, and the overlay list are Behavior Settings that an admin changes on the Web Config page; they apply on save and need neither reload nor restart. Do not call reload or restart for memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.
 - never edit `.rocketclaw` directly
 
+## Built-in agents
+
+`main` and `voice` are built into RocketClaw and have no file under `.rocketclaw/agents`. Never create, copy, edit, or rename anything to `agents/main.md`, `agents/voice.md`, `agents/main/` or `agents/voice/`: RocketClaw ignores those files and logs a warning. An admin turns each built-in agent on or off and picks its model on the Web Config page, under Behavior settings. For any other change, create a new agent with another name.
+
+No agent can delegate to `main` or `voice`: never give an agent a `task` rule for them, an `auto(main)` or `auto(voice)` reviewer, or a plan to write into their sessions.
+
 ## Required inputs
 
 For creation, you must know:
@@ -320,7 +326,7 @@ The optional `schema.output` frontmatter field is a YAML JSON Schema for that ag
 
 The optional `space` frontmatter field is one Web space name string. A Web session started with the agent is born in that space, which is created when missing, and a session whose agent has a `space` offers only agents with the same `space`, ignoring case, unless none of the agents its Slack channel allows has it; a cron without its own `space` uses its agent's. Set or change it only when the human asks, and carry it over on updates and renames. A non-string value fails agent loading.
 
-The optional `sticky` frontmatter field, in advanced and easy agents alike, is `off` (the default), `user`, `global` or `slack`; any other value fails agent loading. `user` keeps one Web session per person and `global` one shared by everyone: a new Web session with the agent opens that existing one instead. Such a session switches only to agents with the same `sticky` value and cannot be forked, and only `user` agents are offered on the Voice page. A sticky agent is never another agent's `task` subagent or permission reviewer, though it may delegate, including to itself. A `global` agent's cron and routine runs report into its one session; a `user` agent cannot be scheduled, so never give it `routines` or name it in a cron file. `slack` makes the agent answer only in Slack: one Channel Session per channel and one Thread Session per thread; it is not offered for new Web sessions, cannot be scheduled either, and only `slack` agents answer in Slack channels. Set or change it only when the human asks, and carry it over on updates and renames.
+The optional `sticky` frontmatter field, in advanced and easy agents alike, is `off` (the default), `user`, `global` or `slack`; any other value fails agent loading. `user` keeps one Web session per person and `global` one shared by everyone: a new Web session with the agent opens that existing one instead. Such a session switches only to agents with the same `sticky` value and cannot be forked, and only `user` agents are offered on the Voice page. A sticky agent is never another agent's `task` subagent or permission reviewer, though it may delegate, including to itself unless it is the built-in `main` or `voice`. A `global` agent's cron and routine runs report into its one session; a `user` agent cannot be scheduled, so never give it `routines` or name it in a cron file. `slack` makes the agent answer only in Slack: one Channel Session per channel and one Thread Session per thread; it is not offered for new Web sessions, cannot be scheduled either, and only `slack` agents answer in Slack channels. Set or change it only when the human asks, and carry it over on updates and renames.
 
 Preserve any other valid frontmatter keys unless the human asked to change them.
 

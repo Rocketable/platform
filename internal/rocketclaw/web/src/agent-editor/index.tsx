@@ -275,13 +275,19 @@ function TemplateList({ busy, onUse }: { busy: boolean; onUse: (template: string
   </div>;
 }
 
+export function BuiltInNote() {
+  return <p className="ml-auto max-w-64 text-right text-xs text-muted-foreground">Built in. Turn it on or off and choose its model in Config → Behavior settings.</p>;
+}
+
 function AgentList({ busy, onCopy, onEdit }: { busy: boolean; onCopy: (agent: string) => void; onEdit: (agent: string) => void }) {
   const agents = useQuery(queries.agents()).data?.agents;
   return <div className="flex flex-col divide-y rounded-lg border">
     {agents?.map((agent) => <div key={agent.name} className="flex items-center gap-2 px-3 py-2">
       <span className="min-w-0 truncate font-mono text-sm">{agent.name}</span>
-      <Button size="sm" variant="ghost" className="ml-auto" aria-label={`Edit ${agent.name}`} disabled={busy} onClick={() => onEdit(agent.name)}>Edit</Button>
-      <Button size="sm" variant="outline" aria-label={`Copy ${agent.name}`} disabled={busy} onClick={() => onCopy(agent.name)}>Copy</Button>
+      {agent.origin === "built-in" ? <BuiltInNote /> : <>
+        <Button size="sm" variant="ghost" className="ml-auto" aria-label={`Edit ${agent.name}`} disabled={busy} onClick={() => onEdit(agent.name)}>Edit</Button>
+        <Button size="sm" variant="outline" aria-label={`Copy ${agent.name}`} disabled={busy} onClick={() => onCopy(agent.name)}>Copy</Button>
+      </>}
     </div>)}
   </div>;
 }

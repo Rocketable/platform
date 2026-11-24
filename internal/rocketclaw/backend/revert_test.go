@@ -72,7 +72,7 @@ func TestRevertSettlesAndPreservesWaitingWork(t *testing.T) {
 	b := newBridge()
 	b.config.ConversationID = "main"
 
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
 	id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("replace", "abandoned"))
 	require.NoError(t, err)
 
@@ -171,7 +171,7 @@ func TestRevertWaitsForDeliverySettlement(t *testing.T) {
 			b := newBridge()
 			b.config.ConversationID = "main"
 
-			require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+			require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
 			id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("old", "answer"))
 			require.NoError(t, err)
 
@@ -232,7 +232,7 @@ func TestRevertStorageLifecycle(t *testing.T) {
 	t.Run("mapped mid-turn suffix", func(t *testing.T) {
 		s, _ := newShadowTestStore(t)
 		ctx := t.Context()
-		require.NoError(t, s.UpsertThread("parent", ThreadState{Agent: "main"}))
+		require.NoError(t, s.UpsertThread("parent", ThreadState{Agent: "primary"}))
 
 		first := testSessionEntry("first", "kept")
 		first.TurnID = "first"
@@ -873,7 +873,7 @@ func TestRevertProviderPrefixAndCompletedRetry(t *testing.T) {
 	b := newBridge()
 	b.config.ConversationID = "main"
 
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
 
 	entry := testSessionEntry("retained", "retained answer")
 	entry.ReplayInput = append(entry.ReplayInput, testSessionEntry("abandoned", "abandoned answer").ReplayInput...)
@@ -921,7 +921,7 @@ func TestRevertCompletedFallbackAndPreparationFailure(t *testing.T) {
 	b := newBridge()
 	b.config.ConversationID = "main"
 
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
 	id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("earlier", "answer"))
 	require.NoError(t, err)
 
@@ -1360,7 +1360,7 @@ func TestRevertLegacyQueuePromotionAndEnqueue(t *testing.T) {
 	b := newBridge()
 	b.config.ConversationID = "main"
 
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
 	manager := newThreadBridgeManager(b.runtime, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager, Cfg: b.runtime}
@@ -1389,7 +1389,7 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 	crashed.config.ConversationID = "main"
 
 	workspace := crashed.runtime.Clone().Workspace
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "primary", "---\ndescription: Primary\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 
@@ -1397,7 +1397,7 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills/docs-helper", 0o755))
 	require.NoError(t, root.WriteFile(".rocketclaw/skills/docs-helper/SKILL.md", []byte("---\nname: docs-helper\ndescription: Write docs\n---\n\nUse this skill for docs.\n"), 0o644))
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
 	manager := newThreadBridgeManager(crashed.runtime, s, crashed.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return crashed }})
 	manager.bridges["main"] = crashed
 	rt := &Runtime{Sessions: s, threads: manager, Cfg: crashed.runtime}

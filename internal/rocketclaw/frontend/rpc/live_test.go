@@ -110,8 +110,8 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-		require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Owned browser fixture\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
+		require.NoError(t, root.Mkdir("agents", 0o700))
+		require.NoError(t, root.WriteFile(filepath.Join("agents", "primary.md"), []byte("---\ndescription: Owned browser fixture\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
 
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
@@ -150,8 +150,8 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 
 		rt := <-ready
 		id := "owned-public-" + final
-		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
-		checkpoint := &testCheckpoint{TurnID: "calls", ConversationKey: id, Agent: "main", DisplayModel: "root/model"}
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "primary", CreatedBy: "alice"}))
+		checkpoint := &testCheckpoint{TurnID: "calls", ConversationKey: id, Agent: "primary", DisplayModel: "root/model"}
 
 		if final == "calls" {
 			for _, call := range []string{"A", "B", "C"} {
@@ -616,7 +616,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	require.NoError(t, root.Mkdir("agents", 0o700))
 
 	const agent = "---\ndescription: Reload fixture\nmodel: test-model\n---\n"
-	require.NoError(t, root.WriteFile("agents/main.md", []byte(agent+"Original prompt\n"), 0o600))
+	require.NoError(t, root.WriteFile("agents/primary.md", []byte(agent+"Original prompt\n"), 0o600))
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan *backend.Runtime)
 	assembly := &mockFrontendAssembler{GateFunc: passGate, AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
@@ -632,7 +632,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 
 	rt := <-ready
 	updated := agent + "Updated prompt\n"
-	require.NoError(t, root.WriteFile("agents/main.md", []byte(updated), 0o600))
+	require.NoError(t, root.WriteFile("agents/primary.md", []byte(updated), 0o600))
 	require.NoError(t, root.WriteFile("rocketclaw.json", []byte("invalid config"), 0o600))
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
@@ -654,7 +654,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	require.Equal(t, http.StatusUnauthorized, response.Code)
 
-	live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/main.md")
+	live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/primary.md")
 	require.NoError(t, err)
 	require.Equal(t, agent+"Original prompt\n", string(live))
 
@@ -662,7 +662,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	t.Cleanup(httpServer.Close)
 	runWebTest(t, "src/reload-transport.test.ts", "ROCKETCLAW_RELOAD_TEST_URL="+httpServer.URL)
 
-	live, err = root.ReadFile(cfg.RuntimeDirName() + "/agents/main.md")
+	live, err = root.ReadFile(cfg.RuntimeDirName() + "/agents/primary.md")
 	require.NoError(t, err)
 	require.Equal(t, updated, string(live))
 
@@ -701,8 +701,8 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
-	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Revert fixture\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
+	require.NoError(t, root.Mkdir("agents", 0o700))
+	require.NoError(t, root.WriteFile(filepath.Join("agents", "primary.md"), []byte("---\ndescription: Revert fixture\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
 	require.NoError(t, root.WriteFile("external-effect.txt", []byte("already happened"), 0o600))
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan *backend.Runtime)
@@ -718,7 +718,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
 	rt := <-ready
-	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "main", CreatedBy: "alice"}))
+	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "primary", CreatedBy: "alice"}))
 
 	for _, id := range []string{"retained-upload", "boundary-upload", "hidden-upload"} {
 		require.NoError(t, rt.Sessions.SaveAttachment(ctx, "chat", "", &protocol.OutboundAttachment{ID: id, Name: id + ".txt", MIMEType: "text/plain", Data: []byte(id + " bytes")}, true))

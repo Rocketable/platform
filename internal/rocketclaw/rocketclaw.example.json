@@ -60,7 +60,7 @@
       {
         "channel": "#channel-name",
         "agents": [
-          "slack",
+          "ops",
           "factory"
         ],
         "allowed_user_ids": [
@@ -70,7 +70,7 @@
       {
         "channel": "@",
         "agents": [
-          "slack"
+          "ops"
         ],
         "allowed_user_ids": [
           "U0987654321"

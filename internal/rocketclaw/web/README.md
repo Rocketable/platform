@@ -207,12 +207,15 @@ every editor call too.
 
 The Agents page has **Create New Agent** and, on each agent, **Edit**, which
 reopens the newest draft of that agent still in editing, or else starts one as a
-copy. People limited to spaces do not see either button.
+copy. People limited to spaces do not see either button. The built-in agents,
+`main` and `voice`, have no **Edit**; their rows say "Built in. Turn it on or off
+and choose its model in Config → Behavior settings." instead.
 
-Each agent's summary line ends with its origin: `built-in`, the overlay's spec
-from `overlays`, or `workspace`, the highest layer that holds its file. A file
-identical to the one in the layer below counts as that lower layer, so an
-unchanged copy of a built-in agent in workspace `agents/` reads `built-in`.
+Each agent's summary line ends with its origin: `built-in` for `main` and
+`voice`, the overlay's spec from `overlays`, or `workspace`, the highest layer
+that holds its file. A file identical to the one in the layer below counts as
+that lower layer, so an unchanged copy of an overlay's agent in workspace
+`agents/` reads as that overlay.
 Opening an agent shows its custom shell when it has one, its permission rules
 written the way its instructions list them, and its prompt.
 
@@ -229,7 +232,10 @@ first, then how to start: **Describe it** (name the agent, then describe it to t
 assistant), **Template** (a starter agent, which brings its own settings,
 instructions and mode), **Copy an agent** (a new agent, named after the original
 with `-copy` unless you name it, leaving the original as it is), or **Blank**. The
-copy list also offers **Edit** on each agent.
+copy list also offers **Edit** on each agent. Built-in agents show the same
+Behavior settings note there instead of Copy and Edit. A draft cannot be named,
+renamed or saved as `main` or `voice`; a draft already stored under one of those
+names can only be renamed, and its test chat and assistant are refused until then.
 
 **Form, File and History.** The settings pane edits one variant at a time. The
 Form shows required, common and changed settings with a plain explanation each,
@@ -267,14 +273,15 @@ instructions read `$ROCKETCLAW_METADATA_*`, the page suggests this mode first.
 The assistant answers with a card of suggested changes, each with a reason, and
 marks the ones that change what the agent may do. The Form and the File preview an
 open card. Anyone on the draft can accept or reject it; the assistant never saves
-and never runs tools.
+and never runs tools. It runs as `main`, so while `main` is turned off it fails with
+"main is turned off in Behavior Settings."
 
 **Saving.** **Save…** saves one variant to one place: the workspace's `agents/`
 folder or one of the Git overlays in the overlay list, a Behavior Setting edited
 on the Config page. The dialog lists the layers with
 the one that wins on top, says which provides the agent now, and warns when a
-later layer hides the destination or when the save replaces a built-in or overlay
-agent whose updates then stop reaching this workspace. It shows the file the save
+later layer hides the destination or when the save replaces an overlay agent
+whose updates then stop reaching this workspace. It shows the file the save
 writes against the one there now: settings go in a standard order and comments
 are dropped. For an overlay it asks every time whether to push to its branch or
 open a pull request. If the destination file changed since the draft began, a
@@ -347,7 +354,10 @@ see [Voice](#voice).
 
 The **Voice** page (`/voice`, also in the bottom navigation and the command
 palette) calls the signed-in person's own session of a `sticky: user` agent, the only
-agents it offers. RocketClaw keeps the person's agent, voice and transcript choice on the
+agents it offers. It selects the person's saved choice, else the built-in `voice`,
+else the first agent offered. With none to offer, for example while `voice` is
+turned off, it shows "No voice agent is available. The built-in voice agent may be
+turned off; an admin can turn it on in Config → Behavior settings." RocketClaw keeps the person's agent, voice and transcript choice on the
 server: the same on every device and through restarts, and never shared with another
 person, even in one browser. Pick an agent and tap the orb to talk; tap it again to hang up. While a call is
 active the orb slowly ebbs and flows, its inner light swirls around a glowing heart,
@@ -453,7 +463,9 @@ Users named in the config file's `web.admins`, unless limited to spaces, also
 get a **Behavior settings** section on the Config page. **Edit** shows one control per Behavior Setting
 (see the [root README](../../../README.md#getting-started) for which fields they
 are); **Save** replaces the whole document and applies it to the running server,
-or shows the validation error and changes nothing. Everyone else sees the page
+or shows the validation error and changes nothing. Its **Built-in agents** group
+has, for `main` and `voice`, an on/off switch and a model picker, empty for the
+model the release ships. Everyone else sees the page
 read-only, without the settings document or Slack allowed user IDs.
 
 Oxlint runs `@shadcn/lint` with `no-restyle` enabled, including inside the UI
@@ -1400,8 +1412,9 @@ recorded run marker or the bar (for the latest run) to preview that run's own
 reasoning and tool activity. **Open chat** opens the chat that holds
 the run's output, or else creates or reuses a writable Web chat that shows the
 run's history, without rerunning the job. Repeated opens return the same chat. It
-offers every loaded agent, and the first loaded agent is selected when the chat is
-created. Removed definitions keep
+offers every loaded agent, and a chat it creates starts with the run's own agent;
+when that agent is missing or turned off, nothing is created and the error names
+the agent. Removed definitions keep
 their recorded runs visible until retention cleanup deletes them: a run no chat
 shows goes 90 days after its last message, and any other run goes with its chat,
 or with its expired messages in a sticky chat.
@@ -1568,7 +1581,8 @@ reports show no error.
 - `POST /api/Prompt` accepts `attachmentIds` in selection order alongside unchanged
   `id`, `text`, and `delivery`. The backend adds attachment references to the text.
 - `POST /api/Reload` takes `{"reason":"updated runtime assets"}` and returns
-  `{"message":"rocketclaw runtime assets reloaded"}`. It uses the same Web
+  `{"message":"rocketclaw runtime assets reloaded"}`, followed in the message by a
+  blank line and the warning strip's warnings when there are any. It uses the same Web
   authorization and serialized, validation-before-swap reload as the agent tool,
   including External MCP agent refresh. It starts no agent turn, does not restart
   the process, and does not reread configuration. A refresh failure is reported

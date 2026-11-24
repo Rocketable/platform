@@ -789,7 +789,7 @@ func TestConversationRemovalDeletesBackgroundJobs(t *testing.T) {
 	require.Equal(t, []string{"turn-1/call/a"}, backgroundJobIDs(t, store, "other"))
 	require.ElementsMatch(t, []string{rocketcodeRetainedDir("other"), rocketcodeRetainedDir("other") + " other", rocketcodeRetainedDir(private), rocketcodeRetainedDir(private) + " " + private}, retainedResults(t, spill), "the deleted conversation's retained output goes with it")
 
-	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: private, ManagedConversationID: "managed"}))
+	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "primary", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: private, ManagedConversationID: "managed"}))
 	children, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'managed'`, "failed MCP children")
 	require.NoError(t, err)
 	require.Len(t, children, 2)

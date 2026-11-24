@@ -18,7 +18,7 @@ func TestGenerateHandoff(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\nmodel: handoff-model\npermission:\n  bash: allow\n  rocketclaw:\n    rocketclaw_set_tag: [[triage, resolved]]\n---\nOriginal agent instructions\n")
+	writeAgent(t, workspace, "primary", "---\nmodel: handoff-model\npermission:\n  bash: allow\n  rocketclaw:\n    rocketclaw_set_tag: [[triage, resolved]]\n---\nOriginal agent instructions\n")
 
 	for _, text := range []string{"# Goal\nKeep the chosen behavior.\n\n# Remaining\nRun the tests.", ""} {
 		t.Run(text, func(t *testing.T) {
@@ -52,7 +52,7 @@ func TestGenerateHandoff(t *testing.T) {
 
 			cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
 
-			document, err := GenerateHandoff(t.Context(), config.NewLockedConfig(cfg), "main", "Source session: ordinary-session\nUser: literal !`touch should-not-exist`")
+			document, err := GenerateHandoff(t.Context(), config.NewLockedConfig(cfg), "primary", "Source session: ordinary-session\nUser: literal !`touch should-not-exist`")
 			if text == "" {
 				require.ErrorContains(t, err, "empty handoff")
 			} else {
@@ -71,15 +71,15 @@ func TestGenerateHandoffFailures(t *testing.T) {
 	for _, test := range []struct {
 		name, agent, message string
 	}{
-		{"missing workspace", "main", "open workspace root"},
-		{"invalid agent", "main", "open workspace agent and skills"},
+		{"missing workspace", "primary", "open workspace root"},
+		{"invalid agent", "primary", "open workspace agent and skills"},
 		{"missing agent", "missing", "prepare handoff"},
-		{"blocked scratch", "main", "create handoff scratch"},
-		{"provider failure", "main", "generate handoff"},
+		{"blocked scratch", "primary", "create handoff scratch"},
+		{"provider failure", "primary", "generate handoff"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			workspace := t.TempDir()
-			writeAgent(t, workspace, "main", "---\nmodel: handoff-model\n---\nSummarize work.\n")
+			writeAgent(t, workspace, "primary", "---\nmodel: handoff-model\n---\nSummarize work.\n")
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				http.Error(w, "handoff unavailable", http.StatusBadRequest)
@@ -92,7 +92,7 @@ func TestGenerateHandoffFailures(t *testing.T) {
 			case "missing workspace":
 				cfg.Workspace = filepath.Join(workspace, "missing")
 			case "invalid agent":
-				writeAgent(t, workspace, "main", "---\nmodel: [\n---\n")
+				writeAgent(t, workspace, "primary", "---\nmodel: [\n---\n")
 			case "blocked scratch":
 				require.NoError(t, os.MkdirAll(filepath.Join(workspace, cfg.RuntimeDirName()), 0o700))
 				require.NoError(t, os.WriteFile(filepath.Join(workspace, cfg.RuntimeDirName(), ".rocketcode"), []byte("occupied"), 0o600))

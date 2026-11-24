@@ -58,7 +58,6 @@ func TestAgentDraftRPCs(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(cfg.Workspace, "agents"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Workspace, "agents", "support.md"), []byte("---\nmodel: gpt-5\n---\nHelp.\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-5\n---\nRun.\n"), 0o600))
 
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
@@ -372,7 +371,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 
 	layers, err := invoke[DraftLayersResponse](bob, connection, "DraftLayers", &DraftLayersRequest{Id: drafts["support"].Id, Variant: "a", Destination: "workspace"})
 	require.NoError(t, err)
-	require.True(t, proto.Equal(&DraftLayersResponse{Layers: []*AgentLayer{{Layer: "built-in"}, {Layer: "workspace", File: new("---\nmodel: gpt-5\n---\nHelp.\n")}}, Next: "---\nmode: easy\n---\n"}, layers), "%v", layers)
+	require.True(t, proto.Equal(&DraftLayersResponse{Layers: []*AgentLayer{{Layer: "workspace", File: new("---\nmodel: gpt-5\n---\nHelp.\n")}}, Next: "---\nmode: easy\n---\n"}, layers), "%v", layers)
 
 	_, err = invoke[DraftLayersResponse](bob, connection, "DraftLayers", &DraftLayersRequest{Id: drafts["support"].Id, Variant: "a", Destination: "built-in"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)

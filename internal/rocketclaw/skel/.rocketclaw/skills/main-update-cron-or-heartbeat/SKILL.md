@@ -20,9 +20,13 @@ Only use this runtime path:
 
 - `cron`
 
+## Every cron names its agent
+
+Every cron file must name the agent that runs it with an `agent:` frontmatter value, such as `agent: reporter`. There is no default agent: a cron file without `agent:`, or whose agent is missing or turned off, still loads but never runs, and each trigger and Run now fails with an error naming the cron. When the human has not said which agent should run a new cron, ask. When you touch a cron file that has no `agent:`, ask the human which agent should run it and add it. The built-in `main` agent may run a cron, reporting into its one shared session; the built-in `voice` agent is `sticky: user` and cannot.
+
 ## Easy agents use routines
 
-Before writing a cron file, read its agent's `.rocketclaw/agents/<agent>.md`. If it has `mode: easy`, do not write a cron file: one whose `agent` is an easy agent fails startup and reload with `agent <agent> is an easy agent; schedule it with its routines`. Schedule it with `routines` in its own agent file instead, edited through `main-create-or-update-agent` (overlay in `agents/`, then `rocketclaw_reload`). Advanced agents have no routines; schedule them with cron files. If the agent has `sticky: user` or `sticky: slack`, schedule it neither way: a cron file naming it fails loading with `agent <agent> is sticky: user; a cron cannot run it` (or `sticky: slack`), and routines on it fail with `routines: a sticky: user agent cannot have routines` (or `sticky: slack`). A `sticky: global` agent's runs report into its one shared session instead of a chat per run. Its cron must inherit the agent's space or explicitly name the same space; a different space fails loading.
+Before writing a cron file, read its agent's `.rocketclaw/agents/<agent>.md`. If it has `mode: easy`, do not write a cron file: one whose `agent` is an easy agent never runs, and the Web warning strip and `rocketclaw_reload` report `uses agent <agent>, which is an easy agent scheduled with its routines`. Schedule it with `routines` in its own agent file instead, edited through `main-create-or-update-agent` (overlay in `agents/`, then `rocketclaw_reload`). Advanced agents have no routines; schedule them with cron files. If the agent has `sticky: user` or `sticky: slack`, schedule it neither way: a cron file naming it never runs and is reported as `uses agent <agent>, which is sticky: user` (or `sticky: slack`), and routines on it fail with `routines: a sticky: user agent cannot have routines` (or `sticky: slack`). A `sticky: global` agent's runs report into its one shared session instead of a chat per run. Its cron must inherit the agent's space or explicitly name the same space; a cron naming a different space never runs.
 
 ```yaml
 routines:
@@ -121,7 +125,7 @@ Do this only for body/instruction changes. Do not ask these questions for schedu
 
 ## File handling
 
-If `cron/HEARTBEAT.md` does not exist, create it with a `schedule:` frontmatter value and the body the human asked for.
+If `cron/HEARTBEAT.md` does not exist, create it with `schedule:` and `agent:` frontmatter values and the body the human asked for.
 
 When `cron/HEARTBEAT.md` already exists:
 
@@ -129,4 +133,4 @@ When `cron/HEARTBEAT.md` already exists:
 - do not create a new file
 - preserve the existing `schedule:` value unless the human explicitly asked to change it
 - update the existing file in place
-- update only the heartbeat body/content
+- update only the heartbeat body/content, plus a missing `agent:` (see [Every cron names its agent](#every-cron-names-its-agent))

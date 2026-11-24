@@ -512,9 +512,43 @@ func TestAgentDraftNameRule(t *testing.T) {
 		}
 	}
 
+	for _, name := range []string{"main", "voice"} {
+		_, errCreate := store.CreateAgentDraft(ctx, "alice", AgentDraftOrigin{Name: name, Mode: harness.AgentModeEasy})
+		_, errRename := store.ApplyAgentDraftOp(ctx, draft.ID, &AgentDraftOp{BaseRevision: 1, Kind: AgentDraftRename, Value: name})
+
+		for _, err := range []error{errCreate, errRename} {
+			_, ok := errors.AsType[*AgentDraftOpError](err)
+			require.True(t, ok, "%q: %v", name, err)
+			require.EqualError(t, err, `"`+name+`" belongs to a built-in agent: give the draft another name.`)
+		}
+	}
+
 	_, err = store.CreateAgentDraft(ctx, "alice", AgentDraftOrigin{Name: "blank"})
 	require.EqualError(t, err, "An agent is easy or advanced.")
 	require.EqualError(t, &AgentDraftNameError{Name: "a/b"}, `"a/b" can't be a name: use only letters, digits, '.', '_' and '-', and don't start with '.' or '-'.`)
+}
+
+func TestAgentDraftNamedLikeBuiltinCanOnlyBeRenamed(t *testing.T) {
+	t.Parallel()
+
+	ct := startDraftChatTest(t, "bot", nil)
+	sessions, id := ct.dt.rt.Sessions, ct.dt.draft.ID
+	_, err := sessions.db.ExecContext(t.Context(), `UPDATE agent_drafts SET draft = jsonb_set(draft, '{name}', '"main"') WHERE id = $1`, id)
+	require.NoError(t, err)
+
+	_, _, errChat := ct.send(t, false, "MSG-0")
+	_, errPropose := sessions.ProposeAgentDraftChanges(t.Context(), id, "bob", &AgentDraftAsk{Request: "Help"})
+	_, errSave := sessions.SaveAgentDraft(t.Context(), ct.dt.rt, &AgentDraftSave{ID: id, Variant: "a", Destination: "workspace", Author: "alice"})
+
+	for _, err := range []error{errChat, errPropose, errSave} {
+		require.EqualError(t, err, `"main" belongs to a built-in agent: give the draft another name.`)
+	}
+
+	ct.dt.edit(t, &AgentDraftOp{Kind: AgentDraftRename, Value: "helper"})
+
+	_, _, err = ct.send(t, false, "MSG-1")
+	require.NoError(t, err)
+	ct.collect(t, "COL-A/MSG-1", "COL-B/MSG-1")
 }
 
 func TestAgentDraftRecordsLayerBases(t *testing.T) {

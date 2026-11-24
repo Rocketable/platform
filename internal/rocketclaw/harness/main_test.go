@@ -3,9 +3,12 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -624,10 +627,10 @@ func TestNewRequiresDefaultAgent(t *testing.T) {
 	config := testWorkspaceConfig(t, dir)
 
 	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "main")
-	require.EqualError(t, err, `missing required default agent "main"`)
+	require.EqualError(t, err, `agent "main" is not loaded`)
 }
 
-func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
+func TestAgentsWithoutInvalidReviewers(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	require.NoError(t, err)
@@ -635,61 +638,53 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 
 	client := openai.NewClient()
 	skills := Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}
+	deploy := func(reviewer string) PermissionSet {
+		return parsePermissionYAML(t, `bash: {"deploy *": auto(`+reviewer+`)}`)
+	}
+	agents := Agents{Items: map[string]Agent{
+		"main":             {Name: "main", Model: "gpt-5.4", Sticky: AgentStickyGlobal},
+		"own":              {Name: "own", Model: "gpt-5.4", Sticky: AgentStickyUser, Permission: deploy("own")},
+		"valid":            {Name: "valid", Model: "gpt-5.4", Permission: deploy("release-guardian")},
+		"release-guardian": {Name: "release-guardian", Model: "gpt-5.4"},
+		"sticky":           {Name: "sticky", Model: "gpt-5.4", Permission: deploy("main")},
+		"missing":          {Name: "missing", Model: "gpt-5.4", Permission: deploy("nobody")},
+		"reserved":         {Name: "reserved", Model: "gpt-5.4", Permission: deploy("guardian")},
+		"guardian":         {Name: "guardian", Model: "gpt-5.4"},
+		"chained":          {Name: "chained", Model: "gpt-5.4", Permission: deploy("sticky")},
+	}}
 
-	t.Run("rejects guardian agent", func(t *testing.T) {
-		config := testWorkspaceConfig(t, dir)
-		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4"}, "guardian": {Name: "guardian", Model: "gpt-5.4"}}}
+	valid, errs := agents.WithoutInvalidReviewers()
 
-		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main")
+	require.Equal(t, []string{"main", "own", "release-guardian", "valid"}, slices.Sorted(maps.Keys(valid.Items)))
+	require.Len(t, agents.Items, 9)
 
-		require.EqualError(t, err, `agent name "guardian" is reserved when auto permission approval is enabled`)
-	})
+	messages := make([]string, 0, len(errs))
+	for _, err := range errs {
+		messages = append(messages, err.Error())
+	}
 
-	t.Run("rejects missing custom reviewer", func(t *testing.T) {
-		config := testWorkspaceConfig(t, dir)
-		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)}}}
+	require.Equal(t, []string{
+		`agent "guardian": the name is reserved for the embedded permission reviewer`,
+		`agent "missing": permission "bash" rule "deploy *" references missing reviewer agent "nobody"`,
+		`agent "reserved": permission "bash" rule "deploy *" references reserved reviewer "guardian"; use bare auto for the embedded guardian`,
+		`agent "sticky": permission "bash" rule "deploy *" references sticky: global reviewer agent "main", which reviews only its own rules`,
+		`agent "chained": permission "bash" rule "deploy *" references missing reviewer agent "sticky"`,
+	}, messages)
 
-		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main")
+	errReviewer, ok := errors.AsType[*AgentReviewerError](errs[3])
+	require.True(t, ok)
+	require.Equal(t, []string{"sticky", "main"}, []string{errReviewer.Agent, errReviewer.Reviewer})
 
-		require.ErrorContains(t, err, `references missing reviewer agent "release-guardian"`)
-	})
+	for _, name := range []string{"main", "own", "valid"} {
+		loop, err := NewWithModelResolver(testResolverForClient(&client), testWorkspaceConfig(t, dir), root, agents, skills, name)
+		require.NoError(t, err, name)
+		require.Equal(t, valid.PrimaryNames(), loop.PermissionReviewer.(*toolFactory).agents.PrimaryNames(), name)
+	}
 
-	t.Run("rejects another agent's sticky reviewer", func(t *testing.T) {
-		config := testWorkspaceConfig(t, dir)
-		agents := Agents{Items: map[string]Agent{
-			"main":     {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(reviewer)}`)},
-			"reviewer": {Name: "reviewer", Model: "gpt-5.4", Sticky: AgentStickyUser, Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(reviewer)}`)},
-		}}
-
-		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main")
-
-		require.ErrorContains(t, err, `agent "main" permission "bash" rule "deploy *" references sticky: user reviewer agent "reviewer", which reviews only its own rules`)
-
-		delete(agents.Items, "main")
-		_, err = NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "reviewer")
-		require.NoError(t, err, "a sticky agent may review its own rules")
-	})
-
-	t.Run("rejects explicit guardian reviewer", func(t *testing.T) {
-		config := testWorkspaceConfig(t, dir)
-		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(guardian)}`)}}}
-
-		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main")
-
-		require.ErrorContains(t, err, `references reserved reviewer "guardian"`)
-	})
-
-	t.Run("accepts custom reviewer", func(t *testing.T) {
-		config := testWorkspaceConfig(t, dir)
-		agents := Agents{Items: map[string]Agent{
-			"main":             {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)},
-			"release-guardian": {Name: "release-guardian", Model: "gpt-5.4"},
-		}}
-
-		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main")
-
-		require.NoError(t, err)
-	})
+	for i, name := range []string{"guardian", "missing", "reserved", "sticky", "chained"} {
+		_, err := NewWithModelResolver(testResolverForClient(&client), testWorkspaceConfig(t, dir), root, agents, skills, name)
+		require.Equal(t, errs[i], err, name)
+	}
 }
 
 func testConfig(shellTempDir string) *Config {

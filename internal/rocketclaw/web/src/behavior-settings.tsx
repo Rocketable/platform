@@ -5,20 +5,25 @@ import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { ModelPicker } from "./agent-editor/model-picker";
 import { mutations, queries } from "./api";
 import type { ConfigView } from "./types";
 
 type Channel = { channel: string; agents?: string[]; allowed_user_ids?: string[] };
+type EmbeddedAgent = { disabled?: boolean; model?: string };
 type Behavior = {
   auto_approver_model: string;
   slack: { channels: Channel[] | null };
   logging: { level: string };
   overlays: string[] | null;
+  embedded_agents?: { main?: EmbeddedAgent; voice?: EmbeddedAgent };
 };
 type Option = { value: string; label: string };
 
 const option = (value: string): Option => ({ value, label: value });
 const levels = ["debug", "info", "warn", "error"].map(option);
+const embeddedAgents = ["main", "voice"] as const;
 
 export function BehaviorSettings({ view }: { view: ConfigView }) {
   const [draft, setDraft] = useState<Behavior>();
@@ -57,7 +62,19 @@ function BehaviorFields({ draft, disabled, onChange }: { draft: Behavior; disabl
       <Group title="Overlays">
         <Overlays overlays={draft.overlays ?? []} onChange={(overlays) => onChange({ overlays })} />
       </Group>
+      <Group title="Built-in agents">
+        {embeddedAgents.map((name) => <EmbeddedAgentSettings key={name} name={name} agent={draft.embedded_agents?.[name] ?? {}} disabled={disabled} onChange={(agent) => onChange({ embedded_agents: { ...draft.embedded_agents, [name]: agent } })} />)}
+      </Group>
     </>
+  );
+}
+
+function EmbeddedAgentSettings({ name, agent, disabled, onChange }: { name: string; agent: EmbeddedAgent; disabled: boolean; onChange: (agent: EmbeddedAgent) => void }) {
+  return (
+    <div role="group" aria-label={`${name} agent`} className="flex flex-col gap-2">
+      <Setting label={name}><Switch aria-label={name} checked={!agent.disabled} disabled={disabled} onCheckedChange={(on) => onChange({ ...agent, disabled: !on })} /></Setting>
+      <ModelPicker label={`${name} model`} value={agent.model ?? ""} onModel={(model) => onChange({ ...agent, model })} />
+    </div>
   );
 }
 

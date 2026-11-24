@@ -105,6 +105,8 @@ func TestAgentMCPFacets(t *testing.T) {
 	require.Empty(t, errs)
 	sudo, errs := load(t, "sudo: true")
 	require.Empty(t, errs)
+	sudoReader, errs := load(t, "sudo: true\npermission:\n  mcp: {stripe: {read: allow}}")
+	require.Empty(t, errs)
 	none, errs := load(t, "permission:\n  read: allow")
 	require.Empty(t, errs)
 
@@ -123,6 +125,10 @@ func TestAgentMCPFacets(t *testing.T) {
 		{"sudo gets every facet", sudo, "stripe.delete_customer", PermissionAuto},
 		{"sudo gets other servers' facets", sudo, "memory.read_graph", PermissionAuto},
 		{"sudo cannot reach unfaceted tools", sudo, "memory.delete_entities", PermissionDeny},
+		{"sudo file grant overrides its facet", sudoReader, "stripe.list_invoices", PermissionAllow},
+		{"sudo file grant keeps the facet's removals", sudoReader, "stripe.get_secret_key", PermissionAuto},
+		{"sudo file grant leaves other facets reviewed", sudoReader, "stripe.delete_customer", PermissionAuto},
+		{"sudo file grant leaves other servers reviewed", sudoReader, "memory.read_graph", PermissionAuto},
 		{"no grant", none, "stripe.list_invoices", PermissionDeny},
 	} {
 		action, _ := tc.agent.Permission.Evaluate(mcpPermissionBucket, tc.subject)
@@ -452,11 +458,35 @@ Prompt
 
 			want := []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}
 			if sudo {
-				want = []PermissionBucket{{Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "mcp", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}
+				want = append([]PermissionBucket{{Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "mcp", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}, want...)
 			}
 
 			require.Equal(t, want, permission.Buckets, value)
 		}
+	})
+
+	t.Run("applies permission rules on top of sudo", func(t *testing.T) {
+		result := LoadAgents(fstest.MapFS{
+			"main.md":      testMapFile("---\nmodel: gpt-5.4\nsudo: yes\npermission:\n  task:\n    main: deny\n---\nPrompt\n"),
+			"malformed.md": testMapFile("---\nmodel: gpt-5.4\nsudo: yes\npermission:\n  task: maybe\n---\nPrompt\n"),
+		}, &AgentLoadConfig{})
+
+		require.Len(t, result.Errors, 1)
+		require.EqualError(t, result.Errors[0], `malformed.md: parse permission: permission "task": unknown permission action "maybe"`)
+		require.NotContains(t, result.Agents.Items, "malformed")
+
+		permission := result.Agents.Items["main"].Permission
+		require.True(t, permission.Sudo)
+
+		for _, tc := range []struct {
+			permission, subject string
+			want                PermissionAction
+		}{{"task", "main", PermissionDeny}, {"task", "other", PermissionAllow}, {"bash", "rm -rf /", PermissionAuto}} {
+			action, _ := permission.Evaluate(tc.permission, tc.subject)
+			require.Equal(t, tc.want, action, tc.subject)
+		}
+
+		require.Equal(t, []PermissionBucket{{Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}, {Pattern: "main", Action: permissionDeny}}}, {Name: "mcp", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}, permission.Buckets)
 	})
 
 	t.Run("loads shell values", func(t *testing.T) {

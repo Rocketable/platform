@@ -18,11 +18,11 @@ func TestShadowConsumedUploadOwnership(t *testing.T) {
 	ctx := t.Context()
 	seed := protocol.OutboundAttachment{ID: "seed", Name: "seed.txt", MIMEType: "text/plain", Data: []byte("seed")}
 	require.NoError(t, store.SaveAttachment(ctx, "parent", "", &seed, true))
-	_, err := (stateDAO{db: store.db}).createConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
+	_, err := (stateDAO{db: store.db}).createConversation(ctx, protocol.Conversation{ID: "parent", Agent: "primary"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
 	require.NoError(t, err)
 	_, err = store.AppendEntryID(ctx, "parent", testSessionEntry("attachment:seed", "seed answer"))
 	require.NoError(t, err)
-	_, err = store.reconcileShadows(ctx, store.db, "parent", "main")
+	_, err = store.reconcileShadows(ctx, store.db, "parent", "primary")
 	require.NoError(t, err)
 
 	var child, copiedID string

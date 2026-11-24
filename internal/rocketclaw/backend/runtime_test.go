@@ -82,7 +82,7 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		workspace := t.TempDir()
-		writeAgent(t, workspace, "main", "---\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_sessions: allow\n    rocketclaw_get_tags: allow\n    rocketclaw_set_tag: [[red, yellow]]\n---\nPrompt\n")
+		writeAgent(t, workspace, "primary", "---\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_sessions: allow\n    rocketclaw_get_tags: allow\n    rocketclaw_set_tag: [[red, yellow]]\n---\nPrompt\n")
 
 		var tagOutputs []string
 
@@ -130,7 +130,7 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 		defer shutdown()
 
 		for _, id := range []string{"Y", "X"} {
-			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
+			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "primary"}))
 			_, err := store.toggleSessionTag(ctx, id, id+"-tag", []string{id + "-tag"})
 			require.NoError(t, err)
 
@@ -195,7 +195,7 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 
 		source := rt.threads.bridges["X"].(*Bridge)
 
-		require.NoError(t, store.PutScheduledMessage("existing", &protocol.ScheduledMessageState{ConversationID: "Y", Agent: "main", Message: "reset by the run", DueAt: time.Now().Add(time.Hour)}))
+		require.NoError(t, store.PutScheduledMessage("existing", &protocol.ScheduledMessageState{ConversationID: "Y", Agent: "primary", Message: "reset by the run", DueAt: time.Now().Add(time.Hour)}))
 
 		for _, turn := range []struct {
 			id       string
@@ -224,7 +224,7 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 		require.Len(t, scheduled, 1)
 
 		for _, message := range scheduled {
-			require.Equal(t, protocol.ScheduledMessageState{ConversationID: "Y", Agent: "main", Message: "after producer-effects", DueAt: message.DueAt, Recurring: true, Interval: 2 * time.Hour, Origin: "[ScheduledMessage source=System]"}, message,
+			require.Equal(t, protocol.ScheduledMessageState{ConversationID: "Y", Agent: "primary", Message: "after producer-effects", DueAt: message.DueAt, Recurring: true, Interval: 2 * time.Hour, Origin: "[ScheduledMessage source=System]"}, message,
 				"only the successful turn's changes apply to the destination, with the destination's agent")
 		}
 
@@ -378,7 +378,7 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "primary", "---\ndescription: Primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
@@ -413,7 +413,7 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 		shutdown := runTestManager(t, rt.threads)
 		defer shutdown()
 
-		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "Y", Agent: "main"}))
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "Y", Agent: "primary"}))
 
 		events := rt.Subscribe(ctx)
 		finals := make(chan protocol.Event, 4)
@@ -1023,14 +1023,14 @@ func TestRuntimeQueueEditRunsWithTurnAgent(t *testing.T) {
 		name, agent, override string
 	}{
 		{name: "current agent", agent: "other"},
-		{name: "explicit agent", agent: "main", override: "main"},
+		{name: "explicit agent", agent: "primary", override: "primary"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			newBridge, store, requests, finals := newResumeTestBridges(t, false)
 			bridge := newBridge()
 			bridge.config.ConversationID = "main"
 
-			require.NoError(t, store.UpsertThread("main", ThreadState{Agent: "main"}))
+			require.NoError(t, store.UpsertThread("main", ThreadState{Agent: "primary"}))
 			manager := newThreadBridgeManager(bridge.runtime, store, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 			manager.bridges["main"] = bridge
 			rt := &Runtime{Sessions: store, threads: manager, Cfg: bridge.runtime}
@@ -1083,7 +1083,7 @@ func TestRuntimeQueueEditRejectsPreservedSteer(t *testing.T) {
 	bridge := newBridge()
 	bridge.config.ConversationID = "main"
 
-	require.NoError(t, store.UpsertThread("main", ThreadState{Agent: "main"}))
+	require.NoError(t, store.UpsertThread("main", ThreadState{Agent: "primary"}))
 	manager := newThreadBridgeManager(bridge.runtime, store, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	manager.bridges["main"] = bridge
 	rt := &Runtime{Sessions: store, threads: manager, Cfg: bridge.runtime}
@@ -1126,7 +1126,7 @@ func TestRuntimeQueueEditMakesTheEditorTheSender(t *testing.T) {
 	bridge := newBridge()
 	bridge.config.ConversationID = "main"
 
-	require.NoError(t, store.UpsertThread("main", ThreadState{Agent: "main"}))
+	require.NoError(t, store.UpsertThread("main", ThreadState{Agent: "primary"}))
 	manager := newThreadBridgeManager(bridge.runtime, store, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	manager.bridges["main"] = bridge
 	rt := &Runtime{Sessions: store, threads: manager, Cfg: bridge.runtime}
@@ -1373,7 +1373,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	})
 	releaseSubagent := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(releaseSubagent)
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n    ask_user_question: allow\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n    ask_user_question: allow\n---\nPrompt\n")
 
 	asked, withdrawn := make(chan string, 1), make(chan error, 1)
 	question := make(chan struct{})
@@ -1479,7 +1479,7 @@ func TestMoveToBackgroundSkipsDeniedAgent(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_e","name":"execute","arguments":%q}]}`, arguments)
 	})
 	gate = filepath.Join(nt.cfg.Workspace, "gate")
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n---\nPrompt\n")
 
 	manager, _ := nt.run(t, ignoreOutbound)
 	bridge := nt.bridge(t, manager, nt.conversationID)

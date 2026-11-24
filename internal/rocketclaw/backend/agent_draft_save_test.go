@@ -422,11 +422,10 @@ func TestAgentDraftLayers(t *testing.T) {
 	overlays := []string{filepath.Join(workspace, "team.git") + "@main", filepath.Join(workspace, "more.git")}
 	store.definitions = config.NewLockedConfig(&config.Config{Workspace: workspace, Overlays: overlays})
 	team := skel.OverlayInfos(filepath.Join(workspace, config.DefaultRuntimeDir), overlays)[0].ClonePath
-	builtin := skel.BuiltinAgent("main")
 
 	writeAgentFile(t, team, "triage", "team triage")
 	writeAgentFile(t, workspace, "triage", "ours")
-	writeAgentFile(t, workspace, "main", *builtin)
+	writeAgentFile(t, workspace, "main", "mine")
 	writeAgentFile(t, team, "shared", "team shared")
 	writeAgentFile(t, workspace, "shared", "team shared")
 
@@ -445,10 +444,7 @@ func TestAgentDraftLayers(t *testing.T) {
 
 	require.Equal(t, map[string]string{"triage": "workspace", "main": "built-in", "shared": overlays[0], "missing": ""}, origins(), "an identical copy comes from the layer it copies")
 
-	type flags struct {
-		hiddenBy, replaces string
-		recreated          bool
-	}
+	type flags struct{ hiddenBy, replaces string }
 
 	layers := func(name, destination string) (*AgentDraftLayers, flags) {
 		t.Helper()
@@ -460,29 +456,24 @@ func TestAgentDraftLayers(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "---\n{}\n---\n", got.Next)
 
-		return got, flags{got.HiddenBy, got.Replaces, got.Recreated}
+		return got, flags{got.HiddenBy, got.Replaces}
 	}
 
 	triage, got := layers("triage", overlays[0])
 	require.Equal(t, flags{hiddenBy: "workspace"}, got)
-	require.Equal(t, []AgentLayer{{Layer: "built-in"}, {Layer: overlays[0], Ref: "main", File: new("team triage")}, {Layer: overlays[1]}, {Layer: "workspace", File: new("ours")}}, triage.Layers)
+	require.Equal(t, []AgentLayer{{Layer: overlays[0], Ref: "main", File: new("team triage")}, {Layer: overlays[1]}, {Layer: "workspace", File: new("ours")}}, triage.Layers)
 
 	_, got = layers("triage", "workspace")
 	require.Equal(t, flags{}, got, "the workspace file already replaces the overlay's")
 
-	_, got = layers("main", "workspace")
-	require.Equal(t, flags{replaces: "built-in"}, got, "a copy of the built-in is still the built-in")
+	_, got = layers("shared", overlays[1])
+	require.Equal(t, flags{hiddenBy: "workspace", replaces: overlays[0]}, got)
 
-	_, got = layers("main", overlays[1])
-	require.Equal(t, flags{hiddenBy: "workspace", replaces: "built-in", recreated: true}, got)
-
-	writeAgentFile(t, workspace, "main", "mine")
-
-	_, got = layers("main", "workspace")
+	fresh, got := layers("fresh", "workspace")
 	require.Equal(t, flags{}, got)
-	require.Equal(t, "workspace", origins()["main"])
+	require.Equal(t, []AgentLayer{{Layer: overlays[0], Ref: "main"}, {Layer: overlays[1]}, {Layer: "workspace"}}, fresh.Layers)
 
-	draft, err := store.CreateAgentDraft(t.Context(), "alice", AgentDraftOrigin{Name: "main", Mode: harness.AgentModeAdvanced})
+	draft, err := store.CreateAgentDraft(t.Context(), "alice", AgentDraftOrigin{Name: "triage", Mode: harness.AgentModeAdvanced})
 	require.NoError(t, err)
 
 	for _, destination := range []string{"built-in", "github.com/acme/other"} {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -51,7 +52,7 @@ func TestSyncResetsTargetPreservingState(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "trash.txt"), []byte("trash"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "trashdir", "old.txt"), []byte("old"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmp, "agents", "main.md"), []byte("overlay"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "agents", "bot.md"), []byte("overlay"), 0o644))
 
 	require.NoError(t, SyncInWithOverlays(tmp, targetRoot, nil, testLogger()))
 
@@ -72,7 +73,7 @@ func TestSyncResetsTargetPreservingState(t *testing.T) {
 	_, err = os.Stat(filepath.Join(root, "overlays", "keep.txt"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 
-	data, err = os.ReadFile(filepath.Join(root, "agents", "main.md"))
+	data, err = os.ReadFile(filepath.Join(root, "agents", "bot.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "overlay", string(data))
 }
@@ -159,16 +160,16 @@ func TestSyncPreservesExistingWorkspaceSetupFiles(t *testing.T) {
 	tmp := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "agents"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "skills", "example"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmp, "agents", "main.md"), []byte("keep overlay"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "agents", "bot.md"), []byte("keep overlay"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "skills", "example", "SKILL.md"), []byte("keep skill"), 0o644))
 
 	require.NoError(t, SyncInWithOverlays(tmp, targetRoot, nil, testLogger()))
 
-	data, err := os.ReadFile(filepath.Join(tmp, "agents", "main.md"))
+	data, err := os.ReadFile(filepath.Join(tmp, "agents", "bot.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "keep overlay", string(data))
 
-	data, err = os.ReadFile(filepath.Join(tmp, targetRoot, "agents", "main.md"))
+	data, err = os.ReadFile(filepath.Join(tmp, targetRoot, "agents", "bot.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "keep overlay", string(data))
 
@@ -283,7 +284,7 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "skills", "remote"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "cron"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "scripts"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "agents", "main.md"), []byte("remote agent"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "agents", "bot.md"), []byte("remote agent"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "skills", "remote", "SKILL.md"), []byte("remote skill"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "cron", "daily.md"), []byte("remote cron"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "scripts", "tool.sh"), []byte("remote script"), 0o644))
@@ -298,15 +299,15 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	workspace := filepath.Join(tmp, "workspace")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "scripts"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("local agent"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "bot.md"), []byte("local agent"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "scripts", "tool.sh"), []byte("local script"), 0o644))
 
 	require.NoError(t, SyncInWithOverlays(workspace, targetRoot, []string{repo}, testLogger()))
 	overlayInfo := OverlayInfos(filepath.Join(workspace, targetRoot), []string{repo})[0]
 	assert.DirExists(t, filepath.Join(overlayInfo.ClonePath, ".git"))
-	assert.FileExists(t, filepath.Join(overlayInfo.ClonePath, "agents", "main.md"))
+	assert.FileExists(t, filepath.Join(overlayInfo.ClonePath, "agents", "bot.md"))
 
-	data, err := os.ReadFile(filepath.Join(workspace, targetRoot, "agents", "main.md"))
+	data, err := os.ReadFile(filepath.Join(workspace, targetRoot, "agents", "bot.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "local agent", string(data))
 
@@ -669,6 +670,71 @@ func TestSyncCreatesEmbeddedRuntimeSupport(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(tmp, targetRoot, ".gitignore"))
 	require.NoError(t, err)
 	assert.Equal(t, "auth.json\nauth.json.lock\nsandbox/\n", string(data))
+
+	for _, dir := range []string{agentsRoot, filepath.Join(targetRoot, agentsRoot)} {
+		entries, err := os.ReadDir(filepath.Join(tmp, dir))
+		require.NoError(t, err)
+		require.Len(t, entries, 1, dir)
+		assert.Equal(t, "examples", entries[0].Name(), dir)
+	}
+}
+
+func TestSyncIgnoresBuiltinAgentFiles(t *testing.T) {
+	_, err := exec.LookPath("git")
+	require.NoError(t, err, "git is required for overlay test")
+
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	workspace := filepath.Join(tmp, "workspace")
+
+	repoGit(t, repo, "init")
+	repoGit(t, repo, "config", "user.email", "test@example.com")
+	repoGit(t, repo, "config", "user.name", "Test User")
+
+	for _, dir := range []string{repo, workspace} {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, agentsRoot, "main"), 0o755))
+
+		for _, name := range []string{"main.md", "voice.md", "main/alt.md", "bot.md"} {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, agentsRoot, name), []byte(dir), 0o644))
+		}
+	}
+
+	repoGit(t, repo, "add", ".")
+	repoGit(t, repo, "commit", "-m", "overlay")
+
+	var logs strings.Builder
+	require.NoError(t, SyncInWithOverlays(workspace, targetRoot, []string{repo}, slog.New(slog.NewTextHandler(&logs, nil))))
+
+	entries, err := os.ReadDir(filepath.Join(workspace, targetRoot, agentsRoot))
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+
+	assert.Equal(t, []string{"bot.md", "examples"}, names)
+
+	for _, source := range []string{OverlayInfos(filepath.Join(workspace, targetRoot), []string{repo})[0].ClonePath, workspace} {
+		for _, name := range []string{"main.md", "voice.md", "main"} {
+			assert.Contains(t, logs.String(), `level=WARN msg="ignored file named after a built-in agent" path=`+filepath.Join(source, agentsRoot, name)+"\n")
+		}
+	}
+}
+
+func TestBuiltinTextNamesRepositoryPaths(t *testing.T) {
+	for _, name := range []string{"builtin/about.md", "builtin/agents/main.md"} {
+		data, err := builtin.ReadFile(name)
+		require.NoError(t, err)
+
+		paths := regexp.MustCompile(`[\w-]+(?:/[\w.-]+)*\.(?:md|proto)`).FindAllString(string(data), -1)
+		require.NotEmpty(t, paths, name)
+
+		for _, path := range paths {
+			_, err := os.Stat(filepath.Join("..", "..", "..", path))
+			require.NoError(t, err, name)
+		}
+	}
 }
 
 func TestSyncEffectiveRuntimeAssetsDoesNotMutateRuntimeOrScriptSymlinks(t *testing.T) {
@@ -679,16 +745,16 @@ func TestSyncEffectiveRuntimeAssetsDoesNotMutateRuntimeOrScriptSymlinks(t *testi
 	require.NoError(t, os.MkdirAll(filepath.Join(realRuntime, agentsRoot), 0o755))
 	require.NoError(t, os.MkdirAll(realScripts, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(realRuntime, agentsRoot, "main.md"), []byte("real runtime"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "main.md"), []byte("overlay"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(realRuntime, agentsRoot, "bot.md"), []byte("real runtime"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "bot.md"), []byte("overlay"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, scriptsRoot, "helper.sh"), []byte("script"), 0o644))
 
 	require.NoError(t, SyncEffectiveRuntimeAssets(workspace, target, nil, testLogger()))
 
-	data, err := os.ReadFile(filepath.Join(realRuntime, agentsRoot, "main.md"))
+	data, err := os.ReadFile(filepath.Join(realRuntime, agentsRoot, "bot.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "real runtime", string(data))
-	data, err = os.ReadFile(filepath.Join(target, agentsRoot, "main.md"))
+	data, err = os.ReadFile(filepath.Join(target, agentsRoot, "bot.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "overlay", string(data))
 
@@ -704,16 +770,16 @@ func TestReplaceRuntimeAssetsAfterValidationLeavesLiveAssetsUnchangedOnValidatio
 
 	require.NoError(t, os.MkdirAll(liveAgents, 0o755))
 	require.NoError(t, os.MkdirAll(realScripts, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(liveAgents, "main.md"), []byte("live"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(liveAgents, "bot.md"), []byte("live"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(realScripts, "tool.sh"), []byte("regular"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "main.md"), []byte("broken"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "bot.md"), []byte("broken"), 0o644))
 
 	errValidate := errors.New("invalid staged assets")
 	err := ReplaceRuntimeAssetsAfterValidation(workspace, targetRoot, new(config.Behavior), testLogger(), new(config.LockedConfig), func(string) error { return errValidate }, func() error { return nil })
 	require.ErrorIs(t, err, errValidate)
 
-	data, err := os.ReadFile(filepath.Join(liveAgents, "main.md"))
+	data, err := os.ReadFile(filepath.Join(liveAgents, "bot.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "live", string(data))
 	data, err = os.ReadFile(filepath.Join(realScripts, "tool.sh"))
@@ -774,7 +840,7 @@ func TestValidateRuntimeAssetsWithStagesTheFile(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "bot.md"), []byte("old"), 0o644))
 
-	builtin, err := os.ReadFile(filepath.Join(agentsRoot, "main.md"))
+	example, err := os.ReadFile(filepath.Join(agentsRoot, "examples", "session-tags.example.md"))
 	require.NoError(t, err)
 
 	errValidate := errors.New("invalid staged assets")
@@ -782,7 +848,7 @@ func TestValidateRuntimeAssetsWithStagesTheFile(t *testing.T) {
 	err = ValidateRuntimeAssetsWith(workspace, nil, testLogger(), map[string][]byte{"agents/bot.md": []byte("new")}, func(stagedWorkDir string) error {
 		staged = stagedWorkDir
 
-		for file, want := range map[string]string{"bot.md": "new", "main.md": string(builtin)} {
+		for file, want := range map[string]string{"bot.md": "new", "examples/session-tags.example.md": string(example)} {
 			data, err := os.ReadFile(filepath.Join(workspace, stagedWorkDir, agentsRoot, file))
 			require.NoError(t, err)
 			assert.Equal(t, want, string(data))
@@ -817,7 +883,7 @@ func TestSyncFSRootMapping(t *testing.T) {
 	}{
 		{name: "root dot", root: ".", path: "AGENTS.md", want: "AGENTS.md"},
 		{name: "same path", root: ".rocketclaw", path: ".rocketclaw", want: "."},
-		{name: "nested path", root: ".rocketclaw", path: ".rocketclaw/agents/main.md", want: "agents/main.md"},
+		{name: "nested path", root: ".rocketclaw", path: ".rocketclaw/agents/ops.md", want: "agents/ops.md"},
 	}
 
 	for _, tt := range tests {

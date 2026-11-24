@@ -35,7 +35,6 @@ func TestSessionReads(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
 
 	for _, id := range []string{"x", "y"} {
 		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))

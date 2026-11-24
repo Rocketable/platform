@@ -43,10 +43,10 @@ func TestPages(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	agents := cfg.RuntimeDirName() + "/agents/"
-	require.NoError(t, root.MkdirAll(agents+"main", 0o700))
+	require.NoError(t, root.MkdirAll(agents+"primary", 0o700))
 	require.NoError(t, root.MkdirAll(agents+"reporter", 0o700))
 
-	for name, frontmatter := range map[string]string{"main": "", "main/review": "", "reporter": "space: Ops\n", "reporter/review": "space: Ops Team\n"} {
+	for name, frontmatter := range map[string]string{"primary": "", "primary/review": "", "reporter": "space: Ops\n", "reporter/review": "space: Ops Team\n"} {
 		require.NoError(t, root.WriteFile(agents+name+".md", []byte("---\nmodel: example-model\n"+frontmatter+"---\nHelp."), 0o600))
 	}
 
@@ -66,7 +66,7 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 		{Agent: "reporter", Kind: backend.PageFile, Name: "large.js", ContentType: "text/javascript", Body: large},
 		{Agent: "reporter", Kind: backend.PageData, Name: "revenue", ContentType: "application/json", Body: []byte(`{"total":3}`)},
 		{Agent: "reporter/review", Kind: backend.PageFile, Name: "a b/c.html", ContentType: "text/html", Body: []byte("<p>c</p>")},
-		{Agent: "main/review", Kind: backend.PageFile, Name: "a.html", ContentType: "text/html", Body: []byte("<p>review</p>")},
+		{Agent: "primary/review", Kind: backend.PageFile, Name: "a.html", ContentType: "text/html", Body: []byte("<p>review</p>")},
 		{Agent: "gone", Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>gone</p>")},
 	} {
 		require.NoError(t, sessions.PutPage(t.Context(), &page))
@@ -105,7 +105,7 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 		{path: "/pages-raw/reporter/x.html", handler: admitted, code: http.StatusOK, body: "<p>x</p>", contentType: "text/html"},
 		{path: "/pages-raw/reporter/docs/", handler: admitted, code: http.StatusOK, body: "<p>docs</p>", contentType: "text/html"},
 		{path: "/pages-raw/reporter/large.js", handler: admitted, code: http.StatusOK, body: string(large), contentType: "text/javascript"},
-		{path: "/pages-raw/main%2Freview/a.html", handler: admitted, code: http.StatusOK, body: "<p>review</p>", contentType: "text/html"},
+		{path: "/pages-raw/primary%2Freview/a.html", handler: admitted, code: http.StatusOK, body: "<p>review</p>", contentType: "text/html"},
 		{path: "/pages-raw/nobody/x.html", handler: admitted, code: http.StatusNotFound},
 		{path: "/pages-raw/gone/index.html", handler: admitted, code: http.StatusNotFound},
 		{path: "/pages-raw/reporter/missing.html", handler: admitted, code: http.StatusNotFound},
@@ -113,8 +113,8 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 		{path: "/pages/billing/reporter/x.html", handler: admitted, code: http.StatusPermanentRedirect, location: "/pages/Ops/reporter/x.html"},
 		{path: "/pages/Ops/reporter%2Freview/a%20b/c.html?v=1", handler: admitted, code: http.StatusPermanentRedirect, location: "/pages/Ops%20Team/reporter%2Freview/a%20b/c.html?v=1"},
 		{path: "/pages/OPS/reporter/x.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
-		{path: "/pages/billing/main%2Freview/a.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
-		{path: "/pages/-/main%2Freview/a.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
+		{path: "/pages/billing/primary%2Freview/a.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
+		{path: "/pages/-/primary%2Freview/a.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
 		{path: "/pages/Ops/nobody/x.html", handler: admitted, code: http.StatusNotFound},
 		{path: "/pages-raw/opencode:box:ses_a/index.html", handler: admitted, code: http.StatusOK, body: "<p>a</p>", contentType: "text/html"},
 		{path: "/pages-raw/opencode%3Abox%3Ases_b/", handler: admitted, code: http.StatusOK, body: "<p>b</p>", contentType: "text/html"},
@@ -158,8 +158,8 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 	listed, err := invoke[ListPagesResponse](ctx, connection, "ListPages", &ListPagesRequest{})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(&ListPagesResponse{Pages: []*PageEntry{
-		{Agent: "main/review", Path: "a.html"},
 		{Agent: "opencode:box:ses_a", Space: "Billing", Path: "index.html"},
+		{Agent: "primary/review", Path: "a.html"},
 		{Agent: "reporter", Space: "Ops", Path: "docs/index.html"},
 		{Agent: "reporter", Space: "Ops", Path: "x.html"},
 		{Agent: "reporter/review", Space: "Ops Team", Path: "a b/c.html"},
@@ -225,11 +225,6 @@ func TestPagesRealBrowser(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Slack: liveSlack()}
-	root, err := os.OpenRoot(cfg.Workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-	require.NoError(t, root.Mkdir("agents", 0o700))
-	require.NoError(t, root.WriteFile("agents/main.md", []byte("---\nmodel: test-model\n---\nHelp.\n"), 0o600))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan *backend.Runtime)

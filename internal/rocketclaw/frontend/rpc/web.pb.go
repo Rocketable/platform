@@ -7021,8 +7021,8 @@ func (x *DraftLayersRequest) GetDestination() string {
 	return ""
 }
 
-// AgentLayer is one layer's file for the draft's name: layer is "built-in", a configured overlay's spec, or
-// "workspace"; ref is an overlay's pinned ref; file is unset where the layer has none.
+// AgentLayer is one layer's file for the draft's name: layer is a configured overlay's spec or "workspace";
+// ref is an overlay's pinned ref; file is unset where the layer has none.
 type AgentLayer struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Layer         string                 `protobuf:"bytes,1,opt,name=layer,proto3" json:"layer,omitempty"`
@@ -7085,16 +7085,14 @@ func (x *AgentLayer) GetFile() string {
 
 // DraftLayersResponse lists the layers in precedence order, each later one winning. hidden_by names the
 // later layer whose file hides the destination, whatever its bytes; replaces names the earlier layer whose
-// agent the save takes over, so its updates stop reaching this workspace; recreated says startup copies the
-// built-in agent into workspace agents/ again, which hides an overlay destination; next is the file the save
-// writes, settings in the standard order and comments dropped. For an overlay destination, branch is the
-// branch a save pushes to, or unpushable says why it cannot push there.
+// agent the save takes over, so its updates stop reaching this workspace; next is the file the save writes,
+// settings in the standard order and comments dropped. For an overlay destination, branch is the branch a
+// save pushes to, or unpushable says why it cannot push there.
 type DraftLayersResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Layers        []*AgentLayer          `protobuf:"bytes,1,rep,name=layers,proto3" json:"layers,omitempty"`
 	HiddenBy      string                 `protobuf:"bytes,2,opt,name=hidden_by,json=hiddenBy,proto3" json:"hidden_by,omitempty"`
 	Replaces      string                 `protobuf:"bytes,3,opt,name=replaces,proto3" json:"replaces,omitempty"`
-	Recreated     bool                   `protobuf:"varint,4,opt,name=recreated,proto3" json:"recreated,omitempty"`
 	Next          string                 `protobuf:"bytes,5,opt,name=next,proto3" json:"next,omitempty"`
 	Branch        string                 `protobuf:"bytes,6,opt,name=branch,proto3" json:"branch,omitempty"`
 	Unpushable    string                 `protobuf:"bytes,7,opt,name=unpushable,proto3" json:"unpushable,omitempty"`
@@ -7151,13 +7149,6 @@ func (x *DraftLayersResponse) GetReplaces() string {
 		return x.Replaces
 	}
 	return ""
-}
-
-func (x *DraftLayersResponse) GetRecreated() bool {
-	if x != nil {
-		return x.Recreated
-	}
-	return false
 }
 
 func (x *DraftLayersResponse) GetNext() string {
@@ -11155,17 +11146,16 @@ const file_web_proto_rawDesc = "" +
 	"\x05layer\x18\x01 \x01(\tR\x05layer\x12\x10\n" +
 	"\x03ref\x18\x02 \x01(\tR\x03ref\x12\x17\n" +
 	"\x04file\x18\x03 \x01(\tH\x00R\x04file\x88\x01\x01B\a\n" +
-	"\x05_file\"\xe1\x01\n" +
+	"\x05_file\"\xd4\x01\n" +
 	"\x13DraftLayersResponse\x12'\n" +
 	"\x06layers\x18\x01 \x03(\v2\x0f.rpc.AgentLayerR\x06layers\x12\x1b\n" +
 	"\thidden_by\x18\x02 \x01(\tR\bhiddenBy\x12\x1a\n" +
-	"\breplaces\x18\x03 \x01(\tR\breplaces\x12\x1c\n" +
-	"\trecreated\x18\x04 \x01(\bR\trecreated\x12\x12\n" +
+	"\breplaces\x18\x03 \x01(\tR\breplaces\x12\x12\n" +
 	"\x04next\x18\x05 \x01(\tR\x04next\x12\x16\n" +
 	"\x06branch\x18\x06 \x01(\tR\x06branch\x12\x1e\n" +
 	"\n" +
 	"unpushable\x18\a \x01(\tR\n" +
-	"unpushable\"\xd9\x01\n" +
+	"unpushableJ\x04\b\x04\x10\x05R\trecreated\"\xd9\x01\n" +
 	"\x10SaveDraftRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\avariant\x18\x02 \x01(\tR\avariant\x12 \n" +

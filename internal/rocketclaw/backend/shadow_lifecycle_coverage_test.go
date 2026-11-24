@@ -40,13 +40,13 @@ func TestShadowLifecycleAdmissionRollback(t *testing.T) {
 		t.Run(table, func(t *testing.T) {
 			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
-			_, err = (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
+			_, err = (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
 			require.NoError(t, err)
 			_, err = store.AppendEntryID(t.Context(), "parent", testSessionEntry("seed", "answer"))
 			require.NoError(t, err)
 
 			rejectShadowLifecycleWrite(t, store, table, "INSERT")
-			parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+			parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "next", true)}
 
 			admitted, err := parent.activateInbound(t.Context(), &request)
@@ -99,7 +99,7 @@ func TestShadowLifecycleClearRollback(t *testing.T) {
 			_, err := store.db.ExecContext(t.Context(), `TRUNCATE attachments, pending_attachment_deletions, entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
 			store.attachments = filesystemAttachments{path: t.TempDir()}
-			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 			children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "clear children")
 			require.NoError(t, err)
 
@@ -143,7 +143,7 @@ func TestShadowLifecycleCaptureFailureAndRetry(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newShadowTestStore(t)
-	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
 	admitted, err := parent.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
@@ -205,7 +205,7 @@ func TestShadowLifecycleDefinitionFailureAndRetry(t *testing.T) {
 	t.Parallel()
 
 	store, root := newShadowTestStore(t)
-	dir := filepath.Join(config.DefaultRuntimeDir, "agents", "main")
+	dir := filepath.Join(config.DefaultRuntimeDir, "agents", "primary")
 	definition, err := root.ReadFile(filepath.Join(dir, "a.md"))
 	require.NoError(t, err)
 
@@ -235,7 +235,7 @@ func TestShadowLifecycleDefinitionFailureAndRetry(t *testing.T) {
 
 			runtime := &Runtime{Sessions: store}
 
-			err = runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"})
+			err = runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"})
 			if failure == "invalid definition" {
 				require.NoError(t, err)
 			} else {
@@ -258,16 +258,16 @@ func TestShadowLifecycleDefinitionFailureAndRetry(t *testing.T) {
 				store.definitions = config.NewLockedConfig(cfg)
 			}
 
-			require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+			require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 
 			if failure == "invalid definition" {
-				_, err = store.reconcileShadows(t.Context(), store.db, "parent", "main")
+				_, err = store.reconcileShadows(t.Context(), store.db, "parent", "primary")
 				require.NoError(t, err)
 			}
 
 			bindings, err := queryStrings(t.Context(), store.db, `SELECT shadow_agent FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "repaired definitions")
 			require.NoError(t, err)
-			require.Equal(t, []string{"main/a", "main/z"}, bindings)
+			require.Equal(t, []string{"primary/a", "primary/z"}, bindings)
 		})
 	}
 }
@@ -284,7 +284,7 @@ func TestShadowLifecycleRevertRollback(t *testing.T) {
 		t.Run(step.table+" "+step.event, func(t *testing.T) {
 			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
-			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 
 			entry := testSessionEntry("discarded", "answer")
 			entry.TurnID = "parent-turn"
@@ -341,7 +341,7 @@ func TestShadowLifecycleSettlementFailureReleasesFamily(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
-			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 			children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "settling children")
 			require.NoError(t, err)
 
@@ -416,7 +416,7 @@ func TestShadowLifecycleUnavailableStateDoesNotStartWork(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newShadowTestStore(t)
-	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
 	admitted, err := parent.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
@@ -473,7 +473,7 @@ func TestShadowLifecycleDeferredCommitFailureAndRetry(t *testing.T) {
 			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
 
-			parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+			parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
 			admitted, err := parent.activateInbound(t.Context(), &request)
 			require.NoError(t, err)
@@ -552,7 +552,7 @@ func TestShadowLifecycleFinishRollback(t *testing.T) {
 			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
 			ctx := t.Context()
-			parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+			parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
 			admitted, err := parent.activateInbound(ctx, &request)
 			require.NoError(t, err)
@@ -612,7 +612,7 @@ func TestShadowTurnNamesParentPerson(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newShadowTestStore(t)
-	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
 	request.inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice Smith", protocol.InboundPrincipalNameMetadataKey: "Alice Smith", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}
 	admitted, err := parent.activateInbound(t.Context(), &request)
@@ -637,7 +637,7 @@ func TestShadowLifecycleStopNotificationCancelsOwningTurn(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newShadowTestStore(t)
-	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
 	admitted, err := parent.activateInbound(t.Context(), &request)
 	require.NoError(t, err)

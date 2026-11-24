@@ -101,7 +101,7 @@ func TestShadowsRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	for name, model := range map[string]string{"main": "gpt-parent", "main/a": "gpt-shadow-a", "main/b": "gpt-shadow-b"} {
+	for name, model := range map[string]string{"primary": "gpt-parent", "primary/a": "gpt-shadow-a", "primary/b": "gpt-shadow-b"} {
 		file := filepath.Join("agents", name+".md")
 		require.NoError(t, root.MkdirAll(filepath.Dir(file), 0o700))
 		require.NoError(t, root.WriteFile(file, fmt.Appendf(nil, "---\ndescription: Live shadow fixture\nmodel: %s\npermission: {}\n---\nReply as %s.\n", model, name), 0o600))
@@ -126,7 +126,7 @@ func TestShadowsRealBackendBrowser(t *testing.T) {
 	})
 
 	rt := <-ready
-	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main", CreatedBy: "alice"}))
+	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "primary", CreatedBy: "alice"}))
 	events := rt.Subscribe(ctx)
 
 	var (

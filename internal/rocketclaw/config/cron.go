@@ -2,10 +2,10 @@ package config
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,7 +80,62 @@ func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronj
 		schedules = append(schedules, schedule)
 	}
 
-	return protocol.OneOffCronjob{RelativePath: relativePath, Agent: cmp.Or(string(raw.Agent), "main"), Space: raw.Space, Prompt: body}, schedules, nil
+	return protocol.OneOffCronjob{RelativePath: relativePath, Agent: string(raw.Agent), Space: raw.Space, Prompt: body}, schedules, nil
+}
+
+type CronDefinition struct {
+	Job       protocol.OneOffCronjob
+	Schedules []CronSchedule
+}
+
+func LoadCronDefinitions(workspace, runtimeDir string) ([]CronDefinition, error) {
+	root, err := os.OpenRoot(workspace)
+	if err != nil {
+		return nil, fmt.Errorf("open workspace root: %w", err)
+	}
+
+	defer func() { _ = root.Close() }()
+
+	cronRoot, err := root.OpenRoot(filepath.ToSlash(filepath.Join(runtimeDir, "cron")))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("read cronjob directory: %w", err)
+	}
+
+	defer func() { _ = cronRoot.Close() }()
+
+	entries, err := fs.ReadDir(cronRoot.FS(), ".")
+	if err != nil {
+		return nil, fmt.Errorf("read cronjob directory: %w", err)
+	}
+
+	var definitions []CronDefinition
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".md") || strings.HasSuffix(name, ".example.md") {
+			continue
+		}
+
+		relativePath := filepath.ToSlash(filepath.Join("cron", name))
+
+		data, err := cronRoot.ReadFile(name)
+		if err != nil {
+			return nil, fmt.Errorf("read cronjob %s: %w", relativePath, err)
+		}
+
+		job, schedules, err := ParseCronDefinition(data, relativePath)
+		if err != nil {
+			return nil, fmt.Errorf("load cron definition: %w", err)
+		}
+
+		definitions = append(definitions, CronDefinition{Job: job, Schedules: schedules})
+	}
+
+	return definitions, nil
 }
 
 type cronFrontmatter struct {

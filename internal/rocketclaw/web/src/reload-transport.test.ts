@@ -17,7 +17,7 @@ test("authenticated browser reloads runtime assets without a conversation", asyn
       });
       return { status: response.status, body: await response.json() };
     });
-    expect(result).toEqual({ status: 200, body: { message: "rocketclaw runtime assets reloaded" } });
+    expect(result).toEqual({ status: 200, body: { message: "rocketclaw runtime assets reloaded\n\nSlack channel @ uses agent assistant, which is not sticky: slack, so it does not answer mentions there." } });
     await page.reload();
     await page.getByRole("textbox").waitFor();
     expect(await page.getByRole("button", { name: "Reload", exact: true }).count()).toBe(0);

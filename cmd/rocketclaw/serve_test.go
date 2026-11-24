@@ -184,17 +184,20 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	require.NoError(t, os.Mkdir("agents", 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join("agents", "voice.md"), []byte("---\ndescription: Voice\nmodel: gpt-6.1-sol\n---\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join("agents", "ops.md"), []byte("---\ndescription: Ops\nmodel: gpt-6.1-sol\nsticky: slack\n---\n"), 0o600))
 	configData := fmt.Sprintf(
-		`{"workspace":%q,"web":{"tsnet":{"auth_key":"tskey-auth-test"}},"database_url":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["assistant"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
+		`{"workspace":%q,"web":{"tsnet":{"auth_key":"tskey-auth-test"}},"database_url":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["ops"],"allowed_user_ids":["U123"]}]},"embedded_agents":{"voice":{"disabled":true}},"openai":{"api_key":"sk-test"}}`,
 		workspace, dsn,
 	)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))
 
 	err = runServe([]string{"--pprof=false"})
 	require.EqualError(t, err, "run rocketclaw: assemble frontends: start Slack connector: slack auth test failed: invalid_auth")
-	agents, _, err := backend.LoadRuntimeDefinitions(config.NewLockedConfig(&config.Config{Workspace: workspace}), ".rocketclaw")
+	cfg, err := config.Load(defaultConfigPath, "", secretFetcher)
 	require.NoError(t, err)
+	agents, _, err := backend.LoadRuntimeDefinitions(config.NewLockedConfig(cfg), ".rocketclaw")
+	require.NoError(t, err)
+	require.Contains(t, agents.Items, "ops")
 	for name, agent := range agents.Items {
 		require.False(t, agent.CustomShell.Emulated, "Slack auth fixture must not start background sandbox preparation for agent %q", name)
 	}
@@ -230,22 +233,46 @@ func TestBuildIdentityUsesOnlyAvailableBinaryMetadata(t *testing.T) {
 		{name: "unknown", want: []string{"version=(unknown)"}},
 		{name: "development", build: debug.BuildInfo{GoVersion: "go1.27.1", Main: debug.Module{Version: "(devel)"}}, want: []string{"version=(devel)", "go_version=go1.27.1"}},
 		{name: "revision", build: debug.BuildInfo{GoVersion: "go1.27.1", Main: debug.Module{Version: "v1.0.0"}, Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "abc123"}, {Key: "vcs.modified", Value: "true"}, {Key: "secret", Value: "not-for-logs"}}}, want: []string{"version=v1.0.0", "go_version=go1.27.1", "build_revision=abc123", "build_dirty=true"}},
+		{name: "pseudo-version", build: debug.BuildInfo{GoVersion: "go1.27.1", Main: debug.Module{Version: "v0.0.0-20261123120000-0123456789ab"}}, want: []string{"version=v0.0.0-20261123120000-0123456789ab", "go_version=go1.27.1", "build_revision=0123456789ab", "build_dirty=false"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs bytes.Buffer
 
-			logBuildIdentity(slog.New(slog.NewTextHandler(&logs, nil)), &tc.build)
+			revision, modified := logBuildIdentity(slog.New(slog.NewTextHandler(&logs, nil)), &tc.build)
+			wantRevision, wantModified := buildRevision(&tc.build)
+			require.Equal(t, []any{wantRevision, wantModified}, []any{revision, modified})
 
 			for _, field := range tc.want {
 				require.Contains(t, logs.String(), field)
 			}
 
-			if tc.name != "revision" {
+			if revision == "" {
 				require.NotContains(t, logs.String(), "build_revision")
 				require.NotContains(t, logs.String(), "build_dirty")
 			}
 
 			require.NotContains(t, logs.String(), "not-for-logs")
+		})
+	}
+}
+
+func TestBuildRevision(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		build    debug.BuildInfo
+		revision string
+		modified bool
+	}{
+		{name: "unknown"},
+		{name: "development", build: debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}},
+		{name: "vcs", build: debug.BuildInfo{Main: debug.Module{Version: "v0.0.0-20261123120000-0123456789ab+dirty"}, Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "abc123"}, {Key: "vcs.modified", Value: "true"}}}, revision: "abc123", modified: true},
+		{name: "pseudo-version", build: debug.BuildInfo{Main: debug.Module{Version: "v0.0.0-20261123120000-0123456789ab"}}, revision: "0123456789ab"},
+		{name: "pre-release pseudo-version", build: debug.BuildInfo{Main: debug.Module{Version: "v1.2.4-0.20261123120000-0123456789ab"}}, revision: "0123456789ab"},
+		{name: "release", build: debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, revision: "v1.2.3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			revision, modified := buildRevision(&tc.build)
+			require.Equal(t, []any{tc.revision, tc.modified}, []any{revision, modified})
 		})
 	}
 }

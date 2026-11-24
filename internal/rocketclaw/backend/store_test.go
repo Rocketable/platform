@@ -1356,7 +1356,7 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 	} {
 		store, _ := newShadowTestStore(t)
 		id := protocol.SlackThreadConversationID("D_1", slackTestTS(cutoff.Add(-time.Hour)))
-		recordTestConversations(t, store, "main", map[string]ConversationKind{id: KindSlackThread})
+		recordTestConversations(t, store, "primary", map[string]ConversationKind{id: KindSlackThread})
 		typed := testSessionEntryAt(cutoff.Add(-time.Hour), id)
 		typed.ReplayInput[0] = json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web]","content":"typed"}`)
 		_, err := store.AppendEntryID(t.Context(), id, typed)
@@ -1418,7 +1418,7 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		if index == 0 {
 			require.Equal(t, 2, bindings, "history-only clear preserves bindings")
 
-			bridge := &Bridge{config: Config{ConversationID: id, Agent: "main", SessionService: store}, log: store.log, runtime: slackAgentRuntime(t)}
+			bridge := &Bridge{config: Config{ConversationID: id, Agent: "primary", SessionService: store}, log: store.log, runtime: slackAgentRuntime(t)}
 			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "future", true)}
 			admitted, err := bridge.activateInbound(t.Context(), &request)
 			require.NoError(t, err)
@@ -2806,26 +2806,26 @@ func TestConversationKindsAtCreation(t *testing.T) {
 	ctx := t.Context()
 	runtime := &Runtime{Sessions: store}
 	run, oneOff := "cron:cron/daily.md:20261019T120000.000000001Z:RUN", "one-off-cron:cron/once.md:20261019T130000.000000001Z:ONE"
-	slack := "slack-channel:C1:main"
+	slack := "slack-channel:C1:primary"
 
-	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "web", Agent: "main", CreatedBy: "alice"}))
+	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "web", Agent: "primary", CreatedBy: "alice"}))
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "job", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/daily.md"}}))
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: oneOff, Agent: "job", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/once.md", OneOff: true}}))
-	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "web:" + run, Agent: "main", CreatedBy: "alice"}))
+	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "web:" + run, Agent: "primary", CreatedBy: "alice"}))
 	_, err := runtime.ContinueRun(ctx, run, "web:"+run, false)
 	require.NoError(t, err)
-	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "job", PrivateConversationID: "private", ManagedConversationID: "mcp-chat"}))
+	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "primary", &ExternalMCPSessionState{Agent: "job", PrivateConversationID: "private", ManagedConversationID: "mcp-chat"}))
 	require.NoError(t, store.startSubagent(ctx, "web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "helper"}))
 
 	for _, parent := range []string{"web", run} {
 		require.NoError(t, (&Bridge{config: Config{ConversationID: parent, SessionService: store}}).AppendChildEntry(ctx, harness.ChildKey{Path: "/call-2-review-0a1b2c3d", Turn: "turn-2", Call: "call-2"}, testSessionEntry("review", "allowed")))
 	}
 
-	bridge := &Bridge{log: store.log, config: Config{ConversationID: slack, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), handling: true}
+	bridge := &Bridge{log: store.log, config: Config{ConversationID: slack, Agent: "primary", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), handling: true}
 	inbound := newThreadInboundMessage("mention", "1.1", "1.1")
 	inbound.SlackReply.ChannelID = "C1"
-	protocol.SetInboundAllowedAgents(inbound, []string{"main"})
-	accepted, err := newThreadBridgeManager(nil, store, store.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }}).SubmitMention(ctx, "main", slackTarget("C1", "1.1"), inbound)
+	protocol.SetInboundAllowedAgents(inbound, []string{"primary"})
+	accepted, err := newThreadBridgeManager(nil, store, store.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }}).SubmitMention(ctx, "primary", slackTarget("C1", "1.1"), inbound)
 	require.NoError(t, err)
 	require.True(t, accepted)
 
@@ -2851,7 +2851,7 @@ FROM conversations c WHERE c.shadow_parent IS NULL`, "kinds", func(row rowScanne
 
 	shadows, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL AND kind = 'shadow' AND NOT listed`, "shadows")
 	require.NoError(t, err)
-	require.Len(t, shadows, 8, "each Web chat and Slack thread of main has both of its shadows")
+	require.Len(t, shadows, 8, "each Web chat and Slack thread of primary has both of its shadows")
 
 	ids, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations`, "conversations")
 	require.NoError(t, err)

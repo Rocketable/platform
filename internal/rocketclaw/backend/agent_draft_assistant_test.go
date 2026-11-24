@@ -49,9 +49,8 @@ func TestAgentDraftAssistant(t *testing.T) {
 
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
-	writeAgent(t, workspace, "main", "---\nmodel: main-model\n---\nRun the workspace.\n")
 
-	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
+	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, EmbeddedAgents: config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Model: "main-model"}}}
 	store.definitions = config.NewLockedConfig(cfg)
 
 	ctx := t.Context()
@@ -185,10 +184,10 @@ func TestAgentDraftAssistant(t *testing.T) {
 func TestAgentDraftAssistantFailures(t *testing.T) {
 	t.Parallel()
 
-	for _, test := range []struct{ name, main, answer, message string }{
+	for _, test := range []struct{ name, agent, answer, message string }{
 		{"missing draft", "---\nmodel: m\n---\n", "{}", "no rows"},
-		{"invalid main", "---\nmodel: [\n---\n", "{}", "open workspace agent and skills"},
-		{"missing main", "", "{}", "prepare agent draft assistant"},
+		{"invalid agent", "---\nmodel: [\n---\n", "{}", "open workspace agent and skills"},
+		{"main off", "", "{}", "main is turned off in Behavior Settings."},
 		{"provider failure", "---\nmodel: m\n---\n", "", "ask agent draft assistant"},
 		{"not JSON", "---\nmodel: m\n---\n", "Sure!", "read agent draft assistant answer"},
 	} {
@@ -208,10 +207,11 @@ func TestAgentDraftAssistantFailures(t *testing.T) {
 
 			workspace := t.TempDir()
 			store := newTestSessionServiceAt(t, workspace)
-			store.definitions = config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}})
+			store.definitions = config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL},
+				EmbeddedAgents: config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Disabled: test.name == "main off"}}})
 
-			if test.main != "" {
-				writeAgent(t, workspace, "main", test.main)
+			if test.agent != "" {
+				writeAgent(t, workspace, "helper", test.agent)
 			}
 
 			draft, err := store.CreateAgentDraft(t.Context(), "alice", AgentDraftOrigin{Name: "bot", Mode: harness.AgentModeEasy})

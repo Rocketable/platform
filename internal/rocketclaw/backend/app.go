@@ -447,6 +447,7 @@ func setBehaviorFields(b *config.Behavior) []string {
 		{"slack.channels", b.Slack.Channels != nil},
 		{"logging.level", b.Logging.Level != ""},
 		{"overlays", b.Overlays != nil},
+		{"embedded_agents", b.EmbeddedAgents != config.EmbeddedAgentsConfig{}},
 	} {
 		if field.set {
 			names = append(names, field.name)
@@ -468,12 +469,25 @@ func SetLogLevel(level *slog.LevelVar, text string) {
 }
 
 func validateRuntimeAssets(cfg *config.LockedConfig, runtimeDir string, logger *slog.Logger) (string, error) {
-	agents, err := LoadRuntimeAgents(cfg, runtimeDir)
+	root, err := os.OpenRoot(cfg.Clone().Workspace)
+	if err != nil {
+		return "", fmt.Errorf("validate rocketcode definitions: open workspace root: %w", err)
+	}
+
+	defer func() { _ = root.Close() }()
+
+	var (
+		agents   harness.Agents
+		warnings []string
+	)
+
+	err = cfg.Do(func(current *config.Config) error {
+		agents, _, warnings, err = readRocketCodeDefinitionsIn(root, current, runtimeDir, nil, false)
+		return err
+	})
 	if err != nil {
 		return "", fmt.Errorf("validate rocketcode definitions: %w", err)
 	}
-
-	var warnings []string
 
 	for _, channel := range cfg.Clone().Slack.Channels {
 		for _, name := range channel.Agents {
@@ -484,5 +498,47 @@ func validateRuntimeAssets(cfg *config.LockedConfig, runtimeDir string, logger *
 		}
 	}
 
+	crons, err := config.LoadCronDefinitions(cfg.Clone().Workspace, runtimeDir)
+	if err != nil {
+		return "", fmt.Errorf("validate cron definitions: %w", err)
+	}
+
+	for _, cron := range crons {
+		if err := CheckCronAgent(agents, &cron.Job); err != nil {
+			warnings = append(warnings, "Cron "+err.Error()+", so it does not run.")
+		}
+	}
+
 	return strings.Join(warnings, " "), nil
+}
+
+type cronAgentError struct{ RelativePath, Agent, Refusal string }
+
+func (e *cronAgentError) Error() string {
+	if e.Agent == "" {
+		return e.RelativePath + " names no agent"
+	}
+
+	return e.RelativePath + " uses agent " + e.Agent + ", which " + e.Refusal
+}
+
+func CheckCronAgent(agents harness.Agents, job *protocol.OneOffCronjob) error {
+	agent, ok := agents.Items[job.Agent]
+
+	var refusal string
+
+	switch {
+	case !ok:
+		refusal = "is not loaded"
+	case agent.Mode == harness.AgentModeEasy && strings.HasPrefix(job.RelativePath, "cron/"):
+		refusal = "is an easy agent scheduled with its routines"
+	case agent.Sticky == harness.AgentStickyUser || agent.Sticky == harness.AgentStickySlack:
+		refusal = "is sticky: " + string(agent.Sticky)
+	case agent.Sticky == harness.AgentStickyGlobal && job.Space != "" && !strings.EqualFold(job.Space, agent.Space):
+		refusal = "is sticky: global in space " + agent.Space + ", not " + job.Space
+	default:
+		return nil
+	}
+
+	return &cronAgentError{RelativePath: job.RelativePath, Agent: job.Agent, Refusal: refusal}
 }
