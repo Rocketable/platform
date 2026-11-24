@@ -247,7 +247,11 @@ func (s Skills) listed(keep func(*Skill) bool) []Skill {
 	}
 
 	slices.SortFunc(list, func(a, b Skill) int {
-		return cmp.Or(strings.Compare(skillSortKey(a.Name), skillSortKey(b.Name)),
+		if order := strings.Compare(skillSortKey(a.Name), skillSortKey(b.Name)); order != 0 {
+			return order
+		}
+
+		return cmp.Or(
 			strings.Compare(cases.Fold().String(norm.NFD.String(a.Name)), cases.Fold().String(norm.NFD.String(b.Name))),
 			strings.Compare(b.Name, a.Name))
 	})
