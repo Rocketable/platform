@@ -2192,7 +2192,7 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 		bus := newTestBus()
 		defer bus.Close()
 
-		bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
+		bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: "http://127.0.0.1:1"}}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
 		bridge.requestCh = make(chan bridgeRequest, 1)
 		bridge.stopCh = make(chan struct{})
 
@@ -3342,7 +3342,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 
 	var logs lockedBuffer
 
-	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}), config: Config{ConversationID: conversationID, Agent: "primary", SessionService: service}, bus: bus, log: slog.New(slog.NewJSONHandler(&logs, nil)), requestCh: make(chan bridgeRequest, 1), inputOpen: true}
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}), config: Config{ConversationID: conversationID, Agent: "primary", SessionService: service}, bus: bus, log: slog.New(slog.NewJSONHandler(&logs, nil)), requestCh: make(chan bridgeRequest, 1), inputOpen: true}
 	queued := protocol.ThreadQueueItem{ID: "queued-input", ConversationID: conversationID, Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue, Message: "hello", Principal: "Alice"}
 	require.NoError(t, service.PutThreadQueueItem(queued.ID, &queued))
 	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &queued))
