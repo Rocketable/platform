@@ -61,9 +61,9 @@ func withImageName[T any, P interface {
 	*T
 	SetExtraFields(map[string]any)
 }](image T, name string) *T {
-	extra := map[string]any{"filename": name}
-	if name == "" {
-		extra = nil
+	var extra map[string]any
+	if name != "" {
+		extra = map[string]any{"filename": name}
 	}
 
 	P(&image).SetExtraFields(extra)
