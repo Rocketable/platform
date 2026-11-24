@@ -716,10 +716,8 @@ func (sfs *sandboxedFileSystem) globMatches(ctx context.Context, pattern, path s
 		return nil, false, errText
 	}
 
-	matches := strings.Split(outputText, "\n")
-
-	results = make([]globMatch, 0, len(matches))
-	for _, match := range matches {
+	results = make([]globMatch, 0, strings.Count(outputText, "\n")+1)
+	for match := range strings.SplitSeq(outputText, "\n") {
 		full := filepath.Join(hostRoot, match)
 		if sfs.deniedPath(full) != "" {
 			continue
