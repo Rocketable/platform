@@ -85,6 +85,11 @@ func TestPageTools(t *testing.T) {
 	spaces, err := store.Spaces(ctx)
 	require.NoError(t, err)
 	require.True(t, slices.ContainsFunc(spaces, func(space Space) bool { return space.Name == "Reports" }), "publishing creates the fallback space")
+	require.JSONEq(t, `{"files":[],"keys":[]}`, must(tools("loose", "Nowhere"), "rocketclaw_list", struct{}{}))
+
+	spaces, err = store.Spaces(ctx)
+	require.NoError(t, err)
+	require.False(t, slices.ContainsFunc(spaces, func(space Space) bool { return space.Name == "Nowhere" }), "only publishing creates a space")
 
 	for name, input := range map[string]any{"rocketclaw_store": map[string]string{"path": "x.html", "content": "x"}, "rocketclaw_read": map[string]string{"path": "r.html"}, "rocketclaw_kv_store": map[string]any{"key": "k", "value": 1}, "rocketclaw_kv_read": map[string]string{"key": "k"}, "rocketclaw_delete": map[string]string{"path": "r.html"}, "rocketclaw_list": struct{}{}} {
 		_, err := call(tools("loose", ""), name, input)
@@ -246,7 +251,10 @@ func TestPageStoreReadsEasyFileView(t *testing.T) {
 
 	store := newTestSessionService(t)
 	threads := &threadBridgeManager{runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store}
-	pageStore := pageSpace{sessions: store, threads: threads, fallback: "Ops"}.nativeTools(workspace, &harness.CustomShell{Emulated: true, Dir: filepath.Join(dir, "folder")})[0]
+	_, _, err = store.CreateStickyConversation(t.Context(), protocol.Conversation{ID: "easy", Agent: "easy", Space: "Ops"}, harness.AgentStickyOff)
+	require.NoError(t, err)
+
+	pageStore := pageSpace{sessions: store, threads: threads, conversation: "easy", noSpace: nativePageNoSpace}.nativeTools(workspace, &harness.CustomShell{Emulated: true, Dir: filepath.Join(dir, "folder")})[0]
 
 	_, err = pageStore.Call(t.Context(), json.RawMessage(`{"path":"config.json","source":"rocketclaw.json"}`), nil)
 	require.ErrorIs(t, err, fs.ErrNotExist, "a relative source starts from the agent's folder")

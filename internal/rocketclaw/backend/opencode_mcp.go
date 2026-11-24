@@ -3,7 +3,6 @@ package backend
 import (
 	"context"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -73,13 +72,13 @@ func (r *Runtime) callOpenCodeTool(ctx context.Context, name string, server conf
 	for {
 		conversation = "opencode:" + name + ":" + id
 
-		err := r.Sessions.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE conversation_id = $1`, conversation).Scan(&conversation)
-		if err == nil {
-			break
+		found, err := scanFound("read OpenCode session "+id, r.Sessions.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE conversation_id = $1`, conversation).Scan(&conversation))
+		if err != nil {
+			return "", err
 		}
 
-		if !errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("read OpenCode session %s: %w", id, err)
+		if found {
+			break
 		}
 
 		var parent struct {

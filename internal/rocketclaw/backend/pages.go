@@ -28,29 +28,34 @@ type Page struct {
 
 var errNoPageSpace = errors.New("this chat has no space")
 
-const pageTargetSQL = `WITH born AS (
+const pageBornSQL = `WITH born AS (
     SELECT s.name FROM conversations c JOIN conversations o ON o.conversation_id = COALESCE(c.shadow_parent, c.conversation_id)
     JOIN web_spaces s ON s.id = o.space_id WHERE c.conversation_id = $1 FOR SHARE OF s
 ), born_name AS (
     SELECT max(name) AS name FROM born
-), made AS (
+)`
+
+const pageTargetSQL = pageBornSQL + `, made AS (
     INSERT INTO web_spaces (name) SELECT $2::text FROM born_name WHERE name IS NULL AND $2 <> ''
     ON CONFLICT ((lower(name))) DO UPDATE SET name = web_spaces.name RETURNING name
 ), target AS (
     SELECT name FROM born UNION ALL SELECT name FROM made
 )`
 
-const livePageSQL = ` FROM hosted_pages p LEFT JOIN web_spaces w ON lower(w.name) = lower(p.space)`
+const pageSpellingSQL = ` FROM hosted_pages p LEFT JOIN web_spaces w ON lower(w.name) = lower(p.space)`
 
 func (s *SessionService) resolvePageSpace(ctx context.Context, conversation, fallback string) (string, error) {
 	var space string
 
-	found, err := scanFound("resolve page space", s.db.QueryRowContext(ctx, pageTargetSQL+` SELECT name FROM target`, conversation, fallback).Scan(&space))
-	if err == nil && !found {
-		err = errNoPageSpace
+	if err := s.db.QueryRowContext(ctx, pageBornSQL+` SELECT COALESCE(name, $2) FROM born_name`, conversation, fallback).Scan(&space); err != nil {
+		return "", fmt.Errorf("resolve page space: %w", err)
 	}
 
-	return space, err
+	if space == "" {
+		return "", errNoPageSpace
+	}
+
+	return space, nil
 }
 
 func (s *SessionService) PutPage(ctx context.Context, page *Page, conversation, fallback string) error {
@@ -100,7 +105,7 @@ RETURNING space`, conversation, fallback, page.Kind, page.Name, page.ContentType
 func (s *SessionService) Page(ctx context.Context, space string, kind PageKind, name string) (Page, bool, error) {
 	page := Page{Kind: kind, Name: name}
 
-	found, err := scanFound("read page", s.db.QueryRowContext(ctx, `SELECT COALESCE(w.name, p.space), p.content_type, p.body, p.updated_at`+livePageSQL+`
+	found, err := scanFound("read page", s.db.QueryRowContext(ctx, `SELECT COALESCE(w.name, p.space), p.content_type, p.body, p.updated_at`+pageSpellingSQL+`
 WHERE lower(p.space) = lower($1) AND p.kind = $2 AND p.name = $3`, space, kind, name).Scan(&page.Space, &page.ContentType, &page.Body, &page.UpdatedAt))
 	if err != nil || !found {
 		return Page{}, false, err
@@ -117,7 +122,7 @@ func (s *SessionService) DeletePage(ctx context.Context, space string, kind Page
 }
 
 func (s *SessionService) Pages(ctx context.Context, space string) ([]Page, error) {
-	return queryRows(ctx, s.db, `SELECT COALESCE(w.name, p.space), p.kind, p.name, p.content_type, octet_length(p.body), p.updated_at`+livePageSQL+`
+	return queryRows(ctx, s.db, `SELECT COALESCE(w.name, p.space), p.kind, p.name, p.content_type, octet_length(p.body), p.updated_at`+pageSpellingSQL+`
 WHERE $1 = '' OR lower(p.space) = lower($1) ORDER BY lower(p.space), p.kind, p.name`, "pages", func(row rowScanner) (Page, error) {
 		var page Page
 		if err := row.Scan(&page.Space, &page.Kind, &page.Name, &page.ContentType, &page.Size, &page.UpdatedAt); err != nil {

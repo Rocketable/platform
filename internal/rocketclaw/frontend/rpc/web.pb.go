@@ -4723,7 +4723,6 @@ func (x *ListCronJobsResponse) GetJobs() []*CronJob {
 	return nil
 }
 
-// PageRequest names a space's Hosted Page file, or its Page Data entry when data is set.
 // An empty path or one ending in / names index.html.
 type PageRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -4785,7 +4784,6 @@ func (x *PageRequest) GetSpace() string {
 	return ""
 }
 
-// Page is a stored file or Page Data entry with its space's current spelling.
 type Page struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Space         string                 `protobuf:"bytes,1,opt,name=space,proto3" json:"space,omitempty"`
@@ -4898,7 +4896,6 @@ func (x *ListPagesRequest) GetSpace() string {
 	return ""
 }
 
-// ListPagesResponse lists the HTML files of every space, deleted spaces included.
 type ListPagesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Pages         []*PageEntry           `protobuf:"bytes,1,rep,name=pages,proto3" json:"pages,omitempty"`
