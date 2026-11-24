@@ -23,7 +23,7 @@ type cronRunner struct {
 	backend frontend.Backend
 }
 
-func (r *cronRunner) Run(ctx context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+func (r *cronRunner) Run(ctx context.Context, agent, prompt string, progress *backend.CronRunProgress) (protocol.CronRunResult, error) {
 	destination := progress.SyncDestination
 	if destination != "" {
 		if err := r.backend.CreateConversation(ctx, protocol.Conversation{ID: destination, Agent: agent, CreatedBy: "cron"}); err != nil {

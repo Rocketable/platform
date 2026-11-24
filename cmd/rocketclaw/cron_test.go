@@ -45,7 +45,7 @@ func TestCronProducerRunsWithDestination(t *testing.T) {
 				},
 			}
 			runner := &cronRunner{backend: core}
-			progress := &backend.RawRunProgress{ConversationID: "X", Cronjob: progressCronjob}
+			progress := &backend.CronRunProgress{ConversationID: "X", Cronjob: progressCronjob}
 			progress.SyncDestination = "web-chat"
 			result, err := runner.Run(ctx, "job-agent", "job prompt", progress)
 			require.Equal(t, "web-chat", result.ConversationID)
@@ -80,7 +80,7 @@ func TestScheduledCronOnlyRunsTurn(t *testing.T) {
 		},
 	}
 	runner := &cronRunner{backend: core}
-	result, err := runner.Run(t.Context(), "job", "prompt", &backend.RawRunProgress{ConversationID: "X"})
+	result, err := runner.Run(t.Context(), "job", "prompt", &backend.CronRunProgress{ConversationID: "X"})
 	require.ErrorIs(t, err, errRun)
 	require.Empty(t, result.ConversationID)
 	require.Equal(t, []string{"create:X", "run"}, operations)
@@ -119,7 +119,7 @@ func TestCronCompletionLogNamesWhetherTheRunReported(t *testing.T) {
 func TestCronRunStopsWhenDestinationFails(t *testing.T) {
 	errCreate := errors.New("create failed")
 	core := &BackendMock{CreateConversationFunc: func(context.Context, protocol.Conversation) error { return errCreate }}
-	_, err := (&cronRunner{backend: core}).Run(t.Context(), "job", "prompt", &backend.RawRunProgress{ConversationID: "X", SyncDestination: "web-chat"})
+	_, err := (&cronRunner{backend: core}).Run(t.Context(), "job", "prompt", &backend.CronRunProgress{ConversationID: "X", SyncDestination: "web-chat"})
 	require.ErrorIs(t, err, errCreate)
 	require.Empty(t, core.RunTurnCalls(), "no turn runs")
 }

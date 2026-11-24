@@ -227,11 +227,11 @@ func TestWebTurnQuestionContinuesAfterRestart(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 
 		if strings.Contains(string(body), "function_call_output") {
-			writeRawRunMessage(t, w, "resp_2", "msg_1", "answer")
+			writeResponseMessage(t, w, "resp_2", "msg_1", "answer")
 			return
 		}
 
-		writeRawRunFunctionCall(t, w, "resp_1", "execute", struct {
+		writeResponseFunctionCall(t, w, "resp_1", "execute", struct {
 			Code string `json:"code"`
 		}{Code: "def main():\n    return ask_user_question(question=\"Ship?\", details=\"\", options=[], multiple=False)\n"})
 	}))

@@ -46,7 +46,7 @@ func TestGenerateOneShot(t *testing.T) {
 				assert.Contains(t, string(request.Input), "Source session: ordinary-session")
 				assert.Contains(t, string(request.Input), "literal !`touch should-not-exist`")
 				w.Header().Set("Content-Type", "application/json")
-				writeRawRunMessage(t, w, "handoff", "message", text)
+				writeResponseMessage(t, w, "handoff", "message", text)
 			}))
 			defer server.Close()
 

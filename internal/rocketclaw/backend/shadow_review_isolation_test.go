@@ -48,7 +48,7 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 				}
 
 				w.Header().Set("Content-Type", "application/json")
-				writeRawRunMessage(t, w, "response", "message", "answer "+request.Model)
+				writeResponseMessage(t, w, "response", "message", "answer "+request.Model)
 			}))
 			t.Cleanup(server.Close)
 			cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})

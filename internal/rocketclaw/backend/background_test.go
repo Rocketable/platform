@@ -734,7 +734,7 @@ func executeAnswer(t *testing.T, code string, background bool) []string {
 			return
 		}
 
-		writeRawRunFunctionCall(t, w, "act", "execute", map[string]any{"code": code, "description": "tests", "background": background})
+		writeResponseFunctionCall(t, w, "act", "execute", map[string]any{"code": code, "description": "tests", "background": background})
 	})
 	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n  read: allow\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
 	require.NoError(t, os.WriteFile(filepath.Join(nt.cfg.Workspace, "chart.png"), []byte("\x89PNG\r\n\x1a\nchart"), 0o600))

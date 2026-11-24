@@ -664,8 +664,8 @@ isolated transport tests below do not start Slack or touch runtime configuration
 
 Open `/s/<base64url-conversation-id>` in the Web UI to read the conversation.
 Thinking and tool traces appear inline within each turn as the browser's Timeline
-detail setting shapes them (Compact by default: one closed summary row); replies and
-successful verbatim-delivery reports always remain visible.
+detail setting shapes them (Compact by default: one closed summary row); replies
+always remain visible.
 For example, obtain the URL component with:
 
 ```sh

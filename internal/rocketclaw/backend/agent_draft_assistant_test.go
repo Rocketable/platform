@@ -43,7 +43,7 @@ func TestAgentDraftAssistant(t *testing.T) {
 		requests <- request
 
 		w.Header().Set("Content-Type", "application/json")
-		writeRawRunMessage(t, w, "proposal", "message", <-answers)
+		writeResponseMessage(t, w, "proposal", "message", <-answers)
 	}))
 	t.Cleanup(server.Close)
 
@@ -201,7 +201,7 @@ func TestAgentDraftAssistantFailures(t *testing.T) {
 				}
 
 				w.Header().Set("Content-Type", "application/json")
-				writeRawRunMessage(t, w, "proposal", "message", test.answer)
+				writeResponseMessage(t, w, "proposal", "message", test.answer)
 			}))
 			t.Cleanup(server.Close)
 

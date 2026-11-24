@@ -1184,18 +1184,18 @@ func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 			case 1:
 				assert.Equal(t, "openai", provider)
 				assert.Equal(t, "main-model", body["model"])
-				writeRawRunFunctionCall(t, w, "resp_1", "task", map[string]string{"description": "delegate", "prompt": "delegated prompt", "subagent_type": "helper"})
+				writeResponseFunctionCall(t, w, "resp_1", "task", map[string]string{"description": "delegate", "prompt": "delegated prompt", "subagent_type": "helper"})
 			case 2:
 				assert.Equal(t, "child", provider)
 				assert.Equal(t, "helper-model", body["model"])
 				assert.Contains(t, requestSystemPrompt(data), "Helper prompt")
 				assert.Contains(t, fmt.Sprint(body), "delegated prompt")
-				writeRawRunMessage(t, w, "resp_2", "msg_2", "child response")
+				writeResponseMessage(t, w, "resp_2", "msg_2", "child response")
 			case 3:
 				assert.Equal(t, "openai", provider)
 				assert.Equal(t, "main-model", body["model"])
 				assert.Contains(t, fmt.Sprint(body), "<task_result>\nchild response\n</task_result>")
-				writeRawRunMessage(t, w, "resp_3", "msg_3", "persistent done")
+				writeResponseMessage(t, w, "resp_3", "msg_3", "persistent done")
 			default:
 				t.Fatalf("unexpected response request %d", requests)
 			}
@@ -2609,12 +2609,12 @@ func TestRunTurnExposesPrincipalEnv(t *testing.T) {
 
 		requests++
 		if requests%2 == 1 {
-			writeRawRunFunctionCall(t, w, "resp_call", "execute", executeBashScript(`printf '%s|%s|%s|%s' "${ROCKETCLAW_PRINCIPAL_NAME-unset}" "${ROCKETCLAW_PRINCIPAL_EMAIL-unset}" "${ROCKETCLAW_PRINCIPAL_ID-unset}" "${ROCKETCLAW_CONVERSATION_ID-unset}"`))
+			writeResponseFunctionCall(t, w, "resp_call", "execute", executeBashScript(`printf '%s|%s|%s|%s' "${ROCKETCLAW_PRINCIPAL_NAME-unset}" "${ROCKETCLAW_PRINCIPAL_EMAIL-unset}" "${ROCKETCLAW_PRINCIPAL_ID-unset}" "${ROCKETCLAW_CONVERSATION_ID-unset}"`))
 
 			return
 		}
 
-		writeRawRunMessage(t, w, "resp_1", "msg_1", "ok")
+		writeResponseMessage(t, w, "resp_1", "msg_1", "ok")
 	}))
 	t.Cleanup(server.Close)
 
@@ -2742,7 +2742,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 
 		if requests == 2 || requests == 5 {
-			writeRawRunFunctionCall(t, w, "resp_2", "execute", executeBashScript(`printf '%s|%s|%s' "$ROCKETCLAW_METADATA_A" "$ROCKETCLAW_METADATA_LATER_KEY" "$ROCKETCLAW_METADATA_Z"`))
+			writeResponseFunctionCall(t, w, "resp_2", "execute", executeBashScript(`printf '%s|%s|%s' "$ROCKETCLAW_METADATA_A" "$ROCKETCLAW_METADATA_LATER_KEY" "$ROCKETCLAW_METADATA_Z"`))
 
 			return
 		}
@@ -3149,7 +3149,7 @@ func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
 		requestBody = string(body)
 
 		w.Header().Set("Content-Type", "application/json")
-		writeRawRunMessage(t, w, "response", "message", "ok")
+		writeResponseMessage(t, w, "response", "message", "ok")
 	}))
 	t.Cleanup(server.Close)
 
@@ -4804,7 +4804,7 @@ func TestBackgroundScriptCallsReachTheHistoryAfterItsTurn(t *testing.T) {
 		}
 
 		code := "def main():\n    for gate in ['one', 'two', 'three']:\n        bash(command='until [ -f " + gates + "/' + gate + ' ]; do sleep 0.05; done; echo ' + gate)\n"
-		writeRawRunFunctionCall(t, w, "resp_0", "execute", map[string]any{"code": code, "description": "gates", "background": true})
+		writeResponseFunctionCall(t, w, "resp_0", "execute", map[string]any{"code": code, "description": "gates", "background": true})
 	})
 	gates = nt.cfg.Workspace
 	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
@@ -4853,7 +4853,7 @@ func TestBackgroundScriptEndsACallWhoseRecordFailedToSave(t *testing.T) {
 		}
 
 		code := "def main():\n    for gate in ['one', 'two']:\n        bash(command='until [ -f " + gates + "/' + gate + ' ]; do sleep 0.05; done; echo ' + gate)\n    return 'done'\n"
-		writeRawRunFunctionCall(t, w, "resp_0", "execute", map[string]any{"code": code, "description": "gates", "background": true})
+		writeResponseFunctionCall(t, w, "resp_0", "execute", map[string]any{"code": code, "description": "gates", "background": true})
 	})
 	gates = nt.cfg.Workspace
 	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
