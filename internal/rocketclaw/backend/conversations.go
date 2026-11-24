@@ -608,7 +608,7 @@ func (b *Bridge) Drain(ctx context.Context, responseID string, phase harness.Tur
 	inputs := snapshot.Inputs
 	segment := shadowStepSegment(applied, snapshot.Resets)
 
-	notes, err := claimBackgroundNotes(context.WithoutCancel(ctx), tx, b.config.ConversationID, b.activeTurnID, true)
+	notes, err := claimBackgroundNotes(context.WithoutCancel(ctx), tx, b.config.ConversationID, b.activeTurnID, true, b.activeUnaddressed)
 	if err != nil {
 		b.mu.Unlock()
 		return nil, inputPersistenceError{cause: err}

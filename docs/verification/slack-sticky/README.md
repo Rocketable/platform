@@ -5,6 +5,20 @@ Sessions, Thread Sessions, and the `slack_respond_in_thread` ratchet. **It does 
 means the properties hold for the finite worlds below, under the assumptions below. The step table maps each model
 step to the code that will build it, or to the current code it changes.
 
+**Gate status, extended with ambient listening: VERIFIED** for the finite worlds below. On 2026-11-24, one
+`make -k` run of the extended model exited 0 in 39m59s:
+
+- every required check finished with `Model checking completed. No error has been found.` (17 of 17: the 11 earlier
+  ones, with `AmbientOn = FALSE`, and 6 ambient ones);
+- every must-fail check failed with its named violation (28 of 28: the 21 earlier ones and 7 ambient ones);
+- every earlier check found exactly the distinct states and depth recorded below.
+
+The run used TLC2 2026.11.19.180144 (rev `bc1b506`) and OpenJDK 21.0.13.1 on linux/aarch64, with 16 cores. The
+ambient design and its results are in [Ambient listening](#ambient-listening). The ambient behavior is now built, and
+the step-to-code rows name the code that implements each step.
+
+The earlier record, for the model without ambient listening:
+
 **Gate status: VERIFIED** for the finite worlds below. On 2026-11-19, one `make -k` run of the final model exited 0:
 
 - every required check finished with `Model checking completed. No error has been found.`;
@@ -219,6 +233,12 @@ Slack call, or one critical section.
 | close | `closeTurn`. New: a Channel Session root wakes its thread's sessions | one transaction |
 | stop | `handleAgentSessionStopped` → `InterruptThread`. New: look the turn up by thread, then interrupt only if that turn is still running, in whichever session holds it | in-memory lookup, later interrupt |
 | crash | `app.go` startup order | restart |
+| `Ambient` gate and classify | `handleMessageEvent`, the `message` event handler of `handleEventsAPI` (`frontend/slack/connector.go`): config gates, mention text, edits, Report Thread, `MentionThread`, Watched Channel; the channel's agent read once for the classify and the admission | one pass of the serial Slack event loop |
+| `Ambient` screen | `ScreenAmbient` → `screenAmbient` on the backend router (`backend/thread_bridges.go`), the Decisions API under a 5-second timeout; an error, refusal or timeout passes | one backend call, on the event loop |
+| `Ambient` admit | `SubmitMention` (`backend/thread_bridges.go`) with the ambient key: the Thread Session of `thread_ts`, or of `ts` for a top-level message; the same `slack:<ch>:<ts>` duplicate check as mentions, `slack:<ch>:<ts>:<edited_ts>` for an edit; no status | one "Slack mention admission" transaction |
+| no-reply | new `slack_no_reply` tool, only on ambient turns: saves a `/no-reply` turn step | one write, journaled |
+| finish (ambient) | `Bridge.finish` (`backend/bridge.go`) reads the `/no-reply` step before `finishTurn` and clears the outbound text and files, so the saved `outbound_json` is silent | "finish" transaction |
+| status, settle (ambient) | connector `SendResponse` (`frontend/slack/connector.go`), new deferred branch: no `c.sessions` entry, no `agents.sessions.setStatus`, no settle; nothing posts without text or files | none |
 
 ## Properties
 
@@ -348,3 +368,192 @@ Two of the bugs the model found were fixed in the model before these runs:
   are UI and listing filters.
 - **Small bounds.** These are 1 to 2 agents, at most 7 items, 1 to 2 tool-call steps per turn, 1 crash, and up to 2
   Stops. Behavior that needs more is not covered.
+
+## Ambient listening
+
+Ambient listening reads Slack messages that do not mention the bot: replies in Joined Threads, and every message in a
+Watched Channel. A cheap decision model screens each one, and a message that passes runs as an ambient turn in its
+thread's Thread Session. The plan is `docs/plans/2026-11-24-1520-feat-slack-ambient-listening-plan.md`. Ambient
+intake changes what `OneAdmission`, `HeldUntilRootSettles`, `OneReply`, `FooterMatchesSession` and `StatusClears`
+rest on, so it extends this model rather than starting a new one.
+
+The constant `AmbientOn` switches it on. Every check above sets `AmbientOn = FALSE` and no ambient message, and their
+results did not change (see Results, extended model).
+
+### The design being checked
+
+- **Intake.** A `message` event goes through one gate and one classification, cheapest check first:
+  - a message that mentions the bot is ignored, because the mention path keeps it. Slack sends a `message` copy of every
+    mention, before or after its `app_mention`;
+  - an edit reaches the Thread Session of its thread only when that session exists, without screening;
+  - a Report Thread reply is ignored;
+  - a reply in a thread whose root mentions the bot and which has no Thread Session is ignored, because the Channel
+    Session owns that request;
+  - anything else, a reply in a Joined Thread or a message in the Watched Channel, is screened.
+- **The channel's agent is read once** per event, for the classification and the admission both.
+- **The screen** skips, passes or fails, and a failure (error, refusal, timeout) passes. It runs on the serial Slack
+  event loop, so no mention is handled while it waits, but sessions run, the configuration changes and the process may
+  crash meanwhile. A crash loses the event, as it loses a mention today.
+- **Admission** goes through the mention admission and its duplicate check: one key per Slack message, whichever event
+  carried it, and a key of its own for each edit. It queues the message in the Thread Session of the message's thread,
+  of its own `ts` for a top-level message, and writes no status.
+- **The ambient turn is deferred.** It never shows Slack's working status, is never in the connector's status
+  sessions, and never settles a status, so a mention waiting behind it keeps its own. It may call `slack_no_reply`,
+  which saves a turn step. At finish, a saved step clears the output, and the cleared output is what is saved for
+  delivery. The turn posts its answer with the footer, or nothing: after no-reply, or with no answer or files, or after
+  a failure or a Stop from Web.
+
+```mermaid
+stateDiagram-v2
+    direction TB
+    [*] --> Gate
+    Gate --> Ignored: off, DM, bot or self, subtype, not allowed, mentions bot, parent redelivery
+    Gate --> Edit: edited reply
+    Gate --> Classify: new message
+    Edit --> Admit: thread has a Thread Session
+    Edit --> Ignored: unfurl, or no Thread Session
+    Classify --> Ignored: report thread, unrecorded thread under a mention root
+    Classify --> Screen: reply in a joined thread
+    Classify --> Screen: message in a watched channel
+    Classify --> Ignored: neither
+    Screen --> Ignored: probability below 0.2
+    Screen --> Admit: pass, error, refusal, timeout, incomplete context
+    Admit --> Ignored: already admitted
+    Admit --> Queued: Thread Session of the thread
+    Ignored --> [*]
+    Queued --> [*]
+```
+
+```mermaid
+stateDiagram-v2
+    direction TB
+    [*] --> Waiting: queued in Thread Queue
+    Waiting --> Running: turn starts
+    Running --> Posted: answer or files, with footer
+    Running --> Silent: slack_no_reply, empty, failed, or stopped from Web
+    Posted --> [*]
+    Silent --> [*]
+```
+
+### What the extension adds to the model
+
+- **`Ambient`** (fair): the `message` handler. Each delivery is one step (gate and classify, with the channel's agent
+  read once); the screen and the admission are the next step. Slack delivers each message, and each mention's copy,
+  at least once and up to `Dups` more times, in any order with the `app_mention`s.
+- **`Lane`**: an ambient turn skips the status and settle writes, may take a no-reply step, and finishes with an answer
+  or silent (no-reply saved, empty, failed, or stopped from Web). A silent turn posts nothing.
+- **`Lifecycle`**: a crash also loses the event being screened.
+- The world is one channel, which is watched. The new items:
+
+| Item | Role |
+| --- | --- |
+| 9 | A plain reply in root 1's thread: a Joined Thread once that thread has a Thread Session, until then a thread under a mention root that the Channel Session owns |
+| 10 | A plain top-level message in the watched channel (its thread is ts 10) |
+| 11 | An edit of a plain reply in root 1's thread, with its own admission key |
+| 12 | A plain reply in a Report Thread (ts 300) |
+
+One thread, root 1's, plays both the Joined Thread and the thread under a mention root: whether item 9 or 11 arrives
+before or after the thread's Thread Session exists decides which. The Thread Session comes from mention 3 (root first)
+or from root 1 moving into its thread.
+
+Safety (invariants), added:
+
+- `MentionNeverAmbient`: a message that mentions the bot is never admitted as ambient.
+- `NoAmbientInReport`: a Report Thread reply is never admitted.
+- `NoAmbientUnderMentionRoot`: an ambient admission never creates the Thread Session of a thread whose root mentions
+  the bot.
+- `AmbientInThread`: an ambient message queues in the Thread Session of its own thread, never in a Channel Session.
+- `SilentPostsNothing`: a turn that called no-reply, or ended silent, posts nothing, across a crash.
+- `AmbientWritesNoStatus`: an ambient turn never writes a Slack status.
+
+Liveness, added: `AmbientSettles`, every admitted ambient message finishes. Fairness is unchanged, plus weak fairness
+for `Ambient`, as for `Slack`.
+
+Witness, added: `NoAmbientAnswer`, which claims the reply and the edit in root 1's thread are never both answered there.
+
+The must-fail mutations:
+
+| Mutation | What is turned off | Violation |
+| --- | --- | --- |
+| `ambient-mentions` | the `message` handler treats mention text as plain | `MentionNeverAmbient` |
+| `ambient-root-channel` | a top-level message is routed with its own `ts` as the message timestamp, which picks the Channel Session | `AmbientInThread` |
+| `ambient-mention-root` | a reply under a mention root with no Thread Session is screened and admitted | `NoAmbientUnderMentionRoot` |
+| `no-reply-footer` | a turn whose no-reply step is saved still posts the footer | `SilentPostsNothing` |
+| `volatile-no-reply` | the no-reply step is kept in memory only; a crash before finish forgets it | `SilentPostsNothing` |
+| `deferred-session` | an ambient turn is tracked as a status session | `AmbientWritesNoStatus` |
+
+### Results, extended model
+
+On 2026-11-24, `make -k -C docs/verification/slack-sticky` exited 0 in 39m59s, with TLC `2026.11.19.180144` (rev
+`bc1b506`) and OpenJDK `21.0.13.1` on linux/aarch64, 16 cores. Logs and full traces are in
+`.tmp/run/slack-sticky-model/<check>.log`.
+
+The earlier checks set `AmbientOn = FALSE` and no ambient message. Each one found the same distinct states and depth
+as in [Results](#results), and each must-fail check the same violation, states and depth. Their times in this run:
+`safety` 6m47s, `stops` 2m30s, `liveness-thread` 2m38s, `liveness-channel` 1m45s, the rest under 30 seconds each.
+
+Required with ambient listening (must pass). Each has one agent, one tool-call step per turn, one crash and no Stop
+unless its row says otherwise. "Up to twice" covers every `app_mention`, every message, and every mention's `message`
+copy; "once" means no duplicate delivery. Each checks every invariant, the earlier ones and the new ones:
+
+| Check | World | Properties | Distinct states | Depth | Time |
+| --- | --- | --- | --- | --- | --- |
+| `ambient-thread` | root 1, thread mention 3, reply 9, edit 11; up to twice | all invariants | 13,326,444 | 54 | 6m03s |
+| `ambient-watched` | root 1, top-level message 10, Report Thread reply 12; up to twice | all invariants | 376,794 | 33 | 13s |
+| `ambient-config` | 2 agents; root 1, reply 9, top-level message 10; each once; agent switch; sticky flip | all invariants | 2,173,008 | 39 | 1m45s |
+| `liveness-ambient-thread` | root 1, thread mention 3, reply 9; each once; 1 Stop | all invariants; `MentionsAnswered`, `StatusClears`, `AmbientSettles` | 319,233 | 39 | 4m37s |
+| `liveness-ambient-edit` | root 1, thread mention 3, edit 11; each once; 1 Stop | as above | 319,233 | 39 | 4m35s |
+| `liveness-ambient-watched` | root 1, top-level message 10, Report Thread reply 12; up to twice | as above | 376,794 | 33 | 7m24s |
+
+Must fail (each found its violation; the counterexample trace is in `.tmp/run/slack-sticky-model/<check>.log`):
+
+| Check | World | Violation | States | Depth |
+| --- | --- | --- | --- | --- |
+| `ambient-mentions` | root 1 | `MentionNeverAmbient` | 7 | 3 |
+| `ambient-root-channel` | top-level message 10 | `AmbientInThread` | 4 | 3 |
+| `ambient-mention-root` | root 1, reply 9 | `NoAmbientUnderMentionRoot` | 10 | 3 |
+| `no-reply-footer` | top-level message 10 | `SilentPostsNothing` | 26 | 8 |
+| `volatile-no-reply` | top-level message 10; 1 crash | `SilentPostsNothing` | 94 | 9 |
+| `deferred-session` | top-level message 10 | `AmbientWritesNoStatus` | 8 | 5 |
+| `witness-ambient-reply` | witness: root 1, thread mention 3, reply 9 and edit 11 are both admitted and answered in root 1's thread | `NoAmbientAnswer` | 82,368 | 27 |
+
+In the `volatile-no-reply` trace, the turn calls no-reply, the process crashes, the resumed turn finishes with an
+answer, and the answer is posted. In the `no-reply-footer` trace, the turn calls no-reply and its footer is posted.
+
+How the ambient worlds were sized, and what that leaves out:
+
+- **The first safety world did not finish.** Every item together (root 1, mention 3, items 9 to 12, each delivered up to
+  twice, one crash) ran out of time at 1800 seconds: 27.9 million distinct states, depth 20, 10.6 million still queued,
+  no violation found. It was split into `ambient-thread` and `ambient-watched`. The Report Thread reply is in the
+  second only, and the edit in the first only.
+- **The first configuration world did not finish.** With thread mention 3 as well, `ambient-config` ran out of time
+  at 1800 seconds with no violation found. It now has no thread mention, so root 1's thread gets its Thread Session
+  only when root 1 moves into it.
+- **Liveness worlds are smaller.** The first two liveness worlds tried, each with duplicates, a Stop, a crash and the
+  four earlier liveness properties as well, ran out of time at 1800 seconds with no violation found: root 1, mention 3,
+  reply 9 and edit 11; and root 1, top-level message 10 and Report Thread reply 12. The liveness worlds in root 1's
+  thread now deliver each message once and take reply 9 and edit 11 one at a time; the watched one has no Stop.
+- **Liveness checks `MentionsAnswered`, `StatusClears` and `AmbientSettles`,** not `Settles` and `ChannelKnowsThread`.
+  In these worlds every item is a mention or an ambient message, so `MentionsAnswered` and `AmbientSettles` together
+  cover what `Settles` claims; no ambient step moves a turn, which is all `ChannelKnowsThread` is about.
+
+One model bug was fixed before these runs: the `Window` let an admission record drop out while the handler was still
+screening the message's last delivery, so its admission ran again (`OneAdmission`, in the first safety world). A day's
+window outlasts a 5-second screen, so `Quiet` now also requires that no event for the message is being screened. No
+counterexample needed a change to the design.
+
+What the ambient extension leaves out, beyond the list above:
+
+- **One channel, and it is watched.** A Joined Thread in a channel that is not watched, the second way a thread is
+  joined (its root is the agent's marked Channel Session answer), the `@` row, and the decision model being unset
+  are not modeled. They only decide whether a message is considered; where an admitted message goes is the same.
+- **Screening's content** (the question, the records, the probability threshold, thread context that cannot be read)
+  is one nondeterministic skip, pass or failure.
+- **Gates before classification** (DMs, bot and app messages, the agent's own messages, subtypes, users not allowed,
+  parent redeliveries, unfurls) are not modeled; each one only drops an event.
+- **Edits of top-level messages** are not modeled; the edit is of a reply in root 1's thread.
+- **Stop from Web** is one way an ambient turn ends silent, not its own step. **Unread marks**, **Web edits of a queued
+  ambient item**, **Permission Review of unaddressed turns**, the tools an ambient turn loses, and how the ambient mark
+  spreads to Task subagents, shadows and Background Job wakes are not modeled.
+- **Small bounds.** These are 1 to 2 agents, at most 4 items per world, each message delivered at most twice, 1 crash,
+  and 1 Stop. Behavior that needs more is not covered, including every ambient item interleaving in one run.

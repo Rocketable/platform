@@ -105,9 +105,11 @@ test("only admins edit the behavior settings, and the view changes only with the
     await pick("Add agent to channel 2", "main");
     await page.getByRole("textbox", { name: "Add user ID to channel 2", exact: true }).fill("U1");
     await page.keyboard.press("Enter");
+    await page.getByRole("textbox", { name: "Wake when for channel 1", exact: true }).fill("someone asks how to deploy");
+    await page.getByRole("textbox", { name: "Engagement for channel 1", exact: true }).fill("answer briefly");
     await save.click();
     await edit.waitFor();
-    const withChannels = { ...saved, slack: { channels: [...initial.slack.channels, { channel: "#ops", agents: ["helper", "main"], allowed_user_ids: ["U1"] }] } };
+    const withChannels = { ...saved, slack: { channels: [{ ...initial.slack.channels[0], wake_when: "someone asks how to deploy", engagement: "answer briefly" }, { channel: "#ops", agents: ["helper", "main"], allowed_user_ids: ["U1"] }] } };
     expect(saves.at(-1)).toEqual(withChannels);
 
     await page.route("https://models.dev/api.json", (route: { fulfill(options: object): Promise<void> }) => route.fulfill({ json: {}, headers: { "access-control-allow-origin": "*" } }));

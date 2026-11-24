@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -84,8 +85,14 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 		terminal protocol.Terminal
 		viewed   time.Duration
 		away     bool
+		deferred bool
+		silent   bool
 		want     []string
 	}{
+		"ambient answer":              {inbound: webMessage(protocol.InboundKindPrompt, "ask", alice), deferred: true, want: []string{alice}},
+		"ambient without answer":      {inbound: webMessage(protocol.InboundKindPrompt, "ask", alice), deferred: true, silent: true},
+		"ambient failed":              {inbound: webMessage(protocol.InboundKindPrompt, "ask", alice), deferred: true, terminal: protocol.TerminalFailed},
+		"ambient stopped":             {inbound: webMessage(protocol.InboundKindPrompt, "ask", alice), deferred: true, terminal: protocol.TerminalStopped},
 		"finished":                    {inbound: webMessage(protocol.InboundKindPrompt, "ask", alice), want: []string{alice}},
 		"failed":                      {inbound: webMessage(protocol.InboundKindPrompt, "ask", alice), terminal: protocol.TerminalFailed, want: []string{alice}},
 		"stopped":                     {inbound: webMessage(protocol.InboundKindPrompt, "ask", alice), terminal: protocol.TerminalStopped, want: []string{alice}},
@@ -118,7 +125,13 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 				viewedAgo(t, service, alice, "web:elsewhere", 0)
 			}
 
-			finish(conversationID, turnID, tc.terminal)
+			outbound := &protocol.OutboundMessage{ConversationID: conversationID, TurnID: turnID, Text: "done", Terminal: cmp.Or(tc.terminal, protocol.TerminalComplete), Deferred: tc.deferred}
+			if tc.silent {
+				outbound.Text = ""
+			}
+
+			_, err := service.finishTurn(ctx, turnID, &turnFinish{conversationID: conversationID, outbound: outbound, terminal: tc.terminal})
+			require.NoError(t, err)
 			assert.Equal(t, tc.want, unreadBy(t, service, conversationID))
 		})
 	}

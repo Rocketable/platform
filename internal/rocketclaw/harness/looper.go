@@ -164,6 +164,7 @@ type looper struct {
 	CodeModeHosts      map[string]looperTool
 	PermissionReviewer permissionReviewer
 	InPermissionReview bool
+	unaddressed        bool
 	Observability      ObservabilityConfig
 	Journal            Journal
 	observations       *turnObservations
@@ -2071,6 +2072,10 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 		decision := l.Permissions.evaluate(permission, subject, scripts...)
 		if decision.Action == permissionDeny {
 			return toolPermissionDecision{denied: true, message: formatPermissionDenied(&decision)}, nil
+		}
+
+		if l.unaddressed && !l.InPermissionReview && decision.Action == permissionAllow && decision.Matched && permission != "read" && (permission != "rocketclaw" || subject != NoReplyToolName) {
+			decision.Action = permissionAuto
 		}
 
 		if decision.Action != permissionAuto {

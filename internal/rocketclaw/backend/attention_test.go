@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"cmp"
 	"database/sql"
 	"encoding/base64"
 	"fmt"
@@ -463,6 +464,13 @@ func TestAttentionParkUntilDone(t *testing.T) {
 		end(t, chat, turnID, terminal)
 		require.NoError(t, service.closeTurn(ctx, turnID))
 	}
+	silentAmbientTurn := func(t *testing.T, chat string, terminal protocol.Terminal) {
+		t.Helper()
+		start(t, chat, chat+":turn")
+		_, err := service.finishTurn(ctx, chat+":turn", &turnFinish{conversationID: chat, outbound: &protocol.OutboundMessage{ConversationID: chat, Deferred: true, Terminal: cmp.Or(terminal, protocol.TerminalComplete)}, terminal: terminal})
+		require.NoError(t, err)
+		require.NoError(t, service.closeTurn(ctx, chat+":turn"))
+	}
 	queue := func(t *testing.T, chat string) {
 		t.Helper()
 		require.NoError(t, service.PutThreadQueueItem(chat+":next", &protocol.ThreadQueueItem{ConversationID: chat, Message: "again"}))
@@ -546,6 +554,17 @@ UPDATE conversations SET goal_objective = 'ship', goal_status = 'active' WHERE c
 			queue(t, chat)
 			turn(t, chat, chat+":turn", protocol.TerminalFailed)
 		}, want: "new quiet parked until=due worked"},
+		"a failed silent ambient turn ends it like any turn, unmarked": {do: func(t *testing.T, chat, _ string) {
+			t.Helper()
+			queue(t, chat)
+			silentAmbientTurn(t, chat, protocol.TerminalFailed)
+		}, want: "read parked until=due worked"},
+		"a silent ambient turn ends it like any turn, unmarked": {do: func(t *testing.T, chat, path string) {
+			t.Helper()
+			silentAmbientTurn(t, chat, "")
+			assert.Equal(t, "read parked until=done worked", attentionOf(t, service, bob, path))
+			tick(t)
+		}, want: "new note=Park ended"},
 		"a stopped turn only records work": {do: func(t *testing.T, chat, _ string) {
 			t.Helper()
 			queue(t, chat)

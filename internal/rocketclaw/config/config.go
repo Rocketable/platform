@@ -187,9 +187,10 @@ type RemoteRocketClawConfig struct {
 }
 
 type SlackConfig struct {
-	BotToken string               `json:"bot_token"`
-	AppToken string               `json:"app_token"`
-	Channels []SlackChannelConfig `json:"channels,omitempty"`
+	BotToken             string               `json:"bot_token"`
+	AppToken             string               `json:"app_token"`
+	AmbientDecisionModel string               `json:"ambient_decision_model,omitempty"`
+	Channels             []SlackChannelConfig `json:"channels,omitempty"`
 }
 
 func (s SlackConfig) Channel(name string) (SlackChannelConfig, bool) {
@@ -206,6 +207,8 @@ type SlackChannelConfig struct {
 	Channel        string   `json:"channel"`
 	Agents         []string `json:"agents,omitempty"`
 	AllowedUserIDs []string `json:"allowed_user_ids,omitempty"`
+	WakeWhen       string   `json:"wake_when,omitempty"`
+	Engagement     string   `json:"engagement,omitempty"`
 }
 
 type OpenAIConfig struct {
@@ -516,6 +519,8 @@ func (c *Config) validateSlack() error {
 		channel.Agents = normalizeStringList(channel.Agents)
 
 		channel.AllowedUserIDs = normalizeStringList(channel.AllowedUserIDs)
+
+		channel.WakeWhen, channel.Engagement = strings.TrimSpace(channel.WakeWhen), strings.TrimSpace(channel.Engagement)
 		if channel.Channel != "" {
 			normalized = append(normalized, channel)
 		}
@@ -532,6 +537,10 @@ func (c *Config) validateSlack() error {
 		if channel.Channel == "@" {
 			if seenAt {
 				return errors.New("slack.channels may include only one @ entry")
+			}
+
+			if channel.WakeWhen != "" {
+				return errors.New("slack.channels[].wake_when cannot be set on the @ entry, which is not a channel")
 			}
 
 			seenAt = true
@@ -603,6 +612,10 @@ func (c *Config) validateDecision() error {
 	}
 
 	if err := c.normalizeDecisionModel("auto_approver_decision.model", &c.AutoApproverDecision.Model); err != nil {
+		return err
+	}
+
+	if err := c.normalizeDecisionModel("slack.ambient_decision_model", &c.Slack.AmbientDecisionModel); err != nil {
 		return err
 	}
 

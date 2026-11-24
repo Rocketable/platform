@@ -44,6 +44,7 @@ type toolFactory struct {
 	shellSystem               *sandboxedShellSystem
 	childContext              []SessionEntry
 	originHeader              string
+	unaddressed               bool
 	shellTemp                 shellTempConfig
 	spillRel                  string
 	retainedRel               string
@@ -207,6 +208,7 @@ func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, err
 		CodeModeHosts:      codeHosts,
 		PermissionReviewer: f,
 		InPermissionReview: f.inPermissionReview,
+		unaddressed:        f.unaddressed,
 		Observability:      f.observability,
 		Journal:            InertJournal{},
 		SteerDrain:         InertSteerDrain{},

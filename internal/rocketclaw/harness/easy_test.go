@@ -274,7 +274,7 @@ func TestEasyAgentPermissions(t *testing.T) {
 
 	require.Subset(t, slices.Collect(maps.Keys(model)), []string{"skill", "task", executeToolName})
 	require.Subset(t, slices.Collect(maps.Keys(hosts)), []string{"bash", "read"})
-	require.Equal(t, "Body", factory.sessionSystemPrompt(t.Context(), &agent))
+	require.Equal(t, "Body\n\nWhen a turn carries a note that the message did not address you, "+UnaddressedReadOnly, factory.sessionSystemPrompt(t.Context(), &agent))
 }
 
 func TestEasyAgentSections(t *testing.T) {

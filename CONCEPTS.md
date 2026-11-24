@@ -6,9 +6,9 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 
 ### Managed Slack Thread
 
-A Slack thread that RocketClaw persists as a conversation owned by a selected agent. In Slack, only mentions start its turns; replies without a mention start nothing. Since `sticky: slack`, a Managed Slack Thread is a Thread Session; one created earlier keeps its history and continues when its agent is the channel's agent.
+A Slack thread that RocketClaw persists as a conversation owned by a selected agent. In Slack, mentions start its turns, and with ambient listening on, so do Ambient Turns; other replies without a mention start nothing. Since `sticky: slack`, a Managed Slack Thread is a Thread Session; one created earlier keeps its history and continues when its agent is the channel's agent.
 
-A Managed Slack Thread has one active turn at a time. A mention received during that turn waits in the Thread Queue and runs as the next turn; it never steers. Web can also work in the conversation: Web input it consumes and every reply are posted into the thread. A second Slack delivery of an accepted mention is not a new send. While any of its turns runs, whichever surface started it, Slack shows the thread as working, or as needing someone while the turn waits for an answer in Web, and an allowlisted user's Stop in Slack ends that turn; besides the turn's checklist and any Web input it consumes, nothing is posted until its answer arrives as a new reply.
+A Managed Slack Thread has one active turn at a time. A mention received during that turn waits in the Thread Queue and runs as the next turn; it never steers. Web can also work in the conversation: Web input it consumes and every reply are posted into the thread. A second Slack delivery of an accepted mention is not a new send. While any of its turns other than an Ambient Turn runs, whichever surface started it, Slack shows the thread as working, or as needing someone while the turn waits for an answer in Web, and an allowlisted user's Stop in Slack ends that turn; besides the turn's checklist and any Web input it consumes, nothing is posted until its answer arrives as a new reply.
 
 ### Channel Session
 
@@ -16,7 +16,7 @@ The one conversation a `sticky: slack` agent keeps for a Slack channel. Root Sla
 
 ### Thread Session
 
-The conversation a `sticky: slack` agent keeps for one Slack thread. Mentions in the thread queue into it and are answered in the thread, including threads under the agent's own top-level answers. It starts no turn while the thread's root mention still waits or runs in a Channel Session, whatever sent the work, Web input included; when that root turn ends or moves, the Thread Session is woken to run what waited.
+The conversation a `sticky: slack` agent keeps for one Slack thread. Mentions and Ambient Turns in the thread queue into it and are answered in the thread, including threads under the agent's own top-level answers. A top-level message admitted from a Watched Channel gets a Thread Session for its own thread. It starts no turn while the thread's root mention still waits or runs in a Channel Session, whatever sent the work, Web input included; when that root turn ends or moves, the Thread Session is woken to run what waited.
 
 ### Root Slack Mention
 
@@ -38,9 +38,22 @@ A Slack thread an earlier version posted a cron report or an External MCP sessio
 
 A Report Thread is read-only. RocketClaw ignores every reply and mention in it, showing no working state and posting no reply, and posts nothing more into it. Read-only means RocketClaw ignores input, not that Slack locks the thread. Work on it continues in Web.
 
+### Joined Thread
+
+A Slack thread in which the channel's first agent already has a Thread Session or Managed Slack Thread, or whose root is that agent's answer at the top of the channel. With ambient listening on, replies there without a mention may become Ambient Turns. A thread stops being joined when the channel's first agent changes.
+*Avoid:* followed thread (Followed is a Web tab state)
+
+### Watched Channel
+
+A configured Slack channel whose entry sets `wake_when`, what its agent listens for, and optionally `engagement`, how it answers. With ambient listening on, any message there without a mention may become an Ambient Turn. The `@` Channel Entry cannot be watched.
+
+### Ambient Turn
+
+A turn started by an allowed user's Slack message that did not mention the bot, in a Joined Thread or a Watched Channel, after a decision model did not judge it clearly not for the agent. It runs in its thread's Thread Session, shows no working state or Stop in Slack, and posts its answer or nothing; `slack_no_reply` keeps it silent. It is unaddressed: its permission reviews allow only low-risk actions, and the Task subagents, shadows and background wakes it starts are unaddressed too. Calls its allow rules permit still go to review, except reads and `slack_no_reply`. Each unaddressed turn is told that its message did not address the agent and to work read-only, saying that a change needs an @mention; Permission Review enforces the limits as a backstop. A turn runs input of one standing only, addressed or unaddressed, so unaddressed input never borrows an addressed turn's standing and addressed input is never held to an Ambient Turn's limits or silence.
+
 ### Thread Queue
 
-The durable, per-conversation list of work waiting to run as later turns: accepted Slack mentions, work queued or stashed from Web, messages another session's agent sends, External MCP prompts that arrive while the conversation's turn is active, and prompts a parent sends into its Subagent Session.
+The durable, per-conversation list of work waiting to run as later turns: accepted Slack mentions and Ambient Turns, work queued or stashed from Web, messages another session's agent sends, External MCP prompts that arrive while the conversation's turn is active, and prompts a parent sends into its Subagent Session.
 
 Each item is a waiting turn of its conversation, queued, stashed, or held, keyed by its input ID; starting it makes it the running turn. A held item waits only until the next message, goal, or agent write sent to its conversation releases it. Saved items that never started run after a restart without another incoming message. An agent-written item carries its sender, the sending session and agent, shown where a person's Principal would be; it is never a person's input, even after a person promotes it, until a person edits it. Editing any item makes it the editor's Web input, with the editor as its Principal, and keeps its place, attachments, delivery, and routing. Only a person stashes items. An agent may also stop the running turn: its stop goes ahead of every earlier item, and a stop without a prompt adds no item, only a line in the transcript naming the sender once the stopped turn has saved. A session write from another session's agent is refused before it adds or stops anything when the receiving agent's recipient setting does not accept the writing agent. A Channel Session writing into a Thread Session of its own channel and agent is always accepted. When the turn that took such an item ends, or a person removes the item, the writing session gets a reply Completion Note.
 
@@ -66,7 +79,7 @@ While a Goal continues, its next turn takes the conversation's next slot ahead o
 
 Input sent into a conversation's running turn so the agent takes it into that turn instead of waiting for a turn of its own.
 
-A steer joins a running turn that still takes input, whoever sent it and whoever started the turn; otherwise it runs as the next turn. The hidden runs of Routines and External MCP always take a steer as their next turn. Steers come from Web and from agents; a Slack mention never steers.
+A steer joins a running turn that still takes input and has its standing, addressed or unaddressed, whoever sent it and whoever started the turn; otherwise it runs as a later turn of its own, keeping its standing. So an unaddressed agent's write into a running addressed subagent, a person's Web steer into a running Ambient Turn, and a promoted ambient item into a running addressed turn each wait and run as their own turn. The hidden runs of Routines and External MCP always take a steer as their next turn. Steers come from Web and from agents; a Slack mention never steers.
 
 ### Agent Pause
 
@@ -242,7 +255,7 @@ A session write's reply is also a Background Job of the writing session, which n
 
 The system message that tells a Background Job's owner how the job ended, consumed exactly once.
 
-It enters a running turn of the owner at its next step, or wakes the owner with a new turn. A note for a script killed by a restart waits for the owner's next turn instead, unless the owner is a Private Producer Conversation. A turn that fails or stops before saving leaves the notes it read for the owner's next turn without waking it again, unless the owner is a Private Producer Conversation, which may have no next turn: its notes wake it again at growing intervals until a wake saves, and only the first failure reaches its destination, saying the wake retries.
+It enters a running turn of the owner at its next step, or wakes the owner with a new turn. A note has the standing of the turn that started its job, and only a turn of that standing takes it: a wake takes the standing of its earliest due note and only notes of that standing, and the others wait for a later turn of theirs. A note for a script killed by a restart waits for the owner's next turn instead, unless the owner is a Private Producer Conversation. A turn that fails or stops before saving leaves the notes it read for the owner's next turn without waking it again, unless the owner is a Private Producer Conversation, which may have no next turn: its notes wake it again at growing intervals until a wake saves, and only the first failure reaches its destination, saying the wake retries.
 
 A reply note answers one session write. It goes to the exact session that wrote, a Subagent Session or Private Producer Conversation included, and carries the write's queue item ID, the other session, its agent, the write mode, and how the other session's turn ended, with that turn's final answer framed as another session's answer rather than the user's instructions. A write that only stopped a running turn gets a note once that turn is over; a write a person removed, or a reply someone stopped, gets a note saying so, and a stopped reply's note waits for the owner's next turn without waking it.
 
@@ -458,6 +471,7 @@ A running turn saves each item of its record once, as a step of its own, instead
 - An Adhoc Callout creates or takes over a Managed Slack Thread.
 - A Root Slack Mention in an unmapped joined channel is an Adhoc Callout when an `@` Channel Entry exists.
 - A mention in a Managed Slack Thread becomes one Thread Queue item and runs as its own turn.
+- An unmentioned message in a Joined Thread or Watched Channel becomes at most one Thread Queue item, an Ambient Turn.
 - A Report Thread ignores Slack input; its conversation continues in Web.
 - A Managed Slack Thread, Thread Queue, External MCP binding, and Step Journal persist in the State Store.
 - Reload replaces Overlay Clones.

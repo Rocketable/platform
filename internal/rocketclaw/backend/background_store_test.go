@@ -293,20 +293,20 @@ func TestBackgroundNoteClaimSucceedsOnce(t *testing.T) {
 
 	defer func() { _ = second.Rollback() }()
 
-	claimed, err := claimBackgroundNotes(ctx, first, "main", "turn-2", false)
+	claimed, err := claimBackgroundNotes(ctx, first, "main", "turn-2", false, false)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
 	require.Equal(t, "turn-2", claimed[0].claimedTurnID)
-	claimed, err = claimBackgroundNotes(ctx, second, "main", "turn-3", false)
+	claimed, err = claimBackgroundNotes(ctx, second, "main", "turn-3", false, false)
 	require.NoError(t, err)
 	require.Empty(t, claimed)
 	require.NoError(t, first.Commit())
 	require.NoError(t, second.Rollback())
 
-	claimed, err = claimBackgroundNotes(ctx, store.db, "main", "turn-3", true)
+	claimed, err = claimBackgroundNotes(ctx, store.db, "main", "turn-3", true, false)
 	require.NoError(t, err)
 	require.Empty(t, claimed, "a turn gets back only the notes it holds")
-	claimed, err = claimBackgroundNotes(ctx, store.db, "main", "turn-2", true)
+	claimed, err = claimBackgroundNotes(ctx, store.db, "main", "turn-2", true, false)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1, "a resumed turn gets back the notes it holds")
 }
@@ -329,7 +329,7 @@ func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 			createTestBackgroundJob(t, store, job)
 			finishTestBackgroundJob(t, store, job, backgroundCompleted, true)
 			seedActiveTurn(t, store, "main", "turn-2", nil)
-			claimed, err := claimBackgroundNotes(ctx, store.db, "main", "turn-2", false)
+			claimed, err := claimBackgroundNotes(ctx, store.db, "main", "turn-2", false, false)
 			require.NoError(t, err)
 			require.Len(t, claimed, 1)
 
@@ -381,7 +381,7 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 		for i, delay := range []time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute, 30 * time.Minute} {
 			turnID := "turn-" + strconv.Itoa(i+2)
 			seedActiveTurn(t, store, "main", turnID, nil)
-			claimed, err := claimBackgroundNotes(ctx, store.db, "main", turnID, false)
+			claimed, err := claimBackgroundNotes(ctx, store.db, "main", turnID, false, false)
 			require.NoError(t, err)
 			require.Len(t, claimed, 1)
 
@@ -410,7 +410,7 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 		require.Equal(t, fresh.jobID, next.jobID, "a new note wakes the run before a waiting retry")
 
 		seedActiveTurn(t, store, "main", "running", nil)
-		claimed, err := claimBackgroundNotes(ctx, store.db, "main", "running", true)
+		claimed, err := claimBackgroundNotes(ctx, store.db, "main", "running", true, false)
 		require.NoError(t, err)
 		require.Len(t, claimed, 2, "a running turn takes the notes before their delay")
 
@@ -565,7 +565,7 @@ func TestReleaseStaleBackgroundClaims(t *testing.T) {
 		job := testBackgroundJob("main", jobID)
 		createTestBackgroundJob(t, store, job)
 		finishTestBackgroundJob(t, store, job, backgroundCompleted, true)
-		_, err := claimBackgroundNotes(ctx, store.db, "main", turnID, false)
+		_, err := claimBackgroundNotes(ctx, store.db, "main", turnID, false, false)
 		require.NoError(t, err)
 	}
 
@@ -880,7 +880,7 @@ func TestBackgroundJobChangeNotices(t *testing.T) {
 	finishTestBackgroundJob(t, store, hidden, backgroundCompleted, true)
 	require.ElementsMatch(t, []string{"cron:daily", "visible"}, notices(), "status and note")
 
-	_, err = claimBackgroundNotes(ctx, store.db, "cron:daily", "turn-2", false)
+	_, err = claimBackgroundNotes(ctx, store.db, "cron:daily", "turn-2", false, false)
 	require.NoError(t, err)
 	require.Empty(t, notices(), "claims carry no transcript change")
 

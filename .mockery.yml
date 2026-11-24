@@ -167,8 +167,12 @@ packages:
         config:
           structname: mockResponsesAPI
       Decider:
-        config:
-          structname: mockDecider
+        configs:
+          - structname: mockDecider
+          - dir: '{{.ConfigDir}}/internal/rocketclaw/backend'
+            pkgname: backend
+            structname: deciderMock
+            inpackage: false
       readAttempt:
         config:
           structname: mockReadAttempt

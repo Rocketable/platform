@@ -1640,8 +1640,9 @@ SELECT 1`, channel, turnID, protocol.TerminalComplete, thread.ID, respondInThrea
 }
 
 func (s *SessionService) markTurnEnd(ctx context.Context, tx *sql.Tx, turnID string, finish *turnFinish) error {
-	var cronPath, space, agent string
-	if err := tx.QueryRowContext(ctx, `WITH run AS (
+	if !finish.outbound.PostsNothing() {
+		var cronPath, space, agent string
+		if err := tx.QueryRowContext(ctx, `WITH run AS (
     SELECT c.cron_path, t.inbound_json->'Cronjob'->>'Space' AS space, t.inbound_json->'Cronjob'->>'Agent' AS agent
     FROM conversations c JOIN turns t ON t.id = $4 WHERE c.conversation_id = $1 AND c.kind IN ($2, $3)
 ), runs AS (
@@ -1652,32 +1653,33 @@ func (s *SessionService) markTurnEnd(ctx context.Context, tx *sql.Tx, turnID str
     WHERE t.id <> $4 AND (t.phase = 'running' OR t.phase = 'waiting' AND t.reason = 'queued' OR NOT t.takes_lane AND t.note = 'pending')
 )
 SELECT COALESCE(max(r.cron_path), ''), COALESCE(max(r.space), ''), COALESCE(max(r.agent), '') FROM run r CROSS JOIN pending p WHERE p.n = 0`,
-		finish.conversationID, KindCronRun, KindOneOffCronRun, turnID).Scan(&cronPath, &space, &agent); err != nil {
-		return fmt.Errorf("read cron run: %w", err)
-	}
+			finish.conversationID, KindCronRun, KindOneOffCronRun, turnID).Scan(&cronPath, &space, &agent); err != nil {
+			return fmt.Errorf("read cron run: %w", err)
+		}
 
-	if cronPath != "" {
-		stem := CronStem(cronPath)
+		if cronPath != "" {
+			stem := CronStem(cronPath)
 
-		if space == "" {
-			agents, err := LoadRuntimeAgents(s.definitions, s.definitions.Clone().RuntimeDirName())
-			if err != nil {
-				return fmt.Errorf("load cron agents: %w", err)
+			if space == "" {
+				agents, err := LoadRuntimeAgents(s.definitions, s.definitions.Clone().RuntimeDirName())
+				if err != nil {
+					return fmt.Errorf("load cron agents: %w", err)
+				}
+
+				space = agents.Items[agent].Space
 			}
 
-			space = agents.Items[agent].Space
+			if err := s.markLocation(ctx, tx, "/routines", space, "Run finished", func(rest string) bool { return decodeSessionID(rest) == stem }); err != nil {
+				return err
+			}
 		}
 
-		if err := s.markLocation(ctx, tx, "/routines", space, "Run finished", func(rest string) bool { return decodeSessionID(rest) == stem }); err != nil {
-			return err
-		}
-	}
-
-	if _, err := tx.ExecContext(ctx, `WITH turn AS (
+		if _, err := tx.ExecContext(ctx, `WITH turn AS (
     SELECT a.id, c.conversation_id, c.kind, a.inbound_json, FALSE AS waking FROM turns a JOIN conversations c ON c.conversation_id = $1 AND c.listed WHERE a.id = $2
 )`+turnEventsSQL+sessionReadersSQL+markTabsSQL+`
 SELECT count(*) FROM marked`, finish.conversationID, turnID); err != nil {
-		return fmt.Errorf("mark turn readers unread: %w", err)
+			return fmt.Errorf("mark turn readers unread: %w", err)
+		}
 	}
 
 	_, err := execState(ctx, tx, "end turn parks", endTurnParksSQL, []string{finish.conversationID}, []bool{finish.terminal == protocol.TerminalFailed}, []int64{0})
@@ -2004,10 +2006,11 @@ func (s *SessionService) restampBackgroundJob(ctx context.Context, job *backgrou
 	return moved > 0, err
 }
 
-func claimBackgroundNotes(ctx context.Context, db stateStoreDB, conversationID, turnID string, held bool) ([]backgroundJob, error) {
-	return queryRows(ctx, db, `WITH unclaimed AS (SELECT id FROM turns WHERE conversation_id = $1 AND note = $3 AND claimed_by = '' FOR UPDATE SKIP LOCKED),
+func claimBackgroundNotes(ctx context.Context, db stateStoreDB, conversationID, turnID string, held, unaddressed bool) ([]backgroundJob, error) {
+	return queryRows(ctx, db, `WITH unclaimed AS (SELECT id FROM turns WHERE conversation_id = $1 AND note = $3 AND claimed_by = ''
+    AND (COALESCE(inbound_json->'Metadata'->>$6::text, '') <> '') = $5 FOR UPDATE SKIP LOCKED),
 claimed AS (UPDATE turns t SET claimed_by = $2 FROM unclaimed u WHERE t.id = u.id RETURNING t.*), notes AS (SELECT * FROM claimed UNION ALL SELECT * FROM turns WHERE $4 AND conversation_id = $1 AND note = $3 AND claimed_by = $2)
-SELECT `+backgroundJobColumns+` FROM notes j LEFT JOIN conversations c USING (conversation_id) ORDER BY j.updated_at_unix_ns, j.input_id`, "background note claims", scanBackgroundJob, conversationID, turnID, notePending, held)
+SELECT `+backgroundJobColumns+` FROM notes j LEFT JOIN conversations c USING (conversation_id) ORDER BY j.updated_at_unix_ns, j.input_id`, "background note claims", scanBackgroundJob, conversationID, turnID, notePending, held, unaddressed, protocol.InboundAmbientMetadataKey)
 }
 
 func (s *SessionService) backgroundWake(ctx context.Context, conversationID string) (backgroundJob, bool, error) {

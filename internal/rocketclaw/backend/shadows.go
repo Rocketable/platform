@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -773,6 +774,11 @@ WHERE jsonb_array_length(h.inputs) > 0 AND b.n = 0`, child).Scan(&id, &data, &sh
 	inbound.PreserveWhitespace = parent.PreserveWhitespace
 	if name := parent.Metadata[protocol.InboundPrincipalNameMetadataKey]; name != "" {
 		inbound.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: name, protocol.InboundPrincipalEmailMetadataKey: parent.Metadata[protocol.InboundPrincipalEmailMetadataKey]}
+	}
+
+	if parent.Metadata[protocol.InboundAmbientMetadataKey] != "" {
+		inbound.Metadata = maps.Collect(maps.All(inbound.Metadata))
+		inbound.Metadata[protocol.InboundAmbientMetadataKey] = protocol.AmbientDelegated
 	}
 
 	if files, ok := parent.Metadata[agentDraftFilesMetadataKey]; ok {

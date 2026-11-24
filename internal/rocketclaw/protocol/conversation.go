@@ -53,7 +53,22 @@ func SlackThreadSessionID(channelID, threadTS, agent string) string {
 	return SlackThreadConversationID(channelID, threadTS) + ":" + agent
 }
 
+type AmbientRecord struct {
+	Author  string `json:"author"`
+	IsAgent bool   `json:"is_agent"`
+	Allowed bool   `json:"allowed"`
+	Text    string `json:"text"`
+}
+
+type AmbientScreen struct {
+	WakeWhen          string          `json:"-"`
+	IncompleteContext bool            `json:"-"`
+	Earlier           []AmbientRecord `json:"earlier_messages"`
+	Message           AmbientRecord   `json:"message"`
+}
+
 type PrimaryTextRouter interface {
+	ScreenAmbient(ctx context.Context, target TextConversationTarget, screen *AmbientScreen) (pass bool)
 	MentionThread(target TextConversationTarget) (recorded, report bool, err error)
 	SubmitMention(ctx context.Context, agent string, target TextConversationTarget, inbound *InboundMessage) (bool, error)
 	InterruptTurn(ctx context.Context, turnID string) error

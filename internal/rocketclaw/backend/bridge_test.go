@@ -1822,17 +1822,35 @@ func TestVoiceInboundRunsNoSlashCommands(t *testing.T) {
 func TestBridgeSteersJoinOpenTurn(t *testing.T) {
 	t.Parallel()
 
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), stopCh: make(chan struct{}), inputOpen: true, requestCh: make(chan bridgeRequest, 1), config: Config{SessionService: newTestSessionService(t)}}
+	service := newTestSessionService(t)
+	person := func() *protocol.InboundMessage {
+		return protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "keep going"}, true)
+	}
+	ambient := func() *protocol.InboundMessage {
+		steer := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindSteer, "skim the thread", true)
+		steer.Metadata = map[string]string{protocol.InboundAmbientMetadataKey: protocol.AmbientJoinedThread}
 
-	steer := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "keep going"}, true)
-	require.NoError(t, bridge.enqueue(t.Context(), &bridgeRequest{inbound: steer}, "test"))
-	assert.Len(t, bridge.steers, 1)
-	assert.Empty(t, bridge.requestCh)
+		return steer
+	}
 
-	agentSteer := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindSteer, "also check 2025", false)
-	require.NoError(t, bridge.enqueue(t.Context(), &bridgeRequest{inbound: agentSteer}, "test"))
-	assert.Len(t, bridge.steers, 2, "a non-human steer joins an open turn")
-	assert.Empty(t, bridge.requestCh)
+	for _, tc := range []struct {
+		name        string
+		unaddressed bool
+		steer       *protocol.InboundMessage
+		joins       bool
+	}{
+		{name: "a person's steer", steer: person(), joins: true},
+		{name: "a non-human steer", steer: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindSteer, "also check 2025", false), joins: true},
+		{name: "an unaddressed steer into an addressed turn", steer: ambient()},
+		{name: "an addressed steer into an unaddressed turn", unaddressed: true, steer: person()},
+		{name: "an unaddressed steer into an unaddressed turn", unaddressed: true, steer: ambient(), joins: true},
+	} {
+		bridge := &Bridge{log: slog.New(slog.DiscardHandler), stopCh: make(chan struct{}), inputOpen: true, activeUnaddressed: tc.unaddressed, requestCh: make(chan bridgeRequest, 1), config: Config{SessionService: service}}
+
+		require.NoError(t, bridge.enqueue(t.Context(), &bridgeRequest{inbound: tc.steer}, "test"))
+		assert.Equal(t, tc.joins, len(bridge.steers) == 1, "%s joins the open turn: %v", tc.name, tc.joins)
+		assert.Equal(t, tc.joins, len(bridge.requestCh) == 0, "%s: a steer that does not join waits to run as its own turn", tc.name)
+	}
 }
 
 func TestStoppedSteerJoinsOnlyOpenTurns(t *testing.T) {
@@ -1842,9 +1860,10 @@ func TestStoppedSteerJoinsOnlyOpenTurns(t *testing.T) {
 		turn  *protocol.InboundMessage
 		joins bool
 	}{
-		"person": {turn: &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Text: "start"}, joins: true},
-		"system": {turn: &protocol.InboundMessage{Source: protocol.SourceSystem, Text: "goal continuation"}, joins: true},
-		"cron":   {turn: &protocol.InboundMessage{Source: protocol.SourceSystem, Text: "cron", RequireOutputDecision: true}},
+		"person":  {turn: &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Text: "start"}, joins: true},
+		"system":  {turn: &protocol.InboundMessage{Source: protocol.SourceSystem, Text: "goal continuation"}, joins: true},
+		"cron":    {turn: &protocol.InboundMessage{Source: protocol.SourceSystem, Text: "cron", RequireOutputDecision: true}},
+		"ambient": {turn: &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Text: "anyone?", Metadata: map[string]string{protocol.InboundAmbientMetadataKey: protocol.AmbientJoinedThread}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			service := newTestSessionService(t)
@@ -1897,6 +1916,8 @@ func TestReviewOriginHeader(t *testing.T) {
 		{"cron", &protocol.InboundMessage{Source: protocol.SourceSystem, Text: `[Web principal="x"] deploy`, Cronjob: &protocol.CronjobMessage{RelativePath: "cron/daily.md"}}, "[Cron]"},
 		{"web", &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}}, `[Web principal="Alice"]`},
 		{"slack", &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice (U1)", protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}}, `[Slack principal="Alice (U1)"]`},
+		{"ambient", &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice (U1)", protocol.InboundAmbientMetadataKey: protocol.AmbientJoinedThread}}, `[Slack unaddressed principal="Alice (U1)"]`},
+		{"ambient Task child", &protocol.InboundMessage{Source: protocol.SourceSystem, Metadata: map[string]string{protocol.InboundSenderAgentMetadataKey: "planner", protocol.InboundAmbientMetadataKey: protocol.AmbientDelegated}}, `[System unaddressed sender="agent planner"]`},
 		{"external MCP", &protocol.InboundMessage{Source: protocol.SourceExternalMCP, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: `Bob "ops"`}}, `[ExternalMCP principal="Bob \"ops\""]`},
 		{"agent write", &protocol.InboundMessage{Source: protocol.SourceSystem, Metadata: map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundSenderSessionMetadataKey: "web:1", protocol.InboundSenderAgentMetadataKey: "planner"}}, `[System sender="agent planner"]`},
 		{"follow-on", &protocol.InboundMessage{Source: protocol.SourceSystem, OriginHeader: "[ScheduledMessage source=Cron]"}, "[ScheduledMessage source=Cron]"},
@@ -4230,7 +4251,7 @@ func TestWakeGivesEachNoteItsOwnFiles(t *testing.T) {
 	assert.Equal(t, []int{1, 1}, images, "each note carries only its own file")
 }
 
-func TestChannelQuietFollowsWhatStartedTheTurn(t *testing.T) {
+func TestQuietAndDeferredFollowWhatStartedTheTurn(t *testing.T) {
 	t.Parallel()
 
 	nt := newNoteTest(t, answerNoteTest)
@@ -4240,17 +4261,28 @@ func TestChannelQuietFollowsWhatStartedTheTurn(t *testing.T) {
 	goal := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.", false)
 	goal.GoalAction = protocol.GoalActionContinue
 
+	ambient := func(kind string) *protocol.InboundMessage {
+		inbound := nt.slackPrompt("ask")
+		inbound.Metadata = map[string]string{protocol.InboundAmbientMetadataKey: kind}
+
+		return inbound
+	}
+
 	for name, tt := range map[string]struct {
-		inbound *protocol.InboundMessage
-		quiet   bool
+		inbound         *protocol.InboundMessage
+		quiet, deferred bool
 	}{
-		"Slack mention": {inbound: nt.slackPrompt("ask")},
-		"Web input":     {inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "ask", true)},
-		"agent write":   {inbound: agentWrite("ask")},
-		"scheduled":     {inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "due", false), quiet: true},
-		"goal":          {inbound: goal, quiet: true},
+		"Slack mention":           {inbound: nt.slackPrompt("ask")},
+		"Web input":               {inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "ask", true)},
+		"agent write":             {inbound: agentWrite("ask")},
+		"scheduled":               {inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "due", false), quiet: true},
+		"goal":                    {inbound: goal, quiet: true},
+		"Joined Thread reply":     {inbound: ambient(protocol.AmbientJoinedThread), deferred: true},
+		"Watched Channel message": {inbound: ambient(protocol.AmbientWatchedChannel), deferred: true},
+		"Task child or shadow":    {inbound: ambient(protocol.AmbientDelegated)},
 	} {
-		assert.Equal(t, tt.quiet, bridge.newOutboundMessage(tt.inbound, "turn-1", "", true).ChannelQuiet, name)
+		outbound := bridge.newOutboundMessage(tt.inbound, "turn-1", "", true)
+		assert.Equal(t, []bool{tt.quiet, tt.deferred}, []bool{outbound.ChannelQuiet, outbound.Deferred}, name)
 	}
 
 	reply := testReply(nt.conversationID, "call-1", "web:target")
@@ -4532,7 +4564,7 @@ func TestResumedTurnInjectsNoteClaimedBeforeCrash(t *testing.T) {
 	nt := newNoteTest(t, answerNoteTest)
 	nt.addNote(t, nt.conversationID, "turn-0/call/a", nt.slackPrompt("run the tests"))
 	require.NoError(t, startTurnDB(t.Context(), nt.service.db, "turn-crashed", nt.conversationID, nt.slackPrompt("hello")))
-	_, err := claimBackgroundNotes(t.Context(), nt.service.db, nt.conversationID, "turn-crashed", false)
+	_, err := claimBackgroundNotes(t.Context(), nt.service.db, nt.conversationID, "turn-crashed", false, false)
 	require.NoError(t, err)
 
 	manager, _ := nt.run(t, ignoreOutbound)

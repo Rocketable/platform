@@ -22,6 +22,10 @@ const (
 	InboundSenderSessionMetadataKey  = "rocketclaw_sender_session"
 	InboundSenderAgentMetadataKey    = "rocketclaw_sender_agent"
 	InboundSenderActionMetadataKey   = "rocketclaw_sender_action"
+	InboundAmbientMetadataKey        = "rocketclaw_ambient"
+	AmbientJoinedThread              = "thread"
+	AmbientWatchedChannel            = "channel"
+	AmbientDelegated                 = "delegated"
 	SenderActionStopped              = "stopped"
 )
 
@@ -125,7 +129,7 @@ type InboundMessage struct {
 	responseCh                 chan InboundResponse
 }
 
-type SlackReplyTarget struct{ ChannelID, MessageTS, ThreadTS string }
+type SlackReplyTarget struct{ ChannelID, MessageTS, ThreadTS, EditTS string }
 
 type TextConversationTarget struct{ ChannelID, MessageID, ThreadID, Agent string }
 
@@ -191,7 +195,7 @@ type OutboundMessage struct {
 	GoalTurn, GoalComplete, GoalActive bool
 	GoalTurnNumber, GoalMaxTurns       int
 	Terminal                           Terminal
-	ChannelQuiet                       bool
+	ChannelQuiet, Deferred             bool
 }
 
 func NewInboundMessage(source Source, kind InboundKind, text string, human bool) *InboundMessage {
@@ -273,6 +277,10 @@ func (m *InboundMessage) CompleteResponseWithAttachments(text string, attachment
 
 func NewOutboundMessage(conversationID, text string) *OutboundMessage {
 	return &OutboundMessage{Text: text, ConversationID: strings.TrimSpace(conversationID)}
+}
+
+func (m *OutboundMessage) PostsNothing() bool {
+	return m.Deferred && (m.Terminal != TerminalComplete || m.Text == "" && len(m.Attachments) == 0)
 }
 
 func CloneOutboundAttachments(attachments []OutboundAttachment) []OutboundAttachment {
