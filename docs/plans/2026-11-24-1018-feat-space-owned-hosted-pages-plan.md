@@ -83,14 +83,18 @@ This replaces two earlier decisions on purpose: per-owner pages from the Hosted 
 - Considered and not built: a guard stopping Shadow Sessions from overwriting their parent's pages. Shadows already run tools for real in the shared workspace (`CONCEPTS.md`, Shadow Session).
 - Considered and not built: per-agent Page Data isolation inside a space. Spaces own the data, so a page reading every key of its space is the intended boundary.
 
-### Open Questions
+### Resolved Questions
 
-These don't block launch; record them in the PR body for the owner.
+The owner settled these after review, checking them against a real deployment's pages, tabs and chat links.
 
-- After the upgrade, an agent that rewrites `q3.html` writes `/pages/<space>/q3.html`, while its migrated copy at `/pages/<space>/<agent>/q3.html` stops updating. The owner may want agents told to publish under their old folder. The plan only documents the new behavior (U3, U6).
-- Renaming a space breaks its page links and open page tabs (R9). Is that acceptable, or should old names redirect?
-- These existing links stop resolving after the upgrade: links whose space segment is `-` or an owner's earlier space, links to pages of sessions moved by a page-tab move, and every old `/pages-raw/<owner>/<path>` link, including Open PDF tabs. Today `servePage` finds pages by owner and redirects any space segment; afterwards the space segment decides.
-- After the upgrade, a migrated page whose old owner used a Page Data key that a newer owner in the same space also used reads the newer owner's value.
+- **Same names in one space overwrite each other, by design.** Two agents in one space that publish the same path or Page Data key replace each other's. Agents that must not collide publish under their own folder and key, which is a change to the agents, not to this plan.
+- **Migrated copies stop updating.** After the upgrade, an agent that rewrites `q3.html` writes `/pages/<space>/q3.html`, and its migrated copy at `/pages/<space>/<agent>/q3.html` stops updating. Accepted: agents that should keep their address publish under `<agent>/<path>`, where the upgrade puts their existing pages.
+- **Renaming a space breaks its page links and open page tabs (R9).** Accepted, with no redirect from old names.
+- **Some existing links stop resolving after the upgrade.** These are links whose space segment is `-` or an owner's earlier space, links to pages of sessions moved by a page-tab move, and every old `/pages-raw/<owner>/<path>` link, including Open PDF tabs. Today `servePage` finds pages by owner and redirects any space segment; afterwards the space segment decides. Accepted.
+- **Page Data clashes during the upgrade keep the newest value (R17).** A migrated page whose old owner used a key that a newer owner in the same space also used reads the newer owner's value. Accepted, along with keeping older values only in `retired_hosted_pages` instead of renaming them `<owner>/<key>`: neither rule gives the older owner's pages back their own value.
+- **Owners with no resolvable space lose their pages at the upgrade (R18).** Accepted. Before upgrading, give every agent that publishes a `space:`. To keep a page of a spaceless owner, copy it from `retired_hosted_pages` into a space after the upgrade.
+- **Page scope follows a moved chat.** A spaceless agent that moves its chat with `rocketclaw_sessions_move` then works on the new space's pages. Accepted.
+- **Rollback stays manual and lossy.** Run migration 109's Down, then pin the older version. Pages published after the upgrade are lost. Accepted.
 
 ---
 
@@ -363,4 +367,4 @@ stateDiagram-v2
 - Existing pages keep their `/pages/<owner's current space>/<owner>/<path>` addresses after upgrade, and every pre-upgrade row is in `retired_hosted_pages`.
 - `make test`, `make lint` and `make check-cloc-budget` pass without new `//nolint`, budget edits or code moved to excluded paths.
 - No source comments, defensive guards, nil-as-disabled dependencies or SQL subqueries were added; dead-end code from abandoned approaches is removed.
-- The PR body carries the Open Questions above and states README impact.
+- The PR body carries the Resolved Questions above and states README impact.
