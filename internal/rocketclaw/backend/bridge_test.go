@@ -4902,7 +4902,7 @@ func TestTurnBoundPlatformTools(t *testing.T) {
 
 	origin := new(protocol.InboundMessage)
 	bridge := &Bridge{runtime: new(config.LockedConfig), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
-	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []harness.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{RestartFunc: func(string) string { return "" }}), attachFilesTool(nil, &harness.CustomShell{}, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), navigateTool(bridge.threads, ""), sessionsWriteTool(bridge, origin, origin, "main", "main", harness.Agents{}), currentSessionIDTool("main")}, pageSpace{sessions: bridge.config.SessionService, agent: "main"}.nativeTools(nil, &harness.CustomShell{}))
+	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []harness.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{RestartFunc: func(string) string { return "" }}), attachFilesTool(nil, &harness.CustomShell{}, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), navigateTool(bridge.threads, ""), sessionsWriteTool(bridge, origin, origin, "main", "main", harness.Agents{}), currentSessionIDTool("main")}, pageSpace{sessions: bridge.config.SessionService, conversation: "main"}.nativeTools(nil, &harness.CustomShell{}))
 
 	var bound []string
 

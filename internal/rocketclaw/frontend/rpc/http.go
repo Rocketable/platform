@@ -49,7 +49,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 
 	handleOpenCode(mux, connection, cfg)
 
-	for _, route := range []string{"GET /pages/{space}/{agent}/{path...}", "GET /pages-raw/{agent}/{path...}"} {
+	for _, route := range []string{"GET /pages/{space}/{path...}", "GET /pages-raw/{space}/{path...}"} {
 		mux.HandleFunc(route, servePage(connection, app))
 	}
 
@@ -197,7 +197,7 @@ func refuseOtherSites(protection *http.CrossOriginProtection, next http.Handler)
 func servePage(connection *grpc.ClientConn, app http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		page := &Page{}
-		if err := connection.Invoke(r.Context(), "/rpc.Web/GetPage", &PageRequest{Agent: r.PathValue("agent"), Path: r.PathValue("path")}, page, grpc.MaxCallRecvMsgSize(math.MaxInt32)); err != nil {
+		if err := connection.Invoke(r.Context(), "/rpc.Web/GetPage", &PageRequest{Space: r.PathValue("space"), Path: r.PathValue("path")}, page, grpc.MaxCallRecvMsgSize(math.MaxInt32)); err != nil {
 			httpRPCError(w, err)
 			return
 		}
@@ -210,8 +210,6 @@ func servePage(connection *grpc.ClientConn, app http.Handler) http.HandlerFunc {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Cache-Control", "no-store")
 			_, _ = w.Write(page.Body)
-		case page.Space != "" && !strings.EqualFold(page.Space, r.PathValue("space")):
-			http.Redirect(w, r, "/pages/"+url.PathEscape(page.Space)+"/"+strings.SplitN(r.URL.RequestURI(), "/", 4)[3], http.StatusPermanentRedirect)
 		default:
 			app.ServeHTTP(w, r)
 		}

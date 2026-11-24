@@ -8,7 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -38,39 +38,30 @@ func TestPages(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-	root, err := os.OpenRoot(cfg.Workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	agents := cfg.RuntimeDirName() + "/agents/"
-	require.NoError(t, root.MkdirAll(agents+"primary", 0o700))
-	require.NoError(t, root.MkdirAll(agents+"reporter", 0o700))
-
-	for name, frontmatter := range map[string]string{"primary": "", "primary/review": "", "reporter": "space: Ops\n", "reporter/review": "space: Ops Team\n"} {
-		require.NoError(t, root.WriteFile(agents+name+".md", []byte("---\nmodel: example-model\n"+frontmatter+"---\nHelp."), 0o600))
-	}
-
-	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `WITH space AS (INSERT INTO web_spaces (name) VALUES ('Billing') RETURNING id)
-INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session, space_id)
-SELECT 'opencode:box:ses_' || n, '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), 'ses_' || n, CASE WHEN n = 'a' THEN space.id END
-FROM space, unnest(ARRAY['a', 'b']) n`)
-	require.NoError(t, err)
-
 	large := bytes.Repeat([]byte("x"), 4<<20+1)
-	for _, page := range []backend.Page{
-		{Agent: "opencode:box:ses_a", Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>a</p>"), Conversation: "opencode:box:ses_a"},
-		{Agent: "opencode:box:ses_a", Kind: backend.PageData, Name: "rows", ContentType: "application/json", Body: []byte("[1]"), Conversation: "opencode:box:ses_a"},
-		{Agent: "opencode:box:ses_b", Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>b</p>"), Conversation: "opencode:box:ses_b"},
-		{Agent: "reporter", Kind: backend.PageFile, Name: "x.html", ContentType: "text/html", Body: []byte("<p>x</p>")},
-		{Agent: "reporter", Kind: backend.PageFile, Name: "docs/index.html", ContentType: "text/html", Body: []byte("<p>docs</p>")},
-		{Agent: "reporter", Kind: backend.PageFile, Name: "large.js", ContentType: "text/javascript", Body: large},
-		{Agent: "reporter", Kind: backend.PageData, Name: "revenue", ContentType: "application/json", Body: []byte(`{"total":3}`)},
-		{Agent: "reporter/review", Kind: backend.PageFile, Name: "a b/c.html", ContentType: "text/html", Body: []byte("<p>c</p>")},
-		{Agent: "primary/review", Kind: backend.PageFile, Name: "a.html", ContentType: "text/html", Body: []byte("<p>review</p>")},
-		{Agent: "gone", Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>gone</p>")},
+	for space, pages := range map[string][]backend.Page{
+		"Billing": {{Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>billing</p>")}, {Kind: backend.PageData, Name: "rows", ContentType: "application/json", Body: []byte("[1]")}},
+		"Ops": {
+			{Kind: backend.PageFile, Name: "x.html", ContentType: "text/html", Body: []byte("<p>x</p>")},
+			{Kind: backend.PageFile, Name: "docs/index.html", ContentType: "text/html", Body: []byte("<p>docs</p>")},
+			{Kind: backend.PageFile, Name: "large.js", ContentType: "text/javascript", Body: large},
+			{Kind: backend.PageData, Name: "rows", ContentType: "application/json", Body: []byte(`{"total":3}`)},
+		},
+		"Ops Team": {{Kind: backend.PageFile, Name: "a b/c.html", ContentType: "text/html", Body: []byte("<p>c</p>")}},
+		"Atlas": {
+			{Kind: backend.PageFile, Name: "opencode:box:ses_a/index.html", ContentType: "text/html", Body: []byte("<p>a</p>")},
+			{Kind: backend.PageFile, Name: "main/review/a b/index.html", ContentType: "text/html", Body: []byte("<p>review</p>")},
+		},
+		"Gone": {{Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>gone</p>")}},
 	} {
-		require.NoError(t, sessions.PutPage(t.Context(), &page))
+		for _, page := range pages {
+			require.NoError(t, sessions.PutPage(t.Context(), &page, "", space))
+		}
 	}
+
+	spaces, err := sessions.Spaces(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, sessions.DeleteSpace(t.Context(), spaces[slices.IndexFunc(spaces, func(space backend.Space) bool { return space.Name == "Gone" })].ID))
 
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
@@ -100,34 +91,27 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 		code        int
 		body        string
 		contentType string
-		location    string
 	}{
-		{path: "/pages-raw/reporter/x.html", handler: admitted, code: http.StatusOK, body: "<p>x</p>", contentType: "text/html"},
-		{path: "/pages-raw/reporter/docs/", handler: admitted, code: http.StatusOK, body: "<p>docs</p>", contentType: "text/html"},
-		{path: "/pages-raw/reporter/large.js", handler: admitted, code: http.StatusOK, body: string(large), contentType: "text/javascript"},
-		{path: "/pages-raw/primary%2Freview/a.html", handler: admitted, code: http.StatusOK, body: "<p>review</p>", contentType: "text/html"},
+		{path: "/pages-raw/Ops/x.html", handler: admitted, code: http.StatusOK, body: "<p>x</p>", contentType: "text/html"},
+		{path: "/pages-raw/ops/docs/", handler: admitted, code: http.StatusOK, body: "<p>docs</p>", contentType: "text/html"},
+		{path: "/pages-raw/Ops/large.js", handler: admitted, code: http.StatusOK, body: string(large), contentType: "text/javascript"},
+		{path: "/pages-raw/Atlas/main%2Freview/a%20b/index.html", handler: admitted, code: http.StatusOK, body: "<p>review</p>", contentType: "text/html"},
+		{path: "/pages-raw/Atlas/opencode:box:ses_a/index.html", handler: admitted, code: http.StatusOK, body: "<p>a</p>", contentType: "text/html"},
+		{path: "/pages-raw/Atlas/opencode%3Abox%3Ases_a/", handler: admitted, code: http.StatusOK, body: "<p>a</p>", contentType: "text/html"},
+		{path: "/pages-raw/Gone/index.html", handler: admitted, code: http.StatusOK, body: "<p>gone</p>", contentType: "text/html"},
 		{path: "/pages-raw/nobody/x.html", handler: admitted, code: http.StatusNotFound},
-		{path: "/pages-raw/gone/index.html", handler: admitted, code: http.StatusNotFound},
-		{path: "/pages-raw/reporter/missing.html", handler: admitted, code: http.StatusNotFound},
-		{path: "/pages-raw/reporter/x.html", handler: denied, code: http.StatusUnauthorized},
-		{path: "/pages/billing/reporter/x.html", handler: admitted, code: http.StatusPermanentRedirect, location: "/pages/Ops/reporter/x.html"},
-		{path: "/pages/Ops/reporter%2Freview/a%20b/c.html?v=1", handler: admitted, code: http.StatusPermanentRedirect, location: "/pages/Ops%20Team/reporter%2Freview/a%20b/c.html?v=1"},
-		{path: "/pages/OPS/reporter/x.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
-		{path: "/pages/billing/primary%2Freview/a.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
-		{path: "/pages/-/primary%2Freview/a.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
-		{path: "/pages/Ops/nobody/x.html", handler: admitted, code: http.StatusNotFound},
-		{path: "/pages-raw/opencode:box:ses_a/index.html", handler: admitted, code: http.StatusOK, body: "<p>a</p>", contentType: "text/html"},
-		{path: "/pages-raw/opencode%3Abox%3Ases_b/", handler: admitted, code: http.StatusOK, body: "<p>b</p>", contentType: "text/html"},
-		{path: "/pages/Ops/opencode%3Abox%3Ases_a/index.html", handler: admitted, code: http.StatusPermanentRedirect, location: "/pages/Billing/opencode%3Abox%3Ases_a/index.html"},
-		{path: "/pages/billing/opencode:box:ses_a/index.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
-		{path: "/pages/Ops/reporter/missing.html", handler: admitted, code: http.StatusNotFound},
-		{path: "/pages/Ops/reporter/x.html", handler: denied, code: http.StatusUnauthorized},
+		{path: "/pages-raw/Billing/x.html", handler: admitted, code: http.StatusNotFound},
+		{path: "/pages-raw/Ops/x.html", handler: denied, code: http.StatusUnauthorized},
+		{path: "/pages/OPS/x.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
+		{path: "/pages/Ops%20Team/a%20b/c.html?v=1", handler: admitted, code: http.StatusOK, body: app.Body.String()},
+		{path: "/pages/Atlas/opencode%3Abox%3Ases_a/index.html", handler: admitted, code: http.StatusOK, body: app.Body.String()},
+		{path: "/pages/Ops/missing.html", handler: admitted, code: http.StatusNotFound},
+		{path: "/pages/Ops/x.html", handler: denied, code: http.StatusUnauthorized},
 	} {
 		request := httptest.NewRequest(http.MethodGet, tc.path, http.NoBody)
 		response := httptest.NewRecorder()
 		tc.handler.ServeHTTP(response, request)
 		require.Equal(t, tc.code, response.Code, tc.path)
-		require.Equal(t, tc.location, response.Header().Get("Location"), tc.path)
 
 		if tc.code != http.StatusOK {
 			continue
@@ -147,38 +131,37 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 	}
 
 	ctx := metadata.NewOutgoingContext(t.Context(), tailnetUser("alice"))
-	data, err := invoke[Page](ctx, connection, "GetPage", &PageRequest{Agent: "reporter", Path: "revenue", Data: true})
-	require.NoError(t, err)
-	require.True(t, proto.Equal(&Page{Space: "Ops", ContentType: "application/json", Body: []byte(`{"total":3}`)}, data), "unexpected page data: %v", data)
-
-	data, err = invoke[Page](ctx, connection, "GetPage", &PageRequest{Agent: "opencode:box:ses_a", Path: "rows", Data: true})
-	require.NoError(t, err)
-	require.True(t, proto.Equal(&Page{Space: "Billing", ContentType: "application/json", Body: []byte("[1]")}, data), "unexpected session page data: %v", data)
+	for space, want := range map[string]*Page{"ops": {Space: "Ops", ContentType: "application/json", Body: []byte(`{"total":3}`)}, "Billing": {Space: "Billing", ContentType: "application/json", Body: []byte("[1]")}} {
+		data, err := invoke[Page](ctx, connection, "GetPage", &PageRequest{Space: space, Path: "rows", Data: true})
+		require.NoError(t, err)
+		require.True(t, proto.Equal(want, data), "a page reads its own space's Page Data: %v", data)
+	}
 
 	listed, err := invoke[ListPagesResponse](ctx, connection, "ListPages", &ListPagesRequest{})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(&ListPagesResponse{Pages: []*PageEntry{
-		{Agent: "opencode:box:ses_a", Space: "Billing", Path: "index.html"},
-		{Agent: "primary/review", Path: "a.html"},
-		{Agent: "reporter", Space: "Ops", Path: "docs/index.html"},
-		{Agent: "reporter", Space: "Ops", Path: "x.html"},
-		{Agent: "reporter/review", Space: "Ops Team", Path: "a b/c.html"},
+		{Space: "Atlas", Path: "main/review/a b/index.html"},
+		{Space: "Atlas", Path: "opencode:box:ses_a/index.html"},
+		{Space: "Billing", Path: "index.html"},
+		{Space: "Gone", Path: "index.html"},
+		{Space: "Ops", Path: "docs/index.html"},
+		{Space: "Ops", Path: "x.html"},
+		{Space: "Ops Team", Path: "a b/c.html"},
 	}}, listed), "unexpected pages: %v", listed)
 
 	version := func() string {
 		response := httptest.NewRecorder()
-		admitted.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/ListPages", strings.NewReader(`{"agent":"reporter","path":"x.html"}`)))
+		admitted.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/ListPages", strings.NewReader(`{"space":"ops","path":"x.html"}`)))
 		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 
 		var found struct {
 			Pages []struct {
-				Agent, Space, Path, UpdatedAt string
+				Space, Path, UpdatedAt string
 			}
 		}
 		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &found))
 		require.Len(t, found.Pages, 1)
 		page := found.Pages[0]
-		require.Equal(t, "reporter", page.Agent)
 		require.Equal(t, "Ops", page.Space)
 		require.Equal(t, "x.html", page.Path)
 		require.NotEmpty(t, page.UpdatedAt)
@@ -187,25 +170,10 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 	}
 	before := version()
 	require.Equal(t, before, version())
-	require.NoError(t, sessions.PutPage(t.Context(), &backend.Page{
-		Agent: "reporter", Kind: backend.PageFile, Name: "x.html", ContentType: "text/html", Body: []byte("<p>updated</p>"),
-	}))
+	require.NoError(t, sessions.PutPage(t.Context(), &backend.Page{Kind: backend.PageFile, Name: "x.html", ContentType: "text/html", Body: []byte("<p>updated</p>")}, "", "Ops"))
 	require.NotEqual(t, before, version())
 
-	tabs, err := invoke[TabsResponse](ctx, connection, "Tabs", &TabsRequest{CreateSpace: "Sales"})
-	require.NoError(t, err)
-	_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", &UpdateSessionRequest{Id: "opencode:box:ses_a", SpaceId: &tabs.Spaces[len(tabs.Spaces)-1].Id})
-	require.NoError(t, err)
-
-	data, err = invoke[Page](ctx, connection, "GetPage", &PageRequest{Agent: "opencode:box:ses_a", Path: "rows", Data: true})
-	require.NoError(t, err)
-	require.Equal(t, "Sales", data.Space)
-
-	moved := httptest.NewRecorder()
-	admitted.ServeHTTP(moved, httptest.NewRequest(http.MethodGet, "/pages/Billing/opencode%3Abox%3Ases_a/index.html", http.NoBody))
-	require.Equal(t, "/pages/Sales/opencode%3Abox%3Ases_a/index.html", moved.Header().Get("Location"))
-
-	_, err = invoke[Page](t.Context(), connection, "GetPage", &PageRequest{Agent: "reporter", Path: "x.html"})
+	_, err = invoke[Page](t.Context(), connection, "GetPage", &PageRequest{Space: "Ops", Path: "x.html"})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 	_, err = invoke[ListPagesResponse](t.Context(), connection, "ListPages", &ListPagesRequest{})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
@@ -244,8 +212,8 @@ func TestPagesRealBrowser(t *testing.T) {
 		await fetch("/api/Identity", { method: "POST", mode: "no-cors", body: "{}" });
 		window.result = await fetch("/api/ListSessions").then((response) => response.text(), (error) => error.name);
 	})();</script>`
-	require.NoError(t, rt.Sessions.PutPage(ctx, &backend.Page{Agent: "main", Kind: backend.PageFile, Name: "probe.html", ContentType: "text/html", Body: []byte(probe)}))
-	require.NoError(t, rt.Sessions.PutPage(ctx, &backend.Page{Agent: "main", Kind: backend.PageFile, Name: "probe.js", ContentType: "text/javascript", Body: []byte(`window.asset = "loaded";`)}))
+	require.NoError(t, rt.Sessions.PutPage(ctx, &backend.Page{Kind: backend.PageFile, Name: "probe.html", ContentType: "text/html", Body: []byte(probe)}, "", "Main"))
+	require.NoError(t, rt.Sessions.PutPage(ctx, &backend.Page{Kind: backend.PageFile, Name: "probe.js", ContentType: "text/javascript", Body: []byte(`window.asset = "loaded";`)}, "", "Main"))
 
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)

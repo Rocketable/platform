@@ -4723,13 +4723,13 @@ func (x *ListCronJobsResponse) GetJobs() []*CronJob {
 	return nil
 }
 
-// PageRequest names an agent's Hosted Page file, or its Page Data entry when data is set.
+// PageRequest names a space's Hosted Page file, or its Page Data entry when data is set.
 // An empty path or one ending in / names index.html.
 type PageRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Agent         string                 `protobuf:"bytes,1,opt,name=agent,proto3" json:"agent,omitempty"`
 	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	Data          bool                   `protobuf:"varint,3,opt,name=data,proto3" json:"data,omitempty"`
+	Space         string                 `protobuf:"bytes,4,opt,name=space,proto3" json:"space,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4764,13 +4764,6 @@ func (*PageRequest) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{57}
 }
 
-func (x *PageRequest) GetAgent() string {
-	if x != nil {
-		return x.Agent
-	}
-	return ""
-}
-
 func (x *PageRequest) GetPath() string {
 	if x != nil {
 		return x.Path
@@ -4785,7 +4778,14 @@ func (x *PageRequest) GetData() bool {
 	return false
 }
 
-// Page is a stored file or Page Data entry with its agent's current space.
+func (x *PageRequest) GetSpace() string {
+	if x != nil {
+		return x.Space
+	}
+	return ""
+}
+
+// Page is a stored file or Page Data entry with its space's current spelling.
 type Page struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Space         string                 `protobuf:"bytes,1,opt,name=space,proto3" json:"space,omitempty"`
@@ -4848,8 +4848,8 @@ func (x *Page) GetBody() []byte {
 
 type ListPagesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Agent         string                 `protobuf:"bytes,1,opt,name=agent,proto3" json:"agent,omitempty"`
 	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	Space         string                 `protobuf:"bytes,3,opt,name=space,proto3" json:"space,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4884,13 +4884,6 @@ func (*ListPagesRequest) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{59}
 }
 
-func (x *ListPagesRequest) GetAgent() string {
-	if x != nil {
-		return x.Agent
-	}
-	return ""
-}
-
 func (x *ListPagesRequest) GetPath() string {
 	if x != nil {
 		return x.Path
@@ -4898,7 +4891,14 @@ func (x *ListPagesRequest) GetPath() string {
 	return ""
 }
 
-// ListPagesResponse lists the HTML files of agents that still exist.
+func (x *ListPagesRequest) GetSpace() string {
+	if x != nil {
+		return x.Space
+	}
+	return ""
+}
+
+// ListPagesResponse lists the HTML files of every space, deleted spaces included.
 type ListPagesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Pages         []*PageEntry           `protobuf:"bytes,1,rep,name=pages,proto3" json:"pages,omitempty"`
@@ -4945,7 +4945,6 @@ func (x *ListPagesResponse) GetPages() []*PageEntry {
 
 type PageEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Agent         string                 `protobuf:"bytes,1,opt,name=agent,proto3" json:"agent,omitempty"`
 	Space         string                 `protobuf:"bytes,2,opt,name=space,proto3" json:"space,omitempty"`
 	Path          string                 `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
 	UpdatedAt     *string                `protobuf:"bytes,4,opt,name=updated_at,json=updatedAt,proto3,oneof" json:"updated_at,omitempty"`
@@ -4981,13 +4980,6 @@ func (x *PageEntry) ProtoReflect() protoreflect.Message {
 // Deprecated: Use PageEntry.ProtoReflect.Descriptor instead.
 func (*PageEntry) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{61}
-}
-
-func (x *PageEntry) GetAgent() string {
-	if x != nil {
-		return x.Agent
-	}
-	return ""
 }
 
 func (x *PageEntry) GetSpace() string {
@@ -8330,8 +8322,7 @@ type UpdateSessionRequest struct {
 	// Toggles a tag a person chose: any tag on a remote OpenCode session, or one its agent allows.
 	Tag *string `protobuf:"bytes,6,opt,name=tag,proto3,oneof" json:"tag,omitempty"`
 	// Pauses or resumes the agent of a Web chat.
-	Paused        *bool   `protobuf:"varint,7,opt,name=paused,proto3,oneof" json:"paused,omitempty"`
-	SpaceId       *string `protobuf:"bytes,8,opt,name=space_id,json=spaceId,proto3,oneof" json:"space_id,omitempty"`
+	Paused        *bool `protobuf:"varint,7,opt,name=paused,proto3,oneof" json:"paused,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8392,13 +8383,6 @@ func (x *UpdateSessionRequest) GetPaused() bool {
 		return *x.Paused
 	}
 	return false
-}
-
-func (x *UpdateSessionRequest) GetSpaceId() string {
-	if x != nil && x.SpaceId != nil {
-		return *x.SpaceId
-	}
-	return ""
 }
 
 type UpdateSessionResponse struct {
@@ -11401,27 +11385,26 @@ const file_web_proto_rawDesc = "" +
 	".rpc.SkillR\x06skills\"\x15\n" +
 	"\x13ListCronJobsRequest\"8\n" +
 	"\x14ListCronJobsResponse\x12 \n" +
-	"\x04jobs\x18\x01 \x03(\v2\f.rpc.CronJobR\x04jobs\"K\n" +
-	"\vPageRequest\x12\x14\n" +
-	"\x05agent\x18\x01 \x01(\tR\x05agent\x12\x12\n" +
+	"\x04jobs\x18\x01 \x03(\v2\f.rpc.CronJobR\x04jobs\"X\n" +
+	"\vPageRequest\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
-	"\x04data\x18\x03 \x01(\bR\x04data\"S\n" +
+	"\x04data\x18\x03 \x01(\bR\x04data\x12\x14\n" +
+	"\x05space\x18\x04 \x01(\tR\x05spaceJ\x04\b\x01\x10\x02R\x05agent\"S\n" +
 	"\x04Page\x12\x14\n" +
 	"\x05space\x18\x01 \x01(\tR\x05space\x12!\n" +
 	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x12\n" +
-	"\x04body\x18\x03 \x01(\fR\x04body\"<\n" +
-	"\x10ListPagesRequest\x12\x14\n" +
-	"\x05agent\x18\x01 \x01(\tR\x05agent\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04path\"9\n" +
+	"\x04body\x18\x03 \x01(\fR\x04body\"I\n" +
+	"\x10ListPagesRequest\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x14\n" +
+	"\x05space\x18\x03 \x01(\tR\x05spaceJ\x04\b\x01\x10\x02R\x05agent\"9\n" +
 	"\x11ListPagesResponse\x12$\n" +
-	"\x05pages\x18\x01 \x03(\v2\x0e.rpc.PageEntryR\x05pages\"~\n" +
+	"\x05pages\x18\x01 \x03(\v2\x0e.rpc.PageEntryR\x05pages\"u\n" +
 	"\tPageEntry\x12\x14\n" +
-	"\x05agent\x18\x01 \x01(\tR\x05agent\x12\x14\n" +
 	"\x05space\x18\x02 \x01(\tR\x05space\x12\x12\n" +
 	"\x04path\x18\x03 \x01(\tR\x04path\x12\"\n" +
 	"\n" +
 	"updated_at\x18\x04 \x01(\tH\x00R\tupdatedAt\x88\x01\x01B\r\n" +
-	"\v_updated_at\"'\n" +
+	"\v_updated_atJ\x04\b\x01\x10\x02R\x05agent\"'\n" +
 	"\x11RunCronJobRequest\x12\x12\n" +
 	"\x04stem\x18\x01 \x01(\tR\x04stem\"$\n" +
 	"\x12RunCronJobResponse\x12\x0e\n" +
@@ -11672,17 +11655,15 @@ const file_web_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vproposal_id\x18\x02 \x01(\tR\n" +
 	"proposalId\x12\x16\n" +
-	"\x06accept\x18\x03 \x01(\bR\x06accept\"\xd6\x01\n" +
+	"\x06accept\x18\x03 \x01(\bR\x06accept\"\xb9\x01\n" +
 	"\x14UpdateSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\x04name\x18\x03 \x01(\tH\x00R\x04name\x88\x01\x01\x12\x15\n" +
 	"\x03tag\x18\x06 \x01(\tH\x01R\x03tag\x88\x01\x01\x12\x1b\n" +
-	"\x06paused\x18\a \x01(\bH\x02R\x06paused\x88\x01\x01\x12\x1e\n" +
-	"\bspace_id\x18\b \x01(\tH\x03R\aspaceId\x88\x01\x01B\a\n" +
+	"\x06paused\x18\a \x01(\bH\x02R\x06paused\x88\x01\x01B\a\n" +
 	"\x05_nameB\x06\n" +
 	"\x04_tagB\t\n" +
-	"\a_pausedB\v\n" +
-	"\t_space_idJ\x04\b\x02\x10\x03J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\x06pinned\"\x17\n" +
+	"\a_pausedJ\x04\b\x02\x10\x03J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06J\x04\b\b\x10\tR\x06pinnedR\bspace_id\"\x17\n" +
 	"\x15UpdateSessionResponse\"\x11\n" +
 	"\x0fProtocolRequest\"5\n" +
 	"\x10ProtocolResponse\x12!\n" +

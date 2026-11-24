@@ -425,6 +425,10 @@ func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config, s
 		return "", err
 	}
 
+	if err := sessions.placePendingPages(ctx, runtimeDir); err != nil {
+		return "", err
+	}
+
 	if err := s.assemble.ValidateAssets(cfg, runtimeDir); err != nil {
 		return "", fmt.Errorf("validate frontend assets: %w", err)
 	}

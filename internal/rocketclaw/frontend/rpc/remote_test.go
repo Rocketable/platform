@@ -89,7 +89,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		}
 
 		for _, agent := range agents {
-			require.NoError(t, rt.Sessions.PutPage(ctx, &backend.Page{Agent: agent, Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>" + reply + " page</p>")}))
+			require.NoError(t, rt.Sessions.PutPage(ctx, &backend.Page{Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>" + reply + " page</p>")}, "", agent))
 		}
 
 		var waking errgroup.Group

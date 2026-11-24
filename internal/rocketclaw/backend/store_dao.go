@@ -426,7 +426,27 @@ func (s *SessionService) CreateSpace(ctx context.Context, name string) error {
 }
 
 func (s *SessionService) RenameSpace(ctx context.Context, id, name string) error {
-	return spaceNameError(execState(ctx, s.db, "rename space", `UPDATE web_spaces SET name = $2 WHERE id = $1`, id, name))
+	tx, err := s.beginStateTx(ctx, "rename space")
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := execState(ctx, tx, "lock renamed space", `SELECT id FROM web_spaces WHERE id = $1 FOR UPDATE`, id); err != nil {
+		return err
+	}
+
+	if err := spaceNameError(execState(ctx, tx, "rename space", `WITH old AS (
+    SELECT name FROM web_spaces WHERE id = $1
+), renamed AS (
+    UPDATE web_spaces SET name = $2 WHERE id = $1
+)
+UPDATE hosted_pages p SET space = $2 FROM old WHERE lower(p.space) = lower(old.name)`, id, name)); err != nil {
+		return err
+	}
+
+	return commitState(tx, "rename space")
 }
 
 func spaceNameError(_ sql.Result, err error) error {
@@ -447,9 +467,6 @@ moving AS (
 ),
 moved AS (
     UPDATE web_shared_tabs t SET space = m.space FROM moving m WHERE t.space = $1 AND t.path = m.path
-),
-pages AS (
-    DELETE FROM hosted_pages p USING conversations c, others WHERE p.conversation_id = c.conversation_id AND c.space_id = $1
 )
 DELETE FROM web_spaces USING others WHERE web_spaces.id = $1`, id)
 	if err == nil && deleted == 0 {

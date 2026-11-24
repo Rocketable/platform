@@ -1297,12 +1297,12 @@ func TestCreateOpenCodeSessionListsItAtOnce(t *testing.T) {
 	assert.Equal(t, spaces[0].ID, remoteSidebar(t, s)[0].SpaceID)
 }
 
-func TestOpenCodeSessionPagesGoWithTheirSession(t *testing.T) {
+func TestOpenCodeSessionPagesOutliveTheirSession(t *testing.T) {
 	t.Parallel()
 
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
-	fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "", "/srv", 2000), openCodeTestSession("ses_b", "", "/srv", 1000)}}
+	fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "", "/srv", 2000)}}
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
 
@@ -1312,25 +1312,19 @@ func TestOpenCodeSessionPagesGoWithTheirSession(t *testing.T) {
 UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_id = 'opencode:box:ses_a'`)
 	require.NoError(t, err)
 
-	for _, page := range []Page{{Agent: "opencode:box:ses_a", Kind: PageFile, Name: "index.html"}, {Agent: "opencode:box:ses_a", Kind: PageData, Name: "rows"}, {Agent: "opencode:box:ses_b", Kind: PageFile, Name: "index.html"}} {
-		page.Conversation, page.ContentType, page.Body = page.Agent, "text/html", []byte("1")
-		require.NoError(t, s.PutPage(ctx, &page))
+	for _, page := range []Page{{Kind: PageFile, Name: "index.html"}, {Kind: PageData, Name: "rows"}} {
+		page.ContentType, page.Body = "text/html", []byte("1")
+		require.NoError(t, s.PutPage(ctx, &page, "opencode:box:ses_a", ""))
+		assert.Equal(t, "Billing", page.Space)
 	}
 
-	page, found, err := s.Page(ctx, "opencode:box:ses_a", PageFile, "index.html")
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, "Billing", page.Space)
-	require.Error(t, s.PutPage(ctx, &Page{Agent: "opencode:box:ses_x", Kind: PageFile, Name: "index.html", Conversation: "opencode:box:ses_x"}))
-
-	fake.sessions = fake.sessions[1:]
+	fake.sessions = nil
 
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
-	pages, err := s.Pages(ctx, "")
+	pages, err := s.Pages(ctx, "billing")
 	require.NoError(t, err)
-	require.Len(t, pages, 1)
-	assert.Equal(t, "opencode:box:ses_b", pages[0].Conversation)
+	assert.Len(t, pages, 2, "a session's pages belong to its space and stay when the session goes")
 }
 
 func TestSidebarHidesUnconfiguredOpenCodeServers(t *testing.T) {

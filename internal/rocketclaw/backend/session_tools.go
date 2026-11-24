@@ -696,7 +696,7 @@ func sessionsGetURLTool(threads *threadBridgeManager) harness.Tool {
 func navigateTool(threads *threadBridgeManager, username string) harness.Tool {
 	return harness.Tool{
 		Name: navigateToolName, TurnBound: true, Description: "Take the person who started your current work from the RocketClaw Web to another page of this server's Web, once: their Web window that has focus opens location within about 2 seconds, as if they clicked a link to it. No other window follows and no reload repeats it, and a newer call replaces one their window has not opened yet. " +
-			"location is a path such as /s/<id>, /oc/<id>, /pages/<space>/<agent>/<path> or /cron, or a URL on this server's Web, such as rocketclaw_sessions_get_url returns; other sites and other RocketClaw servers are refused. " +
+			"location is a path such as /s/<id>, /oc/<id>, /pages/<space>/<path> or /cron, or a URL on this server's Web, such as rocketclaw_sessions_get_url returns; other sites and other RocketClaw servers are refused. " +
 			"A call no window opens within 3 days lapses. Returns the page's URL, which the chat already shows with this call.",
 		Permission: "rocketclaw", VisibilitySubjects: []string{navigateToolName},
 		Subjects:   func(json.RawMessage) ([]string, error) { return []string{navigateToolName}, nil },

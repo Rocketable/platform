@@ -2317,7 +2317,18 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	customTools = append(customTools, sessionsWriteTool(b, origin, msg, rootAgent, self, agents))
-	customTools = append(customTools, pageSpace{sessions: b.config.SessionService, threads: b.threads, agent: rootAgent, space: agents.Items[rootAgent].Space}.nativeTools(root, &agent.CustomShell)...)
+
+	pageAgent := rootAgent
+	if b.shadow {
+		pageAgent = filepath.Dir(rootAgent)
+	}
+
+	pageFallback := agents.Items[pageAgent].Space
+	if origin.Cronjob != nil {
+		pageFallback = cmp.Or(origin.Cronjob.Space, pageFallback)
+	}
+
+	customTools = append(customTools, pageSpace{sessions: b.config.SessionService, threads: b.threads, conversation: self, fallback: pageFallback, noSpace: nativePageNoSpace}.nativeTools(root, &agent.CustomShell)...)
 
 	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, customTools...)
 

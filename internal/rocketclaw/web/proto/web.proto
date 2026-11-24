@@ -541,15 +541,17 @@ message ListCronJobsResponse {
   repeated CronJob jobs = 1;
 }
 
-// PageRequest names an agent's Hosted Page file, or its Page Data entry when data is set.
+// PageRequest names a space's Hosted Page file, or its Page Data entry when data is set.
 // An empty path or one ending in / names index.html.
 message PageRequest {
-  string agent = 1;
+  reserved 1;
+  reserved "agent";
   string path = 2;
   bool data = 3;
+  string space = 4;
 }
 
-// Page is a stored file or Page Data entry with its agent's current space.
+// Page is a stored file or Page Data entry with its space's current spelling.
 message Page {
   string space = 1;
   string content_type = 2;
@@ -557,17 +559,20 @@ message Page {
 }
 
 message ListPagesRequest {
-  string agent = 1;
+  reserved 1;
+  reserved "agent";
   string path = 2;
+  string space = 3;
 }
 
-// ListPagesResponse lists the HTML files of agents that still exist.
+// ListPagesResponse lists the HTML files of every space, deleted spaces included.
 message ListPagesResponse {
   repeated PageEntry pages = 1;
 }
 
 message PageEntry {
-  string agent = 1;
+  reserved 1;
+  reserved "agent";
   string space = 2;
   string path = 3;
   optional string updated_at = 4;
@@ -999,7 +1004,8 @@ message UpdateSessionRequest {
   optional string tag = 6;
   // Pauses or resumes the agent of a Web chat.
   optional bool paused = 7;
-  optional string space_id = 8;
+  reserved 8;
+  reserved "space_id";
 }
 
 message UpdateSessionResponse {}
