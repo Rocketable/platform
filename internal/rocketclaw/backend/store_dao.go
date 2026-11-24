@@ -330,7 +330,7 @@ ON CONFLICT (id) DO UPDATE SET document = excluded.document`, document)
 
 type Space struct{ ID, Name string }
 
-var ErrSpaceRejected = errors.New("another space has that name, or it is the last space")
+var ErrSpaceRejected = errors.New("another space has that name, pages left under that name share a path with this space's, or it is the last space")
 
 func (s *SessionService) Spaces(ctx context.Context) ([]Space, error) {
 	return queryRows(ctx, s.db, `SELECT id, name FROM web_spaces ORDER BY created_at, id`, "web spaces", func(row rowScanner) (Space, error) {

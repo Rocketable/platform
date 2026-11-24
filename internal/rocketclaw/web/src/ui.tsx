@@ -481,8 +481,7 @@ function useRoute() {
     pages: pathname === "/pages",
     shortcuts: pathname === "/shortcuts",
     closed: pathname === "/closed",
-    // A page path keeps its escaped agent and file path after the space segment.
-    page: pathname.startsWith("/pages/") ? pathname.split("/").slice(2).join("/") : "",
+    page: pathname.startsWith("/pages/") ? pathname.slice("/pages/".length) : "",
     id: pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "",
     remote: pathname.startsWith("/oc/") ? decodeSessionId(pathname.slice(4)) : "",
   };
@@ -984,7 +983,6 @@ const isSearch = (path: string) => /^\/search(\/|$)/.test(path);
 const searchTitle = (search?: SearchPageState) => search?.name || search?.searches.find((item) => item.id === search.active)?.query || "Search";
 const freshSearch = () => `/search/${crypto.getRandomValues(new Uint32Array(2)).join("-")}`;
 
-// A hosted page, from its escaped space and file path, is labeled "<space> · <path>".
 function pageLabel(page: string) {
   const [space, ...path] = page.split("/").map(decodeURIComponent);
   return `${space} · ${path.join("/")}`;
@@ -992,14 +990,13 @@ function pageLabel(page: string) {
 
 // A skill's or cron's page tab is titled with its name, and a hosted page's tab with its label.
 function pageTab(path: string): [string, typeof Search] | undefined {
-  if (path.startsWith("/pages/")) return [pageLabel(path.split("/").slice(2).join("/")), FileText];
+  if (path.startsWith("/pages/")) return [pageLabel(path.slice("/pages/".length)), FileText];
   if (path.startsWith("/cron/")) return [decodeSessionId(path.slice("/cron/".length)), Clock];
   if (path.startsWith("/agents/drafts/")) return ["Agent draft", Bot];
   return pageTabs[path] ?? (path.startsWith("/skills/") ? [path.slice("/skills/".length), Sparkles] : undefined);
 }
 
 // A hosted page opens in the space named by its link's space segment, ignoring case, else in the current space.
-// A segment naming a space becomes that space's exact name, so one page has one tab.
 function pageSpace(state: Pick<TabState, "spaces" | "space">, path: string): [string, string] {
   const [, root, segment, ...rest] = path.split("/");
   const space = root === "pages" && rest.length ? state.spaces.find((item) => item.name.toLowerCase() === decodeURIComponent(segment).toLowerCase()) : undefined;
@@ -3321,8 +3318,6 @@ function RemoteSession({ id }: { id: string }) {
   </>;
 }
 
-// A hosted page runs in an opaque origin and reads its space's Page Data by asking this tab. The answer goes only
-// to this frame and only with this load's token, which a document the frame navigates to never sees.
 function HostedPage({ page }: { page: string }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [token] = useState(() => crypto.getRandomValues(new Uint32Array(4)).join("-"));

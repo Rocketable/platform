@@ -195,3 +195,41 @@ func TestPublishWaitsForRename(t *testing.T) {
 	require.NoError(t, <-published)
 	assert.Equal(t, "Finance", page.Space, "a publish that waited for a rename uses the new name")
 }
+
+func TestRenameWaitsForPublish(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, store.CreateSpace(ctx, "Billing"))
+
+	var billing string
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT id FROM web_spaces WHERE name = 'Billing'`).Scan(&billing))
+
+	tx, err := store.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback() })
+
+	_, err = tx.ExecContext(ctx, `SELECT id FROM web_spaces WHERE id = $1 FOR SHARE`, billing)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `INSERT INTO hosted_pages (space, kind, name, content_type, body) VALUES ('Billing', 'file', 'index.html', 'text/html', 'x')`)
+	require.NoError(t, err)
+
+	renamed := make(chan error, 1)
+
+	go func() { renamed <- store.RenameSpace(ctx, billing, "Finance") }()
+
+	assert.Eventually(t, func() bool {
+		var waiting bool
+
+		_ = store.db.QueryRowContext(ctx, `SELECT count(*) > 0 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE%'`).Scan(&waiting)
+
+		return waiting || len(renamed) > 0
+	}, 5*time.Second, time.Millisecond)
+	require.NoError(t, tx.Commit())
+	require.NoError(t, <-renamed)
+
+	_, found, err := store.Page(ctx, "Finance", PageFile, "index.html")
+	require.NoError(t, err)
+	assert.True(t, found, "a rename that waited for a publish moves the published page too")
+}

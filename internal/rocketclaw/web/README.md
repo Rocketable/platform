@@ -620,7 +620,7 @@ active tab.
   session's name, or its agent when it has none, an OpenCode session's tab
   title, or any other tab's title. Its body says what happened: “Park ended”
   for a park's time, the start of the reply for any other session mark,
-  “Search finished”, “Run finished” for a cron, or “<agent> · <page> updated”. Only a tab you have
+  “Search finished”, “Run finished” for a cron, or “<page> updated”. Only a tab you have
   notifies: in your own tabs or Shared. News on a tab you
   closed shows quietly in bold when you open it again, and a window still
   holding tabs older than the server's waits for its reload before it notifies.

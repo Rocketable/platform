@@ -2318,10 +2318,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	customTools = append(customTools, sessionsWriteTool(b, origin, msg, rootAgent, self, agents))
 
-	pageAgent := rootAgent
-	if b.shadow {
-		pageAgent = filepath.Dir(rootAgent)
-	}
+	pageAgent, _, _ := strings.Cut(rootAgent, "/")
 
 	pageFallback := agents.Items[pageAgent].Space
 	if origin.Cronjob != nil {

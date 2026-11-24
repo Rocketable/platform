@@ -541,7 +541,6 @@ message ListCronJobsResponse {
   repeated CronJob jobs = 1;
 }
 
-// PageRequest names a space's Hosted Page file, or its Page Data entry when data is set.
 // An empty path or one ending in / names index.html.
 message PageRequest {
   reserved 1;
@@ -551,7 +550,6 @@ message PageRequest {
   string space = 4;
 }
 
-// Page is a stored file or Page Data entry with its space's current spelling.
 message Page {
   string space = 1;
   string content_type = 2;
@@ -565,7 +563,6 @@ message ListPagesRequest {
   string space = 3;
 }
 
-// ListPagesResponse lists the HTML files of every space, deleted spaces included.
 message ListPagesResponse {
   repeated PageEntry pages = 1;
 }
