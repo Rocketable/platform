@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -28,7 +27,7 @@ type pageToolInput struct {
 	Value         json.RawMessage `json:"value"`
 }
 
-const pageStoreDescription = `Store a file as a Hosted Page of this agent, replacing any file at path, and return its shareable URL: <web origin>/pages/<agent space or ->/<agent>/<path>. Give path plus exactly one of content (text) or content_base64 (binary); content_type is optional and inferred from path's extension. Each file is capped at 10 MiB. Only people the RocketClaw Web admits can open the URL; a path ending in / serves its index.html.
+const pageStoreDescription = `Store a file as a Hosted Page of this chat's space, replacing any file at path, whoever stored it, and return its shareable URL: <web origin>/pages/<space>/<path>. Every chat in the space shares its pages and Page Data; pages outlive the chat that stored them. Give path plus exactly one of content (text) or content_base64 (binary); content_type is optional and inferred from path's extension. Each file is capped at 10 MiB. Only people the RocketClaw Web admits can open the URL; a path ending in / serves its index.html.
 Pages run sandboxed with an opaque origin: they cannot fetch their own files or use localStorage or cookies. Start HTML with <meta charset="utf-8">. Load your own scripts and styles by relative URL as classic <script src> and <link> tags, not modules. CDN scripts, styles, and images load; pin exact versions. Any website can load script files, so keep secrets and data out of files: store data with rocketclaw_kv_store and read it in the page:
 const token = new URLSearchParams(location.hash.slice(1)).get("rc");
 function readData(key) {
@@ -42,17 +41,22 @@ function readData(key) {
     parent.postMessage({ type: "rocketclaw.read", id, key, token }, "*");
   });
 }
-Pages only read data; they cannot write it or read another agent's.`
+Pages only read their own space's data; they cannot write it.`
+
+const (
+	nativePageNoSpace   = "this chat has no space, so it has no Hosted Pages; start the chat from a RocketClaw Web space, or give its agent a space:"
+	openCodePageNoSpace = "this session has no RocketClaw space, so it has no Hosted Pages; only sessions created or forked from a RocketClaw Web space have one"
+)
 
 type pageSpace struct {
 	sessions     *SessionService
 	threads      *threadBridgeManager
-	agent        string
-	space        string
 	conversation string
+	fallback     string
+	noSpace      string
 }
 
-func (p pageSpace) url(name string) (string, error) {
+func (p pageSpace) url(space, name string) (string, error) {
 	origin, err := p.threads.webOrigin()
 	if err != nil {
 		return "", err
@@ -63,27 +67,44 @@ func (p pageSpace) url(name string) (string, error) {
 		segments[i] = url.PathEscape(segments[i])
 	}
 
-	return origin + "/pages/" + url.PathEscape(cmp.Or(p.space, "-")) + "/" + strings.ReplaceAll(url.PathEscape(p.agent), ":", "%3A") + "/" + strings.Join(segments, "/"), nil
+	return origin + "/pages/" + url.PathEscape(space) + "/" + strings.Join(segments, "/"), nil
 }
 
-func (p pageSpace) put(ctx context.Context, kind PageKind, name, contentType string, body []byte) error {
+func (p pageSpace) refused(err error) error {
+	if errors.Is(err, errNoPageSpace) {
+		return errors.New(p.noSpace)
+	}
+
+	return err
+}
+
+func (p pageSpace) space(ctx context.Context) (string, error) {
+	space, err := p.sessions.resolvePageSpace(ctx, p.conversation, p.fallback)
+	return space, p.refused(err)
+}
+
+func (p pageSpace) put(ctx context.Context, kind PageKind, name, contentType string, body []byte) (string, error) {
 	if !fs.ValidPath(name) || name == "." {
-		return fmt.Errorf("invalid page %s name %q: use a relative slash-separated path without empty, . or .. segments", kind, name)
+		return "", fmt.Errorf("invalid page %s name %q: use a relative slash-separated path without empty, . or .. segments", kind, name)
 	}
 
 	if len(body) > 10<<20 {
-		return fmt.Errorf("page %s %q is %d bytes, over the 10 MiB limit", kind, name, len(body))
+		return "", fmt.Errorf("page %s %q is %d bytes, over the 10 MiB limit", kind, name, len(body))
 	}
 
-	return p.sessions.PutPage(ctx, &Page{Agent: p.agent, Kind: kind, Name: name, ContentType: contentType, Body: body, Conversation: p.conversation, Space: p.space})
+	page := Page{Kind: kind, Name: name, ContentType: contentType, Body: body}
+	err := p.refused(p.sessions.PutPage(ctx, &page, p.conversation, p.fallback))
+
+	return page.Space, err
 }
 
 func (p pageSpace) storeFile(ctx context.Context, name string, file *protocol.OutboundAttachment) (string, error) {
-	if err := p.put(ctx, PageFile, name, file.MIMEType, file.Data); err != nil {
+	space, err := p.put(ctx, PageFile, name, file.MIMEType, file.Data)
+	if err != nil {
 		return "", err
 	}
 
-	return p.url(name)
+	return p.url(space, name)
 }
 
 func (p pageSpace) nativeTools(root *os.Root, shell *harness.CustomShell) []harness.Tool {
@@ -115,7 +136,12 @@ func (p pageSpace) nativeTools(root *os.Root, shell *harness.CustomShell) []harn
 
 func (p pageSpace) tools() []harness.Tool {
 	get := func(ctx context.Context, kind PageKind, name string) (Page, error) {
-		page, ok, err := p.sessions.Page(ctx, p.agent, kind, name)
+		space, err := p.space(ctx)
+		if err != nil {
+			return Page{}, err
+		}
+
+		page, ok, err := p.sessions.Page(ctx, space, kind, name)
 		if err == nil && !ok {
 			err = fmt.Errorf("page %s %q not found", kind, name)
 		}
@@ -148,7 +174,7 @@ func (p pageSpace) tools() []harness.Tool {
 
 			return p.storeFile(ctx, input.Path, &file)
 		}),
-		tool("rocketclaw_read", "Return this agent's Hosted Page file at path as JSON with content_type and content, or content_base64 when it is not UTF-8 text.", map[string]any{"path": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
+		tool("rocketclaw_read", "Return this space's Hosted Page file at path as JSON with content_type and content, or content_base64 when it is not UTF-8 text.", map[string]any{"path": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
 			page, err := get(ctx, PageFile, input.Path)
 			if err != nil {
 				return "", err
@@ -169,18 +195,20 @@ func (p pageSpace) tools() []harness.Tool {
 
 			return string(data), err
 		}),
-		tool("rocketclaw_kv_store", "Store value, any JSON value up to 10 MiB, as this agent's Page Data at key, replacing it; its pages read it as shown in rocketclaw_store.", map[string]any{"key": str, "value": map[string]any{"description": "any JSON value"}}, func(ctx context.Context, input *pageToolInput) (string, error) {
+		tool("rocketclaw_kv_store", "Store value, any JSON value up to 10 MiB, as this space's Page Data at key, replacing it whoever stored it; the space's pages read it as shown in rocketclaw_store.", map[string]any{"key": str, "value": map[string]any{"description": "any JSON value"}}, func(ctx context.Context, input *pageToolInput) (string, error) {
 			if !json.Valid(input.Value) {
 				return "", errors.New("value must be a JSON value")
 			}
 
-			return "stored " + input.Key, p.put(ctx, PageData, input.Key, "application/json", input.Value)
+			_, err := p.put(ctx, PageData, input.Key, "application/json", input.Value)
+
+			return "stored " + input.Key, err
 		}),
-		tool("rocketclaw_kv_read", "Return the JSON value this agent stored as Page Data at key.", map[string]any{"key": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
+		tool("rocketclaw_kv_read", "Return the JSON value stored as this space's Page Data at key.", map[string]any{"key": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
 			page, err := get(ctx, PageData, input.Key)
 			return string(page.Body), err
 		}),
-		tool("rocketclaw_delete", "Delete this agent's Hosted Page file at path, or its Page Data at key; give exactly one, leaving the other empty.", map[string]any{"path": str, "key": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
+		tool("rocketclaw_delete", "Delete this space's Hosted Page file at path, or its Page Data at key, whoever stored it; give exactly one, leaving the other empty.", map[string]any{"path": str, "key": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
 			if (input.Path == "") == (input.Key == "") {
 				return "", errors.New("give exactly one of path or key")
 			}
@@ -190,15 +218,25 @@ func (p pageSpace) tools() []harness.Tool {
 				kind, name = PageData, input.Key
 			}
 
-			found, err := p.sessions.DeletePage(ctx, p.agent, kind, name)
+			space, err := p.space(ctx)
+			if err != nil {
+				return "", err
+			}
+
+			found, err := p.sessions.DeletePage(ctx, space, kind, name)
 			if err == nil && !found {
 				err = fmt.Errorf("page %s %q not found", kind, name)
 			}
 
 			return "deleted " + name, err
 		}),
-		tool("rocketclaw_list", "List this agent's Hosted Page files, with URLs, and Page Data keys as JSON.", map[string]any{}, func(ctx context.Context, _ *pageToolInput) (string, error) {
-			pages, err := p.sessions.Pages(ctx, p.agent)
+		tool("rocketclaw_list", "List every Hosted Page file of this space, with URLs, and its Page Data keys as JSON, whichever chat stored them.", map[string]any{}, func(ctx context.Context, _ *pageToolInput) (string, error) {
+			space, err := p.space(ctx)
+			if err != nil {
+				return "", err
+			}
+
+			pages, err := p.sessions.Pages(ctx, space)
 			if err != nil {
 				return "", err
 			}
@@ -229,7 +267,7 @@ func (p pageSpace) tools() []harness.Tool {
 					continue
 				}
 
-				link, err := p.url(page.Name)
+				link, err := p.url(page.Space, page.Name)
 				if err != nil {
 					return "", err
 				}

@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -39,11 +38,6 @@ func (s *Server) getPage(ctx context.Context, request *PageRequest) (*Page, erro
 		return nil, err
 	}
 
-	agents, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
-	if err != nil {
-		return nil, fmt.Errorf("load web page agents: %w", err)
-	}
-
 	kind, name := backend.PageFile, request.Path
 	if request.Data {
 		kind = backend.PageData
@@ -53,17 +47,16 @@ func (s *Server) getPage(ctx context.Context, request *PageRequest) (*Page, erro
 		name += "index.html"
 	}
 
-	page, found, err := s.sessions.Page(ctx, request.Agent, kind, name)
+	page, found, err := s.sessions.Page(ctx, request.Space, kind, name)
 	if err != nil {
 		return nil, fmt.Errorf("read web page: %w", err)
 	}
 
-	agent, ok := agents.Items[request.Agent]
-	if !found || !ok && page.Conversation == "" || !limit.AllowsSpaceName(cmp.Or(agent.Space, page.Space)) {
+	if !found || !limit.AllowsSpaceName(page.Space) {
 		return nil, status.Errorf(codes.NotFound, "page %q not found", name)
 	}
 
-	return &Page{Space: cmp.Or(agent.Space, page.Space), ContentType: page.ContentType, Body: page.Body}, nil
+	return &Page{Space: page.Space, ContentType: page.ContentType, Body: page.Body}, nil
 }
 
 func (s *Server) listPages(ctx context.Context, request *ListPagesRequest) (*ListPagesResponse, error) {
@@ -72,12 +65,7 @@ func (s *Server) listPages(ctx context.Context, request *ListPagesRequest) (*Lis
 		return nil, err
 	}
 
-	agents, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
-	if err != nil {
-		return nil, fmt.Errorf("load web page agents: %w", err)
-	}
-
-	pages, err := s.sessions.Pages(ctx, request.Agent)
+	pages, err := s.sessions.Pages(ctx, request.Space)
 	if err != nil {
 		return nil, fmt.Errorf("list web pages: %w", err)
 	}
@@ -90,8 +78,8 @@ func (s *Server) listPages(ctx context.Context, request *ListPagesRequest) (*Lis
 			continue
 		}
 
-		if agent, ok := agents.Items[page.Agent]; (ok || page.Space != "") && page.Kind == backend.PageFile && page.ContentType == "text/html" && limit.AllowsSpaceName(cmp.Or(agent.Space, page.Space)) {
-			entry := &PageEntry{Agent: page.Agent, Space: cmp.Or(agent.Space, page.Space), Path: page.Name}
+		if page.Kind == backend.PageFile && page.ContentType == "text/html" && limit.AllowsSpaceName(page.Space) {
+			entry := &PageEntry{Space: page.Space, Path: page.Name}
 			if request.Path != "" {
 				entry.UpdatedAt = new(page.UpdatedAt.Format(time.RFC3339Nano))
 			}

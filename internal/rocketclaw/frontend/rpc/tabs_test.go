@@ -430,9 +430,6 @@ func TestTabsSpaceLimit(t *testing.T) {
 		require.Equal(t, codes.PermissionDenied, status.Code(err), "%v", request)
 	}
 
-	_, err = server.updateSession(alice, &UpdateSessionRequest{Id: "ops-chat", SpaceId: &mainID})
-	require.Equal(t, codes.PermissionDenied, status.Code(err))
-
 	spaces, shared := read(alice)
 	require.Equal(t, []string{"Ops"}, spaces)
 	require.Equal(t, []string{path("ops-chat")}, shared)

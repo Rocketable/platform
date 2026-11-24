@@ -56,8 +56,11 @@ func TestSpacePermissions(t *testing.T) {
 	for name, space := range map[string]string{"ops-agent": "space: Ops\n", "main-agent": "space: Main\n", "loose": ""} {
 		skills := map[string]string{"loose": ", plans: allow"}[name]
 		require.NoError(t, root.WriteFile(runtime+"/agents/"+name+".md", []byte("---\nmodel: gpt-6.1-sol\n"+space+"permission:\n  skill: {notes: allow"+skills+"}\n  rocketclaw:\n    rocketclaw_set_tag: [[x]]\n---\nHelp."), 0o600))
-		require.NoError(t, sessions.PutPage(t.Context(), &backend.Page{Agent: name, Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>page</p>")}))
-		require.NoError(t, sessions.PutPage(t.Context(), &backend.Page{Agent: name, Kind: backend.PageData, Name: "rows", ContentType: "application/json", Body: []byte("[1]")}))
+	}
+
+	for _, space := range []string{"Ops", "Main"} {
+		require.NoError(t, sessions.PutPage(t.Context(), &backend.Page{Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>page</p>")}, "", space))
+		require.NoError(t, sessions.PutPage(t.Context(), &backend.Page{Kind: backend.PageData, Name: "rows", ContentType: "application/json", Body: []byte("[1]")}, "", space))
 	}
 
 	rt := &backend.Runtime{Sessions: sessions}
@@ -273,25 +276,23 @@ func TestSpacePermissions(t *testing.T) {
 
 	pages, err := server.listPages(alice, &ListPagesRequest{})
 	require.NoError(t, err)
-	require.True(t, proto.Equal(&ListPagesResponse{Pages: []*PageEntry{{Agent: "ops-agent", Space: "Ops", Path: "index.html"}}}, pages), "%v", pages)
+	require.True(t, proto.Equal(&ListPagesResponse{Pages: []*PageEntry{{Space: "Ops", Path: "index.html"}}}, pages), "%v", pages)
 
 	pages, err = server.listPages(bob, &ListPagesRequest{})
 	require.NoError(t, err)
-	require.True(t, proto.Equal(&ListPagesResponse{Pages: []*PageEntry{
-		{Agent: "loose", Path: "index.html"}, {Agent: "main-agent", Space: "Main", Path: "index.html"}, {Agent: "ops-agent", Space: "Ops", Path: "index.html"},
-	}}, pages), "%v", pages)
+	require.True(t, proto.Equal(&ListPagesResponse{Pages: []*PageEntry{{Space: "Main", Path: "index.html"}, {Space: "Ops", Path: "index.html"}}}, pages), "%v", pages)
 
-	pages, err = server.listPages(alice, &ListPagesRequest{Agent: "main-agent", Path: "index.html"})
+	pages, err = server.listPages(alice, &ListPagesRequest{Space: "Main", Path: "index.html"})
 	require.NoError(t, err)
 	require.Empty(t, pages.Pages)
 
 	for _, request := range []*PageRequest{{Path: "index.html"}, {Path: "rows", Data: true}} {
-		for agent, want := range map[string]codes.Code{"ops-agent": codes.OK, "main-agent": codes.NotFound, "loose": codes.NotFound} {
-			request.Agent = agent
+		for space, want := range map[string]codes.Code{"Ops": codes.OK, "Main": codes.NotFound} {
+			request.Space = space
 			_, err := server.getPage(alice, request)
-			require.Equal(t, want, status.Code(err), "%s %s", agent, request.Path)
+			require.Equal(t, want, status.Code(err), "%s %s", space, request.Path)
 			_, err = server.getPage(bob, request)
-			require.NoError(t, err, "%s %s", agent, request.Path)
+			require.NoError(t, err, "%s %s", space, request.Path)
 		}
 	}
 

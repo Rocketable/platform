@@ -1197,21 +1197,6 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 		}
 	}
 
-	if request.SpaceId != nil {
-		_, limit, err := s.spaceLimit(ctx)
-		if err == nil && !limit.AllowsSpaceID(*request.SpaceId) {
-			err = status.Error(codes.PermissionDenied, "this space is outside your spaces")
-		}
-
-		if err == nil {
-			err = s.sessions.MoveConversation(ctx, request.Id, *request.SpaceId)
-		}
-
-		if err != nil {
-			return nil, fmt.Errorf("update web conversation: %w", err)
-		}
-	}
-
 	updated, err := s.sessions.UpdateConversationDetails(ctx, request.Id, request.Name)
 	if err != nil {
 		return nil, fmt.Errorf("update web conversation: %w", err)

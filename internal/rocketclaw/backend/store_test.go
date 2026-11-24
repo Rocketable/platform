@@ -621,7 +621,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{
 		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
-		"history_links", "voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_attention", "web_closed_tabs", "web_search_pages", "web_searches", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
+		"history_links", "voice_settings", "hosted_pages", "retired_hosted_pages", "hosted_pages_pending", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_attention", "web_closed_tabs", "web_search_pages", "web_searches", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
 		"agent_drafts", "agent_draft_ops", "agent_draft_presence", "agent_draft_proposals", "agent_draft_messages",
 		"behavior_settings",
 	}, tables)
@@ -2456,22 +2456,46 @@ func TestWebSpaces(t *testing.T) {
 	assert.Equal(t, ops.ID, birth("ops-1", "Operations"))
 	assert.Empty(t, birth("none", ""), "no name, no birth space")
 
-	_, err := store.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session, space_id)
-VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), 'ses_b', $1),
-    ('opencode:box:ses_o', '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), 'ses_o', $2)`, banana, ops.ID)
-	require.NoError(t, err)
-
-	for _, owner := range []string{"opencode:box:ses_b", "opencode:box:ses_o"} {
-		require.NoError(t, store.PutPage(ctx, &Page{Agent: owner, Kind: PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("x"), Conversation: owner}))
+	for space, names := range map[string][]string{"Banana": {"index.html", "ops.html"}, "operations": {"ops.html"}} {
+		for _, name := range names {
+			require.NoError(t, store.PutPage(ctx, &Page{Kind: PageFile, Name: name, ContentType: "text/html", Body: []byte(space)}, "", space))
+		}
 	}
 
 	require.NoError(t, store.DeleteSpace(ctx, banana))
 	assert.Empty(t, birth("banana-1", "Banana"), "deleting a space clears the birth space of sessions born there; an existing session never recreates it")
 
+	orphan, found, err := store.Page(ctx, "banana", PageFile, "index.html")
+	require.NoError(t, err)
+	require.True(t, found, "deleting a space leaves its pages as orphans")
+	assert.Equal(t, "Banana", orphan.Space)
+
+	require.ErrorIs(t, store.RenameSpace(ctx, ops.ID, "banana"), ErrSpaceRejected, "a rename that would put two pages on one path is refused")
+
+	removed, err := store.DeletePage(ctx, "Banana", PageFile, "ops.html")
+	require.NoError(t, err)
+	require.True(t, removed)
+	require.NoError(t, store.RenameSpace(ctx, ops.ID, "banana"), "renaming onto orphans adopts them")
+
 	pages, err := store.Pages(ctx, "")
 	require.NoError(t, err)
-	require.Len(t, pages, 1)
-	assert.Equal(t, "opencode:box:ses_o", pages[0].Agent)
+
+	names := make([]string, 0, len(pages))
+	for _, page := range pages {
+		names = append(names, page.Space+" "+page.Name)
+	}
+
+	assert.Equal(t, []string{"banana index.html", "banana ops.html"}, names, "pages follow a renamed space and show its spelling")
+
+	moved, _, err := store.Page(ctx, "banana", PageFile, "ops.html")
+	require.NoError(t, err)
+	assert.Equal(t, "operations", string(moved.Body))
+
+	require.NoError(t, store.PutPage(ctx, &Page{Kind: PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("again")}, "", "BANANA"))
+
+	pages, err = store.Pages(ctx, "Banana")
+	require.NoError(t, err)
+	require.Len(t, pages, 2, "one row per path, whatever spelling wrote it")
 
 	tx, err := store.db.BeginTx(ctx, nil)
 	require.NoError(t, err)

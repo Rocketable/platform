@@ -160,17 +160,16 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 		require.True(t, saved)
 	}
 
-	assert.Equal(t, "https://rc.example/pages/Billing/opencode%3Abox%3Ases_a/index.html", must("ses_child", "store", map[string]string{"path": "index.html", "content": "<p>a</p>"}))
-	assert.Equal(t, []string{alice + " /pages loud"}, locationMarks(t, s, "opencode:box:ses_a · index.html updated"))
+	assert.Equal(t, "https://rc.example/pages/Billing/index.html", must("ses_child", "store", map[string]string{"path": "index.html", "content": "<p>a</p>"}))
+	assert.Equal(t, []string{alice + " /pages loud"}, locationMarks(t, s, "index.html updated"))
 	assert.JSONEq(t, `{"content_type":"text/html","content":"<p>a</p>"}`, must("ses_a", "read", map[string]string{"path": "index.html"}))
 
-	for tool, arguments := range map[string]any{"store": map[string]string{"path": "index.html", "content": "<p>b</p>"}, "kv_store": map[string]any{"key": "rows", "value": 1}} {
+	for tool, arguments := range map[string]any{"store": map[string]string{"path": "index.html", "content": "<p>b</p>"}, "kv_store": map[string]any{"key": "rows", "value": 1}, "list": none} {
 		out, failed := call("ses_b", tool, arguments)
 		assert.True(t, failed, tool)
-		assert.Contains(t, out, "space", tool)
+		assert.Contains(t, out, openCodePageNoSpace, tool)
+		assert.NotContains(t, out, "space:", tool)
 	}
-
-	assert.JSONEq(t, `{"files":[],"keys":[]}`, must("ses_b", "list", none), "a session without a space still sees its pages")
 
 	out, failed = call("ses_a", "store", map[string]string{"path": "x.js", "source": "x.js"})
 	assert.True(t, failed, out)
@@ -199,15 +198,16 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 		} `json:"keys"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(must("ses_a", "list", none)), &listed))
-	require.Len(t, listed.Files, 3)
+	require.Len(t, listed.Files, 4, "sessions in one space share its pages")
 	assert.Equal(t, "index.html", listed.Files[0].Path)
 	assert.Equal(t, "large.txt", listed.Files[1].Path)
-	assert.Equal(t, "x.js", listed.Files[2].Path)
+	assert.Equal(t, "other.html", listed.Files[2].Path)
+	assert.Equal(t, "x.js", listed.Files[3].Path)
 	require.Len(t, listed.Keys, 1)
 	assert.Equal(t, "rows", listed.Keys[0].Key)
 
-	assert.Equal(t, "deleted index.html", must("ses_a", "delete", map[string]string{"path": "index.html", "key": ""}))
+	assert.Equal(t, "deleted other.html", must("ses_a", "delete", map[string]string{"path": "other.html", "key": ""}), "a session may delete a page another session of its space stored")
 
-	out, failed = call("ses_a", "delete", map[string]string{"path": "index.html", "key": ""})
+	out, failed = call("ses_c", "read", map[string]string{"path": "other.html"})
 	assert.True(t, failed, out)
 }
