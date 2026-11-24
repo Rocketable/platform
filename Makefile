@@ -28,5 +28,9 @@ check-cloc-budget:
 	cd internal/harnessfeedback; $(MAKE) check-cloc-budget
 	cd internal/rocketclaw/web; $(MAKE) check-cloc-budget
 
+mocks:
+	go -C tools build -o $(CURDIR)/.tmp/mockery github.com/vektra/mockery/v3
+	.tmp/mockery
+
 deploy:
 	cd internal/rocketclaw; $(MAKE) deploy
