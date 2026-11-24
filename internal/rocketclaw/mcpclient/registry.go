@@ -33,6 +33,8 @@ type ServerConfig struct {
 	Cwd     string
 	URL     string
 	Headers map[string]string
+
+	Instructions string
 }
 
 type Registry struct {
@@ -71,6 +73,22 @@ func New(workspace string, servers map[string]ServerConfig, sessionEnv map[strin
 
 func (r Registry) Names() []string {
 	return slices.Sorted(maps.Keys(r.servers))
+}
+
+func (r Registry) Instructions(name string) string {
+	return r.servers[name].Instructions
+}
+
+func (r Registry) ReadInstructions(ctx context.Context, name string) (string, error) {
+	session := r.Open()
+	defer func() { _ = session.Close() }()
+
+	cs, err := session.connect(ctx, name)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(cs.InitializeResult().Instructions), nil
 }
 
 func (r Registry) Open() *Session {

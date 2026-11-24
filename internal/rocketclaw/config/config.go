@@ -157,6 +157,8 @@ type MCPServerConfig struct {
 	URL     string              `json:"url,omitempty"`
 	Headers map[string]string   `json:"headers,omitempty"`
 	Tools   map[string][]string `json:"tools,omitempty"`
+
+	Instructions string `json:"-"`
 }
 
 func (c *Config) MCPFacets() map[string]map[string][]string {

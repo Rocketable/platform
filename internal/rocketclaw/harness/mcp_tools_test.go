@@ -150,7 +150,7 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	codeProp, _ := props["code"].(map[string]any)
 	assert.Equal(t, "Starlark source defining def main().", codeProp["description"])
 
-	prompt := withCodeModeSystemPrompt("base", model, hosts, nil)
+	prompt := withCodeModeSystemPrompt("base", model, hosts, nil, mcpclient.Registry{})
 	assert.Contains(t, prompt, "base\n\n## Code Mode\n\nThese tools cannot be called directly. They only work inside code you pass to execute:\n")
 	assert.Contains(t, prompt, "\n- read(")
 	assert.NotContains(t, prompt, "MCP servers")
@@ -455,8 +455,8 @@ func TestMCPServerVisibility(t *testing.T) {
 	t.Parallel()
 
 	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
-		"demo": {URL: "http://127.0.0.1:9"},
-		"acme": {URL: "http://127.0.0.1:9"},
+		"demo": {URL: "http://127.0.0.1:9", Instructions: "Search demos before creating one.\nKeep titles short."},
+		"acme": {URL: "http://127.0.0.1:9", Instructions: "Acme only."},
 	}, nil)
 
 	for _, tc := range []struct {
@@ -481,9 +481,9 @@ func TestMCPServerVisibility(t *testing.T) {
 
 	assert.Empty(t, visibleMCPServers(PermissionSet{Sudo: true}, []string{"demo", "acme"}))
 
-	prompt := codeModeSystemPrompt(nil, []string{"demo"})
-	assert.Equal(t, "## Code Mode\n\nMCP servers: demo. List their tools with search(namespace=\"<server>\").", prompt)
-	assert.NotContains(t, prompt, "acme")
+	prompt := codeModeSystemPrompt(nil, []string{"demo"}, reg)
+	assert.Equal(t, "## Code Mode\n\nMCP servers: demo. List their tools with search(namespace=\"<server>\").\n\n<mcp_instructions>\n<server name=\"demo\">\nSearch demos before creating one.\nKeep titles short.\n</server>\n</mcp_instructions>", prompt)
+	assert.NotContains(t, prompt, "Acme")
 }
 
 func TestExecuteExactToolGrant(t *testing.T) {

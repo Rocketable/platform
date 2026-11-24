@@ -24,6 +24,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -853,4 +854,27 @@ func TestPruneRocketcodeTempRemovesEntriesOlderThanCutoff(t *testing.T) {
 
 func passGate(context.Context, *config.Config, *slog.Logger) (func() error, error) {
 	return func() error { return nil }, nil
+}
+
+func TestReadMCPInstructions(t *testing.T) {
+	t.Parallel()
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "guide", Version: "1"}, &mcp.ServerOptions{Instructions: "  Call report when a tool misbehaves.  "})
+	guide := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true}))
+	t.Cleanup(guide.Close)
+
+	cfg := &config.Config{Workspace: t.TempDir(), MCPServers: map[string]config.MCPServerConfig{
+		"guide": {URL: guide.URL, Tools: map[string][]string{"all": {"*"}}},
+		"down":  {URL: "http://127.0.0.1:9"},
+	}}
+
+	var logs bytes.Buffer
+
+	readMCPInstructions(t.Context(), cfg, slog.New(slog.NewTextHandler(&logs, nil)))
+
+	assert.Equal(t, "Call report when a tool misbehaves.", cfg.MCPServers["guide"].Instructions)
+	assert.Equal(t, map[string][]string{"all": {"*"}}, cfg.MCPServers["guide"].Tools)
+	assert.Empty(t, cfg.MCPServers["down"].Instructions)
+	assert.Contains(t, logs.String(), `msg="read MCP server instructions" server=down`)
+	assert.NotContains(t, logs.String(), "server=guide")
 }

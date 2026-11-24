@@ -110,7 +110,7 @@ func executeDescription() string {
 	}, "\n")
 }
 
-func codeModeSystemPrompt(hosts map[string]looperTool, servers []string) string {
+func codeModeSystemPrompt(hosts map[string]looperTool, servers []string, registry mcpclient.Registry) string {
 	lines := []string{"## Code Mode", ""}
 
 	if len(hosts) > 0 {
@@ -137,17 +137,29 @@ func codeModeSystemPrompt(hosts map[string]looperTool, servers []string) string 
 
 	if len(servers) > 0 {
 		lines = append(lines, "MCP servers: "+strings.Join(servers, ", ")+". List their tools with search(namespace=\"<server>\").")
+
+		var blocks []string
+
+		for _, server := range servers {
+			if text := registry.Instructions(server); text != "" {
+				blocks = append(blocks, "<server name=\""+server+"\">\n"+text+"\n</server>")
+			}
+		}
+
+		if len(blocks) > 0 {
+			lines = append(lines, "", "<mcp_instructions>", strings.Join(blocks, "\n"), "</mcp_instructions>")
+		}
 	}
 
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
-func withCodeModeSystemPrompt(base string, modelTools, hosts map[string]looperTool, servers []string) string {
+func withCodeModeSystemPrompt(base string, modelTools, hosts map[string]looperTool, servers []string, registry mcpclient.Registry) string {
 	if _, ok := modelTools[executeToolName]; !ok {
 		return base
 	}
 
-	return strings.TrimSpace(base + "\n\n" + codeModeSystemPrompt(hosts, servers))
+	return strings.TrimSpace(base + "\n\n" + codeModeSystemPrompt(hosts, servers, registry))
 }
 
 func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool) map[string]looperTool {

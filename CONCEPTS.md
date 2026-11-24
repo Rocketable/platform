@@ -152,7 +152,7 @@ A sandbox capability the Code Mode script can call directly, as opposed to a mod
 An MCP server the operator configures for agents to call from Execute, reached only through its MCP Facets; RocketClaw is its client, the reverse of an External MCP Session, where RocketClaw is the server.
 *Avoid:* outbound MCP server
 
-It receives the same session values the turn's shell sees, which its configuration cannot set or override. A local server starts for each Execute call and stops when the call ends, so it only ever holds one turn's values; sharing one server across turns or conversations would hand one's values to another.
+It receives the same session values the turn's shell sees, which its configuration cannot set or override. Its instructions, which RocketClaw reads once at startup by connecting without session values, appear in the system prompt of every agent that can reach it. A local server starts for each Execute call and stops when the call ends, so it only ever holds one turn's values; sharing one server across turns or conversations would hand one's values to another.
 
 ### Emulated Shell
 

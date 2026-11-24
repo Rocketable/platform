@@ -16,6 +16,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"golang.org/x/sync/errgroup"
@@ -29,6 +30,8 @@ const (
 	stateRetention     = 90 * 24 * time.Hour
 	statePruneInterval = time.Hour
 	statePrunePace     = time.Second
+
+	mcpInstructionsTimeout = 15 * time.Second
 )
 
 type FrontendAssembler interface {
@@ -190,6 +193,8 @@ func (s *lockedRun) serve(runCtx context.Context, rocketcodeSessions *SessionSer
 	if err := rocketcodeSessions.resetSavingAgentDrafts(runCtx); err != nil {
 		return err
 	}
+
+	readMCPInstructions(runCtx, cfg, logger)
 
 	slackWarningText, err := s.startWithBehavior(runCtx, cfg, rocketcodeSessions)
 	if err != nil {
@@ -387,6 +392,38 @@ func (f conversationFactory) newBridge(cfg *Config) directBridge {
 	bridge.background = f.rt.background
 
 	return bridge
+}
+
+func readMCPInstructions(ctx context.Context, cfg *config.Config, logger *slog.Logger) {
+	registry := mcpclient.New(cfg.Workspace, toMCPClientServers(cfg.MCPServers), nil)
+	names := registry.Names()
+	instructions := make([]string, len(names))
+
+	ctx, cancel := context.WithTimeout(ctx, mcpInstructionsTimeout)
+	defer cancel()
+
+	var group errgroup.Group
+
+	for i, name := range names {
+		group.Go(func() error {
+			text, err := registry.ReadInstructions(ctx, name)
+			if err != nil {
+				logger.Warn("read MCP server instructions", "server", name, "error", err)
+			}
+
+			instructions[i] = text
+
+			return nil
+		})
+	}
+
+	_ = group.Wait()
+
+	for i, name := range names {
+		server := cfg.MCPServers[name]
+		server.Instructions = instructions[i]
+		cfg.MCPServers[name] = server
+	}
 }
 
 func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config, sessions *SessionService) (string, error) {

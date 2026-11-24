@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
+	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -201,7 +202,7 @@ func TestDecisionToolIsOptInAndCodeModeOnly(t *testing.T) {
 
 			if ok {
 				require.True(t, strings.HasPrefix(tool.Definition.Description.Value, decisionToolSummary+" Models you may call: openai/*.\nstate is a dict (not a string) of the data the questions are about.\n"))
-				require.Contains(t, codeModeSystemPrompt(hosts, nil), "- decision(images=..., model=..., questions=..., state=...) // Ask a decision model typed questions on a state dict; search first for the format. Models you may call: openai/*.")
+				require.Contains(t, codeModeSystemPrompt(hosts, nil, mcpclient.Registry{}), "- decision(images=..., model=..., questions=..., state=...) // Ask a decision model typed questions on a state dict; search first for the format. Models you may call: openai/*.")
 			}
 		})
 	}
