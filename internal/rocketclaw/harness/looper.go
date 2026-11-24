@@ -1859,10 +1859,11 @@ func (l *looper) dispatchToolCalls(
 			if err != nil {
 				recordSpanError(span, err)
 
-				var errStop error
-				if result, errStop = l.failedCallResult(runCtx, call.name, err); errStop != nil {
-					return errStop
+				if runCtx.Err() != nil {
+					return fmt.Errorf("run tool %q: %w", call.name, err)
 				}
+
+				result = ToolCallResult(call.name, ToolResult{}, err)
 			}
 
 			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", err != nil))
@@ -1953,18 +1954,6 @@ func (l *looper) recordCall(ctx context.Context, key string, output *responses.R
 	}
 
 	return saveStep(ctx, l.Journal, key, &callStep{Output: recorded, State: state})
-}
-
-func (l *looper) failedCallResult(ctx context.Context, name string, err error) (ToolResult, error) {
-	if ctx.Err() != nil {
-		return ToolResult{}, fmt.Errorf("run tool %q: %w", name, err)
-	}
-
-	if failed, ok := errors.AsType[toolResultError](err); l.InPermissionReview && (!ok || failed.err != nil) {
-		return ToolResult{}, fmt.Errorf("run reviewer tool %q: %w", name, err)
-	}
-
-	return ToolCallResult(name, ToolResult{}, err), nil
 }
 
 func ToolCallResult(name string, result ToolResult, err error) ToolResult {
