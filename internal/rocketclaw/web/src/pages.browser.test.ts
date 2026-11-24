@@ -239,3 +239,30 @@ for (const width of [1280, 320]) test(`the Page Index lists every space's pages 
   await opened("Billing · q3/report.html");
   expect(await page.locator("iframe").getAttribute("src")).toStartWith("/pages-raw/Billing/q3/report.html#rc=");
 }, { viewport: { width, height: 800 } }), 60_000);
+
+for (const down of [false, true]) test(`the Page Index lists every RocketClaw's pages under their space and server, each opening on its own server, ${down ? "beside a failing remote's error" : "with every remote up"}`, () => withPage(["Billing"], async (page, origin) => {
+  const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" };
+  const remote = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch(request) {
+    const url = new URL(request.url);
+    if (request.method === "OPTIONS") return new Response(null, { headers: cors });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { ...cors, "Content-Type": "text/event-stream" } });
+    if (down && url.pathname === "/api/ListPages") return Response.json({ code: 14, message: "Unavailable" }, { status: 503, headers: cors });
+    const replies: Record<string, unknown> = { "/api/Identity": { username: "tester" }, "/api/Tabs": { spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [], groups: [], space: "lab", last: {} }, shared: [] }, "/api/ListPages": { pages: [{ space: "Lab", path: "index.html" }] } };
+    return Response.json(replies[url.pathname] ?? {}, { headers: cors });
+  } });
+  try {
+    await page.addInitScript((url: string) => document.addEventListener("readystatechange", () => {
+      if (!document.getElementById("rocketclaws")) document.head.append(Object.assign(document.createElement("script"), { id: "rocketclaws", type: "application/json", textContent: JSON.stringify([{ name: "work", url }]) }));
+    }), `http://127.0.0.1:${remote.port}`);
+    await page.goto(`${origin}/pages`);
+    const headings = page.locator("main").getByRole("heading", { level: 2 });
+    await headings.filter({ hasText: "Ops · 127.0.0.1" }).waitFor();
+    await (down ? page.locator("main").getByText("work: Unavailable", { exact: true }) : headings.filter({ hasText: "Lab · work" })).waitFor();
+    expect(await headings.allInnerTexts()).toEqual(["Billing · 127.0.0.1", "Gone · 127.0.0.1", "Ops · 127.0.0.1", ...down ? [] : ["Lab · work"]]);
+    expect(await page.locator("main section").filter({ hasText: "Ops" }).getByRole("link").getAttribute("href")).toBe("/pages/Ops/index.html");
+    if (!down) expect(await page.locator("main section").filter({ hasText: "Lab · work" }).getByRole("link").getAttribute("href")).toBe("/r/work/pages/Lab/index.html");
+    expect(await page.locator("main").getByText("No pages", { exact: true }).count()).toBe(0);
+  } finally {
+    remote.stop(true);
+  }
+}), 60_000);

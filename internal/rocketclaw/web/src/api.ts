@@ -79,7 +79,7 @@ export const queries = {
   agents: (input?: { conversationId: string }) => ({ queryKey: ["agents", input], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<AgentChoices>("ListAgents", input, signal) }),
   skills: (input?: { agent: string }) => ({ queryKey: ["skills", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ skills: Skill[] }>("ListSkills", input, signal)).skills }),
   cronJobs: () => ({ queryKey: ["cronJobs"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ jobs: CronJob[] }>("ListCronJobs", {}, signal)).jobs }),
-  pages: () => ({ queryKey: ["pages"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ pages?: PageEntry[] }>("ListPages", {}, signal)).pages ?? [] }),
+  pages: (name = server()) => ({ queryKey: [{ server: name }, "pages"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ pages?: PageEntry[] }>("ListPages", {}, signal, name)).pages ?? [] }),
   config: () => ({ queryKey: ["config"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ config: ConfigView }>("ListConfig", {}, signal)).config }),
   agentDrafts: () => ({ queryKey: ["agentDrafts"], queryFn: ({ signal }: { signal?: AbortSignal }) => rpc<{ drafts: AgentDraft[]; templates: string[] }>("ListAgentDrafts", {}, signal) }),
   agentSettings: (mode: string) => ({ queryKey: ["agentSettings", mode], staleTime: Infinity, queryFn: async ({ signal }: { signal?: AbortSignal }) => (await rpc<{ settings: AgentSettingHelp[] }>("AgentSettings", { mode }, signal)).settings }),

@@ -422,7 +422,7 @@ A space's JSON key-value entries, which the chats working in that space read and
 
 ### Page Index
 
-The list of every HTML Hosted Page a person may open, the same in every Web space, grouped under the name of each page's space, orphans under their deleted space's name. A person with a Space Limit sees only their spaces' pages.
+The list of every HTML Hosted Page a person may open, on the local server and on each Remote RocketClaw, the same in every Web space, grouped under the name of each page's space, orphans under their deleted space's name. With Remote RocketClaws, each space's heading names its server, and a page opens on its own server. A person with a Space Limit sees only their spaces' pages.
 
 ## Process layout
 
