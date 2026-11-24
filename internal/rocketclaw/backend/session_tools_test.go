@@ -311,6 +311,39 @@ func TestSessionToolsStoredContract(t *testing.T) {
 	require.Equal(t, "timestamp\trole\tcontent\n2026-09-24T12:00:00Z\tuser\t[Slack principal=\"Operator\"]\\n\\nsend it\n2026-09-24T12:00:00Z\tuser\tno header\n", result.Output)
 }
 
+func TestSessionListProjectsLatestEntryOneHop(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, service, "main", map[string]ConversationKind{
+		"run": KindCronRun, "owner": KindCronRun, "reported": KindWebChat, "continued": KindWebChat, "next": KindWebChat,
+	})
+	_, err := service.db.ExecContext(ctx, `UPDATE conversations
+SET reports_to = CASE conversation_id WHEN 'run' THEN 'owner' WHEN 'owner' THEN 'reported' END,
+    continues = CASE conversation_id WHEN 'continued' THEN 'run' WHEN 'next' THEN 'continued' END`)
+	require.NoError(t, err)
+
+	base := time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, entry := range []struct {
+		id string
+		at time.Time
+	}{{"run", base}, {"run", base.Add(time.Nanosecond)}, {"owner", base}} {
+		_, err := service.AppendEntryID(ctx, entry.id, testSessionEntryAt(entry.at, "message"))
+		require.NoError(t, err)
+	}
+
+	ids, err := queryStrings(ctx, service.db, sessionListCandidatesSQL, "session tool candidates",
+		"2031-01-01T00:00:00", "2031-01-01T00:00:00.000000001", 200)
+	require.NoError(t, err)
+	require.Equal(t, []string{"reported"}, ids)
+
+	ids, err = queryStrings(ctx, service.db, sessionListCandidatesSQL, "session tool candidates",
+		"2031-01-01T00:00:00.000000001", "", 3)
+	require.NoError(t, err)
+	require.Equal(t, []string{"continued", "owner", "run"}, ids)
+}
+
 func TestSessionsListSummarizesTheCurrentPath(t *testing.T) {
 	t.Parallel()
 
