@@ -36,6 +36,7 @@ On start, you must always read:
 - Stateful designs (queues, workers, retries, leases, crash recovery, concurrent actors) follow `docs/packs/formal-modeling/stateful-design.md`: a Mermaid state diagram when brainstorming, a PlusCal model and its TLC checks in the plan, and a passing TLC run under `docs/verification/<feature>/` before building the behavior. When TLC cannot run, does not finish, or fails, report BLOCKED / NOT VERIFIED; never treat the gate as passed. CI does not run these models.
 - `CONCEPTS.md` contains shared project vocabulary for entities, named processes, and status concepts; use it when orienting to the codebase or discussing domain concepts.
 - Never use `git`. Use `jj` for repository inspection and history, and always use `jj diff --git` for diffs.
+- `main` merges through a merge queue that rewrites each PR's commits. Start new work with `jj git fetch` and `jj new main@origin`, and before adding to an existing PR, check with `gh pr view <number> --json state` that it is still open.
 - Use `go doc` and `gopls` (use `go run golang.org/x/tools/gopls@latest --help`) often to find issues and opportunities to improve Go code.
 - Always react to GPT comments (`// GPT:`) by doing what the human partner asked and then deleting the comment when you accomplish the stated goal.
 - No source code comments, in any language, tests included. The only exceptions are comments a tool reads to change behavior: build and compiler directives (`//go:build`, `//go:generate`, `//go:embed`, cgo, `#!`), linter suppressions, the `// Code generated ... DO NOT EDIT.` header, and PlusCal that translates to TLA+. Explain things through clearer names and structure, or in the PR description.
@@ -163,7 +164,6 @@ JOIN shadow_parents p USING (conversation_id);
 ## Verification
 
 - Before finalizing Go changes, run `gofmt` on touched files.
-- Before finalizing Go changes, run `go test ./...`.
 - Before finalizing Go changes, run `make lint`.
 - Before finalizing Go changes, run `make test`.
 - If any required verification cannot be run, stop and report why instead of claiming success.
