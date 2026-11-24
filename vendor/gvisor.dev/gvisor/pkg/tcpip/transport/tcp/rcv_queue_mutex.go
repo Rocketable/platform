@@ -55,6 +55,18 @@ func (m *rcvQueueMutex) NestedUnlock(i rcvQueuelockNameIndex) {
 	m.mu.Unlock()
 }
 
+// LockBypass locks m without executing the validator.
+// +checklocksignore
+func (m *rcvQueueMutex) LockBypass() {
+	m.mu.Lock()
+}
+
+// UnlockBypass undoes a single LockBypass call.
+// +checklocksignore
+func (m *rcvQueueMutex) UnlockBypass() {
+	m.mu.Unlock()
+}
+
 // DO NOT REMOVE: The following function is automatically replaced.
 func rcvQueueinitLockNames() {}
 

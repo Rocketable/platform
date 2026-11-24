@@ -1085,6 +1085,7 @@ func (q *segmentQueue) StateFields() []string {
 		"list",
 		"ep",
 		"frozen",
+		"memUsed",
 	}
 }
 
@@ -1096,6 +1097,7 @@ func (q *segmentQueue) StateSave(stateSinkObject state.Sink) {
 	stateSinkObject.Save(0, &q.list)
 	stateSinkObject.Save(1, &q.ep)
 	stateSinkObject.SaveBool(2, &q.frozen)
+	stateSinkObject.SaveInt64(3, &q.memUsed)
 }
 
 func (q *segmentQueue) afterLoad(context.Context) {}
@@ -1105,6 +1107,7 @@ func (q *segmentQueue) StateLoad(ctx context.Context, stateSourceObject state.So
 	stateSourceObject.LoadWait(0, &q.list)
 	stateSourceObject.Load(1, &q.ep)
 	stateSourceObject.LoadBool(2, &q.frozen)
+	stateSourceObject.LoadInt64(3, &q.memUsed)
 }
 
 func (s *sender) StateTypeName() string {

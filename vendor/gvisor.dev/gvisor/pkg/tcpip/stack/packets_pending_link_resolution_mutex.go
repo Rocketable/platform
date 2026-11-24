@@ -55,6 +55,18 @@ func (m *packetsPendingLinkResolutionMutex) NestedUnlock(i packetsPendingLinkRes
 	m.mu.Unlock()
 }
 
+// LockBypass locks m without executing the validator.
+// +checklocksignore
+func (m *packetsPendingLinkResolutionMutex) LockBypass() {
+	m.mu.Lock()
+}
+
+// UnlockBypass undoes a single LockBypass call.
+// +checklocksignore
+func (m *packetsPendingLinkResolutionMutex) UnlockBypass() {
+	m.mu.Unlock()
+}
+
 // DO NOT REMOVE: The following function is automatically replaced.
 func packetsPendingLinkResolutioninitLockNames() {}
 

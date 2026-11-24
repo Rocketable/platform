@@ -55,6 +55,18 @@ func (m *gomaxprocsMutex) NestedUnlock(i gomaxprocslockNameIndex) {
 	m.mu.Unlock()
 }
 
+// LockBypass locks m without executing the validator.
+// +checklocksignore
+func (m *gomaxprocsMutex) LockBypass() {
+	m.mu.Lock()
+}
+
+// UnlockBypass undoes a single LockBypass call.
+// +checklocksignore
+func (m *gomaxprocsMutex) UnlockBypass() {
+	m.mu.Unlock()
+}
+
 // DO NOT REMOVE: The following function is automatically replaced.
 func gomaxprocsinitLockNames() {}
 
