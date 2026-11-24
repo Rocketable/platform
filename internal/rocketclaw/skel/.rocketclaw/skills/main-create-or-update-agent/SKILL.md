@@ -110,7 +110,7 @@ If the human wants to protect an agent from other agents, set `permission.rocket
 
 The check uses the agent that makes the call, so a `task` subagent is checked as its own agent, not as its parent's. A refused write fails before anything is created, queued, or stopped.
 
-The Hosted Page tools `rocketclaw_store`, `rocketclaw_read`, `rocketclaw_delete`, `rocketclaw_list`, `rocketclaw_kv_store`, and `rocketclaw_kv_read` each need their own `allow` rule too. Grant them to agents that publish reports, dashboards, or graphs; their pages show in the space named by the agent's `space:`.
+The Hosted Page tools `rocketclaw_store`, `rocketclaw_read`, `rocketclaw_delete`, `rocketclaw_list`, `rocketclaw_kv_store`, and `rocketclaw_kv_read` each need their own `allow` rule too. Grant them to agents that publish reports, dashboards, or graphs. Pages belong to the space of the chat that publishes them, which for an agent with a `space:` is that space; every chat in the space can replace them, so an agent that needs a stable address of its own publishes under a folder, such as `reporter/q3.html`.
 
 Prefer exact `allow` for low-risk deterministic opt-ins. Use `auto` only for operations where the human wants a reviewer judgment at runtime, for example:
 
