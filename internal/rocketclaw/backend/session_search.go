@@ -105,15 +105,22 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 		}
 
 		key, value, found := strings.Cut(query[pos:end], ":")
-		term := SearchTerm{Key: SearchKey(strings.ToLower(key)), Value: strings.ToLower(value)}
+		if !found {
+			pos = end
+
+			continue
+		}
+
+		term := SearchTerm{Key: SearchKey(strings.ToLower(key)), Value: value}
 
 		switch term.Key {
 		case keyIs:
-			found = found && slices.Contains([]string{"forked", "cron", "unread", "running", "queued", "waiting", "external"}, term.Value)
+			term.Value = strings.ToLower(value)
+			found = slices.Contains([]string{"forked", "cron", "unread", "running", "queued", "waiting", "external"}, term.Value)
 		case keySort:
-			found = found && (term.Value == "newest" || term.Value == "oldest")
+			term.Value = strings.ToLower(value)
+			found = term.Value == "newest" || term.Value == "oldest"
 		case keyTag, keyCron, keyAgent, keyRoom, keyPrincipal, keyServer, keyModel, keySpace:
-			term.Value = value
 			if strings.HasPrefix(value, `"`) {
 				start := pos + len(key) + 1
 				for i := start + 1; i < len(query); i++ {
