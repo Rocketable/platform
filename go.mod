@@ -131,5 +131,5 @@ require (
 	golang.zx2c4.com/wireguard/windows v1.1.1 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20261123191846-1e707ab9fbc2 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261123191846-1e707ab9fbc2 // indirect
-	gvisor.dev/gvisor v0.0.0-20261123204041-0d93122549be // indirect
+	gvisor.dev/gvisor v0.0.0-20261123234434-1cda36bf73f4 // indirect
 )
