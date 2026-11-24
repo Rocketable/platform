@@ -1631,12 +1631,11 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 				continue
 			}
 
-			parts := slices.Clone(message.Content.OfInputItemContentList)
+			parts := message.Content.OfInputItemContentList
 			if piece := len(parts) + *position; piece >= 0 && parts[piece].OfInputText != nil {
 				text := *parts[piece].OfInputText
 				text.SetExtraFields(map[string]any{"cache_control": map[string]string{"type": "ephemeral"}})
 				parts[piece] = responses.ResponseInputContentUnionParam{OfInputText: &text}
-				message.Content.OfInputItemContentList = parts
 			}
 
 			break
