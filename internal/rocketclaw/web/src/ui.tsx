@@ -482,7 +482,7 @@ function useRoute() {
     shortcuts: pathname === "/shortcuts",
     closed: pathname === "/closed",
     // A page path keeps its escaped agent and file path after the space segment.
-    page: pathname.startsWith("/pages/") ? pathname.split("/").slice(3).join("/") : "",
+    page: pathname.startsWith("/pages/") ? pathname.split("/").slice(2).join("/") : "",
     id: pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "",
     remote: pathname.startsWith("/oc/") ? decodeSessionId(pathname.slice(4)) : "",
   };
@@ -984,25 +984,25 @@ const isSearch = (path: string) => /^\/search(\/|$)/.test(path);
 const searchTitle = (search?: SearchPageState) => search?.name || search?.searches.find((item) => item.id === search.active)?.query || "Search";
 const freshSearch = () => `/search/${crypto.getRandomValues(new Uint32Array(2)).join("-")}`;
 
-// A hosted page, from its escaped agent and file path, is labeled "<agent> · <path>".
+// A hosted page, from its escaped space and file path, is labeled "<space> · <path>".
 function pageLabel(page: string) {
-  const [agent, ...path] = page.split("/").map(decodeURIComponent);
-  return `${agent} · ${path.join("/")}`;
+  const [space, ...path] = page.split("/").map(decodeURIComponent);
+  return `${space} · ${path.join("/")}`;
 }
 
 // A skill's or cron's page tab is titled with its name, and a hosted page's tab with its label.
 function pageTab(path: string): [string, typeof Search] | undefined {
-  if (path.startsWith("/pages/")) return [pageLabel(path.split("/").slice(3).join("/")), FileText];
+  if (path.startsWith("/pages/")) return [pageLabel(path.split("/").slice(2).join("/")), FileText];
   if (path.startsWith("/cron/")) return [decodeSessionId(path.slice("/cron/".length)), Clock];
   if (path.startsWith("/agents/drafts/")) return ["Agent draft", Bot];
   return pageTabs[path] ?? (path.startsWith("/skills/") ? [path.slice("/skills/".length), Sparkles] : undefined);
 }
 
 // A hosted page opens in the space named by its link's space segment, ignoring case, else in the current space.
-// A segment naming a space, or "-", becomes that space's exact name, so one page has one tab per space.
+// A segment naming a space becomes that space's exact name, so one page has one tab.
 function pageSpace(state: Pick<TabState, "spaces" | "space">, path: string): [string, string] {
   const [, root, segment, ...rest] = path.split("/");
-  const space = root === "pages" && rest.length ? state.spaces.find((item) => item.name.toLowerCase() === decodeURIComponent(segment).toLowerCase()) ?? (segment === "-" ? state.spaces.find((item) => item.id === state.space) : undefined) : undefined;
+  const space = root === "pages" && rest.length ? state.spaces.find((item) => item.name.toLowerCase() === decodeURIComponent(segment).toLowerCase()) : undefined;
   return space ? [`/pages/${encodeURIComponent(space.name)}/${rest.join("/")}`, space.id] : [path, state.space];
 }
 
@@ -1055,7 +1055,6 @@ function leave(state: TabState, doomed: string, spaces: Space[]): TabState {
 }
 
 const relocate = ({ preview: _preview, unplaced: _unplaced, ...tab }: Tab, space: string): Tab => ({ ...tab, space });
-const pageAgent = (path: string) => path.startsWith("/pages/") ? decodeURIComponent(path.split("/")[3] ?? "") : "";
 
 // The server's saved tabs; tabs left in a lost space or group belong to the first space and no group, and a lost group's
 // placeholder goes. A group saved before every group held one gets its placeholder after its last tab.
@@ -1272,17 +1271,6 @@ function useTabs() {
     queue.next = state;
     if (!queue.saving) flush();
   }, [state]);
-  const movePages = (paths: string[], { id: space, name: named }: Space) => {
-    for (const agent of new Set(paths.map(pageAgent).filter(Boolean))) void mutations.updateSession({ id: agent, spaceId: space, server: name }).then(() => {
-      const rename = (from: string) => pageAgent(from) === agent ? ["", "pages", encodeURIComponent(named), ...from.split("/").slice(3)].join("/") : from;
-      void queryClient.invalidateQueries({ queryKey: queries.pages().queryKey });
-      setState((current) => {
-        const tabs = current.tabs.map((tab) => pageAgent(tab.path) === agent ? { ...relocate(tab, space), path: rename(tab.path), group: tab.space === space ? tab.group : undefined } : tab);
-        return settled({ ...current, active: rename(current.active), tabs: tabs.filter((tab, i) => tabs.findIndex((other) => other.path === tab.path) === i) });
-      });
-      if (viewed && rename(pagePath()) !== pagePath()) navigate(rename(pagePath()), true);
-    }, () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }));
-  };
   const moveTo = (paths: Set<string>, space: string) => setState((current) => settled({ ...current, tabs: current.tabs.map((tab) => paths.has(tab.path) ? { ...relocate(tab, space), group: undefined } : tab) }));
   // An unplaced session moves to the space it was born in once its row names it; an unknown new space is fetched first.
   // A background window holds stale tabs, so it waits until it is focused and has reloaded.
@@ -1468,7 +1456,6 @@ function useTabs() {
         ...state.spaces.filter((item) => item.id !== space).map((item) => ({ key: `space-${item.id}`, label: `Move to "${item.name}"`, sub: { menu: "Move to space", label: item.name }, run: () => {
           update(adopt);
           moveTo(paths, item.id);
-          movePages([...paths], item);
         } })),
       ];
       const closings = !shownOf(space).some((item) => item.path === path) ? tab ? [closing] : [] : [
@@ -1491,10 +1478,7 @@ function useTabs() {
           close(members);
           update((tabs) => tabs.filter((tab) => tab.path !== keeper(id)));
         } },
-        ...state.spaces.filter((item) => item.id !== space).map((item) => ({ key: `space-${item.id}`, label: `Move group to "${item.name}"`, run: () => {
-          setState(settled({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? relocate(tab, item.id) : tab) }));
-          movePages(state.tabs.flatMap((tab) => tab.group === id ? [tab.path] : []), item);
-        } })),
+        ...state.spaces.filter((item) => item.id !== space).map((item) => ({ key: `space-${item.id}`, label: `Move group to "${item.name}"`, run: () => setState(settled({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? relocate(tab, item.id) : tab) })) })),
       ];
     },
   };
@@ -3337,30 +3321,30 @@ function RemoteSession({ id }: { id: string }) {
   </>;
 }
 
-// A hosted page runs in an opaque origin and reads its agent's Page Data by asking this tab. The answer goes only
+// A hosted page runs in an opaque origin and reads its space's Page Data by asking this tab. The answer goes only
 // to this frame and only with this load's token, which a document the frame navigates to never sees.
 function HostedPage({ page }: { page: string }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [token] = useState(() => crypto.getRandomValues(new Uint32Array(4)).join("-"));
   const name = useServer(), origin = serverURL(name);
-  const agent = decodeURIComponent(page.split("/")[0]);
+  const space = decodeURIComponent(page.split("/")[0]);
   useEffect(() => {
     const read = async ({ source, data }: MessageEvent) => {
       if (source !== frame.current?.contentWindow || data?.type !== "rocketclaw.read" || data.token !== token) return;
-      const reply = await rpc<{ body: string }>("GetPage", { agent, path: data.key, data: true }, undefined, name).then(
+      const reply = await rpc<{ body: string }>("GetPage", { space, path: data.key, data: true }, undefined, name).then(
         ({ body }) => ({ value: JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(body), (char) => char.charCodeAt(0)))) }),
         (error: Error) => ({ error: error.message }));
       if (source === frame.current?.contentWindow) (source as Window).postMessage({ type: "rocketclaw.read", id: data.id, ...reply }, "*");
     };
     addEventListener("message", read);
     return () => removeEventListener("message", read);
-  }, [agent, name, token]);
+  }, [space, name, token]);
   if (!page) return null;
   if (/\.pdf$/i.test(page)) return <p className="m-auto p-4 text-sm"><a href={`${origin}/pages-raw/${page}`} target="_blank" rel="noopener noreferrer" className="underline">Open PDF</a></p>;
   return <iframe ref={frame} title={pageLabel(page)} sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads" className="min-h-0 w-full flex-1 border-0" src={`${origin}/pages-raw/${page}#rc=${token}`} />;
 }
 
-const hostedPagePath = ({ agent, path }: PageEntry) => [agent, ...path.split("/")].map(encodeURIComponent).join("/");
+const hostedPagePath = ({ space, path }: PageEntry) => [space, ...path.split("/")].map(encodeURIComponent).join("/");
 
 function PageIndex({ show }: { show: boolean }) {
   const pages = useQuery({ ...queries.pages(), staleTime: 10_000, enabled: show });
@@ -3378,13 +3362,13 @@ function PageIndex({ show }: { show: boolean }) {
 }
 
 function HostedPageLinks({ pages, state }: { pages: PageEntry[]; state?: TabState }) {
-  return [...Map.groupBy(pages, (page) => page.space ?? "")].toSorted(([a], [b]) => a.localeCompare(b)).map(([space, rows]) => <section key={space} className="flex flex-col gap-1">
-    <h2 className="text-xs font-medium text-muted-foreground">{space || "No space"}</h2>
+  return [...Map.groupBy(pages, (page) => page.space)].toSorted(([a], [b]) => a.localeCompare(b)).map(([space, rows]) => <section key={space} className="flex flex-col gap-1">
+    <h2 className="text-xs font-medium text-muted-foreground">{space}</h2>
     <ul className="flex flex-col gap-1">
       {rows.map((page) => {
         const path = hostedPagePath(page);
-        const href = state ? pageSpace(state, `/pages/${encodeURIComponent(space || "-")}/${path}`)[0] : panelHref(path, "pagePreview");
-        return <li key={path}><Link href={href} className="block break-words py-1 text-sm hover:underline">{page.agent} · {page.path}</Link></li>;
+        const href = state ? pageSpace(state, `/pages/${path}`)[0] : panelHref(path, "pagePreview");
+        return <li key={path}><Link href={href} className="block break-words py-1 text-sm hover:underline">{page.path}</Link></li>;
       })}
     </ul>
   </section>);
@@ -3416,18 +3400,18 @@ function HostedPagePicker() {
 }
 
 function pageSelection(selection: string) {
-  const [agent, ...path] = selection.split("/");
-  try { return { agent: decodeURIComponent(agent), path: path.map(decodeURIComponent).join("/") }; }
-  catch { return { agent: "", path: "" }; }
+  const [space, ...path] = selection.split("/");
+  try { return { space: decodeURIComponent(space), path: path.map(decodeURIComponent).join("/") }; }
+  catch { return { space: "", path: "" }; }
 }
 
 function LiveHostedPage({ name, pathname, selection }: { name: string; pathname: string; selection: string }) {
   const view = useId();
-  const input = pageSelection(selection), valid = !!(input.agent && input.path);
+  const input = pageSelection(selection), valid = !!(input.space && input.path);
   const page = useQuery({
     queryKey: [{ server: name }, "hostedPage", pathname, input, view],
     queryFn: ({ signal }) => rpc<{ pages?: PageEntry[] }>("ListPages", input, signal, name).then(
-      ({ pages }) => pages?.find((page) => page.agent === input.agent && page.path === input.path) ?? null,
+      ({ pages }) => pages?.find((page) => page.path === input.path) ?? null,
       (error: Error) => { if (error instanceof RPCError && [7, 16].includes(error.code)) return null; throw error; },
     ),
     enabled: valid, retry: false, gcTime: 0, refetchInterval: 2000,
