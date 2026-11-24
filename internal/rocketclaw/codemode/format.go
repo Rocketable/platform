@@ -89,7 +89,11 @@ func (p *printer) write(s string) {
 
 func (p *printer) newline() {
 	if len(p.pending) > 0 {
-		p.write("  " + strings.Join(p.pending, "  "))
+		for _, comment := range p.pending {
+			p.write("  ")
+			p.write(comment)
+		}
+
 		p.pending = nil
 	}
 
