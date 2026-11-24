@@ -70,6 +70,7 @@ jobs:
       - run: make check-cloc-budget
       - run: make -C internal/rocketclaw lint
       - run: make -C internal/funneld lint
+      - run: make -C internal/harnessfeedback lint
       - if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
         with:
@@ -110,6 +111,16 @@ jobs:
         with:
           path: ~/.cache/go-build
           key: go-${{ github.job }}-${{ github.sha }}
+
+  harnessfeedback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-go
+      - *restore-go-build
+      - run: go test ../../cmd/harnessfeedback ./...
+        working-directory: internal/harnessfeedback
+      - *save-go-build
 
   rocketclaw:
     runs-on: ubuntu-latest
@@ -270,7 +281,7 @@ jobs:
   core:
     name: test (core)
     if: always()
-    needs: [checks, oc, funneld, rocketclaw, sandbox, coverage]
+    needs: [checks, oc, funneld, harnessfeedback, rocketclaw, sandbox, coverage]
     runs-on: ubuntu-latest
     steps:
       - &all-passed

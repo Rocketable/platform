@@ -25,6 +25,7 @@ See [LICENSE](LICENSE) for the full license terms.
 - `internal/rocketclaw` (RocketClaw): the long-running service. It connects the web page, Slack, MCP, scheduled jobs, attachments, and the database. Its program is `cmd/rocketclaw`.
 - `internal/rocketclaw/harness`: RocketClaw's agent engine. It builds model requests from the workspace, runs tools, checks permissions, and saves a replayable record of each session.
 - `cmd/funneld`: a small HTTPS proxy that forwards public paths to internal URLs listed in `funneld.json`.
+- `cmd/harnessfeedback`: an MCP server that agents call to report problems with their harness; it lists each distinct problem once in a Slack channel.
 
 ## Getting started
 
@@ -479,6 +480,34 @@ Release note for built-in agents:
 - An agent whose `auto(...)` reviewer cannot review it is no longer loaded, where before it was listed and each of its turns failed. The warning strip in Web names it and why; other agents load as before.
 - `rocketclaw_reload` and the Web's `/api/Reload` now answer with the warnings the warning strip shows, after a blank line.
 
+### Harness feedback server
+
+`cmd/harnessfeedback` is a separate program, not part of RocketClaw. It serves one MCP tool, `report(summary, details)`, for an agent to report a problem with its harness: a confusing tool error, a misleading description, a missing capability. Install it with `GOPRIVATE=github.com/Rocketable/platform go install github.com/Rocketable/platform/cmd/harnessfeedback@main` and run it as a `command` server; RocketClaw starts it for each `execute` call that uses it, so an installed binary starts faster than `go run`:
+
+```json
+"mcp_servers": {
+  "harness-feedback": {
+    "command": "/home/rocketclaw/go/bin/harnessfeedback",
+    "env": {
+      "HARNESS_FEEDBACK_SLACK_TOKEN": {"aws": {"arn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:feedback", "key": "slack"}},
+      "HARNESS_FEEDBACK_SLACK_CHANNEL": "C0123456789",
+      "HARNESS_FEEDBACK_MODEL_URL": "https://api.openai.com/v1",
+      "HARNESS_FEEDBACK_MODEL_KEY": {"aws": {"arn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:feedback", "key": "openai"}},
+      "HARNESS_FEEDBACK_MODEL": "gpt-6-luna",
+      "HARNESS_FEEDBACK_DB": "/var/lib/harness-feedback/issues.db",
+      "HARNESS_FEEDBACK_WEB_ORIGIN": "https://rocketclaw.example.ts.net"
+    },
+    "tools": {"report": ["report"]}
+  }
+}
+```
+
+All seven settings are required, and so is `ROCKETCLAW_CONVERSATION_ID`, which RocketClaw sets for each `execute` call; the server names any that are missing and exits. Each post links the reporting session on `HARNESS_FEEDBACK_WEB_ORIGIN`. The tool's description tells the agent when to call it.
+
+For each report, the server asks the model, through any service with OpenAI's chat completions API, whether it matches an issue reported in the last 14 days. A new issue posts a top-level message in the channel; a repeat posts a reply in that issue's thread. A SQLite database at `HARNESS_FEEDBACK_DB` keeps one row per issue: its summary, its Slack message, and when it was last reported; rows older than 14 days are deleted. Each report runs in one write transaction, so reports from parallel `execute` calls run one at a time; a report waits up to 5 minutes for the one before it. A crash after a post and before the transaction commits can post an issue twice.
+
+The tool asks agents to leave secrets and customer personal data (PII) out of reports, but it cannot check, so use a private channel. The bot needs `chat:write` and must be in the channel. If it is RocketClaw's own bot, RocketClaw ignores mentions and replies in those threads, like any thread the bot started outside a Channel Session. Grant the `report` facet to the agents that should report.
+
 ### Agent editor
 
 The Agents page in the Web page has **Create New Agent** and, on each agent but the built-in ones, **Edit**. They open the agent editor, where you pick an easy or advanced agent, fill in its settings and instructions with plain-language help, talk to it before it is saved, compare variants and the live agent side by side, and get suggestions from an assistant. Drafts are stored on the server, and teammates who open a draft's link edit it with you live. Only people with no space limits can use the editor, because a draft can give itself any permission and its test chats run real tools. The editor refuses the names `main` and `voice`: a draft already stored under one can only be renamed, and its test chat and Propose changes are refused until then. The assistant behind **Propose changes** runs as `main`, so it fails while `main` is turned off.
@@ -789,6 +818,7 @@ The Config page's Flags section shows **PostHog** as On when a project token is 
 - `cmd/`: runnable programs.
 - `internal/rocketclaw/`: the service, with its agent engine in `internal/rocketclaw/harness/`.
 - `internal/funneld/`: the HTTPS proxy and its config loading.
+- `internal/harnessfeedback/`: the harness feedback MCP server.
 - `vendor/`: copies of Go dependencies.
 
 ## Development
