@@ -26,14 +26,12 @@ func TestValidateAssetsAcceptsWorkspaceWithoutCronjobs(t *testing.T) {
 	require.NoError(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, ".rocketclaw"))
 }
 
-func TestValidateAssetsReportsCronDefinitionError(t *testing.T) {
+func TestValidateAssetsReportsRoutineError(t *testing.T) {
 	workspace := t.TempDir()
-	for _, dir := range []string{"agents", "cron"} {
-		require.NoError(t, os.Mkdir(filepath.Join(workspace, dir), 0o755))
-	}
+	require.NoError(t, os.Mkdir(filepath.Join(workspace, "agents"), 0o755))
 
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "cron", "daily.md"), []byte("---\nagent: main\n---\nBody"), 0o644))
-	require.ErrorContains(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, "."), "validate cron definitions: list cron files: load cron definition: parse cronjob cron/daily.md frontmatter: schedule is required")
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "helper.md"), []byte("---\nmodel: gpt-6.1-sol\nroutines: [every 30min]\n---\nBody"), 0o644))
+	require.ErrorContains(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, "."), `agents/helper.md: routines: schedule "every 30min": invalid cron expression`)
 }
 
 func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {

@@ -301,9 +301,9 @@ test("a person marks tabs read or unread from the tab menu or the palette, each 
   }
 }, 60_000);
 
-test("a Cron tab's loud mark turns it bold and notifies with its note, a park that ends brings it back after it closed, a tab closed elsewhere never notifies, a Shared-only row's notification opens it in its space, and an agent's navigation opens once in a focused window", async () => {
+test("a routine tab's loud mark turns it bold and notifies with its note, a park that ends brings it back after it closed, a tab closed elsewhere never notifies, a Shared-only row's notification opens it in its space, and an agent's navigation opens once in a focused window", async () => {
   const { chromium: engine } = await import(playwright!);
-  const cron = `/cron/${encode("daily")}`, chat = `/s/${encode("chat")}`;
+  const cron = `/routines/${encode("daily")}`, chat = `/s/${encode("chat")}`;
   const ops: SearchPage = { name: "Ops", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" };
   let state = { tabs: [{ path: chat, space: "main" }, { path: cron, space: "main" }], groups: [], space: "main", last: {} }, revision = 1, marks: TabAttention[] = [];
   const viewing: string[] = [];
@@ -362,14 +362,14 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
     await daily.waitFor();
     await polls();
 
-    // A run that finished marks the Cron tab: it goes bold, and the notification takes the tab's title and the note.
+    // A run that finished marks the routine tab: it goes bold, and the notification takes the tab's title and the note.
     marks = [{ path: cron, unreadAt: "2026-10-22T10:01:00Z", note: "Run finished" }];
     await polls();
     expect(await notes()).toEqual([{ title: "daily", body: "Run finished", tag: cron, closed: false }]);
     expect(await daily.getAttribute("aria-description")).toBe("Space: Main, Unread");
     expect(await daily.getByText("daily", { exact: true }).evaluate((title: HTMLElement) => getComputedStyle(title).fontWeight)).toBe("700");
 
-    // A focused window names the Cron tab in view, which reads it; without focus it names none.
+    // A focused window names the routine tab in view, which reads it; without focus it names none.
     await daily.click();
     await polls();
     expect(viewing.at(-1)).toBe(cron);
@@ -386,7 +386,7 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
     await polls();
     expect(new URL(page.url()).pathname).toBe(chat);
 
-    // A park of the Cron tab that ends after it closed brings it back, bold, with a notification, in this window, which stayed open.
+    // A park of the routine tab that ends after it closed brings it back, bold, with a notification, in this window, which stayed open.
     await page.evaluate(() => { window.focused = true; });
     await strip.getByRole("tab", { name: "Chat work", exact: true }).click();
     await strip.getByRole("button", { name: "Close daily", exact: true }).click();
@@ -401,7 +401,7 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
     expect(await daily.getAttribute("aria-description")).toBe("Space: Main, Unread");
     expect((await notes()).slice(1)).toEqual([{ title: "daily", body: "Park ended", tag: cron, closed: false }]);
 
-    // Another window closes the Cron tab just as a run finishes on it: this window, holding older tabs than the listing
+    // Another window closes the routine tab just as a run finishes on it: this window, holding older tabs than the listing
     // names, notifies nothing for it, and drops the tab once it reloads.
     [state, revision, marks] = [{ ...state, tabs: state.tabs.filter((tab) => tab.path !== cron) }, revision + 1, [{ path: cron, unreadAt: "2026-10-22T10:02:30Z", note: "Run finished" }]];
     await daily.waitFor({ state: "detached" });
@@ -429,7 +429,7 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
 
 test("a call that took the person to a page shows its link in the chat, which opens the page in place", async () => {
   const { chromium: engine } = await import(playwright!);
-  const chat = `/s/${encode("chat")}`, cron = `/cron/${encode("daily")}`;
+  const chat = `/s/${encode("chat")}`, cron = `/routines/${encode("daily")}`;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });

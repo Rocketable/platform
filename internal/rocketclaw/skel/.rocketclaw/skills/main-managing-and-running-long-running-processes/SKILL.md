@@ -16,8 +16,8 @@ Do not use subagent tasks as process supervisors. Subagents are for delegated wo
 - Use `tmux` for long-running process sessions.
 - Keep a Markdown ledger for every managed process.
 - Update the ledger before and after start, stop, restart, and health-check actions.
-- If a process needs recurring supervision, create or update the needed `cron/` monitor.
-- If the cron monitor needs a dedicated agent or broader permissions, create or update the needed `agents/` file.
+- If a process needs recurring supervision, create or update the needed monitor routine: a `routines` entry on the monitoring agent.
+- If the monitor routine needs a dedicated agent or broader permissions, create or update the needed `agents/` file.
 - Do not use `&`, `nohup`, `disown`, shell backgrounding, or a subagent task instead of `tmux` unless the human explicitly approves a different mechanism.
 
 # Do Not Use For
@@ -37,9 +37,9 @@ Create the ledger when it does not exist. Keep it in Markdown and preserve exist
 ```markdown
 # Long-Running Processes
 
-| Name | Owner | Purpose | tmux Session | Command | CWD | Started | Expected Lifetime | Health Check | Cron Monitor | Agent | Status | Last Checked |
+| Name | Owner | Purpose | tmux Session | Command | CWD | Started | Expected Lifetime | Health Check | Monitor Routine | Agent | Status | Last Checked |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| example | Human Partner | local dev server | rocketclaw-example | npm run dev | /path/to/project | 2026-05-20T15:04:05Z | until stopped | curl -fsS http://localhost:3000 | cron/example.md | agents/example-monitor.md | running | 2026-05-20T15:05:00Z |
+| example | Human Partner | local dev server | rocketclaw-example | npm run dev | /path/to/project | 2026-05-20T15:04:05Z | until stopped | curl -fsS http://localhost:3000 | example-monitor · 5m | agents/example-monitor.md | running | 2026-05-20T15:05:00Z |
 ```
 
 Status values should be plain and current, such as `planned`, `starting`, `running`, `stopped`, `failed`, `missing`, or `unknown`.
@@ -90,19 +90,19 @@ List known sessions:
 tmux list-sessions
 ```
 
-Stop a managed session only when the human requested it or when the ledger/cron instructions clearly authorize it:
+Stop a managed session only when the human requested it or when the ledger or the monitor routine's instruction clearly authorizes it:
 
 ```bash
 tmux kill-session -t "$session"
 ```
 
-# Cron Monitor Creation
+# Monitor Routine Creation
 
-If a managed process needs recurring supervision and no suitable cron monitor exists, create or update one under `cron/`.
+If a managed process needs recurring supervision and no suitable monitor routine exists, add one: a `routines` entry, with the monitoring instruction, on the monitoring agent's file.
 
-Use the `main-update-cron-or-heartbeat` skill for all `cron/` edits.
+Use the `main-update-cron-or-heartbeat` skill for all `routines` edits.
 
-The cron monitor should:
+The monitor routine's instruction should tell the agent to:
 
 - check the relevant `tmux` session with `tmux has-session`
 - capture recent pane output with `tmux capture-pane`
@@ -111,15 +111,15 @@ The cron monitor should:
 - notify the human only when the process is missing, unhealthy, repeatedly failing, or blocked on human action
 - reply with nothing when there is nothing actionable to report
 
-Keep the cron schedule conservative. If the human did not specify a cadence, ask for one instead of guessing for expensive or noisy checks. For cheap local checks, a short interval such as `5m` is usually reasonable, but still confirm when impact is unclear.
+Keep the routine's schedule conservative. If the human did not specify a cadence, ask for one instead of guessing for expensive or noisy checks. For cheap local checks, a short interval such as `5m` is usually reasonable, but still confirm when impact is unclear.
 
-# Cron Agent Creation
+# Monitoring Agent Creation
 
-If the cron monitor needs an agent that does not exist or lacks necessary permissions, create or update one under `agents/`.
+If the monitor routine needs an agent that does not exist or lacks necessary permissions, create or update one under `agents/`. `main`, `voice`, and `sticky: user` or `sticky: slack` agents cannot have routines, so they cannot be the monitoring agent.
 
-Use the `main-create-or-update-agent` skill for all `agents/` edits.
+Use the `main-create-or-update-agent` skill for all other `agents/` edits.
 
-The cron agent should have narrow, concrete permissions only. Typical permissions are:
+The monitoring agent should have narrow, concrete permissions only. Typical permissions are:
 
 ```yaml
 permission:
@@ -168,24 +168,25 @@ If the ledger is stale:
 
 - inspect `tmux` directly
 - update the ledger with the observed state and current timestamp
-- create or repair the cron monitor if recurring freshness is required
+- create or repair the monitor routine if recurring freshness is required
 
-If the cron file is missing:
+If the monitor routine is missing:
 
-- use `main-update-cron-or-heartbeat` to create it under `cron/`
-- make the cron instructions update the ledger and stay silent unless action is needed
+- use `main-update-cron-or-heartbeat` to add it to the monitoring agent's `routines`
+- make its instruction update the ledger and stay silent unless action is needed
+- a leftover `cron/` monitor file no longer runs; migrate it with `main-update-cron-or-heartbeat`
 
-If the cron schedule is invalid:
+If the routine's schedule is invalid:
 
 - use `main-update-cron-or-heartbeat` schedule validation rules
 - do not write ambiguous schedules
 
-If the cron agent is missing:
+If the monitoring agent is missing:
 
 - use `main-create-or-update-agent` to create it under `agents/`
 - grant only the exact permissions needed by the monitor
 
-If the cron agent lacks permissions:
+If the monitoring agent lacks permissions:
 
 - identify the exact denied operation
 - update the agent with the narrowest matching `bash`, `read`, `edit`, `grep`, or `glob` permission
@@ -194,12 +195,12 @@ If the cron agent lacks permissions:
 If the monitor cannot update the ledger:
 
 - verify the agent has `read` and `edit` access to the ledger path
-- verify the ledger path in the cron instructions matches the actual file
+- verify the ledger path in the routine's instruction matches the actual file
 - report only if human action is required
 
 If the monitor is noisy:
 
-- adjust the cron body so normal healthy checks reply with nothing
+- adjust the routine's instruction so normal healthy checks reply with nothing
 - notify only for missing, failed, unhealthy, or blocked states
 
 # Final Checklist
@@ -210,9 +211,9 @@ Before calling the work complete, verify:
 - the session exists after start, or the ledger accurately says it does not
 - recent pane output was checked when a session exists
 - `LONG_RUNNING_PROCESSES.md` reflects the current state
-- a cron monitor exists when recurring supervision is required, or the ledger records that none was requested
-- the cron monitor uses `tmux` and updates the ledger
-- the cron monitor stays silent when there is nothing actionable
-- the cron agent exists when needed
-- the cron agent has exact needed permissions for `bash`, `read`, `edit`, and any required `grep` or `glob`
+- a monitor routine exists when recurring supervision is required, or the ledger records that none was requested
+- the monitor routine uses `tmux` and updates the ledger
+- the monitor routine stays silent when there is nothing actionable
+- the monitoring agent exists when needed
+- the monitoring agent has exact needed permissions for `bash`, `read`, `edit`, and any required `grep` or `glob`
 - no subagent task is being used as a long-running process supervisor

@@ -56,13 +56,9 @@ func newCronScheduleStoreDB(t *testing.T) (*backend.SessionService, *sql.DB) {
 
 func TestJobsProjectsDefinitionsAndPersistedTriggers(t *testing.T) {
 	workspace := t.TempDir()
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-	require.NoError(t, root.MkdirAll("runtime/cron", 0o700))
-	require.NoError(t, root.WriteFile("runtime/cron/alpha.md", []byte("---\nschedule: [30m, '0 * * * *']\nagent: worker\n---\nExact body\n"), 0o600))
-	store := newCronScheduleStore(t)
 	cfg := newCronConfig(t, workspace, "runtime")
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "runtime", "agents", "worker.md"), []byte("---\nmodel: gpt-6.1-sol\nroutines:\n  - 30m: Exact body\n  - '0 * * * *'\n---\nWork.\n"), 0o600))
+	store := newCronScheduleStore(t)
 	manager := New(cfg, "runtime", store, &runnerMock{}, slog.New(slog.DiscardHandler))
 	start := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	manager.now = func() time.Time { return start.Add(5 * time.Minute) }
@@ -75,109 +71,22 @@ func TestJobsProjectsDefinitionsAndPersistedTriggers(t *testing.T) {
 	jobs, err := manager.Jobs()
 	require.NoError(t, err)
 	require.Equal(t, []Job{
-		{RelativePath: "cron/alpha.md", Agent: "worker", Body: "Exact body\n", Schedules: []string{"30m", "0 * * * *"}, Upcoming: []time.Time{start.Add(30 * time.Minute), start.Add(time.Hour)}},
+		{RelativePath: "agents/worker.md#30m", Agent: "worker", Body: "Exact body", Schedule: "30m", Upcoming: []time.Time{start.Add(30 * time.Minute)}},
+		{RelativePath: "agents/worker.md#0 * * * *", Agent: "worker", Body: "Scheduled run (0 * * * *).", Schedule: "0 * * * *", Upcoming: []time.Time{start.Add(time.Hour)}},
 	}, jobs)
 	remaining, err := store.DueCronSchedules(start.Add(24 * time.Hour))
 	require.NoError(t, err)
 	require.ElementsMatch(t, states, remaining)
-	require.NoError(t, root.WriteFile("outside.md", []byte("outside Cron root"), 0o600))
-	require.NoError(t, root.Symlink("../../outside.md", "runtime/cron/escape.md"))
-
-	_, err = manager.Jobs()
-	require.ErrorContains(t, err, "escape.md")
 }
 
-func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
+func TestStartAndRefreshReportBadRoutines(t *testing.T) {
 	workspace := t.TempDir()
+	cfg := newCronConfig(t, workspace, ".rocketclaw-stage")
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw-stage", "agents", "broken.md"), []byte("---\nmodel: gpt-6.1-sol\nroutines: [every 30min]\n---\nPrompt\n"), 0o644))
 
-	cronDir := filepath.Join(workspace, "cron")
-	if err := os.Mkdir(cronDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule:\n  - 15m\n  - '0 8 * * *'\nagent: worker\n---\nRun daily\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.Mkdir(filepath.Join(cronDir, "archive"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(cronDir, "notes.txt"), []byte("not a cronjob"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.example.md"), []byte("---\nschedule: 1h\n---\nexample\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	defs, err := loadDefinitionsIn(newCronConfig(t, workspace, "."), ".")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(defs) != 1 {
-		t.Fatalf("loadDefinitions loaded %d definitions; want 1", len(defs))
-	}
-
-	def := defs[0]
-	if def.Job.RelativePath != "cron/daily.md" || def.Job.Agent != "worker" || def.Job.Prompt != "Run daily\n" {
-		t.Fatalf("definition = %#v; want daily worker body", def)
-	}
-
-	now := time.Date(2026, time.May, 21, 0, 0, 0, 0, time.UTC)
-	if len(def.Schedules) != 2 || !def.Schedules[0].Next(now).Equal(now.Add(15*time.Minute)) || !def.Schedules[1].Next(now).Equal(now.Add(8*time.Hour)) {
-		t.Fatalf("schedules = %#v; want duration and cron", def.Schedules)
-	}
-}
-
-func TestValidateRuntimeDefinitionsReportsStagedCronParseErrors(t *testing.T) {
-	workspace := t.TempDir()
-
-	cronDir := filepath.Join(workspace, ".rocketclaw-stage", "cron")
-	if err := os.MkdirAll(cronDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(cronDir, "broken.md"), []byte("not frontmatter"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := ValidateRuntimeDefinitions(newCronConfig(t, workspace, ".rocketclaw-stage"), ".rocketclaw-stage"); err == nil || !strings.Contains(err.Error(), "yaml frontmatter is required") {
-		t.Fatalf("ValidateRuntimeDefinitions() error = %v; want frontmatter error", err)
-	}
-
-	m := New(newCronConfig(t, workspace, ".rocketclaw-stage"), ".rocketclaw-stage", newCronScheduleStore(t), &runnerMock{}, slog.New(slog.DiscardHandler))
-	require.ErrorContains(t, m.Start(t.Context()), "yaml frontmatter is required")
-	require.ErrorContains(t, m.Refresh(), "yaml frontmatter is required")
-}
-
-func TestLoadOneOffCronjobUsesEffectiveRuntimeCron(t *testing.T) {
-	workspace := t.TempDir()
-
-	cronDir := filepath.Join(workspace, ".rocketclaw", "cron")
-	if err := os.MkdirAll(cronDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nagent: helper\n---\nRuntime cron"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	m := New(newCronConfig(t, workspace, ".rocketclaw"), ".rocketclaw", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
-		t.Fatal("cronjob manager ran during load test")
-
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
-
-	job, err := m.LoadOneOffCronjob("daily")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if job.Agent != "helper" || job.RelativePath != "cron/daily.md" || !strings.Contains(job.Prompt, "Runtime cron") {
-		t.Fatalf("LoadOneOffCronjob = %#v; want effective runtime cron", job)
-	}
+	m := New(cfg, ".rocketclaw-stage", newCronScheduleStore(t), &runnerMock{}, slog.New(slog.DiscardHandler))
+	require.ErrorContains(t, m.Start(t.Context()), "invalid cron expression")
+	require.ErrorContains(t, m.Refresh(), "invalid cron expression")
 }
 
 func TestCronTraceConversationIDPreservesRelativePath(t *testing.T) {
@@ -256,8 +165,6 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	}}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC) }
 
-	writeHelperAgent(t, workspace)
-
 	m.executeJob(t.Context(), &config.CronDefinition{Job: protocol.OneOffCronjob{RelativePath: "cron/daily.md", Agent: "helper", Prompt: "Body"}})
 	require.Contains(t, logs.String(), `"event":"cron_completed"`)
 	require.Contains(t, logs.String(), `"outcome":"intentional_silence"`)
@@ -279,35 +186,16 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	require.NotContains(t, logs.String(), "secret-bearing-error")
 }
 
-func TestLoadDefinitionsWithoutCronDirectory(t *testing.T) {
-	defs, err := loadDefinitionsIn(newCronConfig(t, t.TempDir(), "."), ".")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestLoadDefinitionsReportsAgentLoadErrors(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	require.NoError(t, os.WriteFile(workspace, []byte("not a directory"), 0o644))
 
-	if len(defs) != 0 {
-		t.Fatalf("loadDefinitions loaded %d definitions; want 0", len(defs))
-	}
-}
+	cfg := config.NewLockedConfig(&config.Config{Workspace: workspace})
+	_, err := loadDefinitionsIn(cfg, ".")
+	require.ErrorContains(t, err, "load agents")
 
-func TestLoadDefinitionsReportsDirectoryErrors(t *testing.T) {
-	workspaceFile := filepath.Join(t.TempDir(), "workspace")
-	if err := os.WriteFile(workspaceFile, []byte("not a directory"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := loadDefinitionsIn(config.NewLockedConfig(&config.Config{Workspace: workspaceFile}), "."); err == nil || !strings.Contains(err.Error(), "open workspace root") {
-		t.Fatalf("loadDefinitionsIn(workspace file, .) error = %v; want workspace open error", err)
-	}
-
-	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "cron"), []byte("not a directory"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := loadDefinitionsIn(newCronConfig(t, workspace, "."), "."); err == nil || !strings.Contains(err.Error(), "read cronjob directory") {
-		t.Fatalf("loadDefinitionsIn(cron file, .) error = %v; want cron directory error", err)
-	}
+	_, err = New(cfg, ".", newCronScheduleStore(t), &runnerMock{}, slog.New(slog.DiscardHandler)).LoadOneOffCronjob("helper · 1h")
+	require.ErrorContains(t, err, "load agents")
 }
 
 func stopCronManager(t *testing.T, m *Manager) {
@@ -323,24 +211,16 @@ func stopCronManager(t *testing.T, m *Manager) {
 
 func TestScanScheduledRunsLoadedDefinitionUntilRefresh(t *testing.T) {
 	workspace := t.TempDir()
-
-	cronDir := filepath.Join(workspace, "cron")
-	if err := os.Mkdir(cronDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	cronPath := filepath.Join(cronDir, "daily.md")
-	if err := os.WriteFile(cronPath, []byte("---\nschedule: 1s\nagent: helper\n---\nold body"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	cfg := newCronConfig(t, workspace, ".")
+	agentPath := filepath.Join(workspace, "agents", "helper.md")
+	require.NoError(t, os.WriteFile(agentPath, []byte("---\nmodel: gpt-6.1-sol\nroutines:\n  - 1s: old body\n---\nHelp.\n"), 0o644))
 
 	store, db := newCronScheduleStoreDB(t)
 	runPrompt := make(chan string, 1)
-	m := New(newCronConfig(t, workspace, "."), ".", store, &runnerMock{RunFunc: func(_ context.Context, _ string, prompt string, _ *backend.CronRunProgress) (protocol.CronRunResult, error) {
+	m := New(cfg, ".", store, &runnerMock{RunFunc: func(_ context.Context, _ string, prompt string, _ *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		runPrompt <- prompt
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
-	writeHelperAgent(t, workspace)
 
 	var (
 		clockMu sync.Mutex
@@ -370,18 +250,18 @@ func TestScanScheduledRunsLoadedDefinitionUntilRefresh(t *testing.T) {
 		case prompt := <-runPrompt:
 			require.Equal(t, want+"\n\n"+cronReplyInstruction, prompt)
 		case <-time.After(time.Second):
-			t.Fatal("scheduled cronjob did not run")
+			t.Fatal("scheduled routine did not run")
 		}
 	}
 
-	require.NoError(t, os.WriteFile(cronPath, []byte("---\nschedule: 2s\nagent: helper\n---\nnew body"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(cronDir, "broken.md"), []byte("not frontmatter"), 0o644))
+	require.NoError(t, os.WriteFile(agentPath, []byte("---\nmodel: gpt-6.1-sol\nroutines:\n  - 2s: new body\n---\nHelp.\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "broken.md"), []byte("---\nmodel: gpt-6.1-sol\nroutines: [every 30min]\n---\nPrompt\n"), 0o644))
 	scan(10*time.Second, "old body")
-	require.ErrorContains(t, m.Refresh(), "yaml frontmatter is required")
+	require.ErrorContains(t, m.Refresh(), "invalid cron expression")
 	scan(20*time.Second, "old body")
 
-	require.NoError(t, os.Remove(filepath.Join(cronDir, "broken.md")))
-	_, err := db.ExecContext(t.Context(), `ALTER TABLE schedules ADD CONSTRAINT refuse_edit CHECK (id <> 'cron/daily.md#0#2s')`)
+	require.NoError(t, os.Remove(filepath.Join(workspace, "agents", "broken.md")))
+	_, err := db.ExecContext(t.Context(), `ALTER TABLE schedules ADD CONSTRAINT refuse_edit CHECK (id <> 'agents/helper.md#2s')`)
 	require.NoError(t, err)
 	require.ErrorContains(t, m.Refresh(), "sync cron schedules")
 	scan(30*time.Second, "old body")
@@ -393,25 +273,18 @@ func TestScanScheduledRunsLoadedDefinitionUntilRefresh(t *testing.T) {
 
 	triggers, err := store.DueCronSchedules(start.Add(time.Hour))
 	require.NoError(t, err)
-	require.Equal(t, []backend.CronScheduleState{{ScheduleID: "cron/daily.md#0#2s", RelativePath: "cron/daily.md", NextDue: start.Add(42 * time.Second)}}, triggers)
+	require.Equal(t, []backend.CronScheduleState{{ScheduleID: "agents/helper.md#2s", RelativePath: "agents/helper.md#2s", NextDue: start.Add(42 * time.Second)}}, triggers)
 }
 
-func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
+func TestScanScheduledWaitsForTheRunningRoutineWithoutBacklog(t *testing.T) {
 	workspace := t.TempDir()
-
-	cronDir := filepath.Join(workspace, "cron")
-	if err := os.Mkdir(cronDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule:\n  - 1s\n  - 1s\nagent: helper\n---\nBody"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	cfg := newCronConfig(t, workspace, ".")
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "helper.md"), []byte("---\nmodel: gpt-6.1-sol\nroutines: [1s]\n---\nHelp.\n"), 0o644))
 
 	store, db := newCronScheduleStoreDB(t)
 	runStarted := make(chan error, 2)
 	release := make(chan struct{})
-	m := New(newCronConfig(t, workspace, "."), ".", store, &runnerMock{RunFunc: func(ctx context.Context, _, _ string, progress *backend.CronRunProgress) (protocol.CronRunResult, error) {
+	m := New(cfg, ".", store, &runnerMock{RunFunc: func(ctx context.Context, _, _ string, progress *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		_, errConversation := db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, cron_path) VALUES ($1, 'helper', 'cron', 'cron_run', FALSE, $2)`, progress.ConversationID, progress.Run.Path)
 
 		_, errTurn := db.ExecContext(ctx, `INSERT INTO turns (id, conversation_id, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $1, 0, 0)`, progress.ConversationID)
@@ -421,31 +294,27 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
-	writeHelperAgent(t, workspace)
 
 	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 	m.now = func() time.Time { return start }
 	require.NoError(t, m.Refresh())
 
 	m.now = func() time.Time { return start.Add(time.Second) }
-	if err := m.scanScheduled(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, m.scanScheduled(t.Context()))
 
 	select {
 	case err := <-runStarted:
 		require.NoError(t, err)
 	case <-time.After(time.Second):
-		t.Fatal("scheduled cronjob did not run")
+		t.Fatal("scheduled routine did not run")
 	}
 
-	if err := m.scanScheduled(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	m.now = func() time.Time { return start.Add(5 * time.Second) }
+	require.NoError(t, m.scanScheduled(t.Context()))
 
 	select {
 	case err := <-runStarted:
-		t.Fatal("same-file scheduled cronjob overlapped or replayed backlog", err)
+		t.Fatal("a routine overlapped its own running run or replayed its backlog", err)
 	default:
 	}
 
@@ -453,185 +322,29 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 	m.wg.Wait()
 }
 
-func TestParseCronDefinitionRejectsInvalidFrontmatter(t *testing.T) {
-	tests := []struct {
-		name string
-		data string
-		want string
-	}{
-		{name: "missing frontmatter", data: "body", want: "yaml frontmatter is required"},
-		{name: "missing closing delimiter", data: "---\nschedule: 1h\nbody", want: "yaml frontmatter closing delimiter is required"},
-		{name: "invalid yaml", data: "---\nschedule: [\n---\nbody", want: "unmarshal frontmatter yaml"},
-		{name: "missing schedule", data: "---\nagent: main\n---\nbody", want: "schedule is required"},
-		{name: "null schedule", data: "---\nschedule: null\n---\nbody", want: "schedule is required"},
-		{name: "invalid schedule list item", data: "---\nschedule:\n  - 1h\n  - 3\n---\nbody", want: "schedule must be a string or list of strings"},
-		{name: "invalid schedule scalar", data: "---\nschedule: 123\n---\nbody", want: "schedule must be a string or list of strings"},
-		{name: "blank duration", data: "---\nschedule: ''\n---\nbody", want: "schedule must not be blank"},
-		{name: "zero duration", data: "---\nschedule: 0s\n---\nbody", want: "duration schedules must be greater than zero"},
-		{name: "every unsupported", data: "---\nschedule: '@every 1h'\n---\nbody", want: "@every is not supported"},
-		{name: "invalid cron", data: "---\nschedule: not a cron\n---\nbody", want: "invalid cron expression"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := config.ParseCronDefinition([]byte(tt.data), "cron/test.md")
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("ParseCronDefinition error = %v; want containing %q", err, tt.want)
-			}
-		})
-	}
-}
-
-func TestParseCronDefinitionLeavesNonStringAgentForValidation(t *testing.T) {
-	job, _, err := config.ParseCronDefinition([]byte("---\nschedule: 1h\nagent: 7\n---\nBody"), "cron/test.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if job.Agent != "7" {
-		t.Fatalf("definition agent = %q; want 7", job.Agent)
-	}
-}
-
-func TestParseCronDefinitionLeavesBlankAgentEmpty(t *testing.T) {
-	_, schedules, err := config.ParseCronDefinition([]byte("---\nschedule: []\n---\nBody"), "cron/test.md")
-	require.NoError(t, err)
-	require.NotNil(t, schedules)
-	require.Empty(t, schedules)
-
-	for _, frontmatter := range []string{"schedule: 1h", "schedule: 1h\nagent: '  \t  '", "schedule: 1h\nagent: null"} {
-		job, _, err := config.ParseCronDefinition([]byte("---\n"+frontmatter+"\n---\nBody"), "cron/test.md")
-		require.NoError(t, err)
-		require.Empty(t, job.Agent, frontmatter)
-	}
-}
-
-func TestExecuteJobRefusesCronsItCannotRun(t *testing.T) {
-	workspace := t.TempDir()
-	cfg := newCronConfig(t, workspace, ".")
-	require.NoError(t, os.Mkdir(filepath.Join(workspace, "cron"), 0o755))
-
-	for name, agent := range map[string]string{
-		"easy":    "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\n---\nPrompt\n",
-		"mine":    "---\nmodel: gpt-6.1-sol\nsticky: user\n---\nPrompt\n",
-		"channel": "---\nmodel: gpt-6.1-sol\nsticky: slack\n---\nPrompt\n",
-		"shared":  "---\nmodel: gpt-6.1-sol\nsticky: global\nspace: Marketing\n---\nPrompt\n",
+func TestParseCronScheduleRejectsInvalidSchedules(t *testing.T) {
+	for raw, want := range map[string]string{
+		"":           "schedule must not be blank",
+		"0s":         "duration schedules must be greater than zero",
+		"@every 1h":  "@every is not supported",
+		"not a cron": "invalid cron expression",
 	} {
-		require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", name+".md"), []byte(agent), 0o644))
-	}
-
-	for name, frontmatter := range map[string]string{
-		"blank": "", "gone": "agent: gone\n", "easy": "agent: easy\n", "mine": "agent: mine\n", "channel": "agent: channel\n", "elsewhere": "agent: shared\nspace: Finance\n",
-	} {
-		require.NoError(t, os.WriteFile(filepath.Join(workspace, "cron", name+".md"), []byte("---\nschedule: 1h\n"+frontmatter+"---\nBody"), 0o644))
-	}
-
-	require.NoError(t, ValidateRuntimeDefinitions(cfg, "."))
-
-	definitions, err := loadDefinitionsIn(cfg, ".")
-	require.NoError(t, err)
-	require.Len(t, definitions, 6, "a cron whose agent it cannot run still loads")
-
-	var logs bytes.Buffer
-
-	m := New(cfg, ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
-		t.Fatal("a cron whose agent it cannot run ran")
-
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.NewJSONHandler(&logs, nil)))
-
-	for i := range definitions {
-		m.executeJob(t.Context(), &definitions[i])
-	}
-
-	for _, refusal := range []string{
-		"cron/blank.md names no agent",
-		"cron/gone.md uses agent gone, which is not loaded",
-		"cron/easy.md uses agent easy, which is an easy agent scheduled with its routines",
-		"cron/mine.md uses agent mine, which is sticky: user",
-		"cron/channel.md uses agent channel, which is sticky: slack",
-		"cron/elsewhere.md uses agent shared, which is sticky: global in space Marketing, not Finance",
-	} {
-		require.Contains(t, logs.String(), `"error":"`+refusal+`"`)
+		_, err := config.ParseCronSchedule(raw)
+		require.ErrorContains(t, err, want, raw)
 	}
 }
 
-func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
-	workspace := t.TempDir()
+func TestPreparePromptAddsTheReplyInstruction(t *testing.T) {
+	m := New(newCronConfig(t, t.TempDir(), "."), ".", newCronScheduleStore(t), &runnerMock{}, slog.New(slog.DiscardHandler))
 
-	cronDir := filepath.Join(workspace, "cron")
-	if err := os.Mkdir(cronDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nagent: helper\n---\nBody"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	m := New(newCronConfig(t, workspace, "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
-
-	job, err := m.LoadOneOffCronjob("daily.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if job.Agent != "helper" || job.RelativePath != "cron/daily.md" {
-		t.Fatalf("job = %#v; want helper cron/daily.md", job)
-	}
-
-	if !strings.Contains(job.Prompt, "Body") || !strings.Contains(job.Prompt, cronReplyInstruction) {
-		t.Fatalf("prompt = %q; want body plus exposed tool instruction", job.Prompt)
-	}
-
-	for _, tt := range []struct {
-		name, body, want string
-	}{
-		{name: "empty", body: "", want: cronReplyInstruction},
-		{name: "trailing newline", body: "Body\n", want: "Body\n\n" + cronReplyInstruction},
-		{name: "several trailing newlines", body: "Body\n\n\n", want: "Body\n\n\n\n" + cronReplyInstruction},
-		{name: "CRLF", body: "Body\r\n", want: "Body\r\n\n" + cronReplyInstruction},
-		{name: "plain", body: "Body", want: "Body\n\n" + cronReplyInstruction},
+	for body, want := range map[string]string{
+		"":           cronReplyInstruction,
+		"Body\n":     "Body\n\n" + cronReplyInstruction,
+		"Body\n\n\n": "Body\n\n\n\n" + cronReplyInstruction,
+		"Body\r\n":   "Body\r\n\n" + cronReplyInstruction,
+		"Body":       "Body\n\n" + cronReplyInstruction,
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := m.preparePrompt(tt.body); got != tt.want {
-				t.Fatalf("preparePrompt(%q) = %q; want %q", tt.body, got, tt.want)
-			}
-		})
-	}
-
-	for _, target := range []string{"", "nested/daily", "daily.txt", "daily.example", "daily.example.md", "."} {
-		if _, err := m.LoadOneOffCronjob(target); err == nil {
-			t.Fatalf("LoadOneOffCronjob(%q) succeeded; want error", target)
-		}
-	}
-
-	if err := os.WriteFile(filepath.Join(cronDir, "broken.md"), []byte("not frontmatter"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := m.LoadOneOffCronjob("missing"); err == nil || !strings.Contains(err.Error(), "read cronjob cron/missing.md") {
-		t.Fatalf("LoadOneOffCronjob(missing) error = %v; want read cronjob error", err)
-	}
-
-	if _, err := m.LoadOneOffCronjob("broken"); err == nil || !strings.Contains(err.Error(), "yaml frontmatter is required") {
-		t.Fatalf("LoadOneOffCronjob(broken) error = %v; want frontmatter error", err)
-	}
-}
-
-func TestLoadOneOffCronjobReportsWorkspaceOpenError(t *testing.T) {
-	workspace := filepath.Join(t.TempDir(), "workspace")
-	if err := os.WriteFile(workspace, []byte("not a directory"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	m := New(config.NewLockedConfig(&config.Config{Workspace: workspace}), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
-
-	if _, err := m.LoadOneOffCronjob("daily"); err == nil || !strings.Contains(err.Error(), "open workspace root") {
-		t.Fatalf("LoadOneOffCronjob(daily) error = %v; want workspace open error", err)
+		require.Equal(t, want, m.preparePrompt(body), body)
 	}
 }
 
@@ -640,11 +353,6 @@ func newCronConfig(t *testing.T, workspace, runtimeDir string) *config.LockedCon
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, runtimeDir, "agents"), 0o755))
 
 	return config.NewLockedConfig(&config.Config{Workspace: workspace})
-}
-
-func writeHelperAgent(t *testing.T, workspace string) {
-	t.Helper()
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "helper.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp.\n"), 0o644))
 }
 
 const easyRoutineAgent = "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\nroutines:\n"
@@ -683,6 +391,9 @@ func TestRoutinesRunAsCronDefinitions(t *testing.T) {
 	job, err := m.LoadOneOffCronjob("marketing · 30m")
 	require.NoError(t, err)
 	require.Equal(t, protocol.OneOffCronjob{RelativePath: "agents/marketing.md#30m", Agent: "marketing", Space: "Ops", Prompt: "Scheduled run (30m).\n\n" + cronReplyInstruction}, job)
+
+	_, err = m.LoadOneOffCronjob("marketing · 2h")
+	require.ErrorContains(t, err, `no routine "marketing · 2h"`)
 
 	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 	require.NoError(t, store.SyncCronSchedules(m.scheduledStates(definitions, start)))

@@ -1454,12 +1454,12 @@ func newCronTestManager(t *testing.T, service *SessionService) (manager *threadB
 func seedCronRun(t *testing.T, service *SessionService, runID string) *protocol.InboundMessage {
 	t.Helper()
 
-	_, err := service.recordConversation(t.Context(), &protocol.Conversation{ID: runID, Agent: "job", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "cron/daily.md"}}, conversationFacts{}, harness.AgentStickyOff)
+	_, err := service.recordConversation(t.Context(), &protocol.Conversation{ID: runID, Agent: "job", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "agents/job.md#1h"}}, conversationFacts{}, harness.AgentStickyOff)
 	require.NoError(t, err)
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
 	msg.ConversationID, msg.RequireOutputDecision = runID, true
-	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "job", RanAt: "2000-01-02T03:04:05Z"}
+	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "agents/job.md#1h", Agent: "job", RanAt: "2000-01-02T03:04:05Z"}
 	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-cron", runID, msg))
 
 	return msg
@@ -1507,7 +1507,7 @@ func TestResumedCronRunMarksCronTabs(t *testing.T) {
 	spaces, err := nt.service.Spaces(ctx)
 	require.NoError(t, err)
 
-	for person, tabs := range map[string][]Tab{alice: {{Path: "/cron", Space: spaces[1].ID}, {Path: "/cron/daily", Space: spaces[1].ID}}, bob: {{Path: "/cron", Space: spaces[0].ID}}} {
+	for person, tabs := range map[string][]Tab{alice: {{Path: "/routines", Space: spaces[1].ID}, {Path: cronTabPath("job · 1h"), Space: spaces[1].ID}}, bob: {{Path: "/routines", Space: spaces[0].ID}}} {
 		saved, err := nt.service.SaveTabState(ctx, person, &TabState{Tabs: tabs}, 0)
 		require.NoError(t, err)
 		require.True(t, saved)
@@ -1517,7 +1517,7 @@ func TestResumedCronRunMarksCronTabs(t *testing.T) {
 	manager, _ := nt.run(t, ignoreOutbound)
 	require.NoError(t, manager.StartActiveTurns(ctx))
 	readFinalFor(t, nt.finals, "cron:daily")
-	assert.ElementsMatch(t, []string{alice + " /cron loud", alice + " /cron/daily loud"}, locationMarks(t, nt.service, "Run finished"), "not Bob's overview of another space")
+	assert.ElementsMatch(t, []string{alice + " /routines loud", alice + " " + cronTabPath("job · 1h") + " loud"}, locationMarks(t, nt.service, "Run finished"), "not Bob's overview of another space")
 }
 
 func TestResumedCronRowOpensReportChat(t *testing.T) {
@@ -1606,11 +1606,6 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	writeAgent(t, workspace, "job", "---\ndescription: Job\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_schedule_message: allow}\n---\nProducer instructions\n")
 	writeAgent(t, workspace, "canonical", "---\ndescription: Canonical\nmodel: gpt-6.1-sol\npermission: {}\n---\nCanonical instructions\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-	require.NoError(t, root.MkdirAll(".rocketclaw/cron", 0o755))
-	require.NoError(t, root.WriteFile(".rocketclaw/cron/daily.md", []byte("---\nschedule: 1h\nagent: job\n---\nJob\n"), 0o600))
 	service := newTestSessionServiceAt(t, workspace)
 	finals := make(chan *protocol.OutboundMessage, 8)
 	requests := make(chan string, 4)

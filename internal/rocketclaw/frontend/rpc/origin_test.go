@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,15 +45,17 @@ func TestChatOriginFactsMatchHistory(t *testing.T) {
 	server := New(withoutBackgroundJobs(), sessions, config.NewLockedConfig(cfg), &mockChannels{SidebarChannelAgentChoicesFunc: func(_ context.Context, channel string) (string, []string, error) {
 		return channel, []string{"main"}, nil
 	}}, &mockCronJobs{LoadOneOffCronjobFunc: func(stem string) (protocol.OneOffCronjob, error) {
-		return protocol.OneOffCronjob{RelativePath: "cron/" + stem + ".md"}, nil
+		agent, schedule, _ := strings.Cut(stem, " · ")
+
+		return protocol.OneOffCronjob{RelativePath: "agents/" + agent + ".md#" + schedule}, nil
 	}})
 	scheduled, scheduledAgain := "cron:cron/daily.md:20260905T010000.000000001Z:first", "cron:cron/daily.md:20260905T013000.000000003Z:third"
 	oneOff, oneOffLater := "one-off-cron:cron/report.md:20260905T020000.000000002Z:second", "one-off-cron:cron/report.md:20260905T030000.000000004Z:fourth"
 	cronSlack, plainSlack, destination := "slack-thread:C1:1.1", "slack-thread:C2:2.2", "slack-thread:C3:3.3"
 
 	for id, run := range map[string]*protocol.CronRun{
-		scheduled: {Path: "cron/daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, scheduledAgain: {Path: "cron/daily.md", At: time.Date(2026, 9, 5, 1, 30, 0, 3, time.UTC)},
-		oneOff: {Path: "cron/report.md", At: time.Date(2026, 9, 5, 2, 0, 0, 2, time.UTC), OneOff: true}, oneOffLater: {Path: "cron/report.md", At: time.Date(2026, 9, 5, 3, 0, 0, 4, time.UTC), OneOff: true},
+		scheduled: {Path: "agents/daily.md#1h", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, scheduledAgain: {Path: "agents/daily.md#1h", At: time.Date(2026, 9, 5, 1, 30, 0, 3, time.UTC)},
+		oneOff: {Path: "agents/report.md#1h", At: time.Date(2026, 9, 5, 2, 0, 0, 2, time.UTC), OneOff: true}, oneOffLater: {Path: "agents/report.md#1h", At: time.Date(2026, 9, 5, 3, 0, 0, 4, time.UTC), OneOff: true},
 	} {
 		agent := "cron-agent"
 		if run.OneOff {
@@ -167,7 +170,7 @@ UPDATE conversations c SET revert_message_id = f.id::text || ':0' FROM first_ent
 		want  map[string]string
 	}{
 		{" T-1 ", map[string]string{destination: "external mcp external conversation: ext-1 agent: producer ticket=t-1 b=two"}},
-		{"Report-Agent", map[string]string{"web:" + oneOff: "cron source: cron/report.md stem: report run kind: one-off run id: one-off-cron:cron/report.md:20260905t020000.000000002z:second agent: report-agent ran at: 2026-09-05t02:00:00.000000002z"}},
+		{"Report-Agent", map[string]string{"web:" + oneOff: "cron source: agents/report.md#1h stem: report · 1h run kind: one-off run id: one-off-cron:cron/report.md:20260905t020000.000000002z:second agent: report-agent ran at: 2026-09-05t02:00:00.000000002z"}},
 	} {
 		matches, err := search(ctx, test.query)
 		require.NoError(t, err)

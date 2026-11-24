@@ -212,10 +212,10 @@ test("saved tabs, deep links, keyboard, page close, palette commands, and the si
   expect(await names(page)).toEqual(["Bravo", "Alpha"]);
 
   await page.keyboard.press("Control+Shift+p");
-  await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Cron: Dashboard" }).click();
-  await page.waitForURL("**/cron");
-  await tab("Cron").dblclick();
-  await page.getByRole("heading", { name: "Cron" }).waitFor();
+  await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Routines: Dashboard" }).click();
+  await page.waitForURL("**/routines");
+  await tab("Routines").dblclick();
+  await page.getByRole("heading", { name: "Routines" }).waitFor();
   await page.keyboard.press("Escape");
   await page.waitForURL(`**${href("alpha")}`);
   expect(await names(page)).toEqual(["Bravo", "Alpha"]);
@@ -781,7 +781,7 @@ test("a space's Shared tabs head its card, which counts them, under a Shared pil
 
 test("a full sidebar scrolls Shared and the person's tabs as one while Parked stays put", () => withPage({ viewport: { width: 1280, height: 400 } }, async (page, origin, _prompts, saved) => {
   saved.shared = ["alpha", "bravo"].map((id) => ({ space: "main", path: href(id) }));
-  saved.state = { ...saved.state, space: "main", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [href("charlie"), href("delta"), "/cron", href("foxtrot"), href("golf"), "/shortcuts", href("hotel")].map((path, i) => ({ path, space: "main", group: i > 2 ? "work" : undefined })) };
+  saved.state = { ...saved.state, space: "main", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [href("charlie"), href("delta"), "/routines", href("foxtrot"), href("golf"), "/shortcuts", href("hotel")].map((path, i) => ({ path, space: "main", group: i > 2 ? "work" : undefined })) };
   saved.attention = [{ path: href("hotel"), parked: true }];
   await page.goto(`${origin}${href("charlie")}`);
   const top = (locator: any) => locator.evaluate((node: HTMLElement) => node.getBoundingClientRect().top), parked = page.getByRole("button", { name: "Parked", exact: true });

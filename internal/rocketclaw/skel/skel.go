@@ -18,13 +18,12 @@ import (
 )
 
 const (
-	payloadRoot   = ".rocketclaw"
-	targetRoot    = payloadRoot
-	agentsRoot    = "agents"
-	skillsRoot    = "skills"
-	workspaceCron = "cron"
-	scriptsRoot   = "scripts"
-	overlaysRoot  = "overlays"
+	payloadRoot  = ".rocketclaw"
+	targetRoot   = payloadRoot
+	agentsRoot   = "agents"
+	skillsRoot   = "skills"
+	scriptsRoot  = "scripts"
+	overlaysRoot = "overlays"
 
 	scriptSymlinkExcludeBegin = "# BEGIN rocketclaw generated script symlinks"
 	scriptSymlinkExcludeEnd   = "# END rocketclaw generated script symlinks"
@@ -424,7 +423,7 @@ func syncScriptSymlinkGitExclude(workspace string, generated []string, logger *s
 }
 
 func overlayWorkspaceIn(workspace, target string, logger *slog.Logger) error {
-	for _, root := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot} {
+	for _, root := range [...]string{agentsRoot, skillsRoot, scriptsRoot} {
 		dir := filepath.Join(workspace, root)
 
 		info, err := os.Stat(dir)
@@ -557,7 +556,7 @@ func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) er
 		{"init"},
 		{"remote", "add", "origin", overlay.URL},
 		{"sparse-checkout", "init", "--cone"},
-		{"sparse-checkout", "set", agentsRoot, skillsRoot, workspaceCron, scriptsRoot},
+		{"sparse-checkout", "set", agentsRoot, skillsRoot, scriptsRoot},
 		{"fetch", "--depth=1", "--filter=blob:none", "origin", cmp.Or(overlay.Ref, "HEAD")},
 		{"checkout", "--detach", "FETCH_HEAD"},
 	} {
@@ -571,7 +570,7 @@ func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) er
 		}
 	}
 
-	for _, root := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot} {
+	for _, root := range [...]string{agentsRoot, skillsRoot, scriptsRoot} {
 		if _, err := os.Stat(filepath.Join(overlay.ClonePath, root)); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue

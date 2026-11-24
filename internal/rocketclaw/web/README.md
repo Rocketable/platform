@@ -148,7 +148,7 @@ highlighted once that language loads; tool output and search results are not. Th
 the expanded view, wraps long lines for every block at once; this browser
 remembers the choice across reloads.
 Only sessions with sandboxed messages append ` - origin` to the footer. The
-origin is `sandboxed` for messages produced by another conversation or a cron
+origin is `sandboxed` for messages produced by another conversation or a routine
 run, and `canonical` otherwise. New turns store the
 resolved provider-qualified model.
 The footer does not show source or destination conversation IDs. Copied messages
@@ -304,8 +304,8 @@ last 30 seconds.
 Recorded user messages in Web chats, Slack threads, and shadows have a **Revert
 message** action alongside Copy. Hover on desktop, tap on touch screens, or focus
 the message with the keyboard. Revert reaches only the messages after the newest
-one from a cron run, External MCP, or Slack: that message and everything before
-it stay, and their Revert is disabled. Hidden cron and External MCP runs and
+one from a routine run, External MCP, or Slack: that message and everything before
+it stay, and their Revert is disabled. Hidden routine and External MCP runs and
 delegation histories do not support Revert. Pending inputs keep their withdrawal
 controls.
 
@@ -326,7 +326,7 @@ panel has one line per request and agent reply, the current branch
 first, with folding and a switch that shows only your messages. Picking an agent
 reply, or the end of another branch, continues from it; picking a request goes
 back to just before it, as Revert does. A pick never clears text you typed.
-Lines before the newest cron, External MCP or Slack message are disabled. The
+Lines before the newest routine, External MCP or Slack message are disabled. The
 first line of each other branch offers **Summarize**, which adds a summary of
 that branch to the current one as a `[System]` message, and **Delete**, which
 confirms what it removes and then deletes that branch, its nested branches and
@@ -453,7 +453,7 @@ Running those transport files directly with
 Build these assets before building `cmd/rocketclaw`, then run that Go executable;
 it serves the Web on its `web.tsnet` node's HTTPS name. Navigation uses the browser History API;
 non-API page paths must return `index.html`, including direct `/s/<base64url-id>`
-and `/cron` loads. The source lives in `internal/rocketclaw/web/`; no JavaScript server is shipped.
+and `/routines` loads. The source lives in `internal/rocketclaw/web/`; no JavaScript server is shipped.
 Keep `TMPDIR` inside the repository's `.tmp/` for builds and tests.
 
 The local `go.mod` is a boundary that keeps this JavaScript project and its
@@ -536,9 +536,11 @@ offline, and one on another protocol keeps working with a notice.
 ## Tabs
 
 Tabs follow editor semantics.
-Sessions and pages (New session, Search, Voice, Cron, Agents, Skills, Settings) open in
+Sessions and pages (New session, Search, Voice, Routines, Agents, Skills, Settings) open in
 one strip, and a location never appears in two tabs. The URL always names the
-active tab.
+active tab. Tabs saved at `/cron` or `/cron/<name>`, from before the page was
+called Routines, were moved once to `/routines` and `/routines/<name>` by a
+database migration.
 
 - **Opening.** Opening a location that is not already open (New session,
   Search results, links, footer buttons, page commands, the palette) gives it a
@@ -626,7 +628,7 @@ active tab.
   session's name, or its agent when it has none, an OpenCode session's tab
   title, or any other tab's title. Its body says what happened: “Park ended”
   for a park's time, the start of the reply for any other session mark,
-  “Search finished”, “Run finished” for a cron, or “<page> updated”. Only a tab you have
+  “Search finished”, “Run finished” for a routine, or “<page> updated”. Only a tab you have
   notifies: in your own tabs or Shared. News on a tab you
   closed shows quietly in bold when you open it again, and a window still
   holding tabs older than the server's waits for its reload before it notifies.
@@ -709,7 +711,7 @@ active tab.
   included, ends the attention items with **Unfollow**, or **Follow** once you
   unfollowed it; with several tabs selected, Unfollow acts on the followed
   ones. On a tab you unfollowed the server marks nothing for you: no turn end,
-  question, finished search, cron run, stored page, or park's end turns it
+  question, finished search, routine run, stored page, or park's end turns it
   bold, counts it, or notifies. Unfollowing clears its bold and keeps its
   park; following again brings back nothing missed. **Mark as unread** still
   works on it, and an agent asking on it still shows **Needs you**, which does
@@ -808,18 +810,18 @@ active tab.
   right, and Close all act only within the tab's space, and Cmd/Ctrl+[ and ]
   only within the current space. Screen readers hear each tab's group, if any,
   and space as its description, such as “Group Work, Space: Main”.
-- **Agents and crons in spaces.** An agent or cron whose frontmatter sets
-  `space:` belongs to the space of that name, ignoring case; a cron without one
-  takes its agent's. The Cron page and Run cron palette hide crons, and their
-  runs, that belong to another space.
-- **Birth space.** A session is born in its agent's space; a Run cron session, a
-  cron's report chat, or a chat continuing a cron run in its cron's space, else
-  the cron agent's; any other Web session in the space you were in. A space named
+- **Agents and routines in spaces.** An agent whose frontmatter sets `space:`
+  belongs to the space of that name, ignoring case, and so do its routines. The
+  Routines page and Run routine palette hide routines, and their runs, that
+  belong to another space.
+- **Birth space.** A session is born in its agent's space; a Run routine session, a
+  routine's report chat, or a chat continuing a routine run in the space of the
+  routine's agent; any other Web session in the space you were in. A space named
   this way that does not exist yet is created with the session. A session opens
   in the space it was born in, and after its first message a new session moves
   there and takes you along. When you have moved a session's tab elsewhere, its tab
   menu offers **Restore to "<space>"**. Sessions from before birth spaces, and
-  sessions started outside the Web other than cron report chats, have none and
+  sessions started outside the Web other than routine report chats, have none and
   open in the current space.
 - **Agent picker.** New session offers every agent. Once a session's agent has a
   space, its picker and `/agent` offer only agents with that space, ignoring case;
@@ -828,7 +830,7 @@ active tab.
   [Space permissions](../../../README.md#space-permissions)) gets only their
   spaces from the server: the space cards, **Move to space**, and the Shared
   card show only those, and so do the session list, search, the agent
-  picker, the Cron page, and the Page Index. Their space cards' **…** menu
+  picker, the Routines page, and the Page Index. Their space cards' **…** menu
   offers only **Go to space**, and the command palette offers no **New space**
   on that server, because the server refuses making, renaming, and deleting
   spaces from them. When another person switches a session to an
@@ -889,8 +891,8 @@ active tab.
 - **Unread** tabs show a bold title, and any kind of tab can be unread. The
   server marks a tab when something new happens on it: for a session, a turn
   ends, finished, failed, or stopped, or the agent starts asking a question;
-  for a Search page, a search you entered finishes; for a cron's page, its
-  run ends, once nothing is left to wake it, and the Cron page of the cron's
+  for a Search page, a search you entered finishes; for a routine's page, its
+  run ends, once nothing is left to wake it, and the Routines page of the routine's
   space is marked too; for
   a published page, an HTML file of it is stored, and the space's Pages list is
   marked too. Agents, Skills, Settings, Shortcuts, Voice, and Recently closed
@@ -898,7 +900,7 @@ active tab.
   notification, when you sent or steered that turn from the Web, when the
   session is in your own tabs in any space, or when it is Shared in a space you
   can see, as a Shared tab is a tab of everyone's; whoever started the turn,
-  Slack mentions and crons included. A Cron or Pages tab reaches you the same
+  Slack mentions and routines included. A Routines or Pages tab reaches you the same
   way when it is your own tab or Shared. A
   remote OpenCode session's turn counts when it holds a prompt. Nobody is
   marked for the tab they had in view in the last 10 seconds, or the last 4
@@ -1025,7 +1027,7 @@ Each dialog opening clears text, pills, and result selection and focuses
 the input.
 Once text is typed, matching commands appear above the conversations; an empty
 query, or one with a filter such as `tag:customer` or `is:forked`, lists
-conversations only. A bare key such as `cron:` is not a filter. Commands match
+conversations only. A bare key such as `routine:` is not a filter. Commands match
 case-insensitively: a label equal to the text comes first, then labels containing
 it, then, once three or more characters are typed, labels containing them in order
 with gaps. Within each group the command order below applies. Enter runs the
@@ -1076,8 +1078,8 @@ values; choosing one by click, arrows, Tab, or Enter writes the filter into the
 query without replacing earlier agents or rooms. Multiple agent filters match
 any listed agent; multiple room filters match any listed room. Other filters
 still narrow those results. `agent:` also matches a chat that shows a hidden
-cron or External MCP run of that agent, such as `agent:dream` for the chat a
-`dream` cron run reports to.
+routine or External MCP run of that agent, such as `agent:reporter` for the chat a
+`reporter` routine run reports to.
 A remote OpenCode session's agent is the one it has selected, so `agent:build`
 also finds those. `server:box` keeps the remote sessions of the configured
 OpenCode server `box`, exactly. `model:opus` keeps conversations whose model
@@ -1111,7 +1113,7 @@ once, in recent-first order.
 `sort:newest` or `sort:oldest` instead orders results by last activity on every
 search surface, overriding message-hit grouping; rows without
 activity come last, equal times order by conversation ID, and the last `sort:` wins.
-Typing `is:` suggests `forked`, `cron`, and `unread` (sessions bold for you, closed tabs included, parked ones not),
+Typing `is:` suggests `forked`, `routine`, and `unread` (sessions bold for you, closed tabs included, parked ones not),
 then the work terms: `running` (a running turn or background work), `queued` (waiting turns other
 than scheduled reminders), `waiting` (a session marked Needs you: a running turn's unanswered
 question, or a remote OpenCode session's pending form or permission request), and `external` (a
@@ -1121,7 +1123,7 @@ reads every work term too. Each listed
 session also carries when its work state (the first of needs you, running, and queued, else idle)
 began, which comes from the server and reads the same for everyone. Typing `sort:` suggests
 `newest` and `oldest`. While typing, a last word that is an unfinished filter
-(a bare `tag:`, `cron:`, `agent:`, `principal:`, `room:`, `server:`, `model:`, or `space:`, a partial `is:` or `sort:` term
+(a bare `tag:`, `routine:`, `agent:`, `principal:`, `room:`, `server:`, `model:`, or `space:`, a partial `is:` or `sort:` term
 such as `is:fork`, or an unclosed quote) is not sent; Enter, opening a saved
 search, and following a link send the whole query. Unknown complete terms such
 as `is:foo` stay ordinary text. Filter pills show the server's reading of the
@@ -1138,7 +1140,7 @@ may be incomplete; the Search page says so instead of reporting “No matches”
 hit from a stopped or failed turn opens its chat without jumping to a message. A
 failed search shows an error with Retry, and the next keystroke also retries.
 Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
-**Sessions: New**, **Sessions: Search**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
+**Sessions: New**, **Sessions: Search**, **Voice**, **Routines: Dashboard**, **Routines: Run**,
 **List Agents**, **List Skills**, **Settings**, **Tabs: Previous**, **Tabs: Next**,
 **Tabs: Recently closed**, and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
 works (the desktop sidebar, not the narrow-screen drawer), and **Tabs: Reopen closed tab** while a tab is closed. In both palettes a command bound to a
@@ -1184,8 +1186,8 @@ the agent cannot use.
 The Stash button and shortcut still hold the entire draft literally, including
 any `/command` text. Slack has no commands: `/` text in a Slack mention reaches
 the agent as ordinary text.
-Run cron opens a new session immediately, titled by the cron's name until its first message arrives. The job still runs privately, but its turn shows live in the chat, with **Working…**, and is replaced by the copied history when it finishes. The same holds for every hidden cron or External MCP run that reports to a chat.
-A chat that began as a cron run or an external MCP call starts with a collapsed origin card. Use show more to see its details; the card scrolls with the messages. An ordinary chat has no origin card.
+Run routine opens a new session immediately, titled by the routine's name until its first message arrives. The routine still runs privately, but its turn shows live in the chat, with **Working…**, and is replaced by the copied history when it finishes. The same holds for every hidden routine or External MCP run that reports to a chat.
+A chat that began as a routine run or an external MCP call starts with a collapsed origin card, headed `Routine · <name>` or `External MCP · <id>`, then the agent. Use show more to see its details; the card scrolls with the messages. An ordinary chat has no origin card.
 The composer's session buttons appear only on desktop; on mobile, the command
 palette offers the same actions.
 Safe-area padding is preserved. On very narrow screens, navigation buttons scroll
@@ -1422,35 +1424,41 @@ or **Regenerate title** asks OpenCode to generate a new title, and a title chang
 in OpenCode appears here on the next sync.
 A failed OpenCode update leaves the local name unchanged.
 
-The Cron page shows one line per cron, each name linking to that cron's journal,
-where its runs are listed. Search above the grid filters the lines by case-insensitive
+The Routines page shows one line per routine, named `<agent> · <schedule>` such as
+`reporter · 1h`, each name linking to that routine's journal, where its runs are
+listed. Search above the grid filters the lines by case-insensitive
 text matching across definitions, metadata, and run times. The grid distinguishes
 recorded runs (filled cyan) from expected runs (outlined amber), with time labels.
 The grid shows the past 12 hours and next 24 hours, including runs whose definition
 is gone. Marker tooltips open on hover, keyboard focus, or tap; Escape dismisses them.
-Each run is one run of the cron; its subagents and sessions are inside it. Click a
+Each run is one run of the routine; its subagents and sessions are inside it. Click a
 recorded run marker or the bar (for the latest run) to preview that run's own
 reasoning and tool activity. **Open chat** opens the chat that holds
 the run's output, or else creates or reuses a writable Web chat that shows the
-run's history, without rerunning the job. Repeated opens return the same chat. It
+run's history, without rerunning the routine. Repeated opens return the same chat. It
 offers every loaded agent, and a chat it creates starts with the run's own agent;
 when that agent is missing or turned off, nothing is created and the error names
 the agent. Removed definitions keep
 their recorded runs visible until retention cleanup deletes them: a run no chat
 shows goes 90 days after its last message, and any other run goes with its chat,
 or with its expired messages in a sticky chat.
-A cron's journal opens from its name on the Cron page or from **Cron: Timeline** in
-the command palette, which lists every cron, retired ones too, with its run count
-and last run. It opens in its own tab and lists the cron's runs, newest first under
+Runs of retired cron files, from before routines replaced them, stay listed as
+Retired under the file's path, such as `cron/daily.md`, and still open.
+A routine's journal opens from its name on the Routines page or from **Routines: Timeline** in
+the command palette, which lists every routine, retired ones too, with its run count
+and last run. It opens in its own tab at `/routines/<encoded name>`, titled
+**Routines / <name>**, and lists the routine's runs, newest first under
 a header per UTC day, each with the time since the run before it. Above them are the
-schedule, a collapsed Definition with the cron's source and body, the run count, the
+schedule, a collapsed Definition with the routine's source, such as
+`agents/reporter.md#1h`, and the prompt it sends, the run count, the
 typical and longest gap, the last and next run, upcoming runs, and one bar per UTC
 day; clicking a bar jumps to that day. The journal shows 60 runs, and **Show older
 runs** adds 100 more. Picking a run previews it beside the list on a wide window and
 under the run on a narrow one. If loading the runs fails, the page keeps what it
-shows and retries until it loads. A play icon beside a cron with a definition, on its
-Cron page line and in its journal, opens an in-app confirmation dialog
-before running. It shows a spinner until
+shows and retries until it loads; a name no routine in this space has shows
+“No routine named <name> in this space.” A play icon beside a routine with a definition, on its
+Routines page line and in its journal, opens an in-app confirmation dialog,
+“Start this routine now?”, before running. It shows a spinner until
 execution finishes, then opens the resulting chat.
 Each turn shows its activity and replies in the order they happened. How much
 activity appears is the browser's **Timeline detail** setting (see Config). Activity
@@ -1483,7 +1491,7 @@ queue's box, with their state and **Open**; running ones also get **Stop**. Prom
 parent sends a busy subagent wait in that subagent's own queue. Open shows a subagent's Delegation
 History, which lists that subagent's own jobs with Open and Stop, or scrolls to a
 script's call, loading earlier turns when needed. Jobs
-started by hidden cron or External MCP runs that report to this chat are listed
+started by hidden routine or External MCP runs that report to this chat are listed
 too, without Open. A `rocketclaw_sessions_write` call that awaits a reply is
 also listed as a job until the other session's answer comes back; its Stop only
 stops waiting for that answer and leaves the other session alone. Calls running
@@ -1536,7 +1544,7 @@ checked. The script's result follows as text. Under it come the approver's
 decision and reason for the whole script, when `code_mode_approve` sent the script for
 review, and any reason that matches no row, such as one saved after the turn
 ended. Until the result arrives, those reasons show on their own. Files the script attached with `rocketclaw_attach_files_to_response` show
-on the turn's final reply. Cron run previews and the
+on the turn's final reply. Routine run previews and the
 delegation panel keep every disclosure open.
 The transcript has a visible scrollbar and a side rail with one jump marker per
 loaded turn. Hovering or focusing the rail opens a scrollable box of message previews;
@@ -1626,7 +1634,7 @@ failures use HTTP 401 and code 16.
 
 Both attachment operations resolve identity from the actual socket's browser IP.
 Forwarded headers cannot select identity. Download requests always contain the
-**viewed visible conversation ID**, including cron previews and synced history;
+**viewed visible conversation ID**, including routine previews and synced history;
 metadata's `conversationId` can identify a private producer and is never used as
 the download authorization target. Newly uploaded IDs become downloadable only
 after the backend references them in history or the queue.

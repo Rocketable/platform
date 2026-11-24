@@ -22,7 +22,7 @@ type SearchKey string
 
 const (
 	keyTag       SearchKey = "tag"
-	keyCron      SearchKey = "cron"
+	keyCron      SearchKey = "routine"
 	keyAgent     SearchKey = "agent"
 	keyRoom      SearchKey = "room"
 	keyIs        SearchKey = "is"
@@ -116,7 +116,7 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 		switch term.Key {
 		case keyIs:
 			term.Value = strings.ToLower(value)
-			found = slices.Contains([]string{"forked", "cron", "unread", "running", "queued", "waiting", "external"}, term.Value)
+			found = slices.Contains([]string{"forked", "routine", "unread", "running", "queued", "waiting", "external"}, term.Value)
 		case keySort:
 			term.Value = strings.ToLower(value)
 			found = term.Value == "newest" || term.Value == "oldest"
@@ -194,7 +194,7 @@ func sidebarChat(ctx context.Context, slack slackLookup, rooms map[string]string
 	chat := SidebarChat{Session: *row, Cron: row.Origin.Run != nil && row.Origin.Binding.ManagedConversationID != row.Origin.ConversationID}
 	if chat.Cron {
 		name, _, _ := strings.Cut(row.Origin.Run.Path, ".md#")
-		chat.CronName = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(name, "cron/"), "agents/"), ".md")
+		chat.CronName = strings.TrimPrefix(name, "agents/")
 	}
 
 	if row.SlackChannel != "" {
@@ -315,7 +315,7 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals, sandboxed []string,
 }
 
 func (c *SidebarChat) is(value string) bool {
-	return value == "forked" && c.Session.ForkedFrom != "" || value == "cron" && c.Cron ||
+	return value == "forked" && c.Session.ForkedFrom != "" || value == "routine" && c.Cron ||
 		value == "unread" && !c.Session.Attention.UnreadAt.IsZero() && !c.Session.Attention.Parked || value == "running" && (c.Session.Running || c.Session.Background) ||
 		value == "queued" && c.Session.Queued || value == "waiting" && c.Session.Asking || value == "external" && c.Session.External
 }

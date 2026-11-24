@@ -632,9 +632,6 @@ go.starlark.net/resolve
 go.starlark.net/starlark
 go.starlark.net/starlarkstruct
 go.starlark.net/syntax
-# go.yaml.in/yaml/v2 v2.4.5
-## explicit; go 1.15
-go.yaml.in/yaml/v2
 # go.yaml.in/yaml/v3 v3.0.6
 ## explicit; go 1.16
 go.yaml.in/yaml/v3
@@ -952,9 +949,6 @@ mvdan.cc/sh/v3/fileutil
 mvdan.cc/sh/v3/internal
 mvdan.cc/sh/v3/pattern
 mvdan.cc/sh/v3/syntax
-# sigs.k8s.io/yaml v1.6.0
-## explicit; go 1.22
-sigs.k8s.io/yaml
 # tailscale.com v1.106.1
 ## explicit; go 1.27.4
 tailscale.com

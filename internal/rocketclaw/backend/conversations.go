@@ -138,7 +138,7 @@ func CronStem(path string) string {
 		return agent + " · " + schedule
 	}
 
-	return strings.TrimSuffix(strings.TrimPrefix(path, "cron/"), ".md")
+	return path
 }
 
 func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage) error {

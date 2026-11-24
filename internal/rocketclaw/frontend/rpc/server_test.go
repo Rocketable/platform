@@ -1301,7 +1301,7 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, "planner", agent)
 		require.Contains(t, prompt, "Cron body")
 		require.NotEmpty(t, progress.SyncDestination)
-		require.True(t, strings.HasPrefix(progress.ConversationID, "one-off-cron:cron/alpha.md:"))
+		require.True(t, strings.HasPrefix(progress.ConversationID, "one-off-cron:agents/planner.md#24h:"))
 
 		cronRan <- struct{}{}
 
@@ -2566,24 +2566,18 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	emptyJobs, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
 	require.Empty(t, emptyJobs.Jobs)
-	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "cron"), 0o700))
 
-	for name, space := range map[string]string{"zeta": "\nspace: Ops", "alpha": ""} {
-		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "cron", name+".md"), []byte("---\nschedule: 24h\nagent: planner"+space+"\n---\nCron body\n"), 0o600))
-	}
+	plannerFile := filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md")
+	plannerWithRoutine := "---\nmodel: gpt-6.1-sol\nspace: Billing\nroutines:\n  - 24h: Cron body\n---\nHelp."
+	require.NoError(t, root.WriteFile(plannerFile, []byte(plannerWithRoutine), 0o600))
 
 	next := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
-	require.NoError(t, sessions.SyncCronSchedules([]backend.CronScheduleState{{ScheduleID: "cron/alpha.md#0#24h", RelativePath: "cron/alpha.md", NextDue: next}, {ScheduleID: "cron/zeta.md#0#24h", RelativePath: "cron/zeta.md", NextDue: next}}))
+	require.NoError(t, sessions.SyncCronSchedules([]backend.CronScheduleState{{ScheduleID: "agents/planner.md#24h", RelativePath: "agents/planner.md#24h", NextDue: next}}))
 
 	jobs, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
-	require.Len(t, jobs.Jobs, 2)
-
-	for i, name := range []string{"alpha", "zeta"} {
-		require.True(t, proto.Equal(&CronJob{Stem: name, Schedule: "24h", Body: "Cron body\n", Agent: "planner", Origin: "cron/" + name + ".md", NextRun: next.Format(time.RFC3339Nano), Upcoming: []string{next.Format(time.RFC3339Nano)}, Space: jobs.Jobs[i].GetSpace()}, jobs.Jobs[i]), "unexpected job: %v", jobs.Jobs[i])
-	}
-
-	require.Equal(t, []string{"Billing", "Ops"}, []string{jobs.Jobs[0].GetSpace(), jobs.Jobs[1].GetSpace()}, "alpha inherits planner's space; zeta names its own")
+	require.Len(t, jobs.Jobs, 1)
+	require.True(t, proto.Equal(&CronJob{Stem: "planner · 24h", Schedule: "24h", Body: "Cron body", Agent: "planner", Origin: "agents/planner.md#24h", NextRun: next.Format(time.RFC3339Nano), Upcoming: []string{next.Format(time.RFC3339Nano)}, Space: "Billing"}, jobs.Jobs[0]), "unexpected job: %v", jobs.Jobs[0])
 
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md"), []byte("---\nmodel: [\n---\nHelp."), 0o600))
 
@@ -2662,10 +2656,10 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 
 	jobs, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
-	require.Len(t, jobs.Jobs, 4)
+	require.Len(t, jobs.Jobs, 3)
 
-	for i, stem := range []string{"report_daily", "report:daily"} {
-		run := jobs.Jobs[i+2]
+	for i, stem := range []string{"cron/report_daily.md", "cron/report:daily.md"} {
+		run := jobs.Jobs[i+1]
 		require.Equal(t, "ran", run.Status)
 		require.Equal(t, stem, run.Stem)
 		require.Equal(t, id, run.NextRun)
@@ -2673,8 +2667,8 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		require.Empty(t, run.Body)
 	}
 
-	require.Equal(t, "2026-09-05T02:00:00.000000002Z", jobs.Jobs[2].LastRun)
-	require.Equal(t, "2026-09-05T01:00:00.000000001Z", jobs.Jobs[3].LastRun)
+	require.Equal(t, "2026-09-05T02:00:00.000000002Z", jobs.Jobs[1].LastRun)
+	require.Equal(t, "2026-09-05T01:00:00.000000001Z", jobs.Jobs[2].LastRun)
 
 	again, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
@@ -2706,8 +2700,8 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	require.NoError(t, err)
 	reverted, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
-	require.Len(t, reverted.Jobs, 4)
-	require.Equal(t, []string{"", id}, []string{reverted.Jobs[2].NextRun, reverted.Jobs[3].NextRun})
+	require.Len(t, reverted.Jobs, 3)
+	require.Equal(t, []string{"", id}, []string{reverted.Jobs[1].NextRun, reverted.Jobs[2].NextRun})
 	_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, id)
 	require.NoError(t, err)
 
@@ -2723,8 +2717,8 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	require.NoError(t, err)
 	withSilent, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
-	require.Len(t, withSilent.Jobs, 5)
-	require.True(t, proto.Equal(&CronJob{Stem: "silent", Status: "ran", LastRun: "2026-09-05T03:00:00.000000003Z", Origin: undelivered}, withSilent.Jobs[2]))
+	require.Len(t, withSilent.Jobs, 4)
+	require.True(t, proto.Equal(&CronJob{Stem: "cron/silent.md", Status: "ran", LastRun: "2026-09-05T03:00:00.000000003Z", Origin: undelivered}, withSilent.Jobs[1]))
 	trace, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: undelivered})
 	require.NoError(t, err)
 	require.Len(t, trace.Messages, 2)
@@ -2761,7 +2755,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			listed, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 			require.NoError(t, err)
 
-			want := &ListCronJobsResponse{Jobs: append(slices.Clone(withSilent.Jobs), &CronJob{Stem: "checkpoint", Status: "ran", LastRun: "2000-01-02T03:04:05.000000006Z", Origin: source})}
+			want := &ListCronJobsResponse{Jobs: append(slices.Clone(withSilent.Jobs), &CronJob{Stem: "cron/checkpoint.md", Status: "ran", LastRun: "2000-01-02T03:04:05.000000006Z", Origin: source})}
 			require.True(t, proto.Equal(want, listed), "checkpoint-only run missing or inventory changed: %v", listed)
 
 			for _, terminal := range []protocol.Terminal{protocol.TerminalFailed, protocol.TerminalStopped, ""} {
@@ -2793,11 +2787,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, err)
 		_, err = sessions.AppendEntryID(ctx, undelivered, &harness.SessionEntry{Version: 1, Type: "producer_schedule", Timestamp: entry.Timestamp, OutputTrace: []json.RawMessage{schedule}})
 		require.NoError(t, err)
-
-		path := filepath.Join(cfg.RuntimeDirName(), "cron", "silent.md")
-
-		require.NoError(t, root.WriteFile(path, []byte("---\nschedule: 24h\nagent: planner\nspace: Ops\n---\nSilent\n"), 0o600))
-		defer func() { require.NoError(t, root.Remove(path)) }()
 
 		request := &CreateSessionRequest{SourceConversationId: undelivered}
 
@@ -2839,7 +2828,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: webID})
 		require.NoError(t, err)
 
-		trace.Origin = `{"agent":"planner","kind":"cron","ranAt":"2026-09-05T03:00:00.000000003Z","runId":"` + undelivered + `","runKind":"scheduled","sourcePath":"cron/silent.md","stem":"silent"}`
+		trace.Origin = `{"agent":"planner","kind":"cron","ranAt":"2026-09-05T03:00:00.000000003Z","runId":"` + undelivered + `","runKind":"scheduled","sourcePath":"cron/silent.md","stem":"cron/silent.md"}`
 		require.Equal(t, trace.Origin, history.Origin)
 		require.Equal(t, trace.Messages, history.Messages)
 		require.True(t, history.Reset_)
@@ -2868,56 +2857,32 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		spaces, err := sessions.Spaces(ctx)
 		require.NoError(t, err)
 
-		opsID := spaces[slices.IndexFunc(spaces, func(space backend.Space) bool { return space.Name == "Ops" })].ID
+		billingID := spaces[slices.IndexFunc(spaces, func(space backend.Space) bool { return space.Name == "Billing" })].ID
 
-		planner := filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md")
+		require.NoError(t, root.WriteFile(plannerFile, []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
+		defer func() { require.NoError(t, root.WriteFile(plannerFile, []byte(plannerWithRoutine), 0o600)) }()
 
-		require.NoError(t, root.WriteFile(planner, []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
-		defer func() {
-			require.NoError(t, root.WriteFile(planner, []byte("---\nmodel: gpt-6.1-sol\nspace: Billing\n---\nHelp."), 0o600))
-		}()
+		catalog, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: webID})
+		require.NoError(t, err)
 
-		for _, test := range []struct {
-			name       string
-			definition bool
-			want       []string
-		}{
-			{"definition", true, []string{"general", "planner", "selected"}},
-			{"missing definition", false, []string{"general", "planner", "selected"}},
-		} {
-			t.Run(test.name, func(t *testing.T) {
-				if !test.definition {
-					require.NoError(t, root.Remove(path))
-					defer func() { require.NoError(t, root.WriteFile(path, []byte("removed definition"), 0o600)) }()
-				}
+		names := make([]string, 0, len(catalog.Agents))
+		for _, agent := range catalog.Agents {
+			names = append(names, agent.Name)
+		}
 
-				catalog, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: webID})
-				require.NoError(t, err)
+		require.Equal(t, []string{"general", "planner", "selected"}, names)
 
-				names := make([]string, 0, len(catalog.Agents))
-				for _, agent := range catalog.Agents {
-					names = append(names, agent.Name)
-				}
+		listed, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+		require.NoError(t, err)
 
-				require.Equal(t, test.want, names)
+		index := slices.IndexFunc(listed.Sessions, func(session *Session) bool { return session.Id == webID })
+		require.NotEqual(t, -1, index)
+		require.Equal(t, billingID, listed.Sessions[index].SpaceId, "the chat keeps the space it was opened in after its agent's space changes")
+		require.True(t, listed.Sessions[index].Cron, "cron origin survives follow-ups and config changes")
 
-				listed, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
-				require.NoError(t, err)
-
-				index := slices.IndexFunc(listed.Sessions, func(session *Session) bool { return session.Id == webID })
-				require.NotEqual(t, -1, index)
-				require.Equal(t, opsID, listed.Sessions[index].SpaceId, "the chat keeps the space its cron named when it was opened")
-				require.True(t, listed.Sessions[index].Cron, "cron origin survives follow-ups and config changes")
-
-				for _, agent := range []string{"general", "planner", "selected"} {
-					_, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: webID, Text: "/agent " + agent})
-					if slices.Contains(test.want, agent) {
-						require.NoError(t, err)
-					} else {
-						require.Equal(t, codes.InvalidArgument, status.Code(err))
-					}
-				}
-			})
+		for _, agent := range []string{"general", "planner", "selected"} {
+			_, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: webID, Text: "/agent " + agent})
+			require.NoError(t, err)
 		}
 
 		reopened, err := invoke[CreateSessionResponse](ctx, connection, "CreateSession", request)
@@ -2964,13 +2929,13 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 	remainingRuns, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
-	require.Len(t, remainingRuns.Jobs, 3)
-	require.True(t, proto.Equal(jobs.Jobs[2], remainingRuns.Jobs[2]))
+	require.Len(t, remainingRuns.Jobs, 2)
+	require.True(t, proto.Equal(jobs.Jobs[1], remainingRuns.Jobs[1]))
 
 	opened := make([]string, 0, 2)
 
 	for range 2 {
-		ran, err := invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "alpha"})
+		ran, err := invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "planner · 24h"})
 		require.NoError(t, err)
 		require.NotEmpty(t, ran.Id)
 		require.NotContains(t, ran.Id, ":")
@@ -2989,7 +2954,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	cronRunner.RunFunc = func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, errors.New("cron execution failed")
 	}
-	failed, err := invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "alpha"})
+	failed, err := invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "planner · 24h"})
 	require.NoError(t, err)
 	require.NotEmpty(t, failed.Id)
 
@@ -3004,10 +2969,10 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	assert.Equal(t, spaces[slices.IndexFunc(spaces, func(space backend.Space) bool { return space.Name == "Billing" })].ID, ran.SpaceId)
 
 	_, err = invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "../escape"})
-	require.ErrorContains(t, err, "nested paths are not allowed")
+	require.ErrorContains(t, err, `no routine "../escape"`)
 
 	for _, method := range []string{"ListCronJobs", "RunCronJob"} {
-		_, err = invoke[RunCronJobResponse](t.Context(), connection, method, &RunCronJobRequest{Stem: "alpha"})
+		_, err = invoke[RunCronJobResponse](t.Context(), connection, method, &RunCronJobRequest{Stem: "planner · 24h"})
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 	}
 
@@ -3024,10 +2989,11 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		}
 	}
 
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "cron", "bad.md"), []byte("not a cron definition"), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "bad.md"), []byte("---\nmodel: gpt-6.1-sol\nroutines: [not a schedule]\n---\nHelp."), 0o600))
 
 	_, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.ErrorContains(t, err, "bad.md")
+	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "bad.md")))
 
 	sidebarChoices := channels.SidebarChannelAgentChoicesFunc
 	channels.SidebarChannelAgentChoicesFunc = func(context.Context, string) (string, []string, error) {

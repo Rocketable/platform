@@ -458,8 +458,8 @@ export async function appScenario(part: "lists" | "composer") {
       await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
       expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
       // The theme commands run earlier in this test come first, as recently used.
-      expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Theme: Auto", "Theme: Dark", "Theme: Light", "Cron: Dashboard", "Cron: Run", "Cron: Timeline", "Help: Keyboard Shortcuts", "List Agents", "List Skills",
-        "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Spaces: New space", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Copy link", "Tabs: Next⌘]", "Tabs: Previous⌘[", "Tabs: Recently closed", "Tabs: Toggle sidebar⌘B",
+      expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Theme: Auto", "Theme: Dark", "Theme: Light", "Help: Keyboard Shortcuts", "List Agents", "List Skills",
+        "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Routines: Dashboard", "Routines: Run", "Routines: Timeline", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Spaces: New space", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Copy link", "Tabs: Next⌘]", "Tabs: Previous⌘[", "Tabs: Recently closed", "Tabs: Toggle sidebar⌘B",
         // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
         "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
         "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded.", "Voice"]);
@@ -479,13 +479,13 @@ export async function appScenario(part: "lists" | "composer") {
       await search.fill("tabs: close t");
       await sessionPalette.getByRole("button", { name: "Tabs: Close all", exact: true }).waitFor({ state: "detached" });
       expect(await commandRows.allTextContents()).toEqual(["Tabs: Close to the right", "Tabs: Close others", "Search in this space for 'tabs: close t'", "Search everywhere for 'tabs: close t'"]); // A contiguous match beats a recent fuzzy one.
-      await search.fill("cron: run"); // A bare key is not a filter.
-      await sessionPalette.getByRole("button", { name: "Cron: Run", exact: true }).waitFor();
-      await search.fill("is:forked cron: run");
-      await sessionPalette.getByRole("button", { name: "Cron: Run", exact: true }).waitFor({ state: "detached" });
-      await search.fill("cron: run");
+      await search.fill("routine: run"); // A bare key is not a filter.
+      await sessionPalette.getByRole("button", { name: "Routines: Run", exact: true }).waitFor();
+      await search.fill("is:forked routine: run");
+      await sessionPalette.getByRole("button", { name: "Routines: Run", exact: true }).waitFor({ state: "detached" });
+      await search.fill("routines: run");
       await search.press("Enter");
-      const cronPicker = page.getByRole("dialog", { name: "Run cron", exact: true }).getByPlaceholder("Search cron jobs", { exact: true });
+      const cronPicker = page.getByRole("dialog", { name: "Run routine", exact: true }).getByPlaceholder("Search routines", { exact: true });
       await cronPicker.waitFor();
       expect(await cronPicker.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
       await page.keyboard.press("Escape");
@@ -1350,7 +1350,7 @@ export async function appScenario(part: "lists" | "composer") {
       const footer = navPage.locator("footer");
       const openPage = async (name: string) => {
         await navPage.keyboard.press("Control+Shift+p");
-        await navPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: ({ Cron: "Cron: Dashboard", Agents: "List Agents", Skills: "List Skills", Config: "Settings" } as Record<string, string>)[name], exact: true }).click();
+        await navPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: ({ Routines: "Routines: Dashboard", Agents: "List Agents", Skills: "List Skills", Config: "Settings" } as Record<string, string>)[name], exact: true }).click();
         await navPage.locator('[data-slot="dialog-overlay"]').waitFor({ state: "hidden" });
         // The top-left corner is a tab, whose tooltip would take the next Escape.
         await navPage.mouse.move(0, navPage.viewportSize()!.height / 2);
@@ -1404,7 +1404,7 @@ export async function appScenario(part: "lists" | "composer") {
         await goToSession(navPage, "matching active");
         await navPage.waitForURL(`${origin}${chatPath}`);
         await navPage.getByPlaceholder("Message or /command").fill("keep this chat draft");
-        for (const name of ["Cron", "Agents", "Skills", "Config"]) {
+        for (const name of ["Routines", "Agents", "Skills", "Config"]) {
           await openPage(name);
           await navPage.waitForURL(`${origin}/${name.toLowerCase()}`);
           const heading = navMain.getByRole("heading", { name, exact: true });
@@ -1419,7 +1419,7 @@ export async function appScenario(part: "lists" | "composer") {
           expect(headingBox.y).toBe(mainBox.y + 16);
           expect(headingBox.height).toBe(28);
           expect(await heading.evaluate((element: HTMLElement) => getComputedStyle(element).padding)).toBe("0px");
-          if (name === "Cron") {
+          if (name === "Routines") {
             const searchBox = (await navMain.getByRole("textbox").first().boundingBox())!;
             expect(searchBox.x).toBe(headerBox.x);
             expect(searchBox.y).toBe(headingBox.y + headingBox.height + 24);
@@ -1469,7 +1469,7 @@ export async function appScenario(part: "lists" | "composer") {
       const cronPage = await context.newPage();
       for (const width of [1280, 390]) {
         await cronPage.setViewportSize({ width, height: 844 });
-        await cronPage.goto(`${origin}/cron`);
+        await cronPage.goto(`${origin}/routines`);
         // Each cron's line names it, linked to its journal, which lists its runs; only a cron with a definition can run.
         const daily = cronPage.getByRole("link", { name: "daily", exact: true });
         await daily.waitFor();
@@ -1493,7 +1493,7 @@ export async function appScenario(part: "lists" | "composer") {
         expect(await cronPage.getByRole("button", { name: /^Preview latest run of / }).count()).toBe(0);
         await search.fill("");
         await daily.waitFor();
-        expect(await daily.getAttribute("href")).toBe(`/cron/${btoa("daily").replaceAll("=", "")}`);
+        expect(await daily.getAttribute("href")).toBe(`/routines/${btoa("daily").replaceAll("=", "")}`);
         expect(await cronPage.getByRole("button", { name: /^Run / }).evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Run daily", "Run unused"]);
         expect(await cronPage.getByText(/Open chat/).count()).toBe(0);
         expect(await cronPage.locator('[aria-label^="Expected daily at "]').count()).toBe(2);
@@ -1536,14 +1536,14 @@ export async function appScenario(part: "lists" | "composer") {
         await cronPage.getByRole("button", { name: "Send", exact: true }).click();
         await ctrl.promptStarted.promise;
         expect(ctrl.prompt).toContain("web:cron:silent-source:Continue this run");
-        await cronPage.goto(`${origin}/cron`);
+        await cronPage.goto(`${origin}/routines`);
         await silent.tap();
         await silentPreview.getByRole("button", { name: /Open chat/ }).click();
         await cronPage.waitForURL(`**/s/${btoa("web:cron:silent-source").replaceAll("=", "")}`);
         await cronPage.locator("#transcript-scroll").getByText("Silent run trace", { exact: true }).waitFor();
         expect(cronOpens.slice(opensBefore)).toEqual(["cron:silent-source", "cron:silent-source"]);
         expect(cronRunCalls).toBe(0);
-        await cronPage.goto(`${origin}/cron`);
+        await cronPage.goto(`${origin}/routines`);
         expect(await cronPage.getByRole("button", { name: "Preview latest run of retired", exact: true }).isEnabled()).toBe(true);
         expect(await cronPage.getByRole("button", { name: "Preview latest run of unused", exact: true }).isDisabled()).toBe(true);
         await cronPage.getByRole("button", { name: "Preview latest run of daily", exact: true }).click({ position: { x: 5, y: 5 } });
@@ -1553,7 +1553,7 @@ export async function appScenario(part: "lists" | "composer") {
         await preview.getByRole("link").click();
         await cronPage.waitForURL("**/s/Y3Jvbi1jaGF0");
       }
-      await cronPage.goto(`${origin}/cron`);
+      await cronPage.goto(`${origin}/routines`);
       const runButton = cronPage.getByRole("button", { name: "Run daily", exact: true });
       await runButton.click();
       const confirmation = cronPage.getByRole("dialog", { name: "Run daily?", exact: true });
@@ -1571,13 +1571,13 @@ export async function appScenario(part: "lists" | "composer") {
       await cronPage.getByRole("tab", { name: "daily", exact: true }).waitFor();
       await cronPage.close();
 
-      // Cron: Timeline shows one cron's rows from the Cron page as a journal: 131 retired runs, 3 hours apart, from Aug 15 18:00 to Sep 1 00:00 UTC.
+      // Routines: Timeline shows one routine's rows from the Routines page as a journal: 131 retired runs, 3 hours apart, from Aug 15 18:00 to Sep 1 00:00 UTC.
       jobs.push(...Array.from({ length: 130 }, (_, i) => ({ stem: "retired", status: "ran", lastRun: new Date(Date.parse("2026-09-01T00:00:00Z") - (i + 1) * 3 * 3_600_000).toISOString(), nextRun: "", origin: `old-source-${i}` })));
       const timelinePage = await context.newPage();
       const runRows = timelinePage.getByRole("region", { name: "Runs", exact: true }).locator("button[aria-pressed]");
       // The first load fails; the page keeps loading, shows no error, and retries until it loads.
       cronFailures = 1;
-      await timelinePage.goto(`${origin}/cron/${btoa("retired").replaceAll("=", "")}`);
+      await timelinePage.goto(`${origin}/routines/${btoa("retired").replaceAll("=", "")}`);
       await timelinePage.getByRole("status").filter({ hasText: "Loading…" }).waitFor();
       await runRows.first().waitFor();
       expect(cronFailures).toBe(0);
@@ -1585,19 +1585,19 @@ export async function appScenario(part: "lists" | "composer") {
       await timelinePage.goto(`${origin}/`);
       await timelinePage.getByPlaceholder("Message a new session").waitFor();
       await timelinePage.keyboard.press("Control+Shift+p");
-      await timelinePage.getByRole("dialog", { name: "Run command", exact: true }).getByPlaceholder("Type a command", { exact: true }).fill("cron: timeline");
-      await timelinePage.getByRole("button", { name: "Cron: Timeline", exact: true }).click();
-      const cronTimelinePicker = timelinePage.getByRole("dialog", { name: "Cron timeline", exact: true });
+      await timelinePage.getByRole("dialog", { name: "Run command", exact: true }).getByPlaceholder("Type a command", { exact: true }).fill("routines: timeline");
+      await timelinePage.getByRole("button", { name: "Routines: Timeline", exact: true }).click();
+      const cronTimelinePicker = timelinePage.getByRole("dialog", { name: "Routine timeline", exact: true });
       await cronTimelinePicker.getByRole("button").first().waitFor();
       expect(await cronTimelinePicker.getByRole("button").allTextContents()).toEqual([expect.stringMatching(/^daily1 runs · last .* UTC$/), "unused0 runs", "retired131 runs · last Sep 1, 2026, 12:00 AM UTC", expect.stringMatching(/^silent1 runs · last .* UTC$/)]);
-      await cronTimelinePicker.getByPlaceholder("Search cron jobs", { exact: true }).fill("ret");
-      await cronTimelinePicker.getByPlaceholder("Search cron jobs", { exact: true }).press("Enter");
-      await timelinePage.waitForURL(`${origin}/cron/${btoa("retired").replaceAll("=", "")}`);
+      await cronTimelinePicker.getByPlaceholder("Search routines", { exact: true }).fill("ret");
+      await cronTimelinePicker.getByPlaceholder("Search routines", { exact: true }).press("Enter");
+      await timelinePage.waitForURL(`${origin}/routines/${btoa("retired").replaceAll("=", "")}`);
       for (const width of [1280, 390]) {
         await timelinePage.setViewportSize({ width, height: 844 });
         await timelinePage.reload();
         await runRows.first().waitFor();
-        expect(await timelinePage.getByRole("heading", { level: 1 }).textContent()).toBe("Cron / retired Retired");
+        expect(await timelinePage.getByRole("heading", { level: 1 }).textContent()).toBe("Routines / retired Retired");
         expect(await timelinePage.getByRole("definition").allTextContents()).toEqual(["131", "3h 0m", "Longest 3h 0m", expect.stringMatching(/^\d+d ago$/), "Sep 1, 2026, 12:00 AM UTC", "Retired"]);
         expect(await timelinePage.getByRole("group", { name: "Runs per day", exact: true }).getByRole("button").count()).toBe(18);
         expect(await runRows.count()).toBe(60);
@@ -1620,8 +1620,8 @@ export async function appScenario(part: "lists" | "composer") {
         expect(await timelinePage.getByRole("button", { name: "Show older runs", exact: true }).count()).toBe(0);
       }
       expect(await timelinePage.getByRole("button", { name: "Run retired", exact: true }).count()).toBe(0);
-      // An active cron's journal shows its definition and runs it like the Cron page.
-      await timelinePage.goto(`${origin}/cron/${btoa("daily").replaceAll("=", "")}`);
+      // An active cron's journal shows its definition and runs it like the Routines page.
+      await timelinePage.goto(`${origin}/routines/${btoa("daily").replaceAll("=", "")}`);
       await timelinePage.getByText("Definition", { exact: true }).click();
       expect(await timelinePage.getByText("cron/daily.md", { exact: true }).isVisible()).toBe(true);
       expect(await timelinePage.getByText("Daily prompt", { exact: true }).isVisible()).toBe(true);
@@ -1629,8 +1629,8 @@ export async function appScenario(part: "lists" | "composer") {
       await timelinePage.getByRole("dialog", { name: "Run daily?", exact: true }).getByRole("button", { name: "Run", exact: true }).click();
       await timelinePage.waitForURL("**/s/bmV3LWNyb24tY2hhdA");
       expect(cronRunCalls).toBe(2);
-      await timelinePage.goto(`${origin}/cron/${btoa("nope")}`);
-      await timelinePage.getByText("No cron named nope in this space.", { exact: true }).waitFor();
+      await timelinePage.goto(`${origin}/routines/${btoa("nope")}`);
+      await timelinePage.getByText("No routine named nope in this space.", { exact: true }).waitFor();
       await timelinePage.close();
       jobs.splice(-130);
     } else {

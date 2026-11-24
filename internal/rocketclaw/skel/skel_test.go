@@ -266,9 +266,7 @@ func TestOverlaySkipsFilteredFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "real", string(data))
 
-	data, err = os.ReadFile(filepath.Join(tmp, targetRoot, "cron", "job.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "cron", string(data))
+	assert.NoDirExists(t, filepath.Join(tmp, targetRoot, "cron"), "cron/ is no longer copied")
 }
 
 func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
@@ -315,9 +313,7 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "remote skill", string(data))
 
-	data, err = os.ReadFile(filepath.Join(workspace, targetRoot, "cron", "daily.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "remote cron", string(data))
+	assert.NoDirExists(t, filepath.Join(workspace, targetRoot, "cron"), "cron/ is no longer copied")
 
 	data, err = os.ReadFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"))
 	require.NoError(t, err)

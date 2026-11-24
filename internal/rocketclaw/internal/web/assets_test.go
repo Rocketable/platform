@@ -19,7 +19,7 @@ func TestEmbeddedApplication(t *testing.T) {
 
 	handler := Handler(new(config.LockedConfig), "")
 
-	for _, path := range []string{"/", "/s/conversation", "/oc/b3BlbmNvZGU6Ym94OnNlc19h", "/cron", "/cron/SEVBUlRCRUFU", "/agents", "/agents/new", "/agents/drafts/abc", "/skills", "/skills/release", "/config", "/search", "/search/3-1-4", "/voice", "/pages", "/shortcuts", "/closed", "/pages/Ops/main%2Freview/index.html", "/r/work", "/r/work/s/abc", "/r/work/agents"} {
+	for _, path := range []string{"/", "/s/conversation", "/oc/b3BlbmNvZGU6Ym94OnNlc19h", "/routines", "/routines/SEVBUlRCRUFU", "/agents", "/agents/new", "/agents/drafts/abc", "/skills", "/skills/release", "/config", "/search", "/search/3-1-4", "/voice", "/pages", "/shortcuts", "/closed", "/pages/Ops/main%2Freview/index.html", "/r/work", "/r/work/s/abc", "/r/work/agents"} {
 		request := httptest.NewRequest(http.MethodGet, path, http.NoBody)
 		request.Header.Set("Accept-Encoding", "gzip")
 

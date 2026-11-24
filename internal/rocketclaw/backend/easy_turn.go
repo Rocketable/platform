@@ -137,7 +137,7 @@ func resolveWorkingDirectory(cfg *config.Config, dir string, turnEnv map[string]
 		return "", fmt.Errorf("workingDirectory: workspace: %w", err)
 	}
 
-	refused := []string{cfg.RuntimeDirName(), "agents", "skills", "cron", "scripts"}
+	refused := []string{cfg.RuntimeDirName(), "agents", "skills", "scripts"}
 	for _, name := range refused {
 		dir := filepath.Join(workspace, name)
 		if _, errStat := os.Lstat(dir); !errors.Is(errStat, fs.ErrNotExist) {

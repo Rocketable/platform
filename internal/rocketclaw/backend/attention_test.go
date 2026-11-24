@@ -302,7 +302,7 @@ func cronTabPath(stem string) string {
 		raw = append(raw, byte(r))
 	}
 
-	return "/cron/" + base64.RawURLEncoding.EncodeToString(raw)
+	return "/routines/" + base64.RawURLEncoding.EncodeToString(raw)
 }
 
 func locationMarks(t *testing.T, s *SessionService, note string) []string {
@@ -339,13 +339,13 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 	require.NoError(t, err)
 
 	mainID, ops := spaces[0].ID, spaces[1].ID
-	routine, typed, shared := cronTabPath("marketing · 30m"), "/cron/marketing%20%C2%B7%2030m", "/cron/marketing · 30m"
+	routine, typed, shared := cronTabPath("marketing · 30m"), "/routines/marketing%20%C2%B7%2030m", "/routines/marketing · 30m"
 
 	for person, tabs := range map[string][]Tab{
-		alice: {{Path: routine, Space: mainID}, {Path: "/cron", Space: ops}, {Path: cronTabPath("daily"), Space: mainID}},
-		bob:   {{Path: typed, Space: mainID}, {Path: "/cron", Space: mainID}},
-		carol: {{Path: routine, Space: ops}, {Path: "/cron/daily", Space: ops}},
-		dave:  {{Path: routine, Space: mainID}, {Path: "/cron", Space: mainID}},
+		alice: {{Path: routine, Space: mainID}, {Path: "/routines", Space: ops}, {Path: cronTabPath("daily · 1h"), Space: mainID}},
+		bob:   {{Path: typed, Space: mainID}, {Path: "/routines", Space: mainID}},
+		carol: {{Path: routine, Space: ops}, {Path: "/routines/daily", Space: ops}},
+		dave:  {{Path: routine, Space: mainID}, {Path: "/routines", Space: mainID}},
 	} {
 		saved, err := service.SaveTabState(ctx, person, &TabState{Tabs: tabs, Space: mainID}, 0)
 		require.NoError(t, err)
@@ -370,15 +370,15 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 	}
 
 	assert.ElementsMatch(t, []string{
-		alice + " /cron loud", alice + " " + shared + " loud", alice + " " + routine + " loud",
+		alice + " /routines loud", alice + " " + shared + " loud", alice + " " + routine + " loud",
 		bob + " " + shared + " loud", bob + " " + typed + " loud",
 		carol + " " + routine + " loud",
 	}, runEnds("cron:marketing", "agents/marketing.md#30m", "Ops"))
 
-	assert.ElementsMatch(t, []string{alice + " /cron loud", alice + " " + cronTabPath("daily") + " loud", bob + " /cron loud"},
-		runEnds("cron:daily", "cron/daily.md", ""))
+	assert.ElementsMatch(t, []string{alice + " /routines loud", alice + " " + cronTabPath("daily · 1h") + " loud", bob + " /routines loud"},
+		runEnds("cron:daily", "agents/daily.md#1h", ""))
 
-	_, err = service.recordConversation(ctx, &protocol.Conversation{ID: "cron:twice", Agent: "marketing", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "cron/daily.md"}}, conversationFacts{}, harness.AgentStickyOff)
+	_, err = service.recordConversation(ctx, &protocol.Conversation{ID: "cron:twice", Agent: "marketing", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "agents/daily.md#1h"}}, conversationFacts{}, harness.AgentStickyOff)
 	require.NoError(t, err)
 
 	turnEnds := func(turnID string) []string {
@@ -397,7 +397,7 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 	removed, _, err := service.DeleteThreadQueueItem(ctx, "cron:twice", "next")
 	require.NoError(t, err)
 	require.True(t, removed)
-	assert.ElementsMatch(t, []string{alice + " /cron loud", alice + " " + cronTabPath("daily") + " loud", bob + " /cron loud"}, turnEnds("turn:last"))
+	assert.ElementsMatch(t, []string{alice + " /routines loud", alice + " " + cronTabPath("daily · 1h") + " loud", bob + " /routines loud"}, turnEnds("turn:last"))
 }
 
 func TestMarkSearchFinished(t *testing.T) {
