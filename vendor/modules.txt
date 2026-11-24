@@ -85,7 +85,7 @@ github.com/aws/aws-sdk-go-v2/credentials/stscreds
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/feature/ec2/imds
 github.com/aws/aws-sdk-go-v2/feature/ec2/imds/internal/config
-# github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.5.11
+# github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.5.12
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager
 github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager/types
@@ -424,7 +424,7 @@ github.com/modelcontextprotocol/go-sdk/oauthex
 # github.com/ncruces/go-strftime v1.1.0
 ## explicit; go 1.24
 github.com/ncruces/go-strftime
-# github.com/openai/openai-go/v3 v3.106.0
+# github.com/openai/openai-go/v3 v3.107.0
 ## explicit; go 1.26.0
 github.com/openai/openai-go/v3
 github.com/openai/openai-go/v3/auth
@@ -860,7 +860,7 @@ google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# gvisor.dev/gvisor v0.0.0-20261124180226-67111258ac55
+# gvisor.dev/gvisor v0.0.0-20261124190646-2bf06df5b1d5
 ## explicit; go 1.27.3
 gvisor.dev/gvisor/pkg/atomicbitops
 gvisor.dev/gvisor/pkg/bits
@@ -905,7 +905,7 @@ gvisor.dev/gvisor/pkg/tcpip/transport/tcp
 gvisor.dev/gvisor/pkg/tcpip/transport/tcpconntrack
 gvisor.dev/gvisor/pkg/tcpip/transport/udp
 gvisor.dev/gvisor/pkg/waiter
-# modernc.org/libc v1.80.1
+# modernc.org/libc v1.82.13
 ## explicit; go 1.26.0
 modernc.org/libc
 modernc.org/libc/errno
@@ -915,6 +915,7 @@ modernc.org/libc/grp
 modernc.org/libc/honnef.co/go/netdb
 modernc.org/libc/langinfo
 modernc.org/libc/limits
+modernc.org/libc/locale
 modernc.org/libc/netdb
 modernc.org/libc/netinet/in
 modernc.org/libc/poll
@@ -936,7 +937,7 @@ modernc.org/libc/wctype
 # modernc.org/mathutil v1.7.1
 ## explicit; go 1.21
 modernc.org/mathutil
-# modernc.org/memory v1.12.1
+# modernc.org/memory v1.13.0
 ## explicit; go 1.23.0
 modernc.org/memory
 # modernc.org/sqlite v1.63.0
@@ -954,7 +955,7 @@ mvdan.cc/sh/v3/syntax
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
-# tailscale.com v1.106.0
+# tailscale.com v1.106.1
 ## explicit; go 1.27.4
 tailscale.com
 tailscale.com/appc
