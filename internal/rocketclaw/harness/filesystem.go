@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -885,13 +884,10 @@ func ripgrep(ctx context.Context, hostRoot string, args ...string) (stdout []byt
 }
 
 func parseGrepMatches(stdout []byte, searchRoot *os.Root, hostRoot string) ([]grepMatch, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(stdout))
-	scanner.Buffer(make([]byte, 0, 64*1024), max(len(stdout), 64*1024))
-
 	var matches []grepMatch
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	for line := range bytes.SplitSeq(stdout, []byte("\n")) {
+		line = bytes.TrimSuffix(line, []byte("\r"))
 		if len(line) == 0 {
 			continue
 		}
@@ -916,10 +912,6 @@ func parseGrepMatches(stdout []byte, searchRoot *os.Root, hostRoot string) ([]gr
 
 		text := strings.TrimRight(item.Data.Lines.Text, "\r\n")
 		matches = append(matches, grepMatch{Path: filepath.Join(hostRoot, item.Data.Path.Text), Line: item.Data.LineNumber, Text: text, MTime: info.ModTime().UnixMilli()})
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan ripgrep output: %w", err)
 	}
 
 	return matches, nil
