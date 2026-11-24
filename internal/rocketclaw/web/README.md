@@ -515,7 +515,9 @@ The session list polls each server on its own schedule and merges their rows by
 recency; a row is its chat on its server. `viewing` goes only to the page's
 server. A remote that stops answering keeps its rows, greyed and offline; only a
 refusal clears them. Search fans out to every server, and a failing remote drops
-out. Each server marks its own tabs (see Unread below), and the page notifies
+out. The Page Index lists every server's pages, each space titled with its
+server, and a page opens on its own server; a failing remote shows its error
+there. Each server marks its own tabs (see Unread below), and the page notifies
 from every server's listing; a server that is offline or on another protocol
 offers no attention items in its rows' menus. The tab strip lists every
 server's cards, one for each of its spaces, in one list (see Spaces below). Another

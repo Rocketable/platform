@@ -3342,28 +3342,30 @@ function HostedPage({ page }: { page: string }) {
 const hostedPagePath = ({ space, path }: PageEntry) => [space, ...path.split("/")].map(encodeURIComponent).join("/");
 
 function PageIndex({ show }: { show: boolean }) {
-  const pages = useQuery({ ...queries.pages(), staleTime: 10_000, enabled: show });
+  const servers = ["", ...rocketclaws().map((remote) => remote.name)];
+  const lists = useQueries({ queries: servers.map((name) => ({ ...queries.pages(name), staleTime: 10_000, enabled: show })) });
   const { state } = useContext(TabActions);
   if (!show) return null;
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
       <PageTitle>Pages</PageTitle>
-      {pages.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
-      {pages.error ? <p className="text-sm text-destructive">{pages.error.message}</p> : null}
-      {pages.data?.length === 0 ? <p className="text-sm text-muted-foreground">No pages</p> : null}
-      <HostedPageLinks pages={pages.data ?? []} state={state} />
+      {lists.some((list) => list.isLoading) ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
+      {lists.map((list, i) => list.error ? <p key={servers[i]} className="text-sm text-destructive">{servers.length > 1 ? `${serverLabel(servers[i])}: ` : ""}{list.error.message}</p> : null)}
+      {lists.every((list) => list.data?.length === 0) ? <p className="text-sm text-muted-foreground">No pages</p> : null}
+      {lists.map((list, i) => <HostedPageLinks key={servers[i]} pages={list.data ?? []} state={state} server={servers[i]} />)}
     </div>
   );
 }
 
-function HostedPageLinks({ pages, state }: { pages: PageEntry[]; state?: TabState }) {
+function HostedPageLinks({ pages, state, server: name }: { pages: PageEntry[]; state?: TabState; server?: string }) {
+  const here = useServer();
   return [...Map.groupBy(pages, (page) => page.space)].toSorted(([a], [b]) => a.localeCompare(b)).map(([space, rows]) => <section key={space} className="flex flex-col gap-1">
-    <h2 className="text-xs font-medium text-muted-foreground">{space}</h2>
+    <h2 className="text-xs font-medium text-muted-foreground">{name !== undefined && rocketclaws().length ? `${space} · ${serverLabel(name)}` : space}</h2>
     <ul className="flex flex-col gap-1">
       {rows.map((page) => {
         const path = hostedPagePath(page);
-        const href = state ? pageSpace(state, `/pages/${path}`)[0] : panelHref(path, "pagePreview");
-        return <li key={path}><Link href={href} className="block break-words py-1 text-sm hover:underline">{page.path}</Link></li>;
+        const href = !state ? panelHref(path, "pagePreview") : name === here ? pageSpace(state, `/pages/${path}`)[0] : `/pages/${path}`;
+        return <li key={path}><Link href={href} server={name} className="block break-words py-1 text-sm hover:underline">{page.path}</Link></li>;
       })}
     </ul>
   </section>);
