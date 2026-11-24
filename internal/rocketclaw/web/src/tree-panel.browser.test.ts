@@ -40,7 +40,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`messa
   ];
   let head = "3:1", busy = false, held = Promise.resolve();
   const moves: { messageId?: string; boundary?: string }[] = [], deletes: { messageId: string; dryRun?: boolean }[] = [], summaries: { branchId: string; instructions: string }[] = [];
-  let finishSummary = () => {};
+  let nextSummary = Promise.withResolvers<() => void>();
   const onPath = () => {
     const ids = new Set<string>();
     for (let at = nodes.find((node) => node.id === head); at; at = nodes.find((node) => node.id === at!.parent)) ids.add(at.id);
@@ -93,7 +93,10 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`messa
       }
       case "/api/SummarizeBranch": {
         summaries.push({ branchId: input.branchId, instructions: input.instructions });
-        await new Promise<void>((resolve) => { finishSummary = resolve; });
+        const heldSummary = Promise.withResolvers<void>();
+        nextSummary.resolve(heldSummary.resolve);
+        nextSummary = Promise.withResolvers<() => void>();
+        await heldSummary.promise;
         if (input.instructions === "fail") return Response.json({ message: "Summary model unavailable", code: 14 }, { status: 503 });
         if (onPath().has(input.branchId)) return Response.json({ appended: false });
         nodes.push({ id: "9:0", parent: head, role: "user", text: "Summary of New try" });
@@ -251,12 +254,14 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`messa
 
     const summarize = tree.getByRole("listitem").filter({ hasText: "New try" }).getByRole("button", { name: "Summarize branch", exact: true });
     const requestSummary = async (instructions: string) => {
+      const received = nextSummary.promise;
       await summarize.click();
       const dialog = page.getByRole("dialog", { name: "Summarize branch" });
       await dialog.getByRole("textbox", { name: "Instructions (optional)" }).fill(instructions);
       await dialog.getByRole("button", { name: "Summarize", exact: true }).click();
       await dialog.waitFor({ state: "detached" });
       await page.waitForFunction(() => document.querySelector('[aria-label="Messages and replies"] [aria-label="Summarize branch"]')?.hasAttribute("disabled"));
+      return received;
     };
     const pickAndReopen = async (name: string) => {
       await row(name).click();
@@ -267,23 +272,23 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`messa
       await page.waitForFunction((text: string) => document.querySelector('[aria-label="Messages and replies"] [aria-current="true"]')?.textContent === text, name);
     };
     await buttons("Summarize branch", 1);
-    await requestSummary(" Keep the numbers ");
+    const finishCurrentBranchSummary = await requestSummary(" Keep the numbers ");
     expect(summaries).toEqual([{ branchId: "3:0", instructions: "Keep the numbers" }]);
     await pickAndReopen("Agent New answer");
     expect(moves.at(-1)).toEqual({ messageId: "3:1", boundary: "THROUGH" });
-    finishSummary();
+    finishCurrentBranchSummary();
     await page.getByRole("status").filter({ hasText: "Nothing was added: the current path already holds the branch that starts at “New try”." }).waitFor();
     expect(await row("You Summary of New try").count()).toBe(0);
 
     await pickAndReopen("Agent First answer");
-    await requestSummary("");
-    finishSummary();
+    const finishAppendedSummary = await requestSummary("");
+    finishAppendedSummary();
     await page.waitForFunction(() => document.querySelector('[aria-label="Messages and replies"] [aria-current="true"]')?.textContent === "You Summary of New try");
     await page.locator('[data-message-id="9:0"]').first().waitFor();
     expect(await page.getByRole("status").filter({ hasText: "Nothing was added" }).count()).toBe(0);
 
-    await requestSummary("fail");
-    finishSummary();
+    const finishFailedSummary = await requestSummary("fail");
+    finishFailedSummary();
     await tree.locator("xpath=..").getByRole("alert").filter({ hasText: "Summary model unavailable" }).waitFor();
     expect(await summarize.isEnabled()).toBe(true);
     expect(summaries.map((summary) => summary.instructions)).toEqual(["Keep the numbers", "", "fail"]);
