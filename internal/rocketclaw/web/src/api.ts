@@ -6,11 +6,31 @@ export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
 }
 
+type Properties = Record<string, string | number | boolean>;
+
+export const telemetry = {
+  captureException: (_error: unknown, _properties: Properties) => {},
+  captureTiming: (_event: string, _properties: Properties) => {},
+};
+
+const polled = new Set(["Protocol", "Identity", "ListAgents", "ListQueue", "Tabs"]);
+
 export async function rpc<T>(method: string, input: object = {}, signal?: AbortSignal, name = server()): Promise<T> {
-  const response = await fetch(`${serverURL(name)}/api/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal });
-  const body = await response.json();
-  if (!response.ok) throw new RPCError(body.message, body.code);
-  return body;
+  const started = performance.now();
+  let outcome = "failed";
+  try {
+    const response = await fetch(`${serverURL(name)}/api/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal });
+    const body = await response.json();
+    if (!response.ok) throw new RPCError(body.message, body.code);
+    outcome = "done";
+    return body;
+  } catch (error) {
+    if (signal?.aborted) outcome = "aborted";
+    else telemetry.captureException(error, { rpc: method });
+    throw error;
+  } finally {
+    if (!polled.has(method)) telemetry.captureTiming("web_request", { rpc: method, remote: name !== "", outcome, duration_ms: performance.now() - started });
+  }
 }
 
 // Completion belongs to the transport, not the terminal snapshot's flag.
@@ -19,41 +39,46 @@ export const listSessions = (signal?: AbortSignal, url = "/api/ListSessions") =>
 
 export async function* sse<T>(url: string, init: RequestInit): AsyncGenerator<T> {
   const signal = init.signal;
-  const response = await fetch(url, init);
-  if (!response.ok) {
-    const body = await response.json();
-    throw new RPCError(body.message, body.code);
-  }
-  const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-  let pending = "", complete = false;
   try {
-    for (;;) {
-      signal?.throwIfAborted();
-      const { value, done } = await reader.read();
-      if (done) break;
-      pending += value;
-      let boundary: number;
-      while ((boundary = pending.indexOf("\n\n")) >= 0) {
-        const frame = pending.slice(0, boundary);
-        pending = pending.slice(boundary + 2);
-        let event = "message";
-        const data: string[] = [];
-        for (const line of frame.split("\n")) {
-          if (line.startsWith("event:")) event = line.slice(6).trim();
-          if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
-        }
-        if (!data.length) continue;
-        const body = JSON.parse(data.join("\n"));
-        if (event === "error") throw new RPCError(body.message, body.code);
-        if (event === "complete") complete = true;
-        else if (event === "message") yield body;
-      }
+    const response = await fetch(url, init);
+    if (!response.ok) {
+      const body = await response.json();
+      throw new RPCError(body.message, body.code);
     }
-    signal?.throwIfAborted();
-    if (!complete) throw new Error("Session stream ended without completion");
-  } finally {
-    await reader.cancel();
-    reader.releaseLock();
+    const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+    let pending = "", complete = false;
+    try {
+      for (;;) {
+        signal?.throwIfAborted();
+        const { value, done } = await reader.read();
+        if (done) break;
+        pending += value;
+        let boundary: number;
+        while ((boundary = pending.indexOf("\n\n")) >= 0) {
+          const frame = pending.slice(0, boundary);
+          pending = pending.slice(boundary + 2);
+          let event = "message";
+          const data: string[] = [];
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+          }
+          if (!data.length) continue;
+          const body = JSON.parse(data.join("\n"));
+          if (event === "error") throw new RPCError(body.message, body.code);
+          if (event === "complete") complete = true;
+          else if (event === "message") yield body;
+        }
+      }
+      signal?.throwIfAborted();
+      if (!complete) throw new Error("Session stream ended without completion");
+    } finally {
+      await reader.cancel();
+      reader.releaseLock();
+    }
+  } catch (error) {
+    if (!signal?.aborted) telemetry.captureException(error, { rpc: new URL(url, location.href).pathname.split("/").at(-1)! });
+    throw error;
   }
 }
 
