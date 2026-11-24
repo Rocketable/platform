@@ -83,6 +83,8 @@ message Session {
   bool pausable = 40;
   // The caller unfollowed its tab: the server marks it unread for them only when they mark it themselves.
   bool unfollowed = 41;
+  // A remote OpenCode session waits on an active automation timer that will wake it, its own or a child session's.
+  bool automation = 42;
 }
 
 // TabAttention is the caller's attention on a tab location that is not a session, as a Session row carries a

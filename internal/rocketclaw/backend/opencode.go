@@ -280,7 +280,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	}
 	shells.mu.Unlock()
 
-	background, asking := map[string]bool{}, map[string]bool{}
+	background, asking, automation := map[string]bool{}, map[string]bool{}, openCodeTimers(ctx, name, server, roots)
 
 	for id := range owners {
 		background[openCodeRoot(ctx, name, server, roots, id)] = true
@@ -291,14 +291,14 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	}
 
 	var (
-		titles, directories, agents, models []string
-		updated                             []time.Time
-		running, backgrounds, askings       []bool
-		replies                             []*string
-		oldest                              time.Time
-		cursors                             []*int64
-		markedIDs, markedUsers, ended       []string
-		markedWaking, failures              []bool
+		titles, directories, agents, models        []string
+		updated                                    []time.Time
+		running, backgrounds, askings, automations []bool
+		replies                                    []*string
+		oldest                                     time.Time
+		cursors                                    []*int64
+		markedIDs, markedUsers, ended              []string
+		markedWaking, failures                     []bool
 	)
 
 	for i, session := range sessions.Data {
@@ -370,11 +370,11 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		titles, directories, agents, models = append(titles, session.Title), append(directories, session.Location.Directory), append(agents, session.Agent), append(models, session.model())
 		updated, running, replies = append(updated, oldest), append(running, busy), append(replies, reply)
 		backgrounds, cursors = append(backgrounds, background[session.ID]), append(cursors, cursor)
-		askings = append(askings, asking[session.ID])
+		askings, automations = append(askings, asking[session.ID]), append(automations, automation[session.ID])
 	}
 
 	return s.storeOpenCodeSync(ctx, []any{name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds,
-		agents, models, KindRemote, cursors, markedIDs, markedUsers, askings, markedWaking}, ended, failures)
+		agents, models, KindRemote, cursors, markedIDs, markedUsers, askings, markedWaking, automations}, ended, failures)
 }
 
 func (s *SessionService) storeOpenCodeSync(ctx context.Context, synced []any, ended []string, failures []bool) error {
@@ -386,14 +386,14 @@ func (s *SessionService) storeOpenCodeSync(ctx context.Context, synced []any, en
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := execState(ctx, tx, "sync opencode sessions", `WITH incoming AS (
-    SELECT *, substr(conversation_id, char_length('opencode:' || $1::text || ':') + 1) AS remote_session FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::bigint[], $18::boolean[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, read_through, asking)
+    SELECT *, substr(conversation_id, char_length('opencode:' || $1::text || ':') + 1) AS remote_session FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::bigint[], $18::boolean[], $20::boolean[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, read_through, asking, automation)
 ), upserted AS (
-    INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session, name, read_through, asking)
-    SELECT conversation_id, agent, '', $14, FALSE, 'remote', $1, title, directory, updated_at, running, now(), reply, background, model, remote_session, title, read_through, asking FROM incoming
+    INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session, name, read_through, asking, automation)
+    SELECT conversation_id, agent, '', $14, FALSE, 'remote', $1, title, directory, updated_at, running, now(), reply, background, model, remote_session, title, read_through, asking, automation FROM incoming
     ON CONFLICT (conversation_id) DO UPDATE SET
         title = CASE WHEN conversations.synced_at > $9 THEN conversations.title ELSE excluded.title END,
         name = CASE WHEN conversations.synced_at > $9 THEN conversations.name ELSE excluded.name END, directory = excluded.directory,
-        last_updated = excluded.last_updated, running = excluded.running, background = excluded.background, asking = excluded.asking, synced_at = excluded.synced_at,
+        last_updated = excluded.last_updated, running = excluded.running, background = excluded.background, asking = excluded.asking, automation = excluded.automation, synced_at = excluded.synced_at,
         reply = COALESCE(excluded.reply, conversations.reply), agent = excluded.agent, model = excluded.model,
         read_through = GREATEST(excluded.read_through, conversations.read_through)
 ), asked AS (
@@ -405,7 +405,7 @@ func (s *SessionService) storeOpenCodeSync(ctx context.Context, synced []any, en
 )`+sessionReadersSQL+markTabsSQL+`, removed AS (
     DELETE FROM conversations WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $9 AND ($7 OR last_updated >= $8)
 )
-UPDATE conversations SET synced_at = now(), running = FALSE, background = FALSE, asking = FALSE
+UPDATE conversations SET synced_at = now(), running = FALSE, background = FALSE, asking = FALSE, automation = FALSE
 WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7 OR last_updated >= $8))`,
 		synced...); err != nil {
 		return err
@@ -490,6 +490,34 @@ func openCodeWaiting(ctx context.Context, name string, server config.OpenCodeCon
 	}
 
 	return waiting
+}
+
+func openCodeTimers(ctx context.Context, name string, server config.OpenCodeConfig, roots map[string]bool) map[string]bool {
+	timers := map[string]bool{}
+
+	var automations struct {
+		Data []struct {
+			SessionID string `json:"sessionID"`
+			Status    string `json:"status"`
+			NextDueAt int64  `json:"nextDueAt"`
+			Action    struct {
+				To struct {
+					Session string `json:"session"`
+				} `json:"to"`
+			} `json:"action"`
+		} `json:"data"`
+	}
+	if openCodeCall(ctx, name, server, http.MethodGet, "/api/experimental/automation", nil, &automations) != nil {
+		return timers
+	}
+
+	for _, automation := range automations.Data {
+		if automation.Status == "active" && automation.NextDueAt != 0 {
+			timers[openCodeRoot(ctx, name, server, roots, cmp.Or(automation.Action.To.Session, automation.SessionID))] = true
+		}
+	}
+
+	return timers
 }
 
 func (s *SessionService) pushOpenCodeNames(ctx context.Context, name string, server config.OpenCodeConfig) error {

@@ -442,7 +442,9 @@ type Session struct {
 	// A person started the session in the Web and nothing outside reports into it, so its agent can pause.
 	Pausable bool `protobuf:"varint,40,opt,name=pausable,proto3" json:"pausable,omitempty"`
 	// The caller unfollowed its tab: the server marks it unread for them only when they mark it themselves.
-	Unfollowed    bool `protobuf:"varint,41,opt,name=unfollowed,proto3" json:"unfollowed,omitempty"`
+	Unfollowed bool `protobuf:"varint,41,opt,name=unfollowed,proto3" json:"unfollowed,omitempty"`
+	// A remote OpenCode session waits on an active automation timer that will wake it, its own or a child session's.
+	Automation    bool `protobuf:"varint,42,opt,name=automation,proto3" json:"automation,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -704,6 +706,13 @@ func (x *Session) GetPausable() bool {
 func (x *Session) GetUnfollowed() bool {
 	if x != nil {
 		return x.Unfollowed
+	}
+	return false
+}
+
+func (x *Session) GetAutomation() bool {
+	if x != nil {
+		return x.Automation
 	}
 	return false
 }
@@ -10994,7 +11003,7 @@ const file_web_proto_rawDesc = "" +
 	"\x05since\x18\x02 \x01(\tR\x05since\x12\x12\n" +
 	"\x04hold\x18\x03 \x01(\bR\x04hold\x12\x1f\n" +
 	"\vsame_origin\x18\x04 \x01(\bR\n" +
-	"sameOrigin\"\xcb\a\n" +
+	"sameOrigin\"\xeb\a\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -11037,7 +11046,10 @@ const file_web_proto_rawDesc = "" +
 	"\bpausable\x18( \x01(\bR\bpausable\x12\x1e\n" +
 	"\n" +
 	"unfollowed\x18) \x01(\bR\n" +
-	"unfollowedJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\t\x10\n" +
+	"unfollowed\x12\x1e\n" +
+	"\n" +
+	"automation\x18* \x01(\bR\n" +
+	"automationJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\t\x10\n" +
 	"J\x04\b\v\x10\fJ\x04\b\f\x10\rJ\x04\b\x1d\x10\x1eJ\x04\b\x1f\x10 J\x04\b \x10!R\x0eallowed_agentsR\x06pinned\"\xb7\x01\n" +
 	"\fTabAttention\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1b\n" +

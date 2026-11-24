@@ -590,6 +590,11 @@ test("tab status icons and running titles keep their layout and shimmer in both 
   await tab("Hotel").and(page.locator('[aria-description$="Forked session"]')).waitFor();
   expect(await tab("Hotel").getAttribute("aria-description")).toBe("Space: Main, Forked session");
   expect(await tab("Hotel").locator("svg").getAttribute("class")).toContain("lucide-git-fork");
+
+  await page.goto(`${origin}${href("india")}`);
+  await tab("India").and(page.locator('[aria-description$="Waiting for a timer"]')).waitFor();
+  expect(await tab("India").getAttribute("aria-description")).toBe("Space: Main, Waiting for a timer");
+  expect(await tab("India").locator("svg").getAttribute("class")).toContain("lucide-timer");
 }), 60_000);
 
 test("with reduced motion a running tab's title shows a still gradient", () => withPage({ reducedMotion: "reduce" }, async (page, origin) => {

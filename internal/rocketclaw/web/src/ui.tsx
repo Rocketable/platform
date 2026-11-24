@@ -16,7 +16,7 @@ import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCErro
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceInputsPending, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PageEntry, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding, TreeNode } from "./types";
-import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Timer, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, Fragment, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -2233,13 +2233,13 @@ const needsYou = <span className="ml-auto shrink-0 rounded-full bg-amber-200 px-
 
 // Waiting on this person's answer wins over the running turn that asks and over background work, such as a subagent
 // or a shell command. A park until a time or until unparked shows a clock, else background work an hourglass, also
-// while a turn runs. Only a turn not waiting on this person is working, so its title shimmers. A chat whose agent is
-// paused shows a pause glyph in place of the chat icon, else a forked session a fork glyph. A title being regenerated
-// spins in place of every other glyph and shimmers.
+// while a turn runs, else an automation timer that will wake the session a stopwatch. Only a turn not waiting on this
+// person is working, so its title shimmers. A chat whose agent is paused shows a pause glyph in place of the chat icon,
+// else a forked session a fork glyph. A title being regenerated spins in place of every other glyph and shimmers.
 function tabActivity(session: Session, unread: boolean, clocked: boolean, regenerating: boolean) {
   const Chat = session.paused ? CirclePause : session.forkedFrom ? GitFork : MessageSquare;
-  const activity = session.asking ? ["Needs your answer"] : [session.running && "Turn running", session.background && "Background work running"];
-  return [[session.forkedFrom && "Forked session", session.paused && "Agent paused", regenerating && "Regenerating title", ...activity, unread && "Unread"].filter(Boolean).join(", "), regenerating ? LoaderCircle : session.asking ? Chat : clocked ? Clock : session.background ? Hourglass : Chat, regenerating || (session.running && !session.asking)] as const;
+  const activity = session.asking ? ["Needs your answer"] : [session.running && "Turn running", session.background && "Background work running", session.automation && "Waiting for a timer"];
+  return [[session.forkedFrom && "Forked session", session.paused && "Agent paused", regenerating && "Regenerating title", ...activity, unread && "Unread"].filter(Boolean).join(", "), regenerating ? LoaderCircle : session.asking ? Chat : clocked ? Clock : session.background ? Hourglass : session.automation ? Timer : Chat, regenerating || (session.running && !session.asking)] as const;
 }
 
 const tabLabel = (tab: Pick<Tab, "path" | "search">, session: Session, SessionIcon: typeof Search): [string, typeof Search] =>

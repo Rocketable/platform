@@ -874,6 +874,11 @@ active tab.
   remote OpenCode session's running child session (a background subagent) or shell command.
   Screen readers hear “Background work running”. A question waiting on this person
   keeps the chat icon.
+- **Automation timers** swap a remote OpenCode session's chat icon for a stopwatch
+  while an active OpenCode automation timer will wake it or one of its child
+  sessions: one that runs at a time, every interval, or on a cron. Paused automations and
+  event watches do not count, and background work's hourglass wins. Screen readers
+  hear “Waiting for a timer”.
 - **Unread** tabs show a bold title, and any kind of tab can be unread. The
   server marks a tab when something new happens on it: for a session, a turn
   ends, finished, failed, or stopped, or the agent starts asking a question;

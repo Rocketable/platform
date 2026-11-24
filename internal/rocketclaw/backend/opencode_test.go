@@ -40,7 +40,8 @@ type fakeOpenCode struct {
 	mcps      map[string][]string
 	bridges   []string
 
-	pending map[string]map[string][]string
+	pending     map[string]map[string][]string
+	automations string
 }
 
 type openCodeTestMessage struct {
@@ -99,6 +100,13 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": requests})
+	case "GET /api/experimental/automation":
+		if f.automations == "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		_, _ = io.WriteString(w, f.automations)
 	case "GET /api/mcp":
 		servers := []map[string]string{}
 		for _, name := range f.mcps[r.URL.Query().Get("location[directory]")] {
@@ -578,6 +586,32 @@ func TestSyncOpenCodeMarksBackgroundWork(t *testing.T) {
 	fake.pending = nil
 
 	assert.Equal(t, []bool{false, false, false}, asking())
+
+	automation := func() []bool {
+		require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+
+		rows := remoteSidebar(t, s)
+
+		automation := make([]bool, 0, len(rows))
+		for _, row := range rows {
+			automation = append(automation, row.Automation)
+		}
+
+		return automation
+	}
+
+	fake.automations = `{"data":[
+		{"sessionID":"ses_a","status":"active","nextDueAt":9000,"action":{"type":"code"}},
+		{"sessionID":"ses_b","status":"active","nextDueAt":9000,"action":{"type":"prompt","to":{"session":"ses_c_child"}}},
+		{"sessionID":"ses_b","status":"paused","nextDueAt":9000,"action":{"type":"shell"}},
+		{"sessionID":"ses_b","status":"active","action":{"type":"prompt","to":{"session":"ses_b"}}}
+	]}`
+
+	assert.Equal(t, []bool{true, false, true}, automation(), "an active timer marks the root of the session it wakes; paused automations and event watches do not")
+
+	fake.automations = ""
+
+	assert.Equal(t, []bool{false, false, false}, automation())
 }
 
 func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
