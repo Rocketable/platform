@@ -1542,7 +1542,9 @@ Late storage reads merge with newer live rows; superseded saves cannot overwrite
 newer snapshots, and post-deletion saves wait for the history clear to finish.
 
 The saved-list tests use real Chromium and IndexedDB. Run them after
-`bun run build`, with the installed Playwright module and Chromium executable:
+`bun run build` and `go -C ../internal/web run gzip.go dist`, which stores the
+bundle gzipped the way the tests serve it, with the installed Playwright module
+and Chromium executable:
 
 ```sh
 export ROCKETCLAW_PLAYWRIGHT_MODULE='/absolute/path/to/playwright-core/index.mjs'
