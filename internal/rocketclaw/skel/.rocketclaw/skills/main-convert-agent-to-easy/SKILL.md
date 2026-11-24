@@ -60,7 +60,7 @@ Start the new frontmatter with `mode: easy`. Write only easy keys. A section lef
 | `permission.rocketclaw.rocketclaw_set_tag` tag groups | `tags`, same lists, plus the `tags` group. |
 | `permission.decision` | `decision`: the `provider/model` names the rules allow, expanding wildcards into the models the human names; their calls now run without review, so list each `auto` rule in the review question. No rule means leave the key out (no `decision` tool). |
 | `approver.decision` | Dropped; tell the human. It applied only when another agent used this one as `auto(<name>)`. Never copy it into the easy `approver.decision`, which checks this agent's own calls. |
-| cron files that run it | `routines` (see "Cron files"). |
+| `routines`, and cron files that run it | `routines`: the agent's own entries unchanged, plus one per cron schedule (see "Cron files"). |
 | body | Kept, with the changes under "Body". |
 
 `rocketclaw` groups:
@@ -98,7 +98,7 @@ Each local `cron/<file>.md` that runs the agent becomes routine entries:
 
 - Each schedule becomes one entry, with the cron body as its instruction: `- "<schedule>": "<body>"`. A file with several schedules gives several entries with the same instruction. Use a YAML block scalar for a body with several lines.
 - Routines report in the agent's `space`. When the cron file's `space` differs, ask which one to keep.
-- The same schedule twice fails loading. When two cron files share a schedule, ask how to merge their instructions.
+- The same schedule twice fails loading. When two cron files, or a cron file and one of the agent's routines, share a schedule, ask how to merge their instructions.
 - Tell the human that past runs stay under `cron/<file>.md`, and routine runs are recorded as `agents/<name>.md#<schedule>`.
 
 After writing the agent, delete each converted local `cron/<file>.md`, or reload fails.

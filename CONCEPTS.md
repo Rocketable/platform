@@ -220,7 +220,7 @@ The one Web session a sticky agent keeps: per person for `sticky: user`, matched
 
 ### Routine
 
-A schedule an Easy Agent declares in its own file, in place of a cron file, that runs the agent with the routine's instruction and reports as a cron job does. Its identity is its agent and schedule text, and its runs have no Shadow Sessions.
+A schedule an agent declares in its own file, the only way to schedule an Easy Agent, that runs the agent with the routine's instruction and reports as a cron job does. Its identity is its agent and schedule text, and its runs have no Shadow Sessions.
 
 ### Subagent Session
 

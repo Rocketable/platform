@@ -328,6 +328,8 @@ The optional `space` frontmatter field is one Web space name string. A Web sessi
 
 The optional `sticky` frontmatter field, in advanced and easy agents alike, is `off` (the default), `user`, `global` or `slack`; any other value fails agent loading. `user` keeps one Web session per person and `global` one shared by everyone: a new Web session with the agent opens that existing one instead. Such a session switches only to agents with the same `sticky` value and cannot be forked, and only `user` agents are offered on the Voice page. A sticky agent is never another agent's `task` subagent or permission reviewer, though it may delegate, including to itself unless it is the built-in `main` or `voice`. A `global` agent's cron and routine runs report into its one session; a `user` agent cannot be scheduled, so never give it `routines` or name it in a cron file. `slack` makes the agent answer only in Slack: one Channel Session per channel and one Thread Session per thread; it is not offered for new Web sessions, cannot be scheduled either, and only `slack` agents answer in Slack channels. Set or change it only when the human asks, and carry it over on updates and renames.
 
+The optional `routines` frontmatter field, in advanced and easy agents alike, lists the schedules the agent runs on by itself; to add or change them, use `main-update-cron-or-heartbeat`. Carry it over on updates and renames. Renaming an agent leaves its earlier routine runs under the old name.
+
 Preserve any other valid frontmatter keys unless the human asked to change them.
 
 The body of the file should contain the agent's purpose and operating instructions based on what the human asked for.
@@ -413,7 +415,7 @@ Agent instructions.
 !`cat MEMORY.md`
 ```
 
-When the effective file has `mode: easy`, keep it easy: never add advanced keys, and carry over its sections, `space`, `workingDirectory` and `routines` unless the human asked to change them. Switch an agent between modes only when the human asks, and then write only the new mode's keys. To convert an advanced agent to easy, use `main-convert-agent-to-easy`. Renaming an easy agent leaves its earlier routine runs under the old name.
+When the effective file has `mode: easy`, keep it easy: never add advanced keys, and carry over its sections, `space`, `workingDirectory` and `routines` unless the human asked to change them. Switch an agent between modes only when the human asks, and then write only the new mode's keys. To convert an advanced agent to easy, use `main-convert-agent-to-easy`.
 
 ## Workflow
 

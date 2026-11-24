@@ -31,11 +31,6 @@ type AgentLoadConfig struct {
 	Skills            fs.FS
 }
 
-type AgentRoutine struct {
-	Schedule    string
-	Instruction string
-}
-
 func (a *Agent) allowsSubagentModel(model string) bool {
 	return !strings.Contains(model, "*") && slices.ContainsFunc(a.Subagents, func(entry string) bool {
 		prefix, wildcard := strings.CutSuffix(entry, "*")
@@ -143,27 +138,6 @@ func compileEasyAgent(agent *Agent, cfg *AgentLoadConfig) error {
 			}
 		case field.Kind != yaml.SequenceNode || field.Decode(&agent.DelegatedFrom) != nil:
 			return errors.New("delegatedFrom: must be true, false, or a list of agent names")
-		}
-	}
-
-	if field := frontmatterField(node, "routines"); field != nil {
-		if slices.Contains([]AgentSticky{AgentStickyUser, AgentStickySlack}, agent.Sticky) {
-			return fmt.Errorf("routines: a sticky: %s agent cannot have routines", agent.Sticky)
-		}
-
-		if field.Kind != yaml.SequenceNode {
-			return errors.New("routines: must be a list of schedules and one-entry maps from schedule to instruction")
-		}
-
-		for _, entry := range field.Content {
-			switch {
-			case entry.Kind == yaml.ScalarNode:
-				agent.Routines = append(agent.Routines, AgentRoutine{Schedule: entry.Value})
-			case entry.Kind == yaml.MappingNode && len(entry.Content) == 2 && entry.Content[1].Kind == yaml.ScalarNode:
-				agent.Routines = append(agent.Routines, AgentRoutine{Schedule: entry.Content[0].Value, Instruction: entry.Content[1].Value})
-			default:
-				return errors.New("routines: must be a list of schedules and one-entry maps from schedule to instruction")
-			}
 		}
 	}
 

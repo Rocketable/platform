@@ -170,7 +170,7 @@ func AgentSettings() []AgentSetting {
 		{Key: "delegatedFrom", Modes: easy, Group: "Who can write", Label: "Who may write to its chats", Control: AgentSettingFile,
 			Explanation: "Which agents may start, message or stop this agent's chats.",
 			Default:     "Any agent.", Allowed: "true, false, or a list of agent names."},
-		{Key: "routines", Modes: easy, Group: "Routines", Label: "Routines", Control: AgentSettingFile,
+		{Key: "routines", Modes: both, Group: "Routines", Label: "Routines", Control: AgentSettingFile,
 			Explanation: "Schedules on which the agent gets a message by itself; a reply opens a Web chat in its space.",
 			Default:     "No routines.", Allowed: "A list of schedules (cron, a duration such as 30m, or @daily), each alone or mapped to an instruction; no schedule twice."},
 		{Key: "additionalInstructions", Modes: advanced, Group: "Output", Label: "Reply style", Control: AgentSettingText,

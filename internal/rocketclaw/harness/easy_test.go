@@ -41,7 +41,7 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 		{"description", easyRequired + "\ndescription: Main", "main.md: description: not an easy-mode key"},
 		{"sudo", easyRequired + "\nsudo: yes", "main.md: sudo: not an easy-mode key"},
 		{"relative shell", easyRequired + "\nshell: bash", "main.md: shell: must be an absolute path or emulated"},
-		{"sticky user routines", easyRequired + "\nsticky: user\nroutines: [30m]", "main.md: routines: a sticky: user agent cannot have routines"},
+		{"advanced sticky user routines", "model: gpt-5.4\nsticky: user\nroutines: [30m]", "main.md: routines: a sticky: user agent cannot have routines"},
 		{"sticky slack routines", easyRequired + "\nsticky: slack\nroutines: [30m]", "main.md: routines: a sticky: slack agent cannot have routines"},
 		{"negative maxRecursion", easyRequired + "\nmaxRecursion: -1", "main.md: maxRecursion: must be an integer of 0 or more"},
 		{"unknown subagent provider", easyRequired + "\nsubagents: [nope/gpt-6]", `main.md: model "nope/gpt-6": provider "nope" is not configured`},
