@@ -34,7 +34,7 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "main")
 
 	require.NoError(t, err)
-	require.Contains(t, looper.SystemPrompt, "remember workspace memory\n\n<current-workspace>\nWorkspace root: "+dir+"\n</current-workspace>")
+	require.Contains(t, looper.SystemPrompt, "remember workspace memory\n\n<current-workspace>\nWorkspace root: "+dir+"\n</current-workspace>\n\nWhen a turn carries a note that the message did not address you, work read-only: read, search and answer; do not change files or data, run commands that change anything, start or write to other sessions, schedule messages, or send anything anywhere other than your answer. If the request needs a change, say that it needs an @mention.")
 }
 
 func TestNewRequiresShellTempDir(t *testing.T) {

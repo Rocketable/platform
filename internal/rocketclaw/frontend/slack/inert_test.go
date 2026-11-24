@@ -9,6 +9,9 @@ import (
 
 type inertThreadRouter struct{}
 
+func (inertThreadRouter) ScreenAmbient(context.Context, protocol.TextConversationTarget, *protocol.AmbientScreen) bool {
+	return false
+}
 func (inertThreadRouter) MentionThread(protocol.TextConversationTarget) (recorded, report bool, err error) {
 	return false, false, nil
 }

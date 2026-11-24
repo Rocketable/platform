@@ -54,6 +54,7 @@ type Config struct {
 	ShellEnv                  map[string]string
 	ChildContext              []SessionEntry
 	OriginHeader              string
+	Unaddressed               bool
 	Sandbox                   sandbox.Runtime
 	MCPServers                map[string]mcpclient.ServerConfig
 	MCPWorkspace              string
@@ -82,6 +83,7 @@ type SubagentWrite struct {
 	Mode                     ContinueMode
 	Model                    string
 	Tools                    []string
+	Unaddressed              bool
 }
 
 type InertChildSessions struct{}
@@ -276,6 +278,7 @@ func NewWithModelResolver(
 		shellSystem:               shellSystem,
 		childContext:              config.ChildContext,
 		originHeader:              config.OriginHeader,
+		unaddressed:               config.Unaddressed,
 		shellTemp:                 shellTemp,
 		spillRel:                  spillRel,
 		retainedRel:               filepath.Join(spillRel, config.RetainedResultDir),

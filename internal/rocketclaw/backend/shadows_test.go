@@ -1700,6 +1700,28 @@ func TestShadowTerminalClosure(t *testing.T) {
 	}
 }
 
+func TestShadowOfAmbientTurnIsUnaddressed(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newShadowTestStore(t)
+	parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
+	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "anyone?", true)
+	inbound.Metadata = map[string]string{protocol.InboundAmbientMetadataKey: protocol.AmbientJoinedThread}
+	request := bridgeRequest{inbound: inbound}
+	admitted, err := parent.activateInbound(t.Context(), &request)
+	require.NoError(t, err)
+	require.True(t, admitted)
+	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "initial", Texts: []string{"anyone?"}}}}))
+
+	var childID string
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY shadow_agent LIMIT 1`).Scan(&childID))
+	turn, claimed, err := store.claimShadowTurn(t.Context(), childID)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.Equal(t, protocol.AmbientDelegated, turn.inbound.Metadata[protocol.InboundAmbientMetadataKey], "a shadow runs unaddressed but cannot silence the conversation")
+	require.Equal(t, "[Slack unaddressed]", turn.inbound.OriginHeader)
+}
+
 func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
 	t.Parallel()
 

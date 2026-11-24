@@ -171,6 +171,8 @@ func (f *toolFactory) availableSubagentsDescription() string {
 	return description.String()
 }
 
+const UnaddressedReadOnly = "work read-only: read, search and answer; do not change files or data, run commands that change anything, start or write to other sessions, schedule messages, or send anything anywhere other than your answer. If the request needs a change, say that it needs an @mention."
+
 func (f *toolFactory) childSystemPrompt(agent *Agent) string {
 	return strings.TrimSpace(f.workspaceInstructions + "\n\n" + agent.Prompt)
 }
@@ -178,7 +180,7 @@ func (f *toolFactory) childSystemPrompt(agent *Agent) string {
 func (f *toolFactory) sessionSystemPrompt(ctx context.Context, agent *Agent) string {
 	expandAgentPrompt(ctx, agent, f.expandPromptShellCommands.PrimaryPrompts, &f.promptExpansion)
 
-	return strings.TrimSpace(agent.Prompt + "\n\n" + f.workspaceInstructions)
+	return strings.TrimSpace(agent.Prompt+"\n\n"+f.workspaceInstructions) + "\n\nWhen a turn carries a note that the message did not address you, " + UnaddressedReadOnly
 }
 
 func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata toolCallMetadata) (string, error) {
@@ -246,7 +248,7 @@ func (f *toolFactory) subagentWrite(ctx context.Context, params *taskParams) (Su
 			return SubagentWrite{}, fmt.Errorf("agent type %s is a sticky: %s agent, which only it delegates to; write to its session with rocketclaw_sessions instead", agent.Name, agent.Sticky)
 		}
 
-		return SubagentWrite{Agent: agent.Name, Delegator: f.agent.Name, Prompt: params.Prompt}, nil
+		return SubagentWrite{Agent: agent.Name, Delegator: f.agent.Name, Prompt: params.Prompt, Unaddressed: f.unaddressed}, nil
 	}
 
 	if !f.agent.allowsSubagentModel(params.Model) {
@@ -268,7 +270,7 @@ func (f *toolFactory) subagentWrite(ctx context.Context, params *taskParams) (Su
 		tools = f.agent.Tools
 	}
 
-	return SubagentWrite{Agent: f.agent.Name, Delegator: f.agent.Name, Prompt: params.Prompt, Model: params.Model, Tools: tools}, nil
+	return SubagentWrite{Agent: f.agent.Name, Delegator: f.agent.Name, Prompt: params.Prompt, Model: params.Model, Tools: tools, Unaddressed: f.unaddressed}, nil
 }
 
 func TaskResult(answer string) string {

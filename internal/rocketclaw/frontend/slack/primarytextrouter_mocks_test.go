@@ -27,6 +27,9 @@ var _ protocol.PrimaryTextRouter = &primaryTextRouterMock{}
 //			MentionThreadFunc: func(target protocol.TextConversationTarget) (bool, bool, error) {
 //				panic("mock out the MentionThread method")
 //			},
+//			ScreenAmbientFunc: func(ctx context.Context, target protocol.TextConversationTarget, screen *protocol.AmbientScreen) bool {
+//				panic("mock out the ScreenAmbient method")
+//			},
 //			SubmitMentionFunc: func(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
 //				panic("mock out the SubmitMention method")
 //			},
@@ -45,6 +48,9 @@ type primaryTextRouterMock struct {
 
 	// MentionThreadFunc mocks the MentionThread method.
 	MentionThreadFunc func(target protocol.TextConversationTarget) (bool, bool, error)
+
+	// ScreenAmbientFunc mocks the ScreenAmbient method.
+	ScreenAmbientFunc func(ctx context.Context, target protocol.TextConversationTarget, screen *protocol.AmbientScreen) bool
 
 	// SubmitMentionFunc mocks the SubmitMention method.
 	SubmitMentionFunc func(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error)
@@ -66,6 +72,15 @@ type primaryTextRouterMock struct {
 			// Target is the target argument value.
 			Target protocol.TextConversationTarget
 		}
+		// ScreenAmbient holds details about calls to the ScreenAmbient method.
+		ScreenAmbient []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Target is the target argument value.
+			Target protocol.TextConversationTarget
+			// Screen is the screen argument value.
+			Screen *protocol.AmbientScreen
+		}
 		// SubmitMention holds details about calls to the SubmitMention method.
 		SubmitMention []struct {
 			// Ctx is the ctx argument value.
@@ -85,6 +100,7 @@ type primaryTextRouterMock struct {
 	}
 	lockInterruptTurn sync.RWMutex
 	lockMentionThread sync.RWMutex
+	lockScreenAmbient sync.RWMutex
 	lockSubmitMention sync.RWMutex
 	lockWebURL        sync.RWMutex
 }
@@ -154,6 +170,46 @@ func (mock *primaryTextRouterMock) MentionThreadCalls() []struct {
 	mock.lockMentionThread.RLock()
 	calls = mock.calls.MentionThread
 	mock.lockMentionThread.RUnlock()
+	return calls
+}
+
+// ScreenAmbient calls ScreenAmbientFunc.
+func (mock *primaryTextRouterMock) ScreenAmbient(ctx context.Context, target protocol.TextConversationTarget, screen *protocol.AmbientScreen) bool {
+	if mock.ScreenAmbientFunc == nil {
+		panic("primaryTextRouterMock.ScreenAmbientFunc: method is nil but PrimaryTextRouter.ScreenAmbient was just called")
+	}
+	callInfo := struct {
+		Ctx    context.Context
+		Target protocol.TextConversationTarget
+		Screen *protocol.AmbientScreen
+	}{
+		Ctx:    ctx,
+		Target: target,
+		Screen: screen,
+	}
+	mock.lockScreenAmbient.Lock()
+	mock.calls.ScreenAmbient = append(mock.calls.ScreenAmbient, callInfo)
+	mock.lockScreenAmbient.Unlock()
+	return mock.ScreenAmbientFunc(ctx, target, screen)
+}
+
+// ScreenAmbientCalls gets all the calls that were made to ScreenAmbient.
+// Check the length with:
+//
+//	len(mockedPrimaryTextRouter.ScreenAmbientCalls())
+func (mock *primaryTextRouterMock) ScreenAmbientCalls() []struct {
+	Ctx    context.Context
+	Target protocol.TextConversationTarget
+	Screen *protocol.AmbientScreen
+} {
+	var calls []struct {
+		Ctx    context.Context
+		Target protocol.TextConversationTarget
+		Screen *protocol.AmbientScreen
+	}
+	mock.lockScreenAmbient.RLock()
+	calls = mock.calls.ScreenAmbient
+	mock.lockScreenAmbient.RUnlock()
 	return calls
 }
 

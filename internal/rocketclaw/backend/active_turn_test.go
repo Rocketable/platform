@@ -703,6 +703,13 @@ func TestSlackSessionTurnOfAgentNoLongerStickySlackDoesNotRun(t *testing.T) {
 	require.NoError(t, rt.threads.PickLaterWork(t.Context(), testChannelSession))
 	assert.Equal(t, testChannelSession, readFinal(t, finals).ConversationID)
 	assert.Equal(t, []string{"turn-1/call/a pending false"}, noteStates(t, rt.Sessions), "a skipped wake leaves its notes for the next turn")
+
+	ambient := newThreadInboundMessage("anyone?", "4.4", "4.4")
+	ambient.Metadata[protocol.InboundAmbientMetadataKey] = protocol.AmbientWatchedChannel
+	accepted, err = rt.threads.SubmitMention(t.Context(), "primary", slackTarget("D123", "4.4"), ambient)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	assert.True(t, readFinal(t, finals).Deferred, "a skipped ambient turn settles no Slack status")
 }
 
 func TestResumedSlackSessionTurnRunsAfterAgentLeavesStickySlack(t *testing.T) {
@@ -1215,6 +1222,232 @@ func TestSlackRespondInThreadOfferedOnlyOnChannelSessionMentions(t *testing.T) {
 		assert.Equal(t, tt.offered, strings.Contains(request, "Slack channel #room-"+tt.channel+" (ID "+tt.channel+")"), "%s: the turn knows its channel", tt.name)
 		assert.Equal(t, tt.offered, strings.Contains(request, "Each mention is one person's request"), "%s: the turn knows the placement rule", tt.name)
 	}
+}
+
+func TestSlackAmbientTurnFraming(t *testing.T) {
+	t.Parallel()
+
+	const said = "please rotate the keys"
+
+	nt := newNoteTest(t, answerNoteTest)
+	nt.cfg.Slack.Channels = append(nt.cfg.Slack.Channels, config.SlackChannelConfig{Channel: "#room-D1", Agents: []string{"primary"}, WakeWhen: "billing questions", Engagement: "answer in one line"})
+	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Primary\nmodel: gpt-6.1-sol\nsticky: slack\npermission:\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nResearch\n")
+	manager, _ := nt.run(t, ignoreOutbound)
+	(&Runtime{threads: manager}).AttachSlack(&slackLookupMock{SidebarChannelAgentChoicesFunc: func(_ context.Context, channel string) (string, []string, error) {
+		return "room-" + channel, nil, nil
+	}})
+
+	ambient := func(kind string) *protocol.InboundMessage {
+		inbound := newThreadInboundMessage(said, "1.2", "1.1")
+		inbound.Metadata[protocol.InboundAmbientMetadataKey] = kind
+
+		return inbound
+	}
+
+	edited := ambient(protocol.AmbientJoinedThread)
+	copyProvenance(edited, protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, said, true))
+
+	slackEdit := ambient(protocol.AmbientJoinedThread)
+	slackEdit.SlackReply.EditTS = "1.9"
+
+	for i, tt := range []struct {
+		name, guidance string
+		inbound        *protocol.InboundMessage
+	}{
+		{name: "Watched Channel message", inbound: ambient(protocol.AmbientWatchedChannel), guidance: "#room-D1 did not mention you. You watch this channel for this goal:\nbilling questions\nHow to engage: answer in one line\nAnswer only if the goal applies and you can add something specific."},
+		{name: "Joined Thread reply", inbound: ambient(protocol.AmbientJoinedThread), guidance: "#room-D2 did not mention you, but you are part of its thread. Answer only if it is meant for you, and stay out of replies people send each other."},
+		{name: "mention", inbound: newThreadInboundMessage(said, "1.2", "1.1")},
+		{name: "Web input", inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, said, true)},
+		{name: "Web-edited ambient item", inbound: edited},
+		{name: "edited Slack message", inbound: slackEdit, guidance: "Answer only if it is meant for you, and stay out of replies people send each other. This is an edited version of a message you may have seen before."},
+	} {
+		channel := "D" + strconv.Itoa(i+1)
+		conversation := "slack-thread:" + channel + ":1.1:primary"
+		recordSlackSession(t, nt.service, conversation, channel, "1.1")
+
+		_, err := runTestTurn(t.Context(), nt.bridge(t, manager, conversation), tt.inbound, "turn-"+strconv.Itoa(i))
+		require.NoError(t, err, tt.name)
+
+		request := nt.request(t)
+		listening := tt.guidance != ""
+		assert.Equal(t, listening, strings.Contains(request, "slack_no_reply("), "%s: the turn can stay silent", tt.name)
+
+		for _, tool := range []string{"rocketclaw_schedule_message(", "rocketclaw_reset_scheduled_messages(", "rocketclaw_sessions_write("} {
+			assert.Equal(t, !listening, strings.Contains(request, tool), "%s: %s", tt.name, tool)
+		}
+
+		assert.Equal(t, listening, strings.Contains(request, "did not mention you"), "%s: only an ambient turn is told why it arrived", tt.name)
+		assert.NotContains(t, request, "started from a message that did not address you", "%s: only work delegated from an unaddressed turn gets the delegated note", tt.name)
+
+		if listening {
+			guidance := ambientGuidance(t, request)
+			assert.Contains(t, guidance, tt.guidance, tt.name)
+			assert.Contains(t, guidance, "Since this message did not address you, "+harness.UnaddressedReadOnly+" To stay quiet", tt.name)
+			assert.Contains(t, guidance, "To stay quiet, call slack_no_reply.", tt.name)
+			assert.NotContains(t, guidance, said, "%s: the guidance never carries message text", tt.name)
+			assert.Equal(t, tt.inbound.SlackReply.EditTS != "", strings.Contains(guidance, "edited version"), tt.name)
+		}
+	}
+
+	_, err := noReplyTool(nt.service, "slack-thread:D1:1.1:primary", "turn-0").Call(t.Context(), json.RawMessage(`{}`), nil)
+	require.NoError(t, err)
+	_, silent, err := nt.service.LoadTurnStep(t.Context(), "slack-thread:D1:1.1:primary", "turn-0"+noReplyStep)
+	require.NoError(t, err)
+	assert.True(t, silent, "calling slack_no_reply saves the turn step")
+
+	editedOrigin := ambient(protocol.AmbientJoinedThread)
+	editedOrigin.SlackReply.EditTS = "1.9"
+	nt.addNote(t, "slack-thread:D2:1.1:primary", "turn-1/call/job", editedOrigin)
+	nt.addNote(t, "slack-thread:D2:1.1:primary", "turn-2/call/job", newThreadInboundMessage(said, "1.3", "1.1"))
+	manager.noteReady("slack-thread:D2:1.1:primary")
+
+	wake := nt.request(t)
+	assert.Contains(t, wake, "slack_no_reply(", "a Background Job wake is the ambient conversation's own turn")
+	assert.Contains(t, ambientGuidance(t, wake), "#room-D2 did not mention you")
+	assert.NotContains(t, ambientGuidance(t, wake), "edited version", "a wake is not the edited message")
+	assert.True(t, readFinalFor(t, nt.finals, "slack-thread:D2:1.1:primary").Deferred, "the wake writes no Slack status")
+
+	mentionWake := nt.request(t)
+	assert.NotContains(t, mentionWake, "slack_no_reply(", "a mention's note wakes its own addressed turn")
+	assert.NotContains(t, lastRequestMessage(t, mentionWake), "unaddressed")
+	assert.False(t, readFinalFor(t, nt.finals, "slack-thread:D2:1.1:primary").Deferred, "the mention's wake writes its Slack status")
+	nt.waitIdle(t, manager, "slack-thread:D2:1.1:primary")
+
+	_, err = nt.bridge(t, manager, "slack-thread:D1:1.1:primary").WriteSubagent(t.Context(), &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-0", Call: "call-1"}, CallKey: "turn-0/call/call-1", Agent: "researcher", Delegator: "primary", Prompt: "look it up", Unaddressed: true})
+	require.NoError(t, err)
+	child := nt.request(t)
+	assert.Contains(t, child, `[System unaddressed sender=\"message from session slack-thread:D1:1.1:primary (agent primary)`, "a Task child of an ambient turn is unaddressed")
+	assert.Contains(t, child, "This work was started from a message that did not address you, so "+harness.UnaddressedReadOnly, "a Task child of an ambient turn is told to work read-only")
+	assert.NotContains(t, child, "did not mention you")
+	assert.NotContains(t, child, "slack_no_reply(", "a Task child cannot silence the conversation")
+	assert.NotContains(t, child, "rocketclaw_sessions_write(", "a Task child keeps its delegator's unaddressed limits after the delegating turn ends")
+}
+
+func TestResumedAmbientTurnKeepsItsGuidance(t *testing.T) {
+	t.Parallel()
+
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if n == 0 {
+			<-r.Context().Done()
+
+			return
+		}
+
+		answerNoteTest(w, r, n, body)
+	})
+	nt.cfg.Slack.Channels = append(nt.cfg.Slack.Channels, config.SlackChannelConfig{Channel: "#room", Agents: []string{"primary"}, WakeWhen: "billing questions"})
+	writePrimaryAgent(t, nt.cfg.Workspace, "slack")
+
+	conversation := "slack-thread:C1:1.1:primary"
+	recordSlackSession(t, nt.service, conversation, "C1", "1.1")
+
+	lookups := &slackLookupMock{SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) { return "room", nil, nil }}
+	inbound := newThreadInboundMessage("anyone?", "1.2", "1.1")
+	inbound.ConversationID, inbound.Metadata[protocol.InboundAmbientMetadataKey] = conversation, protocol.AmbientWatchedChannel
+
+	first, shutdown := nt.run(t, ignoreOutbound)
+	(&Runtime{threads: first}).AttachSlack(lookups)
+	require.NoError(t, nt.bridge(t, first, conversation).Submit(t.Context(), inbound))
+	assert.Contains(t, ambientGuidance(t, nt.request(t)), "billing questions")
+	shutdown()
+
+	nt.cfg.Slack.Channels[1].WakeWhen = "release questions"
+	second, _ := nt.run(t, ignoreOutbound)
+	(&Runtime{threads: second}).AttachSlack(lookups)
+	require.NoError(t, second.StartActiveTurns(t.Context()))
+
+	resumed := nt.request(t)
+	assert.Contains(t, ambientGuidance(t, resumed), "billing questions", "a resumed turn keeps the guidance it started with")
+	assert.NotContains(t, resumed, "release questions")
+}
+
+func TestNoReplySilencesAmbientTurnAcrossRestart(t *testing.T) {
+	t.Parallel()
+
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		if n == 0 {
+			<-r.Context().Done()
+
+			return
+		}
+
+		answerNoteTest(w, r, n, body)
+	})
+	writePrimaryAgent(t, nt.cfg.Workspace, "slack")
+
+	conversation := "slack-thread:C1:1.1:primary"
+	recordSlackSession(t, nt.service, conversation, "C1", "1.1")
+
+	saved, err := nt.service.SaveTabState(t.Context(), alice, &TabState{Tabs: []Tab{{Path: sessionPath(conversation)}}}, 0)
+	require.NoError(t, err)
+	require.True(t, saved)
+
+	lookups := &slackLookupMock{SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) { return "room", nil, nil }}
+	ambient := func(ts string) *protocol.InboundMessage {
+		inbound := newThreadInboundMessage("anyone?", ts, "1.1")
+		inbound.ConversationID, inbound.Metadata[protocol.InboundAmbientMetadataKey] = conversation, protocol.AmbientJoinedThread
+
+		return inbound
+	}
+
+	first, shutdown := nt.run(t, ignoreOutbound)
+	(&Runtime{threads: first}).AttachSlack(lookups)
+	require.NoError(t, nt.bridge(t, first, conversation).Submit(t.Context(), ambient("1.2")))
+	nt.request(t)
+
+	running, err := queryStrings(t.Context(), nt.service.db, `SELECT id FROM turns WHERE conversation_id = $1 AND phase = $2`, "running turn", conversation, turnRunning)
+	require.NoError(t, err)
+	require.Len(t, running, 1)
+	_, err = noReplyTool(nt.service, conversation, running[0]).Call(t.Context(), json.RawMessage(`{}`), nil)
+	require.NoError(t, err)
+	shutdown()
+
+	stored := make(chan string, 4)
+	second, _ := nt.run(t, func(message *protocol.OutboundMessage) {
+		if message.Complete {
+			var text string
+			assert.NoError(t, queryScalar(context.Background(), nt.service.db, "stored outbound", `SELECT outbound_json->>'Text' FROM turns WHERE id = $1`, &text, message.TurnID))
+
+			stored <- text
+		}
+	})
+	(&Runtime{threads: second}).AttachSlack(lookups)
+	require.NoError(t, second.StartActiveTurns(t.Context()))
+	nt.request(t)
+
+	silent := readFinalFor(t, nt.finals, conversation)
+	assert.Equal(t, []any{true, "", 0}, []any{silent.Deferred, silent.Text, len(silent.Attachments)}, "the answer written after no-reply does not post")
+	assert.Empty(t, <-stored, "a resend of the saved outbound stays silent")
+	assert.Empty(t, unreadBy(t, nt.service, conversation), "a silent ambient turn marks no reader unread")
+
+	require.NoError(t, nt.bridge(t, second, conversation).Submit(t.Context(), ambient("1.3")))
+	nt.request(t)
+	assert.Equal(t, "answer", readFinalFor(t, nt.finals, conversation).Text)
+	assert.Equal(t, "answer", <-stored)
+	assert.Equal(t, []string{alice}, unreadBy(t, nt.service, conversation), "an ambient turn that answers marks its readers")
+}
+
+func ambientGuidance(t *testing.T, request string) string {
+	t.Helper()
+
+	var body struct {
+		Input []json.RawMessage `json:"input"`
+	}
+
+	require.NoError(t, json.Unmarshal([]byte(request), &body))
+	messages, err := replayInputMessages(body.Input)
+	require.NoError(t, err)
+
+	for _, message := range messages {
+		if message.role == "developer" && strings.Contains(message.text, "did not mention you") {
+			return message.text
+		}
+	}
+
+	t.Fatal("no ambient guidance in the request")
+
+	return ""
 }
 
 func TestMoveTurnRekeysTheTurnWhileRootFirstAdmissionRuns(t *testing.T) {
@@ -3058,12 +3291,19 @@ SELECT item->>'input_id' FROM items WHERE item->>'input_id' <> ''`, "subagent in
 	nt.request(t)
 	<-held
 
+	steered, err = parent.WriteSubagent(t.Context(), &harness.SubagentWrite{Key: harness.ChildKey{Path: key}, CallKey: "turn-2/call/u", Agent: "researcher", Delegator: "primary", Prompt: "skim the thread", Mode: harness.ContinueSteer, Unaddressed: true})
+	require.NoError(t, err)
+	assert.False(t, steered, "an unaddressed steer queues its own turn instead of joining the running one")
+
 	steered, err = parent.WriteSubagent(t.Context(), &harness.SubagentWrite{Key: harness.ChildKey{Path: key}, CallKey: "turn-2/call/s", Agent: "researcher", Delegator: "primary", Prompt: "also the logs", Mode: harness.ContinueSteer})
 	require.NoError(t, err)
 	assert.True(t, steered, "the steer joins the running turn")
 	close(release)
 
-	assert.Contains(t, nt.request(t), "also the logs", "the running turn takes the steer at its next step")
+	steeredStep := nt.request(t)
+	assert.Contains(t, steeredStep, "also the logs", "the running turn takes the steer at its next step")
+	assert.NotContains(t, steeredStep, "skim the thread")
+	assert.Contains(t, lastRequestMessage(t, nt.request(t)), "[System unaddressed", "the unaddressed write runs as its own unaddressed turn")
 
 	answer, _, err = parent.AwaitSubagent(t.Context(), key, "turn-2/call/c")
 	require.NoError(t, err)

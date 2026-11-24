@@ -28,6 +28,7 @@ const (
 	mcpPermissionBucket       = "mcp"
 	codeModeApproveSubject    = "code_mode_approve"
 	AllowBackgroundSubject    = "allow_background"
+	NoReplyToolName           = "slack_no_reply"
 )
 
 func compileMCPGrant(permission *PermissionSet, facets map[string]map[string][]string, grant map[string]map[string]PermissionAction) error {

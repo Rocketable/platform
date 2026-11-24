@@ -1134,7 +1134,7 @@ func TestRuntimeQueueEditMakesTheEditorTheSender(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		id := fmt.Sprintf("web:planner/call-%t", live)
 		write := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "from planner", false)
-		write.ConversationID, write.Metadata = "main", map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text", protocol.InboundSenderSessionMetadataKey: "web:planner", protocol.InboundSenderAgentMetadataKey: "planner", protocol.InboundSenderActionMetadataKey: protocol.SenderActionStopped, protocol.InboundPrincipalEmailMetadataKey: "alice@example.com", "web_message_id": id}
+		write.ConversationID, write.Metadata = "main", map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text", protocol.InboundSenderSessionMetadataKey: "web:planner", protocol.InboundSenderAgentMetadataKey: "planner", protocol.InboundSenderActionMetadataKey: protocol.SenderActionStopped, protocol.InboundPrincipalEmailMetadataKey: "alice@example.com", protocol.InboundAmbientMetadataKey: "thread", "web_message_id": id}
 		_, _, err := bridge.admitAgentWrite(t.Context(), sessionWriteEnqueue, write, nil)
 		require.NoError(t, err)
 

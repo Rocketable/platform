@@ -328,6 +328,7 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 		wantGuardian     bool
 		wantNoDecision   bool
 		noModel          bool
+		unaddressed      bool
 		wantRules        string
 		configConfidence float64
 	}{
@@ -337,6 +338,11 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 		{name: "confident high-risk deny", answers: reviewAnswers("high", 0.95, "unknown", 0.92, 0.03, "deny", 0.96), wantOutcome: permissionReviewOutcomeDeny},
 		{name: "unauthorized high-risk allow", answers: reviewAnswers("high", 0.95, "low", 0.95, 0.02, "allow", 0.97), wantGuardian: true},
 		{name: "authorized high-risk allow", answers: reviewAnswers("high", 0.95, "medium", 0.95, 0.02, "allow", 0.97), wantOutcome: permissionReviewOutcomeAllow},
+		{name: "medium-risk allow", answers: reviewAnswers("medium", 0.95, "high", 0.95, 0.02, "allow", 0.97), wantOutcome: permissionReviewOutcomeAllow},
+		{name: "unaddressed medium-risk allow", unaddressed: true, answers: reviewAnswers("medium", 0.95, "high", 0.95, 0.02, "allow", 0.97), wantGuardian: true},
+		{name: "unaddressed authorized high-risk allow", unaddressed: true, answers: reviewAnswers("high", 0.95, "high", 0.95, 0.02, "allow", 0.97), wantGuardian: true},
+		{name: "unaddressed medium-risk deny", unaddressed: true, answers: reviewAnswers("medium", 0.95, "high", 0.95, 0.02, "deny", 0.97), wantOutcome: permissionReviewOutcomeDeny},
+		{name: "unaddressed low-risk allow", unaddressed: true, answers: confidentAllow, wantOutcome: permissionReviewOutcomeAllow},
 		{name: "low-risk deny", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "deny", 0.97), wantGuardian: true},
 		{name: "unknown risk level", answers: reviewAnswers("", 0.95, "medium", 0.93, 0.02, "allow", 0.97), wantGuardian: true},
 		{name: "provider error", err: errors.New("provider down"), wantGuardian: true},
@@ -385,7 +391,7 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 				"easy":    {Name: "easy", Model: "gpt-5.4", Mode: AgentModeEasy, ApproverDecision: ApproverDecision{Model: "openai/gpt-6-luna"}},
 				"lenient": {Name: "lenient", Model: "gpt-5.4", Prompt: "Deny anything touching production.", ApproverDecision: ApproverDecision{Model: "openai/gpt-6-luna", MinConfidence: 0.8}},
 			}})
-			factory.autoApproverMinConfidence = tc.configConfidence
+			factory.autoApproverMinConfidence, factory.unaddressed = tc.configConfidence, tc.unaddressed
 			factory.deciders = map[string]Decider{"openai": decider}
 			factory.autoApproverDecisionModel = "openai/gpt-6-luna"
 			factory.childSessions = &mockChildSessions{AppendChildEntryFunc: func(_ context.Context, _ ChildKey, entry *SessionEntry) error {
@@ -461,6 +467,92 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, "bash", call.Name)
 		})
+	}
+}
+
+func TestUnaddressedTurnAllowsOnlyLowRiskReviewedCalls(t *testing.T) {
+	for _, tc := range []struct {
+		risk                 string
+		unaddressed, allowed bool
+	}{
+		{risk: "medium", allowed: true},
+		{risk: "low", unaddressed: true, allowed: true},
+		{risk: "medium", unaddressed: true},
+		{risk: "high", unaddressed: true},
+	} {
+		ran := false
+		mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
+			testMessageOutputItem("review-final", "", `{"risk_level":"`+tc.risk+`","user_authorization":"high","outcome":"allow","rationale":"The user asked for it."}`),
+		}))
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"main": {Name: "main"}}})
+		factory.unaddressed = tc.unaddressed
+
+		loop := testLooper(mockResponses())
+		loop.agent, loop.unaddressed, loop.PermissionReviewer = Agent{Name: "main"}, tc.unaddressed, factory
+		loop.Permissions = parsePermissionYAML(t, "edit: auto")
+		loop.Tools = map[string]looperTool{"edit": {Permission: "edit", Subjects: func(json.RawMessage) ([]string, error) { return []string{"notes.md"}, nil }, Call: func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+			ran = true
+
+			return TextToolResult("edited"), nil
+		}}}
+
+		_, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", "edit", `{}`)}), nil, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, tc.allowed, ran, "%s risk, unaddressed %v", tc.risk, tc.unaddressed)
+		require.Contains(t, systemPrompt(t, &newParams(mock)[0]), "with the token unaddressed", "the reviewer learns what the token means")
+	}
+}
+
+func TestUnaddressedTurnReviewsCallsAnAllowRuleRuns(t *testing.T) {
+	for _, unaddressed := range []bool{false, true} {
+		ran := false
+		mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
+			testMessageOutputItem("review-final", "", `{"risk_level":"medium","user_authorization":"high","outcome":"allow","rationale":"The user asked for it."}`),
+		}))
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"main": {Name: "main"}}})
+		factory.unaddressed = unaddressed
+
+		loop := testLooper(mockResponses())
+		loop.agent, loop.unaddressed, loop.PermissionReviewer = Agent{Name: "main"}, unaddressed, factory
+		loop.Permissions = parsePermissionYAML(t, "edit: allow")
+		loop.Tools = map[string]looperTool{"edit": {Permission: "edit", Subjects: func(json.RawMessage) ([]string, error) { return []string{"notes.md"}, nil }, Call: func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+			ran = true
+
+			return TextToolResult("edited"), nil
+		}}}
+
+		results, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", "edit", `{}`)}), nil, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, !unaddressed, ran, "unaddressed %v", unaddressed)
+		require.Len(t, newParams(mock), map[bool]int{true: 1}[unaddressed], "only an unaddressed turn reviews what an allow rule permits")
+
+		if unaddressed {
+			require.Contains(t, results[0].Param.Output.OfString.Value, "tool call denied: automatic permission review rejected the action")
+		}
+
+		loop.InPermissionReview = true
+		decision, err := loop.permissionDecision("edit", new(loop.Tools["edit"]), json.RawMessage(`{}`))
+		require.NoError(t, err)
+		require.Equal(t, toolPermissionDecision{}, decision, "a reviewer's own allowed calls run unreviewed")
+
+		loop.InPermissionReview = false
+		loop.Permissions = parsePermissionYAML(t, "read: allow")
+		decision, err = loop.permissionDecision("read", &looperTool{Permission: "read"}, json.RawMessage(`{}`))
+		require.NoError(t, err)
+		require.Equal(t, toolPermissionDecision{}, decision, "reads an allow rule permits run unreviewed")
+
+		loop.Permissions = parsePermissionYAML(t, "edit: allow")
+		decision, err = loop.permissionDecision("read", &looperTool{Permission: "read"}, json.RawMessage(`{}`))
+		require.NoError(t, err)
+		require.Equal(t, toolPermissionDecision{}, decision, "reads the edit rule allows run unreviewed")
+
+		loop.Permissions = PermissionSet{}
+		for _, subject := range []string{NoReplyToolName, "rocketclaw_attach_files_to_response"} {
+			require.NoError(t, loop.Permissions.Set("rocketclaw", subject, PermissionAllow))
+			decision, err = loop.permissionDecision(subject, &looperTool{Permission: "rocketclaw", Subjects: func(json.RawMessage) ([]string, error) { return []string{subject}, nil }}, json.RawMessage(`{}`))
+			require.NoError(t, err)
+			require.Equal(t, unaddressed && subject != NoReplyToolName, decision.review != nil, "unaddressed %v: %s", unaddressed, subject)
+		}
 	}
 }
 

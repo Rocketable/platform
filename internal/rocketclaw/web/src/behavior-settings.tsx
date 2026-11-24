@@ -10,7 +10,7 @@ import { DecisionModelPicker, ModelPicker } from "./agent-editor/model-picker";
 import { mutations, queries } from "./api";
 import type { ConfigView } from "./types";
 
-type Channel = { channel: string; agents?: string[]; allowed_user_ids?: string[] };
+type Channel = { channel: string; agents?: string[]; allowed_user_ids?: string[]; wake_when?: string; engagement?: string };
 type EmbeddedAgent = { disabled?: boolean; model?: string };
 type Behavior = {
   auto_approver_model: string;
@@ -160,6 +160,8 @@ function ChannelCard({ number, channel, names, disabled, onChange, onRemove }: {
       <Chips label="Allowed user IDs" items={users} onChange={(next) => onChange({ ...channel, allowed_user_ids: next })}>
         <TextAdder label={`Add user ID to channel ${number}`} onAdd={(id) => onChange({ ...channel, allowed_user_ids: [...new Set([...users, id])] })} />
       </Chips>
+      <Input aria-label={`Wake when for channel ${number}`} placeholder="Wake when, e.g. someone asks how to deploy" value={channel.wake_when ?? ""} onChange={(event) => onChange({ ...channel, wake_when: event.target.value })} />
+      <Input aria-label={`Engagement for channel ${number}`} placeholder="Engagement, e.g. answer briefly and link the docs" value={channel.engagement ?? ""} onChange={(event) => onChange({ ...channel, engagement: event.target.value })} />
     </div>
   );
 }

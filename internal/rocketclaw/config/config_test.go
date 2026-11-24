@@ -377,11 +377,12 @@ func TestLoadPreservesDecisionConfig(t *testing.T) {
 	    "typesafe": {"api_key": "ts-key", "api_base_url": "https://ts.example"}
 	  },
 	  "auto_approver_decision": {"model": " typesafe/jev-latest ", "min_confidence": 0.85},
-	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}
+	  "slack": {"bot_token":"xoxb","app_token":"xapp","ambient_decision_model":" openai/gpt-6-luna ","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}
 	}`)
 
 	assert.Equal(t, map[DecisionProvider]DecisionProviderConfig{DecisionOpenAI: {APIKey: "decide-key"}, DecisionTypeSafe: {APIKey: "ts-key", APIBaseURL: "https://ts.example"}}, cfg.Decision)
 	assert.Equal(t, AutoApproverDecisionConfig{Model: "typesafe/jev-latest", MinConfidence: 0.85}, cfg.AutoApproverDecision)
+	assert.Equal(t, "openai/gpt-6-luna", cfg.Slack.AmbientDecisionModel)
 }
 
 func TestValidateDecisionConfig(t *testing.T) {
@@ -389,21 +390,25 @@ func TestValidateDecisionConfig(t *testing.T) {
 		name       string
 		decision   map[DecisionProvider]DecisionProviderConfig
 		model      string
+		ambient    string
 		confidence float64
 		wantErr    string
 	}{
 		{name: "none"},
-		{name: "both providers", decision: map[DecisionProvider]DecisionProviderConfig{"openai": {APIKey: "a"}, "typesafe": {APIKey: "b"}}, model: "openai/gpt-6-luna", confidence: 1},
+		{name: "both providers", decision: map[DecisionProvider]DecisionProviderConfig{"openai": {APIKey: "a"}, "typesafe": {APIKey: "b"}}, model: "openai/gpt-6-luna", ambient: "openai/gpt-6-luna", confidence: 1},
 		{name: "unknown provider", decision: map[DecisionProvider]DecisionProviderConfig{"anthropic": {APIKey: "a"}}, wantErr: `decision["anthropic"]: provider must be openai or typesafe`},
 		{name: "missing key", decision: map[DecisionProvider]DecisionProviderConfig{"typesafe": {}}, wantErr: `decision["typesafe"].api_key is required`},
 		{name: "unconfigured model provider", decision: map[DecisionProvider]DecisionProviderConfig{"openai": {APIKey: "a"}}, model: "typesafe/jev-latest", wantErr: `auto_approver_decision.model: "typesafe/jev-latest" must be provider/model with its provider configured in decision`},
 		{name: "unqualified model", decision: map[DecisionProvider]DecisionProviderConfig{"openai": {APIKey: "a"}}, model: "gpt-6-luna", wantErr: `auto_approver_decision.model: "gpt-6-luna" must be provider/model with its provider configured in decision`},
+		{name: "ambient model without its provider", decision: map[DecisionProvider]DecisionProviderConfig{"typesafe": {APIKey: "b"}}, ambient: "openai/gpt-6-luna", wantErr: `slack.ambient_decision_model: "openai/gpt-6-luna" must be provider/model with its provider configured in decision`},
+		{name: "unqualified ambient model", decision: map[DecisionProvider]DecisionProviderConfig{"openai": {APIKey: "a"}}, ambient: "gpt-6-luna", wantErr: `slack.ambient_decision_model: "gpt-6-luna" must be provider/model with its provider configured in decision`},
 		{name: "confidence above one", confidence: 1.5, wantErr: "auto_approver_decision.min_confidence must be between 0 and 1"},
 		{name: "negative confidence", confidence: -0.1, wantErr: "auto_approver_decision.min_confidence must be between 0 and 1"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
 			cfg.Decision, cfg.AutoApproverDecision = tt.decision, AutoApproverDecisionConfig{Model: tt.model, MinConfidence: tt.confidence}
+			cfg.Slack.AmbientDecisionModel = tt.ambient
 
 			err := cfg.Validate()
 			if tt.wantErr != "" {
@@ -828,6 +833,7 @@ func TestValidateSlackChannelsLegacyCoverage(t *testing.T) {
 	cfg.Slack.Channels = []SlackChannelConfig{
 		{Channel: " triage ", Agents: []string{" planner ", "", "planner", "helper"}, AllowedUserIDs: []string{" U999 ", "", "U999"}},
 		{Channel: " #team ", Agents: []string{" team "}, AllowedUserIDs: []string{" U123 ", "", "U123", "U456"}},
+		{Channel: " #help ", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}, WakeWhen: " someone asks how to deploy ", Engagement: " answer briefly "},
 		{Channel: " ", Agents: []string{"ignored"}},
 	}
 
@@ -835,6 +841,7 @@ func TestValidateSlackChannelsLegacyCoverage(t *testing.T) {
 	assert.Equal(t, []SlackChannelConfig{
 		{Channel: "#triage", Agents: []string{"planner", "helper"}, AllowedUserIDs: []string{"U999"}},
 		{Channel: "#team", Agents: []string{"team"}, AllowedUserIDs: []string{"U123", "U456"}},
+		{Channel: "#help", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}, WakeWhen: "someone asks how to deploy", Engagement: "answer briefly"},
 	}, cfg.Slack.Channels)
 	triage, ok := cfg.Slack.Channel("#triage")
 	require.True(t, ok)
@@ -897,6 +904,9 @@ func TestValidateSlackChannelsRejectsInvalidConfig(t *testing.T) {
 		{name: "missing at allowlist", update: func(channels *[]SlackChannelConfig) {
 			*channels = []SlackChannelConfig{{Channel: "@", Agents: []string{"main"}}}
 		}, wantErr: "slack.channels[].allowed_user_ids is required"},
+		{name: "watched at entry", update: func(channels *[]SlackChannelConfig) {
+			*channels = []SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}, WakeWhen: " questions "}}
+		}, wantErr: "slack.channels[].wake_when cannot be set on the @ entry, which is not a channel"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()

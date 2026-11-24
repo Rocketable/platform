@@ -22,12 +22,15 @@ PASS_WORKERS ?= 4
 TLC := perl -e 'alarm shift; exec @ARGV' $(LIMIT) $(JAVA) -Xmx6g -cp $(TOOLS) tlc2.TLC -noGenerateSpecTE
 
 # Required: the design must keep every property these name.
-PASS := safety sources stops config replies liveness-thread liveness-channel liveness-web liveness-agent liveness-config liveness-replies
+PASS := safety sources stops config replies liveness-thread liveness-channel liveness-web liveness-agent liveness-config liveness-replies \
+	ambient-thread ambient-watched ambient-config liveness-ambient-thread liveness-ambient-edit liveness-ambient-watched
 # Each must find the named violation: one design rule turned off, one behavior the current code has kept, or a
 # witness showing a path the passes cover is reachable.
 NEGATIVE := no-ratchet volatile-ratchet split-move no-hold no-root-first per-conv-dedup thread-only-lookup \
 	legacy-report no-start-check key-without-agent stop-by-conv settle-after-close no-footer-switch no-wake-on-release \
-	witness-move-held witness-reply-thread witness-web-held witness-stop-moved witness-ignored short-window witness-expiry
+	witness-move-held witness-reply-thread witness-web-held witness-stop-moved witness-ignored short-window witness-expiry \
+	ambient-mentions ambient-root-channel ambient-mention-root no-reply-footer volatile-no-reply deferred-session \
+	witness-ambient-reply
 EXPECTED_no-ratchet := Invariant RatchetHonored is violated.
 EXPECTED_volatile-ratchet := Invariant RatchetHonored is violated.
 EXPECTED_split-move := Temporal property ChannelKnowsThread was violated.
@@ -49,6 +52,13 @@ EXPECTED_witness-stop-moved := Invariant NoStopAfterMove is violated.
 EXPECTED_witness-ignored := Invariant NoIgnoredAtPick is violated.
 EXPECTED_short-window := Invariant OneAdmission is violated.
 EXPECTED_witness-expiry := Invariant NoExpiry is violated.
+EXPECTED_ambient-mentions := Invariant MentionNeverAmbient is violated.
+EXPECTED_ambient-root-channel := Invariant AmbientInThread is violated.
+EXPECTED_ambient-mention-root := Invariant NoAmbientUnderMentionRoot is violated.
+EXPECTED_no-reply-footer := Invariant SilentPostsNothing is violated.
+EXPECTED_volatile-no-reply := Invariant SilentPostsNothing is violated.
+EXPECTED_deferred-session := Invariant AmbientWritesNoStatus is violated.
+EXPECTED_witness-ambient-reply := Invariant NoAmbientAnswer is violated.
 
 .NOTPARALLEL:
 .PHONY: all check translate tools $(PASS) $(NEGATIVE)
