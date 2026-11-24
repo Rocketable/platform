@@ -149,7 +149,7 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 			}
 		}
 
-		if item.OfMessage != nil {
+		if item.OfMessage != nil && len(storedMessage.Header)+len(storedMessage.ID)+len(storedMessage.ItemID) != 0 {
 			extra := map[string]any{}
 			if storedMessage.Header != "" {
 				extra["prompt_header"] = storedMessage.Header
@@ -163,9 +163,7 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 				extra["id"] = storedMessage.ItemID
 			}
 
-			if len(extra) > 0 {
-				item.OfMessage.SetExtraFields(extra)
-			}
+			item.OfMessage.SetExtraFields(extra)
 		}
 
 		if item.OfCompaction != nil {
