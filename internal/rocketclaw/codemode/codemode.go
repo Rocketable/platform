@@ -267,8 +267,13 @@ func (w *argumentWalk) failure(v starlark.Value, position string) starlark.Value
 			w.refused, w.refusedArg = v, w.arg
 		}
 	case *starlark.List, starlark.Tuple, *starlark.Set:
+		if !v.Truth() {
+			break
+		}
+
+		position += "[]"
 		for elem := range starlark.Elements(v.(starlark.Iterable)) {
-			if failure := w.failure(elem, position+"[]"); failure != nil {
+			if failure := w.failure(elem, position); failure != nil {
 				return failure
 			}
 		}
