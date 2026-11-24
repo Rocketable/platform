@@ -731,6 +731,7 @@ func TestExecuteDeliversTheSameResultInForegroundAndBackground(t *testing.T) {
 		{"returned error", returnProbe, missing, "probe: File not found: chart.png", true},
 		{"returned failed bash_result", returnProbe, func(context.Context) (ToolResult, error) { return ToolResult{Data: failedBash}, nil }, "bash: exit status 1\nFile not found: chart.png", true},
 		{"crash", "def main():\n    fail(\"boom\")\n", missing, "tool call failed: execute: run code mode: call main: fail: boom. Choose a different action.", true},
+		{"unknown tool", "def main():\n    return bash(command=\"ls\")\n", missing, "tool call failed: execute: run code mode: execute codemode: codemode.star:2:12: undefined: bash. Choose a different action.", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wantState := map[bool]PublicProgressState{false: PublicProgressCompleted, true: PublicProgressFailed}[tc.failed]
@@ -748,12 +749,8 @@ func TestExecuteDeliversTheSameResultInForegroundAndBackground(t *testing.T) {
 			require.Equal(t, []any{tc.want, tc.failed}, []any{finished.Output, errWork != nil}, "a detached run hands the job the same answer and the same failure")
 
 			text, _, err := answer(t, InertBackgroundJobs{}, "", true, tc.code, tc.probe)
-			if tc.name == "crash" {
-				require.ErrorContains(t, err, `run reviewer tool "execute"`, "a crash still stops a permission review")
-			} else {
-				require.NoError(t, err, "a returned value never stops a permission review")
-				require.Equal(t, tc.want, text)
-			}
+			require.NoError(t, err, "a permission review gets the same answer, so a failed script does not end it")
+			require.Equal(t, tc.want, text)
 		})
 	}
 }
