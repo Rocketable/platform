@@ -120,7 +120,7 @@ The part of RocketClaw configuration that changes how the server behaves rather 
 
 ### Provider
 
-A named account that serves model requests: its sign-in and, for an API-key Provider, the OpenAI-compatible endpoint it calls. A model name without a Provider qualifier uses the default Provider; a qualified name selects that Provider.
+A named account that serves model requests: its sign-in and, for an API-key Provider, the OpenAI-compatible endpoint it calls, which defaults to OpenAI's public API. A model name without a Provider qualifier uses the default Provider; a qualified name selects that Provider.
 
 Root and child agents resolve their Provider independently. There is no implicit failover from one Provider to another.
 
