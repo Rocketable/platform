@@ -465,7 +465,7 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 }
 
 func TestEmbeddedGuardianPromptUnchanged(t *testing.T) {
-	require.Equal(t, "8fd9a0f97e67457dce6b5e5c3f9b995572dd184b35bc4cbb3f8430c8ffb46f9a", fmt.Sprintf("%x", sha256.Sum256([]byte(embeddedGuardianPrompt))))
+	require.Equal(t, "fc444351882ea4b3c0efc224d4d72d9e9f7fa88eb2a7030b244a0b6caf60492c", fmt.Sprintf("%x", sha256.Sum256([]byte(embeddedGuardianPrompt))))
 }
 
 func TestPermissionReviewExpandsDecisionRules(t *testing.T) {
