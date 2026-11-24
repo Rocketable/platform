@@ -3012,7 +3012,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   };
   return (
     <Dialog open={mode !== undefined} onOpenChange={(open) => { if (!open) { setMode(undefined); back(); } }}>
-      <DialogContent initialFocus={input} showCloseButton={false} className="top-[20%] flex max-h-[75vh] translate-y-0 flex-col overflow-hidden sm:max-w-lg [@media(pointer:coarse)]:top-[var(--search-top,1rem)] [@media(pointer:coarse)]:max-h-[var(--search-height,75vh)]">
+      <DialogContent initialFocus={input} finalFocus={() => at() === origin.href || ([...document.querySelectorAll<HTMLElement>("main h1[tabindex]")].find((title) => title.checkVisibility()) ?? true)} showCloseButton={false} className="top-[20%] flex max-h-[75vh] translate-y-0 flex-col overflow-hidden sm:max-w-lg [@media(pointer:coarse)]:top-[var(--search-top,1rem)] [@media(pointer:coarse)]:max-h-[var(--search-height,75vh)]">
         <DialogTitle className="sr-only">{copy.title}</DialogTitle>
         <DialogDescription className="sr-only">{copy.desc}</DialogDescription>
         {mode === "sessions" ? <SessionSearch rows={sidebar.all} query={query} setQuery={(update) => { setPick(""); setEntered(false); setQuery(update); peek(); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
@@ -3959,7 +3959,7 @@ function SessionSearch({ rows, query, setQuery, search, inputRef, placeholder, o
 function PageTitle({ children }: { children: ReactNode }) {
   const { close, state, pathname } = useContext(TabActions);
   return <header className="flex w-full shrink-0 items-center gap-2">
-    <h1 className="text-lg font-semibold">{children}</h1>
+    <h1 tabIndex={-1} className="text-lg font-semibold outline-none">{children}</h1>
     {state.tabs.some((tab) => tab.path === pathname) ? <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => close([pathname])}><X /></Button> : null}
   </header>;
 }

@@ -222,6 +222,7 @@ test("saved tabs, deep links, keyboard, page close, palette commands, and the si
   await page.keyboard.press("Control+Shift+p");
   await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Settings" }).click();
   await page.waitForURL("**/config");
+  await page.getByRole("heading", { name: "Config", exact: true }).and(page.locator(":focus")).waitFor();
   await page.getByRole("main").getByRole("button", { name: "Close", exact: true }).click();
   await page.waitForURL(`**${href("alpha")}`);
   expect(await names(page)).toEqual(["Bravo", "Alpha"]);
