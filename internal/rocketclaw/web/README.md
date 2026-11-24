@@ -753,8 +753,8 @@ active tab.
   above or below its middle, or press Shift+ArrowUp or Shift+ArrowDown on the
   title. A card you have not placed yet, such as a new space's, comes last, in
   its server's order. With more than one server, a card's title names its server
-  after the space, as in "Main · hally": the page's host by its first label
-  (`hally` for `hally.tail1234.ts.net`), and every remote by its configured name.
+  after the space, as in "Main · team": the page's host by its first label
+  (`team` for `team.tail1234.ts.net`), and every remote by its configured name.
   A narrow strip cuts the server's name before the space's. Every space's card
   is drawn and works the same, whichever space is current and whichever server's
   page you are on; only the current space's card is tinted. Its title shows an
@@ -964,7 +964,7 @@ Next session needing you (the inbox button).
 When remote RocketClaws or OpenCode servers are configured, New session opens a
 menu of where to start one, with the page's own server highlighted so Enter starts
 it there. The menu names the local server by the first label of the page's host
-(`hally` for `hally.tail1234.ts.net`), or by the whole address for an IP address.
+(`team` for `team.tail1234.ts.net`), or by the whole address for an IP address.
 Another RocketClaw opens its New session page, and an OpenCode server opens the
 palette's folder picker, as **Sessions: New on <server>** does.
 Cmd/Ctrl+Alt+N opens a new session on the page's server, without the menu.

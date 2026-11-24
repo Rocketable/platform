@@ -31,9 +31,9 @@ Every Code Mode block is titled with the model's own one-line description of it 
 
 ### Problem Frame
 
-On wallace, chat `AHWNE3GO6MMDBJ3V7OGHZDRH2S` ran 104 Execute calls; 89 of them went through permission review, and every review saved a reason. The page shows none of them.
+On a deployment, one chat (the sample chat below) ran 104 Execute calls; 89 of them went through permission review, and every review saved a reason. The page shows none of them.
 
-- **Reasons never load.** `SessionEntry.PermissionReviewRationale` in `internal/rocketcode/permission_review.go` only accepts a reason backed by a text-progress record in the review's output trace. Only the Responses WebSocket path (`internal/rocketcode/responses_websocket.go`) writes those records. Wallace reaches its models over HTTPS, so none of its 203 saved guardian reviews since 2026-10-08 has one.
+- **Reasons never load.** `SessionEntry.PermissionReviewRationale` in `internal/rocketcode/permission_review.go` only accepts a reason backed by a text-progress record in the review's output trace. Only the Responses WebSocket path (`internal/rocketcode/responses_websocket.go`) writes those records. The sample chat's deployment reaches its models over HTTPS, so none of its saved guardian reviews has one.
 - **Titles mislead.** `toolTitle` in `internal/rocketclaw/web/src/ui.tsx` names a block after the first `bash`/`read`/`glob`/`grep` call it finds in the script. A script running four commands is titled after one of them, and many scripts end up titled `python3 - <<'PY'`. Execute calls from agents allowed to run Background Jobs already carry a model-written `description` (for example "Validate PR diff and agent permissions"), and the page ignores it.
 - **Bodies are raw JSON.** The expanded row shows the escaped `{"code": "..."}` argument and the raw result.
 - **Commands inside scripts are not kept.** Commit `c0c187fc266d` (2026-10-13) stopped saving them because their full outputs were stored. One 67 MB MP3 `read` made a chat take about 45 seconds to open. Migration `032_drop_script_calls.sql` deleted the stored copies. `cmd/rocketclaw/CHEATSHEET.md` still claims each call made inside a script is saved and shown.
@@ -76,7 +76,7 @@ On wallace, chat `AHWNE3GO6MMDBJ3V7OGHZDRH2S` ran 104 Execute calls; 89 of them 
 
 ### Success Criteria
 
-- On wallace, chat `AHWNE3GO6MMDBJ3V7OGHZDRH2S` shows an approver reason for each of its 89 reviewed blocks, and each block lists its reviewed commands with readable text.
+- The sample chat shows an approver reason for each of its 89 reviewed blocks, and each block lists its reviewed commands with readable text.
 - A new script that reads a large binary file adds a row reading like `65536 KiB of binary output`, and the History response grows by well under a kilobyte for that command.
 
 ### Scope Boundaries
@@ -118,7 +118,7 @@ On wallace, chat `AHWNE3GO6MMDBJ3V7OGHZDRH2S` ran 104 Execute calls; 89 of them 
 - KTD6. **Per-command reasons are recorded when the gate decides, not matched afterwards.** `CheckNestedToolCall` already runs under the host call's `ToolCallKey`, which includes `codemode.CallKey`. It notes the review outcome and reason under that key on the turn's observations, under the existing `turnObservations` mutex. `recordHostCall` copies them into the record. Matching review records to commands later would have to compare clipped arguments, which fails exactly for the large commands. The MCP path shares the key: `newMCPToolBuiltin` in `internal/rocketcode/codemode/codemode.go` passes one context, already carrying the call key, to both `decide` (`CheckNestedPermission`) and `call` (`mcpCall`).
 - KTD7. **Whole-script reasons and existing-chat commands come from review records, parsed in `internal/rocketcode`.** A review entry's first user message ends with the planned-action JSON between `Planned action JSON:` and `>>> APPROVAL REQUEST END`, written by `permissionReviewPrompt`. The parser lives next to that builder, so the format has one owner. It returns the reviewed tool name, permission, subjects, raw arguments, outcome, and reason. A whole-script review has tool `execute` and permission `rocketclaw`. An MCP call reviewed inside a script also has tool `execute`, but its permission is `mcp`, and its row is named after its subject (`server.tool`). This puts the code in `internal/rocketcode` (about 1,800 lines of CLOC headroom) rather than `internal/rocketclaw` (about 366 lines, already in its hazard zone). Decoding a review's first item is the expensive part: on this chat the 110 review entries total about 35 MB. New chats never need this parse, because KTD2 records the whole-script reason in the trace. The server parses planned actions only for Execute events in the current response that have no command records and no whole-script record, which means chats recorded before this change. U3 measures History latency on a fixture of that size, for a cold read and for a follow-up poll, before and after.
 - KTD8. **Starlark visibility reads the current timeline level.** The Execute row reads `timelineLevel(useTimelineDetail())` from `internal/rocketclaw/web/src/timeline-detail.ts`. Everything shows the script and Detailed shows a toggle. A custom setting that matches no level also shows the toggle, so the script stays reachable, and so does a failed, background, or attachment-carrying block that Messages or Quiet still shows (R10). The highlighter already loads `python` (`internal/rocketclaw/web/src/lib/highlighter.tsx`). (session-settled: user-directed — chosen over a single fixed visibility.)
-- KTD9. **The block title is the Execute call's `description`, and every agent's Execute takes one.** Today `backgroundTool` (`internal/rocketcode/background.go`) adds `description` only for agents allowed to run Background Jobs. U6 moves it into Execute's own definition, so every agent's model writes it; the background wrapper keeps adding only `background`. The `toolTitle` heuristic remains the fallback for older calls. (session-settled: user-directed — chosen over keeping descriptions for background-capable agents only: 60 of 61 wallace agents would keep misleading titles.)
+- KTD9. **The block title is the Execute call's `description`, and every agent's Execute takes one.** Today `backgroundTool` (`internal/rocketcode/background.go`) adds `description` only for agents allowed to run Background Jobs. U6 moves it into Execute's own definition, so every agent's model writes it; the background wrapper keeps adding only `background`. The `toolTitle` heuristic remains the fallback for older calls. (session-settled: user-directed — chosen over keeping descriptions for background-capable agents only: nearly every agent on a deployment would keep misleading titles.)
 
 ### High-Level Technical Design
 
@@ -153,7 +153,7 @@ Command-row sources by chat age:
 
 ### Assumptions
 
-- Models fill in an optional `description` field reliably once it is in Execute's schema, as the background-capable `sudo` agent already does on every call in the wallace chat.
+- Models fill in an optional `description` field reliably once it is in Execute's schema, as the background-capable `sudo` agent already does on every call in the sample chat.
 
 ### Sources
 
@@ -188,10 +188,10 @@ Command-row sources by chat age:
   - A commentary-phase decision is ignored and the later final answer wins.
   - A review that made a read-only tool call before answering returns the final answer's reason, not tool output.
   - Content that is not a decision (`outcome: unknown`) returns nothing.
-  - The planned-action reader returns tool `bash` and the exact raw arguments for a captured wallace prompt fixture. It returns tool `execute` with permission `rocketclaw` for a whole-script review, and tool `execute` with permission `mcp` and subject `server.tool` for an MCP call reviewed inside a script.
+  - The planned-action reader returns tool `bash` and the exact raw arguments for a captured prompt fixture from the sample chat. It returns tool `execute` with permission `rocketclaw` for a whole-script review, and tool `execute` with permission `mcp` and subject `server.tool` for an MCP call reviewed inside a script.
   - The planned-action reader returns nothing for a prompt missing either delimiter.
   - Reading only the reason allocates no more than reading it from an entry without the prompt, within the existing tolerance.
-- **Verification:** Unit tests pass. Run against the captured `AHWNE3GO6MMDBJ3V7OGHZDRH2S` review rows, the reader yields 110 reasons and 110 planned actions.
+- **Verification:** Unit tests pass. Run against the sample chat's captured review rows, the reader yields 110 reasons and 110 planned actions.
 
 ### U2. Record each command a script runs
 
@@ -247,7 +247,7 @@ Command-row sources by chat age:
 - **Test scenarios:**
   - A finished turn with three recorded commands under one Execute call returns them in order on that call's event, with summaries.
   - A running turn returns its recorded commands before the Execute call has a result.
-  - A review saved over HTTP, with no progress trace, appears in `ReviewRationales` for a top-level reviewed call. This is the wallace regression.
+  - A review saved over HTTP, with no progress trace, appears in `ReviewRationales` for a top-level reviewed call. This is the sample chat's regression.
   - An Execute call with a whole-script review gets that reason as its script reason. Its per-command reviews do not leak into the script reason.
   - An old-format Execute call with two reviewed commands and no records gets two rows with arguments (exact up to the KTD4 clip), reasons, and empty summaries. A reviewed command whose arguments exceed 4 KiB comes back clipped with the marker.
   - An old-format Execute call with a whole-script review and a reviewed MCP call shows the whole-script reason as its script reason, and the MCP call as a row named `server.tool`.
@@ -293,7 +293,7 @@ Command-row sources by chat age:
   - A block whose call state is `background` says it moved to the background. Its rows still marked `running` read "still running when moved to the background".
   - A block with exactly the cap number of rows shows the cap notice.
   - A non-Execute reviewed tool row still shows its rationale footer (existing `delegations.browser.test.ts` contract).
-- **Verification:** Web unit and browser tests pass. The web TS CLOC budget check passes. A screenshot of the wallace chat fixture shows titled blocks with reasons.
+- **Verification:** Web unit and browser tests pass. The web TS CLOC budget check passes. A screenshot of the sample chat fixture shows titled blocks with reasons.
 
 ### U5. Correct the docs
 
@@ -335,7 +335,7 @@ Command-row sources by chat age:
 
 | Risk | Mitigation |
 |---|---|
-| History reads every review record, about 35 MB for the wallace chat, and planned-action parsing adds decode cost. | KTD7 limits parsing to Execute calls that need it. U3 measures against a 20% budget. |
+| History reads every review record, about 35 MB for the sample chat, and planned-action parsing adds decode cost. | KTD7 limits parsing to Execute calls that need it. U3 measures against a 20% budget. |
 | The rocketclaw Go source is 366 lines from its CLOC limit, and the web is 403 lines from its limit. | Parsing lives in rocketcode (KTD7). U3 and U4 reuse the removed projection pattern instead of new layers. |
 | The prompt delimiters change later and old-chat rows silently disappear. | The parser and the prompt builder share one file (KTD7). U1 tests a captured real prompt. |
 
@@ -357,7 +357,7 @@ Command-row sources by chat age:
 ## Definition of Done
 
 - R1–R12 hold, each covered by a U1–U4 or U6 test scenario.
-- The wallace chat `AHWNE3GO6MMDBJ3V7OGHZDRH2S`, rendered from a fixture of its History, shows reasons for its 89 reviewed blocks.
+- The sample chat, rendered from a fixture of its History, shows reasons for its 89 reviewed blocks.
 - No new code path stores command output beyond the KTD3 summary.
 - Every gate in the Verification Contract passes, with CLOC budgets unchanged.
 - Code from abandoned approaches is removed from the diff. No `PermissionReviewRationale` trace-dependency leftovers remain.

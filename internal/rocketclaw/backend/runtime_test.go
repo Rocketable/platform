@@ -1327,7 +1327,7 @@ func TestAttachSlack(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, room)
 	require.Empty(t, choices)
-	require.Empty(t, manager.slackLookups.SlackTagsMatching(t.Context(), "alan"))
+	require.Empty(t, manager.slackLookups.SlackTagsMatching(t.Context(), "sam"))
 
 	slack := new(slackLookupMock)
 	rt := &Runtime{threads: manager}

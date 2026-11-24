@@ -783,15 +783,15 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 	const id = "tag-search"
 	require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
 	_, err = sessions.AppendEntryID(t.Context(), id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
-		json.RawMessage(`{"type":"message","role":"user","content":"ping <!subteam^S0BA868QQ90>"}`),
+		json.RawMessage(`{"type":"message","role":"user","content":"ping <!subteam^S01ABCDEF56>"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"unrelated reply"}`),
-		json.RawMessage(`{"type":"message","role":"user","content":"hi <@U05MD4PEVHN>"}`),
-		json.RawMessage(`{"type":"message","role":"user","content":"alan tagged nobody"}`),
-		json.RawMessage(`{"type":"message","role":"user","content":"alan hi <@U05MD4PEVHN>"}`),
+		json.RawMessage(`{"type":"message","role":"user","content":"hi <@U01ABCDEF23>"}`),
+		json.RawMessage(`{"type":"message","role":"user","content":"sam tagged nobody"}`),
+		json.RawMessage(`{"type":"message","role":"user","content":"sam hi <@U01ABCDEF23>"}`),
 	}})
 	require.NoError(t, err)
 
-	matching := map[string][]string{"cs-operators": {"S0BA868QQ90"}, "alan": {"U05MD4PEVHN"}}
+	matching := map[string][]string{"cs-operators": {"S01ABCDEF56"}, "sam": {"U01ABCDEF23"}}
 	server := &Server{
 		sessions: sessions,
 		cfg:      new(config.LockedConfig),
@@ -804,16 +804,16 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 	group, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "cs-operators"})
 	require.NoError(t, err)
 	require.Len(t, group.Matches, 1)
-	require.Equal(t, "ping <!subteam^S0BA868QQ90>", group.Matches[0].Message.Text)
-	require.Equal(t, []string{"S0BA868QQ90"}, group.TagIds)
+	require.Equal(t, "ping <!subteam^S01ABCDEF56>", group.Matches[0].Message.Text)
+	require.Equal(t, []string{"S01ABCDEF56"}, group.TagIds)
 
-	user, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "alan"})
+	user, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "sam"})
 	require.NoError(t, err)
 	require.Len(t, user.Matches, 3)
-	require.Equal(t, "hi <@U05MD4PEVHN>", user.Matches[0].Message.Text)
-	require.Equal(t, "alan tagged nobody", user.Matches[1].Message.Text)
-	require.Equal(t, "alan hi <@U05MD4PEVHN>", user.Matches[2].Message.Text)
-	require.Equal(t, []string{"U05MD4PEVHN"}, user.TagIds)
+	require.Equal(t, "hi <@U01ABCDEF23>", user.Matches[0].Message.Text)
+	require.Equal(t, "sam tagged nobody", user.Matches[1].Message.Text)
+	require.Equal(t, "sam hi <@U01ABCDEF23>", user.Matches[2].Message.Text)
+	require.Equal(t, []string{"U01ABCDEF23"}, user.TagIds)
 
 	matching["cs-operators"] = nil
 	emptyTags, err := server.searchMessages(ctx, &SearchMessagesRequest{Query: "cs-operators"})
@@ -1293,7 +1293,7 @@ func TestSessionEntries(t *testing.T) {
 
 		require.Equal(t, "C1", channel)
 
-		return channelTitle, []string{"planner", "general", "planner-slack", "main-slack"}, nil
+		return channelTitle, []string{"planner", "general", "planner-slack", "support-slack"}, nil
 	}
 	channels.SlackTagsMatchingFunc = func(context.Context, string) []string { return nil }
 	cronRan := make(chan struct{}, 2)
@@ -2407,7 +2407,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	historyBefore, err := sessions.ObserveEntries(ctx, "empty-web")
 	require.NoError(t, err)
 
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main-slack.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: slack\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "support-slack.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: slack\n---\nHelp."), 0o600))
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner-slack.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: slack\nspace: Billing\n---\nHelp."), 0o600))
 
 	channelChoices = []string{"general", "planner", "planner-slack"}
@@ -2492,16 +2492,18 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	choices, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
 	require.NoError(t, err)
 	require.Equal(t, "planner-slack", choices.CurrentAgent)
-	require.Len(t, choices.Agents, 1, "a Billing Slack thread offers only Billing sticky: slack agents, though its channel also allows planner and main-slack")
+	require.Len(t, choices.Agents, 1, "a Billing Slack thread offers only Billing sticky: slack agents, though its channel also allows planner and support-slack")
 	require.Equal(t, "planner-slack", choices.Agents[0].Name)
 	require.Len(t, channels.ChannelAgentChoicesCalls(), channelCalls)
 
 	sidebarPolicy := channels.SidebarChannelAgentChoicesFunc
-	channels.SidebarChannelAgentChoicesFunc = func(context.Context, string) (string, []string, error) { return "triage", []string{"main-slack"}, nil }
+	channels.SidebarChannelAgentChoicesFunc = func(context.Context, string) (string, []string, error) {
+		return "triage", []string{"support-slack"}, nil
+	}
 	choices, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
 	require.NoError(t, err)
 	require.Len(t, choices.Agents, 1)
-	require.Equal(t, "main-slack", choices.Agents[0].Name)
+	require.Equal(t, "support-slack", choices.Agents[0].Name)
 
 	channels.SidebarChannelAgentChoicesFunc = sidebarPolicy
 
@@ -2510,7 +2512,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	choices, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
 	require.NoError(t, err)
 	require.Len(t, choices.Agents, 1)
-	require.Equal(t, "main-slack", choices.Agents[0].Name)
+	require.Equal(t, "support-slack", choices.Agents[0].Name)
 	require.Equal(t, "planner-slack", choices.CurrentAgent, "stored current agent survives removal from the loaded choices")
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner-slack.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: slack\nspace: Billing\n---\nHelp."), 0o600))
 
@@ -2525,7 +2527,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		require.NotEqual(t, "private-X", session.Id)
 	}
 
-	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/agent main-slack"})
+	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/agent support-slack"})
 	require.ErrorContains(t, err, "Slack unavailable")
 	unchanged, found, err := sessions.Thread(id)
 	require.NoError(t, err)

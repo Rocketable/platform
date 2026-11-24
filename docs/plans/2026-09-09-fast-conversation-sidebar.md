@@ -12,8 +12,8 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** Ulderico can open or return to the Web sidebar and find a conversation without waiting for the entire conversation list to reload.
-- **Owner:** Ulderico, who requested this improvement and selected its scope in the planning conversation.
+- **Objective:** A user can open or return to the Web sidebar and find a conversation without waiting for the entire conversation list to reload.
+- **Owner:** The user who requested this improvement and selected its scope in the planning conversation.
 - **Scope:** Stored summaries, background Slack metadata refresh, progressive delivery, and a saved browser list. Five implementation units follow the requirements below.
 - **Stop conditions:** Stop if exact preview/visibility semantics cannot be preserved, identity isolation fails, or the source-size/coverage gates cannot be met honestly.
 - **Delivery ownership:** Implementation includes local verification and documentation. Production rollout requires a coordinated backend/Web deployment after active turns finish. This document does not authorize a merge or deploy.
@@ -61,7 +61,7 @@ The measurement is historical evidence, not a measurement of this proposed desig
 
 ### Success Criteria
 
-Measure first useful display, fresh first-screen delivery, full transfer and startup time separately against the same fixed dataset. The previously discussed 100 ms saved-display and 300 ms fresh-first-screen figures are directional targets, not measured promises or newly imposed release gates. Ulderico owns the user requirements; do not invent tighter numerical requirements while implementing them.
+Measure first useful display, fresh first-screen delivery, full transfer and startup time separately against the same fixed dataset. The previously discussed 100 ms saved-display and 300 ms fresh-first-screen figures are directional targets, not measured promises or newly imposed release gates. The requesting user owns the user requirements; do not invent tighter numerical requirements while implementing them.
 
 - Same-user return and reload display saved rows without waiting for a fresh enumeration, after identity confirmation where needed.
 - Fresh recent rows reach the browser before the full response completes.
@@ -129,35 +129,35 @@ Summary updates must preserve when producer output reaches its managed destinati
 PR #47 is still open at `cd5aead87993aef1e3e9253a167d343824dd1e7f` as checked during planning. Its latest optimization/streaming deployment remains pending.
 This plan builds on that source contract; the implementer must reconcile any later changes before editing.
 
-Use the existing local production-data clone for local validation. Gene and Wallace are two users on the same server. The user explicitly authorized copying both production databases onto that shared server for validation, using Docker, with deletion of the validation volumes afterward. This supersedes the earlier RDS-only restriction. Test the datasets sequentially in isolated PostgreSQL containers; run the candidate in Docker with model calls, scheduled work and outbound delivery disabled. Stream each source dump directly into the test database without retaining a dump file. Keep database copies in explicitly named validation volumes, not host bind mounts. Return only counts, timings and pass/fail results to this workstation, not conversation payloads, previews, identifiers or data-bearing error output. (session-settled: user-directed — shared-server Docker copies allowed; validation volumes must be deleted afterward.)
+Use the existing local production-data clone for local validation. Deployments A and B run as two users on the same server. The user explicitly authorized copying both production databases onto that shared server for validation, using Docker, with deletion of the validation volumes afterward. This supersedes the earlier RDS-only restriction. Test the datasets sequentially in isolated PostgreSQL containers; run the candidate in Docker with model calls, scheduled work and outbound delivery disabled. Stream each source dump directly into the test database without retaining a dump file. Keep database copies in explicitly named validation volumes, not host bind mounts. Return only counts, timings and pass/fail results to this workstation, not conversation payloads, previews, identifiers or data-bearing error output. (session-settled: user-directed — shared-server Docker copies allowed; validation volumes must be deleted afterward.)
 Delete the validation containers and their volumes after validation, including failure/cancellation cleanup, and verify the named volumes no longer exist. Record only aggregate results and cleanup confirmation. Scope deletion to the resources created for this validation; do not use broad Docker pruning. Keep any non-data scratch files under repository `.tmp/` and remove data-bearing test artifacts before declaring validation complete.
 Before production deployment, measure startup readiness independently from background backfill completion and coordinate one active writer version. Wait for active turns to finish using the established 90-second checks. Keep durable production backups separate from disposable validation copies; local production backups and non-sensitive build artifacts belong under repository `.tmp/`. Deploy matching backend and Web versions together through each environment's existing runner. Never run a candidate with production model-refresh credentials.
 The user explicitly selected forward-migration hardening against all three production environments instead of adding a rollback rehearsal. Preserve applied migration IDs and test the actual upgrade paths; do not mask migration errors with blanket unknown-migration skipping or production ledger deletion.
 
 ### Production Migration Inspection — 2026-09-09
 
-Read-only inspection covered the configured databases on `ssh gene`, `ssh wallace`, and local RocketClaw production. No production migrations, restarts or data changes were performed. Captured schema inventories and aggregate counts are under `.tmp/`; they contain no credentials or conversation payloads.
+Read-only inspection covered the configured databases of Deployment A, Deployment B, and local RocketClaw production. No production migrations, restarts or data changes were performed. Captured schema inventories and aggregate counts are under `.tmp/`; they contain no credentials or conversation payloads.
 
 | Environment | PostgreSQL | Applied migrations | History entries / distinct histories | Recorded conversations | History table including indexes/TOAST |
 |---|---|---|---|---|---|
-| Gene | 18.4 | 001–005 | 336 / 74 | 75 | 28,499,968 bytes |
-| Wallace | 18.4 | 001–005 | 33,105 / 17,581 | 7,360 | 946,135,040 bytes |
+| Deployment A | 18.4 | 001–005 | 336 / 74 | 75 | 28,499,968 bytes |
+| Deployment B | 18.4 | 001–005 | 33,105 / 17,581 | 7,360 | 946,135,040 bytes |
 | Local | 18.6 | 001–008 | 6,115 / 5,303 | 759 | 1,151,918,080 bytes |
 
-Counts are observations of live databases, not a frozen shared snapshot. Gene and Wallace's readable running binaries both identify as module version `v0.0.50` with sql-migrate `v1.8.1`. Local configured database is the inspected loopback PostgreSQL instance.
+Counts are observations of live databases, not a frozen shared snapshot. The readable running binaries of Deployments A and B both identify as module version `v0.0.50` with sql-migrate `v1.8.1`. Local configured database is the inspected loopback PostgreSQL instance.
 
 **Concrete migration inputs and constraints:**
 
 - All three have `public.pg_migrations`, no public `gorp_migrations`, and no unknown IDs relative to this revision's embedded migration set. The prior local obsolete ledger IDs are absent. There is no current evidence requiring ledger repair.
-- Gene and Wallace lack the columns introduced by 006–008. Upgrade proof must include those migrations before this feature's new migrations. Their application users own the existing tables and have public-schema CREATE/USAGE privileges, so the inspected permissions do not indicate a DDL blocker.
+- Deployments A and B lack the columns introduced by 006–008. Upgrade proof must include those migrations before this feature's new migrations. Their application users own the existing tables and have public-schema CREATE/USAGE privileges, so the inspected permissions do not indicate a DDL blocker.
 - Local contains extra `managed_conversations.settled_override` and `bumped_at_unix_ns` columns. Preserve these unrelated columns. Local `thread_queue.kind` has default `''`, whereas migration 006 declares `'enqueue'`: `ADD COLUMN IF NOT EXISTS` does not reconcile an existing column's definition. Preserve this observed starting shape in the migration fixture and evaluate its effect on the upgrade; do not assume ledger equality proves schema equality or silently change unrelated queue behavior.
 - No existing public summary/channel tables were found under those names. New-table migrations should create only derived structures and their indexes; they must not scan, rewrite or cast existing replay history as part of blocking startup DDL.
-- Histories without managed records exist in every environment: 38 Gene entries, 21,961 Wallace entries and 4,556 local entries. Do not add a summary foreign key requiring a managed-conversation row, or create managed rows to satisfy it. Existing discovery rules still govern sidebar eligibility.
+- Histories without managed records exist in every environment: 38 Deployment A entries, 21,961 Deployment B entries and 4,556 local entries. Do not add a summary foreign key requiring a managed-conversation row, or create managed rows to satisfy it. Existing discovery rules still govern sidebar eligibility.
 - The timestamp validity aggregate found zero values rejected by PostgreSQL's timestamp-with-time-zone parser in each environment. This is not proof that Go and PostgreSQL interpret every format identically; use the existing Go decoder and normalize to agreed microsecond precision before writing derived timestamps.
 - Full replay JSON was not fetched or decoded in this production inspection. Existing escaped-NUL evidence still requires BYTEA previews and Go decoding. Backfill correctness and interruption behavior must be demonstrated on isolated copies, not inferred from schema inspection.
 - Schema initialization currently runs before `holdRunLock` in `backend/app.go`; that runtime lock does not protect schema migration execution. Keep blocking migrations small and transactional, and explicitly verify migration-runner serialization for concurrent startup. Start history backfill only within the owned runtime lifecycle, without gating readiness.
 
-**Required forward-upgrade proof:** reproduce each observed schema and ledger with synthetic data in isolated PostgreSQL, apply the full candidate migration sequence, repeat startup without schema changes, and interrupt a migration to verify transactional recovery. Preserve unrelated columns, permissions and history. Validate real Gene/Wallace data in shared-server Docker under the boundary above, preserving migration records and identity-sequence state during restore. Run background backfill while test frontend requests and ordinary test writes proceed, measuring readiness and contention on the larger Wallace/local shapes. These are implementation checks, not checks already executed during planning.
+**Required forward-upgrade proof:** reproduce each observed schema and ledger with synthetic data in isolated PostgreSQL, apply the full candidate migration sequence, repeat startup without schema changes, and interrupt a migration to verify transactional recovery. Preserve unrelated columns, permissions and history. Validate real Deployment A/B data in shared-server Docker under the boundary above, preserving migration records and identity-sequence state during restore. Run background backfill while test frontend requests and ordinary test writes proceed, measuring readiness and contention on the larger Deployment B/local shapes. These are implementation checks, not checks already executed during planning.
 
 **Shared-server readiness:** previous inspection found about 56 GiB available RAM, 368 GiB free disk and low load. Docker was not on either user's PATH at that time; verify current installation and daemon access before validation. RDS database-creation privileges and server-side copying extensions are no longer prerequisites for this approach. Recheck shared-host resources before starting and account for both production applications when measuring load.
 
@@ -265,7 +265,7 @@ Review every writer named in U1 again after generation/lint changes. Verify queu
 - The Success Criteria are measured and met; no historical measurement is presented as a new result.
 - README/setup documentation explains progressive completeness, user-scoped saved display and Slack refresh/subscription behavior.
 - Delivery reports state separately what was verified locally, published, independently reviewed and deployed.
-- Shared-server validation containers and volumes have been deleted, with cleanup verified and no Gene/Wallace data exported to this workstation.
+- Shared-server validation containers and volumes have been deleted, with cleanup verified and no Deployment A/B data exported to this workstation.
 
 ---
 

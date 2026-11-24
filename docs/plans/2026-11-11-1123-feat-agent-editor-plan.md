@@ -15,11 +15,11 @@ execution: code
 
 - **Objective:** A person who is not an engineer can create a working RocketClaw agent on their own, prove it works by talking to it, compare versions side by side, and save it to the right place.
 - **Means:** A Web page over server-stored drafts. Test turns run a copy of the draft and the live file captured when each message is sent (KTD4), variants and the live agent run as shadows of one test chat (KTD5), and saving validates the draft before renaming the agent file into place and running the existing Reload (KTD8). The save lifecycle, co-editing, test turns and External MCP mode were model-checked before implementation (`docs/verification/agent-editor-save/`, `agent-editor-coediting/`, `agent-editor-test-turns/` and `agent-editor-external-mcp/`).
-- **Product authority:** Ucirello (human partner). The layout was chosen through two prototype rounds: design 21 (workbench with Form / File tabs, assistant panel, live co-editing).
+- **Product authority:** The human partner. The layout was chosen through two prototype rounds: design 21 (workbench with Form / File tabs, assistant panel, live co-editing).
 - **Plan authority:** Requirements (R) win on product behavior. KTDs win on mechanism within their cited Rs. Units override neither.
 - **Execution profile:** Deep. Seven pull requests in merge order (see Implementation Units). Backend first; the Agents-page entry points ship last, so users reach the editor only when it is complete.
 - **Stop conditions:** Stop and report when a CLOC budget would be exceeded after the one approved raise (KTD1). Stop when a settled decision proves unworkable in code. Stop when react-doctor's limit or a linter would need a suppression.
-- **Who finishes:** The implementing agent builds, verifies and opens each PR. Ucirello reviews and merges.
+- **Who finishes:** The implementing agent builds, verifies and opens each PR. The human partner reviews and merges.
 - **Open blockers:** None. Prototype 21 was approved on 2026-11-12.
 
 ---
@@ -182,7 +182,7 @@ The result is that only engineers who know the file format can make agents, and 
 - External MCP metadata: `internal/rocketclaw/frontend/externalmcp/server.go`, `cmd/rocketclaw/mcp.go`, `internal/rocketclaw/backend/bridge.go` (`turnShellEnv`, `externalMCPMetadataDeveloperMessage`), `CONCEPTS.md` (External MCP Metadata).
 - Model checks of the save lifecycle, co-editing, test turns and External MCP mode: `docs/verification/agent-editor-save/`, `agent-editor-coediting/`, `agent-editor-test-turns/` and `agent-editor-external-mcp/`. Each folder holds its spec, checks and Makefile; its README has the diagram, properties, results and how to re-run.
 - Model data: https://models.dev/api.json (MIT); https://slopalytics.com/ (links only; data from Artificial Analysis).
-- Prototypes (machine-local, best effort): `/Users/ucirello/Projects/platform/.tmp/workspaces/20261111-new-agent-interface-in-cmd-rocketclaw/.tmp/ce-prototype/20261111-agent-editor/`, with `decisions.md`; the approved design is `round2/21-file-tab/` (`NOTES.md`, `shots/`). A missing prototype is not a blocker; this plan's requirements govern any disagreement.
+- Prototypes (machine-local, best effort): `<repo-root>/.tmp/workspaces/20261111-new-agent-interface-in-cmd-rocketclaw/.tmp/ce-prototype/20261111-agent-editor/`, with `decisions.md`; the approved design is `round2/21-file-tab/` (`NOTES.md`, `shots/`). A missing prototype is not a blocker; this plan's requirements govern any disagreement.
 
 ---
 
@@ -441,7 +441,7 @@ Waits on: nothing.
 **Requirements:** Enables everything; KTD1.
 **Dependencies:** None.
 **Files:** `internal/rocketclaw/Makefile` (`GO_SOURCE_CLOC_BUDGET ?= 45750`), `internal/rocketclaw/web/Makefile` (`TS_CLOC_BUDGET ?= 13550`).
-**Approach:** Change the two values only. The commit message cites Ucirello's approval.
+**Approach:** Change the two values only. The commit message cites the human partner's approval.
 **Test scenarios:** Test expectation: none -- budget values only; `check-cloc-budget` exercises them.
 **Verification:** Both `check-cloc-budget` targets report the new limits.
 

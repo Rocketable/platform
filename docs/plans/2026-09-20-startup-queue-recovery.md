@@ -38,7 +38,7 @@ The person who sent the message can receive no answer until another event starts
 
 The investigation reproduced that startup state at `549038341ed3da3c91e338bf6270e3c7b84720c6`.
 It also established that the older MCP queue-owner mismatch is absent from that revision.
-See `docs/investigations/2026-09-20-wallace-stranded-mcp-queue.md` for the evidence and its limits.
+See `docs/investigations/2026-09-20-stranded-mcp-queue.md` for the evidence and its limits.
 
 ### Key Decisions
 
@@ -80,7 +80,7 @@ An old in-memory MCP response waiter cannot be recreated after restart.
 The change uses existing persisted state and requires no database migration, configuration switch, queue poller, connector-event replay, or new queue service.
 It does not promise checkpoint priority over every fresh live request accepted during frontend assembly; R3 applies to the saved work recovered here.
 
-**Deferred to follow-up work:** Wallace's production-copy migration rehearsal through migration 014 and the disposition of its six historical rows belong to release preparation.
+**Deferred to follow-up work:** The affected deployment's production-copy migration rehearsal through migration 014 and the disposition of its six historical rows belong to release preparation.
 Neither is implementation authority to mutate production.
 
 ---
@@ -327,12 +327,12 @@ If a required check cannot run, report the blocker and do not declare the implem
 
 ## Rollout Notes
 
-The six Wallace rows in the investigation are historical observations, not a current inventory.
+The deployment's six rows in the investigation are historical observations, not a current inventory.
 Any still-queued rows become eligible under R1; the fix has no cutoff that silently excludes old work.
-Before Wallace's first startup with the fix, obtain the operator's decision about those exact rows and recheck their current state.
+Before the deployment's first startup with the fix, obtain the operator's decision about those exact rows and recheck their current state.
 If the operator chooses deletion, complete that separately authorized cleanup before starting the fixed build.
 
-Release approval also requires a fresh, consistent Wallace database-copy rehearsal with the pinned candidate through migrations 006–014, including repeat initialization, data comparison, and a verified recovery/rollback path.
+Release approval also requires a fresh, consistent database-copy rehearsal of that deployment with the pinned candidate through migrations 006–014, including repeat initialization, data comparison, and a verified recovery/rollback path.
 Earlier 005–010 rehearsals and synthetic migration tests do not establish this release's production safety.
 Binary-only rollback to v0.0.52 after newer migrations is not a verified rollback procedure.
 

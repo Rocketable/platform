@@ -24,14 +24,14 @@ execution: code
 
 ### Summary
 
-Slack human turns show the sender as a quoted `principal="Ulderico (U0ADDPB7P4K)"`.
+Slack human turns show the sender as a quoted `principal="Jane (U01ABCDEF23)"`.
 Each connector still chooses the principal string.
 Clockwork prints whatever it was given, quoted so spaces stay readable and the header stays one field.
 
 ### Problem Frame
 
-Slack currently labels the sender with the Slack user ID, so the model sees `U0ADDPB7P4K` instead of `Ulderico`.
-The header also smashes spaces and `=`/`[]` into a single token, so a human name would become `Ulderico_(U0ADDPB7P4K)` even after Slack started sending a real name.
+Slack currently labels the sender with the Slack user ID, so the model sees `U01ABCDEF23` instead of `Jane`.
+The header also smashes spaces and `=`/`[]` into a single token, so a human name would become `Jane_(U01ABCDEF23)` even after Slack started sending a real name.
 
 ### Key Decisions
 
@@ -62,7 +62,7 @@ The header also smashes spaces and `=`/`[]` into a single token, so a human name
 
 **Header**
 
-- R3. The model-visible header shows Slack's principal quoted, so the model can read `Ulderico (U0ADDPB7P4K)` as one field.
+- R3. The model-visible header shows Slack's principal quoted, so the model can read `Jane (U01ABCDEF23)` as one field.
 - R4. Clockwork quotes every principal it prints. It does not turn spaces into underscores or rewrite `=` / `[]`.
 
 **Other sources**
@@ -87,19 +87,19 @@ The header also smashes spaces and `=`/`[]` into a single token, so a human name
 
 - AE1. Display name present
   - **Covers R1, R3.**
-  - **Given:** Slack shows `Ulderico` for `U0ADDPB7P4K`.
+  - **Given:** Slack shows `Jane` for `U01ABCDEF23`.
   - **When:** That person sends a human Slack turn.
-  - **Then:** The header includes `principal="Ulderico (U0ADDPB7P4K)"`.
+  - **Then:** The header includes `principal="Jane (U01ABCDEF23)"`.
 - AE2. Display name empty, real name present
   - **Covers R1.**
-  - **Given:** Slack has no display name and real name `Ulderico Cirello` for `U0ADDPB7P4K`.
+  - **Given:** Slack has no display name and real name `Jane Doe` for `U01ABCDEF23`.
   - **When:** That person sends a human Slack turn.
-  - **Then:** The header includes `principal="Ulderico Cirello (U0ADDPB7P4K)"`.
+  - **Then:** The header includes `principal="Jane Doe (U01ABCDEF23)"`.
 - AE3. Name lookup fails
   - **Covers R2, R4.**
-  - **Given:** Slack returns no visible label for `U0ADDPB7P4K`.
+  - **Given:** Slack returns no visible label for `U01ABCDEF23`.
   - **When:** That person sends a human Slack turn.
-  - **Then:** The header includes `principal="U0ADDPB7P4K"`.
+  - **Then:** The header includes `principal="U01ABCDEF23"`.
 - AE4. Other connector value unchanged
   - **Covers R5, R4.**
   - **Given:** External MCP supplies principal `Alice [ops]=lead`.
@@ -191,9 +191,9 @@ U1 then U2. Quoting can ship and be tested without Slack lookup.
 - **Files:** `internal/rocketclaw/slackconnector/connector.go`, `internal/rocketclaw/slackconnector/connector_test.go`, and inbound httptest stubs in that package plus `internal/rocketclaw/slackconnector/adhoc_callout_test.go` if those handlers reach `slackPrincipal`. Optional: `README.md` scope sentence.
 - **Approach:** Give `slackPrincipal` a `context.Context`. Call `GetUserInfoContext`. Build `Name (ID)` from KTD2. On error or empty label, return the trimmed ID (KTD4). Resolve once and pass the string into buffer and inbound constructors. Do not add a cache. Do not touch `AllowedUserIDs` or `RecipientUserID`. Stub `/users.info` on inbound servers that reject unknown paths. Add a narrow `slackPrincipal` table test. Do not assert principal on every handler test.
 - **Test scenarios:**
-  - Display name `Ulderico` for `U0ADDPB7P4K` stamps `Ulderico (U0ADDPB7P4K)`.
-  - Empty display name and real name `Ulderico Cirello` stamps `Ulderico Cirello (U0ADDPB7P4K)`.
-  - `users.info` error stamps `U0ADDPB7P4K`.
+  - Display name `Jane` for `U01ABCDEF23` stamps `Jane (U01ABCDEF23)`.
+  - Empty display name and real name `Jane Doe` stamps `Jane Doe (U01ABCDEF23)`.
+  - `users.info` error stamps `U01ABCDEF23`.
   - Empty user ID stamps empty principal.
   - Allowlist and routing still compare the raw Slack user ID.
 - **Verification:** `gofmt` on touched files. `go test ./internal/rocketclaw/slackconnector`.

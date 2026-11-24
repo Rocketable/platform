@@ -342,7 +342,7 @@ Order: U7, U1, U2, U8, U3, U4, U5, U6.
   4. Return rows in chat order, then history order, with the completeness flag (KTD12).
 - **Patterns to follow:** `ChatOriginFacts` in `internal/rocketclaw/backend/store.go` for a single visibility-aware query returning an iterator; `queryRows`.
 - **Test scenarios:**
-  - `alan` matches both "Alan" and "alanine": substring, not whole-word, semantics.
+  - `sam` matches both "Sam" and "sample": substring, not whole-word, semantics.
   - A needle containing `%`, `_`, or `\` matches only literal occurrences.
   - A one-letter and a two-letter needle return the same rows as a substring check in Go over the fixture.
   - A needle matching only a Slack tag prefix returns that message.

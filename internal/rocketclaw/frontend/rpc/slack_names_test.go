@@ -23,7 +23,7 @@ func TestSlackNames(t *testing.T) {
 	t.Parallel()
 
 	channels := &mockChannels{SlackNamesFunc: func(_ context.Context, ids []string) map[string]string {
-		resolved := map[string]string{"U1": "alan", "S1": "cs-operators", "C1": "general"}
+		resolved := map[string]string{"U1": "sam", "S1": "cs-operators", "C1": "general"}
 		names := make(map[string]string)
 
 		for _, id := range ids {
@@ -66,7 +66,7 @@ func TestSlackNames(t *testing.T) {
 		Names map[string]string `json:"names"`
 	}
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
-	require.Equal(t, map[string]string{"C1": "general", "S1": "cs-operators", "U1": "alan"}, body.Names)
+	require.Equal(t, map[string]string{"C1": "general", "S1": "cs-operators", "U1": "sam"}, body.Names)
 
 	_, err = invoke[SlackNamesResponse](t.Context(), connection, "SlackNames", &SlackNamesRequest{Ids: []string{"U1"}})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))

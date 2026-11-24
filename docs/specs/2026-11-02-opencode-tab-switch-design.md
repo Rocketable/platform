@@ -9,7 +9,7 @@ status: step 1 built; step 2, for every server at once, built 2026-11-22 (docs/p
 ## The problem
 
 Opening an OpenCode tab builds the embedded OpenCode view from scratch, which downloads everything it shows.
-Measured on Hally (2026-11-02, one OpenCode session, page assets already cached), each build costs:
+Measured on a deployment (2026-11-02, one OpenCode session, page assets already cached), each build costs:
 
 | | Requests | Bytes |
 |---|---|---|
@@ -88,7 +88,7 @@ probe below will show it.
 | Memory grows with every session visited | Drop entries for sessions no longer open, so OpenCode's own limit applies | Test: visit 5 sessions, at most open tabs + 3 transcripts kept |
 | A send in progress on A lands in B | Each send carries its own session ID | Test: start a send in A, switch to B, request names A |
 | RocketClaw shows the wrong link or title | They read the shown session, which the view reports | Browser test: switch, "Copy server link" names B |
-| Something in OpenCode's session screen assumes a fresh start | OpenCode's own app moves between sessions this way | The tests above, plus a check on Hally |
+| Something in OpenCode's session screen assumes a fresh start | OpenCode's own app moves between sessions this way | The tests above, plus a check on the deployment |
 
 ## Optional step 2: keep the one view while a RocketClaw tab shows
 
@@ -128,7 +128,7 @@ every view, and each hidden view keeps its own event stream and polls.
 - `oc/host/mount.test.tsx`: the step 1 tests above, all in one mounted view.
 - A browser test in `web/`: switching between two OpenCode tabs of one server creates the view once and opens one
   event stream.
-- On Hally: requests and bytes per switch, first visit and revisit, before and after, with the probe used above.
+- On the deployment: requests and bytes per switch, first visit and revisit, before and after, with the probe used above.
 
 ## Decision
 

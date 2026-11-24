@@ -4,8 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CodeBlock, InlineText, MarkdownText, TranscriptText, cleanText, useCleanText } from "./transcript-text";
 
-const names = { S0BA868QQ90: "cs-operators" };
-const entry = "<!subteam^S0BA868QQ90> *Allen now says he would buy a Windows computer if memory is the cause.*\n\nMemory exhaustion remains unverified.\n\n*Please send this revised combined reply and leave the case open.*\n\nRevised customer reply:\n```\nI wouldn’t recommend buying a Windows computer.\n```";
+const names = { S01ABCDEF56: "cs-operators" };
+const entry = "<!subteam^S01ABCDEF56> *Sam now says he would buy a Windows computer if memory is the cause.*\n\nMemory exhaustion remains unverified.\n\n*Please send this revised combined reply and leave the case open.*\n\nRevised customer reply:\n```\nI wouldn’t recommend buying a Windows computer.\n```";
 const mark = 'class="rounded-sm bg-primary/20 text-foreground ring-1 ring-primary/30"';
 
 function html(ui: ReactNode, seed: Record<string, string> = names) {
@@ -160,9 +160,9 @@ test("non-interactive output has no anchors or buttons", () => {
 });
 
 test("InlineText formats the first line only", () => {
-  const markup = html(<InlineText text={"<!subteam^S0BA868QQ90> *Allen now says*\n- second"} />);
+  const markup = html(<InlineText text={"<!subteam^S01ABCDEF56> *Sam now says*\n- second"} />);
   expect(markup).toContain("@cs-operators");
-  expect(markup).toContain("<strong>Allen now says</strong>");
+  expect(markup).toContain("<strong>Sam now says</strong>");
   expect(markup).not.toContain("second");
   expect(markup).not.toContain("<ul");
   expect(markup).not.toContain("<a ");
@@ -179,8 +179,8 @@ test("raw and Markdown PR links keep their anchor and gain explicit Preview, exc
 });
 
 test("cleanText drops markers and substitutes resolved names", () => {
-  expect(cleanText("<!subteam^S0BA868QQ90> *Allen now says*", names)).toBe("@cs-operators Allen now says");
-  expect(html(<Clean text={"<!subteam^S0BA868QQ90> *Allen now says*"} />)).toBe("@cs-operators Allen now says");
+  expect(cleanText("<!subteam^S01ABCDEF56> *Sam now says*", names)).toBe("@cs-operators Sam now says");
+  expect(html(<Clean text={"<!subteam^S01ABCDEF56> *Sam now says*"} />)).toBe("@cs-operators Sam now says");
 });
 
 test("MarkdownText renders headings, tables, links, code, and Slack tags without raw HTML", () => {
@@ -189,7 +189,7 @@ test("MarkdownText renders headings, tables, links, code, and Slack tags without
   expect(html(<MarkdownText text={"see [docs](https://x.com/a), `x`, <@U1>, <#C1|general> and <!here>"} />)).toBe(`<div class="markdown break-words"><p>see <a href="https://x.com/a" class="underline" target="_blank" rel="noopener noreferrer">docs</a>, <code class="rounded-sm bg-muted px-1 font-mono text-[0.9em]">x</code>, ${tag("@U1")}, ${tag("#general")} and ${tag("@here")}</p></div>`);
   // A leading Slack tag would otherwise start an HTML block that hides the rest of the line's Markdown.
   const reply = html(<MarkdownText text={entry} />);
-  expect(reply).toContain(`<p>${tag("@cs-operators")} <em>Allen now says he would buy a Windows computer if memory is the cause.</em></p>`);
+  expect(reply).toContain(`<p>${tag("@cs-operators")} <em>Sam now says he would buy a Windows computer if memory is the cause.</em></p>`);
   expect(reply).toContain('aria-label="Copy Code"');
   expect(reply).toContain(">I wouldn’t recommend buying a Windows computer.\n</code>");
   const unsafe = html(<MarkdownText text={"<script>alert(1)</script>\n\n[x](javascript:alert(1))"} />);

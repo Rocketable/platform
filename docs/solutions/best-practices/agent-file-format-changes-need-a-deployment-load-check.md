@@ -33,7 +33,7 @@ One top-level agent file that fails to load stops RocketClaw from starting: star
 
 When a change turns an accepted agent-file form into a load error, old and new releases also reject each other's files. The MCP facets change (plan `docs/plans/2026-11-19-1303-feat-mcp-server-facets-plan.md`) made raw `permission.mcp` rules such as `"memory.*": allow` fail on the new release, while the facet form `memory: {all: allow}` fails on the old one. So a deployment cannot fix its files ahead of the upgrade, and a rollback breaks again unless the old files come back.
 
-Reading frontmatter by eye was not enough. Before the check ran, a reasonable guess was that a deployment's MCP-using agents were sudo agents and would be unaffected. On Hally all seven were advanced agents without `sudo:`, and every one of them failed to load on the new release.
+Reading frontmatter by eye was not enough. Before the check ran, a reasonable guess was that a deployment's MCP-using agents were sudo agents and would be unaffected. On one deployment, all seven were advanced agents without `sudo:`, and every one of them failed to load on the new release.
 
 ## Guidance
 

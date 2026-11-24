@@ -16,8 +16,8 @@ execution: code
 - **Authority:** Product Contract requirements win on behavior. KTDs win on mechanism. Units override neither.
 - **Stop conditions:** Stop and report instead of continuing in any of these cases:
   - a unit would push `internal/rocketclaw` Go source or `internal/rocketclaw/web` TS source over its CLOC budget (KTD11)
-  - migration `043` collides with a migration already applied on Wallace or added on another branch
-  - Wallace's Postgres lacks `gen_random_uuid()` (Postgres 13+)
+  - migration `043` collides with a migration already applied on a production deployment or added on another branch
+  - a production deployment's Postgres lacks `gen_random_uuid()` (Postgres 13+)
 - **Execution profile:** Go backend and RPC first, then the Web, then docs and the rebuilt committed frontend. One reviewable change per unit.
 - **Finishes and ships:** the implementer, through the repo's normal PR flow.
 
@@ -398,7 +398,7 @@ stateDiagram-v2
 | Line budgets | `make check-cloc-budget` passes without budget edits | all |
 | Frontend build | `make -C internal/rocketclaw web-assets`, with the result committed | U7 |
 
-Before deploying, confirm `043` isn't already taken in Wallace's `pg_migrations` table or on an open branch (`docs/solutions/runtime-errors/deployment-binary-missing-live-migrations.md`). Also confirm Wallace's Postgres is version 13 or newer.
+Before deploying, confirm `043` isn't already taken in the deployment's `pg_migrations` table or on an open branch (`docs/solutions/runtime-errors/deployment-binary-missing-live-migrations.md`). Also confirm the deployment's Postgres is version 13 or newer.
 
 ## Definition of Done
 

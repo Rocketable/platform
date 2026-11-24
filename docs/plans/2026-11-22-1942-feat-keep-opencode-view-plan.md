@@ -23,7 +23,7 @@ Measured with the browser harness (100 ms added to each OpenCode request):
 | Chat → OpenCode tab | 832 ms |
 | One server's tab → another server's tab | ~840 ms every time |
 
-On wallace (2026-11-22): two OpenCode servers, alitu-dev and ruzuku-dev; people keep 20–49 OpenCode tabs mixed with
+On a deployment (2026-11-22): two OpenCode servers, acme-dev and example-dev; people keep 20–49 OpenCode tabs mixed with
 chats, search and pages across several spaces, some spaces holding both servers' tabs. A session's last 20 messages are
 up to 5.6 MB.
 

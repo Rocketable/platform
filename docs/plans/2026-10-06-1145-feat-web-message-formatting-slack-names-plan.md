@@ -12,7 +12,7 @@ deepened: 2026-10-06
 
 ## Goal Capsule
 
-- **Objective:** RocketClaw Web shows agent replies the way a Slack reader would see them. Code blocks, bold, italics, strikethrough, inline code, quotes, and lists are formatted, and Slack tags such as `<!subteam^S0BA868QQ90>` show real names such as `@cs-operators`. This applies on every surface that shows message text or a message-derived title. Searching for a name finds messages that tag it.
+- **Objective:** RocketClaw Web shows agent replies the way a Slack reader would see them. Code blocks, bold, italics, strikethrough, inline code, quotes, and lists are formatted, and Slack tags such as `<!subteam^S01ABCDEF56>` show real names such as `@cs-operators`. This applies on every surface that shows message text or a message-derived title. Searching for a name finds messages that tag it.
 - **Means:** One shared formatter in `transcript-text.tsx` covers block and inline text, with optional search highlighting. A new Web RPC lets the Slack connector resolve Slack IDs to names, and message search also matches the IDs whose names contain the query.
 - **Authority:** The operator's feedback (6 Oct 2026, screenshot of `/search?q=sort:newest tag:operator-needed&room=acme-cs-claw`) and the user's answers recorded under Key Decisions.
 - **Execution profile:** Six units. U1 and U2 are Go plus proto. U3–U5 are Web in `internal/rocketclaw/web`. U6 covers docs and the bundle.
@@ -29,14 +29,14 @@ Render Slack-style message text as formatted text across RocketClaw Web, turn Sl
 
 ### Problem Frame
 
-Agents such as `acme-cs-principal` write replies for Slack. They use `*bold*`, fenced code, inline code, `- ` bullets, and user-group mentions (`<!subteam^S0BA868QQ90>`).
+Agents such as `acme-cs-principal` write replies for Slack. They use `*bold*`, fenced code, inline code, `- ` bullets, and user-group mentions (`<!subteam^S01ABCDEF56>`).
 `/search` shows that text raw. `MatchedExcerpt` (`internal/rocketclaw/web/src/ui.tsx`) prints the whole message as monospace `whitespace-pre-wrap` text, so fences, asterisks, and backticks appear literally.
-The result heading and the sidebar, palette, and matrix row titles show the raw first line, for example `<!subteam^S0BA868QQ90> *Allen now says…*`.
+The result heading and the sidebar, palette, and matrix row titles show the raw first line, for example `<!subteam^S01ABCDEF56> *Sam now says…*`.
 The chat page (`TranscriptText`) already renders fenced code, bold, and links. It leaves inline code, lists, and Slack tags literal, as the earlier plan's R10 deliberately chose.
 
-Evidence gathered on Wallace (v0.1.15, identical to `main` at planning time):
-- Entry 94120 (`slack-thread:C0B8CQT7P2N:1791038443.994659`) stores the assistant `final_answer` text shown in the screenshot verbatim, including the fence and the subteam tag.
-- After the user added the scope, the bot token holds `users:read` and `usergroups:read`. `usergroups.list` returns `S0BA868QQ90` = `@cs-operators` ("CS Operators") and `S0BGM0CHCRY` = `@on-call`.
+Evidence gathered on a deployment (v0.1.15, identical to `main` at planning time):
+- The message's stored entry (in a `slack-thread:C01ABCDEF45:…` conversation) stores the assistant `final_answer` text shown in the screenshot verbatim, including the fence and the subteam tag.
+- After the user added the scope, the bot token holds `users:read` and `usergroups:read`. `usergroups.list` returns `S01ABCDEF56` = `@cs-operators` ("CS Operators") and `S02ABCDEF67` = `@on-call`.
 
 ### Requirements
 
@@ -64,13 +64,13 @@ Evidence gathered on Wallace (v0.1.15, identical to `main` at planning time):
 - R5. The chat transcript and cron run previews (everything that uses `TranscriptText`/`TranscriptLine`) use the full formatter. Handoff search hits, the handoff target excerpt, and queued items use the inline renderer (U5).
 - R6. `/search` result rows use the formatter. Searched words stay highlighted, including inside bold, inline code, list items, quotes, code blocks, and resolved tag names. With a search word, a long message shows only the lines around the match. Without one, it shows the whole message, as today.
 - R7. Single-line titles render the first line with inline formatting only: bold, italics, strikethrough, inline code, links shown as plain labels, and Slack tags. This covers `/search` result headings, sidebar rows, the Cmd+P palette, the matrix dialog, and the turn-rail previews. They stay single-line and truncated.
-- R7a. Hover tooltips (`title`) and accessible names (`aria-label`) for those titles and rows use the cleaned text: markup removed and tags replaced by resolved names. For example, `@cs-operators Allen now says…` instead of `<!subteam^…> *Allen now says…*`.
+- R7a. Hover tooltips (`title`) and accessible names (`aria-label`) for those titles and rows use the cleaned text: markup removed and tags replaced by resolved names. For example, `@cs-operators Sam now says…` instead of `<!subteam^…> *Sam now says…*`.
 - R7b. Copy still copies the original raw message text, so pasting into Slack keeps working tags and formatting.
 
 **Names**
 
-- R8. Slack IDs resolve to current names through the server, using the Slack bot token Wallace already has. Names are cached in the process and refreshed every 8 hours, so renames in Slack show up within 8 hours without a restart.
-- R8a. `/search` message search also matches messages that tag a user or user group whose resolved name contains the search text. For example, `cs-operators` finds messages containing `<!subteam^S0BA868QQ90>`, and the matching tag is highlighted. Channel tags almost always carry their name (`<#C…|name>`), which raw search already matches.
+- R8. Slack IDs resolve to current names through the server, using the Slack bot token the deployment already has. Names are cached in the process and refreshed every 8 hours, so renames in Slack show up within 8 hours without a restart.
+- R8a. `/search` message search also matches messages that tag a user or user group whose resolved name contains the search text. For example, `cs-operators` finds messages containing `<!subteam^S01ABCDEF56>`, and the matching tag is highlighted. Channel tags almost always carry their name (`<#C…|name>`), which raw search already matches.
 
 **Docs**
 
@@ -78,7 +78,7 @@ Evidence gathered on Wallace (v0.1.15, identical to `main` at planning time):
 
 ### Key Decisions
 
-- **Show real Slack names, resolved by the server.** Governs R2, R3, R8. (Session-settled, user-approved: chosen over a generic `@team` label. The user added `usergroups:read` to the Wallace app during planning, and the scope was verified live.)
+- **Show real Slack names, resolved by the server.** Governs R2, R3, R8. (Session-settled, user-approved: chosen over a generic `@team` label. The user added `usergroups:read` to the deployment's Slack app during planning, and the scope was verified live.)
 - **Format every surface, not only `/search`.** Governs R5–R7. (User-approved: "Everywhere".)
 - **Supported syntax is the current set plus lists, inline code, Slack tags, italics, strikethrough, and quotes.** Governs R1, R2. (User-approved. Italics, strikethrough, and quotes were added after the user was told about the TS CLOC budget.)
 - **Format and highlight at the same time. With a search word, show only the lines near the match.** Governs R6. (User-approved: chosen over showing the whole message or adding a "show more" control.)
@@ -165,7 +165,7 @@ flowchart LR
 - Go CLOC: 19528 of 23500 (user-raised from 22350; hazard zone from 23000). No pressure. The user also edited `internal/rocketclaw/Makefile` and `internal/rocketcode/Makefile` budgets. These are user-owned edits; keep them as they are.
 - `users.list` is a Tier 2 Slack method and is paginated. One load per 8 hours is well within limits, but very large workspaces make the first load slow. The first `SlackNames` or name search after start or reload waits for it.
 - Generated artifacts: `web.pb.go`, `protocol.gen.go` (proto SHA), and the tracked bundle under `internal/rocketclaw/internal/web/dist` must all be regenerated. The TS types in `web/src/types.ts` are hand-written.
-- The Wallace token already has both scopes (verified 6 Oct 2026). Other deployments without `usergroups:read` get the R3 fallback for groups, and name search covers users only.
+- The deployment's token already has both scopes (verified 6 Oct 2026). Other deployments without `usergroups:read` get the R3 fallback for groups, and name search covers users only.
 
 ---
 
@@ -204,8 +204,8 @@ flowchart LR
   2. In `searchMessages`, inside the singleflight leader, fetch the prefixes once, OR them into the per-message match, and return the matched IDs in `tag_ids`.
 - **Patterns to follow:** The existing `searchMessages` flight and scan; the case-insensitive `strings.Contains` match.
 - **Test scenarios:**
-  - Needle `cs-operators` returns a message containing `<!subteam^S0BA868QQ90>` and no unrelated messages, and `tag_ids` contains `S0BA868QQ90`.
-  - Needle `alan` matches `<@U05MD4PEVHN>` when that user's display name contains "alan".
+  - Needle `cs-operators` returns a message containing `<!subteam^S01ABCDEF56>` and no unrelated messages, and `tag_ids` contains `S01ABCDEF56`.
+  - Needle `sam` matches `<@U01ABCDEF23>` when that user's display name contains "sam".
   - A needle matching both raw text and a tag returns each message once.
   - With an empty directory (failed load), search behaves exactly as today.
   - Existing search tests (shared flight, cancellation) keep passing. Matryer mocks panic on nil funcs, so these tests must supply `SlackTagsMatchingFunc`: `TestSearchMessagesSharedFlightCancellation` builds `&Server{}` with nil `channels`, and the `&mockChannels{}` uses in `sidebar_test.go`, `live_test.go`, and `cmd/rocketclaw/web_test.go` need it only on paths that search.
@@ -226,14 +226,14 @@ flowchart LR
   6. Leave the Copy action's text untouched.
 - **Patterns to follow:** The existing single-regex `matchAll` tokenizer; `CodeBlock`.
 - **Test scenarios:**
-  - The screenshot message (entry 94120 text) renders a `<strong>`, a code block with the customer reply, and `@cs-operators` once the name query resolves. No `*`, backtick fence, or `<!subteam` text remains.
-  - The second screenshot message renders a 4-item `<ul>`, inline `<code>` for `` `2567-1030` ``, `` `sub_1Tg4…` ``, and `` `ch_3UN…` ``, and bold for the approval sentence.
+  - The screenshot message (the stored entry's text) renders a `<strong>`, a code block with the customer reply, and `@cs-operators` once the name query resolves. No `*`, backtick fence, or `<!subteam` text remains.
+  - The second screenshot message renders a 4-item `<ul>`, inline `<code>` for `` `1234-5678` ``, `` `sub_ABC…` ``, and `` `ch_XYZ…` ``, and bold for the approval sentence.
   - `_italic_` renders `<em>`, and `~gone~` renders `<s>`. `snake_case_name`, `~/path`, and `a~b~c` stay literal.
   - Two `> ` lines render one `<blockquote>` with formatted content. `&gt; quoted` (Slack-escaped) also quotes. A mid-line `>` does not.
   - `<!subteam^S1|@ops>` shows `@ops` with no lookup. `<!here>` shows `@here`. An unresolved `<@U9>` shows `@U9`.
   - `` `*not bold*` `` stays literal inside inline code. `2 * 3 * 4` and `*.go` stay literal. `-1` and `--flag` mid-line are not bullets.
   - With needle `windows`, matches inside bold, plain text, a quote, and a code block are each wrapped in `<mark>`. With needle `operators`, the resolved `@cs-operators` label is highlighted.
-  - `useCleanText("<!subteam^S0BA868QQ90> *Allen now says*")` returns `@cs-operators Allen now says` once resolved.
+  - `useCleanText("<!subteam^S01ABCDEF56> *Sam now says*")` returns `@cs-operators Sam now says` once resolved.
   - Copy on a formatted message copies the raw text.
   - Existing transcript tests for escaping, links, fences, and long output keep passing.
 - **Verification:** `transcript-text.test.tsx` passes.
@@ -253,7 +253,7 @@ flowchart LR
   - A needle search shows a highlighted match inside formatted text, and a long message is trimmed to the lines around the match.
   - Searching `cs-operators` (stubbed `tag_ids`) shows the message trimmed around the tag, with `@cs-operators` highlighted.
   - A formatted search row contains no nested `<a>` or `<button>`, and clicking its code block navigates to the session like the rest of the row.
-  - The result heading shows `@cs-operators Allen now says…` in bold, and its accessible name is the cleaned text.
+  - The result heading shows `@cs-operators Sam now says…` in bold, and its accessible name is the cleaned text.
   - Existing search tests (ordering, tabs, deep links) keep passing.
 - **Verification:** Search browser tests pass.
 
@@ -328,7 +328,7 @@ flowchart LR
 ### Sources
 
 - Operator feedback and screenshot, 6 Oct 2026 (`/search?q=sort:newest tag:operator-needed&room=acme-cs-claw`).
-- Wallace evidence: `rocketclaw` v0.1.15; `session_entries` id 94120; `auth.test` scopes and `usergroups.list` output after the scope was added.
+- Deployment evidence: `rocketclaw` v0.1.15; the screenshot message's `session_entries` row; `auth.test` scopes and `usergroups.list` output after the scope was added.
 - User decisions, 6 Oct 2026: `@handle` for teams, display name for people, nearby-lines search windows, 8-hour name refresh, cleaned tooltips, raw Copy, italics/strikethrough/quotes now, name search now.
 - `docs/plans/2026-10-05-1839-fix-web-search-links-tags-feedback-plan.md`: KTD7 tokenizer and R10, which this plan revises.
 - `internal/rocketclaw/web/src/transcript-text.tsx`, `internal/rocketclaw/web/src/ui.tsx` (`MatchedExcerpt`, `SearchMatches`, session row title), `internal/rocketclaw/frontend/rpc/session_commands.go` (`searchMessages`), `internal/rocketclaw/frontend/slack/connector.go` (`slackPrincipal`, `SidebarChannelAgentChoices`), `cmd/rocketclaw/assemble.go`, `cmd/rocketclaw/web.go`.

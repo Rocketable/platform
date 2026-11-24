@@ -1,4 +1,4 @@
-# Wallace: stranded external-MCP follow-up messages
+# Stranded external-MCP follow-up messages
 
 ## Status and purpose
 
@@ -6,15 +6,15 @@ Investigation date: 2026-09-20.
 
 **Diagnosis only. No fix, queue deletion, replay, configuration change, or service restart was performed.**
 
-This document preserves evidence from Wallace's production deployment and a subsequent audit of `main`.
+This document preserves evidence from a production deployment and a subsequent audit of `main`.
 
 **Follow-up result:** at `main` commit `549038341ed3da3c91e338bf6270e3c7b84720c6`, the original live queue mismatch has been removed, but startup still does not recover ordinary saved queue rows. See [Current-main audit](#current-main-audit) for source references and local test evidence.
 
-The original deployed-version diagnosis rests on production database observations, retained service logs, and inspection of the deployed source. No controlled reproduction of that old revision was run. The follow-up tests below exercise the pinned `main` revision with synthetic data, not Wallace's production database.
+The original deployed-version diagnosis rests on production database observations, retained service logs, and inspection of the deployed source. No controlled reproduction of that old revision was run. The follow-up tests below exercise the pinned `main` revision with synthetic data, not the deployment's production database.
 
 ## Bottom line
 
-Six external-MCP follow-ups remained in Wallace's durable `thread_queue` table. Every row belonged to a managed Slack conversation paired with a private external-MCP conversation.
+Six external-MCP follow-ups remained in the deployment's durable `thread_queue` table. Every row belonged to a managed Slack conversation paired with a private external-MCP conversation.
 
 The deployed code can return an MCP response while the previous turn still holds the conversation-pair lock. A follow-up arriving in that interval is saved on the managed Slack conversation's queue. When the private MCP turn finishes, its later-work picker looks up the private conversation's queue instead. It does not find the managed conversation's saved message.
 
@@ -26,16 +26,16 @@ Confidence in this explanation is **high**, with the evidence and remaining limi
 
 | Item | Observed value |
 | --- | --- |
-| SSH aliases | `wallace`, `gene`, and administrative `bizclaws` reach the same host |
-| Tailnet address | `100.125.81.26` |
-| Hostname | `ip-10-40-1-44` |
-| Service investigated | `wallace.service` |
-| Working directory | `/home/wallace` |
+| SSH alias | `example-host` |
+| Tailnet address | `10.0.0.10` |
+| Hostname | `example-host` |
+| Service investigated | `rocketclaw.service` |
+| Working directory | `/home/claw` |
 | Running application at inspection | `github.com/Rocketable/platform/cmd/rocketclaw`, module version `v0.0.52` |
 | Deployed tag commit | `31d8ab13eac0e962deda8a870bbd19dfd2b1ad76` |
 | Go version in running binary | `go1.27.1` |
 | Service command | `go run github.com/Rocketable/platform/cmd/rocketclaw@latest` |
-| Database | `rocketclaw_wallace`, PostgreSQL 18.4 on RDS |
+| Database | `rocketclaw_example`, PostgreSQL 18.4 on RDS |
 | Applied migrations | `001_init.sql` through `005_drop_store_bootstrap.sql` |
 | Candidate `main` inspected during release assessment | `8c2268b37325b36785f4036acf1f13ba21e8c95a` |
 
@@ -55,7 +55,7 @@ This does not establish every earlier startup. However, a source comparison foun
 
 ## Production observations
 
-Queries used PostgreSQL sessions with `default_transaction_read_only=on` and `statement_timeout=15000`. Credentials were read remotely from `/home/wallace/femtoclaw.json`, passed through environment variables, and not included in this document.
+Queries used PostgreSQL sessions with `default_transaction_read_only=on` and `statement_timeout=15000`. Credentials were read remotely from `/home/claw/femtoclaw.json`, passed through environment variables, and not included in this document.
 
 At inspection:
 
@@ -72,18 +72,9 @@ Counts and absence checks are observations of a live system, not a single frozen
 
 ### The six rows
 
-Customer text is summarized here rather than copied in full. IDs allow an authorized operator to recover the exact rows if needed.
+Customer text and row IDs are not reproduced here. An authorized operator can recover the exact rows from the deployment's database.
 
-All managed IDs have the prefix `slack-thread:C0B8CQT7P2N:`. All private IDs have the prefix `external_mcp:acme-cs-customer-triage:`.
-
-| Queue item ID | Managed ID suffix | Private ID suffix | External conversation ID | Message subject |
-| --- | --- | --- | --- | --- |
-| `H4LSUFNMROIKC42PGMG2OMVQPJ` | `1788701544.878719` | `J7LBOY52CI67KH4UNUOGVS33NG` | `intercom:215475813660616` | Publishing an existing episode |
-| `CM7GEE4DTHYLEBLTLEI3SLPWYK` | `1788939561.324029` | `X7JPL54DWII4QBFT2F6M4TJVJ7` | `intercom:215475856429236` | Unexpected additional-show charge |
-| `CAYPMEVWVAYLJMHQ2K6R4BND6V` | `1789160862.869749` | `JJPK72KVFUDQQKZHYDC5XWKWIX` | `intercom:215475903363189` | Choppy 20-minute recording |
-| `QZ3N3TADEGUSR3ZKCT76WLSDGV` | `1789356985.923149` | `2I73PX7MRGTDFMVWPXCP7AX3PT` | `intercom:215475923677657` | Publishing a second episode to Apple |
-| `KQMTTBRTNEAHVQQXXHGIML7DTG` | `1789449324.457619` | `5SSQJ2JF6AXFJCZXG7JGXC4LTF` | `intercom:215475943204713` | Video files may be too large |
-| `YTWVZYHRHIDS5BYI7FV3QU5ZET` | `1789828665.900679` | `NIHFWN4S3OOKKYIGOKHH25ZPKL` | `intercom:215476008713898` | Storage and whether to delete/archive 136+ episodes |
+All managed IDs have the prefix `slack-thread:C01ABCDEF45:`. All private IDs have the prefix `external_mcp:acme-cs-customer-triage:`. Each row has its own queue item ID, managed thread timestamp, private conversation ID, and external support-ticket conversation ID, and each message is a customer support follow-up.
 
 ### Timing correlation
 
@@ -157,7 +148,7 @@ The stored rows' managed IDs and empty Slack message fields match this path. The
 
 [`backend/bridge.go:569–615`](https://github.com/Rocketable/platform/blob/v0.0.52/internal/rocketclaw/backend/bridge.go#L569-L615), `pickLaterWork`, reads goals, queue rows, and scheduled messages using `b.config.ConversationID`.
 
-For these completing jobs, the logs show that ID is `external_mcp:acme-cs-customer-triage:...`. The saved row instead belongs to `slack-thread:C0B8CQT7P2N:...`.
+For these completing jobs, the logs show that ID is `external_mcp:acme-cs-customer-triage:...`. The saved row instead belongs to `slack-thread:C01ABCDEF45:...`.
 
 The finishing bridge therefore does not select the saved follow-up. Releasing the pair lock does not itself trigger a pick on the paired managed conversation.
 
@@ -185,7 +176,7 @@ There is no general startup enumeration of `thread_queue` in these inspected sta
 | An active goal or future schedule is intentionally blocking the queue | No goal rows for these six in the inspected join; no scheduled rows at the earlier snapshot; `park_after` empty. Not supported by observed state. |
 | Work ran but queue-row deletion failed | No corresponding managed-turn start/dequeue logs were found, and the source exposes the private/managed lookup mismatch. Less consistent with the evidence. |
 | Restarts alone should recover saved work | The inspected startup code does not sweep ordinary queues. Restarts were observed while older rows remained. |
-| Customers necessarily went unanswered | Not established. September 19 logs show the original job had already noticed and investigated the storage question. A saved duplicate/follow-up can coexist with work done in the original turn. Customer-resolution status was not audited. |
+| Customers necessarily went unanswered | Not established. September 19 logs show the original job had already noticed and investigated the follow-up's question. A saved duplicate/follow-up can coexist with work done in the original turn. Customer-resolution status was not audited. |
 | Current `main` has exactly the same defect | The follow-up audit below found the live mechanism removed, while the startup recovery gap persists. This was not established by the original production investigation alone. |
 
 Historical logs were searched from September 6 onward. Their retention and completeness were not independently certified. Absence of a matching line is supporting evidence, not proof of all possible historical activity.
@@ -202,7 +193,7 @@ GitHub issue search was unavailable because repository issues are disabled. A ta
 
 ### First establish the current state
 
-1. Identify the running binary version again; do not assume Wallace is still on v0.0.52.
+1. Identify the running binary version again; do not assume the deployment is still on v0.0.52.
 2. Pin the exact candidate or `main` commit under investigation.
 3. Re-query the six IDs read-only. Record whether each still exists, and any current active turn, goal, or scheduled-message blocker for its conversation.
 4. Read the current equivalents of MCP submission, durable queue ownership, turn completion, pair release, and startup queue restoration.
@@ -253,9 +244,9 @@ LEFT JOIN external_mcp_sessions m
 LEFT JOIN conversation_goals g
   ON g.conversation_id = q.conversation_id
 WHERE q.queue_item_id IN (
-  'H4LSUFNMROIKC42PGMG2OMVQPJ', 'CM7GEE4DTHYLEBLTLEI3SLPWYK',
-  'CAYPMEVWVAYLJMHQ2K6R4BND6V', 'QZ3N3TADEGUSR3ZKCT76WLSDGV',
-  'KQMTTBRTNEAHVQQXXHGIML7DTG', 'YTWVZYHRHIDS5BYI7FV3QU5ZET'
+  '<queue-item-id-1>', '<queue-item-id-2>',
+  '<queue-item-id-3>', '<queue-item-id-4>',
+  '<queue-item-id-5>', '<queue-item-id-6>'
 )
 ORDER BY q.stash_at_unix_ns;
 
@@ -265,7 +256,7 @@ SELECT id, applied_at FROM pg_migrations ORDER BY id;
 ROLLBACK;
 ```
 
-For logs, use `sudo journalctl -u wallace.service` through `ssh bizclaws`, bounded to the dates above, and filter by the private/managed IDs and these message names:
+For logs, use `sudo journalctl -u rocketclaw.service` through `ssh example-host`, bounded to the dates above, and filter by the private/managed IDs and these message names:
 
 - `bridge dequeued request`
 - `starting rocketcode turn`
@@ -288,7 +279,7 @@ Pinned revision: **`549038341ed3da3c91e338bf6270e3c7b84720c6`**, `internal/rocke
 | --- | --- |
 | Can the exact old private/managed queue mismatch strand a newly arriving MCP follow-up? | **No, that mechanism has been removed.** MCP execution now runs through the destination conversation's work loop, and the caller waits through synchronization and delivery. |
 | Does startup automatically process an ordinary saved queue row with no active checkpoint, goal, or schedule? | **No. This part remains true.** The local startup probe preserved its queued row and instantiated no conversation bridge for it. |
-| Will upgrading alone process Wallace's six existing entries? | **Do not expect it to.** Their observed state matches the missing-startup-consumer case. This audit did not replay the actual rows or re-query production. |
+| Will upgrading alone process the deployment's six existing entries? | **Do not expect it to.** Their observed state matches the missing-startup-consumer case. This audit did not replay the actual rows or re-query production. |
 
 The conclusion concerns this exact failure mechanism. It is not a claim that every queue, delivery-error, cancellation, or crash-recovery path is defect-free.
 
@@ -304,7 +295,7 @@ References in this subsection are pinned to the audited commit:
 6. [`backend/conversations.go:193–212`](https://github.com/Rocketable/platform/blob/549038341ed3da3c91e338bf6270e3c7b84720c6/internal/rocketclaw/backend/conversations.go#L193-L212) publishes the synchronized output on the managed ID and releases the reservation afterward. [`backend/runtime.go:82–115`](https://github.com/Rocketable/platform/blob/549038341ed3da3c91e338bf6270e3c7b84720c6/internal/rocketclaw/backend/runtime.go#L82-L115) waits for live consumers' delivery acknowledgements.
 7. [`backend/bridge.go:1146–1156`](https://github.com/Rocketable/platform/blob/549038341ed3da3c91e338bf6270e3c7b84720c6/internal/rocketclaw/backend/bridge.go#L1146-L1156) also waits for final delivery before completing the inbound response, reversing the old ordering.
 
-The core architectural change is commit [`0c738a7747281999543082c55fa67ae83eebcf56`](https://github.com/Rocketable/platform/commit/0c738a7747281999543082c55fa67ae83eebcf56), `internal/rocketclaw: compose Slack, MCP, and Cron on one conversation Backend`. Its diff removes the busy-MCP stash implementation and introduces `RunTurn`/`SyncConversation` routing. GitHub associates that commit with merged [PR #42](https://github.com/Rocketable/platform/pull/42), “Conversation Backend for Slack and Web,” which documents the shared backend and private-producer-to-managed-conversation behavior. No separate targeted fix for Wallace's six rows was found.
+The core architectural change is commit [`0c738a7747281999543082c55fa67ae83eebcf56`](https://github.com/Rocketable/platform/commit/0c738a7747281999543082c55fa67ae83eebcf56), `internal/rocketclaw: compose Slack, MCP, and Cron on one conversation Backend`. Its diff removes the busy-MCP stash implementation and introduces `RunTurn`/`SyncConversation` routing. GitHub associates that commit with merged [PR #42](https://github.com/Rocketable/platform/pull/42), “Conversation Backend for Slack and Web,” which documents the shared backend and private-producer-to-managed-conversation behavior. No separate targeted fix for the deployment's six rows was found.
 
 ### Why saved rows still remain idle on startup
 
@@ -337,7 +328,7 @@ Therefore: **the specific production MCP race has been removed, but deleting the
 
 ### Local verification
 
-The checks ran in an isolated Jujutsu workspace at the pinned revision, using a dedicated native PostgreSQL **18.6** instance and Go **1.27.1**. Database files, workspace, test temporary directories, and logs were kept under `.tmp/wallace-queue-main-audit/`. Production runs PostgreSQL 18.4; this was a runtime-path investigation, not a production-copy migration rehearsal.
+The checks ran in an isolated Jujutsu workspace at the pinned revision, using a dedicated native PostgreSQL **18.6** instance and Go **1.27.1**. Database files, workspace, test temporary directories, and logs were kept under `.tmp/queue-main-audit/`. Production runs PostgreSQL 18.4; this was a runtime-path investigation, not a production-copy migration rehearsal.
 
 Existing tests passed before the diagnostic additions:
 
@@ -371,7 +362,7 @@ Two temporary diagnostic tests then exercised the disputed boundaries:
 
 The first draft of this startup probe had no history and was retention-pruned. It was corrected to include recent history, matching the production evidence, before accepting the result. A fixture with no history would not demonstrate the reported stranded-row symptom. The live probe's initial expected fallback text was also corrected to match its attachment flags; its delivery-order assertions already passed.
 
-Additional contract checks passed with `-race`: `TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage`, `TestInitializeSessionDBUpgradesMainSchema` (both five/eight-migration starting points and both migration-ledger names), the four runtime enqueue/producer-ordering cases, and the MCP metadata/submit-completion tests. The migration test uses synthetic fixtures and does not substitute for the outstanding Wallace database-copy rehearsal. `gopls check` reported no diagnostics for the temporary test additions.
+Additional contract checks passed with `-race`: `TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage`, `TestInitializeSessionDBUpgradesMainSchema` (both five/eight-migration starting points and both migration-ledger names), the four runtime enqueue/producer-ordering cases, and the MCP metadata/submit-completion tests. The migration test uses synthetic fixtures and does not substitute for the outstanding production database-copy rehearsal. `gopls check` reported no diagnostics for the temporary test additions.
 
 Diagnostic command:
 
@@ -381,7 +372,7 @@ Diagnostic command:
 go test ./internal/rocketclaw/backend -run '^TestAudit' -race -count=1 -timeout=120s -v
 ```
 
-The diagnostic additions were confined to the disposable workspace's existing `backend/app_test.go` and `backend/runtime_test.go`. Their patch and output were captured locally as `.tmp/wallace-queue-main-audit/diagnostic-tests.patch` and `.tmp/wallace-queue-main-audit/audit-tests-corrected.log`; the additional passing run is in `contract-tests.log` in the same directory. These are scratch artifacts, not committed regression tests; the command needs that patch applied to the pinned revision. The local database was stopped and the disposable workspace was forgotten and removed afterward. Verification was targeted to this investigation; no full-suite, lint, or release-certification claim is made.
+The diagnostic additions were confined to the disposable workspace's existing `backend/app_test.go` and `backend/runtime_test.go`. Their patch and output were captured locally as `.tmp/queue-main-audit/diagnostic-tests.patch` and `.tmp/queue-main-audit/audit-tests-corrected.log`; the additional passing run is in `contract-tests.log` in the same directory. These are scratch artifacts, not committed regression tests; the command needs that patch applied to the pinned revision. The local database was stopped and the disposable workspace was forgotten and removed afterward. Verification was targeted to this investigation; no full-suite, lint, or release-certification claim is made.
 
 ### Recommended follow-up
 

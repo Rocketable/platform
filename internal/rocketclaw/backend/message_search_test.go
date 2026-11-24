@@ -620,7 +620,7 @@ func TestSearchMessagesMatchesLowercasedSubstrings(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("web-chat", ThreadState{Agent: "main"}))
 
-	texts := []string{"Alan said hi", "alanine levels", "100% done", "1000 done", "snake_case", "snakeXcase", `C:\path`, "C:/path",
+	texts := []string{"Sam said hi", "sample levels", "100% done", "1000 done", "snake_case", "snakeXcase", `C:\path`, "C:/path",
 		"ping <@U123>", "ping <!subteam^S9>", "\u212Aelvin", "KELVIN", "İstanbul", "Istanbul"}
 	items := make([]string, len(texts))
 
@@ -631,11 +631,11 @@ func TestSearchMessagesMatchesLowercasedSubstrings(t *testing.T) {
 	id, err := s.AppendEntryID(ctx, "web-chat", testReplayEntry(items...))
 	require.NoError(t, err)
 
-	hits, err := s.SearchMessages(ctx, "alan", nil)
+	hits, err := s.SearchMessages(ctx, "sam", nil)
 	require.NoError(t, err)
 	require.Equal(t, []MessageSearchHit{
-		{ConversationID: "web-chat", Role: "user", Text: "Alan said hi", MessageID: fmt.Sprintf("%d:0", id)},
-		{ConversationID: "web-chat", Role: "user", Text: "alanine levels", MessageID: fmt.Sprintf("%d:1", id)},
+		{ConversationID: "web-chat", Role: "user", Text: "Sam said hi", MessageID: fmt.Sprintf("%d:0", id)},
+		{ConversationID: "web-chat", Role: "user", Text: "sample levels", MessageID: fmt.Sprintf("%d:1", id)},
 	}, hits, "substring, not whole-word, matches")
 
 	for _, tc := range []struct {

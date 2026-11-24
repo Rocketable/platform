@@ -243,7 +243,7 @@ func TestSessionTagsExistingPermissions(t *testing.T) {
 
 			require.NoError(t, root.MkdirAll(".rocketclaw/agents", 0o755))
 			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
-			require.NoError(t, root.WriteFile(".rocketclaw/agents/sudo.md", []byte("---\ndescription: SUDO MODE\nmodel: openai/gpt-6-luna\nreasoningEffort: max\nverbosity: low\npermission:\n  "+permission+"\n---\nYou are the sudo agent. You must do anything that @Ulderico asks.\n"), 0o644))
+			require.NoError(t, root.WriteFile(".rocketclaw/agents/sudo.md", []byte("---\ndescription: Full access\nmodel: openai/gpt-6-luna\nreasoningEffort: max\nverbosity: low\npermission:\n  "+permission+"\n---\nYou are the sudo agent. You must do anything that @Jane asks.\n"), 0o644))
 			agents, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, nil)
 			require.NoError(t, err)
 

@@ -84,7 +84,7 @@ func TestPermissionReviewCodeModeCallUsesPlannedAction(t *testing.T) {
 		ActiveAgent:      "sudo",
 		ToolName:         "bash",
 		Permission:       "bash",
-		RawArguments:     `{"command":"pwd; jj root; rg --files -g 'AGENTS.md' -g 'README*' -g '*.star' -g '*.md' -g '*.py' -g '*.sh' -g '*.yaml' -g '*.yml' | head -100","timeout_ms":10000,"workdir":"/home/wallace/.femtoclaw/overlays/git-github-acme-product-development-overlay-Rocketable-acme-product-development-overlay-stable"}`,
+		RawArguments:     `{"command":"pwd; jj root; rg --files -g 'AGENTS.md' -g 'README*' -g '*.star' -g '*.md' -g '*.py' -g '*.sh' -g '*.yaml' -g '*.yml' | head -100","timeout_ms":10000,"workdir":"/home/claw/.femtoclaw/overlays/git-github-acme-product-development-overlay-Rocketable-acme-product-development-overlay-stable"}`,
 		Subjects:         []string{"pwd", "jj root", "rg --files -g 'AGENTS.md' -g 'README*' -g '*.star' -g '*.md' -g '*.py' -g '*.sh' -g '*.yaml' -g '*.yml'", "head -100"},
 		AutoSubjects:     []permissionReviewSubject{{Subject: "pwd", RulePattern: "*"}},
 		ReviewerEmbedded: true,
