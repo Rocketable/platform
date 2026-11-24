@@ -193,12 +193,12 @@ func (f *File) AttrNames() []string {
 }
 
 func (f *File) details() string {
-	parts := []string{f.spec.Mime}
+	size := humanSize(f.Size())
 	if w, h, ok := f.Dimensions(); ok {
-		parts = append(parts, fmt.Sprintf("%d × %d", w, h))
+		return f.spec.Mime + ", " + fmt.Sprintf("%d × %d", w, h) + ", " + size
 	}
 
-	return strings.Join(append(parts, humanSize(f.Size())), ", ")
+	return f.spec.Mime + ", " + size
 }
 
 var (
