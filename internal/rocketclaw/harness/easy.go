@@ -320,6 +320,10 @@ func compileEasySections(agent *Agent, cfg *AgentLoadConfig, action PermissionAc
 		_ = permission.Set("skill", "*", PermissionAllow)
 	}
 
+	if len(folders) == 0 {
+		return nil
+	}
+
 	skills, _ := discoverSkills(cfg.Skills)
 
 	for _, folder := range folders {
