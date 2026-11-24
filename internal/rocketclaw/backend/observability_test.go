@@ -46,7 +46,7 @@ func TestRunTurnSpanPreservesMaskingAndFailure(t *testing.T) {
 			}
 
 			questions := &webQuestions{store: nt.service, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}
-			bridge := NewConversation(config.NewLockedConfig(nt.cfg), finalsPublisher{finals: nt.finals}, &Config{ConversationID: nt.conversationID, Agent: "main", SessionService: nt.service, RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, UserQuestionAsker: questions}, slog.New(slog.DiscardHandler))
+			bridge := NewConversation(config.NewLockedConfig(nt.cfg), finalsPublisher{finals: nt.finals}, &Config{ConversationID: nt.conversationID, Agent: "primary", SessionService: nt.service, RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, UserQuestionAsker: questions}, slog.New(slog.DiscardHandler))
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "private input", false)
 			inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}
@@ -74,7 +74,7 @@ func TestRunTurnSpanPreservesMaskingAndFailure(t *testing.T) {
 				require.Equal(t, instrumentation.RedactedValue, input.AsString())
 				require.Contains(t, span.Attributes(), attribute.String("$ai_input_state", instrumentation.RedactedValue))
 				require.Equal(t, instrumentation.RedactedValue, output.AsString())
-				require.Subset(t, span.Attributes(), []attribute.KeyValue{otelsemconv.GenAIOperationNameInvokeAgent, otelsemconv.GenAIAgentName("main"), otelsemconv.GenAIConversationID(nt.conversationID)})
+				require.Subset(t, span.Attributes(), []attribute.KeyValue{otelsemconv.GenAIOperationNameInvokeAgent, otelsemconv.GenAIAgentName("primary"), otelsemconv.GenAIConversationID(nt.conversationID)})
 
 				if test.fail {
 					require.ErrorContains(t, err, "open workspace root")

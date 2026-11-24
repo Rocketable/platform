@@ -53,9 +53,9 @@ import (
 func TestQueueEdit(t *testing.T) {
 	h := startVoiceHarness(t)
 	ctx := metadata.NewOutgoingContext(t.Context(), tailnetUser("alice"))
-	_, err := invoke[PromptResponse](ctx, h.conn, "Prompt", &PromptRequest{Id: "main", MessageId: "waiting", Text: "original", Delivery: PromptDelivery_STASH})
+	_, err := invoke[PromptResponse](ctx, h.conn, "Prompt", &PromptRequest{Id: "primary", MessageId: "waiting", Text: "original", Delivery: PromptDelivery_STASH})
 	require.NoError(t, err)
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, h.url+"/api/EditQueueItem", strings.NewReader(`{"id":"main","itemId":"waiting","text":"  corrected\ntext  "}`))
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, h.url+"/api/EditQueueItem", strings.NewReader(`{"id":"primary","itemId":"waiting","text":"  corrected\ntext  "}`))
 	require.NoError(t, err)
 	response, err := http.DefaultClient.Do(request)
 
@@ -66,19 +66,19 @@ func TestQueueEdit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, response.StatusCode, string(body))
 
-	items, err := h.rt.QueueItems("main")
+	items, err := h.rt.QueueItems("primary")
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	require.Equal(t, "  corrected\ntext  ", items[0].Inbound.Text)
 
-	require.NoError(t, h.rt.Sessions.SaveAttachment(ctx, "main", "", &protocol.OutboundAttachment{ID: "note", Name: "note.txt", MIMEType: "text/plain", Data: []byte("keep attached")}, true))
-	require.NoError(t, h.rt.Sessions.BeginGoal("main", &backend.GoalState{Objective: "hold queued work"}))
+	require.NoError(t, h.rt.Sessions.SaveAttachment(ctx, "primary", "", &protocol.OutboundAttachment{ID: "note", Name: "note.txt", MIMEType: "text/plain", Data: []byte("keep attached")}, true))
+	require.NoError(t, h.rt.Sessions.BeginGoal("primary", &backend.GoalState{Objective: "hold queued work"}))
 
 	for _, delivery := range []PromptDelivery{PromptDelivery_QUEUE, PromptDelivery_STASH} {
 		id := "item-" + delivery.String()
-		_, err := invoke[PromptResponse](ctx, h.conn, "Prompt", &PromptRequest{Id: "main", MessageId: id, Text: "original", Delivery: delivery, AttachmentIds: []string{"note"}})
+		_, err := invoke[PromptResponse](ctx, h.conn, "Prompt", &PromptRequest{Id: "primary", MessageId: id, Text: "original", Delivery: delivery, AttachmentIds: []string{"note"}})
 		require.NoError(t, err)
-		before, err := h.rt.Sessions.ThreadQueueForConversation("main")
+		before, err := h.rt.Sessions.ThreadQueueForConversation("primary")
 		require.NoError(t, err)
 
 		index := slices.IndexFunc(before, func(item protocol.ThreadQueueItem) bool { return item.ID == id })
@@ -87,15 +87,15 @@ func TestQueueEdit(t *testing.T) {
 		expected.Message, expected.Content.Text = "  revised\nbody  ", "  revised\nbody  "
 		expected.Inbound.Text = expected.Message + suffix
 		expected.Inbound.Metadata[protocol.InboundRawTextMetadataKey] = expected.Message
-		_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "main", ItemId: id, Text: expected.Message})
+		_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "primary", ItemId: id, Text: expected.Message})
 		require.NoError(t, err)
-		after, err := h.rt.Sessions.ThreadQueueForConversation("main")
+		after, err := h.rt.Sessions.ThreadQueueForConversation("primary")
 		require.NoError(t, err)
 
 		before[index] = expected
 		require.Equal(t, before, after, "only text changes; identity, attachments, ordering and routing survive")
 
-		listed, err := invoke[ListQueueResponse](ctx, h.conn, "ListQueue", &ListQueueRequest{Id: "main"})
+		listed, err := invoke[ListQueueResponse](ctx, h.conn, "ListQueue", &ListQueueRequest{Id: "primary"})
 		require.NoError(t, err)
 
 		row := listed.Items[index]
@@ -104,9 +104,9 @@ func TestQueueEdit(t *testing.T) {
 		require.Equal(t, delivery, row.Delivery)
 
 		for _, text := range []string{"", " \t "} {
-			_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "main", ItemId: id, Text: text})
+			_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "primary", ItemId: id, Text: text})
 			require.NoError(t, err)
-			listed, err = invoke[ListQueueResponse](ctx, h.conn, "ListQueue", &ListQueueRequest{Id: "main"})
+			listed, err = invoke[ListQueueResponse](ctx, h.conn, "ListQueue", &ListQueueRequest{Id: "primary"})
 			require.NoError(t, err)
 
 			row = listed.Items[index]
@@ -120,30 +120,30 @@ func TestQueueEdit(t *testing.T) {
 
 		_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "nokey", ItemId: id, Text: "wrong conversation"})
 		require.Equal(t, codes.NotFound, status.Code(err))
-		_, err = invoke[QueueItemResponse](ctx, h.conn, "RemoveQueueItem", &QueueItemRequest{Id: "main", ItemId: id})
+		_, err = invoke[QueueItemResponse](ctx, h.conn, "RemoveQueueItem", &QueueItemRequest{Id: "primary", ItemId: id})
 		require.NoError(t, err)
-		_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "main", ItemId: id, Text: "too late"})
+		_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "primary", ItemId: id, Text: "too late"})
 		require.Equal(t, codes.NotFound, status.Code(err))
-		items, err = h.rt.Sessions.ThreadQueueForConversation("main")
+		items, err = h.rt.Sessions.ThreadQueueForConversation("primary")
 		require.NoError(t, err)
 		require.False(t, slices.ContainsFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == id }))
 	}
 
-	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("steer", &protocol.ThreadQueueItem{ID: "steer", ConversationID: "main", Kind: protocol.InboundKindSteer, Message: "unchanged"}))
-	_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "main", ItemId: "steer", Text: "changed"})
+	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("steer", &protocol.ThreadQueueItem{ID: "steer", ConversationID: "primary", Kind: protocol.InboundKindSteer, Message: "unchanged"}))
+	_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "primary", ItemId: "steer", Text: "changed"})
 	require.Equal(t, codes.NotFound, status.Code(err))
 
 	write := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindEnqueue, "from planner", false)
-	write.ConversationID, write.Metadata = "main", map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundSenderSessionMetadataKey: "web:planner", protocol.InboundSenderAgentMetadataKey: "planner", "web_message_id": "agent"}
-	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("agent", &protocol.ThreadQueueItem{ID: "agent", ConversationID: "main", Kind: protocol.InboundKindEnqueue, Message: "from planner", Source: protocol.SourceSystem, Inbound: write}))
+	write.ConversationID, write.Metadata = "primary", map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundSenderSessionMetadataKey: "web:planner", protocol.InboundSenderAgentMetadataKey: "planner", "web_message_id": "agent"}
+	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("agent", &protocol.ThreadQueueItem{ID: "agent", ConversationID: "primary", Kind: protocol.InboundKindEnqueue, Message: "from planner", Source: protocol.SourceSystem, Inbound: write}))
 
 	bob := metadata.NewOutgoingContext(t.Context(), tailnetUser("bob"))
 	for _, id := range []string{"agent", "waiting"} {
-		_, err = invoke[QueueItemResponse](bob, h.conn, "EditQueueItem", &QueueItemRequest{Id: "main", ItemId: id, Text: "from bob"})
+		_, err = invoke[QueueItemResponse](bob, h.conn, "EditQueueItem", &QueueItemRequest{Id: "primary", ItemId: id, Text: "from bob"})
 		require.NoError(t, err)
-		items, err = h.rt.QueueItems("main")
+		items, err = h.rt.QueueItems("primary")
 		require.NoError(t, err)
-		listed, err := invoke[ListQueueResponse](ctx, h.conn, "ListQueue", &ListQueueRequest{Id: "main"})
+		listed, err := invoke[ListQueueResponse](ctx, h.conn, "ListQueue", &ListQueueRequest{Id: "primary"})
 		require.NoError(t, err)
 
 		i := slices.IndexFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == id })
@@ -1140,18 +1140,18 @@ func TestSessionEntries(t *testing.T) {
 	cfg, err := config.Load(configPath, "", &config.AWSFetcher{})
 	require.NoError(t, err)
 
-	cfg.Workspace = t.TempDir()
+	cfg.Workspace, cfg.EmbeddedAgents = t.TempDir(), config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Disabled: true}, Voice: config.EmbeddedAgentConfig{Disabled: true}}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
 
-	for _, name := range []string{"main", "planner", "selected"} {
+	for _, name := range []string{"general", "planner", "selected"} {
 		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
 	}
 
-	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents", "main"), 0o700))
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main", "alternative.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nCompare."), 0o600))
+	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents", "general"), 0o700))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "general", "alternative.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nCompare."), 0o600))
 
 	rt := &backend.Runtime{Sessions: sessions}
 
@@ -1275,7 +1275,7 @@ func TestSessionEntries(t *testing.T) {
 			return nil
 		},
 	}
-	channelChoices := []string{"main", "planner"}
+	channelChoices := []string{"general", "planner"}
 	channels := &mockChannels{ChannelAgentChoicesFunc: func(_ context.Context, channel string) ([]string, error) {
 		if channel == "C2" {
 			return []string{"selected"}, nil
@@ -1293,7 +1293,7 @@ func TestSessionEntries(t *testing.T) {
 
 		require.Equal(t, "C1", channel)
 
-		return channelTitle, []string{"planner", "main", "planner-slack", "main-slack"}, nil
+		return channelTitle, []string{"planner", "general", "planner-slack", "main-slack"}, nil
 	}
 	channels.SlackTagsMatchingFunc = func(context.Context, string) []string { return nil }
 	cronRan := make(chan struct{}, 2)
@@ -1363,7 +1363,7 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "alice@example.com", view.Config.TailscaleUser)
 
-		created, err := invoke[CreateSessionResponse](browser, connection, "CreateSession", &CreateSessionRequest{Agent: "main"})
+		created, err := invoke[CreateSessionResponse](browser, connection, "CreateSession", &CreateSessionRequest{Agent: "general"})
 		require.NoError(t, err)
 		thread, _, err := sessions.Thread(created.Id)
 		require.NoError(t, err)
@@ -1445,7 +1445,7 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, codes.Internal, status.Code(err))
 	require.ErrorContains(t, err, "received no request message")
 
-	require.NoError(t, sessions.UpsertThread("prompted", backend.ThreadState{Agent: "main"}))
+	require.NoError(t, sessions.UpsertThread("prompted", backend.ThreadState{Agent: "general"}))
 
 	for _, tt := range []struct {
 		text, want string
@@ -1495,7 +1495,7 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "producer", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/private.md", At: time.Unix(1, 0), OneOff: run == "one-off-cron:private"}}))
 	}
 
-	thread := backend.ThreadState{Agent: "main"}
+	thread := backend.ThreadState{Agent: "general"}
 	seeded.RecordSlackThread(t, sessions, id, thread)
 	require.NoError(t, sessions.BeginGoal(id, &backend.GoalState{Objective: "keep goal", MaxTurns: 3}))
 	goal, exists, err := sessions.Goal(id)
@@ -1609,7 +1609,7 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, deleted.Deleted)
 
-	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: "doomed", Agent: "main", CreatedBy: "alice"}))
+	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: "doomed", Agent: "general", CreatedBy: "alice"}))
 	_, err = seeded.db.ExecContext(ctx, `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id) VALUES ('doomed-turn', 'doomed', '{}', '[]', 1, 1, 0)`)
 	require.NoError(t, err)
 	_, err = invoke[DeleteSessionResponse](ctx, connection, "DeleteSession", &DeleteSessionRequest{Id: "doomed"})
@@ -1960,9 +1960,9 @@ WHERE c.conversation_id = v.id`)
 
 	t.Run("shadow metadata follows parent history without messages", func(t *testing.T) {
 		_, err := db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
-VALUES ('shadow-test-a', 'main/a', 'alice', 'shadow', FALSE), ('shadow-test-z', 'main/z', 'alice', 'shadow', FALSE);
+VALUES ('shadow-test-a', 'general/a', 'alice', 'shadow', FALSE), ('shadow-test-z', 'general/z', 'alice', 'shadow', FALSE);
 INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, call_turn, call_id)
-VALUES ('shadow-test-a/task', 'main', '', 'shadow-test-a', 'subagent', FALSE, 'turn', 'task'), ('shadow-test-z/task', 'main', '', 'shadow-test-z', 'subagent', FALSE, 'turn', 'task')`)
+VALUES ('shadow-test-a/task', 'general', '', 'shadow-test-a', 'subagent', FALSE, 'turn', 'task'), ('shadow-test-z/task', 'general', '', 'shadow-test-z', 'subagent', FALSE, 'turn', 'task')`)
 
 		require.NoError(t, err)
 		defer func() {
@@ -1970,8 +1970,8 @@ VALUES ('shadow-test-a/task', 'main', '', 'shadow-test-a', 'subagent', FALSE, 't
 			require.NoError(t, err)
 		}()
 
-		_, err = db.ExecContext(ctx, `UPDATE conversations c SET shadow_parent = $1, parent_agent = 'main', shadow_agent = v.agent
-FROM (VALUES ('shadow-test-z', 'main/z'), ('shadow-test-a', 'main/a')) v(id, agent) WHERE c.conversation_id = v.id`, id)
+		_, err = db.ExecContext(ctx, `UPDATE conversations c SET shadow_parent = $1, parent_agent = 'general', shadow_agent = v.agent
+FROM (VALUES ('shadow-test-z', 'general/z'), ('shadow-test-a', 'general/a')) v(id, agent) WHERE c.conversation_id = v.id`, id)
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, `INSERT INTO shadow_turns
 (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json)
@@ -1985,7 +1985,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 		require.NotEqual(t, emptyHistory.Revision, waiting.Revision)
 
 		for i, shadow := range waiting.Shadows {
-			require.Equal(t, []string{"main/a", "main/z"}[i], shadow.ShadowAgent)
+			require.Equal(t, []string{"general/a", "general/z"}[i], shadow.ShadowAgent)
 			require.Equal(t, id, shadow.ParentConversationId)
 			require.Len(t, shadow.Turns, 1)
 			require.Equal(t, id, shadow.Turns[0].ParentSourceConversationId)
@@ -2237,7 +2237,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	for _, tc := range []struct {
 		agent string
 		want  []string
-	}{{"planner", []string{"alpha"}}, {"selected", []string{"zeta"}}, {"main", nil}, {"missing", nil}} {
+	}{{"planner", []string{"alpha"}}, {"selected", []string{"zeta"}}, {"general", nil}, {"missing", nil}} {
 		filtered, err := invoke[ListSkillsResponse](ctx, connection, "ListSkills", &ListSkillsRequest{Agent: tc.agent})
 		require.NoError(t, err)
 
@@ -2340,7 +2340,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.NoError(t, err)
 	require.Len(t, catalog.Agents, 3)
 
-	for i, name := range []string{"main", "planner", "selected"} {
+	for i, name := range []string{"general", "planner", "selected"} {
 		require.Equal(t, name, catalog.Agents[i].Name)
 	}
 
@@ -2365,7 +2365,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 
 	births := map[string]string{}
 
-	for _, born := range []struct{ agent, space, want string }{{"planner", "", billing.ID}, {"main", billing.ID, billing.ID}, {"main", "deleted-space", ""}} {
+	for _, born := range []struct{ agent, space, want string }{{"planner", "", billing.ID}, {"general", billing.ID, billing.ID}, {"general", "deleted-space", ""}} {
 		plain, err := invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: born.agent, SpaceId: born.space})
 		require.NoError(t, err)
 
@@ -2393,7 +2393,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 
 	_, err = invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "missing"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
-	_, err = invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "main/alternative"})
+	_, err = invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "general/alternative"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
 	scoped, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: created.Id})
@@ -2401,7 +2401,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.Len(t, scoped.Agents, 1)
 	require.Equal(t, "planner", scoped.Agents[0].Name)
 
-	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: created.Id, Text: "/agent main"})
+	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: created.Id, Text: "/agent general"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
 	historyBefore, err := sessions.ObserveEntries(ctx, "empty-web")
@@ -2410,7 +2410,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main-slack.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: slack\n---\nHelp."), 0o600))
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner-slack.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: slack\nspace: Billing\n---\nHelp."), 0o600))
 
-	channelChoices = []string{"main", "planner", "planner-slack"}
+	channelChoices = []string{"general", "planner", "planner-slack"}
 	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/agent planner"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err), "a Slack thread refuses an agent that is not sticky: slack, even one its channel lists")
 
@@ -2423,7 +2423,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		require.Equal(t, agent, selected.Agent)
 	}
 
-	channelChoices = []string{"main"}
+	channelChoices = []string{"general"}
 	liveCalls := len(channels.ChannelAgentChoicesCalls())
 	sidebarCalls := len(channels.SidebarChannelAgentChoicesCalls())
 
@@ -2433,18 +2433,18 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	}{
 		{id, "planner", codes.InvalidArgument},
 		{created.Id, "selected", codes.InvalidArgument},
-		{created.Id, "main/alternative", codes.InvalidArgument},
+		{created.Id, "general/alternative", codes.InvalidArgument},
 		{"empty-web", "missing", codes.InvalidArgument},
-		{"private-X", "main", codes.PermissionDenied},
-		{"cron:cron/daily.md:20000102T030405.000000006Z:a", "main", codes.PermissionDenied},
-		{"unrecorded", "main", codes.NotFound},
+		{"private-X", "general", codes.PermissionDenied},
+		{"cron:cron/daily.md:20000102T030405.000000006Z:a", "general", codes.PermissionDenied},
+		{"unrecorded", "general", codes.NotFound},
 	} {
 		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: tc.id, Text: "/agent " + tc.agent})
 		require.Equal(t, tc.code, status.Code(err))
 	}
 
 	for _, extra := range []string{"slack-thread:C1:2.2", "slack-thread:C2:3.3"} {
-		seeded.RecordSlackThread(t, sessions, extra, backend.ThreadState{Agent: "main"})
+		seeded.RecordSlackThread(t, sessions, extra, backend.ThreadState{Agent: "general"})
 		_, err := sessions.AppendEntryID(ctx, extra, &harness.SessionEntry{})
 		require.NoError(t, err)
 	}
@@ -2641,10 +2641,10 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.NoError(t, err)
 
 	corrupt := "cron:corrupt-delegations"
-	require.NoError(t, sessions.UpsertThread(corrupt, backend.ThreadState{Agent: "main"}))
+	require.NoError(t, sessions.UpsertThread(corrupt, backend.ThreadState{Agent: "general"}))
 	_, err = sessions.AppendEntryID(ctx, corrupt, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "corrupt-turn", Timestamp: time.Now()})
 	require.NoError(t, err)
-	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "corrupt-turn", ConversationKey: corrupt, Agent: "main"}))
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "corrupt-turn", ConversationKey: corrupt, Agent: "general"}))
 	_, err = db.ExecContext(ctx, `INSERT INTO steps (conversation_id, key, value) VALUES ($1, 'corrupt-turn/replay_input/0000000000', '7')`, corrupt)
 	require.NoError(t, err)
 	corruptView, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: corrupt})
@@ -2677,7 +2677,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.True(t, proto.Equal(jobs, again))
 	t.Run("a cron run is one row whatever chats and sessions it has", func(t *testing.T) {
 		const destination, subagent = "opaque-human-Y", "cron-subagent"
-		require.NoError(t, sessions.UpsertThread(destination, backend.ThreadState{Agent: "main"}))
+		require.NoError(t, sessions.UpsertThread(destination, backend.ThreadState{Agent: "general"}))
 		_, err = db.ExecContext(ctx, `UPDATE conversations SET continues = $2 WHERE conversation_id = $1`, destination, sources[0])
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, call_turn, call_id)
@@ -2708,7 +2708,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	require.NoError(t, err)
 
 	undelivered := "cron:cron/silent.md:20260905T030000.000000003Z:third"
-	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: undelivered, Agent: "producer", Run: &protocol.CronRun{Path: "cron/silent.md", At: time.Date(2026, 9, 5, 3, 0, 0, 3, time.UTC)}}))
+	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: undelivered, Agent: "planner", Run: &protocol.CronRun{Path: "cron/silent.md", At: time.Date(2026, 9, 5, 3, 0, 0, 3, time.UTC)}}))
 
 	traceEntry := entry
 	traceEntry.ReplayInput = []json.RawMessage{
@@ -2826,7 +2826,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		thread, found, err := sessions.Thread(webID)
 		require.NoError(t, err)
 		require.True(t, found)
-		require.Equal(t, backend.ThreadState{Agent: "main", CreatedBy: "alice"}, thread, "a continued run starts with the first loaded agent")
+		require.Equal(t, backend.ThreadState{Agent: "planner", CreatedBy: "alice"}, thread, "a continued run starts with the run's agent")
 
 		var owner string
 
@@ -2835,7 +2835,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: webID})
 		require.NoError(t, err)
 
-		trace.Origin = `{"agent":"producer","kind":"cron","ranAt":"2026-09-05T03:00:00.000000003Z","runId":"` + undelivered + `","runKind":"scheduled","sourcePath":"cron/silent.md","stem":"silent"}`
+		trace.Origin = `{"agent":"planner","kind":"cron","ranAt":"2026-09-05T03:00:00.000000003Z","runId":"` + undelivered + `","runKind":"scheduled","sourcePath":"cron/silent.md","stem":"silent"}`
 		require.Equal(t, trace.Origin, history.Origin)
 		require.Equal(t, trace.Messages, history.Messages)
 		require.True(t, history.Reset_)
@@ -2878,8 +2878,8 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			definition bool
 			want       []string
 		}{
-			{"definition", true, []string{"main", "planner", "selected"}},
-			{"missing definition", false, []string{"main", "planner", "selected"}},
+			{"definition", true, []string{"general", "planner", "selected"}},
+			{"missing definition", false, []string{"general", "planner", "selected"}},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				if !test.definition {
@@ -2905,7 +2905,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 				require.Equal(t, opsID, listed.Sessions[index].SpaceId, "the chat keeps the space its cron named when it was opened")
 				require.True(t, listed.Sessions[index].Cron, "cron origin survives follow-ups and config changes")
 
-				for _, agent := range []string{"main", "planner", "selected"} {
+				for _, agent := range []string{"general", "planner", "selected"} {
 					_, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: webID, Text: "/agent " + agent})
 					if slices.Contains(test.want, agent) {
 						require.NoError(t, err)
@@ -3106,7 +3106,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 	t.Run("durable attachments", func(t *testing.T) {
 		const conversation = "attachment-visible"
-		require.NoError(t, sessions.UpsertThread(conversation, backend.ThreadState{Agent: "main"}))
+		require.NoError(t, sessions.UpsertThread(conversation, backend.ThreadState{Agent: "general"}))
 
 		previousRunTurn := core.RunTurnFunc
 
@@ -3165,7 +3165,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		imageFile := &Attachment{}
 		require.NoError(t, imageUpload.RecvMsg(imageFile))
 		require.Equal(t, "image/png", imageFile.MimeType)
-		require.NoError(t, sessions.UpsertThread(conversation, backend.ThreadState{Agent: "main"}))
+		require.NoError(t, sessions.UpsertThread(conversation, backend.ThreadState{Agent: "general"}))
 
 		exact := "  keep\n\t this  text \"intact\" attachment:literal prose  \n"
 		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: conversation, Text: exact, Delivery: PromptDelivery_QUEUE, AttachmentIds: []string{file.Id, imageFile.Id}})
@@ -3650,7 +3650,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			target = "handoff-destination"
 		)
 		for _, id := range []string{source, target} {
-			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
+			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "general", CreatedBy: "alice"}))
 		}
 
 		file := protocol.OutboundAttachment{ID: "handoff-notes", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("verified notes")}
@@ -3855,7 +3855,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			})
 		}
 
-		agentPath := filepath.Join(cfg.RuntimeDirName(), "agents", "main.md")
+		agentPath := filepath.Join(cfg.RuntimeDirName(), "agents", "general.md")
 		agentData, err := root.ReadFile(agentPath)
 		require.NoError(t, err)
 		require.NoError(t, root.WriteFile(agentPath, []byte("---\nmodel: [\n---\n"), 0o600))
@@ -3867,7 +3867,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 	t.Run("shared message search", func(t *testing.T) {
 		const id = "shared-search"
-		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "general", CreatedBy: "alice"}))
 		entryID, err := sessions.AppendEntryID(ctx, id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"user","content":"unique shared search text"}`),
 		}})
@@ -4008,7 +4008,11 @@ func TestContinueCronRun(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
+
+	for _, name := range []string{"helper", "planner"} {
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
+	}
+
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "aaa.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: global\n---\nHelp."), 0o600))
 
 	db, err := sql.Open("pgx", dsn)
@@ -4036,10 +4040,10 @@ func TestContinueCronRun(t *testing.T) {
 	for name, report := range map[string]string{"unbound": "", "bound": "slack-thread:C1:1.2"} {
 		t.Run(name, func(t *testing.T) {
 			run := "cron:cron/daily.md:20260905T010000.000000001Z:" + name
-			require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "main", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}}))
+			require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "planner", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}}))
 
 			if report != "" {
-				require.NoError(t, sessions.UpsertThread(report, backend.ThreadState{Agent: "main", CreatedBy: backend.ThreadCreatedByCron}))
+				require.NoError(t, sessions.UpsertThread(report, backend.ThreadState{Agent: "planner", CreatedBy: backend.ThreadCreatedByCron}))
 				_, err := db.ExecContext(ctx, `UPDATE conversations SET reports_to = $2 WHERE conversation_id = $1`, run, report)
 				require.NoError(t, err)
 			}
@@ -4061,7 +4065,7 @@ func TestContinueCronRun(t *testing.T) {
 				thread, found, err := sessions.Thread(created.Id)
 				require.NoError(t, err)
 				require.True(t, found)
-				require.Equal(t, "main", thread.Agent, "ordinary continuation must not select an unrelated sticky agent")
+				require.Equal(t, "planner", thread.Agent, "continuation runs the run's agent, not the first loaded one")
 			}
 
 			require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM entries`).Scan(&after))
@@ -4097,6 +4101,19 @@ func TestContinueCronRun(t *testing.T) {
 			require.JSONEq(t, `{"type":"message","role":"user","content":"follow-up"}`, string(agent[1].Entry.ReplayInput[0]))
 		})
 	}
+
+	t.Run("removed agent", func(t *testing.T) {
+		run := "cron:cron/daily.md:20260905T010000.000000001Z:removed"
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "gone", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/daily.md"}}))
+
+		_, err := server.createSession(ctx, &CreateSessionRequest{SourceConversationId: run})
+		require.Equal(t, codes.FailedPrecondition, status.Code(err))
+		require.ErrorContains(t, err, `agent "gone" is not loaded`)
+
+		_, recorded, err := sessions.Thread("web:" + run)
+		require.NoError(t, err)
+		require.False(t, recorded)
+	})
 
 	t.Run("global sticky", func(t *testing.T) {
 		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "room.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: global\nspace: Original\n---\nHelp."), 0o600))
@@ -4149,9 +4166,7 @@ func TestStickySlackAgentsAnswerOnlyInSlackSessions(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
 
-	for name, sticky := range map[string]string{"main": "off", "channel": "slack"} {
-		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: "+sticky+"\npermission: {}\n---\nHelp."), 0o600))
-	}
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "channel.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: slack\npermission: {}\n---\nHelp."), 0o600))
 
 	const slackSession = "slack-thread:C1:1.1"
 	openTestTurns(t, dsn).RecordSlackThread(t, sessions, slackSession, backend.ThreadState{Agent: "channel"})
@@ -4178,7 +4193,7 @@ func TestStickySlackAgentsAnswerOnlyInSlackSessions(t *testing.T) {
 
 	current, names := offered("")
 	require.Empty(t, current)
-	require.Equal(t, []string{"main"}, names, "a new session is not offered a sticky: slack agent")
+	require.Equal(t, []string{"main", "voice"}, names, "a new session is not offered a sticky: slack agent")
 
 	_, err = server.createSession(ctx, &CreateSessionRequest{Agent: "channel"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
@@ -4206,7 +4221,7 @@ func TestListAgentsShowsPermissionsAndOrigin(t *testing.T) {
 
 	team := skel.OverlayInfos(cfg.RuntimeDirName(), cfg.Overlays)[0].ClonePath
 	files := map[string]string{
-		"careful": "---\nmodel: gpt-6.1-sol\npermission:\n  bash:\n    \"*\": deny\n    \"git *\": auto(guardian)\n  webfetch: allow\n---\nHelp.",
+		"careful": "---\nmodel: gpt-6.1-sol\npermission:\n  bash:\n    \"*\": deny\n    \"git *\": auto(plain)\n  webfetch: allow\n---\nHelp.",
 		"root":    "---\nmodel: gpt-6.1-sol\nsudo: yes\n---\nHelp.",
 		"plain":   "---\nmodel: gpt-6.1-sol\n---\nHelp.",
 	}
@@ -4233,8 +4248,8 @@ func TestListAgentsShowsPermissionsAndOrigin(t *testing.T) {
 		origins[agent.Name], permissions[agent.Name] = agent.Origin, agent.Permissions
 	}
 
-	require.Equal(t, map[string]string{"careful": "workspace", "root": cfg.Overlays[0], "plain": ""}, origins)
-	require.Contains(t, permissions["careful"], "## Bash Permissions\n\nRules are listed in order. The last matching rule wins.\n\n- Deny `*`.\n- Require automatic approval by `guardian` for `git *`.\n\n## Webfetch Permissions")
+	require.Equal(t, map[string]string{"careful": "workspace", "root": cfg.Overlays[0], "plain": "", "main": "built-in", "voice": "built-in"}, origins)
+	require.Contains(t, permissions["careful"], "## Bash Permissions\n\nRules are listed in order. The last matching rule wins.\n\n- Deny `*`.\n- Require automatic approval by `plain` for `git *`.\n\n## Webfetch Permissions")
 	require.Contains(t, permissions["root"], "## Sudo Mode")
 }
 

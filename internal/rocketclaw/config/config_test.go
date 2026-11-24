@@ -77,7 +77,8 @@ func TestBehaviorRoundTrip(t *testing.T) {
 	  "auto_approver_model": "work/gpt-6.1-sol",
 	  "slack": {"channels": [{"channel": "#ops", "agents": ["main"], "allowed_user_ids": ["U123"]}]},
 	  "logging": {"level": "warn"},
-	  "overlays": ["github.com/rocketable/overlay1@main"]
+	  "overlays": ["github.com/rocketable/overlay1@main"],
+	  "embedded_agents": {"main": {"disabled": true, "model": ""}, "voice": {"disabled": false, "model": "work/gpt-x#low"}}
 	}`
 
 	var behavior Behavior
@@ -96,6 +97,13 @@ func TestBehaviorRoundTrip(t *testing.T) {
 	require.JSONEq(t, document, string(data))
 	assert.Equal(t, "xoxb-test", cfg.Slack.BotToken)
 	assert.Equal(t, "xapp-test", cfg.Slack.AppToken)
+}
+
+func TestBehaviorWithoutEmbeddedAgentsLeavesBothOn(t *testing.T) {
+	var behavior Behavior
+	require.NoError(t, json.Unmarshal([]byte(`{"auto_approver_model": "gpt-a", "logging": {"level": "warn"}}`), &behavior))
+
+	assert.Equal(t, EmbeddedAgentsConfig{}, behavior.EmbeddedAgents)
 }
 
 func TestAttachmentLocation(t *testing.T) {
@@ -324,6 +332,36 @@ func TestValidateAutoApproverModels(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, cfg.AutoApproverModel)
+		})
+	}
+}
+
+func TestValidateEmbeddedAgentModels(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		main, voice string
+		want        EmbeddedAgentsConfig
+		wantErr     string
+	}{
+		{name: "unset", want: EmbeddedAgentsConfig{}},
+		{name: "openai prefix", main: " openai/gpt-x#low ", voice: "gpt-y", want: EmbeddedAgentsConfig{Main: EmbeddedAgentConfig{Model: "gpt-x#low"}, Voice: EmbeddedAgentConfig{Model: "gpt-y"}}},
+		{name: "configured provider", voice: " work/gpt-x#high ", want: EmbeddedAgentsConfig{Voice: EmbeddedAgentConfig{Model: "work/gpt-x#high"}}},
+		{name: "unconfigured provider", main: " nope/gpt-x ", want: EmbeddedAgentsConfig{Main: EmbeddedAgentConfig{Model: "nope/gpt-x"}}},
+		{name: "missing model", voice: "work/", wantErr: `embedded_agents.voice.model: invalid model "work/": expected model or provider/model`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Providers = map[string]OpenAIConfig{"work": {APIKey: "work-key"}}
+			cfg.EmbeddedAgents.Main.Model, cfg.EmbeddedAgents.Voice.Model = tt.main, tt.voice
+
+			err := cfg.ValidateBehavior()
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.EmbeddedAgents)
 		})
 	}
 }

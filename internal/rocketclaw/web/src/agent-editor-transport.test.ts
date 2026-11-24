@@ -132,6 +132,21 @@ test("the agent editor starts drafts, refuses limited people, and follows a team
     await b.getByRole("heading", { name: "Create New Agent", exact: true }).waitFor();
     expect(b.url()).not.toBe(editing);
 
+    const builtIn = "Built in. Turn it on or off and choose its model in Config → Behavior settings.";
+    await b.goto(`${bob}/agents/new`);
+    await b.getByRole("radio", { name: "Advanced agent" }).click();
+    await b.getByRole("radio", { name: "Copy an agent" }).click();
+    const copyList = b.getByRole("region", { name: "Settings", exact: true });
+    await copyList.getByRole("button", { name: "Copy support-bot", exact: true }).waitFor();
+    await copyList.getByText("main", { exact: true }).waitFor();
+    await copyList.getByText(builtIn, { exact: true }).first().waitFor();
+    for (const action of ["Edit", "Copy"]) expect(await copyList.getByRole("button", { name: `${action} main`, exact: true }).count()).toBe(0);
+    await b.goto(`${bob}/agents`);
+    await b.getByRole("button", { name: "Edit support-bot", exact: true }).waitFor();
+    await b.getByRole("heading", { name: "main", exact: true }).waitFor();
+    await b.getByText(builtIn, { exact: true }).first().waitFor();
+    expect(await b.getByRole("button", { name: "Edit main", exact: true }).count()).toBe(0);
+
     await Bun.sleep(500);
     const names = (await call<{ drafts: AgentDraft[] }>("ListAgentDrafts", {})).drafts.map((draft) => draft.name);
     for (const name of ["researcher", "support-bot", "support-bot-copy"]) expect([name, names.filter((started) => started === name).length]).toEqual([name, 1]);
@@ -992,11 +1007,6 @@ test("saving picks a variant and a layer, warns, reviews live changes, and follo
     await dialog(b).getByText("alice is saving this draft already.", { exact: true }).waitFor();
     expect((await fetch(`${alice}/test/release-save`, { method: "POST" })).ok).toBe(true);
     await dialog(a).getByText("Saved and reloaded: hold is live.", { exact: true }).waitFor();
-
-    const main = await call<{ id: string }>("CreateAgentDraft", { name: "main", copy: true });
-    await a.goto(`${alice}/agents/drafts/${main.id}`);
-    await choose(a, "Workspace");
-    await dialog(a).getByText("Replaces the built-in main: its future updates will no longer reach this workspace.", { exact: true }).waitFor();
 
     await a.goto(`${alice}/agents`);
     await a.getByRole("button", { name: "Edit router", exact: true }).click();

@@ -211,7 +211,7 @@ func TestWebTurnQuestionContinuesAfterRestart(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "primary", "---\ndescription: Primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	service := newTestSessionServiceAt(t, workspace)
 
@@ -238,12 +238,12 @@ func TestWebTurnQuestionContinuesAfterRestart(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
 
 	finals := make(chan *protocol.OutboundMessage, 4)
 	cfg := config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}})
 	newBridge := func(rt *Runtime) *Bridge {
-		return NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: service, UserQuestionAsker: rt.questions}, slog.New(slog.DiscardHandler))
+		return NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "primary", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: service, UserQuestionAsker: rt.questions}, slog.New(slog.DiscardHandler))
 	}
 	pending := func(rt *Runtime) []protocol.AskUserQuestionRequest {
 		var listed []protocol.AskUserQuestionRequest

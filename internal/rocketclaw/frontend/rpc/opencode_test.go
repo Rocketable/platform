@@ -69,7 +69,7 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "primary.md"), []byte("---\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nHelp."), 0o600))
 
 	server := New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{RenameThreadSessionFunc: func(context.Context, string, string) {}}, &mockCronJobs{})
 	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
@@ -99,7 +99,7 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	_, err = server.updateSession(ctx, &UpdateSessionRequest{Id: created.Id, Paused: new(true)})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "only a Web chat's agent pauses")
 
-	require.NoError(t, sessions.UpsertThread("web", backend.ThreadState{Agent: "main"}))
+	require.NoError(t, sessions.UpsertThread("web", backend.ThreadState{Agent: "primary"}))
 
 	_, err = server.updateSession(ctx, &UpdateSessionRequest{Id: "web", Tag: new("customer")})
 	require.NoError(t, err, "a tag the agent allows")
@@ -149,7 +149,7 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	assert.True(t, proto.Equal(&ListSessionsResponse{
 		Owner:           "alice",
 		OpencodeServers: map[string]string{"box": upstream.URL, "down": down.URL, "creds": "https://box.example:4096"},
-		AgentTags:       map[string]*TagChoices{"main": {Tags: []string{"customer", "internal"}}},
+		AgentTags:       map[string]*TagChoices{"primary": {Tags: []string{"customer", "internal"}}},
 	}, first), "%v", first)
 	assert.True(t, proto.Equal(&ListSessionsResponse{UpstreamSuccess: true, Version: done.GetVersion()}, done), "%v", done)
 

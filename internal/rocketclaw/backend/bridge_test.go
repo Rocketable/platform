@@ -478,11 +478,11 @@ func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	stashAt := time.Date(2000, 1, 1, 12, 0, 0, 0, time.UTC)
 
-	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
+	recordTestConversations(t, store, "primary", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "A", Principal: "U1", StashAt: stashAt, Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
-	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Date(2000, 1, 1, 12, 5, 0, 0, time.UTC)}))
+	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "primary", Message: "scheduled", DueAt: time.Date(2000, 1, 1, 12, 5, 0, 0, time.UTC)}))
 
-	bridge := &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler), runtime: slackAgentRuntime(t), config: Config{ConversationID: conversationID, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+	bridge := &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler), runtime: slackAgentRuntime(t), config: Config{ConversationID: conversationID, Agent: "primary", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
 	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	require.Len(t, bridge.requestCh, 1)
@@ -996,7 +996,7 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindWebChat})
-	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace, EmbeddedAgents: config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Disabled: true}}}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
 	continuation := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	continuation.GoalAction = protocol.GoalActionContinue
 	require.NoError(t, handleTestInbound(t.Context(), bridge, &bridgeRequest{inbound: continuation}))
@@ -1018,8 +1018,8 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 	outbound := <-bus.outbound
 	assert.True(t, outbound.Complete)
 	assert.Contains(t, outbound.Text, internalErrorResponse)
-	assert.Contains(t, outbound.Text, `missing required default agent "main"`)
-	require.ErrorContains(t, err, `prepare rocketcode turn: missing required default agent "main"`)
+	assert.Contains(t, outbound.Text, `agent "main" is not loaded`)
+	require.ErrorContains(t, err, `prepare rocketcode turn: agent "main" is not loaded`)
 
 	responseCh := inbound.EnableResponseWait()
 	require.Len(t, responseCh, 1)
@@ -1149,7 +1149,7 @@ func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: main-model\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "primary", "---\ndescription: Primary\nmodel: main-model\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
 	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: child/helper-model\n---\nHelper prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
@@ -1236,9 +1236,9 @@ func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 	service.jobs = registry
 
 	runTestManager(t, manager)
-	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
 
-	bridge := NewConversation(locked, bus, &Config{ConversationID: conversationID, Agent: "main", SessionService: service}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	bridge := NewConversation(locked, bus, &Config{ConversationID: conversationID, Agent: "primary", SessionService: service}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	bridge.threads, bridge.background = manager, registry
 
 	manager.mu.Lock()
@@ -1612,7 +1612,7 @@ func TestModelResolverConfiguresOpenAI(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", `---
+	writeAgent(t, workspace, "primary", `---
 description: Main
 model: gpt-6.1-sol
 ---
@@ -1634,7 +1634,7 @@ Prompt
 
 	shellTempDir := filepath.Join(workspace, "shell-tmp")
 	require.NoError(t, os.Mkdir(shellTempDir, 0o755))
-	_, err = harness.NewWithModelResolver(resolver, &harness.Config{ShellTempDir: shellTempDir, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}}, root, agents, skills, "main")
+	_, err = harness.NewWithModelResolver(resolver, &harness.Config{ShellTempDir: shellTempDir, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}}, root, agents, skills, "primary")
 	require.NoError(t, err)
 }
 
@@ -2534,7 +2534,7 @@ func TestRunTurnExpandsOnlyCronDefinitionShellCommands(t *testing.T) {
 
 			msg := protocol.NewInboundMessage(tc.source, protocol.InboundKindPrompt, prompt, false)
 			if tc.cron {
-				msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/report.md", Agent: "main"}
+				msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/report.md", Agent: "primary"}
 			}
 
 			if tc.wake {
@@ -2884,7 +2884,7 @@ func TestRunTurnTranslatesSlashToDirectSkill(t *testing.T) {
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "primary", "---\ndescription: Primary\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
 	writeAgent(t, workspace, "denied", "---\ndescription: Denied\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    docs-helper: deny\n---\nPrompt\n")
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills/docs-helper", 0o755))
 	require.NoError(t, root.WriteFile(".rocketclaw/skills/docs-helper/SKILL.md", []byte(`---
@@ -2949,8 +2949,8 @@ Request: $ARGUMENTS
 		for _, kind := range []protocol.InboundKind{protocol.InboundKindPrompt, protocol.InboundKindSteer, protocol.InboundKindEnqueue} {
 			for _, invocation := range []string{"/docs-helper write API docs", "/skill docs-helper write API docs"} {
 				conversationID := fmt.Sprintf("dollar-%s-%s-%s", source, kind, invocation)
-				recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindWebChat})
-				bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
+				recordTestConversations(t, service, "primary", map[string]ConversationKind{conversationID: KindWebChat})
+				bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: conversationID, Agent: "primary", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 				msg := protocol.NewInboundMessageFromContent(source, kind, &protocol.InboundContent{Text: invocation, TextAttachments: []string{"attachment-only argument"}}, true)
 				msg.ConversationID = conversationID
 				msg.Metadata[protocol.InboundPrincipalMetadataKey] = "Alice"
@@ -2961,7 +2961,7 @@ Request: $ARGUMENTS
 				promote := kind == protocol.InboundKindEnqueue && strings.HasPrefix(invocation, "/skill ")
 				if kind == protocol.InboundKindEnqueue {
 					item := protocol.ThreadQueueItem{ID: conversationID + "-queued", ConversationID: conversationID, Source: source, Message: invocation, Principal: "Alice", Content: protocol.InboundContent{Text: invocation, TextAttachments: []string{"attachment-only argument"}}}
-					require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+					require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
 					manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: service, bridges: map[string]directBridge{conversationID: bridge}}
 					require.NoError(t, service.PutThreadQueueItem("removed", &item))
 					removed, err := manager.deleteQueueItem(t.Context(), conversationID, "removed")
@@ -3058,8 +3058,8 @@ Request: $ARGUMENTS
 		}
 	}
 
-	recordTestConversations(t, service, "main", map[string]ConversationKind{"dollar-slack": KindWebChat, "missing-skill": KindWebChat})
-	mention := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "dollar-slack", Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
+	recordTestConversations(t, service, "primary", map[string]ConversationKind{"dollar-slack": KindWebChat, "missing-skill": KindWebChat})
+	mention := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "dollar-slack", Agent: "primary", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 	mentionMsg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "/docs-helper write API docs"}, true)
 	mentionMsg.ConversationID = mention.config.ConversationID
 	requestBody.Input = nil
@@ -3076,7 +3076,7 @@ Request: $ARGUMENTS
 
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
-	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "missing-skill", Agent: "main", SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "missing-skill", Agent: "primary", SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler)}
 	msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "/skill missing-skill", true)
 	msg.ConversationID = bridge.config.ConversationID
 	msg.Metadata = map[string]string{"web_message_id": "original-input"}
@@ -3121,14 +3121,14 @@ func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: work/gpt\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "primary", "---\ndescription: Primary\nmodel: work/gpt\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
+	recordTestConversations(t, service, "primary", map[string]ConversationKind{conversationID: KindSlackThread})
 	_, err = service.AppendEntryID(t.Context(), conversationID, &harness.SessionEntry{Version: 1, Type: "turn", Model: "openai/gpt", ResponseID: "provider-private-sentinel", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable","id":"provider-private-sentinel"}`)}, OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`)}})
 	require.NoError(t, err)
 
@@ -3153,7 +3153,7 @@ func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}), config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}), config: Config{ConversationID: conversationID, Agent: "primary", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	msg.ConversationID = conversationID
 	_, err = runTestTurn(t.Context(), bridge, msg, "turn-1")
@@ -3170,7 +3170,7 @@ func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeMainAgent(t, workspace, "slack")
+	writePrimaryAgent(t, workspace, "slack")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	service, err := NewSessionService(workspace)
@@ -3178,7 +3178,7 @@ func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
+	recordTestConversations(t, service, "primary", map[string]ConversationKind{conversationID: KindSlackThread})
 
 	held := make(chan struct{})
 
@@ -3223,7 +3223,7 @@ func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: strings.Replace(server.URL, "http://", "ws://", 1)}}), config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: strings.Replace(server.URL, "http://", "ws://", 1)}}), config: Config{ConversationID: conversationID, Agent: "primary", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	msg.ConversationID = conversationID
 	msg.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}
@@ -3278,7 +3278,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: work/model-a\nreasoningEffort: high\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "primary", "---\ndescription: Primary\nmodel: work/model-a\nreasoningEffort: high\npermission: {}\n---\nPrompt\n")
 	writeAgent(t, workspace, "reviewer", "---\ndescription: Reviewer\nmodel: work/model-b\nreasoningEffort: low\nadditionalInstructions: Reply in one sentence.\nsticky: slack\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
@@ -3335,14 +3335,14 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread, "destination": KindWebChat})
+	recordTestConversations(t, service, "primary", map[string]ConversationKind{conversationID: KindSlackThread, "destination": KindWebChat})
 
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
 
 	var logs lockedBuffer
 
-	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}), config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: bus, log: slog.New(slog.NewJSONHandler(&logs, nil)), requestCh: make(chan bridgeRequest, 1), inputOpen: true}
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}), config: Config{ConversationID: conversationID, Agent: "primary", SessionService: service}, bus: bus, log: slog.New(slog.NewJSONHandler(&logs, nil)), requestCh: make(chan bridgeRequest, 1), inputOpen: true}
 	queued := protocol.ThreadQueueItem{ID: "queued-input", ConversationID: conversationID, Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue, Message: "hello", Principal: "Alice"}
 	require.NoError(t, service.PutThreadQueueItem(queued.ID, &queued))
 	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &queued))
@@ -3384,7 +3384,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	require.Empty(t, start.Text)
 	require.Empty(t, start.Attachments)
 	require.Nil(t, start.ReasoningEffort)
-	bridge.SwitchAgent("main")
+	bridge.SwitchAgent("primary")
 
 	steer := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "also explain"}, true)
 	steer.Metadata["web_message_id"] = "active-steer"
@@ -3472,7 +3472,7 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "primary", "---\ndescription: Primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
@@ -3513,12 +3513,12 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-	recordTestConversations(t, service, "main", map[string]ConversationKind{"thread-1": KindWebChat})
+	recordTestConversations(t, service, "primary", map[string]ConversationKind{"thread-1": KindWebChat})
 	require.NoError(t, service.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 5}))
 	_, err = service.UpdateGoalStatus("thread-1", GoalStatusProgress, "patched parser; checking connectors")
 	require.NoError(t, err)
 
-	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "thread-1", Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "thread-1", Agent: "primary", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "continue", false)
 	msg.GoalAction = protocol.GoalActionContinue
 	msg.ConversationID = "thread-1"
@@ -3543,7 +3543,7 @@ func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "primary", "---\ndescription: Primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
@@ -3583,10 +3583,10 @@ func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-	recordTestConversations(t, service, "main", map[string]ConversationKind{"thread-1": KindWebChat})
+	recordTestConversations(t, service, "primary", map[string]ConversationKind{"thread-1": KindWebChat})
 	require.NoError(t, service.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 5}))
 
-	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "thread-1", Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "thread-1", Agent: "primary", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "continue", false)
 	msg.GoalAction = protocol.GoalActionContinue
 	msg.ConversationID = "thread-1"
@@ -3892,7 +3892,7 @@ func newNoteTest(t *testing.T, respond noteTestResponder) *noteTest {
 	t.Helper()
 
 	workspace := t.TempDir()
-	for _, agent := range []string{"main", "job"} {
+	for _, agent := range []string{"primary", "job"} {
 		writeAgent(t, workspace, agent, "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	}
 
@@ -3927,8 +3927,8 @@ func newNoteTest(t *testing.T, respond noteTestResponder) *noteTest {
 	}))
 	t.Cleanup(server.Close)
 
-	nt.cfg = &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}}}}}
-	require.NoError(t, nt.service.UpsertThread(nt.conversationID, ThreadState{Agent: "main"}))
+	nt.cfg = &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"primary"}}}}}
+	require.NoError(t, nt.service.UpsertThread(nt.conversationID, ThreadState{Agent: "primary"}))
 
 	return nt
 }
@@ -3981,7 +3981,7 @@ func TestFirstWebMessageNamesUnnamedSession(t *testing.T) {
 
 	nt := newNoteTest(t, answerNoteTest)
 	named := "web:named"
-	require.NoError(t, nt.service.UpsertThread(named, ThreadState{Agent: "main"}))
+	require.NoError(t, nt.service.UpsertThread(named, ThreadState{Agent: "primary"}))
 	_, err := nt.service.UpdateConversationDetails(t.Context(), named, new("Chosen name"))
 	require.NoError(t, err)
 
@@ -4576,7 +4576,7 @@ FROM conversations WHERE conversation_id IN ('cron:daily', 'web:cron:daily') ORD
 		private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
 
 		for _, conversationID := range []string{private, managed} {
-			require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+			require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
 		}
 
 		origin := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "plan", true)
@@ -4620,7 +4620,7 @@ func TestHiddenRunFailedWakeRetries(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		nt.service = newTestSessionServiceAt(t, nt.cfg.Workspace)
 		for _, conversationID := range []string{nt.conversationID, private, managed} {
-			require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+			require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
 		}
 
 		manager, shutdown := nt.run(t, ignoreOutbound)
@@ -4706,7 +4706,7 @@ func TestStopLeavesBackgroundJobsRunning(t *testing.T) {
 
 	started, release := make(chan struct{}, 1), make(chan struct{})
 	turn := backgroundTurn{registry: bridge.background, root: testTurnRoot(t), conversationID: nt.conversationID, origin: nt.slackPrompt("run the tests")}
-	_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-0/call/a", Kind: harness.BackgroundKindExecute, Label: "tests", Agent: "main", Detached: true}, blockedWork(started, release))
+	_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-0/call/a", Kind: harness.BackgroundKindExecute, Label: "tests", Agent: "primary", Detached: true}, blockedWork(started, release))
 	require.NoError(t, err)
 	<-started
 
@@ -4728,7 +4728,7 @@ func TestEmptyProducerWakeLeavesDestinationFree(t *testing.T) {
 	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
 
 	for _, conversationID := range []string{private, managed} {
-		require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+		require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
 	}
 
 	wake := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
@@ -4760,13 +4760,13 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_b","name":"execute","arguments":%q}]}`, arguments)
 	})
 	gate = filepath.Join(nt.cfg.Workspace, "gate")
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  rocketclaw: {allow_background: allow, rocketclaw_restart: allow}\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  rocketclaw: {allow_background: allow, rocketclaw_restart: allow}\n---\nPrompt\n")
 
 	manager, _ := nt.run(t, ignoreOutbound)
 	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
 
 	for _, conversationID := range []string{private, managed} {
-		require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+		require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
 	}
 
 	origin := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "plan", true)
@@ -4807,7 +4807,7 @@ func TestBackgroundScriptCallsReachTheHistoryAfterItsTurn(t *testing.T) {
 		writeRawRunFunctionCall(t, w, "resp_0", "execute", map[string]any{"code": code, "description": "gates", "background": true})
 	})
 	gates = nt.cfg.Workspace
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
 
 	manager, _ := nt.run(t, ignoreOutbound)
 	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("go")))
@@ -4856,7 +4856,7 @@ func TestBackgroundScriptEndsACallWhoseRecordFailedToSave(t *testing.T) {
 		writeRawRunFunctionCall(t, w, "resp_0", "execute", map[string]any{"code": code, "description": "gates", "background": true})
 	})
 	gates = nt.cfg.Workspace
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
 
 	_, err := nt.service.db.ExecContext(t.Context(), `CREATE SEQUENCE refused_saves;
 CREATE FUNCTION refuse_first_finished_call() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN

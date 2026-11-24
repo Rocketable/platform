@@ -33,7 +33,6 @@ type AgentLayer struct {
 type AgentDraftLayers struct {
 	Layers                   []AgentLayer
 	HiddenBy, Replaces       string
-	Recreated                bool
 	Next, Branch, Unpushable string
 }
 
@@ -74,12 +73,12 @@ func (s *SessionService) AgentDraftLayers(ctx context.Context, id, variant, dest
 		return nil, err
 	}
 
-	at := slices.IndexFunc(layers[1:], func(layer AgentLayer) bool { return layer.Layer == destination }) + 1
-	if at == 0 {
+	at := slices.IndexFunc(layers, func(layer AgentLayer) bool { return layer.Layer == destination })
+	if at < 0 {
 		return nil, &AgentDraftOpError{Problem: "That is not a save destination."}
 	}
 
-	report := &AgentDraftLayers{Layers: layers, Recreated: layers[0].File != nil && at < len(layers)-1, Next: renderAgentDraftFile(draft.Mode, &draft.Variants[i])}
+	report := &AgentDraftLayers{Layers: layers, Next: renderAgentDraftFile(draft.Mode, &draft.Variants[i])}
 
 	for _, layer := range layers[at+1:] {
 		if layer.File != nil {
@@ -98,7 +97,7 @@ func (s *SessionService) AgentDraftLayers(ctx context.Context, id, variant, dest
 	}
 
 	if at < len(layers)-1 {
-		if report.Branch, err = overlayBranch(ctx, overlays[at-1]); err != nil {
+		if report.Branch, err = overlayBranch(ctx, overlays[at]); err != nil {
 			report.Unpushable = err.Error()
 		}
 	}
@@ -107,6 +106,10 @@ func (s *SessionService) AgentDraftLayers(ctx context.Context, id, variant, dest
 }
 
 func (s *SessionService) AgentOrigin(name string) (string, error) {
+	if skel.BuiltinAgent(name) {
+		return "built-in", nil
+	}
+
 	layers, _, err := s.agentLayers(name)
 	if err != nil {
 		return "", err
@@ -130,9 +133,9 @@ func (s *SessionService) agentLayers(name string) ([]AgentLayer, []skel.OverlayI
 	}
 
 	cfg := s.definitions.Clone()
-	layers := []AgentLayer{{Layer: agentDraftBuiltinLayer, File: skel.BuiltinAgent(name)}}
 	overlays := skel.OverlayInfos(cfg.RuntimeDirName(), cfg.Overlays)
 
+	var layers []AgentLayer
 	for _, overlay := range overlays {
 		layers = append(layers, AgentLayer{Layer: overlay.Spec, Ref: overlay.Ref, File: bases[overlay.Spec]})
 	}
@@ -173,11 +176,11 @@ func (s *SessionService) SaveAgentDraft(ctx context.Context, rt agentDraftRuntim
 		return "", err
 	}
 
-	i := draft.variant(save.Variant)
+	i, errName := draft.variant(save.Variant), checkAgentDraftName(draft.Name)
 
 	switch {
-	case !agentDraftNamePattern.MatchString(draft.Name):
-		return refuse(&AgentDraftNameError{Name: draft.Name})
+	case errName != nil:
+		return refuse(errName)
 	case i < 0:
 		return refuse(&AgentDraftOpError{Problem: "That variant does not exist."})
 	case at >= 0:

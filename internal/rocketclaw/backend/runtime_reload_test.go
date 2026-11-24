@@ -20,7 +20,7 @@ func TestRuntimeReload(t *testing.T) {
 
 	for _, scenario := range []string{"success", "invalid-agent", "invalid-frontend", "refresh-failure", "cron-refresh-failure"} {
 		t.Run(scenario, func(t *testing.T) {
-			cfg := &config.Config{Workspace: t.TempDir(), Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}}}}}
+			cfg := &config.Config{Workspace: t.TempDir(), Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"primary"}}}}}
 			root, err := os.OpenRoot(cfg.Workspace)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -31,7 +31,7 @@ func TestRuntimeReload(t *testing.T) {
 				newAgent = "---\ndescription: Updated\nmodel: test-model\n---\nUpdated prompt\n"
 			)
 
-			require.NoError(t, root.WriteFile("agents/main.md", []byte(oldAgent), 0o600))
+			require.NoError(t, root.WriteFile("agents/primary.md", []byte(oldAgent), 0o600))
 
 			log := slog.New(slog.DiscardHandler)
 			require.NoError(t, skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, log))
@@ -41,8 +41,12 @@ func TestRuntimeReload(t *testing.T) {
 				updated = "---\nmodel: [\n---\n"
 			}
 
-			require.NoError(t, root.WriteFile("agents/main.md", []byte(updated), 0o600))
+			require.NoError(t, root.WriteFile("agents/primary.md", []byte(updated), 0o600))
+			require.NoError(t, root.Mkdir("cron", 0o755))
+			require.NoError(t, root.WriteFile("cron/unnamed.md", []byte("---\nschedule: 1h\n---\nBody\n"), 0o600))
 			require.NoError(t, root.WriteFile("rocketclaw.json", []byte("invalid config"), 0o600))
+
+			const warnings = "Slack channel #ops uses agent primary, which is not sticky: slack, so it does not answer mentions there. Cron cron/unnamed.md names no agent, so it does not run."
 
 			assembler := &frontendAssemblerMock{GateFunc: passGate, ValidateAssetsFunc: func(*config.Config, string) error {
 				if scenario == "invalid-frontend" {
@@ -55,7 +59,7 @@ func TestRuntimeReload(t *testing.T) {
 			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, RunCtx: t.Context(), Sessions: sessions, Assemble: assembler, sandboxes: sandbox.None{}, ExternalMCPAgents: refresh, CronJobs: cron}
 			refreshed := func(failure string) error {
 				require.False(t, rt.reloadMu.TryLock(), "reload remains serialized through each refresh")
-				live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/main.md")
+				live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/primary.md")
 				require.NoError(t, err)
 				require.Equal(t, newAgent, string(live), "refresh runs after replacement")
 
@@ -74,13 +78,13 @@ func TestRuntimeReload(t *testing.T) {
 			receipt, err := rt.Reload("updated assets")
 			if scenario == "success" {
 				require.NoError(t, err)
-				require.Equal(t, "rocketclaw runtime assets reloaded", receipt)
+				require.Equal(t, "rocketclaw runtime assets reloaded\n\n"+warnings, receipt)
 			} else {
 				require.Error(t, err)
 				require.Empty(t, receipt)
 			}
 
-			live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/main.md")
+			live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/primary.md")
 			require.NoError(t, err)
 
 			if scenario == "invalid-agent" || scenario == "invalid-frontend" {
@@ -90,7 +94,7 @@ func TestRuntimeReload(t *testing.T) {
 				require.Empty(t, rt.SlackWarning())
 			} else {
 				require.Equal(t, newAgent, string(live))
-				require.Equal(t, "Slack channel #ops uses agent main, which is not sticky: slack, so it does not answer mentions there.", rt.SlackWarning())
+				require.Equal(t, warnings, rt.SlackWarning())
 				require.Len(t, refresh.RefreshCalls(), 1)
 
 				cronCalls := 1
@@ -106,7 +110,7 @@ func TestRuntimeReload(t *testing.T) {
 
 func TestRuntimeSaveBehavior(t *testing.T) {
 	cfg := &config.Config{Workspace: t.TempDir(), AutoApproverModel: "gpt-a"}
-	cfg.Slack.Channels = []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#cron", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}
+	cfg.Slack.Channels = []config.SlackChannelConfig{{Channel: "@", Agents: []string{"primary"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#cron", Agents: []string{"primary"}, AllowedUserIDs: []string{"U1"}}}
 	require.NoError(t, cfg.ValidateBehavior())
 
 	root, err := os.OpenRoot(cfg.Workspace)
@@ -119,11 +123,11 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 	)
 
 	require.NoError(t, root.MkdirAll("agents", 0o755))
-	require.NoError(t, root.WriteFile("agents/main.md", []byte(oldAgent), 0o600))
+	require.NoError(t, root.WriteFile("agents/primary.md", []byte(oldAgent), 0o600))
 
 	log := slog.New(slog.DiscardHandler)
 	require.NoError(t, skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), nil, log))
-	require.NoError(t, root.WriteFile("agents/main.md", []byte(newAgent), 0o600))
+	require.NoError(t, root.WriteFile("agents/primary.md", []byte(newAgent), 0o600))
 
 	store := newTestSessionService(t)
 	require.NoError(t, putBehaviorSettings(t.Context(), store.db, new(cfg.Behavior())))
@@ -202,6 +206,7 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 		{"channel without agents", func(b *config.Behavior) { b.Slack.Channels[1].Agents = nil }, "slack.channels[].agents is required"},
 		{"frontend assets rejected", func(b *config.Behavior) { b.AutoApproverModel, rejectAssets = "gpt-s", true }, `cron job "report" is invalid`},
 		{"overlay fails to sync", func(b *config.Behavior) { b.Overlays = []string{filepath.Join(t.TempDir(), "missing")} }, "apply configured rocketclaw overlay"},
+		{"voice model on an unconfigured provider", func(b *config.Behavior) { b.EmbeddedAgents.Voice.Model = "nope/gpt-x" }, `embedded_agents.voice.model: provider "nope" is not configured`},
 	} {
 		require.ErrorContains(t, rt.SaveBehavior(edit(tt.change)), tt.want, tt.name)
 
@@ -209,19 +214,29 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 
 		require.Equal(t, before, rt.Cfg.Clone().Behavior(), tt.name)
 		require.Equal(t, before, stored(), tt.name)
-		require.Equal(t, oldAgent, liveAgent("main.md"), tt.name)
+		require.Equal(t, oldAgent, liveAgent("primary.md"), tt.name)
 		require.Empty(t, rt.SlackWarning(), tt.name)
 	}
 
 	require.Empty(t, refresh.RefreshCalls())
 
-	saved := edit(func(b *config.Behavior) { b.AutoApproverModel, b.Logging.Level = "gpt-b", "warn" })
+	agents, err := LoadRuntimeAgents(rt.Cfg, cfg.RuntimeDirName())
+	require.NoError(t, err)
+	require.Contains(t, agents.Items, "main")
+
+	saved := edit(func(b *config.Behavior) {
+		b.AutoApproverModel, b.Logging.Level, b.EmbeddedAgents.Main.Disabled = "gpt-b", "warn", true
+	})
 	require.NoError(t, rt.SaveBehavior(saved))
-	require.Equal(t, "Slack channel @ uses agent main, which is not sticky: slack, so it does not answer mentions there. Slack channel #cron uses agent main, which is not sticky: slack, so it does not answer mentions there.", rt.SlackWarning())
+
+	agents, err = LoadRuntimeAgents(rt.Cfg, cfg.RuntimeDirName())
+	require.NoError(t, err)
+	require.NotContains(t, agents.Items, "main", "saving main turned off removes it")
+	require.Equal(t, "Slack channel @ uses agent primary, which is not sticky: slack, so it does not answer mentions there. Slack channel #cron uses agent primary, which is not sticky: slack, so it does not answer mentions there.", rt.SlackWarning())
 	require.Equal(t, "gpt-b", rt.Cfg.Clone().AutoApproverModel)
 	require.Equal(t, rt.Cfg.Clone().Behavior(), stored())
 	require.Equal(t, slog.LevelWarn, rt.logLevel.Level())
-	require.Equal(t, oldAgent, liveAgent("main.md"), "a save that keeps the overlays does not publish workspace edits")
+	require.Equal(t, oldAgent, liveAgent("primary.md"), "a save that keeps the overlays does not publish workspace edits")
 	require.Len(t, refresh.RefreshCalls(), 1)
 	require.Len(t, cron.RefreshCalls(), 1)
 
@@ -257,7 +272,7 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 		require.Equal(t, before, rt.Cfg.Clone().Behavior(), tt.fail)
 		require.Equal(t, before, stored(), tt.fail)
 		require.Equal(t, slog.LevelWarn, rt.logLevel.Level(), tt.fail)
-		require.Equal(t, oldAgent, liveAgent("main.md"), tt.fail)
+		require.Equal(t, oldAgent, liveAgent("primary.md"), tt.fail)
 		require.NoFileExists(t, filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents", "remote.md"), tt.fail)
 		require.Len(t, refresh.RefreshCalls(), calls+tt.refreshes, tt.fail)
 	}
@@ -268,7 +283,7 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 	require.Equal(t, []string{repo}, rt.Cfg.Clone().Overlays)
 	require.Equal(t, rt.Cfg.Clone().Behavior(), stored())
 	require.Contains(t, liveAgent("remote.md"), "Remote prompt")
-	require.Equal(t, newAgent, liveAgent("main.md"), "an overlay change re-stages runtime assets")
+	require.Equal(t, newAgent, liveAgent("primary.md"), "an overlay change re-stages runtime assets")
 	require.Len(t, refresh.RefreshCalls(), 8)
 	require.Len(t, cron.RefreshCalls(), 7)
 }

@@ -190,7 +190,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.Mkdir("agents", 0o700))
 
-	for name, model := range map[string]string{"main": "gpt-6.1-sol\nsticky: user", "nokey": "nokey/gpt-6.1-sol", "chat": "chat/gpt-6.1-sol", "stale": "stale/gpt-6.1-sol", "worker": "worker/test-model"} {
+	for name, model := range map[string]string{"primary": "gpt-6.1-sol\nsticky: user", "nokey": "nokey/gpt-6.1-sol", "chat": "chat/gpt-6.1-sol", "stale": "stale/gpt-6.1-sol", "worker": "worker/test-model"} {
 		require.NoError(t, root.WriteFile(filepath.Join("agents", name+".md"), []byte("---\ndescription: Voice fixture\nmodel: "+model+"\npermission: {}\n---\nReply plainly.\n"), 0o600))
 	}
 
@@ -229,11 +229,11 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	t.Cleanup(web.Close)
 	h.url = web.URL
 
-	for _, id := range []string{"main", "nokey", "chat", "stale", "worker"} {
+	for _, id := range []string{"primary", "nokey", "chat", "stale", "worker"} {
 		require.NoError(t, h.rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: id, CreatedBy: "alice"}))
 	}
 
-	require.NoError(t, h.rt.CreateConversation(ctx, protocol.Conversation{ID: "cron:main", Agent: "main", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/main.md", At: time.Unix(1, 0)}}))
+	require.NoError(t, h.rt.CreateConversation(ctx, protocol.Conversation{ID: "cron:primary", Agent: "primary", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/main.md", At: time.Unix(1, 0)}}))
 
 	return h
 }
@@ -361,7 +361,7 @@ func spoken(id, text string) string {
 func (h *voiceHarness) messages(t *testing.T) []*TranscriptEvent {
 	t.Helper()
 
-	view, err := h.server.history(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")), &HistoryRequest{Id: "main"})
+	view, err := h.server.history(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")), &HistoryRequest{Id: "primary"})
 	require.NoError(t, err)
 
 	return view.Messages
@@ -380,7 +380,7 @@ func (h *voiceHarness) ended(t *testing.T) {
 
 func (h *voiceHarness) prompt(group *errgroup.Group, text string) {
 	group.Go(func() error {
-		response, err := http.Post(h.url+"/api/Prompt", "application/json", strings.NewReader(`{"id":"main","text":"`+text+`","delivery":"STEER"}`))
+		response, err := http.Post(h.url+"/api/Prompt", "application/json", strings.NewReader(`{"id":"primary","text":"`+text+`","delivery":"STEER"}`))
 		if err != nil {
 			return fmt.Errorf("post typed prompt: %w", err)
 		}
@@ -606,18 +606,18 @@ func TestVoice(t *testing.T) {
 			code                       int
 			contains                   string
 		}{
-			{"private conversation", http.MethodPost, `{"conversationId":"cron:main","sdp":"offer-x"}`, "", http.StatusForbidden, `"code":7`},
+			{"private conversation", http.MethodPost, `{"conversationId":"cron:primary","sdp":"offer-x"}`, "", http.StatusForbidden, `"code":7`},
 			{"unknown conversation", http.MethodPost, `{"conversationId":"missing","sdp":"offer-x"}`, "", http.StatusNotFound, `"code":5`},
-			{"cross site", http.MethodPost, `{"conversationId":"main","sdp":"offer-x"}`, "https://untrusted.example", http.StatusForbidden, ""},
+			{"cross site", http.MethodPost, `{"conversationId":"primary","sdp":"offer-x"}`, "https://untrusted.example", http.StatusForbidden, ""},
 			{"not routed for GET", http.MethodGet, "", "", http.StatusNotFound, ""},
-			{"sdp required", http.MethodPost, `{"conversationId":"main"}`, "", http.StatusBadRequest, "sdp is required"},
+			{"sdp required", http.MethodPost, `{"conversationId":"primary"}`, "", http.StatusBadRequest, "sdp is required"},
 			{"conversation required", http.MethodPost, `{"sdp":"offer-x"}`, "", http.StatusBadRequest, "conversationId is required"},
-			{"no api key", http.MethodPost, `{"conversationId":"main","sdp":"offer-x"}`, "", http.StatusBadRequest, `"code":9`},
-			{"no ChatGPT login", http.MethodPost, `{"conversationId":"main","sdp":"offer-x"}`, "", http.StatusBadRequest, "no usable voice credentials"},
-			{"ChatGPT refresh failure", http.MethodPost, `{"conversationId":"main","sdp":"offer-x"}`, "", http.StatusBadRequest, `refresh ChatGPT OAuth token for provider \"openai\"; run ` + "`rocketclaw oai login`"},
-			{"voice not offered", http.MethodPost, `{"conversationId":"main","sdp":"offer-x","voice":"cove"}`, "", http.StatusBadRequest, `provider \"openai\" offers no voice \"cove\"`},
-			{"upstream rejection", http.MethodPost, `{"conversationId":"main","sdp":"offer-reject"}`, "", http.StatusBadRequest, "openai voice request failed with HTTP 401"},
-			{"sideband refused", http.MethodPost, `{"conversationId":"main","sdp":"offer-unattached"}`, "", http.StatusBadRequest, "openai voice request failed with HTTP 503"},
+			{"no api key", http.MethodPost, `{"conversationId":"primary","sdp":"offer-x"}`, "", http.StatusBadRequest, `"code":9`},
+			{"no ChatGPT login", http.MethodPost, `{"conversationId":"primary","sdp":"offer-x"}`, "", http.StatusBadRequest, "no usable voice credentials"},
+			{"ChatGPT refresh failure", http.MethodPost, `{"conversationId":"primary","sdp":"offer-x"}`, "", http.StatusBadRequest, `refresh ChatGPT OAuth token for provider \"openai\"; run ` + "`rocketclaw oai login`"},
+			{"voice not offered", http.MethodPost, `{"conversationId":"primary","sdp":"offer-x","voice":"cove"}`, "", http.StatusBadRequest, `provider \"openai\" offers no voice \"cove\"`},
+			{"upstream rejection", http.MethodPost, `{"conversationId":"primary","sdp":"offer-reject"}`, "", http.StatusBadRequest, "openai voice request failed with HTTP 401"},
+			{"sideband refused", http.MethodPost, `{"conversationId":"primary","sdp":"offer-unattached"}`, "", http.StatusBadRequest, "openai voice request failed with HTTP 503"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				cfg := h.server.cfg.Clone()
@@ -679,7 +679,7 @@ func TestVoice(t *testing.T) {
 	}
 
 	if !t.Run("call", func(t *testing.T) {
-		_, cancel, peer := h.call(t, "main", "offer-1")
+		_, cancel, peer := h.call(t, "primary", "offer-1")
 		assert.Contains(t, peer.create, `"sdp":"offer-1"`)
 		assert.Contains(t, peer.create, `"voice":"cedar"`, "the call speaks with the chosen voice")
 
@@ -688,13 +688,13 @@ func TestVoice(t *testing.T) {
 		h.ended(t)
 		assert.Empty(t, h.hangups, "a confirmed close needs no hangup")
 
-		reader, _, peer := h.call(t, "main", "offer-2")
+		reader, _, peer := h.call(t, "primary", "offer-2")
 		peer.send(t, `{"type":"session.closed","reason":"expired"}`)
 		assert.JSONEq(t, `{"ended":{"reason":"expired"}}`, strings.TrimPrefix(frame(t, reader), "data: "))
 		assert.Equal(t, "event: complete\ndata: {}", frame(t, reader))
 		assert.Empty(t, peer.all(t), "an expired session gets no close")
 
-		reader, _, peer = h.call(t, "main", "offer-lost")
+		reader, _, peer = h.call(t, "primary", "offer-lost")
 		peer.mu.Lock()
 		require.NoError(t, peer.conn.Close())
 		peer.mu.Unlock()
@@ -703,11 +703,11 @@ func TestVoice(t *testing.T) {
 		assert.Empty(t, peer.all(t))
 		assert.Empty(t, h.peers)
 
-		first, _, older := h.call(t, "main", "offer-3")
+		first, _, older := h.call(t, "primary", "offer-3")
 		handOff(t, older, "c1", "please run the tests")
 		assert.Contains(t, <-h.requests, "please run the tests")
 
-		_, cancel, newer := h.call(t, "main", "offer-4")
+		_, cancel, newer := h.call(t, "primary", "offer-4")
 		assert.JSONEq(t, `{"ended":{"reason":"replaced"}}`, strings.TrimPrefix(frame(t, first), "data: "))
 		assert.Equal(t, "event: complete\ndata: {}", frame(t, first), "the replaced call's stream ends without waiting for its hand-off turn")
 		assert.Equal(t, []string{voiceCloseMessage}, older.all(t))
@@ -727,7 +727,7 @@ func TestVoice(t *testing.T) {
 	if !t.Run("hand-offs", func(t *testing.T) {
 		const lint = "Lint passed:\n```\nok\n```"
 
-		_, cancel, peer := h.call(t, "main", "offer-a")
+		_, cancel, peer := h.call(t, "primary", "offer-a")
 		handOff(t, peer, "d1", "please run the tests")
 		assert.Contains(t, <-h.requests, "please run the tests")
 
@@ -738,7 +738,7 @@ func TestVoice(t *testing.T) {
 		handOff(t, peer, "d2", "/skill deploy")
 		peer.send(t, `{"type":"session.delegation.created","delegation":{"id":"d1"}}`)
 		require.Eventually(t, func() bool {
-			items, err := h.rt.QueueItems("main")
+			items, err := h.rt.QueueItems("primary")
 			return err == nil && len(items) == 1 && items[0].ID == "d2"
 		}, 10*time.Second, 10*time.Millisecond)
 
@@ -763,7 +763,7 @@ func TestVoice(t *testing.T) {
 		assert.Contains(t, <-h.requests, "check the build")
 		h.prompt(&typed, "typed steer")
 		require.Eventually(t, func() bool {
-			items, err := h.rt.QueueItems("main")
+			items, err := h.rt.QueueItems("primary")
 			return err == nil && len(items) == 1
 		}, 10*time.Second, 10*time.Millisecond)
 
@@ -800,7 +800,7 @@ func TestVoice(t *testing.T) {
 
 		h.ended(t)
 
-		_, _, next := h.call(t, "main", "offer-b")
+		_, _, next := h.call(t, "primary", "offer-b")
 		assert.Contains(t, next.create, `"Lint passed:\n`+"```"+`\nok\n`+"```"+`"`, "a new call is seeded with the conversation as written (R13, R14)")
 		assert.Contains(t, next.create, `user: please run the tests`, "the seed keeps the person's requests")
 		assert.NotContains(t, next.create, "CANARY_TOOL_RESULT")
@@ -823,26 +823,26 @@ func TestVoice(t *testing.T) {
 		require.Eventually(t, func() bool {
 			var err error
 
-			pending, err = h.rt.PendingQuestions(t.Context(), "main")
+			pending, err = h.rt.PendingQuestions(t.Context(), "primary")
 
 			return err == nil && len(pending) == 1
 		}, 10*time.Second, 10*time.Millisecond)
 
-		_, cancel, peer := h.call(t, "main", "offer-q")
+		_, cancel, peer := h.call(t, "primary", "offer-q")
 		notice := spoken("", "I need your input. Please respond in the app.\n\nShip?\nOptions: Yes")
 		assert.Equal(t, notice, peer.expect(t, "Ship?"))
 
 		handOff(t, peer, "a1", "yes please")
 		require.Eventually(t, func() bool {
-			items, err := h.rt.QueueItems("main")
+			items, err := h.rt.QueueItems("primary")
 			return err == nil && len(items) == 1 && items[0].ID == "a1"
 		}, 10*time.Second, 10*time.Millisecond)
 
-		still, err := h.rt.PendingQuestions(t.Context(), "main")
+		still, err := h.rt.PendingQuestions(t.Context(), "primary")
 		require.NoError(t, err)
 		assert.Equal(t, pending, still)
 
-		require.NoError(t, h.rt.AnswerQuestion(t.Context(), "main", pending[0].ID, protocol.AskUserQuestionAnswer{Selected: []string{"yes"}}))
+		require.NoError(t, h.rt.AnswerQuestion(t.Context(), "primary", pending[0].ID, protocol.AskUserQuestionAnswer{Selected: []string{"yes"}}))
 		assert.Contains(t, <-h.requests, "yes please")
 
 		h.replies <- voiceModelText("r2", "Shipped.")
@@ -863,7 +863,7 @@ func TestVoice(t *testing.T) {
 
 		var forwarding errgroup.Group
 
-		forwarding.Go(func() error { return (&voiceCall{server: h.server, conversationID: "main"}).forward(ctx, snapshots) })
+		forwarding.Go(func() error { return (&voiceCall{server: h.server, conversationID: "primary"}).forward(ctx, snapshots) })
 
 		first := <-snapshots
 
@@ -923,11 +923,11 @@ func TestVoice(t *testing.T) {
 		require.Equal(t, http.StatusOK, code)
 		assert.Empty(t, settings.GetAgent(), "a person with no row gets the defaults")
 
-		code, settings = post(`{"action":"UPDATE","agent":"main","voice":"cedar","transcript":true}`)
+		code, settings = post(`{"action":"UPDATE","agent":"primary","voice":"cedar","transcript":true}`)
 		require.Equal(t, http.StatusOK, code)
-		assert.Equal(t, []any{"main", "cedar", true}, []any{settings.GetAgent(), settings.GetVoice(), settings.GetTranscript()})
+		assert.Equal(t, []any{"primary", "cedar", true}, []any{settings.GetAgent(), settings.GetVoice(), settings.GetTranscript()})
 
-		for _, body := range []string{`{"action":"UPDATE","agent":"nokey"}`, `{"action":"UPDATE","agent":"ghost"}`, `{"action":"UPDATE","voice":"no-such-voice"}`, `{"action":"START","agent":"main"}`} {
+		for _, body := range []string{`{"action":"UPDATE","agent":"nokey"}`, `{"action":"UPDATE","agent":"ghost"}`, `{"action":"UPDATE","voice":"no-such-voice"}`, `{"action":"START","agent":"primary"}`} {
 			code, _ = post(body)
 			assert.Equal(t, http.StatusBadRequest, code, "voice offers only sticky: user agents and offered voices, and starts no conversation: %s", body)
 		}
@@ -937,7 +937,7 @@ func TestVoice(t *testing.T) {
 		assert.Equal(t, "miko", answer.GetVoice())
 
 		_, settings = post(`{}`)
-		assert.Equal(t, []any{"main", "cedar", true}, []any{settings.GetAgent(), settings.GetVoice(), settings.GetTranscript()}, "one person's update never changes another's settings")
+		assert.Equal(t, []any{"primary", "cedar", true}, []any{settings.GetAgent(), settings.GetVoice(), settings.GetTranscript()}, "one person's update never changes another's settings")
 	}) {
 		return
 	}
@@ -960,11 +960,11 @@ func TestVoice(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
 		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "room.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: global\npermission: {}\n---\nReply plainly.\n"), 0o600))
 
-		mine, bobs := create(alice, "main"), create(bob, "main")
-		assert.Equal(t, []any{false, false}, []any{mine.Id == "main", mine.Resumed}, "a chat born off is never a sticky session")
+		mine, bobs := create(alice, "primary"), create(bob, "primary")
+		assert.Equal(t, []any{false, false}, []any{mine.Id == "primary", mine.Resumed}, "a chat born off is never a sticky session")
 		assert.False(t, bobs.Resumed, "another person's session is not theirs")
-		assert.Equal(t, &CreateSessionResponse{Id: mine.Id, Resumed: true}, create(alice, "main"), "a sticky: user agent resumes the person's own session")
-		assert.Equal(t, &CreateSessionResponse{Id: bobs.Id, Resumed: true}, create(bob, "main"))
+		assert.Equal(t, &CreateSessionResponse{Id: mine.Id, Resumed: true}, create(alice, "primary"), "a sticky: user agent resumes the person's own session")
+		assert.Equal(t, &CreateSessionResponse{Id: bobs.Id, Resumed: true}, create(bob, "primary"))
 
 		room := create(alice, "room")
 		assert.False(t, room.Resumed)
@@ -981,17 +981,17 @@ func TestVoice(t *testing.T) {
 			offered[agent.Name] = [2]string{agent.Sticky, agent.StickySession}
 		}
 
-		assert.Equal(t, [2]string{"user", bobs.Id}, offered["main"])
+		assert.Equal(t, [2]string{"user", bobs.Id}, offered["primary"])
 		assert.Equal(t, [2]string{"global", room.Id}, offered["room"])
 		assert.Equal(t, [2]string{"", ""}, offered["nokey"])
 
-		for id, want := range map[string]string{bobs.Id: "main, voice", plain.Id: "assistant, chat, nokey, stale, worker"} {
+		for id, want := range map[string]string{bobs.Id: "primary, voice", plain.Id: "chat, nokey, stale, worker"} {
 			reply, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "/agent"})
 			require.NoError(t, err)
 			assert.Equal(t, want, reply.PrivateText, "a sticky session keeps its agent, and no other session switches to a sticky one")
 		}
 
-		for id, agent := range map[string]string{bobs.Id: "nokey", plain.Id: "main"} {
+		for id, agent := range map[string]string{bobs.Id: "nokey", plain.Id: "primary"} {
 			_, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "/agent " + agent})
 			assert.Equal(t, codes.InvalidArgument, status.Code(err))
 		}
@@ -1003,7 +1003,7 @@ func TestVoice(t *testing.T) {
 		require.NoError(t, root.WriteFile(aide, []byte("---\nmodel: gpt-6.1-sol\nsticky: user\npermission: {}\n---\nReply plainly.\n"), 0o600))
 		create(alice, "aide")
 
-		for id, want := range map[string]string{mine.Id: "main, voice", bobs.Id: "aide, main, voice"} {
+		for id, want := range map[string]string{mine.Id: "primary, voice", bobs.Id: "aide, primary, voice"} {
 			reply, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "/agent"})
 			require.NoError(t, err)
 			assert.Equal(t, want, reply.PrivateText, "alice already has a sticky session with aide; bob does not")
@@ -1015,7 +1015,7 @@ func TestVoice(t *testing.T) {
 
 		reply, err := h.server.prompt(alice, &PromptRequest{Id: bobs.Id, Text: "/agent"})
 		require.NoError(t, err)
-		assert.Equal(t, "aide, main, voice", reply.PrivateText, "a session born sticky: user still takes only sticky: user agents")
+		assert.Equal(t, "aide, primary, voice", reply.PrivateText, "a session born sticky: user still takes only sticky: user agents")
 
 		_, err = h.server.prompt(alice, &PromptRequest{Id: bobs.Id, Text: "/agent nokey"})
 		assert.Equal(t, codes.InvalidArgument, status.Code(err))
@@ -1091,7 +1091,7 @@ func TestVoice(t *testing.T) {
 
 	t.Run("one call per person", func(t *testing.T) {
 		for _, id := range []string{"second", "shared"} {
-			require.NoError(t, h.rt.CreateConversation(t.Context(), protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
+			require.NoError(t, h.rt.CreateConversation(t.Context(), protocol.Conversation{ID: id, Agent: "primary", CreatedBy: "alice"}))
 		}
 
 		phone, hangUpPhone, _ := h.call(t, "second", "offer-phone")

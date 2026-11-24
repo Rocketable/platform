@@ -15,7 +15,7 @@ type Method = "push" | "pull";
 type Choice = { variant: string; destination: string; method?: Method };
 type Outcome = SaveDraftResponse & { who?: string };
 
-const title = (layer: string) => layer === "workspace" ? "Workspace" : layer === "built-in" ? "Built-in" : layer;
+const title = (layer: string) => layer === "workspace" ? "Workspace" : layer;
 
 function PendingLink({ pending }: { pending: AgentDraftPending }) {
   const text = pending.number ? `Pull request #${pending.number}` : pending.branch === pending.base ? `Commit ${pending.commit.slice(0, 12)} on ${pending.base}` : `Branch ${pending.branch}`;
@@ -156,11 +156,11 @@ function Destinations({ name, layers, chosen, onChoose }: { name: string; layers
   return <div role="radiogroup" aria-label="Where to save" className="flex flex-col gap-1.5">
     <h3 className="text-xs font-medium text-muted-foreground">2 · Where <span className="font-normal">· a higher layer wins when two hold {name}.md</span></h3>
     <div className="flex flex-col divide-y rounded-lg border">
-      {[...layers].reverse().map(({ layer, ref, file }) => <button key={layer} type="button" role="radio" aria-checked={chosen === layer} aria-label={`Destination ${title(layer)}`} disabled={layer === "built-in"} onClick={() => onChoose(layer)}
-        className={cn("flex cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:text-muted-foreground", chosen === layer && "bg-muted/60")}>
+      {[...layers].reverse().map(({ layer, ref, file }) => <button key={layer} type="button" role="radio" aria-checked={chosen === layer} aria-label={`Destination ${title(layer)}`} onClick={() => onChoose(layer)}
+        className={cn("flex cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm", chosen === layer && "bg-muted/60")}>
         <span className={cn("size-3 shrink-0 rounded-full border", chosen === layer && "border-4 border-foreground")} />
         <span className="font-medium">{title(layer)}</span>{ref ? <code className="text-[11px] text-muted-foreground">@{ref}</code> : null}
-        <span className="ml-auto text-xs text-muted-foreground">{[layer === provider && "provides it now", layer !== provider && file !== undefined && "has a hidden copy", layer === "built-in" && "ships with RocketClaw, read-only"].filter(Boolean).join(" · ")}</span>
+        <span className="ml-auto text-xs text-muted-foreground">{layer === provider ? "provides it now" : file !== undefined ? "has a hidden copy" : ""}</span>
       </button>)}
     </div>
   </div>;
@@ -168,7 +168,6 @@ function Destinations({ name, layers, chosen, onChoose }: { name: string; layers
 
 function Warnings({ name, layers }: { name: string; layers: DraftLayers }) {
   const notes = [layers.hiddenBy && `Hidden by ${title(layers.hiddenBy)}: its ${name}.md wins, so this save will not be the ${name} that runs.`,
-    layers.replaces && `Replaces ${layers.replaces === "built-in" ? `the built-in ${name}` : `${name} from ${layers.replaces}`}: its future updates will no longer reach this workspace.`,
-    layers.recreated && `Startup copies the built-in ${name} into workspace agents/ again, and that copy hides this one.`, layers.unpushable].filter((note): note is string => Boolean(note));
+    layers.replaces && `Replaces ${name} from ${layers.replaces}: its future updates will no longer reach this workspace.`, layers.unpushable].filter((note): note is string => Boolean(note));
   return notes.map((note) => <p key={note} className="flex items-start gap-1.5 text-xs text-amber-800 dark:text-amber-300"><CircleAlert className="mt-px size-3.5 shrink-0" />{note}</p>);
 }

@@ -21,12 +21,12 @@ func TestShadowReviewClearProducerHistory(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newShadowTestStore(t)
-	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{ManagedConversationID: "visible", PrivateConversationID: "private", Agent: "main"}))
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"other": KindWebChat})
+	require.NoError(t, store.RegisterExternalMCPConversation("external", "primary", &ExternalMCPSessionState{ManagedConversationID: "visible", PrivateConversationID: "private", Agent: "primary"}))
+	recordTestConversations(t, store, "primary", map[string]ConversationKind{"other": KindWebChat})
 
 	for _, id := range []string{"private", "projected-private", "unrelated/producer"} {
-		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main"}))
-		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: id, Agent: "main", SessionService: store}}
+		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "primary"}))
+		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: id, Agent: "primary", SessionService: store}}
 		request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "original", false)}
 
 		request.inbound.SyncDestination = "visible"
@@ -84,7 +84,7 @@ SELECT count(*) FROM `+table+` t LEFT JOIN shadows s USING (conversation_id) WHE
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations WHERE shadow_parent = 'private'`).Scan(&count))
 	require.Equal(t, 2, count, "bindings survive history clear")
 
-	bridge := &Bridge{log: store.log, config: Config{ConversationID: "private", Agent: "main", SessionService: store}}
+	bridge := &Bridge{log: store.log, config: Config{ConversationID: "private", Agent: "primary", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "future", false)}
 	admitted, err := bridge.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
@@ -137,8 +137,8 @@ func TestShadowReviewPayloadRelease(t *testing.T) {
 		t.Run(order, func(t *testing.T) {
 			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
-			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
-			bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
+			bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "admitted bytes", true)}
 			admitted, err := bridge.activateInbound(t.Context(), &request)
 			require.NoError(t, err)
@@ -149,7 +149,7 @@ func TestShadowReviewPayloadRelease(t *testing.T) {
 
 			var child string
 
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/a'`).Scan(&child))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'primary/a'`).Scan(&child))
 			turn, claimed, err := store.claimShadowTurn(t.Context(), child)
 			require.NoError(t, err)
 			require.True(t, claimed)
@@ -239,10 +239,10 @@ func TestShadowReviewClearLiveProducer(t *testing.T) {
 	t.Parallel()
 
 	store, root := newShadowTestStore(t)
-	require.NoError(t, root.Remove(".rocketclaw/agents/main/z.md"))
+	require.NoError(t, root.Remove(".rocketclaw/agents/primary/z.md"))
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
 
-	for _, item := range []struct{ name, model string }{{"main", "gpt-parent"}, {"main/a", "gpt-child"}} {
+	for _, item := range []struct{ name, model string }{{"primary", "gpt-parent"}, {"primary/a", "gpt-child"}} {
 		require.NoError(t, root.WriteFile(".rocketclaw/agents/"+item.name+".md", fmt.Appendf(nil, "---\nmodel: %s\npermission: {}\n---\nSystem %s", item.model, item.name), 0o600))
 	}
 
@@ -270,8 +270,8 @@ func TestShadowReviewClearLiveProducer(t *testing.T) {
 	t.Cleanup(server.Close)
 	cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})
 	store.definitions = cfg
-	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{ManagedConversationID: "0visible", PrivateConversationID: "private", Agent: "main"}))
-	require.NoError(t, store.UpsertThread("private", ThreadState{Agent: "main"}))
+	require.NoError(t, store.RegisterExternalMCPConversation("external", "primary", &ExternalMCPSessionState{ManagedConversationID: "0visible", PrivateConversationID: "private", Agent: "primary"}))
+	require.NoError(t, store.UpsertThread("private", ThreadState{Agent: "primary"}))
 	manager, shutdown := newTestBridgeManager(t, cfg, store, make(chan *protocol.OutboundMessage, 4))
 	t.Cleanup(shutdown)
 

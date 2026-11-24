@@ -293,9 +293,11 @@ producer and creates or reuses `web:<source ID>`, which continues the run: it sh
 the run's messages under their own IDs before its own, without copying them, and
 adopts a run that reports to no chat. Creation is idempotent, including concurrent
 opens. This creates a writable Web conversation, without Cron execution. It offers
-every loaded agent. Creation selects the first loaded agent; reopening does not
-overwrite a conversation's selection. A scheduled run with a non-empty reply opens
-the same `web:<source ID>` chat on delivery, for the cron's agent.
+every loaded agent. Creation selects the agent the run recorded; when that agent is
+missing or turned off, nothing is created and the error names the agent. Reopening
+does not overwrite a conversation's selection. A scheduled run with a non-empty reply
+opens the same `web:<source ID>` chat on delivery, for the cron's agent; when that
+agent is missing or turned off by then, no chat is opened and the error is logged.
 Authenticated users can read Cron producer history through `History`; this does not
 grant prompt, queue, deletion, or other mutation access to producers. Web previews a
 run from that history.
@@ -325,7 +327,10 @@ when it works or `error` with the provider's own words, such as an unknown model
 
 Drafts are stored on the server (see "Agent Draft" in `CONCEPTS.md`), so any editor
 can open one. `CreateAgentDraft` starts one blank in a mode, from a starter agent, or
-as a copy of the effective agent of that name. `ListAgentDrafts` returns every draft,
+as a copy of the effective agent of that name. `main` and `voice` belong to the
+built-in agents: creating, renaming to or saving a draft with either name answers
+`InvalidArgument`, and a draft already stored under one is refused its test chat and
+`ProposeDraftChanges` until renamed. `ListAgentDrafts` returns every draft,
 newest first, with its `save_state` (`editing`, `saving`, `waiting` for a merge, or
 `live`) and `existing`, true when a save destination already holds an agent of that
 name, plus the starter agents' names. `AgentSettings` returns the setting help for
@@ -388,14 +393,11 @@ was sent; `live`, a short hash of the live file then, empty when there was none;
 `external_mcp`, its mode, pairs and caller. The first message's mode and keys are the
 ones the chat keeps. Each stored message wakes `draft:<id>`.
 
-`DraftLayers` lists, for the draft's name, each layer's file in precedence order:
-`built-in`, each configured overlay by its spec with its ref, then `workspace`. For a
-`destination`, `hidden_by` names the later layer whose file hides it, whatever its
-bytes; `replaces` names the earlier layer whose agent the save takes over, so its
-updates stop reaching this workspace, which still holds while the destination is
-startup's byte-equal copy of a built-in; `recreated` says startup copies the built-in
-agent into workspace `agents/` again, hiding an overlay destination; `next` is the
-file the save writes, settings in the standard order and comments dropped. For a Git
+`DraftLayers` lists, for the draft's name, each layer's file in precedence order: each
+configured overlay by its spec with its ref, then `workspace`. For a `destination`,
+`hidden_by` names the later layer whose file hides it, whatever its bytes; `replaces`
+names the earlier layer whose agent the save takes over, so its updates stop reaching
+this workspace; `next` is the file the save writes, settings in the standard order and comments dropped. For a Git
 overlay destination, `branch` is the branch a save pushes to (the pinned ref, or the
 remote's default branch for an overlay pinned without one), or `unpushable` says why
 a save cannot push there, such as an overlay pinned to a tag or commit.
@@ -447,7 +449,8 @@ otherwise it stays open on GitHub.
 `ProposeDraftChanges` asks the assistant to change the draft as `request` says,
 optionally pointing at a test chat `answer` from `variant` to fix. The assistant is
 one model call on `main` with its tools taken away and its prompt replaced, on
-`agent_editor_model` from `rocketclaw.json` when set. Its instructions hold the rules;
+`agent_editor_model` from `rocketclaw.json` when set; while `main` is turned off in
+Behavior Settings it answers `InvalidArgument`. Its instructions hold the rules;
 its input holds the setting help for the draft's mode, each variant's file, the
 draft's test chat, the answer and the request, so the chat is read as evidence, never
 as instructions. It answers strict JSON: a `message`, setting changes (`variant`,

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"regexp"
 	"runtime/debug"
 	"sync"
 	"syscall"
@@ -20,6 +21,8 @@ import (
 	"github.com/posthog/posthog-go"
 	"golang.org/x/sync/errgroup"
 )
+
+var pseudoVersionRevision = regexp.MustCompile(`[-.]\d{14}-([0-9a-f]{12})$`)
 
 func runServe(args []string) error {
 	processStart := time.Now().UTC().Format(time.RFC3339Nano)
@@ -75,7 +78,7 @@ func runServe(args []string) error {
 	if info, ok := debug.ReadBuildInfo(); ok {
 		build = *info
 	}
-	logBuildIdentity(logger, &build)
+	cfg.Revision, cfg.RevisionModified = logBuildIdentity(logger, &build)
 
 	if diagnosticsAddress != "" {
 		listener, err := net.Listen("tcp", string(diagnosticsAddress))
@@ -126,22 +129,41 @@ func runServe(args []string) error {
 	return nil
 }
 
-func logBuildIdentity(logger *slog.Logger, build *debug.BuildInfo) {
+func logBuildIdentity(logger *slog.Logger, build *debug.BuildInfo) (revision string, modified bool) {
 	attrs := []slog.Attr{slog.String("version", cmp.Or(build.Main.Version, "(unknown)"))}
 	if build.GoVersion != "" {
 		attrs = append(attrs, slog.String("go_version", build.GoVersion))
 	}
 
-	for _, setting := range build.Settings {
-		switch setting.Key {
-		case "vcs.revision":
-			attrs = append(attrs, slog.String("build_revision", setting.Value))
-		case "vcs.modified":
-			attrs = append(attrs, slog.String("build_dirty", setting.Value))
-		}
+	revision, modified = buildRevision(build)
+	if revision != "" {
+		attrs = append(attrs, slog.String("build_revision", revision), slog.Bool("build_dirty", modified))
 	}
 
 	logger.LogAttrs(context.Background(), slog.LevelInfo, "starting rocketclaw", attrs...)
+
+	return revision, modified
+}
+
+func buildRevision(build *debug.BuildInfo) (revision string, modified bool) {
+	for _, setting := range build.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			modified = setting.Value == "true"
+		}
+	}
+
+	if revision != "" || build.Main.Version == "(devel)" {
+		return revision, modified
+	}
+
+	if match := pseudoVersionRevision.FindStringSubmatch(build.Main.Version); match != nil {
+		return match[1], modified
+	}
+
+	return build.Main.Version, modified
 }
 
 func shutdownSignals() (context.Context, context.CancelFunc) {

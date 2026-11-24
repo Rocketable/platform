@@ -1218,8 +1218,8 @@ func TestSearchSessionsFiltersByServerAgentAndModel(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(".rocketclaw/agents", 0o755))
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
-	require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\nmodel: gpt-6.1-sol\n---\nPrompt\n"), 0o644))
-	require.NoError(t, s.UpsertThread("web-session:local", ThreadState{Agent: "main"}))
+	require.NoError(t, root.WriteFile(".rocketclaw/agents/primary.md", []byte("---\nmodel: gpt-6.1-sol\n---\nPrompt\n"), 0o644))
+	require.NoError(t, s.UpsertThread("web-session:local", ThreadState{Agent: "primary"}))
 	_, err = s.AppendEntryID(ctx, "web-session:local", testSessionEntry("question", "answer"))
 	require.NoError(t, err)
 
@@ -1252,7 +1252,7 @@ func TestSearchSessionsFiltersByServerAgentAndModel(t *testing.T) {
 		"model:OPUS":                        {"opencode:box:ses_fast", "opencode:box:ses_opus"},
 		"model:anthropic/claude-opus-4-7":   {"opencode:box:ses_opus", "opencode:box:ses_fast"},
 		"model:gpt-6.1":                     {"web-session:local"},
-		"model:gpt-6.1-sol agent:main":      {"web-session:local"},
+		"model:gpt-6.1-sol agent:primary":   {"web-session:local"},
 		"server:box model:opus agent:build": {"opencode:box:ses_opus"},
 		"server:other":                      {},
 	} {

@@ -1091,8 +1091,8 @@ func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*R
 		return nil, fmt.Errorf("run web cron job: %w", status.Error(codes.PermissionDenied, "this cron or its agent is outside your spaces"))
 	}
 
-	if sticky := agents.Items[job.Agent].Sticky; sticky == harness.AgentStickyUser || sticky == harness.AgentStickySlack {
-		return nil, fmt.Errorf("run web cron job: %w", status.Errorf(codes.FailedPrecondition, "a cron cannot run a sticky: %s agent", sticky))
+	if err := backend.CheckCronAgent(agents, &job); err != nil {
+		return nil, fmt.Errorf("run web cron job: %w", status.Error(codes.FailedPrecondition, err.Error()))
 	}
 
 	conversation := protocol.Conversation{ID: rand.Text(), Agent: job.Agent, CreatedBy: principal, Space: space}
@@ -1623,18 +1623,15 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 			return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.NotFound, "cron run is not recorded"))
 		}
 
-		if agents.Items[thread.Agent].Sticky == harness.AgentStickyGlobal {
-			request.Agent = thread.Agent
-		} else {
-			choices = slices.DeleteFunc(choices, func(name string) bool { return agents.Items[name].Sticky != harness.AgentStickyOff })
-
-			request.Agent = ""
-			if len(choices) > 0 {
-				request.Agent = choices[0]
-			}
+		if _, ok := agents.Items[thread.Agent]; !ok {
+			return nil, fmt.Errorf("create web conversation: %w", status.Errorf(codes.FailedPrecondition, "agent %q is not loaded", thread.Agent))
 		}
 
-		id = "web:" + source
+		if !limit.AllowsAgent(thread.Agent) {
+			return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.PermissionDenied, "this cron run's agent is outside your spaces"))
+		}
+
+		request.Agent, id = thread.Agent, "web:"+source
 	}
 
 	if !slices.Contains(choices, request.Agent) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, queryOptions, useQueries, useQuery, useMutation, useIsMutating, useMutationState } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, queryOptions, type QueryStatus, useQueries, useQuery, useMutation, useIsMutating, useMutationState } from "@tanstack/react-query";
 import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
 import { Drawer } from "@base-ui/react/drawer";
@@ -45,7 +45,7 @@ import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigg
 import { cn } from "@/lib/utils";
 import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, StripLayout, TabAttention, TranscriptEvent, VoiceSettings } from "@/types";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
-import { AgentEditorPage, editAgent } from "@/agent-editor";
+import { AgentEditorPage, BuiltInNote, editAgent } from "@/agent-editor";
 import type { MountOptions, Mounted } from "../../oc/host/api";
 import {
   invalidatePendingSaves,
@@ -6258,7 +6258,9 @@ const voiceStatus: Record<VoiceState, string> = { idle: "Tap to talk", connectin
 // VoiceStage is the orb with the call's status under it: big and centered, or small
 // at the bottom beside the transcript. It is one orb either way, so it shrinks rather than reappearing.
 // A call starts only once the agents have loaded, since they decide its voice; hanging up never waits.
-function VoiceStage({ voice, compact, busy, loading, error, onPress }: { voice: VoiceView; compact: boolean; busy: boolean; loading: boolean; error?: string; onPress: () => void }) {
+function VoiceStage({ voice, compact, busy, agents, selected, settingsLoading, error, onPress }: { voice: VoiceView; compact: boolean; busy: boolean; agents: QueryStatus; selected: string; settingsLoading: boolean; error?: string; onPress: () => void }) {
+  if (agents === "success" && !selected) return <p role="status" className="m-auto text-center text-sm text-muted-foreground">No voice agent is available. The built-in voice agent may be turned off; an admin can turn it on in Config → Behavior settings.</p>;
+  const loading = agents === "pending" || settingsLoading || !selected;
   const active = voice.state !== "idle" && voice.state !== "error";
   return <div className={cn("flex flex-col items-center", compact ? "shrink-0 gap-2" : "flex-1 justify-center gap-10 py-10")}>
     <VoiceOrb state={voice.state === "reconnecting" ? "connecting" : voice.state} data-size={compact ? "small" : "large"} aria-label={active ? "End voice call" : "Start voice call"} aria-pressed={active} disabled={busy || voice.state === "ending" || (!active && loading)} onClick={onPress} />
@@ -6300,8 +6302,7 @@ function VoiceCall({ username }: { username: string }) {
   const { saved, update, loading, problem } = useVoiceSettings(username);
   const agents = useQuery(queries.agents());
   const catalog = (agents.data?.agents ?? []).filter((item) => item.sticky === "user");
-  // The person's choice, else the shipped voice agent, else main, else the first one offered.
-  const selected = offeredAgent(catalog, saved.agent, "voice", "main") ?? "";
+  const selected = offeredAgent(catalog, saved.agent, "voice") ?? "";
   const agentInfo = catalog.find((item) => item.name === selected);
   const [callId, setCallId] = useState("");
   const snapshot = useVoice(), call = voiceFor(snapshot, callId);
@@ -6351,7 +6352,7 @@ function VoiceCall({ username }: { username: string }) {
         </div>
       </div>
       {transcript ? <VoiceTranscript captions={voice.captions} /> : null}
-      <VoiceStage voice={voice} compact={transcript} busy={start.isPending} loading={agents.isPending || loading || selected === ""} error={error} onPress={() => active ? stopVoice() : start.mutate()} />
+      <VoiceStage voice={voice} compact={transcript} busy={start.isPending} agents={agents.status} selected={selected} settingsLoading={loading} error={error} onPress={() => active ? stopVoice() : start.mutate()} />
     </div>
   );
 }
@@ -6398,7 +6399,7 @@ function AgentsPage() {
               <p className="text-xs text-muted-foreground">{[agent.model, agent.reasoning, agent.verbosity, agent.origin].filter(Boolean).join(" · ")}</p>
               {agent.description ? <p className="mt-1 text-sm leading-relaxed">{agent.description}</p> : null}
             </button>
-            {editor ? <Button size="xs" variant="outline" aria-label={`Edit ${agent.name}`} disabled={editing} onClick={() => { setEditing(true); edit.mutate(agent.name); }}>Edit</Button> : null}
+            {agent.origin === "built-in" ? <BuiltInNote /> : editor ? <Button size="xs" variant="outline" aria-label={`Edit ${agent.name}`} disabled={editing} onClick={() => { setEditing(true); edit.mutate(agent.name); }}>Edit</Button> : null}
           </div>
           {open === agent.name ? (
             <div className="mt-3 flex flex-col gap-3">

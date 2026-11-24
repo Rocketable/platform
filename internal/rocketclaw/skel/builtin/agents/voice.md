@@ -3,6 +3,8 @@ mode: easy
 model: gpt-6.1-sol#high
 space: Main
 sticky: user
+subagents: []
+delegatedFrom: false
 workingDirectory: sessions/voice/$ROCKETCLAW_CONVERSATION_ID
 ---
 

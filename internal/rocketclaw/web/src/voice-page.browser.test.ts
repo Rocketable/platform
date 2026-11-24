@@ -562,7 +562,8 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     await page.reload();
     await page.getByLabel("Transcript", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Choose agent", exact: true }).and(page.locator(":disabled")).waitFor();
-    expect(await page.getByRole("button", { name: "Start voice call", exact: true }).isDisabled()).toBe(true);
+    await page.getByText("No voice agent is available. The built-in voice agent may be turned off; an admin can turn it on in Config → Behavior settings.", { exact: true }).waitFor();
+    expect(await page.getByRole("button", { name: "Start voice call", exact: true }).count()).toBe(0);
   } finally {
     await browser.close();
     server.stop(true);

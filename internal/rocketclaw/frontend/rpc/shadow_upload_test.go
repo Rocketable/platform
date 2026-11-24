@@ -36,9 +36,9 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
-	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents", "main"), 0o700))
+	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents", "primary"), 0o700))
 
-	for _, name := range []string{"main", "main/a"} {
+	for _, name := range []string{"primary", "primary/a"} {
 		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte("---\nmodel: gpt-6.1-sol\n---\nReply."), 0o600))
 	}
 
@@ -47,7 +47,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
 	runtime := &backend.Runtime{Sessions: sessions}
-	require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main", CreatedBy: "alice"}))
+	require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary", CreatedBy: "alice"}))
 	seeded := openTestTurns(t, dsn)
 
 	var child string
@@ -162,7 +162,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 	entries, err := sessions.ObserveEntries(t.Context(), "parent")
 	require.NoError(t, err)
 	require.Equal(t, replay, entries[0].Entry.ReplayInput, "model input text and attachment references are untouched")
-	require.NoError(t, sessions.RegisterExternalMCPConversation("external", "main", &backend.ExternalMCPSessionState{Agent: "main", PrivateConversationID: "parent", ManagedConversationID: "visible"}))
+	require.NoError(t, sessions.RegisterExternalMCPConversation("external", "primary", &backend.ExternalMCPSessionState{Agent: "primary", PrivateConversationID: "parent", ManagedConversationID: "visible"}))
 
 	for _, projection := range []struct {
 		destination          string

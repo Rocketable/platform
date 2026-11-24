@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -231,7 +232,7 @@ func TestSpacePermissions(t *testing.T) {
 	}{
 		{alice, "", []string{"ops-agent"}, ""},
 		{alice, "switched", []string{"ops-agent"}, "main-agent"},
-		{bob, "", []string{"loose", "main-agent", "ops-agent"}, ""},
+		{bob, "", []string{"loose", "main", "main-agent", "ops-agent", "voice"}, ""},
 	} {
 		listed, err := server.listAgents(tc.ctx, tc.id)
 		require.NoError(t, err)
@@ -359,25 +360,31 @@ func TestSpacePermissions(t *testing.T) {
 		require.Equal(t, crons[stem].Agent, <-ran, stem)
 	}
 
+	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "cron:ops-agent", Agent: "ops-agent", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/ops-agent-report.md", At: at}}))
+	_, err = sessions.AppendEntryID(t.Context(), "cron:ops-agent", &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: at})
+	require.NoError(t, err)
+
 	for _, tc := range []struct {
-		ctx     context.Context
-		request *CreateSessionRequest
-		want    codes.Code
-		space   string
+		ctx          context.Context
+		request      *CreateSessionRequest
+		want         codes.Code
+		agent, space string
 	}{
-		{alice, &CreateSessionRequest{Agent: "main-agent"}, codes.InvalidArgument, ""},
-		{alice, &CreateSessionRequest{Agent: "loose"}, codes.InvalidArgument, ""},
-		{alice, &CreateSessionRequest{Agent: "ops-agent"}, codes.OK, "Ops"},
-		{alice, &CreateSessionRequest{SourceConversationId: "cron:main"}, codes.PermissionDenied, ""},
-		{alice, &CreateSessionRequest{SourceConversationId: "cron:ops"}, codes.OK, "Ops"},
-		{bob, &CreateSessionRequest{Agent: "main-agent"}, codes.OK, "Main"},
-		{bob, &CreateSessionRequest{SourceConversationId: "cron:main"}, codes.OK, "Main"},
+		{alice, &CreateSessionRequest{Agent: "main-agent"}, codes.InvalidArgument, "", ""},
+		{alice, &CreateSessionRequest{Agent: "loose"}, codes.InvalidArgument, "", ""},
+		{alice, &CreateSessionRequest{Agent: "ops-agent"}, codes.OK, "ops-agent", "Ops"},
+		{alice, &CreateSessionRequest{SourceConversationId: "cron:main"}, codes.PermissionDenied, "", ""},
+		{alice, &CreateSessionRequest{SourceConversationId: "cron:ops"}, codes.PermissionDenied, "", ""},
+		{alice, &CreateSessionRequest{SourceConversationId: "cron:ops-agent"}, codes.OK, "ops-agent", "Ops"},
+		{bob, &CreateSessionRequest{Agent: "main-agent"}, codes.OK, "main-agent", "Main"},
+		{bob, &CreateSessionRequest{SourceConversationId: "cron:main"}, codes.OK, "loose", "Main"},
 	} {
 		calls := len(core.CreateConversationCalls())
 		_, err := server.createSession(tc.ctx, tc.request)
 		require.Equal(t, tc.want, status.Code(err), "%v: %v", tc.request, err)
 
 		if tc.want == codes.OK {
+			require.Equal(t, tc.agent, core.CreateConversationCalls()[calls].Conversation.Agent, "%v", tc.request)
 			require.Equal(t, tc.space, core.CreateConversationCalls()[calls].Conversation.Space, "%v", tc.request)
 		}
 	}
@@ -670,7 +677,7 @@ func TestRunCronJobFollowsStickyAgent(t *testing.T) {
 	core := withoutBackgroundJobs()
 	core.CreateConversationFunc = func(context.Context, protocol.Conversation) error { return nil }
 	server := New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{LoadOneOffCronjobFunc: func(stem string) (protocol.OneOffCronjob, error) {
-		return protocol.OneOffCronjob{Agent: stem}, nil
+		return protocol.OneOffCronjob{RelativePath: "cron/" + stem + ".md", Agent: strings.TrimPrefix(stem, "blank")}, nil
 	}, RunOneOffCronjobFunc: func(_ context.Context, job *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
 		ran <- job.ConversationID
 		return protocol.CronRunResult{}, nil
@@ -687,8 +694,18 @@ func TestRunCronJobFollowsStickyAgent(t *testing.T) {
 	require.NotEqual(t, "lobby", started.Id)
 	require.Equal(t, started.Id, <-ran)
 
-	for _, stem := range []string{"mine", "channel"} {
+	db := openTestTurns(t, dsn).db
+
+	var before, after int
+	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations`).Scan(&before))
+
+	for stem, want := range map[string]string{"mine": "cron/mine.md uses agent mine, which is sticky: user", "channel": "cron/channel.md uses agent channel, which is sticky: slack", "blank": "cron/blank.md names no agent", "gone": "cron/gone.md uses agent gone, which is not loaded"} {
 		_, err = server.runCronJob(alice, &RunCronJobRequest{Stem: stem})
 		require.Equal(t, codes.FailedPrecondition, status.Code(err), stem)
+		require.ErrorContains(t, err, want)
 	}
+
+	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations`).Scan(&after))
+	require.Equal(t, before, after, "a refused run creates no chat")
+	require.Empty(t, ran)
 }

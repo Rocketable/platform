@@ -21,6 +21,8 @@ type Config struct {
 	DatabaseURL          string                                      `json:"database_url"`
 	Attachments          AttachmentsConfig                           `json:"attachments,omitzero"`
 	WorkDir              string                                      `json:"-"`
+	Revision             string                                      `json:"-"`
+	RevisionModified     bool                                        `json:"-"`
 	Overlays             []string                                    `json:"overlays,omitempty"`
 	Web                  WebConfig                                   `json:"web,omitzero"`
 	ServerDisplayName    string                                      `json:"server_display_name,omitempty"`
@@ -40,6 +42,7 @@ type Config struct {
 	AutoApproverDecision AutoApproverDecisionConfig                  `json:"auto_approver_decision,omitzero"`
 	PostHog              PostHogConfig                               `json:"posthog,omitzero"`
 	Permissions          map[string][]string                         `json:"permissions,omitempty"`
+	EmbeddedAgents       EmbeddedAgentsConfig                        `json:"embedded_agents,omitzero"`
 }
 
 type Behavior struct {
@@ -47,22 +50,33 @@ type Behavior struct {
 	Slack             struct {
 		Channels []SlackChannelConfig `json:"channels"`
 	} `json:"slack"`
-	Logging  LoggingConfig `json:"logging"`
-	Overlays []string      `json:"overlays"`
+	Logging        LoggingConfig        `json:"logging"`
+	Overlays       []string             `json:"overlays"`
+	EmbeddedAgents EmbeddedAgentsConfig `json:"embedded_agents"`
+}
+
+type EmbeddedAgentsConfig struct {
+	Main  EmbeddedAgentConfig `json:"main"`
+	Voice EmbeddedAgentConfig `json:"voice"`
+}
+
+type EmbeddedAgentConfig struct {
+	Disabled bool   `json:"disabled"`
+	Model    string `json:"model"`
 }
 
 func (c *Config) Behavior() Behavior {
 	var b Behavior
 
 	b.AutoApproverModel, b.Slack.Channels = c.AutoApproverModel, c.Slack.Channels
-	b.Logging, b.Overlays = c.Logging, c.Overlays
+	b.Logging, b.Overlays, b.EmbeddedAgents = c.Logging, c.Overlays, c.EmbeddedAgents
 
 	return b
 }
 
 func (c *Config) SetBehavior(b *Behavior) {
 	c.AutoApproverModel, c.Slack.Channels = b.AutoApproverModel, b.Slack.Channels
-	c.Logging, c.Overlays = b.Logging, b.Overlays
+	c.Logging, c.Overlays, c.EmbeddedAgents = b.Logging, b.Overlays, b.EmbeddedAgents
 }
 
 const DefaultRuntimeDir = ".rocketclaw"
@@ -403,6 +417,15 @@ func (c *Config) ValidateBehavior() error {
 	c.AutoApproverModel, err = normalizeOpenAIModel("auto_approver_model", c.AutoApproverModel)
 	if err != nil {
 		return err
+	}
+
+	for _, agent := range [...]struct {
+		field   string
+		setting *EmbeddedAgentConfig
+	}{{"embedded_agents.main.model", &c.EmbeddedAgents.Main}, {"embedded_agents.voice.model", &c.EmbeddedAgents.Voice}} {
+		if agent.setting.Model, err = normalizeOpenAIModel(agent.field, agent.setting.Model); err != nil {
+			return err
+		}
 	}
 
 	return c.validateSlack()

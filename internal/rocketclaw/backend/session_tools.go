@@ -17,6 +17,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -233,6 +234,10 @@ func checkRecipient(agents harness.Agents, target, sender string) error {
 	definition := agents.Items[target]
 	if all, names, _ := agentRecipients(&definition); all || slices.Contains(names, sender) {
 		return nil
+	}
+
+	if skel.BuiltinAgent(target) {
+		return fmt.Errorf("agent %q is built into RocketClaw and accepts no writes from agents", target)
 	}
 
 	setting := "permission.rocketclaw." + recipientSetting

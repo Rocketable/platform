@@ -18,18 +18,18 @@ func TestMCPToolsNotInRocketClawAutoAllowList(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "primary", "---\ndescription: Primary\nmodel: gpt-5.4\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	root := openWorkspaceRoot(t, workspace)
 
 	agents, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, nil)
 	require.NoError(t, err)
 
-	action, matched := agents.Items["main"].Permission.Evaluate("rocketclaw", "execute")
+	action, matched := agents.Items["primary"].Permission.Evaluate("rocketclaw", "execute")
 	assert.False(t, matched)
 	assert.Equal(t, harness.PermissionDeny, action)
 
-	action, matched = agents.Items["main"].Permission.Evaluate("mcp", "execute")
+	action, matched = agents.Items["primary"].Permission.Evaluate("mcp", "execute")
 	assert.False(t, matched)
 	assert.Equal(t, harness.PermissionDeny, action)
 }

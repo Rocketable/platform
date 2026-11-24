@@ -70,17 +70,17 @@ func TestStopBackgroundJobToolNeedsAllowBackground(t *testing.T) {
 	for permission, visible := range map[string]bool{"{}": false, "{rocketclaw: {allow_background: allow}}": true} {
 		t.Run(permission, func(t *testing.T) {
 			workspace := t.TempDir()
-			writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: "+permission+"\n---\nPrompt\n")
+			writePrimaryAgentSkills(t, workspace, "---\ndescription: Primary\nmodel: gpt-6.1-sol\npermission: "+permission+"\n---\nPrompt\n")
 
 			cfg := &config.Config{Workspace: workspace}
-			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main")
+			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "primary")
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
 			require.NoError(t, root.MkdirAll("shell", 0o700))
 
 			bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
 			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil)
-			runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main")
+			runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "primary")
 			require.NoError(t, err)
 
 			host, hosted := runtime.CodeModeHosts[stopBackgroundJobToolName]

@@ -52,7 +52,7 @@ func newShadowTestStore(t *testing.T) (*SessionService, *os.Root) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	for _, name := range []string{"main", "main/a", "main/z"} {
+	for _, name := range []string{"primary", "primary/a", "primary/z"} {
 		file := filepath.Join(config.DefaultRuntimeDir, "agents", name+".md")
 		require.NoError(t, root.MkdirAll(filepath.Dir(file), 0o700))
 		require.NoError(t, root.WriteFile(file, []byte("---\nmodel: gpt-6.1-sol\n---\nPrompt "+name), 0o600))
@@ -70,15 +70,15 @@ func TestShadowBindingsCreation(t *testing.T) {
 	var group errgroup.Group
 	for range 8 {
 		group.Go(func() error {
-			return runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main", CreatedBy: "alice"})
+			return runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary", CreatedBy: "alice"})
 		})
 	}
 
 	require.NoError(t, group.Wait())
-	require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "other", Agent: "main"}))
+	require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "other", Agent: "primary"}))
 	bindings, err := queryStrings(t.Context(), store.db, `SELECT shadow_parent || ':' || parent_agent || ':' || shadow_agent FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "test shadow bindings")
 	require.NoError(t, err)
-	require.Equal(t, []string{"other:main:main/a", "other:main:main/z", "parent:main:main/a", "parent:main:main/z"}, bindings)
+	require.Equal(t, []string{"other:primary:primary/a", "other:primary:primary/z", "parent:primary:primary/a", "parent:primary:primary/z"}, bindings)
 	children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "test shadow children")
 	require.NoError(t, err)
 	require.Len(t, children, 4)
@@ -87,9 +87,9 @@ func TestShadowBindingsCreation(t *testing.T) {
 		thread, found, err := store.Thread(child)
 		require.NoError(t, err)
 		require.True(t, found)
-		require.Contains(t, []string{"main/a", "main/z"}, thread.Agent)
+		require.Contains(t, []string{"primary/a", "primary/z"}, thread.Agent)
 		require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: child, Agent: thread.Agent}))
-		require.NoError(t, store.UpsertThread(child, ThreadState{Agent: "main"}), "explicit ownership, not the agent name, prevents recursion")
+		require.NoError(t, store.UpsertThread(child, ThreadState{Agent: "primary"}), "explicit ownership, not the agent name, prevents recursion")
 	}
 
 	var count int
@@ -103,10 +103,10 @@ func TestShadowActivationRollback(t *testing.T) {
 	for _, kind := range []string{"queue", "schedule", "note"} {
 		t.Run(kind, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
-			_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
+			_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
 			require.NoError(t, err)
 
-			bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+			bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "new input", false)}
 
 			switch kind {
@@ -117,7 +117,7 @@ func TestShadowActivationRollback(t *testing.T) {
 			case "schedule":
 				request.scheduledMessageID = "scheduled"
 
-				require.NoError(t, store.PutScheduledMessage("scheduled", &protocol.ScheduledMessageState{ConversationID: "parent", Agent: "main", Message: "new input", DueAt: time.Now()}))
+				require.NoError(t, store.PutScheduledMessage("scheduled", &protocol.ScheduledMessageState{ConversationID: "parent", Agent: "primary", Message: "new input", DueAt: time.Now()}))
 			case "note":
 				request.backgroundWake = true
 				job := testBackgroundJob("parent", "finished")
@@ -178,7 +178,7 @@ func TestShadowSeedAndFork(t *testing.T) {
 	t.Parallel()
 
 	store, root := newShadowTestStore(t)
-	_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
+	_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
 	require.NoError(t, err)
 
 	attachment := protocol.OutboundAttachment{ID: "original", Name: "seed.txt", MIMEType: "text/plain", Data: []byte("seed bytes")}
@@ -208,12 +208,12 @@ func TestShadowSeedAndFork(t *testing.T) {
 	require.NoError(t, spill.MkdirAll(filepath.Dir(file), 0o700))
 	require.NoError(t, spill.WriteFile(file, []byte("retained seed"), 0o600))
 
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "future", true)}
 	admitted, err := bridge.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
 	require.True(t, admitted)
-	_, err = store.ForkConversation(t.Context(), "parent", protocol.Conversation{ID: "fork", Agent: "main"}, "")
+	_, err = store.ForkConversation(t.Context(), "parent", protocol.Conversation{ID: "fork", Agent: "primary"}, "")
 	require.NoError(t, err)
 	children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "seed children")
 	require.NoError(t, err)
@@ -252,7 +252,7 @@ func TestShadowSeedAndFork(t *testing.T) {
 		require.Zero(t, count, "copying seeds performs no execution")
 	}
 
-	require.NoError(t, root.Remove(filepath.Join(config.DefaultRuntimeDir, "agents", "main", "z.md")))
+	require.NoError(t, root.Remove(filepath.Join(config.DefaultRuntimeDir, "agents", "primary", "z.md")))
 	endTestTurn(t, store, "parent", request.turnID, "")
 	request = bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "next", true)}
 	admitted, err = bridge.activateInbound(t.Context(), &request)
@@ -268,9 +268,9 @@ func TestShadowClaimHead(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newShadowTestStore(t)
-	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"visible": KindWebChat})
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
+	recordTestConversations(t, store, "primary", map[string]ConversationKind{"visible": KindWebChat})
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 
 	for range 2 {
 		request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "same text", false)}
@@ -291,7 +291,7 @@ func TestShadowClaimHead(t *testing.T) {
 	require.True(t, retained, "pending manifests protect their historyless parent as well as their children")
 
 	var child string
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/a'`).Scan(&child))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'primary/a'`).Scan(&child))
 
 	inputs, err := json.Marshal([]harness.PromptInput{{ID: "input", Texts: []string{"canonical input"}}})
 	require.NoError(t, err)
@@ -384,16 +384,16 @@ func TestShadowImplicitCreation(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newShadowTestStore(t)
-	require.NoError(t, store.UpsertThread("cron:private", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
-	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{ManagedConversationID: "visible", PrivateConversationID: "mcp:private", Agent: "main"}))
+	require.NoError(t, store.UpsertThread("cron:private", ThreadState{Agent: "primary", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, store.RegisterExternalMCPConversation("external", "primary", &ExternalMCPSessionState{ManagedConversationID: "visible", PrivateConversationID: "mcp:private", Agent: "primary"}))
 
-	conversation := "slack-channel:C1:main"
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversation, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), handling: true}
+	conversation := "slack-channel:C1:primary"
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversation, Agent: "primary", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), handling: true}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	inbound := newThreadInboundMessage("mention", "1.1", "1.1")
-	protocol.SetInboundAllowedAgents(inbound, []string{"main"})
+	protocol.SetInboundAllowedAgents(inbound, []string{"primary"})
 	inbound.SlackReply.ChannelID = "C1"
-	accepted, err := manager.SubmitMention(t.Context(), "main", slackTarget("C1", "1.1"), inbound)
+	accepted, err := manager.SubmitMention(t.Context(), "primary", slackTarget("C1", "1.1"), inbound)
 	require.NoError(t, err)
 	require.True(t, accepted)
 	parents, err := queryStrings(t.Context(), store.db, `SELECT shadow_parent FROM conversations WHERE shadow_parent IS NOT NULL GROUP BY 1 HAVING count(*) = 2 ORDER BY 1`, "implicit shadow parents")
@@ -411,8 +411,8 @@ func TestShadowExecutionOwnerEntrypoints(t *testing.T) {
 	for _, entrypoint := range []string{"web", "cron", "scheduled", "goal continuation", "background wake"} {
 		t.Run(entrypoint, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
-			recordTestConversations(t, store, "main", map[string]ConversationKind{"visible": KindWebChat})
-			visible := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "visible", Agent: "main", SessionService: store}}
+			recordTestConversations(t, store, "primary", map[string]ConversationKind{"visible": KindWebChat})
+			visible := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "visible", Agent: "primary", SessionService: store}}
 			owner := visible
 			inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "input", true)
 			inbound.Metadata = map[string]string{"web_message_id": "id", "channel_id": "C1"}
@@ -421,13 +421,13 @@ func TestShadowExecutionOwnerEntrypoints(t *testing.T) {
 
 			switch entrypoint {
 			case "cron":
-				owner = &Bridge{log: visible.log, config: Config{ConversationID: "private", Agent: "main", SessionService: store}}
+				owner = &Bridge{log: visible.log, config: Config{ConversationID: "private", Agent: "primary", SessionService: store}}
 				request.producer, inbound.SyncDestination = owner, "visible"
 				inbound.Source, inbound.RequireOutputDecision = protocol.SourceSystem, true
 			case "scheduled":
 				inbound.Source, inbound.Human, request.scheduledMessageID = protocol.SourceSystem, false, "scheduled"
 
-				require.NoError(t, store.PutScheduledMessage("scheduled", &protocol.ScheduledMessageState{ConversationID: "visible", Agent: "main", Message: "input", DueAt: time.Now()}))
+				require.NoError(t, store.PutScheduledMessage("scheduled", &protocol.ScheduledMessageState{ConversationID: "visible", Agent: "primary", Message: "input", DueAt: time.Now()}))
 			case "goal continuation":
 				inbound.Source, inbound.Human, inbound.GoalAction = protocol.SourceSystem, false, protocol.GoalActionContinue
 			case "background wake":
@@ -458,7 +458,7 @@ func TestShadowExecutionOwnerEntrypoints(t *testing.T) {
 				require.Empty(t, turn.inbound.SyncDestination)
 
 				publisher := &outboundPublisherMock{PublishOutboundFunc: func(context.Context, *protocol.OutboundMessage) error { return errors.New("connector unavailable") }}
-				child := &Bridge{shadow: true, config: Config{ConversationID: id, Agent: "main/a", SessionService: store}, bus: publisher}
+				child := &Bridge{shadow: true, config: Config{ConversationID: id, Agent: "primary/a", SessionService: store}, bus: publisher}
 				child.publishConsumed(t.Context(), inbound, "parent header")
 				require.NoError(t, child.finish(t.Context(), &bridgeRequest{inbound: turn.inbound, turnID: turn.id}, &turnFinish{conversationID: strings.TrimSpace(id)}, &runResult{turnID: turn.id, text: "local only"}, ""))
 				require.Empty(t, publisher.PublishOutboundCalls(), "connector failures cannot affect local child completion")
@@ -477,8 +477,8 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 		t.Run(permission, func(t *testing.T) {
 			store, root := newShadowTestStore(t)
 			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
-			require.NoError(t, root.WriteFile(".rocketclaw/agents/main/a.md", fmt.Appendf(nil, "---\nmodel: gpt-child\npermission:\n  bash: %s\n  rocketclaw: {rocketclaw_restart: allow, rocketclaw_sessions: allow}\n---\nChild prompt", permission), 0o600))
-			require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\nmodel: gpt-parent\npermission: {bash: allow}\n---\nParent prompt"), 0o600))
+			require.NoError(t, root.WriteFile(".rocketclaw/agents/primary/a.md", fmt.Appendf(nil, "---\nmodel: gpt-child\npermission:\n  bash: %s\n  rocketclaw: {rocketclaw_restart: allow, rocketclaw_sessions: allow}\n---\nChild prompt", permission), 0o600))
+			require.NoError(t, root.WriteFile(".rocketclaw/agents/primary.md", []byte("---\nmodel: gpt-parent\npermission: {bash: allow}\n---\nParent prompt"), 0o600))
 
 			toolResults := make(chan string, 4)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -514,7 +514,7 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			t.Cleanup(server.Close)
 			cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})
 			store.definitions = cfg
-			parent := &Bridge{runtime: cfg, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}, log: slog.New(slog.DiscardHandler)}
+			parent := &Bridge{runtime: cfg, config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}, log: slog.New(slog.DiscardHandler)}
 			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "write", true)}
 			admitted, err := parent.activateInbound(t.Context(), &request)
 			require.NoError(t, err)
@@ -524,13 +524,13 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			require.NoError(t, err)
 
 			var childID string
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/a'`).Scan(&childID))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'primary/a'`).Scan(&childID))
 			turn, claimed, err := store.claimShadowTurn(t.Context(), childID)
 			require.NoError(t, err)
 			require.True(t, claimed)
 
 			publisher := &outboundPublisherMock{PublishOutboundFunc: func(context.Context, *protocol.OutboundMessage) error { return errors.New("connector unavailable") }}
-			child := NewConversation(cfg, publisher, &Config{ConversationID: childID, Agent: "main/a", SessionService: store}, slog.New(slog.DiscardHandler))
+			child := NewConversation(cfg, publisher, &Config{ConversationID: childID, Agent: "primary/a", SessionService: store}, slog.New(slog.DiscardHandler))
 			child.shadow = true
 
 			prohibited := make([]harness.Tool, 0, 8)
@@ -542,28 +542,28 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			require.NotContains(t, parentConfig.ShellEnv, "ROCKETCLAW_SHADOW")
 
 			childConfig := child.rocketcodeConfig(root.Name(), nil, prohibited...)
-			require.Equal(t, "main/a", childConfig.ShellEnv["ROCKETCLAW_SHADOW"])
+			require.Equal(t, "primary/a", childConfig.ShellEnv["ROCKETCLAW_SHADOW"])
 
 			capturedEnv := map[string]string{rocketclawConversationIDEnv: "parent", "ROCKETCLAW_METADATA_FRUIT": "banana"}
 			childConfig = child.rocketcodeConfig(root.Name(), capturedEnv, prohibited...)
-			require.Equal(t, "main/a", childConfig.ShellEnv["ROCKETCLAW_SHADOW"])
+			require.Equal(t, "primary/a", childConfig.ShellEnv["ROCKETCLAW_SHADOW"])
 			require.Equal(t, childID, childConfig.ShellEnv[rocketclawConversationIDEnv])
 			require.Equal(t, "banana", childConfig.ShellEnv["ROCKETCLAW_METADATA_FRUIT"])
 			require.Equal(t, "parent", capturedEnv[rocketclawConversationIDEnv])
 			require.NotContains(t, capturedEnv, "ROCKETCLAW_SHADOW", "shadow environment must not mutate captured parent inputs")
 
 			childConfig = child.rocketcodeConfig(root.Name(), map[string]string{"ROCKETCLAW_PRINCIPAL_NAME": "Alice"}, prohibited...)
-			require.Equal(t, map[string]string{"ROCKETCLAW_PRINCIPAL_NAME": "Alice", "ROCKETCLAW_SHADOW": "main/a"}, childConfig.ShellEnv)
+			require.Equal(t, map[string]string{"ROCKETCLAW_PRINCIPAL_NAME": "Alice", "ROCKETCLAW_SHADOW": "primary/a"}, childConfig.ShellEnv)
 
 			manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(c *Config) directBridge {
 				return NewConversation(cfg, publisher, &Config{ConversationID: c.ConversationID, Agent: c.Agent, SessionService: store}, slog.New(slog.DiscardHandler))
 			}})
-			require.NoError(t, store.startSubagent(t.Context(), childID, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "main"}))
-			managed, err := manager.ensureThreadBridge(t.Context(), childID+"/call-1", ThreadState{Agent: "main", parent: childID})
+			require.NoError(t, store.startSubagent(t.Context(), childID, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "primary"}))
+			managed, err := manager.ensureThreadBridge(t.Context(), childID+"/call-1", ThreadState{Agent: "primary", parent: childID})
 			require.NoError(t, err)
 
 			subagentConfig := managed.(*Bridge).rocketcodeConfig(root.Name(), nil, prohibited...)
-			require.Equal(t, "main", subagentConfig.ShellEnv["ROCKETCLAW_SHADOW"])
+			require.Equal(t, "primary", subagentConfig.ShellEnv["ROCKETCLAW_SHADOW"])
 
 			for _, tool := range prohibited {
 				require.True(t, slices.ContainsFunc(parentConfig.CustomTools, func(item harness.Tool) bool { return item.Name == tool.Name }))
@@ -582,7 +582,7 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			data, err := root.ReadFile("effect.txt")
 			if permission == "allow" {
 				require.NoError(t, err)
-				require.Equal(t, "main/a", string(data))
+				require.Equal(t, "primary/a", string(data))
 			} else {
 				require.ErrorIs(t, err, os.ErrNotExist)
 				require.Contains(t, output, "bash")
@@ -595,7 +595,7 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newShadowTestStore(t)
-	parent := &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+	parent := &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
 	admitted, err := parent.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
@@ -678,14 +678,14 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 	t.Parallel()
 
 	store, root := newShadowTestStore(t)
-	require.NoError(t, root.Remove(filepath.Join(config.DefaultRuntimeDir, "agents", "main", "z.md")))
+	require.NoError(t, root.Remove(filepath.Join(config.DefaultRuntimeDir, "agents", "primary", "z.md")))
 	require.NoError(t, root.MkdirAll(filepath.Join(config.DefaultRuntimeDir, "skills"), 0o700))
 
-	for _, name := range []string{"main", "main/a"} {
+	for _, name := range []string{"primary", "primary/a"} {
 		frame := "Parent frame."
 		model := "gpt-parent"
 
-		if name != "main" {
+		if name != "primary" {
 			frame = "Child frame must not replace parent."
 			model = "gpt-child"
 		}
@@ -766,7 +766,7 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 	}})
 	shutdown := runTestManager(t, manager)
 	t.Cleanup(shutdown)
-	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 
 	parent, err := manager.recordedBridge(t.Context(), "parent")
 	require.NoError(t, err)
@@ -864,7 +864,7 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 	for _, human := range []bool{true, false} {
 		t.Run(fmt.Sprintf("human=%t", human), func(t *testing.T) {
 			store, root := newShadowTestStore(t)
-			require.NoError(t, root.Remove(".rocketclaw/agents/main/z.md"))
+			require.NoError(t, root.Remove(".rocketclaw/agents/primary/z.md"))
 			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
 
 			type providerRequest struct {
@@ -919,7 +919,7 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 
 			cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})
 			store.definitions = cfg
-			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 
 			var childID string
 			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL`).Scan(&childID))
@@ -1045,7 +1045,7 @@ WHERE c.conversation_id IN ($1, $2) ORDER BY c.conversation_id, t.id, s.id`, "st
 
 func TestShadowFirstReconciliationClear(t *testing.T) {
 	store, _ := newShadowTestStore(t)
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"parent": KindWebChat})
+	recordTestConversations(t, store, "primary", map[string]ConversationKind{"parent": KindWebChat})
 	tx, err := store.db.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 
@@ -1054,7 +1054,7 @@ func TestShadowFirstReconciliationClear(t *testing.T) {
 	require.NoError(t, lockSessionHistory(t.Context(), tx, "parent"))
 
 	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "first", true)
-	require.NoError(t, store.startShadowManifests(t.Context(), tx, "parent", "main", "first-turn", inbound))
+	require.NoError(t, store.startShadowManifests(t.Context(), tx, "parent", "primary", "first-turn", inbound))
 	require.NoError(t, saveTurnInputs(t.Context(), tx, "parent", "first-turn", &turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "initial", Texts: []string{"first"}}}, Closed: true}))
 
 	var holder int
@@ -1080,7 +1080,7 @@ func TestShadowFirstReconciliationClear(t *testing.T) {
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations WHERE shadow_parent IS NOT NULL`).Scan(&count))
 	require.Equal(t, 2, count, "history clear retains the first admitted bindings")
 
-	bridge := &Bridge{config: Config{ConversationID: "parent", Agent: "main", SessionService: store}, log: store.log}
+	bridge := &Bridge{config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}, log: store.log}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "next", true)}
 	admitted, err := bridge.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
@@ -1095,10 +1095,10 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 	for _, mutation := range []string{"revert", "history clear", "external MCP removal"} {
 		t.Run(mutation, func(t *testing.T) {
 			store, root := newShadowTestStore(t)
-			require.NoError(t, root.Remove(".rocketclaw/agents/main/z.md"))
+			require.NoError(t, root.Remove(".rocketclaw/agents/primary/z.md"))
 			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
 
-			for _, item := range []struct{ name, model string }{{"main", "gpt-parent"}, {"main/a", "gpt-child"}} {
+			for _, item := range []struct{ name, model string }{{"primary", "gpt-parent"}, {"primary/a", "gpt-child"}} {
 				require.NoError(t, root.WriteFile(".rocketclaw/agents/"+item.name+".md", fmt.Appendf(nil, "---\nmodel: %s\npermission: {}\n---\nSystem %s", item.model, item.name), 0o600))
 			}
 
@@ -1171,10 +1171,10 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 			if mutation == "external MCP removal" {
 				parentID = "0parent"
 				ownerID = "external_mcp:private"
-				require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{ManagedConversationID: parentID, PrivateConversationID: ownerID, Agent: "main"}))
-				require.NoError(t, store.UpsertThread(ownerID, ThreadState{Agent: "main"}))
+				require.NoError(t, store.RegisterExternalMCPConversation("external", "primary", &ExternalMCPSessionState{ManagedConversationID: parentID, PrivateConversationID: ownerID, Agent: "primary"}))
+				require.NoError(t, store.UpsertThread(ownerID, ThreadState{Agent: "primary"}))
 			} else {
-				require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+				require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 			}
 
 			finals := make(chan *protocol.OutboundMessage, 8)
@@ -1403,13 +1403,13 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 	t.Cleanup(server.Close)
 	cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})
 	store.definitions = cfg
-	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 
 	finals := make(chan *protocol.OutboundMessage, 8)
 	manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
 	t.Cleanup(shutdown)
 
-	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: "parent", Agent: "main", SessionService: store, RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: "parent", Agent: "primary", SessionService: store, RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}}, slog.New(slog.DiscardHandler))
 	bridge.threads = manager
 
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "admitted", true)}
@@ -1423,7 +1423,7 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 	require.True(t, found)
 	result, err := runTestTurn(t.Context(), bridge, head.inbound, head.id)
 	require.NoError(t, err)
-	require.Equal(t, "main", result.attribution.Agent)
+	require.Equal(t, "primary", result.attribution.Agent)
 
 	for range 3 {
 		require.Equal(t, "gpt-6.1-sol", <-requests)
@@ -1436,7 +1436,7 @@ func TestShadowSiblingFailureIsIndependent(t *testing.T) {
 	store, root := newShadowTestStore(t)
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
 
-	for _, item := range []struct{ name, model string }{{"main", "gpt-parent"}, {"main/a", "gpt-good"}, {"main/z", "gpt-fail"}} {
+	for _, item := range []struct{ name, model string }{{"primary", "gpt-parent"}, {"primary/a", "gpt-good"}, {"primary/z", "gpt-fail"}} {
 		require.NoError(t, root.WriteFile(".rocketclaw/agents/"+item.name+".md", fmt.Appendf(nil, "---\nmodel: %s\npermission: {}\n---\nSystem %s", item.model, item.name), 0o600))
 	}
 
@@ -1464,7 +1464,7 @@ func TestShadowSiblingFailureIsIndependent(t *testing.T) {
 	t.Cleanup(server.Close)
 	cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})
 	store.definitions = cfg
-	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 
 	finals := make(chan *protocol.OutboundMessage, 8)
 	manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
@@ -1476,8 +1476,8 @@ func TestShadowSiblingFailureIsIndependent(t *testing.T) {
 	require.Equal(t, "answer gpt-parent", readFinal(t, finals).Text)
 
 	var good, failed string
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/a'`).Scan(&good))
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/z'`).Scan(&failed))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'primary/a'`).Scan(&good))
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'primary/z'`).Scan(&failed))
 	require.Eventually(t, func() bool {
 		var settled int
 
@@ -1502,7 +1502,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	t.Parallel()
 
 	store, root := newShadowTestStore(t)
-	require.NoError(t, root.Remove(filepath.Join(config.DefaultRuntimeDir, "agents", "main", "z.md")))
+	require.NoError(t, root.Remove(filepath.Join(config.DefaultRuntimeDir, "agents", "primary", "z.md")))
 	require.NoError(t, root.MkdirAll(filepath.Join(config.DefaultRuntimeDir, "skills"), 0o700))
 
 	requests := make(chan []json.RawMessage, 4)
@@ -1537,7 +1537,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 		bridgeCfg.SessionService, bridgeCfg.RequestRestart = store, &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}
 		return NewConversation(cfg, finalsPublisher{finals: finals}, bridgeCfg, slog.New(slog.DiscardHandler))
 	}})
-	require.NoError(t, store.UpsertThread("parent", ThreadState{Agent: "main"}))
+	require.NoError(t, store.UpsertThread("parent", ThreadState{Agent: "primary"}))
 	parent, err := manager.recordedBridge(t.Context(), "parent")
 	require.NoError(t, err)
 
@@ -1564,7 +1564,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE shadow_turns DROP CONSTRAINT reject_capture`)
 	require.NoError(t, err)
 	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &snapshot))
-	require.NoError(t, root.WriteFile(filepath.Join(config.DefaultRuntimeDir, "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\nadditionalInstructions: new frame\npermission: {}\n---\nnew system"), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(config.DefaultRuntimeDir, "agents", "primary.md"), []byte("---\nmodel: gpt-6.1-sol\nadditionalInstructions: new frame\npermission: {}\n---\nnew system"), 0o600))
 
 	changed := replayInputForMessage("developer", "changed metadata must not replace captured metadata")
 	_, err = store.AppendEntryID(t.Context(), "parent", &harness.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: changed})
@@ -1655,7 +1655,7 @@ func TestShadowTerminalClosure(t *testing.T) {
 	for _, scenario := range []string{"attachment fallback", "preparation error", "obsolete goal", "stop"} {
 		t.Run(scenario, func(t *testing.T) {
 			store, root := newShadowTestStore(t)
-			parent := NewConversation(store.definitions, discardPublisher{}, &Config{ConversationID: "parent", Agent: "main", SessionService: store}, slog.New(slog.DiscardHandler))
+			parent := NewConversation(store.definitions, discardPublisher{}, &Config{ConversationID: "parent", Agent: "primary", SessionService: store}, slog.New(slog.DiscardHandler))
 			parent.threads = &threadBridgeManager{bridges: map[string]directBridge{}}
 			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
 			admitted, err := parent.activateInbound(t.Context(), &request)
@@ -1668,7 +1668,7 @@ func TestShadowTerminalClosure(t *testing.T) {
 			case "attachment fallback":
 				request.inbound.AttachmentPresence = protocol.AttachmentPresenceImages
 			case "preparation error":
-				require.NoError(t, root.Remove(".rocketclaw/agents/main.md"))
+				require.NoError(t, root.Remove(".rocketclaw/agents/primary.md"))
 
 				terminal = protocol.TerminalFailed
 			case "obsolete goal":
@@ -1706,7 +1706,7 @@ func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newShadowTestStore(t)
-	parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+	parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
 	admitted, err := parent.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
@@ -1770,7 +1770,7 @@ func startShadowStepTurn(t *testing.T) (*SessionService, *Bridge, map[string]*Br
 	t.Helper()
 
 	store, _ := newShadowTestStore(t)
-	parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
+	parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "primary", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
 	admitted, err := parent.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
@@ -1781,7 +1781,7 @@ func startShadowStepTurn(t *testing.T) (*SessionService, *Bridge, map[string]*Br
 	children := map[string]*Bridge{}
 	parent.threads = &threadBridgeManager{bridges: map[string]directBridge{}}
 
-	for _, agent := range []string{"main/a", "main/z"} {
+	for _, agent := range []string{"primary/a", "primary/z"} {
 		var id string
 		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL AND shadow_agent = $1`, agent).Scan(&id))
 		turn, claimed, err := store.claimShadowTurn(t.Context(), id)
@@ -1816,7 +1816,7 @@ func TestShadowStepLimit(t *testing.T) {
 	t.Parallel()
 
 	store, parent, children := startShadowStepTurn(t)
-	answered, limited := children["main/a"], children["main/z"]
+	answered, limited := children["primary/a"], children["primary/z"]
 
 	drainShadowStep(t, parent, "p1", harness.TurnPhaseToolLoop, "initial")
 
@@ -1872,7 +1872,7 @@ func TestShadowStepLimitRestartsAtPersonMessages(t *testing.T) {
 	t.Parallel()
 
 	store, parent, children := startShadowStepTurn(t)
-	limited := children["main/z"]
+	limited := children["primary/z"]
 
 	parent.steers = []bridgeRequest{
 		{queueItemID: "s1", inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "also check the logs", true), completion: &turnCompletion{done: make(chan struct{})}},
@@ -1914,7 +1914,7 @@ func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
 	store, root := newShadowTestStore(t)
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
 
-	for _, name := range []string{"main", "main/a"} {
+	for _, name := range []string{"primary", "primary/a"} {
 		require.NoError(t, root.WriteFile(".rocketclaw/agents/"+name+".md", []byte("---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\nroutines: [30m]\n---\nPrompt\n"), 0o600))
 	}
 
@@ -1923,21 +1923,21 @@ func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
 
 	agents, _, err := LoadRuntimeDefinitions(cfg, config.DefaultRuntimeDir)
 	require.NoError(t, err)
-	require.Equal(t, []string{"main/a"}, agents.ShadowNames("main"))
-	require.Contains(t, logs.String(), "main/z.md")
-	require.Contains(t, logs.String(), "parent main")
+	require.Equal(t, []string{"primary/a"}, agents.ShadowNames("primary"))
+	require.Contains(t, logs.String(), "primary/z.md")
+	require.Contains(t, logs.String(), "parent primary")
 
 	runtime := &Runtime{Sessions: store}
 
-	for id, path := range map[string]string{"routine-run": "agents/main.md#30m", "cron-run": "cron/daily.md", "web": ""} {
-		conversation := protocol.Conversation{ID: id, Agent: "main"}
+	for id, path := range map[string]string{"routine-run": "agents/primary.md#30m", "cron-run": "cron/daily.md", "web": ""} {
+		conversation := protocol.Conversation{ID: id, Agent: "primary"}
 		if path != "" {
 			conversation.Run = &protocol.CronRun{Path: path, At: time.Unix(1, 0)}
 		}
 
 		require.NoError(t, runtime.CreateConversation(t.Context(), conversation))
 
-		parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: id, Agent: "main", SessionService: store}}
+		parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: id, Agent: "primary", SessionService: store}}
 		request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "hello", false)}
 		admitted, err := parent.activateInbound(t.Context(), &request)
 		require.NoError(t, err)
@@ -1946,7 +1946,7 @@ func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
 
 	mirrored, err := queryStrings(t.Context(), store.db, `SELECT c.shadow_parent || ':' || c.shadow_agent FROM conversations c JOIN shadow_turns s ON s.child_conversation_id = c.conversation_id ORDER BY 1`, "test shadow turns")
 	require.NoError(t, err)
-	require.Equal(t, []string{"cron-run:main/a", "web:main/a"}, mirrored)
+	require.Equal(t, []string{"cron-run:primary/a", "web:primary/a"}, mirrored)
 	shadows, err := queryStrings(t.Context(), store.db, `SELECT shadow_parent FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "test shadow sessions")
 	require.NoError(t, err)
 	require.Equal(t, []string{"cron-run", "web"}, shadows, "a routine run creates no shadow sessions")

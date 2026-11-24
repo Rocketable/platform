@@ -35,8 +35,8 @@ Use `rg` over `.rocketclaw/agents` and `.rocketclaw/cron` for steps 3 and 4.
 
 Stop and tell the human, without writing anything, when:
 
-- The agent is `main`, or any agent whose job is to edit `agents/`, `cron/`, `skills/`, `scripts/`, `rocketclaw.json` or the workspace itself. An easy agent's files are limited to its `workingDirectory`, which may not be or contain the workspace, nor be, contain or lie inside those folders. Cron files without `agent` run `main`.
-- A cron file that runs the agent comes from a git overlay or the embedded skeleton, including one exposed by deleting a local override. A cron file naming an easy agent fails startup and reload, and a workspace overlay cannot delete it. The human must remove it from its source first. Check the resulting layers before any writes, not just the currently effective cron files.
+- The agent is `main`, or any agent whose job is to edit `agents/`, `cron/`, `skills/`, `scripts/`, `rocketclaw.json` or the workspace itself. An easy agent's files are limited to its `workingDirectory`, which may not be or contain the workspace, nor be, contain or lie inside those folders. Cron files without `agent` never run.
+- A cron file that runs the agent comes from a git overlay or the embedded skeleton, including one exposed by deleting a local override. A cron file naming an easy agent never runs, and a workspace overlay cannot delete it. The human must remove it from its source first. Check the resulting layers before any writes, not just the currently effective cron files.
 - Another agent uses it as a reviewer through `auto(<name>)`. Easy agents always have the shell and file tools, so they make poor reviewers. Ask whether to keep this agent advanced, or to change those rules first through `main-create-or-update-agent`.
 
 ## Step 3: map what maps

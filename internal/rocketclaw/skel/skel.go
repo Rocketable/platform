@@ -37,6 +37,22 @@ type OverlayInfo struct {
 //go:embed all:.rocketclaw all:agents
 var payload embed.FS
 
+//go:embed builtin
+var builtin embed.FS
+
+//go:embed builtin/about.md
+var About string
+
+func BuiltinAgents() fs.FS {
+	agents, _ := fs.Sub(builtin, "builtin/agents")
+	return agents
+}
+
+func BuiltinAgent(name string) bool {
+	_, err := fs.Stat(builtin, "builtin/agents/"+name+".md")
+	return err == nil
+}
+
 func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger *slog.Logger) error {
 	if err := syncFSFiltered(payload, agentsRoot, filepath.Join(workspace, agentsRoot), "unpacking embedded rocketclaw setup files", logger, false, false, inertFileFilter{}); err != nil {
 		return fmt.Errorf("unpack embedded rocketclaw overlay %s: %w", agentsRoot, err)
@@ -195,15 +211,6 @@ func validateStage(workspace, stage string, overlays []string, logger *slog.Logg
 	}
 
 	return validate(filepath.ToSlash(stagedWorkDir))
-}
-
-func BuiltinAgent(name string) *string {
-	data, err := fs.ReadFile(payload, agentsRoot+"/"+name+".md")
-	if err != nil {
-		return nil
-	}
-
-	return new(string(data))
 }
 
 func commitStagedRuntimeAssets(stage, live string) error {
@@ -444,7 +451,7 @@ func overlayWorkspaceIn(workspace, target string, logger *slog.Logger) error {
 			logger,
 			true,
 			true,
-			workspaceOverlayFilter{workspace: workspace, root: root},
+			builtinAgentFilter{source: workspace, logger: logger, next: workspaceOverlayFilter{workspace: workspace, root: root}},
 		); err != nil {
 			return err
 		}
@@ -573,7 +580,7 @@ func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) er
 			return fmt.Errorf("stat overlay directory %s: %w", root, err)
 		}
 
-		if err := syncFSFiltered(os.DirFS(overlay.ClonePath), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, true, true, inertFileFilter{}); err != nil {
+		if err := syncFSFiltered(os.DirFS(overlay.ClonePath), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, true, true, builtinAgentFilter{source: overlay.ClonePath, logger: logger, next: inertFileFilter{}}); err != nil {
 			return err
 		}
 	}
@@ -669,6 +676,21 @@ func (f workspaceOverlayFilter) skip(name string, d fs.DirEntry) bool {
 	return !d.IsDir() && strings.HasSuffix(strings.ToLower(filepath.Base(name)), "example.md")
 }
 
+type builtinAgentFilter struct {
+	source string
+	logger *slog.Logger
+	next   fileFilter
+}
+
+func (f builtinAgentFilter) skip(name string, d fs.DirEntry) bool {
+	if agent, ok := strings.CutPrefix(strings.TrimSuffix(name, ".md"), agentsRoot+"/"); ok && BuiltinAgent(agent) {
+		f.logger.Warn("ignored file named after a built-in agent", "path", filepath.Join(f.source, filepath.FromSlash(name)))
+		return true
+	}
+
+	return f.next.skip(name, d)
+}
+
 func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger, overwrite, preserveExecutable bool, filter fileFilter) error {
 	logger.Info(message, "path", target)
 
@@ -679,6 +701,11 @@ func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger
 
 		if filter.skip(name, d) {
 			logger.Debug("skipped rocketclaw overlay file", "path", name)
+
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+
 			return nil
 		}
 

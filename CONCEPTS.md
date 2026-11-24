@@ -103,7 +103,7 @@ Restart is not a substitute for Reload when only overlay file contents changed.
 
 ### Behavior Settings
 
-The part of RocketClaw configuration that changes how the server behaves rather than where it runs or what secrets it holds: the auto-approver model, Slack channel routing and allowed users, logging level, and the overlay list. They live in PostgreSQL as one document that the Web admins named in the config file (`web.admins`) edit on the Config page, and a save applies to the running server. The first start imports them from the config file; after that the file's copies are ignored. Setup and secrets stay in the config file or AWS Secrets Manager.
+The part of RocketClaw configuration that changes how the server behaves rather than where it runs or what secrets it holds: the auto-approver model, Slack channel routing and allowed users, logging level, the overlay list, and whether each Embedded Agent is on and which model it uses. They live in PostgreSQL as one document that the Web admins named in the config file (`web.admins`) edit on the Config page, and a save applies to the running server. The first start imports them from the config file; after that the file's copies are ignored. Setup and secrets stay in the config file or AWS Secrets Manager.
 
 ## Model Providers
 
@@ -190,15 +190,22 @@ When a decision model is configured, a review asks it first and keeps its answer
 
 ### Task
 
-The model-facing tool through which an agent delegates a prompt to another agent type, or an Easy Agent to itself on one of its subagent models; the work runs as a Subagent Session, and its answer returns as the tool's result. Another agent cannot Task an Easy Agent.
+The model-facing tool through which an agent delegates a prompt to another agent type, or an Easy Agent to itself on one of its subagent models; the work runs as a Subagent Session, and its answer returns as the tool's result. Another agent cannot Task an Easy Agent, and no agent, itself included, can Task an Embedded Agent.
 
 ### Easy Agent
 
 An agent whose file sets `mode: easy`. A section its file leaves out turns on everything in it, except MCP, which stays off until its file names an MCP Facet, and OpenCode servers, which it reaches only when its file names them; a section it writes turns on only what it lists, and everything on is reviewed by the agent's own approver. Its shell commands run in its own folder, in the Emulated Shell unless its file names a wrapper program, and it gets only the commands, secrets, MCP tools, OpenCode servers, skills, models, and Routines its file names.
 
+### Embedded Agent
+
+One of the two agents built into the RocketClaw binary, `main` and `voice`, which every load takes from the binary rather than from the workspace or an overlay. The Web and the README call them built-in agents.
+*Avoid:* shipped agent, default agent
+
+No overlay, workspace file, or Agent Draft can replace one: same-named files are skipped with a warning, and the agent editor refuses their names. No agent delegates to one, not even itself: not through Task, a permission reviewer, or a session write. Behavior Settings turn each on or off and choose its model; one that is off is absent everywhere, and work sent to it fails. Its prompt ends with an About RocketClaw section that links to this repository's docs at the running revision.
+
 ### Sticky Session
 
-The one Web session a sticky agent keeps: per person for `sticky: user`, matched by login rather than display name, and one for everyone for `sticky: global`. Each chat records at creation whether it is born sticky, and that never changes; a chat born `off` never becomes a Sticky Session. A new Web session or session-tool creation resumes the agent's Sticky Session and starts one only when there is none. A personal sticky request without an identifiable person is refused. A `global` agent's cron and Routine runs report into its Sticky Session, opening it when there is none; a `user` agent cannot be scheduled. The chat stays in its original space, cannot be forked, and keeps its row while messages older than 90 days expire. A session switches only to agents of the kind it was born as, skipping agents that already have that kind of session for its person, or for everyone with `global`. A sticky agent is top-level: it may delegate, including to itself, but no other agent delegates to it or names it as a permission reviewer. Slack conversations use only `sticky: slack` agents, checked when each turn fires, and switch only to the `sticky: slack` agents their channel lists; External MCP conversations use only sticky: off agents; both keep separate histories. The Voice page calls only sticky: user agents, each on the person's own Sticky Session.
+The one Web session a sticky agent keeps: per person for `sticky: user`, matched by login rather than display name, and one for everyone for `sticky: global`. Each chat records at creation whether it is born sticky, and that never changes; a chat born `off` never becomes a Sticky Session. A new Web session or session-tool creation resumes the agent's Sticky Session and starts one only when there is none. A personal sticky request without an identifiable person is refused. A `global` agent's cron and Routine runs report into its Sticky Session, opening it when there is none; a `user` agent cannot be scheduled. The chat stays in its original space, cannot be forked, and keeps its row while messages older than 90 days expire. A session switches only to agents of the kind it was born as, skipping agents that already have that kind of session for its person, or for everyone with `global`. A sticky agent is top-level: it may delegate, including to itself unless it is an Embedded Agent, but no other agent delegates to it or names it as a permission reviewer. Slack conversations use only `sticky: slack` agents, checked when each turn fires, and switch only to the `sticky: slack` agents their channel lists; External MCP conversations use only sticky: off agents; both keep separate histories. The Voice page calls only sticky: user agents, each on the person's own Sticky Session.
 
 ### Routine
 

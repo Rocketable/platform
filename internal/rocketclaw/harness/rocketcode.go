@@ -3,6 +3,7 @@ package harness
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -208,12 +209,15 @@ func NewWithModelResolver(
 		return nil, fmt.Errorf("retained result dir %q must be a relative path inside the spill dir", config.RetainedResultDir)
 	}
 
-	if err := validateAutoPermissionReviewers(agents); err != nil {
-		return nil, err
+	agents, errsReviewer := agents.WithoutInvalidReviewers()
+	for _, err := range errsReviewer {
+		if errReviewer, _ := errors.AsType[*AgentReviewerError](err); errReviewer.Agent == defaultAgent {
+			return nil, err
+		}
 	}
 
 	if _, ok := agents.Items[defaultAgent]; !ok {
-		return nil, fmt.Errorf("missing required default agent %q", defaultAgent)
+		return nil, fmt.Errorf("agent %q is not loaded", defaultAgent)
 	}
 
 	prepared := make(map[string]Agent, len(agents.Items))
@@ -291,32 +295,68 @@ func NewWithModelResolver(
 	return looper, nil
 }
 
-func validateAutoPermissionReviewers(agents Agents) error {
-	if _, ok := agents.Items[guardianAgentName]; ok {
-		return fmt.Errorf("agent name %q is reserved when auto permission approval is enabled", guardianAgentName)
+type AgentReviewerError struct {
+	Agent, Reviewer string
+	Err             error
+}
+
+func (e *AgentReviewerError) Error() string {
+	return fmt.Sprintf("agent %q: %v", e.Agent, e.Err)
+}
+
+func (e *AgentReviewerError) Unwrap() error {
+	return e.Err
+}
+
+func (a Agents) WithoutInvalidReviewers() (Agents, []error) {
+	valid := Agents{Items: maps.Clone(a.Items)}
+
+	var errs []error
+
+	for removed := true; removed; {
+		removed = false
+
+		for _, name := range slices.Sorted(maps.Keys(valid.Items)) {
+			if err := valid.reviewerError(name); err != nil {
+				errs = append(errs, err)
+				removed = true
+
+				delete(valid.Items, name)
+			}
+		}
 	}
 
-	for agentName := range agents.Items {
-		agent := agents.Items[agentName]
-		for _, bucket := range agent.Permission.Buckets {
-			for _, rule := range bucket.Rules {
-				if rule.Action != permissionAuto || rule.Reviewer == "" {
-					continue
-				}
+	return valid, errs
+}
 
-				if rule.Reviewer == guardianAgentName {
-					return fmt.Errorf("agent %q permission %q rule %q references reserved reviewer %q; use bare auto for the embedded guardian", agentName, bucket.Name, rule.Pattern, guardianAgentName)
-				}
+func (a Agents) reviewerError(name string) error {
+	if name == guardianAgentName {
+		return &AgentReviewerError{Agent: name, Reviewer: guardianAgentName, Err: errors.New("the name is reserved for the embedded permission reviewer")}
+	}
 
-				reviewer, ok := agents.Items[rule.Reviewer]
-				if !ok {
-					return fmt.Errorf("agent %q permission %q rule %q references missing reviewer agent %q", agentName, bucket.Name, rule.Pattern, rule.Reviewer)
-				}
-
-				if !delegable(&reviewer, &agent) {
-					return fmt.Errorf("agent %q permission %q rule %q references sticky: %s reviewer agent %q, which reviews only its own rules", agentName, bucket.Name, rule.Pattern, reviewer.Sticky, rule.Reviewer)
-				}
+	agent := a.Items[name]
+	for _, bucket := range agent.Permission.Buckets {
+		for _, rule := range bucket.Rules {
+			if rule.Action != permissionAuto || rule.Reviewer == "" {
+				continue
 			}
+
+			reviewer, ok := a.Items[rule.Reviewer]
+
+			var reason string
+
+			switch {
+			case rule.Reviewer == guardianAgentName:
+				reason = fmt.Sprintf("references reserved reviewer %q; use bare auto for the embedded guardian", guardianAgentName)
+			case !ok:
+				reason = fmt.Sprintf("references missing reviewer agent %q", rule.Reviewer)
+			case !delegable(&reviewer, &agent):
+				reason = fmt.Sprintf("references sticky: %s reviewer agent %q, which reviews only its own rules", reviewer.Sticky, rule.Reviewer)
+			default:
+				continue
+			}
+
+			return &AgentReviewerError{Agent: name, Reviewer: rule.Reviewer, Err: fmt.Errorf("permission %q rule %q %s", bucket.Name, rule.Pattern, reason)}
 		}
 	}
 

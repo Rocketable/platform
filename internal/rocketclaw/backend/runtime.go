@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -104,6 +105,10 @@ func (r *Runtime) Reload(reason string) (string, error) {
 
 	r.prepareSandbox()
 
+	if warnings != "" {
+		return "rocketclaw runtime assets reloaded\n\n" + warnings, nil
+	}
+
 	return "rocketclaw runtime assets reloaded", nil
 }
 
@@ -118,6 +123,12 @@ func (r *Runtime) SaveBehavior(behavior *config.Behavior) error {
 
 	if err := candidate.ValidateBehavior(); err != nil {
 		return fmt.Errorf("validate behavior settings: %w", err)
+	}
+
+	for _, embedded := range [...]struct{ field, model string }{{"embedded_agents.main.model", candidate.EmbeddedAgents.Main.Model}, {"embedded_agents.voice.model", candidate.EmbeddedAgents.Voice.Model}} {
+		if provider, _, qualified := strings.Cut(embedded.model, "/"); qualified && !slices.Contains(candidate.ProviderNames(), provider) {
+			return fmt.Errorf("validate behavior settings: %s: provider %q is not configured", embedded.field, provider)
+		}
 	}
 
 	normalized := candidate.Behavior()

@@ -863,8 +863,8 @@ message DraftLayersRequest {
   string destination = 3;
 }
 
-// AgentLayer is one layer's file for the draft's name: layer is "built-in", a configured overlay's spec, or
-// "workspace"; ref is an overlay's pinned ref; file is unset where the layer has none.
+// AgentLayer is one layer's file for the draft's name: layer is a configured overlay's spec or "workspace";
+// ref is an overlay's pinned ref; file is unset where the layer has none.
 message AgentLayer {
   string layer = 1;
   string ref = 2;
@@ -873,15 +873,15 @@ message AgentLayer {
 
 // DraftLayersResponse lists the layers in precedence order, each later one winning. hidden_by names the
 // later layer whose file hides the destination, whatever its bytes; replaces names the earlier layer whose
-// agent the save takes over, so its updates stop reaching this workspace; recreated says startup copies the
-// built-in agent into workspace agents/ again, which hides an overlay destination; next is the file the save
-// writes, settings in the standard order and comments dropped. For an overlay destination, branch is the
-// branch a save pushes to, or unpushable says why it cannot push there.
+// agent the save takes over, so its updates stop reaching this workspace; next is the file the save writes,
+// settings in the standard order and comments dropped. For an overlay destination, branch is the branch a
+// save pushes to, or unpushable says why it cannot push there.
 message DraftLayersResponse {
   repeated AgentLayer layers = 1;
   string hidden_by = 2;
   string replaces = 3;
-  bool recreated = 4;
+  reserved 4;
+  reserved "recreated";
   string next = 5;
   string branch = 6;
   string unpushable = 7;

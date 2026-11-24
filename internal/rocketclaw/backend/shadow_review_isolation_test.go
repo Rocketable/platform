@@ -30,7 +30,7 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 			store, root := newShadowTestStore(t)
 			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
 
-			for _, item := range []struct{ name, model string }{{"main", "gpt-parent"}, {"main/a", "gpt-broken"}, {"main/z", "gpt-good"}, {"other", "gpt-other"}} {
+			for _, item := range []struct{ name, model string }{{"primary", "gpt-parent"}, {"primary/a", "gpt-broken"}, {"primary/z", "gpt-good"}, {"other", "gpt-other"}} {
 				require.NoError(t, root.WriteFile(".rocketclaw/agents/"+item.name+".md", fmt.Appendf(nil, "---\nmodel: %s\npermission: {}\n---\nSystem %s", item.model, item.name), 0o600))
 			}
 
@@ -56,27 +56,27 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 
 			runtime := &Runtime{Sessions: store}
 			if failure != "new malformed" {
-				require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+				require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 			}
 
 			if failure == "bound missing" {
-				require.NoError(t, root.Remove(".rocketclaw/agents/main/a.md"))
+				require.NoError(t, root.Remove(".rocketclaw/agents/primary/a.md"))
 			} else {
-				require.NoError(t, root.WriteFile(".rocketclaw/agents/main/a.md", []byte("---\nmodel: [\n---\nBroken"), 0o600))
+				require.NoError(t, root.WriteFile(".rocketclaw/agents/primary/a.md", []byte("---\nmodel: [\n---\nBroken"), 0o600))
 			}
 
-			require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+			require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 			require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "unrelated", Agent: "other"}))
 
 			agents, _, err := LoadRuntimeDefinitions(cfg, config.DefaultRuntimeDir)
 			require.NoError(t, err, "shared execution loader must retain healthy definitions")
-			require.Contains(t, agents.Items, "main")
-			require.Contains(t, agents.Items, "main/z")
+			require.Contains(t, agents.Items, "primary")
+			require.Contains(t, agents.Items, "primary/z")
 			require.Contains(t, agents.Items, "other")
-			require.NotContains(t, agents.Items, "main/a")
+			require.NotContains(t, agents.Items, "primary/a")
 
 			if failure != "bound missing" {
-				require.Contains(t, logs.String(), "main/a.md", "operators must see the malformed file")
+				require.Contains(t, logs.String(), "primary/a.md", "operators must see the malformed file")
 			}
 
 			finals := make(chan *protocol.OutboundMessage, 8)
@@ -97,7 +97,7 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 			}
 
 			var good string
-			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/z'`).Scan(&good))
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'primary/z'`).Scan(&good))
 			require.Eventually(t, func() bool {
 				entries, err := store.ObserveEntries(t.Context(), good)
 				return err == nil && len(entries) == 1
@@ -108,7 +108,7 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 
 			if failure != "new malformed" {
 				var broken string
-				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/a'`).Scan(&broken))
+				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'primary/a'`).Scan(&broken))
 
 				inbound, err := json.Marshal(protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "saved input", true))
 				require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 
 				var message string
 				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT outbound_json->>'Text' FROM turns WHERE conversation_id = $1 AND terminal = $2`, broken, protocol.TerminalFailed).Scan(&message))
-				require.Contains(t, message, `missing required default agent "main/a"`)
+				require.Contains(t, message, `agent "primary/a" is not loaded`)
 			}
 
 			require.Empty(t, finals, "child success and definition errors stay local")
@@ -152,7 +152,7 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 		return NewConversation(cfg, discardPublisher{}, bridgeCfg, store.log)
 	}})
 	for _, id := range []string{"existing", "blocked"} {
-		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main"}))
+		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "primary"}))
 	}
 
 	existing, err := manager.recordedBridge(t.Context(), "existing")
@@ -173,7 +173,7 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 	done := make(chan error, 1)
 
 	group.Go(func() error {
-		_, err := manager.ensureThreadBridge(ctx, "blocked", ThreadState{Agent: "main"})
+		_, err := manager.ensureThreadBridge(ctx, "blocked", ThreadState{Agent: "primary"})
 		done <- err
 
 		return nil
@@ -193,7 +193,7 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 		t.Fatal("blocked ownership read holds the global worker lock")
 	}
 	manager.mu.Unlock()
-	lookup, err := manager.ensureThreadBridge(t.Context(), "existing", ThreadState{Agent: "main"})
+	lookup, err := manager.ensureThreadBridge(t.Context(), "existing", ThreadState{Agent: "primary"})
 	require.NoError(t, err)
 	require.Same(t, existing, lookup)
 	cancel()
@@ -215,7 +215,7 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 	maxConnections := store.db.Stats().MaxOpenConnections
 	store.db.SetMaxOpenConns(1)
 
-	lookup, err = manager.ensureThreadBridge(ctx, "existing", ThreadState{Agent: "main"})
+	lookup, err = manager.ensureThreadBridge(ctx, "existing", ThreadState{Agent: "primary"})
 	require.NoError(t, err)
 	require.Same(t, existing, lookup)
 	store.db.SetMaxOpenConns(maxConnections)
@@ -224,7 +224,7 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 
 	for range 2 {
 		group.Go(func() error {
-			bridge, err := manager.ensureThreadBridge(t.Context(), "blocked", ThreadState{Agent: "main"})
+			bridge, err := manager.ensureThreadBridge(t.Context(), "blocked", ThreadState{Agent: "primary"})
 			if err == nil {
 				results <- bridge
 			}

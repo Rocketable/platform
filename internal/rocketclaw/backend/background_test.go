@@ -651,7 +651,7 @@ func TestBackgroundNoteCarriesTheJobsFiles(t *testing.T) {
 				return harness.ToolResult{Output: "Attached file 1: chart.png", Attachments: []harness.Attachment{{MIME: "image/png", Filename: "chart.png", URL: "data:image/png;base64,"}}, Data: harness.RetainedFiles{ResultID: resultID}}, nil
 			}, DetachFunc: func() bool { return true }}
 			turn := backgroundTurn{registry: nt.service.jobs.(*backgroundRegistry), root: testTurnRoot(t), conversationID: nt.conversationID, origin: nt.slackPrompt("run the tests")}
-			_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-0/call/a", Kind: harness.BackgroundKindExecute, Label: "tests", Agent: "main", CallID: "a", Detached: true}, work)
+			_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-0/call/a", Kind: harness.BackgroundKindExecute, Label: "tests", Agent: "primary", CallID: "a", Detached: true}, work)
 			require.NoError(t, err)
 
 			if running {
@@ -736,7 +736,7 @@ func executeAnswer(t *testing.T, code string, background bool) []string {
 
 		writeRawRunFunctionCall(t, w, "act", "execute", map[string]any{"code": code, "description": "tests", "background": background})
 	})
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n  read: allow\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n  read: allow\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
 	require.NoError(t, os.WriteFile(filepath.Join(nt.cfg.Workspace, "chart.png"), []byte("\x89PNG\r\n\x1a\nchart"), 0o600))
 	manager, _ := nt.run(t, ignoreOutbound)
 	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("go")))

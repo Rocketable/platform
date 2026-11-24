@@ -37,11 +37,11 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	require.NoError(t, root.Mkdir("agents", 0o755))
 
 	const agent = "---\ndescription: Lifecycle test agent\nmodel: gpt-6.1-sol\n---\nRespond concisely.\n"
-	require.NoError(t, root.WriteFile("agents/main.md", []byte(agent), 0o600))
+	require.NoError(t, root.WriteFile("agents/primary.md", []byte(agent), 0o600))
 
 	resources := make([]*os.File, 2)
 	for i := range resources {
-		resources[i], err = root.Open("agents/main.md")
+		resources[i], err = root.Open("agents/primary.md")
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = resources[i].Close() })
 	}
@@ -53,7 +53,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	t.Cleanup(collector.Close)
 
 	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: config.SlackConfig{
-		Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#general", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}},
+		Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"primary"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#general", Agents: []string{"primary"}, AllowedUserIDs: []string{"U1"}}},
 	}, MCPExternal: config.MCPExternalConfig{Enabled: true}, PostHog: config.PostHogConfig{ProjectToken: "phc_test", Host: collector.URL}}
 	require.NoError(t, cfg.ValidateBehavior())
 
@@ -77,7 +77,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.Equal(t, cfg, got)
 			require.True(t, runtimeDir == cfg.RuntimeDirName() || strings.HasPrefix(runtimeDir, cfg.RuntimeDirName()+"-reload-"))
 
-			data, err := root.ReadFile(runtimeDir + "/agents/main.md")
+			data, err := root.ReadFile(runtimeDir + "/agents/primary.md")
 			require.NoError(t, err)
 			require.Equal(t, agent, string(data))
 
@@ -92,14 +92,14 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.NoError(t, rt.Sessions.db.PingContext(rt.RunCtx))
 			require.Same(t, rt.threads, rt.TextRouter)
 
-			require.NoError(t, rt.threads.store.UpsertThread(threadID, ThreadState{Agent: "main"}))
+			require.NoError(t, rt.threads.store.UpsertThread(threadID, ThreadState{Agent: "primary"}))
 			require.NoError(t, rt.threads.PickLaterWork(rt.RunCtx, threadID))
 
 			bridge := rt.threads.bridges[threadID].(*Bridge)
 			require.Same(t, rt, bridge.config.RequestReload)
 			reloaded, err := bridge.config.RequestReload.Reload("test reload")
 			require.NoError(t, err)
-			require.Equal(t, "rocketclaw runtime assets reloaded", reloaded)
+			require.Equal(t, "rocketclaw runtime assets reloaded\n\nSlack channel @ uses agent primary, which is not sticky: slack, so it does not answer mentions there. Slack channel #general uses agent primary, which is not sticky: slack, so it does not answer mentions there.", reloaded)
 
 			_, _, err = bridge.threads.createSession(rt.RunCtx, &threadStart{agent: "missing"}, nil, "", nil, nil)
 			require.ErrorContains(t, err, `agent "missing" is not configured`)
@@ -167,7 +167,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Queue recovery\nmodel: gpt-6.1-sol\npermission: {}\n---\nRespond concisely.\n")
+	writeAgentFile(t, workspace, "primary", "---\ndescription: Queue recovery\nmodel: gpt-6.1-sol\npermission: {}\n---\nRespond concisely.\n")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -186,7 +186,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 	conversationID := "web-queued"
 	seed, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	require.NoError(t, seed.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	require.NoError(t, seed.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
 	boundary, err := seed.AppendEntryID(t.Context(), conversationID, testSessionEntry("recorded", "answer"))
 	require.NoError(t, err)
 	_, _, err = stageRevertDB(t.Context(), seed.db, conversationID, fmt.Sprintf("%d:0", boundary))
@@ -656,8 +656,6 @@ func TestRunStopsOnInvalidFrontendAssets(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n"), 0o600))
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -672,8 +670,6 @@ func TestRunTakesTheLockThenGatesThenMigrates(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n"), 0o600))
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -733,7 +729,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\nsticky: slack\npermission: {}\n---\nPrompt\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "primary.md"), []byte("---\ndescription: Primary\nmodel: gpt-6.1-sol\nsticky: slack\npermission: {}\n---\nPrompt\n"), 0o600))
 
 	bodies := make(chan string, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -768,7 +764,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 			lastStep = "submitting the Slack mention"
 			startupMu.Unlock()
 
-			accepted, err := rt.TextRouter.SubmitMention(rt.RunCtx, "main", protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}, msg)
+			accepted, err := rt.TextRouter.SubmitMention(rt.RunCtx, "primary", protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}, msg)
 
 			startupMu.Lock()
 			lastStep = fmt.Sprintf("SubmitMention returned accepted=%t, error=%v", accepted, err)

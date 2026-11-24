@@ -33,7 +33,7 @@ func TestValidateAssetsReportsCronDefinitionError(t *testing.T) {
 	}
 
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "cron", "daily.md"), []byte("---\nagent: main\n---\nBody"), 0o644))
-	require.ErrorContains(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, "."), "validate cron definitions: load cron definition: parse cronjob cron/daily.md frontmatter: schedule is required")
+	require.ErrorContains(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, "."), "validate cron definitions: list cron files: load cron definition: parse cronjob cron/daily.md frontmatter: schedule is required")
 }
 
 func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
@@ -54,7 +54,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 	for _, slack := range []config.SlackConfig{
 		{
 			BotToken: "xoxb-test", AppToken: "xapp-test",
-			Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"assistant"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#ops", Agents: []string{"assistant"}, AllowedUserIDs: []string{"U1"}}},
+			Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"ops"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#ops", Agents: []string{"ops"}, AllowedUserIDs: []string{"U1"}}},
 		},
 		{},
 	} {
@@ -66,8 +66,10 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 			})
 
 			workspace := t.TempDir()
-			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "agents"), 0o755))
-			require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\n---\n"), 0o600))
+			require.NoError(t, os.Mkdir(filepath.Join(workspace, "agents"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "ops.md"), []byte("---\ndescription: Ops\nmodel: gpt-6.1-sol\nsticky: slack\n---\n"), 0o600))
+			require.NoError(t, os.Mkdir(filepath.Join(workspace, "cron"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(workspace, "cron", "ops.md"), []byte("---\nschedule: 1h\nagent: ops\n---\nReport.\n"), 0o600))
 
 			usePassingTailnet(t)
 

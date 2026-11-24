@@ -259,10 +259,12 @@ func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error)
 		}
 	}
 
-	if sudo {
-		agent.Permission = sudoPermissions(cfg.MCPFacets)
-	} else if agent.Permission, err = parsePermissionNode(frontmatterField(frontmatterNode, "permission"), cfg.MCPFacets); err != nil {
+	if agent.Permission, err = parsePermissionNode(frontmatterField(frontmatterNode, "permission"), cfg.MCPFacets); err != nil {
 		return Agent{}, fmt.Errorf("%s: parse permission: %w", filePath, err)
+	}
+
+	if sudo {
+		agent.Permission = sudoPermissions(cfg.MCPFacets, agent.Permission)
 	}
 
 	if field := frontmatterField(frontmatterNode, "maxRecursion"); field != nil {
@@ -393,7 +395,7 @@ func decodeAgentFrontmatter(frontmatterText []byte) (map[string]any, *yaml.Node,
 	return frontmatter, node.Content[0], nil
 }
 
-func sudoPermissions(facets map[string]map[string][]string) PermissionSet {
+func sudoPermissions(facets map[string]map[string][]string, rules PermissionSet) PermissionSet {
 	permissions := PermissionSet{Sudo: true}
 	_ = permissions.Set("skill", "*", PermissionAllow)
 	_ = permissions.Set("task", "*", PermissionAllow)
@@ -408,6 +410,14 @@ func sudoPermissions(facets map[string]map[string][]string) PermissionSet {
 	}
 
 	_ = compileMCPGrant(&permissions, facets, everyFacet)
+
+	for _, bucket := range rules.Buckets {
+		if i := slices.IndexFunc(permissions.Buckets, func(sudoBucket PermissionBucket) bool { return sudoBucket.Name == bucket.Name }); i >= 0 {
+			permissions.Buckets[i].Rules = append(permissions.Buckets[i].Rules, bucket.Rules...)
+		} else {
+			permissions.Buckets = append(permissions.Buckets, bucket)
+		}
+	}
 
 	return permissions
 }

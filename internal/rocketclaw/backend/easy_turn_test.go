@@ -170,7 +170,7 @@ func TestEasyShadowReadsParentUploads(t *testing.T) {
 	t.Parallel()
 
 	store, root := newShadowTestStore(t)
-	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
+	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 
 	var child string
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent = 'parent' LIMIT 1`).Scan(&child))
@@ -224,7 +224,7 @@ func TestEasyApproverUsesItsOwnTools(t *testing.T) {
 	})
 	wrapper := filepath.Join(nt.cfg.Workspace, "wrap.sh")
 	require.NoError(t, os.WriteFile(wrapper, []byte("#!/bin/sh\nprintf 'ran %s in %s with %s' \"$1\" \"$PWD\" \"$ROCKETCLAW_ENVIRONMENT\""), 0o755))
-	writeAgent(t, nt.cfg.Workspace, "main", "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: "+filepath.Join(nt.cfg.Workspace, "data", "$ROCKETCLAW_CONVERSATION_ID")+"\nshell: "+wrapper+"\nrocketclaw: []\napprover:\n  rocketclaw: [tags]\n  tags: [[red, green]]\n  commands: {lookup: ./lookup}\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "primary", "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: "+filepath.Join(nt.cfg.Workspace, "data", "$ROCKETCLAW_CONVERSATION_ID")+"\nshell: "+wrapper+"\nrocketclaw: []\napprover:\n  rocketclaw: [tags]\n  tags: [[red, green]]\n  commands: {lookup: ./lookup}\n---\nPrompt\n")
 	nt.cfg.AutoApproverModel = "gpt-review"
 
 	manager, _ := nt.run(t, ignoreOutbound)
@@ -282,7 +282,7 @@ func TestEasySubagentWorksInParentFolder(t *testing.T) {
 			answerNoteTest(w, r, n, body)
 		}
 	})
-	writeAgent(t, nt.cfg.Workspace, "main", "---\nmode: easy\nmodel: gpt-6.1-sol\nsubagents: [gpt-6-luna]\nspace: Ops\nworkingDirectory: "+filepath.Join(nt.cfg.Workspace, "data", "$ROCKETCLAW_CONVERSATION_ID")+"\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "primary", "---\nmode: easy\nmodel: gpt-6.1-sol\nsubagents: [gpt-6-luna]\nspace: Ops\nworkingDirectory: "+filepath.Join(nt.cfg.Workspace, "data", "$ROCKETCLAW_CONVERSATION_ID")+"\n---\nPrompt\n")
 	nt.cfg.AutoApproverModel = "gpt-review"
 
 	data := filepath.Join(nt.cfg.Workspace, "data")
