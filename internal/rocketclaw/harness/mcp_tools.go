@@ -277,11 +277,19 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 		return ToolResult{}, fmt.Errorf("run code mode: %w", errNames)
 	}
 
-	usedServers := slices.DeleteFunc(slices.Clone(visibleServers), func(server string) bool {
-		return !slices.ContainsFunc(names, func(name string) bool {
-			return name == searchBuiltinName || strings.HasPrefix(name, codemode.SanitizeTool(server)+"_")
-		})
-	})
+	var usedServers []string
+
+	switch {
+	case slices.Contains(names, searchBuiltinName):
+		usedServers = visibleServers
+	case len(names) > 0:
+		for _, server := range visibleServers {
+			prefix := codemode.SanitizeTool(server) + "_"
+			if slices.ContainsFunc(names, func(name string) bool { return strings.HasPrefix(name, prefix) }) {
+				usedServers = append(usedServers, server)
+			}
+		}
+	}
 
 	mcpCall := codemode.CallFunc(func(context.Context, string, string, map[string]any) (starlark.Value, error) {
 		return nil, errors.New("mcp call unavailable")
