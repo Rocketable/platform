@@ -46,6 +46,10 @@ def main():
     ]
     return str(x)  # trailing
 # after`},
+		{"parameter list opening comment", "def f( # note\n a): return a", `def f(  # note
+    a,
+):
+    return a`},
 		{"literals as written", "def main():\n\ti = 0\n\twhile i < 2:\n\t\ti += 1\n\treturn '''é — \\u00e9''' + r\"\\d\" + str(b'\\xff') + str(0 .real)", `def main():
     i = 0
     while i < 2:
