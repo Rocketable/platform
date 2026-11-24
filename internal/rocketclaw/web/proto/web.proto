@@ -350,6 +350,7 @@ message SearchSessionsResponse {
 // SlackNamesRequest asks for display names of Slack IDs.
 message SlackNamesRequest {
   repeated string ids = 1;
+  optional string query = 2;
 }
 
 // SlackNamesResponse maps IDs to bare display strings without a leading @ or #.
@@ -478,10 +479,12 @@ message PromptRequest {
   PromptDelivery delivery = 3;
   repeated string attachment_ids = 4;
   string message_id = 5;
+  repeated string mention_ids = 6;
 }
 
 message PromptResponse {
   string private_text = 1;
+  optional string mention_warning = 2;
 }
 
 message CronJob {
@@ -1364,6 +1367,7 @@ service Web {
   rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
   rpc SearchSessions(SearchSessionsRequest) returns (SearchSessionsResponse);
   rpc SlackNames(SlackNamesRequest) returns (SlackNamesResponse);
+  rpc NotifySessionMentions(PromptRequest) returns (PromptResponse);
   rpc Handoff(HandoffRequest) returns (HandoffResponse);
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
   rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);

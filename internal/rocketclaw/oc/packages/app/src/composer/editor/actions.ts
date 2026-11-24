@@ -1,10 +1,8 @@
 import { batch, untrack, type Accessor } from "solid-js"
 import type { SetStoreFunction, Store } from "solid-js/store"
 import type {
-  ComposerAgentPart,
-  ComposerFilePart,
-  ComposerSkillPart,
-  ComposerSessionPart,
+  // rocketclaw: share the suggestion type for person tags (upstream packages/app/src/composer/editor/actions.ts).
+  ComposerSuggestion,
   ComposerPersistedState,
   ComposerPrompt,
 } from "../types"
@@ -75,7 +73,8 @@ export function createComposerEditorActions(input: ComposerStateStoreInput) {
       setStore()("context", "items", (items) => items.filter((item) => item.key !== key))
     },
     addMention(
-      mention: ComposerFilePart | ComposerAgentPart | ComposerSkillPart | ComposerSessionPart,
+      // rocketclaw: insert any composer tag, including a person (upstream packages/app/src/composer/editor/actions.ts).
+      mention: NonNullable<ComposerSuggestion["mention"]>,
       range?: { start: number; end: number },
     ) {
       const prompt = withOffsets(store().prompt)
@@ -143,7 +142,8 @@ function insertMention(
   prompt: ComposerPrompt,
   start: number,
   end: number,
-  mention: ComposerFilePart | ComposerAgentPart | ComposerSkillPart | ComposerSessionPart,
+  // rocketclaw: keep person tags as atomic parts (upstream packages/app/src/composer/editor/actions.ts).
+  mention: NonNullable<ComposerSuggestion["mention"]>,
 ): ComposerPrompt {
   let position = 0
   let inserted = false

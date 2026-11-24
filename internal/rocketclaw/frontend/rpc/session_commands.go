@@ -425,7 +425,16 @@ func (s *Server) slackNames(ctx context.Context, request *SlackNamesRequest) (*S
 		return nil, err
 	}
 
-	return &SlackNamesResponse{Names: s.channels.SlackNames(ctx, request.GetIds())}, nil
+	ids := request.GetIds()
+	if request.Query != nil {
+		ids = slices.DeleteFunc(s.channels.SlackTagsMatching(ctx, *request.Query), func(id string) bool {
+			return !slackPersonID.MatchString(id)
+		})
+		slices.Sort(ids)
+		ids = ids[:min(len(ids), 20)]
+	}
+
+	return &SlackNamesResponse{Names: s.channels.SlackNames(ctx, ids)}, nil
 }
 
 func (s *Server) findPullRequests(ctx context.Context, request *FindPullRequestsRequest) (*FindPullRequestsResponse, error) {

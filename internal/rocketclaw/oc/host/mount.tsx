@@ -27,9 +27,11 @@ import { SessionTab } from "./session-tab"
 import { ServerState } from "./state"
 import { Theme } from "./theme"
 import { VersionPill } from "./version-pill"
+import { reportMentionWarnings } from "./session-mentions"
 
 // One platform for the page, as upstream's entry made: its draft store holds one IndexedDB connection.
 const web = createWebPlatform(tag.replace(/^v/, ""))
+web.platform.fetch = reportMentionWarnings
 
 /**
  * Shows one session of the configured OpenCode servers inside element (KTD8), with OpenCode's page-wide behavior

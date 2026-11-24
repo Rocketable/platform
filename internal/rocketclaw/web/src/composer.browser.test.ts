@@ -30,6 +30,7 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
         case "/api/ListConfig": return Response.json({ config: { workspace: "composer" } });
         case "/api/ListAgents": return Response.json({ agents: [{ name: "Build", model: "OpenAI / GPT-6.1 Sol", reasoning: "high" }], currentAgent: "Build" });
         case "/api/ListSkills": return Response.json({ skills: [] });
+        case "/api/SlackNames": return Response.json({ names: { U42: "Riley" } });
         case "/api/ListQueue": return Response.json({ items: queue });
         case "/api/Prompt": {
           const prompt = await request.json() as { text: string; delivery: QueueItem["delivery"]; messageId: string };
@@ -104,6 +105,64 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
       await Promise.all([page.waitForResponse("**/api/Prompt"), page.getByRole("menuitem", { name: "Stash", exact: true }).click()]);
       await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
       expect(calls.at(-1)).toMatchObject({ text: "Save this for later", delivery: "STASH" });
+      if (width === 1280 && !touch) {
+        await input.fill("Ask @R");
+        await page.getByRole("button", { name: "@Riley", exact: true }).waitFor();
+        for (const replacement of ["Ask @Riley please review", "Ask @Riley "]) {
+          await input.fill("Ask @Ril");
+          await page.getByRole("button", { name: "@Riley", exact: true }).click();
+          await input.fill(replacement);
+          await Promise.all([page.waitForResponse("**/api/Prompt"), page.getByRole("button", { name: "Send", exact: true }).click()]);
+          expect(calls.at(-1)).toMatchObject({ text: replacement });
+          expect(calls.at(-1)).not.toHaveProperty("mentionIds");
+        }
+        await input.fill("Ask @Ril");
+        await page.getByRole("button", { name: "@Riley", exact: true }).waitFor();
+        await input.press("Tab");
+        expect(await input.inputValue()).toBe("Ask @Riley ");
+        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+        await input.press("Home");
+        await input.pressSequentially("Please ");
+        await input.press("End");
+        await input.pressSequentially("caf");
+        const ime = await page.context().newCDPSession(page);
+        await ime.send("Input.imeSetComposition", { text: "e", selectionStart: 1, selectionEnd: 1 });
+        await ime.send("Input.imeSetComposition", { text: "é", selectionStart: 1, selectionEnd: 1 });
+        await page.keyboard.insertText("é");
+        await ime.detach();
+        expect(await input.inputValue()).toBe("Please Ask @Riley café");
+        await page.keyboard.press("Control+Shift+p");
+        const palette = page.getByRole("dialog", { name: "Run command", exact: true });
+        await palette.getByPlaceholder("Type a command").fill("Enqueue work");
+        await palette.getByRole("button", { name: "Command: Enqueue work (/enqueue)", exact: true }).click();
+        await palette.waitFor({ state: "hidden" });
+        expect(await input.inputValue()).toBe("/enqueue Please Ask @Riley café");
+        expect(await page.getByRole("button", { name: "@Riley", exact: true }).count()).toBe(0);
+        await Promise.all([page.waitForResponse("**/api/Prompt"), input.press("Enter")]);
+        expect(calls.at(-1)).toMatchObject({ text: "/enqueue Please Ask @Riley café", mentionIds: ["U42"] });
+        await input.fill("Ask @Riley and <@U42|Riley>");
+        await Promise.all([page.waitForResponse("**/api/Prompt"), input.press("Enter")]);
+        expect(calls.at(-1)).not.toHaveProperty("mentionIds");
+        await input.fill("Ask @Ril");
+        await page.getByRole("button", { name: "@Riley", exact: true }).waitFor();
+        await input.press("Tab");
+        await input.press("Backspace");
+        await input.press("Backspace");
+        await input.pressSequentially("y tomorrow");
+        await Promise.all([page.waitForResponse("**/api/Prompt"), input.press("Enter")]);
+        expect(calls.at(-1)).toMatchObject({ text: "Ask @Riley tomorrow" });
+        expect(calls.at(-1)).not.toHaveProperty("mentionIds");
+        await input.fill("Ask @Ril");
+        await page.getByRole("button", { name: "@Riley", exact: true }).click();
+        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+        await input.press("End");
+        await input.press("ArrowLeft");
+        await input.pressSequentially("x");
+        await input.press("End");
+        await Promise.all([page.waitForResponse("**/api/Prompt"), input.press("Enter")]);
+        expect(calls.at(-1)).toMatchObject({ text: "Ask @Rileyx " });
+        expect(calls.at(-1)).not.toHaveProperty("mentionIds");
+      }
       expect(errors).toEqual([]);
     } finally {
       await browser.close();

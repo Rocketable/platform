@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -22,6 +23,8 @@ type slackFrontend interface {
 	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
 	SlackNames(context.Context, []string) map[string]string
 	SlackTagsMatching(context.Context, string) []string
+	SendSessionMention(ctx context.Context, userID, link string) error
+	SlackMentionEmail(ctx context.Context, userID string) string
 	RenameThreadSession(ctx context.Context, conversationID, name string)
 	StartEvents(context.Context, frontend.Backend) <-chan struct{}
 	Start(context.Context)
@@ -45,6 +48,12 @@ func (inertSlack) SlackNames(context.Context, []string) map[string]string {
 func (inertSlack) SlackTagsMatching(context.Context, string) []string {
 	return nil
 }
+
+func (inertSlack) SendSessionMention(context.Context, string, string) error {
+	return errors.New("direct notifications are unavailable")
+}
+
+func (inertSlack) SlackMentionEmail(context.Context, string) string { return "" }
 
 func (inertSlack) RenameThreadSession(context.Context, string, string) {}
 

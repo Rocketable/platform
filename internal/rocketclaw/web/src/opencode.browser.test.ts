@@ -303,6 +303,7 @@ function start() {
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "opencode" });
       case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/SlackNames": return Response.json({ names: { U42: "Riley" } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       // New session needs the config to scope its draft.
       case "/api/ListConfig": return Response.json({ config: {} });
@@ -1220,6 +1221,7 @@ test("OpenCode's composer reports typing for the session the view shows, and the
     // The reports in the order the tab numbered them, which they may reach the server out of.
     const reports = () => calls.filter(({ path }) => path === "/api/ReportTyping").map(({ body }) => body).sort((a, b) => Number(a.seq) - Number(b.seq)).map(({ id, typing }) => ({ id, typing }));
     const sent: string[] = [];
+    let sentPrompt: { text: string; metadata: { rocketclaw_mention_ids?: string[] } } | undefined;
     // The fake server has no models and answers sends with the wrong status; these answers let OpenCode's own send
     // paths run to the end (packages/client/src/promise/generated/client.ts).
     const catalog: Record<string, unknown> = {
@@ -1231,7 +1233,11 @@ test("OpenCode's composer reports typing for the session the view shows, and the
     await page.route(/\/oc\/box\/api\/session\/ses_a\/(agent|model|shell|prompt|generate)$/, (request: any) => {
       const kind = new URL(request.request().url()).pathname.split("/").at(-1)!;
       sent.push(kind);
-      if (kind === "prompt") return request.fulfill({ json: { data: { id: request.request().postDataJSON().id, sessionID: "ses_a", time: { created: 1 }, type: "user", payload: { text: "hello" }, delivery: "steer" } } });
+      if (kind === "prompt") {
+        const body = request.request().postDataJSON();
+        sentPrompt = body;
+        return request.fulfill({ headers: { "X-RocketClaw-Mention-Warning": "One or more teammate notifications could not be sent." }, json: { data: { id: body.id, sessionID: "ses_a", time: { created: 1 }, type: "user", payload: { text: body.text }, delivery: "steer" } } });
+      }
       if (kind === "generate") return request.fulfill({ json: { data: { text: "by the way", tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0 } } });
       return request.fulfill({ status: 204 });
     });
@@ -1300,10 +1306,13 @@ test("OpenCode's composer reports typing for the session the view shows, and the
     const held = Promise.withResolvers<void>();
     let requested = 0;
     await page.route("**/api/ReportTyping", async (request: any) => { if (++requested === 1) await held.promise; await request.continue(); });
-    await composer.pressSequentially("hello");
+    await composer.pressSequentially("Ask @Ril");
+    await view.locator('[data-suggestion-id="person:U42"]').click();
     await until(() => requested === 1);
     await composer.press("Enter");
     await until(() => sent.includes("prompt"));
+    expect(sentPrompt).toMatchObject({ text: "Ask @Riley ", metadata: { rocketclaw_mention_ids: ["U42"] } });
+    await page.getByText("One or more teammate notifications could not be sent.", { exact: true }).waitFor();
     await reported(12, ses("ses_a", false));
     expect(await composer.textContent()).toBe("");
     held.resolve();

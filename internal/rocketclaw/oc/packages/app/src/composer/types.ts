@@ -8,6 +8,8 @@ import type {
   SkillPart,
   SessionPart,
 } from "./state"
+// rocketclaw: type the directory tag carried by a suggestion (upstream packages/app/src/composer/types.ts).
+import type { PersonPart } from "./schema"
 
 export type ComposerFilePart = FileAttachmentPart
 
@@ -47,7 +49,8 @@ export type ComposerOption = {
 
 export type ComposerSuggestion = {
   id: string
-  kind: "agent" | "command" | "file" | "reference" | "resource" | "skill" | "session" | "history"
+  // rocketclaw: the composer also offers people from the directory (upstream packages/app/src/composer/types.ts).
+  kind: "agent" | "command" | "file" | "reference" | "resource" | "skill" | "session" | "history" | "person"
   label: string
   title?: string
   trigger?: string
@@ -56,5 +59,6 @@ export type ComposerSuggestion = {
   keybind?: string[]
   recent?: boolean
   history?: ComposerHistoryEntry
-  mention?: ComposerFilePart | ComposerAgentPart | ComposerSkillPart | ComposerSessionPart
+  // rocketclaw: retain a person's ID when a suggestion is selected (upstream packages/app/src/composer/types.ts).
+  mention?: ComposerFilePart | ComposerAgentPart | ComposerSkillPart | ComposerSessionPart | PersonPart
 }

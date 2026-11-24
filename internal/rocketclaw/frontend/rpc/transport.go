@@ -24,7 +24,7 @@ const webUnaryMethods, editorMethods = "Protocol Identity Reload Prompt History 
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
 
-	for method := range strings.FieldsSeq(webUnaryMethods + " " + editorMethods) {
+	for method := range strings.FieldsSeq(webUnaryMethods + " " + editorMethods + " NotifySessionMentions") {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 
@@ -40,6 +40,11 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 			}
 
 			handler := func(ctx context.Context, request any) (any, error) {
+				if method == "NotifySessionMentions" {
+					response, err := s.notifyRemoteSessionMentions(ctx, request.(*PromptRequest))
+					return response, withoutDatabaseText(method, err)
+				}
+
 				response, err := s.webCall(ctx, method, request)
 
 				return response, withoutDatabaseText(method, err)

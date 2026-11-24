@@ -213,6 +213,10 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 		return err
 	}
 
+	if notice, ok := ctx.Value(webPromptAcceptanceKey{}).(webPromptAcceptance); ok {
+		notice.PromptAccepted(ctx)
+	}
+
 	select {
 	case <-bridge.stopCh:
 		return protocol.ErrBridgeStopped

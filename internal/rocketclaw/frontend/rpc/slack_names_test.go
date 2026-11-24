@@ -23,7 +23,7 @@ func TestSlackNames(t *testing.T) {
 	t.Parallel()
 
 	channels := &mockChannels{SlackNamesFunc: func(_ context.Context, ids []string) map[string]string {
-		resolved := map[string]string{"U1": "sam", "S1": "cs-operators", "C1": "general"}
+		resolved := map[string]string{"U1": "Riley", "S1": "operations", "C1": "general"}
 		names := make(map[string]string)
 
 		for _, id := range ids {
@@ -33,6 +33,9 @@ func TestSlackNames(t *testing.T) {
 		}
 
 		return names
+	}, SlackTagsMatchingFunc: func(_ context.Context, query string) []string {
+		require.Equal(t, "ri", query)
+		return []string{"U1", "S1"}
 	}}
 	cfg := &config.Config{}
 	listener, err := net.Listen("unix", testSocketPath(t))
@@ -66,9 +69,17 @@ func TestSlackNames(t *testing.T) {
 		Names map[string]string `json:"names"`
 	}
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
-	require.Equal(t, map[string]string{"C1": "general", "S1": "cs-operators", "U1": "sam"}, body.Names)
+	require.Equal(t, map[string]string{"C1": "general", "S1": "operations", "U1": "Riley"}, body.Names)
+
+	response = httptest.NewRecorder()
+	signedIn("alice", NewHTTPHandler(connection, new(config.LockedConfig), "")).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/SlackNames", strings.NewReader(`{"ids":[],"query":"ri"}`)))
+	require.Equal(t, http.StatusOK, response.Code)
+
+	body.Names = nil
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+	require.Equal(t, map[string]string{"U1": "Riley"}, body.Names)
 
 	_, err = invoke[SlackNamesResponse](t.Context(), connection, "SlackNames", &SlackNamesRequest{Ids: []string{"U1"}})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
-	require.Len(t, channels.SlackNamesCalls(), 1)
+	require.Len(t, channels.SlackNamesCalls(), 2)
 }

@@ -655,7 +655,7 @@ test("the PR pane quotes its description and adds diff notes to the native draft
   const session = "notes-fixture", pr = "https://github.com/sample/notes-repository/pull/7";
   const sessionPath = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
   const patch = "@@ -8,5 +8,7 @@\n ctx8\n ctx9\n-gone10\n-gone11\n+add10 ```\n+add11\n+add12\n+add13\n ctx12";
-  let prompts = 0;
+  const prompts: { text: string; mentionIds?: string[] }[] = [];
   let uploadHold: Promise<void> | undefined;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
@@ -672,7 +672,8 @@ test("the PR pane quotes its description and adds diff notes to the native draft
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/ListQueue": return Response.json({ items: [] });
-      case "/api/Prompt": prompts++; return Response.json({});
+      case "/api/SlackNames": return Response.json({ names: { U42: "Riley" } });
+      case "/api/Prompt": prompts.push(await request.json()); return Response.json({});
       case "/api/UploadAttachment": await uploadHold; return Response.json({ id: "attachment", name: "notes.txt", mimeType: "text/plain", size: "5" });
       case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: sessionPath(session), space: "main" }], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [] });
       case "/api/History": return Response.json({ messages: [{ role: "tool", text: "execute\n{}", complete: true, turnId: "t", entryKey: "t", itemId: "create", inputId: "", toolName: "execute", toolCallId: "create", codeModeCalls: [{ name: "bash", arguments: JSON.stringify({ command: "gh pr create --fill" }), status: "ok", summary: pr, createdPullRequests: [pr] }] }], delegations: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: ["t"], running: false, terminal: "", backgroundJobs: [], pendingQuestions: [], start: "0", more: false });
@@ -704,10 +705,14 @@ test("the PR pane quotes its description and adds diff notes to the native draft
       window.getSelection()!.removeAllRanges();
       window.getSelection()!.addRange(range);
     });
-    await composer.fill("Hi");
+    await composer.fill("Hi @Ril");
+    await page.getByRole("button", { name: "@Riley", exact: true }).click();
     await selectDescription(prs);
     await page.getByRole("button", { name: "Quote", exact: true }).click();
-    expect(await composer.inputValue()).toBe("Hi\n\n> Description sentence marker\n\n");
+    expect(await composer.inputValue()).toBe("Hi @Riley \n\n> Description sentence marker\n\n");
+    expect(prompts).toHaveLength(0);
+    await Promise.all([page.waitForResponse("**/api/Prompt"), composer.press("Enter")]);
+    expect(prompts[0]).toMatchObject({ text: "Hi @Riley \n\n> Description sentence marker\n\n", mentionIds: ["U42"] });
     await prs.getByRole("tab", { name: "Code", exact: true }).click();
     await prs.getByText("add11", { exact: true }).waitFor();
     const number = (root: any, type: string, line: number) => root.locator(`[data-line-type="${type}"][data-column-number="${line}"]`);
@@ -792,7 +797,7 @@ test("the PR pane quotes its description and adds diff notes to the native draft
     expect(await composer.inputValue()).toBe(`${narrow}\n\n> Description sentence marker\n\n`);
     expect(await sheet.isVisible()).toBe(true);
     expect(await sheet.evaluate((node: HTMLElement) => node.contains(document.activeElement))).toBe(true);
-    expect(prompts).toBe(1);
+    expect(prompts).toHaveLength(2);
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }
 }, 30_000);

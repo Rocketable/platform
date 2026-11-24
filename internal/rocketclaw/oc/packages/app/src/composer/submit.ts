@@ -36,6 +36,8 @@ import {
   type PromptStatusEvent,
   type PromptStatusState,
 } from "./prompt-status-machine"
+// rocketclaw: the relay alone consumes the selection (upstream packages/app/src/composer/submit.ts).
+import { mentionMetadata } from "@rocketclaw/host/session-mentions"
 
 // The model each session was last switched to from this client, by session ID.
 const switched = new Map<string, string>()
@@ -948,6 +950,8 @@ async function admitPrompt(
   gate: Gate | undefined,
   turn: Turn,
 ) {
+  // rocketclaw: enforce the tag cap before committing any changes (upstream packages/app/src/composer/submit.ts).
+  const mentions = mentionMetadata(value.prompt)
   const request = await buildSubmissionRequest(session, value)
 
   // Switching agent or model reconfigures the session immediately, and with it
@@ -992,6 +996,8 @@ async function admitPrompt(
     agents: request.agents,
     skills: request.skills,
     metadata: {
+      // rocketclaw: carry people only to the relay, not in stored messages (upstream packages/app/src/composer/submit.ts).
+      ...mentions,
       displayText: request.displayText,
       comments: request.comments,
       attachments: request.attachments,

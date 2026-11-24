@@ -68,6 +68,10 @@ export const SessionPart = Persistence.struct({
 
 export type SessionPart = typeof SessionPart.Type
 
+// rocketclaw: a directory tag keeps its recipient while editing (upstream packages/app/src/composer/schema.ts).
+export const PersonPart = Persistence.struct({ type: Schema.Literal("person"), ...PartBase, id: Schema.String })
+export type PersonPart = typeof PersonPart.Type
+
 const ImageFields = {
   type: Schema.Literal("image"),
   id: Schema.String,
@@ -131,6 +135,8 @@ export const ContentPart = Schema.Union([
   AgentPart,
   SkillPart,
   SessionPart,
+  // rocketclaw: restore person tags as composer parts (upstream packages/app/src/composer/schema.ts).
+  PersonPart,
   ImageAttachmentPart,
   PathAttachmentPart,
 ])

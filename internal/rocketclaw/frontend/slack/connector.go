@@ -248,6 +248,29 @@ func slackDirectoryID(id string) bool {
 	return strings.HasPrefix(id, "U") || strings.HasPrefix(id, "W") || strings.HasPrefix(id, "S")
 }
 
+func (c *Connector) SendSessionMention(ctx context.Context, userID, link string) error {
+	dm, _, _, err := c.api.OpenConversationContext(ctx, &slack.OpenConversationParameters{Users: []string{userID}})
+	if err != nil {
+		return fmt.Errorf("open direct conversation: %w", err)
+	}
+
+	_, _, err = c.api.PostMessageContext(ctx, dm.ID, slack.MsgOptionText(link, false), slack.MsgOptionDisableLinkUnfurl(), slack.MsgOptionDisableMediaUnfurl())
+	if err != nil {
+		return fmt.Errorf("post direct notification: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Connector) SlackMentionEmail(ctx context.Context, userID string) string {
+	user, err := c.api.GetUserInfoContext(ctx, userID)
+	if err != nil {
+		return ""
+	}
+
+	return user.Profile.Email
+}
+
 func slackDisplayName(user *slack.User) string {
 	return cmp.Or(strings.TrimSpace(user.Profile.DisplayName), strings.TrimSpace(user.RealName))
 }

@@ -89,6 +89,8 @@ type ChannelAgentChoices interface {
 	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
 	SlackNames(context.Context, []string) map[string]string
 	SlackTagsMatching(context.Context, string) []string
+	SendSessionMention(ctx context.Context, userID, link string) error
+	SlackMentionEmail(ctx context.Context, userID string) string
 	RenameThreadSession(ctx context.Context, conversationID, name string)
 }
 
@@ -1749,6 +1751,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	}
 
 	kind := protocol.InboundKindSteer
+	mentionIDs := request.MentionIds
 
 	switch delivery {
 	case PromptDelivery_STEER:
@@ -1756,6 +1759,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		kind = protocol.InboundKindEnqueue
 	case PromptDelivery_STASH:
 		kind = protocol.InboundKindHeld
+		mentionIDs = nil
 	default:
 		return nil, fmt.Errorf("web prompt: %w", status.Error(codes.InvalidArgument, "unknown prompt delivery"))
 	}
@@ -1767,6 +1771,13 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	if err := s.turnFeedable(ctx, request.Id, kind == protocol.InboundKindSteer); err != nil {
 		return nil, err
 	}
+
+	mentionIDs, err = distinctMentionIDs(mentionIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	notice := sessionMentionNotice{server: s, id: request.Id, ids: mentionIDs}
 
 	paused, err := s.pausedSend(ctx, request.Id, kind)
 	if err != nil {
@@ -1800,14 +1811,16 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 			return nil, fmt.Errorf("web prompt: %w", err)
 		}
 
-		return &PromptResponse{}, nil
+		notice.PromptAccepted(ctx)
+
+		return &PromptResponse{MentionWarning: notice.warning}, nil
 	}
 
 	if goal.Objective != "" {
 		inbound.Metadata["web_goal_prompt"] = request.Text + strings.TrimPrefix(inbound.Text, text)
 	}
 
-	return s.submitPrompt(ctx, inbound, goal, paused)
+	return s.submitPrompt(ctx, inbound, goal, paused, &notice)
 }
 
 func (s *Server) pausedSend(ctx context.Context, id string, kind protocol.InboundKind) (bool, error) {
@@ -1863,7 +1876,11 @@ func (s *Server) agentReply(ctx context.Context, id string, words []string) (*Pr
 	return &PromptResponse{PrivateText: "Agent: " + words[1]}, nil
 }
 
-func (s *Server) submitPrompt(ctx context.Context, inbound *protocol.InboundMessage, goal protocol.GoalRequest, paused bool) (*PromptResponse, error) {
+func (s *Server) submitPrompt(ctx context.Context, inbound *protocol.InboundMessage, goal protocol.GoalRequest, paused bool, notice *sessionMentionNotice) (*PromptResponse, error) {
+	if len(notice.ids) > 0 && goal.Objective == "" {
+		ctx = backend.WithWebPromptAcceptance(ctx, notice)
+	}
+
 	var err error
 
 	switch {
@@ -1880,10 +1897,24 @@ func (s *Server) submitPrompt(ctx context.Context, inbound *protocol.InboundMess
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("web prompt: %w", err)
+		err = fmt.Errorf("web prompt: %w", err)
+		if notice.accepted {
+			warning := "The message was sent, but the turn did not complete: " + status.Convert(withoutDatabaseText("Prompt", err)).Message()
+			if notice.warning != nil {
+				warning += " " + *notice.warning
+			}
+
+			return &PromptResponse{MentionWarning: &warning}, nil
+		}
+
+		return nil, err
 	}
 
-	return &PromptResponse{}, nil
+	if goal.Objective != "" {
+		notice.PromptAccepted(ctx)
+	}
+
+	return &PromptResponse{MentionWarning: notice.warning}, nil
 }
 
 func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*ListQueueResponse, error) {

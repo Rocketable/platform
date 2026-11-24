@@ -387,6 +387,10 @@ func (r *Runtime) PostPausedMessage(ctx context.Context, inbound *protocol.Inbou
 		return r.RunTurn(ctx, inbound)
 	}
 
+	if notice, ok := ctx.Value(webPromptAcceptanceKey{}).(webPromptAcceptance); err == nil && ok {
+		notice.PromptAccepted(ctx)
+	}
+
 	return err
 }
 

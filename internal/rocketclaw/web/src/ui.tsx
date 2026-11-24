@@ -48,6 +48,7 @@ import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import { AgentEditorPage, BuiltInNote, editAgent } from "@/agent-editor";
 import type { MountOptions, Mounted } from "../../oc/host/api";
+import { matchesComposerMention, useComposerMentions, type ComposerMention } from "./composer-mentions";
 import {
   invalidatePendingSaves,
   loadSavedSessions,
@@ -776,7 +777,7 @@ function ServerSessions({ children }: { children: ReactNode }) {
 }
 
 type PendingFile = { id: string; file: File };
-type ComposerDraft = { text: string; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; missing?: boolean; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; reviewRationales?: Record<string, string>; shadows?: ShadowBinding[]; earlierShadows?: { from: string; before: string; shadows: ShadowBinding[] }[]; movable?: boolean; jobs?: BackgroundJob[]; questions?: PendingQuestion[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; revertFloor?: string; canUndo?: boolean; reverting?: boolean; restored?: { text: string; files: PendingFile[] }; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
+type ComposerDraft = { text: string; mentions?: { text: string; tags: ComposerMention[] }; files: PendingFile[]; agent: string; sessionId: string; sending: boolean; busy: boolean; lines: Line[]; parked?: Line[]; consumed?: Set<string>; revision?: string; origin?: ChatOrigin; terminal?: string; historyError?: string; missing?: boolean; historyRead?: Promise<void>; historyAgain?: boolean; start?: string; more?: boolean; earlier?: Promise<void>; delegations?: string[]; reviewRationales?: Record<string, string>; shadows?: ShadowBinding[]; earlierShadows?: { from: string; before: string; shadows: ShadowBinding[] }[]; movable?: boolean; jobs?: BackgroundJob[]; questions?: PendingQuestion[]; error: string; edit: number; submission: number; historyEpoch?: number; revertEligible?: boolean; revertMessageId?: string; revertFloor?: string; canUndo?: boolean; reverting?: boolean; restored?: { text: string; files: PendingFile[] }; focus?: number; hydrated?: boolean; persistenceKey?: string; persistedEdit?: number; persistenceError?: string };
 // latest is the newest turn's entry key: its unsaved messages revert by input ID.
 const RevertActions = createContext<{ available: boolean; pending: boolean; latest?: string; floor?: string; run: (messageId?: string) => Promise<void> } | undefined>(undefined);
 const DraftScope = createContext<string | undefined>(undefined);
@@ -2412,7 +2413,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     draft.persistenceError = "";
     onDraftChange();
     return draftContent(JSON.stringify([scope, ""]), () => ({ text: "", files: [], agent: "" })).then(() => {
-      if (drafts.get("") === draft) { draft.text = ""; draft.files = []; draft.agent = ""; draft.edit++; }
+      if (drafts.get("") === draft) { draft.text = ""; draft.mentions = undefined; draft.files = []; draft.agent = ""; draft.edit++; }
       if (newChatOwner.current !== owner) return;
       drafts.delete("");
       setConversation((current) => ({ ...current, created: "", key: current.key + 1 }));
@@ -5126,7 +5127,9 @@ function usePRComposer(id: string, drafts: Map<string, ComposerDraft>, onDraftCh
   const draft = drafts.get(id);
   const append = (block: string) => {
     const target = drafts.get(id)!;
+    const mentions = target.mentions?.text === target.text ? target.mentions : undefined;
     target.text = appendBlock(target.text, block);
+    if (mentions) target.mentions = { ...mentions, text: target.text };
     target.edit++;
     if (wide) target.focus = (target.focus ?? 0) + 1;
     else setAdded((count) => count + 1);
@@ -5203,6 +5206,7 @@ async function prepareResumedDraft(id: string, scope: string, drafts: Map<string
       void queryClient.invalidateQueries({ queryKey: ["queue"] });
       if (draft.edit !== edit) throw new Error("The old draft was stashed, but this session's draft changed. Review it before trying again.");
       draft.text = "";
+      draft.mentions = undefined;
       draft.files = [];
       draft.agent = "";
       draft.edit++;
@@ -5229,7 +5233,7 @@ async function sendComposer(input: {
   currentAgent: string;
   goSession: (id: string, resumed?: boolean) => void;
   resumeSession: (id: string) => Promise<ComposerDraft>;
-  prompt: { mutateAsync: (value: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }) => Promise<string> };
+  prompt: { mutateAsync: (value: Parameters<typeof mutations.prompt>[0]) => ReturnType<typeof mutations.prompt> };
   create: { mutateAsync: (value: { agent?: string }) => Promise<{ id: string; resumed?: boolean }> };
   scrollToEnd: () => boolean;
   setAgentOpen: (value: boolean) => void;
@@ -5238,16 +5242,19 @@ async function sendComposer(input: {
 }) {
   const name = server();
   let { draft } = input;
+  const mentions = draft.mentions?.text === input.text ? draft.mentions : undefined;
   // While the agent is paused, a message goes to the people here at once: no turn waits for it.
   let delivery = input.delivery ?? (input.busy && !input.paused?.(input.sessionId) ? "QUEUE" : "STEER");
   // Match strings.Fields/unicode.IsSpace in frontend/rpc/server.go, not JavaScript's whitespace.
   const command = input.delivery === "STASH" ? null : /^\p{White_Space}*\/(enqueue|stash|steer)(?=\p{White_Space}|$)\p{White_Space}*/u.exec(input.text);
   const followUp: PromptDelivery = command ? command[1] === "enqueue" ? "QUEUE" : command[1] === "stash" ? "STASH" : "STEER" : delivery;
   const stashing = followUp === "STASH";
+  const mentionIds = stashing ? [] : [...new Set(mentions?.tags.filter((tag) => matchesComposerMention(input.text, tag)).map((tag) => tag.id))];
   const stopping = !stashing && isStopCommand(input.text);
   if (draft.sending || (input.text.trim() === "" && input.files.length === 0)) {
     return;
   }
+  if (mentionIds.length > 5) return input.setSendError("Tag at most five people per message.");
   draft.sending = true;
   let submission = ++draft.submission;
   input.onDraftChange();
@@ -5267,6 +5274,7 @@ async function sendComposer(input: {
         const target = await input.resumeSession(sessionId);
         draft.sending = false;
         draft.text = "";
+        draft.mentions = undefined;
         draft.files = [];
         draft.agent = "";
         draft.edit++;
@@ -5305,16 +5313,18 @@ async function sendComposer(input: {
     }
     // Prompt waits for the whole turn. Consume only this submission before waiting.
     draft.text = "";
+    draft.mentions = undefined;
     reportTyping(name, input.sessionId, false);
     draft.files = [];
     draft.agent = "";
     dispatchedEdit = ++draft.edit;
-    const response = input.prompt.mutateAsync({ id: sessionId, text: input.text, delivery, messageId: optimistic.id, ...(attachments.length ? { attachmentIds: attachments.map((file) => file.id) } : {}) });
+    const response = input.prompt.mutateAsync({ id: sessionId, text: input.text, delivery, messageId: optimistic.id, ...(mentionIds.length ? { mentionIds } : {}), ...(attachments.length ? { attachmentIds: attachments.map((file) => file.id) } : {}) });
     draft.sending = false;
     draft.focus = (draft.focus ?? 0) + 1;
     input.onDraftChange();
     input.setAgentOpen(false);
-    const privateText = await response;
+    const { privateText, mentionWarning } = await response;
+    if (mentionWarning) input.setSendError(mentionWarning);
     optimistic.complete = true;
     void queryClient.invalidateQueries({ queryKey: ["agents"] });
     if (enqueue) {
@@ -5332,6 +5342,7 @@ async function sendComposer(input: {
     if (dispatchedEdit === undefined) draft.sending = false;
     else if (draft.edit === dispatchedEdit && draft.submission === submission) {
       draft.text = input.text;
+      draft.mentions = mentions;
       draft.files = input.files;
       draft.agent = agent;
       draft.edit++;
@@ -5365,6 +5376,7 @@ async function revertComposer(draft: ComposerDraft, messageId: string | undefine
       const files = await restoreFiles(result.prompt.attachments ?? []);
       if (draft.edit === edit && draft.submission === submission) {
         draft.text = result.prompt.text;
+        draft.mentions = undefined;
         draft.files = files;
         draft.restored = { text: draft.text, files };
         draft.edit++;
@@ -5372,6 +5384,7 @@ async function revertComposer(draft: ComposerDraft, messageId: string | undefine
       }
     } else if (boundary && draft.restored?.text === draft.text && draft.restored.files === draft.files) {
       draft.text = "";
+      draft.mentions = undefined;
       draft.files = [];
       draft.edit++;
     }
@@ -5394,7 +5407,7 @@ type QueueAgentSwitch = {
   id: string;
   selected: string;
   currentAgent: string;
-  prompt: { mutateAsync: (value: { id: string; text: string }) => Promise<string> };
+  prompt: { mutateAsync: (value: { id: string; text: string }) => ReturnType<typeof mutations.prompt> };
 };
 
 // Queue actions switch an unlisted agent first, holding the draft's sending flag so a send cannot switch at the same time.
@@ -5528,7 +5541,8 @@ function SessionComposer({
   });
   const [, setTyped] = useState(0);
   // Typing redraws only this composer; a whole-app redraw per keystroke made long chats lag.
-  const setText = (value: string) => {
+  const setText = (value: string, tags?: ComposerMention[]) => {
+    draft.mentions = tags?.length ? { text: value, tags } : undefined;
     draft.text = value;
     draft.edit++;
     reportTyping(name, id, value !== "");
@@ -5560,8 +5574,11 @@ function SessionComposer({
   const skills = useQuery({ ...queries.skills({ agent: selected }), enabled: selected !== "", placeholderData: undefined });
   const matches = slashOff ? [] : slashMatches(text, skills.data ?? []);
   const pick = Math.max(0, matches.findIndex((item) => item.invocation === slashPick));
-  const applySlash = (invocation: string) => {
-    setText(invocation);
+  const applySlash = (invocation: string, prefix = 0) => {
+    const tags = prefix && draft.mentions?.text === text
+      ? draft.mentions.tags.map((tag) => ({ ...tag, start: tag.start + prefix, end: tag.end + prefix }))
+      : undefined;
+    setText(invocation, tags);
     setSlashOff(invocation !== "/skill ");
     setAgentOpen(false);
   };
@@ -5641,6 +5658,7 @@ function SessionComposer({
         historyCommand={() => void revert.run()}
         sessionId={id}
         text={text}
+        tags={draft.mentions?.text === text ? draft.mentions.tags : []}
         setText={setText}
         matches={matches}
         pick={pick}
@@ -5693,6 +5711,7 @@ function Composer({
   historyCommand,
   sessionId,
   text,
+  tags,
   setText,
   matches,
   pick,
@@ -5724,10 +5743,11 @@ function Composer({
   historyCommand: () => void;
   sessionId: string;
   text: string;
-  setText: (value: string) => void;
+  tags: ComposerMention[];
+  setText: (value: string, tags?: ComposerMention[]) => void;
   matches: ReturnType<typeof slashMatches>;
   pick: number;
-  applySlash: (invocation: string) => void;
+  applySlash: (invocation: string, prefix?: number) => void;
   catalog: { name: string; model?: string; reasoning?: string }[];
   selected: string;
   setAgent: (name: string) => void;
@@ -5761,10 +5781,11 @@ function Composer({
     if (command === "undo") return historyCommand();
     if (command === "tree") return navigate(panelHref("1", "tree"));
     if (command === "stop") void stop();
-    else applySlash(`/${command} ${text}`);
+    else applySlash(`/${command} ${text}`, command.length + 2);
     messageInput.current?.focus();
   });
   const empty = text.trim() === "" && files.length === 0;
+  const mentions = useComposerMentions(text, tags, messageInput, setText);
   const agent = catalog.find((item) => item.name === selected);
   const actions = <>
     <VoiceToggle sessionId={sessionId} agent={selected} sending={sending} call={call} />
@@ -5782,12 +5803,13 @@ function Composer({
       <div className="px-3 pb-3">
       <SelectionQuote container={() => document.getElementById("transcript-scroll")} hidden={sending} quote={(selected) => {
         const value = appendBlock(text, quoteLines(selected));
-        flushSync(() => setText(value));
+        flushSync(() => setText(value, tags));
         messageInput.current!.focus();
         messageInput.current!.setSelectionRange(value.length, value.length);
       }} />
       <div className="relative mx-auto w-full max-w-3xl">
-        {matches.length > 0 ? (
+        {mentions.menu}
+        {pickerOpen && !mentions.hasPeople ? (
           <ul className="absolute inset-x-0 bottom-full z-10 mb-2 max-h-[50dvh] overflow-y-auto rounded-2xl border bg-popover text-popover-foreground shadow-md">
             {matches.map((cmd, index) => (
               <li key={cmd.invocation}>
@@ -5817,15 +5839,18 @@ function Composer({
             enterKeyHint={touch ? "enter" : undefined}
             disabled={sending}
             value={text}
-            onChange={(event) => {
+            onInput={(event) => {
               setSlashOff(false);
               setAgentOpen(false);
-              setText(event.target.value);
+              mentions.edit(event);
+              mentions.update(event.currentTarget);
             }}
+            onSelect={(event) => mentions.update(event.currentTarget)}
             placeholder={placeholder}
             className="min-h-[60px] max-h-[180px] overflow-y-auto"
             onKeyDown={(event) => {
               if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.repeat) return;
+              if (mentions.keyDown(event)) return;
               if (touch && event.key === "Enter" && !event.metaKey && !event.ctrlKey) return;
               if (event.key === "Enter" && event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
                 event.preventDefault();

@@ -299,6 +299,15 @@ WHERE username = $1 AND path = ANY($2) AND unread_at IS NULL AND NOT parked AND 
 	return nil
 }
 
+func (s *SessionService) FindWebLogin(ctx context.Context, email string) (string, error) {
+	var username string
+
+	err := queryScalar(ctx, s.db, "match Web login", `SELECT CASE WHEN count(*) = 1 THEN min(username) ELSE '' END
+FROM web_tab_states WHERE lower(username) = lower($1)`, &username, email)
+
+	return username, err
+}
+
 func (s *SessionService) PollAttention(ctx context.Context, username, path string, hold bool) (revision int64, navigation string, err error) {
 	if path == "" {
 		_, err := scanFound("read tab state", s.db.QueryRowContext(ctx, `SELECT revision FROM web_tab_states WHERE username = $1`, username).Scan(&revision))
