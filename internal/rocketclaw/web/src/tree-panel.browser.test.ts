@@ -218,7 +218,8 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`messa
     }
     await page.waitForFunction(() => document.querySelector('[aria-label="Messages and replies"] [aria-current="true"]')?.textContent === "You Old try");
 
-    expect(await tree.getByRole("button", { name: "Delete branch" }).count()).toBe(2);
+    const buttons = (name: string, count: number) => page.waitForFunction(([name, count]: [string, number]) => document.querySelectorAll(`[aria-label="Messages and replies"] [aria-label="${name}"]`).length === count, [name, count] as [string, number]);
+    await buttons("Delete branch", 2);
     await tree.getByRole("listitem").filter({ hasText: "Old try" }).getByRole("button", { name: "Delete branch", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Delete branch" });
     await dialog.getByText("It is the current branch, so the chat moves back to where it splits off, and 2 queued messages will run from there.", { exact: true }).waitFor();
@@ -246,7 +247,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`messa
       }
       await page.waitForFunction((text: string) => document.querySelector('[aria-label="Messages and replies"] [aria-current="true"]')?.textContent === text, name);
     };
-    expect(await tree.getByRole("button", { name: "Summarize branch" }).count()).toBe(1);
+    await buttons("Summarize branch", 1);
     await requestSummary(" Keep the numbers ");
     expect(summaries).toEqual([{ branchId: "3:0", instructions: "Keep the numbers" }]);
     await pickAndReopen("Agent New answer");
