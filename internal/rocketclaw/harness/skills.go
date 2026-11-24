@@ -377,14 +377,14 @@ func composeSystemPromptWithSkills(base string, skills Skills, agent *Agent) str
 	prompts := []string{strings.TrimSpace(base)}
 
 	if list := skills.advertised(agent); len(list) > 0 {
-		lines := append(make([]string, 0, 5*len(list)+5),
+		lines := append(make([]string, 0, len(list)+5),
 			"Skills provide specialized instructions and workflows for specific tasks.",
 			"Use the skill tool to load a skill when a task matches its description.",
 			"The user may also invoke a skill directly. When that happens, its instructions appear in the conversation as a <skill_content> block, the same shape the skill tool returns. A skill that is already present this way does not need to be invoked again.",
 			"<available_skills>",
 		)
 		for _, skill := range list {
-			lines = append(lines, "  <skill>", "    <id>"+skill.Name+"</id>", "    <name>"+skill.DisplayName+"</name>", "    <description>"+skill.Description+"</description>", "  </skill>")
+			lines = append(lines, "  <skill>\n    <id>"+skill.Name+"</id>\n    <name>"+skill.DisplayName+"</name>\n    <description>"+skill.Description+"</description>\n  </skill>")
 		}
 
 		prompts = append(prompts, strings.Join(append(lines, "</available_skills>"), "\n"))
