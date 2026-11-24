@@ -52,6 +52,11 @@ type Agent struct {
 	Tools            []string
 }
 
+type AgentRoutine struct {
+	Schedule    string
+	Instruction string
+}
+
 type AgentSticky string
 
 const (
@@ -238,7 +243,12 @@ func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error)
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
 
-	agent := Agent{Name: name, Model: model, ReasoningEffort: modelEffort, Space: space, Prompt: strings.TrimSpace(prompt), Location: filePath, OutputSchema: outputSchema, Frontmatter: frontmatter, FrontmatterNode: frontmatterNode, FileMode: info.Mode(), Mode: mode, Sticky: sticky}
+	routines, err := parseAgentRoutines(frontmatterField(frontmatterNode, "routines"), sticky)
+	if err != nil {
+		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
+	}
+
+	agent := Agent{Name: name, Model: model, ReasoningEffort: modelEffort, Space: space, Prompt: strings.TrimSpace(prompt), Location: filePath, OutputSchema: outputSchema, Frontmatter: frontmatter, FrontmatterNode: frontmatterNode, FileMode: info.Mode(), Mode: mode, Sticky: sticky, Routines: routines}
 	if mode == AgentModeEasy {
 		if err := compileEasyAgent(&agent, cfg); err != nil {
 			return Agent{}, fmt.Errorf("%s: %w", filePath, err)
@@ -486,6 +496,36 @@ func parseAgentShell(node *yaml.Node, agent *Agent) error {
 	}
 
 	return errors.New("shell: must be an absolute path or emulated")
+}
+
+func parseAgentRoutines(field *yaml.Node, sticky AgentSticky) ([]AgentRoutine, error) {
+	if field == nil {
+		return nil, nil
+	}
+
+	if slices.Contains([]AgentSticky{AgentStickyUser, AgentStickySlack}, sticky) {
+		return nil, fmt.Errorf("routines: a sticky: %s agent cannot have routines", sticky)
+	}
+
+	errShape := errors.New("routines: must be a list of schedules and one-entry maps from schedule to instruction")
+	if field.Kind != yaml.SequenceNode {
+		return nil, errShape
+	}
+
+	var routines []AgentRoutine
+
+	for _, entry := range field.Content {
+		switch {
+		case entry.Kind == yaml.ScalarNode:
+			routines = append(routines, AgentRoutine{Schedule: entry.Value})
+		case entry.Kind == yaml.MappingNode && len(entry.Content) == 2 && entry.Content[1].Kind == yaml.ScalarNode:
+			routines = append(routines, AgentRoutine{Schedule: entry.Content[0].Value, Instruction: entry.Content[1].Value})
+		default:
+			return nil, errShape
+		}
+	}
+
+	return routines, nil
 }
 
 func parseAgentOutputSchema(schema *yaml.Node) (map[string]any, error) {

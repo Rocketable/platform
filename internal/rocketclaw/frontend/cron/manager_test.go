@@ -656,10 +656,11 @@ func TestRoutinesRunAsCronDefinitions(t *testing.T) {
 	require.NoError(t, os.WriteFile(agentPath, []byte(easyRoutineAgent+"  - '*/5 * * * *': Check X.\n  - 30m\n---\nPrompt\n"), 0o644))
 	require.NoError(t, os.Mkdir(filepath.Join(workspace, "agents", "marketing"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "marketing", "twin.md"), []byte(easyRoutineAgent+"  - 1h\n---\nPrompt\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "ops.md"), []byte("---\nmodel: gpt-6.1-sol\nroutines:\n  - 1h: Check Y.\n---\nPrompt\n"), 0o644))
 
 	definitions, err := loadDefinitionsIn(cfg, ".")
 	require.NoError(t, err)
-	require.Len(t, definitions, 2)
+	require.Len(t, definitions, 3)
 
 	var runs []string
 
@@ -676,6 +677,7 @@ func TestRoutinesRunAsCronDefinitions(t *testing.T) {
 	require.Equal(t, []string{
 		"marketing|Check X.\n\n" + cronReplyInstruction + "|agents/marketing.md#*/5 * * * *|Ops",
 		"marketing|Scheduled run (30m).\n\n" + cronReplyInstruction + "|agents/marketing.md#30m|Ops",
+		"ops|Check Y.\n\n" + cronReplyInstruction + "|agents/ops.md#1h|",
 	}, runs)
 
 	job, err := m.LoadOneOffCronjob("marketing · 30m")
@@ -686,7 +688,7 @@ func TestRoutinesRunAsCronDefinitions(t *testing.T) {
 	require.NoError(t, store.SyncCronSchedules(m.scheduledStates(definitions, start)))
 	before, err := store.DueCronSchedules(start.Add(24 * time.Hour))
 	require.NoError(t, err)
-	require.Len(t, before, 2)
+	require.Len(t, before, 3)
 	require.NoError(t, os.WriteFile(agentPath, []byte(easyRoutineAgent+"  - 30m\n  - '*/5 * * * *': Check X.\n---\nPrompt\n"), 0o644))
 
 	reordered, err := loadDefinitionsIn(cfg, ".")

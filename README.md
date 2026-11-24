@@ -248,11 +248,21 @@ MCP clients call `session_prompt` with a conversation ID and an agent with `stic
 
 Set `mcp_external.enabled` to `true` and `mcp_external.listen_addr` to serve External MCP. `mcp_external.users` maps each login to its password, for example `"users": {"ci-bot": "set-me"}`, and callers send them with HTTP Basic auth. Without `mcp_external.users`, External MCP asks callers for no login at all; an empty object `{}` refuses every caller. Like any value in `rocketclaw.json`, a password can come from AWS Secrets Manager. `rocketclaw run --aws-secrets-manager-users-arn ARN` instead takes all the logins from that JSON secret, in the same login-to-password shape, replacing `mcp_external.users`. RocketClaw reads the logins when it starts.
 
-A job file in `cron/` runs its agent on its repeating schedule: a 5-field cron expression, a Go duration such as `30m`, an `@daily`-style shortcut, or a list of them. For a single future run, an agent uses `rocketclaw_schedule_message`. An empty reply reports nothing; any other reply opens a new Web chat with the report, run by the job's agent, or reuses that agent's global sticky chat. The Cron page in Web lists every run, and continuing one opens the same chat. An [easy mode agent](#easy-mode-agents) schedules itself with `routines` in its own file instead; a cron file naming it never runs.
+A job file in `cron/` runs its agent on its repeating schedule: a 5-field cron expression, a Go duration such as `30m`, an `@daily`-style shortcut, or a list of them. For a single future run, an agent uses `rocketclaw_schedule_message`. An empty reply reports nothing; any other reply opens a new Web chat with the report, run by the job's agent, or reuses that agent's global sticky chat. The Cron page in Web lists every run, and continuing one opens the same chat.
+
+Any agent can also schedule itself with `routines` in its own file: a list of schedules, written as in a cron file, each alone or mapped to an instruction.
+
+```yaml
+routines:
+  - "*/5 * * * *": "Check the campaign dashboard for anomalies."
+  - "30m"
+```
+
+Each routine runs the agent with its instruction, or with `Scheduled run (<schedule>).` for a bare schedule, and reports like a cron job, in the agent's `space`. The Cron page lists it as `<agent> · <schedule>`, and `cron:<agent>` finds its runs. The same schedule twice in one file fails loading. Renaming the agent file leaves earlier routine runs under the old name. Only top-level agents' routines run: routine runs get no shadows, and a shadow's own `routines` never run. An [easy mode agent](#easy-mode-agents) is scheduled only with `routines`; a cron file naming it never runs.
 
 A job file must name its agent with `agent:`; there is no default. A file without one, or whose agent is missing, turned off, an easy agent, `sticky: user` or `sticky: slack`, or `sticky: global` with a different `space` than the file's, still loads but never runs: each scheduled run and each Run now fails with an error naming the cron and why, and after startup, Reload, and Behavior Settings saves, the warning strip in Web lists it, as does the answer of `rocketclaw_reload`. Continuing a run, from its report chat, with **Open chat**, or by a follow-up it scheduled, always uses the run's own agent. When that agent is missing or turned off, nothing is created and the error names the agent. If the run reports to no chat, a follow-up that comes due while its agent is missing or turned off is dropped, and the error names the agent. A follow-up not yet due is kept and checked when it comes due.
 
-Cron definition bodies expand shell snippets (an exclamation mark followed by a backtick-quoted command) before the model reads them. These are trusted commands, like those in agent prompts: they run in the workspace through the selected agent's `shell`, when set, without a tool permission review. Ordinary messages, scheduled messages, and Background Job completion notes stay literal.
+Cron definition bodies and routine instructions expand shell snippets (an exclamation mark followed by a backtick-quoted command) before the model reads them. These are trusted commands, like those in agent prompts: they run in the workspace through the selected agent's `shell`, when set, without a tool permission review. Ordinary messages, scheduled messages, and Background Job completion notes stay literal.
 
 Agents can use `rocketclaw_schedule_message` for a follow-up in the current conversation. `send_this_in` accepts positive durations up to `2160h` (90 days), the retention window, including `12h` and `168h`. Set `recurring` to `false` for one message or `true` to repeat at that interval (at least `1m`) until scheduled messages are reset. Pending schedules protect their conversations and explicit owners from normal retention cleanup.
 
@@ -529,7 +539,7 @@ Any other value stops the agent from loading. Each chat records when it is creat
 
 Slack answers only with `slack` agents (below). External MCP conversations allow only `sticky: off` agents, including agents that omit the setting; External MCP does not offer or accept sticky agents. Each keeps its separate history, and neither joins a Web sticky chat.
 
-Cron files and routines follow their agent. Each run of a `global` agent, from a cron file, an easy agent's `routines`, or the Cron page's Run now, reports into the agent's session instead of a chat of its own, opening that session when there is none. A global agent's cron must use the agent's space; one naming a different space never runs. A run has no person to own a `user` session, so a `user` agent cannot be scheduled: a cron file naming it never runs, `routines` on it fail loading, and Run now refuses it. The Voice page offers only `sticky: user` agents (see [Voice](#voice)).
+Cron files and routines follow their agent. Each run of a `global` agent, from a cron file, its `routines`, or the Cron page's Run now, reports into the agent's session instead of a chat of its own, opening that session when there is none. A global agent's cron must use the agent's space; one naming a different space never runs. A run has no person to own a `user` session, so a `user` agent cannot be scheduled: a cron file naming it never runs, `routines` on it fail loading, and Run now refuses it. The Voice page offers only `sticky: user` agents (see [Voice](#voice)).
 
 ### Easy mode agents
 
@@ -611,8 +621,8 @@ How an easy agent runs:
 - ``!`…` `` lines in the body and in the `SKILL.md` of a skill the agent loads run in host bash, from the workspace, with the secrets. A skill's lines run before the arguments of `/name` go in, so text passed that way never runs. Those in a routine's instruction run in the agent's own shell, from the `workingDirectory`, as `bash` calls do: in the emulated shell, or through a wrapper with RocketClaw's environment and `ROCKETCLAW_ENVIRONMENT` but not the secrets.
 - `allowedNetworkTargets` limits `webfetch` with exactly the rules the shell's `curl` follows: both use the same client. The one difference: a `webfetch` redirect to a public address outside the list can reach it once the approver approves that hop; the shell's `curl` never asks.
 - `task` takes a `model` from `subagents` and the `tools` the subagent gets, `null` for all of the parent's; a list leaves out every outside MCP tool. An entry ending in `*`, such as `anthropic/*`, allows every model whose name, `#effort` included, starts with the text before the `*`; a `*` anywhere else fails loading. The subagent runs the parent's own file, with the same folder, approver and secrets. Advanced agents cannot `task` an easy agent; they write to its sessions with `rocketclaw_sessions`, which `delegatedFrom` limits.
-- Each routine runs the agent on a schedule written as in a cron file, with its instruction, or with `Scheduled run (<schedule>).` for a bare schedule. It reports like a cron job, in the agent's `space`. The Cron page lists it as `<agent> · <schedule>`, and `cron:<agent>` finds its runs. Schedules repeat; `rocketclaw_schedule_message` sends a single future run. A cron file naming an easy agent never runs. Renaming the agent file leaves earlier routine runs under the old name.
-- A shadow must use its parent's mode; one that does not is dropped with a warning. An easy shadow needs the same required keys, and its `space` may differ. Routine runs get no shadows, and a shadow's own `routines` never run.
+- `routines` work as for any agent (see [MCP and scheduled jobs](#mcp-and-scheduled-jobs)), but a cron file naming an easy agent never runs.
+- A shadow must use its parent's mode; one that does not is dropped with a warning. An easy shadow needs the same required keys, and its `space` may differ.
 
 ### Emulated shell
 
