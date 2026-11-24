@@ -1,3 +1,5 @@
+export ROCKETCLAW_PLAYWRIGHT_MODULE ?= $(HOME)/.cache/playwright-core/node_modules/playwright-core
+export ROCKETCLAW_CHROMIUM ?= $(shell bun -e 'console.log(require("$(ROCKETCLAW_PLAYWRIGHT_MODULE)").chromium.executablePath())' 2>/dev/null)
 TS_CLOC_BUDGET ?= 13550
 TS_CLOC_HAZARD_ZONE ?= 250
 
