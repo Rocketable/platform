@@ -349,7 +349,7 @@ It loads as soon as the page has a tab of a Remote OpenCode Session on a configu
 
 ### MCP Bridge
 
-The MCP server RocketClaw serves for each configured OpenCode coding server, through which an agent in a Remote OpenCode Session reads and changes that session's tags and publishes its Hosted Pages.
+The MCP server RocketClaw serves for each configured OpenCode coding server, through which an agent in a Remote OpenCode Session reads and changes that session's tags and works on the Hosted Pages of the session's Birth Space.
 
 Each tool call acts on the Remote OpenCode Session that made it, or for a subagent's call on the nearest ancestor RocketClaw keeps a copy of, and is refused when there is none. RocketClaw adds the bridge to the coding server itself, one folder at a time: before relaying a person's message from the Web it adds it to that session's folder, so the turn the message starts already has the tools, and each sync adds it to every folder the server has open that lacks it. An addition lasts only until the server restarts or closes that folder, and the next message or sync adds it again.
 
@@ -374,7 +374,7 @@ Another RocketClaw server declared in the local server's configuration, whose ch
 
 The Space a session was born in.
 
-It is its agent's space, or for a cron's sessions the cron's, else the cron agent's, else for a Web session, or a remote OpenCode session created from the Web, the space the person was in; a forked remote session takes its source's. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Moving a tab changes only that person's tabs, except a remote OpenCode session's Hosted Page tab, whose move changes the session's Birth Space for everyone. An agent without a space of its own can move its session to another space, which changes the Birth Space for everyone and leaves people's tabs where they are. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report chats, have none.
+It is its agent's space, or for a cron's sessions the cron's, else the cron agent's, else for a Web session, or a remote OpenCode session created from the Web, the space the person was in; a forked remote session takes its source's. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Moving a tab changes only that person's tabs. An agent without a space of its own can move its session to another space, which changes the Birth Space for everyone and leaves people's tabs where they are. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report chats, have none.
 
 ### Space Limit
 
@@ -410,19 +410,19 @@ Whether a person wants the server to mark a tab Unread for them. Every tab, Shar
 
 ### Hosted Page
 
-A file an agent published, served by RocketClaw under a URL that names the agent's space, the agent, and the file path.
+A file published into a Web space, served by RocketClaw at `/pages/<space>/<path>`.
 
-It belongs to the agent, not to a space: when the agent's space changes, its pages move with it and links under the old space name redirect. Only people the Web admits can open one, and a person with a Space Limit only when the page's space is in it. Page scripts run walled off from RocketClaw and can only read their own agent's Page Data.
+It belongs to the space, not to whoever published it. An agent's page tools act on the space of the chat that calls them: its Birth Space, through its top-level session or a Shadow Session's parent; for a chat with none, a cron run's space, else the agent's `space:`. An agent in a remote OpenCode session works through its coding server's MCP bridge on its session's Birth Space only. A chat with no space has no pages. Any chat in a space can replace or delete any of its pages, and pages outlive the chat, session, or agent that stored them; changing an agent's `space:` leaves its pages where they are.
 
-An agent in a remote OpenCode session publishes through its coding server's MCP bridge instead. Such a page belongs to that session, which stands in for the agent: it lives in the session's Birth Space, and it is deleted with the session's RocketClaw copy or with that space. A session with no Birth Space cannot publish pages. Moving one of its pages' tabs to another space in the Web moves the session's Birth Space there, so all its pages follow.
+Renaming a space moves its pages to the new name, and links under the old name stop resolving. Deleting a space leaves its pages as orphans under its name: nothing can change them, and people without a Space Limit can still open them and see them in the Page Index. A space later created or renamed to that name adopts them; a rename that would put two pages on one path is refused. Only people the Web admits can open a page, and a person with a Space Limit only when the page's space is in it. Page scripts run walled off from RocketClaw and can only read their space's Page Data.
 
 ### Page Data
 
-An agent's JSON key-value entries, which the agent reads and writes and its Hosted Pages may only read. Each agent, shadow agents included, has its own, and so does each remote OpenCode session that publishes pages.
+A space's JSON key-value entries, which the chats working in that space read and write and its Hosted Pages may only read.
 
 ### Page Index
 
-The list of every HTML Hosted Page a person may open, the same in every Web space, grouped under the name of each page's space, with pages of agents with no space under "No space". A person with a Space Limit sees only their spaces' pages.
+The list of every HTML Hosted Page a person may open, the same in every Web space, grouped under the name of each page's space, orphans under their deleted space's name. A person with a Space Limit sees only their spaces' pages.
 
 ## Process layout
 
@@ -444,7 +444,7 @@ The shared language frontends and backend import. A frontend drops protocol mess
 
 RocketClaw's durable database for sessions, Managed Slack Thread routing, goals, cron, Scheduled Messages, the Thread Queue, External MCP bindings, and the Step Journal.
 
-Each fact lives in one place. There is one record for every conversation of every kind, with what it is, whether Web lists it, where it reports to, and its facts: Slack thread, summary, tags, goal, External MCP binding, and shadow parent. Every turn is one record, whether waiting (Thread Queue items and one-time Scheduled Messages), running, delivering, or done, Background Jobs included. Saved history, the Step Journal, and cron lines with recurring Scheduled Messages each live in their own place, as do attachments, Slack channel facts, Voice Settings, Hosted Pages, Spaces and tabs, the run lock, and shadow comparison turns. Data a release retires is kept aside until a later release drops it, with two exceptions: the release that brought one attention state per tab deleted the old attention data outright on upgrade (mutes, snoozes, unread marks, and the tab rows kept only to hold a mark) and dropped the old tab JSON, Search Pages included, once it had unpacked it into rows; and the release that made the tab strip one set of cards for every server deleted the tabs people had pinned above the space picker outright.
+Each fact lives in one place. There is one record for every conversation of every kind, with what it is, whether Web lists it, where it reports to, and its facts: Slack thread, summary, tags, goal, External MCP binding, and shadow parent. Every turn is one record, whether waiting (Thread Queue items and one-time Scheduled Messages), running, delivering, or done, Background Jobs included. Saved history, the Step Journal, and cron lines with recurring Scheduled Messages each live in their own place, as do attachments, Slack channel facts, Voice Settings, Hosted Pages, Spaces and tabs, the run lock, and shadow comparison turns. Data a release retires is kept aside until a later release drops it, with two exceptions: the release that brought one attention state per tab deleted the old attention data outright on upgrade (mutes, snoozes, unread marks, and the tab rows kept only to hold a mark) and dropped the old tab JSON, Search Pages included, once it had unpacked it into rows; and the release that made the tab strip one set of cards for every server deleted the tabs people had pinned above the space picker outright. The release that gave Hosted Pages to spaces kept every older page aside, including those of owners with no space, which it did not move.
 
 ### Step Journal
 

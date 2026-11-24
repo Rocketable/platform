@@ -27,6 +27,12 @@ tags:
 
 # Moving a Remote OpenCode Session's Page Tab Must Move the Session's Birth Space
 
+## Replaced
+
+Hosted Pages now belong to Web spaces, not to sessions or agents (`docs/plans/2026-11-24-1018-feat-space-owned-hosted-pages-plan.md`). A page's space is stored with the page, so a session's Birth Space no longer decides where its existing pages live, and moving a page tab moves only that person's tab again. `UpdateSessionRequest.space_id` and the Web's `movePages` are gone. The objection below to a per-page space column held while a session owned its pages; with no owner left, the page's own space is the only source of truth.
+
+What still holds: a Hosted Page's space is its access boundary, and any future path that moves pages between spaces must check the mover's Space Limit for both spaces.
+
 ## Problem
 
 A Remote OpenCode Session created while its owner was in the space Ops published reports that landed in Ops, although the owner had moved the session's tab to Acme. "Move to space" on the page tabs did not move the pages either. A page's space comes from its session's Birth Space, and nothing in the Web changed that.

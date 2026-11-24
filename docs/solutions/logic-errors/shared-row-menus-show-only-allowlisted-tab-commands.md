@@ -80,7 +80,7 @@ One behavior followed from the unification: when the Shared row's path is also a
 
 ## Related Issues
 
-- `docs/solutions/logic-errors/moving-a-page-tab-must-move-its-sessions-birth-space.md`: what Move to space does for Hosted Page tabs.
+- `docs/solutions/logic-errors/moving-a-page-tab-must-move-its-sessions-birth-space.md`: why Move to space once moved a Hosted Page's session, and why it no longer does.
 - `docs/solutions/architecture-patterns/a-per-tab-attention-flag-must-keep-its-row-on-server-and-in-browser.md`: the Follow/Unfollow data side.
 - `docs/solutions/architecture-patterns/kept-tab-groups-hold-their-place-with-a-placeholder-tab.md`: the group commands in the `placing` list.
 - `docs/solutions/architecture-patterns/web-acts-on-remote-opencode-sessions-through-the-api-proxy.md`: where Delete session is added to the tab menu.
