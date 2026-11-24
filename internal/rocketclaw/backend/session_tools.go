@@ -364,17 +364,21 @@ type sessionListSummary struct {
 	LastAssistantMessage string
 }
 
-const sessionListCandidatesSQL = `WITH RECURSIVE runs AS (
+const sessionListCandidatesSQL = `WITH RECURSIVE latest_entries AS (
+    SELECT conversation_id, MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") AS latest
+    FROM entries
+    GROUP BY conversation_id
+    HAVING MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") >= $1 COLLATE "C"
+), runs AS (
     SELECT conversation_id, reports_to FROM conversations WHERE reports_to IS NOT NULL
 ), viewed AS (
-    SELECT conversation_id, entry_timestamp FROM entries
-    UNION ALL SELECT r.reports_to, e.entry_timestamp FROM runs r JOIN entries e USING (conversation_id)
-    UNION ALL SELECT c.conversation_id, e.entry_timestamp FROM conversations c JOIN entries e ON e.conversation_id = c.continues
+    SELECT conversation_id, latest FROM latest_entries
+    UNION ALL SELECT r.reports_to, e.latest FROM runs r JOIN latest_entries e USING (conversation_id)
+    UNION ALL SELECT c.conversation_id, e.latest FROM conversations c JOIN latest_entries e ON e.conversation_id = c.continues
     WHERE c.continues IS NOT NULL
 ), recent AS (
-    SELECT conversation_id, MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") AS latest FROM viewed GROUP BY conversation_id
-    HAVING MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") >= $1 COLLATE "C"
-    AND ($2 = '' OR MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") < $2 COLLATE "C")
+    SELECT conversation_id, MAX(latest) AS latest FROM viewed GROUP BY conversation_id
+    HAVING $2 = '' OR MAX(latest) < $2 COLLATE "C"
 ), starts AS (
     SELECT conversation_id AS id FROM recent
 ), ` + ancestorsSQL + `, shadowed AS (
