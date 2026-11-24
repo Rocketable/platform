@@ -129,7 +129,7 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   const attachment = (await page.locator('#transcript-scroll img[alt="dot.png"]').getAttribute("src"))!;
 
   observed.stage = "remote hosted page";
-  await page.goto(`${local}/r/work/pages/-/scout/index.html`);
+  await page.goto(`${local}/r/work/pages/scout/index.html`);
   await page.locator("main iframe").contentFrame().getByText("Remote reply page", { exact: true }).waitFor();
 
   observed.stage = "another site";

@@ -105,7 +105,7 @@ export const mutations = {
   prompt: async (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }, name = server()) => (await rpc<{ privateText: string }>("Prompt", input, undefined, name)).privateText,
   runCron: async (input: { stem: string }) => (await rpc<{ id: string }>("RunCronJob", input)).id,
   // server names the RocketClaw the session is on, this one when unset.
-  updateSession: ({ server: remote, ...input }: { id: string; name?: string; tag?: string; paused?: boolean; spaceId?: string; server?: string }) => rpc("UpdateSession", input, undefined, remote),
+  updateSession: ({ server: remote, ...input }: { id: string; name?: string; tag?: string; paused?: boolean; server?: string }) => rpc("UpdateSession", input, undefined, remote),
   removeQueueItem: (input: { id: string; itemId: string }) => rpc("RemoveQueueItem", input),
   steerQueueItem: (input: { id: string; itemId: string }) => rpc("SteerQueueItem", input),
   editQueueItem: (input: { id: string; itemId: string; text: string }) => rpc("EditQueueItem", input),

@@ -333,12 +333,12 @@ test("a hosted page opens beside the embedded OpenCode session", async () => {
   const { web, release, base } = start();
   release();
   const browser = await engine.launch({ executablePath: chromium, headless: true });
-  const entry = { agent: "opencode:box:ses_a", path: "index.html", space: "Main", updatedAt: "first" };
+  const entry = { space: "Main", path: "index.html", updatedAt: "first" };
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     await page.route("**/api/ListPages", (route: any) => route.fulfill({ json: { pages: [entry] } }));
-    await page.route("**/pages-raw/opencode%3Abox%3Ases_a/index.html", (route: any) => route.fulfill({ contentType: "text/html", body: "<h1>Live report</h1>" }));
-    await page.goto(`${base}${route(entry.agent)}`);
+    await page.route("**/pages-raw/Main/index.html", (route: any) => route.fulfill({ contentType: "text/html", body: "<h1>Live report</h1>" }));
+    await page.goto(`${base}${route("opencode:box:ses_a")}`);
     const view = page.locator("main [data-oc-view]");
     await view.getByText("answer in ses_a", { exact: true }).waitFor();
     const draft = view.locator('[contenteditable="true"]').first();
@@ -347,7 +347,7 @@ test("a hosted page opens beside the embedded OpenCode session", async () => {
     await page.getByRole("button", { name: "Tab actions", exact: true }).click();
     await page.getByRole("menuitem", { name: "Hosted Pages", exact: true }).click();
     const pane = page.getByRole("complementary", { name: "Hosted Pages", exact: true });
-    await pane.getByRole("link", { name: `${entry.agent} · ${entry.path}`, exact: true }).click();
+    await pane.getByRole("link", { name: entry.path, exact: true }).click();
     await pane.frameLocator("iframe").getByRole("heading", { name: "Live report" }).waitFor();
     expect(await view.getByText("answer in ses_a", { exact: true }).isVisible()).toBe(true);
     await pane.getByRole("button", { name: "Close hosted pages", exact: true }).click();

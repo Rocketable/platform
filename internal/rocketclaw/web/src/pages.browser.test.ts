@@ -5,7 +5,7 @@ import { unpacked } from "./test-browsers";
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
-const pages = [{ agent: "main", path: "index.html" }, { agent: "ops-bot", space: "Ops", path: "index.html" }, { agent: "reporter", space: "Billing", path: "index.html" }, { agent: "reporter", space: "Billing", path: "q3/report.html" }];
+const pages = [{ space: "Gone", path: "index.html" }, { space: "Ops", path: "index.html" }, { space: "Billing", path: "index.html" }, { space: "Billing", path: "q3/report.html" }];
 // The page keeps every message it receives, and its fragment token, for the test to read.
 const script = `<script>window.replies = []; addEventListener("message", (event) => replies.push(event.data)); window.token = new URLSearchParams(location.hash.slice(1)).get("rc");</script>`;
 
@@ -22,7 +22,7 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
       const file = path.join(dist, url.pathname);
       return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
     }
-    const input = await request.json().catch(() => ({})) as { agent: string; path: string; data: boolean; state?: typeof saved.state };
+    const input = await request.json().catch(() => ({})) as { space: string; path: string; data: boolean; state?: typeof saved.state };
     switch (url.pathname) {
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/Protocol": return Response.json({ protoSha256: "pages" });
@@ -35,7 +35,7 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
       case "/api/Tabs": if (input.state) saved.state = input.state; return Response.json(saved);
       case "/api/GetPage":
         reads.push(input);
-        return input.agent === "reporter" && input.path === "revenue" && input.data ? Response.json({ space: "Billing", contentType: "application/json", body: Buffer.from(`{"total":3}`).toString("base64") }) : Response.json({ code: 5, message: "page not found" }, { status: 404 });
+        return input.space === "Billing" && input.path === "revenue" && input.data ? Response.json({ space: "Billing", contentType: "application/json", body: Buffer.from(`{"total":3}`).toString("base64") }) : Response.json({ code: 5, message: "page not found" }, { status: 404 });
       default: return Response.json({});
     }
   } });
@@ -68,31 +68,31 @@ async function chooseSpace(page: any, name: string) {
 }
 
 test("a page link opens in the space named by its segment, ignoring case, on a fresh load and in the app", () => withPage(["Main", "billing"], async (page, origin) => {
-  await page.goto(`${origin}/pages/Billing/reporter/index.html`);
+  await page.goto(`${origin}/pages/Billing/index.html`);
   // The strip draws before the spaces load; the tab then moves to the space its link names.
   await page.locator('button[aria-current="true"][aria-label="billing"]').waitFor();
-  await page.waitForURL(`${origin}/pages/billing/reporter/index.html`);
+  await page.waitForURL(`${origin}/pages/billing/index.html`);
 
   await chooseSpace(page, "Main");
-  await go(page, "/pages/Billing/reporter/q3/report.html");
-  await strip(page).getByRole("tab", { name: "reporter · q3/report.html", exact: true }).waitFor();
+  await go(page, "/pages/Billing/q3/report.html");
+  await strip(page).getByRole("tab", { name: "billing · q3/report.html", exact: true }).waitFor();
   expect(await space(page)).toBe("billing");
-  await page.waitForURL(`${origin}/pages/billing/reporter/q3/report.html`);
-  expect((await names(page)).toSorted()).toEqual(["reporter · index.html", "reporter · q3/report.html"]);
+  await page.waitForURL(`${origin}/pages/billing/q3/report.html`);
+  expect((await names(page)).toSorted()).toEqual(["billing · index.html", "billing · q3/report.html"]);
 
   // Without a matching space the page opens in the current space, and no space is added.
   await chooseSpace(page, "Main");
-  await go(page, "/pages/Finance/reporter/index.html");
-  await strip(page).getByRole("tab", { name: "reporter · index.html", exact: true }).waitFor();
+  await go(page, "/pages/Finance/index.html");
+  await strip(page).getByRole("tab", { name: "Finance · index.html", exact: true }).waitFor();
   expect(await space(page)).toBe("Main");
-  expect(page.url()).toBe(`${origin}/pages/Finance/reporter/index.html`);
+  expect(page.url()).toBe(`${origin}/pages/Finance/index.html`);
   expect(await page.locator("[data-tab-lists] button[aria-description][aria-expanded]").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Main", "billing"]);
 }), 60_000);
 
 test("a hosted page updates beside a session without remounting its draft", () => withPage(["Main"], async (page, origin) => {
   const route = `/s/${btoa("sample")}`;
-  const example = { agent: "reporter/review", path: "q3/read me.html", space: "Billing" };
-  const raw = "/pages-raw/reporter%2Freview/q3/read%20me.html";
+  const example = { space: "Billing", path: "q3/read me.html" };
+  const raw = "/pages-raw/Billing/q3/read%20me.html";
   let revision = "first", missing = false, offline = false, mounts = 0;
   let hold = false;
   const requested = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
@@ -101,9 +101,9 @@ test("a hosted page updates beside a session without remounting its draft", () =
     return route.fulfill({ contentType: "text/html", headers: { "Cache-Control": "no-store" }, body: `<h1>${revision}</h1>` });
   });
   await page.route("**/api/ListPages", async (route: any) => {
-    const { agent, path } = route.request().postDataJSON();
+    const { space, path } = route.request().postDataJSON();
     if (!path) return route.fulfill({ json: { pages: [example] } });
-    expect({ agent, path }).toEqual({ agent: example.agent, path: example.path });
+    expect({ space, path }).toEqual(example);
     if (hold) { requested.resolve(); await release.promise; }
     if (offline) return route.fulfill({ status: 503, json: { message: "Unavailable" } });
     return route.fulfill({ json: { pages: missing ? [] : [{ ...example, updatedAt: revision }] } });
@@ -115,7 +115,7 @@ test("a hosted page updates beside a session without remounting its draft", () =
   await page.getByRole("button", { name: "Tab actions", exact: true }).click();
   await page.getByRole("menuitem", { name: "Hosted Pages", exact: true }).click({ timeout: 2500 });
   const pane = page.getByRole("complementary", { name: "Hosted Pages", exact: true });
-  await pane.getByRole("link", { name: "reporter/review · q3/read me.html", exact: true }).click();
+  await pane.getByRole("link", { name: "q3/read me.html", exact: true }).click();
   const frame = pane.frameLocator("iframe");
   await frame.getByRole("heading", { name: "first" }).waitFor();
   expect(await pane.locator("iframe").getAttribute("sandbox")).toBe("allow-scripts allow-popups allow-forms allow-modals allow-downloads");
@@ -147,51 +147,38 @@ test("a hosted page updates beside a session without remounting its draft", () =
   expect(await composer.inputValue()).toBe("Unsent draft");
 }), 30_000);
 
-test("a page's shared link and its Page Index link share one tab, and a - link opens in each space", () => withPage(["Main", "billing", "Space 2"], async (page, origin) => {
+test("a page's shared link and its Page Index link share one tab", () => withPage(["Main", "billing"], async (page, origin) => {
   await chooseSpace(page, "billing");
   await go(page, "/pages");
-  await page.getByRole("link", { name: "reporter · index.html", exact: true }).click();
-  await page.waitForURL(`${origin}/pages/billing/reporter/index.html`);
-  await go(page, "/pages/Billing/reporter/index.html");
-  await page.waitForURL(`${origin}/pages/billing/reporter/index.html`);
-  expect(await names(page)).toEqual(["New session", "Pages", "reporter · index.html"]);
-
-  await go(page, "/pages/-/main/index.html");
-  await page.waitForURL(`${origin}/pages/billing/main/index.html`);
-  await chooseSpace(page, "Main");
-  await go(page, "/pages/-/main/index.html");
-  await page.waitForURL(`${origin}/pages/Main/main/index.html`);
-  expect(await space(page)).toBe("Main");
-  expect(await names(page)).toContain("main · index.html");
-
-  await go(page, "/pages/Space%202/main/index.html");
-  await page.waitForURL(`${origin}/pages/Space%202/main/index.html`);
-  expect(await space(page)).toBe("Space 2");
-  expect(await names(page)).toEqual(["main · index.html"]);
+  await page.locator("main section").filter({ hasText: "Billing" }).getByRole("link", { name: "index.html", exact: true }).click();
+  await page.waitForURL(`${origin}/pages/billing/index.html`);
+  await go(page, "/pages/Billing/index.html");
+  await page.waitForURL(`${origin}/pages/billing/index.html`);
+  expect(await names(page)).toEqual(["New session", "Pages", "billing · index.html"]);
 }), 60_000);
 
-test("moving a page's tab moves its session's pages to the space, and its tabs there", () => withPage(["Main", "billing"], async (page, origin, _reads, moves) => {
-  await page.goto(`${origin}/pages/Billing/reporter/q3/report.html`);
+test("moving a page's tab moves only the tab, and its title keeps naming the page's space", () => withPage(["Main", "billing"], async (page, origin, _reads, moves) => {
+  await page.goto(`${origin}/pages/Billing/index.html`);
   await page.locator('button[aria-current="true"][aria-label="billing"]').waitFor();
-  await go(page, "/pages/Billing/reporter/index.html");
-  await page.waitForURL(`${origin}/pages/billing/reporter/index.html`);
+  await page.waitForURL(`${origin}/pages/billing/index.html`);
 
-  await strip(page).getByRole("tab", { name: "reporter · index.html", exact: true }).click({ button: "right" });
+  await strip(page).getByRole("tab", { name: "billing · index.html", exact: true }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Move to space", exact: true }).click();
   await page.getByRole("menuitem", { name: "Main", exact: true }).click();
-  await page.waitForURL(`${origin}/pages/Main/reporter/index.html`);
-  expect(moves).toEqual([{ id: "reporter", spaceId: "s0" }]);
-  expect(await space(page)).toBe("Main");
-  expect((await names(page)).filter((name: string) => name.startsWith("reporter")).toSorted()).toEqual(["reporter · index.html", "reporter · q3/report.html"]);
+  await chooseSpace(page, "Main");
+  await go(page, "/pages/Main/index.html");
+  await strip(page).getByRole("tab", { name: "Main · index.html", exact: true }).waitFor();
+  expect((await names(page)).filter((name: string) => name.endsWith("index.html")).toSorted()).toEqual(["Main · index.html", "billing · index.html"]);
+  expect(moves).toEqual([]);
 }), 60_000);
 
-test("a sandboxed page reads its agent's Page Data only with its token and from its own frame", () => withPage(["Main"], async (page, origin, reads) => {
-  await page.goto(`${origin}/pages/-/reporter/index.html`);
+test("a sandboxed page reads its space's Page Data only with its token and from its own frame", () => withPage(["Main"], async (page, origin, reads) => {
+  await page.goto(`${origin}/pages/Billing/index.html`);
   const iframe = page.locator("iframe");
   expect(await iframe.getAttribute("sandbox")).toBe("allow-scripts allow-popups allow-forms allow-modals allow-downloads");
-  expect(await iframe.getAttribute("title")).toBe("reporter · index.html");
+  expect(await iframe.getAttribute("title")).toBe("Billing · index.html");
   const src = new URL(await iframe.getAttribute("src"), origin);
-  expect(src.pathname).toBe("/pages-raw/reporter/index.html");
+  expect(src.pathname).toBe("/pages-raw/Billing/index.html");
   const token = new URLSearchParams(src.hash.slice(1)).get("rc")!;
   expect(token).toMatch(/^\d+-\d+-\d+-\d+$/);
   const frame = await (await iframe.elementHandle()).contentFrame();
@@ -213,18 +200,18 @@ test("a sandboxed page reads its agent's Page Data only with its token and from 
   // Independent reads can finish in either order; each reply belongs to its request ID.
   expect(await frame.evaluate(() => (window as any).replies.toSorted((a: { id: number }, b: { id: number }) => a.id - b.id))).toEqual([{ type: "rocketclaw.read", id: 4, value: { total: 3 } }, { type: "rocketclaw.read", id: 5, error: "page not found" }]);
   expect(reads).toHaveLength(2);
-  expect(reads).toEqual(expect.arrayContaining([{ agent: "reporter", path: "revenue", data: true }, { agent: "reporter", path: "missing", data: true }]));
+  expect(reads).toEqual(expect.arrayContaining([{ space: "Billing", path: "revenue", data: true }, { space: "Billing", path: "missing", data: true }]));
   expect(await page.evaluate(() => (window as any).replies.filter((reply: object) => "value" in reply || "error" in reply))).toEqual([]);
 }), 60_000);
 
 test("a PDF page, which Chrome refuses to show in a sandboxed frame, opens in its own tab", () => withPage(["Main"], async (page, origin) => {
-  await page.goto(`${origin}/pages/-/reporter/q3/report.pdf`);
+  await page.goto(`${origin}/pages/Billing/q3/report.pdf`);
   const link = page.getByRole("link", { name: "Open PDF", exact: true });
-  expect(await link.getAttribute("href")).toBe("/pages-raw/reporter/q3/report.pdf");
+  expect(await link.getAttribute("href")).toBe("/pages-raw/Billing/q3/report.pdf");
   expect(await page.locator("iframe").count()).toBe(0);
   const [opened] = await Promise.all([page.waitForEvent("popup"), link.click()]);
   await opened.waitForLoadState();
-  expect(opened.url()).toBe(`${origin}/pages-raw/reporter/q3/report.pdf`);
+  expect(opened.url()).toBe(`${origin}/pages-raw/Billing/q3/report.pdf`);
   const viewer = () => opened.frames().some((frame: any) => frame.url().startsWith("chrome-extension://"));
   for (let tries = 0; tries < 50 && !viewer(); tries++) await opened.waitForTimeout(100);
   expect(viewer()).toBe(true);
@@ -243,12 +230,12 @@ for (const width of [1280, 320]) test(`the Page Index lists every space's pages 
   await opened("Pages");
   const links = page.locator("main").getByRole("link");
   await links.first().waitFor();
-  expect(await page.locator("main").getByRole("heading", { level: 2 }).allInnerTexts()).toEqual(["No space", "Billing", "Ops"]);
-  expect(await links.allInnerTexts()).toEqual(["main · index.html", "reporter · index.html", "reporter · q3/report.html", "ops-bot · index.html"]);
-  expect(await links.filter({ hasText: "ops-bot" }).getAttribute("href")).toBe("/pages/Ops/ops-bot/index.html");
+  expect(await page.locator("main").getByRole("heading", { level: 2 }).allInnerTexts()).toEqual(["Billing", "Gone", "Ops"]);
+  expect(await links.allInnerTexts()).toEqual(["index.html", "q3/report.html", "index.html", "index.html"]);
+  expect(await page.locator("main section").filter({ hasText: "Ops" }).getByRole("link").getAttribute("href")).toBe("/pages/Ops/index.html");
   for (const box of await links.evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getBoundingClientRect().right))) expect(box).toBeLessThanOrEqual(width);
-  await links.filter({ hasText: "reporter · q3/report.html" }).click();
-  await page.waitForURL(`${origin}/pages/Billing/reporter/q3/report.html`);
-  await opened("reporter · q3/report.html");
-  expect(await page.locator("iframe").getAttribute("src")).toStartWith("/pages-raw/reporter/q3/report.html#rc=");
+  await links.filter({ hasText: "q3/report.html" }).click();
+  await page.waitForURL(`${origin}/pages/Billing/q3/report.html`);
+  await opened("Billing · q3/report.html");
+  expect(await page.locator("iframe").getAttribute("src")).toStartWith("/pages-raw/Billing/q3/report.html#rc=");
 }, { viewport: { width, height: 800 } }), 60_000);
