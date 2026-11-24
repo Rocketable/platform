@@ -750,7 +750,7 @@ func moveResponder(t *testing.T, script string, answer noteTestResponder) noteTe
 	return func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		switch {
 		case strings.Contains(body, summaryInstruction):
-			writeRawRunMessage(t, w, "summary", "summary", testSummary)
+			writeResponseMessage(t, w, "summary", "summary", testSummary)
 		case strings.Contains(body, "function_call_output"):
 			answer(w, r, n, body)
 		default:
@@ -944,13 +944,13 @@ func TestMovedTurnSurvivesCrashesAroundTheMove(t *testing.T) {
 		switch {
 		case strings.Contains(body, summaryInstruction):
 			if !crashOnce(summaryCrash, r) {
-				writeRawRunMessage(t, w, "summary", "summary", testSummary)
+				writeResponseMessage(t, w, "summary", "summary", testSummary)
 			}
 		case strings.Contains(body, "from web"):
 			answerNoteTest(w, r, n, body)
 		case strings.Contains(body, "function_call_output"):
 			if !crashOnce(threadCrash, r) {
-				writeRawRunMessage(t, w, "moved", "moved", "moved answer")
+				writeResponseMessage(t, w, "moved", "moved", "moved answer")
 			}
 		default:
 			starts <- struct{}{}
@@ -1049,7 +1049,7 @@ func TestSlackStopStopsOnlyTheTurnItShowed(t *testing.T) {
 	nt, manager, _ := newMoveTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		switch {
 		case strings.Contains(body, summaryInstruction):
-			writeRawRunMessage(t, w, "summary", "summary", testSummary)
+			writeResponseMessage(t, w, "summary", "summary", testSummary)
 		case strings.Contains(body, "second ask"):
 			select {
 			case <-release:
@@ -1137,15 +1137,15 @@ func TestMovedEasyTurnKeepsItsWorkingDirectory(t *testing.T) {
 	nt := newNoteTest(t, func(w http.ResponseWriter, _ *http.Request, _ int, body string) {
 		switch {
 		case strings.Contains(body, "You are judging one planned coding-agent action."):
-			writeRawRunMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
+			writeResponseMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
 		case !strings.Contains(body, "function_call_output"):
 			writeExecuteCall(t, w, "write", "def main():\n    bash(command=r'''printf '%s%s' ban ana > note.txt''')\n    return slack_respond_in_thread(in_thread=True)\n")
 		case strings.Contains(body, "banana"):
-			writeRawRunMessage(t, w, "found", "found", "found")
+			writeResponseMessage(t, w, "found", "found", "found")
 		case strings.Contains(body, "in_thread=True") && !strings.Contains(body, "cat note.txt"):
 			writeExecuteCall(t, w, "read", "def main():\n    return bash(command=r'''cat note.txt''')\n")
 		default:
-			writeRawRunMessage(t, w, "missing", "missing", "missing")
+			writeResponseMessage(t, w, "missing", "missing", "missing")
 		}
 	})
 	wrapper := filepath.Join(nt.cfg.Workspace, "wrap.sh")
@@ -1642,17 +1642,17 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 
 			requests <- string(body)
 
-			writeRawRunMessage(t, w, "followup", "followup", "canonical answer")
+			writeResponseMessage(t, w, "followup", "followup", "canonical answer")
 
 			return
 		}
 
 		if strings.Contains(string(body), "function_call_output") {
-			writeRawRunMessage(t, w, "done", "done", "")
+			writeResponseMessage(t, w, "done", "done", "")
 			return
 		}
 
-		writeRawRunFunctionCall(t, w, "schedule", "execute", struct {
+		writeResponseFunctionCall(t, w, "schedule", "execute", struct {
 			Code string `json:"code"`
 		}{Code: "def main():\n    rocketclaw_schedule_message(message=\"follow up\", send_this_in=\"59m\", recurring=False)\n    rocketclaw_schedule_message(message=\"second follow up\", send_this_in=\"59m200ms\", recurring=False)\n    rocketclaw_schedule_message(message=\"recurring follow up\", send_this_in=\"1h\", recurring=True)\n    return \"\"\n"})
 	}))
@@ -2432,7 +2432,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 			return
 		}
 
-		writeRawRunFunctionCall(t, w, "resp_1", "execute", struct {
+		writeResponseFunctionCall(t, w, "resp_1", "execute", struct {
 			Code string `json:"code"`
 		}{Code: "def main():\n    return ask_user_question(question=\"Ship?\", details=\"\", options=[], multiple=False)\n"})
 	}))
@@ -2832,9 +2832,9 @@ func TestCrashDuringForegroundTaskRunsSubagentOnce(t *testing.T) {
 			default:
 			}
 
-			writeRawRunMessage(t, w, "resp", "msg", "found it")
+			writeResponseMessage(t, w, "resp", "msg", "found it")
 		case !strings.Contains(body, "function_call_output"):
-			writeRawRunFunctionCall(t, w, "resp", "task", map[string]string{"description": "research", "prompt": "research the flaky test", "subagent_type": "researcher"})
+			writeResponseFunctionCall(t, w, "resp", "task", map[string]string{"description": "research", "prompt": "research the flaky test", "subagent_type": "researcher"})
 		default:
 			answerNoteTest(w, r, n, body)
 		}
@@ -2872,9 +2872,9 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 		case strings.Contains(body, "You are judging one planned coding-agent action."):
 			reviews <- body
 
-			writeRawRunMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
+			writeResponseMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
 		case !strings.Contains(body, "function_call_output"):
-			writeRawRunFunctionCall(t, w, "act", "execute", executeBashScript("true"))
+			writeResponseFunctionCall(t, w, "act", "execute", executeBashScript("true"))
 		default:
 			_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Report finished.","annotations":[]}]}]}`))
 		}
@@ -2983,15 +2983,15 @@ func TestTaskRunsSubagentAsSession(t *testing.T) {
 
 			<-release
 
-			writeRawRunMessage(t, w, "resp", "msg", "checked")
+			writeResponseMessage(t, w, "resp", "msg", "checked")
 		case strings.Contains(body, `"input":[{"content":"Research`) && strings.Contains(body, "function_call_output"):
 			assert.Contains(t, body, `"output":"`+protocol.SlackThreadConversationID("C123", "111.222")+`"`, "a subagent's current session is its top-level session")
-			writeRawRunMessage(t, w, "resp", "msg", "found it")
+			writeResponseMessage(t, w, "resp", "msg", "found it")
 		case strings.Contains(body, `"input":[{"content":"Research`):
 			assert.NotContains(t, body, `"name":"task"`, "the subagent is at its top-level agent's recursion limit")
-			writeRawRunFunctionCall(t, w, "current", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_current_id()\n"}`))
+			writeResponseFunctionCall(t, w, "current", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_current_id()\n"}`))
 		case !strings.Contains(body, "function_call_output"):
-			writeRawRunFunctionCall(t, w, "resp", "task", map[string]string{"description": "research", "prompt": "research the flaky test", "subagent_type": "researcher"})
+			writeResponseFunctionCall(t, w, "resp", "task", map[string]string{"description": "research", "prompt": "research the flaky test", "subagent_type": "researcher"})
 		default:
 			answerNoteTest(w, r, n, body)
 		}
@@ -3084,9 +3084,9 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 		case n == 0:
 			<-r.Context().Done()
 		case strings.Contains(body, `"input":[{"content":"Research`) && strings.Contains(body, "parent work") && !strings.Contains(body, "next work"):
-			writeRawRunMessage(t, w, "resp", "msg", "parent work done")
+			writeResponseMessage(t, w, "resp", "msg", "parent work done")
 		case !strings.Contains(body, `"input":[{"content":"Research`) && !strings.Contains(body, "function_call_output"):
-			writeRawRunFunctionCall(t, w, "resp", "task", map[string]any{"description": "more", "prompt": "parent work", "subagent_type": "researcher", "continue": map[string]string{"session_id": "/a", "mode": "enqueue"}})
+			writeResponseFunctionCall(t, w, "resp", "task", map[string]any{"description": "more", "prompt": "parent work", "subagent_type": "researcher", "continue": map[string]string{"session_id": "/a", "mode": "enqueue"}})
 		default:
 			answerNoteTest(w, r, n, body)
 		}
@@ -3205,7 +3205,7 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 					text = "noted"
 				}
 
-				writeRawRunMessage(t, w, "resp", "msg", text)
+				writeResponseMessage(t, w, "resp", "msg", text)
 			})
 
 			require.NoError(t, nt.service.startSubagent(t.Context(), nt.conversationID, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "a"}, Agent: "researcher"}))
@@ -3305,20 +3305,20 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 				case strings.Contains(body, "You are judging one planned coding-agent action."):
 					reviews <- body
 
-					writeRawRunMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
+					writeResponseMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
 				case strings.Contains(body, `"input":[{"content":"Research`) && strings.Contains(body, "function_call_output"):
-					writeRawRunMessage(t, w, "resp", "msg", "done")
+					writeResponseMessage(t, w, "resp", "msg", "done")
 				case strings.Contains(body, `"input":[{"content":"Research`):
 					select {
 					case helper <- body:
 					default:
 					}
 
-					writeRawRunFunctionCall(t, w, "act", "execute", struct {
+					writeResponseFunctionCall(t, w, "act", "execute", struct {
 						Code string `json:"code"`
 					}{script})
 				case !strings.Contains(body, "function_call_output") && !strings.Contains(body, "child task"):
-					writeRawRunFunctionCall(t, w, "resp", "task", map[string]string{"description": "act", "prompt": "act for me", "subagent_type": "researcher"})
+					writeResponseFunctionCall(t, w, "resp", "task", map[string]string{"description": "act", "prompt": "act for me", "subagent_type": "researcher"})
 				default:
 					answerNoteTest(w, r, n, body)
 				}
@@ -3420,17 +3420,17 @@ func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 				case strings.Contains(body, `"input":[{"content":"Research`) && strings.Contains(body, "function_call_output"):
 					results <- body
 
-					writeRawRunMessage(t, w, "resp", "msg", "done")
+					writeResponseMessage(t, w, "resp", "msg", "done")
 				case strings.Contains(body, `"input":[{"content":"Research`):
-					writeRawRunFunctionCall(t, w, "act", "execute", struct {
+					writeResponseFunctionCall(t, w, "act", "execute", struct {
 						Code string `json:"code"`
 					}{"def main():\n    return '[' + " + tc.call + " + ']'\n"})
 				case strings.Contains(body, `"input":[{"content":"Lead`) && strings.Contains(body, "function_call_output"):
-					writeRawRunMessage(t, w, "lead", "msg", "led")
+					writeResponseMessage(t, w, "lead", "msg", "led")
 				case strings.Contains(body, `"input":[{"content":"Lead`):
-					writeRawRunFunctionCall(t, w, "lead", "task", map[string]any{"description": "act", "prompt": "act for me", "subagent_type": "researcher"})
+					writeResponseFunctionCall(t, w, "lead", "task", map[string]any{"description": "act", "prompt": "act for me", "subagent_type": "researcher"})
 				case !strings.Contains(body, "function_call_output"):
-					writeRawRunFunctionCall(t, w, "resp", "task", map[string]any{"description": "act", "prompt": "act for me", "subagent_type": map[bool]string{false: "researcher", true: "lead"}[tc.nested], "background": background})
+					writeResponseFunctionCall(t, w, "resp", "task", map[string]any{"description": "act", "prompt": "act for me", "subagent_type": map[bool]string{false: "researcher", true: "lead"}[tc.nested], "background": background})
 				default:
 					answerNoteTest(w, r, n, body)
 				}

@@ -502,7 +502,7 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 					if input.Type == "function_call_output" {
 						toolResults <- input.Output
 
-						writeRawRunMessage(t, w, "done", "message", "answer")
+						writeResponseMessage(t, w, "done", "message", "answer")
 
 						return
 					}
@@ -914,7 +914,7 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 				}
 
 				w.Header().Set("Content-Type", "application/json")
-				writeRawRunMessage(t, w, "response", "message", "answer")
+				writeResponseMessage(t, w, "response", "message", "answer")
 			}))
 			t.Cleanup(server.Close)
 			t.Cleanup(func() { close(release) })
@@ -1163,7 +1163,7 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 				requests <- request.Model
 
 				w.Header().Set("Content-Type", "application/json")
-				writeRawRunMessage(t, w, "response", "message", "answer")
+				writeResponseMessage(t, w, "response", "message", "answer")
 			}))
 			t.Cleanup(server.Close)
 			cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})
@@ -1394,7 +1394,7 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		writeRawRunMessage(t, w, "response", "message", "answer")
+		writeResponseMessage(t, w, "response", "message", "answer")
 
 		requests <- request.Model
 	}))
@@ -1457,7 +1457,7 @@ func TestShadowSiblingFailureIsIndependent(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		writeRawRunMessage(t, w, "response", "message", "answer "+request.Model)
+		writeResponseMessage(t, w, "response", "message", "answer "+request.Model)
 	}))
 	t.Cleanup(server.Close)
 	cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})

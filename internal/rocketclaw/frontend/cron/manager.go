@@ -19,7 +19,7 @@ import (
 )
 
 type Runner interface {
-	Run(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error)
+	Run(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error)
 }
 
 type Manager struct {
@@ -211,12 +211,12 @@ func (m *Manager) Jobs() ([]Job, error) {
 }
 
 func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
-	raw := new(backend.RawRunProgress)
+	progress := new(backend.CronRunProgress)
 
-	raw.Run = &protocol.CronRun{Path: job.RelativePath, At: m.now(), OneOff: true}
-	raw.ConversationID = cronTraceConversationID(oneOffCronTracePrefix, job.RelativePath, raw.Run.At)
-	raw.SyncDestination = job.ConversationID
-	raw.Cronjob = &protocol.CronjobMessage{RelativePath: job.RelativePath, Agent: job.Agent, RanAt: m.now().Format(time.RFC3339), Space: job.Space}
+	progress.Run = &protocol.CronRun{Path: job.RelativePath, At: m.now(), OneOff: true}
+	progress.ConversationID = cronTraceConversationID(oneOffCronTracePrefix, job.RelativePath, progress.Run.At)
+	progress.SyncDestination = job.ConversationID
+	progress.Cronjob = &protocol.CronjobMessage{RelativePath: job.RelativePath, Agent: job.Agent, RanAt: m.now().Format(time.RFC3339), Space: job.Space}
 
 	m.mu.Lock()
 	if m.closed {
@@ -230,9 +230,9 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCron
 	defer m.wg.Done()
 
 	startedAt := time.Now()
-	result, err := m.run.Run(context.WithoutCancel(ctx), job.Agent, job.Prompt, raw)
+	result, err := m.run.Run(context.WithoutCancel(ctx), job.Agent, job.Prompt, progress)
 
-	m.log.Info("one-off cronjob returned", "event", "cron_completed", "outcome", runOutcome(result, err), "conversation_id", raw.ConversationID, "destination_conversation_id", result.ConversationID, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
+	m.log.Info("one-off cronjob returned", "event", "cron_completed", "outcome", runOutcome(result, err), "conversation_id", progress.ConversationID, "destination_conversation_id", result.ConversationID, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
 
 	if err != nil {
 		return result, fmt.Errorf("run one-off cronjob: %w", err)
@@ -378,7 +378,7 @@ func (m *Manager) executeJob(ctx context.Context, definition *config.CronDefinit
 		return
 	}
 
-	progress := &backend.RawRunProgress{
+	progress := &backend.CronRunProgress{
 		ConversationID: cronTraceConversationID(cronTracePrefix, definition.Job.RelativePath, startedAt),
 		Run:            &protocol.CronRun{Path: definition.Job.RelativePath, At: startedAt},
 		Cronjob:        &protocol.CronjobMessage{RelativePath: definition.Job.RelativePath, Agent: definition.Job.Agent, RanAt: ranAt, Space: definition.Job.Space},

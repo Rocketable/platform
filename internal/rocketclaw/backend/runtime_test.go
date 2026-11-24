@@ -109,9 +109,9 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 			}
 
 			if len(tagOutputs) == 0 {
-				writeRawRunFunctionCall(t, w, "tag", "execute", json.RawMessage(`{"code":"def main():\n    return \"\\n\".join([str(r) for r in [rocketclaw_set_tag(tag=\"red\"), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_sessions_current_id()]])\n"}`))
+				writeResponseFunctionCall(t, w, "tag", "execute", json.RawMessage(`{"code":"def main():\n    return \"\\n\".join([str(r) for r in [rocketclaw_set_tag(tag=\"red\"), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_get_tags(), rocketclaw_set_tag(tag=\"yellow\"), rocketclaw_sessions_current_id()]])\n"}`))
 			} else {
-				writeRawRunMessage(t, w, "done", "message", "done")
+				writeResponseMessage(t, w, "done", "message", "done")
 			}
 		}))
 		defer server.Close()

@@ -14,7 +14,7 @@ func executeBashScript(command string) map[string]string {
 	return map[string]string{"code": "def main():\n    return bash(command=" + strconv.Quote(command) + ")\n"}
 }
 
-func writeRawRunFunctionCall(t *testing.T, w http.ResponseWriter, responseID, name string, args any) {
+func writeResponseFunctionCall(t *testing.T, w http.ResponseWriter, responseID, name string, args any) {
 	t.Helper()
 
 	data, err := json.Marshal(args)
@@ -39,7 +39,7 @@ func requestSystemPrompt(body []byte) string {
 	return prompt
 }
 
-func writeRawRunMessage(t *testing.T, w http.ResponseWriter, responseID, messageID, text string) {
+func writeResponseMessage(t *testing.T, w http.ResponseWriter, responseID, messageID, text string) {
 	t.Helper()
 
 	_, err := fmt.Fprintf(w, `{"id":%q,"object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":%q,"type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%q,"annotations":[]}]}]}`, responseID, messageID, text)

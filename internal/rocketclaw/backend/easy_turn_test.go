@@ -209,15 +209,15 @@ func TestEasyApproverUsesItsOwnTools(t *testing.T) {
 		case review && !answered:
 			reviews <- body
 
-			writeRawRunFunctionCall(t, w, "tag", "execute", map[string]string{"code": "def main():\n    return rocketclaw_set_tag(tag=\"red\") + str(bash(command=r'''lookup'''))\n", "description": "tag"})
+			writeResponseFunctionCall(t, w, "tag", "execute", map[string]string{"code": "def main():\n    return rocketclaw_set_tag(tag=\"red\") + str(bash(command=r'''lookup'''))\n", "description": "tag"})
 		case review:
 			reviews <- body
 
-			writeRawRunMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
+			writeResponseMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
 		case !answered:
 			turns <- body
 
-			writeRawRunFunctionCall(t, w, "act", "execute", map[string]string{"code": "def main():\n    return glob(pattern=\"*\")\n", "description": "look"})
+			writeResponseFunctionCall(t, w, "act", "execute", map[string]string{"code": "def main():\n    return glob(pattern=\"*\")\n", "description": "look"})
 		default:
 			answerNoteTest(w, r, n, body)
 		}
@@ -262,7 +262,7 @@ func TestEasySubagentWorksInParentFolder(t *testing.T) {
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		switch {
 		case strings.Contains(body, "You are judging one planned coding-agent action."):
-			writeRawRunMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
+			writeResponseMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
 		case strings.Contains(body, "research the flaky test") && !strings.Contains(body, "function_call_output"):
 			subagentBodies <- body
 
@@ -275,9 +275,9 @@ func TestEasySubagentWorksInParentFolder(t *testing.T) {
 			default:
 			}
 
-			writeRawRunMessage(t, w, "resp_2", "msg_2", "found it")
+			writeResponseMessage(t, w, "resp_2", "msg_2", "found it")
 		case !strings.Contains(body, "function_call_output"):
-			writeRawRunFunctionCall(t, w, "resp_1", "task", map[string]any{"description": "research", "prompt": "research the flaky test", "model": "gpt-6-luna", "tools": []string{"bash", "task"}, "background": true})
+			writeResponseFunctionCall(t, w, "resp_1", "task", map[string]any{"description": "research", "prompt": "research the flaky test", "model": "gpt-6-luna", "tools": []string{"bash", "task"}, "background": true})
 		default:
 			answerNoteTest(w, r, n, body)
 		}

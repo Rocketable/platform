@@ -71,7 +71,7 @@ func startAgentDraftTest(t *testing.T, agents map[string]string, answer func(w h
 
 		switch column := regexp.MustCompile(`COL-\w+`).FindString(requestSystemPrompt(data)); {
 		case strings.Contains(string(data), "You are judging one planned coding-agent action."):
-			writeRawRunMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
+			writeResponseMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
 		case column == "":
 			answerNoteTest(w, r, 0, "")
 		default:
@@ -206,7 +206,7 @@ func TestAgentDraftTurnRunsWhatItWasSentWith(t *testing.T) {
 	answers, histories := make(chan string, 16), make(chan [2]string, 16)
 	dt := startAgentDraftTest(t, map[string]string{"support-bot": easy + "COL-L1\n", "support-bot/b": easy + "COL-DISKB\n"}, func(w http.ResponseWriter, column, user, body string) {
 		answer := column + "/" + regexp.MustCompile(`MSG-\d`).FindString(user) + "/" + regexp.MustCompile(`FRAME-\w+`).FindString(user)
-		writeRawRunMessage(t, w, "resp", "msg", answer)
+		writeResponseMessage(t, w, "resp", "msg", answer)
 
 		answers <- answer
 
@@ -267,7 +267,7 @@ func TestAgentDraftTurnRunsUnsavedDraftAndItsSubagent(t *testing.T) {
 		case column == "COL-TA" && strings.Contains(user, "research the flaky test"):
 			answer = column + "/subagent"
 		case column == "COL-TA" && !strings.Contains(body, "function_call_output"):
-			writeRawRunFunctionCall(t, w, "resp_task", "task", map[string]any{"description": "research", "prompt": "research the flaky test", "model": "gpt-6-luna", "tools": []string{"bash"},
+			writeResponseFunctionCall(t, w, "resp_task", "task", map[string]any{"description": "research", "prompt": "research the flaky test", "model": "gpt-6-luna", "tools": []string{"bash"},
 				"background": strings.Contains(body, "Run the subagent in the background")})
 
 			return
@@ -285,7 +285,7 @@ func TestAgentDraftTurnRunsUnsavedDraftAndItsSubagent(t *testing.T) {
 
 		answer += answerSb286.String()
 
-		writeRawRunMessage(t, w, "resp", "msg", answer)
+		writeResponseMessage(t, w, "resp", "msg", answer)
 
 		answers <- answer
 	})

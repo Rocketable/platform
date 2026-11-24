@@ -1297,7 +1297,7 @@ func TestSessionEntries(t *testing.T) {
 	}
 	channels.SlackTagsMatchingFunc = func(context.Context, string) []string { return nil }
 	cronRan := make(chan struct{}, 2)
-	cronRunner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	cronRunner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		require.Equal(t, "planner", agent)
 		require.Contains(t, prompt, "Cron body")
 		require.NotEmpty(t, progress.SyncDestination)
@@ -2983,10 +2983,10 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	<-cronRan
 
 	calls := cronRunner.RunCalls()
-	require.ElementsMatch(t, opened, []string{calls[0].RawRunProgress.SyncDestination, calls[1].RawRunProgress.SyncDestination})
-	require.NotEqual(t, calls[0].RawRunProgress.ConversationID, calls[1].RawRunProgress.ConversationID)
+	require.ElementsMatch(t, opened, []string{calls[0].CronRunProgress.SyncDestination, calls[1].CronRunProgress.SyncDestination})
+	require.NotEqual(t, calls[0].CronRunProgress.ConversationID, calls[1].CronRunProgress.ConversationID)
 
-	cronRunner.RunFunc = func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	cronRunner.RunFunc = func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, errors.New("cron execution failed")
 	}
 	failed, err := invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "alpha"})
@@ -4274,7 +4274,7 @@ func TestRoutineCronJobs(t *testing.T) {
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "marketing.md"), []byte("---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\nroutines: [30m]\n---\nHelp."), 0o600))
 
 	ran := make(chan string, 1)
-	runner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	runner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		ran <- agent + "|" + progress.Run.Path + "|" + progress.SyncDestination + "|" + prompt
 		return protocol.CronRunResult{}, nil
 	}}

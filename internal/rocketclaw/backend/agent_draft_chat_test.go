@@ -38,7 +38,7 @@ func startDraftChatTest(t *testing.T, name string, agents map[string]string) *dr
 			<-gate.(chan struct{})
 		}
 
-		writeRawRunMessage(t, w, "resp", "msg", answer)
+		writeResponseMessage(t, w, "resp", "msg", answer)
 
 		ct.answers <- [2]string{answer, strings.ReplaceAll(body, `\"`, `"`)}
 	})

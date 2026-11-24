@@ -77,7 +77,7 @@ func TestModelResolverSelectsUnqualifiedExplicitAndNamedProviders(t *testing.T) 
 			requests <- name
 
 			w.Header().Set("Content-Type", "application/json")
-			writeRawRunMessage(t, w, "response", "message", "ok")
+			writeResponseMessage(t, w, "response", "message", "ok")
 		}))
 	}
 
@@ -183,7 +183,7 @@ func TestModelResolverConstructsProviderSpecificAPIKeyAndChatGPTClients(t *testi
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		writeRawRunMessage(t, w, "response", "message", "ok")
+		writeResponseMessage(t, w, "response", "message", "ok")
 	}))
 	t.Cleanup(server.Close)
 
@@ -270,7 +270,7 @@ func TestModelResolverLogsProviderAndAPIModelWithoutCredentials(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		writeRawRunMessage(t, w, "response", "message", "ok")
+		writeResponseMessage(t, w, "response", "message", "ok")
 	}))
 	t.Cleanup(server.Close)
 

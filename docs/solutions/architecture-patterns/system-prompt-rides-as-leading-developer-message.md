@@ -50,7 +50,7 @@ Tests pin the request shape:
 - `systemPrompt` in `looper_test.go:192` asserts that `Instructions` is unset and the first input item is the developer prompt.
 - `TestLooperCompactsAndRetriesContextLengthExceeded` (`looper_test.go:1000`) mocks a compact reply that echoes the prompt. It checks that the compact call leads with the developer prompt and sets no `Instructions`, that the retry carries the prompt once and no other developer message, and that the saved history never contains the prompt.
 - `TestTransportRetriesContextOverflowAfterCompaction` (`oauth_test.go:1343`) checks that the ChatGPT retry keeps the developer item.
-- Backend fake model servers read the prompt with `requestSystemPrompt` (`internal/rocketclaw/backend/raw_run_test.go:26`) or match the raw body prefix `"input":[{"content":"<agent prompt>`, instead of `"instructions":"<agent prompt>`.
+- Backend fake model servers read the prompt with `requestSystemPrompt` (`internal/rocketclaw/backend/fake_responses_test.go:26`) or match the raw body prefix `"input":[{"content":"<agent prompt>`, instead of `"instructions":"<agent prompt>`.
 
 ## Why This Matters
 

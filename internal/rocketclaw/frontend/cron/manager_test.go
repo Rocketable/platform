@@ -164,7 +164,7 @@ func TestLoadOneOffCronjobUsesEffectiveRuntimeCron(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := New(newCronConfig(t, workspace, ".rocketclaw"), ".rocketclaw", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(newCronConfig(t, workspace, ".rocketclaw"), ".rocketclaw", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		t.Fatal("cronjob manager ran during load test")
 
 		return protocol.CronRunResult{}, nil
@@ -198,7 +198,7 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 		destination string
 	)
 
-	m := New(newCronConfig(t, t.TempDir(), "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(newCronConfig(t, t.TempDir(), "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		require.Equal(t, "helper", agent)
 		require.Equal(t, "Body", prompt)
 		require.Equal(t, destination, progress.SyncDestination)
@@ -227,7 +227,7 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 }
 
 func TestRunOneOffCronjobRejectsStoppedManager(t *testing.T) {
-	m := New(newCronConfig(t, t.TempDir(), "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(newCronConfig(t, t.TempDir(), "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		t.Fatal("stopped cronjob manager ran one-off cronjob")
 
 		return protocol.CronRunResult{}, nil
@@ -247,7 +247,7 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	var logs bytes.Buffer
 
 	workspace := t.TempDir()
-	m := New(newCronConfig(t, workspace, "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(newCronConfig(t, workspace, "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, _, _ string, progress *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		if !strings.HasPrefix(progress.ConversationID, "cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want scheduled trace ID", progress.ConversationID)
 		}
@@ -264,14 +264,14 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	require.Contains(t, logs.String(), `"duration_ms":`)
 	logs.Reset()
 
-	m.run = &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m.run = &runnerMock{RunFunc: func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{Reported: true}, nil
 	}}
 	m.executeJob(t.Context(), &config.CronDefinition{Job: protocol.OneOffCronjob{RelativePath: "cron/daily.md", Agent: "helper", Prompt: "Body"}})
 	require.Contains(t, logs.String(), `"outcome":"reported"`)
 	logs.Reset()
 
-	m.run = &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m.run = &runnerMock{RunFunc: func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, errors.New("secret-bearing-error")
 	}}
 	m.executeJob(t.Context(), &config.CronDefinition{Job: protocol.OneOffCronjob{RelativePath: "cron/daily.md", Agent: "helper", Prompt: "Body"}})
@@ -336,7 +336,7 @@ func TestScanScheduledRunsLoadedDefinitionUntilRefresh(t *testing.T) {
 
 	store, db := newCronScheduleStoreDB(t)
 	runPrompt := make(chan string, 1)
-	m := New(newCronConfig(t, workspace, "."), ".", store, &runnerMock{RunFunc: func(_ context.Context, _ string, prompt string, _ *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(newCronConfig(t, workspace, "."), ".", store, &runnerMock{RunFunc: func(_ context.Context, _ string, prompt string, _ *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		runPrompt <- prompt
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
@@ -411,7 +411,7 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 	store, db := newCronScheduleStoreDB(t)
 	runStarted := make(chan error, 2)
 	release := make(chan struct{})
-	m := New(newCronConfig(t, workspace, "."), ".", store, &runnerMock{RunFunc: func(ctx context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(newCronConfig(t, workspace, "."), ".", store, &runnerMock{RunFunc: func(ctx context.Context, _, _ string, progress *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		_, errConversation := db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, cron_path) VALUES ($1, 'helper', 'cron', 'cron_run', FALSE, $2)`, progress.ConversationID, progress.Run.Path)
 
 		_, errTurn := db.ExecContext(ctx, `INSERT INTO turns (id, conversation_id, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $1, 0, 0)`, progress.ConversationID)
@@ -534,7 +534,7 @@ func TestExecuteJobRefusesCronsItCannotRun(t *testing.T) {
 
 	var logs bytes.Buffer
 
-	m := New(cfg, ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(cfg, ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		t.Fatal("a cron whose agent it cannot run ran")
 
 		return protocol.CronRunResult{}, nil
@@ -568,7 +568,7 @@ func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := New(newCronConfig(t, workspace, "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(newCronConfig(t, workspace, "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
 
@@ -626,7 +626,7 @@ func TestLoadOneOffCronjobReportsWorkspaceOpenError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := New(config.NewLockedConfig(&config.Config{Workspace: workspace}), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(config.NewLockedConfig(&config.Config{Workspace: workspace}), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
 
@@ -665,7 +665,7 @@ func TestRoutinesRunAsCronDefinitions(t *testing.T) {
 	var runs []string
 
 	store := newCronScheduleStore(t)
-	m := New(cfg, ".", store, &runnerMock{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(cfg, ".", store, &runnerMock{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.CronRunProgress) (protocol.CronRunResult, error) {
 		runs = append(runs, agent+"|"+prompt+"|"+progress.Run.Path+"|"+progress.Cronjob.Space)
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))

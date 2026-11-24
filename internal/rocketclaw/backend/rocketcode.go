@@ -13,7 +13,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-type RawRunProgress struct {
+type CronRunProgress struct {
 	ConversationID  string
 	Run             *protocol.CronRun
 	SyncDestination string

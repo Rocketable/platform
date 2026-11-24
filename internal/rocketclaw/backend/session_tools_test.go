@@ -104,11 +104,11 @@ func TestSessionTagToolsBridge(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 
 				if requests < len(calls) {
-					writeRawRunFunctionCall(t, w, fmt.Sprintf("tag-%d", requests), "execute", struct {
+					writeResponseFunctionCall(t, w, fmt.Sprintf("tag-%d", requests), "execute", struct {
 						Code string `json:"code"`
 					}{"def main():\n    return " + calls[requests] + ".unwrap()\n"})
 				} else {
-					writeRawRunMessage(t, w, "done", "message", "done")
+					writeResponseMessage(t, w, "done", "message", "done")
 				}
 
 				requests++
@@ -668,7 +668,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 					assert.Contains(t, string(raw), `\"rule_pattern\": \"rocketclaw_sessions\"`, "every session tool is reviewed under the one rule")
 
 					approvals++
-					writeRawRunMessage(t, w, fmt.Sprintf("approval-%d", approvals), "approval", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Read-only inspection."}`)
+					writeResponseMessage(t, w, fmt.Sprintf("approval-%d", approvals), "approval", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Read-only inspection."}`)
 
 					return
 				}
@@ -700,24 +700,24 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 				}
 
 				if requests == probe {
-					writeRawRunFunctionCall(t, w, "missing-criteria", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_list(since=\"1h\", until=\"\", limit=1, include_message_preview=False)\n"}`))
+					writeResponseFunctionCall(t, w, "missing-criteria", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_list(since=\"1h\", until=\"\", limit=1, include_message_preview=False)\n"}`))
 
 					return
 				}
 
 				switch requests {
 				case 1:
-					writeRawRunFunctionCall(t, w, "list", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_list(criteria=\"\", since=\"1970-01-01T00:00:00Z\", until=\"\", limit=200, include_message_preview=True)\n"}`))
+					writeResponseFunctionCall(t, w, "list", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_list(criteria=\"\", since=\"1970-01-01T00:00:00Z\", until=\"\", limit=200, include_message_preview=True)\n"}`))
 				case 2:
-					writeRawRunFunctionCall(t, w, "get", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_get(conversation_id=\"external_mcp:private\", limit=100, before_entry_id=0)\n"}`))
+					writeResponseFunctionCall(t, w, "get", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_get(conversation_id=\"external_mcp:private\", limit=100, before_entry_id=0)\n"}`))
 				case 3:
-					writeRawRunFunctionCall(t, w, "direct-list", sessionsListToolName, json.RawMessage(`{"criteria":"","since":"1970-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`))
+					writeResponseFunctionCall(t, w, "direct-list", sessionsListToolName, json.RawMessage(`{"criteria":"","since":"1970-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`))
 				case 4:
-					writeRawRunFunctionCall(t, w, "direct-get", sessionsGetToolName, json.RawMessage(`{"conversation_id":"external_mcp:private","limit":100,"before_entry_id":0}`))
+					writeResponseFunctionCall(t, w, "direct-get", sessionsGetToolName, json.RawMessage(`{"conversation_id":"external_mcp:private","limit":100,"before_entry_id":0}`))
 				case 5:
-					writeRawRunFunctionCall(t, w, "current", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_current_id()\n"}`))
+					writeResponseFunctionCall(t, w, "current", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_current_id()\n"}`))
 				case 6:
-					writeRawRunFunctionCall(t, w, "direct-current", "rocketclaw_sessions_current_id", json.RawMessage(`{}`))
+					writeResponseFunctionCall(t, w, "direct-current", "rocketclaw_sessions_current_id", json.RawMessage(`{}`))
 				case 7:
 					code, err := json.Marshal(struct {
 						Code string `json:"code"`
@@ -726,9 +726,9 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 						return
 					}
 
-					writeRawRunFunctionCall(t, w, "current-history", "execute", json.RawMessage(code))
+					writeResponseFunctionCall(t, w, "current-history", "execute", json.RawMessage(code))
 				default:
-					writeRawRunMessage(t, w, "done", "message", "done")
+					writeResponseMessage(t, w, "done", "message", "done")
 				}
 			}))
 			t.Cleanup(server.Close)
@@ -927,7 +927,7 @@ func TestSessionsMoveTool(t *testing.T) {
 					return
 				}
 
-				writeRawRunFunctionCall(t, w, "move", "execute", struct {
+				writeResponseFunctionCall(t, w, "move", "execute", struct {
 					Code string `json:"code"`
 				}{"def main():\n    return rocketclaw_sessions_move(space='ops')\n"})
 			})
@@ -1329,7 +1329,7 @@ func TestSessionsWriteRecipients(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 
 			if len(outputs) == len(writes) {
-				writeRawRunMessage(t, w, "done", "message", "done")
+				writeResponseMessage(t, w, "done", "message", "done")
 
 				return
 			}
@@ -1597,7 +1597,7 @@ func replyNoteTest(t *testing.T, code string, answer noteTestResponder) *noteTes
 			return
 		}
 
-		writeRawRunFunctionCall(t, w, "resp", "execute", struct {
+		writeResponseFunctionCall(t, w, "resp", "execute", struct {
 			Code string `json:"code"`
 		}{"def main():\n    return " + code + "\n"})
 	})
@@ -1642,7 +1642,7 @@ func TestSessionWriteReplyReachesCaller(t *testing.T) {
 				if strings.Contains(body, "<session_reply") {
 					noted <- lastRequestMessage(t, body)
 
-					writeRawRunMessage(t, w, "resp", "msg", "noted")
+					writeResponseMessage(t, w, "resp", "msg", "noted")
 
 					return
 				}
@@ -1655,7 +1655,7 @@ func TestSessionWriteReplyReachesCaller(t *testing.T) {
 					}
 				}
 
-				writeRawRunMessage(t, w, "resp", "msg", map[bool]string{true: "billing is fine", false: "waiting"}[target])
+				writeResponseMessage(t, w, "resp", "msg", map[bool]string{true: "billing is fine", false: "waiting"}[target])
 			})
 			manager, _ := nt.run(t, ignoreOutbound)
 
@@ -1697,15 +1697,15 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 		case strings.Contains(body, "<subagent id="):
 			reported <- lastRequestMessage(t, body)
 
-			writeRawRunMessage(t, w, "resp", "msg", "noted")
+			writeResponseMessage(t, w, "resp", "msg", "noted")
 		case strings.Contains(body, "<session_reply"):
 			woke <- body
 
-			writeRawRunMessage(t, w, "resp", "msg", "billing noted")
+			writeResponseMessage(t, w, "resp", "msg", "billing noted")
 		case strings.Contains(body, `"input":[{"content":"Research`) && strings.Contains(body, "function_call_output"):
-			writeRawRunMessage(t, w, "resp", "msg", "asked ops")
+			writeResponseMessage(t, w, "resp", "msg", "asked ops")
 		case strings.Contains(body, `"input":[{"content":"Research`):
-			writeRawRunFunctionCall(t, w, "write", "execute", struct {
+			writeResponseFunctionCall(t, w, "write", "execute", struct {
 				Code string `json:"code"`
 			}{"def main():\n    return rocketclaw_sessions_write(session_id='web:ops', mode='enqueue', prompt='summarize billing', title='', agent='')\n"})
 		case strings.Contains(body, "message from session"):
@@ -1715,9 +1715,9 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 				return
 			}
 
-			writeRawRunMessage(t, w, "resp", "msg", "billing is fine")
+			writeResponseMessage(t, w, "resp", "msg", "billing is fine")
 		case !strings.Contains(body, "function_call_output"):
-			writeRawRunFunctionCall(t, w, "task", "task", map[string]string{"description": "ask ops", "prompt": "ask ops about billing", "subagent_type": "researcher"})
+			writeResponseFunctionCall(t, w, "task", "task", map[string]string{"description": "ask ops", "prompt": "ask ops about billing", "subagent_type": "researcher"})
 		default:
 			answerNoteTest(w, r, n, body)
 		}
@@ -1775,7 +1775,7 @@ func TestSessionWriteReplyWakesHiddenRun(t *testing.T) {
 			text = "billing is fine"
 		}
 
-		writeRawRunMessage(t, w, "resp", "msg", text)
+		writeResponseMessage(t, w, "resp", "msg", text)
 	})
 	nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 	manager, _ := nt.run(t, ignoreOutbound)
@@ -1825,7 +1825,7 @@ func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 			default:
 			}
 
-			writeRawRunMessage(t, w, "resp", "msg", "billing is fine")
+			writeResponseMessage(t, w, "resp", "msg", "billing is fine")
 		})
 
 		manager, shutdown := nt.run(t, ignoreOutbound)
@@ -1851,7 +1851,7 @@ func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 		nt := replyNoteTest(t, "", func(w http.ResponseWriter, _ *http.Request, _ int, body string) {
 			woke <- lastRequestMessage(t, body)
 
-			writeRawRunMessage(t, w, "resp", "msg", "noted")
+			writeResponseMessage(t, w, "resp", "msg", "noted")
 		})
 
 		reply := testReply("web:caller", "turn-1/call/w", nt.conversationID)
@@ -1879,7 +1879,7 @@ func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 		nt := replyNoteTest(t, "", func(w http.ResponseWriter, _ *http.Request, _ int, body string) {
 			woke <- lastRequestMessage(t, body)
 
-			writeRawRunMessage(t, w, "resp", "msg", "noted")
+			writeResponseMessage(t, w, "resp", "msg", "noted")
 		})
 		require.NoError(t, nt.service.UpsertThread("web:ops", ThreadState{Agent: "main"}))
 
