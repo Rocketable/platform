@@ -86,14 +86,14 @@ func compileEasyAgent(agent *Agent, cfg *AgentLoadConfig) error {
 		target     any
 	}{
 		{"maxRecursion", "an integer of 0 or more", &maxRecursion},
-		{"approver", "a mapping of model and prompt strings and a decision mapping", &approver},
+		{"approver", "a mapping of model and prompt strings", &approver},
 	} {
 		if field := frontmatterField(node, section.key); field != nil && field.Decode(section.target) != nil {
 			return fmt.Errorf("%s: must be %s", section.key, section.shape)
 		}
 	}
 
-	if err := errors.Join(parseEmulatedShell(node, agent), parseApproverDecision(frontmatterField(node, "approver"), agent, cfg)); err != nil {
+	if err := parseEmulatedShell(node, agent); err != nil {
 		return err
 	}
 
@@ -388,9 +388,8 @@ func easyKeys() map[string][]string {
 	return map[string][]string{
 		"": {"mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN", "shell", "commands", "mcp", "opencode", "rocketclaw",
 			"tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema", "sticky", "decision"},
-		"approver":          {"model", "prompt", "decision", "secretsARN", "commands", "mcp", "rocketclaw", "tags", "skills", "allowedNetworkTargets"},
-		"approver.decision": {"model", "minConfidence", "prompt"},
-		"schema":            {"output"},
+		"approver": {"model", "prompt", "secretsARN", "commands", "mcp", "rocketclaw", "tags", "skills", "allowedNetworkTargets"},
+		"schema":   {"output"},
 	}
 }
 

@@ -19,24 +19,23 @@ import (
 var AgentFrontmatterPattern = regexp.MustCompile(`\A---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|\z)`)
 
 type Agent struct {
-	Name             string
-	Description      string
-	Model            string
-	ReasoningEffort  string
-	Verbosity        string
-	MaxRecursion     *int
-	CustomShell      CustomShell
-	Space            string
-	Prompt           string
-	Location         string
-	Permission       PermissionSet
-	OutputSchema     map[string]any
-	ApproverDecision ApproverDecision
-	Frontmatter      map[string]any
-	FrontmatterNode  *yaml.Node
-	FileMode         fs.FileMode
-	Mode             AgentMode
-	Sticky           AgentSticky
+	Name            string
+	Description     string
+	Model           string
+	ReasoningEffort string
+	Verbosity       string
+	MaxRecursion    *int
+	CustomShell     CustomShell
+	Space           string
+	Prompt          string
+	Location        string
+	Permission      PermissionSet
+	OutputSchema    map[string]any
+	Frontmatter     map[string]any
+	FrontmatterNode *yaml.Node
+	FileMode        fs.FileMode
+	Mode            AgentMode
+	Sticky          AgentSticky
 
 	WorkingDirectory string
 	Commands         map[string]string
@@ -296,7 +295,7 @@ func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error)
 		}
 	}
 
-	if err := cmp.Or(parseAgentShell(frontmatterNode, &agent), parseAgentApprover(frontmatterNode, &agent, cfg)); err != nil {
+	if err := parseAgentShell(frontmatterNode, &agent); err != nil {
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
 
@@ -305,57 +304,6 @@ func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error)
 	agent.Verbosity = argString(frontmatter, "verbosity")
 
 	return agent, nil
-}
-
-type ApproverDecision struct {
-	Model         string  `yaml:"model"`
-	MinConfidence float64 `yaml:"minConfidence"`
-	Prompt        string  `yaml:"prompt"`
-}
-
-func parseAgentApprover(node *yaml.Node, agent *Agent, cfg *AgentLoadConfig) error {
-	field := frontmatterField(node, "approver")
-	if field != nil && field.Kind != yaml.MappingNode {
-		return errors.New("approver: must be a mapping with only decision")
-	}
-
-	if err := checkKeys(field, "approver.", "advanced agents take only approver.decision", "decision"); err != nil {
-		return err
-	}
-
-	return parseApproverDecision(field, agent, cfg)
-}
-
-func parseApproverDecision(approver *yaml.Node, agent *Agent, cfg *AgentLoadConfig) error {
-	if approver == nil {
-		return nil
-	}
-
-	node := frontmatterField(approver, "decision")
-	if node == nil {
-		return nil
-	}
-
-	errShape := errors.New("approver.decision: must be a mapping of model and prompt strings and a minConfidence number")
-	if node.Kind != yaml.MappingNode {
-		return errShape
-	}
-
-	if err := checkKeys(node, "approver.decision.", "not an approver.decision key", easyKeys()["approver.decision"]...); err != nil {
-		return err
-	}
-
-	if node.Decode(&agent.ApproverDecision) != nil {
-		return errShape
-	}
-
-	if decision := &agent.ApproverDecision; decision.MinConfidence < 0 || decision.MinConfidence > 1 {
-		return errors.New("approver.decision.minConfidence: must be between 0 and 1")
-	}
-
-	agent.ApproverDecision.Model = strings.TrimSpace(agent.ApproverDecision.Model)
-
-	return checkDecisionModels(cfg, agent.ApproverDecision.Model)
 }
 
 func checkDecisionModels(cfg *AgentLoadConfig, models ...string) error {

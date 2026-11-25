@@ -38,8 +38,6 @@ func withCustomShell(customShell *CustomShell, command string) (path string, arg
 
 type Config struct {
 	AutoApproverModel         shared.ResponsesModel
-	AutoApproverDecisionModel string
-	AutoApproverMinConfidence float64
 	Deciders                  map[string]Decider
 	ExpandPromptShellCommands PromptShellCommandExpansion
 	ParallelToolCalls         int
@@ -264,8 +262,6 @@ func NewWithModelResolver(
 		resolver:                  resolver,
 		workspaceInstructions:     workspaceInstructions,
 		autoApproverModel:         cmp.Or(config.AutoApproverModel, defaultOpenAIModel),
-		autoApproverDecisionModel: config.AutoApproverDecisionModel,
-		autoApproverMinConfidence: config.AutoApproverMinConfidence,
 		deciders:                  config.Deciders,
 		parallelToolCalls:         config.ParallelToolCalls,
 		expandPromptShellCommands: config.ExpandPromptShellCommands,
