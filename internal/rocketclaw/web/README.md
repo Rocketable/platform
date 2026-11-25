@@ -475,7 +475,9 @@ get a **Behavior settings** section on the Config page. **Edit** shows one contr
 are); **Save** replaces the whole document and applies it to the running server,
 or shows the validation error and changes nothing. Its **Built-in agents** group
 has, for `main` and `voice`, an on/off switch and a model picker, empty for the
-model the release ships. Its **Session titles** group has the title model picker and
+model the release ships. Its **Slack** group starts with the ambient decision model, picked
+the same way as the title decision model below (empty turns ambient listening off), above the
+channels. Its **Session titles** group has the title model picker and
 the title decision model: a decision provider from `decision`, the model name (empty
 turns automatic title checks off), and **Test**, which sends that model one title check. Everyone else sees the page
 read-only, without the settings document or Slack allowed user IDs.

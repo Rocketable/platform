@@ -664,11 +664,14 @@ func TestSaveBehaviorSettings(t *testing.T) {
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 	require.ErrorContains(t, err, "slack.channels[].agents is required")
 
-	saved, err := server.saveBehaviorSettings(alice, &SaveBehaviorSettingsRequest{DocumentJson: document(func(b *config.Behavior) { b.AutoApproverModel = "gpt-b" })})
+	saved, err := server.saveBehaviorSettings(alice, &SaveBehaviorSettingsRequest{DocumentJson: document(func(b *config.Behavior) {
+		b.AutoApproverModel, b.Slack.AmbientDecisionModel = "gpt-b", "openai/gpt-6-luna"
+	})})
 	require.NoError(t, err)
 	require.Equal(t, "gpt-b", core.SaveBehaviorCalls()[1].Behavior.AutoApproverModel)
 	require.True(t, saved.Config.CanEdit)
 	require.Contains(t, saved.Config.BehaviorJson, `"auto_approver_model": "gpt-b"`)
+	require.Contains(t, saved.Config.BehaviorJson, `"ambient_decision_model": "openai/gpt-6-luna"`)
 
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)

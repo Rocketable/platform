@@ -430,11 +430,13 @@ func TestRunMergesStoredBehaviorSettings(t *testing.T) {
 
 	got, err = start(func(cfg *config.Config) {
 		cfg.Slack, cfg.AutoApproverModel, cfg.Logging.Level = testSlack(), "gpt-b", "error"
+		cfg.Slack.AmbientDecisionModel = "openai/gpt-6-luna"
 	})
 	require.NoError(t, err)
 	require.Equal(t, "gpt-a", got.live.AutoApproverModel, "the stored auto_approver_model applies")
 	require.Equal(t, slog.LevelInfo, got.level, "the stored logging.level replaces the file's")
-	require.Contains(t, got.logs, `level=WARN msg="ignoring behavior settings in the config file; the stored behavior settings apply" fields="[auto_approver_model slack.channels logging.level]"`)
+	require.Empty(t, got.live.Slack.AmbientDecisionModel, "the stored slack.ambient_decision_model applies")
+	require.Contains(t, got.logs, `level=WARN msg="ignoring behavior settings in the config file; the stored behavior settings apply" fields="[auto_approver_model slack.channels slack.ambient_decision_model logging.level]"`)
 
 	_, err = store.db.ExecContext(t.Context(), `UPDATE behavior_settings SET document = document || '{"server_display_name": "stored"}'::jsonb`)
 	require.NoError(t, err)

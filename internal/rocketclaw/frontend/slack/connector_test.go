@@ -2689,9 +2689,7 @@ func TestHandleEventsAPIIgnoresMessagesAndReactions(t *testing.T) {
 		recorded, report bool
 		watch            string
 		root             map[string]any
-		off              bool
 	}{
-		{name: "ambient listening off", event: newSlackMessageEvent(t, nil), recorded: true, off: true},
 		{name: "1:1 DM", event: newSlackMessageEvent(t, map[string]any{"channel": "D123", "channel_type": "im"}), recorded: true},
 		{name: "bot message", event: newSlackMessageEvent(t, map[string]any{"bot_id": "B111"}), recorded: true},
 		{name: "the agent's own message", event: newSlackMessageEvent(t, map[string]any{"user": "U999", "bot_id": "B999"}), recorded: true},
@@ -2723,17 +2721,27 @@ func TestHandleEventsAPIIgnoresMessagesAndReactions(t *testing.T) {
 			}
 
 			connector, writes := newAmbientConnector(t, router, tt.watch, []map[string]any{root, current})
-
-			if tt.off {
-				connector.config.Store(&config.Config{Slack: config.SlackConfig{Channels: testSocialChannels()}})
-			}
-
 			connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(tt.event))
 
 			assert.Empty(t, router.ScreenAmbientCalls())
 			assert.Empty(t, router.SubmitMentionCalls())
 			assert.Empty(t, *writes)
 		})
+	}
+}
+
+func TestHandleEventsAPIFollowsTheLiveAmbientDecisionModel(t *testing.T) {
+	router := newMentionRouter(true)
+	connector, _ := newAmbientConnector(t, router, "", []map[string]any{{"ts": "171234.5678", "user": "U555", "text": "can someone look at the deploy?"}, {"ts": "171235.0001", "user": "U123", "text": "also check staging"}})
+
+	for _, step := range []struct {
+		model    string
+		screened int
+	}{{"openai/gpt-6-luna", 1}, {"", 1}, {"openai/gpt-6.1-sol", 2}} {
+		setAmbientDecisionModel(t, connector, step.model)
+		connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(newSlackMessageEvent(t, nil)))
+
+		assert.Len(t, router.ScreenAmbientCalls(), step.screened, "a saved model %q applies to the next message without a restart", step.model)
 	}
 }
 
@@ -3007,7 +3015,7 @@ func TestHandleAppMentionEventRedeliveryStartsOnce(t *testing.T) {
 	}
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
 	connector.botUserID = "U999"
-	enableAmbientListening(t, connector)
+	setAmbientDecisionModel(t, connector, "openai/gpt-6-luna")
 
 	root := newSlackAppMentionEvent()
 	reply := newSlackAppMentionEvent()
@@ -3222,11 +3230,14 @@ func newTestConnectorWithOptions(apiURL string, channels []config.SlackChannelCo
 	return connector
 }
 
-func enableAmbientListening(t *testing.T, connector *Connector) {
+func setAmbientDecisionModel(t *testing.T, connector *Connector, model string) {
 	t.Helper()
 
 	require.NoError(t, connector.config.Do(func(cfg *config.Config) error {
-		cfg.Slack.AmbientDecisionModel = "openai/gpt-6-luna"
+		behavior := cfg.Behavior()
+		behavior.Slack.AmbientDecisionModel = model
+		cfg.SetBehavior(&behavior)
+
 		return nil
 	}))
 }
@@ -3243,7 +3254,7 @@ func newAmbientConnector(t *testing.T, router protocol.PrimaryTextRouter, watch 
 		{Channel: "#other", Agents: []string{"other"}, AllowedUserIDs: []string{"U555"}},
 	}, router)
 	connector.botUserID = "U999"
-	enableAmbientListening(t, connector)
+	setAmbientDecisionModel(t, connector, "openai/gpt-6-luna")
 
 	return connector, writes
 }

@@ -6,7 +6,7 @@ description: Use this skill to inspect or update setup fields of the rocketclaw 
 
 Use this skill whenever the human wants to inspect or modify setup fields of the configuration file RocketClaw loads from the current working directory: `femtoclaw.json` when it exists, else `rocketclaw.json`.
 
-This skill covers setup fields only. It does not cover the Behavior Settings, which are stored in PostgreSQL and edited by a Web admin (a user listed in `web.admins`) on the Web Config page: `auto_approver_model`, `slack.channels`, `logging.level`, `overlays`, and `embedded_agents` (whether the built-in `main` and `voice` agents are on, and their models). After the first start, RocketClaw ignores their copies in the configuration file, so editing them in the file changes nothing and reading them from the file can be stale. The Web Config page shows their live values. When the human asks for a change to one of them, do not edit the file: tell the human to make the change on the Web Config page, where a save applies at once without a restart.
+This skill covers setup fields only. It does not cover the Behavior Settings, which are stored in PostgreSQL and edited by a Web admin (a user listed in `web.admins`) on the Web Config page: `auto_approver_model`, `slack.channels`, `slack.ambient_decision_model`, `logging.level`, `overlays`, and `embedded_agents` (whether the built-in `main` and `voice` agents are on, and their models). After the first start, RocketClaw ignores their copies in the configuration file, so editing them in the file changes nothing and reading them from the file can be stale. The Web Config page shows their live values. When the human asks for a change to one of them, do not edit the file: tell the human to make the change on the Web Config page, where a save applies at once without a restart.
 
 This skill exists to shorten the learning loop around routine rocketclaw configuration changes.
 
@@ -111,7 +111,7 @@ When the human asks for a config change in plain English:
 - preserve the correct JSON type
 - if the target path or intended type is ambiguous, ask a clarifying question before writing
 
-If the request touches a Behavior Setting, such as the auto-approver model, the title models, a Slack channel's agents or allowed users, or the overlay list, do not write it with `jq`; point the human to the Web Config page instead.
+If the request touches a Behavior Setting, such as the auto-approver model, the title models, the Slack ambient decision model, a Slack channel's agents or allowed users, or the overlay list, do not write it with `jq`; point the human to the Web Config page instead.
 
 Agents reach an MCP server's tools only through its facets: `mcp_servers.<server>.tools` maps each facet name (letters, digits, `_`, `-`) to a list of tool-name patterns without the server prefix, such as `"get_*"`. `*` matches any text and `?` one character; an entry starting with `-`, such as `"-get_secret_*"`, removes those tools from that facet wherever it appears. Facets may overlap, so a `sudo` facet of `["*"]` beside narrower `read` and `write` facets is fine. A tool in no facet is reachable by no agent, sudo agents included. An easy agent grants facets as `mcp: {<server>: [read]}`, an advanced one as `permission.mcp: {<server>: {read: allow, write: auto}}`; a facet an agent names that the server lacks fails agent loading (`server "<server>" has no "<facet>" facet`). Server names may not contain `.`. For example:
 

@@ -49,7 +49,8 @@ type Config struct {
 type Behavior struct {
 	AutoApproverModel string `json:"auto_approver_model"`
 	Slack             struct {
-		Channels []SlackChannelConfig `json:"channels"`
+		Channels             []SlackChannelConfig `json:"channels"`
+		AmbientDecisionModel string               `json:"ambient_decision_model"`
 	} `json:"slack"`
 	Logging            LoggingConfig        `json:"logging"`
 	Overlays           []string             `json:"overlays"`
@@ -71,7 +72,7 @@ type EmbeddedAgentConfig struct {
 func (c *Config) Behavior() Behavior {
 	var b Behavior
 
-	b.AutoApproverModel, b.Slack.Channels = c.AutoApproverModel, c.Slack.Channels
+	b.AutoApproverModel, b.Slack.Channels, b.Slack.AmbientDecisionModel = c.AutoApproverModel, c.Slack.Channels, c.Slack.AmbientDecisionModel
 	b.Logging, b.Overlays, b.EmbeddedAgents = c.Logging, c.Overlays, c.EmbeddedAgents
 	b.TitleModel, b.TitleDecisionModel = c.TitleModel, c.TitleDecisionModel
 
@@ -79,7 +80,7 @@ func (c *Config) Behavior() Behavior {
 }
 
 func (c *Config) SetBehavior(b *Behavior) {
-	c.AutoApproverModel, c.Slack.Channels = b.AutoApproverModel, b.Slack.Channels
+	c.AutoApproverModel, c.Slack.Channels, c.Slack.AmbientDecisionModel = b.AutoApproverModel, b.Slack.Channels, b.Slack.AmbientDecisionModel
 	c.Logging, c.Overlays, c.EmbeddedAgents = b.Logging, b.Overlays, b.EmbeddedAgents
 	c.TitleModel, c.TitleDecisionModel = b.TitleModel, b.TitleDecisionModel
 }
@@ -442,6 +443,10 @@ func (c *Config) ValidateBehavior() error {
 		return err
 	}
 
+	if err := c.normalizeDecisionModel("slack.ambient_decision_model", &c.Slack.AmbientDecisionModel); err != nil {
+		return err
+	}
+
 	return c.validateSlack()
 }
 
@@ -612,10 +617,6 @@ func (c *Config) validateDecision() error {
 	}
 
 	if err := c.normalizeDecisionModel("auto_approver_decision.model", &c.AutoApproverDecision.Model); err != nil {
-		return err
-	}
-
-	if err := c.normalizeDecisionModel("slack.ambient_decision_model", &c.Slack.AmbientDecisionModel); err != nil {
 		return err
 	}
 

@@ -14,7 +14,7 @@ type Channel = { channel: string; agents?: string[]; allowed_user_ids?: string[]
 type EmbeddedAgent = { disabled?: boolean; model?: string };
 type Behavior = {
   auto_approver_model: string;
-  slack: { channels: Channel[] | null };
+  slack: { channels: Channel[] | null; ambient_decision_model?: string };
   logging: { level: string };
   overlays: string[] | null;
   embedded_agents?: { main?: EmbeddedAgent; voice?: EmbeddedAgent };
@@ -54,7 +54,10 @@ export function BehaviorSettings({ view }: { view: ConfigView }) {
 function BehaviorFields({ draft, disabled, onChange }: { draft: Behavior; disabled: boolean; onChange: (change: Partial<Behavior>) => void }) {
   return (
     <>
-      <Group title="Slack channels">
+      <Group title="Slack">
+        <Labeled label="Ambient decision model" hint="When set, it screens allowed users' messages without a mention in Joined Threads and Watched Channels, and the agent answers those it does not rule out. Empty turns ambient listening off.">
+          <DecisionModelPicker label="Ambient decision model" value={draft.slack.ambient_decision_model ?? ""} onModel={(ambient_decision_model) => onChange({ slack: { ...draft.slack, ambient_decision_model } })} />
+        </Labeled>
         <Channels channels={draft.slack.channels ?? []} disabled={disabled} onChange={(channels) => onChange({ slack: { ...draft.slack, channels } })} />
       </Group>
       <Group title="Server">
