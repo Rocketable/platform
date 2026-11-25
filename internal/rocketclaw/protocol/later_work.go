@@ -50,7 +50,7 @@ type LaterWorkRow struct {
 }
 
 func MixedLaterWork(queue []ThreadQueueItem, scheduled map[string]ScheduledMessageState) []LaterWorkRow {
-	slots := map[string][]ThreadQueueItem{}
+	slots := map[string][]int{}
 
 	for i := range queue {
 		if queue[i].Kind == InboundKindHeld {
@@ -62,19 +62,20 @@ func MixedLaterWork(queue []ThreadQueueItem, scheduled map[string]ScheduledMessa
 			park = ""
 		}
 
-		slots[park] = append(slots[park], queue[i])
+		slots[park] = append(slots[park], i)
 	}
 
-	for _, items := range slots {
-		slices.SortFunc(items, func(a, b ThreadQueueItem) int {
+	for _, indices := range slots {
+		slices.SortFunc(indices, func(i, j int) int {
+			a, b := &queue[i], &queue[j]
 			return cmp.Or(cmp.Compare(a.Position, b.Position), a.StashAt.Compare(b.StashAt), strings.Compare(a.ID, b.ID))
 		})
 	}
 
 	rows := make([]LaterWorkRow, 0, len(queue)+len(scheduled))
 
-	for i := range slots[""] {
-		rows = append(rows, LaterWorkRow{Kind: LaterWorkQueued, Queue: slots[""][i]})
+	for _, i := range slots[""] {
+		rows = append(rows, LaterWorkRow{Kind: LaterWorkQueued, Queue: queue[i]})
 	}
 
 	for _, id := range slices.SortedFunc(maps.Keys(scheduled), func(a, b string) int {
@@ -82,8 +83,8 @@ func MixedLaterWork(queue []ThreadQueueItem, scheduled map[string]ScheduledMessa
 	}) {
 		rows = append(rows, LaterWorkRow{Kind: LaterWorkScheduled, ScheduledID: id, Scheduled: scheduled[id]})
 
-		for i := range slots[id] {
-			rows = append(rows, LaterWorkRow{Kind: LaterWorkQueued, Queue: slots[id][i]})
+		for _, i := range slots[id] {
+			rows = append(rows, LaterWorkRow{Kind: LaterWorkQueued, Queue: queue[i]})
 		}
 	}
 
