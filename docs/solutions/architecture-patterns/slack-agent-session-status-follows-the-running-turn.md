@@ -1,7 +1,7 @@
 ---
 title: A Slack Mention Thread's Agent Session Status Follows Its Running Turn
 date: 2026-11-04
-last_updated: 2026-11-24
+last_updated: 2026-11-25
 category: docs/solutions/architecture-patterns/
 module: internal/rocketclaw/frontend/slack
 problem_type: architecture_pattern
@@ -11,11 +11,11 @@ applies_when:
   - Adding or changing code that calls agents.sessions.setStatus for a Slack mention thread
   - Showing a running turn's progress in Slack (status, checklist, or a new kind of update)
   - Publishing anything from a turn to connectors while the turn runs
-  - Adding a kind of Slack turn that shows no status, like an Ambient Turn
+  - Adding a kind of Slack turn that shows its status late or never, like an Ambient Turn
 related_components:
   - internal/rocketclaw/backend
   - internal/rocketclaw/protocol
-tags: [slack, agent-session, setstatus, processing, suspended, stop, checklist, plan-block, turn-progress, polling, outbound-bus, ambient-turn, deferred]
+tags: [slack, agent-session, setstatus, processing, suspended, stop, checklist, plan-block, turn-progress, polling, outbound-bus, ambient-turn, deferred, worked]
 ---
 
 # A Slack Mention Thread's Agent Session Status Follows Its Running Turn
@@ -30,18 +30,20 @@ The status now has six writers in `internal/rocketclaw/frontend/slack/connector.
 |---|---|---|
 | `handleAppMentionEvent` | a mention passes the allowlist and report-thread checks, before `SubmitMention` | `processing`, with the session title and initiator, only when no turn of the thread is running |
 | `settleSession` | the mention started no turn | `active`, unless a turn of the thread is running |
-| `startSession` | a turn in a mention thread starts or resumes, unless its outbound is `Deferred` | `processing` |
-| `pollSession` | every 3 seconds while the turn runs | `suspended` while a Web question waits, `processing` otherwise, re-sent before Slack's one-hour limit; `active` once the turn no longer runs |
+| `startSession` | a turn in a mention thread starts or resumes | `processing`, or nothing for a `Deferred` outbound, whose session stays hidden |
+| `pollSession` | every 3 seconds while the turn runs | `suspended` while a Web question waits, `processing` otherwise, re-sent before Slack's one-hour limit; `active` once the turn no longer runs. A hidden session sends nothing until `TurnProgress` reports `Worked`, which it does only while the row is `running` |
 | `handleAgentSessionStopped` | Slack's Stop button | `active`, or the running turn's current status again |
-| `finishResponse` | the turn's final was delivered, or its delivery was abandoned (`AbortResponse`) | `active` (mention threads only, never for a `Deferred` outbound) |
+| `finishResponse` | the turn's final was delivered, posted nothing, or its delivery was abandoned (`AbortResponse`) | `active` (mention threads only; for a `Deferred` outbound only when it carries `Worked`) |
 
-An Ambient Turn writes no status at all. Its intake, `handleMessageEvent`, sends none, and the backend marks its outbound messages `Deferred` (`listensAmbient` in `internal/rocketclaw/backend/bridge.go`), which keeps it out of `startSession` and the `finishResponse` settle. A `Deferred` final with no answer, or one that failed or was stopped, returns from `SendResponse` before anything is posted or settled.
+An Ambient Turn writes no status until its first tool call other than `slack_no_reply` has finished. Its intake, `handleMessageEvent`, sends none, and the backend marks its outbound messages `Deferred` (`listensAmbient` in `internal/rocketclaw/backend/bridge.go`). `startSession` gives a `Deferred` turn a hidden session: one with no `status` yet, which the poll keeps reading but which sends nothing. `TurnProgress.Worked` is true once the turn's trace holds a finished call that made no `slack_no_reply` operation, or its Code Mode journal holds a finished operation other than `slack_no_reply`. The next poll then shows `processing`, the checklist and Stop, as for a mention. `Bridge.finish` and `stopIdleTurn` read `TurnProgress.Worked` just before `finishTurn` and save it as the final outbound's `Worked`. A `Deferred` final that posts nothing (`PostsNothing`: no answer, a failure or a Stop) still posts nothing, but it ends the session through `finishResponse`, which deletes any checklist and settles the status when the outbound carries `Worked`. A `Deferred` final that answers retitles its checklist and settles like a mention turn's.
 
 ## Guidance
 
 **The running turn's `slackSession` owns the thread's status.** Its `status` field is the last status sent for the turn, and `pollSession` sends only when the wanted status differs from it, or when the 50-minute renewal is due. Any other writer that sends a status while a turn runs makes that cache wrong, and the poll then never corrects Slack. So a writer for a thread with a running turn either goes through `sendStatus`, which updates the cache, or sends nothing. The mention handler sends nothing when `sessionTurn` finds a session. The Stop handler re-sends `session.status` for a turn that keeps running.
 
-**An Ambient Turn has no `slackSession`, so its thread looks idle to every writer.** A mention that arrives while one runs sends `processing` with its title and initiator, then waits in the Thread Queue. The Ambient Turn's end writes nothing, so that status stands until the mention's own turn starts its session. A Stop pressed meanwhile finds no session and only sends `active`; it reaches neither the Ambient Turn nor the waiting mention. Do not give a `Deferred` turn a session or a settle to "tidy" this: the status it would write belongs to the mention, not to the hidden turn.
+**A hidden session is invisible to every other writer.** `sessionTurn` skips a session with no `status`, so until an Ambient Turn has worked its thread looks idle. A mention that arrives then sends `processing` with its title and initiator and waits in the Thread Queue. If the Ambient Turn ends without working, it writes nothing, and that status stands until the mention's own turn starts its session. A Stop pressed then finds no session and only sends `active`; it reaches neither turn. Once the Ambient Turn worked, its session is the thread's running turn, as a mention turn's would be: the waiting mention's handler sends nothing, Stop interrupts the Ambient Turn only (`InterruptTurn` by turn ID), and its end sends `active` until the mention's turn starts and sends `processing`, the same order as one mention waiting behind another. Do not show or settle a `Deferred` turn before it worked: the status would belong to the waiting mention, not to the hidden turn.
+
+**The settle of a `Deferred` turn reads `Worked` saved with its final, not memory and not a later progress read.** `finishResponse` settles when the outbound carries `Worked` instead of checking whether this process showed its status. After a restart, a resumed turn, or one re-delivering its final, has no shown session, yet Slack may still show the status from before the crash. Settling from the in-memory session would leave that status up, against the model's `StatusClears` in `docs/verification/slack-sticky/`. Settling a turn that worked but ended before the poll showed it sends one `active`, the same as a mention turn ending. Do not ask `TurnProgress` at delivery instead: `finishTurn` clears the turn's steps, `slack_no_reply` operations included, so a call that only stayed quiet would then count as work and the settle would clear a waiting mention's status. For the same reason `TurnProgress` reports `Worked` only while the row is `running`, so a poll during delivery shows nothing new.
 
 **One lock for all of it.** `responseMu` guards the `sessions` map and every session's fields. Every status write for a turn happens under it, which orders a poll, a final and a Stop against each other. `pollSession` reads the database before taking the lock and then checks that the session is still the one its timer belongs to, so a slow query never holds up answer delivery or the Slack event loop.
 
@@ -56,13 +58,13 @@ The rule was learned from a bug found in review. While a Web-started turn waited
 Two Slack limits shape the rest:
 
 - A `processing` session times out to `active` after one hour unless it is sent again, and a session shows Stop only while `processing`. That is why the poll renews 10 minutes before `slackWorkingStateLifetime` (`connector.go`).
-- A streamed message (`chat.startStream`) is cut off after 10 minutes, and scenario runs take longer. So the checklist is one plan-block message edited at most once per poll, Slack's documented pattern for long tasks. It is the only message RocketClaw edits; answers are never edited.
+- A streamed message (`chat.startStream`) is cut off after 10 minutes, and scenario runs take longer. So the checklist is one plan-block message edited at most once per poll, Slack's documented pattern for long tasks. It is the only message RocketClaw edits or deletes; answers are never edited.
 
 ## When to Apply
 
 - Adding a status writer: route it through the running turn's session or skip it when one exists, and add a case to the status-list tests.
 - Showing new mid-turn progress in Slack: add it to `TurnProgress` and render it from `pollSession`, rather than publishing it on the outbound bus.
-- Adding a Slack turn that must stay invisible until it answers: mark its outbound `Deferred` and write no status for it anywhere, so a mention queued behind it keeps its own.
+- Adding a Slack turn that must stay invisible until it has worked: mark its outbound `Deferred`, keep its session hidden until `TurnProgress.Worked`, save `Worked` on its final before `finishTurn`, and settle it only when the final carries it, so a mention queued behind a quiet turn keeps its own status.
 - Changing the poll interval or renewal: keep the renewal inside Slack's one-hour limit, and keep checklist edits to at most one per poll, plus the final one.
 
 ## Examples
@@ -81,7 +83,7 @@ if turnID, _ := c.sessionTurn(ev.Channel, threadTS); turnID == "" {
 c.responseMu.Unlock()
 ```
 
-Tests that hold the pattern: `TestMentionTurnShowsProgress`, `TestMentionTurnPollRenewsAndEndsStaleSession`, `TestMentionTurnPollsUntilItEnds`, `TestMentionDuringWaitingTurnKeepsItSuspended` and `TestDeferredTurnPostsOnlyItsAnswer` (no session, no status, Stop leaves the turn running) in `connector_test.go`; `TestTurnProgress` in `internal/rocketclaw/backend/active_turn_test.go`. The model in `docs/verification/slack-sticky/` checks `AmbientWritesNoStatus`; its `deferred-session` check, which tracks an Ambient Turn as a status session, must fail.
+Tests that hold the pattern: `TestMentionTurnShowsProgress`, `TestMentionTurnPollRenewsAndEndsStaleSession`, `TestMentionTurnPollsUntilItEnds`, `TestMentionDuringWaitingTurnKeepsItSuspended`, `TestDeferredTurnPostsOnlyItsAnswer` (no status and no Stop before the turn worked), `TestDeferredTurnShowsStatusOnceItWorked` (an early Stop is ignored; the checklist is deleted when nothing posts), `TestDeferredTurnStatusReplacesWaitingMentionsOnceItWorked` and `TestMentionWaitingBehindQuietDeferredTurnKeepsItsStatus` in `connector_test.go`; `TestTurnProgress` (`Worked`, a call that only called `slack_no_reply` is not work, and a delivering turn reports none) and `TestIdleStopOfAmbientTurnCarriesWhetherItWorked` in `internal/rocketclaw/backend/active_turn_test.go`. The model in `docs/verification/slack-sticky/` checks `AmbientStatusAfterWork`; its `early-status` and `no-reply-status` checks must fail.
 
 Not yet confirmed against a live workspace: slack-go sends `"type":"task_card"` on each checklist task, while Slack's plan-block reference shows tasks without a type (the Python SDK sends it too). If Slack rejects the block, the checklist is missing and `show Slack turn checklist` is logged.
 

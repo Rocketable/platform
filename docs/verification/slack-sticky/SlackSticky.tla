@@ -29,8 +29,8 @@ EXTENDS Integers, Sequences, FiniteSets
      10    a top-level message (its own thread is ts 10)
      11    an edit of a reply in root 1's thread, with its own admission key
      12    a reply in a Report Thread (ts 300)
-   An admitted message runs as an ambient turn in its thread's Thread Session: deferred, it writes no Slack status,
-   and it posts its answer with the footer, or nothing. *)
+   An admitted message runs as an ambient turn in its thread's Thread Session: deferred, it shows Slack status only
+   once a tool call other than slack_no_reply has finished, and it posts its answer with the footer, or nothing. *)
 
 CONSTANTS Agents, InitAgent, Roots, ThreadMentions, WebItems, AgentItems, ReplyMentions, ThreadWrites, ThreadWeb,
           Dups, MaxCalls, MaxCrashes, MaxStops, CfgFlips, KindFlips, Mutation,
@@ -40,7 +40,7 @@ Mutations == {"none", "no-ratchet", "volatile-ratchet", "split-move", "no-hold",
               "thread-only-lookup", "legacy-report", "no-start-check", "key-without-agent", "stop-by-conv",
               "settle-after-close", "no-footer-switch", "no-wake-on-release", "short-window",
               "ambient-mentions", "ambient-root-channel", "ambient-mention-root", "no-reply-footer",
-              "volatile-no-reply", "deferred-session"}
+              "volatile-no-reply", "early-status", "no-reply-status"}
 
 ASSUME InitAgent \in Agents
 ASSUME Roots \subseteq {1, 2} /\ ThreadMentions \subseteq {3} /\ WebItems \subseteq {4} /\ AgentItems \subseteq {5}
@@ -120,9 +120,11 @@ variables
     seen = {},
     admits = [i \in Items |-> 0],
     rec = [p \in Posts |-> "none"],
-    \* Durable, ambient: the admission's ambient key, and the turn's saved no-reply step.
+    \* Durable, ambient: the admission's ambient key, the turn's saved no-reply step, and whether its trace holds a
+    \* finished tool call other than slack_no_reply.
     amb = [i \in Items |-> FALSE],
     noReply = [i \in Items |-> FALSE],
+    worked = [i \in Items |-> FALSE],
     \* Slack: messages posted, statuses shown, events in flight.
     delivered = [m \in Mentions |-> 0],
     msgs = [m \in Messages |-> 0],
@@ -145,7 +147,7 @@ variables
     asked = [i \in Items |-> FALSE],
     quietAsked = [i \in Items |-> FALSE],
     badStart = FALSE, stoppedWrong = FALSE, clobber = FALSE, earlyThread = FALSE, webHeld = FALSE, expired = FALSE,
-    ambStatus = FALSE, rootMade = FALSE;
+    earlyStatus = FALSE, rootMade = FALSE, ambStopWaiting = FALSE;
 
 define
     Seen(i, k) == IF Mutation = "per-conv-dedup" THEN <<i, k>> \in seen ELSE \E x \in seen : x[1] = i
@@ -170,13 +172,15 @@ define
     Found(p) == sent[p] > 0 /\ (Mutation # "thread-only-lookup" \/ (p[2] = "reply" /\ replyLoc[p[1]] # Top))
     Loc(k) == IF k.kind = "th" THEN k.ts ELSE Top
     Footer(i, k) == IF Mutation = "no-footer-switch" THEN home[i] ELSE k
-    \* An ambient turn is deferred: the connector keeps no status session for it.
-    Deferred(i) == amb[i] /\ Mutation # "deferred-session"
+    \* What the connector reads from the turn's progress: a tool call other than slack_no_reply has finished.
+    Worked(i) == worked[i] \/ Mutation = "early-status" \/ (Mutation = "no-reply-status" /\ noReply[i])
+    \* The connector shows a mention turn's status from its start, and an ambient turn's once it worked.
+    ShowsStatus(i) == ~amb[i] \/ Worked(i)
     \* The turn's delivery posts to Slack: never for an ignored turn, nor for a silent ambient one.
     Speaks(i) == outcome[i] \notin {"ignored", "silent"} \/ (noReply[i] /\ Mutation = "no-reply-footer")
-    \* The settle's check for another turn running in the thread sees only the turns that have a status session.
+    \* The settle's check for another turn running in the thread sees only the turns that show a status.
     OtherLive(t, i) == \E k \in Keys : active[k] \notin {0, i} /\ rootTs[active[k]] = t /\ phase[active[k]] = "running"
-                                       /\ ~Deferred(active[k])
+                                       /\ ShowsStatus(active[k])
     Live(t) == \E k \in Keys : active[k] # 0 /\ rootTs[active[k]] = t /\ phase[active[k]] = "running"
     \* Waking the thread sessions a root held, and the given keys.
     Woken(T, K) == [k \in Keys |-> IF k \in K \/ (Mutation # "no-wake-on-release" /\ k.kind = "th" /\ k.ts \in T /\ exists[k])
@@ -231,8 +235,8 @@ define
     AmbientInThread == \A i \in Items : amb[i] => home[i] = TS(MsgThread(i), agentOf[i])
     \* A turn that called no-reply, or ended silent, posts nothing to Slack, across crashes.
     SilentPostsNothing == \A i \in Items : (quietAsked[i] \/ outcome[i] = "silent") => sent[<<i, "reply">>] = 0
-    \* An ambient turn never writes a Slack status.
-    AmbientWritesNoStatus == ~ambStatus
+    \* An ambient turn writes a Slack status only after a tool call other than slack_no_reply finished.
+    AmbientStatusAfterWork == ~earlyStatus
 
     \* Witnesses: each claims a path never happens; a witness check must find it, so the passes are not vacuous.
     \* A turn moved into its thread and finished there after a crash, and the held thread mention ran after it.
@@ -249,6 +253,9 @@ define
     NoExpiry == ~expired
     \* The reply in root 1's thread and the edit were both answered in that thread.
     NoAmbientAnswer == ~(\A i \in JoinedReplies \cup Edits : sent[<<i, "reply">>] > 0)
+    \* A Slack Stop ended an ambient turn that showed its status while a mention waited behind it, and the mention
+    \* was then answered.
+    NoAmbientStopBeforeMention == ~(ambStopWaiting /\ \A m \in ThreadMentions : phase[m] = "done")
 
     \* Liveness, under the fairness in the Spec: everything but people, configuration and crashes is weakly fair.
     \* Every queued item finishes.
@@ -315,13 +322,21 @@ Run:
                 rootTs[i] := PostedRoot(i);
             end with;
         or
-            \* startSession: the native working status on the turn's thread; never for a deferred turn.
+            \* startSession, or for an ambient turn the poll once its progress shows a finished tool call: the native
+            \* working status on the turn's thread.
             await active[self] # 0;
             with i = active[self] do
-                await phase[i] = "running" /\ rootTs[i] # Top /\ ~shown[i] /\ ~Deferred(i);
+                await phase[i] = "running" /\ rootTs[i] # Top /\ ~shown[i] /\ ShowsStatus(i);
                 status[rootTs[i]] := TRUE;
                 shown[i] := TRUE;
-                ambStatus := ambStatus \/ amb[i];
+                earlyStatus := earlyStatus \/ (amb[i] /\ ~worked[i]);
+            end with;
+        or
+            \* A tool call other than slack_no_reply finishes on an ambient turn: saved in its trace.
+            await active[self] # 0;
+            with i = active[self] do
+                await amb[i] /\ phase[i] = "running" /\ ~worked[i];
+                worked[i] := TRUE;
             end with;
         or
             \* slack_no_reply, only on an ambient turn: one saved turn step.
@@ -376,7 +391,7 @@ Run:
                 await /\ phase[i] = "running"
                       /\ (self.kind = "th" \/ ~thread[i])
                       /\ ~NeedRoot(i, self)
-                      /\ (shown[i] \/ rootTs[i] = Top \/ Deferred(i));
+                      /\ (shown[i] \/ rootTs[i] = Top \/ amb[i]);
                 phase[i] := "delivering";
                 outcome[i] := o;
             end with;
@@ -408,15 +423,15 @@ Run:
                 rec[p] := "done";
             end with;
         or
-            \* finishResponse: settle the thread's status unless another turn there is running; a deferred turn never
-            \* settles.
+            \* finishResponse: settle the thread's status unless another turn there is running; an ambient turn settles
+            \* only once it worked, read from its progress, so a crash that lost its shown status still clears it.
             await active[self] # 0 /\ Mutation # "settle-after-close";
             with i = active[self] do
                 await /\ phase[i] = "delivering" /\ ~settled[i]
                       /\ (~Speaks(i) \/ rec[<<i, "reply">>] = "done");
-                if rootTs[i] # Top /\ ~OtherLive(rootTs[i], i) /\ ~Deferred(i) then
+                if rootTs[i] # Top /\ ~OtherLive(rootTs[i], i) /\ ShowsStatus(i) then
                     status[rootTs[i]] := FALSE;
-                    ambStatus := ambStatus \/ amb[i];
+                    earlyStatus := earlyStatus \/ (amb[i] /\ ~worked[i]);
                 end if;
                 settled[i] := TRUE;
             end with;
@@ -578,7 +593,8 @@ Press:
     end while;
 end process;
 
-\* InterruptConversation, later: stop the turn the press found, wherever it now runs.
+\* InterruptConversation, later: stop the turn the press found, wherever it now runs. A stopped ambient turn posts
+\* nothing, like one stopped from Web.
 fair process StopDeliver = Proc("stopdeliver")
 begin
 Interrupt:
@@ -588,8 +604,9 @@ Interrupt:
                         ELSE IF \E k \in Keys : active[k] = e[1] THEN {k \in Keys : active[k] = e[1]} ELSE {NoKey} do
                 if tk # NoKey /\ active[tk] # 0 /\ phase[active[tk]] = "running" then
                     phase[active[tk]] := "delivering";
-                    outcome[active[tk]] := "stopped";
+                    outcome[active[tk]] := IF amb[active[tk]] THEN "silent" ELSE "stopped";
                     stoppedWrong := stoppedWrong \/ active[tk] # e[1];
+                    ambStopWaiting := ambStopWaiting \/ (amb[active[tk]] /\ \E m \in Mentions : InQ(m, tk));
                 end if;
             end with;
             stopEv := stopEv \ {e};
@@ -642,11 +659,11 @@ end algorithm; *)
 \* BEGIN TRANSLATION
 VARIABLES cfg, slack, cfgLeft, kindLeft, exists, convAgent, queue, active, 
           phase, outcome, agentOf, home, rootTs, thread, calls, movedTo, 
-          notes, seen, admits, rec, amb, noReply, delivered, msgs, sent, 
-          replyLoc, replyFooter, status, stopsLeft, wake, shown, inflight, 
-          settled, noteDue, settleDue, stopEv, pend, crashes, asked, 
+          notes, seen, admits, rec, amb, noReply, worked, delivered, msgs, 
+          sent, replyLoc, replyFooter, status, stopsLeft, wake, shown, 
+          inflight, settled, noteDue, settleDue, stopEv, pend, crashes, asked, 
           quietAsked, badStart, stoppedWrong, clobber, earlyThread, webHeld, 
-          expired, ambStatus, rootMade
+          expired, earlyStatus, rootMade, ambStopWaiting
 
 (* define statement *)
 Seen(i, k) == IF Mutation = "per-conv-dedup" THEN <<i, k>> \in seen ELSE \E x \in seen : x[1] = i
@@ -672,12 +689,14 @@ Found(p) == sent[p] > 0 /\ (Mutation # "thread-only-lookup" \/ (p[2] = "reply" /
 Loc(k) == IF k.kind = "th" THEN k.ts ELSE Top
 Footer(i, k) == IF Mutation = "no-footer-switch" THEN home[i] ELSE k
 
-Deferred(i) == amb[i] /\ Mutation # "deferred-session"
+Worked(i) == worked[i] \/ Mutation = "early-status" \/ (Mutation = "no-reply-status" /\ noReply[i])
+
+ShowsStatus(i) == ~amb[i] \/ Worked(i)
 
 Speaks(i) == outcome[i] \notin {"ignored", "silent"} \/ (noReply[i] /\ Mutation = "no-reply-footer")
 
 OtherLive(t, i) == \E k \in Keys : active[k] \notin {0, i} /\ rootTs[active[k]] = t /\ phase[active[k]] = "running"
-                                   /\ ~Deferred(active[k])
+                                   /\ ShowsStatus(active[k])
 Live(t) == \E k \in Keys : active[k] # 0 /\ rootTs[active[k]] = t /\ phase[active[k]] = "running"
 
 Woken(T, K) == [k \in Keys |-> IF k \in K \/ (Mutation # "no-wake-on-release" /\ k.kind = "th" /\ k.ts \in T /\ exists[k])
@@ -733,7 +752,7 @@ AmbientInThread == \A i \in Items : amb[i] => home[i] = TS(MsgThread(i), agentOf
 
 SilentPostsNothing == \A i \in Items : (quietAsked[i] \/ outcome[i] = "silent") => sent[<<i, "reply">>] = 0
 
-AmbientWritesNoStatus == ~ambStatus
+AmbientStatusAfterWork == ~earlyStatus
 
 
 
@@ -752,6 +771,9 @@ NoExpiry == ~expired
 NoAmbientAnswer == ~(\A i \in JoinedReplies \cup Edits : sent[<<i, "reply">>] > 0)
 
 
+NoAmbientStopBeforeMention == ~(ambStopWaiting /\ \A m \in ThreadMentions : phase[m] = "done")
+
+
 
 Settles == \A i \in Items : phase[i] = "waiting" ~> phase[i] \in Final
 
@@ -766,11 +788,11 @@ AmbientSettles == \A i \in Items : (amb[i] /\ phase[i] = "waiting") ~> phase[i] 
 
 vars == << cfg, slack, cfgLeft, kindLeft, exists, convAgent, queue, active, 
            phase, outcome, agentOf, home, rootTs, thread, calls, movedTo, 
-           notes, seen, admits, rec, amb, noReply, delivered, msgs, sent, 
-           replyLoc, replyFooter, status, stopsLeft, wake, shown, inflight, 
-           settled, noteDue, settleDue, stopEv, pend, crashes, asked, 
-           quietAsked, badStart, stoppedWrong, clobber, earlyThread, webHeld, 
-           expired, ambStatus, rootMade >>
+           notes, seen, admits, rec, amb, noReply, worked, delivered, msgs, 
+           sent, replyLoc, replyFooter, status, stopsLeft, wake, shown, 
+           inflight, settled, noteDue, settleDue, stopEv, pend, crashes, 
+           asked, quietAsked, badStart, stoppedWrong, clobber, earlyThread, 
+           webHeld, expired, earlyStatus, rootMade, ambStopWaiting >>
 
 ProcSet == (Keys) \cup {Proc("settler")} \cup {Proc("slack")} \cup {Proc("ambient")} \cup {Proc("window")} \cup {Proc("submit")} \cup {Proc("stoppress")} \cup {Proc("stopdeliver")} \cup {Proc("config")} \cup {Proc("lifecycle")}
 
@@ -797,6 +819,7 @@ Init == (* Global variables *)
         /\ rec = [p \in Posts |-> "none"]
         /\ amb = [i \in Items |-> FALSE]
         /\ noReply = [i \in Items |-> FALSE]
+        /\ worked = [i \in Items |-> FALSE]
         /\ delivered = [m \in Mentions |-> 0]
         /\ msgs = [m \in Messages |-> 0]
         /\ sent = [p \in Posts |-> 0]
@@ -821,8 +844,9 @@ Init == (* Global variables *)
         /\ earlyThread = FALSE
         /\ webHeld = FALSE
         /\ expired = FALSE
-        /\ ambStatus = FALSE
+        /\ earlyStatus = FALSE
         /\ rootMade = FALSE
+        /\ ambStopWaiting = FALSE
 
 Lane(self) == /\ \/ /\ exists[self] /\ wake[self] /\ active[self] = 0
                     /\ IF Held(self) \/ queue[self] = <<>>
@@ -842,13 +866,13 @@ Lane(self) == /\ \/ /\ exists[self] /\ wake[self] /\ active[self] = 0
                                                /\ earlyThread' = (earlyThread \/ (self.kind = "th" /\ RootPending(self.ts)))
                                                /\ UNCHANGED outcome
                                /\ wake' = wake
-                    /\ UNCHANGED <<exists, rootTs, thread, calls, movedTo, notes, rec, noReply, sent, replyLoc, replyFooter, status, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, clobber, ambStatus>>
+                    /\ UNCHANGED <<exists, rootTs, thread, calls, movedTo, notes, rec, noReply, worked, sent, replyLoc, replyFooter, status, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, clobber, earlyStatus>>
                  \/ /\ active[self] # 0
                     /\ LET i == active[self] IN
                          LET p == <<active[self], "root">> IN
                            /\ phase[i] \in {"running", "delivering"} /\ NeedRoot(i, self) /\ rec[p] = "none"
                            /\ rec' = [rec EXCEPT ![p] = "intent"]
-                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, noReply, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, ambStatus>>
+                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, noReply, worked, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, earlyStatus>>
                  \/ /\ active[self] # 0
                     /\ LET i == active[self] IN
                          LET p == <<active[self], "root">> IN
@@ -860,27 +884,32 @@ Lane(self) == /\ \/ /\ exists[self] /\ wake[self] /\ active[self] = 0
                                  ELSE /\ sent' = [sent EXCEPT ![p] = sent[p] + 1]
                                       /\ inflight' = [inflight EXCEPT ![p] = TRUE]
                                       /\ UNCHANGED << rootTs, rec >>
-                    /\ UNCHANGED <<exists, queue, active, phase, outcome, thread, calls, movedTo, notes, noReply, replyLoc, replyFooter, status, wake, shown, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, ambStatus>>
+                    /\ UNCHANGED <<exists, queue, active, phase, outcome, thread, calls, movedTo, notes, noReply, worked, replyLoc, replyFooter, status, wake, shown, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, earlyStatus>>
                  \/ /\ active[self] # 0
                     /\ LET i == active[self] IN
                          LET p == <<active[self], "root">> IN
                            /\ phase[i] \in {"running", "delivering"} /\ NeedRoot(i, self) /\ rec[p] = "intent" /\ inflight[p]
                            /\ rec' = [rec EXCEPT ![p] = "done"]
                            /\ rootTs' = [rootTs EXCEPT ![i] = PostedRoot(i)]
-                    /\ UNCHANGED <<exists, queue, active, phase, outcome, thread, calls, movedTo, notes, noReply, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, ambStatus>>
+                    /\ UNCHANGED <<exists, queue, active, phase, outcome, thread, calls, movedTo, notes, noReply, worked, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, earlyStatus>>
                  \/ /\ active[self] # 0
                     /\ LET i == active[self] IN
-                         /\ phase[i] = "running" /\ rootTs[i] # Top /\ ~shown[i] /\ ~Deferred(i)
+                         /\ phase[i] = "running" /\ rootTs[i] # Top /\ ~shown[i] /\ ShowsStatus(i)
                          /\ status' = [status EXCEPT ![rootTs[i]] = TRUE]
                          /\ shown' = [shown EXCEPT ![i] = TRUE]
-                         /\ ambStatus' = (ambStatus \/ amb[i])
-                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, rec, noReply, sent, replyLoc, replyFooter, wake, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread>>
+                         /\ earlyStatus' = (earlyStatus \/ (amb[i] /\ ~worked[i]))
+                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, rec, noReply, worked, sent, replyLoc, replyFooter, wake, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread>>
+                 \/ /\ active[self] # 0
+                    /\ LET i == active[self] IN
+                         /\ amb[i] /\ phase[i] = "running" /\ ~worked[i]
+                         /\ worked' = [worked EXCEPT ![i] = TRUE]
+                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, rec, noReply, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, earlyStatus>>
                  \/ /\ active[self] # 0
                     /\ LET i == active[self] IN
                          /\ amb[i] /\ phase[i] = "running" /\ ~noReply[i]
                          /\ noReply' = [noReply EXCEPT ![i] = TRUE]
                          /\ quietAsked' = [quietAsked EXCEPT ![i] = TRUE]
-                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, rec, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, badStart, clobber, earlyThread, ambStatus>>
+                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, rec, worked, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, badStart, clobber, earlyThread, earlyStatus>>
                  \/ /\ self.kind = "ch" /\ active[self] # 0
                     /\ LET i == active[self] IN
                          \E s \in {{FALSE}, {TRUE}, {TRUE, FALSE}}:
@@ -891,7 +920,7 @@ Lane(self) == /\ \/ /\ exists[self] /\ wake[self] /\ active[self] = 0
                                  THEN /\ \E last \in s:
                                            thread' = [thread EXCEPT ![i] = last]
                                  ELSE /\ thread' = [thread EXCEPT ![i] = TRUE \in s]
-                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, movedTo, notes, rec, noReply, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, quietAsked, badStart, clobber, earlyThread, ambStatus>>
+                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, movedTo, notes, rec, noReply, worked, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, quietAsked, badStart, clobber, earlyThread, earlyStatus>>
                  \/ /\ self.kind = "ch" /\ active[self] # 0
                     /\ LET i == active[self] IN
                          LET tk == TS(rootTs[active[self]], agentOf[active[self]]) IN
@@ -906,29 +935,29 @@ Lane(self) == /\ \/ /\ exists[self] /\ wake[self] /\ active[self] = 0
                                       /\ notes' = notes
                                  ELSE /\ notes' = [notes EXCEPT ![self] = notes[self] \cup {tk}]
                                       /\ UNCHANGED noteDue
-                    /\ UNCHANGED <<queue, phase, outcome, rootTs, thread, calls, rec, noReply, sent, replyLoc, replyFooter, status, shown, inflight, settled, settleDue, asked, quietAsked, badStart, earlyThread, ambStatus>>
+                    /\ UNCHANGED <<queue, phase, outcome, rootTs, thread, calls, rec, noReply, worked, sent, replyLoc, replyFooter, status, shown, inflight, settled, settleDue, asked, quietAsked, badStart, earlyThread, earlyStatus>>
                  \/ /\ \E n \in noteDue : n[1] = self
                     /\ \E n \in {x \in noteDue : x[1] = self}:
                          /\ notes' = [notes EXCEPT ![self] = notes[self] \cup {n[2]}]
                          /\ noteDue' = noteDue \ {n}
-                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, rec, noReply, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, settleDue, asked, quietAsked, badStart, clobber, earlyThread, ambStatus>>
+                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, rec, noReply, worked, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, settleDue, asked, quietAsked, badStart, clobber, earlyThread, earlyStatus>>
                  \/ /\ active[self] # 0
                     /\ LET i == active[self] IN
                          \E o \in IF ~amb[i] THEN {"answer"} ELSE IF noReply[i] THEN {"silent"} ELSE {"answer", "silent"}:
                            /\ /\ phase[i] = "running"
                               /\ (self.kind = "th" \/ ~thread[i])
                               /\ ~NeedRoot(i, self)
-                              /\ (shown[i] \/ rootTs[i] = Top \/ Deferred(i))
+                              /\ (shown[i] \/ rootTs[i] = Top \/ amb[i])
                            /\ phase' = [phase EXCEPT ![i] = "delivering"]
                            /\ outcome' = [outcome EXCEPT ![i] = o]
-                    /\ UNCHANGED <<exists, queue, active, rootTs, thread, calls, movedTo, notes, rec, noReply, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, ambStatus>>
+                    /\ UNCHANGED <<exists, queue, active, rootTs, thread, calls, movedTo, notes, rec, noReply, worked, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, earlyStatus>>
                  \/ /\ active[self] # 0
                     /\ LET i == active[self] IN
                          LET p == <<active[self], "reply">> IN
                            /\ /\ phase[i] = "delivering" /\ Speaks(i) /\ rec[p] = "none"
                               /\ (self.kind = "th" \/ ~thread[i])
                            /\ rec' = [rec EXCEPT ![p] = "intent"]
-                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, noReply, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, ambStatus>>
+                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, noReply, worked, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, earlyStatus>>
                  \/ /\ active[self] # 0
                     /\ LET i == active[self] IN
                          LET p == <<active[self], "reply">> IN
@@ -942,24 +971,24 @@ Lane(self) == /\ \/ /\ exists[self] /\ wake[self] /\ active[self] = 0
                                       /\ replyLoc' = [replyLoc EXCEPT ![i] = Loc(self)]
                                       /\ replyFooter' = [replyFooter EXCEPT ![i] = Footer(i, self)]
                                       /\ rec' = rec
-                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, noReply, status, wake, shown, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, ambStatus>>
+                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, noReply, worked, status, wake, shown, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, earlyStatus>>
                  \/ /\ active[self] # 0
                     /\ LET i == active[self] IN
                          LET p == <<active[self], "reply">> IN
                            /\ phase[i] = "delivering" /\ rec[p] = "intent" /\ inflight[p]
                            /\ rec' = [rec EXCEPT ![p] = "done"]
-                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, noReply, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, ambStatus>>
+                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, noReply, worked, sent, replyLoc, replyFooter, status, wake, shown, inflight, settled, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread, earlyStatus>>
                  \/ /\ active[self] # 0 /\ Mutation # "settle-after-close"
                     /\ LET i == active[self] IN
                          /\ /\ phase[i] = "delivering" /\ ~settled[i]
                             /\ (~Speaks(i) \/ rec[<<i, "reply">>] = "done")
-                         /\ IF rootTs[i] # Top /\ ~OtherLive(rootTs[i], i) /\ ~Deferred(i)
+                         /\ IF rootTs[i] # Top /\ ~OtherLive(rootTs[i], i) /\ ShowsStatus(i)
                                THEN /\ status' = [status EXCEPT ![rootTs[i]] = FALSE]
-                                    /\ ambStatus' = (ambStatus \/ amb[i])
+                                    /\ earlyStatus' = (earlyStatus \/ (amb[i] /\ ~worked[i]))
                                ELSE /\ TRUE
-                                    /\ UNCHANGED << status, ambStatus >>
+                                    /\ UNCHANGED << status, earlyStatus >>
                          /\ settled' = [settled EXCEPT ![i] = TRUE]
-                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, rec, noReply, sent, replyLoc, replyFooter, wake, shown, inflight, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread>>
+                    /\ UNCHANGED <<exists, queue, active, phase, outcome, rootTs, thread, calls, movedTo, notes, rec, noReply, worked, sent, replyLoc, replyFooter, wake, shown, inflight, noteDue, settleDue, asked, quietAsked, badStart, clobber, earlyThread>>
                  \/ /\ active[self] # 0
                     /\ LET i == active[self] IN
                          /\ /\ phase[i] = "delivering"
@@ -974,11 +1003,12 @@ Lane(self) == /\ \/ /\ exists[self] /\ wake[self] /\ active[self] = 0
                                THEN /\ settleDue' = (settleDue \cup {rootTs[i]})
                                ELSE /\ TRUE
                                     /\ UNCHANGED settleDue
-                    /\ UNCHANGED <<exists, queue, outcome, rootTs, thread, calls, movedTo, notes, rec, noReply, sent, replyLoc, replyFooter, status, shown, inflight, settled, noteDue, asked, quietAsked, badStart, clobber, earlyThread, ambStatus>>
+                    /\ UNCHANGED <<exists, queue, outcome, rootTs, thread, calls, movedTo, notes, rec, noReply, worked, sent, replyLoc, replyFooter, status, shown, inflight, settled, noteDue, asked, quietAsked, badStart, clobber, earlyThread, earlyStatus>>
               /\ UNCHANGED << cfg, slack, cfgLeft, kindLeft, convAgent, 
                               agentOf, home, seen, admits, amb, delivered, 
                               msgs, stopsLeft, stopEv, pend, crashes, 
-                              stoppedWrong, webHeld, expired, rootMade >>
+                              stoppedWrong, webHeld, expired, rootMade, 
+                              ambStopWaiting >>
 
 Settler == /\ settleDue # {}
            /\ \E t \in settleDue:
@@ -990,11 +1020,12 @@ Settler == /\ settleDue # {}
            /\ UNCHANGED << cfg, slack, cfgLeft, kindLeft, exists, convAgent, 
                            queue, active, phase, outcome, agentOf, home, 
                            rootTs, thread, calls, movedTo, notes, seen, admits, 
-                           rec, amb, noReply, delivered, msgs, sent, replyLoc, 
-                           replyFooter, stopsLeft, wake, shown, inflight, 
-                           settled, noteDue, stopEv, pend, crashes, asked, 
-                           quietAsked, badStart, stoppedWrong, clobber, 
-                           earlyThread, webHeld, expired, ambStatus, rootMade >>
+                           rec, amb, noReply, worked, delivered, msgs, sent, 
+                           replyLoc, replyFooter, stopsLeft, wake, shown, 
+                           inflight, settled, noteDue, stopEv, pend, crashes, 
+                           asked, quietAsked, badStart, stoppedWrong, clobber, 
+                           earlyThread, webHeld, expired, earlyStatus, 
+                           rootMade, ambStopWaiting >>
 
 Slack == /\ pend = NoEvent
          /\ \E m \in {x \in Mentions : delivered[x] < 1 + Dups /\ Visible(x)}:
@@ -1030,11 +1061,11 @@ Slack == /\ pend = NoEvent
                                              /\ status' = [t \in ThreadTs |-> status[t] \/ t \in {SlackThread(i) : i \in its}]
          /\ UNCHANGED << cfg, slack, cfgLeft, kindLeft, active, outcome, 
                          thread, calls, movedTo, notes, rec, amb, noReply, 
-                         msgs, sent, replyLoc, replyFooter, stopsLeft, shown, 
-                         inflight, settled, noteDue, settleDue, stopEv, pend, 
-                         crashes, asked, quietAsked, badStart, stoppedWrong, 
-                         clobber, earlyThread, webHeld, expired, ambStatus, 
-                         rootMade >>
+                         worked, msgs, sent, replyLoc, replyFooter, stopsLeft, 
+                         shown, inflight, settled, noteDue, settleDue, stopEv, 
+                         pend, crashes, asked, quietAsked, badStart, 
+                         stoppedWrong, clobber, earlyThread, webHeld, expired, 
+                         earlyStatus, rootMade, ambStopWaiting >>
 
 Ambient == /\ \/ /\ pend = NoEvent
                  /\ \E i \in {x \in Messages : msgs[x] < 1 + Dups /\ Visible(x)}:
@@ -1075,12 +1106,12 @@ Ambient == /\ \/ /\ pend = NoEvent
                             /\ pend' = NoEvent
                  /\ msgs' = msgs
            /\ UNCHANGED << cfg, slack, cfgLeft, kindLeft, active, outcome, 
-                           thread, calls, movedTo, notes, rec, noReply, 
+                           thread, calls, movedTo, notes, rec, noReply, worked, 
                            delivered, sent, replyLoc, replyFooter, status, 
                            stopsLeft, shown, inflight, settled, noteDue, 
                            settleDue, stopEv, crashes, asked, quietAsked, 
                            badStart, stoppedWrong, clobber, earlyThread, 
-                           webHeld, expired, ambStatus >>
+                           webHeld, expired, earlyStatus, ambStopWaiting >>
 
 Window == /\ \E x \in {r \in seen : Mutation = "short-window" \/ Quiet(r[1])}:
                /\ seen' = seen \ {x}
@@ -1088,11 +1119,12 @@ Window == /\ \E x \in {r \in seen : Mutation = "short-window" \/ Quiet(r[1])}:
           /\ UNCHANGED << cfg, slack, cfgLeft, kindLeft, exists, convAgent, 
                           queue, active, phase, outcome, agentOf, home, rootTs, 
                           thread, calls, movedTo, notes, admits, rec, amb, 
-                          noReply, delivered, msgs, sent, replyLoc, 
+                          noReply, worked, delivered, msgs, sent, replyLoc, 
                           replyFooter, status, stopsLeft, wake, shown, 
                           inflight, settled, noteDue, settleDue, stopEv, pend, 
                           crashes, asked, quietAsked, badStart, stoppedWrong, 
-                          clobber, earlyThread, webHeld, ambStatus, rootMade >>
+                          clobber, earlyThread, webHeld, earlyStatus, rootMade, 
+                          ambStopWaiting >>
 
 Submit == /\ \E i \in {x \in WebItems \cup AgentItems \cup ThreadWrites \cup ThreadWeb : phase[x] = "new"}:
                \E k \in CASE i \in ThreadWrites -> UNION {notes[c] : c \in Keys}
@@ -1107,11 +1139,12 @@ Submit == /\ \E i \in {x \in WebItems \cup AgentItems \cup ThreadWrites \cup Thr
                  /\ wake' = [wake EXCEPT ![k] = TRUE]
           /\ UNCHANGED << cfg, slack, cfgLeft, kindLeft, exists, convAgent, 
                           active, outcome, thread, calls, movedTo, notes, seen, 
-                          admits, rec, amb, noReply, delivered, msgs, sent, 
-                          replyLoc, replyFooter, status, stopsLeft, shown, 
-                          inflight, settled, noteDue, settleDue, stopEv, pend, 
-                          crashes, asked, quietAsked, badStart, stoppedWrong, 
-                          clobber, earlyThread, expired, ambStatus, rootMade >>
+                          admits, rec, amb, noReply, worked, delivered, msgs, 
+                          sent, replyLoc, replyFooter, status, stopsLeft, 
+                          shown, inflight, settled, noteDue, settleDue, stopEv, 
+                          pend, crashes, asked, quietAsked, badStart, 
+                          stoppedWrong, clobber, earlyThread, expired, 
+                          earlyStatus, rootMade, ambStopWaiting >>
 
 StopPress == /\ stopsLeft > 0
              /\ \E e \in {x \in Items \X Keys : active[x[2]] = x[1] /\ phase[x[1]] = "running" /\ shown[x[1]]
@@ -1121,32 +1154,34 @@ StopPress == /\ stopsLeft > 0
              /\ UNCHANGED << cfg, slack, cfgLeft, kindLeft, exists, convAgent, 
                              queue, active, phase, outcome, agentOf, home, 
                              rootTs, thread, calls, movedTo, notes, seen, 
-                             admits, rec, amb, noReply, delivered, msgs, sent, 
-                             replyLoc, replyFooter, status, wake, shown, 
-                             inflight, settled, noteDue, settleDue, pend, 
-                             crashes, asked, quietAsked, badStart, 
+                             admits, rec, amb, noReply, worked, delivered, 
+                             msgs, sent, replyLoc, replyFooter, status, wake, 
+                             shown, inflight, settled, noteDue, settleDue, 
+                             pend, crashes, asked, quietAsked, badStart, 
                              stoppedWrong, clobber, earlyThread, webHeld, 
-                             expired, ambStatus, rootMade >>
+                             expired, earlyStatus, rootMade, ambStopWaiting >>
 
 StopDeliver == /\ \E e \in stopEv:
                     /\ \E tk \in IF Mutation = "stop-by-conv" THEN {e[2]}
                                  ELSE IF \E k \in Keys : active[k] = e[1] THEN {k \in Keys : active[k] = e[1]} ELSE {NoKey}:
                          IF tk # NoKey /\ active[tk] # 0 /\ phase[active[tk]] = "running"
                             THEN /\ phase' = [phase EXCEPT ![active[tk]] = "delivering"]
-                                 /\ outcome' = [outcome EXCEPT ![active[tk]] = "stopped"]
+                                 /\ outcome' = [outcome EXCEPT ![active[tk]] = IF amb[active[tk]] THEN "silent" ELSE "stopped"]
                                  /\ stoppedWrong' = (stoppedWrong \/ active[tk] # e[1])
+                                 /\ ambStopWaiting' = (ambStopWaiting \/ (amb[active[tk]] /\ \E m \in Mentions : InQ(m, tk)))
                             ELSE /\ TRUE
-                                 /\ UNCHANGED << phase, outcome, stoppedWrong >>
+                                 /\ UNCHANGED << phase, outcome, stoppedWrong, 
+                                                 ambStopWaiting >>
                     /\ stopEv' = stopEv \ {e}
                /\ UNCHANGED << cfg, slack, cfgLeft, kindLeft, exists, 
                                convAgent, queue, active, agentOf, home, rootTs, 
                                thread, calls, movedTo, notes, seen, admits, 
-                               rec, amb, noReply, delivered, msgs, sent, 
-                               replyLoc, replyFooter, status, stopsLeft, wake, 
-                               shown, inflight, settled, noteDue, settleDue, 
-                               pend, crashes, asked, quietAsked, badStart, 
-                               clobber, earlyThread, webHeld, expired, 
-                               ambStatus, rootMade >>
+                               rec, amb, noReply, worked, delivered, msgs, 
+                               sent, replyLoc, replyFooter, status, stopsLeft, 
+                               wake, shown, inflight, settled, noteDue, 
+                               settleDue, pend, crashes, asked, quietAsked, 
+                               badStart, clobber, earlyThread, webHeld, 
+                               expired, earlyStatus, rootMade >>
 
 Config == /\ \/ /\ cfgLeft > 0
                 /\ \E a \in Agents \ {cfg}:
@@ -1160,12 +1195,12 @@ Config == /\ \/ /\ cfgLeft > 0
                 /\ UNCHANGED <<cfg, cfgLeft>>
           /\ UNCHANGED << exists, convAgent, queue, active, phase, outcome, 
                           agentOf, home, rootTs, thread, calls, movedTo, notes, 
-                          seen, admits, rec, amb, noReply, delivered, msgs, 
-                          sent, replyLoc, replyFooter, status, stopsLeft, wake, 
-                          shown, inflight, settled, noteDue, settleDue, stopEv, 
-                          pend, crashes, asked, quietAsked, badStart, 
+                          seen, admits, rec, amb, noReply, worked, delivered, 
+                          msgs, sent, replyLoc, replyFooter, status, stopsLeft, 
+                          wake, shown, inflight, settled, noteDue, settleDue, 
+                          stopEv, pend, crashes, asked, quietAsked, badStart, 
                           stoppedWrong, clobber, earlyThread, webHeld, expired, 
-                          ambStatus, rootMade >>
+                          earlyStatus, rootMade, ambStopWaiting >>
 
 Lifecycle == /\ crashes < MaxCrashes
              /\ crashes' = crashes + 1
@@ -1188,10 +1223,11 @@ Lifecycle == /\ crashes < MaxCrashes
              /\ UNCHANGED << cfg, slack, cfgLeft, kindLeft, exists, convAgent, 
                              queue, active, phase, outcome, agentOf, home, 
                              rootTs, calls, movedTo, notes, seen, admits, rec, 
-                             amb, delivered, msgs, sent, replyLoc, replyFooter, 
-                             status, stopsLeft, asked, quietAsked, badStart, 
-                             stoppedWrong, clobber, earlyThread, webHeld, 
-                             expired, ambStatus, rootMade >>
+                             amb, worked, delivered, msgs, sent, replyLoc, 
+                             replyFooter, status, stopsLeft, asked, quietAsked, 
+                             badStart, stoppedWrong, clobber, earlyThread, 
+                             webHeld, expired, earlyStatus, rootMade, 
+                             ambStopWaiting >>
 
 Next == Settler \/ Slack \/ Ambient \/ Window \/ Submit \/ StopPress
            \/ StopDeliver \/ Config \/ Lifecycle

@@ -29,8 +29,8 @@ PASS := safety sources stops config replies liveness-thread liveness-channel liv
 NEGATIVE := no-ratchet volatile-ratchet split-move no-hold no-root-first per-conv-dedup thread-only-lookup \
 	legacy-report no-start-check key-without-agent stop-by-conv settle-after-close no-footer-switch no-wake-on-release \
 	witness-move-held witness-reply-thread witness-web-held witness-stop-moved witness-ignored short-window witness-expiry \
-	ambient-mentions ambient-root-channel ambient-mention-root no-reply-footer volatile-no-reply deferred-session \
-	witness-ambient-reply
+	ambient-mentions ambient-root-channel ambient-mention-root no-reply-footer volatile-no-reply early-status \
+	no-reply-status witness-ambient-reply witness-ambient-stop
 EXPECTED_no-ratchet := Invariant RatchetHonored is violated.
 EXPECTED_volatile-ratchet := Invariant RatchetHonored is violated.
 EXPECTED_split-move := Temporal property ChannelKnowsThread was violated.
@@ -57,8 +57,10 @@ EXPECTED_ambient-root-channel := Invariant AmbientInThread is violated.
 EXPECTED_ambient-mention-root := Invariant NoAmbientUnderMentionRoot is violated.
 EXPECTED_no-reply-footer := Invariant SilentPostsNothing is violated.
 EXPECTED_volatile-no-reply := Invariant SilentPostsNothing is violated.
-EXPECTED_deferred-session := Invariant AmbientWritesNoStatus is violated.
+EXPECTED_early-status := Invariant AmbientStatusAfterWork is violated.
+EXPECTED_no-reply-status := Invariant AmbientStatusAfterWork is violated.
 EXPECTED_witness-ambient-reply := Invariant NoAmbientAnswer is violated.
+EXPECTED_witness-ambient-stop := Invariant NoAmbientStopBeforeMention is violated.
 
 .NOTPARALLEL:
 .PHONY: all check translate tools $(PASS) $(NEGATIVE)

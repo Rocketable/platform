@@ -406,6 +406,39 @@ func TestIdleStopSettlesCallsLeftRunning(t *testing.T) {
 		"a turn stopped before it resumed leaves no call spinning: journaled calls keep their state, a cut-off call is stopped")
 }
 
+func TestIdleStopOfAmbientTurnCarriesWhetherItWorked(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name, operation string
+		worked          bool
+	}{
+		{name: "only stayed quiet", operation: harness.NoReplyToolName},
+		{name: "read the thread", operation: "read", worked: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			newBridge, service, _, finals := newResumeTestBridges(t, false)
+			idle := newBridge()
+			conversationID := idle.config.ConversationID
+			inbound := newThreadInboundMessage("anyone?", "1.2", "1.1")
+			inbound.ConversationID, inbound.Metadata[protocol.InboundAmbientMetadataKey] = conversationID, protocol.AmbientJoinedThread
+			require.NoError(t, startTurnDB(t.Context(), service.db, "turn-ambient", conversationID, inbound))
+
+			journal := conversationJournal{store: service, conversationID: conversationID, log: slog.New(slog.DiscardHandler)}
+			require.NoError(t, journal.SaveTrace(t.Context(), "turn-ambient", []json.RawMessage{json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"call-1","kind":"tool","state":"completed"}}`)}))
+			require.NoError(t, journal.SaveCodeModeCall(t.Context(), "turn-ambient", "turn-ambient/call/call-1/host/0", json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"call-1","key":"turn-ambient/call/call-1/host/0","name":"`+tt.operation+`","status":"ok"}`)))
+
+			require.NotNil(t, idle.InterruptActiveTurn())
+
+			final := readFinal(t, finals)
+			assert.True(t, final.Deferred)
+			assert.Equal(t, tt.worked, final.Worked, "the stopped final carries whether the turn worked, read before its steps are cleared")
+		})
+	}
+}
+
 func TestStopBetweenTakeAndHandleDoesNotRun(t *testing.T) {
 	t.Parallel()
 
@@ -3745,7 +3778,7 @@ func TestTurnProgress(t *testing.T) {
 
 	got, err := s.TurnProgress(ctx, "turn-1")
 	require.NoError(t, err)
-	assert.Equal(t, protocol.TurnProgress{Running: true, Asking: true, Steps: []protocol.TurnStep{
+	assert.Equal(t, protocol.TurnProgress{Running: true, Asking: true, Worked: true, Steps: []protocol.TurnStep{
 		{ID: "call-1", Title: "Run login scenario", State: protocol.TurnStepDone},
 		{ID: "call-3", Title: "Review results", State: protocol.TurnStepFailed},
 		{ID: "call-4", Title: "execute", State: protocol.TurnStepRunning},
@@ -3764,6 +3797,54 @@ func TestTurnProgress(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got.Steps, 4, "the progress follows the turn into the conversation that now holds it")
 	assert.True(t, got.Running)
+
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"quiet": KindSlackThread})
+	require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: "turn-3", ConversationKey: "quiet", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"function_call","call_id":"call-6","name":"execute","arguments":"{}"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"call-7","name":"execute","arguments":"{}"}`),
+	}, OutputTrace: []json.RawMessage{progress("call-6", "completed"), progress("call-7", "working")}}))
+
+	operation := func(conversationID, turnID, callID, name, status string) {
+		key := turnID + "/call/" + callID + "/host/0"
+		journal := conversationJournal{store: s, conversationID: conversationID, log: slog.New(slog.DiscardHandler)}
+		require.NoError(t, journal.SaveCodeModeCall(ctx, turnID, key, json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"`+callID+`","key":"`+key+`","name":"`+name+`","status":"`+status+`"}`)))
+	}
+
+	operation("quiet", "turn-3", "call-6", harness.NoReplyToolName, "ok")
+	operation("quiet", "turn-3", "call-7", "read", "running")
+
+	got, err = s.TurnProgress(ctx, "turn-3")
+	require.NoError(t, err)
+	assert.False(t, got.Worked, "a call that only stayed quiet, and an operation still running, are not work")
+
+	operation("quiet", "turn-3", "call-7", "read", "ok")
+
+	got, err = s.TurnProgress(ctx, "turn-3")
+	require.NoError(t, err)
+	assert.True(t, got.Worked, "a finished operation of a running script is work")
+
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"silent": KindSlackThread})
+	require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: "turn-4", ConversationKey: "silent", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"function_call","call_id":"call-8","name":"execute","arguments":"{}"}`),
+	}, OutputTrace: []json.RawMessage{progress("call-8", "completed")}}))
+	operation("silent", "turn-4", "call-8", harness.NoReplyToolName, "ok")
+
+	for conversationID, turnID := range map[string]string{"quiet": "turn-3", "silent": "turn-4"} {
+		_, err := s.finishTurn(ctx, turnID, &turnFinish{conversationID: conversationID, outbound: &protocol.OutboundMessage{ConversationID: conversationID, TurnID: turnID, Terminal: protocol.TerminalComplete, Deferred: true}})
+		require.NoError(t, err)
+
+		got, err = s.TurnProgress(ctx, turnID)
+		require.NoError(t, err)
+		assert.Equal(t, protocol.TurnProgress{Running: true}, got, "a delivering turn reports no work, which its cleared steps can no longer tell")
+	}
+
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"stopped": KindSlackThread})
+	require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: "turn-5", ConversationKey: "stopped", OutputTrace: []json.RawMessage{}}))
+	require.NoError(t, settleStoppedTrace(ctx, conversationJournal{store: s, conversationID: "stopped", log: slog.New(slog.DiscardHandler)}, "turn-5"))
+
+	got, err = s.TurnProgress(ctx, "turn-5")
+	require.NoError(t, err, "a stopped turn whose trace was empty saved it as JSON null")
+	assert.Equal(t, protocol.TurnProgress{Running: true}, got)
 
 	_, err = s.db.ExecContext(ctx, `UPDATE turns SET phase = 'done' WHERE id = 'turn-1'`)
 	require.NoError(t, err)
