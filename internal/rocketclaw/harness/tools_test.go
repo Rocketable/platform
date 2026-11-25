@@ -89,7 +89,7 @@ func TestWebSearchPermissionIsCoarse(t *testing.T) {
 
 	loop := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "websearch", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}}}
 	tool := tools["websearch"]
-	decision, err := loop.permissionDecision("websearch", &tool, json.RawMessage(`{}`))
+	decision, err := loop.permissionDecision("websearch", &tool, json.RawMessage(`{}`), false)
 
 	require.NoError(t, err)
 	require.True(t, decision.denied)
@@ -188,7 +188,7 @@ func TestBashPermissionsCheckWholeScript(t *testing.T) {
 		t.Run(tt.command, func(t *testing.T) {
 			raw, err := json.Marshal(bashParams{Command: tt.command})
 			require.NoError(t, err)
-			decision, err := loop.permissionDecision("bash", &tool, raw)
+			decision, err := loop.permissionDecision("bash", &tool, raw, false)
 			require.NoError(t, err)
 			require.Equal(t, tt.denied, decision.denied, decision.message)
 		})
@@ -271,7 +271,7 @@ func TestBashPermissionsCheckWholeScript(t *testing.T) {
 			loop.Permissions = parsePermissionYAML(t, "bash: "+tt.rules)
 			raw, err := json.Marshal(bashParams{Command: tt.command})
 			require.NoError(t, err)
-			decision, err := loop.permissionDecision("bash", &tool, raw)
+			decision, err := loop.permissionDecision("bash", &tool, raw, false)
 			require.NoError(t, err)
 			require.Equal(t, tt.denied, decision.denied, decision.message)
 		})
@@ -289,7 +289,7 @@ func TestBashPermissionsCheckWholeScript(t *testing.T) {
 	} {
 		raw, err := json.Marshal(bashParams{Command: command})
 		require.NoError(t, err)
-		decision, err := loop.permissionDecision("bash", &tool, raw)
+		decision, err := loop.permissionDecision("bash", &tool, raw, false)
 		require.NoError(t, err)
 		require.False(t, decision.denied, "%s: %s", command, decision.message)
 	}

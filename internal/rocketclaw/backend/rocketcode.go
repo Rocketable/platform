@@ -13,11 +13,11 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-type CronRunProgress struct {
+type RoutineRunProgress struct {
 	ConversationID  string
-	Run             *protocol.CronRun
+	Run             *protocol.RoutineRun
 	SyncDestination string
-	Cronjob         *protocol.CronjobMessage
+	Routine         *protocol.RoutineMessage
 }
 
 func prepareRocketCode(locked *config.LockedConfig, agent string) (*os.Root, harness.Agents, harness.Skills, *modelResolver, error) {

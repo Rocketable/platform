@@ -101,9 +101,9 @@ func TestEasyTurnShell(t *testing.T) {
 	require.NoError(t, permission.Set("skill", "a", harness.PermissionAllow))
 	require.NoError(t, permission.Set("skill", "b", harness.PermissionAllow))
 
-	easy := harness.Agent{Mode: harness.AgentModeEasy, Permission: permission, CustomShell: harness.CustomShell{Emulated: true}, WorkingDirectory: filepath.Join(workspace, "data", "$ROCKETCLAW_CONVERSATION_ID"), Commands: map[string]string{"show": "printenv SECRET_KEY"}, SecretsARN: []string{"arn:a"}}
+	easy := harness.Agent{Permission: permission, CustomShell: harness.CustomShell{Emulated: true}, WorkingDirectory: filepath.Join(workspace, "data", "$ROCKETCLAW_CONVERSATION_ID"), Commands: map[string]string{"show": "printenv SECRET_KEY"}, SecretsARN: []string{"arn:a"}}
 
-	reviewer := harness.Agent{Mode: harness.AgentModeEasy, CustomShell: harness.CustomShell{Emulated: true}, WorkingDirectory: easy.WorkingDirectory, Commands: map[string]string{"lookup": "printenv REVIEW_KEY"}, NetworkTargets: []string{}, SecretsARN: []string{"arn:review"}}
+	reviewer := harness.Agent{CustomShell: harness.CustomShell{Emulated: true}, WorkingDirectory: easy.WorkingDirectory, Commands: map[string]string{"lookup": "printenv REVIEW_KEY"}, NetworkTargets: []string{}, SecretsARN: []string{"arn:review"}}
 	require.NoError(t, reviewer.Permission.Set("skill", "c", harness.PermissionAllow))
 
 	easy.Approver = &reviewer
@@ -182,7 +182,7 @@ func TestEasyShadowReadsParentUploads(t *testing.T) {
 	folder, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 
-	agents := harness.Agents{Items: map[string]harness.Agent{"easy": {Mode: harness.AgentModeEasy, CustomShell: harness.CustomShell{Emulated: true}, WorkingDirectory: folder}}}
+	agents := harness.Agents{Items: map[string]harness.Agent{"easy": {CustomShell: harness.CustomShell{Emulated: true}, WorkingDirectory: folder}}}
 	b := &Bridge{shadow: true, config: Config{SessionService: store, Secrets: &secretFetcherMock{}}}
 	require.NoError(t, b.setEasyShell(t.Context(), &config.Config{Workspace: root.Name()}, agents, harness.Skills{}, "easy", map[string]string{rocketclawConversationIDEnv: child}, child))
 
@@ -277,7 +277,7 @@ func TestEasySubagentWorksInParentFolder(t *testing.T) {
 
 			writeResponseMessage(t, w, "resp_2", "msg_2", "found it")
 		case !strings.Contains(body, "function_call_output"):
-			writeResponseFunctionCall(t, w, "resp_1", "task", map[string]any{"description": "research", "prompt": "research the flaky test", "model": "gpt-6-luna", "tools": []string{"bash", "task"}, "background": true})
+			writeResponseFunctionCall(t, w, "resp_1", "task_clone", map[string]any{"description": "research", "prompt": "research the flaky test", "model": "gpt-6-luna", "tools": []string{"bash", "task_clone"}, "background": true})
 		default:
 			answerNoteTest(w, r, n, body)
 		}
@@ -365,7 +365,7 @@ func TestEasySubagentWorksInParentFolder(t *testing.T) {
 	stage = "recorded subagent configuration"
 
 	require.NoError(t, nt.service.db.QueryRowContext(t.Context(), `SELECT subagent_model, subagent_tools::text FROM conversations WHERE parent_conversation_id = $1`, nt.conversationID).Scan(&model, &tools))
-	require.Equal(t, []string{"gpt-6-luna", `["bash", "task"]`}, []string{model, tools})
+	require.Equal(t, []string{"gpt-6-luna", `["bash", "task_clone"]`}, []string{model, tools})
 
 	stage = "restart"
 	manager, _ = nt.restart(t)
@@ -388,6 +388,7 @@ func TestEasySubagentWorksInParentFolder(t *testing.T) {
 		assert.Contains(t, body, `"model":"gpt-6-luna"`)
 		assert.Contains(t, body, `\n- bash(`)
 		assert.NotContains(t, body, `\n- read(`, "execute offers only the chosen tools")
-		assert.NotContains(t, body, `"name":"task"`, "the subagent is at its agent's recursion limit")
+		assert.NotContains(t, body, `"name":"task_clone"`, "the copy is at its agent's recursion limit")
+		assert.Contains(t, body, "You are a copy of agent primary", "the copy keeps its agent's instructions and learns it is a copy")
 	}
 }

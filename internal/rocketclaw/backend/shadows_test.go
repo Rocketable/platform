@@ -386,7 +386,7 @@ func TestShadowImplicitCreation(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newShadowTestStore(t)
-	require.NoError(t, store.UpsertThread("cron:private", ThreadState{Agent: "primary", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, store.UpsertThread("cron:private", ThreadState{Agent: "primary", CreatedBy: ThreadCreatedByRoutine}))
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "primary", &ExternalMCPSessionState{ManagedConversationID: "visible", PrivateConversationID: "mcp:private", Agent: "primary"}))
 
 	conversation := "slack-channel:C1:primary"
@@ -1924,13 +1924,6 @@ func TestShadowStepLimitRestartsAtPersonMessages(t *testing.T) {
 }
 
 func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
-	var logs bytes.Buffer
-
-	logger := slog.Default()
-
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(logger) })
-
 	store, root := newShadowTestStore(t)
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
 
@@ -1943,16 +1936,14 @@ func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
 
 	agents, _, err := LoadRuntimeDefinitions(cfg, config.DefaultRuntimeDir)
 	require.NoError(t, err)
-	require.Equal(t, []string{"primary/a"}, agents.ShadowNames("primary"))
-	require.Contains(t, logs.String(), "primary/z.md")
-	require.Contains(t, logs.String(), "parent primary")
+	require.Equal(t, []string{"primary/a", "primary/z"}, agents.ShadowNames("primary"), "an advanced shadow follows an easy parent")
 
 	runtime := &Runtime{Sessions: store}
 
 	for id, path := range map[string]string{"routine-run": "agents/primary.md#30m", "cron-run": "cron/daily.md", "web": ""} {
 		conversation := protocol.Conversation{ID: id, Agent: "primary"}
 		if path != "" {
-			conversation.Run = &protocol.CronRun{Path: path, At: time.Unix(1, 0)}
+			conversation.Run = &protocol.RoutineRun{Path: path, At: time.Unix(1, 0)}
 		}
 
 		require.NoError(t, runtime.CreateConversation(t.Context(), conversation))
@@ -1966,10 +1957,10 @@ func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
 
 	mirrored, err := queryStrings(t.Context(), store.db, `SELECT c.shadow_parent || ':' || c.shadow_agent FROM conversations c JOIN shadow_turns s ON s.child_conversation_id = c.conversation_id ORDER BY 1`, "test shadow turns")
 	require.NoError(t, err)
-	require.Equal(t, []string{"cron-run:primary/a", "web:primary/a"}, mirrored)
+	require.Equal(t, []string{"cron-run:primary/a", "cron-run:primary/z", "web:primary/a", "web:primary/z"}, mirrored)
 	shadows, err := queryStrings(t.Context(), store.db, `SELECT shadow_parent FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "test shadow sessions")
 	require.NoError(t, err)
-	require.Equal(t, []string{"cron-run", "web"}, shadows, "a routine run creates no shadow sessions")
+	require.Equal(t, []string{"cron-run", "cron-run", "web", "web"}, shadows, "a routine run creates no shadow sessions")
 }
 
 func TestHistoryMutationSharesLockOrder(t *testing.T) {

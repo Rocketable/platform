@@ -213,7 +213,7 @@ func (b *Bridge) AppendChildEntry(ctx context.Context, key harness.ChildKey, ent
 )
 INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, retention, slack_channel, call_turn, call_id)
 SELECT $1, '', '', $2, $3, FALSE, CASE WHEN bool_or(retention = 'private' OR parent_conversation_id IS NULL
-    AND kind IN ('slack_thread', 'cron_run', 'one_off_cron_run', 'external_mcp_run')) THEN 'private' ELSE 'nested' END,
+    AND kind IN ('slack_thread', 'routine_run', 'one_off_routine_run', 'external_mcp_run')) THEN 'private' ELSE 'nested' END,
     max(slack_channel) FILTER (WHERE conversation_id = $2), $4, $5 FROM ancestors
 ON CONFLICT (conversation_id) DO NOTHING`, b.config.ConversationID+key.Path, b.config.ConversationID+key.Parent, KindReview, key.Turn, key.Call); err != nil {
 		return fmt.Errorf("record review history: %w", err)
@@ -1240,7 +1240,7 @@ FROM self s CROSS JOIN producing p CROSS JOIN unsettled u CROSS JOIN lane l`, b.
 	default:
 		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 		inbound.ConversationID, inbound.SlackReply = b.config.ConversationID, protocol.Clone(note.origin.SlackReply)
-		inbound.SyncDestination, inbound.RequireOutputDecision, inbound.Cronjob = note.origin.SyncDestination, note.origin.RequireOutputDecision, note.origin.Cronjob
+		inbound.SyncDestination, inbound.RequireOutputDecision, inbound.Routine = note.origin.SyncDestination, note.origin.RequireOutputDecision, note.origin.Routine
 		inbound.OriginHeader, inbound.Metadata = reviewOriginHeader(note.origin), map[string]string{protocol.InboundAmbientMetadataKey: note.origin.Metadata[protocol.InboundAmbientMetadataKey]}
 
 		if inbound.SyncDestination == "" {
@@ -1366,25 +1366,25 @@ WHERE m.conversation_id = $1`, source).Scan(&data, &owner, &active); err != nil 
 			return fmt.Errorf("load web agents: %w", err)
 		}
 
-		agent, loaded := definitions.Items[inbound.Cronjob.Agent]
+		agent, loaded := definitions.Items[inbound.Routine.Agent]
 		if agent.Sticky == harness.AgentStickyGlobal {
 			if err := tx.Commit(); err != nil {
 				return fmt.Errorf("commit producer handoff check: %w", err)
 			}
 
-			return b.openCronReport(ctx, &protocol.OutboundMessage{Cronjob: inbound.Cronjob})
+			return b.openRoutineReport(ctx, &protocol.OutboundMessage{Routine: inbound.Routine})
 		}
 
 		if !loaded {
-			if _, err := execState(ctx, tx, "drop cron follow-ups", `DELETE FROM turns WHERE conversation_id = $1 AND phase = 'waiting' AND reason = $2 AND run_at_unix_ns <= $3`, source, waitScheduled, timeUnixNano(time.Now())); err != nil {
+			if _, err := execState(ctx, tx, "drop routine follow-ups", `DELETE FROM turns WHERE conversation_id = $1 AND phase = 'waiting' AND reason = $2 AND run_at_unix_ns <= $3`, source, waitScheduled, timeUnixNano(time.Now())); err != nil {
 				return err
 			}
 
 			if err := tx.Commit(); err != nil {
-				return fmt.Errorf("commit cron follow-up drop: %w", err)
+				return fmt.Errorf("commit routine follow-up drop: %w", err)
 			}
 
-			b.log.Error("cron follow-up dropped: agent is not loaded", "agent", inbound.Cronjob.Agent)
+			b.log.Error("routine follow-up dropped: agent is not loaded", "agent", inbound.Routine.Agent)
 
 			return nil
 		}
@@ -1395,11 +1395,11 @@ WHERE m.conversation_id = $1`, source).Scan(&data, &owner, &active); err != nil 
 		}
 
 		if !recorded {
-			if _, err := dao.createConversation(ctx, protocol.Conversation{ID: web, Agent: inbound.Cronjob.Agent, CreatedBy: string(ThreadCreatedByCron), Space: cmp.Or(inbound.Cronjob.Space, agent.Space)}, conversationFacts{kind: KindWebChat, cronRun: source}, harness.AgentStickyOff); err != nil {
+			if _, err := dao.createConversation(ctx, protocol.Conversation{ID: web, Agent: inbound.Routine.Agent, CreatedBy: string(ThreadCreatedByRoutine), Space: cmp.Or(inbound.Routine.Space, agent.Space)}, conversationFacts{kind: KindWebChat, routineRun: source}, harness.AgentStickyOff); err != nil {
 				return err
 			}
 
-			if _, err := b.config.SessionService.reconcileShadows(ctx, tx, web, inbound.Cronjob.Agent); err != nil {
+			if _, err := b.config.SessionService.reconcileShadows(ctx, tx, web, inbound.Routine.Agent); err != nil {
 				return err
 			}
 		}
@@ -1885,7 +1885,7 @@ func (b *Bridge) finish(ctx context.Context, request *bridgeRequest, finish *tur
 	}
 
 	if terminal != "" && msg.SyncDestination == "" {
-		outbound.Cronjob = nil
+		outbound.Routine = nil
 	}
 
 	finish.outbound, finish.terminal, finish.hidden = outbound, terminal, hiddenRun(msg)
@@ -1930,8 +1930,8 @@ func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *
 
 	b.log.Info("final delivery acknowledgement returned", "event", "delivery_acknowledged", "boundary", "frontend_ack", "conversation_id", b.config.ConversationID, "turn_id", request.turnID, "acknowledged", true, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", "<nil>")
 
-	if outbound.Cronjob != nil && msg.SyncDestination == "" && (strings.TrimSpace(outbound.Text) != "" || len(outbound.Attachments) > 0) {
-		if err := b.openCronReport(ctx, outbound); err != nil {
+	if outbound.Routine != nil && msg.SyncDestination == "" && (strings.TrimSpace(outbound.Text) != "" || len(outbound.Attachments) > 0) {
+		if err := b.openRoutineReport(ctx, outbound); err != nil {
 			msg.CompleteResponseWithAttachments(outbound.Text, outbound.Attachments, err)
 			return err
 		}
@@ -1959,31 +1959,31 @@ func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *
 	return nil
 }
 
-func (b *Bridge) openCronReport(ctx context.Context, outbound *protocol.OutboundMessage) error {
+func (b *Bridge) openRoutineReport(ctx context.Context, outbound *protocol.OutboundMessage) error {
 	agents, err := LoadRuntimeAgents(b.runtime, b.runtime.Clone().RuntimeDirName())
 	if err != nil {
-		return fmt.Errorf("load cron agents: %w", err)
+		return fmt.Errorf("load routine agents: %w", err)
 	}
 
-	agent, ok := agents.Items[outbound.Cronjob.Agent]
+	agent, ok := agents.Items[outbound.Routine.Agent]
 	if !ok {
-		b.log.Error("cron report chat not opened: agent is not loaded", "agent", outbound.Cronjob.Agent)
+		b.log.Error("routine report chat not opened: agent is not loaded", "agent", outbound.Routine.Agent)
 		return nil
 	}
 
-	destination := protocol.Conversation{ID: "web:" + b.config.ConversationID, Agent: outbound.Cronjob.Agent, CreatedBy: string(ThreadCreatedByCron), Space: cmp.Or(outbound.Cronjob.Space, agent.Space)}
-	facts := conversationFacts{kind: KindWebChat, cronRun: b.config.ConversationID}
+	destination := protocol.Conversation{ID: "web:" + b.config.ConversationID, Agent: outbound.Routine.Agent, CreatedBy: string(ThreadCreatedByRoutine), Space: cmp.Or(outbound.Routine.Space, agent.Space)}
+	facts := conversationFacts{kind: KindWebChat, routineRun: b.config.ConversationID}
 
 	if agent.Sticky != harness.AgentStickyOff {
-		destination.ID, facts.cronRun = rand.Text(), ""
+		destination.ID, facts.routineRun = rand.Text(), ""
 	}
 
 	ctx = context.WithoutCancel(ctx)
 	if _, err := b.config.SessionService.recordConversation(ctx, &destination, facts, agent.Sticky); err != nil {
-		return fmt.Errorf("record cron report chat: %w", err)
+		return fmt.Errorf("record routine report chat: %w", err)
 	}
 
-	tx, err := b.config.SessionService.beginStateTx(ctx, "cron destination binding")
+	tx, err := b.config.SessionService.beginStateTx(ctx, "routine destination binding")
 	if err != nil {
 		return err
 	}
@@ -1999,7 +1999,7 @@ func (b *Bridge) openCronReport(ctx context.Context, outbound *protocol.Outbound
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit cron destination binding: %w", err)
+		return fmt.Errorf("commit routine destination binding: %w", err)
 	}
 
 	return b.threads.armSchedules(ctx, destinationID, schedules)
@@ -2201,7 +2201,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			return runResult{}, err
 		}
 
-		rootAgent, agent.MaxRecursion = owner.agentSnapshot(), nil
+		rootAgent, agent.MaxRecursion = owner.agentSnapshot(), new(0)
 		if limit := agents.Items[rootAgent].MaxRecursion; limit != nil {
 			agent.MaxRecursion = new(max(*limit-len(jobs), 0))
 		}
@@ -2217,6 +2217,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 		if model.Valid {
 			agent.Model, agent.ReasoningEffort = harness.ParseModelRef(model.String)
+			agent.Prompt += "\n\nYou are a copy of agent " + agentName + ", started by it with task_clone to work on one part of its task. Your final answer goes back to it."
 		}
 
 		if err = json.Unmarshal(tools, &agent.Tools); err != nil {
@@ -2351,9 +2352,9 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	agent := agents.Items[agentName]
 
-	customTools := append(sessionTagTools(b.config.SessionService, tagConversationID), currentSessionIDTool(self))
+	customTools := append(sessionTagTools(b.config.SessionService, tagConversationID), currentSessionIDTool(self, rootAgent))
 	if agents.Items[rootAgent].Space == "" {
-		customTools = append(customTools, sessionsMoveTool(b.config.SessionService, self))
+		customTools = append(customTools, sessionsMoveTool(b.config.SessionService, self, rootAgent))
 	}
 
 	if b.parent == "" && !unaddressed {
@@ -2395,14 +2396,14 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	if !unaddressed {
-		customTools = append(customTools, sessionsWriteTool(b, origin, msg, rootAgent, self, agents))
+		customTools = append(customTools, sessionsWriteTool(b, origin, msg, rootAgent, self))
 	}
 
 	pageAgent, _, _ := strings.Cut(rootAgent, "/")
 
 	pageFallback := agents.Items[pageAgent].Space
-	if origin.Cronjob != nil {
-		pageFallback = cmp.Or(origin.Cronjob.Space, pageFallback)
+	if origin.Routine != nil {
+		pageFallback = cmp.Or(origin.Routine.Space, pageFallback)
 	}
 
 	customTools = append(customTools, pageSpace{sessions: b.config.SessionService, threads: b.threads, conversation: self, fallback: pageFallback, noSpace: nativePageNoSpace}.nativeTools(root, &agent.CustomShell)...)
@@ -2515,7 +2516,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 		header, _, _ = strings.Cut(prompt, "\n\n")
 		prepared = harness.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey], msg.Metadata[agentDraftMessageMetadataKey], turnID+"/initial"), TurnID: turnID, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: inboundDirectSkill(msg)}
-		prepared.ExpandShellCommands = msg.Cronjob != nil && msg.Metadata[backgroundNotesMetadataKey] == ""
+		prepared.ExpandShellCommands = msg.Routine != nil && msg.Metadata[backgroundNotesMetadataKey] == ""
 		snapshot.Inputs, snapshot.Environment, snapshot.ChildContext = []harness.PromptInput{prepared}, shellEnv, childContext
 
 		snapshot.GoalTurn = msg.GoalTurn
@@ -2972,12 +2973,16 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 		return harness.Agents{}, harness.Skills{}, nil, fmt.Errorf("open skills dir: %w", err)
 	}
 
-	agents, err := loadAgentDefinitions(agentsFS, skillsFS, cfg)
+	agents, errsAgent, err := loadAgentDefinitions(agentsFS, skillsFS, cfg)
 	if err != nil {
 		return harness.Agents{}, harness.Skills{}, nil, err
 	}
 
-	builtin, err := loadAgentDefinitions(skel.BuiltinAgents(), skillsFS, cfg)
+	builtin, errsBuiltin, err := loadAgentDefinitions(skel.BuiltinAgents(), skillsFS, cfg)
+	for _, errBuiltin := range errsBuiltin {
+		err = errors.Join(err, errBuiltin)
+	}
+
 	if err != nil {
 		return harness.Agents{}, harness.Skills{}, nil, fmt.Errorf("load built-in agents: %w", err)
 	}
@@ -2991,6 +2996,10 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 	}
 
 	var warnings []string
+
+	for _, errAgent := range errsAgent {
+		warnings = append(warnings, "Agent "+strings.TrimSuffix(errAgent.Path, ".md")+" was not loaded: "+errAgent.Err.Error()+".")
+	}
 
 	if setting := cfg.EmbeddedAgents.Main; setting.Disabled {
 		delete(agents.Items, "main")
@@ -3023,18 +3032,6 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 	for name := range agents.Items {
 		agent := agents.Items[name]
 
-		groups, err := checkedAgentTagGroups(&agent)
-		if err != nil {
-			if strings.Contains(name, "/") {
-				slog.Warn("load shadow definition", "path", agent.Location, "error", err)
-				delete(agents.Items, name)
-
-				continue
-			}
-
-			return harness.Agents{}, harness.Skills{}, nil, fmt.Errorf("%s: %w", agent.Location, err)
-		}
-
 		agent.Permission.Buckets = slices.DeleteFunc(agent.Permission.Buckets, func(bucket harness.PermissionBucket) bool {
 			return bucket.Name == "rocketclaw_tags"
 		})
@@ -3046,10 +3043,10 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 			}
 		}
 
-		setSessionTagTools(&agent, groups)
+		setSessionTagTools(&agent)
 
 		if agent.Approver != nil {
-			setSessionTagTools(agent.Approver, agent.Approver.TagGroups)
+			setSessionTagTools(agent.Approver)
 		}
 
 		for _, tool := range tools {
@@ -3067,30 +3064,28 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 	return agents, skills, warnings, nil
 }
 
-func loadAgentDefinitions(agentsFS, skillsFS fs.FS, cfg *config.Config) (harness.Agents, error) {
+func loadAgentDefinitions(agentsFS, skillsFS fs.FS, cfg *config.Config) (harness.Agents, []*harness.AgentLoadError, error) {
 	result := harness.LoadAgents(agentsFS, &harness.AgentLoadConfig{MCPFacets: cfg.MCPFacets(), Providers: cfg.ProviderNames(), DecisionProviders: cfg.DecisionProviderNames(), OpenCodeServers: slices.Collect(maps.Keys(cfg.OpenCode)), Skills: skillsFS})
 
-	for name := range result.Agents.Items {
-		agent := result.Agents.Items[name]
-		if parent, ok := result.Agents.Items[filepath.Dir(name)]; ok && parent.Mode != agent.Mode {
-			slog.Warn("load shadow definition", "path", agent.Location, "error", fmt.Errorf("mode %s does not match parent %s's mode %s", agent.Mode, parent.Name, parent.Mode))
-			delete(result.Agents.Items, name)
-		}
-	}
-
-	var errLoads []error
+	var (
+		errsAgent []*harness.AgentLoadError
+		errsLoad  []error
+	)
 
 	for _, err := range result.Errors {
-		location, _, _ := strings.Cut(err.Error(), ": ")
-		if strings.Contains(location, "/") {
-			slog.Warn("load shadow definition", "path", location, "error", err)
-			continue
-		}
+		errAgent, ok := errors.AsType[*harness.AgentLoadError](err)
 
-		errLoads = append(errLoads, err)
+		switch {
+		case !ok:
+			errsLoad = append(errsLoad, err)
+		case strings.Contains(errAgent.Path, "/"):
+			slog.Warn("load shadow definition", "path", errAgent.Path, "error", err)
+		default:
+			errsAgent = append(errsAgent, errAgent)
+		}
 	}
 
-	return result.Agents, errors.Join(errLoads...)
+	return result.Agents, errsAgent, errors.Join(errsLoad...)
 }
 
 func LoadRuntimeDefinitions(cfg *config.LockedConfig, runtimeDir string) (harness.Agents, harness.Skills, error) {
@@ -3474,7 +3469,7 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 
 	outbound.Complete = complete
 	if msg != nil {
-		outbound.Cronjob = msg.Cronjob
+		outbound.Routine = msg.Routine
 
 		goal, goalOK, err := b.config.SessionService.Goal(b.config.ConversationID)
 		accounted := msg.GoalAction != protocol.GoalActionNone
@@ -3660,8 +3655,6 @@ func ReplayInputMessageRoleText(item *responses.ResponseInputItemUnionParam, raw
 	return role, text, true, nil
 }
 
-const defaultReplyInstruction = "Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."
-
 func (b *Bridge) buildPrompt(msg *protocol.InboundMessage, agent *harness.Agent) (string, error) {
 	prompt := buildPrompt(msg, agent, false)
 
@@ -3678,16 +3671,9 @@ func (b *Bridge) buildPrompt(msg *protocol.InboundMessage, agent *harness.Agent)
 }
 
 func buildPrompt(msg *protocol.InboundMessage, agent *harness.Agent, steer bool) string {
-	instruction := defaultReplyInstruction
-
+	instruction := ""
 	if agent != nil {
-		if override, ok := agent.Frontmatter["additionalInstructions"].(string); ok && strings.TrimSpace(override) != "" {
-			instruction = override
-		}
-
-		if agent.Mode == harness.AgentModeEasy {
-			instruction = ""
-		}
+		instruction = agent.ReplyHint
 	}
 
 	body := strings.TrimSpace(msg.Text)
@@ -3796,7 +3782,7 @@ func provenanceFromInbound(msg *protocol.InboundMessage) promptProvenance {
 	}
 
 	provenance := promptProvenance{origin: origin, unaddressed: msg.Metadata[protocol.InboundAmbientMetadataKey] != ""}
-	if origin := strings.TrimSpace(msg.Metadata[protocol.InboundOriginMetadataKey]); slices.Contains([]string{"Slack", "Cron", "ExternalMCP", "System"}, origin) {
+	if origin := strings.TrimSpace(msg.Metadata[protocol.InboundOriginMetadataKey]); slices.Contains([]string{"Slack", "Routine", "ExternalMCP", "System"}, origin) {
 		provenance.origin = origin
 	}
 
@@ -3834,8 +3820,8 @@ func reviewOriginHeader(origin *protocol.InboundMessage) string {
 	}
 
 	provenance := provenanceFromInbound(origin)
-	if origin.Cronjob != nil {
-		provenance.origin = "Cron"
+	if origin.Routine != nil {
+		provenance.origin = "Routine"
 	}
 
 	provenance.principal = cmp.Or(provenance.principal, origin.Metadata[protocol.InboundPrincipalNameMetadataKey])

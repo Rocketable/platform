@@ -22,7 +22,7 @@ type SearchKey string
 
 const (
 	keyTag       SearchKey = "tag"
-	keyCron      SearchKey = "routine"
+	keyRoutine   SearchKey = "routine"
 	keyAgent     SearchKey = "agent"
 	keyRoom      SearchKey = "room"
 	keyIs        SearchKey = "is"
@@ -51,10 +51,10 @@ const (
 )
 
 type SidebarChat struct {
-	Session  SidebarSession
-	Room     string
-	Cron     bool
-	CronName string
+	Session     SidebarSession
+	Room        string
+	Routine     bool
+	RoutineName string
 }
 
 type SearchScope int
@@ -120,7 +120,7 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 		case keySort:
 			term.Value = strings.ToLower(value)
 			found = term.Value == "newest" || term.Value == "oldest"
-		case keyTag, keyCron, keyAgent, keyRoom, keyPrincipal, keyServer, keyModel, keySpace:
+		case keyTag, keyRoutine, keyAgent, keyRoom, keyPrincipal, keyServer, keyModel, keySpace:
 			if strings.HasPrefix(value, `"`) {
 				start := pos + len(key) + 1
 				for i := start + 1; i < len(query); i++ {
@@ -191,10 +191,10 @@ func (s *SessionService) SidebarChats(ctx context.Context, username string, slac
 }
 
 func sidebarChat(ctx context.Context, slack slackLookup, rooms map[string]string, row *SidebarSession) (SidebarChat, error) {
-	chat := SidebarChat{Session: *row, Cron: row.Origin.Run != nil && row.Origin.Binding.ManagedConversationID != row.Origin.ConversationID}
-	if chat.Cron {
+	chat := SidebarChat{Session: *row, Routine: row.Origin.Run != nil && row.Origin.Binding.ManagedConversationID != row.Origin.ConversationID}
+	if chat.Routine {
 		name, _, _ := strings.Cut(row.Origin.Run.Path, ".md#")
-		chat.CronName = strings.TrimPrefix(name, "agents/")
+		chat.RoutineName = strings.TrimPrefix(name, "agents/")
 	}
 
 	if row.SlackChannel != "" {
@@ -256,19 +256,19 @@ func (s *SessionService) searchCandidates(ctx context.Context, slack slackLookup
 
 	candidates := []string{}
 	err = s.readParallelRows(ctx, `WITH own AS (
-    SELECT conversation_id, listed OR server IS NOT NULL AS shown, cron_run_at_unix_ns IS NOT NULL AS run FROM conversations WHERE search_words LIKE ANY ($6)
+    SELECT conversation_id, listed OR server IS NOT NULL AS shown, routine_run_at_unix_ns IS NOT NULL AS run FROM conversations WHERE search_words LIKE ANY ($6)
 ), `+visibleChatsSQL+chatOriginSQL+`, found AS (
     SELECT conversation_id FROM own WHERE shown
     UNION ALL SELECT c.conversation_id FROM creating c JOIN own p ON p.conversation_id = c.creating_source AND p.run
     UNION ALL SELECT c.conversation_id FROM visible_chats c JOIN turns t ON t.conversation_id = c.conversation_id AND t.phase NOT IN ('waiting', 'done') AND t.takes_lane
     WHERE lower(replace(replace(t.inbound_json->>'Text', U&'\0130', 'i'), U&'\212A', 'k') COLLATE "C") LIKE ANY ($6)
     UNION ALL SELECT conversation_id FROM origins c WHERE $5::text[] <> '{}' AND c.slack_channel = ANY($5) OR $4 ~ '[="\\[:cntrl:]]' AND c.pairs <> 'null'
-        OR (c.managed = c.conversation_id) <> (c.run_at IS NOT NULL) AND strpos('cron source: stem: run kind: scheduled one-off id: agent: ran at: external mcp conversation:', $4) > 0
+        OR (c.managed = c.conversation_id) <> (c.run_at IS NOT NULL) AND strpos('routine source: stem: run kind: scheduled one-off id: agent: ran at: external mcp conversation:', $4) > 0
 )
 SELECT DISTINCT conversation_id FROM found`, "session search candidates", func(row rowScanner) error {
 		candidates = append(candidates, "")
 		return row.Scan(&candidates[len(candidates)-1])
-	}, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, KindOneOffCronRun, needle, matched, patterns)
+	}, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByRoutine, KindOneOffRoutineRun, needle, matched, patterns)
 
 	return candidates, err
 }
@@ -282,8 +282,8 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals, sandboxed []string,
 		switch term.Key {
 		case keyTag:
 			ok = slices.Contains(c.Session.Tags, term.Value)
-		case keyCron:
-			ok = c.CronName == term.Value
+		case keyRoutine:
+			ok = c.RoutineName == term.Value
 		case keyAgent:
 			hasAgent, agentMatch = true, agentMatch || c.Session.Conversation.Agent == term.Value || slices.Contains(sandboxed, term.Value)
 			continue
@@ -315,7 +315,7 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals, sandboxed []string,
 }
 
 func (c *SidebarChat) is(value string) bool {
-	return value == "forked" && c.Session.ForkedFrom != "" || value == "routine" && c.Cron ||
+	return value == "forked" && c.Session.ForkedFrom != "" || value == "routine" && c.Routine ||
 		value == "unread" && !c.Session.Attention.UnreadAt.IsZero() && !c.Session.Attention.Parked || value == "running" && (c.Session.Running || c.Session.Background) ||
 		value == "queued" && c.Session.Queued || value == "waiting" && c.Session.Asking || value == "external" && c.Session.External
 }

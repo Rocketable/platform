@@ -15,7 +15,7 @@ func TestOriginJSON(t *testing.T) {
 		origin any
 		want   string
 	}{
-		{"cron", cronOrigin{Kind: originCron, RunKind: cronScheduled}, `{"agent":"","kind":"cron","ranAt":"","runId":"","runKind":"scheduled","sourcePath":"","stem":""}`},
+		{"cron", routineOrigin{Kind: originRoutine, RunKind: routineScheduled}, `{"agent":"","kind":"routine","ranAt":"","runId":"","runKind":"scheduled","sourcePath":"","stem":""}`},
 		{"missing pairs", externalMCPOrigin{Kind: originExternalMCP}, `{"agent":"","externalConversationId":"","kind":"external_mcp","pairs":null}`},
 		{"empty pairs", externalMCPOrigin{Kind: originExternalMCP, Pairs: []originPair{}}, `{"agent":"","externalConversationId":"","kind":"external_mcp","pairs":[]}`},
 		{"caller text", externalMCPOrigin{Kind: originExternalMCP, ExternalConversationID: "id<1>", Pairs: []originPair{{Key: "ticket-id", Value: "<script>"}}}, `{"agent":"","externalConversationId":"id\u003c1\u003e","kind":"external_mcp","pairs":[{"key":"ticket-id","value":"\u003cscript\u003e"}]}`},

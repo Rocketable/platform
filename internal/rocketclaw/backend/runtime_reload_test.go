@@ -36,15 +36,13 @@ func TestRuntimeReload(t *testing.T) {
 			log := slog.New(slog.DiscardHandler)
 			require.NoError(t, skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, log))
 
-			updated := newAgent
+			updated, warnings := newAgent, "Slack channel #ops uses agent primary, which is not sticky: slack, so it does not answer mentions there."
 			if scenario == "invalid-agent" {
-				updated = "---\nmodel: [\n---\n"
+				updated, warnings = "---\nmodel: test-model\nsudu: yes\n---\n", "Agent primary was not loaded: sudu: not an advanced-mode key. "+warnings
 			}
 
 			require.NoError(t, root.WriteFile("agents/primary.md", []byte(updated), 0o600))
 			require.NoError(t, root.WriteFile("rocketclaw.json", []byte("invalid config"), 0o600))
-
-			const warnings = "Slack channel #ops uses agent primary, which is not sticky: slack, so it does not answer mentions there."
 
 			assembler := &frontendAssemblerMock{GateFunc: passGate, ValidateAssetsFunc: func(*config.Config, string) error {
 				if scenario == "invalid-frontend" {
@@ -54,12 +52,12 @@ func TestRuntimeReload(t *testing.T) {
 				return nil
 			}}
 			refresh, cron := &runtimeRefresherMock{}, &runtimeRefresherMock{}
-			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, RunCtx: t.Context(), Sessions: sessions, Assemble: assembler, sandboxes: sandbox.None{}, ExternalMCPAgents: refresh, CronJobs: cron}
+			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, RunCtx: t.Context(), Sessions: sessions, Assemble: assembler, sandboxes: sandbox.None{}, ExternalMCPAgents: refresh, Routines: cron}
 			refreshed := func(failure string) error {
 				require.False(t, rt.reloadMu.TryLock(), "reload remains serialized through each refresh")
 				live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/primary.md")
 				require.NoError(t, err)
-				require.Equal(t, newAgent, string(live), "refresh runs after replacement")
+				require.Equal(t, updated, string(live), "refresh runs after replacement")
 
 				if scenario == failure {
 					return errors.New("refresh failed")
@@ -74,7 +72,7 @@ func TestRuntimeReload(t *testing.T) {
 			}
 
 			receipt, err := rt.Reload("updated assets")
-			if scenario == "success" {
+			if scenario == "success" || scenario == "invalid-agent" {
 				require.NoError(t, err)
 				require.Equal(t, "rocketclaw runtime assets reloaded\n\n"+warnings, receipt)
 			} else {
@@ -85,22 +83,22 @@ func TestRuntimeReload(t *testing.T) {
 			live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/primary.md")
 			require.NoError(t, err)
 
-			if scenario == "invalid-agent" || scenario == "invalid-frontend" {
+			if scenario == "invalid-frontend" {
 				require.Equal(t, oldAgent, string(live))
 				require.Empty(t, refresh.RefreshCalls())
 				require.Empty(t, cron.RefreshCalls())
 				require.Empty(t, rt.SlackWarning())
 			} else {
-				require.Equal(t, newAgent, string(live))
+				require.Equal(t, updated, string(live))
 				require.Equal(t, warnings, rt.SlackWarning())
 				require.Len(t, refresh.RefreshCalls(), 1)
 
-				cronCalls := 1
+				routineCalls := 1
 				if scenario == "refresh-failure" {
-					cronCalls = 0
+					routineCalls = 0
 				}
 
-				require.Len(t, cron.RefreshCalls(), cronCalls)
+				require.Len(t, cron.RefreshCalls(), routineCalls)
 			}
 		})
 	}
@@ -138,7 +136,7 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 
 	refresh, cron := &runtimeRefresherMock{}, &runtimeRefresherMock{}
 	rt := &Runtime{
-		Cfg: config.NewLockedConfig(cfg), Log: log, logLevel: new(slog.LevelVar), RunCtx: t.Context(), Sessions: store, ExternalMCPAgents: refresh, CronJobs: cron, sandboxes: sandbox.None{},
+		Cfg: config.NewLockedConfig(cfg), Log: log, logLevel: new(slog.LevelVar), RunCtx: t.Context(), Sessions: store, ExternalMCPAgents: refresh, Routines: cron, sandboxes: sandbox.None{},
 		Assemble: &frontendAssemblerMock{GateFunc: passGate, ValidateAssetsFunc: func(_ *config.Config, runtimeDir string) error {
 			if rejectAssets {
 				return errors.New(`cron job "report" is invalid`)
@@ -261,7 +259,7 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 	}{
 		{"swap", func(b *config.Behavior) { b.Overlays, b.Logging.Level = []string{repo}, "error" }, "commit rocketclaw reload stage", 0},
 		{"refresh", func(b *config.Behavior) { b.AutoApproverModel, b.Logging.Level = "gpt-c", "error" }, "refresh failed", 2},
-		{"cron", func(b *config.Behavior) { b.AutoApproverModel, b.Logging.Level = "gpt-e", "error" }, "refresh cron jobs after restoring: cron refresh failed", 2},
+		{"cron", func(b *config.Behavior) { b.AutoApproverModel, b.Logging.Level = "gpt-e", "error" }, "refresh routines after restoring: cron refresh failed", 2},
 		{"commit", func(b *config.Behavior) { b.Overlays, b.Logging.Level = []string{repo}, "error" }, "commit behavior settings", 2},
 	} {
 		ctx, cancel := context.WithCancel(t.Context())

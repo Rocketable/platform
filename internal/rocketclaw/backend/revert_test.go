@@ -335,11 +335,11 @@ func TestRevertEligibility(t *testing.T) {
 	s := newTestSessionService(t)
 
 	ctx := t.Context()
-	for _, c := range []struct{ id, kind, cronRun string }{
-		{"slack-thread:C1:1.1", "slack_thread", ""}, {"cron:job:1", "cron_run", ""}, {"web:cron:job:1", "web_chat", "cron:job:1"}, {"child/call", "subagent", ""},
+	for _, c := range []struct{ id, kind, routineRun string }{
+		{"slack-thread:C1:1.1", "slack_thread", ""}, {"cron:job:1", "routine_run", ""}, {"web:cron:job:1", "web_chat", "cron:job:1"}, {"child/call", "subagent", ""},
 		{"copied", "web_chat", ""}, {"valid", "web_chat", ""},
 	} {
-		_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, cron_run) VALUES ($1, 'planner', '', $2, TRUE, NULLIF($3, ''))`, c.id, c.kind, c.cronRun)
+		_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, routine_run) VALUES ($1, 'planner', '', $2, TRUE, NULLIF($3, ''))`, c.id, c.kind, c.routineRun)
 		require.NoError(t, err)
 		_, err = s.AppendEntryID(ctx, c.id, testSessionEntry("request", "reply"))
 		require.NoError(t, err)
@@ -445,7 +445,7 @@ func TestRevertFloor(t *testing.T) {
 	require.NoError(t, queryScalar(ctx, s.db, "undone entry", `SELECT count(*) = 1 FROM entries WHERE conversation_id = $1 AND entry_json::text LIKE '%human2%'`, &kept, thread))
 	require.True(t, kept, "the undone message stays stored")
 
-	recordTestConversations(t, s, "main", map[string]ConversationKind{"bound-chat": KindWebChat, "bound-run": KindCronRun})
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"bound-chat": KindWebChat, "bound-run": KindRoutineRun})
 	_, err = s.AppendEntryID(ctx, "bound-run", message("", "older report"))
 	require.NoError(t, err)
 	before, err := s.AppendEntryID(ctx, "bound-chat", message(`,"prompt_header":"[Web principal=\"Ann\"]"`, "before the report"))
@@ -1180,7 +1180,7 @@ func TestRevertStashKeepsWebInbound(t *testing.T) {
 	runTestBridge(t, restarted)
 	require.NoError(t, restarted.PickLaterWork(t.Context()))
 
-	header := `[Web principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n`
+	header := `[Web principal=\"alice\"]\n\n`
 	require.Contains(t, <-requests, header+"deploy it", "the stored item keeps its header across the restart")
 	require.Equal(t, "answer", readFinal(t, finals).Text)
 
@@ -1405,7 +1405,7 @@ func TestRevertCorruptHistoryCannotBeAdmitted(t *testing.T) {
 			require.NoError(t, err)
 			ctx := t.Context()
 			require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
-			recordTestConversations(t, s, "main", map[string]ConversationKind{"run": KindCronRun})
+			recordTestConversations(t, s, "main", map[string]ConversationKind{"run": KindRoutineRun})
 			_, err = s.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'main' WHERE conversation_id = 'run'`)
 			require.NoError(t, err)
 

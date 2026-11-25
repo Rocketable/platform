@@ -25,15 +25,15 @@ const (
 type ConversationKind int32
 
 const (
-	ConversationKind_WEB_CHAT         ConversationKind = 0
-	ConversationKind_SLACK_THREAD     ConversationKind = 1
-	ConversationKind_CRON_RUN         ConversationKind = 2
-	ConversationKind_ONE_OFF_CRON_RUN ConversationKind = 3
-	ConversationKind_EXTERNAL_MCP_RUN ConversationKind = 4
-	ConversationKind_SUBAGENT         ConversationKind = 5
-	ConversationKind_REVIEW           ConversationKind = 6
-	ConversationKind_SHADOW           ConversationKind = 7
-	ConversationKind_REMOTE_OPENCODE  ConversationKind = 8
+	ConversationKind_WEB_CHAT            ConversationKind = 0
+	ConversationKind_SLACK_THREAD        ConversationKind = 1
+	ConversationKind_ROUTINE_RUN         ConversationKind = 2
+	ConversationKind_ONE_OFF_ROUTINE_RUN ConversationKind = 3
+	ConversationKind_EXTERNAL_MCP_RUN    ConversationKind = 4
+	ConversationKind_SUBAGENT            ConversationKind = 5
+	ConversationKind_REVIEW              ConversationKind = 6
+	ConversationKind_SHADOW              ConversationKind = 7
+	ConversationKind_REMOTE_OPENCODE     ConversationKind = 8
 )
 
 // Enum value maps for ConversationKind.
@@ -41,8 +41,8 @@ var (
 	ConversationKind_name = map[int32]string{
 		0: "WEB_CHAT",
 		1: "SLACK_THREAD",
-		2: "CRON_RUN",
-		3: "ONE_OFF_CRON_RUN",
+		2: "ROUTINE_RUN",
+		3: "ONE_OFF_ROUTINE_RUN",
 		4: "EXTERNAL_MCP_RUN",
 		5: "SUBAGENT",
 		6: "REVIEW",
@@ -50,15 +50,15 @@ var (
 		8: "REMOTE_OPENCODE",
 	}
 	ConversationKind_value = map[string]int32{
-		"WEB_CHAT":         0,
-		"SLACK_THREAD":     1,
-		"CRON_RUN":         2,
-		"ONE_OFF_CRON_RUN": 3,
-		"EXTERNAL_MCP_RUN": 4,
-		"SUBAGENT":         5,
-		"REVIEW":           6,
-		"SHADOW":           7,
-		"REMOTE_OPENCODE":  8,
+		"WEB_CHAT":            0,
+		"SLACK_THREAD":        1,
+		"ROUTINE_RUN":         2,
+		"ONE_OFF_ROUTINE_RUN": 3,
+		"EXTERNAL_MCP_RUN":    4,
+		"SUBAGENT":            5,
+		"REVIEW":              6,
+		"SHADOW":              7,
+		"REMOTE_OPENCODE":     8,
 	}
 )
 
@@ -349,9 +349,9 @@ type Session struct {
 	Name       string                 `protobuf:"bytes,10,opt,name=name,proto3" json:"name,omitempty"`
 	ForkedFrom string                 `protobuf:"bytes,13,opt,name=forked_from,json=forkedFrom,proto3" json:"forked_from,omitempty"`
 	Tags       []string               `protobuf:"bytes,14,rep,name=tags,proto3" json:"tags,omitempty"`
-	// The chat's recorded origin is a cron run, even after human follow-ups.
-	Cron     bool   `protobuf:"varint,15,opt,name=cron,proto3" json:"cron,omitempty"`
-	CronName string `protobuf:"bytes,16,opt,name=cron_name,json=cronName,proto3" json:"cron_name,omitempty"`
+	// The chat's recorded origin is a routine run, even after human follow-ups.
+	Routine     bool   `protobuf:"varint,15,opt,name=routine,proto3" json:"routine,omitempty"`
+	RoutineName string `protobuf:"bytes,16,opt,name=routine_name,json=routineName,proto3" json:"routine_name,omitempty"`
 	// A remote OpenCode session names its configured server and folder; offline while it is unreachable.
 	Server    string `protobuf:"bytes,17,opt,name=server,proto3" json:"server,omitempty"`
 	Directory string `protobuf:"bytes,18,opt,name=directory,proto3" json:"directory,omitempty"`
@@ -495,16 +495,16 @@ func (x *Session) GetTags() []string {
 	return nil
 }
 
-func (x *Session) GetCron() bool {
+func (x *Session) GetRoutine() bool {
 	if x != nil {
-		return x.Cron
+		return x.Routine
 	}
 	return false
 }
 
-func (x *Session) GetCronName() string {
+func (x *Session) GetRoutineName() string {
 	if x != nil {
-		return x.CronName
+		return x.RoutineName
 	}
 	return ""
 }
@@ -875,13 +875,13 @@ type HistoryResponse struct {
 	RevertEligible  bool   `protobuf:"varint,13,opt,name=revert_eligible,json=revertEligible,proto3" json:"revert_eligible,omitempty"`
 	RevertMessageId string `protobuf:"bytes,14,opt,name=revert_message_id,json=revertMessageId,proto3" json:"revert_message_id,omitempty"`
 	CanUndo         bool   `protobuf:"varint,15,opt,name=can_undo,json=canUndo,proto3" json:"can_undo,omitempty"`
-	// Message ID of the newest message undo must keep: one from a cron run, External MCP, or Slack.
+	// Message ID of the newest message undo must keep: one from a routine run, External MCP, or Slack.
 	// Empty when undo may reach the first message.
 	RevertFloor string `protobuf:"bytes,21,opt,name=revert_floor,json=revertFloor,proto3" json:"revert_floor,omitempty"`
 	// An allowed agent's execute or task call runs attached, so MoveToBackground has work to move.
 	Movable bool `protobuf:"varint,16,opt,name=movable,proto3" json:"movable,omitempty"`
 	// Background Jobs running or holding an undelivered Completion Note, including those of hidden
-	// cron and External MCP runs whose destination is this conversation.
+	// Routine and External MCP runs whose destination is this conversation.
 	BackgroundJobs []*BackgroundJob `protobuf:"bytes,17,rep,name=background_jobs,json=backgroundJobs,proto3" json:"background_jobs,omitempty"`
 	// Unanswered ask_user_question calls of this conversation's Web turns, in question ID order.
 	PendingQuestions []*PendingQuestion `protobuf:"bytes,18,rep,name=pending_questions,json=pendingQuestions,proto3" json:"pending_questions,omitempty"`
@@ -4178,7 +4178,7 @@ func (x *PromptResponse) GetMentionWarning() string {
 	return ""
 }
 
-type CronJob struct {
+type Routine struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Stem     string                 `protobuf:"bytes,1,opt,name=stem,proto3" json:"stem,omitempty"`
 	Status   string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
@@ -4195,20 +4195,20 @@ type CronJob struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CronJob) Reset() {
-	*x = CronJob{}
+func (x *Routine) Reset() {
+	*x = Routine{}
 	mi := &file_web_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CronJob) String() string {
+func (x *Routine) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CronJob) ProtoMessage() {}
+func (*Routine) ProtoMessage() {}
 
-func (x *CronJob) ProtoReflect() protoreflect.Message {
+func (x *Routine) ProtoReflect() protoreflect.Message {
 	mi := &file_web_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -4220,75 +4220,75 @@ func (x *CronJob) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CronJob.ProtoReflect.Descriptor instead.
-func (*CronJob) Descriptor() ([]byte, []int) {
+// Deprecated: Use Routine.ProtoReflect.Descriptor instead.
+func (*Routine) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{50}
 }
 
-func (x *CronJob) GetStem() string {
+func (x *Routine) GetStem() string {
 	if x != nil {
 		return x.Stem
 	}
 	return ""
 }
 
-func (x *CronJob) GetStatus() string {
+func (x *Routine) GetStatus() string {
 	if x != nil {
 		return x.Status
 	}
 	return ""
 }
 
-func (x *CronJob) GetLastRun() string {
+func (x *Routine) GetLastRun() string {
 	if x != nil {
 		return x.LastRun
 	}
 	return ""
 }
 
-func (x *CronJob) GetNextRun() string {
+func (x *Routine) GetNextRun() string {
 	if x != nil {
 		return x.NextRun
 	}
 	return ""
 }
 
-func (x *CronJob) GetSchedule() string {
+func (x *Routine) GetSchedule() string {
 	if x != nil {
 		return x.Schedule
 	}
 	return ""
 }
 
-func (x *CronJob) GetBody() string {
+func (x *Routine) GetBody() string {
 	if x != nil {
 		return x.Body
 	}
 	return ""
 }
 
-func (x *CronJob) GetAgent() string {
+func (x *Routine) GetAgent() string {
 	if x != nil {
 		return x.Agent
 	}
 	return ""
 }
 
-func (x *CronJob) GetUpcoming() []string {
+func (x *Routine) GetUpcoming() []string {
 	if x != nil {
 		return x.Upcoming
 	}
 	return nil
 }
 
-func (x *CronJob) GetOrigin() string {
+func (x *Routine) GetOrigin() string {
 	if x != nil {
 		return x.Origin
 	}
 	return ""
 }
 
-func (x *CronJob) GetSpace() string {
+func (x *Routine) GetSpace() string {
 	if x != nil {
 		return x.Space
 	}
@@ -4698,26 +4698,26 @@ func (x *ListSkillsResponse) GetSkills() []*Skill {
 	return nil
 }
 
-type ListCronJobsRequest struct {
+type ListRoutinesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListCronJobsRequest) Reset() {
-	*x = ListCronJobsRequest{}
+func (x *ListRoutinesRequest) Reset() {
+	*x = ListRoutinesRequest{}
 	mi := &file_web_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListCronJobsRequest) String() string {
+func (x *ListRoutinesRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListCronJobsRequest) ProtoMessage() {}
+func (*ListRoutinesRequest) ProtoMessage() {}
 
-func (x *ListCronJobsRequest) ProtoReflect() protoreflect.Message {
+func (x *ListRoutinesRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_web_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -4729,32 +4729,32 @@ func (x *ListCronJobsRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListCronJobsRequest.ProtoReflect.Descriptor instead.
-func (*ListCronJobsRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListRoutinesRequest.ProtoReflect.Descriptor instead.
+func (*ListRoutinesRequest) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{57}
 }
 
-type ListCronJobsResponse struct {
+type ListRoutinesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Jobs          []*CronJob             `protobuf:"bytes,1,rep,name=jobs,proto3" json:"jobs,omitempty"`
+	Jobs          []*Routine             `protobuf:"bytes,1,rep,name=jobs,proto3" json:"jobs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListCronJobsResponse) Reset() {
-	*x = ListCronJobsResponse{}
+func (x *ListRoutinesResponse) Reset() {
+	*x = ListRoutinesResponse{}
 	mi := &file_web_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListCronJobsResponse) String() string {
+func (x *ListRoutinesResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListCronJobsResponse) ProtoMessage() {}
+func (*ListRoutinesResponse) ProtoMessage() {}
 
-func (x *ListCronJobsResponse) ProtoReflect() protoreflect.Message {
+func (x *ListRoutinesResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_web_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -4766,12 +4766,12 @@ func (x *ListCronJobsResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListCronJobsResponse.ProtoReflect.Descriptor instead.
-func (*ListCronJobsResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListRoutinesResponse.ProtoReflect.Descriptor instead.
+func (*ListRoutinesResponse) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{58}
 }
 
-func (x *ListCronJobsResponse) GetJobs() []*CronJob {
+func (x *ListRoutinesResponse) GetJobs() []*Routine {
 	if x != nil {
 		return x.Jobs
 	}
@@ -5055,27 +5055,27 @@ func (x *PageEntry) GetUpdatedAt() string {
 	return ""
 }
 
-type RunCronJobRequest struct {
+type RunRoutineRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Stem          string                 `protobuf:"bytes,1,opt,name=stem,proto3" json:"stem,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RunCronJobRequest) Reset() {
-	*x = RunCronJobRequest{}
+func (x *RunRoutineRequest) Reset() {
+	*x = RunRoutineRequest{}
 	mi := &file_web_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RunCronJobRequest) String() string {
+func (x *RunRoutineRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RunCronJobRequest) ProtoMessage() {}
+func (*RunRoutineRequest) ProtoMessage() {}
 
-func (x *RunCronJobRequest) ProtoReflect() protoreflect.Message {
+func (x *RunRoutineRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_web_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -5087,39 +5087,39 @@ func (x *RunCronJobRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RunCronJobRequest.ProtoReflect.Descriptor instead.
-func (*RunCronJobRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use RunRoutineRequest.ProtoReflect.Descriptor instead.
+func (*RunRoutineRequest) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{64}
 }
 
-func (x *RunCronJobRequest) GetStem() string {
+func (x *RunRoutineRequest) GetStem() string {
 	if x != nil {
 		return x.Stem
 	}
 	return ""
 }
 
-type RunCronJobResponse struct {
+type RunRoutineResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RunCronJobResponse) Reset() {
-	*x = RunCronJobResponse{}
+func (x *RunRoutineResponse) Reset() {
+	*x = RunRoutineResponse{}
 	mi := &file_web_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RunCronJobResponse) String() string {
+func (x *RunRoutineResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RunCronJobResponse) ProtoMessage() {}
+func (*RunRoutineResponse) ProtoMessage() {}
 
-func (x *RunCronJobResponse) ProtoReflect() protoreflect.Message {
+func (x *RunRoutineResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_web_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -5131,12 +5131,12 @@ func (x *RunCronJobResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RunCronJobResponse.ProtoReflect.Descriptor instead.
-func (*RunCronJobResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use RunRoutineResponse.ProtoReflect.Descriptor instead.
+func (*RunRoutineResponse) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{65}
 }
 
-func (x *RunCronJobResponse) GetId() string {
+func (x *RunRoutineResponse) GetId() string {
 	if x != nil {
 		return x.Id
 	}
@@ -10735,7 +10735,7 @@ const file_web_proto_rawDesc = "" +
 	"\x05since\x18\x02 \x01(\tR\x05since\x12\x12\n" +
 	"\x04hold\x18\x03 \x01(\bR\x04hold\x12\x1f\n" +
 	"\vsame_origin\x18\x04 \x01(\bR\n" +
-	"sameOrigin\"\xeb\a\n" +
+	"sameOrigin\"\xf7\a\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -10748,9 +10748,9 @@ const file_web_proto_rawDesc = "" +
 	" \x01(\tR\x04name\x12\x1f\n" +
 	"\vforked_from\x18\r \x01(\tR\n" +
 	"forkedFrom\x12\x12\n" +
-	"\x04tags\x18\x0e \x03(\tR\x04tags\x12\x12\n" +
-	"\x04cron\x18\x0f \x01(\bR\x04cron\x12\x1b\n" +
-	"\tcron_name\x18\x10 \x01(\tR\bcronName\x12\x16\n" +
+	"\x04tags\x18\x0e \x03(\tR\x04tags\x12\x18\n" +
+	"\aroutine\x18\x0f \x01(\bR\aroutine\x12!\n" +
+	"\froutine_name\x18\x10 \x01(\tR\vroutineName\x12\x16\n" +
 	"\x06server\x18\x11 \x01(\tR\x06server\x12\x1c\n" +
 	"\tdirectory\x18\x12 \x01(\tR\tdirectory\x12\x18\n" +
 	"\aoffline\x18\x13 \x01(\bR\aoffline\x12\x19\n" +
@@ -11087,7 +11087,7 @@ const file_web_proto_rawDesc = "" +
 	"\fprivate_text\x18\x01 \x01(\tR\vprivateText\x12,\n" +
 	"\x0fmention_warning\x18\x02 \x01(\tH\x00R\x0ementionWarning\x88\x01\x01B\x12\n" +
 	"\x10_mention_warning\"\x81\x02\n" +
-	"\aCronJob\x12\x12\n" +
+	"\aRoutine\x12\x12\n" +
 	"\x04stem\x18\x01 \x01(\tR\x04stem\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x19\n" +
 	"\blast_run\x18\x03 \x01(\tR\alastRun\x12\x19\n" +
@@ -11131,9 +11131,9 @@ const file_web_proto_rawDesc = "" +
 	"\x12ListSkillsResponse\x12\"\n" +
 	"\x06skills\x18\x01 \x03(\v2\n" +
 	".rpc.SkillR\x06skills\"\x15\n" +
-	"\x13ListCronJobsRequest\"8\n" +
-	"\x14ListCronJobsResponse\x12 \n" +
-	"\x04jobs\x18\x01 \x03(\v2\f.rpc.CronJobR\x04jobs\"X\n" +
+	"\x13ListRoutinesRequest\"8\n" +
+	"\x14ListRoutinesResponse\x12 \n" +
+	"\x04jobs\x18\x01 \x03(\v2\f.rpc.RoutineR\x04jobs\"X\n" +
 	"\vPageRequest\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
 	"\x04data\x18\x03 \x01(\bR\x04data\x12\x14\n" +
@@ -11153,9 +11153,9 @@ const file_web_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x04 \x01(\tH\x00R\tupdatedAt\x88\x01\x01B\r\n" +
 	"\v_updated_atJ\x04\b\x01\x10\x02R\x05agent\"'\n" +
-	"\x11RunCronJobRequest\x12\x12\n" +
+	"\x11RunRoutineRequest\x12\x12\n" +
 	"\x04stem\x18\x01 \x01(\tR\x04stem\"$\n" +
-	"\x12RunCronJobResponse\x12\x0e\n" +
+	"\x12RunRoutineResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x8b\x01\n" +
 	"\x15AnswerQuestionRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x15\n" +
@@ -11575,12 +11575,12 @@ const file_web_proto_rawDesc = "" +
 	"\tauto_park\x18\n" +
 	" \x01(\bR\bautoPark\x12(\n" +
 	"\x06layout\x18\v \x01(\v2\x10.rpc.StripLayoutR\x06layout\x12\"\n" +
-	"\x05lists\x18\f \x03(\v2\f.rpc.ListTabR\x05listsJ\x04\b\x06\x10\aJ\x04\b\b\x10\tR\x05mutesR\ttop_shelf*\xa7\x01\n" +
+	"\x05lists\x18\f \x03(\v2\f.rpc.ListTabR\x05listsJ\x04\b\x06\x10\aJ\x04\b\b\x10\tR\x05mutesR\ttop_shelf*\xad\x01\n" +
 	"\x10ConversationKind\x12\f\n" +
 	"\bWEB_CHAT\x10\x00\x12\x10\n" +
-	"\fSLACK_THREAD\x10\x01\x12\f\n" +
-	"\bCRON_RUN\x10\x02\x12\x14\n" +
-	"\x10ONE_OFF_CRON_RUN\x10\x03\x12\x14\n" +
+	"\fSLACK_THREAD\x10\x01\x12\x0f\n" +
+	"\vROUTINE_RUN\x10\x02\x12\x17\n" +
+	"\x13ONE_OFF_ROUTINE_RUN\x10\x03\x12\x14\n" +
 	"\x10EXTERNAL_MCP_RUN\x10\x04\x12\f\n" +
 	"\bSUBAGENT\x10\x05\x12\n" +
 	"\n" +
@@ -11620,9 +11620,9 @@ const file_web_proto_rawDesc = "" +
 	"\fReportTyping\x12\x18.rpc.ReportTypingRequest\x1a\x19.rpc.ReportTypingResponse\x12+\n" +
 	"\x04Tabs\x12\x10.rpc.TabsRequest\x1a\x11.rpc.TabsResponse\x121\n" +
 	"\x06Prompt\x12\x12.rpc.PromptRequest\x1a\x13.rpc.PromptResponse\x12C\n" +
-	"\fListCronJobs\x12\x18.rpc.ListCronJobsRequest\x1a\x19.rpc.ListCronJobsResponse\x12=\n" +
+	"\fListRoutines\x12\x18.rpc.ListRoutinesRequest\x1a\x19.rpc.ListRoutinesResponse\x12=\n" +
 	"\n" +
-	"RunCronJob\x12\x16.rpc.RunCronJobRequest\x1a\x17.rpc.RunCronJobResponse\x12&\n" +
+	"RunRoutine\x12\x16.rpc.RunRoutineRequest\x1a\x17.rpc.RunRoutineResponse\x12&\n" +
 	"\aGetPage\x12\x10.rpc.PageRequest\x1a\t.rpc.Page\x12:\n" +
 	"\tListPages\x12\x15.rpc.ListPagesRequest\x1a\x16.rpc.ListPagesResponse\x12I\n" +
 	"\x0eAnswerQuestion\x12\x1a.rpc.AnswerQuestionRequest\x1a\x1b.rpc.AnswerQuestionResponse\x124\n" +
@@ -11746,22 +11746,22 @@ var file_web_proto_goTypes = []any{
 	(*Attachment)(nil),                    // 51: rpc.Attachment
 	(*PromptRequest)(nil),                 // 52: rpc.PromptRequest
 	(*PromptResponse)(nil),                // 53: rpc.PromptResponse
-	(*CronJob)(nil),                       // 54: rpc.CronJob
+	(*Routine)(nil),                       // 54: rpc.Routine
 	(*Agent)(nil),                         // 55: rpc.Agent
 	(*ListAgentsRequest)(nil),             // 56: rpc.ListAgentsRequest
 	(*ListAgentsResponse)(nil),            // 57: rpc.ListAgentsResponse
 	(*Skill)(nil),                         // 58: rpc.Skill
 	(*ListSkillsRequest)(nil),             // 59: rpc.ListSkillsRequest
 	(*ListSkillsResponse)(nil),            // 60: rpc.ListSkillsResponse
-	(*ListCronJobsRequest)(nil),           // 61: rpc.ListCronJobsRequest
-	(*ListCronJobsResponse)(nil),          // 62: rpc.ListCronJobsResponse
+	(*ListRoutinesRequest)(nil),           // 61: rpc.ListRoutinesRequest
+	(*ListRoutinesResponse)(nil),          // 62: rpc.ListRoutinesResponse
 	(*PageRequest)(nil),                   // 63: rpc.PageRequest
 	(*Page)(nil),                          // 64: rpc.Page
 	(*ListPagesRequest)(nil),              // 65: rpc.ListPagesRequest
 	(*ListPagesResponse)(nil),             // 66: rpc.ListPagesResponse
 	(*PageEntry)(nil),                     // 67: rpc.PageEntry
-	(*RunCronJobRequest)(nil),             // 68: rpc.RunCronJobRequest
-	(*RunCronJobResponse)(nil),            // 69: rpc.RunCronJobResponse
+	(*RunRoutineRequest)(nil),             // 68: rpc.RunRoutineRequest
+	(*RunRoutineResponse)(nil),            // 69: rpc.RunRoutineResponse
 	(*AnswerQuestionRequest)(nil),         // 70: rpc.AnswerQuestionRequest
 	(*AnswerQuestionResponse)(nil),        // 71: rpc.AnswerQuestionResponse
 	(*ConfigChannel)(nil),                 // 72: rpc.ConfigChannel
@@ -11891,7 +11891,7 @@ var file_web_proto_depIdxs = []int32{
 	2,   // 27: rpc.PromptRequest.delivery:type_name -> rpc.PromptDelivery
 	55,  // 28: rpc.ListAgentsResponse.agents:type_name -> rpc.Agent
 	58,  // 29: rpc.ListSkillsResponse.skills:type_name -> rpc.Skill
-	54,  // 30: rpc.ListCronJobsResponse.jobs:type_name -> rpc.CronJob
+	54,  // 30: rpc.ListRoutinesResponse.jobs:type_name -> rpc.Routine
 	67,  // 31: rpc.ListPagesResponse.pages:type_name -> rpc.PageEntry
 	72,  // 32: rpc.ConfigView.slack_channels:type_name -> rpc.ConfigChannel
 	73,  // 33: rpc.ConfigView.mcp_server_facets:type_name -> rpc.ConfigMCPServer
@@ -11966,8 +11966,8 @@ var file_web_proto_depIdxs = []int32{
 	43,  // 102: rpc.Web.ReportTyping:input_type -> rpc.ReportTypingRequest
 	157, // 103: rpc.Web.Tabs:input_type -> rpc.TabsRequest
 	52,  // 104: rpc.Web.Prompt:input_type -> rpc.PromptRequest
-	61,  // 105: rpc.Web.ListCronJobs:input_type -> rpc.ListCronJobsRequest
-	68,  // 106: rpc.Web.RunCronJob:input_type -> rpc.RunCronJobRequest
+	61,  // 105: rpc.Web.ListRoutines:input_type -> rpc.ListRoutinesRequest
+	68,  // 106: rpc.Web.RunRoutine:input_type -> rpc.RunRoutineRequest
 	63,  // 107: rpc.Web.GetPage:input_type -> rpc.PageRequest
 	65,  // 108: rpc.Web.ListPages:input_type -> rpc.ListPagesRequest
 	70,  // 109: rpc.Web.AnswerQuestion:input_type -> rpc.AnswerQuestionRequest
@@ -12027,8 +12027,8 @@ var file_web_proto_depIdxs = []int32{
 	44,  // 163: rpc.Web.ReportTyping:output_type -> rpc.ReportTypingResponse
 	158, // 164: rpc.Web.Tabs:output_type -> rpc.TabsResponse
 	53,  // 165: rpc.Web.Prompt:output_type -> rpc.PromptResponse
-	62,  // 166: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
-	69,  // 167: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
+	62,  // 166: rpc.Web.ListRoutines:output_type -> rpc.ListRoutinesResponse
+	69,  // 167: rpc.Web.RunRoutine:output_type -> rpc.RunRoutineResponse
 	64,  // 168: rpc.Web.GetPage:output_type -> rpc.Page
 	66,  // 169: rpc.Web.ListPages:output_type -> rpc.ListPagesResponse
 	71,  // 170: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse

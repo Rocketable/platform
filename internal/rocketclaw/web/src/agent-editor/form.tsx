@@ -30,11 +30,16 @@ const yamlScalar = (text: string) => /^(?:[^\s\-?:,[\]{}#&*!|>'"%@`]|[-?:](?=\S)
 
 function listText(yaml: string) {
   const items = /^\[(.*)\]$/.exec(yaml)?.[1].split(",") ?? (/^(- .*\n?)+$/.test(yaml) ? yaml.split("\n").map((line) => line.slice(2)) : [yaml]);
-  const texts = items.map((item) => scalar(item.trim()));
+  const texts = items.map((item) => {
+    const agent = /^\{?\s*agent: ([^{}]*?)\s*\}?$/.exec(item.trim())?.[1], text = scalar(agent ?? item.trim());
+    return agent === undefined || text === undefined ? text : `agent: ${text}`;
+  });
   return texts.every((text) => text !== undefined) ? texts.join(", ") : undefined;
 }
 
-const listYAML = (text: string) => text.trim() === "auto" ? "auto" : text.trim() ? `[${text.split(",").map((item) => item.trim()).filter(Boolean).map(yamlScalar).join(", ")}]` : "";
+const itemYAML = (item: string) => item.startsWith("agent:") ? `agent: ${yamlScalar(item.slice(6).trim())}` : yamlScalar(item);
+
+const listYAML = (text: string) => text.trim() === "auto" ? "auto" : text.split(",").map((item) => item.trim()).filter(Boolean).map((item) => `- ${itemYAML(item)}`).join("\n");
 
 export function FormTab({ help, ...shared }: Shared & { help: AgentSettingHelp[] }) {
   const { variant } = shared, set = new Set(variant.settings.map(({ key }) => key));
@@ -51,8 +56,8 @@ export function FormTab({ help, ...shared }: Shared & { help: AgentSettingHelp[]
       <summary className="cursor-pointer text-sm font-medium">{group} <span className="font-normal text-muted-foreground">· {settings.length} left at default</span></summary>
       <div className="flex flex-col gap-5 pt-3">{settings.map(row)}</div>
     </details>)}
-    {others.length ? <section aria-label="Other settings" className="flex flex-col gap-2">
-      <h3 className="text-sm font-medium">Other settings <span className="font-normal text-muted-foreground">· the editor has no help for these; change them in the File tab</span></h3>
+    {others.length ? <section aria-label="Unknown settings" className="flex flex-col gap-2">
+      <h3 className="text-sm font-medium text-destructive">Unknown settings <span className="font-normal text-muted-foreground">· the agent fails to load with these; remove them in the File tab</span></h3>
       {others.map(({ key, value }) => <pre key={key} className="overflow-x-auto rounded-md bg-muted px-2 py-1 font-mono text-xs">{key}: {value}</pre>)}
     </section> : null}
   </div>;

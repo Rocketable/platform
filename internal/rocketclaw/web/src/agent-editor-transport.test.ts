@@ -276,16 +276,17 @@ test("two people co-edit a draft live in the Form and the File, with history and
 
     const { draft } = await call<AgentDraftView>("GetAgentDraft", { id, since: "1" });
     await call("ApplyAgentDraftOp", { id, op: { baseRevision: draft.revision, opId: "test-helpers", kind: "set_field", variant: "a", key: "subagents", value: "auto" } });
-    await a.getByRole("textbox", { name: "Helper models", exact: true }).waitFor();
+    await a.getByRole("textbox", { name: "Helpers", exact: true }).waitFor();
     await b.getByRole("button", { name: "Advanced", exact: true }).click();
-    await a.getByText("bob switched the whole draft to advanced. Dropped: Helper models.", { exact: false }).waitFor();
+    await a.getByText("bob switched the whole draft to advanced. Dropped: Helpers.", { exact: false }).waitFor();
     await a.getByRole("status").getByRole("button", { name: "Restore", exact: true }).click();
-    await until("the helpers are back", async () => await b.getByRole("textbox", { name: "Helper models", exact: true }).inputValue() === "auto");
+    await until("the helpers are back", async () => await b.getByRole("textbox", { name: "Helpers", exact: true }).inputValue() === "auto");
 
     const tuner = await call<{ id: string; revision: string }>("CreateAgentDraft", { name: "tuner", mode: "advanced" });
     await call("ApplyAgentDraftOp", { id: tuner.id, op: { baseRevision: tuner.revision, opId: "test-tuner", kind: "edit_file", variant: "a", value: "---\nmodel: gpt-6.1-sol\ntemperature: 0.2\nhidden: true\n---\nTune.\n" } });
     await a.goto(`${alice}/agents/drafts/${tuner.id}`);
-    const others = a.getByRole("region", { name: "Other settings" });
+    const others = a.getByRole("region", { name: "Unknown settings" });
+    await others.getByText("the agent fails to load with these; remove them in the File tab", { exact: false }).waitFor();
     for (const setting of ["temperature: 0.2", "hidden: true"]) await others.getByText(setting, { exact: true }).waitFor();
     await a.getByRole("tab", { name: "File", exact: true }).click();
     const file = a.getByRole("textbox", { name: "Agent file" });
@@ -994,6 +995,24 @@ test("saving picks a variant and a layer, warns, reviews live changes, and follo
     await a.getByRole("group", { name: "Shared chat", exact: true }).getByText("Not saved. Allowed: off, user, global or slack.", { exact: true }).waitFor();
     expect(await dialog(a).count()).toBe(0);
     await a.getByRole("alert").getByText("Not saved. Fix the draft's settings before saving it. Shared chat: off, user, global or slack.", { exact: true }).waitFor();
+    await apply(id, { kind: "set_field", variant: "a", key: "sticky", value: "" });
+    await apply(id, { kind: "set_field", variant: "a", key: "delegatedFrom", value: "[main]" });
+    await a.getByRole("region", { name: "Unknown settings" }).getByText("delegatedFrom: [main]", { exact: true }).waitFor();
+    await choose(a, "Workspace");
+    await dialog(a).getByRole("button", { name: "Save to workspace", exact: true }).click();
+    await a.getByRole("alert").getByText("Not saved. Fix the draft's settings before saving it. delegatedFrom: not an advanced-mode key", { exact: true }).waitFor();
+    expect(await Bun.file(`${workspace}/agents/router.md`).text()).toBe(saved);
+
+    const lead = await call<{ id: string }>("CreateAgentDraft", { name: "lead", mode: "easy" });
+    await apply(lead.id, { kind: "edit_file", variant: "a", value: "---\nmode: easy\nspace: Ops\nmodel: gpt-lead\nworkingDirectory: sessions/lead/$ROCKETCLAW_CONVERSATION_ID\nsubagents: auto\n---\nLead.\n" });
+    await a.goto(`${alice}/agents/drafts/${lead.id}`);
+    await a.getByRole("textbox", { name: "Helpers", exact: true }).fill("gpt-lead, agent: writer");
+    await until("the agent entry is stored", async () => (await read(lead.id)).variants[0].settings.find(({ key }) => key === "subagents")?.value === "- gpt-lead\n- agent: writer");
+    await choose(a, "Workspace");
+    await dialog(a).getByRole("button", { name: "Save to workspace", exact: true }).click();
+    await dialog(a).getByText("Saved and reloaded: lead is live.", { exact: true }).waitFor();
+    expect(await Bun.file(`${workspace}/agents/lead.md`).text()).toContain("subagents:\n  - gpt-lead\n  - agent: writer\n");
+    await dialog(a).getByRole("button", { name: "Done", exact: true }).click();
 
     const hold = await call<{ id: string }>("CreateAgentDraft", { name: "hold", mode: "advanced" });
     await apply(hold.id, { kind: "edit_file", variant: "a", value: "---\nmodel: gpt-hold\n---\nHold.\n" });

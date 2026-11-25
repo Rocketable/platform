@@ -236,7 +236,7 @@ func (s *lockedRun) serve(runCtx context.Context, rocketcodeSessions *SessionSer
 	*rt = Runtime{
 		Cfg: rocketcodeSessions.definitions, Log: logger, logLevel: s.logLevel, RunCtx: runCtx,
 		Sessions:          rocketcodeSessions,
-		ExternalMCPAgents: inertRefresher{}, CronJobs: inertRefresher{}, Assemble: s.assemble, sandboxes: s.sandboxes,
+		ExternalMCPAgents: inertRefresher{}, Routines: inertRefresher{}, Assemble: s.assemble, sandboxes: s.sandboxes,
 		TextRouter: threadBridges, threads: threadBridges, background: background,
 		questions: questions, shutdown: shutdown, slackWarningText: slackWarningText,
 	}

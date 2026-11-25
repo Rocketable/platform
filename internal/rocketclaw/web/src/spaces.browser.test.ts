@@ -1343,7 +1343,7 @@ function serveRemote(tabs: RemoteTabs, sessions: (sent: Change[]) => object[]) {
     if (input.attention) sent.push(input.attention);
     const stale = !!input.state && input.revision !== saved.revision;
     if (input.state && !stale) [saved.state, saved.revision] = [input.state, saved.revision + 1];
-    const replies: Record<string, unknown> = { "/api/Identity": { username: "tester" }, "/api/Protocol": { protoSha256: "tabs" }, "/api/Tabs": stale ? { ...saved, stale } : saved, "/api/ListConfig": { config: { workspace: "tabs" } }, "/api/ListAgents": { agents: [{ name: "main" }], currentAgent: "main" }, "/api/ListCronJobs": { jobs: [] }, "/api/ListQueue": { items: [] }, "/api/CreateSession": { id: "opencode:far:ses_far" },
+    const replies: Record<string, unknown> = { "/api/Identity": { username: "tester" }, "/api/Protocol": { protoSha256: "tabs" }, "/api/Tabs": stale ? { ...saved, stale } : saved, "/api/ListConfig": { config: { workspace: "tabs" } }, "/api/ListAgents": { agents: [{ name: "main" }], currentAgent: "main" }, "/api/ListRoutines": { jobs: [] }, "/api/ListQueue": { items: [] }, "/api/CreateSession": { id: "opencode:far:ses_far" },
       "/api/History": { messages: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" } };
     return Response.json(replies[url.pathname] ?? {}, { headers: cors });
   } });

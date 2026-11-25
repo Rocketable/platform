@@ -239,7 +239,7 @@ func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *lo
 					return ToolResult{}, err
 				}
 
-				write, err := f.subagentWrite(ctx, &task)
+				write, err := f.subagentWrite(ctx, &task, tool.Definition.Name == taskCloneToolName)
 				if err != nil {
 					return ToolResult{}, err
 				}

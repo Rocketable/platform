@@ -28,7 +28,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend"
-	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	routinefrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/routine"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/openai/openai-go/v3"
@@ -47,7 +47,7 @@ type Server struct {
 	sessions *backend.SessionService
 	cfg      *config.LockedConfig
 	channels ChannelAgentChoices
-	cronjobs CronJobs
+	routines Routines
 
 	searchMu    sync.Mutex
 	searches    map[string]*searchFlight
@@ -92,14 +92,14 @@ type ChannelAgentChoices interface {
 	RenameThreadSession(ctx context.Context, conversationID, name string)
 }
 
-type CronJobs interface {
-	Jobs() ([]cronfrontend.Job, error)
-	LoadOneOffCronjob(string) (protocol.OneOffCronjob, error)
-	RunOneOffCronjob(context.Context, *protocol.OneOffCronjob) (protocol.CronRunResult, error)
+type Routines interface {
+	Jobs() ([]routinefrontend.Job, error)
+	LoadOneOffRoutine(string) (protocol.OneOffRoutine, error)
+	RunOneOffRoutine(context.Context, *protocol.OneOffRoutine) (protocol.RoutineRunResult, error)
 }
 
-func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, runs: map[string][]*searchRun{}, listingSeed: maphash.MakeSeed(), listings: map[string][]sessionListing{}, typingWatchers: map[string]map[chan *TypingEvent]string{}, typingNewest: map[string]map[[2]string]uint32{}}
+func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, routines Routines) *Server {
+	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, routines: routines, runs: map[string][]*searchRun{}, listingSeed: maphash.MakeSeed(), listings: map[string][]sessionListing{}, typingWatchers: map[string]map[chan *TypingEvent]string{}, typingNewest: map[string]map[[2]string]uint32{}}
 }
 
 func (s *Server) ListSessionEntries(ctx context.Context, request *SessionEntriesRequest) (*ListSessionEntriesResponse, error) {
@@ -302,7 +302,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 func sidebarSession(chat *backend.SidebarChat) *Session {
 	row := &chat.Session
 	conversation := row.Conversation
-	session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Automation: row.Automation, Paused: row.Paused, Pausable: row.Pausable, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
+	session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Automation: row.Automation, Paused: row.Paused, Pausable: row.Pausable, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Routine: chat.Routine, RoutineName: chat.RoutineName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
 		Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label()}
 
 	if !row.StateSince.IsZero() {
@@ -343,15 +343,15 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		return nil, err
 	}
 
-	path, cronTrace, err := s.sessions.CronRun(ctx, request.Id)
+	path, routineTrace, err := s.sessions.RoutineRun(ctx, request.Id)
 	if err != nil {
-		return nil, fmt.Errorf("resolve web cron trace: %w", err)
+		return nil, fmt.Errorf("resolve web routine trace: %w", err)
 	}
 
-	if !cronTrace {
+	if !routineTrace {
 		err = s.readableConversation(ctx, request.Id)
 	} else {
-		err = s.cronInLimit(limit, backend.CronStem(path))
+		err = s.routineInLimit(limit, backend.RoutineStem(path))
 	}
 
 	if err != nil {
@@ -392,7 +392,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		response.Shadows = append(response.Shadows, shadow)
 	}
 
-	if !cronTrace && request.GetBefore() == 0 {
+	if !routineTrace && request.GetBefore() == 0 {
 		response.Origin, err = s.chatOrigin(ctx, request.Id)
 		if err != nil {
 			return nil, err
@@ -429,7 +429,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 		response.ReplacedKeys = append(response.ReplacedKeys, entry.Key)
 
-		messages, err := s.transcriptEntry(ctx, root, entry, request.Id, cronTrace, calls)
+		messages, err := s.transcriptEntry(ctx, root, entry, request.Id, routineTrace, calls)
 		if err != nil {
 			return nil, err
 		}
@@ -496,7 +496,7 @@ func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse
 	return nil
 }
 
-func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *backend.ObservedSessionEntry, conversationID string, cronTrace bool, calls map[[2]string]string) ([]*TranscriptEvent, error) {
+func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *backend.ObservedSessionEntry, conversationID string, routineTrace bool, calls map[[2]string]string) ([]*TranscriptEvent, error) {
 	items, err := harness.ReplayInputToParams(entry.Entry.ReplayInput)
 	if err != nil {
 		return nil, fmt.Errorf("decode web history: %w", err)
@@ -567,7 +567,7 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 			}
 		}
 
-		event.attribute(entry.Entry.AttributionAt(i), producer, conversationID, cronTrace)
+		event.attribute(entry.Entry.AttributionAt(i), producer, conversationID, routineTrace)
 		event.EntryKey, event.TurnId = entry.Key, entry.Entry.TurnID
 		event.ItemId = fmt.Sprintf("%s:%d", entry.Key, i)
 
@@ -595,7 +595,7 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 		}
 	}
 
-	messages = fallbackProgress(entry, progress, replayText, replayResults, replayCalls, conversationID, cronTrace, messages)
+	messages = fallbackProgress(entry, progress, replayText, replayResults, replayCalls, conversationID, routineTrace, messages)
 
 	if entry.Entry.TurnID == "" {
 		return messages, nil
@@ -670,7 +670,7 @@ func (e *TranscriptEvent) appendPublicText(dst []*TranscriptEvent, content json.
 	return dst, nil
 }
 
-func fallbackProgress(entry *backend.ObservedSessionEntry, progress []harness.PublicProgress, replayText, replayResults, replayCalls map[string]bool, conversationID string, cronTrace bool, messages []*TranscriptEvent) []*TranscriptEvent {
+func fallbackProgress(entry *backend.ObservedSessionEntry, progress []harness.PublicProgress, replayText, replayResults, replayCalls map[string]bool, conversationID string, routineTrace bool, messages []*TranscriptEvent) []*TranscriptEvent {
 	producer := cmp.Or(entry.SourceConversationID, conversationID)
 
 	for i := range progress {
@@ -703,7 +703,7 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []harness.Pu
 			event.Text = item.Text
 		}
 
-		event.attribute(entry.Entry.AttributionAt(len(entry.Entry.ReplayInput)), producer, conversationID, cronTrace)
+		event.attribute(entry.Entry.AttributionAt(len(entry.Entry.ReplayInput)), producer, conversationID, routineTrace)
 		event.publicProgress(item, entry, producer)
 
 		if item.Kind != harness.PublicProgressText && item.Kind != harness.PublicProgressThinking {
@@ -819,11 +819,11 @@ func (e *TranscriptEvent) codeModeCall(call *harness.CodeModeCall, reviewTurn st
 	}
 }
 
-func (e *TranscriptEvent) attribute(snapshot harness.ReplayAttribution, source, destination string, cronTrace bool) {
+func (e *TranscriptEvent) attribute(snapshot harness.ReplayAttribution, source, destination string, routineTrace bool) {
 	e.Agent, e.Model, e.ReasoningEffort = snapshot.Agent, snapshot.Model, snapshot.ReasoningEffort
 	e.Origin = "canonical"
 
-	if source != destination || cronTrace {
+	if source != destination || routineTrace {
 		e.Origin = "sandboxed"
 	}
 }
@@ -963,10 +963,10 @@ func conversationKind(kind backend.ConversationKind) ConversationKind {
 		return ConversationKind_WEB_CHAT
 	case backend.KindSlackThread:
 		return ConversationKind_SLACK_THREAD
-	case backend.KindCronRun:
-		return ConversationKind_CRON_RUN
-	case backend.KindOneOffCronRun:
-		return ConversationKind_ONE_OFF_CRON_RUN
+	case backend.KindRoutineRun:
+		return ConversationKind_ROUTINE_RUN
+	case backend.KindOneOffRoutineRun:
+		return ConversationKind_ONE_OFF_ROUTINE_RUN
 	case backend.KindExternalMCPRun:
 		return ConversationKind_EXTERNAL_MCP_RUN
 	case backend.KindSubagent:
@@ -983,7 +983,7 @@ func conversationKind(kind backend.ConversationKind) ConversationKind {
 }
 
 func (s *Server) humanConversation(ctx context.Context, id string) (bool, error) {
-	_, run, err := s.sessions.CronRun(ctx, id)
+	_, run, err := s.sessions.RoutineRun(ctx, id)
 	if err != nil {
 		return false, fmt.Errorf("resolve web conversation visibility: %w", err)
 	}
@@ -1000,29 +1000,29 @@ func (s *Server) humanConversation(ctx context.Context, id string) (bool, error)
 	return !recorded || pair.PrivateConversationID != id, nil
 }
 
-func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error) {
+func (s *Server) listRoutines(ctx context.Context) (*ListRoutinesResponse, error) {
 	_, limit, err := s.spaceLimit(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	jobs, err := s.cronjobs.Jobs()
+	jobs, err := s.routines.Jobs()
 	if err != nil {
-		return nil, fmt.Errorf("list web cron jobs: %w", err)
+		return nil, fmt.Errorf("list web routines: %w", err)
 	}
 
 	agents, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
-		return nil, fmt.Errorf("load web cron agents: %w", err)
+		return nil, fmt.Errorf("load web routine agents: %w", err)
 	}
 
-	response := &ListCronJobsResponse{}
+	response := &ListRoutinesResponse{}
 	spaces := map[string]string{}
 
 	for i := range jobs {
 		job := &jobs[i]
 
-		row := &CronJob{Stem: backend.CronStem(job.RelativePath), Schedule: job.Schedule, Body: job.Body, Agent: job.Agent, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
+		row := &Routine{Stem: backend.RoutineStem(job.RelativePath), Schedule: job.Schedule, Body: job.Body, Agent: job.Agent, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
 
 		spaces[row.Stem] = row.Space
 		if !limit.AllowsSpaceName(row.Space) {
@@ -1040,21 +1040,21 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 		response.Jobs = append(response.Jobs, row)
 	}
 
-	sources, err := s.sessions.CronRunSources(ctx)
+	sources, err := s.sessions.RoutineRunSources(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("read cron history provenance: %w", err)
+		return nil, fmt.Errorf("read routine history provenance: %w", err)
 	}
 
-	runs := map[string]*CronJob{}
+	runs := map[string]*Routine{}
 
 	for _, source := range sources {
-		if !limit.AllowsSpaceName(spaces[backend.CronStem(source.Run.Path)]) {
+		if !limit.AllowsSpaceName(spaces[backend.RoutineStem(source.Run.Path)]) {
 			continue
 		}
 
 		row, ok := runs[source.SourceConversationID]
 		if !ok {
-			row = &CronJob{Stem: backend.CronStem(source.Run.Path), Status: "ran", LastRun: source.Run.At.Format("2006-01-02T15:04:05.000000000Z"), Origin: source.SourceConversationID}
+			row = &Routine{Stem: backend.RoutineStem(source.Run.Path), Status: "ran", LastRun: source.Run.At.Format("2006-01-02T15:04:05.000000000Z"), Origin: source.SourceConversationID}
 			runs[row.Origin] = row
 		}
 
@@ -1063,49 +1063,49 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 		}
 	}
 
-	response.Jobs = append(response.Jobs, slices.SortedFunc(maps.Values(runs), func(a, b *CronJob) int {
+	response.Jobs = append(response.Jobs, slices.SortedFunc(maps.Values(runs), func(a, b *Routine) int {
 		return cmp.Or(cmp.Compare(b.LastRun, a.LastRun), cmp.Compare(a.Origin, b.Origin))
 	})...)
 
 	return response, nil
 }
 
-func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*RunCronJobResponse, error) {
+func (s *Server) runRoutine(ctx context.Context, request *RunRoutineRequest) (*RunRoutineResponse, error) {
 	principal, limit, err := s.spaceLimit(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	job, err := s.cronjobs.LoadOneOffCronjob(request.Stem)
+	job, err := s.routines.LoadOneOffRoutine(request.Stem)
 	if err != nil {
-		return nil, fmt.Errorf("load web cron job: %w", err)
+		return nil, fmt.Errorf("load web routine: %w", err)
 	}
 
 	agents, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
-		return nil, fmt.Errorf("load web cron agents: %w", err)
+		return nil, fmt.Errorf("load web routine agents: %w", err)
 	}
 
 	space := cmp.Or(job.Space, agents.Items[job.Agent].Space)
 	if !limit.AllowsSpaceName(space) || !limit.AllowsAgent(job.Agent) {
-		return nil, fmt.Errorf("run web cron job: %w", status.Error(codes.PermissionDenied, "this routine or its agent is outside your spaces"))
+		return nil, fmt.Errorf("run web routine: %w", status.Error(codes.PermissionDenied, "this routine or its agent is outside your spaces"))
 	}
 
 	conversation := protocol.Conversation{ID: rand.Text(), Agent: job.Agent, CreatedBy: principal, Space: space}
 
 	id, _, err := s.sessions.CreateStickyConversation(ctx, conversation, agents.Items[job.Agent].Sticky)
 	if err != nil {
-		return nil, fmt.Errorf("create web cron conversation: %w", err)
+		return nil, fmt.Errorf("create web routine conversation: %w", err)
 	}
 
 	job.ConversationID = id
 	go func() {
-		if _, err := s.cronjobs.RunOneOffCronjob(context.WithoutCancel(ctx), &job); err != nil {
-			slog.Error("run web cron job", "stem", request.Stem, "id", id, "error", err)
+		if _, err := s.routines.RunOneOffRoutine(context.WithoutCancel(ctx), &job); err != nil {
+			slog.Error("run web routine", "stem", request.Stem, "id", id, "error", err)
 		}
 	}()
 
-	return &RunCronJobResponse{Id: id}, nil
+	return &RunRoutineResponse{Id: id}, nil
 }
 
 func (s *Server) conversationTitle(ctx context.Context, id string) (string, error) {
@@ -1558,26 +1558,26 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 
 	source := request.SourceConversationId
 
-	path, run, err := s.sessions.CronRun(ctx, source)
+	path, run, err := s.sessions.RoutineRun(ctx, source)
 	if err != nil {
-		return nil, fmt.Errorf("read cron conversation: %w", err)
+		return nil, fmt.Errorf("read routine conversation: %w", err)
 	}
 
 	if source != "" && !run {
 		kind, err := s.sessions.ConversationKind(ctx, source)
 		if err != nil {
-			return nil, fmt.Errorf("read cron conversation: %w", err)
+			return nil, fmt.Errorf("read routine conversation: %w", err)
 		}
 
 		if kind == "" {
-			return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.NotFound, "source cron run is not recorded"))
+			return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.NotFound, "source routine run is not recorded"))
 		}
 
-		return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.InvalidArgument, "source must be a recorded cron run"))
+		return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.InvalidArgument, "source must be a recorded routine run"))
 	}
 
 	if run {
-		if err := s.cronInLimit(limit, backend.CronStem(path)); err != nil {
+		if err := s.routineInLimit(limit, backend.RoutineStem(path)); err != nil {
 			return nil, err
 		}
 	}
@@ -1597,11 +1597,11 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 	if source != "" {
 		thread, recorded, err := s.sessions.Thread(source)
 		if err != nil {
-			return nil, fmt.Errorf("read cron conversation: %w", err)
+			return nil, fmt.Errorf("read routine conversation: %w", err)
 		}
 
 		if !recorded {
-			return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.NotFound, "cron run is not recorded"))
+			return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.NotFound, "routine run is not recorded"))
 		}
 
 		if _, ok := agents.Items[thread.Agent]; !ok {
@@ -1641,7 +1641,7 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 	if source != "" {
 		bound, err := s.backend.ContinueRun(ctx, source, id, sticky != harness.AgentStickyOff)
 		if err != nil {
-			return nil, fmt.Errorf("continue cron run: %w", err)
+			return nil, fmt.Errorf("continue routine run: %w", err)
 		}
 
 		if sticky != harness.AgentStickyOff {
@@ -1662,7 +1662,7 @@ func (s *Server) birthSpace(ctx context.Context, agents harness.Agents, agent, p
 	space := agents.Items[agent].Space
 
 	if path != "" {
-		if job, err := s.cronjobs.LoadOneOffCronjob(backend.CronStem(path)); err == nil {
+		if job, err := s.routines.LoadOneOffRoutine(backend.RoutineStem(path)); err == nil {
 			space = cmp.Or(job.Space, agents.Items[job.Agent].Space)
 		}
 	}
@@ -2036,12 +2036,12 @@ func (s *Server) queueKeptAsSent(ctx context.Context, id string) error {
 }
 
 func (s *Server) listPending(ctx context.Context, response *HistoryResponse, request *HistoryRequest) error {
-	_, cronTrace, err := s.sessions.CronRun(ctx, request.Id)
+	_, routineTrace, err := s.sessions.RoutineRun(ctx, request.Id)
 	if err != nil {
-		return fmt.Errorf("read web cron trace: %w", err)
+		return fmt.Errorf("read web routine trace: %w", err)
 	}
 
-	if request.GetBefore() != 0 || cronTrace {
+	if request.GetBefore() != 0 || routineTrace {
 		return nil
 	}
 
@@ -2285,18 +2285,18 @@ func (s *Server) spaceLimit(ctx context.Context) (username string, limit backend
 	return username, limit, nil
 }
 
-func (s *Server) cronInLimit(limit backend.SpaceLimit, stem string) error {
+func (s *Server) routineInLimit(limit backend.SpaceLimit, stem string) error {
 	if !limit.Limited() {
 		return nil
 	}
 
 	agents, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
-		return fmt.Errorf("load web cron agents: %w", err)
+		return fmt.Errorf("load web routine agents: %w", err)
 	}
 
-	if job, errLoad := s.cronjobs.LoadOneOffCronjob(stem); errLoad != nil || !limit.AllowsSpaceName(cmp.Or(job.Space, agents.Items[job.Agent].Space)) {
-		return fmt.Errorf("web cron: %w", status.Error(codes.PermissionDenied, "this routine is outside your spaces"))
+	if job, errLoad := s.routines.LoadOneOffRoutine(stem); errLoad != nil || !limit.AllowsSpaceName(cmp.Or(job.Space, agents.Items[job.Agent].Space)) {
+		return fmt.Errorf("web routine: %w", status.Error(codes.PermissionDenied, "this routine is outside your spaces"))
 	}
 
 	return nil

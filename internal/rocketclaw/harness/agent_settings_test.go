@@ -58,18 +58,6 @@ func frontmatterReads(files map[string]*ast.File) map[frontmatterRead]bool {
 		var keys, tags []string
 
 		for _, decl := range file.Decls {
-			derived := map[string]bool{}
-			fromFrontmatter := func(expr ast.Expr) bool {
-				switch expr := expr.(type) {
-				case *ast.SelectorExpr:
-					return expr.Sel.Name == "Frontmatter"
-				case *ast.Ident:
-					return derived[expr.Name]
-				}
-
-				return false
-			}
-
 			ast.Inspect(decl, func(node ast.Node) bool {
 				switch node := node.(type) {
 				case *ast.CallExpr:
@@ -81,21 +69,6 @@ func frontmatterReads(files map[string]*ast.File) map[frontmatterRead]bool {
 					first, _ := node.Args[0].(*ast.Ident)
 					if value, ok := key(node.Args[1]); ok && (fn.Name == "frontmatterField" || fn.Name == "frontmatterValue" || fn.Name == "argString" && first != nil && first.Name == "frontmatter") {
 						keys = append(keys, value)
-					}
-				case *ast.IndexExpr:
-					if value, ok := key(node.Index); ok && fromFrontmatter(node.X) {
-						keys = append(keys, value)
-					}
-				case *ast.AssignStmt:
-					rhs := node.Rhs[0]
-					if assertion, ok := rhs.(*ast.TypeAssertExpr); ok {
-						rhs = assertion.X
-					}
-
-					if index, ok := rhs.(*ast.IndexExpr); ok && fromFrontmatter(index.X) {
-						if ident, ok := node.Lhs[0].(*ast.Ident); ok {
-							derived[ident.Name] = true
-						}
 					}
 				case *ast.Field:
 					if node.Tag != nil {
@@ -148,25 +121,6 @@ func parseGoFiles(t *testing.T, dirs ...string) map[string]*ast.File {
 	return files
 }
 
-func TestAgentSettingsCoverEasyKeys(t *testing.T) {
-	var lifted, help []string
-
-	for parent, keys := range easyKeys() {
-		for _, key := range keys {
-			lifted = append(lifted, strings.TrimPrefix(parent+"."+key, "."))
-		}
-	}
-
-	settings := AgentSettings()
-	for i := range settings {
-		if slices.Contains(settings[i].Modes, AgentModeEasy) {
-			help = append(help, settings[i].Key)
-		}
-	}
-
-	require.ElementsMatch(t, lifted, help)
-}
-
 func TestAgentSettingsCoverLoaderReads(t *testing.T) {
 	settings := AgentSettings()
 
@@ -195,7 +149,7 @@ func TestAgentSettingsCoverLoaderReads(t *testing.T) {
 func TestFrontmatterReadsSeeEveryShape(t *testing.T) {
 	for name, src := range map[string]string{
 		"direct call":    `package p; func f(node *yaml.Node) { _ = frontmatterField(node, "fooBar") }`,
-		"derived map":    `package p; const fooKey = "fooBar"; func f(a Agent) { m, _ := a.Frontmatter["permission"].(map[string]any); _ = m[fooKey] }`,
+		"named constant": `package p; const fooKey = "fooBar"; func f(node *yaml.Node) { _ = frontmatterField(node, fooKey) }`,
 		"decoded struct": "package p; type s struct { Foo string `yaml:\"fooBar\"` }; func f(node *yaml.Node) { _ = frontmatterField(node, \"model\") }",
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -31,11 +32,11 @@ func TestTaskPublicLifecycleKeepsChildContentPrivate(t *testing.T) {
 	l.Journal = sink
 	l.observations = &turnObservations{journal: sink, turnID: "test-turn"}
 	l.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
-	l.Tools = map[string]looperTool{"task": factory.taskTool()}
+	l.Tools = map[string]looperTool{"task": factory.taskTool([]string{"child"})}
 
 	outputs, err := l.dispatchToolCalls(t.Context(), responseWithFunctionCalls("parent-response", []responses.ResponseFunctionToolCall{
-		testFunctionCall("item-A", "A", "task", `{"subagent_type":"child","prompt":"do it","description":"PRIVATE_DESCRIPTION"}`),
-		testFunctionCall("item-B", "B", "task", `{"subagent_type":"child","prompt":"do it","description":"PRIVATE_DESCRIPTION"}`),
+		testFunctionCall("item-A", "A", "task", `{"agent":"child","prompt":"do it","description":"PRIVATE_DESCRIPTION"}`),
+		testFunctionCall("item-B", "B", "task", `{"agent":"child","prompt":"do it","description":"PRIVATE_DESCRIPTION"}`),
 	}), nil, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, outputs, 2)
@@ -98,7 +99,7 @@ func TestTaskPublicLifecycleFailureAndCancellation(t *testing.T) {
 					{Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
 					{Name: "fast", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
 				}}
-				l.Tools = map[string]looperTool{"task": factory.taskTool(), "fast": {Call: func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+				l.Tools = map[string]looperTool{"task": factory.taskTool([]string{"child"}), "fast": {Call: func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 					<-started
 					return TextToolResult("ok"), nil
 				}}}
@@ -129,7 +130,7 @@ func TestTaskPublicLifecycleFailureAndCancellation(t *testing.T) {
 					defer close(done)
 
 					outputs, err = l.dispatchToolCalls(ctx, responseWithFunctionCalls("response", []responses.ResponseFunctionToolCall{
-						testFunctionCall("child-item", "child-call", "task", `{"subagent_type":"child","prompt":"PRIVATE_PROMPT"}`),
+						testFunctionCall("child-item", "child-call", "task", `{"agent":"child","prompt":"PRIVATE_PROMPT"}`),
 						testFunctionCall("fast-item", "fast", "fast", `{}`),
 					}), nil, nil, nil)
 				}()
@@ -183,7 +184,7 @@ func TestTaskTool(t *testing.T) {
 	t.Run("rejects unknown subagent", func(t *testing.T) {
 		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
 
-		_, err := factory.runTask(context.Background(), testTaskParams("", "", "missing"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}})
+		_, err := factory.runTask(context.Background(), testTaskParams("", "", "missing"), false, toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}})
 
 		require.EqualError(t, err, "unknown agent type: missing is not a valid agent type")
 	})
@@ -195,14 +196,14 @@ func TestTaskTool(t *testing.T) {
 		}})
 		factory.recursionRemaining = &remaining
 
-		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}})
+		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), false, toolCallMetadata{subagentIndex: 1, subagentTotal: 1, observations: &turnObservations{journal: InertJournal{}}, progress: &PublicProgress{}})
 
 		require.EqualError(t, err, "maxRecursion limit reached: task delegation is unavailable")
 	})
 }
 
 func TestTaskToolPermissionDefaults(t *testing.T) {
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"reviewer": testAgent("reviewer")}})
 
 	t.Run("tasked subagent denies tools by default", func(t *testing.T) {
 		agent := testAgentWithPermission(PermissionSet{Buckets: nil})
@@ -228,7 +229,7 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 
 	t.Run("recursion budget hides task", func(t *testing.T) {
 		remaining := 0
-		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
+		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"reviewer": testAgent("reviewer")}})
 		factory.recursionRemaining = &remaining
 		agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"task": permissionAllow}))
 		agent.Name = "main"
@@ -326,73 +327,115 @@ func TestBashPermissionGrantsSessionShellTempReadAndGlob(t *testing.T) {
 	})
 	globTool.Permission = "glob"
 
-	decision, err := loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".rocketclaw/.rocketcode/tmp/session-a/out.txt"}`))
+	decision, err := loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".rocketclaw/.rocketcode/tmp/session-a/out.txt"}`), false)
 	require.NoError(t, err)
 	require.False(t, decision.denied)
 
-	decision, err = loop.permissionDecision("glob", &globTool, json.RawMessage(`{"pattern":"*","path":".rocketclaw/.rocketcode/tmp/session-a"}`))
+	decision, err = loop.permissionDecision("glob", &globTool, json.RawMessage(`{"pattern":"*","path":".rocketclaw/.rocketcode/tmp/session-a"}`), false)
 	require.NoError(t, err)
 	require.False(t, decision.denied)
 
-	decision, err = loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".rocketclaw/.rocketcode/tmp/session-b/out.txt"}`))
+	decision, err = loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".rocketclaw/.rocketcode/tmp/session-b/out.txt"}`), false)
 	require.NoError(t, err)
 	require.True(t, decision.denied)
 
-	decision, err = loop.permissionDecision("glob", &globTool, json.RawMessage(`{"pattern":"*","path":".rocketclaw/.rocketcode/tmp/session-b"}`))
+	decision, err = loop.permissionDecision("glob", &globTool, json.RawMessage(`{"pattern":"*","path":".rocketclaw/.rocketcode/tmp/session-b"}`), false)
 	require.NoError(t, err)
 	require.True(t, decision.denied)
 }
 
-func TestTaskToolDescriptionFiltersDeniedSubagents(t *testing.T) {
+func TestTaskAgentValues(t *testing.T) {
+	sudo, room, aide := testAgent("root"), testAgentWithDescription("room", "Shared room"), testAgent("aide")
+	sudo.Permission.Sudo, room.Sticky, aide.Sticky = true, AgentStickyGlobal, AgentStickyUser
 	agents := Agents{Items: map[string]Agent{
 		"builder":  testAgentWithDescription("builder", "Build things"),
 		"helper":   testAgentWithDescription("helper", "Help everywhere"),
 		"reviewer": testAgentWithDescription("reviewer", "Review changes"),
 		"main":     testAgentWithDescription("main", "Default agent"),
+		"root":     sudo,
+		"room":     room,
+		"aide":     aide,
 	}}
+	rules := func(pairs ...string) PermissionSet {
+		var permission PermissionSet
+		for i := 0; i < len(pairs); i += 2 {
+			require.NoError(t, permission.Set("task", pairs[i], PermissionAction(pairs[i+1])))
+		}
 
-	t.Run("agent without task permissions lists no subagents", func(t *testing.T) {
-		factory := testTaskFactory(mockResponses(), agents)
+		return permission
+	}
 
-		description := factory.taskDescription()
+	for _, tc := range []struct {
+		name, caller string
+		permission   PermissionSet
+		review       bool
+		want         []string
+	}{
+		{name: "no task rules", caller: "main"},
+		{name: "a wildcard denial and one allowed agent", caller: "main", permission: rules("*", "deny", "reviewer", "allow"), want: []string{"reviewer"}},
+		{name: "the caller only when it names itself", caller: "main", permission: rules("main", "allow"), want: []string{"main"}},
+		{name: "every loaded agent but sudo and sticky ones", caller: "main", permission: rules("*", "allow"), want: []string{"builder", "helper", "main", "reviewer"}},
+		{name: "reviewed targets", caller: "main", permission: rules("*", "auto"), want: []string{"builder", "helper", "main", "reviewer"}},
+		{name: "a sticky caller names itself", caller: "room", permission: rules("*", "allow"), want: []string{"builder", "helper", "main", "reviewer", "room"}},
+		{name: "a sudo caller and its own sessions", caller: "root", permission: PermissionSet{Sudo: true, Buckets: rules("*", "allow").Buckets}, want: []string{"builder", "helper", "main", "reviewer", "root"}},
+		{name: "nothing to send to review inside a review", caller: "main", permission: rules("*", "auto", "builder", "allow"), review: true, want: []string{"builder"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			factory := testTaskFactory(mockResponses(), agents)
+			factory.inPermissionReview = tc.review
+			caller := agents.Items[tc.caller]
+			caller.Permission = tc.permission
 
-		require.Contains(t, description, "No agents are currently available.")
-		require.NotContains(t, description, "- builder: Build things")
-		require.NotContains(t, description, "- helper: Help everywhere")
-		require.NotContains(t, description, "- reviewer: Review changes")
-		require.NotContains(t, description, "Default agent")
-	})
+			tools, _ := factory.assembleTools(&caller)
+			if tc.want == nil {
+				require.NotContains(t, tools, "task")
 
-	t.Run("active agent hides denied subagents", func(t *testing.T) {
-		factory := testTaskFactory(mockResponses(), agents)
-		factory.agent = testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{
-			{Pattern: "*", Action: permissionDeny},
-			{Pattern: "reviewer", Action: permissionAllow},
-		}}}})
-		factory.agent.Name = "main"
+				return
+			}
 
-		description := factory.taskDescription()
+			properties := tools["task"].Definition.Parameters["properties"].(map[string]any)
+			require.Equal(t, tc.want, properties["agent"].(map[string]any)["enum"])
 
-		require.NotContains(t, description, "- builder: Build things")
-		require.NotContains(t, description, "- helper: Help everywhere")
-		require.Contains(t, description, "- reviewer: Review changes")
-	})
+			for name, agent := range agents.Items {
+				require.Equal(t, slices.Contains(tc.want, name), strings.Contains(tools["task"].Definition.Description.Value, "\n- "+name+": "), "%s with %s", name, agent.Description)
+			}
+		})
+	}
+}
 
-	t.Run("active agent can allow default agent as subagent", func(t *testing.T) {
-		factory := testTaskFactory(mockResponses(), agents)
-		factory.agent = testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "main", Action: permissionAllow}}}}})
-		factory.agent.Name = "main"
+func TestSudoDelegationHonorsTaskDenials(t *testing.T) {
+	root := testAgent("root")
+	root.Permission.Sudo = true
+	agents := Agents{Items: map[string]Agent{"root": root, "builder": testAgent("builder"), "reviewer": testAgent("reviewer")}}
 
-		description := factory.taskDescription()
+	for _, tc := range []struct {
+		name          string
+		rules         []string
+		target, owner string
+		want          bool
+	}{
+		{name: "no rule reaches every agent", target: "builder", owner: "builder", want: true},
+		{name: "a denial refuses the target", rules: []string{"builder", "deny"}, target: "builder", owner: "builder"},
+		{name: "a denial refuses the target inside the caller's chats", rules: []string{"builder", "deny"}, target: "builder", owner: "root"},
+		{name: "a denial leaves other agents", rules: []string{"builder", "deny"}, target: "reviewer", owner: "reviewer", want: true},
+		{name: "a wildcard denial refuses every other agent", rules: []string{"*", "deny"}, target: "reviewer", owner: "reviewer"},
+		{name: "a denial of itself leaves its own chats", rules: []string{"*", "deny"}, target: "root", owner: "root", want: true},
+	} {
+		caller := root
+		for i := 0; i < len(tc.rules); i += 2 {
+			require.NoError(t, caller.Permission.Set("task", tc.rules[i], PermissionAction(tc.rules[i+1])))
+		}
 
-		require.Contains(t, description, "- main: Default agent")
-	})
+		for _, op := range []DelegationOp{DelegationStart, DelegationWrite, DelegationRead} {
+			require.Equal(t, tc.want, agents.delegates(&caller, op, tc.target, tc.owner), "%s: %s", tc.name, op)
+		}
+	}
 }
 
 func TestTaskToolDescriptionUsesOpenCodeGuidance(t *testing.T) {
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child")}})
 
-	description := factory.taskDescription()
+	description := factory.taskTool([]string{"child"}).Definition.Description.Value
 
 	require.Contains(t, description, "Launch a new agent to handle complex, multistep tasks autonomously.")
 	require.Contains(t, description, "When NOT to use the Task tool:")
@@ -401,7 +444,7 @@ func TestTaskToolDescriptionUsesOpenCodeGuidance(t *testing.T) {
 
 func TestLooperRunsTaskToolCall(t *testing.T) {
 	mock := mockResponses(
-		responseWithFunctionCalls("parent-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "task", `{"description":"Review","prompt":"look","subagent_type":"review"}`)}),
+		responseWithFunctionCalls("parent-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "task", `{"description":"Review","prompt":"look","agent":"review"}`)}),
 		responseWithMessage("parent-final", "parent done"),
 	)
 	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
@@ -410,7 +453,7 @@ func TestLooperRunsTaskToolCall(t *testing.T) {
 	factory.childSessions = answeringSessions(map[string][]SessionEntry{}, false)
 	looper := testLooper(mock)
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}}
-	looper.Tools = map[string]looperTool{"task": factory.taskTool()}
+	looper.Tools = map[string]looperTool{"task": factory.taskTool([]string{"review"})}
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
@@ -434,7 +477,7 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 	mock := mockResponses(
 		responseWithFunctionCalls("root", []responses.ResponseFunctionToolCall{
 			testFunctionCall("tool-1", "call-probe", "probe", `{}`),
-			testFunctionCall("tool-2", "call-task", "task", `{"description":"Review","prompt":"look","subagent_type":"review"}`),
+			testFunctionCall("tool-2", "call-task", "task", `{"description":"Review","prompt":"look","agent":"review"}`),
 		}),
 		responseWithMessage("probe-review", allow),
 		responseWithMessage("probe-nested-review", allow),
@@ -457,7 +500,7 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 	looper.agent = Agent{Name: "main"}
 	looper.PermissionReviewer = factory
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{auto, {Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}}
-	looper.Tools = map[string]looperTool{"task": factory.taskTool(), "probe": probe}
+	looper.Tools = map[string]looperTool{"task": factory.taskTool([]string{"review"}), "probe": probe}
 	looper.ParallelToolCalls = 1
 	output := make(chan ChatResponse, 20)
 
@@ -487,7 +530,7 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 }
 
 func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
-	call := responseWithFunctionCalls("root", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call_0", "task", `{"description":"Review","prompt":"look","subagent_type":"child"}`)})
+	call := responseWithFunctionCalls("root", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call_0", "task", `{"description":"Review","prompt":"look","agent":"child"}`)})
 	allowed := []*responses.Response{call, responseWithMessage("review", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`), responseWithMessage("root-final", "done")}
 	denied := []*responses.Response{call, responseWithMessage("review", `{"risk_level":"critical","user_authorization":"unknown","outcome":"deny","rationale":"no"}`), responseWithMessage("root-final", "done")}
 	saved := map[string][]SessionEntry{}
@@ -501,7 +544,7 @@ func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
 		looper.agent = Agent{Name: "main"}
 		looper.PermissionReviewer = factory
 		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAuto}}}}}
-		looper.Tools = map[string]looperTool{"task": factory.taskTool()}
+		looper.Tools = map[string]looperTool{"task": factory.taskTool([]string{"child"})}
 		output := make(chan ChatResponse, 20)
 
 		input := make(chan PromptInput, 1)
@@ -528,14 +571,14 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child")}})
 	sessions := answeringSessions(map[string][]SessionEntry{}, false)
 	factory.childSessions = sessions
-	task := factory.taskTool()
+	task := factory.taskTool([]string{"child"})
 
 	keys := make([]string, 0, 3)
 
 	for _, turnID := range []string{"turn-1", "turn-1", "turn-2"} {
 		parent := testLooper(mockResponses())
 		parent.observations.turnID = turnID
-		result, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call_0"}), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review"}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
+		result, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call_0"}), json.RawMessage(`{"agent":"child","prompt":"look","description":"Review"}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nlook: done\n</task_result>", result.Output)
 
@@ -555,7 +598,7 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 	factory.childKey = ChildKey{Path: "/parent"}
 	parent := testLooper(mockResponses())
 	parent.observations.turnID = "turn-3"
-	_, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call_0"}), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review"}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
+	_, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call_0"}), json.RawMessage(`{"agent":"child","prompt":"look","description":"Review"}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
 	require.NoError(t, err)
 
 	progress := PublicProgressFromTrace(parent.observations.trace)
@@ -563,18 +606,18 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 	require.Equal(t, ChildKey{Path: "/parent" + taskKey("turn-3", "call_0"), Parent: "/parent", Turn: "turn-3", Call: "call_0"}, sessions.WriteSubagentCalls()[3].Write.Key)
 }
 
-func TestEasyTaskDelegatesByModel(t *testing.T) {
+func TestTaskCloneStartsCopiesOfTheCaller(t *testing.T) {
 	agent, errs := loadEasyTestAgent(t, easyRequired+"\nsubagents: [gpt-6-luna, gpt-6.1-sol#high]\nmcp: {s: [read]}")
 	require.Empty(t, errs)
 
 	sessions := answeringSessions(map[string][]SessionEntry{}, false)
-	task := func(agent *Agent, callID, args string) error {
+	clone := func(agent *Agent, callID, args string) error {
 		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": *agent}})
 		factory.childSessions, factory.backgroundJobs = sessions, &mockBackgroundJobs{EnabledFunc: func() bool { return true }, RunFunc: InertBackgroundJobs{}.Run}
 		parent := testLooper(mockResponses())
 		parent.observations.turnID, parent.Permissions = "turn-"+callID, agent.Permission
 		parent.Tools, parent.CodeModeHosts = factory.assembleTools(agent)
-		_, err := parent.Tools["task"].Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: callID}), json.RawMessage(args), nil, toolCallMetadata{callID: callID, observations: parent.observations, progress: &PublicProgress{ID: callID}})
+		_, err := parent.Tools["task_clone"].Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: callID}), json.RawMessage(args), nil, toolCallMetadata{callID: callID, observations: parent.observations, progress: &PublicProgress{ID: callID}})
 
 		return err
 	}
@@ -583,16 +626,25 @@ func TestEasyTaskDelegatesByModel(t *testing.T) {
 	}
 
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": agent}})
-	tools, _ := factory.assembleTools(&agent)
-	schema := string(marshalParameters(t, tools["task"].Definition.Parameters))
-	require.Contains(t, schema, `"tools":{"items":{"type":"string"},"type":["array","null"]}`)
-	require.Contains(t, schema, `"model":{"type":"string"}`)
-	require.NotContains(t, schema, "subagent_type")
-	require.Contains(t, tools["task"].Definition.Description.Value, "Available models:\n- gpt-6-luna\n- gpt-6.1-sol#high")
+	tools, hosts := factory.assembleTools(&agent)
+	own := slices.Sorted(slices.Values(append(slices.Collect(maps.Keys(tools)), slices.Collect(maps.Keys(hosts))...)))
 
-	err := task(&agent, "call-1", args("gpt-6-luna", `["bash"]`, ""))
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
+	}
+
+	require.NoError(t, json.Unmarshal(marshalParameters(t, tools["task_clone"].Definition.Parameters), &schema))
+	require.Equal(t, []string{"description", "model", "prompt", "tools"}, schema.Required)
+	require.JSONEq(t, `{"type":"string","enum":["gpt-6-luna","gpt-6.1-sol#high"]}`, string(schema.Properties["model"]))
+	require.JSONEq(t, marshalJSON(t, map[string]any{"type": []string{"array", "null"}, "items": map[string]any{"type": "string", "enum": own}}), string(schema.Properties["tools"]))
+	require.Contains(t, own, "task_clone", "a copy may get the copy tool")
+	require.NotContains(t, tools, "task", "copy models name no target")
+	require.Contains(t, tools["task_clone"].Definition.Description.Value, "Available models:\n- gpt-6-luna\n- gpt-6.1-sol#high")
+
+	err := clone(&agent, "call-1", args("gpt-6-luna", `["bash"]`, ""))
 	require.NoError(t, err)
-	err = task(&agent, "call-2", args("gpt-6.1-sol#high", "null", ""))
+	err = clone(&agent, "call-2", args("gpt-6.1-sol#high", "null", ""))
 	require.NoError(t, err)
 
 	writes := sessions.WriteSubagentCalls()
@@ -601,24 +653,24 @@ func TestEasyTaskDelegatesByModel(t *testing.T) {
 	require.Equal(t, []any{"gpt-6.1-sol#high", []string(nil)}, []any{writes[1].Write.Model, writes[1].Write.Tools}, "null gives every tool of the parent")
 
 	for _, tc := range []struct{ name, args, want string }{
-		{"unlisted model", args("gpt-7", "null", ""), `model "gpt-7" is not one of this agent's subagent models: gpt-6-luna, gpt-6.1-sol#high`},
+		{"unlisted model", args("gpt-7", "null", ""), `model "gpt-7" is not one of this agent's copy models: gpt-6-luna, gpt-6.1-sol#high`},
 		{"tool the parent lacks", args("gpt-6-luna", `["bash","rocketclaw_restart"]`, ""), `tool "rocketclaw_restart" is not one of your tools`},
 		{"MCP tool", args("gpt-6-luna", `["s.list_reports"]`, ""), `tool "s.list_reports" is not one of your tools`},
 	} {
-		err := task(&agent, "call-3", tc.args)
+		err := clone(&agent, "call-3", tc.args)
 		require.ErrorContains(t, err, tc.want, tc.name)
 	}
 
-	require.Len(t, sessions.WriteSubagentCalls(), 2, "a refused call starts no subagent")
+	require.Len(t, sessions.WriteSubagentCalls(), 2, "a refused call starts no copy")
 
 	reloaded, errs := loadEasyTestAgent(t, easyRequired+"\nsubagents: [gpt-6.1-sol#high]")
 	require.Empty(t, errs)
 
-	err = task(&reloaded, "call-4", args("gpt-6-luna", "null", writes[0].Write.Key.Path))
-	require.EqualError(t, err, `model "gpt-6-luna" is not one of this agent's subagent models: gpt-6.1-sol#high`)
-	require.Len(t, sessions.WriteSubagentCalls(), 2, "a refused continue leaves the subagent unchanged")
+	err = clone(&reloaded, "call-4", args("gpt-6-luna", "null", writes[0].Write.Key.Path))
+	require.EqualError(t, err, `model "gpt-6-luna" is not one of this agent's copy models: gpt-6.1-sol#high`)
+	require.Len(t, sessions.WriteSubagentCalls(), 2, "a refused continue leaves the copy unchanged")
 
-	err = task(&reloaded, "call-5", args("gpt-6.1-sol#high", `["bash"]`, writes[0].Write.Key.Path))
+	err = clone(&reloaded, "call-5", args("gpt-6.1-sol#high", `["bash"]`, writes[0].Write.Key.Path))
 	require.NoError(t, err)
 	require.Equal(t, SubagentWrite{Key: ChildKey{Path: writes[0].Write.Key.Path, Turn: "turn-call-5", Call: "call-5"}, CallKey: "turn-call-5/call/call-5", Agent: "main", Delegator: "main", Prompt: "look", Mode: ContinueEnqueue, Model: "gpt-6.1-sol#high", Tools: []string{"bash"}}, *sessions.WriteSubagentCalls()[2].Write)
 
@@ -628,32 +680,34 @@ func TestEasyTaskDelegatesByModel(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{executeToolName, loadExecuteResultToolName}, slices.Collect(maps.Keys(loop.Tools)))
 	require.Equal(t, []string{"bash"}, slices.Collect(maps.Keys(loop.CodeModeHosts)))
-	require.Empty(t, visibleMCPServers(loop.Permissions, []string{"s", "t"}), "a tools list gives the subagent no outside MCP tools")
+	require.Empty(t, visibleMCPServers(loop.Permissions, []string{"s", "t"}), "a tools list gives the copy no outside MCP tools")
 
 	action, _ := loop.Permissions.Evaluate(mcpPermissionBucket, "s.list_reports")
 	require.Equal(t, PermissionDeny, action)
 
-	subagent.Tools = []string{"task", "bash"}
-	err = task(&subagent, "call-6", args("gpt-6-luna", "null", ""))
+	subagent.Tools = []string{"task_clone", "bash"}
+	err = clone(&subagent, "call-6", args("gpt-6-luna", "null", ""))
 	require.NoError(t, err)
-	require.Equal(t, []string{"task", "bash"}, sessions.WriteSubagentCalls()[3].Write.Tools)
+	require.Equal(t, []string{"task_clone", "bash"}, sessions.WriteSubagentCalls()[3].Write.Tools)
 
 	loop, err = factory.newLooper(&agent, "")
 	require.NoError(t, err)
-	require.Subset(t, slices.Collect(maps.Keys(loop.CodeModeHosts)), []string{"bash", "read"}, "without a list the subagent has every tool")
+	require.Subset(t, slices.Collect(maps.Keys(loop.CodeModeHosts)), []string{"bash", "read"}, "without a list the copy has every tool")
 	require.Equal(t, []string{"s"}, visibleMCPServers(loop.Permissions, []string{"s", "t"}), "and its agent's facets")
 }
 
-func TestEasyTaskNeedsSubagentsAndDepth(t *testing.T) {
+func TestDelegationToolsNeedTargetsCopyModelsAndDepth(t *testing.T) {
 	for _, tc := range []struct {
-		sections  string
-		remaining int
-		offered   bool
+		sections    string
+		remaining   int
+		task, clone bool
 	}{
-		{"", 1, true},
-		{"subagents: []", 1, false},
-		{"subagents: [gpt-6-luna]\nmaxRecursion: 0", 0, false},
-		{"", 0, false},
+		{"", 1, false, true},
+		{"subagents: []", 1, false, false},
+		{"subagents: [{agent: main}]", 1, true, false},
+		{"subagents: [gpt-6-luna, {agent: main}]", 1, true, true},
+		{"subagents: [gpt-6-luna, {agent: main}]\nmaxRecursion: 0", 0, false, false},
+		{"", 0, false, false},
 	} {
 		agent, errs := loadEasyTestAgent(t, easyRequired+"\n"+tc.sections)
 		require.Empty(t, errs)
@@ -661,44 +715,27 @@ func TestEasyTaskNeedsSubagentsAndDepth(t *testing.T) {
 		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": agent}})
 		factory.recursionRemaining = &tc.remaining
 		tools, _ := factory.assembleTools(&agent)
-		require.Equal(t, tc.offered, tools["task"].Call != nil, tc)
+		require.Equal(t, []bool{tc.task, tc.clone}, []bool{tools["task"].Call != nil, tools["task_clone"].Call != nil}, tc)
 	}
 }
 
-func TestAdvancedTaskRefusesEasyAgent(t *testing.T) {
-	easy, errs := loadEasyTestAgent(t, easyRequired)
-	require.Empty(t, errs)
-
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": easy, "child": testAgent("child")}})
-	factory.childSessions = answeringSessions(map[string][]SessionEntry{}, false)
+func TestTaskRefusesStickyAndSudoTargets(t *testing.T) {
+	room, root := testAgent("room"), testAgent("root")
+	room.Sticky, root.Permission.Sudo = AgentStickyGlobal, true
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"room": room, "root": root, "child": testAgent("child")}})
 	factory.agent = testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"task": permissionAllow}))
 	factory.agent.Name = "boss"
 
-	require.NotContains(t, factory.taskDescription(), "- main:")
+	_, err := factory.subagentWrite(t.Context(), &taskParams{Agent: "room", Prompt: "look"}, false)
+	require.EqualError(t, err, "agent room is a sticky: global agent, which only it delegates to; write to its session with rocketclaw_sessions_write instead")
 
-	parent := testLooper(mockResponses())
-	_, err := factory.taskTool().Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call-1"}), json.RawMessage(`{"subagent_type":"main","prompt":"look","description":"Look"}`), nil, toolCallMetadata{callID: "call-1", observations: parent.observations, progress: &PublicProgress{ID: "call-1"}})
-	require.EqualError(t, err, "agent type main is an easy agent, which task cannot run; write to its sessions with rocketclaw_sessions instead")
-}
-
-func TestTaskRunsStickyAgentOnlyForItself(t *testing.T) {
-	room := testAgent("room")
-	room.Sticky = AgentStickyGlobal
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"room": room, "child": testAgent("child")}})
-	factory.agent = testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"task": permissionAllow}))
-	factory.agent.Name = "boss"
-
-	require.NotContains(t, factory.taskDescription(), "- room:")
-	require.Contains(t, factory.taskDescription(), "- child:")
-
-	_, err := factory.subagentWrite(t.Context(), &taskParams{SubagentType: "room", Prompt: "look"})
-	require.EqualError(t, err, "agent type room is a sticky: global agent, which only it delegates to; write to its session with rocketclaw_sessions instead")
+	_, err = factory.subagentWrite(t.Context(), &taskParams{Agent: "root", Prompt: "look"}, false)
+	require.EqualError(t, err, "agent root is not a target of agent boss")
 
 	factory.agent = &room
 	factory.agent.Permission = permissionSetForActions(map[string]PermissionAction{"task": permissionAllow})
-	require.Contains(t, factory.taskDescription(), "- room:")
 
-	write, err := factory.subagentWrite(t.Context(), &taskParams{SubagentType: "room", Prompt: "look"})
+	write, err := factory.subagentWrite(t.Context(), &taskParams{Agent: "room", Prompt: "look"}, false)
 	require.NoError(t, err)
 	require.Equal(t, "room", write.Agent)
 }
@@ -726,7 +763,7 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 
 	factory.resolver = testResolverForResponsesAPI(client)
 	factory.autoApproverModel = defaultOpenAIModel
-	factory.agent = &Agent{}
+	factory.agent = &Agent{Name: "main", Permission: permissionSetForActions(map[string]PermissionAction{"task": permissionAllow})}
 	factory.agents = agents
 	factory.skills = Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}
 	factory.baseTools = map[string]looperTool{
@@ -755,12 +792,12 @@ func testAgentWithDescription(name, description string) Agent {
 	return agent
 }
 
-func testTaskParams(description, prompt, subagentType string) *taskParams {
+func testTaskParams(description, prompt, agent string) *taskParams {
 	var params taskParams
 
 	params.Description = description
 	params.Prompt = prompt
-	params.SubagentType = subagentType
+	params.Agent = agent
 
 	return &params
 }

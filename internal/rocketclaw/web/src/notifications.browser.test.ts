@@ -304,7 +304,7 @@ test("a routine tab's loud mark turns it bold and notifies with its note, a park
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListQueue": return Response.json({ items: [] });
-      case "/api/ListCronJobs": return Response.json({ jobs: [] });
+      case "/api/ListRoutines": return Response.json({ jobs: [] });
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
       case "/api/Tabs":
         if (input.state) [state, revision] = [input.state, revision + 1];
@@ -412,7 +412,7 @@ test("a call that took the person to a page shows its link in the chat, which op
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/ListQueue": return Response.json({ items: [] });
-      case "/api/ListCronJobs": return Response.json({ jobs: [] });
+      case "/api/ListRoutines": return Response.json({ jobs: [] });
       case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: chat, space: "main" }], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [] });
       case "/api/History": return Response.json({ messages: [{ role: "tool", text: "execute\n{}", complete: true, turnId: "t", entryKey: "t", itemId: "go", inputId: "", toolName: "execute", toolCallId: "go",
         codeModeCalls: [{ name: "rocketclaw_navigate_for_me", arguments: JSON.stringify({ location: `https://rc.example${cron}` }), status: "ok", summary: `https://rc.example${cron}` }] }],

@@ -30,7 +30,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 )
 
-func TestRunRejectsInvalidAgentAtStartup(t *testing.T) {
+func TestRunStartsPastAnInvalidAgent(t *testing.T) {
 	t.Parallel()
 
 	workspace := shortTempDir(t)
@@ -40,9 +40,10 @@ func TestRunRejectsInvalidAgentAtStartup(t *testing.T) {
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, slog.New(slog.DiscardHandler), new(slog.LevelVar), &frontendAssemblerMock{GateFunc: passGate}, sandbox.None{})
-	require.ErrorContains(t, err, "validate rocketcode definitions")
-	require.ErrorContains(t, err, "model: required non-empty string")
+
+	errFrontend := errors.New("frontend assets checked")
+	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, slog.New(slog.DiscardHandler), new(slog.LevelVar), &frontendAssemblerMock{GateFunc: passGate, ValidateAssetsFunc: func(*config.Config, string) error { return errFrontend }}, sandbox.None{})
+	require.ErrorIs(t, err, errFrontend, "agent definitions passed with the invalid agent left out")
 }
 
 func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
@@ -135,7 +136,7 @@ func TestThreadBridgeManagerMentionThreadRecognizesReportThreads(t *testing.T) {
 	t.Parallel()
 
 	store := newWorkspaceSessionService(t)
-	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("C123", "1.1"), ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("C123", "1.1"), ThreadState{Agent: "main", CreatedBy: ThreadCreatedByRoutine}))
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{PrivateConversationID: "external_mcp:private", ManagedConversationID: protocol.SlackThreadConversationID("C123", "2.2"), Agent: "main"}))
 	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("C123", "3.3"), ThreadState{Agent: "main"}))
 
@@ -707,9 +708,9 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 	recordTestConversations(t, store, "primary", map[string]ConversationKind{"web:caller": KindWebChat, "caller-global": KindWebChat, "caller-user": KindWebChat})
 	caller := &Bridge{config: Config{ConversationID: "web:caller", SessionService: store}, threads: manager}
 	origin := &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}}
-	write := sessionsWriteTool(caller, origin, origin, "primary", caller.config.ConversationID, harness.Agents{})
+	write := sessionsWriteTool(caller, origin, origin, "primary", caller.config.ConversationID)
 
-	output, err := write.Call(t.Context(), []byte(`{"session_id":"","mode":"steer","title":" Child ","prompt":" literal $(date) ","agent":""}`), nil)
+	output, err := callInTurn(t, workspace, "main", &write, `{"session_id":"","mode":"steer","title":" Child ","prompt":" literal $(date) ","agent":""}`)
 	require.NoError(t, err)
 
 	var result struct {
@@ -723,18 +724,18 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 
 	require.NotEmpty(t, conversationID)
 	assert.Empty(t, slackThread)
-	assert.JSONEq(t, fmt.Sprintf(`{"outcome":"created","session_id":%q,"url":%q,"queue_item_id":"web:caller/"}`, conversationID, "https://rocketclaw.example.ts.net/s/"+base64.RawURLEncoding.EncodeToString([]byte(conversationID))), output.Output)
+	assert.JSONEq(t, fmt.Sprintf(`{"outcome":"created","session_id":%q,"url":%q,"queue_item_id":"web:caller/turn/call/call/host/0"}`, conversationID, "https://rocketclaw.example.ts.net/s/"+base64.RawURLEncoding.EncodeToString([]byte(conversationID))), output.Output)
 	assert.Equal(t, Config{ConversationID: conversationID, Agent: "primary"}, created)
-	assert.Equal(t, []string{"web:caller/"}, queueIDs(t, store, conversationID), "the first prompt is a Thread Queue row under the returned queue_item_id")
+	assert.Equal(t, []string{"web:caller/turn/call/call/host/0"}, queueIDs(t, store, conversationID), "the first prompt is a Thread Queue row under the returned queue_item_id")
 	require.Len(t, bridge.requestCh, 1)
-	assert.Equal(t, "web:caller/", (<-bridge.requestCh).queueItemID)
+	assert.Equal(t, "web:caller/turn/call/call/host/0", (<-bridge.requestCh).queueItemID)
 
 	restarted := newThreadBridgeManager(runtime, store, slog.New(slog.DiscardHandler), factory)
 	require.NoError(t, restarted.StartQueuedConversations(t.Context()))
 	require.Len(t, bridge.requestCh, 1)
 
 	request := <-bridge.requestCh
-	assert.Equal(t, "web:caller/", request.queueItemID)
+	assert.Equal(t, "web:caller/turn/call/call/host/0", request.queueItemID)
 
 	activated, err := bridge.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
@@ -744,7 +745,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 	assert.Equal(t, " literal $(date) ", first.Text)
 	assert.False(t, first.Human)
 	assert.Equal(t, protocol.SourceSystem, first.Source)
-	assert.Contains(t, buildPrompt(first, nil, false), `sender="message from session web:caller (agent ); your final answer returns to that session automatically, so do not write back to it"`)
+	assert.Contains(t, buildPrompt(first, nil, false), `sender="message from session web:caller (agent main); your final answer returns to that session automatically, so do not write back to it"`)
 	assert.Contains(t, buildPrompt(first, nil, false), "\n\n literal $(date) ")
 	assert.Equal(t, "System", first.Metadata[protocol.InboundOriginMetadataKey])
 	assert.Nil(t, first.SlackReply)
@@ -758,7 +759,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT name FROM conversations WHERE conversation_id = $1`, conversationID).Scan(&name))
 	assert.Equal(t, "Child", name)
 
-	_, err = write.Call(t.Context(), []byte(`{"session_id":"","mode":"steer","title":"","prompt":"again","agent":""}`), nil)
+	_, err = callInTurn(t, workspace, "main", &write, `{"session_id":"","mode":"steer","title":"","prompt":"again","agent":""}`)
 	require.ErrorContains(t, err, "title is required")
 
 	for _, sticky := range []string{"global", "user"} {
@@ -774,10 +775,10 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 			origin.Metadata[protocol.InboundPrincipalEmailMetadataKey] = "alice@example.com"
 			origin.Metadata[protocol.InboundPrincipalMetadataKey] = "Bob"
 			caller.config.ConversationID = "caller-" + sticky
-			write := sessionsWriteTool(caller, origin, origin, "primary", caller.config.ConversationID, harness.Agents{})
-			output, err := write.Call(t.Context(), []byte(`{"session_id":"","mode":"steer","title":"Do not rename","prompt":"next request","agent":""}`), nil)
+			write := sessionsWriteTool(caller, origin, origin, "primary", caller.config.ConversationID)
+			output, err := callInTurn(t, workspace, "main", &write, `{"session_id":"","mode":"steer","title":"Do not rename","prompt":"next request","agent":""}`)
 			require.NoError(t, err)
-			assert.JSONEq(t, fmt.Sprintf(`{"outcome":"queued","session_id":%q,"url":%q,"queue_item_id":%q}`, id, "https://rocketclaw.example.ts.net/s/"+base64.RawURLEncoding.EncodeToString([]byte(id)), caller.config.ConversationID+"/"), output.Output)
+			assert.JSONEq(t, fmt.Sprintf(`{"outcome":"queued","session_id":%q,"url":%q,"queue_item_id":%q}`, id, "https://rocketclaw.example.ts.net/s/"+base64.RawURLEncoding.EncodeToString([]byte(id)), caller.config.ConversationID+"/turn/call/call/host/0"), output.Output)
 			thread, found, err := store.Thread(id)
 			require.NoError(t, err)
 			require.True(t, found)
@@ -791,14 +792,14 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 			assert.False(t, items[0].Inbound.Human)
 			assert.Equal(t, protocol.SourceSystem, items[0].Inbound.Source)
 
-			self := sessionsWriteTool(caller, origin, origin, "primary", id, harness.Agents{})
-			_, err = self.Call(t.Context(), []byte(`{"session_id":"","mode":"enqueue","title":"Self","prompt":"loop","agent":""}`), nil)
+			self := sessionsWriteTool(caller, origin, origin, "primary", id)
+			_, err = callInTurn(t, workspace, "main", &self, `{"session_id":"","mode":"enqueue","title":"Self","prompt":"loop","agent":""}`)
 			require.ErrorContains(t, err, "is this session")
 
 			if sticky == "user" {
 				delete(origin.Metadata, protocol.InboundPrincipalEmailMetadataKey)
 
-				_, err = write.Call(t.Context(), []byte(`{"session_id":"","mode":"enqueue","title":"Missing person","prompt":"request","agent":""}`), nil)
+				_, err = callInTurn(t, workspace, "main", &write, `{"session_id":"","mode":"enqueue","title":"Missing person","prompt":"request","agent":""}`)
 				require.ErrorContains(t, err, "identifiable person")
 			}
 		})
@@ -832,7 +833,7 @@ func TestSessionsWriteRejectsUnavailableAgents(t *testing.T) {
 	write := func(origin *protocol.InboundMessage, agentName, agent, want string) {
 		t.Helper()
 
-		_, err := sessionsWriteTool(&Bridge{config: Config{ConversationID: "caller", SessionService: store}, threads: manager}, origin, origin, agentName, "caller", harness.Agents{}).Call(t.Context(), fmt.Appendf(nil, `{"session_id":"","mode":"enqueue","title":"Nightly","prompt":"run suite","agent":%q}`, agent), nil)
+		_, err := callInTurn(t, workspace, "main", new(sessionsWriteTool(&Bridge{config: Config{ConversationID: "caller", SessionService: store}, threads: manager}, origin, origin, agentName, "caller")), fmt.Sprintf(`{"session_id":"","mode":"enqueue","title":"Nightly","prompt":"run suite","agent":%q}`, agent))
 		require.ErrorContains(t, err, want)
 	}
 
@@ -840,7 +841,7 @@ func TestSessionsWriteRejectsUnavailableAgents(t *testing.T) {
 	protocol.SetInboundAllowedAgents(slack, []string{"primary"})
 	write(slack, "primary", "other", `agent "other" is not allowed on this source surface`)
 
-	cron := &protocol.InboundMessage{Source: protocol.SourceSystem, Cronjob: &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "job"}}
+	cron := &protocol.InboundMessage{Source: protocol.SourceSystem, Routine: &protocol.RoutineMessage{RelativePath: "cron/daily.md", Agent: "job"}}
 	write(cron, "job", "primary", `agent "primary" is not allowed on this source surface`)
 	write(cron, "job", "", `agent "job" is not configured`)
 	write(new(protocol.InboundMessage), "missing", "", `agent "missing" is not configured`)

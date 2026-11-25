@@ -150,6 +150,7 @@ type toolCallMetadata struct {
 
 type looper struct {
 	agent              Agent
+	agents             Agents
 	ProviderOrigin     ProviderOrigin
 	Client             responsesAPI
 	SystemPrompt       string
@@ -1086,7 +1087,7 @@ func (l *looper) directSkillInput(ctx context.Context, input *PromptInputDirectS
 		return nil, fmt.Errorf("marshal direct skill input: %w", err)
 	}
 
-	decision, err := l.permissionDecision("skill", &tool, raw)
+	decision, err := l.permissionDecision("skill", &tool, raw, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1713,6 +1714,7 @@ func (l *looper) dispatchToolCalls(
 		outputIndex   int
 		subagentIndex int
 		subagentTotal int
+		reviewed      bool
 	}
 
 	outputs := []dispatchedToolOutput{}
@@ -1766,7 +1768,7 @@ func (l *looper) dispatchToolCalls(
 			continue
 		}
 
-		decision, err := l.permissionDecision(item.Name, &tool, args)
+		decision, err := l.permissionDecision(item.Name, &tool, args, false)
 		errDenied := errors.New("tool permission denied")
 
 		if err != nil {
@@ -1788,11 +1790,14 @@ func (l *looper) dispatchToolCalls(
 			continue
 		}
 
-		if item.Name == "task" {
+		subagentIndex := 0
+
+		if item.Name == "task" || item.Name == taskCloneToolName {
 			taskTotal++
+			subagentIndex = taskTotal
 		}
 
-		calls = append(calls, pendingToolCall{name: item.Name, callID: item.CallID, args: args, tool: tool, progress: progress, outputIndex: len(outputs)})
+		calls = append(calls, pendingToolCall{name: item.Name, callID: item.CallID, args: args, tool: tool, progress: progress, outputIndex: len(outputs), subagentIndex: subagentIndex, reviewed: decision.review != nil})
 		outputs = append(outputs, dispatchedToolOutput{})
 	}
 
@@ -1800,16 +1805,10 @@ func (l *looper) dispatchToolCalls(
 		return nil, nil
 	}
 
-	taskIndex := 0
-
 	for i := range calls {
-		if calls[i].name != "task" {
-			continue
+		if calls[i].subagentIndex > 0 {
+			calls[i].subagentTotal = taskTotal
 		}
-
-		taskIndex++
-		calls[i].subagentIndex = taskIndex
-		calls[i].subagentTotal = taskTotal
 	}
 
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -1826,7 +1825,7 @@ func (l *looper) dispatchToolCalls(
 			callCtx, span := l.Observability.startToolSpan(groupCtx, call.name, call.callID, call.tool.Permission, metadata)
 			defer span.span.End()
 
-			callCtx = context.WithValue(callCtx, toolCallContextKey{}, toolCallContext{looper: l, observations: l.observations, reviewInput: reviewContext, currentTurnInputs: slices.Clone(l.observations.saved.ReviewInputs), output: output, callID: call.callID})
+			callCtx = context.WithValue(callCtx, toolCallContextKey{}, toolCallContext{looper: l, observations: l.observations, reviewInput: reviewContext, currentTurnInputs: slices.Clone(l.observations.saved.ReviewInputs), output: output, callID: call.callID, reviewed: call.reviewed})
 			progress := call.progress
 
 			key := ToolCallKey(callCtx)
@@ -2027,7 +2026,7 @@ func (d *doomLoopTrap) trapped(name string, args json.RawMessage) bool {
 	return true
 }
 
-func (l *looper) permissionDecision(toolName string, tool *looperTool, args json.RawMessage) (toolPermissionDecision, error) {
+func (l *looper) permissionDecision(toolName string, tool *looperTool, args json.RawMessage, reviewAllowed bool) (toolPermissionDecision, error) {
 	if toolName == loadExecuteResultToolName {
 		var params loadExecuteResultParams
 
@@ -2074,7 +2073,7 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 			return toolPermissionDecision{denied: true, message: formatPermissionDenied(&decision)}, nil
 		}
 
-		if l.unaddressed && !l.InPermissionReview && decision.Action == permissionAllow && decision.Matched && permission != "read" && (permission != "rocketclaw" || subject != NoReplyToolName) {
+		if decision.Action == permissionAllow && (reviewAllowed || l.unaddressed && !l.InPermissionReview && decision.Matched && permission != "read" && (permission != "rocketclaw" || subject != NoReplyToolName)) {
 			decision.Action = permissionAuto
 		}
 

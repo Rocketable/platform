@@ -200,8 +200,8 @@ func TestPermissionReviewUsesAgentApprover(t *testing.T) {
 		agent         Agent
 		model, effort string
 	}{
-		{name: "auto approver model", agent: Agent{Name: "main", Mode: AgentModeEasy}, model: "gpt-5.4-mini", effort: "low"},
-		{name: "easy approver", agent: Agent{Name: "main", Mode: AgentModeEasy, ApproverModel: "openai/gpt-6-luna#max", ApproverPrompt: "Deny any write to the billing folder."}, model: "gpt-6-luna", effort: "max"},
+		{name: "auto approver model", agent: Agent{Name: "main"}, model: "gpt-5.4-mini", effort: "low"},
+		{name: "easy approver", agent: Agent{Name: "main", ApproverModel: "openai/gpt-6-luna#max", ApproverPrompt: "Deny any write to the billing folder."}, model: "gpt-6-luna", effort: "max"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
@@ -308,7 +308,7 @@ func TestPermissionReviewRunsReviewerWithoutDecisionModel(t *testing.T) {
 
 		var saved []SessionEntry
 
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"main": {Name: "main", Mode: AgentModeEasy}, "release": {Name: "release", Model: "gpt-5.4"}}})
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"main": {Name: "main"}, "release": {Name: "release", Model: "gpt-5.4"}}})
 		factory.deciders = map[string]Decider{"openai": decider, "typesafe": decider}
 		factory.childSessions = &mockChildSessions{AppendChildEntryFunc: func(_ context.Context, _ ChildKey, entry *SessionEntry) error {
 			saved = append(saved, *entry)
@@ -386,25 +386,25 @@ func TestUnaddressedTurnReviewsCallsAnAllowRuleRuns(t *testing.T) {
 		}
 
 		loop.InPermissionReview = true
-		decision, err := loop.permissionDecision("edit", new(loop.Tools["edit"]), json.RawMessage(`{}`))
+		decision, err := loop.permissionDecision("edit", new(loop.Tools["edit"]), json.RawMessage(`{}`), false)
 		require.NoError(t, err)
 		require.Equal(t, toolPermissionDecision{}, decision, "a reviewer's own allowed calls run unreviewed")
 
 		loop.InPermissionReview = false
 		loop.Permissions = parsePermissionYAML(t, "read: allow")
-		decision, err = loop.permissionDecision("read", &looperTool{Permission: "read"}, json.RawMessage(`{}`))
+		decision, err = loop.permissionDecision("read", &looperTool{Permission: "read"}, json.RawMessage(`{}`), false)
 		require.NoError(t, err)
 		require.Equal(t, toolPermissionDecision{}, decision, "reads an allow rule permits run unreviewed")
 
 		loop.Permissions = parsePermissionYAML(t, "edit: allow")
-		decision, err = loop.permissionDecision("read", &looperTool{Permission: "read"}, json.RawMessage(`{}`))
+		decision, err = loop.permissionDecision("read", &looperTool{Permission: "read"}, json.RawMessage(`{}`), false)
 		require.NoError(t, err)
 		require.Equal(t, toolPermissionDecision{}, decision, "reads the edit rule allows run unreviewed")
 
 		loop.Permissions = PermissionSet{}
 		for _, subject := range []string{NoReplyToolName, "rocketclaw_attach_files_to_response"} {
 			require.NoError(t, loop.Permissions.Set("rocketclaw", subject, PermissionAllow))
-			decision, err = loop.permissionDecision(subject, &looperTool{Permission: "rocketclaw", Subjects: func(json.RawMessage) ([]string, error) { return []string{subject}, nil }}, json.RawMessage(`{}`))
+			decision, err = loop.permissionDecision(subject, &looperTool{Permission: "rocketclaw", Subjects: func(json.RawMessage) ([]string, error) { return []string{subject}, nil }}, json.RawMessage(`{}`), false)
 			require.NoError(t, err)
 			require.Equal(t, unaddressed && subject != NoReplyToolName, decision.review != nil, "unaddressed %v: %s", unaddressed, subject)
 		}

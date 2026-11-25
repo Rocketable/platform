@@ -17,52 +17,87 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const taskCloneToolName = "task_clone"
+
 type taskParams struct {
-	Description  string       `json:"description"`
-	Prompt       string       `json:"prompt"`
-	SubagentType string       `json:"subagent_type"`
-	Model        string       `json:"model"`
-	Tools        []string     `json:"tools"`
-	Continue     taskContinue `json:"continue"`
+	Description string       `json:"description"`
+	Prompt      string       `json:"prompt"`
+	Agent       string       `json:"agent"`
+	Model       string       `json:"model"`
+	Tools       []string     `json:"tools"`
+	Continue    taskContinue `json:"continue"`
 }
 
-func (f *toolFactory) taskTool() looperTool {
-	easy := f.agent.Mode == AgentModeEasy
-	properties := map[string]any{
-		"description":   map[string]any{"type": "string"},
-		"prompt":        map[string]any{"type": "string"},
-		"subagent_type": map[string]any{"type": "string"},
+func (f *toolFactory) taskTargets() []string {
+	var names []string
+
+	for name := range f.agents.Items {
+		target := f.agents.Items[name]
+		action := f.agent.Permission.evaluate("task", name).Action
+
+		if (action == permissionAllow || action == permissionAuto && !f.inPermissionReview) && delegable(&target, f.agent) && f.agents.delegates(f.agent, DelegationStart, name, name) {
+			names = append(names, name)
+		}
 	}
 
-	if easy {
-		delete(properties, "subagent_type")
-		properties["model"] = map[string]any{"type": "string"}
-		properties["tools"] = map[string]any{"type": []string{"array", "null"}, "items": map[string]any{"type": "string"}}
+	slices.Sort(names)
+
+	return names
+}
+
+func (f *toolFactory) taskTool(targets []string) looperTool {
+	var available strings.Builder
+
+	available.WriteString("Available agents and what they are for:")
+
+	for _, name := range targets {
+		fmt.Fprintf(&available, "\n- %s: %s", name, cmp.Or(f.agents.Items[name].Description, "This subagent should only be called manually by the user."))
 	}
+
+	return f.delegationTool("task", "When using the Task tool, you must specify an agent parameter, one of the agents listed below, to select which agent runs the task.", available.String(), map[string]any{
+		"agent": map[string]any{"type": "string", "enum": targets},
+	})
+}
+
+func (f *toolFactory) taskCloneTool(tools []string) looperTool {
+	model := map[string]any{"type": "string"}
+	if !slices.ContainsFunc(f.agent.CloneModels, func(entry string) bool { return strings.HasSuffix(entry, "*") }) {
+		model["enum"] = f.agent.CloneModels
+	}
+
+	return f.delegationTool(taskCloneToolName, "When using the task_clone tool, you start a copy of yourself with your own instructions. You must specify a model parameter, one of the models listed below, to select which model runs the copy, and a tools parameter: null to give it all of your tools, outside MCP tools included, or the names of the ones it may use, which leaves out every outside MCP tool. A listed entry ending in * stands for every model whose name, #effort included, starts with the text before the *; name a concrete model in its place.", "Available models:\n- "+strings.Join(f.agent.CloneModels, "\n- "), map[string]any{
+		"model": model,
+		"tools": map[string]any{"type": []string{"array", "null"}, "items": map[string]any{"type": "string", "enum": tools}},
+	})
+}
+
+func (f *toolFactory) delegationTool(name, selection, available string, properties map[string]any) looperTool {
+	properties["description"] = map[string]any{"type": "string"}
+	properties["prompt"] = map[string]any{"type": "string"}
 
 	return f.backgroundTool(f.agent, BackgroundKindTask, &looperTool{
-		Definition: *functionTool("task", f.taskDescription(), properties),
-		Permission: "task",
+		Definition: *functionTool(name, taskDescription(selection, available), properties),
+		Permission: name,
 		resumable:  true,
 		Subjects: func(raw json.RawMessage) ([]string, error) {
 			var params taskParams
 			if err := json.Unmarshal(raw, &params); err != nil {
-				return nil, fmt.Errorf("parse task params: %w", err)
+				return nil, fmt.Errorf("parse %s params: %w", name, err)
 			}
 
-			if easy {
-				return []string{f.agent.Name}, nil
+			if name == taskCloneToolName {
+				return []string{params.Model}, nil
 			}
 
-			return []string{params.SubagentType}, nil
+			return []string{params.Agent}, nil
 		},
 		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, metadata toolCallMetadata) (ToolResult, error) {
 			var params taskParams
 			if err := json.Unmarshal(raw, &params); err != nil {
-				return ToolResult{}, fmt.Errorf("parse task params: %w", err)
+				return ToolResult{}, fmt.Errorf("parse %s params: %w", name, err)
 			}
 
-			result, err := f.runTask(ctx, &params, metadata)
+			result, err := f.runTask(ctx, &params, name == taskCloneToolName, metadata)
 			if err != nil {
 				return ToolResult{}, err
 			}
@@ -72,16 +107,7 @@ func (f *toolFactory) taskTool() looperTool {
 	})
 }
 
-func (f *toolFactory) taskDescription() string {
-	var selection, available string
-	if f.agent.Mode == AgentModeEasy {
-		selection = "When using the Task tool, you must specify a model parameter, one of the models listed below, to select which model runs the subagent, and a tools parameter: null to give it all of your tools, outside MCP tools included, or the names of the ones it may use, which leaves out every outside MCP tool. A listed entry ending in * stands for every model whose name, #effort included, starts with the text before the *; name a concrete model in its place."
-		available = "Available models:\n- " + strings.Join(f.agent.Subagents, "\n- ")
-	} else {
-		selection = "When using the Task tool, you must specify a subagent_type parameter to select which agent type to use."
-		available = f.availableSubagentsDescription()
-	}
-
+func taskDescription(selection, available string) string {
 	return strings.Join([]string{
 		"Launch a new agent to handle complex, multistep tasks autonomously.",
 		"",
@@ -141,36 +167,6 @@ func (f *toolFactory) taskDescription() string {
 	}, "\n")
 }
 
-func (f *toolFactory) availableSubagentsDescription() string {
-	const heading = "Available agent types and the tools they have access to:"
-
-	names := make([]string, 0, len(f.agents.Items))
-	for name := range f.agents.Items {
-		agent := f.agents.Items[name]
-		if agent.Mode == AgentModeEasy || f.agent.Permission.evaluate("task", name).Action != permissionAllow || !delegable(&agent, f.agent) {
-			continue
-		}
-
-		names = append(names, name)
-	}
-
-	slices.Sort(names)
-
-	if len(names) == 0 {
-		return heading + "\nNo agents are currently available."
-	}
-
-	var description strings.Builder
-	description.WriteString(heading)
-
-	for _, name := range names {
-		text := cmp.Or(f.agents.Items[name].Description, "This subagent should only be called manually by the user.")
-		fmt.Fprintf(&description, "\n- %s: %s", name, text)
-	}
-
-	return description.String()
-}
-
 const UnaddressedReadOnly = "work read-only: read, search and answer; do not change files or data, run commands that change anything, start or write to other sessions, schedule messages, or send anything anywhere other than your answer. If the request needs a change, say that it needs an @mention."
 
 func (f *toolFactory) childSystemPrompt(agent *Agent) string {
@@ -183,12 +179,12 @@ func (f *toolFactory) sessionSystemPrompt(ctx context.Context, agent *Agent) str
 	return strings.TrimSpace(agent.Prompt+"\n\n"+f.workspaceInstructions) + "\n\nWhen a turn carries a note that the message did not address you, " + UnaddressedReadOnly
 }
 
-func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata toolCallMetadata) (string, error) {
+func (f *toolFactory) runTask(ctx context.Context, params *taskParams, clone bool, metadata toolCallMetadata) (string, error) {
 	if f.recursionRemaining != nil && *f.recursionRemaining == 0 {
 		return "", errors.New("maxRecursion limit reached: task delegation is unavailable")
 	}
 
-	write, err := f.subagentWrite(ctx, params)
+	write, err := f.subagentWrite(ctx, params, clone)
 	if err != nil {
 		return "", err
 	}
@@ -233,26 +229,26 @@ func delegable(agent, delegator *Agent) bool {
 	return agent.Sticky == AgentStickyOff || agent.Name == delegator.Name
 }
 
-func (f *toolFactory) subagentWrite(ctx context.Context, params *taskParams) (SubagentWrite, error) {
-	if f.agent.Mode != AgentModeEasy {
-		agent, ok := f.agents.Items[params.SubagentType]
+func (f *toolFactory) subagentWrite(ctx context.Context, params *taskParams, clone bool) (SubagentWrite, error) {
+	if !clone {
+		agent, ok := f.agents.Items[params.Agent]
 		if !ok {
-			return SubagentWrite{}, fmt.Errorf(unknownAgentType, params.SubagentType)
-		}
-
-		if agent.Mode == AgentModeEasy {
-			return SubagentWrite{}, fmt.Errorf("agent type %s is an easy agent, which task cannot run; write to its sessions with rocketclaw_sessions instead", agent.Name)
+			return SubagentWrite{}, fmt.Errorf(unknownAgentType, params.Agent)
 		}
 
 		if !delegable(&agent, f.agent) {
-			return SubagentWrite{}, fmt.Errorf("agent type %s is a sticky: %s agent, which only it delegates to; write to its session with rocketclaw_sessions instead", agent.Name, agent.Sticky)
+			return SubagentWrite{}, fmt.Errorf("agent %s is a sticky: %s agent, which only it delegates to; write to its session with rocketclaw_sessions_write instead", agent.Name, agent.Sticky)
+		}
+
+		if !f.agents.delegates(f.agent, DelegationStart, agent.Name, agent.Name) {
+			return SubagentWrite{}, fmt.Errorf("agent %s is not a target of agent %s", agent.Name, f.agent.Name)
 		}
 
 		return SubagentWrite{Agent: agent.Name, Delegator: f.agent.Name, Prompt: params.Prompt, Unaddressed: f.unaddressed}, nil
 	}
 
 	if !f.agent.allowsSubagentModel(params.Model) {
-		return SubagentWrite{}, fmt.Errorf("model %q is not one of this agent's subagent models: %s", params.Model, strings.Join(f.agent.Subagents, ", "))
+		return SubagentWrite{}, fmt.Errorf("model %q is not one of this agent's copy models: %s", params.Model, strings.Join(f.agent.CloneModels, ", "))
 	}
 
 	tc, _ := toolCallContextFrom(ctx)

@@ -49,7 +49,7 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 	for id, facts := range map[string]conversationFacts{
 		searchChatA: {kind: KindSlackThread, slackChannel: "C1", slackThread: "1.1"}, searchChatB: {kind: KindSlackThread, slackChannel: "C9", slackThread: "2.2"},
 		searchChatW: {kind: KindWebChat},
-		searchChatD: {kind: KindWebChat, cronRun: daily}, searchChatE: {kind: KindWebChat, cronRun: weekly},
+		searchChatD: {kind: KindWebChat, routineRun: daily}, searchChatE: {kind: KindWebChat, routineRun: weekly},
 	} {
 		_, err := s.recordConversation(ctx, &protocol.Conversation{ID: id, Space: map[string]string{searchChatA: "Blue garden", searchChatW: "Blue garden", searchChatB: "Amber"}[id]}, facts, harness.AgentStickyOff)
 		require.NoError(t, err)
@@ -57,7 +57,7 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 
 	require.NoError(t, s.RegisterExternalMCPConversation("ext-1", "main", &ExternalMCPSessionState{Agent: "producer", PrivateConversationID: "external_mcp:private", ManagedConversationID: searchChatX, OriginPairs: map[string]string{"Ticket": "T-1"}}))
 
-	for id, run := range map[string]*protocol.CronRun{
+	for id, run := range map[string]*protocol.RoutineRun{
 		daily:  {Path: "agents/daily.md#1h", At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 		weekly: {Path: "agents/Weekly report.md#1h", At: time.Date(2026, 1, 3, 3, 4, 5, 0, time.UTC), OneOff: true},
 	} {
@@ -135,6 +135,21 @@ func searchTestSessions(t *testing.T, s *SessionService, slack slackLookup, quer
 	return search, matches
 }
 
+func searchSessionsInTurn(t *testing.T, s *SessionService, slack slackLookup, criteria string, params *sessionListParams) *SessionSearch {
+	t.Helper()
+
+	var search *SessionSearch
+
+	_, err := callInTurn(t, t.TempDir(), "main", &harness.Tool{Name: "search_sessions", Call: func(ctx context.Context, _ json.RawMessage, _ chan<- harness.ChatResponse) (result harness.ToolResult, err error) {
+		search, err = s.searchSessionsWithin(ctx, criteria, params, slack)
+
+		return result, err
+	}}, `{}`)
+	require.NoError(t, err)
+
+	return search
+}
+
 func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 	t.Parallel()
 	s, slack := newSessionSearchFixture(t)
@@ -142,7 +157,7 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 	require.NoError(t, s.UpsertThread("written-web", ThreadState{Agent: "main"}))
 	require.NoError(t, s.UpsertThread(searchChatW, ThreadState{Agent: "other", CreatedBy: ThreadCreator(`Writer "One"`)}))
 	require.NoError(t, s.startSubagent(ctx, "written-web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "main"}), "an unindexed subagent session leaves search complete")
-	recordTestConversations(t, s, "main", map[string]ConversationKind{"cron:daily": KindCronRun})
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"cron:daily": KindRoutineRun})
 
 	var authored int64
 
@@ -200,8 +215,7 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 	require.Len(t, matches, 1, "a person who wrote only on a branch left behind stays a participant")
 	require.Equal(t, []string{`Writer "One"`, "Writer Attachment", "Writer Cut", "Writer Two"}, filtered.Principals)
 
-	search, err := s.searchSessionsWithin(ctx, `principal:"Writer \"One\"" principal:"Writer Two"`, &sessionListParams{}, slack)
-	require.NoError(t, err)
+	search := searchSessionsInTurn(t, s, slack, `principal:"Writer \"One\"" principal:"Writer Two"`, &sessionListParams{})
 	require.Len(t, search.Matches, 1)
 	require.Equal(t, searchChatA, search.Matches[0].Chat.Session.Conversation.ID)
 }
@@ -437,8 +451,7 @@ VALUES ('alice', $6, $1, now(), FALSE), ('alice', $7, $2, now(), TRUE), ('alice'
 		require.Equal(t, tc.ids, ids, "%s %s", tc.username, tc.query)
 	}
 
-	search, err := s.searchSessionsWithin(ctx, "is:unread", &sessionListParams{}, slack)
-	require.NoError(t, err)
+	search := searchSessionsInTurn(t, s, slack, "is:unread", &sessionListParams{})
 	require.Empty(t, search.Text, "is:unread is a filter for the agent tool too")
 	require.Empty(t, search.Matches, "the agent tool searches for no person")
 }
@@ -486,15 +499,13 @@ func TestSearchSessionsWorkTerms(t *testing.T) {
 		require.Equal(t, want, ids, query)
 	}
 
-	search, err := s.searchSessionsWithin(ctx, "is:waiting", &sessionListParams{}, slack)
-	require.NoError(t, err)
+	search := searchSessionsInTurn(t, s, slack, "is:waiting", &sessionListParams{})
 	require.Len(t, search.Matches, 1, "the agent tool reads the same terms")
 	require.Equal(t, searchChatW, search.Matches[0].Chat.Session.Conversation.ID)
 
 	since := strings.TrimSuffix(time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339Nano), "Z")
 	for query, want := range map[string][]string{"is:queued": {searchChatA, searchChatW}, "agent:main": {searchChatX, searchChatA}} {
-		search, err := s.searchSessionsWithin(ctx, query, &sessionListParams{Since: since}, slack)
-		require.NoError(t, err)
+		search := searchSessionsInTurn(t, s, slack, query, &sessionListParams{Since: since})
 
 		ids := make([]string, 0, len(search.Matches))
 		for i := range search.Matches {

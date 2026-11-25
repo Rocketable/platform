@@ -1,12 +1,14 @@
 package harness
 
 import (
+	"errors"
 	"maps"
 	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,6 +49,9 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 		{"unknown subagent provider", easyRequired + "\nsubagents: [nope/gpt-6]", `main.md: model "nope/gpt-6": provider "nope" is not configured`},
 		{"unknown subagent prefix provider", easyRequired + "\nsubagents: ['nope/*']", `main.md: model "nope/*": provider "nope" is not configured`},
 		{"subagent star inside", easyRequired + "\nsubagents: ['work/*#high']", `main.md: subagents: "work/*#high": * may only end an entry`},
+		{"agent wildcard", easyRequired + "\nsubagents: [{agent: '*'}]", `main.md: subagents: agent "*": name one agent; wildcards are not supported`},
+		{"agent pattern", easyRequired + "\nsubagents: [{agent: 'writer-*'}]", `main.md: subagents: agent "writer-*": name one agent; wildcards are not supported`},
+		{"subagent entry of another shape", easyRequired + "\nsubagents: [{model: gpt-6}]", "main.md: subagents: must be auto or a list of models and {agent: name} entries"},
 		{"unknown approver provider", easyRequired + "\napprover: {model: nope/gpt-6}", `main.md: model "nope/gpt-6": provider "nope" is not configured`},
 		{"misspelled approver key", easyRequired + "\napprover: {promt: rules}", "main.md: approver.promt: not an easy-mode key"},
 		{"approver decision", easyRequired + "\napprover: {decision: {model: openai/gpt-6-luna}}", "main.md: approver.decision: not an easy-mode key"},
@@ -75,6 +80,18 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 		{"approver wildcard target", easyRequired + "\napprover: {allowedNetworkTargets: ['*.googleapis.com']}", "main.md: approver.allowedNetworkTargets: *.googleapis.com: wildcards and CIDR ranges are not supported"},
 		{"approver reserved command name", easyRequired + "\napprover: {commands: {curl: /usr/bin/curl}}", "main.md: approver.commands: curl is the emulated shell's own"},
 		{"approver secrets not a list", easyRequired + "\napprover: {secretsARN: arn::one}", "main.md: approver.secretsARN: must be a list of ARNs"},
+		{"approver copy model", easyRequired + "\napprover: {subagents: [gpt-6-luna]}", "main.md: approver.subagents: must be a list of {agent: name} entries"},
+		{"approver subagents auto", easyRequired + "\napprover: {subagents: auto}", "main.md: approver.subagents: must be a list of {agent: name} entries"},
+		{"leftover delegatedFrom", easyRequired + "\ndelegatedFrom: false", "main.md: delegatedFrom: not an easy-mode key"},
+		{"schedule phrase", easyRequired + "\nroutines: [every 30min]", `main.md: routines: schedule "every 30min": invalid cron expression: expected exactly 5 fields, found 2: [every 30min]`},
+		{"duplicate schedule", easyRequired + "\nroutines: [30m, {' 30m': Again.}]", `main.md: routines: schedule "30m" is listed twice`},
+		{"advanced schedule phrase", "model: gpt-5.4\nroutines: [every 30min]", `main.md: routines: schedule "every 30min": invalid cron expression: expected exactly 5 fields, found 2: [every 30min]`},
+		{"advanced unknown provider", "model: nope/gpt-6", `main.md: model "nope/gpt-6": provider "nope" is not configured`},
+		{"advanced unknown key", "model: gpt-5.4\nsudu: yes", "main.md: sudu: not an advanced-mode key"},
+		{"advanced approver", "model: gpt-5.4\napprover: {model: gpt-5.4}", "main.md: approver: not an advanced-mode key"},
+		{"duplicate tag", easyRequired + "\nrocketclaw: [tags]\ntags: [[red], [red]]", `main.md: tags: empty or duplicate tag name "red"`},
+		{"approver empty tag", easyRequired + "\napprover: {rocketclaw: [tags], tags: [['']]}", `main.md: approver.tags: empty or duplicate tag name ""`},
+		{"advanced empty tag group", "model: gpt-5.4\npermission: {rocketclaw: {rocketclaw_set_tag: [[]]}}", "main.md: permission.rocketclaw.rocketclaw_set_tag: tag groups must not be empty"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, errs := loadEasyTestAgent(t, tc.frontmatter)
@@ -106,22 +123,20 @@ func TestLoadEasyAgentFields(t *testing.T) {
 
 		one := 1
 
-		require.Equal(t, AgentModeEasy, agent.Mode)
 		require.Equal(t, "gpt-6.1-sol", agent.Model)
 		require.Equal(t, "high", agent.ReasoningEffort)
 		require.Equal(t, "Marketing", agent.Space)
 		require.Equal(t, "sessions/$ROCKETCLAW_CONVERSATION_ID", agent.WorkingDirectory)
 		require.Equal(t, CustomShell{Emulated: true}, agent.CustomShell, "emulated, and failing closed until set up per turn")
 		require.Equal(t, &one, agent.MaxRecursion)
-		require.Equal(t, []string{"gpt-6.1-sol#high"}, agent.Subagents)
+		require.Equal(t, []string{"gpt-6.1-sol#high"}, agent.CloneModels)
 		require.Equal(t, "Body", agent.Prompt)
-		require.Nil(t, agent.DelegatedFrom)
 		require.Nil(t, agent.NetworkTargets)
 		require.Nil(t, agent.Commands)
 		require.Nil(t, agent.SecretsARN)
 		require.Nil(t, agent.TagGroups)
 		require.Empty(t, agent.ApproverModel+agent.ApproverPrompt)
-		require.Equal(t, []any{AgentModeEasy, agent.WorkingDirectory, agent.CustomShell}, []any{agent.Approver.Mode, agent.Approver.WorkingDirectory, agent.Approver.CustomShell}, "every easy agent's approver works in its folder")
+		require.Equal(t, []any{agent.WorkingDirectory, agent.CustomShell}, []any{agent.Approver.WorkingDirectory, agent.Approver.CustomShell}, "every easy agent's approver works in its folder")
 		require.Len(t, agent.Approver.Permission.Buckets, 4, "read, glob and grep, and the rocketclaw groups no approver gets")
 	})
 
@@ -141,21 +156,23 @@ allowedNetworkTargets: [api.stripe.com, "https://api.example.com/v1/"]
 routines:
   - "*/5 * * * *": Check the dashboard.
   - 30m
-delegatedFrom: [main]
 schema: {output: {type: object, properties: {answer: {type: string}}}}`)
 		require.Empty(t, errs)
 
 		zero := 0
 		require.Equal(t, &zero, agent.MaxRecursion)
-		require.Equal(t, []string{"work/gpt-6-luna#max", "gpt-6-luna"}, agent.Subagents)
+		require.Equal(t, []string{"work/gpt-6-luna#max", "gpt-6-luna"}, agent.CloneModels)
 		require.Equal(t, "work/gpt-6-luna#max", agent.ApproverModel)
 		require.Equal(t, "Deny writes.", agent.ApproverPrompt)
 		require.Equal(t, []string{"arn::marketing-read"}, agent.SecretsARN)
 		require.Equal(t, map[string]string{"stripe-write": "stripe -c $ROCKETCLAW_METADATA_CUSTOMER_ID"}, agent.Commands)
 		require.Equal(t, [][]string{{"triage", "resolved"}}, agent.TagGroups)
 		require.Equal(t, []string{"api.stripe.com", "https://api.example.com/v1/"}, agent.NetworkTargets)
-		require.Equal(t, []AgentRoutine{{Schedule: "*/5 * * * *", Instruction: "Check the dashboard."}, {Schedule: "30m"}}, agent.Routines)
-		require.Equal(t, []string{"main"}, agent.DelegatedFrom)
+
+		every5Minutes, errFive := config.ParseRoutineSchedule("*/5 * * * *")
+		every30Minutes, errThirty := config.ParseRoutineSchedule("30m")
+		require.NoError(t, errors.Join(errFive, errThirty))
+		require.Equal(t, []AgentRoutine{{Schedule: every5Minutes, Instruction: "Check the dashboard."}, {Schedule: every30Minutes}}, agent.Routines)
 		require.Equal(t, map[string]any{"type": "object", "properties": map[string]any{"answer": map[string]any{"type": "string"}}}, agent.OutputSchema)
 	})
 
@@ -168,22 +185,63 @@ schema: {output: {type: object, properties: {answer: {type: string}}}}`)
 		}
 	})
 
-	t.Run("delegatedFrom false", func(t *testing.T) {
-		agent, errs := loadEasyTestAgent(t, easyRequired+"\ndelegatedFrom: false")
-		require.Empty(t, errs)
-		require.Equal(t, []string{}, agent.DelegatedFrom)
-	})
-
 	t.Run("advanced", func(t *testing.T) {
-		for _, frontmatter := range []string{"model: gpt-5.4\ndescription: Main\nskils: [ignored]", "mode: advanced\nmodel: gpt-5.4\ndescription: Main\nskils: [ignored]"} {
+		for _, frontmatter := range []string{"model: gpt-5.4\ndescription: Main", "mode: advanced\nmodel: gpt-5.4\ndescription: Main"} {
 			agent, errs := loadEasyTestAgent(t, frontmatter)
 			require.Empty(t, errs)
-			require.Equal(t, AgentModeAdvanced, agent.Mode)
 			require.Equal(t, "Main", agent.Description)
-			require.False(t, agent.Permission.Easy)
-			require.Nil(t, agent.MaxRecursion)
+			require.Equal(t, new(1), agent.MaxRecursion)
 		}
 	})
+}
+
+func TestEasySubagentTargets(t *testing.T) {
+	agent, errs := loadEasyTestAgent(t, easyRequired+"\nsubagents: [gpt-6-luna, {agent: writer}]")
+	require.Empty(t, errs)
+	require.Equal(t, []string{"gpt-6-luna"}, agent.CloneModels)
+
+	var tasks []PermissionRule
+
+	for _, bucket := range agent.Permission.Buckets {
+		if bucket.Name == "task" {
+			tasks = append(tasks, bucket.Rules...)
+		}
+	}
+
+	require.Equal(t, []PermissionRule{{Pattern: "writer", Action: PermissionAuto}}, tasks, "the agent entry is a reviewed target, and the agent is no target of its own")
+
+	for _, name := range []string{"writer", "reader"} {
+		action, _ := agent.Approver.Permission.Evaluate("task", name)
+		require.Equal(t, map[string]PermissionAction{"writer": PermissionAuto, "reader": PermissionDeny}[name], action, "the reviewer borrows the agent's targets: %s", name)
+	}
+
+	agent, errs = loadEasyTestAgent(t, easyRequired+"\nsubagents: [{agent: writer}]\napprover: {subagents: [{agent: reader}]}")
+	require.Empty(t, errs)
+	require.Empty(t, agent.CloneModels)
+	require.Nil(t, agent.Approver.CloneModels)
+
+	for _, name := range []string{"writer", "reader"} {
+		action, _ := agent.Approver.Permission.Evaluate("task", name)
+		require.Equal(t, map[string]PermissionAction{"writer": PermissionDeny, "reader": PermissionAuto}[name], action, "the reviewer's own list replaces the agent's: %s", name)
+	}
+}
+
+func TestEasyAndAdvancedShareRecordFields(t *testing.T) {
+	easy, errs := loadEasyTestAgent(t, easyRequired+"\nrocketclaw: [tags]\ntags: [[red, green], [open]]")
+	require.Empty(t, errs)
+
+	advanced, errs := loadEasyTestAgent(t, "model: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[red, green], [open]]")
+	require.Empty(t, errs)
+
+	require.Equal(t, [][]string{{"red", "green"}, {"open"}}, easy.TagGroups)
+	require.Equal(t, easy.TagGroups, advanced.TagGroups)
+	require.Equal(t, easy.ReplyHint, advanced.ReplyHint, "neither file asks for a reply style")
+	require.Empty(t, advanced.ReplyHint)
+	require.Equal(t, easy.MaxRecursion, advanced.MaxRecursion)
+
+	advanced, errs = loadEasyTestAgent(t, "model: gpt-5.4\nadditionalInstructions: Reply in one sentence.")
+	require.Empty(t, errs)
+	require.Equal(t, "Reply in one sentence.", advanced.ReplyHint)
 }
 
 func TestEasySubagentModelPrefixes(t *testing.T) {
@@ -207,69 +265,68 @@ func TestEasySubagentModelPrefixes(t *testing.T) {
 	}
 
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": agent}})
-	factory.agent = &agent
-	description := factory.taskDescription()
-	require.Contains(t, description, "Available models:\n- gpt-6-luna\n- work/*\n- gpt-6.1-sol#*")
-	require.Contains(t, description, "A listed entry ending in * stands for every model whose name, #effort included, starts with the text before the *")
+	tools, _ := factory.assembleTools(&agent)
+	clone := tools["task_clone"].Definition
+	require.Contains(t, clone.Description.Value, "Available models:\n- gpt-6-luna\n- work/*\n- gpt-6.1-sol#*")
+	require.Contains(t, clone.Description.Value, "A listed entry ending in * stands for every model whose name, #effort included, starts with the text before the *")
+	require.JSONEq(t, `{"type":"string"}`, string(marshalParameters(t, clone.Parameters["properties"].(map[string]any)["model"].(map[string]any))), "a wildcard entry leaves the model open to every name it matches")
 }
 
 func TestEasyAgentPermissions(t *testing.T) {
 	agent, errs := loadEasyTestAgent(t, easyRequired)
 	require.Empty(t, errs)
-	require.True(t, agent.Permission.Easy)
 	require.False(t, agent.Permission.Sudo)
 
 	for _, tc := range []struct {
 		permission, subject string
 		want                PermissionAction
 	}{
-		{"bash", "rm -rf build", PermissionAuto},
-		{"read", "notes.md", PermissionAuto},
-		{"edit", "notes.md", PermissionAuto},
-		{"glob", "*.md", PermissionAuto},
-		{"grep", "TODO", PermissionAuto},
-		{"webfetch", "https://example.com", PermissionAuto},
-		{"websearch", "*", PermissionAuto},
+		{"bash", "rm -rf build", PermissionAllow},
+		{"read", "notes.md", PermissionAllow},
+		{"edit", "notes.md", PermissionAllow},
+		{"glob", "*.md", PermissionAllow},
+		{"grep", "TODO", PermissionAllow},
+		{"webfetch", "https://example.com", PermissionAllow},
+		{"websearch", "*", PermissionAllow},
 		{"opencode", "local", PermissionDeny},
 		{"mcp", "s.update_x", PermissionDeny},
 		{"mcp", "t.get_x", PermissionDeny},
 		{"rocketclaw", codeModeApproveSubject, PermissionAuto},
-		{"rocketclaw", "rocketclaw_sessions", PermissionAuto},
-		{"rocketclaw", "rocketclaw_kv_store", PermissionAuto},
-		{"rocketclaw", "rocketclaw_list", PermissionAuto},
-		{"rocketclaw", AllowBackgroundSubject, PermissionAuto},
-		{"rocketclaw", "rocketclaw_restart", PermissionAuto},
+		{"rocketclaw", "rocketclaw_sessions", PermissionAllow},
+		{"rocketclaw", "rocketclaw_kv_store", PermissionAllow},
+		{"rocketclaw", "rocketclaw_list", PermissionAllow},
+		{"rocketclaw", AllowBackgroundSubject, PermissionAllow},
+		{"rocketclaw", "rocketclaw_restart", PermissionAllow},
 		{"rocketclaw", "rocketclaw_set_tag", PermissionDeny},
-		{"task", "main", PermissionAllow},
+		{"task", "main", PermissionDeny},
 		{"task", "other", PermissionDeny},
+		{"task_clone", "gpt-6.1-sol#high", PermissionAllow},
 		{"skill", "support", PermissionAllow},
 	} {
 		action, _ := agent.Permission.Evaluate(tc.permission, tc.subject)
 		require.Equal(t, tc.want, action, tc.permission+" "+tc.subject)
-
-		if tc.want == PermissionAuto && tc.permission != "rocketclaw" || tc.subject == "rocketclaw_restart" || tc.subject == AllowBackgroundSubject {
-			require.True(t, agent.Permission.Enabled(tc.permission, tc.subject), tc.subject)
-		}
+		require.Equal(t, tc.want == PermissionAllow, agent.Permission.Enabled(tc.permission, tc.subject), tc.subject)
 	}
 
-	var allowed []string
+	var reviewed []string
 
 	for _, bucket := range agent.Permission.Buckets {
 		for _, rule := range bucket.Rules {
-			if rule.Action == PermissionAllow {
-				allowed = append(allowed, bucket.Name+" "+rule.Pattern)
+			if rule.Action == PermissionAuto {
+				reviewed = append(reviewed, bucket.Name+" "+rule.Pattern)
 			}
 		}
 	}
 
-	require.ElementsMatch(t, []string{"skill *", "task main"}, allowed)
+	require.Equal(t, []string{"rocketclaw " + codeModeApproveSubject}, reviewed, "only the whole script is reviewed")
 	require.Empty(t, visibleMCPServers(agent.Permission, []string{"s", "t"}))
 	require.NotContains(t, PermissionPrompt(agent.Permission), "Sudo Mode")
 
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": agent}})
 	model, hosts := factory.assembleTools(&agent)
 
-	require.Subset(t, slices.Collect(maps.Keys(model)), []string{"skill", "task", executeToolName})
+	require.Subset(t, slices.Collect(maps.Keys(model)), []string{"skill", executeToolName, "task_clone"})
+	require.NotContains(t, model, "task", "model entries alone name no target")
 	require.Subset(t, slices.Collect(maps.Keys(hosts)), []string{"bash", "read"})
 	require.Equal(t, "Body\n\nWhen a turn carries a note that the message did not address you, "+UnaddressedReadOnly, factory.sessionSystemPrompt(t.Context(), &agent))
 }
@@ -299,8 +356,7 @@ func TestEasyAgentSections(t *testing.T) {
 			off: [][2]string{{"mcp", "t.get_x"}}},
 		{name: "no mcp", sections: "mcp: {}", off: [][2]string{{"mcp", "s.list_reports"}, {"mcp", "t.get_x"}}},
 		{name: "opencode server", sections: "opencode: [local]", on: [][2]string{{"opencode", "local"}}, off: [][2]string{{"opencode", "other"}}},
-		{name: "no subagents", sections: "subagents: []", off: [][2]string{{"task", "main"}}},
-		{name: "no recursion", sections: "maxRecursion: 0", off: [][2]string{{"task", "main"}}},
+		{name: "no subagents", sections: "subagents: []", off: [][2]string{{"task", "main"}, {"task_clone", "gpt-6.1-sol#high"}}},
 		{name: "no decision models", off: [][2]string{{"decision", "openai/gpt-6-luna"}}},
 		{name: "decision model", sections: "decision: [openai/gpt-6-luna]",
 			on:  [][2]string{{"decision", "openai/gpt-6-luna"}},
@@ -330,8 +386,8 @@ func TestEasyAgentSections(t *testing.T) {
 	require.Empty(t, errs)
 	require.Equal(t, []string{"s"}, visibleMCPServers(agent.Permission, []string{"s", "t"}))
 	require.Equal(t, []PermissionRule{
-		{Pattern: "s.list_*", Action: PermissionAuto, Except: []string{"s.list_secrets"}},
-		{Pattern: "s.update_*", Action: PermissionAuto},
+		{Pattern: "s.list_*", Action: PermissionAllow, Except: []string{"s.list_secrets"}},
+		{Pattern: "s.update_*", Action: PermissionAllow},
 	}, agent.Permission.Buckets[slices.IndexFunc(agent.Permission.Buckets, func(bucket PermissionBucket) bool { return bucket.Name == mcpPermissionBucket })].Rules)
 
 	openCodeAPI := looperTool{Permission: "opencode", VisibilitySubjects: []string{"local", "other"}}
@@ -365,7 +421,6 @@ func TestEasyApproverTools(t *testing.T) {
 			agent, errs := loadEasyTestAgent(t, easyRequired+"\napprover:\n  "+strings.ReplaceAll(tc.approver, "\n", "\n  "))
 			require.Empty(t, errs)
 			require.NotNil(t, agent.Approver)
-			require.False(t, agent.Approver.Permission.Easy)
 
 			for _, subject := range slices.Concat(guardian, tc.on) {
 				action, _ := agent.Approver.Permission.Evaluate(subject[0], subject[1])
@@ -395,7 +450,7 @@ approver:
 	require.Empty(t, errs)
 
 	approver := agent.Approver
-	require.Equal(t, []any{guardianAgentName, AgentModeEasy, "low"}, []any{approver.Name, approver.Mode, approver.ReasoningEffort})
+	require.Equal(t, []any{guardianAgentName, "low"}, []any{approver.Name, approver.ReasoningEffort})
 	require.Equal(t, agent.WorkingDirectory, approver.WorkingDirectory, "the reviewer works in the agent's folder")
 	require.Equal(t, CustomShell{Path: "/usr/local/bin/wrap"}, approver.CustomShell, "and in the agent's kind of shell")
 	require.Equal(t, [][]string{{"red", "green"}}, approver.TagGroups)

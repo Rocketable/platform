@@ -134,7 +134,7 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
-	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun, "one-off-cron:once": KindOneOffCronRun})
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindRoutineRun, "one-off-cron:once": KindOneOffRoutineRun})
 
 	for _, conversationID := range []string{"cron:daily", "one-off-cron:once"} {
 		_, err := s.AppendEntryID(ctx, conversationID, testSessionEntry("hidden prompt", "hidden answer"))
@@ -142,7 +142,7 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 	}
 
 	const handoff = "web:cron:cron/daily.md:1"
-	require.NoError(t, s.UpsertThread(handoff, ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, s.UpsertThread(handoff, ThreadState{Agent: "main", CreatedBy: ThreadCreatedByRoutine}))
 	recordTestConversations(t, s, "main", map[string]ConversationKind{handoff + "/call-1": KindSubagent})
 	handoffID, err := s.AppendEntryID(ctx, handoff, testSessionEntry("handoff prompt", "handoff answer"))
 	require.NoError(t, err)
@@ -183,7 +183,7 @@ func TestMessageSearchIndexesBoundRunEntries(t *testing.T) {
 	manager, _ := newTestBridgeManager(t, config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), s, make(chan *protocol.OutboundMessage, 4))
 	rt := &Runtime{Sessions: s, threads: manager}
 
-	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun})
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindRoutineRun})
 	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "web-dest", Agent: "main"}))
 
 	reference := uploadTestAttachment(t, s, "cron:daily", "cron-file")
@@ -208,7 +208,7 @@ func TestMessageSearchIndexesBoundRunEntries(t *testing.T) {
 	bindTestRun(t, s, "cron:daily", "web-dest")
 	require.Len(t, messageSearchTestRows(t, s, "web-dest"), 2, "binding again indexes nothing new")
 
-	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:broken": KindCronRun})
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:broken": KindRoutineRun})
 	_, err = s.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('cron:broken', '{"replay_input":[{"type":"message","id":"msg_2","role":"assistant","content":[{"type":"output_text","text":"ok"},{"type":"refusal","refusal":"no","text":7}]}]}', '')`)
 	require.NoError(t, err)
 	_, _, err = (stateDAO{db: s.db}).bindRun(ctx, "cron:broken", "web-dest")
@@ -222,7 +222,7 @@ func TestMessageSearchFindsContinuedRun(t *testing.T) {
 	ctx := t.Context()
 	manager, _ := newTestBridgeManager(t, config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), s, make(chan *protocol.OutboundMessage, 4))
 	rt := &Runtime{Sessions: s, threads: manager}
-	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun, "cron:other": KindCronRun})
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindRoutineRun, "cron:other": KindRoutineRun})
 
 	for _, id := range []string{"thread", "web:cron:daily", "web:cron:other"} {
 		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
@@ -281,7 +281,7 @@ func TestMessagePrincipalsFollowHistory(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:weekly": KindCronRun})
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:weekly": KindRoutineRun})
 	require.NoError(t, (&Runtime{Sessions: s}).CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "main"}))
 	bindTestRun(t, s, "cron:weekly", "chat")
 	_, err := s.AppendEntryID(ctx, "cron:weekly", testReplayEntry(`{"type":"message","role":"user","prompt_header":"[Cron principal=\"Cron Writer\"]","content":"report"}`))
@@ -321,7 +321,7 @@ func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
 	ctx := t.Context()
 	bridge := &Bridge{config: Config{ConversationID: "chat", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})}
-	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun})
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindRoutineRun})
 	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "main"}))
 
 	prompt := func(principal string) *harness.SessionEntry {
@@ -406,7 +406,7 @@ func TestMessageSearchSkipsRunEntriesBeforeAttach(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun})
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindRoutineRun})
 	require.NoError(t, (&Runtime{Sessions: s}).CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "main"}))
 	_, err := s.AppendEntryID(ctx, "cron:daily", testReplayEntry(`{"type":"compaction","id":"cmp_1","encrypted_content":"sealed"}`, `{"type":"message","role":"user","content":"early report"}`))
 	require.NoError(t, err)
@@ -717,7 +717,7 @@ func TestSearchMessagesReadEveryBranch(t *testing.T) {
 	third, err := s.AppendEntryID(ctx, "main", testSessionEntry("needle 8", "needle 9"))
 	require.NoError(t, err)
 
-	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun})
+	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindRoutineRun})
 	_, err = s.AppendEntryID(ctx, "cron:daily", testSessionEntry("needle cron", "answer"))
 	require.NoError(t, err)
 	require.NoError(t, s.RegisterExternalMCPConversation("public", "main", &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "managed", Agent: "main"}))
@@ -850,7 +850,7 @@ func TestSearchMessagesMatchesGoReference(t *testing.T) {
 
 	require.Greater(t, len(want), 300)
 
-	recordTestConversations(t, s, "main", map[string]ConversationKind{"cron:daily": KindCronRun, "private": KindExternalMCPRun})
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"cron:daily": KindRoutineRun, "private": KindExternalMCPRun})
 
 	for _, id := range []string{"cron:daily", "private"} {
 		_, err := s.AppendEntryID(ctx, id, testReplayEntry(item("user"), item("assistant"), item("user")))

@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
-	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -188,16 +187,6 @@ func (s *Server) uploadContent(ctx context.Context, conversationID, text string,
 
 	defer func() { _ = root.Close() }()
 
-	thread, _, err := s.sessions.Thread(conversationID)
-	if err != nil {
-		return content, fmt.Errorf("read upload conversation: %w", err)
-	}
-
-	agents, err := backend.LoadRuntimeAgents(s.cfg, cfg.RuntimeDirName())
-	if err != nil {
-		return content, fmt.Errorf("load upload agents: %w", err)
-	}
-
 	for _, id := range ids {
 		attachment, err := s.sessions.LoadAttachment(ctx, conversationID, id, true)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -208,13 +197,8 @@ func (s *Server) uploadContent(ctx context.Context, conversationID, text string,
 			return content, fmt.Errorf("load prompt upload: %w", err)
 		}
 
-		path := filepath.Join("artifacts", "uploads", attachment.ID, attachment.Name)
-		reference := fmt.Sprintf("attachment:%s %q (workspace path %q)", attachment.ID, attachment.Name, path)
-
-		if agents.Items[thread.Agent].Mode == harness.AgentModeEasy {
-			path = filepath.Join(backend.EasyUploadDir(cfg, conversationID), attachment.ID, attachment.Name)
-			reference = fmt.Sprintf("attachment:%s %q (path %q)", attachment.ID, attachment.Name, filepath.Join(cfg.Workspace, path))
-		}
+		path := filepath.Join(backend.UploadDir(cfg, conversationID), attachment.ID, attachment.Name)
+		reference := fmt.Sprintf("attachment:%s %q (path %q)", attachment.ID, attachment.Name, filepath.Join(cfg.Workspace, path))
 
 		if err := root.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return content, fmt.Errorf("create upload directory: %w", err)

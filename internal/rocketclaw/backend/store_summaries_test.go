@@ -29,7 +29,7 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	header := provenanceHeader(&promptProvenance{origin: "Web", principal: "alice", additionalInstructions: defaultReplyInstruction})
+	header := provenanceHeader(&promptProvenance{origin: "Web", principal: "alice", additionalInstructions: "Reply in one sentence."})
 	body, err := json.Marshal(header + "\n\n" + header + "\n\nbody")
 	require.NoError(t, err)
 	headerJSON, err := json.Marshal(header)
@@ -435,7 +435,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	recordTestConversations(t, service, "main", map[string]ConversationKind{"cron:private": KindCronRun, "one-off-cron:private": KindOneOffCronRun, "private": KindExternalMCPRun})
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"cron:private": KindRoutineRun, "one-off-cron:private": KindOneOffRoutineRun, "private": KindExternalMCPRun})
 
 	for _, id := range []string{"a", "Z", "ä", "empty", "missing", "zero", "cron:private", "one-off-cron:private", "private"} {
 		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
@@ -1025,7 +1025,7 @@ func TestChatEntryFactsFollowWrites(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	recordTestConversations(t, s, "main", map[string]ConversationKind{"early": KindCronRun, "late": KindCronRun})
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"early": KindRoutineRun, "late": KindRoutineRun})
 
 	for _, id := range []string{"attached", "own"} {
 		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))

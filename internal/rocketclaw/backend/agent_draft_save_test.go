@@ -232,17 +232,10 @@ func TestSaveAgentDraftRefusesBeforeWriting(t *testing.T) {
 	ds.edit(t, draft.ID, &AgentDraftOp{Kind: AgentDraftSetField, Variant: "a", Key: "sticky", Value: "sometimes"})
 
 	_, err = ds.save(t, draft.ID)
-	help, _ := agentSettingHelp("sticky", harness.AgentModeAdvanced)
-	require.Equal(t, []AgentDraftProblem{{Variant: "a", Key: "sticky", Sentence: help.Allowed}}, refusal(t, err).Problems)
+	require.Equal(t, []AgentDraftProblem{{Variant: "a", Key: "sticky", Sentence: agentSettingHelp("sticky", harness.AgentModeAdvanced).Allowed}}, refusal(t, err).Problems)
 	unchanged()
 
 	ds.edit(t, draft.ID, &AgentDraftOp{Kind: AgentDraftSetField, Variant: "a", Key: "sticky"})
-	writeAgentFile(t, ds.workspace, "broken", "---\nsticky: sometimes\n---\n")
-
-	_, err = ds.save(t, draft.ID)
-	require.Contains(t, refusal(t, err).Problem, "broken.md")
-	unchanged()
-	require.NoError(t, os.Remove(filepath.Join(ds.workspace, "agents", "broken.md")))
 
 	_, err = ds.rt.Sessions.SaveAgentDraft(t.Context(), ds.rt, &AgentDraftSave{ID: draft.ID, Variant: "zz", Destination: "workspace", Author: "alice"})
 	require.EqualError(t, err, "That variant does not exist.")

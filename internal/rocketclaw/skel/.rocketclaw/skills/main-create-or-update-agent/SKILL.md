@@ -28,7 +28,7 @@ Only use these runtime paths:
 
 `main` is built into RocketClaw and has no file under `.rocketclaw/agents`. Never create, copy, edit, or rename anything to `agents/main.md` or `agents/main/`: RocketClaw ignores those files and logs a warning. An admin turns the built-in agent on or off and picks its model on the Web Config page, under Behavior settings. For any other change, create a new agent with another name.
 
-No agent can delegate to `main`: never give an agent a `task` rule for it, an `auto(main)` reviewer, or a plan to write into its sessions.
+Never give an agent an `auto(main)` reviewer, or a plan to `task` it: `main` is sticky. With the session tools it is an ordinary target, but it is sudo, so only sudo agents read its sessions and none writes into them.
 
 ## Required inputs
 
@@ -56,7 +56,7 @@ RocketCode denies all tools by default. Write only the explicit `allow` rules th
 
 A scalar `permission: allow` does not grant global access. Use explicit permission buckets instead.
 
-If the human wants an agent with every tool and feature, set `sudo: yes` and omit `permission`, except `permission.rocketclaw.rocketclaw_set_tag` tag groups and `permission.rocketclaw.rocketclaw_sessions_recipient`. Sudo offers every tool and sends every call to `guardian` for review, except skills, `task`, and the default-on RocketClaw tools. Also set a bounded `maxRecursion`, because a sudo agent can delegate to every agent, itself included.
+If the human wants an agent with every tool and feature, set `sudo: yes` and omit `permission`, except `permission.rocketclaw.rocketclaw_set_tag` tag groups. Sudo offers every tool and sends every call to `guardian` for review, except skills, `task`, and the default-on RocketClaw tools. Also set a bounded `maxRecursion`, because a sudo agent can delegate to every agent but other sudo agents, itself included. No other agent starts, writes into or reads a sudo agent's sessions, except that sudo agents may read them. To keep a sudo agent away from an agent, add `task: {<name>: deny}`: that keeps both `task` and the session tools off it, and `"*": deny` keeps them off every other agent, while its own sessions stay reachable.
 
 Built-in permission buckets:
 - `read`: root-relative file paths for the `read` tool
@@ -67,15 +67,14 @@ Built-in permission buckets:
 - `bash`: shell command call expressions parsed out of the command
 - `edit`: root-relative file paths touched by `apply_patch`
 - `skill`: skill names for `find_skills` and `skill`
-- `task`: subagent names for the `task` tool only
+- `task`: the agent's targets: agent names, or wildcards such as `"*"`, that the `task` tool may start and the session tools may reach; any action but `deny` makes a target, and the action still decides whether a `task` call is reviewed. The agent is its own target only when a rule names it
 - `decision`: `provider/model` names the Code Mode `decision` tool may call, such as `"typesafe/*": allow`; scripts call `decision(model=..., state={...}, questions={...}, images=[...])` inside `execute`, where images are workspace files the agent may `read`; the tool exists only when `decision` providers are configured in `rocketclaw.json`
 - `read` / `edit` / `glob` / `grep` / `webfetch` / `bash`: same subjects as before; unlock nested builtins inside Code Mode `execute` (not separate top-level tools)
 - `mcp`: outbound MCP by facet, a map from a configured `mcp_servers` name to a map from one of its facets (`mcp_servers.<name>.tools` in `rocketclaw.json`) to `allow` or `auto`; unlocks Code Mode `execute` MCP builtins for the granted facets' tools. When granted facets overlap, the more careful level wins. Raw tool names, wildcards, `deny`, and `auto(<agent>)` fail loading, and so does an unknown server or facet
 - `rocketclaw`: exact RocketClaw tool and setting names only; a wildcard key such as `"*"` or `rocketclaw_sessions_*`, or the scalar form `rocketclaw: allow`, fails agent loading
 - `rocketclaw.code_mode_approve`: optional whole-script Code Mode approval before `execute` runs; `allow` by default, independent of other RocketClaw rules and nested tool grants
 - `rocketclaw.allow_background`: `allow` lets the agent run `execute` scripts and `task` subagents in the background, steer, queue behind, or stop a running subagent through `task`'s `continue`, and gives it `rocketclaw_stop_background_job`; only `allow` or `deny`, `deny` by default, independent of other RocketClaw rules
-- `rocketclaw.rocketclaw_sessions`: lets the agent read saved conversations and start, message, and stop other Web sessions; `deny` (default), `auto`, `auto(<agent-name>)`, or `allow`
-- `rocketclaw.rocketclaw_sessions_recipient`: which agents may start, message, or stop this agent's sessions; `true` (default, except `false` for sudo agents), `false`, or a list of agent names
+- `rocketclaw.rocketclaw_sessions`: lets the agent read saved conversations and start, message, and stop Web sessions of its `task` targets; `deny` (default), `auto`, `auto(<agent-name>)`, or `allow`
 
 For edit-only agents, an `edit` allow also permits reading the same path unless a `read` rule matched first. Do not add a top-level deny that would block this fallback.
 
@@ -89,26 +88,22 @@ If the human wants the agent to leave long scripts or subagents running while th
 
 If the human wants the agent to read other conversations, start Web sessions, or send messages into other sessions, set `permission.rocketclaw.rocketclaw_sessions`. This one key offers `rocketclaw_sessions_list`, `rocketclaw_sessions_get`, `rocketclaw_sessions_current_id`, `rocketclaw_sessions_get_url`, and `rocketclaw_sessions_write`, plus `rocketclaw_sessions_move`, which moves the agent's own session to another space for everyone, when the agent has no `space:`:
 
-- `auto` or `auto(<agent-name>)`: every read and write is reviewed first; writes reach any chat Web lists, including Slack threads RocketClaw manages
+- `auto` or `auto(<agent-name>)`: every read and write is reviewed first
 - `allow`: the same, without review
 
-Omit it otherwise; the default is `deny`. The reads cover every conversation, private ones included. Older per-tool keys such as `rocketclaw_sessions_get: allow` or `rocketclaw_sessions_write: allow` still load but grant nothing, and `rocketclaw_sessions_write: children` fails agent loading. For example:
+Omit it otherwise; the default is `deny`. The tools reach only sessions of the agents its `task` rules name, private ones and Slack threads RocketClaw manages included; its own sessions only when a rule names the agent itself, which `rocketclaw_sessions_current_id` and `rocketclaw_sessions_move` need too. Sudo agents' sessions are out of reach, except that sudo agents read them. Older per-tool keys such as `rocketclaw_sessions_get: allow` or `rocketclaw_sessions_write: allow` still load but grant nothing, and `rocketclaw_sessions_write: children` fails agent loading. For example:
 
 ```yaml
 permission:
+  task:
+    writer: allow
   rocketclaw:
     rocketclaw_sessions: auto
 ```
 
 There is no separate stop tool: `rocketclaw_sessions_write` with `mode: stop` and an empty `prompt` stops a session. Each write that returns a `queue_item_id` comes back later as one `<session_reply>` note carrying the other session's answer, so tell the agent not to wait, poll, or write again for it.
 
-If the human wants to protect an agent from other agents, set `permission.rocketclaw.rocketclaw_sessions_recipient` on the protected agent:
-
-- `true` (default): any agent may start, message, or stop its sessions
-- `false` (default for sudo agents): no agent may, not even another session of the same agent
-- a list of agent names, such as `[main]`: only those agents may
-
-The check uses the agent that makes the call, so a `task` subagent is checked as its own agent, not as its parent's. A refused write fails before anything is created, queued, or stopped.
+Protection is the caller's own rules: an agent reaches another agent's sessions only when its own `task` rules name it. To keep agents out of an agent's sessions, leave it out of their `task` rules, and avoid `"*"` there.
 
 The Hosted Page tools `rocketclaw_store`, `rocketclaw_read`, `rocketclaw_delete`, `rocketclaw_list`, `rocketclaw_kv_store`, and `rocketclaw_kv_read` each need their own `allow` rule too. Grant them to agents that publish reports, dashboards, or graphs. Pages belong to the space of the chat that publishes them, which for an agent with a `space:` is that space; every chat in the space can replace them, so an agent that needs a stable address of its own publishes under a folder, such as `reporter/q3.html`.
 
@@ -178,7 +173,7 @@ Every `auto` check, whole-script checks (`code_mode_approve`) included, goes to 
 | --- | --- | --- |
 | Advanced, `auto` (or `sudo`) | `guardian` on `auto_approver_model` | the guardian's policy |
 | Advanced, `auto(<agent-name>)` | that agent | its body |
-| Easy, everything reviewed | `guardian` on `approver.model`, then `auto_approver_model` | the guardian's policy + `approver.prompt` |
+| Easy, each `execute` script | `guardian` on `approver.model`, then `auto_approver_model` | the guardian's policy + `approver.prompt` |
 
 The provider of every model in an easy agent's `decision` list must be configured under `decision` in `rocketclaw.json`, or the agent fails to load. An advanced `permission.decision` rule naming an unconfigured provider still loads, but every call to it returns `stop_reason` `"error"`, so check its provider too. Use `main-update-rocketclaw-json` to add a provider.
 
@@ -236,8 +231,8 @@ Account for these rocketcode runtime facts when designing agent instructions and
 - The shell tool statically denies common direct env-file and external-path attempts such as `cat .env`, `cat ../outside`, and `cd /tmp`, but this is only a preflight guardrail, not an OS-enforced shell sandbox for dynamically generated paths.
 - `task` subagents never get `ask_user_question` or `rocketclaw_navigate_for_me`, whatever their permissions.
 - Each `task` subagent runs as a session of its own, hidden from the sidebar, with its own permissions and Background Jobs; its `rocketclaw_sessions_write` and session tags act for its top-level session, but replies to its writes come back to the subagent itself. When a reply or one of its own Background Jobs wakes a subagent after its `task` call returned, its new answer reaches its parent as a note.
-- Prompt shell expansion with ``!`command` `` works in agent bodies, routine instructions, the `SKILL.md` of loaded skills, and approver prompts. RocketClaw does not read `AGENTS.md` by itself; write ``!`cat AGENTS.md` `` in the body to include it. A command's output and the arguments passed to a skill stay literal.
-- Prompt shell expansion runs from the workspace root and captures stdout only. The default runner uses `/bin/bash`, ignores `$SHELL`, and disables startup files and inherited shell functions/options. For an agent that sets `shell`, these lines run through that shell instead.
+- Prompt shell expansion with ``!`command` `` works in agent bodies, routine instructions, the `SKILL.md` of loaded skills, and approver prompts. RocketClaw does not read `AGENTS.md` by itself; write ``!`cat AGENTS.md` `` in the body to include it. Except in routine instructions, they run in host bash from the workspace, with the agent's secrets, whatever its `shell`. A command's output and the arguments passed to a skill stay literal: a skill's lines run before its arguments go in.
+- Prompt shell expansion runs from the workspace root and captures stdout only. The default runner uses `/bin/bash`, ignores `$SHELL`, and disables startup files and inherited shell functions/options. Only the lines in a routine's instruction run through the agent's `shell` instead.
 
 ## Name and path handling
 
@@ -288,12 +283,12 @@ The `model` value is required. Use a real model name such as `gpt-6.1-sol` or `p
 When updating an existing agent, preserve the existing non-empty `model` unless the human explicitly asked to change it. If the existing agent has no `model` or an empty `model`, ask the human which model to use and add it.
 
 The optional `maxRecursion` frontmatter field controls task subdelegation depth for inferences started with that agent:
-- omitted or `-1` means unlimited subdelegation
+- omitted means `1`, counted from the top-level agent
 - `0` disables subdelegation
 - a positive integer caps delegation to that many task levels
-- invalid values fail agent loading
+- negative or other invalid values fail agent loading
 
-The optional `shell` frontmatter field runs every shell command for that agent instead of `/bin/bash`. Its value is either an absolute path to a program, called as `<shell> <command>`, or `emulated`, which runs the commands in a built-in bash emulator and requires `workingDirectory`. That includes the agent's ``!`…` `` prompt lines and those in the skills it loads. Any other value fails agent loading. In an easy agent, leaving `shell` out means `emulated`; a wrapper starts in its `workingDirectory` and gets its `secretsARN`, `commands`, `allowedNetworkTargets` and resolved `workingDirectory` as one JSON object in `ROCKETCLAW_ENVIRONMENT` instead of the secrets, the commands' programs and the `curl` limits. Either way, an easy agent's ``!`…` `` lines in its body and in the skills it loads run in host bash; only those in a routine's instruction run in its `shell`. When handling it:
+The optional `shell` frontmatter field runs every shell command for that agent instead of `/bin/bash`. Its value is either an absolute path to a program, called as `<shell> <command>`, or `emulated`, which runs the commands in a built-in bash emulator and requires `workingDirectory`; with it, `read`, `glob`, `grep` and `apply_patch` see only that folder, the chat's uploads and the agent's skills, and `webfetch` reaches only `allowedNetworkTargets` (public addresses when left out). The ``!`…` `` lines of a routine's instruction run in the `shell` too, but those in the body and in loaded skills always run in host bash. Any other value fails agent loading. In an easy agent, leaving `shell` out means `emulated`; a wrapper starts in its `workingDirectory` and gets its `secretsARN`, `commands`, `allowedNetworkTargets` and resolved `workingDirectory` as one JSON object in `ROCKETCLAW_ENVIRONMENT` instead of the secrets, the commands' programs and the `curl` limits. When handling it:
 - set, change, or remove `shell` only when the human explicitly asks, and use the exact value they give
 - never create or edit a `shell` program inside the workspace
 - carry `shell` over unchanged on updates and renames
@@ -309,17 +304,17 @@ A `shell` program must:
 - stop the sandboxed command when it receives `SIGTERM` at the timeout
 - live, with any file it reads for configuration, outside the workspace and outside every path an agent can write
 
-A missing program makes ``!`…` `` lines expand to empty text and makes `bash` calls fail with the start error. File tools and MCP servers still run outside the program.
+A missing program makes the ``!`…` `` lines of routine instructions expand to empty text and makes `bash` calls fail with the start error. File tools and MCP servers still run outside the program.
 
 The optional `schema.output` frontmatter field is a YAML JSON Schema for that agent's own final response. When present, RocketCode requests OpenAI structured output. Do not put it on permission-reviewer agents; those runs keep a fixed decision schema. Invalid schemas fail agent loading.
 
 The optional `space` frontmatter field is one Web space name string. A Web session started with the agent is born in that space, which is created when missing, and a session whose agent has a `space` offers only agents with the same `space`, ignoring case, unless none of the agents its Slack channel allows has it; the agent's routines run in it too. Set or change it only when the human asks, and carry it over on updates and renames. A non-string value fails agent loading.
 
-The optional `sticky` frontmatter field, in advanced and easy agents alike, is `off` (the default), `user`, `global` or `slack`; any other value fails agent loading. `user` keeps one Web session per person and `global` one shared by everyone: a new Web session with the agent opens that existing one instead. Such a session switches only to agents with the same `sticky` value and cannot be forked. A sticky agent is never another agent's `task` subagent or permission reviewer, though it may delegate, including to itself unless it is the built-in `main`. A `global` agent's routine runs report into its one session; a `user` agent cannot be scheduled, so never give it `routines`. `slack` makes the agent answer only in Slack: one Channel Session per channel and one Thread Session per thread; it is not offered for new Web sessions, cannot be scheduled either, and only `slack` agents answer in Slack channels. Set or change it only when the human asks, and carry it over on updates and renames.
+The optional `sticky` frontmatter field, in advanced and easy agents alike, is `off` (the default), `user`, `global` or `slack`; any other value fails agent loading. `user` keeps one Web session per person and `global` one shared by everyone: a new Web session with the agent opens that existing one instead. Such a session switches only to agents with the same `sticky` value and cannot be forked. A sticky agent is never another agent's `task` subagent or permission reviewer, though it may delegate, including to itself when its rules name it. A `global` agent's routine runs report into its one session; a `user` agent cannot be scheduled, so never give it `routines`. `slack` makes the agent answer only in Slack: one Channel Session per channel and one Thread Session per thread; it is not offered for new Web sessions, cannot be scheduled either, and only `slack` agents answer in Slack channels. Set or change it only when the human asks, and carry it over on updates and renames.
 
 The optional `routines` frontmatter field, in advanced and easy agents alike, lists the schedules the agent runs on by itself, and is the only way to schedule an agent; to add or change them, use `main-update-cron-or-heartbeat`. Carry it over on updates and renames. Renaming an agent leaves its earlier routine runs under the old name.
 
-Preserve any other valid frontmatter keys unless the human asked to change them.
+An advanced file takes only the keys this skill describes; any other top-level key, such as a misspelling or an OpenCode-only key like `temperature`, fails loading with `<key>: not an advanced-mode key`. Never add one, and drop one an existing file still has only when the human agrees.
 
 The body of the file should contain the agent's purpose and operating instructions based on what the human asked for.
 
@@ -329,9 +324,9 @@ The body must also end with an extra instruction that explicitly tells the agent
 
 ## Easy mode agents
 
-An agent file with `mode: easy` uses a shorter format. Write it when the human asks for an easy agent, or for one that works in its own folder, turns whole features on or off, and has every action reviewed by an approver. Otherwise write the advanced format above. Leaving `mode` out means advanced; any value other than `easy` or `advanced` fails loading.
+An agent file with `mode: easy` uses a shorter format. Write it when the human asks for an easy agent, or for one that works in its own folder, turns whole features on or off, and has every script reviewed by an approver. Otherwise write the advanced format above. Leaving `mode` out means advanced; any value other than `easy` or `advanced` fails loading.
 
-A section left out, or set to `auto`, turns on everything in it, reviewed by the agent's approver; a written section turns on only what it lists. The approver reviews each `execute` script once, whole, and that approves every call the script makes. For creation, ask for the target name, `model`, `space`, `workingDirectory` and purpose, and which sections to narrow. Do not ask for a description, permission opt-ins, `shell` or `sudo`.
+A section left out, or set to `auto`, turns on everything in it; a written section turns on only what it lists. The agent's approver reviews each `execute` script once, whole; the script's calls then run when the file turns them on, except a `bash` call with text stdin and a `task` send to an `{agent: name}` target, which the approver reviews again. For creation, ask for the target name, `model`, `space`, `workingDirectory` and purpose, and which sections to narrow. Do not ask for a description, permission opt-ins, `shell` or `sudo`.
 
 Keys:
 - `mode: easy`
@@ -339,23 +334,22 @@ Keys:
 - `space` (required): Web space name
 - `sticky`: `off` (default), `user`, `global` or `slack`, as for advanced agents
 - `workingDirectory` (required): the agent's own folder, the only one its shell and file tools can write, for example `sessions/<name>/$ROCKETCLAW_CONVERSATION_ID`; relative to RocketClaw's working directory; it may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills` or `scripts`, wherever a link puts them
-- `subagents`: models `task` may run this agent on, each like `model`; `[]` for none; default its own `model`. An entry ending in `*` (quote it in YAML, such as `"anthropic/*"`) allows every model whose name, `#effort` included, starts with the text before the `*`; a `*` anywhere else fails loading
-- `maxRecursion`: subagent levels, 0 or more; `0` turns `task` off; default `1`
+- `subagents`: models `task_clone` may run a copy of this agent on, each like `model`; `[]` for none; default its own `model`. An entry ending in `*` (quote it in YAML, such as `"anthropic/*"`) allows every model whose name, `#effort` included, starts with the text before the `*`; a `*` anywhere else fails loading. An entry `- agent: <name>` names one agent as a target of `task` and the session tools, each `task` send reviewed by the approver; the agent itself is a target only when an entry names it; agent wildcards fail loading
+- `maxRecursion`: subagent levels, 0 or more; `0` turns `task` and `task_clone` off; default `1`
 - `approver`: `model` replaces the review model and `prompt` is added to the guardian's rules; default `guardian` on `auto_approver_model`; see [Reviews and decision models](#reviews-and-decision-models)
 - `decision`: decision models the Code Mode `decision` tool may call, each `provider/model` with its provider configured under `decision`; calls run without review; default no `decision` tool
 - `secretsARN`: Secrets Manager ARNs, fetched each turn, given only to `commands` programs and the ``!`…` `` lines in the body and in loaded skills
 - `commands`: map from command name to the host command line it runs
 - `mcp`: a map from server to a list of its facets, such as `{demo: [read]}`; facets come from `mcp_servers.<name>.tools` in `rocketclaw.json` (use `main-update-rocketclaw-json`); left out or `{}` means no MCP tools, unlike the other sections; `auto` and an unknown server or facet fail loading
-- `opencode`: a list of OpenCode servers configured under `opencode` in `rocketclaw.json`, such as `[build-box]`, that the `opencode_api` tool may call, each call reviewed; it can run commands and change files, settings and credentials there, so add a server only when the human asks for it by name; left out or `[]` means no `opencode_api` tool, unlike the other sections; `auto` and an unknown server fail loading
+- `opencode`: a list of OpenCode servers configured under `opencode` in `rocketclaw.json`, such as `[build-box]`, that the `opencode_api` tool may call from reviewed scripts; it can run commands and change files, settings and credentials there, so add a server only when the human asks for it by name; left out or `[]` means no `opencode_api` tool, unlike the other sections; `auto` and an unknown server fail loading
 - `rocketclaw`: `[]` for none, or a list of the groups `sessions`, `pages`, `tags`, `background`, `restart`; default all five
 - `tags`: tag groups as a list of lists; when `rocketclaw` is a list, `tags` and its `tags` group need each other
 - `skills`: `[]` for none, or folders under `skills/`; a missing folder fails loading; default all skills
 - `allowedNetworkTargets`: hosts, `host:port` entries and URL prefixes; wildcards and CIDR ranges fail loading; default public addresses only
 - `routines`: the agent's schedules; use `main-update-cron-or-heartbeat`
-- `delegatedFrom`: `true` (default), `false`, or the agent names that may start, message or stop its chats
 - `schema.output`: as for advanced agents
 
-Any other key fails loading with `<key>: not an easy-mode key`, including the advanced keys `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo` and `additionalInstructions`. `approver` takes only `model`, `prompt` and the reviewer's own tool keys, and `schema` only `output`.
+Any other key fails loading with `<key>: not an easy-mode key`, including the advanced keys `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo` and `additionalInstructions`. `approver` takes only `model`, `prompt`, `subagents` (only `- agent: <name>` entries, replacing the agent's targets for the reviewer's session tools) and the reviewer's own tool keys, and `schema` only `output`.
 
 Each `commands` entry becomes a program of that name in the agent's shell. A plain call of that name runs it instead of any tool or builtin with the same name; `builtin`, `command` or a full path such as `/bin/echo` still reach the original. Name it with 1-64 letters, digits, `_`, `.`, `+` or `-`, starting with a letter, digit or `_` and not with `rocketclaw`. Calling `<name> a b` runs `<command line> "$@"` in host bash with `a` and `b` as `$@`:
 
@@ -413,7 +407,7 @@ When the effective file has `mode: easy`, keep it easy: never add advanced keys,
 5. Create or update the overlay file in `agents/`.
 6. If this is a rename and an old overlay file exists at the previous path, remove that old overlay file.
 7. If the agent names a decision model, check that its provider is under `decision` in `rocketclaw.json`; if not, add it with `main-update-rocketclaw-json` before reloading.
-8. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, then optionally tell the human you are applying them now and call `rocketclaw_reload` exactly once. Use `rocketclaw_restart` only when setup fields in `rocketclaw.json` changed.
+8. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, then optionally tell the human you are applying them now and call `rocketclaw_reload` exactly once. Use `rocketclaw_restart` only when setup fields in `rocketclaw.json` changed. A file with an error does not stop the reload: its agent alone is left out, routines included, and the reload's answer says `Agent <name> was not loaded: <reason>.` Fix every such agent you touched before you finish.
 
 ## Important
 
@@ -423,7 +417,7 @@ When the effective file has `mode: easy`, keep it easy: never add advanced keys,
 - Do not write broad `edit: allow` or `bash: allow`; prefer exact `edit` or exact `bash` opt-ins, not both.
 - Always end the agent instructions with an explicit instruction to use `MEMORY.md`, or, for easy agents, with ``!`cat MEMORY.md` ``.
 - Never add advanced keys to a `mode: easy` file.
-- Never write `approver` in an advanced file; only easy agents read it.
+- Never write `approver` in an advanced file; it is an easy key, and an advanced file with it fails to load.
 - Make all requested agent-definition edits before calling `rocketclaw_reload` or `rocketclaw_restart`; do not call either between intermediate edits.
 - Be truthful about overlay limitations when a rename cannot remove an old embedded source path.
 - If no agent-definition file changed, do not call `rocketclaw_restart`.

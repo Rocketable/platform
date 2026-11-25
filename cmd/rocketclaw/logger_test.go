@@ -53,9 +53,9 @@ func TestPostHogMirrorsCaptureEventsAndExceptions(t *testing.T) {
 
 	logger := newLogger(level, postHogMirrors(client, "lab")...).With("component", "cron")
 	logger.Debug("ignored")
-	logger.Info("completed cronjob", "event", "cron_completed", "outcome", "ok")
+	logger.Info("completed routine", "event", "routine_completed", "outcome", "ok")
 	logger.Info("rocketclaw health", "go_goroutines", 7)
-	logger.Error("cronjob failed", "error", errors.New("boom"))
+	logger.Error("routine failed", "error", errors.New("boom"))
 	require.NoError(t, client.Close())
 
 	mu.Lock()
@@ -70,8 +70,8 @@ func TestPostHogMirrorsCaptureEventsAndExceptions(t *testing.T) {
 		names[event.Event] = event
 	}
 
-	assert.Subset(t, names["cron_completed"].Properties, map[string]any{"msg": "completed cronjob", "component": "cron", "outcome": "ok", "level": "INFO"})
+	assert.Subset(t, names["routine_completed"].Properties, map[string]any{"msg": "completed routine", "component": "cron", "outcome": "ok", "level": "INFO"})
 	assert.Subset(t, names["rocketclaw health"].Properties, map[string]any{"go_goroutines": float64(7)})
-	assert.Subset(t, names["cronjob failed"].Properties, map[string]any{"error": "boom", "level": "ERROR"})
+	assert.Subset(t, names["routine failed"].Properties, map[string]any{"error": "boom", "level": "ERROR"})
 	assert.Equal(t, "boom", names["$exception"].Properties["$exception_list"].([]any)[0].(map[string]any)["value"])
 }

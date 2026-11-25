@@ -72,7 +72,7 @@ func TestGenerateOneShotFailures(t *testing.T) {
 		name, agent, message string
 	}{
 		{"missing workspace", "primary", "open workspace root"},
-		{"invalid agent", "primary", "open workspace agent and skills"},
+		{"invalid agent", "primary", "prepare one-shot run"},
 		{"missing agent", "missing", "prepare one-shot run"},
 		{"blocked scratch", "primary", "create one-shot scratch"},
 		{"provider failure", "primary", "generate one-shot reply"},

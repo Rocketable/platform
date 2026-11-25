@@ -130,7 +130,7 @@ func TestHTTPBoundary(t *testing.T) {
 	handler := NewHTTPHandler(connection, new(config.LockedConfig), "")
 
 	for _, tc := range []struct{ method, body, message string }{
-		{"RunCronJob", `{}`, "stem is required"},
+		{"RunRoutine", `{}`, "stem is required"},
 		{"SteerQueueItem", `{}`, "id is required"},
 		{"SteerQueueItem", `{"id":"chat"}`, "itemId is required"},
 		{"PopQueueItem", `{"id":"chat"}`, "itemId is required"},
@@ -193,7 +193,7 @@ func TestHTTPFindPullRequests(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockRoutines{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -277,7 +277,7 @@ func TestHTTPReload(t *testing.T) {
 		require.Equal(t, "updated assets", reason)
 		return "rocketclaw runtime assets reloaded", nil
 	}}
-	server := New(core, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{})
+	server := New(core, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockRoutines{})
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
@@ -343,7 +343,7 @@ func TestHTTPRPCMCP(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(core, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(core, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockRoutines{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -434,7 +434,7 @@ func TestHTTPRPCMCP(t *testing.T) {
 		require.Equal(t, login, identity.Username)
 	}
 
-	text, failed = call(alice, "RunCronJob", &RunCronJobRequest{})
+	text, failed = call(alice, "RunRoutine", &RunRoutineRequest{})
 	require.True(t, failed)
 	require.Equal(t, "rpc error: code = InvalidArgument desc = stem is required", text)
 

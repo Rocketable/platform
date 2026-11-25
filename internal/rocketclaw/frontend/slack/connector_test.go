@@ -84,7 +84,7 @@ func TestSplitSlackResponseTextBoundaries(t *testing.T) {
 	}
 }
 
-func TestGoalMessageLayoutMatchesCronStyle(t *testing.T) {
+func TestGoalMessageLayoutMatchesRoutineStyle(t *testing.T) {
 	body := "Progress summary: I counted 1. Current state: 1 of 10. Next concrete step: count 2 on the next turn."
 	blocks, overflow := titledMessageLayout(slackGoalHeaderText(1, 10, false), body)
 	assert.Empty(t, overflow)

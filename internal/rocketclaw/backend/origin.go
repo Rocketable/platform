@@ -9,15 +9,15 @@ import (
 type originKind string
 
 const (
-	originCron        originKind = "cron"
+	originRoutine     originKind = "routine"
 	originExternalMCP originKind = "external_mcp"
 )
 
-type cronRunKind string
+type routineRunKind string
 
 const (
-	cronScheduled cronRunKind = "scheduled"
-	cronOneOff    cronRunKind = "one-off"
+	routineScheduled routineRunKind = "scheduled"
+	routineOneOff    routineRunKind = "one-off"
 )
 
 type originPair struct {
@@ -25,14 +25,14 @@ type originPair struct {
 	Value string `json:"value"`
 }
 
-type cronOrigin struct {
-	Agent      string      `json:"agent"`
-	Kind       originKind  `json:"kind"`
-	RanAt      string      `json:"ranAt"`
-	RunID      string      `json:"runId"`
-	RunKind    cronRunKind `json:"runKind"`
-	SourcePath string      `json:"sourcePath"`
-	Stem       string      `json:"stem"`
+type routineOrigin struct {
+	Agent      string         `json:"agent"`
+	Kind       originKind     `json:"kind"`
+	RanAt      string         `json:"ranAt"`
+	RunID      string         `json:"runId"`
+	RunKind    routineRunKind `json:"runKind"`
+	SourcePath string         `json:"sourcePath"`
+	Stem       string         `json:"stem"`
 }
 
 type externalMCPOrigin struct {
@@ -78,12 +78,12 @@ func DecideOrigin(facts *ChatOriginFacts) (origin any, text string) {
 			strings.ToLower("External MCP External conversation: " + facts.ExternalConversationID + " Agent: " + facts.Binding.Agent + " " + joined.String())
 	}
 
-	kind := cronScheduled
+	kind := routineScheduled
 	if facts.Run.OneOff {
-		kind = cronOneOff
+		kind = routineOneOff
 	}
 
-	cron := cronOrigin{Kind: originCron, SourcePath: facts.Run.Path, Stem: CronStem(facts.Run.Path), RunKind: kind, RunID: facts.CreatingSource, Agent: facts.ProducerAgent, RanAt: facts.Run.At.Format(time.RFC3339Nano)}
+	routine := routineOrigin{Kind: originRoutine, SourcePath: facts.Run.Path, Stem: RoutineStem(facts.Run.Path), RunKind: kind, RunID: facts.CreatingSource, Agent: facts.ProducerAgent, RanAt: facts.Run.At.Format(time.RFC3339Nano)}
 
-	return cron, strings.ToLower("Cron Source: " + cron.SourcePath + " Stem: " + cron.Stem + " Run kind: " + string(cron.RunKind) + " Run ID: " + cron.RunID + " Agent: " + cron.Agent + " Ran at: " + cron.RanAt)
+	return routine, strings.ToLower("Routine Source: " + routine.SourcePath + " Stem: " + routine.Stem + " Run kind: " + string(routine.RunKind) + " Run ID: " + routine.RunID + " Agent: " + routine.Agent + " Ran at: " + routine.RanAt)
 }

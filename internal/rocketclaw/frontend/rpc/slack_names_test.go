@@ -42,7 +42,7 @@ func TestSlackNames(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, nil, config.NewLockedConfig(cfg), channels, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, nil, config.NewLockedConfig(cfg), channels, &mockRoutines{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error {

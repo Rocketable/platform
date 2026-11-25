@@ -30,7 +30,7 @@ func TestRunEntriesJoinTheChatPathWhereTheyArrive(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	recordTestConversations(t, s, "main", map[string]ConversationKind{"chat": KindWebChat, "run": KindExternalMCPRun, "other": KindWebChat, "continuing": KindWebChat, "cron": KindCronRun})
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"chat": KindWebChat, "run": KindExternalMCPRun, "other": KindWebChat, "continuing": KindWebChat, "cron": KindRoutineRun})
 
 	_, err := s.AppendEntryID(ctx, "chat", testSessionEntry("first", "one"))
 	require.NoError(t, err)
@@ -95,7 +95,7 @@ func TestBoundRunEntriesFollowTheChatLeaf(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	recordTestConversations(t, s, "main", map[string]ConversationKind{"chat": KindWebChat, "run": KindCronRun})
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"chat": KindWebChat, "run": KindRoutineRun})
 
 	job, err := s.AppendEntryID(ctx, "run", testSessionEntry("job", "done"))
 	require.NoError(t, err)

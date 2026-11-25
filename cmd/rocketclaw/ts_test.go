@@ -89,7 +89,7 @@ func TestTailnetLogin(t *testing.T) {
 	require.Equal(t, "https://rocketclaw-test.tail-scale.ts.net", tailnet.Origin, "the logged-in node serves its HTTPS name")
 
 	rt := &backend.Runtime{Cfg: config.NewLockedConfig(&config.Config{Web: config.WebConfig{Tsnet: tailnet}}), Log: slog.New(slog.DiscardHandler), Sessions: webSessions(t)}
-	stop := startWebRPC(rt, node, &mockWebChannels{}, &mockWebCron{})
+	stop := startWebRPC(rt, node, &mockWebChannels{}, &mockWebRoutines{})
 	require.NoError(t, stop(t.Context()))
 	require.NoError(t, node.server.Close())
 }

@@ -29,7 +29,7 @@ tags:
 
 ## Context
 
-One top-level agent file that fails to load stops RocketClaw from starting: startup returns the error from `validateRuntimeAssets` in `lockedRun.startWith` (`internal/rocketclaw/backend/app.go:434`). There is no skip-and-warn for the agents folder the way there is for a mismatched shadow.
+One top-level agent file that fails to load leaves out only that agent, with a warning in the warning strip. The failure is quieter than it was, when startup stopped on it, but not harmless: the agent's routines stop, their next due times are forgotten, a follow-up one of its routine runs scheduled is dropped when it comes due, and anything that looks the agent up must treat it as missing (see `docs/solutions/security-issues/dropping-only-the-broken-agent-made-missing-agent-lookups-fail-open.md`). Releases from before this per-agent rule still stop at startup on such a file, which matters for a rollback.
 
 When a change turns an accepted agent-file form into a load error, old and new releases also reject each other's files. The MCP facets change (plan `docs/plans/2026-11-19-1303-feat-mcp-server-facets-plan.md`) made raw `permission.mcp` rules such as `"memory.*": allow` fail on the new release, while the facet form `memory: {all: allow}` fails on the old one. So a deployment cannot fix its files ahead of the upgrade, and a rollback breaks again unless the old files come back.
 

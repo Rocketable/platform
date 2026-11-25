@@ -178,7 +178,7 @@ func TestSessionTagsPrivateLifecycle(t *testing.T) {
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	recordPrivateHistories(t, store, map[string]ConversationKind{
-		"external_mcp:pre-epoch": KindExternalMCPRun, "external_mcp:orphan": KindExternalMCPRun, "cron:recent": KindCronRun, "external_mcp:queued": KindExternalMCPRun,
+		"external_mcp:pre-epoch": KindExternalMCPRun, "external_mcp:orphan": KindExternalMCPRun, "cron:recent": KindRoutineRun, "external_mcp:queued": KindExternalMCPRun,
 	})
 	_, err := store.AppendEntryID(ctx, "external_mcp:pre-epoch", testSessionEntryAt(time.Unix(-20, 0).UTC(), "old"))
 	require.NoError(t, err)
@@ -479,7 +479,7 @@ func TestProducerRoutingSurvivesCompletion(t *testing.T) {
 			workspace := t.TempDir()
 			store := newTestSessionServiceAt(t, workspace)
 			ctx := t.Context()
-			recordTestConversations(t, store, "main", map[string]ConversationKind{"producer": KindCronRun, "owner": KindWebChat})
+			recordTestConversations(t, store, "main", map[string]ConversationKind{"producer": KindRoutineRun, "owner": KindWebChat})
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "produce", false)
 			inbound.ConversationID, inbound.SyncDestination = "producer", destination
@@ -703,129 +703,129 @@ func TestSlackChannelFacts(t *testing.T) {
 	assert.Equal(t, []string{"G1"}, ids)
 }
 
-func TestCronRunSourcesBoundsDeliveryRows(t *testing.T) {
+func TestRoutineRunSourcesBoundsDeliveryRows(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	_, err := store.db.ExecContext(ctx, `INSERT INTO conversations
-    (conversation_id, agent, created_by, kind, listed, retention, reports_to, continues, cron_path, cron_run_at_unix_ns, revert_message_id)
-VALUES ('run', 'main', '', 'cron_run', FALSE, 'private', 'report', NULL, 'cron/report.md', 1, ''),
+    (conversation_id, agent, created_by, kind, listed, retention, reports_to, continues, routine_path, routine_run_at_unix_ns, revert_message_id)
+VALUES ('run', 'main', '', 'routine_run', FALSE, 'private', 'report', NULL, 'cron/report.md', 1, ''),
        ('report', 'main', 'alice', 'web_chat', TRUE, 'record', NULL, DEFAULT, NULL, DEFAULT, '1:1'),
        ('fork', 'main', 'alice', 'web_chat', TRUE, 'record', NULL, 'run', NULL, DEFAULT, '1:0');
 INSERT INTO entries (id, conversation_id, entry_json, entry_timestamp)
 SELECT n, 'run', '{}', '' FROM generate_series(1, 512) n;`)
 	require.NoError(t, err)
 
-	sources, err := store.CronRunSources(ctx)
+	sources, err := store.RoutineRunSources(ctx)
 	require.NoError(t, err)
-	require.Equal(t, []CronRunSource{{ConversationID: "report", SourceConversationID: "run", Run: protocol.CronRun{Path: "cron/report.md", At: time.Unix(0, 1).UTC()}}}, sources)
+	require.Equal(t, []RoutineRunSource{{ConversationID: "report", SourceConversationID: "run", Run: protocol.RoutineRun{Path: "cron/report.md", At: time.Unix(0, 1).UTC()}}}, sources)
 
-	plan, err := queryStrings(ctx, store.db, `EXPLAIN (ANALYZE, TIMING OFF) `+cronRunSourcesSQL, "cron run sources plan")
+	plan, err := queryStrings(ctx, store.db, `EXPLAIN (ANALYZE, TIMING OFF) `+routineRunSourcesSQL, "routine run sources plan")
 	require.NoError(t, err)
 	require.Regexp(t, `Append +\([^\n]+\(actual rows=3(?:\.0+)? loops=1\)`, strings.Join(plan, "\n"))
 }
 
-func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
+func TestSessionServiceSyncRoutineSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
 	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
 	due := now.Add(time.Minute)
 
-	require.NoError(t, store.SyncCronSchedules([]CronScheduleState{
+	require.NoError(t, store.SyncRoutineSchedules([]RoutineScheduleState{
 		{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: due},
 		{ScheduleID: "daily#1", RelativePath: "daily.md", NextDue: due},
 		{ScheduleID: "weekly#0", RelativePath: "weekly.md", NextDue: due.Add(time.Hour)},
 		{ScheduleID: "running#0", RelativePath: "running.md", NextDue: now},
 	}))
-	claimed, err := store.ClaimCronSchedule(CronScheduleState{ScheduleID: "running#0", RelativePath: "running.md", NextDue: now}, due, now)
+	claimed, err := store.ClaimRoutineSchedule(RoutineScheduleState{ScheduleID: "running#0", RelativePath: "running.md", NextDue: now}, due, now)
 	require.NoError(t, err)
 	require.True(t, claimed)
 
-	require.NoError(t, store.SyncCronSchedules([]CronScheduleState{
+	require.NoError(t, store.SyncRoutineSchedules([]RoutineScheduleState{
 		{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: due.Add(2 * time.Hour)},
 	}))
 
-	schedules, err := store.DueCronSchedules(due.Add(24 * time.Hour))
+	schedules, err := store.DueRoutineSchedules(due.Add(24 * time.Hour))
 	require.NoError(t, err)
-	assert.Equal(t, []CronScheduleState{{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: due}}, schedules)
+	assert.Equal(t, []RoutineScheduleState{{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: due}}, schedules)
 
-	require.NoError(t, store.SyncCronSchedules([]CronScheduleState{{ScheduleID: "empty#0", RelativePath: "empty.md"}}))
+	require.NoError(t, store.SyncRoutineSchedules([]RoutineScheduleState{{ScheduleID: "empty#0", RelativePath: "empty.md"}}))
 
-	dueSchedules, err := store.DueCronSchedules(now)
+	dueSchedules, err := store.DueRoutineSchedules(now)
 	require.NoError(t, err)
-	assert.Contains(t, dueSchedules, CronScheduleState{ScheduleID: "empty#0", RelativePath: "empty.md"})
-	claimed, err = store.ClaimCronSchedule(dueSchedules[0], due, now)
+	assert.Contains(t, dueSchedules, RoutineScheduleState{ScheduleID: "empty#0", RelativePath: "empty.md"})
+	claimed, err = store.ClaimRoutineSchedule(dueSchedules[0], due, now)
 	require.NoError(t, err)
 	require.True(t, claimed)
 
-	require.NoError(t, store.ResetCronSchedules())
+	require.NoError(t, store.ResetRoutineSchedules())
 	ids, err := queryStrings(t.Context(), store.db, `SELECT id FROM schedules`, "cron schedules after reset")
 	require.NoError(t, err)
 	require.Empty(t, ids)
 }
 
-func TestSessionServiceDueCronSchedulesHonorsDueTime(t *testing.T) {
+func TestSessionServiceDueRoutineSchedulesHonorsDueTime(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
 	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
 
-	require.NoError(t, store.SyncCronSchedules([]CronScheduleState{
+	require.NoError(t, store.SyncRoutineSchedules([]RoutineScheduleState{
 		{ScheduleID: "second", RelativePath: "second.md", NextDue: now},
 		{ScheduleID: "first", RelativePath: "first.md", NextDue: now.Add(-time.Minute)},
 		{ScheduleID: "later", RelativePath: "later.md", NextDue: now.Add(time.Minute)},
 	}))
 
-	due, err := store.DueCronSchedules(now)
+	due, err := store.DueRoutineSchedules(now)
 	require.NoError(t, err)
-	assert.Equal(t, []CronScheduleState{
+	assert.Equal(t, []RoutineScheduleState{
 		{ScheduleID: "first", RelativePath: "first.md", NextDue: now.Add(-time.Minute)},
 		{ScheduleID: "second", RelativePath: "second.md", NextDue: now},
 	}, due)
 }
 
-func TestSessionServiceClaimCronScheduleSerializesSamePathAndCompletionClearsRunning(t *testing.T) {
+func TestSessionServiceClaimRoutineScheduleSerializesSamePathAndCompletionClearsRunning(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
 	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
 	next := now.Add(time.Hour)
 
-	dueDaily := CronScheduleState{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: now}
-	dueDailySecond := CronScheduleState{ScheduleID: "daily#1", RelativePath: "daily.md", NextDue: now}
-	require.NoError(t, store.SyncCronSchedules([]CronScheduleState{
+	dueDaily := RoutineScheduleState{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: now}
+	dueDailySecond := RoutineScheduleState{ScheduleID: "daily#1", RelativePath: "daily.md", NextDue: now}
+	require.NoError(t, store.SyncRoutineSchedules([]RoutineScheduleState{
 		dueDaily,
 		dueDailySecond,
 	}))
 
-	ok, err := store.ClaimCronSchedule(dueDaily, next, now)
+	ok, err := store.ClaimRoutineSchedule(dueDaily, next, now)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	run := protocol.Conversation{ID: "cron:daily.md:run", Agent: "main", Run: &protocol.CronRun{Path: "daily.md", At: now}}
+	run := protocol.Conversation{ID: "cron:daily.md:run", Agent: "main", Run: &protocol.RoutineRun{Path: "daily.md", At: now}}
 	_, err = store.recordConversation(t.Context(), &run, conversationFacts{}, harness.AgentStickyOff)
 	require.NoError(t, err)
 	require.NoError(t, startTurnDB(t.Context(), store.db, "daily-run", run.ID, protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job", false)))
 	require.NoError(t, store.PutScheduledMessage("follow-up", &protocol.ScheduledMessageState{ConversationID: run.ID, Agent: "main", Message: "later", DueAt: next}))
 
-	ok, err = store.ClaimCronSchedule(dueDailySecond, next, now)
+	ok, err = store.ClaimRoutineSchedule(dueDailySecond, next, now)
 	require.NoError(t, err)
 	assert.False(t, ok)
 
-	due, err := store.DueCronSchedules(now)
+	due, err := store.DueRoutineSchedules(now)
 	require.NoError(t, err)
 	assert.Empty(t, due)
 
-	ok, err = store.ClaimCronSchedule(dueDaily, next.Add(time.Hour), now)
+	ok, err = store.ClaimRoutineSchedule(dueDaily, next.Add(time.Hour), now)
 	require.NoError(t, err)
 	assert.False(t, ok)
 
 	endTestTurn(t, store, run.ID, "daily-run", "")
 
 	dueDaily.NextDue = next
-	ok, err = store.ClaimCronSchedule(dueDaily, next.Add(time.Hour), next)
+	ok, err = store.ClaimRoutineSchedule(dueDaily, next.Add(time.Hour), next)
 	require.NoError(t, err)
 	require.True(t, ok)
 }
@@ -839,7 +839,7 @@ func TestSessionServiceActiveGoalThreads(t *testing.T) {
 	assert.Nil(t, threads)
 
 	for _, id := range []string{"active", "legacy", "terminal"} {
-		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
+		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByRoutine}))
 		require.NoError(t, store.BeginGoal(id, &GoalState{Objective: "work", MaxTurns: 1}))
 	}
 
@@ -851,8 +851,8 @@ func TestSessionServiceActiveGoalThreads(t *testing.T) {
 	threads, err = store.ActiveGoalThreads()
 	require.NoError(t, err)
 	assert.Equal(t, map[string]ThreadState{
-		"active": {Agent: "planner", CreatedBy: ThreadCreatedByCron},
-		"legacy": {Agent: "planner", CreatedBy: ThreadCreatedByCron},
+		"active": {Agent: "planner", CreatedBy: ThreadCreatedByRoutine},
+		"legacy": {Agent: "planner", CreatedBy: ThreadCreatedByRoutine},
 	}, threads)
 }
 
@@ -1150,13 +1150,13 @@ func TestSessionServiceThreadAgentUpdatePreservesCreator(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	require.NoError(t, service.UpsertThread("thread", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, service.UpsertThread("thread", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByRoutine}))
 	require.NoError(t, service.UpsertThread("thread", ThreadState{Agent: "main"}))
 
 	thread, ok, err := service.Thread("thread")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}, thread)
+	assert.Equal(t, ThreadState{Agent: "main", CreatedBy: ThreadCreatedByRoutine}, thread)
 }
 
 func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
@@ -1213,7 +1213,7 @@ func TestDeleteChatRemovesItAsRetentionDoes(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	recordTestConversations(t, service, "main", map[string]ConversationKind{"chat": KindWebChat, "busy": KindWebChat, "cron:daily:run": KindCronRun})
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"chat": KindWebChat, "busy": KindWebChat, "cron:daily:run": KindRoutineRun})
 	recordPrivateHistories(t, service, map[string]ConversationKind{"mcp-run": KindExternalMCPRun})
 	_, err := service.db.ExecContext(t.Context(), `WITH linked AS (
     UPDATE conversations SET reports_to = 'chat' WHERE conversation_id = 'cron:daily:run'
@@ -1538,8 +1538,8 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	boundaryThread := protocol.SlackThreadConversationID("DBOUNDARY", slackTestTS(cutoff))
 	recordTestConversations(t, store, "planner", map[string]ConversationKind{
 		oldThread: KindSlackThread, activeOldThread: KindSlackThread, newThread: KindSlackThread, boundaryThread: KindSlackThread, "slack-thread:D123:not-a-time": KindSlackThread,
-		"cron:daily:old": KindCronRun, "one-off-cron:daily:old": KindOneOffCronRun, "cron:daily:new": KindCronRun, "cron:daily:boundary": KindCronRun, "cron:daily:reported": KindCronRun,
-		"cron:daily:continued": KindCronRun, "draft-chat": KindAgentDraft,
+		"cron:daily:old": KindRoutineRun, "one-off-cron:daily:old": KindOneOffRoutineRun, "cron:daily:new": KindRoutineRun, "cron:daily:boundary": KindRoutineRun, "cron:daily:reported": KindRoutineRun,
+		"cron:daily:continued": KindRoutineRun, "draft-chat": KindAgentDraft,
 	})
 
 	orphanGoal := protocol.SlackThreadConversationID("DGOAL", slackTestTS(oldTime))
@@ -1549,9 +1549,9 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	_, err := store.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention) VALUES ('unmanaged-web', '', '', 'web_chat', FALSE, 'nested')`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.UpsertThread("empty-recorded", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
-	require.NoError(t, store.UpsertThread("empty-new", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
-	require.NoError(t, store.UpsertThread("empty-running", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, store.UpsertThread("empty-recorded", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByRoutine}))
+	require.NoError(t, store.UpsertThread("empty-new", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByRoutine}))
+	require.NoError(t, store.UpsertThread("empty-running", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByRoutine}))
 	require.NoError(t, store.UpsertThread("continuing", ThreadState{Agent: "planner"}))
 	require.NoError(t, store.UpsertThread("old-web", ThreadState{Agent: "planner"}))
 	require.NoError(t, store.UpsertThread("active-web", ThreadState{Agent: "planner"}))
@@ -1563,7 +1563,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 	require.NoError(t, store.startSubagent(t.Context(), "active-web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/helper", Turn: "turn-0", Call: "helper"}, Agent: "planner"}))
 	require.NoError(t, store.startSubagent(t.Context(), "cron:daily:old", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/helper", Turn: "turn-0", Call: "helper"}, Agent: "planner"}))
 	seedActiveTurn(t, store, "empty-running", "running", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "running"})
-	require.NoError(t, store.UpsertThread(activeOldThread, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, store.UpsertThread(activeOldThread, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByRoutine}))
 
 	for conversationID, ts := range map[string]time.Time{
 		oldThread:                      oldTime,
@@ -1619,7 +1619,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 	thread, ok, err := store.Thread(activeOldThread)
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByCron, sticky: harness.AgentStickySlack}, thread)
+	assert.Equal(t, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByRoutine, sticky: harness.AgentStickySlack}, thread)
 	assert.Contains(t, threadIDs, activeOldThread)
 	assert.Contains(t, threadIDs, newThread)
 	assert.Contains(t, threadIDs, boundaryThread)
@@ -1679,7 +1679,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: "born-off", Agent: "user", CreatedBy: "carol@example.com"}))
 		_, err = store.AppendEntryID(ctx, "born-off", testSessionEntryAt(old, "expired ordinary"))
 		require.NoError(t, err)
-		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: "cron:old", Agent: "global", Run: &protocol.CronRun{Path: "cron/daily.md"}}))
+		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: "cron:old", Agent: "global", Run: &protocol.RoutineRun{Path: "cron/daily.md"}}))
 		_, err = store.AppendEntryID(ctx, "cron:old", testSessionEntryAt(old, "expired hidden report"))
 		require.NoError(t, err)
 		_, err = (&Runtime{Sessions: store}).ContinueRun(ctx, "cron:old", "global", true)
@@ -1690,7 +1690,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 		_, err = store.PruneStateBefore(ctx, cutoff, 0)
 		require.NoError(t, err)
 
-		runs, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations WHERE kind = 'cron_run'`, "remaining runs")
+		runs, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations WHERE kind = 'routine_run'`, "remaining runs")
 		require.NoError(t, err)
 		assert.Empty(t, runs, "a run whose messages all expired is deleted, not left empty under the sticky chat")
 
@@ -1737,7 +1737,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 
 		id, _, err := store.CreateStickyConversation(ctx, protocol.Conversation{ID: "room", Agent: "room", CreatedBy: "alice@example.com"}, harness.AgentStickyUser)
 		require.NoError(t, err)
-		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: "cron:old", Agent: "room", Run: &protocol.CronRun{Path: "cron/daily.md"}}))
+		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: "cron:old", Agent: "room", Run: &protocol.RoutineRun{Path: "cron/daily.md"}}))
 		_, err = (&Runtime{Sessions: store}).ContinueRun(ctx, "cron:old", id, true)
 		require.NoError(t, err)
 
@@ -1911,7 +1911,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 				case id == emptySlack:
 					recordTestConversations(t, store, "planner", map[string]ConversationKind{id: KindSlackThread})
 				case id == "cron:scheduled":
-					recordTestConversations(t, store, "planner", map[string]ConversationKind{id: KindCronRun})
+					recordTestConversations(t, store, "planner", map[string]ConversationKind{id: KindRoutineRun})
 				default:
 					require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner"}))
 				}
@@ -2893,8 +2893,8 @@ func TestConversationKindsAtCreation(t *testing.T) {
 	slack := "slack-channel:C1:primary"
 
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "web", Agent: "primary", CreatedBy: "alice"}))
-	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "job", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/daily.md"}}))
-	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: oneOff, Agent: "job", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/once.md", OneOff: true}}))
+	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "job", CreatedBy: "routine", Run: &protocol.RoutineRun{Path: "cron/daily.md"}}))
+	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: oneOff, Agent: "job", CreatedBy: "routine", Run: &protocol.RoutineRun{Path: "cron/once.md", OneOff: true}}))
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "web:" + run, Agent: "primary", CreatedBy: "alice"}))
 	_, err := runtime.ContinueRun(ctx, run, "web:"+run, false)
 	require.NoError(t, err)
@@ -2927,7 +2927,7 @@ FROM conversations c WHERE c.shadow_parent IS NULL`, "kinds", func(row rowScanne
 		return nil
 	}))
 	require.Equal(t, map[string]string{
-		"web": "web_chat listed record", run: "cron_run hidden record", oneOff: "one_off_cron_run hidden record", "web:" + run: "web_chat listed record",
+		"web": "web_chat listed record", run: "routine_run hidden record", oneOff: "one_off_routine_run hidden record", "web:" + run: "web_chat listed record",
 		"mcp-chat": "web_chat listed record", "private": "external_mcp_run hidden record", slack: "slack_thread listed record",
 		"web/call-1": "subagent hidden record web", "web/call-2-review-0a1b2c3d": "review hidden nested web",
 		run + "/call-2-review-0a1b2c3d": "review hidden private " + run,

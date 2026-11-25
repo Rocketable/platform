@@ -86,7 +86,7 @@ func sidebarChoicesFixture(tb testing.TB, count int) (*Server, context.Context) 
 		require.NoError(tb, err)
 	}
 
-	return New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{RenameThreadSessionFunc: func(context.Context, string, string) {}}, &mockCronJobs{}), metadata.NewIncomingContext(tb.Context(), tailnetUser("alice"))
+	return New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{RenameThreadSessionFunc: func(context.Context, string, string) {}}, &mockRoutines{}), metadata.NewIncomingContext(tb.Context(), tailnetUser("alice"))
 }
 
 func TestSidebarFingerprintAllocationBudget(t *testing.T) {
@@ -189,7 +189,7 @@ func TestSidebarSendFailures(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer(grpc.MaxSendMsgSize(1))
-	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockRoutines{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error {
@@ -273,7 +273,7 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 
 		return nil
 	}}
-	New(core, sessions, config.NewLockedConfig(cfg), channels, &mockCronJobs{}).Register(transport)
+	New(core, sessions, config.NewLockedConfig(cfg), channels, &mockRoutines{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -405,7 +405,7 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 	require.Same(t, firstSlot, &listings[0], "eviction must not leave old snapshots before the slice")
 
 	fingerprints := listings[len(listings)-1].rows
-	server = New(server.backend, server.sessions, server.cfg, server.channels, server.cronjobs)
+	server = New(server.backend, server.sessions, server.cfg, server.channels, server.routines)
 	sent, fresh := list(ctx, unknown.Version)
 	require.ElementsMatch(t, []string{"chat-00", "chat-01"}, sent, "another server's version gets every row")
 	require.Empty(t, fresh.Since)

@@ -40,7 +40,7 @@ type Runtime struct {
 	RunCtx            context.Context
 	Sessions          *SessionService
 	ExternalMCPAgents runtimeRefresher
-	CronJobs          runtimeRefresher
+	Routines          runtimeRefresher
 	Assemble          FrontendAssembler
 	sandboxes         sandboxPreparer
 
@@ -95,8 +95,8 @@ func (r *Runtime) Reload(reason string) (string, error) {
 		return "", fmt.Errorf("refresh external MCP agents: %w", err)
 	}
 
-	if err := r.CronJobs.Refresh(); err != nil {
-		return "", fmt.Errorf("refresh cron jobs: %w", err)
+	if err := r.Routines.Refresh(); err != nil {
+		return "", fmt.Errorf("refresh routines: %w", err)
 	}
 
 	if err := r.resumeScheduledSessions(r.RunCtx); err != nil {
@@ -168,8 +168,8 @@ func (r *Runtime) SaveBehavior(behavior *config.Behavior) error {
 			return fmt.Errorf("refresh external MCP agents: %w", err)
 		}
 
-		if err := r.CronJobs.Refresh(); err != nil {
-			return fmt.Errorf("refresh cron jobs: %w", err)
+		if err := r.Routines.Refresh(); err != nil {
+			return fmt.Errorf("refresh routines: %w", err)
 		}
 
 		return commitState(tx, "behavior settings")
@@ -209,8 +209,8 @@ func (r *Runtime) SaveBehavior(behavior *config.Behavior) error {
 			err = errors.Join(err, fmt.Errorf("refresh external MCP agents after restoring: %w", errRefresh))
 		}
 
-		if errRefresh := r.CronJobs.Refresh(); errRefresh != nil {
-			err = errors.Join(err, fmt.Errorf("refresh cron jobs after restoring: %w", errRefresh))
+		if errRefresh := r.Routines.Refresh(); errRefresh != nil {
+			err = errors.Join(err, fmt.Errorf("refresh routines after restoring: %w", errRefresh))
 		}
 	}
 

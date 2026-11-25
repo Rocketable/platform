@@ -17,7 +17,7 @@ Only use these runtime paths:
 - current effective agent: `.rocketclaw/agents/<agent>.md`
 - writable overlay agent: `agents/<agent>.md`
 
-Edit the agent file the way `main-create-or-update-agent` says: read the effective file, copy it into `agents/` before editing, never edit `.rocketclaw` directly, keep every other key and the body unchanged, and call `rocketclaw_reload` exactly once after all edits. The reload reports a routine that fails loading and names its file; fix it before you finish.
+Edit the agent file the way `main-create-or-update-agent` says: read the effective file, copy it into `agents/` before editing, never edit `.rocketclaw` directly, keep every other key and the body unchanged, and call `rocketclaw_reload` exactly once after all edits. A schedule that is not valid, or one listed twice, fails loading only that agent: the reload still succeeds, that agent and all its routines stay off, and the reload's answer says `Agent <name> was not loaded: routines: …`. Fix it before you finish.
 
 ## Which agents can have routines
 

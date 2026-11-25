@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ type toolCallContext struct {
 	output            chan<- ChatResponse
 	callID            string
 	sink              *backgroundSink
+	reviewed          bool
 }
 
 func toolCallContextFrom(ctx context.Context) (toolCallContext, bool) {
@@ -67,7 +69,12 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 		args = json.RawMessage(`{}`)
 	}
 
-	decision, err := tc.looper.permissionDecision(toolName, tool, args)
+	var bash bashParams
+	if cmp.Or(tool.Permission, toolName) == "bash" {
+		_ = json.Unmarshal(args, &bash)
+	}
+
+	decision, err := tc.looper.permissionDecision(toolName, tool, args, tc.reviewed && bash.Stdin.text != "")
 	if err != nil {
 		return fmt.Errorf("check permission: %w", err)
 	}
@@ -76,13 +83,8 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 		return permissionDeniedError(decision.message)
 	}
 
-	var bash bashParams
-	if decision.review != nil && decision.review.Permission == "bash" {
-		_ = json.Unmarshal(args, &bash)
-	}
-
 	switch {
-	case decision.review == nil, tc.looper.Permissions.Easy && bash.Stdin.text == "":
+	case decision.review == nil:
 		return nil
 	case len(bash.Stdin.text) > 64<<10:
 		return permissionDeniedError("stdin too large to review (max 64 KiB); write it to a file first")

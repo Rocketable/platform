@@ -1,0 +1,197 @@
+package backend
+
+import (
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/stretchr/testify/require"
+)
+
+type zzCall struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type zzTurn struct {
+	Caller string   `json:"caller"`
+	Self   string   `json:"self"`
+	Calls  []zzCall `json:"calls"`
+}
+
+type zzSession struct {
+	ID      string `json:"id"`
+	Agent   string `json:"agent"`
+	Kind    string `json:"kind"`
+	Parent  string `json:"parent"`
+	Channel string `json:"channel"`
+	Thread  string `json:"thread"`
+	Minute  int    `json:"minute"`
+}
+
+type zzWorld struct {
+	Agents   map[string]string `json:"agents"`
+	Sessions []zzSession       `json:"sessions"`
+	Turns    []zzTurn          `json:"turns"`
+}
+
+func TestZZDelegationDiff(t *testing.T) {
+	data, err := os.ReadFile(os.Getenv("ZZ_DIFF_WORLD"))
+	require.NoError(t, err)
+
+	var world zzWorld
+	require.NoError(t, json.Unmarshal(data, &world))
+
+	out, err := os.Create(os.Getenv("ZZ_DIFF_OUT"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, out.Close()) })
+
+	encoder := json.NewEncoder(out)
+
+	workspace := t.TempDir()
+	for name, content := range world.Agents {
+		writeAgent(t, workspace, name, content)
+	}
+
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "skills"), 0o755))
+
+	store := newTestSessionServiceAt(t, workspace)
+	cfg := &config.Config{Workspace: workspace, Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}
+	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(cfg), store: store, bridges: map[string]directBridge{}, slackLookups: noSlackLookups{}}
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	for _, s := range world.Sessions {
+		switch s.Kind {
+		case "web":
+			runningTestBridge(t, store, manager, s.ID)
+			require.NoError(t, store.UpsertThread(s.ID, ThreadState{Agent: s.Agent}))
+		case "helper":
+			_, err := store.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, call_turn, call_id) VALUES ($1, $2, '', $3, $4, FALSE, 'turn', $1)`, s.ID, s.Agent, s.Parent, KindSubagent)
+			require.NoError(t, err)
+		case "run":
+			recordTestConversations(t, store, s.Agent, map[string]ConversationKind{s.ID: KindWebChat})
+		case "slack":
+			_, err := store.recordConversation(t.Context(), &protocol.Conversation{ID: s.ID, Agent: s.Agent}, conversationFacts{kind: KindSlackThread, slackChannel: s.Channel, slackThread: s.Thread}, harness.AgentStickyOff)
+			require.NoError(t, err)
+
+			if s.Thread != "" {
+				runningTestBridge(t, store, manager, s.ID)
+				require.NoError(t, store.UpsertThread(s.ID, ThreadState{Agent: s.Agent}))
+			}
+		}
+
+		if s.Minute >= 0 {
+			_, err := store.AppendEntryID(t.Context(), s.ID, testSessionEntryAt(base.Add(time.Duration(s.Minute)*time.Minute), "hello"))
+			require.NoError(t, err)
+		}
+	}
+
+	list, get := listSessionsTool(store, manager), getSessionTool(store)
+
+	for _, turn := range world.Turns {
+		t.Run(turn.Caller+"@"+turn.Self, func(t *testing.T) {
+			var (
+				mu      sync.Mutex
+				outputs = map[string]string{}
+			)
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+
+				if strings.Contains(string(body), `"model":"review-model"`) {
+					writeResponseMessage(t, w, "review", "review", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"Requested."}`)
+
+					return
+				}
+
+				var request struct {
+					Input []struct {
+						Type   string          `json:"type"`
+						CallID string          `json:"call_id"`
+						Output json.RawMessage `json:"output"`
+					} `json:"input"`
+				}
+				_ = json.Unmarshal(body, &request)
+
+				seen := false
+
+				mu.Lock()
+				for _, item := range request.Input {
+					if item.Type == "function_call_output" {
+						seen = true
+
+						var text string
+						if json.Unmarshal(item.Output, &text) != nil {
+							text = string(item.Output)
+						}
+
+						outputs[item.CallID] = text
+					}
+				}
+				mu.Unlock()
+
+				if seen {
+					writeResponseMessage(t, w, "done", "done", "done")
+
+					return
+				}
+
+				items := make([]map[string]string, 0, len(turn.Calls))
+				for i, call := range turn.Calls {
+					items = append(items, map[string]string{"id": "fc_" + strconv.Itoa(i), "type": "function_call", "status": "completed", "call_id": call.ID, "name": call.Name, "arguments": call.Arguments})
+				}
+
+				encoded, _ := json.Marshal(map[string]any{"id": "resp_calls", "object": "response", "created_at": 0, "status": "completed", "model": "gpt-6.1-sol", "output": items})
+				_, _ = w.Write(encoded)
+			}))
+			defer server.Close()
+
+			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), turn.Caller)
+			require.NoError(t, err)
+
+			defer func() { require.NoError(t, root.Close()) }()
+
+			for name := range world.Agents {
+				require.Contains(t, agents.Items, name)
+			}
+
+			bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: turn.Self, SessionService: store}, threads: manager, log: slog.New(slog.DiscardHandler)}
+			write := sessionsWriteTool(bridge, new(protocol.InboundMessage), new(protocol.InboundMessage), turn.Caller, turn.Self__WRITE_ARGS__)
+
+			runtime, err := harness.NewWithModelResolver(resolver, &harness.Config{AutoApproverModel: "review-model", ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, BackgroundJobs: harness.InertBackgroundJobs{}, CustomTools: []harness.Tool{list, get, write}, ParallelToolCalls: 4}, root, agents, skills, turn.Caller)
+			require.NoError(t, err)
+
+			input := make(chan harness.PromptInput, 1)
+			responses := make(chan harness.ChatResponse, 1<<16)
+			input <- harness.PromptInput{TurnID: "turn", Texts: []string{"call"}, Responses: responses}
+
+			close(input)
+
+			memory := new(memoryStore)
+			require.NoError(t, runtime.Loop(t.Context(), input, memory.in(), memory, make(chan os.Signal)))
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			for _, call := range turn.Calls {
+				output, ok := outputs[call.ID]
+				require.True(t, ok, call.ID)
+				require.NoError(t, encoder.Encode(map[string]string{"caller": turn.Caller, "self": turn.Self, "call": call.ID, "output": output}))
+			}
+		})
+	}
+}

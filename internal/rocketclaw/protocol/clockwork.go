@@ -19,7 +19,7 @@ func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 	clone.ReasoningEffort = Clone(message.ReasoningEffort)
 	clone.SlackReply = Clone(message.SlackReply)
 	clone.Attachments = CloneOutboundAttachments(message.Attachments)
-	clone.Cronjob = Clone(message.Cronjob)
+	clone.Routine = Clone(message.Routine)
 
 	return &clone
 }

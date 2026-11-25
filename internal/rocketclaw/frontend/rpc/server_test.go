@@ -29,7 +29,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	routinefrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/routine"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
@@ -180,7 +180,7 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 			require.NoError(t, err)
 
 			transport := grpc.NewServer()
-			New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+			New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockRoutines{}).Register(transport)
 
 			var serving errgroup.Group
 			serving.Go(func() error { return transport.Serve(listener) })
@@ -338,7 +338,7 @@ func TestTailnetIdentity(t *testing.T) {
 	var slackWarning string
 
 	transport := grpc.NewServer()
-	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: func() string { return slackWarning }}, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: func() string { return slackWarning }}, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockRoutines{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -458,7 +458,7 @@ func TestTestModel(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockRoutines{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -505,7 +505,7 @@ func TestTailnetCrossSitePages(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockRoutines{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -627,7 +627,7 @@ func TestSaveBehaviorSettings(t *testing.T) {
 
 		return locked.Do(func(cfg *config.Config) error { cfg.SetBehavior(behavior); return nil })
 	}}
-	server := New(core, nil, locked, &mockChannels{}, &mockCronJobs{})
+	server := New(core, nil, locked, &mockChannels{}, &mockRoutines{})
 	alice := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	bob := metadata.NewIncomingContext(t.Context(), tailnetUser("bob"))
 	document := func(change func(*config.Behavior)) string {
@@ -1326,23 +1326,23 @@ func TestSessionEntries(t *testing.T) {
 		return channelTitle, []string{"planner", "general", "planner-slack", "support-slack"}, nil
 	}
 	channels.SlackTagsMatchingFunc = func(context.Context, string) []string { return nil }
-	cronRan := make(chan struct{}, 2)
-	cronRunner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.CronRunProgress) (protocol.CronRunResult, error) {
+	routineRan := make(chan struct{}, 2)
+	routineRunner := &mockRoutineRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RoutineRunProgress) (protocol.RoutineRunResult, error) {
 		require.Equal(t, "planner", agent)
 		require.Contains(t, prompt, "Cron body")
 		require.NotEmpty(t, progress.SyncDestination)
-		require.True(t, strings.HasPrefix(progress.ConversationID, "one-off-cron:agents/planner.md#24h:"))
+		require.True(t, strings.HasPrefix(progress.ConversationID, "one-off-routine:agents/planner.md#24h:"))
 
-		cronRan <- struct{}{}
+		routineRan <- struct{}{}
 
-		return protocol.CronRunResult{ConversationID: progress.SyncDestination}, nil
+		return protocol.RoutineRunResult{ConversationID: progress.SyncDestination}, nil
 	}}
 	live := config.NewLockedConfig(cfg)
-	cronjobs := cronfrontend.New(live, cfg.RuntimeDirName(), sessions, cronRunner, slog.New(slog.DiscardHandler))
-	require.NoError(t, cronjobs.Start(t.Context()))
-	t.Cleanup(func() { require.NoError(t, cronjobs.Stop(context.Background())) })
+	routines := routinefrontend.New(live, cfg.RuntimeDirName(), sessions, routineRunner, slog.New(slog.DiscardHandler))
+	require.NoError(t, routines.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, routines.Stop(context.Background())) })
 
-	server := New(core, sessions, live, channels, cronjobs)
+	server := New(core, sessions, live, channels, routines)
 	socketPath := testSocketPath(t)
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
@@ -1522,7 +1522,7 @@ func TestSessionEntries(t *testing.T) {
 	const id = "slack-thread:C1:1.1"
 
 	for _, run := range []string{"cron:private", "one-off-cron:private"} {
-		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "producer", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/private.md", At: time.Unix(1, 0), OneOff: run == "one-off-cron:private"}}))
+		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "producer", CreatedBy: "routine", Run: &protocol.RoutineRun{Path: "cron/private.md", At: time.Unix(1, 0), OneOff: run == "one-off-cron:private"}}))
 	}
 
 	thread := backend.ThreadState{Agent: "general"}
@@ -1752,7 +1752,7 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, protocol.SourceWeb, goalInbounds[0].Source)
 		require.Equal(t, id, goalInbounds[0].ConversationID)
 
-		reference := `attachment:goal-file "goal.txt" (workspace path "artifacts/uploads/goal-file/goal.txt")`
+		reference := fmt.Sprintf("attachment:goal-file %q (path %q)", "goal.txt", filepath.Join(cfg.Workspace, backend.UploadDir(cfg, id), "goal-file", "goal.txt"))
 		require.Equal(t, "ship it\n\n"+reference, goalInbounds[0].Text)
 		require.Equal(t, "alice", goalInbounds[0].Metadata[protocol.InboundPrincipalMetadataKey])
 		require.Equal(t, "goal-message", goalInbounds[0].Metadata["web_message_id"])
@@ -1932,7 +1932,7 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, id, turns[len(turns)-1].ConversationID)
 
 	at := time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC)
-	for hidden, run := range map[string]*protocol.CronRun{"cron:cron/daily.md:20000102T030405.000000006Z:a": {Path: "cron/daily.md", At: at}, "one-off-cron:cron/daily.md:20000102T030405.000000006Z:b": {Path: "cron/daily.md", At: at, OneOff: true}} {
+	for hidden, run := range map[string]*protocol.RoutineRun{"cron:cron/daily.md:20000102T030405.000000006Z:a": {Path: "cron/daily.md", At: at}, "one-off-cron:cron/daily.md:20000102T030405.000000006Z:b": {Path: "cron/daily.md", At: at, OneOff: true}} {
 		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: hidden, Agent: "producer", Run: run}))
 	}
 
@@ -2109,7 +2109,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 		json.RawMessage(`{"type":"function_call","name":"execute","arguments":"{\"code\":\"true\"}"}`),
 		json.RawMessage(`{"type":"function_call_output","output":"ok"}`),
 		json.RawMessage(`{"type":"message","id":"msg_one","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer one","annotations":[]}]}`),
-		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]","content":"[Web principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhuman two"}`),
+		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\nhuman two"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"answer two"}`),
 		json.RawMessage(`{"type":"function_call","call_id":"script","name":"execute","arguments":"{\"code\":\"def main(): return tag()\",\"description\":\"Tag\"}"}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"script","output":"tagged"}`),
@@ -2127,7 +2127,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	require.Equal(t, "script", history.Messages[8].ToolCallId)
 	require.Equal(t, "execute", history.Messages[8].ToolName)
 	require.Equal(t, "script", history.Messages[9].ToolCallId, "calls made inside a script are never shown")
-	require.Equal(t, `[Web principal="alice" additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]`, history.Messages[6].Header)
+	require.Equal(t, `[Web principal="alice"]`, history.Messages[6].Header)
 	require.Equal(t, "alice", history.Messages[6].GetPrincipal())
 
 	for i, message := range history.Messages {
@@ -2592,7 +2592,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		require.Equal(t, largePreview, session.Preview)
 	}
 
-	emptyJobs, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+	emptyJobs, err := invoke[ListRoutinesResponse](ctx, connection, "ListRoutines", &ListRoutinesRequest{})
 	require.NoError(t, err)
 	require.Empty(t, emptyJobs.Jobs)
 
@@ -2601,21 +2601,22 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.NoError(t, root.WriteFile(plannerFile, []byte(plannerWithRoutine), 0o600))
 
 	next := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
-	require.NoError(t, sessions.SyncCronSchedules([]backend.CronScheduleState{{ScheduleID: "agents/planner.md#24h", RelativePath: "agents/planner.md#24h", NextDue: next}}))
+	require.NoError(t, sessions.SyncRoutineSchedules([]backend.RoutineScheduleState{{ScheduleID: "agents/planner.md#24h", RelativePath: "agents/planner.md#24h", NextDue: next}}))
 
-	jobs, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+	jobs, err := invoke[ListRoutinesResponse](ctx, connection, "ListRoutines", &ListRoutinesRequest{})
 	require.NoError(t, err)
 	require.Len(t, jobs.Jobs, 1)
-	require.True(t, proto.Equal(&CronJob{Stem: "planner · 24h", Schedule: "24h", Body: "Cron body", Agent: "planner", Origin: "agents/planner.md#24h", NextRun: next.Format(time.RFC3339Nano), Upcoming: []string{next.Format(time.RFC3339Nano)}, Space: "Billing"}, jobs.Jobs[0]), "unexpected job: %v", jobs.Jobs[0])
+	require.True(t, proto.Equal(&Routine{Stem: "planner · 24h", Schedule: "24h", Body: "Cron body", Agent: "planner", Origin: "agents/planner.md#24h", NextRun: next.Format(time.RFC3339Nano), Upcoming: []string{next.Format(time.RFC3339Nano)}, Space: "Billing"}, jobs.Jobs[0]), "unexpected job: %v", jobs.Jobs[0])
 
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md"), []byte("---\nmodel: [\n---\nHelp."), 0o600))
 
-	_, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
-	require.ErrorContains(t, err, "list web cron jobs: load agents: broken.md")
+	withBroken, err := invoke[ListRoutinesResponse](ctx, connection, "ListRoutines", &ListRoutinesRequest{})
+	require.NoError(t, err, "a broken agent file drops only that agent")
+	require.True(t, proto.Equal(jobs, withBroken), "unexpected jobs: %v", withBroken)
 	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md")))
 
 	sources := []string{"cron:cron/report:daily.md:20260905T010000.000000001Z:first", "one-off-cron:cron/report_daily.md:20260905T020000.000000002Z:second"}
-	runs := []*protocol.CronRun{{Path: "cron/report:daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, {Path: "cron/report_daily.md", At: time.Date(2026, 9, 5, 2, 0, 0, 2, time.UTC), OneOff: true}}
+	runs := []*protocol.RoutineRun{{Path: "cron/report:daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, {Path: "cron/report_daily.md", At: time.Date(2026, 9, 5, 2, 0, 0, 2, time.UTC), OneOff: true}}
 
 	runEntries := make([]int64, 0, len(sources))
 
@@ -2683,7 +2684,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		require.NoError(t, err)
 	}
 
-	jobs, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+	jobs, err = invoke[ListRoutinesResponse](ctx, connection, "ListRoutines", &ListRoutinesRequest{})
 	require.NoError(t, err)
 	require.Len(t, jobs.Jobs, 3)
 
@@ -2699,7 +2700,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.Equal(t, "2026-09-05T02:00:00.000000002Z", jobs.Jobs[1].LastRun)
 	require.Equal(t, "2026-09-05T01:00:00.000000001Z", jobs.Jobs[2].LastRun)
 
-	again, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+	again, err := invoke[ListRoutinesResponse](ctx, connection, "ListRoutines", &ListRoutinesRequest{})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(jobs, again))
 	t.Run("a cron run is one row whatever chats and sessions it has", func(t *testing.T) {
@@ -2713,7 +2714,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		_, err = sessions.AppendEntryID(ctx, subagent, &entry)
 		require.NoError(t, err)
 
-		listed, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+		listed, err := invoke[ListRoutinesResponse](ctx, connection, "ListRoutines", &ListRoutinesRequest{})
 		require.NoError(t, err)
 		require.True(t, proto.Equal(jobs, listed), "unexpected cron runs: %v", listed)
 
@@ -2727,7 +2728,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 	_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = $2`, fmt.Sprintf("%d:0", runEntries[1]), id)
 	require.NoError(t, err)
-	reverted, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+	reverted, err := invoke[ListRoutinesResponse](ctx, connection, "ListRoutines", &ListRoutinesRequest{})
 	require.NoError(t, err)
 	require.Len(t, reverted.Jobs, 3)
 	require.Equal(t, []string{"", id}, []string{reverted.Jobs[1].NextRun, reverted.Jobs[2].NextRun})
@@ -2735,7 +2736,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	require.NoError(t, err)
 
 	undelivered := "cron:cron/silent.md:20260905T030000.000000003Z:third"
-	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: undelivered, Agent: "planner", Run: &protocol.CronRun{Path: "cron/silent.md", At: time.Date(2026, 9, 5, 3, 0, 0, 3, time.UTC)}}))
+	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: undelivered, Agent: "planner", Run: &protocol.RoutineRun{Path: "cron/silent.md", At: time.Date(2026, 9, 5, 3, 0, 0, 3, time.UTC)}}))
 
 	traceEntry := entry
 	traceEntry.ReplayInput = []json.RawMessage{
@@ -2744,10 +2745,10 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	}
 	_, err = sessions.AppendEntryID(ctx, undelivered, &traceEntry)
 	require.NoError(t, err)
-	withSilent, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+	withSilent, err := invoke[ListRoutinesResponse](ctx, connection, "ListRoutines", &ListRoutinesRequest{})
 	require.NoError(t, err)
 	require.Len(t, withSilent.Jobs, 4)
-	require.True(t, proto.Equal(&CronJob{Stem: "cron/silent.md", Status: "ran", LastRun: "2026-09-05T03:00:00.000000003Z", Origin: undelivered}, withSilent.Jobs[1]))
+	require.True(t, proto.Equal(&Routine{Stem: "cron/silent.md", Status: "ran", LastRun: "2026-09-05T03:00:00.000000003Z", Origin: undelivered}, withSilent.Jobs[1]))
 	trace, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: undelivered})
 	require.NoError(t, err)
 	require.Len(t, trace.Messages, 2)
@@ -2760,7 +2761,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	for _, prefix := range []string{"cron:", "one-off-cron:"} {
 		t.Run(prefix+"checkpoint-only run is listed", func(t *testing.T) {
 			source := prefix + "cron/checkpoint.md:20000102T030405.000000006Z:pending"
-			run := &protocol.CronRun{Path: "cron/checkpoint.md", At: time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC), OneOff: prefix == "one-off-cron:"}
+			run := &protocol.RoutineRun{Path: "cron/checkpoint.md", At: time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC), OneOff: prefix == "one-off-cron:"}
 			require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: source, Agent: "producer", Run: run}))
 			require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: source, ConversationKey: source, Agent: "producer", ReplayInput: []json.RawMessage{
 				json.RawMessage(`{"type":"message","role":"assistant","content":"Private checkpoint content"}`),
@@ -2781,17 +2782,17 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			require.Len(t, trace.Messages, 1)
 			require.Equal(t, "Private checkpoint content", trace.Messages[0].Text)
 
-			listed, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+			listed, err := invoke[ListRoutinesResponse](ctx, connection, "ListRoutines", &ListRoutinesRequest{})
 			require.NoError(t, err)
 
-			want := &ListCronJobsResponse{Jobs: append(slices.Clone(withSilent.Jobs), &CronJob{Stem: "cron/checkpoint.md", Status: "ran", LastRun: "2000-01-02T03:04:05.000000006Z", Origin: source})}
+			want := &ListRoutinesResponse{Jobs: append(slices.Clone(withSilent.Jobs), &Routine{Stem: "cron/checkpoint.md", Status: "ran", LastRun: "2000-01-02T03:04:05.000000006Z", Origin: source})}
 			require.True(t, proto.Equal(want, listed), "checkpoint-only run missing or inventory changed: %v", listed)
 
 			for _, terminal := range []protocol.Terminal{protocol.TerminalFailed, protocol.TerminalStopped, ""} {
 				require.NoError(t, seeded.SetActiveTurnTerminal(ctx, source, terminal))
 				transcript, err := sessions.ObserveHistory(ctx, source, "", 0, 0, 0, &backend.HistoryInventory{})
 				require.NoError(t, err)
-				listed, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+				listed, err := invoke[ListRoutinesResponse](ctx, connection, "ListRoutines", &ListRoutinesRequest{})
 				require.NoError(t, err)
 
 				if terminal == "" {
@@ -2857,7 +2858,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: webID})
 		require.NoError(t, err)
 
-		trace.Origin = `{"agent":"planner","kind":"cron","ranAt":"2026-09-05T03:00:00.000000003Z","runId":"` + undelivered + `","runKind":"scheduled","sourcePath":"cron/silent.md","stem":"cron/silent.md"}`
+		trace.Origin = `{"agent":"planner","kind":"routine","ranAt":"2026-09-05T03:00:00.000000003Z","runId":"` + undelivered + `","runKind":"scheduled","sourcePath":"cron/silent.md","stem":"cron/silent.md"}`
 		require.Equal(t, trace.Origin, history.Origin)
 		require.Equal(t, trace.Messages, history.Messages)
 		require.True(t, history.Reset_)
@@ -2907,7 +2908,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		index := slices.IndexFunc(listed.Sessions, func(session *Session) bool { return session.Id == webID })
 		require.NotEqual(t, -1, index)
 		require.Equal(t, billingID, listed.Sessions[index].SpaceId, "the chat keeps the space it was opened in after its agent's space changes")
-		require.True(t, listed.Sessions[index].Cron, "cron origin survives follow-ups and config changes")
+		require.True(t, listed.Sessions[index].Routine, "cron origin survives follow-ups and config changes")
 
 		for _, agent := range []string{"general", "planner", "selected"} {
 			_, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: webID, Text: "/agent " + agent})
@@ -2946,7 +2947,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		_, err = invoke[CreateSessionResponse](t.Context(), connection, "CreateSession", request)
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
-		require.Empty(t, cronRunner.RunCalls(), "opening history must not rerun cron")
+		require.Empty(t, routineRunner.RunCalls(), "opening history must not rerun cron")
 	})
 
 	_, err = sessions.DeleteSession(ctx, undelivered)
@@ -2956,7 +2957,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	require.NoError(t, err)
 	require.EqualValues(t, 1, deletedSourceEntries)
 
-	remainingRuns, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
+	remainingRuns, err := invoke[ListRoutinesResponse](ctx, connection, "ListRoutines", &ListRoutinesRequest{})
 	require.NoError(t, err)
 	require.Len(t, remainingRuns.Jobs, 2)
 	require.True(t, proto.Equal(jobs.Jobs[1], remainingRuns.Jobs[1]))
@@ -2964,7 +2965,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	opened := make([]string, 0, 2)
 
 	for range 2 {
-		ran, err := invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "planner · 24h"})
+		ran, err := invoke[RunRoutineResponse](ctx, connection, "RunRoutine", &RunRoutineRequest{Stem: "planner · 24h"})
 		require.NoError(t, err)
 		require.NotEmpty(t, ran.Id)
 		require.NotContains(t, ran.Id, ":")
@@ -2972,18 +2973,18 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	}
 
 	require.NotEqual(t, opened[0], opened[1])
-	require.Eventually(t, func() bool { return len(cronRan) == 2 }, time.Second, 10*time.Millisecond)
-	<-cronRan
-	<-cronRan
+	require.Eventually(t, func() bool { return len(routineRan) == 2 }, time.Second, 10*time.Millisecond)
+	<-routineRan
+	<-routineRan
 
-	calls := cronRunner.RunCalls()
-	require.ElementsMatch(t, opened, []string{calls[0].CronRunProgress.SyncDestination, calls[1].CronRunProgress.SyncDestination})
-	require.NotEqual(t, calls[0].CronRunProgress.ConversationID, calls[1].CronRunProgress.ConversationID)
+	calls := routineRunner.RunCalls()
+	require.ElementsMatch(t, opened, []string{calls[0].RoutineRunProgress.SyncDestination, calls[1].RoutineRunProgress.SyncDestination})
+	require.NotEqual(t, calls[0].RoutineRunProgress.ConversationID, calls[1].RoutineRunProgress.ConversationID)
 
-	cronRunner.RunFunc = func(context.Context, string, string, *backend.CronRunProgress) (protocol.CronRunResult, error) {
-		return protocol.CronRunResult{}, errors.New("cron execution failed")
+	routineRunner.RunFunc = func(context.Context, string, string, *backend.RoutineRunProgress) (protocol.RoutineRunResult, error) {
+		return protocol.RoutineRunResult{}, errors.New("cron execution failed")
 	}
-	failed, err := invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "planner · 24h"})
+	failed, err := invoke[RunRoutineResponse](ctx, connection, "RunRoutine", &RunRoutineRequest{Stem: "planner · 24h"})
 	require.NoError(t, err)
 	require.NotEmpty(t, failed.Id)
 
@@ -2997,11 +2998,11 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	ran := runRows.Sessions[slices.IndexFunc(runRows.Sessions, func(row *Session) bool { return row.Id == failed.Id })]
 	assert.Equal(t, spaces[slices.IndexFunc(spaces, func(space backend.Space) bool { return space.Name == "Billing" })].ID, ran.SpaceId)
 
-	_, err = invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "../escape"})
+	_, err = invoke[RunRoutineResponse](ctx, connection, "RunRoutine", &RunRoutineRequest{Stem: "../escape"})
 	require.ErrorContains(t, err, `no routine "../escape"`)
 
-	for _, method := range []string{"ListCronJobs", "RunCronJob"} {
-		_, err = invoke[RunCronJobResponse](t.Context(), connection, method, &RunCronJobRequest{Stem: "planner · 24h"})
+	for _, method := range []string{"ListRoutines", "RunRoutine"} {
+		_, err = invoke[RunRoutineResponse](t.Context(), connection, method, &RunRoutineRequest{Stem: "planner · 24h"})
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 	}
 
@@ -3020,8 +3021,9 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "bad.md"), []byte("---\nmodel: gpt-6.1-sol\nroutines: [not a schedule]\n---\nHelp."), 0o600))
 
-	_, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
-	require.ErrorContains(t, err, "bad.md")
+	withBadRoutine, err := invoke[ListRoutinesResponse](ctx, connection, "ListRoutines", &ListRoutinesRequest{})
+	require.NoError(t, err, "a bad routine drops only its agent")
+	require.False(t, slices.ContainsFunc(withBadRoutine.Jobs, func(job *Routine) bool { return job.Agent == "bad" }))
 	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "bad.md")))
 
 	sidebarChoices := channels.SidebarChannelAgentChoicesFunc
@@ -3065,10 +3067,12 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md"), []byte("---\nmodel: [\n---\nHelp."), 0o600))
 
-	_, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
-	require.ErrorContains(t, err, "load web agents")
+	agentsWithBroken, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
+	require.NoError(t, err, "a broken agent file drops only that agent")
+	require.False(t, slices.ContainsFunc(agentsWithBroken.Agents, func(agent *Agent) bool { return agent.Name == "broken" }))
+
 	_, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
-	require.ErrorContains(t, err, "load web agents")
+	require.NoError(t, err, "a broken agent file drops only that agent")
 	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md")))
 
 	t.Run("selected conversation read unavailable", func(t *testing.T) {
@@ -3091,7 +3095,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		_, err = transaction.ExecContext(t.Context(), `LOCK TABLE conversations IN ACCESS EXCLUSIVE MODE`)
 		require.NoError(t, err)
 
-		selectedServer := &Server{backend: server.backend, sessions: lockedSessions, cfg: server.cfg, channels: server.channels, cronjobs: server.cronjobs}
+		selectedServer := &Server{backend: server.backend, sessions: lockedSessions, cfg: server.cfg, channels: server.channels, routines: server.routines}
 		incoming := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 		selected, err := selectedServer.listAgents(incoming, id)
 		require.ErrorContains(t, err, "resolve web conversation visibility")
@@ -3100,7 +3104,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		_, _, err = lockedSessions.PollAttention(t.Context(), "alice", "/cron", false)
 		require.ErrorContains(t, err, "record tab view")
 		err = selectedServer.listPending(t.Context(), &HistoryResponse{}, &HistoryRequest{Id: id})
-		require.ErrorContains(t, err, "read web cron trace")
+		require.ErrorContains(t, err, "read web routine trace")
 	})
 
 	t.Run("durable attachments", func(t *testing.T) {
@@ -3225,7 +3229,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.Contains(t, queue[0].Content.TextAttachments[0], file.Id)
 		require.Contains(t, queue[0].Content.TextAttachments[1], imageFile.Id)
 		require.Equal(t, []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: imageData}}, queue[0].Content.Attachments)
-		materialized, err := root.ReadFile(filepath.Join("artifacts", "uploads", file.Id, file.Name))
+		materialized, err := root.ReadFile(filepath.Join(backend.UploadDir(cfg, conversation), file.Id, file.Name))
 		require.NoError(t, err)
 		require.Equal(t, data, materialized)
 
@@ -3388,8 +3392,8 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			name, path, message string
 		}{
 			{"missing workspace", "", "open upload workspace"},
-			{"uploads collision", "artifacts/uploads", "create upload directory"},
-			{"filename directory", filepath.Join("artifacts", "uploads", imageFile.Id, imageFile.Name), "materialize upload"},
+			{"uploads collision", filepath.Join(cfg.RuntimeDirName(), "uploads"), "create upload directory"},
+			{"filename directory", filepath.Join(backend.UploadDir(cfg, conversation), imageFile.Id, imageFile.Name), "materialize upload"},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				fixtureRoot, path := root, test.path
@@ -3641,48 +3645,50 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.Equal(t, codes.NotFound, status.Code(stream.RecvMsg(&Attachment{})))
 	})
 
-	t.Run("easy chat uploads", func(t *testing.T) {
-		const conversation = "web:easy-attachments"
+	for kind, file := range map[string]string{"easy": "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\n---\nHelp.", "advanced": "---\nmodel: gpt-6.1-sol\n---\nHelp."} {
+		t.Run(kind+" chat uploads", func(t *testing.T) {
+			conversation := "web:" + kind + "-attachments"
 
-		agentPath := filepath.Join(cfg.RuntimeDirName(), "agents", "easy.md")
-		require.NoError(t, root.WriteFile(agentPath, []byte("---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\n---\nHelp."), 0o600))
-		t.Cleanup(func() { require.NoError(t, root.Remove(agentPath)) })
-		require.NoError(t, sessions.UpsertThread(conversation, backend.ThreadState{Agent: "easy"}))
+			agentPath := filepath.Join(cfg.RuntimeDirName(), "agents", kind+".md")
+			require.NoError(t, root.WriteFile(agentPath, []byte(file), 0o600))
+			t.Cleanup(func() { require.NoError(t, root.Remove(agentPath)) })
+			require.NoError(t, sessions.UpsertThread(conversation, backend.ThreadState{Agent: kind}))
 
-		previousRunTurn := core.RunTurnFunc
-		core.RunTurnFunc = func(_ context.Context, inbound *protocol.InboundMessage) error {
-			turns = append(turns, inbound)
-			return nil
-		}
+			previousRunTurn := core.RunTurnFunc
+			core.RunTurnFunc = func(_ context.Context, inbound *protocol.InboundMessage) error {
+				turns = append(turns, inbound)
+				return nil
+			}
 
-		defer func() { core.RunTurnFunc = previousRunTurn }()
+			defer func() { core.RunTurnFunc = previousRunTurn }()
 
-		upload, err := connection.NewStream(ctx, &grpc.StreamDesc{ClientStreams: true}, "/rpc.Web/UploadAttachment")
-		require.NoError(t, err)
-		require.NoError(t, upload.SendMsg(&Attachment{ConversationId: conversation, Name: "notes.txt", Data: []byte("easy notes")}))
-		require.NoError(t, upload.CloseSend())
+			upload, err := connection.NewStream(ctx, &grpc.StreamDesc{ClientStreams: true}, "/rpc.Web/UploadAttachment")
+			require.NoError(t, err)
+			require.NoError(t, upload.SendMsg(&Attachment{ConversationId: conversation, Name: "notes.txt", Data: []byte(kind + " notes")}))
+			require.NoError(t, upload.CloseSend())
 
-		file := &Attachment{}
-		require.NoError(t, upload.RecvMsg(file))
+			uploaded := &Attachment{}
+			require.NoError(t, upload.RecvMsg(uploaded))
 
-		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: conversation, Text: "read it", AttachmentIds: []string{file.Id}})
-		require.NoError(t, err)
+			_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: conversation, Text: "read it", AttachmentIds: []string{uploaded.Id}})
+			require.NoError(t, err)
 
-		path := filepath.Join(cfg.RuntimeDirName(), "uploads", "web:easy-attachments", file.Id, "notes.txt")
-		require.Equal(t, fmt.Sprintf("read it\n\nattachment:%s \"notes.txt\" (path %q)", file.Id, filepath.Join(cfg.Workspace, path)), turns[len(turns)-1].Text)
+			path := filepath.Join(cfg.RuntimeDirName(), "uploads", conversation, uploaded.Id, "notes.txt")
+			require.Equal(t, fmt.Sprintf("read it\n\nattachment:%s \"notes.txt\" (path %q)", uploaded.Id, filepath.Join(cfg.Workspace, path)), turns[len(turns)-1].Text)
 
-		data, err := root.ReadFile(path)
-		require.NoError(t, err)
-		require.Equal(t, "easy notes", string(data))
+			data, err := root.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, kind+" notes", string(data))
 
-		_, err = root.Stat(filepath.Join("artifacts", "uploads", file.Id))
-		require.ErrorIs(t, err, os.ErrNotExist, "the workspace holds no copy")
+			_, err = root.Stat(filepath.Join("artifacts", "uploads", uploaded.Id))
+			require.ErrorIs(t, err, os.ErrNotExist, "the workspace holds no copy")
 
-		shown, files, err := sessions.InputAttachments(ctx, conversation, turns[len(turns)-1].Text)
-		require.NoError(t, err)
-		require.Equal(t, "read it", shown, "the reference is stripped")
-		require.Len(t, files, 1)
-	})
+			shown, files, err := sessions.InputAttachments(ctx, conversation, turns[len(turns)-1].Text)
+			require.NoError(t, err)
+			require.Equal(t, "read it", shown, "the reference is stripped")
+			require.Len(t, files, 1)
+		})
+	}
 
 	t.Run("fork search and rejoin an ordinary session", func(t *testing.T) {
 		const (
@@ -3911,7 +3917,8 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, root.WriteFile(agentPath, []byte("---\nmodel: [\n---\n"), 0o600))
 
 		_, err = invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: source})
-		require.ErrorContains(t, err, "load web agents")
+		require.Equal(t, codes.FailedPrecondition, status.Code(err))
+		require.ErrorContains(t, err, "session agent is no longer available")
 		require.NoError(t, root.WriteFile(agentPath, agentData, 0o600))
 	})
 
@@ -4044,7 +4051,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	require.Len(t, catalog.Agents, 5, "the unselected catalog is independent of the database")
 }
 
-func TestContinueCronRun(t *testing.T) {
+func TestContinueRoutineRun(t *testing.T) {
 	t.Parallel()
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -4072,8 +4079,8 @@ func TestContinueCronRun(t *testing.T) {
 	core := withoutBackgroundJobs()
 	rt := &backend.Runtime{Sessions: sessions}
 	core.CreateConversationFunc, core.ContinueRunFunc = rt.CreateConversation, rt.ContinueRun
-	cronjobs := &mockCronJobs{LoadOneOffCronjobFunc: func(string) (protocol.OneOffCronjob, error) { return protocol.OneOffCronjob{}, os.ErrNotExist }}
-	server := &Server{backend: core, sessions: sessions, cfg: config.NewLockedConfig(cfg), cronjobs: cronjobs}
+	routines := &mockRoutines{LoadOneOffRoutineFunc: func(string) (protocol.OneOffRoutine, error) { return protocol.OneOffRoutine{}, os.ErrNotExist }}
+	server := &Server{backend: core, sessions: sessions, cfg: config.NewLockedConfig(cfg), routines: routines}
 	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
 	texts := func(id string) (shown []string) {
@@ -4090,10 +4097,10 @@ func TestContinueCronRun(t *testing.T) {
 	for name, report := range map[string]string{"unbound": "", "bound": "slack-thread:C1:1.2"} {
 		t.Run(name, func(t *testing.T) {
 			run := "cron:cron/daily.md:20260905T010000.000000001Z:" + name
-			require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "planner", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}}))
+			require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "planner", CreatedBy: "routine", Run: &protocol.RoutineRun{Path: "cron/daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}}))
 
 			if report != "" {
-				require.NoError(t, sessions.UpsertThread(report, backend.ThreadState{Agent: "planner", CreatedBy: backend.ThreadCreatedByCron}))
+				require.NoError(t, sessions.UpsertThread(report, backend.ThreadState{Agent: "planner", CreatedBy: backend.ThreadCreatedByRoutine}))
 				_, err := db.ExecContext(ctx, `UPDATE conversations SET reports_to = $2 WHERE conversation_id = $1`, run, report)
 				require.NoError(t, err)
 			}
@@ -4154,7 +4161,7 @@ func TestContinueCronRun(t *testing.T) {
 
 	t.Run("removed agent", func(t *testing.T) {
 		run := "cron:cron/daily.md:20260905T010000.000000001Z:removed"
-		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "gone", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/daily.md"}}))
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "gone", CreatedBy: "routine", Run: &protocol.RoutineRun{Path: "cron/daily.md"}}))
 
 		_, err := server.createSession(ctx, &CreateSessionRequest{SourceConversationId: run})
 		require.Equal(t, codes.FailedPrecondition, status.Code(err))
@@ -4173,7 +4180,7 @@ func TestContinueCronRun(t *testing.T) {
 		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "room.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: global\nspace: Ops\n---\nHelp."), 0o600))
 
 		run := "cron:cron/global.md:20260905T010000.000000001Z:global"
-		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "room", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/global.md"}}))
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "room", CreatedBy: "routine", Run: &protocol.RoutineRun{Path: "cron/global.md"}}))
 		_, err = sessions.AppendEntryID(ctx, run, &harness.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"global report"}`)}})
 		require.NoError(t, err)
 
@@ -4186,7 +4193,7 @@ func TestContinueCronRun(t *testing.T) {
 		var destination string
 		require.NoError(t, db.QueryRowContext(ctx, `SELECT reports_to FROM conversations WHERE conversation_id = $1`, run).Scan(&destination))
 		require.Equal(t, shared.Id, destination)
-		_, continuation, err := sessions.CronRun(ctx, shared.Id)
+		_, continuation, err := sessions.RoutineRun(ctx, shared.Id)
 		require.NoError(t, err)
 		require.False(t, continuation, "the shared session must remain eligible for sticky lookup")
 
@@ -4225,7 +4232,7 @@ func TestStickySlackAgentsAnswerOnlyInSlackSessions(t *testing.T) {
 	core.CreateConversationFunc = func(context.Context, protocol.Conversation) error { return nil }
 	server := New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{
 		SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) { return "support", []string{"channel"}, nil },
-	}, &mockCronJobs{})
+	}, &mockRoutines{})
 	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
 	offered := func(id string) (current string, names []string) {
@@ -4287,7 +4294,7 @@ func TestListAgentsShowsPermissionsAndOrigin(t *testing.T) {
 	require.NoError(t, root.WriteFile(filepath.Join("agents", "careful.md"), []byte(files["careful"]), 0o600))
 	require.NoError(t, root.WriteFile(filepath.Join(team, "agents", "root.md"), []byte(files["root"]), 0o600))
 
-	server := New(withoutBackgroundJobs(), sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{})
+	server := New(withoutBackgroundJobs(), sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockRoutines{})
 	listed, err := server.listAgents(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")), "")
 	require.NoError(t, err)
 
@@ -4303,7 +4310,7 @@ func TestListAgentsShowsPermissionsAndOrigin(t *testing.T) {
 	require.Contains(t, permissions["root"], "## Sudo Mode")
 }
 
-func TestRoutineCronJobs(t *testing.T) {
+func TestListRoutines(t *testing.T) {
 	t.Parallel()
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -4320,29 +4327,29 @@ func TestRoutineCronJobs(t *testing.T) {
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "marketing.md"), []byte("---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\nroutines: [30m]\n---\nHelp."), 0o600))
 
 	ran := make(chan string, 1)
-	runner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.CronRunProgress) (protocol.CronRunResult, error) {
+	runner := &mockRoutineRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RoutineRunProgress) (protocol.RoutineRunResult, error) {
 		ran <- agent + "|" + progress.Run.Path + "|" + progress.SyncDestination + "|" + prompt
-		return protocol.CronRunResult{}, nil
+		return protocol.RoutineRunResult{}, nil
 	}}
 	locked := config.NewLockedConfig(cfg)
 	core := withoutBackgroundJobs()
 	rt := &backend.Runtime{Sessions: sessions}
 	core.CreateConversationFunc = rt.CreateConversation
-	server := &Server{backend: core, sessions: sessions, cfg: locked, cronjobs: cronfrontend.New(locked, cfg.RuntimeDirName(), sessions, runner, slog.New(slog.DiscardHandler))}
+	server := &Server{backend: core, sessions: sessions, cfg: locked, routines: routinefrontend.New(locked, cfg.RuntimeDirName(), sessions, runner, slog.New(slog.DiscardHandler))}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-tailnet-login-bin", "alice", "rocketclaw-tailnet-name-bin", "Alice"))
 
 	run := "cron:agents/marketing.md#30m:20260905T010000.000000001Z:first"
-	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "marketing", CreatedBy: "cron", Run: &protocol.CronRun{Path: "agents/marketing.md#30m", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}}))
+	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "marketing", CreatedBy: "routine", Run: &protocol.RoutineRun{Path: "agents/marketing.md#30m", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}}))
 	_, err = sessions.AppendEntryID(ctx, run, &harness.SessionEntry{Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"report"}`)}})
 	require.NoError(t, err)
 
-	jobs, err := server.listCronJobs(ctx)
+	jobs, err := server.listRoutines(ctx)
 	require.NoError(t, err)
 	require.Len(t, jobs.Jobs, 2)
-	require.True(t, proto.Equal(&CronJob{Stem: "marketing · 30m", Schedule: "30m", Body: "Scheduled run (30m).", Agent: "marketing", Origin: "agents/marketing.md#30m", Space: "Ops"}, jobs.Jobs[0]), "unexpected job: %v", jobs.Jobs[0])
-	require.True(t, proto.Equal(&CronJob{Stem: "marketing · 30m", Status: "ran", LastRun: "2026-09-05T01:00:00.000000001Z", Origin: run}, jobs.Jobs[1]), "unexpected run: %v", jobs.Jobs[1])
+	require.True(t, proto.Equal(&Routine{Stem: "marketing · 30m", Schedule: "30m", Body: "Scheduled run (30m).", Agent: "marketing", Origin: "agents/marketing.md#30m", Space: "Ops"}, jobs.Jobs[0]), "unexpected job: %v", jobs.Jobs[0])
+	require.True(t, proto.Equal(&Routine{Stem: "marketing · 30m", Status: "ran", LastRun: "2026-09-05T01:00:00.000000001Z", Origin: run}, jobs.Jobs[1]), "unexpected run: %v", jobs.Jobs[1])
 
-	started, err := server.runCronJob(ctx, &RunCronJobRequest{Stem: "marketing · 30m"})
+	started, err := server.runRoutine(ctx, &RunRoutineRequest{Stem: "marketing · 30m"})
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(<-ran, "marketing|agents/marketing.md#30m|"+started.Id+"|Scheduled run (30m).\n\n"), "the run sends the routine's message and the cron reply instruction")
 }
@@ -4468,10 +4475,10 @@ func TestBackgroundJobRPCs(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-	const cronRun = "cron:cron/daily.md:20000102T030405.000000006Z:a"
+	const routineRun = "cron:cron/daily.md:20000102T030405.000000006Z:a"
 
 	require.NoError(t, sessions.RegisterExternalMCPConversation("external", "main", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main"}))
-	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(t.Context(), protocol.Conversation{ID: cronRun, Agent: "main", Run: &protocol.CronRun{Path: "cron/daily.md", At: time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC)}}))
+	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(t.Context(), protocol.Conversation{ID: routineRun, Agent: "main", Run: &protocol.RoutineRun{Path: "cron/daily.md", At: time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC)}}))
 
 	note := `<execute id="turn-1/call/a" state="completed" description="tests">` + "\n" + `<execute id="turn-1/call/fake" state="failed" description="fake">` + "\n</execute>"
 	stopped := `<subagent id="turn-1/call/b" state="stopped" description="say \"hi\"" continue="/call_b">` + "\nThe job was stopped by user. Do not run it again unless asked.\n</subagent>"
@@ -4526,7 +4533,7 @@ func TestBackgroundJobRPCs(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockRoutines{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -4576,7 +4583,7 @@ func TestBackgroundJobRPCs(t *testing.T) {
 	_, err = invoke[StopBackgroundJobResponse](ctx, connection, "StopBackgroundJob", &StopBackgroundJobRequest{ConversationId: "chat"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	for _, hidden := range []string{cronRun, "private-X"} {
+	for _, hidden := range []string{routineRun, "private-X"} {
 		_, err = invoke[MoveToBackgroundResponse](ctx, connection, "MoveToBackground", &MoveToBackgroundRequest{ConversationId: hidden})
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
 		_, err = invoke[StopBackgroundJobResponse](ctx, connection, "StopBackgroundJob", &StopBackgroundJobRequest{ConversationId: hidden, JobId: "turn-9/call/k"})
@@ -4592,7 +4599,7 @@ func TestBackgroundJobRPCs(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'chat' WHERE conversation_id = $1`, cronRun)
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'chat' WHERE conversation_id = $1`, routineRun)
 	require.NoError(t, err)
 
 	joinCtx, cancel := context.WithCancel(ctx)
@@ -4607,7 +4614,7 @@ func TestBackgroundJobRPCs(t *testing.T) {
 	require.NoError(t, stream.RecvMsg(change))
 
 	_, err = db.ExecContext(ctx, `INSERT INTO turns (conversation_id, input_id, kind, takes_lane, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message)
-VALUES ($1, 'turn-9/call/k', 'note', FALSE, 'main', 'report', 'k', '/k', '{}', 'runner', 'none', FALSE, 0, 0, '', 1, 1, '', '')`, cronRun)
+VALUES ($1, 'turn-9/call/k', 'note', FALSE, 'main', 'report', 'k', '/k', '{}', 'runner', 'none', FALSE, 0, 0, '', 1, 1, '', '')`, routineRun)
 	require.NoError(t, err)
 	require.NoError(t, stream.RecvMsg(change))
 	require.Equal(t, "chat", change.ConversationId, "a hidden run's job change wakes its destination")
@@ -4641,7 +4648,7 @@ func TestQuestionRPCs(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockRoutines{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })

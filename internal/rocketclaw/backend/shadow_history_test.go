@@ -215,7 +215,8 @@ func TestShadowHistoryIsAbsentFromOrdinaryEnumeration(t *testing.T) {
 		require.Equal(t, "parent", facts.ConversationID)
 	}
 
-	listedResult, err := listSessionsTool(store, &threadBridgeManager{slackLookups: noSlackLookups{}}).Call(ctx, json.RawMessage(`{"since":"1970-01-01T00:00:00Z","until":"","limit":100,"include_message_preview":false}`), nil)
+	workspace := t.TempDir()
+	listedResult, err := callInTurn(t, workspace, "main", new(listSessionsTool(store, &threadBridgeManager{slackLookups: noSlackLookups{}})), `{"since":"1970-01-01T00:00:00Z","until":"","limit":100,"include_message_preview":false}`)
 	require.NoError(t, err)
 	require.Contains(t, listedResult.Output, "parent\t")
 
@@ -223,7 +224,7 @@ func TestShadowHistoryIsAbsentFromOrdinaryEnumeration(t *testing.T) {
 		require.NotContains(t, listedResult.Output, child)
 	}
 
-	inspected, err := getSessionTool(store).Call(ctx, json.RawMessage(`{"conversation_id":"parent","limit":100,"before_entry_id":0}`), nil)
+	inspected, err := callInTurn(t, workspace, "main", new(getSessionTool(store)), `{"conversation_id":"parent","limit":100,"before_entry_id":0}`)
 	require.NoError(t, err)
 
 	for _, child := range children {

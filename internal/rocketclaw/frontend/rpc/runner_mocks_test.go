@@ -9,32 +9,32 @@ import (
 	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
-	"github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	"github.com/Rocketable/platform/internal/rocketclaw/frontend/routine"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// Ensure that mockCronRunner does implement cronfrontend.Runner.
+// Ensure that mockRoutineRunner does implement routinefrontend.Runner.
 // If this is not the case, regenerate this file with mockery.
-var _ cronfrontend.Runner = &mockCronRunner{}
+var _ routinefrontend.Runner = &mockRoutineRunner{}
 
-// mockCronRunner is a mock implementation of cronfrontend.Runner.
+// mockRoutineRunner is a mock implementation of routinefrontend.Runner.
 //
 //	func TestSomethingThatUsesRunner(t *testing.T) {
 //
-//		// make and configure a mocked cronfrontend.Runner
-//		mockedRunner := &mockCronRunner{
-//			RunFunc: func(context1 context.Context, s string, s1 string, cronRunProgress *backend.CronRunProgress) (protocol.CronRunResult, error) {
+//		// make and configure a mocked routinefrontend.Runner
+//		mockedRunner := &mockRoutineRunner{
+//			RunFunc: func(context1 context.Context, s string, s1 string, routineRunProgress *backend.RoutineRunProgress) (protocol.RoutineRunResult, error) {
 //				panic("mock out the Run method")
 //			},
 //		}
 //
-//		// use mockedRunner in code that requires cronfrontend.Runner
+//		// use mockedRunner in code that requires routinefrontend.Runner
 //		// and then make assertions.
 //
 //	}
-type mockCronRunner struct {
+type mockRoutineRunner struct {
 	// RunFunc mocks the Run method.
-	RunFunc func(context1 context.Context, s string, s1 string, cronRunProgress *backend.CronRunProgress) (protocol.CronRunResult, error)
+	RunFunc func(context1 context.Context, s string, s1 string, routineRunProgress *backend.RoutineRunProgress) (protocol.RoutineRunResult, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -46,50 +46,50 @@ type mockCronRunner struct {
 			S string
 			// S1 is the s1 argument value.
 			S1 string
-			// CronRunProgress is the cronRunProgress argument value.
-			CronRunProgress *backend.CronRunProgress
+			// RoutineRunProgress is the routineRunProgress argument value.
+			RoutineRunProgress *backend.RoutineRunProgress
 		}
 	}
 	lockRun sync.RWMutex
 }
 
 // Run calls RunFunc.
-func (mock *mockCronRunner) Run(context1 context.Context, s string, s1 string, cronRunProgress *backend.CronRunProgress) (protocol.CronRunResult, error) {
+func (mock *mockRoutineRunner) Run(context1 context.Context, s string, s1 string, routineRunProgress *backend.RoutineRunProgress) (protocol.RoutineRunResult, error) {
 	if mock.RunFunc == nil {
-		panic("mockCronRunner.RunFunc: method is nil but Runner.Run was just called")
+		panic("mockRoutineRunner.RunFunc: method is nil but Runner.Run was just called")
 	}
 	callInfo := struct {
-		Context1        context.Context
-		S               string
-		S1              string
-		CronRunProgress *backend.CronRunProgress
+		Context1           context.Context
+		S                  string
+		S1                 string
+		RoutineRunProgress *backend.RoutineRunProgress
 	}{
-		Context1:        context1,
-		S:               s,
-		S1:              s1,
-		CronRunProgress: cronRunProgress,
+		Context1:           context1,
+		S:                  s,
+		S1:                 s1,
+		RoutineRunProgress: routineRunProgress,
 	}
 	mock.lockRun.Lock()
 	mock.calls.Run = append(mock.calls.Run, callInfo)
 	mock.lockRun.Unlock()
-	return mock.RunFunc(context1, s, s1, cronRunProgress)
+	return mock.RunFunc(context1, s, s1, routineRunProgress)
 }
 
 // RunCalls gets all the calls that were made to Run.
 // Check the length with:
 //
 //	len(mockedRunner.RunCalls())
-func (mock *mockCronRunner) RunCalls() []struct {
-	Context1        context.Context
-	S               string
-	S1              string
-	CronRunProgress *backend.CronRunProgress
+func (mock *mockRoutineRunner) RunCalls() []struct {
+	Context1           context.Context
+	S                  string
+	S1                 string
+	RoutineRunProgress *backend.RoutineRunProgress
 } {
 	var calls []struct {
-		Context1        context.Context
-		S               string
-		S1              string
-		CronRunProgress *backend.CronRunProgress
+		Context1           context.Context
+		S                  string
+		S1                 string
+		RoutineRunProgress *backend.RoutineRunProgress
 	}
 	mock.lockRun.RLock()
 	calls = mock.calls.Run

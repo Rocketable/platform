@@ -186,7 +186,6 @@ func TestAgentDraftAssistantFailures(t *testing.T) {
 
 	for _, test := range []struct{ name, agent, answer, message string }{
 		{"missing draft", "---\nmodel: m\n---\n", "{}", "no rows"},
-		{"invalid agent", "---\nmodel: [\n---\n", "{}", "open workspace agent and skills"},
 		{"main off", "", "{}", "main is turned off in Behavior Settings."},
 		{"provider failure", "---\nmodel: m\n---\n", "", "ask agent draft assistant"},
 		{"not JSON", "---\nmodel: m\n---\n", "Sure!", "read agent draft assistant answer"},

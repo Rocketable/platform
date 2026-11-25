@@ -682,8 +682,7 @@ type openCodeTitle struct {
 }
 
 func AgentTagChoices(agent *harness.Agent) []string {
-	groups, _ := agentTagGroups(agent)
-	tags := slices.Concat(groups...)
+	tags := slices.Concat(agent.TagGroups...)
 	slices.Sort(tags)
 
 	return tags
@@ -703,8 +702,7 @@ func (s *SessionService) ToggleManualTag(ctx context.Context, agents harness.Age
 			return err
 		}
 
-		agent := agents.Items[thread.Agent]
-		groups, _ := agentTagGroups(&agent)
+		groups := agents.Items[thread.Agent].TagGroups
 
 		i := slices.IndexFunc(groups, func(candidate []string) bool { return slices.Contains(candidate, tag) })
 		if i < 0 {
