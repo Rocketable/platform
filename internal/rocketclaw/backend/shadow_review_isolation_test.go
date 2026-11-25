@@ -115,18 +115,34 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 				_, err = store.db.ExecContext(t.Context(), `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json) VALUES ($1, 'parent', 'bound-work', $2)`, broken, inbound)
 				require.NoError(t, err)
 				require.NoError(t, store.captureTurnInputs(t.Context(), "parent", "bound-work", &turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "saved", Texts: []string{"saved input"}}}, Closed: true}))
-				require.NoError(t, manager.PickLaterWork(t.Context(), broken))
-				require.Eventually(t, func() bool {
-					var failed bool
 
-					err := store.db.QueryRowContext(t.Context(), `SELECT count(*) > 0 FROM turns WHERE conversation_id = $1 AND terminal = $2`, broken, protocol.TerminalFailed).Scan(&failed)
+				var (
+					terminal protocol.Terminal
+					message  string
+				)
 
-					return err == nil && failed
-				}, 3*time.Second, time.Millisecond)
+				for change, err := range store.Changes(t.Context(), broken) {
+					require.NoError(t, err)
 
-				var message string
-				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT outbound_json->>'Text' FROM turns WHERE conversation_id = $1 AND terminal = $2`, broken, protocol.TerminalFailed).Scan(&message))
-				require.Contains(t, message, `agent "primary/a" is not loaded`)
+					if change.Revision == "" {
+						require.NoError(t, manager.PickLaterWork(t.Context(), broken))
+
+						continue
+					}
+
+					settled, err := scanFound("read settled shadow", store.db.QueryRowContext(t.Context(), `SELECT COALESCE(t.terminal, ''), COALESCE(t.outbound_json->>'Text', '')
+FROM shadow_turns s LEFT JOIN turns t ON t.id = s.child_turn_id
+WHERE s.child_conversation_id = $1 AND s.parent_source_conversation_id = 'parent' AND s.parent_turn_id = 'bound-work'
+    AND s.child_turn_id <> '' AND (t.phase = $2 OR t.id IS NULL)`, broken, turnDone).Scan(&terminal, &message))
+					require.NoError(t, err)
+
+					if settled {
+						break
+					}
+				}
+
+				require.Equal(t, protocol.TerminalFailed, terminal)
+				require.Equal(t, internalErrorResponse+"\n\n"+`prepare rocketcode turn: agent "primary/a" is not loaded`, message)
 			}
 
 			require.Empty(t, finals, "child success and definition errors stay local")
