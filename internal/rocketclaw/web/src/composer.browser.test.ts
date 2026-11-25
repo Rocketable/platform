@@ -30,7 +30,10 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
         case "/api/ListConfig": return Response.json({ config: { workspace: "composer" } });
         case "/api/ListAgents": return Response.json({ agents: [{ name: "Build", model: "OpenAI / GPT-6.1 Sol", reasoning: "high" }], currentAgent: "Build" });
         case "/api/ListSkills": return Response.json({ skills: [] });
-        case "/api/SlackNames": return Response.json({ names: { U42: "Riley" } });
+        case "/api/SlackNames": {
+          const { query } = await request.json() as { query?: string };
+          return Response.json({ names: query === "Ri" ? { U42: "Riley", U43: "Rika" } : { U42: "Riley" } });
+        }
         case "/api/ListQueue": return Response.json({ items: queue });
         case "/api/Prompt": {
           const prompt = await request.json() as { text: string; delivery: QueueItem["delivery"]; messageId: string };
@@ -106,8 +109,20 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
       await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
       expect(calls.at(-1)).toMatchObject({ text: "Save this for later", delivery: "STASH" });
       if (width === 1280 && !touch) {
-        await input.fill("Ask @R");
-        await page.getByRole("button", { name: "@Riley", exact: true }).waitFor();
+        await input.fill("Ask @R\nTomorrow");
+        await input.press("ArrowUp");
+        await input.press("End");
+        const accepted = await page.getByRole("button", { name: "@Riley", exact: true }).evaluate(async (button: HTMLButtonElement) => {
+          button.click();
+          await Promise.resolve();
+          const field = document.querySelector("textarea")!;
+          const caret = { text: field.value, start: field.selectionStart, end: field.selectionEnd };
+          field.select();
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          return { caret, selection: [field.selectionStart, field.selectionEnd] };
+        });
+        const acceptedText = "Ask @Riley \nTomorrow";
+        expect(accepted).toEqual({ caret: { text: acceptedText, start: 11, end: 11 }, selection: [0, acceptedText.length] });
         for (const replacement of ["Ask @Riley please review", "Ask @Riley "]) {
           await input.fill("Ask @Ril");
           await page.getByRole("button", { name: "@Riley", exact: true }).click();
@@ -116,11 +131,12 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
           expect(calls.at(-1)).toMatchObject({ text: replacement });
           expect(calls.at(-1)).not.toHaveProperty("mentionIds");
         }
-        await input.fill("Ask @Ril");
+        await input.fill("Ask @");
+        await input.pressSequentially("Ri");
         await page.getByRole("button", { name: "@Riley", exact: true }).waitFor();
+        await input.press("ArrowUp");
         await input.press("Tab");
         expect(await input.inputValue()).toBe("Ask @Riley ");
-        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
         await input.press("Home");
         await input.pressSequentially("Please ");
         await input.press("End");
@@ -154,7 +170,6 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
         expect(calls.at(-1)).not.toHaveProperty("mentionIds");
         await input.fill("Ask @Ril");
         await page.getByRole("button", { name: "@Riley", exact: true }).click();
-        await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
         await input.press("End");
         await input.press("ArrowLeft");
         await input.pressSequentially("x");

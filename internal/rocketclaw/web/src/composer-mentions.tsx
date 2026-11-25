@@ -61,13 +61,12 @@ export function useComposerMentions(text: string, tags: ComposerMention[], input
     const start = cursor - query.length - 1;
     const label = `@${name.replace(/[\r\n]/g, " ")}`;
     const end = start + label.length;
-    const value = text.slice(0, start) + label + " " + text.slice(cursor);
+    const field = input.current!;
+    field.focus();
+    field.setRangeText(`${label} `, start, cursor, "end");
+    const value = field.value;
     setText(value, [...remainingTags(value, start, cursor), { id, label, start, end }]);
     setCaret({ text: value, position: end + 1 });
-    requestAnimationFrame(() => {
-      input.current?.focus();
-      input.current?.setSelectionRange(end + 1, end + 1);
-    });
   };
 
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
