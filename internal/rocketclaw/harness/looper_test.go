@@ -1335,10 +1335,10 @@ func TestLooperDoesNotCompactUnansweredToolCall(t *testing.T) {
 	mock := mockResponses()
 	queueCompactResponses(mock, compactedResponse("cmp-old", "encrypted-old"))
 
-	contextErr := contextLengthExceededError()
+	errContext := contextLengthExceededError()
 	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ oai.ResponseObserver, _ ...option.RequestOption) (*responses.Response, error) {
 		if len(newParams(mock)) == 1 {
-			return nil, contextErr
+			return nil, errContext
 		}
 
 		return responseWithMessage("resp-final", "answer"), nil

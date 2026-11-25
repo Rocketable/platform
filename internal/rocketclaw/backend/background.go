@@ -314,14 +314,14 @@ func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *b
 		r.movableChanged(ctx, key.conversationID)
 	}
 
-	cause := context.Cause(ctx)
-	if attached || errors.Is(cause, errBackgroundAbandoned) && errWork != nil {
+	errCause := context.Cause(ctx)
+	if attached || errors.Is(errCause, errBackgroundAbandoned) && errWork != nil {
 		return
 	}
 
 	<-run.recorded
 
-	stop, stopped := errors.AsType[harness.BackgroundStopError](cause)
+	stop, stopped := errors.AsType[harness.BackgroundStopError](errCause)
 
 	result = harness.ToolCallResult(string(run.row.kind.tool()), result, errWork)
 
@@ -499,9 +499,9 @@ func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, 
 		select {
 		case <-finished:
 		case <-ctx.Done():
-			cause := context.Cause(ctx)
-			_, jobStopped := errors.AsType[harness.BackgroundStopError](cause)
-			stopped := !errors.Is(cause, harness.ErrShutdown) && !errors.Is(cause, errBackgroundAbandoned)
+			errCause := context.Cause(ctx)
+			_, jobStopped := errors.AsType[harness.BackgroundStopError](errCause)
+			stopped := !errors.Is(errCause, harness.ErrShutdown) && !errors.Is(errCause, errBackgroundAbandoned)
 
 			if stopped && !jobStopped {
 				if _, err := execState(context.WithoutCancel(ctx), r.store.db, "hold subagent input", `UPDATE turns SET reason = $3, delivery = $4 WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting' AND delivery = $5`, conversationID, inputID, waitHeld, protocol.InboundKindHeld, protocol.InboundKindEnqueue); err != nil {
@@ -518,7 +518,7 @@ func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, 
 				r.notes.InterruptConversation(conversationID)
 			}
 
-			return "", harness.ReplayAttribution{}, fmt.Errorf("wait for subagent %q: %w", conversationID, cause)
+			return "", harness.ReplayAttribution{}, fmt.Errorf("wait for subagent %q: %w", conversationID, errCause)
 		}
 	}
 }

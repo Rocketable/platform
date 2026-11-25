@@ -1429,8 +1429,8 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	require.True(t, moved)
 
 	select {
-	case cause := <-withdrawn:
-		require.ErrorIs(t, cause, errMovedToBackground, "the pending question is withdrawn")
+	case errCause := <-withdrawn:
+		require.ErrorIs(t, errCause, errMovedToBackground, "the pending question is withdrawn")
 	case <-time.After(10 * time.Second):
 		t.Fatal("the pending question was not withdrawn")
 	}

@@ -48,7 +48,7 @@ func TestTryGatherFailFastCancelsSibling(t *testing.T) {
 		t.Run(branch, func(t *testing.T) {
 			var (
 				mu        sync.Mutex
-				cancelled error
+				errCancelled error
 			)
 
 			hangStarted := make(chan struct{})
@@ -76,7 +76,7 @@ func TestTryGatherFailFastCancelsSibling(t *testing.T) {
 						select {
 						case <-ctx.Done():
 							mu.Lock()
-							cancelled = context.Cause(ctx)
+							errCancelled = context.Cause(ctx)
 							mu.Unlock()
 
 							return nil, ctx.Err()
@@ -91,11 +91,11 @@ func TestTryGatherFailFastCancelsSibling(t *testing.T) {
 			}
 
 			mu.Lock()
-			cause := cancelled
+			errCause := errCancelled
 			mu.Unlock()
 
-			if cause == nil || cause.Error() != "cancelled after another branch failed" {
-				t.Fatalf("hang sibling's cancellation = %v, want it to read as a cancellation", cause)
+			if errCause == nil || errCause.Error() != "cancelled after another branch failed" {
+				t.Fatalf("hang sibling's cancellation = %v, want it to read as a cancellation", errCause)
 			}
 		})
 	}

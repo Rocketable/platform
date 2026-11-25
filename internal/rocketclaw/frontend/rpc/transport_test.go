@@ -40,12 +40,12 @@ func TestValidRequest(t *testing.T) {
 func TestWithoutDatabaseText(t *testing.T) {
 	t.Parallel()
 
-	database := fmt.Errorf("read cron run: %w", &pgconn.PgError{Code: "22021", Message: "invalid byte sequence for encoding \"UTF8\""})
-	masked := withoutDatabaseText("History", database)
-	require.Equal(t, codes.Internal, status.Code(masked))
-	require.Equal(t, "web History: rpc error: code = Internal desc = read cron run: database error", status.Convert(masked).Message())
+	errDatabase := fmt.Errorf("read cron run: %w", &pgconn.PgError{Code: "22021", Message: "invalid byte sequence for encoding \"UTF8\""})
+	errMasked := withoutDatabaseText("History", errDatabase)
+	require.Equal(t, codes.Internal, status.Code(errMasked))
+	require.Equal(t, "web History: rpc error: code = Internal desc = read cron run: database error", status.Convert(errMasked).Message())
 
-	other := errors.New("revert requires a Web chat, Slack thread, or shadow")
-	require.Equal(t, other, withoutDatabaseText("StageRevert", other))
+	errOther := errors.New("revert requires a Web chat, Slack thread, or shadow")
+	require.Equal(t, errOther, withoutDatabaseText("StageRevert", errOther))
 	require.NoError(t, withoutDatabaseText("History", nil))
 }

@@ -689,14 +689,14 @@ func TestRunTakesTheLockThenGatesThenMigrates(t *testing.T) {
 
 	errGate := errors.New("the Web node needs a login")
 	errInvalid := errors.New("invalid cron")
-	gate := errGate
+	errCurrentGate := errGate
 	assembler := &frontendAssemblerMock{
 		GateFunc: func(ctx context.Context, _ *config.Config, _ *slog.Logger) (func() error, error) {
 			_, err := client.AcquireContext(ctx, runLockName, pglock.FailIfLocked())
 			require.ErrorIs(t, err, pglock.ErrNotAcquired, "the gate runs with the run lock held")
 			require.False(t, migrated(), "the gate runs before migrations")
 
-			return func() error { return nil }, gate
+			return func() error { return nil }, errCurrentGate
 		},
 		ValidateAssetsFunc: func(*config.Config, string) error { return errInvalid },
 	}
@@ -709,7 +709,7 @@ func TestRunTakesTheLockThenGatesThenMigrates(t *testing.T) {
 	require.NoError(t, err, "a failed gate releases the run lock")
 	require.NoError(t, lock.Close())
 
-	gate = nil
+	errCurrentGate = nil
 
 	require.ErrorIs(t, Run(t.Context(), cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), errInvalid)
 	require.True(t, migrated(), "a fresh database migrates once the gate passes")
