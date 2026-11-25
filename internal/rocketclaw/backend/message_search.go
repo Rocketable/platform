@@ -224,7 +224,11 @@ JOIN conversations c ON c.conversation_id = m.conversation_id AND c.listed AND c
 ORDER BY m.conversation_id, m.position, m.created_at_unix_ns NULLS FIRST, m.turn_id`
 
 func containsPattern(text string) string {
-	return "%" + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(text) + "%"
+	if strings.IndexByte(text, '\\') >= 0 || strings.IndexByte(text, '%') >= 0 || strings.IndexByte(text, '_') >= 0 {
+		text = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(text)
+	}
+
+	return "%" + text + "%"
 }
 
 type MessageSearchHit struct {
