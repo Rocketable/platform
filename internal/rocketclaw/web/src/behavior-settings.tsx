@@ -6,7 +6,7 @@ import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { ModelPicker } from "./agent-editor/model-picker";
+import { DecisionModelPicker, ModelPicker } from "./agent-editor/model-picker";
 import { mutations, queries } from "./api";
 import type { ConfigView } from "./types";
 
@@ -18,6 +18,8 @@ type Behavior = {
   logging: { level: string };
   overlays: string[] | null;
   embedded_agents?: { main?: EmbeddedAgent; voice?: EmbeddedAgent };
+  title_model?: string;
+  title_decision_model?: string;
 };
 type Option = { value: string; label: string };
 
@@ -65,6 +67,14 @@ function BehaviorFields({ draft, disabled, onChange }: { draft: Behavior; disabl
       <Group title="Built-in agents">
         {embeddedAgents.map((name) => <EmbeddedAgentSettings key={name} name={name} agent={draft.embedded_agents?.[name] ?? {}} disabled={disabled} onChange={(agent) => onChange({ embedded_agents: { ...draft.embedded_agents, [name]: agent } })} />)}
       </Group>
+      <Group title="Session titles">
+        <Labeled label="Title model" hint="Names Web sessions. Empty uses openai/gpt-6-luna#low.">
+          <ModelPicker label="Title model" value={draft.title_model ?? ""} onModel={(title_model) => onChange({ title_model })} />
+        </Labeled>
+        <Labeled label="Title decision model" hint="When set, every fourth message a person sends checks whether a generated title still fits. Empty turns this off.">
+          <DecisionModelPicker label="Title decision model" value={draft.title_decision_model ?? ""} onModel={(title_decision_model) => onChange({ title_decision_model })} />
+        </Labeled>
+      </Group>
     </>
   );
 }
@@ -76,6 +86,10 @@ function EmbeddedAgentSettings({ name, agent, disabled, onChange }: { name: stri
       <ModelPicker label={`${name} model`} value={agent.model ?? ""} onModel={(model) => onChange({ ...agent, model })} />
     </div>
   );
+}
+
+function Labeled({ label, hint, children }: { label: string; hint: string; children: ReactNode }) {
+  return <div role="group" aria-label={label} className="flex flex-col gap-1.5 border-b py-2"><span className="text-sm text-muted-foreground">{label}</span><span className="text-xs text-muted-foreground">{hint}</span>{children}</div>;
 }
 
 function Group({ title, children }: { title: string; children: ReactNode }) {

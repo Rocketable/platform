@@ -475,7 +475,9 @@ get a **Behavior settings** section on the Config page. **Edit** shows one contr
 are); **Save** replaces the whole document and applies it to the running server,
 or shows the validation error and changes nothing. Its **Built-in agents** group
 has, for `main` and `voice`, an on/off switch and a model picker, empty for the
-model the release ships. Everyone else sees the page
+model the release ships. Its **Session titles** group has the title model picker and
+the title decision model: a decision provider from `decision`, the model name (empty
+turns automatic title checks off), and **Test**, which sends that model one title check. Everyone else sees the page
 read-only, without the settings document or Slack allowed user IDs.
 
 Oxlint runs `@shadcn/lint` with `no-restyle` enabled, including inside the UI
@@ -1413,12 +1415,12 @@ selector. On mobile, these and the session actions sit above Steer and Send. The
 replaces the session row's last-message preview without changing the messages; both
 the name and the preview remain searchable.
 When a person's first Web message starts a RocketClaw session that has no name, the
-title model (`title_model`, `openai/gpt-6-luna#low` by default) names it from that
+title model (the `title_model` Behavior Setting, `openai/gpt-6-luna#low` by default) names it from that
 message in the background, as OpenCode does; a name set meanwhile wins. **Regenerate title** in the
 command palette, or saving a blank name, names it again from its first request and
 recent messages, and stays unavailable until that finishes. A failed attempt keeps
 the old name. The new title keeps the name it replaces, as in
-`Encabulator rollout (was Encabulator notes)`. When `title_decision_model` is set, every
+`Encabulator rollout (was Encabulator notes)`. When the `title_decision_model` Behavior Setting is set, every
 fourth message a person sends checks whether a generated title still fits, and
 renames the session the same way when it does not; a typed name is never checked.
 Pins and names are shared with everyone who can see the session and persist

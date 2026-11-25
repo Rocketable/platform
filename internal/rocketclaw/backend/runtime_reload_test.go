@@ -205,6 +205,7 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 		{"frontend assets rejected", func(b *config.Behavior) { b.AutoApproverModel, rejectAssets = "gpt-s", true }, `cron job "report" is invalid`},
 		{"overlay fails to sync", func(b *config.Behavior) { b.Overlays = []string{filepath.Join(t.TempDir(), "missing")} }, "apply configured rocketclaw overlay"},
 		{"voice model on an unconfigured provider", func(b *config.Behavior) { b.EmbeddedAgents.Voice.Model = "nope/gpt-x" }, `embedded_agents.voice.model: provider "nope" is not configured`},
+		{"title model on an unconfigured provider", func(b *config.Behavior) { b.TitleModel = "nope/gpt-x#low" }, `title_model: provider "nope" is not configured`},
 	} {
 		require.ErrorContains(t, rt.SaveBehavior(edit(tt.change)), tt.want, tt.name)
 

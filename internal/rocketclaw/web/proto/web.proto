@@ -627,6 +627,8 @@ message ConfigView {
   repeated string providers = 12;
   string behavior_json = 13;
   bool can_edit = 14;
+  // Configured decision provider names, sorted.
+  repeated string decision_providers = 16;
 }
 
 message ListConfigRequest {}
@@ -639,8 +641,12 @@ message ListConfigResponse {
   ConfigView config = 1;
 }
 
-// TestModelRequest names the model to try, as "provider/model#effort".
-message TestModelRequest { string model = 1; }
+// TestModelRequest names the model to try, as "provider/model#effort", or as "provider/model" for a
+// decision model, which is tried with one title check.
+message TestModelRequest {
+  string model = 1;
+  bool decision = 2;
+}
 
 // TestModelResponse holds the provider's error text, empty when the model works, and how long the
 // request took.

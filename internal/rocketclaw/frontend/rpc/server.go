@@ -1258,7 +1258,7 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 			Workspace: cfg.Workspace, Overlays: cfg.Overlays,
 			LoggingLevel: cfg.Logging.Level, AutoApproverModel: cfg.AutoApproverModel,
 			InstrumentationEnabled: cfg.PostHog.ProjectToken != "", McpExternal: cfg.MCPExternal.Enabled,
-			Providers: cfg.ProviderNames(), CanEdit: slices.Contains(cfg.Web.Admins, username),
+			Providers: cfg.ProviderNames(), DecisionProviders: cfg.DecisionProviderNames(), CanEdit: slices.Contains(cfg.Web.Admins, username),
 		}
 
 		for _, server := range slices.Sorted(maps.Keys(cfg.MCPServers)) {
@@ -1288,7 +1288,12 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 }
 
 func (s *Server) testModel(ctx context.Context, request *TestModelRequest) *TestModelResponse {
-	elapsed, err := backend.TestModel(ctx, s.cfg.Clone(), request.Model)
+	test := backend.TestModel
+	if request.Decision {
+		test = backend.TestDecisionModel
+	}
+
+	elapsed, err := test(ctx, s.cfg.Clone(), request.Model)
 	if errAPI, ok := errors.AsType[*openai.Error](err); ok {
 		return &TestModelResponse{Error: cmp.Or(errAPI.Message, err.Error())}
 	}

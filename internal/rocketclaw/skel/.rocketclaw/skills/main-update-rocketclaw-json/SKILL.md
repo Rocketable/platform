@@ -111,7 +111,7 @@ When the human asks for a config change in plain English:
 - preserve the correct JSON type
 - if the target path or intended type is ambiguous, ask a clarifying question before writing
 
-If the request touches a Behavior Setting, such as the auto-approver model, a Slack channel's agents or allowed users, or the overlay list, do not write it with `jq`; point the human to the Web Config page instead.
+If the request touches a Behavior Setting, such as the auto-approver model, the title models, a Slack channel's agents or allowed users, or the overlay list, do not write it with `jq`; point the human to the Web Config page instead.
 
 Agents reach an MCP server's tools only through its facets: `mcp_servers.<server>.tools` maps each facet name (letters, digits, `_`, `-`) to a list of tool-name patterns without the server prefix, such as `"get_*"`. `*` matches any text and `?` one character; an entry starting with `-`, such as `"-get_secret_*"`, removes those tools from that facet wherever it appears. Facets may overlap, so a `sudo` facet of `["*"]` beside narrower `read` and `write` facets is fine. A tool in no facet is reachable by no agent, sudo agents included. An easy agent grants facets as `mcp: {<server>: [read]}`, an advanced one as `permission.mcp: {<server>: {read: allow, write: auto}}`; a facet an agent names that the server lacks fails agent loading (`server "<server>" has no "<facet>" facet`). Server names may not contain `.`. For example:
 
