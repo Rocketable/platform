@@ -539,6 +539,10 @@ func (s *SessionService) searchDefinitions(ctx context.Context, terms []SearchTe
 }
 
 func (search *SessionSearch) sortMatches() {
+	if len(search.Terms) == 0 {
+		return
+	}
+
 	var sort string
 
 	for _, term := range search.Terms {
