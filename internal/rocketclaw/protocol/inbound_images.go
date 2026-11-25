@@ -133,33 +133,32 @@ type inboundImageEncoder interface {
 }
 
 func shrinkImageWithinLimit(src image.Image, targetLimit int, encoder inboundImageEncoder) ([]byte, error) {
-	candidate, currentSize, err := encoder.encodeWithinLimit(src, targetLimit)
-	if err != nil || candidate != nil {
-		return candidate, err
-	}
+	var srcBounds image.Rectangle
 
-	bounds := src.Bounds()
-
-	currentWidth, currentHeight := bounds.Dx(), bounds.Dy()
-	for range maxInboundAttachmentResizeAttempts {
-		if currentWidth <= 1 || currentHeight <= 1 {
-			break
-		}
-
-		nextWidth, nextHeight := nextImageResizeDimensions(currentWidth, currentHeight, currentSize, targetLimit)
-		if nextWidth >= currentWidth && nextHeight >= currentHeight {
-			break
-		}
-
-		resized := image.NewNRGBA(image.Rect(0, 0, nextWidth, nextHeight))
-		xdraw.CatmullRom.Scale(resized, resized.Bounds(), src, bounds, xdraw.Over, nil)
-
-		candidate, currentSize, err = encoder.encodeWithinLimit(resized, targetLimit)
+	for attempt, current := 0, src; ; attempt++ {
+		candidate, currentSize, err := encoder.encodeWithinLimit(current, targetLimit)
 		if err != nil || candidate != nil {
 			return candidate, err
 		}
 
-		currentWidth, currentHeight = nextWidth, nextHeight
+		if attempt == maxInboundAttachmentResizeAttempts {
+			break
+		}
+
+		currentBounds := current.Bounds()
+		if attempt == 0 {
+			srcBounds = currentBounds
+		}
+
+		currentWidth, currentHeight := currentBounds.Dx(), currentBounds.Dy()
+		if currentWidth <= 1 || currentHeight <= 1 {
+			break
+		}
+
+		nextBounds := image.Rectangle{Max: image.Pt(nextImageResizeDimensions(currentWidth, currentHeight, currentSize, targetLimit))}
+		resized := image.NewNRGBA(nextBounds)
+		xdraw.CatmullRom.Scale(resized, nextBounds, src, srcBounds, xdraw.Over, nil)
+		current = resized
 	}
 
 	return nil, errInboundAttachmentReductionNotEnough
