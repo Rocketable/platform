@@ -73,7 +73,7 @@ func TestExecuteSpillPathRefusesWhatItCannotCheck(t *testing.T) {
 	require.EqualError(t, err, deniedSpillAccess)
 
 	shellTemp := testShellTempConfig(t, workspace, filepath.Join(workspace.Name(), ".tmp"))
-	sss := newSandboxedShellSystem(workspace, &shellTemp, nil, &sandbox.Runtime{})
+	sss := newSandboxedShellSystem(workspace, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{})
 	sss.spillRel = defaultSpillRel
 	got := sss.Bash(t.Context(), &CustomShell{}, &bashParams{Command: "cat " + filepath.Join(workspace.Name(), "moved", "spill", "result.txt")})
 	require.Equal(t, deniedSpillAccess, got.Output)

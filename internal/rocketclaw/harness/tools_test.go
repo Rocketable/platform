@@ -44,7 +44,7 @@ func TestGlobGrepPermissionSubjects(t *testing.T) {
 	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
 	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, &sandbox.Runtime{})
+	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, &sandbox.Runtime{}, InertTurnSecrets{})
 
 	globSubjects, err := tools["glob"].Subjects(json.RawMessage(`{"pattern":"**/*.go","path":"src"}`))
 	require.NoError(t, err)
@@ -68,7 +68,7 @@ func TestWebFetchPermissionSubjectsMatchOpenCode(t *testing.T) {
 	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
 	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, &sandbox.Runtime{})
+	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, &sandbox.Runtime{}, InertTurnSecrets{})
 
 	subjects, err := tools["webfetch"].Subjects(json.RawMessage(`{"url":"https://docs.example/path?q=1","format":"markdown"}`))
 
@@ -85,7 +85,7 @@ func TestWebSearchPermissionIsCoarse(t *testing.T) {
 	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
 	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, &sandbox.Runtime{})
+	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, &sandbox.Runtime{}, InertTurnSecrets{})
 
 	loop := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "websearch", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}}}
 	tool := tools["websearch"]
@@ -102,7 +102,7 @@ func TestBashPermissionsCheckWholeScript(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.Mkdir(".tmp", 0o755))
-	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, filepath.Join(root.Name(), ".tmp")), nil, &sandbox.Runtime{})
+	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, filepath.Join(root.Name(), ".tmp")), nil, &sandbox.Runtime{}, InertTurnSecrets{})
 	tool := tools["bash"]
 
 	loop := &looper{Journal: InertJournal{}, Permissions: parsePermissionYAML(t, `bash: {"scripts/cmd *": allow}`), Tools: tools, observations: &turnObservations{journal: InertJournal{}}}
@@ -338,7 +338,7 @@ func TestFunctionToolStrictSchemasRequireAllProperties(t *testing.T) {
 	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
 	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, &sandbox.Runtime{})
+	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, &sandbox.Runtime{}, InertTurnSecrets{})
 
 	requireToolRequiredProperties(t, tools["glob"].Definition.Parameters, []string{"path", "pattern"})
 	requireToolRequiredProperties(t, tools["grep"].Definition.Parameters, []string{"include", "path", "pattern"})

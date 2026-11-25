@@ -191,7 +191,7 @@ func newResultModelEnv(t *testing.T) *resultModelEnv {
 	env.registry = mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{"uploader": {URL: url}}, nil)
 
 	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell"))
-	env.tools = makeSandboxedTools(&sandboxedFileSystem{mu: sync.Mutex{}, root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}))
+	env.tools = makeSandboxedTools(&sandboxedFileSystem{mu: sync.Mutex{}, root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{}))
 	bash := env.tools["bash"]
 	runBash := bash.Call
 	bash.Call = func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse, metadata toolCallMetadata) (ToolResult, error) {

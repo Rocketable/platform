@@ -329,7 +329,7 @@ func TestExecuteDecisionReturnsADict(t *testing.T) {
 	require.NoError(t, root.WriteFile("photo.png", []byte("\x89PNG\r\n\x1a\nrest"), 0o600))
 
 	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell"))
-	baseTools := makeSandboxedTools(&sandboxedFileSystem{mu: sync.Mutex{}, root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}))
+	baseTools := makeSandboxedTools(&sandboxedFileSystem{mu: sync.Mutex{}, root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{}))
 
 	decider := &mockDecider{DecideFunc: func(_ context.Context, request *DecisionRequest) ([]DecisionAnswer, DecisionUsage, error) {
 		require.Equal(t, []DecisionImage{{MIME: "image/png", Base64: base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nrest"))}}, request.Images)
@@ -396,7 +396,7 @@ func TestExecuteDecisionTakesImageFileObjects(t *testing.T) {
 	}
 
 	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell"))
-	baseTools := makeSandboxedTools(&sandboxedFileSystem{mu: sync.Mutex{}, root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}))
+	baseTools := makeSandboxedTools(&sandboxedFileSystem{mu: sync.Mutex{}, root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{}))
 
 	var permissions PermissionSet
 	require.NoError(t, permissions.Set("decision", "openai/*", PermissionAllow))

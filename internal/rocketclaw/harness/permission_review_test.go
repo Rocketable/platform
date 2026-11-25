@@ -185,6 +185,7 @@ func TestPermissionReviewIncludesChildContext(t *testing.T) {
 		agents:            Agents{Items: map[string]Agent{}},
 		skills:            Skills{Items: map[string]Skill{}},
 		baseTools:         map[string]looperTool{},
+		shellSystem:       &sandboxedShellSystem{},
 		childContext: []SessionEntry{{Version: 1, ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"developer","content":"This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\""}`),
 		}}},
@@ -217,6 +218,7 @@ func TestPermissionReviewUsesAgentApprover(t *testing.T) {
 				agents:            Agents{Items: map[string]Agent{"main": tc.agent}},
 				skills:            Skills{Items: map[string]Skill{}},
 				baseTools:         map[string]looperTool{},
+				shellSystem:       &sandboxedShellSystem{},
 				childSessions:     InertChildSessions{},
 			}
 
@@ -561,6 +563,51 @@ func TestPermissionReviewResolvesCustomReviewerIndependently(t *testing.T) {
 	request := <-reviewRequests
 	require.Contains(t, request, `"model":"release-api"`)
 	require.Empty(t, rootRequests)
+}
+
+func TestPermissionReviewShellHasNoTurnSecrets(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	secrets := NewTurnSecretStore()
+	require.NoError(t, secrets.Save("GITHUB_TOKEN", []byte("ghp-turn-value")))
+
+	config := testWorkspaceConfig(t, dir)
+	config.TurnSecrets = secrets
+
+	const command = `printf "[%s]" "$GITHUB_TOKEN"`
+
+	code, err := json.Marshal(map[string]string{"code": "def main():\n    return bash(command=r'''" + command + "''')\n", "description": "look"})
+	require.NoError(t, err)
+
+	mock := mockResponses(
+		responseWithFunctionCalls("look", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, string(code))}),
+		testResponse("review", []responses.ResponseOutputItemUnion{
+			testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Looked."}`),
+		}),
+	)
+	bash := parsePermissionYAML(t, "bash: allow")
+	loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), config, root, Agents{Items: map[string]Agent{
+		"main":    {Name: "main", Model: "gpt-5.4", Permission: bash},
+		"release": {Name: "release", Model: "gpt-5.4", Permission: bash},
+	}}, Skills{Items: map[string]Skill{}}, "main")
+	require.NoError(t, err)
+
+	params, err := json.Marshal(map[string]string{"command": command})
+	require.NoError(t, err)
+
+	own, err := loop.CodeModeHosts["bash"].Call(t.Context(), params, nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	require.Equal(t, "[ghp-turn-value]", own.Output)
+
+	decision := loop.PermissionReviewer.(*toolFactory).reviewPermission(t.Context(), &permissionReviewRequest{Reviewer: "release"})
+	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome, decision.Rationale)
+
+	input := newParams(mock)[1].Input.OfInputItemList
+	require.Contains(t, input[len(input)-1].OfFunctionCallOutput.Output.OfString.Value, "[]")
+	require.NotContains(t, input[len(input)-1].OfFunctionCallOutput.Output.OfString.Value, "ghp-turn-value")
 }
 
 func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.T) {

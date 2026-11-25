@@ -105,7 +105,7 @@ func stdinTestShell(t *testing.T) (*os.Root, looperTool) {
 	require.NoError(t, root.MkdirAll(".tmp/shell", 0o700))
 	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell"))
 
-	return root, bashTool(newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}), &CustomShell{})
+	return root, bashTool(newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{}), &CustomShell{})
 }
 
 func TestExecuteBashStdinReview(t *testing.T) {

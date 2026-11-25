@@ -101,7 +101,7 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
 	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o700))
 	shellTemp := testShellTempConfig(t, root, outputDir)
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{})
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{})
 	factory := &toolFactory{
 		baseTools: makeSandboxedTools(sfs, sss),
 	}
@@ -281,7 +281,7 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 	require.NoError(t, permissions.Set("bash", "rm *", PermissionDeny))
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{})
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{})
 	factory := &toolFactory{
 		baseTools: makeSandboxedTools(sfs, sss),
 	}
@@ -387,7 +387,7 @@ func TestExecuteBashOutputSurvivesContainers(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(".tmp/shell", 0o700))
 	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell"))
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{})
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{})
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 
 	var permissions PermissionSet
@@ -1121,7 +1121,7 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 		return TextToolResult("probed"), nil
 	}
 
-	base := makeSandboxedTools(&sandboxedFileSystem{root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}))
+	base := makeSandboxedTools(&sandboxedFileSystem{root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{}))
 	base["emit"], base["probe"] = emit, probe
 
 	const rules = "rocketclaw: {code_mode_approve: auto}\nbash: {'*': allow, 'rm *': deny}\nread: {'*': allow, 'slow.txt': auto}\nwebfetch: allow\nemit: allow\nprobe: auto\nmcp: {demo: {all: allow, checked: auto, risky: auto, stalled: auto}}"
@@ -1270,7 +1270,7 @@ func TestHostToolsReportACancelledContextAsAnError(t *testing.T) {
 
 	permissions := parsePermissionYAML(t, "read: allow\nglob: allow\ngrep: allow\nedit: allow\nbash: allow\nwebfetch: allow")
 	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell-tmp"))
-	factory := &toolFactory{baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}))}
+	factory := &toolFactory{baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{}))}
 	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
 	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 	ctx, cancel := context.WithCancel(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations}))

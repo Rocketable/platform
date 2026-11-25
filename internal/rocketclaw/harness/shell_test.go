@@ -38,7 +38,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	require.NoError(t, root.WriteFile(".env.example", []byte("SECRET=example\n"), 0o644))
 
 	shellTemp := testShellTempConfig(t, root, outputDir)
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{})
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{})
 	sss.forceKillTimeout = 10 * time.Millisecond
 
 	t.Run("rejects invalid commands before execution", func(t *testing.T) {
@@ -239,11 +239,18 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, fs.FileMode(0o700), info.Mode().Perm())
 
-		configured := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new", "TMPDIR=/not/rocketcode"}, &sandbox.Runtime{})
+		secrets := NewTurnSecretStore()
+		require.NoError(t, secrets.Save("GITHUB_TOKEN", []byte("ghp-turn-value")))
+		configured := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new", "TMPDIR=/not/rocketcode"}, &sandbox.Runtime{}, secrets)
 
-		result := configured.Bash(t.Context(), &CustomShell{}, &bashParams{Command: `printf '%s\n%s' "$ROCKETCLAW_CONVERSATION_ID" "$TMPDIR"`, Description: "env precedence"})
+		result := configured.Bash(t.Context(), &CustomShell{}, &bashParams{Command: `printf '%s\n%s\n%s' "$ROCKETCLAW_CONVERSATION_ID" "$TMPDIR" "$GITHUB_TOKEN"`, Description: "env precedence"})
 		require.True(t, result.Success, result.Output)
-		require.Equal(t, "new\n"+outputDir, result.String())
+		require.Equal(t, "new\n"+outputDir+"\nghp-turn-value", result.String())
+
+		require.NoError(t, root.WriteFile("token.sh", []byte("#!/bin/sh\nprintf %s \"$GITHUB_TOKEN\""), 0o755))
+		result = configured.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "token.sh")}, &bashParams{Command: "ls"})
+		require.Equal(t, BashResult{Output: "ghp-turn-value", Success: true}, result, "a wrapper program sees the turn secret")
+		require.NotContains(t, strings.Join(configured.env, "\n"), "ghp-turn-value", "the persisted turn environment never holds a turn secret")
 	})
 
 	t.Run("returns full multi-line output", func(t *testing.T) {
@@ -369,7 +376,7 @@ func TestBashStaysInTheAgentFolder(t *testing.T) {
 	require.NoError(t, workspace.WriteFile("wrap.sh", []byte("#!/bin/sh\nexec /bin/bash -c \"$1\""), 0o755))
 
 	shellTemp := testShellTempConfig(t, workspace, filepath.Join(workspace.Name(), ".tmp"))
-	sss := newSandboxedShellSystem(workspace, &shellTemp, nil, &sandbox.Runtime{})
+	sss := newSandboxedShellSystem(workspace, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{})
 
 	folders := map[string]*os.Root{}
 
@@ -462,7 +469,7 @@ func TestBashRefusalsAreTheSameForEveryShell(t *testing.T) {
 	require.NoError(t, workspace.WriteFile("wrap.sh", []byte("#!/bin/sh\nexec /bin/bash -c \"$1\""), 0o755))
 
 	shellTemp := testShellTempConfig(t, workspace, filepath.Join(workspace.Name(), ".tmp"))
-	sss := newSandboxedShellSystem(workspace, &shellTemp, nil, &sandbox.Runtime{})
+	sss := newSandboxedShellSystem(workspace, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{})
 	sss.spillRel = ".rocketcode/spill"
 
 	folder, err := filepath.EvalSymlinks(t.TempDir())
@@ -509,7 +516,7 @@ func BenchmarkBashOutput(b *testing.B) {
 	require.NoError(b, root.Mkdir("shell-tmp", 0o700))
 
 	shellTemp := testShellTempConfig(b, root, filepath.Join(root.Name(), "shell-tmp"))
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{})
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{})
 	want := strings.Repeat("sample\n\x00", 1<<18)
 	require.NoError(b, root.WriteFile("input", []byte(want), 0o600))
 

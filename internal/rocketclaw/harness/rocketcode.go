@@ -256,7 +256,7 @@ func NewWithModelResolver(
 
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
 
-	baseTools, shellSystem := newSandboxedTools(root, spillRel, shellTemp, shellEnv, &sb)
+	baseTools, shellSystem := newSandboxedTools(root, spillRel, shellTemp, shellEnv, &sb, config.TurnSecrets)
 	if len(config.Deciders) > 0 {
 		baseTools["decision"] = decisionTool(config.Deciders, config.Observability)
 	}

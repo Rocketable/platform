@@ -110,7 +110,7 @@ func newEmulated(t *testing.T, commands, secrets map[string]string, targets []st
 	shellTemp := testShellTempConfig(t, root, filepath.Join(workspace, ".tmp"))
 
 	return &emulated{
-		sss:   newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=web:c1", "GORACE=" + os.Getenv("GORACE") + " atexit_sleep_ms=0"}, rt),
+		sss:   newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=web:c1", "GORACE=" + os.Getenv("GORACE") + " atexit_sleep_ms=0"}, rt, InertTurnSecrets{}),
 		shell: CustomShell{Emulated: true, Dir: folder, ReadOnly: readOnly, Commands: commands, Secrets: secrets, NetworkTargets: targets},
 		logs:  logs,
 	}
@@ -125,7 +125,7 @@ func (e *emulated) bash(t *testing.T, command string) BashResult {
 func (e *emulated) sandboxed(t *testing.T, command string) BashResult {
 	t.Helper()
 
-	return emulatedBashResult(runEmulated(t.Context(), e.sss.sandbox, &e.shell, command, "", e.shell.Dir, e.sss.env, append(os.Environ(), e.sss.env...), defaultShellTimeout*time.Millisecond))
+	return emulatedBashResult(runEmulated(t.Context(), e.sss.sandbox, &e.shell, command, "", e.shell.Dir, e.sss.env, append(os.Environ(), e.sss.env...), e.sss.turnSecrets.Env(), defaultShellTimeout*time.Millisecond))
 }
 
 func (e *emulated) ok(t *testing.T, command, want string) {
@@ -305,6 +305,27 @@ func TestEmulatedShellSecrets(t *testing.T) {
 
 	other := newEmulated(t, map[string]string{"deploy": `bash -c 'echo "[${DEPLOY_TOKEN-unset}]"'`}, map[string]string{"OTHER": "o"}, nil)
 	other.ok(t, "deploy", "[unset]\n")
+
+	turnSecrets := NewTurnSecretStore()
+	require.NoError(t, turnSecrets.Save("DEPLOY_TOKEN", []byte("turn-deploy-token")))
+	require.NoError(t, turnSecrets.Save("GITHUB_TOKEN", []byte("turn-github-token")))
+
+	turn := newEmulated(t, map[string]string{
+		"deploy": `bash -c 'echo "$DEPLOY_TOKEN $GITHUB_TOKEN"'`,
+		"procs":  "cat /proc/[0-9]*/cmdline 2>/dev/null; true",
+	}, map[string]string{"DEPLOY_TOKEN": "host-secret"}, nil)
+	turn.sss.turnSecrets = turnSecrets
+
+	turn.ok(t, `echo "$GITHUB_TOKEN"; deploy`, "turn-github-token\nturn-deploy-token turn-github-token\n")
+
+	got = turn.sandboxed(t, "cat /proc/[0-9]*/cmdline /run/rocketclaw/* 2>/dev/null; procs")
+	require.True(t, got.Success, got.Output)
+	require.Contains(t, got.Output, "/run/rocketclaw/script")
+	require.Contains(t, got.Output, "bwrap\x00--args\x003\x00")
+
+	for _, leak := range []string{"turn-deploy-token", "turn-github-token"} {
+		require.NotContains(t, got.Output, leak, "no command line or run file carries a turn secret")
+	}
 }
 
 func forge(args []string) int {

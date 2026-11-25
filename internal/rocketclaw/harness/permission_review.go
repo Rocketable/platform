@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -123,9 +124,14 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 
+	reviewShell := *f.shellSystem
+	reviewShell.turnSecrets = InertTurnSecrets{}
+
 	childFactory := *f
 	childFactory.inPermissionReview = true
 	childFactory.childKey = request.Review.under(f.childKey.Path)
+	childFactory.shellSystem, childFactory.baseTools = &reviewShell, maps.Clone(f.baseTools)
+	childFactory.baseTools["bash"] = bashTool(&reviewShell, &CustomShell{})
 
 	payload, err := json.MarshalIndent(request, "", "  ")
 	if err != nil {

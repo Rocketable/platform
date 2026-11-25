@@ -159,7 +159,7 @@ It receives the same session values the turn's shell sees, which its configurati
 An agent's opt-in shell mode, the default for an Easy Agent, in which its shell commands run in real Bash inside a Linux sandbox instead of host bash.
 *Avoid:* sandboxed bash, bubblewrap shell
 
-Each command runs in a fresh sandbox with no network. Only the agent's declared working directory reaches the host disk writable, with its uploads and skill folders read-only; temporary files are the command's own and gone when it ends. The commands can start only the host programs the agent declares, and those programs see only the host's environment plus the agent's secrets, never variables the sandboxed script set. Its curl fetches through RocketClaw under the agent's allowed targets. An agent that asked for the Emulated Shell but cannot get one has its shell commands fail rather than fall back to host bash.
+Each command runs in a fresh sandbox with no network. Only the agent's declared working directory reaches the host disk writable, with its uploads and skill folders read-only; temporary files are the command's own and gone when it ends. The commands can start only the host programs the agent declares, and those programs see only the host's environment plus the agent's secrets, never variables the sandboxed script set. Secrets a person pastes during a turn reach both the sandboxed script and those programs as environment variables, and win over an agent secret of the same name; the agent's own secrets still reach only the host programs. Its curl fetches through RocketClaw under the agent's allowed targets. An agent that asked for the Emulated Shell but cannot get one has its shell commands fail rather than fall back to host bash.
 
 ### Script Call Record
 

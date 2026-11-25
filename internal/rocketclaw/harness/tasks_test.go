@@ -733,6 +733,7 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 		"bash": bashTool,
 		"read": readTool,
 	}
+	factory.shellSystem = &sandboxedShellSystem{}
 	factory.childSessions = InertChildSessions{}
 	factory.backgroundJobs = InertBackgroundJobs{}
 

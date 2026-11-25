@@ -83,15 +83,17 @@ type sandboxedShellSystem struct {
 	spillRel         string
 	shellTemp        shellTempConfig
 	env              []string
+	turnSecrets      TurnSecrets
 	sandbox          *sandbox.Runtime
 	forceKillTimeout time.Duration
 }
 
-func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, rt *sandbox.Runtime) *sandboxedShellSystem {
+func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, rt *sandbox.Runtime, turnSecrets TurnSecrets) *sandboxedShellSystem {
 	return &sandboxedShellSystem{
 		root:             root,
 		shellTemp:        *shellTemp,
 		env:              slices.Clone(env),
+		turnSecrets:      turnSecrets,
 		sandbox:          rt,
 		forceKillTimeout: shellForceKillTimeout,
 	}
@@ -172,9 +174,10 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 
 	env := append(os.Environ(), sss.env...)
 	env = append(env, "TMPDIR="+sss.shellTemp.tmpDir)
+	secretEnv := sss.turnSecrets.Env()
 
 	if customShell.Emulated {
-		return emulatedBashResult(runEmulated(ctx, sss.sandbox, customShell, params.Command, params.Stdin.text, hostDir, sss.env, env, timeout))
+		return emulatedBashResult(runEmulated(ctx, sss.sandbox, customShell, params.Command, params.Stdin.text, hostDir, sss.env, env, secretEnv, timeout))
 	}
 
 	commandCtx, cancel := context.WithTimeout(ctx, timeout+shellTimeoutGrace)
@@ -182,7 +185,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 
 	timedOut := false
 
-	env = append(env, customShell.Env...)
+	env = slices.Concat(env, customShell.Env, secretEnv)
 	shell, args := withCustomShell(customShell, params.Command)
 	cmd := exec.CommandContext(commandCtx, shell, args...)
 	cmd.Dir, cmd.Env = hostDir, env
