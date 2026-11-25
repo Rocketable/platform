@@ -1,7 +1,7 @@
 ---
 title: The Web Shares One Connection, and Keeping Views Mounted Needs a Remount Audit
 date: 2026-10-07
-last_updated: 2026-11-22
+last_updated: 2026-11-25
 category: docs/solutions/architecture-patterns/
 module: internal/rocketclaw/web
 problem_type: architecture_pattern
@@ -174,9 +174,15 @@ queries and effects they started. Decide for each one whether it should keep run
 
 ## Why This Matters
 
-Neither problem shows up in tests or on localhost. The connection problem needs realistic data
+Neither problem shows up on localhost. The connection problem needs realistic data
 (thousands of sessions) and a slow link. It then looks like a hung server, and the obvious suspects
-(OpenCode, the database, the six-connection limit) all check out clean. The remount problems never
+(OpenCode, the database, the six-connection limit) all check out clean. Tests are the opposite case
+for that limit: a real-backend browser test served by `httptest.NewServer` speaks plain HTTP/1.1, so
+Chromium gives it six connections per server. Two pages that each hold `/stream`, `/typing` and
+`/listing` use all six, and every other request, such as a button's RPC, waits until the test times
+out. Serve such a test as production is served: `httptest.NewUnstartedServer`, `EnableHTTP2 = true`
+and `StartTLS()`, with `ignoreHTTPSErrors: true` on the Playwright context, as
+`TestRevertRealBackendBrowser` (`internal/rocketclaw/frontend/rpc/live_test.go`) does. The remount problems never
 throw. They show up as commands going to the wrong composer, navigation the person did not ask for, a
 rewritten URL, or a wrong scroll position. Tests with one visible view never exercise them.
 
