@@ -241,8 +241,10 @@ func NewInboundMessageFromContent(source Source, kind InboundKind, content *Inbo
 }
 
 func NormalizeMIMEType(mimeType string) string {
-	if mediaType, _, err := mime.ParseMediaType(mimeType); err == nil {
-		mimeType = mediaType
+	if strings.Contains(mimeType, ";") {
+		if mediaType, _, err := mime.ParseMediaType(mimeType); err == nil {
+			return mediaType
+		}
 	}
 
 	return strings.ToLower(strings.TrimSpace(mimeType))
