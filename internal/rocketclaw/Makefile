@@ -96,6 +96,7 @@ coverage-profile:
 	trap cleanup EXIT INT TERM; \
 	if [ -z "$${ROCKETCLAW_TEST_DATABASE_URL:-}" ]; then \
 		name=$$(docker run -d --pull=always \
+			--shm-size=1g \
 			-e POSTGRES_HOST_AUTH_METHOD=trust \
 			-e POSTGRES_USER=postgres \
 			-e POSTGRES_PASSWORD=postgres \
