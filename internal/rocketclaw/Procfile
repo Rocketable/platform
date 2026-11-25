@@ -1,2 +1,2 @@
-build-rocketclaw: go build -o ./bin/rocketclaw ../../cmd/rocketclaw
-rocketclaw:       ./bin/rocketclaw
+build-rocketclaw: GOEXPERIMENT=runtimesecret go build -o ./bin/rocketclaw ../../cmd/rocketclaw
+rocketclaw:       "$PWD"/bin/rocketclaw

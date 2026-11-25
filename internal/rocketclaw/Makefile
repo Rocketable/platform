@@ -1,3 +1,4 @@
+export GOEXPERIMENT := runtimesecret
 export ROCKETCLAW_PLAYWRIGHT_MODULE ?= $(HOME)/.cache/playwright-core/node_modules/playwright-core
 export ROCKETCLAW_CHROMIUM ?= $(shell bun -e 'console.log(require("$(ROCKETCLAW_PLAYWRIGHT_MODULE)").chromium.executablePath())' 2>/dev/null)
 COVERPROFILE ?= .coverage.out
@@ -120,8 +121,8 @@ deploy:
 	@set -eu; \
 	pid=$$(pgrep -n -x rocketclaw || true); \
 	[ -n "$$pid" ] || { printf "deploy failed: no running rocketclaw process found\n"; exit 1; }; \
-	target=$$(lsof -a -p "$$pid" -d txt -Fn | awk '/^n/ { print substr($$0, 2); exit }'); \
-	[ -n "$$target" ] || { printf "deploy failed: unable to find running rocketclaw path for pid %s\n" "$$pid"; exit 1; }; \
+	target=$$(tr '\0' '\n' < "/proc/$$pid/cmdline" | head -n 1); \
+	case "$$target" in /*) ;; *) printf "deploy failed: running rocketclaw path for pid %s is not absolute: '%s'\n" "$$pid" "$$target"; exit 1 ;; esac; \
 	printf "deploying rocketclaw to %s (pid %s)\n" "$$target" "$$pid"; \
 	go build -o ./bin/rocketclaw ../../cmd/rocketclaw; \
 	mv ./bin/rocketclaw "$$target"; \

@@ -23,8 +23,21 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 	"tailscale.com/tstest/integration/testcontrol"
 )
+
+func TestRunServeDisablesCrashDumps(t *testing.T) {
+	require.NoError(t, unix.Prctl(unix.PR_SET_DUMPABLE, 1, 0, 0, 0))
+	t.Cleanup(func() { require.NoError(t, unix.Prctl(unix.PR_SET_DUMPABLE, 1, 0, 0, 0)) })
+	t.Chdir(t.TempDir())
+
+	require.ErrorContains(t, runServe(nil), "load config")
+
+	dumpable, err := unix.PrctlRetInt(unix.PR_GET_DUMPABLE, 0, 0, 0, 0)
+	require.NoError(t, err)
+	require.Zero(t, dumpable)
+}
 
 func TestRunServeReportsAppStartupError(t *testing.T) {
 	for _, tc := range []struct {

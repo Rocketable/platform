@@ -10,6 +10,7 @@ permissions:
   contents: read
 
 env:
+  GOEXPERIMENT: runtimesecret
   ROCKETCLAW_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/rocketclaw_test?sslmode=disable
 
 jobs:

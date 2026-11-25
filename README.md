@@ -30,8 +30,10 @@ See [LICENSE](LICENSE) for the full license terms.
 ## Getting started
 
 ```sh
-go run github.com/Rocketable/platform/cmd/rocketclaw@main
+GOEXPERIMENT=runtimesecret go run github.com/Rocketable/platform/cmd/rocketclaw@main
 ```
+
+Every build of RocketClaw needs `GOEXPERIMENT=runtimesecret`; a build without it fails.
 
 Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or the older `femtoclaw.json`) from the current folder. When `femtoclaw.json` exists, RocketClaw uses it, even if `rocketclaw.json` is there too, and its runtime folder is `<workspace>/.femtoclaw` instead of `<workspace>/.rocketclaw`. The file holds setup and secrets: it points at the workspace and the database, holds the Slack, provider, and External MCP credentials, and turns on other integrations. Values can also come from AWS Secrets Manager. Any value can be written as `{"aws": {"arn": "ARN", "key": "KEY"}}`, and RocketClaw replaces it with the string under `KEY` in that JSON secret. So `aws` is a reserved name: every object whose only key is `aws` is read as such a reference. A map with a single entry named `aws`, such as one MCP server or provider called `aws`, fails to load with `aws object requires arn and key`; give it another name. `rocketclaw run --aws-secrets-manager-arn ARN` merges that JSON secret over the file, and with it the file is optional: the secret alone can hold the whole configuration, and the workspace defaults to the current folder. `rocketclaw oai login`, `oai list`, `oai logout`, and `ts login` take the same flag.
 
@@ -834,9 +836,9 @@ The Config page's Flags section shows **PostHog** as On when a project token is 
 ## Development
 
 ```sh
-go test ./...
+GOEXPERIMENT=runtimesecret go test ./...
 ```
 
-`go build ./cmd/rocketclaw` builds RocketClaw. `go generate ./internal/rocketclaw/internal/web` rebuilds the web frontend and OpenCode's UI with Bun into `internal/rocketclaw/internal/web/dist/` and `oc-dist/`, then replaces every file there with a gzipped `<name>.gz`. RocketClaw sends those bytes as they are to browsers that accept gzip and unpacks them only for the rest. Both folders are committed, so a Go-only build does not need Bun. When you change `internal/rocketclaw/web/` or `internal/rocketclaw/oc/`, commit the rebuilt files too.
+`GOEXPERIMENT=runtimesecret go build ./cmd/rocketclaw` builds RocketClaw. `go generate ./internal/rocketclaw/internal/web` rebuilds the web frontend and OpenCode's UI with Bun into `internal/rocketclaw/internal/web/dist/` and `oc-dist/`, then replaces every file there with a gzipped `<name>.gz`. RocketClaw sends those bytes as they are to browsers that accept gzip and unpacks them only for the rest. Both folders are committed, so a Go-only build does not need Bun. When you change `internal/rocketclaw/web/` or `internal/rocketclaw/oc/`, commit the rebuilt files too.
 
 `make test` in `internal/rocketclaw` first runs `go generate` on the frontends, the protobuf code (which needs `protoc` and `protoc-gen-go` at the versions in the `*.pb.go` headers) and the mocks, then lints. Then it starts PostgreSQL in Docker, or uses `ROCKETCLAW_TEST_DATABASE_URL` if set. It runs the Go tests once with race detection and coverage, then the emulated shell's acceptance tests (`make sandbox-test`, which need Linux with bubblewrap, mmdebstrap and a delegated cgroup), and enforces the fixed `COVERAGE_REQUIRED` minimum in its Makefile on both together, as CI does. Generated protobuf code (`*.pb.go`) does not count toward the total. GitHub Actions tests against PostgreSQL 18.

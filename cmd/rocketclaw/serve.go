@@ -20,11 +20,16 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/posthog/posthog-go"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sys/unix"
 )
 
 var pseudoVersionRevision = regexp.MustCompile(`[-.]\d{14}-([0-9a-f]{12})$`)
 
 func runServe(args []string) error {
+	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+		return fmt.Errorf("disable crash dumps: %w", err)
+	}
+
 	processStart := time.Now().UTC().Format(time.RFC3339Nano)
 	flagSet := flag.NewFlagSet("rocketclaw", flag.ContinueOnError)
 	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
