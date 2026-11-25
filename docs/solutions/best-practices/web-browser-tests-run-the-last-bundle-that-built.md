@@ -44,7 +44,7 @@ A second mutation, `lastPageSeen.current = shown; return;`, failed too, with "un
 - **Remember that `tsc` also checks the test files.** A type error in any `*.test.ts`, such as an untyped parameter in a `page.evaluate` callback, stops the build just as one in `ui.tsx` does. While adding remote RocketClaws, a new `remote-transport.test.ts` with an implicit `any` kept `dist` stale, and a mutation check passed against the old bundle until the build's last line was read.
 - **Make mutations and debug code type-check.** TypeScript rejects always-true conditions, unreachable code after `return`, and loose `window` casts, so a careless mutation never reaches the bundle. Prefer mutations that flip a real condition, such as adding a truthy operand or changing `&&` to `||`, and cast debug globals through `unknown` to a concrete type.
 - **When a test or debug run surprises you, check the bundle first.** Before concluding that a test is weak or that logging is stripped, confirm `dist` was rebuilt, for example by checking the build output or the `dist/assets/main-*.js.gz` timestamp.
-- **For anything you will rely on, use `make test`**, which builds first and stops on a type error.
+- **To run a few files, use `make test-files TESTS="src/tabs.browser.test.ts src/spaces.browser.test.ts"`** in `internal/rocketclaw/web`. It rebuilds the bundle the official way, stops on a type error, and runs only those files. For the whole suite, use `make test`. Keep the hand loop below for filtering one test by name with `-t`.
 
 ## Why This Matters
 
