@@ -1705,7 +1705,7 @@ func TestPausedChatHoldsWorkUntilResume(t *testing.T) {
 	require.Never(t, func() bool { return len(requests) > 0 }, 300*time.Millisecond, 10*time.Millisecond, "each runs once")
 }
 
-func newCronTestManager(t *testing.T, service *SessionService) (manager *threadBridgeManager, cfg *config.Config, finals chan *protocol.OutboundMessage) {
+func newRoutineTestManager(t *testing.T, service *SessionService) (manager *threadBridgeManager, cfg *config.Config, finals chan *protocol.OutboundMessage) {
 	t.Helper()
 
 	cfg = &config.Config{Workspace: t.TempDir()}
@@ -1717,31 +1717,31 @@ func newCronTestManager(t *testing.T, service *SessionService) (manager *threadB
 	return manager, cfg, finals
 }
 
-func seedCronRun(t *testing.T, service *SessionService, runID string) *protocol.InboundMessage {
+func seedRoutineRun(t *testing.T, service *SessionService, runID string) *protocol.InboundMessage {
 	t.Helper()
 
-	_, err := service.recordConversation(t.Context(), &protocol.Conversation{ID: runID, Agent: "job", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "agents/job.md#1h"}}, conversationFacts{}, harness.AgentStickyOff)
+	_, err := service.recordConversation(t.Context(), &protocol.Conversation{ID: runID, Agent: "job", CreatedBy: string(ThreadCreatedByRoutine), Run: &protocol.RoutineRun{Path: "agents/job.md#1h"}}, conversationFacts{}, harness.AgentStickyOff)
 	require.NoError(t, err)
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
 	msg.ConversationID, msg.RequireOutputDecision = runID, true
-	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "agents/job.md#1h", Agent: "job", RanAt: "2000-01-02T03:04:05Z"}
+	msg.Routine = &protocol.RoutineMessage{RelativePath: "agents/job.md#1h", Agent: "job", RanAt: "2000-01-02T03:04:05Z"}
 	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-cron", runID, msg))
 
 	return msg
 }
 
-func TestSilentCronRunOpensNoReportChat(t *testing.T) {
+func TestSilentRoutineRunOpensNoReportChat(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	manager, cfg, finals := newCronTestManager(t, service)
-	_, err := service.recordConversation(t.Context(), &protocol.Conversation{ID: "cron:quiet", Agent: "job", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "cron/quiet.md"}}, conversationFacts{}, harness.AgentStickyOff)
+	manager, cfg, finals := newRoutineTestManager(t, service)
+	_, err := service.recordConversation(t.Context(), &protocol.Conversation{ID: "cron:quiet", Agent: "job", CreatedBy: string(ThreadCreatedByRoutine), Run: &protocol.RoutineRun{Path: "cron/quiet.md"}}, conversationFacts{}, harness.AgentStickyOff)
 	require.NoError(t, err)
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
 	msg.ConversationID, msg.RequireOutputDecision = "cron:quiet", true
-	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/quiet.md", Agent: "job", RanAt: "2000-01-02T03:04:05Z"}
+	msg.Routine = &protocol.RoutineMessage{RelativePath: "cron/quiet.md", Agent: "job", RanAt: "2000-01-02T03:04:05Z"}
 	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-quiet", "cron:quiet", msg))
 	writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmodel: gpt-6.1-sol\npermission: {}\n---\nRun the job.\n")
 
@@ -1762,7 +1762,7 @@ func TestSilentCronRunOpensNoReportChat(t *testing.T) {
 	assert.False(t, reportsTo.Valid, "the run reports to no chat until it is continued in Web")
 }
 
-func TestResumedCronRunMarksCronTabs(t *testing.T) {
+func TestResumedRoutineRunMarksRoutineTabs(t *testing.T) {
 	t.Parallel()
 
 	nt := newNoteTest(t, answerNoteTest)
@@ -1773,25 +1773,25 @@ func TestResumedCronRunMarksCronTabs(t *testing.T) {
 	spaces, err := nt.service.Spaces(ctx)
 	require.NoError(t, err)
 
-	for person, tabs := range map[string][]Tab{alice: {{Path: "/routines", Space: spaces[1].ID}, {Path: cronTabPath("job · 1h"), Space: spaces[1].ID}}, bob: {{Path: "/routines", Space: spaces[0].ID}}} {
+	for person, tabs := range map[string][]Tab{alice: {{Path: "/routines", Space: spaces[1].ID}, {Path: routineTabPath("job · 1h"), Space: spaces[1].ID}}, bob: {{Path: "/routines", Space: spaces[0].ID}}} {
 		saved, err := nt.service.SaveTabState(ctx, person, &TabState{Tabs: tabs}, 0)
 		require.NoError(t, err)
 		require.True(t, saved)
 	}
 
-	seedCronRun(t, nt.service, "cron:daily")
+	seedRoutineRun(t, nt.service, "cron:daily")
 	manager, _ := nt.run(t, ignoreOutbound)
 	require.NoError(t, manager.StartActiveTurns(ctx))
 	readFinalFor(t, nt.finals, "cron:daily")
-	assert.ElementsMatch(t, []string{alice + " /routines loud", alice + " " + cronTabPath("job · 1h") + " loud"}, locationMarks(t, nt.service, "Run finished"), "not Bob's overview of another space")
+	assert.ElementsMatch(t, []string{alice + " /routines loud", alice + " " + routineTabPath("job · 1h") + " loud"}, locationMarks(t, nt.service, "Run finished"), "not Bob's overview of another space")
 }
 
-func TestResumedCronRowOpensReportChat(t *testing.T) {
+func TestResumedRoutineRowOpensReportChat(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	manager, cfg, finals := newCronTestManager(t, service)
-	msg := seedCronRun(t, service, "cron:daily")
+	manager, cfg, finals := newRoutineTestManager(t, service)
+	msg := seedRoutineRun(t, service, "cron:daily")
 	writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmodel: gpt-6.1-sol\nspace: Reports\npermission: {}\n---\nRun the job.\n")
 
 	crashed := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
@@ -1809,7 +1809,7 @@ func TestResumedCronRowOpensReportChat(t *testing.T) {
 	thread, recorded, err := service.Thread(destination)
 	require.NoError(t, err)
 	require.True(t, recorded)
-	assert.Equal(t, ThreadState{Agent: "job", CreatedBy: ThreadCreatedByCron}, thread, "the report chat runs the cron's agent")
+	assert.Equal(t, ThreadState{Agent: "job", CreatedBy: ThreadCreatedByRoutine}, thread, "the report chat runs the cron's agent")
 
 	kind, err := service.ConversationKind(t.Context(), destination)
 	require.NoError(t, err)
@@ -1865,7 +1865,7 @@ func TestResumedCronRowOpensReportChat(t *testing.T) {
 	}
 }
 
-func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
+func TestSilentRoutineLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
@@ -1899,7 +1899,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 
 			origins, err := queryStrings(r.Context(), service.db, `SELECT inbound_json->>'OriginHeader' FROM turns WHERE conversation_id = 'web:cron:daily' AND phase = $1`, "running turn origins", turnRunning)
 			assert.NoError(t, err)
-			assert.Equal(t, []string{"[ScheduledMessage source=Cron]"}, origins, "a scheduled turn is reviewed as one, with the source of the run that scheduled it")
+			assert.Equal(t, []string{"[ScheduledMessage source=Routine]"}, origins, "a scheduled turn is reviewed as one, with the source of the run that scheduled it")
 
 			requests <- string(body)
 
@@ -1921,14 +1921,14 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 	manager, shutdown := newTestBridgeManager(t, config.NewLockedConfig(cfg), service, finals)
 
-	require.NoError(t, service.UpsertThread("cron:daily", ThreadState{Agent: "job", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, service.UpsertThread("cron:daily", ThreadState{Agent: "job", CreatedBy: ThreadCreatedByRoutine}))
 
 	bridge, err := manager.recordedBridge(t.Context(), "cron:daily")
 	require.NoError(t, err)
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "run job", false)
 	msg.RequireOutputDecision = true
-	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "job"}
+	msg.Routine = &protocol.RoutineMessage{RelativePath: "cron/daily.md", Agent: "job"}
 	require.NoError(t, bridge.Submit(t.Context(), msg))
 	assert.Empty(t, readFinal(t, finals).Text)
 	require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
@@ -1938,7 +1938,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	require.Len(t, scheduled, 3, "the run's schedules wait with it")
 
 	for _, message := range scheduled {
-		assert.Equal(t, "[ScheduledMessage source=Cron]", message.Origin, "a cron run's scheduled messages keep its source")
+		assert.Equal(t, "[ScheduledMessage source=Routine]", message.Origin, "a cron run's scheduled messages keep its source")
 	}
 
 	_, recorded, err := service.Thread("web:cron:daily")
@@ -1974,7 +1974,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 			assert.Equal(t, "job", final.Agent, "the follow-up chat runs the run's agent, not the first loaded one")
 			assert.Equal(t, "canonical answer", final.Text)
 			assert.Nil(t, final.SlackReply, "no inherited cron channel target")
-			assert.Nil(t, final.Cronjob, "follow-ups are ordinary scheduled turns")
+			assert.Nil(t, final.Routine, "follow-ups are ordinary scheduled turns")
 
 			body := <-requests
 
@@ -1996,7 +1996,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 			assert.Equal(t, "user", current.role)
 			header, prompt, framed := strings.Cut(current.text, "\n\n")
 			assert.True(t, framed)
-			assert.Equal(t, `[System additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]`, header)
+			assert.Equal(t, `[System]`, header)
 			assert.Contains(t, []string{"follow up", "second follow up"}, prompt)
 			t.Logf("scheduled prompt %q, turn %q", prompt, final.TurnID)
 
@@ -2048,7 +2048,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	assert.Equal(t, "job", recurring.Agent, "startup uses persisted Web selection, not the stale schedule agent")
 	assert.Equal(t, "canonical answer", recurring.Text)
 	assert.Nil(t, recurring.SlackReply)
-	assert.Nil(t, recurring.Cronjob)
+	assert.Nil(t, recurring.Routine)
 
 	var request struct {
 		Input []json.RawMessage `json:"input"`
@@ -2059,7 +2059,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, messages)
 	assert.Equal(t, "user", messages[len(messages)-1].role)
-	assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nrecurring follow up", messages[len(messages)-1].text)
+	assert.Equal(t, "[System]\n\nrecurring follow up", messages[len(messages)-1].text)
 	private, err := service.ObserveEntries(t.Context(), "cron:daily")
 	require.NoError(t, err)
 	assert.Len(t, private, 1, "canonical turns never append to producer history")
@@ -2098,11 +2098,11 @@ DELETE FROM conversations WHERE conversation_id IN ('cron:pending', 'web:cron:pe
 				writeAgent(t, runtime.Clone().Workspace, "a-loaded", "---\ndescription: First loaded\nmodel: gpt-6.1-sol\npermission: {}\n---\nSorted fallback instructions\n")
 			}
 
-			require.NoError(t, store.UpsertThread("cron:pending", ThreadState{Agent: "worker", CreatedBy: ThreadCreatedByCron}))
+			require.NoError(t, store.UpsertThread("cron:pending", ThreadState{Agent: "worker", CreatedBy: ThreadCreatedByRoutine}))
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original job", false)
 			inbound.RequireOutputDecision = true
-			inbound.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/missing.md", Agent: "worker"}
+			inbound.Routine = &protocol.RoutineMessage{RelativePath: "cron/missing.md", Agent: "worker"}
 			require.NoError(t, startTurnDB(t.Context(), store.db, "pending", "cron:pending", inbound))
 
 			effects := []producerEffect{{Schedule: &protocol.ScheduledMessageState{Message: "pending follow up", DueAt: time.Now().Add(-time.Minute)}}}
@@ -2287,7 +2287,7 @@ FROM conversations WHERE conversation_id IN ('cron:pending', 'web:cron:pending')
 	}
 }
 
-func TestDueFollowUpOfTurnedOffCronAgentOpensNoChat(t *testing.T) {
+func TestDueFollowUpOfTurnedOffRoutineAgentOpensNoChat(t *testing.T) {
 	t.Parallel()
 
 	for _, unboundChat := range []bool{false, true} {
@@ -2295,11 +2295,11 @@ func TestDueFollowUpOfTurnedOffCronAgentOpensNoChat(t *testing.T) {
 			t.Parallel()
 
 			newBridge, store, calls, finals := newResumeTestBridges(t, false)
-			require.NoError(t, store.UpsertThread("cron:pending", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
+			require.NoError(t, store.UpsertThread("cron:pending", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByRoutine}))
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original job", false)
 			inbound.RequireOutputDecision = true
-			inbound.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "main"}
+			inbound.Routine = &protocol.RoutineMessage{RelativePath: "cron/daily.md", Agent: "main"}
 			require.NoError(t, startTurnDB(t.Context(), store.db, "pending", "cron:pending", inbound))
 			seedProducerEffects(t, store, "cron:pending", "pending",
 				producerEffect{Schedule: &protocol.ScheduledMessageState{Message: "pending follow up", DueAt: time.Now().Add(-time.Minute)}},
@@ -2320,7 +2320,7 @@ func TestDueFollowUpOfTurnedOffCronAgentOpensNoChat(t *testing.T) {
 
 			bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:pending", Agent: "main", SessionService: store}, slog.New(slog.NewTextHandler(&logs, nil)))
 			require.NoError(t, bridge.pickLaterWork(t.Context(), true), "a drop never re-arms the timer")
-			assert.Equal(t, 1, strings.Count(logs.String(), `level=ERROR msg="cron follow-up dropped: agent is not loaded" component=rocketcode agent=main`), logs.String())
+			assert.Equal(t, 1, strings.Count(logs.String(), `level=ERROR msg="routine follow-up dropped: agent is not loaded" component=rocketcode agent=main`), logs.String())
 
 			_, recorded, err := store.Thread("web:cron:pending")
 			require.NoError(t, err)
@@ -2343,12 +2343,12 @@ func TestDueFollowUpOfTurnedOffCronAgentOpensNoChat(t *testing.T) {
 	}
 }
 
-func TestFailedCronRunOpensNoReportChat(t *testing.T) {
+func TestFailedRoutineRunOpensNoReportChat(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	manager, cfg, finals := newCronTestManager(t, service)
-	msg := seedCronRun(t, service, "cron:daily")
+	manager, cfg, finals := newRoutineTestManager(t, service)
+	msg := seedRoutineRun(t, service, "cron:daily")
 
 	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.threads = manager
@@ -2363,30 +2363,32 @@ func TestFailedCronRunOpensNoReportChat(t *testing.T) {
 	assert.False(t, recorded)
 }
 
-func TestCronReportFailsWhenAgentsDoNotLoad(t *testing.T) {
+func TestRoutineReportFailsWhenAgentsDoNotLoad(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	manager, cfg, finals := newCronTestManager(t, service)
-	msg := seedCronRun(t, service, "cron:daily")
-	require.NoError(t, os.WriteFile(filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents", "job.md"), []byte("---\ndescription: Job\n---\nPrompt\n"), 0o600))
+	manager, cfg, finals := newRoutineTestManager(t, service)
+	msg := seedRoutineRun(t, service, "cron:daily")
+	agents := filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents")
+	require.NoError(t, os.RemoveAll(agents))
+	require.NoError(t, os.WriteFile(agents, []byte("not a folder"), 0o600))
 
 	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.threads = manager
 	err := bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{conversationID: strings.TrimSpace("cron:daily")}, &runResult{turnID: "turn-cron", text: "report"}, "")
-	require.ErrorContains(t, err, "load cron agents")
+	require.ErrorContains(t, err, "load routine agents")
 
 	_, recorded, err := service.Thread("web:cron:daily")
 	require.NoError(t, err)
 	assert.False(t, recorded)
 }
 
-func TestCronReportSkipsUnloadedAgent(t *testing.T) {
+func TestRoutineReportSkipsUnloadedAgent(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	manager, cfg, finals := newCronTestManager(t, service)
-	msg := seedCronRun(t, service, "cron:daily")
+	manager, cfg, finals := newRoutineTestManager(t, service)
+	msg := seedRoutineRun(t, service, "cron:daily")
 
 	var logs bytes.Buffer
 
@@ -2396,7 +2398,7 @@ func TestCronReportSkipsUnloadedAgent(t *testing.T) {
 
 	assert.Equal(t, "report", readFinal(t, finals).Text)
 	assert.Empty(t, runningTestTurns(t, service), "the run's turn still closes")
-	assert.Contains(t, logs.String(), `level=ERROR msg="cron report chat not opened: agent is not loaded" component=rocketcode agent=job`)
+	assert.Contains(t, logs.String(), `level=ERROR msg="routine report chat not opened: agent is not loaded" component=rocketcode agent=job`)
 
 	_, recorded, err := service.Thread("web:cron:daily")
 	require.NoError(t, err)
@@ -2407,12 +2409,12 @@ func TestCronReportSkipsUnloadedAgent(t *testing.T) {
 	assert.False(t, reportsTo.Valid)
 }
 
-func TestCronReportKeepsBoundDestination(t *testing.T) {
+func TestRoutineReportKeepsBoundDestination(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	manager, cfg, finals := newCronTestManager(t, service)
-	msg := seedCronRun(t, service, "cron:daily")
+	manager, cfg, finals := newRoutineTestManager(t, service)
+	msg := seedRoutineRun(t, service, "cron:daily")
 
 	const existing = "web:cron:daily"
 
@@ -2436,7 +2438,7 @@ func TestCronReportKeepsBoundDestination(t *testing.T) {
 	assert.Equal(t, existing, owner)
 }
 
-func TestStickyGlobalCronReportsToStickySession(t *testing.T) {
+func TestStickyGlobalRoutineReportsToStickySession(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
@@ -2448,8 +2450,8 @@ func TestStickyGlobalCronReportsToStickySession(t *testing.T) {
 			t.Parallel()
 
 			service := newTestSessionService(t)
-			manager, cfg, finals := newCronTestManager(t, service)
-			msg := seedCronRun(t, service, "cron:daily")
+			manager, cfg, finals := newRoutineTestManager(t, service)
+			msg := seedRoutineRun(t, service, "cron:daily")
 			writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmodel: gpt-6.1-sol\nsticky: global\nspace: Ops\npermission: {}\n---\nRun the job.\n")
 
 			if tc.existing {
@@ -2495,12 +2497,12 @@ func TestStickyGlobalCronReportsToStickySession(t *testing.T) {
 	}
 }
 
-func TestStickyGlobalCronReminderOpensStickySession(t *testing.T) {
+func TestStickyGlobalRoutineReminderOpensStickySession(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	manager, cfg, finals := newCronTestManager(t, service)
-	msg := seedCronRun(t, service, "cron:daily")
+	manager, cfg, finals := newRoutineTestManager(t, service)
+	msg := seedRoutineRun(t, service, "cron:daily")
 	writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmodel: gpt-6.1-sol\nsticky: global\nspace: Ops\npermission: {}\n---\nRun the job.\n")
 
 	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
@@ -2509,7 +2511,7 @@ func TestStickyGlobalCronReminderOpensStickySession(t *testing.T) {
 	readFinal(t, finals)
 	require.NoError(t, service.PutScheduledMessage("later", &protocol.ScheduledMessageState{ConversationID: "cron:daily", Agent: "job", Message: "follow up", DueAt: time.Now().Add(-time.Minute)}))
 
-	require.NoError(t, (&Runtime{Sessions: service}).CreateConversation(t.Context(), protocol.Conversation{ID: "cron:report", Agent: "job", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/report.md"}}))
+	require.NoError(t, (&Runtime{Sessions: service}).CreateConversation(t.Context(), protocol.Conversation{ID: "cron:report", Agent: "job", CreatedBy: "routine", Run: &protocol.RoutineRun{Path: "cron/report.md"}}))
 	report := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:report", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
 	report.threads = manager
 	blocker, err := service.db.BeginTx(t.Context(), nil)
@@ -2525,7 +2527,7 @@ func TestStickyGlobalCronReminderOpensStickySession(t *testing.T) {
 
 	requests.Go(func() error { return bridge.handoffProducer(t.Context()) })
 	requests.Go(func() error {
-		return report.openCronReport(t.Context(), &protocol.OutboundMessage{Cronjob: &protocol.CronjobMessage{Agent: "job", RelativePath: "cron/report.md"}})
+		return report.openRoutineReport(t.Context(), &protocol.OutboundMessage{Routine: &protocol.RoutineMessage{Agent: "job", RelativePath: "cron/report.md"}})
 	})
 	requests.Go(func() error {
 		id, _, err := service.CreateStickyConversation(t.Context(), protocol.Conversation{ID: "web-candidate", Agent: "job", CreatedBy: "alice"}, harness.AgentStickyGlobal)
@@ -2934,7 +2936,7 @@ func TestRowRunsBeforeLiveMessage(t *testing.T) {
 	assert.NotEqual(t, "turn-waiting", readFinal(t, finals).TurnID)
 }
 
-func TestShutdownReleasesCronRunnerWait(t *testing.T) {
+func TestShutdownReleasesRoutineRunnerWait(t *testing.T) {
 	t.Parallel()
 
 	newBridge, service, requests, finals := newResumeTestBridges(t, true)
@@ -2944,7 +2946,7 @@ func TestShutdownReleasesCronRunnerWait(t *testing.T) {
 	var shutdown func()
 
 	rt.threads, shutdown = newTestBridgeManager(t, template.runtime, service, finals)
-	require.NoError(t, service.UpsertThread("cron:daily", ThreadState{Agent: "primary", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, service.UpsertThread("cron:daily", ThreadState{Agent: "primary", CreatedBy: ThreadCreatedByRoutine}))
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
 	inbound.ConversationID, inbound.SyncDestination, inbound.RequireOutputDecision = "cron:daily", template.config.ConversationID, true
@@ -3035,7 +3037,7 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 
 			_, _ = w.Write([]byte(`{"id":"resp_2","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_2","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"found it","annotations":[]}]}]}`))
 		case !strings.Contains(body, "function_call_output"):
-			_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_t","name":"task","arguments":"{\"description\":\"research\",\"prompt\":\"research the flaky test\",\"subagent_type\":\"researcher\",\"background\":true}"}]}`))
+			_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_t","name":"task","arguments":"{\"description\":\"research\",\"prompt\":\"research the flaky test\",\"agent\":\"researcher\",\"background\":true}"}]}`))
 		default:
 			answerNoteTest(w, r, n, body)
 		}
@@ -3095,7 +3097,7 @@ func TestCrashDuringForegroundTaskRunsSubagentOnce(t *testing.T) {
 
 			writeResponseMessage(t, w, "resp", "msg", "found it")
 		case !strings.Contains(body, "function_call_output"):
-			writeResponseFunctionCall(t, w, "resp", "task", map[string]string{"description": "research", "prompt": "research the flaky test", "subagent_type": "researcher"})
+			writeResponseFunctionCall(t, w, "resp", "task", map[string]string{"description": "research", "prompt": "research the flaky test", "agent": "researcher"})
 		default:
 			answerNoteTest(w, r, n, body)
 		}
@@ -3145,13 +3147,13 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 	first, shutdown := nt.run(t, ignoreOutbound)
 	report := "web:cron:nightly"
 
-	msg := seedCronRun(t, nt.service, "cron:nightly")
+	msg := seedRoutineRun(t, nt.service, "cron:nightly")
 	job := testBackgroundJob("cron:nightly", "turn-cron/call/a")
 	job.origin = msg
 	createTestBackgroundJob(t, nt.service, job)
 
 	outbound := protocol.NewOutboundMessage("cron:nightly", "Report started")
-	outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
+	outbound.TurnID, outbound.Complete, outbound.Routine = "turn-cron", true, msg.Routine
 	_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{conversationID: strings.TrimSpace("cron:nightly"), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
 	require.NoError(t, err)
 	require.NoError(t, first.StartActiveTurns(t.Context()))
@@ -3169,7 +3171,7 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 	nt.waitIdle(t, manager, report)
 	assert.Equal(t, []string{"turn-cron/call/a consumed true"}, noteStates(t, nt.service))
 
-	assert.Contains(t, reviewPrompt(t, <-reviews), "Turn origin (written by RocketClaw): [Cron]\n", "a cron run's wake is reviewed as cron")
+	assert.Contains(t, reviewPrompt(t, <-reviews), "Turn origin (written by RocketClaw): [Routine]\n", "a cron run's wake is reviewed as cron")
 }
 
 func reviewPrompt(t *testing.T, body string) string {
@@ -3249,15 +3251,15 @@ func TestTaskRunsSubagentAsSession(t *testing.T) {
 			assert.Contains(t, body, `"output":"`+protocol.SlackThreadConversationID("C123", "111.222")+`"`, "a subagent's current session is its top-level session")
 			writeResponseMessage(t, w, "resp", "msg", "found it")
 		case strings.Contains(body, `"input":[{"content":"Research`):
-			assert.NotContains(t, body, `"name":"task"`, "the subagent is at its top-level agent's recursion limit")
+			assert.NotContains(t, body, `"name":"task"`, "a helper under a top-level agent with the default maxRecursion cannot delegate")
 			writeResponseFunctionCall(t, w, "current", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_current_id()\n"}`))
 		case !strings.Contains(body, "function_call_output"):
-			writeResponseFunctionCall(t, w, "resp", "task", map[string]string{"description": "research", "prompt": "research the flaky test", "subagent_type": "researcher"})
+			writeResponseFunctionCall(t, w, "resp", "task", map[string]string{"description": "research", "prompt": "research the flaky test", "agent": "researcher"})
 		default:
 			answerNoteTest(w, r, n, body)
 		}
 	})
-	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\nmaxRecursion: 1\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n")
 	writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw:\n    rocketclaw_sessions: allow\n---\nResearch\n")
 
 	manager, _ := nt.run(t, ignoreOutbound)
@@ -3344,6 +3346,45 @@ SELECT item->>'input_id' FROM items WHERE item->>'input_id' <> ''`, "subagent in
 	assert.Empty(t, replyQueueItems(t, nt.service), "a task's prompts get no session reply")
 }
 
+func TestTaskHelperOfUnloadedTopLevelAgentCannotDelegate(t *testing.T) {
+	t.Parallel()
+
+	asked, broken, helper := make(chan struct{}), make(chan struct{}), make(chan string, 1)
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		switch {
+		case strings.Contains(body, "function_call_output"):
+			answerNoteTest(w, r, n, body)
+		case strings.Contains(body, "research the flaky test"):
+			helper <- body
+
+			writeResponseMessage(t, w, "resp", "msg", "found it")
+		default:
+			close(asked)
+			<-broken
+			writeResponseFunctionCall(t, w, "resp", "task", map[string]string{"description": "research", "prompt": "research the flaky test", "agent": "researcher"})
+		}
+	})
+	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\nmaxRecursion: 3\npermission:\n  task: allow\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "researcher", "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: "+filepath.Join(nt.cfg.Workspace, "data")+"\nsubagents: [gpt-6.1-sol, {agent: job}]\n---\nResearch\n")
+
+	manager, _ := nt.run(t, ignoreOutbound)
+	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
+	<-asked
+	writeAgent(t, nt.cfg.Workspace, "primary", "---\nmodel: [\n---\nPrompt\n")
+	close(broken)
+
+	select {
+	case body := <-helper:
+		assert.NotContains(t, body, `"name":"task"`, "a helper whose top-level agent is not loaded has no delegation budget")
+		assert.NotContains(t, body, `"name":"task_clone"`)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the helper never ran")
+	}
+
+	readFinal(t, nt.finals)
+	nt.waitIdle(t, manager, nt.conversationID)
+}
+
 func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 	t.Parallel()
 
@@ -3354,7 +3395,7 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 		case strings.Contains(body, `"input":[{"content":"Research`) && strings.Contains(body, "parent work") && !strings.Contains(body, "next work"):
 			writeResponseMessage(t, w, "resp", "msg", "parent work done")
 		case !strings.Contains(body, `"input":[{"content":"Research`) && !strings.Contains(body, "function_call_output"):
-			writeResponseFunctionCall(t, w, "resp", "task", map[string]any{"description": "more", "prompt": "parent work", "subagent_type": "researcher", "continue": map[string]string{"session_id": "/a", "mode": "enqueue"}})
+			writeResponseFunctionCall(t, w, "resp", "task", map[string]any{"description": "more", "prompt": "parent work", "agent": "researcher", "continue": map[string]string{"session_id": "/a", "mode": "enqueue"}})
 		default:
 			answerNoteTest(w, r, n, body)
 		}
@@ -3562,7 +3603,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 	}{
 		{protocol.SourceWeb, "Alice", "primary", "alice@example.com", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, nil, "Alice|alice@example.com|unset", `[Web principal="Alice"]`},
 		{protocol.SourceExternalMCP, "Bob", "primary", "", nil, map[string]string{"ticket": "T-1"}, "unset|unset|T-1", `[ExternalMCP principal="Bob"]`},
-		{protocol.SourceSystem, "", "job", string(ThreadCreatedByCron), nil, nil, "unset|unset|unset", "[Cron]"},
+		{protocol.SourceSystem, "", "job", string(ThreadCreatedByRoutine), nil, nil, "unset|unset|unset", "[Routine]"},
 	} {
 		t.Run(string(tc.source), func(t *testing.T) {
 			t.Parallel()
@@ -3586,7 +3627,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 						Code string `json:"code"`
 					}{script})
 				case !strings.Contains(body, "function_call_output") && !strings.Contains(body, "child task"):
-					writeResponseFunctionCall(t, w, "resp", "task", map[string]string{"description": "act", "prompt": "act for me", "subagent_type": "researcher"})
+					writeResponseFunctionCall(t, w, "resp", "task", map[string]string{"description": "act", "prompt": "act for me", "agent": "researcher"})
 				default:
 					answerNoteTest(w, r, n, body)
 				}
@@ -3596,7 +3637,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 				writeAgent(t, nt.cfg.Workspace, agent, "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n---\nPrompt\n")
 			}
 
-			writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission:\n  bash: auto\n  rocketclaw: {rocketclaw_attach_files_to_response: allow, rocketclaw_schedule_message: allow, rocketclaw_sessions: allow}\n---\nResearch\n")
+			writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission:\n  bash: auto\n  task: {primary: allow, job: allow}\n  rocketclaw: {rocketclaw_attach_files_to_response: allow, rocketclaw_schedule_message: allow, rocketclaw_sessions: allow}\n---\nResearch\n")
 			nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 			nt.cfg.AutoApproverModel = "gpt-review"
 
@@ -3605,7 +3646,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 
 			if tc.source == protocol.SourceSystem {
 				root = "cron:nightly"
-				seedCronRun(t, nt.service, root)
+				seedRoutineRun(t, nt.service, root)
 				require.NoError(t, manager.StartActiveTurns(t.Context()))
 			} else {
 				prompt := protocol.NewInboundMessage(tc.source, protocol.InboundKindPrompt, "hello", true)
@@ -3696,14 +3737,14 @@ func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 				case strings.Contains(body, `"input":[{"content":"Lead`) && strings.Contains(body, "function_call_output"):
 					writeResponseMessage(t, w, "lead", "msg", "led")
 				case strings.Contains(body, `"input":[{"content":"Lead`):
-					writeResponseFunctionCall(t, w, "lead", "task", map[string]any{"description": "act", "prompt": "act for me", "subagent_type": "researcher"})
+					writeResponseFunctionCall(t, w, "lead", "task", map[string]any{"description": "act", "prompt": "act for me", "agent": "researcher"})
 				case !strings.Contains(body, "function_call_output"):
-					writeResponseFunctionCall(t, w, "resp", "task", map[string]any{"description": "act", "prompt": "act for me", "subagent_type": map[bool]string{false: "researcher", true: "lead"}[tc.nested], "background": background})
+					writeResponseFunctionCall(t, w, "resp", "task", map[string]any{"description": "act", "prompt": "act for me", "agent": map[bool]string{false: "researcher", true: "lead"}[tc.nested], "background": background})
 				default:
 					answerNoteTest(w, r, n, body)
 				}
 			})
-			writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
+			writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\nmaxRecursion: 2\npermission:\n  task: allow\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
 			writeAgent(t, nt.cfg.Workspace, "lead", "---\ndescription: Lead\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n---\nLead\n")
 			writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_restart: allow, rocketclaw_attach_files_to_response: allow}\n---\nResearch\n")
 

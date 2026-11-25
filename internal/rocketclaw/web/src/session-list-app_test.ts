@@ -20,10 +20,10 @@ export async function appScenario(part: "lists" | "composer") {
   let promptHold = Promise.withResolvers<string>();
   let createHold = Promise.withResolvers<string>();
   let uploadHold = Promise.withResolvers<void>();
-  const cronHold = Promise.withResolvers<string>();
-  let cronRunCalls = 0;
-  let cronFailures = 0;
-  const cronHistory: string[] = [];
+  const routineHold = Promise.withResolvers<string>();
+  let routineRunCalls = 0;
+  let routineFailures = 0;
+  const routineHistory: string[] = [];
   const historyRequests: { id: string; revision?: string }[] = [];
   const searchQueries: string[] = [];
   const manySearchHold = Promise.withResolvers<void>();
@@ -34,7 +34,7 @@ export async function appScenario(part: "lists" | "composer") {
     "is:forked fixture 0": ["perf-0"], "Release notes": ["named"], "Original preview": ["named"], "agent:main room:room matching": ["slack-thread:C:active", "slack-thread:C:resolved"],
   };
   const searchTerms: Record<string, string[]> = { "agent:main": ["agent:main"], "agent:main room:ro": ["agent:main"], "agent:main room:room": ["agent:main", "room:room"], "agent:main room:room matching": ["agent:main", "room:room"], "tag:customer": ["tag:customer"] };
-  const cronOpens: string[] = [];
+  const routineOpens: string[] = [];
   const wireTail = Promise.withResolvers<void>();
   const ownerTail = Promise.withResolvers<void>();
   let blocked = Promise.withResolvers<void>();
@@ -162,7 +162,7 @@ export async function appScenario(part: "lists" | "composer") {
         case "/api/Handoff": return Response.json({ document: "Handoff document" });
         case "/api/CreateSession":
           if (input.sourceConversationId) {
-            cronOpens.push(input.sourceConversationId);
+            routineOpens.push(input.sourceConversationId);
             ctrl.currentAgents.set("web:cron:silent-source", "other");
             return Response.json({ id: "web:cron:silent-source" });
           }
@@ -199,11 +199,11 @@ export async function appScenario(part: "lists" | "composer") {
           if (ctrl.holdPrompt) { const privateText = await promptHold.promise; ctrl.prompting.delete(input.id); return Response.json({ privateText }); }
           ctrl.prompting.delete(input.id);
           return Response.json({ privateText: "" });
-        case "/api/ListCronJobs":
-          if (cronFailures === 0) return Response.json({ jobs });
-          cronFailures--;
+        case "/api/ListRoutines":
+          if (routineFailures === 0) return Response.json({ jobs });
+          routineFailures--;
           return Response.json({ message: "cron list down", code: 14 }, { status: 503 });
-        case "/api/RunCronJob": cronRunCalls++; return Response.json({ id: await cronHold.promise });
+        case "/api/RunRoutine": routineRunCalls++; return Response.json({ id: await routineHold.promise });
         case "/api/SearchSessions":
           searchQueries.push(input.query);
           if (input.query === "is:forked fixture 0") await manySearchHold.promise;
@@ -215,11 +215,11 @@ export async function appScenario(part: "lists" | "composer") {
         case "/api/History":
           historyRequests.push(input);
           if (input.id === "cron:silent-source" || input.id === "web:cron:silent-source") {
-            cronHistory.push(input.id);
+            routineHistory.push(input.id);
             return historyResponse(input.id, [{ role: "assistant", text: "Silent run trace", complete: true, turnId: "", entryKey: "silent", itemId: "silent:0", inputId: "" }], "", input.revision);
           }
           if (input.id === "cron-source") {
-            cronHistory.push(input.id);
+            routineHistory.push(input.id);
             return historyResponse(input.id, [{ role: "assistant", text: "Daily run report", complete: true, turnId: "", entryKey: "daily", itemId: "daily:0", inputId: "" }], "", input.revision);
           }
           return historyResponse(input.id, ctrl.history, "", input.revision);
@@ -484,11 +484,11 @@ export async function appScenario(part: "lists" | "composer") {
       await sessionPalette.getByRole("button", { name: "Routines: Run", exact: true }).waitFor({ state: "detached" });
       await search.fill("routines: run");
       await search.press("Enter");
-      const cronPicker = page.getByRole("dialog", { name: "Run routine", exact: true }).getByPlaceholder("Search routines", { exact: true });
-      await cronPicker.waitFor();
-      expect(await cronPicker.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
+      const routinePicker = page.getByRole("dialog", { name: "Run routine", exact: true }).getByPlaceholder("Search routines", { exact: true });
+      await routinePicker.waitFor();
+      expect(await routinePicker.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
       await page.keyboard.press("Escape");
-      await cronPicker.waitFor({ state: "hidden" });
+      await routinePicker.waitFor({ state: "hidden" });
       await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
       await page.setViewportSize({ width: 390, height: 844 });
@@ -1465,132 +1465,132 @@ export async function appScenario(part: "lists" | "composer") {
         expect(ctrl.createdAgents.length).toBe(creations);
       }
       await navPage.close();
-      const cronPage = await context.newPage();
+      const routinePage = await context.newPage();
       for (const width of [1280, 390]) {
-        await cronPage.setViewportSize({ width, height: 844 });
-        await cronPage.goto(`${origin}/routines`);
+        await routinePage.setViewportSize({ width, height: 844 });
+        await routinePage.goto(`${origin}/routines`);
         // Each cron's line names it, linked to its journal, which lists its runs; only a cron with a definition can run.
-        const daily = cronPage.getByRole("link", { name: "daily", exact: true });
+        const daily = routinePage.getByRole("link", { name: "daily", exact: true });
         await daily.waitFor();
-        const search = cronPage.getByRole("textbox", { name: "Search", exact: true });
+        const search = routinePage.getByRole("textbox", { name: "Search", exact: true });
         const searchBounds = await search.boundingBox();
-        const gridBounds = await cronPage.getByRole("button", { name: "Preview latest run of daily", exact: true }).boundingBox();
+        const gridBounds = await routinePage.getByRole("button", { name: "Preview latest run of daily", exact: true }).boundingBox();
         expect(searchBounds.y + searchBounds.height).toBeLessThan(gridBounds.y);
         for (const text of ["DAILY", "prompt", "24h", "planner", "cron/daily.md"]) {
           await search.fill(text);
-          await cronPage.getByRole("link", { name: "retired", exact: true }).waitFor({ state: "hidden" });
+          await routinePage.getByRole("link", { name: "retired", exact: true }).waitFor({ state: "hidden" });
           expect(await daily.isVisible()).toBe(true);
-          expect(await cronPage.getByRole("button", { name: /^Preview latest run of / }).count()).toBe(1);
+          expect(await routinePage.getByRole("button", { name: /^Preview latest run of / }).count()).toBe(1);
         }
         await search.fill("Sep 1, 2026");
         await daily.waitFor({ state: "hidden" });
-        expect(await cronPage.getByRole("link", { name: "retired", exact: true }).isVisible()).toBe(true);
+        expect(await routinePage.getByRole("link", { name: "retired", exact: true }).isVisible()).toBe(true);
         await search.fill("silent");
-        await cronPage.getByRole("link", { name: "silent", exact: true }).waitFor();
+        await routinePage.getByRole("link", { name: "silent", exact: true }).waitFor();
         await search.fill("no-such-cron");
-        await cronPage.getByRole("link", { name: "silent", exact: true }).waitFor({ state: "hidden" });
-        expect(await cronPage.getByRole("button", { name: /^Preview latest run of / }).count()).toBe(0);
+        await routinePage.getByRole("link", { name: "silent", exact: true }).waitFor({ state: "hidden" });
+        expect(await routinePage.getByRole("button", { name: /^Preview latest run of / }).count()).toBe(0);
         await search.fill("");
         await daily.waitFor();
         expect(await daily.getAttribute("href")).toBe(`/routines/${btoa("daily").replaceAll("=", "")}`);
-        expect(await cronPage.getByRole("button", { name: /^Run / }).evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Run daily", "Run unused"]);
-        expect(await cronPage.getByText(/Open chat/).count()).toBe(0);
-        expect(await cronPage.locator('[aria-label^="Expected daily at "]').count()).toBe(2);
-        const expected = cronPage.getByRole("button", { name: /^Expected daily at / }).first();
+        expect(await routinePage.getByRole("button", { name: /^Run / }).evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Run daily", "Run unused"]);
+        expect(await routinePage.getByText(/Open chat/).count()).toBe(0);
+        expect(await routinePage.locator('[aria-label^="Expected daily at "]').count()).toBe(2);
+        const expected = routinePage.getByRole("button", { name: /^Expected daily at / }).first();
         await expected.hover();
-        await cronPage.getByRole("tooltip").waitFor();
-        expect(await cronPage.getByRole("tooltip").textContent()).toMatch(/^Expected daily at .* UTC$/);
+        await routinePage.getByRole("tooltip").waitFor();
+        expect(await routinePage.getByRole("tooltip").textContent()).toMatch(/^Expected daily at .* UTC$/);
         await expected.press("Escape");
-        expect(await cronPage.getByRole("tooltip").count()).toBe(0);
+        expect(await routinePage.getByRole("tooltip").count()).toBe(0);
         await expected.blur();
         await expected.focus();
-        expect(await cronPage.getByRole("tooltip").isVisible()).toBe(true);
+        expect(await routinePage.getByRole("tooltip").isVisible()).toBe(true);
         await expected.press("Escape");
         await expected.tap();
-        expect(await cronPage.getByRole("tooltip").isVisible()).toBe(true);
-        const bounds = await cronPage.getByRole("tooltip").boundingBox();
+        expect(await routinePage.getByRole("tooltip").isVisible()).toBe(true);
+        const bounds = await routinePage.getByRole("tooltip").boundingBox();
         expect(bounds.x).toBeGreaterThanOrEqual(0);
         expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
         await expected.press("Escape");
-        await cronPage.getByRole("button", { name: /^Expected daily at / }).last().hover();
+        await routinePage.getByRole("button", { name: /^Expected daily at / }).last().hover();
         // The page scroller clips overflow, so the tooltip's far edge must be painted, not just laid out.
-        expect(await cronPage.getByRole("tooltip").evaluate((node: HTMLElement) => { const box = node.getBoundingClientRect(); return node.contains(document.elementFromPoint(box.right - 1, box.top + box.height / 2)); })).toBe(true);
-        const silent = cronPage.getByRole("button", { name: /^Preview silent at / });
+        expect(await routinePage.getByRole("tooltip").evaluate((node: HTMLElement) => { const box = node.getBoundingClientRect(); return node.contains(document.elementFromPoint(box.right - 1, box.top + box.height / 2)); })).toBe(true);
+        const silent = routinePage.getByRole("button", { name: /^Preview silent at / });
         await silent.tap();
-        const silentPreview = cronPage.getByRole("region", { name: "Run preview", exact: true });
+        const silentPreview = routinePage.getByRole("region", { name: "Run preview", exact: true });
         await silentPreview.getByText("Silent run trace", { exact: true }).waitFor();
-        expect(cronHistory.includes("cron:silent-source")).toBe(true);
-        const opensBefore = cronOpens.length;
+        expect(routineHistory.includes("cron:silent-source")).toBe(true);
+        const opensBefore = routineOpens.length;
         await silentPreview.getByRole("button", { name: /Open chat/ }).click();
-        await cronPage.waitForURL(`**/s/${btoa("web:cron:silent-source").replaceAll("=", "")}`);
-        await cronPage.locator("#transcript-scroll").getByText("Silent run trace", { exact: true }).waitFor();
-        expect(cronOpens.slice(opensBefore)).toEqual(["cron:silent-source"]);
-        await cronPage.getByPlaceholder("Message or /command").fill("Continue this run");
-        await cronPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
-        await cronPage.getByRole("button", { name: "Choose agent", exact: true }).click();
-        await cronPage.getByRole("menuitemradio").first().waitFor();
-        expect(await cronPage.getByRole("menuitemradio").count()).toBe(1);
-        await cronPage.keyboard.press("Escape");
+        await routinePage.waitForURL(`**/s/${btoa("web:cron:silent-source").replaceAll("=", "")}`);
+        await routinePage.locator("#transcript-scroll").getByText("Silent run trace", { exact: true }).waitFor();
+        expect(routineOpens.slice(opensBefore)).toEqual(["cron:silent-source"]);
+        await routinePage.getByPlaceholder("Message or /command").fill("Continue this run");
+        await routinePage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
+        await routinePage.getByRole("button", { name: "Choose agent", exact: true }).click();
+        await routinePage.getByRole("menuitemradio").first().waitFor();
+        expect(await routinePage.getByRole("menuitemradio").count()).toBe(1);
+        await routinePage.keyboard.press("Escape");
         ctrl.promptStarted = Promise.withResolvers<void>();
-        await cronPage.getByRole("button", { name: "Send", exact: true }).click();
+        await routinePage.getByRole("button", { name: "Send", exact: true }).click();
         await ctrl.promptStarted.promise;
         expect(ctrl.prompt).toContain("web:cron:silent-source:Continue this run");
-        await cronPage.goto(`${origin}/routines`);
+        await routinePage.goto(`${origin}/routines`);
         await silent.tap();
         await silentPreview.getByRole("button", { name: /Open chat/ }).click();
-        await cronPage.waitForURL(`**/s/${btoa("web:cron:silent-source").replaceAll("=", "")}`);
-        await cronPage.locator("#transcript-scroll").getByText("Silent run trace", { exact: true }).waitFor();
-        expect(cronOpens.slice(opensBefore)).toEqual(["cron:silent-source", "cron:silent-source"]);
-        expect(cronRunCalls).toBe(0);
-        await cronPage.goto(`${origin}/routines`);
-        expect(await cronPage.getByRole("button", { name: "Preview latest run of retired", exact: true }).isEnabled()).toBe(true);
-        expect(await cronPage.getByRole("button", { name: "Preview latest run of unused", exact: true }).isDisabled()).toBe(true);
-        await cronPage.getByRole("button", { name: "Preview latest run of daily", exact: true }).click({ position: { x: 5, y: 5 } });
-        const preview = cronPage.getByRole("region", { name: "Run preview", exact: true });
+        await routinePage.waitForURL(`**/s/${btoa("web:cron:silent-source").replaceAll("=", "")}`);
+        await routinePage.locator("#transcript-scroll").getByText("Silent run trace", { exact: true }).waitFor();
+        expect(routineOpens.slice(opensBefore)).toEqual(["cron:silent-source", "cron:silent-source"]);
+        expect(routineRunCalls).toBe(0);
+        await routinePage.goto(`${origin}/routines`);
+        expect(await routinePage.getByRole("button", { name: "Preview latest run of retired", exact: true }).isEnabled()).toBe(true);
+        expect(await routinePage.getByRole("button", { name: "Preview latest run of unused", exact: true }).isDisabled()).toBe(true);
+        await routinePage.getByRole("button", { name: "Preview latest run of daily", exact: true }).click({ position: { x: 5, y: 5 } });
+        const preview = routinePage.getByRole("region", { name: "Run preview", exact: true });
         await preview.getByText("Daily run report", { exact: true }).waitFor();
-        expect(cronHistory.at(-1)).toBe("cron-source");
+        expect(routineHistory.at(-1)).toBe("cron-source");
         await preview.getByRole("link").click();
-        await cronPage.waitForURL("**/s/Y3Jvbi1jaGF0");
+        await routinePage.waitForURL("**/s/Y3Jvbi1jaGF0");
       }
-      await cronPage.goto(`${origin}/routines`);
-      const runButton = cronPage.getByRole("button", { name: "Run daily", exact: true });
+      await routinePage.goto(`${origin}/routines`);
+      const runButton = routinePage.getByRole("button", { name: "Run daily", exact: true });
       await runButton.click();
-      const confirmation = cronPage.getByRole("dialog", { name: "Run daily?", exact: true });
+      const confirmation = routinePage.getByRole("dialog", { name: "Run daily?", exact: true });
       await confirmation.waitFor();
       await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
-      expect(cronRunCalls).toBe(0);
+      expect(routineRunCalls).toBe(0);
       await runButton.click();
       await confirmation.getByRole("button", { name: "Run", exact: true }).click();
-      await cronPage.getByRole("button", { name: "Running daily", exact: true }).waitFor();
-      expect(await cronPage.getByRole("button", { name: "Running daily", exact: true }).isDisabled()).toBe(true);
-      cronHold.resolve("new-cron-chat");
-      await cronPage.waitForURL("**/s/bmV3LWNyb24tY2hhdA");
+      await routinePage.getByRole("button", { name: "Running daily", exact: true }).waitFor();
+      expect(await routinePage.getByRole("button", { name: "Running daily", exact: true }).isDisabled()).toBe(true);
+      routineHold.resolve("new-cron-chat");
+      await routinePage.waitForURL("**/s/bmV3LWNyb24tY2hhdA");
       // The page is still 390px wide, where the tabs sit in the drawer.
-      await cronPage.getByRole("button", { name: "Show sidebar", exact: true }).click();
-      await cronPage.getByRole("tab", { name: "daily", exact: true }).waitFor();
-      await cronPage.close();
+      await routinePage.getByRole("button", { name: "Show sidebar", exact: true }).click();
+      await routinePage.getByRole("tab", { name: "daily", exact: true }).waitFor();
+      await routinePage.close();
 
       // Routines: Timeline shows one routine's rows from the Routines page as a journal: 131 retired runs, 3 hours apart, from Aug 15 18:00 to Sep 1 00:00 UTC.
       jobs.push(...Array.from({ length: 130 }, (_, i) => ({ stem: "retired", status: "ran", lastRun: new Date(Date.parse("2026-09-01T00:00:00Z") - (i + 1) * 3 * 3_600_000).toISOString(), nextRun: "", origin: `old-source-${i}` })));
       const timelinePage = await context.newPage();
       const runRows = timelinePage.getByRole("region", { name: "Runs", exact: true }).locator("button[aria-pressed]");
       // The first load fails; the page keeps loading, shows no error, and retries until it loads.
-      cronFailures = 1;
+      routineFailures = 1;
       await timelinePage.goto(`${origin}/routines/${btoa("retired").replaceAll("=", "")}`);
       await timelinePage.getByRole("status").filter({ hasText: "Loading…" }).waitFor();
       await runRows.first().waitFor();
-      expect(cronFailures).toBe(0);
+      expect(routineFailures).toBe(0);
       expect(await timelinePage.getByText("cron list down").count()).toBe(0);
       await timelinePage.goto(`${origin}/`);
       await timelinePage.getByPlaceholder("Message a new session").waitFor();
       await timelinePage.keyboard.press("Control+Shift+p");
       await timelinePage.getByRole("dialog", { name: "Run command", exact: true }).getByPlaceholder("Type a command", { exact: true }).fill("routines: timeline");
       await timelinePage.getByRole("button", { name: "Routines: Timeline", exact: true }).click();
-      const cronTimelinePicker = timelinePage.getByRole("dialog", { name: "Routine timeline", exact: true });
-      await cronTimelinePicker.getByRole("button").first().waitFor();
-      expect(await cronTimelinePicker.getByRole("button").allTextContents()).toEqual([expect.stringMatching(/^daily1 runs · last .* UTC$/), "unused0 runs", "retired131 runs · last Sep 1, 2026, 12:00 AM UTC", expect.stringMatching(/^silent1 runs · last .* UTC$/)]);
-      await cronTimelinePicker.getByPlaceholder("Search routines", { exact: true }).fill("ret");
-      await cronTimelinePicker.getByPlaceholder("Search routines", { exact: true }).press("Enter");
+      const routineTimelinePicker = timelinePage.getByRole("dialog", { name: "Routine timeline", exact: true });
+      await routineTimelinePicker.getByRole("button").first().waitFor();
+      expect(await routineTimelinePicker.getByRole("button").allTextContents()).toEqual([expect.stringMatching(/^daily1 runs · last .* UTC$/), "unused0 runs", "retired131 runs · last Sep 1, 2026, 12:00 AM UTC", expect.stringMatching(/^silent1 runs · last .* UTC$/)]);
+      await routineTimelinePicker.getByPlaceholder("Search routines", { exact: true }).fill("ret");
+      await routineTimelinePicker.getByPlaceholder("Search routines", { exact: true }).press("Enter");
       await timelinePage.waitForURL(`${origin}/routines/${btoa("retired").replaceAll("=", "")}`);
       for (const width of [1280, 390]) {
         await timelinePage.setViewportSize({ width, height: 844 });
@@ -1627,7 +1627,7 @@ export async function appScenario(part: "lists" | "composer") {
       await timelinePage.getByRole("button", { name: "Run daily", exact: true }).click();
       await timelinePage.getByRole("dialog", { name: "Run daily?", exact: true }).getByRole("button", { name: "Run", exact: true }).click();
       await timelinePage.waitForURL("**/s/bmV3LWNyb24tY2hhdA");
-      expect(cronRunCalls).toBe(2);
+      expect(routineRunCalls).toBe(2);
       await timelinePage.goto(`${origin}/routines/${btoa("nope")}`);
       await timelinePage.getByText("No routine named nope in this space.", { exact: true }).waitFor();
       await timelinePage.close();

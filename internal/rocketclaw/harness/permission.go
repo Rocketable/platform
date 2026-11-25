@@ -53,7 +53,6 @@ type PermissionBucket struct {
 type PermissionSet struct {
 	Buckets   []PermissionBucket
 	Sudo      bool
-	Easy      bool
 	skillRead map[string]skillReadAccess
 }
 
@@ -318,7 +317,7 @@ func (ps PermissionSet) Evaluate(permission, subject string) (action PermissionA
 
 func (ps PermissionSet) Enabled(permission, subject string) bool {
 	action := ps.evaluate(permission, subject).Action
-	return action == permissionAllow || (ps.Sudo || ps.Easy) && action == permissionAuto
+	return action == permissionAllow || ps.Sudo && action == permissionAuto
 }
 
 func (ps PermissionSet) evaluate(permission, subject string, scripts ...string) permissionDecision {

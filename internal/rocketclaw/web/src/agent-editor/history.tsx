@@ -38,8 +38,7 @@ export function ModeBanner({ coedit, help, restore }: { coedit: CoEdit; help: He
   const [dismissed, setDismissed] = useState<string>();
   const change = coedit.modeChange, mode = change?.op.value as keyof Help | undefined;
   if (!change || !mode || dismissed === change.op.revision) return null;
-  const allowed = (key: string, of: keyof Help) => help[of].some((setting) => setting.key === key);
-  const dropped = [...new Set(change.before.variants.flatMap((variant) => variant.settings.map(({ key }) => key)))].filter((key) => !allowed(key, mode) && (mode === "easy" || allowed(key, "easy")));
+  const dropped = [...new Set(change.before.variants.flatMap((variant) => variant.settings.map(({ key }) => key)))].filter((key) => !help[mode].some((setting) => setting.key === key));
   const needed = help[mode].filter((setting) => setting.required && !coedit.view!.variants[0].settings.some(({ key }) => key === setting.key));
   return <div role="status" className="flex items-start gap-2 border-b bg-muted/40 px-4 py-2 text-xs">
     <p className="flex-1">{change.op.author?.split("@")[0]} switched the whole draft to <b>{mode}</b>. {dropped.length ? `Dropped: ${dropped.map((key) => settingLabel(help, key)).join(", ")}.` : "Nothing was dropped."}

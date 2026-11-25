@@ -167,7 +167,7 @@ func TestLoadAgents(t *testing.T) {
 		require.NoError(t, root.WriteFile("main/notes.txt", []byte("ignored"), 0o600))
 		require.NoError(t, root.WriteFile("main/broken.md", []byte("missing frontmatter"), 0o600))
 
-		result := LoadAgents(root.FS(), &AgentLoadConfig{})
+		result := LoadAgents(root.FS(), &AgentLoadConfig{Providers: []string{"main"}})
 		require.Len(t, result.Agents.Items, 4)
 		require.Equal(t, []string{"main", "ordinary"}, result.Agents.PrimaryNames())
 		require.Equal(t, []string{"main/a", "main/z"}, result.Agents.ShadowNames("main"))
@@ -211,8 +211,6 @@ verbosity: low
 maxRecursion: 2
 permission:
   edit: deny
-temperature: 0.1
-hidden: true
 ---
 
 You are in review mode.
@@ -250,11 +248,9 @@ ignored
 		require.Equal(t, "review.md", review.Location)
 		require.Equal(t, fs.FileMode(0o640), review.FileMode.Perm())
 		require.Equal(t, PermissionSet{Buckets: []PermissionBucket{{Name: "edit", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}}, review.Permission)
-		require.InDelta(t, 0.1, review.Frontmatter["temperature"], 0.0001)
-		require.Equal(t, true, review.Frontmatter["hidden"])
 
 		plan := result.Agents.Items["plan"]
-		require.Nil(t, plan.MaxRecursion)
+		require.Equal(t, new(1), plan.MaxRecursion, "maxRecursion defaults to 1")
 		require.Equal(t, "Plan, do not edit.", plan.Prompt)
 		require.NotContains(t, result.Agents.Items, "child")
 	})
@@ -289,7 +285,7 @@ ignored
 			{"model: work/gpt-6.1-sol", "work/gpt-6.1-sol", ""},
 		} {
 			t.Run(tt.frontmatter, func(t *testing.T) {
-				result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\n" + tt.frontmatter + "\n---\nPrompt\n")}, &AgentLoadConfig{})
+				result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\n" + tt.frontmatter + "\n---\nPrompt\n")}, &AgentLoadConfig{Providers: []string{"work"}})
 
 				require.Empty(t, result.Errors)
 				require.Equal(t, tt.model, result.Agents.Items["main"].Model)
@@ -359,13 +355,11 @@ Prompt
 
 	t.Run("loads max recursion values", func(t *testing.T) {
 		result := LoadAgents(fstest.MapFS{
-			"unlimited.md": testMapFile("---\ndescription: Unlimited\nmodel: gpt-5.4\nmaxRecursion: -1\n---\nPrompt\n"),
-			"zero.md":      testMapFile("---\ndescription: Zero\nmodel: gpt-5.4\nmaxRecursion: 0\n---\nPrompt\n"),
-			"positive.md":  testMapFile("---\ndescription: Positive\nmodel: gpt-5.4\nmaxRecursion: 3\n---\nPrompt\n"),
+			"zero.md":     testMapFile("---\ndescription: Zero\nmodel: gpt-5.4\nmaxRecursion: 0\n---\nPrompt\n"),
+			"positive.md": testMapFile("---\ndescription: Positive\nmodel: gpt-5.4\nmaxRecursion: 3\n---\nPrompt\n"),
 		}, &AgentLoadConfig{})
 
 		require.Empty(t, result.Errors)
-		require.Nil(t, result.Agents.Items["unlimited"].MaxRecursion)
 		require.NotNil(t, result.Agents.Items["zero"].MaxRecursion)
 		require.Equal(t, 0, *result.Agents.Items["zero"].MaxRecursion)
 		require.NotNil(t, result.Agents.Items["positive"].MaxRecursion)
@@ -379,13 +373,13 @@ Prompt
 			value string
 			want  string
 		}{
-			{name: "max recursion below unlimited", field: "maxRecursion", value: "-2", want: "main.md: parse maxRecursion:"},
-			{name: "max recursion float", field: "maxRecursion", value: "1.0", want: "main.md: parse maxRecursion:"},
-			{name: "max recursion string", field: "maxRecursion", value: "\"1\"", want: "main.md: parse maxRecursion:"},
-			{name: "max recursion bool", field: "maxRecursion", value: "true", want: "main.md: parse maxRecursion:"},
-			{name: "max recursion null", field: "maxRecursion", value: "null", want: "main.md: parse maxRecursion:"},
-			{name: "max recursion sequence", field: "maxRecursion", value: "[]", want: "main.md: parse maxRecursion:"},
-			{name: "max recursion map", field: "maxRecursion", value: "{}", want: "main.md: parse maxRecursion:"},
+			{name: "max recursion negative", field: "maxRecursion", value: "-1", want: "main.md: maxRecursion: must be an integer of 0 or more"},
+			{name: "max recursion float", field: "maxRecursion", value: "1.0", want: "main.md: maxRecursion: must be an integer of 0 or more"},
+			{name: "max recursion string", field: "maxRecursion", value: "\"1\"", want: "main.md: maxRecursion: must be an integer of 0 or more"},
+			{name: "max recursion bool", field: "maxRecursion", value: "true", want: "main.md: maxRecursion: must be an integer of 0 or more"},
+			{name: "max recursion null", field: "maxRecursion", value: "null", want: "main.md: maxRecursion: must be an integer of 0 or more"},
+			{name: "max recursion sequence", field: "maxRecursion", value: "[]", want: "main.md: maxRecursion: must be an integer of 0 or more"},
+			{name: "max recursion map", field: "maxRecursion", value: "{}", want: "main.md: maxRecursion: must be an integer of 0 or more"},
 			{name: "shell relative path", field: "shell", value: "sandbox/enter", want: "main.md: shell: must be an absolute path or emulated"},
 			{name: "shell bare name", field: "shell", value: "enter", want: "main.md: shell: must be an absolute path or emulated"},
 			{name: "shell empty", field: "shell", value: "\"\"", want: "main.md: shell: must be an absolute path or emulated"},
@@ -491,7 +485,7 @@ Strictly follow the rules.
 `),
 		}
 
-		result := LoadAgents(fsys, &AgentLoadConfig{})
+		result := LoadAgents(fsys, &AgentLoadConfig{Providers: []string{"openai"}})
 
 		require.Empty(t, result.Errors)
 		require.Equal(t, "Review code: security and performance", result.Agents.Items["review"].Description)

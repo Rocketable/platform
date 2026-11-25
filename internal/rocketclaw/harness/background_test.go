@@ -22,7 +22,7 @@ import (
 
 const (
 	todayExecuteParameters = `{"additionalProperties":false,"properties":{"code":{"description":"Starlark source defining def main().","type":"string"},"description":{"description":"A short 3-5 word label for the script, displayed to the user.","type":"string"}},"required":["code","description"],"type":"object"}`
-	todayTaskParameters    = `{"additionalProperties":false,"properties":{"description":{"type":"string"},"prompt":{"type":"string"},"subagent_type":{"type":"string"}},"required":["description","prompt","subagent_type"],"type":"object"}`
+	todayTaskParameters    = `{"additionalProperties":false,"properties":{"agent":{"enum":["child"],"type":"string"},"description":{"type":"string"},"prompt":{"type":"string"}},"required":["agent","description","prompt"],"type":"object"}`
 	backgroundPermissions  = `{rocketclaw: {allow_background: allow}, task: allow, read: allow, probe: auto}`
 )
 
@@ -66,7 +66,7 @@ func TestBackgroundSchemasFollowPermission(t *testing.T) {
 			require.NoError(t, json.Unmarshal(marshalParameters(t, model[executeToolName].Definition.Parameters), &execute))
 			require.NoError(t, json.Unmarshal(marshalParameters(t, model["task"].Definition.Parameters), &task))
 			require.Equal(t, []string{"background", "code", "description"}, execute.Required)
-			require.Equal(t, []string{"background", "continue", "description", "prompt", "subagent_type"}, task.Required)
+			require.Equal(t, []string{"agent", "background", "continue", "description", "prompt"}, task.Required)
 			require.Equal(t, "boolean", execute.Properties["background"].Type)
 			require.Equal(t, backgroundExecuteParam, execute.Properties["background"].Description)
 			require.Contains(t, execute.Properties["background"].Description, "result_id lasts 7 days")
@@ -102,7 +102,7 @@ func TestSudoAgentSeesEveryTool(t *testing.T) {
 
 func TestBackgroundRequestsRejectedWhenNotOffered(t *testing.T) {
 	executeArgs := `{"code":"def main():\n    return probe()\n","description":"","background":true}`
-	taskArgs := `{"subagent_type":"missing","prompt":"look","description":"Review","background":true,"continue":""}`
+	taskArgs := `{"agent":"missing","prompt":"look","description":"Review","background":true,"continue":""}`
 
 	for _, tc := range []struct {
 		name, permissions, tool, args string
@@ -154,7 +154,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 		},
 		{
 			name: "moved task", tool: "task",
-			args: `{"subagent_type":"child","prompt":"look","description":"Review","background":false,"continue":{"session_id":"","mode":"enqueue"}}`,
+			args: `{"agent":"child","prompt":"look","description":"Review","background":false,"continue":{"session_id":"","mode":"enqueue"}}`,
 			job:  BackgroundJob{ID: "turn/call/call-1", Kind: BackgroundKindTask, Label: "Review", Agent: "main", SubagentKey: taskKey("turn", "call-1"), CallID: "call-1"},
 		},
 	} {
@@ -273,7 +273,7 @@ func TestBackgroundForegroundCallKeepsTurnCancellation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				var (
-					errSeen     error
+					errSeen  error
 					finished bool
 				)
 
@@ -386,7 +386,7 @@ func TestTaskContinueSteerJoinsRunningTurn(t *testing.T) {
 func TestTaskContinueNeedsTaskPermission(t *testing.T) {
 	jobs := enabledBackgroundJobs()
 	loop := backgroundTestLooper(t, `{rocketclaw: {allow_background: allow}, task: {reviewer: allow}}`, jobs, nil)
-	args := `{"subagent_type":"child","prompt":"more","description":"Review","background":false,"continue":{"session_id":"/call-1","mode":"steer"}}`
+	args := `{"agent":"child","prompt":"more","description":"Review","background":false,"continue":{"session_id":"/call-1","mode":"steer"}}`
 
 	outputs, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-3", "task", args)}), nil, nil, make(chan ChatResponse, 20))
 	require.NoError(t, err)
@@ -505,7 +505,7 @@ func TestSteerSwitchedSubagentRowNamesFinalType(t *testing.T) {
 	}
 
 	parent := testLooper(mockResponses())
-	got, err := factory.runTask(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call-1"}), testTaskParams("Review", "check it", "child"), toolCallMetadata{callID: "call-1", observations: parent.observations, progress: &PublicProgress{ID: "call-1"}})
+	got, err := factory.runTask(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call-1"}), testTaskParams("Review", "check it", "child"), false, toolCallMetadata{callID: "call-1", observations: parent.observations, progress: &PublicProgress{ID: "call-1"}})
 	require.NoError(t, err)
 	require.Equal(t, "<task_result>\nchecked\n</task_result>", got)
 
@@ -631,7 +631,7 @@ func continueTestTask(t *testing.T, mock *mockResponsesAPI, jobs BackgroundJobs,
 	return func(callID, subagentType, prompt, continueID string) (string, []PublicProgress, error) {
 		parent := testLooper(mockResponses())
 		parent.observations.turnID = "turn-" + callID
-		args := fmt.Sprintf(`{"subagent_type":%q,"prompt":%q,"description":"Review","background":false,"continue":{"session_id":%q,"mode":"enqueue"}}`, subagentType, prompt, continueID)
+		args := fmt.Sprintf(`{"agent":%q,"prompt":%q,"description":"Review","background":false,"continue":{"session_id":%q,"mode":"enqueue"}}`, subagentType, prompt, continueID)
 		result, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: callID}), json.RawMessage(args), nil, toolCallMetadata{callID: callID, observations: parent.observations, progress: &PublicProgress{ID: callID}})
 
 		return result.Output, PublicProgressFromTrace(parent.observations.trace), err
@@ -766,7 +766,7 @@ func backgroundTestLooper(t *testing.T, permissions string, jobs BackgroundJobs,
 		return probe(ctx)
 	}
 
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child")}})
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child"), "reviewer": testAgent("reviewer")}})
 	factory.baseTools = map[string]looperTool{"probe": probeTool}
 	factory.backgroundJobs = jobs
 	factory.retainedRel = "retained"

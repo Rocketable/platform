@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/google/jsonschema-go/jsonschema"
 	"gopkg.in/yaml.v3"
 )
@@ -31,28 +32,26 @@ type Agent struct {
 	Location        string
 	Permission      PermissionSet
 	OutputSchema    map[string]any
-	Frontmatter     map[string]any
 	FrontmatterNode *yaml.Node
 	FileMode        fs.FileMode
-	Mode            AgentMode
 	Sticky          AgentSticky
+	ReplyHint       string
 
 	WorkingDirectory string
 	Commands         map[string]string
 	SecretsARN       []string
-	Subagents        []string
+	CloneModels      []string
 	ApproverModel    string
 	ApproverPrompt   string
 	Approver         *Agent
 	Routines         []AgentRoutine
 	TagGroups        [][]string
-	DelegatedFrom    []string
 	NetworkTargets   []string
 	Tools            []string
 }
 
 type AgentRoutine struct {
-	Schedule    string
+	Schedule    config.RoutineSchedule
 	Instruction string
 }
 
@@ -102,16 +101,16 @@ type AgentLoadResult struct {
 	Errors []error
 }
 
-type AgentMaxRecursionError struct {
-	Location string
-	Err      error
+type AgentLoadError struct {
+	Path string
+	Err  error
 }
 
-func (e *AgentMaxRecursionError) Error() string {
-	return fmt.Sprintf("%s: parse maxRecursion: %v", e.Location, e.Err)
+func (e *AgentLoadError) Error() string {
+	return e.Path + ": " + e.Err.Error()
 }
 
-func (e *AgentMaxRecursionError) Unwrap() error {
+func (e *AgentLoadError) Unwrap() error {
 	return e.Err
 }
 
@@ -166,7 +165,7 @@ func LoadAgents(fsys fs.FS, cfg *AgentLoadConfig) AgentLoadResult {
 	for _, filePath := range files {
 		agent, err := loadAgent(fsys, filePath, cfg)
 		if err != nil {
-			result.Errors = append(result.Errors, err)
+			result.Errors = append(result.Errors, &AgentLoadError{Path: filePath, Err: err})
 			continue
 		}
 
@@ -189,49 +188,53 @@ func ParseModelRef(ref string) (model, effort string) {
 func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error) {
 	data, err := fs.ReadFile(fsys, filePath)
 	if err != nil {
-		return Agent{}, fmt.Errorf("%s: read agent: %w", filePath, err)
+		return Agent{}, fmt.Errorf("read agent: %w", err)
 	}
 
 	info, err := fs.Stat(fsys, filePath)
 	if err != nil {
-		return Agent{}, fmt.Errorf("%s: stat agent: %w", filePath, err)
+		return Agent{}, fmt.Errorf("stat agent: %w", err)
 	}
 
 	frontmatter, frontmatterNode, prompt, err := parseAgentFrontmatter(data)
 	if err != nil {
-		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
+		return Agent{}, err
 	}
 
 	mode := AgentMode(frontmatterValue(frontmatterNode, "mode", string(AgentModeAdvanced)))
 	if !mode.Valid() {
-		return Agent{}, fmt.Errorf("%s: mode: must be easy or advanced", filePath)
+		return Agent{}, errors.New("mode: must be easy or advanced")
+	}
+
+	if err := checkKeys(frontmatterNode, mode, ""); err != nil {
+		return Agent{}, err
 	}
 
 	sticky, ok := map[string]AgentSticky{"off": AgentStickyOff, "user": AgentStickyUser, "global": AgentStickyGlobal, "slack": AgentStickySlack}[frontmatterValue(frontmatterNode, "sticky", "off")]
 	if !ok {
-		return Agent{}, fmt.Errorf("%s: sticky: must be off, user, global or slack", filePath)
+		return Agent{}, errors.New("sticky: must be off, user, global or slack")
 	}
 
 	name := strings.TrimSuffix(filePath, filepath.Ext(filePath))
 	if name == "" {
-		return Agent{}, fmt.Errorf("%s: empty agent name", filePath)
+		return Agent{}, errors.New("empty agent name")
 	}
 
 	modelField := frontmatterField(frontmatterNode, "model")
 	if modelField == nil || modelField.Kind != yaml.ScalarNode || modelField.ShortTag() != "!!str" {
-		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
+		return Agent{}, errors.New("model: required non-empty string")
 	}
 
 	model, modelEffort := ParseModelRef(modelField.Value)
 	if model == "" {
-		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
+		return Agent{}, errors.New("model: required non-empty string")
 	}
 
 	var space string
 
 	if field := frontmatterField(frontmatterNode, "space"); field != nil {
 		if field.Kind != yaml.ScalarNode || field.ShortTag() != "!!str" {
-			return Agent{}, fmt.Errorf("%s: space: must be a string", filePath)
+			return Agent{}, errors.New("space: must be a string")
 		}
 
 		space = field.Value
@@ -239,71 +242,116 @@ func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error)
 
 	outputSchema, err := parseAgentOutputSchema(frontmatterField(frontmatterNode, "schema"))
 	if err != nil {
-		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
+		return Agent{}, err
 	}
 
 	routines, err := parseAgentRoutines(frontmatterField(frontmatterNode, "routines"), sticky)
 	if err != nil {
-		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
+		return Agent{}, err
 	}
 
-	agent := Agent{Name: name, Model: model, ReasoningEffort: modelEffort, Space: space, Prompt: strings.TrimSpace(prompt), Location: filePath, OutputSchema: outputSchema, Frontmatter: frontmatter, FrontmatterNode: frontmatterNode, FileMode: info.Mode(), Mode: mode, Sticky: sticky, Routines: routines}
+	maxRecursion := 1
+	if field := frontmatterField(frontmatterNode, "maxRecursion"); field != nil && (field.Kind != yaml.ScalarNode || field.ShortTag() != "!!int" || field.Decode(&maxRecursion) != nil || maxRecursion < 0) {
+		return Agent{}, errors.New("maxRecursion: must be an integer of 0 or more")
+	}
+
+	agent := Agent{Name: name, Model: model, ReasoningEffort: modelEffort, MaxRecursion: &maxRecursion, Space: space, Prompt: strings.TrimSpace(prompt), Location: filePath, OutputSchema: outputSchema, FrontmatterNode: frontmatterNode, FileMode: info.Mode(), Sticky: sticky, Routines: routines}
 	if mode == AgentModeEasy {
 		if err := compileEasyAgent(&agent, cfg); err != nil {
-			return Agent{}, fmt.Errorf("%s: %w", filePath, err)
+			return Agent{}, err
 		}
 
 		return agent, nil
 	}
 
+	if err := compileAdvancedAgent(&agent, cfg, frontmatter); err != nil {
+		return Agent{}, err
+	}
+
+	return agent, nil
+}
+
+func compileAdvancedAgent(agent *Agent, cfg *AgentLoadConfig, frontmatter map[string]any) error {
+	node := agent.FrontmatterNode
+
 	var sudo bool
 
-	if field := frontmatterField(frontmatterNode, "sudo"); field != nil {
+	if field := frontmatterField(node, "sudo"); field != nil {
 		switch strings.ToLower(field.Value) {
 		case "true", "1", "on", "yes":
 			sudo = true
 		case "false", "0", "off", "no":
 		default:
-			return Agent{}, fmt.Errorf("%s: sudo: must be one of true/1/on/yes or false/0/off/no", filePath)
+			return errors.New("sudo: must be one of true/1/on/yes or false/0/off/no")
 		}
 	}
 
-	if agent.Permission, err = parsePermissionNode(frontmatterField(frontmatterNode, "permission"), cfg.MCPFacets); err != nil {
-		return Agent{}, fmt.Errorf("%s: parse permission: %w", filePath, err)
+	var err error
+	if agent.Permission, err = parsePermissionNode(frontmatterField(node, "permission"), cfg.MCPFacets); err != nil {
+		return fmt.Errorf("parse permission: %w", err)
 	}
 
 	if sudo {
 		agent.Permission = sudoPermissions(cfg.MCPFacets, agent.Permission)
 	}
 
-	if field := frontmatterField(frontmatterNode, "maxRecursion"); field != nil {
-		if field.Kind != yaml.ScalarNode || field.ShortTag() != "!!int" {
-			return Agent{}, &AgentMaxRecursionError{Location: filePath, Err: errors.New("must be an integer greater than or equal to -1")}
-		}
-
-		var value int
-		if err := field.Decode(&value); err != nil {
-			return Agent{}, &AgentMaxRecursionError{Location: filePath, Err: err}
-		}
-
-		if value < -1 {
-			return Agent{}, &AgentMaxRecursionError{Location: filePath, Err: errors.New("must be an integer greater than or equal to -1")}
-		}
-
-		if value >= 0 {
-			agent.MaxRecursion = &value
-		}
+	if err := parseAgentShell(node, agent); err != nil {
+		return err
 	}
 
-	if err := parseAgentShell(frontmatterNode, &agent); err != nil {
-		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
+	field := frontmatterField(frontmatterField(frontmatterField(node, "permission"), "rocketclaw"), "rocketclaw_set_tag")
+	if field != nil && field.ShortTag() != "!!str" && (field.Decode(&agent.TagGroups) != nil || agent.TagGroups == nil) {
+		return errors.New("permission.rocketclaw.rocketclaw_set_tag: must be a list of tag lists")
+	}
+
+	if err := checkTagGroups(agent.TagGroups); err != nil {
+		return fmt.Errorf("permission.rocketclaw.rocketclaw_set_tag: %w", err)
+	}
+
+	if err := checkModelProviders(cfg, agent.Model); err != nil {
+		return err
 	}
 
 	agent.Description = argString(frontmatter, "description")
-	agent.ReasoningEffort = cmp.Or(modelEffort, argString(frontmatter, "reasoningEffort"))
+	agent.ReasoningEffort = cmp.Or(agent.ReasoningEffort, argString(frontmatter, "reasoningEffort"))
 	agent.Verbosity = argString(frontmatter, "verbosity")
 
-	return agent, nil
+	if hint := argString(frontmatter, "additionalInstructions"); strings.TrimSpace(hint) != "" {
+		agent.ReplyHint = hint
+	}
+
+	return nil
+}
+
+func checkTagGroups(groups [][]string) error {
+	var names []string
+
+	for _, group := range groups {
+		if len(group) == 0 {
+			return errors.New("tag groups must not be empty")
+		}
+
+		for _, name := range group {
+			if name == "" || slices.Contains(names, name) {
+				return fmt.Errorf("empty or duplicate tag name %q", name)
+			}
+
+			names = append(names, name)
+		}
+	}
+
+	return nil
+}
+
+func checkModelProviders(cfg *AgentLoadConfig, models ...string) error {
+	for _, model := range models {
+		name, _ := ParseModelRef(model)
+		if provider, _, qualified := strings.Cut(name, "/"); qualified && !slices.Contains(cfg.Providers, provider) {
+			return fmt.Errorf("model %q: provider %q is not configured", model, provider)
+		}
+	}
+
+	return nil
 }
 
 func checkDecisionModels(cfg *AgentLoadConfig, models ...string) error {
@@ -381,7 +429,7 @@ func sudoPermissions(facets map[string]map[string][]string, rules PermissionSet)
 }
 
 func frontmatterField(frontmatter *yaml.Node, key string) *yaml.Node {
-	for i := 0; i+1 < len(frontmatter.Content); i += 2 {
+	for i := 0; frontmatter != nil && i+1 < len(frontmatter.Content); i += 2 {
 		if frontmatter.Content[i].Value == key {
 			return frontmatter.Content[i+1]
 		}
@@ -463,14 +511,27 @@ func parseAgentRoutines(field *yaml.Node, sticky AgentSticky) ([]AgentRoutine, e
 	var routines []AgentRoutine
 
 	for _, entry := range field.Content {
+		var raw, instruction string
+
 		switch {
 		case entry.Kind == yaml.ScalarNode:
-			routines = append(routines, AgentRoutine{Schedule: entry.Value})
+			raw = entry.Value
 		case entry.Kind == yaml.MappingNode && len(entry.Content) == 2 && entry.Content[1].Kind == yaml.ScalarNode:
-			routines = append(routines, AgentRoutine{Schedule: entry.Content[0].Value, Instruction: entry.Content[1].Value})
+			raw, instruction = entry.Content[0].Value, entry.Content[1].Value
 		default:
 			return nil, errShape
 		}
+
+		schedule, err := config.ParseRoutineSchedule(raw)
+		if err != nil {
+			return nil, fmt.Errorf("routines: schedule %q: %w", raw, err)
+		}
+
+		if slices.ContainsFunc(routines, func(routine AgentRoutine) bool { return routine.Schedule.Raw == schedule.Raw }) {
+			return nil, fmt.Errorf("routines: schedule %q is listed twice", schedule.Raw)
+		}
+
+		routines = append(routines, AgentRoutine{Schedule: schedule, Instruction: instruction})
 	}
 
 	return routines, nil

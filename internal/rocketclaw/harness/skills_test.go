@@ -654,8 +654,8 @@ Args: $ARGUMENTS
 	require.NoError(t, err)
 
 	require.Contains(t, result.Output, "Generated: secret-output")
-	require.Contains(t, result.Output, "Args: secret-output")
-	require.Equal(t, 2, strings.Count(result.Output, "secret-output"))
+	require.Contains(t, result.Output, "Args: !`cat SECRET.md`\n", "typed arguments go in after the skill's own commands ran, and never run")
+	require.Equal(t, 1, strings.Count(result.Output, "secret-output"))
 
 	result, err = factory.skillTool().Call(context.Background(), json.RawMessage(`{"id":"arg-skill"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
@@ -729,54 +729,31 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 		require.ErrorIs(t, err, fs.ErrNotExist)
 	})
 
-	t.Run("skill tool expands shell commands in runtime root", func(t *testing.T) {
-		env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, &sandbox.Runtime{})
-		require.NoError(t, err)
-
-		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
-		factory.expandPromptShellCommands = PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: true}
-		factory.promptExpansion = env
-		tool := factory.skillTool()
-
-		got, err := tool.Call(context.Background(), json.RawMessage(`{"id":"dynamic-skill","arguments":"MEMORY.md","direct":true}`), nil, emptyToolCallMetadata())
-
-		require.NoError(t, err)
-		require.Contains(t, got.Output, "Generated: dynamic-output")
-		require.NotContains(t, got.Output, "!`cat 'MEMORY.md'; printf ran > EFFECT`")
-
-		effect, err := root.ReadFile("EFFECT")
-		require.NoError(t, err)
-		require.Equal(t, "ran", string(effect))
-	})
-
-	t.Run("skill expands through the loading agent shell", func(t *testing.T) {
+	t.Run("skill tool expands its own commands in the workspace before arguments go in, whatever the agent's shell", func(t *testing.T) {
 		env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, &sandbox.Runtime{})
 		require.NoError(t, err)
 
 		shell := writeCustomShell(t, root)
-		boxed := agentWithSkillPermission()
+		boxed, emulated := agentWithSkillPermission(), agentWithSkillPermission()
 		boxed.CustomShell = CustomShell{Path: shell}
+		emulated.CustomShell = CustomShell{Emulated: true, Dir: t.TempDir()}
 
-		for _, tc := range []struct {
-			name  string
-			agent *Agent
-			want  string
-		}{
-			{name: "sandboxed", agent: boxed, want: "Generated: custom:1:cat 'MEMORY.md'; printf ran > EFFECT\n"},
-			{name: "default", agent: agentWithSkillPermission(), want: "Generated: dynamic-output\n"},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				factory := testSkillFactory(t, loaded, tc.agent)
-				factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
-				factory.promptExpansion = env
-				factory.promptExpansion.customShell = CustomShell{Path: shell}
+		for _, agent := range []*Agent{agentWithSkillPermission(), boxed, emulated} {
+			require.NoError(t, root.RemoveAll("EFFECT"))
 
-				model, _ := factory.assembleTools(tc.agent)
-				got, err := model["skill"].Call(context.Background(), json.RawMessage(`{"id":"dynamic-skill","arguments":"MEMORY.md","direct":true}`), nil, emptyToolCallMetadata())
+			factory := testSkillFactory(t, loaded, agent)
+			factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
+			factory.promptExpansion = env
 
-				require.NoError(t, err)
-				require.Contains(t, got.Output, tc.want)
-			})
+			model, _ := factory.assembleTools(agent)
+			got, err := model["skill"].Call(t.Context(), json.RawMessage(`{"id":"dynamic-skill","arguments":"MEMORY.md","direct":true}`), nil, emptyToolCallMetadata())
+			require.NoError(t, err)
+			require.Contains(t, got.Output, "Generated: \n\nMEMORY.md\n", "$1 was still literal when the command ran, so cat found nothing")
+			require.NotContains(t, got.Output, "dynamic-output")
+
+			effect, err := root.ReadFile("EFFECT")
+			require.NoError(t, err)
+			require.Equal(t, "ran", string(effect), "the command ran in the workspace")
 		}
 	})
 }

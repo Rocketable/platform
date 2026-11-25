@@ -16,7 +16,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	routinefrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/routine"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
@@ -100,7 +100,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		require.NoError(t, err)
 
 		transport := grpc.NewServer()
-		New(rt, rt.Sessions, rt.Cfg, &mockChannels{SlackTagsMatchingFunc: func(context.Context, string) []string { return nil }}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) { return nil, nil }}).Register(transport)
+		New(rt, rt.Sessions, rt.Cfg, &mockChannels{SlackTagsMatchingFunc: func(context.Context, string) []string { return nil }}, &mockRoutines{JobsFunc: func() ([]routinefrontend.Job, error) { return nil, nil }}).Register(transport)
 
 		var serving errgroup.Group
 		serving.Go(func() error { return transport.Serve(listener) })

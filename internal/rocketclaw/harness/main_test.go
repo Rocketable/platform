@@ -30,7 +30,7 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	config := testWorkspaceConfig(t, dir)
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	looper, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "remember !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "remember !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "main")
 
 	require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestNewCopiesShellEnv(t *testing.T) {
 	config := testWorkspaceConfig(t, dir)
 	config.ShellEnv = env
 	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "main")
 	require.NoError(t, err)
 
@@ -138,7 +138,7 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	config.ShellEnv = map[string]string{"ROCKETCLAW_CONVERSATION_ID": "prompt", "TMPDIR": "/ignored"}
 	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "env !`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"` tmp !`printf %s \"$TMPDIR\"`", Location: "", Permission: parsePermissionYAML(t, `edit: {"${ROCKETCLAW_CONVERSATION_ID}/note.txt": allow}`), Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "env !`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"` tmp !`printf %s \"$TMPDIR\"`", Location: "", Permission: parsePermissionYAML(t, `edit: {"${ROCKETCLAW_CONVERSATION_ID}/note.txt": allow}`), FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "main")
 
 	require.NoError(t, err)
@@ -222,7 +222,7 @@ func TestNewBindsBashToEachAgentCustomShell(t *testing.T) {
 	})
 }
 
-func TestNewExpandsPromptsThroughRootAgentCustomShell(t *testing.T) {
+func TestNewExpandsBodyOnHostAndInputThroughCustomShell(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	require.NoError(t, err)
@@ -235,7 +235,7 @@ func TestNewExpandsPromptsThroughRootAgentCustomShell(t *testing.T) {
 		"main": {Name: "main", Model: "gpt-5.4", Prompt: "remember !`echo hi`", CustomShell: CustomShell{Path: writeCustomShell(t, root)}},
 	}}, Skills{Items: map[string]Skill{}}, "main")
 	require.NoError(t, err)
-	require.Contains(t, loop.SystemPrompt, "remember custom:1:echo hi\n")
+	require.Contains(t, loop.SystemPrompt, "remember hi\n", "the body's ! lines run in host bash, not the agent's shell")
 
 	for _, tc := range []struct {
 		input bool
@@ -345,12 +345,12 @@ read:
 
 	readTool := loop.CodeModeHosts["read"]
 	readArgs := json.RawMessage(`{"filePath":"skills/parent/asset.txt"}`)
-	decision, err := loop.permissionDecision("read", &readTool, readArgs)
+	decision, err := loop.permissionDecision("read", &readTool, readArgs, false)
 	require.NoError(t, err)
 	require.False(t, decision.denied)
 
 	deniedArgs := json.RawMessage(`{"filePath":"skills/child/asset.txt"}`)
-	decision, err = loop.permissionDecision("read", &readTool, deniedArgs)
+	decision, err = loop.permissionDecision("read", &readTool, deniedArgs, false)
 	require.NoError(t, err)
 	require.True(t, decision.denied)
 

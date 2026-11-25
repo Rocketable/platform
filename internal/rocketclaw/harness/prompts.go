@@ -78,15 +78,11 @@ func expandAgentPrompt(ctx context.Context, agent *Agent, enabled bool, env *pro
 
 func (e *promptExpansionEnvironment) forAgent(agent *Agent) promptExpansionEnvironment {
 	scoped := *e
-	scoped.customShell = agent.CustomShell
+	scoped.customShell = CustomShell{}
+	scoped.env = slices.Clone(e.env)
 
-	if agent.Mode == AgentModeEasy {
-		scoped.customShell = CustomShell{}
-		scoped.env = slices.Clone(e.env)
-
-		for name, value := range agent.CustomShell.Secrets {
-			scoped.env = append(scoped.env, name+"="+value)
-		}
+	for name, value := range agent.CustomShell.Secrets {
+		scoped.env = append(scoped.env, name+"="+value)
 	}
 
 	return scoped

@@ -297,7 +297,7 @@ func TestAttentionDecidesOnLockedRow(t *testing.T) {
 	assert.Equal(t, "none", attentionOf(t, service, alice, path))
 }
 
-func cronTabPath(stem string) string {
+func routineTabPath(stem string) string {
 	raw := make([]byte, 0, len(stem))
 	for _, r := range stem {
 		raw = append(raw, byte(r))
@@ -319,7 +319,7 @@ FROM web_tab_attention WHERE unread_at IS NOT NULL AND note = $1`, "location mar
 	return got
 }
 
-func TestCronRunEndMarksCronTabs(t *testing.T) {
+func TestRoutineRunEndMarksRoutineTabs(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
@@ -340,10 +340,10 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 	require.NoError(t, err)
 
 	mainID, ops := spaces[0].ID, spaces[1].ID
-	routine, typed, shared := cronTabPath("marketing · 30m"), "/routines/marketing%20%C2%B7%2030m", "/routines/marketing · 30m"
+	routine, typed, shared := routineTabPath("marketing · 30m"), "/routines/marketing%20%C2%B7%2030m", "/routines/marketing · 30m"
 
 	for person, tabs := range map[string][]Tab{
-		alice: {{Path: routine, Space: mainID}, {Path: "/routines", Space: ops}, {Path: cronTabPath("daily · 1h"), Space: mainID}},
+		alice: {{Path: routine, Space: mainID}, {Path: "/routines", Space: ops}, {Path: routineTabPath("daily · 1h"), Space: mainID}},
 		bob:   {{Path: typed, Space: mainID}, {Path: "/routines", Space: mainID}},
 		carol: {{Path: routine, Space: ops}, {Path: "/routines/daily", Space: ops}},
 		dave:  {{Path: routine, Space: mainID}, {Path: "/routines", Space: mainID}},
@@ -358,11 +358,11 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 	runEnds := func(runID, path, space string) []string {
 		t.Helper()
 
-		_, err := service.recordConversation(ctx, &protocol.Conversation{ID: runID, Agent: "marketing", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: path}}, conversationFacts{}, harness.AgentStickyOff)
+		_, err := service.recordConversation(ctx, &protocol.Conversation{ID: runID, Agent: "marketing", CreatedBy: string(ThreadCreatedByRoutine), Run: &protocol.RoutineRun{Path: path}}, conversationFacts{}, harness.AgentStickyOff)
 		require.NoError(t, err)
 
 		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "run", false)
-		inbound.Cronjob = &protocol.CronjobMessage{RelativePath: path, Agent: "marketing", Space: space}
+		inbound.Routine = &protocol.RoutineMessage{RelativePath: path, Agent: "marketing", Space: space}
 		require.NoError(t, startTurnDB(ctx, service.db, "turn:"+runID, runID, inbound))
 		_, err = service.finishTurn(ctx, "turn:"+runID, &turnFinish{conversationID: runID, outbound: protocol.NewOutboundMessage(runID, "done")})
 		require.NoError(t, err)
@@ -376,10 +376,10 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 		carol + " " + routine + " loud",
 	}, runEnds("cron:marketing", "agents/marketing.md#30m", "Ops"))
 
-	assert.ElementsMatch(t, []string{alice + " /routines loud", alice + " " + cronTabPath("daily · 1h") + " loud", bob + " /routines loud"},
+	assert.ElementsMatch(t, []string{alice + " /routines loud", alice + " " + routineTabPath("daily · 1h") + " loud", bob + " /routines loud"},
 		runEnds("cron:daily", "agents/daily.md#1h", ""))
 
-	_, err = service.recordConversation(ctx, &protocol.Conversation{ID: "cron:twice", Agent: "marketing", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "agents/daily.md#1h"}}, conversationFacts{}, harness.AgentStickyOff)
+	_, err = service.recordConversation(ctx, &protocol.Conversation{ID: "cron:twice", Agent: "marketing", CreatedBy: string(ThreadCreatedByRoutine), Run: &protocol.RoutineRun{Path: "agents/daily.md#1h"}}, conversationFacts{}, harness.AgentStickyOff)
 	require.NoError(t, err)
 
 	turnEnds := func(turnID string) []string {
@@ -398,7 +398,7 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 	removed, _, err := service.DeleteThreadQueueItem(ctx, "cron:twice", "next")
 	require.NoError(t, err)
 	require.True(t, removed)
-	assert.ElementsMatch(t, []string{alice + " /routines loud", alice + " " + cronTabPath("daily · 1h") + " loud", bob + " /routines loud"}, turnEnds("turn:last"))
+	assert.ElementsMatch(t, []string{alice + " /routines loud", alice + " " + routineTabPath("daily · 1h") + " loud", bob + " /routines loud"}, turnEnds("turn:last"))
 }
 
 func TestMarkSearchFinished(t *testing.T) {
@@ -599,7 +599,7 @@ UPDATE conversations SET goal_objective = 'ship', goal_status = 'active' WHERE c
 		"a run reporting to the session is work": {do: func(t *testing.T, chat, _ string) {
 			t.Helper()
 
-			_, err := service.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, reports_to) VALUES ($1, 'job', '', 'cron_run', FALSE, $2)`, chat+":run", chat)
+			_, err := service.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, reports_to) VALUES ($1, 'job', '', 'routine_run', FALSE, $2)`, chat+":run", chat)
 			require.NoError(t, err)
 			turn(t, chat, chat+":turn", "")
 			start(t, chat+":run", chat+":run-turn")

@@ -16,22 +16,22 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	routinefrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/routine"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 )
 
-func TestValidateAssetsAcceptsWorkspaceWithoutCronjobs(t *testing.T) {
+func TestValidateAssetsAcceptsWorkspaceWithoutRoutines(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "agents"), 0o755))
 	require.NoError(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, ".rocketclaw"))
 }
 
-func TestValidateAssetsReportsRoutineError(t *testing.T) {
+func TestValidateAssetsLeavesABadRoutineToItsAgent(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(workspace, "agents"), 0o755))
 
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "helper.md"), []byte("---\nmodel: gpt-6.1-sol\nroutines: [every 30min]\n---\nBody"), 0o644))
-	require.ErrorContains(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, "."), `agents/helper.md: routines: schedule "every 30min": invalid cron expression`)
+	require.NoError(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, "."))
 }
 
 func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
@@ -48,7 +48,7 @@ func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 	require.ErrorContains(t, err, "start Slack connector")
 }
 
-func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
+func TestAssembleFrontendsWiresSlackRoutineAndMCP(t *testing.T) {
 	for _, slack := range []config.SlackConfig{
 		{
 			BotToken: "xoxb-test", AppToken: "xapp-test",
@@ -97,7 +97,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 						require.Equal(t, ctx.Done(), done, "the inert Slack ends with the run")
 					}
 
-					require.IsType(t, &cronfrontend.Manager{}, rt.CronJobs, "a reload refreshes the started cron jobs")
+					require.IsType(t, &routinefrontend.Manager{}, rt.Routines, "a reload refreshes the started cron jobs")
 					cancel()
 					<-done
 					for _, stop := range stops {

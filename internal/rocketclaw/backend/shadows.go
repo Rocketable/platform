@@ -581,7 +581,7 @@ func (b *Bridge) startShadowWorkers(ctx context.Context, turn string) error {
 
 func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, parent, agent string) ([]string, error) {
 	var unshadowed bool
-	if err := queryScalar(ctx, db, "read shadow ownership", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND (shadow_parent IS NOT NULL OR cron_path LIKE 'agents/%' OR kind = $2)`, &unshadowed, parent, KindAgentDraft); err != nil || unshadowed {
+	if err := queryScalar(ctx, db, "read shadow ownership", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND (shadow_parent IS NOT NULL OR routine_path LIKE 'agents/%' OR kind = $2)`, &unshadowed, parent, KindAgentDraft); err != nil || unshadowed {
 		return nil, err
 	}
 
@@ -613,7 +613,7 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 		return nil, fmt.Errorf("open shadow skills directory: %w", err)
 	}
 
-	definitions, err := loadAgentDefinitions(agentsFS, skillsFS, cfg)
+	definitions, _, err := loadAgentDefinitions(agentsFS, skillsFS, cfg)
 	if err != nil {
 		return nil, err
 	}

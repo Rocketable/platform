@@ -23,7 +23,7 @@ Ask for the council name, purpose, coordinator and member descriptions, models, 
 
 `shell` does not pass from the coordinator to members: when the human wants the council sandboxed, ask whether each member also needs `shell`.
 
-Every agent needs a non-empty `description` and `model`. Write descriptions as useful selection guidance because the task roster displays them. Check the active root `maxRecursion` budget for each delegation path: caller -> coordinator -> member requires two task hops; a direct surface -> coordinator -> member requires one.
+Every agent needs a non-empty `description` and `model`. Write descriptions as useful selection guidance because the task roster displays them. Check the active root `maxRecursion` budget for each delegation path, counted from the top-level agent, which defaults to 1: caller -> coordinator -> member requires two task hops, so the caller needs `maxRecursion: 2`; a direct surface -> coordinator -> member requires one.
 
 ## Permission Graph
 
@@ -48,7 +48,7 @@ Start each agent with an explicit permission set and add only required capabilit
 
 3. **Member capabilities:** Give each member its own `model`, instructions, and tools. Use `read`/`glob`/`grep` for analysts, narrow `edit` paths for editors, exact `bash` commands for test runners, and named `task` targets for further delegation.
 
-Exact task rules keep the graph auditable. Wildcard rules widen the graph to every matching loaded agent. Follow `main-create-or-update-agent` for permission buckets, write/execute separation, and web-content trust.
+Exact task rules keep the graph auditable. Wildcard rules widen the graph to every matching loaded agent but sudo ones, for `task` and, when the agent has them, the session tools alike. An easy-mode caller or coordinator names each target as a `subagents` entry `- agent: <name>` instead. Follow `main-create-or-update-agent` for permission buckets, write/execute separation, and web-content trust.
 
 ## Coordinator Behavior
 

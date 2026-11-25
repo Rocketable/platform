@@ -531,7 +531,7 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat, "cron:daily": KindCronRun, "private": KindExternalMCPRun, "main/b": KindSubagent})
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat, "cron:daily": KindRoutineRun, "private": KindExternalMCPRun, "main/b": KindSubagent})
 
 	for conversationID, origin := range map[string]*protocol.InboundMessage{"main": {Source: protocol.SourceSlack}, "cron:daily": {RequireOutputDecision: true}, "private": {SyncDestination: "managed"}} {
 		script := testBackgroundJob(conversationID, "turn-1/call/"+conversationID)

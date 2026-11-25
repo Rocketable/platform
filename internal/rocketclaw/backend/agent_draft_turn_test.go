@@ -267,7 +267,7 @@ func TestAgentDraftTurnRunsUnsavedDraftAndItsSubagent(t *testing.T) {
 		case column == "COL-TA" && strings.Contains(user, "research the flaky test"):
 			answer = column + "/subagent"
 		case column == "COL-TA" && !strings.Contains(body, "function_call_output"):
-			writeResponseFunctionCall(t, w, "resp_task", "task", map[string]any{"description": "research", "prompt": "research the flaky test", "model": "gpt-6-luna", "tools": []string{"bash"},
+			writeResponseFunctionCall(t, w, "resp_task", "task_clone", map[string]any{"description": "research", "prompt": "research the flaky test", "model": "gpt-6-luna", "tools": []string{"bash"},
 				"background": strings.Contains(body, "Run the subagent in the background")})
 
 			return

@@ -2502,9 +2502,8 @@ Use this skill for docs.
 	require.Contains(t, serialized, `"role":"user"`)
 	require.JSONEq(t, `{"content":"/docs-helper write the API guide !`+"`"+`echo run >> calls`+"`"+`","role":"user","type":"message"}`, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList[1]))
 
-	calls, err := factory.promptExpansion.root.ReadFile("calls")
-	require.NoError(t, err)
-	require.Equal(t, "run\n", string(calls))
+	_, err = factory.promptExpansion.root.Stat("calls")
+	require.ErrorIs(t, err, os.ErrNotExist, "typed arguments never run")
 }
 
 func TestLooperDirectSkillRejectsBeforeModelRequest(t *testing.T) {
@@ -2700,7 +2699,7 @@ func TestLooperUnknownSlashSkillStaysPlainText(t *testing.T) {
 }
 
 func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
-	loaded := LoadSkills(fstest.MapFS{"docs-helper/SKILL.md": mapFile("---\nname: docs-helper\ndescription: Docs\n---\nInstructions !`echo $ARGUMENTS >> calls`")}, "/virtual/skills").Skills
+	loaded := LoadSkills(fstest.MapFS{"docs-helper/SKILL.md": mapFile("---\nname: docs-helper\ndescription: Docs\n---\nInstructions !`echo run >> calls`")}, "/virtual/skills").Skills
 	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
 	factory.expandPromptShellCommands.SkillPrompts = true
 	mock := mockResponses(responseWithMessage("resp-final", "original answer"))
@@ -2738,7 +2737,7 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	require.NoError(t, errRead)
 	require.ErrorContains(t, err, "Unable to load skill missing-skill")
 	require.Empty(t, steers)
-	require.Equal(t, "first\n", string(calls), "failure must not execute later skill shells")
+	require.Equal(t, "run\n", string(calls), "failure must not execute later skill shells")
 	require.Len(t, newParams(mock), 1, "failed batch must not reach a continuation request")
 	require.Empty(t, collectResponses(output), "caller owns turn-failure delivery")
 	require.Empty(t, saved, "failed turn must not be persisted as completed")

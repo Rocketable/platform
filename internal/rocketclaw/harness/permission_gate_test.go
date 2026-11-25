@@ -29,7 +29,7 @@ func TestToolCallAgent(t *testing.T) {
 	_, ok := ToolCallAgent(t.Context())
 	require.False(t, ok)
 
-	agent := Agent{Name: "child", Frontmatter: map[string]any{"permissions": "retained"}}
+	agent := Agent{Name: "child", ReplyHint: "retained"}
 	loop := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, agent: agent}
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: loop, observations: loop.observations, callID: "call"})
 	got, ok := ToolCallAgent(ctx)
@@ -113,17 +113,19 @@ func TestExecuteBashStdinReview(t *testing.T) {
 
 	for _, tc := range []struct {
 		name, rules, stdin, want string
-		easy, sudo               bool
+		sudo                     bool
 		reviews                  []string
 	}{
-		{"advanced allow runs unreviewed", "bash: allow", strings.Repeat("x", 65537), "65537", false, false, nil},
-		{"advanced auto shows stdin in full", "bash: auto", strings.Repeat("x", 65536), "65536", false, false, []string{"bash"}},
-		{"advanced auto refuses stdin over 64 KiB before review", "bash: auto", strings.Repeat("x", 65537), refused, false, false, nil},
-		{"sudo reviews unmatched calls with their stdin", "read: allow", "hi", "2", false, true, []string{"execute", "bash"}},
-		{"advanced deny refuses", "bash: deny", "hi", `bash: tool call denied: permission "bash" rejected subject "wc -c" by rule "*" => deny. Choose a different action.`, false, false, nil},
-		{"easy reviews the script, then the call with its stdin", "rocketclaw: {code_mode_approve: auto}\nbash: auto", "hi", "2", true, false, []string{"execute", "bash"}},
-		{"easy without stdin reviews only the script", "rocketclaw: {code_mode_approve: auto}\nbash: auto", "", "0", true, false, []string{"execute"}},
-		{"easy refuses stdin over 64 KiB before the second review", "rocketclaw: {code_mode_approve: auto}\nbash: auto", strings.Repeat("x", 65537), refused, true, false, []string{"execute"}},
+		{"allow runs unreviewed", "bash: allow", strings.Repeat("x", 65537), "65537", false, nil},
+		{"auto shows stdin in full", "bash: auto", strings.Repeat("x", 65536), "65536", false, []string{"bash"}},
+		{"auto refuses stdin over 64 KiB before review", "bash: auto", strings.Repeat("x", 65537), refused, false, nil},
+		{"sudo reviews unmatched calls with their stdin", "read: allow", "hi", "2", true, []string{"execute", "bash"}},
+		{"sudo reviews unmatched calls without stdin", "read: allow", "", "0", true, []string{"execute", "bash"}},
+		{"deny refuses", "bash: deny", "hi", `bash: tool call denied: permission "bash" rejected subject "wc -c" by rule "*" => deny. Choose a different action.`, false, nil},
+		{"a reviewed script's allowed call with stdin is reviewed again", "rocketclaw: {code_mode_approve: auto}\nbash: allow", "hi", "2", false, []string{"execute", "bash"}},
+		{"a reviewed script's allowed call without stdin is not", "rocketclaw: {code_mode_approve: auto}\nbash: allow", "", "0", false, []string{"execute"}},
+		{"a reviewed script's call the rules review is reviewed again", "rocketclaw: {code_mode_approve: auto}\nbash: auto", "", "0", false, []string{"execute", "bash"}},
+		{"stdin over 64 KiB is refused before the second review", "rocketclaw: {code_mode_approve: auto}\nbash: allow", strings.Repeat("x", 65537), refused, false, []string{"execute"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			permissions := parsePermissionYAML(t, tc.rules)
@@ -132,7 +134,7 @@ func TestExecuteBashStdinReview(t *testing.T) {
 			loop := testLooper(mockResponses())
 			loop.agent = Agent{Name: "main"}
 			loop.Tools = (&toolFactory{}).mcpToolsFor(&Agent{Permission: permissions}, hosts)
-			permissions.Easy, permissions.Sudo = tc.easy, tc.sudo
+			permissions.Sudo = tc.sudo
 			loop.Permissions = permissions
 			loop.CodeModeHosts = hosts
 			reviewer := permissionReviewerWith(permissionReviewDecision{Outcome: permissionReviewOutcomeAllow, Rationale: "ok"})
@@ -158,9 +160,14 @@ func TestExecuteBashStdinReview(t *testing.T) {
 					continue
 				}
 
-				want, err := json.Marshal(map[string]string{"command": "wc -c", "stdin": tc.stdin})
+				want := map[string]string{"command": "wc -c"}
+				if tc.stdin != "" {
+					want["stdin"] = tc.stdin
+				}
+
+				raw, err := json.Marshal(want)
 				require.NoError(t, err)
-				require.JSONEq(t, string(want), request.RawArguments)
+				require.JSONEq(t, string(raw), request.RawArguments)
 			}
 
 			require.Equal(t, tc.reviews, reviewed)
@@ -182,22 +189,20 @@ func TestBashFileStdin(t *testing.T) {
 
 	for _, tc := range []struct {
 		name, rules string
-		easy        bool
 		reviews     int
 	}{
-		{"easy: a file never triggers the second review", "bash: auto", true, 0},
-		{"advanced auto: reviewers see the file's descriptor", "bash: auto", false, 2},
+		{"a reviewed script's allowed call with a file is not reviewed again", "bash: allow", 0},
+		{"auto: reviewers see the file's descriptor", "bash: auto", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, bash := stdinTestShell(t)
 			loop := testLooper(mockResponses())
 			loop.agent = Agent{Name: "main"}
 			loop.Permissions = parsePermissionYAML(t, tc.rules)
-			loop.Permissions.Easy = tc.easy
 			loop.CodeModeHosts = map[string]looperTool{"bash": bash}
 			reviewer := permissionReviewerWith(permissionReviewDecision{Outcome: permissionReviewOutcomeAllow, Rationale: "ok"})
 			loop.PermissionReviewer = reviewer
-			ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: loop, observations: loop.observations, callID: "call"})
+			ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: loop, observations: loop.observations, callID: "call", reviewed: true})
 
 			host, _ := codeModeHostToolsFromContext(ctx)
 			host = append(host, codemode.HostTool{Details: codemode.NoDetails{}, Name: "blob", CallValue: func(context.Context, map[string]any) (starlark.Value, error) { return blob, nil }})

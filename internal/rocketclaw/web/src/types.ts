@@ -7,8 +7,8 @@ export type CodeModeCall = { name: string; arguments?: string; status?: "running
 export type BackgroundJob = { jobId: string; kind: string; state: string; label: string; toolCallId: string; subagentKey: string; stoppedBy: string; hidden: boolean; note: string };
 export type PendingQuestion = { id: string; question: string; details: string; options: { label: string; value: string; description: string }[]; multiple: boolean };
 export type QueueItem = { id: string; text: string; editText?: string; attachments?: Attachment[]; delivery?: PromptDelivery; principal?: string };
-export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; running?: boolean; background?: boolean; paused?: boolean; pausable?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean; spaceId?: string; reply?: string; model?: string; kind?: ConversationKind; remoteSessionId?: string; label?: string; unreadAt?: string; markedUnread?: boolean; parked?: boolean; until?: string; untilDone?: boolean; note?: string; autoPark?: boolean; unfollowed?: boolean; asking?: boolean; automation?: boolean; stateSince?: string; rocketclaw?: string };
-export type ConversationKind = "WEB_CHAT" | "SLACK_THREAD" | "CRON_RUN" | "ONE_OFF_CRON_RUN" | "EXTERNAL_MCP_RUN" | "SUBAGENT" | "REVIEW" | "SHADOW" | "REMOTE_OPENCODE";
+export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; running?: boolean; background?: boolean; paused?: boolean; pausable?: boolean; name?: string; forkedFrom?: string; tags?: string[]; routine?: boolean; routineName?: string; server?: string; directory?: string; offline?: boolean; spaceId?: string; reply?: string; model?: string; kind?: ConversationKind; remoteSessionId?: string; label?: string; unreadAt?: string; markedUnread?: boolean; parked?: boolean; until?: string; untilDone?: boolean; note?: string; autoPark?: boolean; unfollowed?: boolean; asking?: boolean; automation?: boolean; stateSince?: string; rocketclaw?: string };
+export type ConversationKind = "WEB_CHAT" | "SLACK_THREAD" | "ROUTINE_RUN" | "ONE_OFF_ROUTINE_RUN" | "EXTERNAL_MCP_RUN" | "SUBAGENT" | "REVIEW" | "SHADOW" | "REMOTE_OPENCODE";
 // Remote OpenCode servers with their origins, and the tags people may set on their sessions.
 export type Remote = { servers: Record<string, string>; agentTags: Record<string, string[]> };
 export type OriginPair = { key: string; value: string };
@@ -30,7 +30,7 @@ export type AttentionAction = "MARK_READ" | "MARK_UNREAD" | "PARK" | "PARK_UNTIL
 // since a held version, that version, the IDs removed since, and only the tab rows changed since.
 export type SessionBatch = { sessions?: Session[]; owner?: string; upstreamSuccess?: boolean; opencodeServers?: Remote["servers"]; agentTags?: Record<string, { tags?: string[] }>; version?: string; since?: string; removed?: string[]; tabs?: TabAttention[]; tabRevision?: string; navigate?: string };
 export type AgentChoices = { agents: Agent[]; currentAgent: string };
-export type CronJob = { stem: string; status: string; lastRun: string; nextRun: string; schedule?: string; body?: string; agent?: string; upcoming?: string[]; origin?: string; space?: string };
+export type Routine = { stem: string; status: string; lastRun: string; nextRun: string; schedule?: string; body?: string; agent?: string; upcoming?: string[]; origin?: string; space?: string };
 // sticky is "user" or "global" for an agent with one session per person or one in all; stickySession is the one a
 // new session resumes.
 export type Agent = { name: string; model?: string; reasoning?: string; description?: string; verbosity?: string; prompt?: string; permissions?: string; origin?: string; customShell?: string; space?: string; rocketclaw?: string; sticky?: string; stickySession?: string };

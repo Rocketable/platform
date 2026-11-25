@@ -1,6 +1,6 @@
 import { hashKey, type QueryKey } from "@tanstack/react-query";
 import { server, serverURL } from "./navigation";
-import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, ListTab, SavedTabs, SearchPage, StripLayout, TranscriptEvent, TreeNode } from "./types";
+import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, Routine, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, ListTab, SavedTabs, SearchPage, StripLayout, TranscriptEvent, TreeNode } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -78,7 +78,7 @@ export const queries = {
   identity: (name = server()) => ({ queryKey: [{ server: name }, "identity"], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ username: string; principal?: string; sandboxError?: string; slackWarning?: string; limited?: boolean }>("Identity", {}, signal, name) }),
   agents: (input?: { conversationId: string }) => ({ queryKey: ["agents", input], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<AgentChoices>("ListAgents", input, signal) }),
   skills: (input?: { agent: string }) => ({ queryKey: ["skills", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ skills: Skill[] }>("ListSkills", input, signal)).skills }),
-  cronJobs: () => ({ queryKey: ["cronJobs"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ jobs: CronJob[] }>("ListCronJobs", {}, signal)).jobs }),
+  routines: () => ({ queryKey: ["routines"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ jobs: Routine[] }>("ListRoutines", {}, signal)).jobs }),
   pages: (name = server()) => ({ queryKey: [{ server: name }, "pages"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ pages?: PageEntry[] }>("ListPages", {}, signal, name)).pages ?? [] }),
   config: () => ({ queryKey: ["config"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ config: ConfigView }>("ListConfig", {}, signal)).config }),
   agentDrafts: () => ({ queryKey: ["agentDrafts"], queryFn: ({ signal }: { signal?: AbortSignal }) => rpc<{ drafts: AgentDraft[]; templates: string[] }>("ListAgentDrafts", {}, signal) }),
@@ -101,7 +101,7 @@ export const mutations = {
   popQueueItem: (input: { id: string; itemId: string }) => rpc("PopQueueItem", input),
   createSession: async ({ server: remote, ...input }: { name?: string; agent?: string; sourceConversationId?: string; opencodeServer?: string; directory?: string; spaceId?: string; server?: string }) => rpc<{ id: string; resumed?: boolean }>("CreateSession", input, undefined, remote),
   prompt: (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string; mentionIds?: string[] }, name = server()) => rpc<{ privateText?: string; mentionWarning?: string }>("Prompt", input, undefined, name),
-  runCron: async (input: { stem: string }) => (await rpc<{ id: string }>("RunCronJob", input)).id,
+  runRoutine: async (input: { stem: string }) => (await rpc<{ id: string }>("RunRoutine", input)).id,
   // server names the RocketClaw the session is on, this one when unset.
   updateSession: ({ server: remote, ...input }: { id: string; name?: string; tag?: string; paused?: boolean; server?: string }) => rpc("UpdateSession", input, undefined, remote),
   removeQueueItem: (input: { id: string; itemId: string }) => rpc("RemoveQueueItem", input),

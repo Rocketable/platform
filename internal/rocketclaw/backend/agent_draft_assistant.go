@@ -175,9 +175,7 @@ func (s *SessionService) ProposeAgentDraftChanges(ctx context.Context, id, usern
 
 		var value yaml.Node
 
-		help, _ := agentSettingHelp(change.Key, mode)
-
-		return help == nil || strings.Contains(change.Key, ".") || !known(change.Variant) ||
+		return agentSettingHelp(change.Key, mode) == nil || strings.Contains(change.Key, ".") || !known(change.Variant) ||
 			change.ValueYAML != "" && (yaml.Unmarshal([]byte(change.ValueYAML), &value) != nil || len(value.Content) == 0)
 	})
 	proposal.Bodies = slices.DeleteFunc(proposal.Bodies, func(body AgentDraftProposedBody) bool { return !known(body.Variant) })

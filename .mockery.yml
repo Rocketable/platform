@@ -70,14 +70,14 @@ packages:
             pkgname: main
             structname: BackendMock
             inpackage: false
-  github.com/Rocketable/platform/internal/rocketclaw/frontend/cron:
+  github.com/Rocketable/platform/internal/rocketclaw/frontend/routine:
     interfaces:
       Runner:
         configs:
           - structname: runnerMock
           - dir: '{{.ConfigDir}}/internal/rocketclaw/frontend/rpc'
             pkgname: rpc
-            structname: mockCronRunner
+            structname: mockRoutineRunner
             inpackage: false
   github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc:
     interfaces:
@@ -88,12 +88,12 @@ packages:
             pkgname: main
             structname: mockWebChannels
             inpackage: false
-      CronJobs:
+      Routines:
         configs:
-          - structname: mockCronJobs
+          - structname: mockRoutines
           - dir: '{{.ConfigDir}}/cmd/rocketclaw'
             pkgname: main
-            structname: mockWebCron
+            structname: mockWebRoutines
             inpackage: false
       tailnetWhoIs:
         config:

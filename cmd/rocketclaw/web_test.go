@@ -84,7 +84,7 @@ func TestWebRPCSyncsOpenCode(t *testing.T) {
 
 	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}}, OpenCode: servers}
 	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Sessions: sessions}
-	stop := startWebRPC(rt, node, &mockWebChannels{}, &mockWebCron{})
+	stop := startWebRPC(rt, node, &mockWebChannels{}, &mockWebRoutines{})
 
 	require.Eventually(t, func() bool {
 		for chat, err := range sessions.SidebarChats(t.Context(), "", &mockWebChannels{}, nil) {

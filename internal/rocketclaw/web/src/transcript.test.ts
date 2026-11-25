@@ -271,7 +271,7 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
     if (requests.length === 2) return second.promise;
     if (requests.length === 3) throw new Error("history unavailable");
     if (requests.length >= 7) return Response.json({ ...view(requests.length === 7 ? requests.at(-1)!.revision ? [] : [kept, event("later", "later:0", "assistant", "later")] : [event("later", "later:0", "assistant", "final")], { reset: requests.length !== 7 || !requests.at(-1)!.revision, revision: "reopened", entryKeys: requests.length === 7 ? ["kept", "later"] : ["later"], delegations: ["session/call"] }), origin: "" });
-    return Response.json({ ...view([], { reset: false, revision: "recovered", entryKeys: ["kept", "turn"], delegations: requests.length > 5 ? [] : ["session/call"] }), origin: JSON.stringify({ kind: "cron" }) });
+    return Response.json({ ...view([], { reset: false, revision: "recovered", entryKeys: ["kept", "turn"], delegations: requests.length > 5 ? [] : ["session/call"] }), origin: JSON.stringify({ kind: "routine" }) });
   }, { preconnect: originalFetch.preconnect });
   queryClient.setQueryData(["queue", { id: "session" }], []);
   let changes = 0;
@@ -281,7 +281,7 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
     for (let i = 0; i < 10; i++) expect(refreshHistory()).toBe(loading);
     expect(requests).toEqual([{ id: "session", limit: 50 }]);
     draft.lines.push({ id: "local", role: "user", text: "same" });
-    first.resolve(Response.json({ ...view([kept, event("turn", "turn:0", "user", "same", { inputId: "used" })], { revision: "applied", running: true }), origin: JSON.stringify({ kind: "cron" }) }));
+    first.resolve(Response.json({ ...view([kept, event("turn", "turn:0", "user", "same", { inputId: "used" })], { revision: "applied", running: true }), origin: JSON.stringify({ kind: "routine" }) }));
     await first.promise;
     while (requests.length < 2) await Promise.resolve();
     expect(requests[1]).toEqual({ id: "session", revision: "applied", limit: 50 });

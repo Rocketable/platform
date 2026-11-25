@@ -39,7 +39,7 @@ function serveRingable(options: { cors?: boolean; rows: () => Session[]; tabs: (
     if (url.pathname === "/api/Tabs") counts.tabs++;
     const replies: Record<string, unknown> = {
       "/api/Protocol": { protoSha256: "listing-ring" }, "/api/Identity": { username: "tester" }, "/api/ListAgents": { agents: [{ name: "main" }], currentAgent: "main" },
-      "/api/ListQueue": { items: [] }, "/api/Tabs": options.tabs(), "/api/ListConfig": { config: { workspace: "ring" } }, "/api/ListCronJobs": { jobs: [] },
+      "/api/ListQueue": { items: [] }, "/api/Tabs": options.tabs(), "/api/ListConfig": { config: { workspace: "ring" } }, "/api/ListRoutines": { jobs: [] },
       "/api/History": { origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: "1", reset: true, entryKeys: [], running: false, start: "0", more: false },
     };
     return Response.json(replies[url.pathname] ?? {}, { headers: cors });

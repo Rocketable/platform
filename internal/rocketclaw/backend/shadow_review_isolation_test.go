@@ -148,8 +148,10 @@ WHERE s.child_conversation_id = $1 AND s.parent_source_conversation_id = 'parent
 			require.Empty(t, finals, "child success and definition errors stay local")
 			require.NoError(t, root.WriteFile(".rocketclaw/agents/other.md", []byte("---\nmodel: [\n---\nBroken primary"), 0o600))
 
-			_, _, err = LoadRuntimeDefinitions(cfg, config.DefaultRuntimeDir)
-			require.ErrorContains(t, err, "other.md: parse YAML frontmatter", "ordinary malformed primary behavior is unchanged")
+			agents, _, err = LoadRuntimeDefinitions(cfg, config.DefaultRuntimeDir)
+			require.NoError(t, err, "a malformed primary fails only its own load")
+			require.NotContains(t, agents.Items, "other")
+			require.Contains(t, agents.Items, "primary/z")
 		})
 	}
 }

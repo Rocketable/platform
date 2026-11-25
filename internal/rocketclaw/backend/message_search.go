@@ -179,7 +179,7 @@ WHERE c.principals <> '{}' ORDER BY c.conversation_id COLLATE "C", p.principal C
 		}
 
 		return nil
-	}, "", ThreadCreatedByCron, KindOneOffCronRun)
+	}, "", ThreadCreatedByRoutine, KindOneOffRoutineRun)
 
 	return principals, slices.Sorted(maps.Keys(names)), err
 }

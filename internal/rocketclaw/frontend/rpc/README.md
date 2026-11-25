@@ -127,7 +127,7 @@ Previews use the latest nonempty user or assistant message, including the same
 successful delivery report shown in History.
 Session `running` is true while the conversation has an unfinished turn.
 
-`MoveToBackground` moves every running `execute` and `task` call of agents with
+`MoveToBackground` moves every running `execute`, `task` and `task_clone` call of agents with
 `permission.rocketclaw.allow_background: allow` in the conversation into Background
 Jobs and reports `moved`; with nothing eligible it changes nothing.
 `StopBackgroundJob` stops one running job by ID, records it as stopped by user, and
@@ -175,7 +175,7 @@ with the selected loaded agent. For a sticky agent it first looks for the agent'
 session (`StickySessions`): the chat whose stored `sticky` value, set once at creation,
 matches the agent's mode, created by the caller's login for `sticky: user`. A chat born
 `off` never counts. When one exists it
-returns that ID with `resumed` set and creates nothing. `RunCronJob` likewise runs a
+returns that ID with `resumed` set and creates nothing. `RunRoutine` likewise runs a
 `sticky: global` agent's routine in that session; a `sticky: user` or
 `sticky: slack` agent cannot have routines, so it never meets one. A `sticky: slack` agent answers only in
 Slack: `ListAgents` and `CreateSession` leave it out of new sessions, while its Slack
@@ -272,18 +272,20 @@ A `/name` that is not a command and not a skill the agent can load reaches the
 agent as plain text; `/skill name` reports the missing skill instead.
 Normal Send during a turn queues; Cmd/Ctrl+Enter steers. Skills are loaded when consumed.
 
-`ListCronJobs` uses the same started Cron manager as scheduled execution.
+`ListRoutines` uses the same started routine manager as scheduled execution.
 It exposes the routines in agent files, each named `<agent> · <schedule>` with
 run path `agents/<agent>.md#<schedule>`, and each schedule's next trigger within 24 hours,
 using persisted due times for recurring schedules rather than restarting their
 intervals on a read. The manager reads no `cron/` folder; one left over is
-ignored. `RunCronJob` finds the selected routine through that manager by its
+ignored. `RunRoutine` finds the selected routine through that manager by its
 `<agent> · <schedule>` name only, failing with `no routine "<name>"` for any other,
 runs its fresh private X, and returns the actual destination Y only after the
 existing runner's RunTurn and Sync finish successfully.
 
 Backend entry reads expose generic source conversation provenance; RPC
-decodes the `cron:` prefix and the timestamp/random suffix from the right. The stored
+takes a run's path and time from its stored run facts, not from its ID. New runs get
+`routine:` and `one-off-routine:` IDs; runs from before the rename keep their `cron:`
+and `one-off-cron:` IDs and still list and open. The stored
 path label is used as-is, including previously stored underscores, without matching
 current definitions. Each run X is one row, whatever chats hold its output. Only X's
 own history and turns count; subagent and review sessions under X are not read. The
@@ -489,11 +491,13 @@ cleanup leaves it behind. The response supplies the
 immutable ID, basename, detected MIME type, and original byte count. Pass IDs in
 `Prompt.attachment_ids` for either steer or queue. Images retain the existing
 model-side normalization; all uploads are also materialized through
-`os.OpenRoot(cfg.Workspace)` at `artifacts/uploads/<id>/<basename>`. Other files
-are available to model tools at those paths. The original text, principal,
-attachment references, and image input travel through existing durable queue
-content. Prompt text includes `attachment:<id>` and the safe workspace path so
-replay retains a file reference without embedding its bytes in transcript RPCs.
+`os.OpenRoot(cfg.Workspace)` at `.rocketclaw/uploads/<conversation>/<id>/<basename>`,
+for every agent. Other files are available to model tools at those paths. The
+original text, principal, attachment references, and image input travel through
+existing durable queue content. Prompt text includes `attachment:<id>` and the
+file's absolute path so replay retains a file reference without embedding its
+bytes in transcript RPCs. References to `artifacts/uploads/<id>/<basename>`
+written by earlier releases are still recognized and stripped.
 
 `DownloadAttachment(Attachment) -> stream Attachment` requires the **visible
 conversation ID** in `conversation_id` and the attachment ID in `id`. It authorizes
@@ -786,7 +790,7 @@ The checks sit where requests already pass:
 - One session: `visibleConversation` reads the top-level conversation by parent
   link (`TopLevelSession`) and checks its Birth Space, agent, and kind. Shadows
   reach it through `readableConversation`. History of a routine run trace checks
-  the routine's space instead (`cronInLimit`), which is its agent's.
+  the routine's space instead (`routineInLimit`), which is its agent's.
 - Agent choice: `agentChoices` and `ListAgents` drop agents outside the limit, which
   covers `CreateSession`, `ForkSession`, and `/agent`. `sameSpace`
   still offers every remaining choice when the current agent is outside the
@@ -801,8 +805,8 @@ The checks sit where requests already pass:
   a visible session.
 - Handlers outside those paths check for themselves: `Tabs` (only the person's
   spaces and Shared tabs, and creates missing listed spaces), `GetPage` and
-  `ListPages`, `ListCronJobs` and `RunCronJob` (the routine's space and its agent;
-  `RunCronJob` refuses others with "this routine or its agent is outside your spaces"),
+  `ListPages`, `ListRoutines` and `RunRoutine` (the routine's space and its agent;
+  `RunRoutine` refuses others with "this routine or its agent is outside your spaces"),
   `ListSessions`' first frame (no OpenCode servers, only their agents' tags),
   `ListConfig` (see above), `ListSkills` (only skills their agents may use), and
   `Reload`, because reloaded agent files can widen a limit.

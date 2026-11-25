@@ -67,13 +67,13 @@ func TestRuntimeRecordsExplicitConversationsWithoutResettingSelection(t *testing
 
 	store := newTestSessionService(t)
 	rt := &Runtime{Sessions: store}
-	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "opaque", Agent: "selected", CreatedBy: "cron"}))
+	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "opaque", Agent: "selected", CreatedBy: "routine"}))
 	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "opaque", Agent: "new-default"}))
 
 	thread, found, err := store.Thread("opaque")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, ThreadState{Agent: "selected", CreatedBy: "cron"}, thread)
+	require.Equal(t, ThreadState{Agent: "selected", CreatedBy: "routine"}, thread)
 }
 
 func TestRuntimeProducerReportsToDestination(t *testing.T) {
@@ -82,7 +82,7 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		workspace := t.TempDir()
-		writeAgent(t, workspace, "primary", "---\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_sessions: allow\n    rocketclaw_get_tags: allow\n    rocketclaw_set_tag: [[red, yellow]]\n---\nPrompt\n")
+		writeAgent(t, workspace, "primary", "---\nmodel: gpt-6.1-sol\npermission:\n  task: {primary: allow}\n  rocketclaw:\n    rocketclaw_sessions: allow\n    rocketclaw_get_tags: allow\n    rocketclaw_set_tag: [[red, yellow]]\n---\nPrompt\n")
 
 		var tagOutputs []string
 
@@ -923,7 +923,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 			require.True(t, admitted)
 			require.Equal(t, want, request.inbound.Text)
 			require.Equal(t, &harness.PromptInputDirectSkill{Name: "inspect", Arguments: "exact\ntext"}, inboundDirectSkill(request.inbound), "the edited text is the editor's Web message")
-			require.Contains(t, buildPrompt(request.inbound, nil, false), `[Web principal="Bob" `)
+			require.Contains(t, buildPrompt(request.inbound, nil, false), `[Web principal="Bob"]`)
 			require.Equal(t, content.Attachments, request.inbound.Attachments)
 			require.Equal(t, first.SlackReply, bridge.newOutboundMessage(request.inbound, "turn", "answer", true).SlackReply)
 			changed, err = rt.EditQueueItem(t.Context(), conversationID, id, "too late", "Bob", "bob@example.com")
@@ -1167,7 +1167,7 @@ func TestRuntimeQueueEditMakesTheEditorTheSender(t *testing.T) {
 		require.Equal(t, person, request.inbound.Metadata)
 		require.Equal(t, []any{protocol.SourceWeb, true}, []any{request.inbound.Source, request.inbound.Human})
 		require.Equal(t, `[Web principal="Bob"]`, reviewOriginHeader(request.inbound))
-		require.Equal(t, `[Web principal="Bob"]`+"\n\nfrom Bob", buildPrompt(request.inbound, &harness.Agent{Mode: harness.AgentModeEasy}, false))
+		require.Equal(t, `[Web principal="Bob"]`+"\n\nfrom Bob", buildPrompt(request.inbound, &harness.Agent{}, false))
 
 		_, err = store.db.ExecContext(t.Context(), `UPDATE turns SET phase = 'done' WHERE conversation_id = 'main'`)
 		require.NoError(t, err)
@@ -1349,15 +1349,15 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 				Background  bool   `json:"background"`
 			}{code, "ask", false})
 			task, _ := json.Marshal(struct {
-				Description  string `json:"description"`
-				Prompt       string `json:"prompt"`
-				SubagentType string `json:"subagent_type"`
-				Background   bool   `json:"background"`
-				Continue     struct {
+				Description string `json:"description"`
+				Prompt      string `json:"prompt"`
+				Agent       string `json:"agent"`
+				Background  bool   `json:"background"`
+				Continue    struct {
 					SessionID string `json:"session_id"`
 					Mode      string `json:"mode"`
 				} `json:"continue"`
-			}{Description: "research", Prompt: "research the flaky test", SubagentType: "researcher"})
+			}{Description: "research", Prompt: "research the flaky test", Agent: "researcher"})
 			_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_e","name":"execute","arguments":%q},{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_t","name":"task","arguments":%q}]}`, execute, task)
 		case strings.Contains(body, `"input":[{"content":"Research`):
 			select {

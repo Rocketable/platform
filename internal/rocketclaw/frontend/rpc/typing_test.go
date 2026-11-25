@@ -46,7 +46,7 @@ func TestTyping(t *testing.T) {
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
-	server := New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{})
+	server := New(&mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockRoutines{})
 	transport := grpc.NewServer()
 	server.Register(transport)
 

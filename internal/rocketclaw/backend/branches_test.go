@@ -374,7 +374,7 @@ func TestDeleteSiblingBranchKeepsTheCurrentPoint(t *testing.T) {
 	require.Equal(t, rows, branchTestRows(t, s), "a refused delete removes nothing")
 }
 
-func TestDeleteBranchHoldingACronReportIsRefused(t *testing.T) {
+func TestDeleteBranchHoldingARoutineReportIsRefused(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)

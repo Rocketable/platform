@@ -105,10 +105,10 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 		tools["bash"] = bashTool(f.shellSystem, &agent.CustomShell)
 	}
 
-	if agent.Mode == AgentModeEasy {
-		easy := makeSandboxedTools(&easyFiles{shell: agent.CustomShell}, f.shellSystem)
+	if agent.CustomShell.Dir != "" {
+		folder := makeSandboxedTools(&easyFiles{shell: agent.CustomShell}, f.shellSystem)
 		for _, name := range []string{"read", "apply_patch", "glob", "grep"} {
-			tools[name] = easy[name]
+			tools[name] = folder[name]
 		}
 
 		tools["webfetch"] = webFetchTool(easyWebFetchClient(agent.NetworkTargets))
@@ -118,9 +118,14 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 	tools["find_skills"] = scoped.findSkillsTool()
 	tools["skill"] = scoped.skillTool()
 
-	tools["task"] = scoped.taskTool()
-	if scoped.recursionRemaining != nil && *scoped.recursionRemaining == 0 {
-		delete(tools, "task")
+	if scoped.recursionRemaining == nil || *scoped.recursionRemaining > 0 {
+		if targets := scoped.taskTargets(); len(targets) > 0 {
+			tools["task"] = scoped.taskTool(targets)
+		}
+
+		if len(agent.CloneModels) > 0 {
+			tools[taskCloneToolName] = looperTool{}
+		}
 	}
 
 	if agent.Tools != nil {
@@ -170,6 +175,12 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 		delete(tools, "find_skills")
 	}
 
+	if _, ok := tools[taskCloneToolName]; ok {
+		names := slices.AppendSeq(slices.Collect(maps.Keys(tools)), maps.Keys(codeHosts))
+		slices.Sort(names)
+		tools[taskCloneToolName] = scoped.taskCloneTool(names)
+	}
+
 	return tools, codeHosts
 }
 
@@ -192,6 +203,7 @@ func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, err
 
 	loop := &looper{
 		agent:              *agent,
+		agents:             f.agents,
 		ProviderOrigin:     origin,
 		Client:             responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}},
 		SystemPrompt:       withCodeModeSystemPrompt(composeSystemPromptWithSkills(systemPrompt, f.skills, agent), modelTools, codeHosts, mcpServers),
@@ -437,9 +449,7 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, input skillTool
 	}
 
 	content := strings.TrimSpace(skill.Content)
-
-	easy := f.agent.Mode == AgentModeEasy
-	if easy && f.expandPromptShellCommands.SkillPrompts {
+	if f.expandPromptShellCommands.SkillPrompts {
 		content = f.promptExpansion.expandShellCommands(ctx, content)
 	}
 
@@ -460,13 +470,7 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, input skillTool
 		"<skill_files>",
 	}, files, []string{"</skill_files>", "</skill_content>"})
 
-	output := strings.Join(lines, "\n")
-
-	if !easy && f.expandPromptShellCommands.SkillPrompts {
-		output = f.promptExpansion.expandShellCommands(ctx, output)
-	}
-
-	return output, nil
+	return strings.Join(lines, "\n"), nil
 }
 
 var (

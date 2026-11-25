@@ -17,7 +17,7 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	message.ConsumedHeader = `[Web principal="alice"]`
 	message.Agent, message.Model, message.SourceConversationID, message.ReasoningEffort = "planner", "work/model-a", "producer-x", new("high")
 	message.SlackReply = &SlackReplyTarget{ChannelID: "C1", ThreadTS: "1.2"}
-	message.Cronjob = &CronjobMessage{RelativePath: "job.md"}
+	message.Routine = &RoutineMessage{RelativePath: "job.md"}
 	message.Terminal = TerminalStopped
 	message.Attachments = []OutboundAttachment{
 		{ID: "report", Name: "report.txt", MIMEType: "text/plain", Data: []byte("report"), OriginalUnverified: true, Size: 6},
@@ -42,18 +42,18 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	require.Equal(t, TerminalStopped, clone.Terminal)
 	require.NotSame(t, message.ReasoningEffort, clone.ReasoningEffort)
 	require.NotSame(t, message.SlackReply, clone.SlackReply)
-	require.NotSame(t, message.Cronjob, clone.Cronjob)
+	require.NotSame(t, message.Routine, clone.Routine)
 	require.NotSame(t, &message.Attachments[0], &clone.Attachments[0])
 	require.NotSame(t, &message.Attachments[0].Data[0], &clone.Attachments[0].Data[0])
 
 	clone.SlackReply.ThreadTS = "changed"
-	clone.Cronjob.RelativePath = "changed"
+	clone.Routine.RelativePath = "changed"
 	clone.Attachments[0].Name = "changed"
 	clone.Attachments[0].Data[0] = 'X'
 	clone.Attachments[1].Data[0] = 'Y'
 
 	require.Equal(t, "1.2", message.SlackReply.ThreadTS)
-	require.Equal(t, "job.md", message.Cronjob.RelativePath)
+	require.Equal(t, "job.md", message.Routine.RelativePath)
 	require.Equal(t, "report.txt", message.Attachments[0].Name)
 	require.Equal(t, byte('r'), message.Attachments[0].Data[0])
 	require.Equal(t, byte('i'), message.Attachments[1].Data[0])

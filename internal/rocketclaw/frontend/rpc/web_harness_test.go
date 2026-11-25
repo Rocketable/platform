@@ -17,7 +17,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	routinefrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/routine"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
@@ -119,7 +119,7 @@ func startWebHarness(t *testing.T) *webHarness {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	h.server = New(h.rt, h.rt.Sessions, h.rt.Cfg, &mockChannels{}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) { return nil, nil }})
+	h.server = New(h.rt, h.rt.Sessions, h.rt.Cfg, &mockChannels{}, &mockRoutines{JobsFunc: func() ([]routinefrontend.Job, error) { return nil, nil }})
 	h.server.Register(transport)
 
 	var serving errgroup.Group
@@ -197,7 +197,7 @@ func TestPausedChat(t *testing.T) {
 		}, 10*time.Second, 10*time.Millisecond)
 	}
 
-	require.NoError(t, h.rt.CreateConversation(t.Context(), protocol.Conversation{ID: "report", Agent: id, CreatedBy: "cron"}))
+	require.NoError(t, h.rt.CreateConversation(t.Context(), protocol.Conversation{ID: "report", Agent: id, CreatedBy: "routine"}))
 
 	for _, chat := range []string{id, "report"} {
 		_, err := h.rt.Sessions.AppendEntryID(t.Context(), chat, &harness.SessionEntry{Timestamp: time.Now().UTC()})

@@ -1060,7 +1060,7 @@ func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T)
 	t.Parallel()
 
 	workspace := t.TempDir()
-	agents := harness.Agents{Items: map[string]harness.Agent{"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "base prompt", Location: "", Permission: harness.PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}}}
+	agents := harness.Agents{Items: map[string]harness.Agent{"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "base prompt", Location: "", Permission: harness.PermissionSet{Buckets: nil}, FileMode: 0}}}
 
 	appendOverlayPromptToAgent(agents, "main", &config.Config{
 		Workspace: workspace,
@@ -1184,7 +1184,7 @@ func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 			case 1:
 				assert.Equal(t, "openai", provider)
 				assert.Equal(t, "main-model", body["model"])
-				writeResponseFunctionCall(t, w, "resp_1", "task", map[string]string{"description": "delegate", "prompt": "delegated prompt", "subagent_type": "helper"})
+				writeResponseFunctionCall(t, w, "resp_1", "task", map[string]string{"description": "delegate", "prompt": "delegated prompt", "agent": "helper"})
 			case 2:
 				assert.Equal(t, "child", provider)
 				assert.Equal(t, "helper-model", body["model"])
@@ -1744,23 +1744,21 @@ func TestBuildPromptCoversAttachments(t *testing.T) {
 		{protocol.SourceWeb, "Web"},
 	} {
 		t.Run(tc.origin, func(t *testing.T) {
-			assert.Equal(t, "["+tc.origin+" principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&protocol.InboundMessage{Source: tc.source, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}, nil, false))
+			assert.Equal(t, "["+tc.origin+" principal=\"Alice\"]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&protocol.InboundMessage{Source: tc.source, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}, nil, false))
 		})
 	}
 
-	assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nAttachment notes:\n- unsupported PDF", buildPrompt(&protocol.InboundMessage{AttachmentWarnings: []string{" unsupported PDF "}}, nil, false))
+	assert.Equal(t, "[System]\n\nAttachment notes:\n- unsupported PDF", buildPrompt(&protocol.InboundMessage{AttachmentWarnings: []string{" unsupported PDF "}}, nil, false))
 }
 
-func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
+func TestBuildPromptReplyHint(t *testing.T) {
 	t.Parallel()
 
 	msg := &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Text: "hello", Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}
 
-	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", buildPrompt(msg, &harness.Agent{Frontmatter: map[string]any{"additionalInstructions": "Reply in one sentence."}}, false))
-	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, &harness.Agent{Frontmatter: map[string]any{"additionalInstructions": " "}}, false))
-	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, &harness.Agent{Frontmatter: map[string]any{"additionalInstructions": 7}}, false))
-	assert.Equal(t, "[Slack principal=\"Alice\"]\n\nhello", buildPrompt(msg, &harness.Agent{Mode: harness.AgentModeEasy}, false), "easy agents get no reply-style line")
-	assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n task \n", buildPrompt(&protocol.InboundMessage{Source: protocol.SourceSystem, PreserveWhitespace: true, Text: " task \n", Metadata: map[string]string{protocol.InboundOriginMetadataKey: "System"}}, nil, false))
+	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", buildPrompt(msg, &harness.Agent{ReplyHint: "Reply in one sentence."}, false))
+	assert.Equal(t, "[Slack principal=\"Alice\"]\n\nhello", buildPrompt(msg, &harness.Agent{}, false), "no reply hint, no reply-style line")
+	assert.Equal(t, "[System]\n\n task \n", buildPrompt(&protocol.InboundMessage{Source: protocol.SourceSystem, PreserveWhitespace: true, Text: " task \n", Metadata: map[string]string{protocol.InboundOriginMetadataKey: "System"}}, nil, false))
 }
 
 func TestParseDirectSkillTrigger(t *testing.T) {
@@ -1902,14 +1900,14 @@ func TestReviewOriginHeader(t *testing.T) {
 		inbound *protocol.InboundMessage
 		want    string
 	}{
-		{"cron", &protocol.InboundMessage{Source: protocol.SourceSystem, Text: `[Web principal="x"] deploy`, Cronjob: &protocol.CronjobMessage{RelativePath: "cron/daily.md"}}, "[Cron]"},
+		{"cron", &protocol.InboundMessage{Source: protocol.SourceSystem, Text: `[Web principal="x"] deploy`, Routine: &protocol.RoutineMessage{RelativePath: "cron/daily.md"}}, "[Routine]"},
 		{"web", &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}}, `[Web principal="Alice"]`},
 		{"slack", &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice (U1)", protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}}, `[Slack principal="Alice (U1)"]`},
 		{"ambient", &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice (U1)", protocol.InboundAmbientMetadataKey: protocol.AmbientJoinedThread}}, `[Slack unaddressed principal="Alice (U1)"]`},
 		{"ambient Task child", &protocol.InboundMessage{Source: protocol.SourceSystem, Metadata: map[string]string{protocol.InboundSenderAgentMetadataKey: "planner", protocol.InboundAmbientMetadataKey: protocol.AmbientDelegated}}, `[System unaddressed sender="agent planner"]`},
 		{"external MCP", &protocol.InboundMessage{Source: protocol.SourceExternalMCP, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: `Bob "ops"`}}, `[ExternalMCP principal="Bob \"ops\""]`},
 		{"agent write", &protocol.InboundMessage{Source: protocol.SourceSystem, Metadata: map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundSenderSessionMetadataKey: "web:1", protocol.InboundSenderAgentMetadataKey: "planner"}}, `[System sender="agent planner"]`},
-		{"follow-on", &protocol.InboundMessage{Source: protocol.SourceSystem, OriginHeader: "[ScheduledMessage source=Cron]"}, "[ScheduledMessage source=Cron]"},
+		{"follow-on", &protocol.InboundMessage{Source: protocol.SourceSystem, OriginHeader: "[ScheduledMessage source=Routine]"}, "[ScheduledMessage source=Routine]"},
 	} {
 		assert.Equal(t, tc.want, reviewOriginHeader(tc.inbound), tc.name)
 
@@ -1921,7 +1919,7 @@ func TestReviewOriginHeader(t *testing.T) {
 
 func TestBuildPromptNamesAgentSender(t *testing.T) {
 	msg := &protocol.InboundMessage{Source: protocol.SourceSystem, Text: "hi", Metadata: map[string]string{protocol.InboundSenderSessionMetadataKey: `web:"a"`, protocol.InboundSenderAgentMetadataKey: "planner"}}
-	instructions := ` additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]` + "\n\nhi"
+	instructions := `]` + "\n\nhi"
 	returns := `; your final answer returns to that session automatically, so do not write back to it"`
 
 	assert.Equal(t, `[System sender="steer from session web:\"a\" (agent planner)`+returns+instructions, buildPrompt(msg, nil, true))
@@ -2002,7 +2000,7 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	assert.Equal(t, threadKey, final.ConversationID)
 	assert.Equal(t, "selected", final.Agent)
 	assert.Nil(t, final.SlackReply, "routing comes from the canonical Slack ID, not an inherited reply")
-	assert.Nil(t, final.Cronjob)
+	assert.Nil(t, final.Routine)
 
 	body := <-requests
 	assert.Contains(t, body, "Selected canonical instructions")
@@ -2015,7 +2013,7 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 
 	require.NoError(t, json.Unmarshal([]byte(body), &request))
 	assert.Equal(t, "user", request.Input[len(request.Input)-1].Role)
-	assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nlater", request.Input[len(request.Input)-1].Content)
+	assert.Equal(t, "[System]\n\nlater", request.Input[len(request.Input)-1].Content)
 	entries, err := service.ObserveEntries(t.Context(), privateConversationID)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "the canonical scheduled turn does not enter private history")
@@ -2519,7 +2517,7 @@ func TestAskUserQuestionToolOmitsResponseChannel(t *testing.T) {
 	assert.Equal(t, "slack-thread:C1:1", got.ConversationID)
 }
 
-func TestRunTurnExpandsOnlyCronDefinitionShellCommands(t *testing.T) {
+func TestRunTurnExpandsOnlyRoutineDefinitionShellCommands(t *testing.T) {
 	t.Parallel()
 
 	const prompt = "!`printf x >> expansion-count; printf sample-value`"
@@ -2544,7 +2542,7 @@ func TestRunTurnExpandsOnlyCronDefinitionShellCommands(t *testing.T) {
 
 			msg := protocol.NewInboundMessage(tc.source, protocol.InboundKindPrompt, prompt, false)
 			if tc.cron {
-				msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/report.md", Agent: "primary"}
+				msg.Routine = &protocol.RoutineMessage{RelativePath: "cron/report.md", Agent: "primary"}
 			}
 
 			if tc.wake {
@@ -2565,7 +2563,7 @@ func TestRunTurnExpandsOnlyCronDefinitionShellCommands(t *testing.T) {
 			assert.Equal(t, "user", messages[len(messages)-1].role)
 
 			prefix := map[protocol.Source]string{protocol.SourceSystem: "System", protocol.SourceWeb: "Web", protocol.SourceSlack: "Slack", protocol.SourceExternalMCP: "ExternalMCP"}[tc.source]
-			assert.Equal(t, "["+prefix+" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n"+tc.want, messages[len(messages)-1].text)
+			assert.Equal(t, "["+prefix+"]\n\n"+tc.want, messages[len(messages)-1].text)
 			assert.Equal(t, prompt, msg.Text, "the admitted input stays unchanged")
 
 			snapshot, captured, err := bridge.turnInputs(t.Context(), "turn-input")
@@ -3421,7 +3419,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 
 		consumedSteer = consumedSteer || message.ConsumedID == "active-steer"
 		if message.ConsumedID == "active-steer" {
-			require.Equal(t, `[Web principal="Bob" additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]`, message.ConsumedHeader)
+			require.Equal(t, `[Web principal="Bob"]`, message.ConsumedHeader)
 		} else {
 			require.True(t, message.Complete, "only one blank start may precede the final answer")
 		}
@@ -3475,7 +3473,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, initial.ConsumedHeader, items[0].OfMessage.ExtraFields()["prompt_header"])
 	require.Equal(t, responses.EasyInputMessageRoleUser, items[2].OfMessage.Role)
-	require.Equal(t, `[Web principal="Bob" additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]`, items[2].OfMessage.ExtraFields()["prompt_header"])
+	require.Equal(t, `[Web principal="Bob"]`, items[2].OfMessage.ExtraFields()["prompt_header"])
 }
 
 func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
@@ -4167,7 +4165,7 @@ func lastRequestMessage(t *testing.T, body string) string {
 }
 
 func systemPromptHeader() string {
-	return "[System additional_instructions=" + strconv.Quote(defaultReplyInstruction) + "]"
+	return "[System]"
 }
 
 func testExecuteNote(jobID string) string {
@@ -4577,13 +4575,13 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		manager, _ := nt.run(t, ignoreOutbound)
 		report := "web:cron:daily"
 
-		msg := seedCronRun(t, nt.service, "cron:daily")
+		msg := seedRoutineRun(t, nt.service, "cron:daily")
 		job := testBackgroundJob("cron:daily", "turn-cron/call/a")
 		job.origin = msg
 		createTestBackgroundJob(t, nt.service, job)
 
 		outbound := protocol.NewOutboundMessage("cron:daily", "Report started")
-		outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
+		outbound.TurnID, outbound.Complete, outbound.Routine = "turn-cron", true, msg.Routine
 		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{conversationID: strings.TrimSpace("cron:daily"), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
 		require.NoError(t, err)
 		require.NoError(t, manager.StartActiveTurns(t.Context()))
@@ -4607,13 +4605,13 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		manager, _ := nt.run(t, ignoreOutbound)
 		report := "web:cron:daily"
 
-		msg := seedCronRun(t, nt.service, "cron:daily")
+		msg := seedRoutineRun(t, nt.service, "cron:daily")
 		job := testBackgroundJob("cron:daily", "turn-cron/call/a")
 		job.origin = msg
 		createTestBackgroundJob(t, nt.service, job)
 
 		outbound := protocol.NewOutboundMessage("cron:daily", "Report started")
-		outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
+		outbound.TurnID, outbound.Complete, outbound.Routine = "turn-cron", true, msg.Routine
 		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{conversationID: strings.TrimSpace("cron:daily"), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
 		require.NoError(t, err)
 		require.NoError(t, manager.StartActiveTurns(t.Context()))
@@ -4626,7 +4624,7 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		finishTestBackgroundJob(t, nt.service, job, backgroundCompleted, true)
 
 		stale := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
-		stale.ConversationID, stale.RequireOutputDecision, stale.Cronjob = "cron:daily", msg.RequireOutputDecision, msg.Cronjob
+		stale.ConversationID, stale.RequireOutputDecision, stale.Routine = "cron:daily", msg.RequireOutputDecision, msg.Routine
 		require.NoError(t, nt.bridge(t, manager, "cron:daily").enqueue(t.Context(), &bridgeRequest{inbound: stale, backgroundWake: true}, "submit background wake"))
 
 		defer func() {
@@ -4989,7 +4987,7 @@ func TestTurnBoundPlatformTools(t *testing.T) {
 
 	origin := new(protocol.InboundMessage)
 	bridge := &Bridge{runtime: new(config.LockedConfig), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
-	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []harness.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{RestartFunc: func(string) string { return "" }}), attachFilesTool(nil, &harness.CustomShell{}, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), navigateTool(bridge.threads, ""), sessionsWriteTool(bridge, origin, origin, "main", "main", harness.Agents{}), currentSessionIDTool("main")}, pageSpace{sessions: bridge.config.SessionService, conversation: "main"}.nativeTools(nil, &harness.CustomShell{}))
+	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []harness.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{RestartFunc: func(string) string { return "" }}), attachFilesTool(nil, &harness.CustomShell{}, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), navigateTool(bridge.threads, ""), sessionsWriteTool(bridge, origin, origin, "main", "main"), currentSessionIDTool("main", "main")}, pageSpace{sessions: bridge.config.SessionService, conversation: "main"}.nativeTools(nil, &harness.CustomShell{}))
 
 	var bound []string
 

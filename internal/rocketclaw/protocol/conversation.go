@@ -13,10 +13,10 @@ var ErrBridgeStopped = errors.New("bridge stopped")
 
 type Conversation struct {
 	ID, Agent, CreatedBy, Space string
-	Run                         *CronRun
+	Run                         *RoutineRun
 }
 
-type CronRun struct {
+type RoutineRun struct {
 	Path   string
 	At     time.Time
 	OneOff bool

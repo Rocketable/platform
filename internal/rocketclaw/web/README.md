@@ -239,8 +239,12 @@ renamed, and its test chat and assistant are refused until then.
 
 **Form, File and History.** The settings pane edits one variant at a time. The
 Form shows required, common and changed settings with a plain explanation each,
-and folds the rest into groups that say their defaults in words. The File tab is
-the same variant as its agent file. Everyone's edits in either tab, and their
+and folds the rest into groups that say their defaults in words. A list setting
+takes entries separated by commas and saves them one entry per line; in an easy agent's **Helpers**, an entry
+`agent: writer` names the agent `writer` next to the copy models, and the file
+gets `- agent: writer`. Keys the agent's kind does not take are listed under
+**Unknown settings**, because the agent fails to load with them; remove them in
+the File tab. The File tab is the same variant as its agent file. Everyone's edits in either tab, and their
 cursors, appear for everyone else as they type. A setting takes the last write;
 instructions typed at the same time keep everyone's text. File-tab YAML that does
 not parse yet stays with the person typing it until it does. History lists every

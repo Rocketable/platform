@@ -18,7 +18,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-func startWebRPC(rt *backend.Runtime, tailnet *tailnetNode, channels rpc.ChannelAgentChoices, cronjobs rpc.CronJobs) func(context.Context) error {
+func startWebRPC(rt *backend.Runtime, tailnet *tailnetNode, channels rpc.ChannelAgentChoices, routines rpc.Routines) func(context.Context) error {
 	cfg := rt.Cfg.Clone()
 
 	listener := bufconn.Listen(1 << 20)
@@ -30,7 +30,7 @@ func startWebRPC(rt *backend.Runtime, tailnet *tailnetNode, channels rpc.Channel
 	handler.Handle("/", rpc.NewHTTPHandler(connection, rt.Cfg, cmp.Or(cfg.ServerDisplayName, cfg.Web.Tsnet.Hostname)))
 	handler.Handle("/opencode/{name}/mcp", http.NewCrossOriginProtection().Handler(rt.OpenCodeMCP()))
 	server := grpc.NewServer()
-	web := rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs)
+	web := rpc.New(rt, rt.Sessions, rt.Cfg, channels, routines)
 	web.Register(server)
 
 	var serving errgroup.Group

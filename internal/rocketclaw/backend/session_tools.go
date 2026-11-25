@@ -17,7 +17,6 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -32,7 +31,6 @@ const (
 	sessionsMoveToolName      = "rocketclaw_sessions_move"
 	navigateToolName          = "rocketclaw_navigate_for_me"
 	sessionsSubject           = "rocketclaw_sessions"
-	recipientSetting          = "rocketclaw_sessions_recipient"
 
 	maxListedSessions = 200
 	maxSessionEntries = 100
@@ -124,135 +122,74 @@ func (s *SessionService) checkSessionTarget(ctx context.Context, owner, syncDest
 	return agent, nil
 }
 
-func agentTagGroups(agent *harness.Agent) ([][]string, error) {
-	groups := agent.TagGroups
-	if agent.Mode != harness.AgentModeEasy {
-		permission, _ := agent.Frontmatter["permission"].(map[string]any)
-		rocketclaw, _ := permission["rocketclaw"].(map[string]any)
-
-		raw, present := rocketclaw[setTagToolName]
-		if !present {
-			return nil, nil
-		}
-
-		if _, scalar := raw.(string); scalar {
-			return nil, nil
-		}
-
-		data, err := json.Marshal(raw)
-		if err != nil {
-			return nil, fmt.Errorf("encode tag permissions: %w", err)
-		}
-
-		if err := json.Unmarshal(data, &groups); err != nil {
-			return nil, fmt.Errorf("decode tag groups: %w", err)
-		}
-
-		if groups == nil {
-			return nil, errors.New("tags must be a list of tag lists")
-		}
-	}
-
-	var names []string
-
-	for _, group := range groups {
-		if len(group) == 0 {
-			return nil, errors.New("tag groups must not be empty")
-		}
-
-		for _, name := range group {
-			if name == "" || slices.Contains(names, name) {
-				return nil, fmt.Errorf("empty or duplicate tag name %q", name)
-			}
-
-			names = append(names, name)
-		}
-	}
-
-	return groups, nil
-}
-
-func agentRecipients(agent *harness.Agent) (all bool, names []string, err error) {
-	if agent.Mode == harness.AgentModeEasy {
-		return agent.DelegatedFrom == nil, agent.DelegatedFrom, nil
-	}
-
-	permission, _ := agent.Frontmatter["permission"].(map[string]any)
-	rocketclaw, _ := permission["rocketclaw"].(map[string]any)
-
-	raw, present := rocketclaw[recipientSetting]
-	if !present {
-		return !agent.Permission.Sudo, nil, nil
-	}
-
-	if all, ok := raw.(bool); ok {
-		return all, nil, nil
-	}
-
-	list, _ := raw.([]any)
-	if len(list) == 0 {
-		return false, nil, errors.New("must be true, false, or a non-empty list of agent names")
-	}
-
-	for _, item := range list {
-		name, _ := item.(string)
-		if name == "" || slices.Contains(names, name) {
-			return false, nil, fmt.Errorf("agent names must be unique non-empty strings, got %v", item)
-		}
-
-		names = append(names, name)
-	}
-
-	return false, names, nil
-}
-
-func checkedAgentTagGroups(agent *harness.Agent) ([][]string, error) {
-	tagsKey := "permission.rocketclaw." + setTagToolName
-	if agent.Mode == harness.AgentModeEasy {
-		tagsKey = "tags"
-	}
-
-	groups, err := agentTagGroups(agent)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", tagsKey, err)
-	}
-
-	if _, _, err := agentRecipients(agent); err != nil {
-		return nil, fmt.Errorf("permission.rocketclaw.%s: %w", recipientSetting, err)
-	}
-
-	if agent.Approver != nil {
-		if _, err := agentTagGroups(agent.Approver); err != nil {
-			return nil, fmt.Errorf("approver.tags: %w", err)
-		}
-	}
-
-	return groups, nil
-}
-
-func checkRecipient(agents harness.Agents, target, sender string) error {
-	definition := agents.Items[target]
-	if all, names, _ := agentRecipients(&definition); all || slices.Contains(names, sender) {
+func checkSessionReach(ctx context.Context, op harness.DelegationOp, session, agent, owner string) error {
+	if harness.ToolCallDelegates(ctx, op, agent, owner) {
 		return nil
 	}
 
-	if skel.BuiltinAgent(target) {
-		return fmt.Errorf("agent %q is built into RocketClaw and accepts no writes from agents", target)
+	caller, _ := harness.ToolCallAgent(ctx)
+	action, _ := caller.Permission.Evaluate("task", agent)
+	reason := "a sudo agent's chats and agents that are not loaded are out of its reach"
+
+	switch {
+	case caller.Permission.Sudo && action == harness.PermissionDeny:
+		reason = "its task rules deny agent " + agent
+	case caller.Permission.Sudo:
+		reason = "only a sudo agent writes into its own chats"
+	case action == harness.PermissionDeny:
+		reason = "its task rules do not name agent " + agent
 	}
 
-	setting := "permission.rocketclaw." + recipientSetting
-	if definition.Mode == harness.AgentModeEasy {
-		setting = "delegatedFrom"
-	}
-
-	return fmt.Errorf("agent %q does not accept writes from agent %q (%s)", target, sender, setting)
+	return fmt.Errorf("agent %s may not %s %s: %s", caller.Name, op, session, reason)
 }
 
-func setSessionTagTools(agent *harness.Agent, groups [][]string) {
+func (s *SessionService) sessionOwners(ctx context.Context, ids []string) (map[string][2]string, error) {
+	owners := make(map[string][2]string, len(ids))
+
+	return owners, readRows(ctx, s.db, `WITH RECURSIVE starts AS (
+    SELECT unnest($1::text[]) AS id
+), `+ancestorsSQL+`, tops AS (
+    SELECT DISTINCT ON (id) id, conversation_id FROM ancestors ORDER BY id, depth DESC
+)
+SELECT t.id, COALESCE(c.agent, ''), COALESCE(o.agent, '') FROM tops t
+LEFT JOIN conversations c ON c.conversation_id = t.id
+LEFT JOIN conversations o ON o.conversation_id = t.conversation_id`, "session owners", func(row rowScanner) error {
+		var (
+			id    string
+			owner [2]string
+		)
+		if err := row.Scan(&id, &owner[0], &owner[1]); err != nil {
+			return fmt.Errorf("scan session owner: %w", err)
+		}
+
+		owners[id] = owner
+
+		return nil
+	}, ids)
+}
+
+func (s *SessionService) sessionListCandidates(ctx context.Context, params *sessionListParams) ([]string, error) {
+	var ids []string
+
+	return ids, readRows(ctx, s.db, sessionListCandidatesSQL, "session tool candidates", func(row rowScanner) error {
+		var id, agent, owner string
+		if err := row.Scan(&id, &agent, &owner); err != nil {
+			return fmt.Errorf("scan session tool candidates: %w", err)
+		}
+
+		if len(ids) < params.Limit && harness.ToolCallDelegates(ctx, harness.DelegationRead, agent, owner) {
+			ids = append(ids, id)
+		}
+
+		return nil
+	}, params.Since, params.Until)
+}
+
+func setSessionTagTools(agent *harness.Agent) {
 	action := harness.PermissionDeny
-	if len(groups) > 0 && (agent.Permission.Sudo || agent.Permission.Easy) {
+	if len(agent.TagGroups) > 0 && agent.Permission.Sudo {
 		action = harness.PermissionAuto
-	} else if len(groups) > 0 {
+	} else if len(agent.TagGroups) > 0 {
 		action = harness.PermissionAllow
 	}
 
@@ -270,7 +207,7 @@ func setSessionTagTools(agent *harness.Agent, groups [][]string) {
 		return
 	}
 
-	agent.Prompt += "\n\n## Session Tags\n\nAvailable tools: " + strings.Join(tools, ", ") + ". Tags belong to the owning session and persist across restarts. Allowed literal, case-sensitive groups: " + fmt.Sprintf("%q", groups) + ". Each group is exclusive: set an inactive tag to replace its group; set an active tag to toggle it off. Other groups stay unchanged. Get returns all active session tags."
+	agent.Prompt += "\n\n## Session Tags\n\nAvailable tools: " + strings.Join(tools, ", ") + ". Tags belong to the owning session and persist across restarts. Allowed literal, case-sensitive groups: " + fmt.Sprintf("%q", agent.TagGroups) + ". Each group is exclusive: set an inactive tag to replace its group; set an active tag to toggle it off. Other groups stay unchanged. Get returns all active session tags."
 }
 
 func sessionTagTools(service *SessionService, conversationID string) []harness.Tool {
@@ -291,11 +228,6 @@ func sessionTagTools(service *SessionService, conversationID string) []harness.T
 				agent, ok := harness.ToolCallAgent(ctx)
 				if !ok {
 					return harness.ToolResult{}, errors.New("tag tools require an active agent call")
-				}
-
-				groups, err := agentTagGroups(&agent)
-				if err != nil {
-					return harness.ToolResult{}, err
 				}
 
 				var (
@@ -320,15 +252,18 @@ func sessionTagTools(service *SessionService, conversationID string) []harness.T
 					return harness.ToolResult{}, errors.New("invalid tag arguments")
 				}
 
-				var tags []string
+				var (
+					tags []string
+					err  error
+				)
 
 				if name == setTagToolName {
-					group := slices.IndexFunc(groups, func(group []string) bool { return slices.Contains(group, *params.Tag) })
+					group := slices.IndexFunc(agent.TagGroups, func(group []string) bool { return slices.Contains(group, *params.Tag) })
 					if group < 0 {
 						return harness.ToolResult{}, fmt.Errorf("tag %q is not permitted for agent %q", *params.Tag, agent.Name)
 					}
 
-					tags, err = service.toggleSessionTag(ctx, conversationID, *params.Tag, groups[group])
+					tags, err = service.toggleSessionTag(ctx, conversationID, *params.Tag, agent.TagGroups[group])
 				} else {
 					tags, err = sessionTags(ctx, service.db, conversationID)
 				}
@@ -383,16 +318,23 @@ const sessionListCandidatesSQL = `WITH RECURSIVE latest_entries AS (
     SELECT conversation_id AS id FROM recent
 ), ` + ancestorsSQL + `, shadowed AS (
     SELECT DISTINCT a.id AS conversation_id FROM ancestors a JOIN conversations b ON b.conversation_id = a.conversation_id WHERE b.shadow_parent IS NOT NULL
+), tops AS (
+    SELECT DISTINCT ON (id) id, conversation_id FROM ancestors ORDER BY id, depth DESC
 )
-SELECT r.conversation_id FROM recent r LEFT JOIN shadowed s USING (conversation_id) WHERE s.conversation_id IS NULL
-ORDER BY r.latest DESC, r.conversation_id COLLATE "C" LIMIT $3`
+SELECT r.conversation_id, COALESCE(c.agent, ''), COALESCE(o.agent, '') FROM recent r
+JOIN tops t ON t.id = r.conversation_id
+LEFT JOIN conversations c ON c.conversation_id = r.conversation_id
+LEFT JOIN conversations o ON o.conversation_id = t.conversation_id
+LEFT JOIN shadowed s ON s.conversation_id = r.conversation_id WHERE s.conversation_id IS NULL
+ORDER BY r.latest DESC, r.conversation_id COLLATE "C"`
 
 func listSessionsTool(service *SessionService, threads *threadBridgeManager) harness.Tool {
 	return harness.Tool{
 		Name: sessionsListToolName, Description: fmt.Sprintf("List durable conversations of this State Store, newest first. Supply all five fields: criteria, since (required), until (empty for no upper bound), limit (1 to %d) and include_message_preview. Returns TSV with a header, one session per row with entry counts, timestamps and optional message previews. "+
-			"Empty criteria lists every stored conversation by latest entry, including private MCP and routine sessions. "+
+			"Only sessions of agents your task permission rules name are listed, your own only when they name you, never a sudo agent's unless you are sudo; a sudo agent lists every session but those of another agent its task rules deny. "+
+			"Empty criteria lists every such stored conversation by latest entry, including private MCP and routine sessions. "+
 			"Other criteria is a Web /search query and returns what /search would: only the chats Web lists, never private External MCP or routine producer chats, filtered before the limit; order then uses each chat's summary time, and since and until the later of it and when the chat's newest running or waiting turn was created, so current work counts as recent. "+
-			"Query language: tag:V, routine:V, agent:V and room:V match V exactly and case-sensitively; space:V matches the complete Birth Space name ignoring case, not tab placement; model:V matches part of the agent's configured model, ignoring case; V may be a JSON-quoted string such as tag:\"Needs review\"; is:forked and is:routine; is:running (a running turn or background work), is:queued (waiting turns other than scheduled ones), is:waiting (waiting on a person: a pending question, form or permission request) and is:external (bound to External MCP), all but is:waiting counting the hidden runs reporting to a chat as its own; sort:newest or sort:oldest. agent:V also matches chats showing a hidden cron or External MCP run of agent V. Room terms match any one room and agent terms any one agent; other filters use AND. Unknown or malformed terms are searched as text. "+
+			"Query language: tag:V, routine:V, agent:V and room:V match V exactly and case-sensitively; space:V matches the complete Birth Space name ignoring case, not tab placement; model:V matches part of the agent's configured model, ignoring case; V may be a JSON-quoted string such as tag:\"Needs review\"; is:forked and is:routine; is:running (a running turn or background work), is:queued (waiting turns other than scheduled ones), is:waiting (waiting on a person: a pending question, form or permission request) and is:external (bound to External MCP), all but is:waiting counting the hidden runs reporting to a chat as its own; sort:newest or sort:oldest. agent:V also matches chats showing a hidden routine or External MCP run of agent V. Room terms match any one room and agent terms any one agent; other filters use AND. Unknown or malformed terms are searched as text. "+
 			"All remaining text is ONE case-insensitive phrase, not separate keywords, matched against name, room, agent, preview, session label, chat origin and message text. "+
 			"With criteria, rows add name, agent, room, tags and matched (the field holding the phrase, or messages when only message text did), and a messages block lists up to 3 matching messages per listed chat; rocketclaw_sessions_get with a row's before_entry_id and limit 1 shows that message. Messages of stopped turns are not listed. "+
 			"Trailing lines show how criteria was read and whether the limit cut results.", maxListedSessions),
@@ -450,7 +392,7 @@ func listSessionsTool(service *SessionService, threads *threadBridgeManager) har
 			)
 
 			if criteria := strings.TrimSpace(params.Criteria); criteria == "" {
-				ids, err = queryStrings(ctx, service.db, sessionListCandidatesSQL, "session tool candidates", params.Since, params.Until, params.Limit)
+				ids, err = service.sessionListCandidates(ctx, &params)
 			} else {
 				threads.mu.Lock()
 				slack := threads.slackLookups
@@ -567,6 +509,22 @@ func (s *SessionService) searchSessionsWithin(ctx context.Context, criteria stri
 		return at < params.Since || params.Until != "" && at >= params.Until
 	})
 
+	ids := make([]string, 0, len(search.Matches))
+	for i := range search.Matches {
+		ids = append(ids, search.Matches[i].Chat.Session.Conversation.ID)
+	}
+
+	owners, err := s.sessionOwners(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	search.Matches = slices.DeleteFunc(search.Matches, func(match SessionMatch) bool {
+		owner := owners[match.Chat.Session.Conversation.ID]
+
+		return !harness.ToolCallDelegates(ctx, harness.DelegationRead, owner[0], owner[1])
+	})
+
 	if !slices.ContainsFunc(search.Terms, func(term SearchTerm) bool { return term.Key == keySort }) {
 		slices.SortFunc(search.Matches, func(a, b SessionMatch) int {
 			return cmp.Or(b.Chat.Session.Summary.LastUpdated.Compare(a.Chat.Session.Summary.LastUpdated), strings.Compare(a.Chat.Session.Conversation.ID, b.Chat.Session.Conversation.ID))
@@ -653,13 +611,17 @@ GROUP BY f.id, f.turns, f.revert_index, f."timestamp" ORDER BY f.id DESC`, "sess
 	return summaries, nil
 }
 
-func currentSessionIDTool(conversationID string) harness.Tool {
+func currentSessionIDTool(conversationID, owner string) harness.Tool {
 	return harness.Tool{
-		Name: sessionsCurrentIDToolName, Description: "Return only the owning RocketClaw bridge's bare stored conversation ID, without a JSON wrapper. Pass it as conversation_id to rocketclaw_sessions_get inside execute to read durable history, including entries before compaction. Child agents inherit this owning conversation ID, not a separate child-run ID. No arguments.",
+		Name: sessionsCurrentIDToolName, Description: "Return only the owning RocketClaw bridge's bare stored conversation ID, without a JSON wrapper. Pass it as conversation_id to rocketclaw_sessions_get inside execute to read durable history, including entries before compaction. Child agents inherit this owning conversation ID, not a separate child-run ID. No arguments. Works only on sessions of agents your task permission rules name, your own only when they name you, never a sudo agent's unless you are sudo; a sudo agent may use it on any session but those of another agent its task rules deny.",
 		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject},
 		Subjects:   func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}, "additionalProperties": false},
-		Call: func(context.Context, json.RawMessage, chan<- harness.ChatResponse) (harness.ToolResult, error) {
+		Call: func(ctx context.Context, _ json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
+			if err := checkSessionReach(ctx, harness.DelegationRead, "session "+strconv.Quote(conversationID), owner, owner); err != nil {
+				return harness.ToolResult{}, err
+			}
+
 			return harness.TextToolResult(conversationID), nil
 		},
 	}
@@ -667,7 +629,7 @@ func currentSessionIDTool(conversationID string) harness.Tool {
 
 func sessionsGetURLTool(threads *threadBridgeManager) harness.Tool {
 	return harness.Tool{
-		Name: sessionsGetURLToolName, Description: "Return only the clickable Web URL of a top-level session, one Web lists. Fails for Delegation Histories, private External MCP and routine producer conversations, and unknown IDs.",
+		Name: sessionsGetURLToolName, Description: "Return only the clickable Web URL of a top-level session, one Web lists. Fails for Delegation Histories, private External MCP and routine producer conversations, and unknown IDs. Works only on sessions of agents your task permission rules name, your own only when they name you, never a sudo agent's unless you are sudo; a sudo agent may use it on any session but those of another agent its task rules deny.",
 		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject},
 		Subjects:   func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
 		Parameters: map[string]any{"properties": map[string]any{"session_id": map[string]any{"type": "string"}}, "required": []string{"session_id"}},
@@ -679,7 +641,12 @@ func sessionsGetURLTool(threads *threadBridgeManager) harness.Tool {
 				return harness.ToolResult{}, fmt.Errorf("parse get session URL: %w", err)
 			}
 
-			if _, err := threads.store.checkTopLevelSession(ctx, params.SessionID); err != nil {
+			agent, err := threads.store.checkTopLevelSession(ctx, params.SessionID)
+			if err == nil {
+				err = checkSessionReach(ctx, harness.DelegationRead, "session "+strconv.Quote(params.SessionID), agent, agent)
+			}
+
+			if err != nil {
 				return harness.ToolResult{}, err
 			}
 
@@ -738,9 +705,9 @@ func navigateTool(threads *threadBridgeManager, username string) harness.Tool {
 	}
 }
 
-func sessionsMoveTool(service *SessionService, conversationID string) harness.Tool {
+func sessionsMoveTool(service *SessionService, conversationID, owner string) harness.Tool {
 	return harness.Tool{
-		Name: sessionsMoveToolName, Description: "Move this session to another Web space, named as the Web names it, ignoring case. It moves for everyone: the space becomes the session's Birth Space, which decides which people limited to some spaces can read it, what space: searches find, and where Restore puts its tabs. Tabs people already have stay where they are. Fails for a space that does not exist.",
+		Name: sessionsMoveToolName, Description: "Move this session to another Web space, named as the Web names it, ignoring case. It moves for everyone: the space becomes the session's Birth Space, which decides which people limited to some spaces can read it, what space: searches find, and where Restore puts its tabs. Tabs people already have stay where they are. Fails for a space that does not exist. Works only on sessions of agents your task permission rules name, your own only when they name you, never a sudo agent's; a sudo agent may use it on any session but another sudo agent's and those of another agent its task rules deny.",
 		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject},
 		Subjects:   func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{"space": map[string]any{"type": "string"}}, "required": []string{"space"}, "additionalProperties": false},
@@ -750,6 +717,10 @@ func sessionsMoveTool(service *SessionService, conversationID string) harness.To
 			}
 			if err := json.Unmarshal(raw, &params); err != nil {
 				return harness.ToolResult{}, fmt.Errorf("parse move session: %w", err)
+			}
+
+			if err := checkSessionReach(ctx, harness.DelegationWrite, "session "+strconv.Quote(conversationID), owner, owner); err != nil {
+				return harness.ToolResult{}, err
 			}
 
 			spaces, err := service.Spaces(ctx)
@@ -862,7 +833,7 @@ SELECT value FROM parked ORDER BY (value::jsonb->>'timestamp')::timestamptz`, co
 	return nil
 }
 
-func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentName, self string, agents harness.Agents) harness.Tool {
+func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentName, self string) harness.Tool {
 	owner := cmp.Or(origin.SyncDestination, self)
 	properties := map[string]any{"session_id": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []sessionWriteMode{sessionWriteStop, sessionWriteSteer, sessionWriteEnqueue}}}
 
@@ -877,7 +848,7 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 			"Only stop takes an empty prompt: it then just stops the turn and goal, queues nothing, and posts that this session stopped it into that session's transcript without starting a turn. " +
 			"The receiver is told this session and agent sent it and that its answer comes back here. Each call that returns a queue_item_id gets exactly one reply: when the target's turn that took prompt ends, or, for an empty-prompt stop, once the stopped turn is over, a <session_reply> note naming that queue_item_id arrives here with the outcome and that turn's final answer. A steer's answer covers the whole turn it joined. " +
 			"DO NOT wait, sleep, poll, or write again to get the reply: work on anything that does not depend on it, or end your response; you will be resumed when it arrives. " +
-			"Every call, including create and stop, fails before doing anything when the target agent's permission.rocketclaw." + recipientSetting + ", or an easy target's delegatedFrom, does not accept this agent, except a write from a Slack channel's session into its own thread sessions. " +
+			"Every call, including create and stop, fails before doing anything unless the session's agent is one of this agent's targets: an agent its task permission rules name without deny, itself only when they name it, or, for a sudo agent, any agent but another one its task rules deny. Nothing but a sudo agent itself writes into its sessions. " +
 			"Returns JSON with outcome (created, steered, queued or stopped), session_id, url, queue_item_id (absent only for an empty-prompt stop when no turn was running, which gets no reply) and, for stop, turn_was_running. Share url so a person can open the session.",
 		Parameters: map[string]any{"properties": properties, "required": slices.Sorted(maps.Keys(properties))},
 		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
@@ -930,11 +901,11 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 				allowed := strings.FieldsFunc(origin.Metadata[protocol.InboundAllowedAgentsMetadataKey], func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' })
 				start := threadStart{agent: cmp.Or(strings.TrimSpace(input.Agent), agentName), createdBy: ThreadCreator(origin.Metadata[protocol.InboundPrincipalEmailMetadataKey])}
 
-				if origin.Cronjob != nil {
-					allowed, start.createdBy = []string{agentName}, ThreadCreatedByCron
+				if origin.Routine != nil {
+					allowed, start.createdBy = []string{agentName}, ThreadCreatedByRoutine
 				}
 
-				if err := checkRecipient(agents, start.agent, agent.Name); err != nil {
+				if err := checkSessionReach(ctx, harness.DelegationStart, "sessions of agent "+start.agent, start.agent, start.agent); err != nil {
 					return harness.ToolResult{}, err
 				}
 
@@ -949,18 +920,10 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 
 				result.SessionID = start.conversationID
 			} else {
-				var (
-					targetAgent string
-					ownThread   bool
-				)
+				var targetAgent string
 
 				if targetAgent, err = b.config.SessionService.checkSessionTarget(ctx, self, origin.SyncDestination, input.SessionID); err == nil {
-					err = queryScalar(ctx, b.config.SessionService.db, "read own Thread Session", `SELECT count(*) > 0 FROM conversations s JOIN conversations t USING (kind, slack_channel, agent)
-WHERE s.conversation_id = $1 AND t.conversation_id = $2 AND s.kind = 'slack_thread' AND s.slack_thread IS NULL AND t.slack_thread IS NOT NULL AND t.agent = $3`, &ownThread, self, input.SessionID, agent.Name)
-				}
-
-				if err == nil && !ownThread {
-					err = checkRecipient(agents, targetAgent, agent.Name)
+					err = checkSessionReach(ctx, harness.DelegationWrite, "session "+strconv.Quote(input.SessionID), targetAgent, targetAgent)
 				}
 
 				if err != nil {
@@ -1021,9 +984,25 @@ func storedEventLine(kind string, raw json.RawMessage) (role, text string) {
 	return "event", "[" + kind + ": stored event not rendered]"
 }
 
+func (s *SessionService) sessionToolEntries(ctx context.Context, conversationID string, beforeEntryID int64, limit int) ([]ObservedSessionEntry, error) {
+	owners, err := s.sessionOwners(ctx, []string{conversationID})
+	if err != nil {
+		return nil, err
+	}
+
+	owner := owners[conversationID]
+	if err := checkSessionReach(ctx, harness.DelegationRead, "session "+strconv.Quote(conversationID), owner[0], owner[1]); err != nil {
+		return nil, err
+	}
+
+	return queryRows(ctx, s.db, `WITH `+sessionHistorySQL+`
+SELECT id, entry_json, source_conversation_id, synced, revert_index FROM effective_entries
+WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entries", scanObservedEntry, conversationID, beforeEntryID, limit)
+}
+
 func getSessionTool(service *SessionService) harness.Tool {
 	return harness.Tool{
-		Name: sessionsGetToolName, Description: fmt.Sprintf("Read the newest limit (1 to %d) stored entries of a durable conversation older than before_entry_id (0 for the newest) as timestamp, role and content TSV in stored entry order, including messages, readable reasoning and tool events before compaction. When older entries exist, the last line is [next_before_entry_id=N]; pass N to read the previous page. Store-wide access includes private MCP sessions. One snapshot, no polling or read-state changes. Use rocketclaw_sessions_current_id for your owning conversation or rocketclaw_sessions_list to find another ID.", maxSessionEntries),
+		Name: sessionsGetToolName, Description: fmt.Sprintf("Read the newest limit (1 to %d) stored entries of a durable conversation older than before_entry_id (0 for the newest) as timestamp, role and content TSV in stored entry order, including messages, readable reasoning and tool events before compaction. When older entries exist, the last line is [next_before_entry_id=N]; pass N to read the previous page. It reaches only sessions of agents your task permission rules name, as rocketclaw_sessions_list does, private MCP sessions included. One snapshot, no polling or read-state changes. Use rocketclaw_sessions_current_id for your owning conversation or rocketclaw_sessions_list to find another ID.", maxSessionEntries),
 		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject},
 		Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
 		Parameters: map[string]any{"properties": map[string]any{
@@ -1050,9 +1029,7 @@ func getSessionTool(service *SessionService) harness.Tool {
 				return harness.ToolResult{}, fmt.Errorf("limit must be between 1 and %d and before_entry_id must not be negative", maxSessionEntries)
 			}
 
-			observations, err := queryRows(ctx, service.db, `WITH `+sessionHistorySQL+`
-SELECT id, entry_json, source_conversation_id, synced, revert_index FROM effective_entries
-WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entries", scanObservedEntry, params.ConversationID, params.BeforeEntryID, params.Limit+1)
+			observations, err := service.sessionToolEntries(ctx, params.ConversationID, params.BeforeEntryID, params.Limit+1)
 			if err != nil {
 				return harness.ToolResult{}, err
 			}

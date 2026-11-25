@@ -20,3 +20,15 @@ test("the MCP settings list each configured server with its facets", () => {
     [...list.matchAll(/<li[^>]*>(.*?)<\/li>/g)].map(([, item]) => [...item.matchAll(/>([^<]+)</g)].map(([, text]) => text)));
   expect(lists).toEqual([[["alpha", "read", "write"], ["zeta", "sudo"]], [["alpha", "read", "write"], ["zeta", "sudo"]]]);
 });
+
+test("helpers show agent entries next to models, and unknown keys show as failing to load", () => {
+  const html = (value: string) => {
+    const variant = { name: "default", settings: [{ key: "subagents", value }, { key: "temperature", value: "0.2" }], body: "" };
+    return renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}>
+      <FormTab help={[{ ...setting("subagents", "Helpers"), control: "list" }]} coedit={{} as CoEdit} variant={variant} presence={[]} onFile={() => {}} suggested={suggestion("easy", variant, [])} problems={[]} />
+    </QueryClientProvider>);
+  };
+  for (const value of ["- gpt-5\n- agent: writer", "[gpt-5, {agent: writer}]"]) expect(/<input[^>]*aria-label="Helpers"[^>]*value="([^"]*)"/.exec(html(value))?.[1]).toBe("gpt-5, agent: writer");
+  const unknown = /<section aria-label="Unknown settings"[^>]*>(.*?)<\/section>/.exec(html("auto"))?.[1] ?? "";
+  expect(unknown.replaceAll(/<[^>]+>/g, "")).toBe("Unknown settings · the agent fails to load with these; remove them in the File tabtemperature: 0.2");
+});

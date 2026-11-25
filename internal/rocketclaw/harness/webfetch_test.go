@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
@@ -428,7 +429,7 @@ func TestWebFetchReplaysFromJournal(t *testing.T) {
 	require.Equal(t, 2, fetches)
 }
 
-func TestEasyWebFetchNetworkTargets(t *testing.T) {
+func TestFolderWebFetchNetworkTargets(t *testing.T) {
 	unlisted := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("unlisted")) }))
 	t.Cleanup(unlisted.Close)
 
@@ -471,7 +472,7 @@ func TestEasyWebFetchNetworkTargets(t *testing.T) {
 
 	for _, row := range rows {
 		t.Run(string(row.Targets)+" "+row.URL, func(t *testing.T) {
-			agent := &Agent{Mode: AgentModeEasy, Permission: permission}
+			agent := &Agent{Permission: permission, CustomShell: CustomShell{Dir: t.TempDir()}}
 			if string(row.Targets) != `"auto"` {
 				require.NoError(t, json.Unmarshal(row.Targets, &agent.NetworkTargets))
 			}
@@ -483,7 +484,20 @@ func TestEasyWebFetchNetworkTargets(t *testing.T) {
 
 	got, err := fetch(&Agent{Permission: permission}, listed.URL+"/redirect")
 	require.NoError(t, err)
-	require.Equal(t, "unlisted", got.Output, "an advanced agent fetches as before")
+	require.Equal(t, "unlisted", got.Output, "an agent without a folder fetches by its rules alone")
+
+	loaded := LoadAgents(fstest.MapFS{"emulated.md": testMapFile("---\nmodel: gpt-5.4\nshell: emulated\nworkingDirectory: work\nallowedNetworkTargets: [" + strings.TrimPrefix(listed.URL, "http://") + "]\npermission:\n  webfetch: allow\n---\nPrompt\n")}, &AgentLoadConfig{})
+	require.Empty(t, loaded.Errors)
+
+	emulated := loaded.Agents.Items["emulated"]
+	emulated.CustomShell.Dir = t.TempDir()
+
+	_, err = fetch(&emulated, unlisted.URL+"/")
+	require.ErrorContains(t, err, "not in allowedNetworkTargets", "an advanced emulated agent's webfetch keeps to its network list")
+
+	got, err = fetch(&emulated, listed.URL+"/")
+	require.NoError(t, err)
+	require.Equal(t, "listed", got.Output)
 
 	client := easyWebFetchClient(nil)
 	client.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -586,38 +600,42 @@ func TestExecuteWebFetchRedirectReview(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name, rules, first string
-		easy               bool
-		targets            []string
-		hopOutcome         permissionReviewOutcome
-		want, approval     string
-		reviews            []string
-		reviewTime         time.Duration
+		name, rules, first, hop string
+		folder                  bool
+		targets                 []string
+		hopOutcome              permissionReviewOutcome
+		want, approval          string
+		reviews                 []string
+		reviewTime              time.Duration
 	}{
-		{name: "easy follows a hop listed in allowedNetworkTargets", easy: true, targets: []string{originHost, strings.TrimPrefix(hopURL, "http://")}, first: viaOrigin, want: `[true,"hop page",1]`, reviews: []string{"execute"}},
-		{name: "easy follows a private hop listed in allowedNetworkTargets", easy: true, targets: []string{originHost, strings.TrimPrefix(localHop, "http://")}, first: origin.URL + "/go?to=" + localHop, want: `[true,"hop page",1]`, reviews: []string{"execute"}},
-		{name: "easy refuses an unlisted private hop without review", easy: true, targets: []string{originHost}, first: origin.URL + "/go?to=http://10.0.0.1/x", hopOutcome: permissionReviewOutcomeAllow, want: private("http://10.0.0.1/x"), reviews: []string{"execute"}},
-		{name: "easy refuses the metadata address without review", easy: true, targets: []string{originHost}, first: origin.URL + "/go?to=http://169.254.169.254/x", hopOutcome: permissionReviewOutcomeAllow, want: private("http://169.254.169.254/x"), reviews: []string{"execute"}},
-		{name: "easy asks the approver about an unlisted hop", easy: true, targets: []string{originHost}, first: viaOrigin, hopOutcome: permissionReviewOutcomeAllow, want: `[true,"hop page",1]`, approval: "the reviewed script; listed in allowedNetworkTargets", reviews: []string{"execute", "webfetch"}},
-		{name: "easy refuses an unlisted hop the approver denies", easy: true, targets: []string{originHost}, first: viaOrigin, hopOutcome: permissionReviewOutcomeDeny, want: `[false,"webfetch: redirect to ` + hopURL + `: tool call denied: automatic permission review rejected the action: no. Choose a different action.",1]`, approval: "the reviewed script; listed in allowedNetworkTargets", reviews: []string{"execute", "webfetch"}},
-		{name: "easy auto follows a public hop", easy: true, first: "http://public.example/go?to=http://public.example/landing", want: `[true,"public page",1]`, reviews: []string{"execute"}},
-		{name: "easy auto refuses a private hop without review", easy: true, first: "http://public.example/go?to=http://private.example/landing", want: `[false,"webfetch: send request: Get \"http://private.example/landing\": 10.0.0.1:80: private address, not in allowedNetworkTargets",1]`, reviews: []string{"execute"}},
-		{name: "advanced follows an allowed hop", rules: "webfetch: allow", first: viaOrigin, want: `[true,"hop page",1]`},
-		{name: "advanced refuses a private hop a wildcard allows", rules: "webfetch: allow", first: origin.URL + "/go?to=http://[fd00::1]/x", want: private("http://[fd00::1]/x")},
-		{name: "advanced refuses a private hop without asking the guardian", rules: fmt.Sprintf("webfetch:\n  %q: allow", origin.URL+"/*"), first: origin.URL + "/go?to=http://127.0.0.1/x", hopOutcome: permissionReviewOutcomeAllow, want: private("http://127.0.0.1/x")},
-		{name: "advanced follows a private hop its rules name", rules: fmt.Sprintf("webfetch:\n  %q: allow\n  %q: allow", origin.URL+"/*", "http://localhost:*/landing"), first: origin.URL + "/go?to=" + localHop, want: `[true,"hop page",1]`},
-		{name: "advanced asks the guardian about an auto hop", rules: fmt.Sprintf("webfetch:\n  %q: allow\n  %q: auto", origin.URL+"/*", hopURL), first: viaOrigin, hopOutcome: permissionReviewOutcomeAllow, want: `[true,"hop page",1]`, approval: fmt.Sprintf("rule %q => allow", origin.URL+"/*"), reviews: []string{"webfetch"}},
-		{name: "advanced review time does not count against timeout_s", rules: fmt.Sprintf("webfetch:\n  %q: allow", origin.URL+"/*"), first: viaOrigin, hopOutcome: permissionReviewOutcomeAllow, want: `[true,"hop page",1]`, approval: fmt.Sprintf("rule %q => allow", origin.URL+"/*"), reviews: []string{"webfetch"}, reviewTime: 1500 * time.Millisecond},
-		{name: "advanced asks the guardian about an unmatched hop", rules: fmt.Sprintf("webfetch:\n  %q: allow", origin.URL+"/*"), first: viaOrigin, hopOutcome: permissionReviewOutcomeAllow, want: `[true,"hop page",1]`, approval: fmt.Sprintf("rule %q => allow", origin.URL+"/*"), reviews: []string{"webfetch"}},
-		{name: "advanced refuses a denied hop without review", rules: fmt.Sprintf("webfetch:\n  %q: allow\n  %q: deny", origin.URL+"/*", hopURL), first: viaOrigin, want: `[false,"webfetch: redirect to ` + hopURL + `: tool call denied: permission \"webfetch\" rejected subject \"` + hopURL + `\" by rule \"` + hopURL + `\" => deny. Choose a different action.",1]`},
+		{name: "with a folder, follows a hop listed in allowedNetworkTargets", folder: true, targets: []string{originHost, strings.TrimPrefix(hopURL, "http://")}, first: viaOrigin, want: `[true,"hop page",1]`, reviews: []string{"execute"}},
+		{name: "with a folder, follows a private hop listed in allowedNetworkTargets", folder: true, targets: []string{originHost, strings.TrimPrefix(localHop, "http://")}, first: origin.URL + "/go?to=" + localHop, want: `[true,"hop page",1]`, reviews: []string{"execute"}},
+		{name: "with a folder, refuses an unlisted private hop without review", folder: true, targets: []string{originHost}, first: origin.URL + "/go?to=http://10.0.0.1/x", hopOutcome: permissionReviewOutcomeAllow, want: private("http://10.0.0.1/x"), reviews: []string{"execute"}},
+		{name: "with a folder, refuses the metadata address without review", folder: true, targets: []string{originHost}, first: origin.URL + "/go?to=http://169.254.169.254/x", hopOutcome: permissionReviewOutcomeAllow, want: private("http://169.254.169.254/x"), reviews: []string{"execute"}},
+		{name: "with a folder, asks the approver about an unlisted hop", folder: true, targets: []string{originHost}, first: viaOrigin, hopOutcome: permissionReviewOutcomeAllow, want: `[true,"hop page",1]`, approval: `the reviewed script; rule "*" => allow; listed in allowedNetworkTargets`, reviews: []string{"execute", "webfetch"}},
+		{name: "with a folder, refuses an unlisted hop the approver denies", folder: true, targets: []string{originHost}, first: viaOrigin, hopOutcome: permissionReviewOutcomeDeny, want: `[false,"webfetch: redirect to ` + hopURL + `: tool call denied: automatic permission review rejected the action: no. Choose a different action.",1]`, approval: `the reviewed script; rule "*" => allow; listed in allowedNetworkTargets`, reviews: []string{"execute", "webfetch"}},
+		{name: "with a folder, refuses a listed hop its rules deny without review", folder: true, targets: []string{originHost, strings.TrimPrefix(hopURL, "http://")}, rules: fmt.Sprintf("rocketclaw: {code_mode_approve: auto}\nwebfetch:\n  \"*\": allow\n  %q: deny", hopURL), first: viaOrigin, want: `[false,"webfetch: redirect to ` + hopURL + `: tool call denied: permission \"webfetch\" rejected subject \"` + hopURL + `\" by rule \"` + hopURL + `\" => deny. Choose a different action.",1]`, reviews: []string{"execute"}},
+		{name: "with a folder, asks the approver about a listed hop its rules send to review", folder: true, targets: []string{originHost, strings.TrimPrefix(hopURL, "http://")}, rules: fmt.Sprintf("rocketclaw: {code_mode_approve: auto}\nwebfetch:\n  \"*\": allow\n  %q: auto", hopURL), first: viaOrigin, hopOutcome: permissionReviewOutcomeAllow, want: `[true,"hop page",1]`, approval: `the reviewed script; rule "*" => allow; listed in allowedNetworkTargets`, reviews: []string{"execute", "webfetch"}},
+		{name: "with a folder, asks the approver about a private listed hop its rules send to review", folder: true, targets: []string{originHost, strings.TrimPrefix(localHop, "http://")}, rules: fmt.Sprintf("rocketclaw: {code_mode_approve: auto}\nwebfetch:\n  \"*\": allow\n  %q: auto", localHop), first: origin.URL + "/go?to=" + localHop, hop: localHop, hopOutcome: permissionReviewOutcomeAllow, want: `[true,"hop page",1]`, approval: `the reviewed script; rule "*" => allow; listed in allowedNetworkTargets`, reviews: []string{"execute", "webfetch"}},
+		{name: "with a folder, auto follows a public hop", folder: true, first: "http://public.example/go?to=http://public.example/landing", want: `[true,"public page",1]`, reviews: []string{"execute"}},
+		{name: "with a folder, auto refuses a private hop without review", folder: true, first: "http://public.example/go?to=http://private.example/landing", want: `[false,"webfetch: send request: Get \"http://private.example/landing\": 10.0.0.1:80: private address, not in allowedNetworkTargets",1]`, reviews: []string{"execute"}},
+		{name: "without a folder, follows an allowed hop", rules: "webfetch: allow", first: viaOrigin, want: `[true,"hop page",1]`},
+		{name: "without a folder, refuses a private hop a wildcard allows", rules: "webfetch: allow", first: origin.URL + "/go?to=http://[fd00::1]/x", want: private("http://[fd00::1]/x")},
+		{name: "without a folder, refuses a private hop without asking the guardian", rules: fmt.Sprintf("webfetch:\n  %q: allow", origin.URL+"/*"), first: origin.URL + "/go?to=http://127.0.0.1/x", hopOutcome: permissionReviewOutcomeAllow, want: private("http://127.0.0.1/x")},
+		{name: "without a folder, follows a private hop its rules name", rules: fmt.Sprintf("webfetch:\n  %q: allow\n  %q: allow", origin.URL+"/*", "http://localhost:*/landing"), first: origin.URL + "/go?to=" + localHop, want: `[true,"hop page",1]`},
+		{name: "without a folder, asks the guardian about an auto hop", rules: fmt.Sprintf("webfetch:\n  %q: allow\n  %q: auto", origin.URL+"/*", hopURL), first: viaOrigin, hopOutcome: permissionReviewOutcomeAllow, want: `[true,"hop page",1]`, approval: fmt.Sprintf("rule %q => allow", origin.URL+"/*"), reviews: []string{"webfetch"}},
+		{name: "without a folder, review time does not count against timeout_s", rules: fmt.Sprintf("webfetch:\n  %q: allow", origin.URL+"/*"), first: viaOrigin, hopOutcome: permissionReviewOutcomeAllow, want: `[true,"hop page",1]`, approval: fmt.Sprintf("rule %q => allow", origin.URL+"/*"), reviews: []string{"webfetch"}, reviewTime: 1500 * time.Millisecond},
+		{name: "without a folder, asks the guardian about an unmatched hop", rules: fmt.Sprintf("webfetch:\n  %q: allow", origin.URL+"/*"), first: viaOrigin, hopOutcome: permissionReviewOutcomeAllow, want: `[true,"hop page",1]`, approval: fmt.Sprintf("rule %q => allow", origin.URL+"/*"), reviews: []string{"webfetch"}},
+		{name: "without a folder, refuses a denied hop without review", rules: fmt.Sprintf("webfetch:\n  %q: allow\n  %q: deny", origin.URL+"/*", hopURL), first: viaOrigin, want: `[false,"webfetch: redirect to ` + hopURL + `: tool call denied: permission \"webfetch\" rejected subject \"` + hopURL + `\" by rule \"` + hopURL + `\" => deny. Choose a different action.",1]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := webFetchClient(false)
-			rules := cmp.Or(tc.rules, "rocketclaw: {code_mode_approve: auto}\nwebfetch: auto")
+			rules := cmp.Or(tc.rules, "rocketclaw: {code_mode_approve: auto}\nwebfetch: allow")
 			permissions := parsePermissionYAML(t, rules)
+			agent := Agent{Name: "main", NetworkTargets: tc.targets}
 
-			if tc.easy {
-				permissions.Easy = true
+			if tc.folder {
+				agent.CustomShell.Dir = t.TempDir()
 				client = easyWebFetchClient(tc.targets)
 			}
 
@@ -641,7 +659,7 @@ func TestExecuteWebFetchRedirectReview(t *testing.T) {
 
 			hosts := map[string]looperTool{"webfetch": webFetchTool(client)}
 			loop := testLooper(mockResponses())
-			loop.agent = Agent{Name: "main", NetworkTargets: tc.targets}
+			loop.agent = agent
 			loop.Tools = (&toolFactory{}).mcpToolsFor(&Agent{Permission: permissions}, hosts)
 			loop.Permissions = permissions
 			loop.CodeModeHosts = hosts
@@ -671,10 +689,11 @@ func TestExecuteWebFetchRedirectReview(t *testing.T) {
 					continue
 				}
 
-				require.Equal(t, []any{"webfetch", []string{hopURL}, `{"format":"text","timeout_s":1,"url":"` + viaOrigin + `"}`}, []any{request.Permission, request.Subjects, request.RawArguments})
+				want := cmp.Or(tc.hop, hopURL)
+				require.Equal(t, []any{"webfetch", []string{want}, `{"format":"text","timeout_s":1,"url":"` + tc.first + `"}`}, []any{request.Permission, request.Subjects, request.RawArguments})
 				require.Equal(t, &webFetchRedirectReview{
-					OriginalURL: viaOrigin, OriginalApproval: tc.approval, Redirects: []webFetchRedirect{{URL: viaOrigin, Status: http.StatusFound, Location: hopURL}},
-					Hop: hopURL, ChangesSite: true, ScriptLine: 3, ScriptCode: `r = webfetch(url=FIRST, format="text", timeout_s=1)`,
+					OriginalURL: tc.first, OriginalApproval: tc.approval, Redirects: []webFetchRedirect{{URL: tc.first, Status: http.StatusFound, Location: want}},
+					Hop: want, ChangesSite: true, ScriptLine: 3, ScriptCode: `r = webfetch(url=FIRST, format="text", timeout_s=1)`,
 				}, request.Redirect)
 				require.Equal(t, ReviewTurn(CallKey(loop.observations.turnID, "call")+"/host/0/redirect/1"), request.Turn)
 			}

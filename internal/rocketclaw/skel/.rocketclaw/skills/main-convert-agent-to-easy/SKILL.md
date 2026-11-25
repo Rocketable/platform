@@ -24,7 +24,7 @@ Never edit `.rocketclaw` directly. Write no scratch files; if one is unavoidable
 For each agent to convert, read the effective file and find:
 
 1. Its origin: the workspace overlay `agents/<name>.md`, a git overlay clone `.rocketclaw/overlays/*/agents/<name>.md` (later overlays in the `overlays` list of `rocketclaw.json` win), or the embedded skeleton.
-2. Its shadows under `.rocketclaw/agents/<name>/`. A shadow whose mode differs from its parent's is dropped with a warning, so every shadow is converted too, with the same questions.
+2. Its shadows under `.rocketclaw/agents/<name>/`. A shadow of either mode follows a parent of either mode, so ask whether to convert each shadow too; convert those the human names with the same questions.
 3. Other agents that point at it: `task` rules whose subject matches `<name>` (wildcards included) and `auto(<name>)` reviewer rules in any effective agent.
 
 Use `rg` over `.rocketclaw/agents` for step 3.
@@ -46,17 +46,17 @@ Start the new frontmatter with `mode: easy`. Write only easy keys. A section lef
 | `reasoningEffort` | Dropped after folding it into `model`. |
 | `space` | `space`. Required: ask when missing. |
 | `schema.output` | `schema.output`, unchanged. |
-| `permission.task`, `maxRecursion` | No `task` allow, or `maxRecursion: 0`, means `subagents: []`. Otherwise ask (see "Questions"). Easy `maxRecursion` counts levels of the agent's own subagents; omitted means `1`, and `-1` fails loading. |
+| `permission.task`, `maxRecursion` | Each agent its `task` rules name with any action but `deny` becomes a `subagents` entry `- agent: <name>`, itself included only when a rule names it; expand wildcards against the agents loaded now, leaving out sudo agents. Sends to them are now reviewed by the approver; say so for each `allow`. Copy models: ask (see "Questions"). `maxRecursion` means the same in both formats: omitted means `1`, and a negative value fails loading. |
 | `shell: emulated` with `workingDirectory`, `commands`, `allowedNetworkTargets` | Same three keys, unchanged. Drop `shell`. |
 | `permission.webfetch` | `allowedNetworkTargets`, which limits both `webfetch` and the shell's `curl`. Automatically map only an equivalent origin/path-prefix allow, preserving scheme, port and path (`https://go.dev/*` becomes `https://go.dev/`, not `go.dev`). Easy matching ignores queries and uses path prefixes: a query restriction, exact path, wildcard host or non-prefix wildcard is not equivalent. Explain the extra access and ask whether to accept it or stay advanced; leave files unchanged until answered. A `*` allow means leave the key out (public addresses only). No rule means `allowedNetworkTargets: []` (no network), unless the human says its shell commands needed the network. |
 | `permission.skill` | `skills`: the folders, relative to `.rocketclaw/skills/`, of every skill the rules allow; expand wildcards and denies against the folders that exist now. Only a plain `*` allow with no deny may be left out. No rule means `skills: []`. |
 | `permission.mcp` | `mcp`: each server becomes a list of the facets granted, so `{demo: {read: allow, write: auto}}` becomes `demo: [read, write]`. Easy mode reviews every facet the same way; say so when an `allow` facet becomes reviewed. No grant means leave the key out. A `sudo` agent's every-facet access must be listed facet by facet from `mcp_servers.<name>.tools` in `rocketclaw.json`. |
 | `permission.opencode` | `opencode`: the configured OpenCode servers the rules allow, expanding wildcards into the servers the human names; their calls are now reviewed. No rule means leave the key out (no `opencode_api` tool). A `sudo` agent could call every configured server: ask which ones, if any, to list. |
 | `permission.rocketclaw` | `rocketclaw`, as a list of the groups below that were on; `[]` when none was. Leave it out only when all six were on. |
-| `permission.rocketclaw.rocketclaw_sessions_recipient` | `delegatedFrom`, same value. When absent, `true`, except `false` for a `sudo` agent. |
+| `permission.rocketclaw.rocketclaw_sessions_recipient` | Dropped: it no longer does anything. Who may reach the agent is up to each caller's own targets. |
 | `permission.rocketclaw.rocketclaw_set_tag` tag groups | `tags`, same lists, plus the `tags` group. |
 | `permission.decision` | `decision`: the `provider/model` names the rules allow, expanding wildcards into the models the human names; their calls now run without review, so list each `auto` rule in the review question. No rule means leave the key out (no `decision` tool). |
-| `approver` | Dropped; advanced agents do not read it. Never copy it into the easy `approver`, which checks this agent's own calls. |
+| `approver` | Dropped; an advanced file with it fails to load. Never copy it into the easy `approver`, which checks this agent's own calls. |
 | `routines` | `routines`, unchanged. Prompt-shell expressions in their instructions now run in the easy agent's shell, the emulated shell unless it keeps a wrapper; tell the human when one needs a host program. |
 | body | Kept, with the changes under "Body". |
 
@@ -72,7 +72,7 @@ Start the new frontmatter with `mode: easy`. Write only easy keys. A section lef
 
 `sudo: yes` agents already have everything on and reviewed, which is what easy does with sections left out. Leave the sections out, and still ask the questions below.
 
-Dropped with no easy equivalent; tell the human each one that was set: `description`, `verbosity`, `shell` (a wrapper path), `sudo`, `permission.rocketclaw.code_mode_approve` (easy reviews every whole script), a `websearch` deny (easy agents always have web search), and every `deny` rule. Also tell the human when the agent had no `bash`, `read`, `edit`, `glob` or `grep` rules: easy agents always have the shell and file tools, reviewed and limited to their folder.
+Dropped with no easy equivalent; tell the human each one that was set: `description`, `verbosity`, `shell` (a wrapper path), `sudo`, `permission.rocketclaw.code_mode_approve` (easy reviews every whole script), a `websearch` deny (easy agents always have web search), and every `deny` rule. Also tell the human when the agent had no `bash`, `read`, `edit`, `glob` or `grep` rules: easy agents always have the shell and file tools, allowed inside reviewed scripts and limited to their folder.
 
 ## Questions
 
@@ -83,9 +83,9 @@ Collect every open question first, tell the human how many there are, then ask t
 3. Files: list the `read`, `edit`, `glob` and `grep` paths the agent had. It will see only its folder, its chat's uploads and its skills. Ask how it should reach each path: copy the data into its folder, a prompt-shell line in the body for read-only context, a `commands` entry, or keep the agent advanced.
 4. Host programs: list the programs its `bash` rules allowed. Shell commands now run in the emulated shell (Ubuntu with the usual tools, `python3`, `node`, `sqlite3`, and `curl` limited by `allowedNetworkTargets`). For each program the sandbox lacks, such as `gh`, `aws`, `kubectl`, or a script under `scripts/`, ask for the `commands` entry: a name and the host command line it runs. A `commands` program runs in host bash from the agent's folder, not the workspace, so give a workspace script its absolute path. A `bash` allow narrower than its program, such as `kubectl rollout *`, widens to the whole program as a `commands` entry; propose approver rules that keep the narrowing. An agent with a `shell` wrapper path can keep it as its easy `shell`, which then starts in its folder and gets the `commands` map, with `secretsARN`, `allowedNetworkTargets` and the folder as `workingDirectory`, as JSON in `ROCKETCLAW_ENVIRONMENT` instead of running them; ask whether to keep the wrapper or move to the emulated shell, and ask the question above only for the emulated shell.
 5. Secrets: `commands` programs already get RocketClaw's environment, as host bash did. Ask for `secretsARN` only when the human wants to add secrets.
-6. Delegation: list the agents its `task` rules allowed. An easy agent can `task` only itself, on the models in `subagents`. Ask for the `subagents` models (`[]` for none) and `maxRecursion`; to reach the other agents it can use the `sessions` group with `rocketclaw_sessions_write`.
-7. Callers: list the agents whose `task` rules reach it. No agent can `task` an easy agent; ask whether to switch those callers to `rocketclaw_sessions` through `main-create-or-update-agent`, or keep this agent advanced. Callers that switch must be in this agent's `delegatedFrom` when it is a list, or their writes are refused.
-8. Review: everything turned on is now reviewed by one approver, the guardian, except skills, `task`, the `decision` models it lists, web search and the always-on RocketClaw tools (reload, scheduled messages, attaching files, goal updates, questions). List each other `allow` that skipped review, each `deny` rule, each `auto(<reviewer>)` rule, and each `auto` rule in `permission.decision`. Ask for `approver.prompt` rules that keep the intent of the denies (for example "Deny any `rm`"). Ask whether `approver.model` should change. Tell the human that the approver's prompt guides a model's review and is not a guaranteed block, unlike `deny`.
+6. Delegation: list the agents its `task` rules named; they become `- agent:` entries in `subagents`, reached by `task` and, with the `sessions` group, the session tools. Ask for the models it may copy itself onto with `task_clone` (`[]` for none) and `maxRecursion`.
+7. Callers: the agents whose `task` rules name it keep reaching it, with `task` and the session tools; nothing in this agent's file changes that.
+8. Review: one approver, the guardian, now reviews each `execute` script whole, and what the file turns on runs inside an approved script without another review; skills, `task_clone` copies of itself on its `subagents` models, the `decision` models it lists, web search and the always-on RocketClaw tools (reload, scheduled messages, attaching files, goal updates, questions) run without review. List each other `allow` that skipped review, each `deny` rule, each `auto(<reviewer>)` rule, and each `auto` rule in `permission.decision`. Ask for `approver.prompt` rules that keep the intent of the denies (for example "Deny any `rm`"). Ask whether `approver.model` should change. Tell the human that the approver's prompt guides a model's review and is not a guaranteed block, unlike `deny`.
 9. `additionalInstructions`, when set: ask whether to move its text into the body.
 
 ## Body
@@ -93,7 +93,7 @@ Collect every open question first, tell the human how many there are, then ask t
 - Keep the body's instructions.
 - A prompt-shell expression is an exclamation mark (U+0021), immediately followed by a backtick (U+0060), the command, and a closing backtick. Construct it in the agent body; do not replace it with the command's current output.
 - Advanced bodies end with an instruction to use `MEMORY.md`. Easy tools cannot reach `MEMORY.md`, which is in the workspace. Replace that instruction with a prompt-shell expression running `cat MEMORY.md`, and tell the human the agent can now read its memory but not update it.
-- Every prompt-shell expression now runs in host bash from the workspace, with the agent's secrets. When the agent had a `shell` wrapper, these lines ran inside it before; tell the human they now run outside any sandbox.
+- Prompt-shell expressions in the body and in skills run in host bash from the workspace, with the agent's secrets, in both formats, so converting does not change where they run.
 - Add the `additionalInstructions` text as the human answered.
 
 ## Step 4: confirm, write, apply

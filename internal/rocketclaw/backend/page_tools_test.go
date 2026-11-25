@@ -271,7 +271,7 @@ func TestPageStoreReadsEasyFileView(t *testing.T) {
 func TestPageToolsPublishIntoTheChatsSpace(t *testing.T) {
 	t.Parallel()
 
-	for name, cron := range map[string]*protocol.CronjobMessage{"agent space": nil, "cron space": {RelativePath: "cron/report.md", Agent: "primary", Space: "Ops"}} {
+	for name, cron := range map[string]*protocol.RoutineMessage{"agent space": nil, "cron space": {RelativePath: "cron/report.md", Agent: "primary", Space: "Ops"}} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -290,7 +290,7 @@ func TestPageToolsPublishIntoTheChatsSpace(t *testing.T) {
 			nt.cfg.Web.Tsnet = &config.TsnetConfig{Origin: "https://rc.example"}
 
 			msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "publish", true)
-			msg.Cronjob = cron
+			msg.Routine = cron
 
 			manager, _ := nt.run(t, ignoreOutbound)
 			require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), msg))

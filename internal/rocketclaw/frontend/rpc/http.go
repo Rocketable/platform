@@ -627,7 +627,7 @@ func httpInput(input io.Reader, request proto.Message, method string) error {
 		required = "id"
 	case "SearchMessages", "SearchSessions":
 		required = "query"
-	case "RunCronJob":
+	case "RunRoutine":
 		required = "stem"
 	case "MoveToBackground":
 		required = "conversationId"

@@ -98,7 +98,7 @@ type OutboundAttachment struct {
 	Size               int64
 }
 
-type CronjobMessage struct {
+type RoutineMessage struct {
 	RelativePath, Agent, RanAt string
 	Space                      string
 }
@@ -120,7 +120,7 @@ type InboundMessage struct {
 	ExternalMCPMetadata   map[string]string
 	SyncDestination       string
 	RequireOutputDecision bool
-	Cronjob               *CronjobMessage
+	Routine               *RoutineMessage
 	OriginHeader          string
 	SlackRoot             *InboundMessage `json:"-"`
 
@@ -187,7 +187,7 @@ type OutboundMessage struct {
 	Agent                              string
 	Model, SourceConversationID        string
 	ReasoningEffort                    *string
-	Cronjob                            *CronjobMessage
+	Routine                            *RoutineMessage
 	Complete                           bool
 	SlackReply                         *SlackReplyTarget
 	Attachments                        []OutboundAttachment

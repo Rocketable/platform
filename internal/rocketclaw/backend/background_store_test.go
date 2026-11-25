@@ -94,7 +94,7 @@ func reportTestRun(t *testing.T, store *SessionService, run, destination string)
 
 	_, err := store.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ($1, 'main', '', 'web_chat', TRUE) ON CONFLICT DO NOTHING`, destination)
 	require.NoError(t, err)
-	_, err = store.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, reports_to) VALUES ($1, 'main', '', 'cron_run', FALSE, $2)
+	_, err = store.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, reports_to) VALUES ($1, 'main', '', 'routine_run', FALSE, $2)
 ON CONFLICT (conversation_id) DO UPDATE SET reports_to = excluded.reports_to`, run, destination)
 	require.NoError(t, err)
 }
@@ -360,7 +360,7 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		ctx := t.Context()
-		recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindCronRun})
+		recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindRoutineRun})
 
 		job := testBackgroundJob("main", "turn-1/call/a")
 		createTestBackgroundJob(t, store, job)
@@ -696,7 +696,7 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 			managed := protocol.SlackThreadConversationID("C1", slackTestTS(old))
 			private, orphan := "external_mcp:planner:private", "cron:daily:old"
 
-			recordTestConversations(t, store, "planner", map[string]ConversationKind{thread: KindSlackThread, orphan: KindCronRun})
+			recordTestConversations(t, store, "planner", map[string]ConversationKind{thread: KindSlackThread, orphan: KindRoutineRun})
 			require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: private, ManagedConversationID: managed}))
 
 			for _, conversationID := range []string{thread, managed, private, orphan} {

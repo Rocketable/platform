@@ -36,7 +36,7 @@ func TestExternalRunReportsIndexMigration(t *testing.T) {
 	_, err := store.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
 SELECT 'chat-' || n, 'main', 'alice', 'web_chat', TRUE FROM generate_series(1, 2) n;
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, reports_to)
-SELECT 'run-' || n, 'main', '', CASE WHEN n <= 8 THEN 'external_mcp_run' ELSE 'cron_run' END, FALSE, 'chat-' || (n % 2 + 1)
+SELECT 'run-' || n, 'main', '', CASE WHEN n <= 8 THEN 'external_mcp_run' ELSE 'routine_run' END, FALSE, 'chat-' || (n % 2 + 1)
 FROM generate_series(1, 8192) n;
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
 VALUES ('unbound-run', 'main', '', 'external_mcp_run', FALSE);
@@ -163,7 +163,7 @@ ALTER TABLE entries SET (autovacuum_enabled = false);
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, last_updated)
 SELECT 'chat-' || n, 'main', 'alice', 'web_chat', TRUE, now() FROM generate_series(1, 256) n;
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, reports_to)
-SELECT 'run-' || c || '-' || n, 'job', '', 'cron_run', FALSE, 'chat-' || c FROM generate_series(1, 4) c, generate_series(1, 256) n;
+SELECT 'run-' || c || '-' || n, 'job', '', 'routine_run', FALSE, 'chat-' || c FROM generate_series(1, 4) c, generate_series(1, 256) n;
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT conversation_id, '{}', '' FROM conversations, generate_series(1, 8) WHERE conversation_id <> 'chat-4'
 ORDER BY conversation_id NOT IN ('run-1-1', 'run-2-1'), conversation_id LIKE 'run-%', conversation_id;
@@ -289,7 +289,7 @@ INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
 SELECT 'unrelated-' || n, 'sample-agent', '', 'web_chat', TRUE FROM generate_series(1, 4096) n;
 INSERT INTO conversations (conversation_id, agent, created_by, producer_inbound_json, reports_to, kind, listed) VALUES
     ('destination', 'sample-agent', '', '{}', NULL, 'web_chat', TRUE),
-    ('producer', 'sample-agent', '', '{"SyncDestination":"destination"}', 'destination', 'cron_run', FALSE),
+    ('producer', 'sample-agent', '', '{"SyncDestination":"destination"}', 'destination', 'routine_run', FALSE),
     ('producer/comparison', 'sample-agent/comparison', '', '{}', NULL, 'shadow', FALSE);
 UPDATE conversations SET shadow_parent = 'producer', parent_agent = 'sample-agent', shadow_agent = 'sample-agent/comparison' WHERE conversation_id = 'producer/comparison';
 ANALYZE conversations;
@@ -564,12 +564,12 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM legacy_thread_queue`).Scan(&kept))
 	require.Equal(t, 1, kept)
 
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql", "112_routines_tab_paths.sql", "113_generated_name.sql", "114_web_tab_lists.sql", "115_drop_voice.sql")
+	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql", "112_routines_tab_paths.sql", "113_generated_name.sql", "114_web_tab_lists.sql", "115_drop_voice.sql", "116_routine_names.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
 	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql", "112_routines_tab_paths.sql", "113_generated_name.sql", "114_web_tab_lists.sql", "115_drop_voice.sql"}, ledger)
+	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql", "112_routines_tab_paths.sql", "113_generated_name.sql", "114_web_tab_lists.sql", "115_drop_voice.sql", "116_routine_names.sql"}, ledger)
 
 	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
 	require.NoError(t, err)
@@ -585,9 +585,9 @@ func TestHistoryRequiresConversationMigration(t *testing.T) {
 
 	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"kept": KindWebChat})
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 84)
 	require.NoError(t, err)
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"kept": KindWebChat})
 
 	for _, id := range []string{"kept", "gone"} {
 		_, err = store.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{}', '')`, id)
@@ -615,8 +615,8 @@ func TestHistoryLinksMigration(t *testing.T) {
 
 	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"linear": KindWebChat, "staged": KindWebChat, "run": KindCronRun, "continuing": KindWebChat,
-		"reported": KindWebChat, "reporter": KindCronRun, "steered": KindWebChat, "gapped": KindWebChat, "elsewhere": KindWebChat})
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"linear": KindWebChat, "staged": KindWebChat, "run": KindRoutineRun, "continuing": KindWebChat,
+		"reported": KindWebChat, "reporter": KindRoutineRun, "steered": KindWebChat, "gapped": KindWebChat, "elsewhere": KindWebChat})
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 107)
 	require.NoError(t, err)
 	_, err = store.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'linear' WHERE conversation_id = 'run';
@@ -777,8 +777,8 @@ func TestHiddenRunCopiesMigration(t *testing.T) {
 	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"chat": KindWebChat, "run": KindRoutineRun, "cron-chat": KindWebChat, "old-run": KindRoutineRun, "mcp-chat": KindWebChat, "mcp-run": KindExternalMCPRun})
 	downTo95(store)
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"chat": KindWebChat, "run": KindCronRun, "cron-chat": KindWebChat, "old-run": KindCronRun, "mcp-chat": KindWebChat, "mcp-run": KindExternalMCPRun})
 	_, err := store.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'chat', producer_inbound_json = '{}' WHERE conversation_id = 'run';
 UPDATE conversations SET first_source = 'old-run', last_updated = now() WHERE conversation_id = 'cron-chat';
 UPDATE conversations SET external_id = 'ext-1', external_run = 'mcp-run', last_updated = now() WHERE conversation_id = 'mcp-chat'`)
@@ -831,8 +831,8 @@ UPDATE conversations SET external_id = 'ext-1', external_run = 'mcp-run', last_u
 	}
 
 	refused := newColdTestSessionServiceAt(t, t.TempDir())
+	recordTestConversations(t, refused, "main", map[string]ConversationKind{"run": KindRoutineRun})
 	downTo95(refused)
-	recordTestConversations(t, refused, "main", map[string]ConversationKind{"run": KindCronRun})
 	_, err = refused.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp, audience) VALUES ('run', '{}', '', 'visible')`)
 	require.NoError(t, err)
 	require.ErrorContains(t, initializeSessionDB(ctx, refused.db, slog.New(slog.DiscardHandler)), "cannot be merged")
@@ -905,9 +905,9 @@ func TestDropGuardrailEntriesMigration(t *testing.T) {
 
 	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"sub": KindSubagent})
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 75)
 	require.NoError(t, err)
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"sub": KindSubagent})
 
 	_, err = store.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('sub', '{"type":"guardrail"}', ''), ('sub', '{"type":"turn"}', '')`)
 	require.NoError(t, err)
@@ -924,11 +924,11 @@ func TestSlackThreadsMigration(t *testing.T) {
 
 	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
+	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "main", PrivateConversationID: "private", ManagedConversationID: "mcp"}))
+	require.NoError(t, store.UpsertThread("cron", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByRoutine}))
+	require.NoError(t, store.UpsertThread("mention", ThreadState{Agent: "main"}))
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 69)
 	require.NoError(t, err)
-	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "main", PrivateConversationID: "private", ManagedConversationID: "mcp"}))
-	require.NoError(t, store.UpsertThread("cron", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
-	require.NoError(t, store.UpsertThread("mention", ThreadState{Agent: "main"}))
 	_, err = store.db.ExecContext(ctx, `UPDATE conversations SET kind = 'slack_thread', slack_channel = 'C1', slack_thread = '1.' || length(conversation_id), external_channel = '#ops' WHERE conversation_id IN ('mcp', 'cron', 'mention')`)
 	require.NoError(t, err)
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
@@ -1095,6 +1095,102 @@ SELECT entry FROM entries ORDER BY entry COLLATE "C"`, "voice paths")
 	}, paths)
 }
 
+func TestRoutineNamesMigration(t *testing.T) {
+	t.Parallel()
+
+	store := newColdTestSessionServiceAt(t, t.TempDir())
+	ctx := t.Context()
+	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 115)
+	require.NoError(t, err)
+
+	const (
+		run, oneOff, report = "cron:agents/a.md#1h:20260101T000000Z:x", "one-off-cron:agents/a.md#1h:20260102T000000Z:y", "web:cron:agents/a.md#1h:20260101T000000Z:x"
+		routine             = `{"RelativePath":"agents/a.md#1h","Agent":"a","RanAt":"2026-01-01T00:00:00Z","Space":"Ops"}`
+	)
+
+	inbound := `{"Source":"system","Text":"run","Cronjob":` + routine + `}`
+	for _, seed := range []struct {
+		statement string
+		args      []any
+	}{
+		{`INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, cron_path, cron_run_at_unix_ns, producer_inbound_json) VALUES
+    ($1, 'a', 'cron', 'cron_run', FALSE, 'agents/a.md#1h', 1767225600000000000, $3::json),
+    ($2, 'a', 'cron', 'one_off_cron_run', FALSE, 'agents/a.md#1h', 1767312000000000000, '{"Source":"system"}')`, []any{run, oneOff, inbound}},
+		{`INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, cron_run) VALUES ($1, 'a', 'cron', 'web_chat', TRUE, $2)`, []any{report, run}},
+		{`INSERT INTO schedules (id, cron_path, next_due_unix_ns, origin) VALUES ('agents/a.md#1h', 'agents/a.md#1h', 1, '[ScheduledMessage source=Cron principal="Ann"]')`, nil},
+		{`UPDATE conversations SET goal_origin = '[Cron]' WHERE conversation_id = $1`, []any{report}},
+		{`INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"type":"message","role":"user","content":"run"}', '2026-01-01T00:00:00Z')`, []any{run}},
+		{`INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json) VALUES ($1, $2, 'turn', $3::json)`, []any{report, run, inbound}},
+	} {
+		_, err = store.db.ExecContext(ctx, seed.statement, seed.args...)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, store.PutThreadQueueItem("follow-up", &protocol.ThreadQueueItem{ConversationID: run, Message: "again"}))
+	_, err = store.db.ExecContext(ctx, `UPDATE turns SET inbound_json = $1::json, outbound_json = $2::json, origin = '[ScheduledMessage source=Cron]' WHERE input_id = 'follow-up'`,
+		`{"Source":"system","Text":"again","Kind":"enqueue","Cronjob":`+routine+`}`, `{"Text":"done","Cronjob":`+routine+`}`)
+	require.NoError(t, err)
+
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	rows, err := queryStrings(ctx, store.db, `SELECT concat_ws(' ', conversation_id, kind, created_by, routine_path, routine_run_at_unix_ns, routine_run, NULLIF(goal_origin, '')) FROM conversations
+UNION ALL SELECT concat_ws(' ', 'schedule', routine_path, origin) FROM schedules
+UNION ALL SELECT concat_ws(' ', 'turn', inbound_json->'Routine'->>'Agent', inbound_json->'Cronjob', outbound_json->'Routine'->>'Space', outbound_json->'Cronjob', origin) FROM turns
+UNION ALL SELECT concat_ws(' ', 'shadow', inbound_json->'Routine'->>'Agent', inbound_json->'Cronjob') FROM shadow_turns
+UNION ALL SELECT concat_ws(' ', 'producer', producer_inbound_json->'Routine'->>'Agent', producer_inbound_json->'Cronjob') FROM conversations WHERE producer_inbound_json IS NOT NULL
+UNION ALL SELECT 'index ' || to_regclass('conversations_routine_runs')::text ORDER BY 1`, "renamed routine facts")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"cron:agents/a.md#1h:20260101T000000Z:x routine_run routine agents/a.md#1h 1767225600000000000",
+		"index conversations_routine_runs",
+		"one-off-cron:agents/a.md#1h:20260102T000000Z:y one_off_routine_run routine agents/a.md#1h 1767312000000000000",
+		"producer",
+		"producer a",
+		`schedule agents/a.md#1h [ScheduledMessage source=Routine principal="Ann"]`,
+		"shadow a",
+		"turn a Ops [ScheduledMessage source=Routine]",
+		"web:cron:agents/a.md#1h:20260101T000000Z:x web_chat routine cron:agents/a.md#1h:20260101T000000Z:x [Routine]",
+	}, rows)
+
+	queue, err := store.ThreadQueueForConversation(run)
+	require.NoError(t, err)
+	require.Len(t, queue, 1)
+	require.Equal(t, &protocol.RoutineMessage{RelativePath: "agents/a.md#1h", Agent: "a", RanAt: "2026-01-01T00:00:00Z", Space: "Ops"}, queue[0].Inbound.Routine, "a waiting follow-up of an old run still carries its routine")
+
+	sources, err := store.RoutineRunSources(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []RoutineRunSource{{ConversationID: run, SourceConversationID: run, Run: protocol.RoutineRun{Path: "agents/a.md#1h", At: time.Unix(0, 1767225600000000000).UTC()}}}, sources, "an old run still lists under its own ID")
+
+	for _, id := range []string{run, report} {
+		path, isRun, err := store.RoutineRun(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, "agents/a.md#1h", path, id)
+		require.Equal(t, id == run, isRun, id)
+	}
+
+	_, err = (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 115)
+	require.NoError(t, err)
+
+	restored, err := queryStrings(ctx, store.db, `SELECT concat_ws(' ', conversation_id, kind, created_by, cron_path, cron_run, NULLIF(goal_origin, '')) FROM conversations
+UNION ALL SELECT concat_ws(' ', 'schedule', cron_path, origin) FROM schedules
+UNION ALL SELECT concat_ws(' ', 'turn', inbound_json->'Cronjob'->>'Agent', inbound_json->'Routine', outbound_json->'Cronjob'->>'Space', origin) FROM turns
+UNION ALL SELECT concat_ws(' ', 'shadow', inbound_json->'Cronjob'->>'Agent') FROM shadow_turns
+UNION ALL SELECT concat_ws(' ', 'producer', producer_inbound_json->'Cronjob'->>'Agent') FROM conversations WHERE producer_inbound_json IS NOT NULL
+UNION ALL SELECT 'index ' || to_regclass('conversations_cron_runs')::text ORDER BY 1`, "restored cron facts")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"cron:agents/a.md#1h:20260101T000000Z:x cron_run cron agents/a.md#1h",
+		"index conversations_cron_runs",
+		"one-off-cron:agents/a.md#1h:20260102T000000Z:y one_off_cron_run cron agents/a.md#1h",
+		"producer",
+		"producer a",
+		`schedule agents/a.md#1h [ScheduledMessage source=Cron principal="Ann"]`,
+		"shadow a",
+		"turn a Ops [ScheduledMessage source=Cron]",
+		"web:cron:agents/a.md#1h:20260101T000000Z:x web_chat cron cron:agents/a.md#1h:20260101T000000Z:x [Cron]",
+	}, restored)
+}
+
 func TestDropTopShelfMigration(t *testing.T) {
 	t.Parallel()
 
@@ -1127,6 +1223,7 @@ func TestWebTabAttentionMigration(t *testing.T) {
 
 	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"a": KindWebChat, "b": KindWebChat})
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 89)
 	require.NoError(t, err)
 
@@ -1136,7 +1233,6 @@ ORDER BY table_name COLLATE "C", column_name`, "attention shape")
 	require.NoError(t, err)
 	require.Equal(t, []string{"web_tab_mutes conversation_id NO", "web_tab_mutes until YES", "web_tab_mutes username NO", "web_tabs group_id NO", "web_tabs marked_unread NO", "web_tabs position YES", "web_tabs unread_at YES"}, shape)
 
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"a": KindWebChat, "b": KindWebChat})
 	_, err = store.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, space, viewing, viewed_at) VALUES ('alice', 2, 'main', 'a', now());
 INSERT INTO web_tab_mutes (username, conversation_id, until) VALUES ('alice', 'a', NULL), ('alice', 'b', now() - interval '1 day');
 INSERT INTO web_tabs (username, path, conversation_id, position, space, unread_at, marked_unread) VALUES
@@ -1311,6 +1407,8 @@ func TestExternalMCPMetadataMigration(t *testing.T) {
 	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	migrations := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
+
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"mcp": KindWebChat, "shadow": KindWebChat})
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrations, migrate.Down, 79)
 	require.NoError(t, err)
 
@@ -1320,8 +1418,6 @@ func TestExternalMCPMetadataMigration(t *testing.T) {
 		kept    = `{"Source":"external_mcp","Text":"hi","Metadata":{"rocketclaw_principal":"bob","source":"api"}}`
 		web     = `{"Source":"web","Text":"hi","Metadata":{"web_message_id":"w-1","rocketclaw_raw_text":"hi"}}`
 	)
-
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"mcp": KindWebChat, "shadow": KindWebChat})
 
 	seed := func(query string, args ...any) {
 		t.Helper()

@@ -423,7 +423,8 @@ func TestAgentDraftModeSwitchConvertsEveryVariant(t *testing.T) {
 
 	revision := applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: 1, OpID: "alice.1", Kind: AgentDraftSetField, Variant: "a", Key: "subagents", Value: "[]"})
 	revision = applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: revision, OpID: "alice.2", Kind: AgentDraftAddVariant, Variant: "b", Value: "a"})
-	easy := applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: revision, OpID: "alice.3", Kind: AgentDraftAddVariant, Variant: "c", Value: "a"})
+	revision = applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: revision, OpID: "alice.3", Kind: AgentDraftAddVariant, Variant: "c", Value: "a"})
+	easy := applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: revision, OpID: "alice.4", Kind: AgentDraftSetField, Variant: "c", Key: "temperature", Value: "0.2"})
 
 	keys := func(revisionWant int64, mode harness.AgentMode) [][]string {
 		got, err := store.LoadAgentDraft(ctx, draft.ID)
@@ -451,12 +452,12 @@ func TestAgentDraftModeSwitchConvertsEveryVariant(t *testing.T) {
 	require.NoError(t, err)
 
 	file := renderAgentDraftFile(harness.AgentModeAdvanced, &b.Variants[1])
-	advanced := applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: easy, OpID: "alice.4", Kind: AgentDraftEditFile, Variant: "b", Value: file})
+	advanced := applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: easy, OpID: "alice.5", Kind: AgentDraftEditFile, Variant: "b", Value: file})
 	require.Equal(t, easy+1, advanced)
 	require.Equal(t, [][]string{advancedKeys, advancedKeys, advancedKeys}, keys(advanced, harness.AgentModeAdvanced))
 
-	restored := applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: advanced, OpID: "alice.5", Kind: AgentDraftRestore, From: easy})
-	require.Equal(t, [][]string{easyKeys, easyKeys, easyKeys}, keys(restored, harness.AgentModeEasy))
+	restored := applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: advanced, OpID: "alice.6", Kind: AgentDraftRestore, From: easy})
+	require.Equal(t, [][]string{easyKeys, easyKeys, {"space", "model", "workingDirectory", "subagents", "temperature"}}, keys(restored, harness.AgentModeEasy))
 }
 
 func TestAgentDraftCopyRendersInStandardOrder(t *testing.T) {
@@ -604,7 +605,7 @@ func TestValidateAgentDraft(t *testing.T) {
 	revision := applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: draft.Revision, Kind: AgentDraftSetField, Variant: "a", Key: "space", Value: "Main"})
 	revision = applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: revision, Kind: AgentDraftAddVariant, Variant: "b", Value: "a"})
 	revision = applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: revision, Kind: AgentDraftAddVariant, Variant: "c", Value: "a"})
-	revision = applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: revision, Kind: AgentDraftSetField, Variant: "a", Key: "temperature", Value: "0.2"})
+	revision = applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: revision, Kind: AgentDraftSetField, Variant: "a", Key: "delegatedFrom", Value: "[writer]"})
 	workspace := store.definitions.Clone().Workspace
 	revision = applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: revision, Kind: AgentDraftSetField, Variant: "b", Key: "workingDirectory", Value: filepath.Join(workspace, "agents", "helper")})
 	applyTestAgentDraftOp(t, store, draft.ID, &AgentDraftOp{BaseRevision: revision, Kind: AgentDraftSetField, Variant: "c", Key: "workingDirectory", Value: t.TempDir()})
@@ -614,7 +615,7 @@ func TestValidateAgentDraft(t *testing.T) {
 	problems, err = store.ValidateAgentDraft(draft)
 	require.NoError(t, err)
 	require.Equal(t, []AgentDraftProblem{
-		{Variant: "a", Key: "temperature", Sentence: "This setting isn't valid here yet."},
+		{Variant: "a", Key: "delegatedFrom", Sentence: "not an easy-mode key"},
 		{Variant: "b", Key: "workingDirectory", Sentence: "A folder that is not, does not contain, and is not inside the workspace or RocketClaw's own folders."},
 	}, problems)
 

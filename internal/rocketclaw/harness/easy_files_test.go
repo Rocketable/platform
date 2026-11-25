@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -52,8 +53,15 @@ func TestEasyFileView(t *testing.T) {
 
 	factory := &toolFactory{baseTools: makeSandboxedTools(&sandboxedFileSystem{root: workspace}, nil)}
 	permission := parsePermissionYAML(t, "read: allow\nedit: allow\nglob: allow\ngrep: allow")
-	_, easy := factory.assembleTools(&Agent{Mode: AgentModeEasy, Permission: permission, CustomShell: CustomShell{Emulated: true, Dir: folder, ReadOnly: []string{uploads, skill}}})
+	_, easy := factory.assembleTools(&Agent{Permission: permission, CustomShell: CustomShell{Emulated: true, Dir: folder, ReadOnly: []string{uploads, skill}}})
 	_, advanced := factory.assembleTools(&Agent{Permission: permission})
+
+	loaded := LoadAgents(fstest.MapFS{"emulated.md": testMapFile("---\nmodel: gpt-5.4\nshell: emulated\nworkingDirectory: work\npermission:\n  read: allow\n---\nPrompt\n")}, &AgentLoadConfig{})
+	require.Empty(t, loaded.Errors)
+
+	emulatedAgent := loaded.Agents.Items["emulated"]
+	emulatedAgent.CustomShell.Dir = folder
+	_, emulated := factory.assembleTools(&emulatedAgent)
 
 	call := func(hosts map[string]looperTool, name string, params any) string {
 		raw, err := json.Marshal(params)
@@ -98,7 +106,9 @@ func TestEasyFileView(t *testing.T) {
 		require.Equal(t, "error: "+filepath.Join(dir, "workspace", "agents", "secret.md")+" is outside this agent's folders", call(easy, "read", readToolParams{FilePath: filepath.Join(dir, "workspace", "agents", "secret.md")}))
 		require.Equal(t, "error: File not found: "+filepath.Join(folder, "agents", "secret.md"), call(easy, "read", readToolParams{FilePath: "agents/secret.md"}), "a workspace path is not the folder's")
 		require.Equal(t, "error: symlink access denied: link", call(easy, "read", readToolParams{FilePath: filepath.Join(folder, "link")}))
-		require.Equal(t, numbered("agents/secret.md", "workspace secret"), readOutput(advanced, "agents/secret.md"), "an advanced agent reads the workspace")
+		require.Equal(t, numbered("agents/secret.md", "workspace secret"), readOutput(advanced, "agents/secret.md"), "an agent without a folder reads the workspace")
+		require.Equal(t, "error: "+filepath.Join(dir, "secret")+" is outside this agent's folders", call(emulated, "read", readToolParams{FilePath: "../secret"}), "an advanced emulated agent's file tools keep to its folder")
+		require.Equal(t, numbered(filepath.Join(folder, "note.txt"), "hello needle"), readOutput(emulated, "note.txt"))
 
 		got, err := subjects("read", readToolParams{FilePath: "note.txt"})
 		require.NoError(t, err)

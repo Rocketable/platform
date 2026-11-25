@@ -83,7 +83,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 
 			return "reloaded", nil
 		}}
-	New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockRoutines{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })

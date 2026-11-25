@@ -422,19 +422,19 @@ func (s *SessionService) ValidateAgentDraft(draft *AgentDraft) ([]AgentDraftProb
 		for i := range draft.Variants {
 			variant, file := &draft.Variants[i], draft.Name+".md"
 
-			agents, err := loadAgentDefinitions(fstest.MapFS{file: {Data: []byte(renderAgentDraftFile(draft.Mode, variant))}}, skills, cfg)
+			agents, errsAgent, err := loadAgentDefinitions(fstest.MapFS{file: {Data: []byte(renderAgentDraftFile(draft.Mode, variant))}}, skills, cfg)
 			agent := agents.Items[draft.Name]
 
-			if err == nil {
-				_, err = checkedAgentTagGroups(&agent)
+			if len(errsAgent) > 0 {
+				err = errsAgent[0].Err
 			}
 
-			if err == nil && agent.Mode == harness.AgentModeEasy && !strings.Contains(agent.WorkingDirectory, "$") {
+			if err == nil && draft.Mode == harness.AgentModeEasy && !strings.Contains(agent.WorkingDirectory, "$") {
 				_, err = resolveWorkingDirectory(cfg, agent.WorkingDirectory, nil)
 			}
 
 			if err != nil {
-				problems = append(problems, agentDraftProblem(variant.Name, draft.Mode, strings.TrimPrefix(err.Error(), file+": ")))
+				problems = append(problems, agentDraftProblem(variant.Name, draft.Mode, err.Error()))
 			}
 		}
 
@@ -600,11 +600,7 @@ func applyAgentDraftOp(draft *AgentDraft, op *AgentDraftOp) error {
 
 		draft.Mode = mode
 		for i := range draft.Variants {
-			draft.Variants[i].Settings = slices.DeleteFunc(draft.Variants[i].Settings, func(setting AgentDraftSetting) bool {
-				help, listed := agentSettingHelp(setting.Key, mode)
-
-				return help == nil && (listed || mode == harness.AgentModeEasy)
-			})
+			draft.Variants[i].Settings = slices.DeleteFunc(draft.Variants[i].Settings, func(setting AgentDraftSetting) bool { return agentSettingHelp(setting.Key, mode) == nil })
 		}
 	case AgentDraftSetExternalMCP:
 		draft.ExternalMCP = op.ExternalMCP
@@ -1006,21 +1002,21 @@ func agentDraftProblem(variant string, mode harness.AgentMode, message string) A
 	key, _, _ = strings.Cut(strings.TrimPrefix(key, "parse "), " ")
 
 	for k := key; k != ""; k = k[:max(0, strings.LastIndex(k, "."))] {
-		if help, _ := agentSettingHelp(k, mode); help != nil {
+		if help := agentSettingHelp(k, mode); help != nil {
 			return AgentDraftProblem{Variant: variant, Key: k, Sentence: help.Allowed}
 		}
 	}
 
-	return AgentDraftProblem{Variant: variant, Key: key, Sentence: "This setting isn't valid here yet."}
+	return AgentDraftProblem{Variant: variant, Key: key, Sentence: strings.TrimPrefix(message, key+": ")}
 }
 
-func agentSettingHelp(key string, mode harness.AgentMode) (*harness.AgentSetting, bool) {
-	settings := harness.AgentSettings()
-	if i := slices.IndexFunc(settings, func(field harness.AgentSetting) bool { return field.Key == key && slices.Contains(field.Modes, mode) }); i >= 0 {
-		return &settings[i], true
+func agentSettingHelp(key string, mode harness.AgentMode) *harness.AgentSetting {
+	settings := harness.AgentSettingsFor(mode)
+	if i := slices.IndexFunc(settings, func(field harness.AgentSetting) bool { return field.Key == key }); i >= 0 {
+		return &settings[i]
 	}
 
-	return nil, slices.ContainsFunc(settings, func(field harness.AgentSetting) bool { return field.Key == key })
+	return nil
 }
 
 func scanAgentDraft(row rowScanner) (AgentDraft, error) {

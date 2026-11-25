@@ -338,7 +338,7 @@ test("room autocomplete keeps selections and full labels on each search surface"
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }, { name: "other" }] });
     if (url.pathname === "/api/ListConfig") return Response.json({ config: {} });
     if (url.pathname === "/api/ListSkills") return Response.json({ skills: [] });
-    if (url.pathname === "/api/ListCronJobs") return Response.json({ jobs: [] });
+    if (url.pathname === "/api/ListRoutines") return Response.json({ jobs: [] });
     if (url.pathname === "/api/SearchSessions") {
       const { query } = await request.json() as { query: string };
       queries.push(query);

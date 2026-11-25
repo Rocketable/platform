@@ -123,7 +123,7 @@ export async function withPage(options: object, run: (page: any, origin: string,
       case "/api/Protocol": return Response.json({ protoSha256: "tabs" });
       case "/api/ListConfig": return Response.json({ config: { workspace: "tabs" } });
       case "/api/ListAgents": return Response.json({ agents: saved.agents, currentAgent: "main" });
-      case "/api/ListCronJobs": return Response.json({ jobs: [{ stem: "daily", status: "" }, { stem: "opsreport", status: "", space: "Ops" },
+      case "/api/ListRoutines": return Response.json({ jobs: [{ stem: "daily", status: "" }, { stem: "opsreport", status: "", space: "Ops" },
         { stem: "opsreport", status: "ran", lastRun: new Date().toISOString() }, { stem: "retired", status: "ran", lastRun: new Date().toISOString() }] });
       case "/api/History": return Response.json({ messages: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
       case "/api/CreateSession":

@@ -34,9 +34,9 @@ message Session {
   reserved 12;
   string forked_from = 13;
   repeated string tags = 14;
-  // The chat's recorded origin is a cron run, even after human follow-ups.
-  bool cron = 15;
-  string cron_name = 16;
+  // The chat's recorded origin is a routine run, even after human follow-ups.
+  bool routine = 15;
+  string routine_name = 16;
   // A remote OpenCode session names its configured server and folder; offline while it is unreachable.
   string server = 17;
   string directory = 18;
@@ -105,8 +105,8 @@ message TabAttention {
 enum ConversationKind {
   WEB_CHAT = 0;
   SLACK_THREAD = 1;
-  CRON_RUN = 2;
-  ONE_OFF_CRON_RUN = 3;
+  ROUTINE_RUN = 2;
+  ONE_OFF_ROUTINE_RUN = 3;
   EXTERNAL_MCP_RUN = 4;
   SUBAGENT = 5;
   REVIEW = 6;
@@ -148,13 +148,13 @@ message HistoryResponse {
   bool revert_eligible = 13;
   string revert_message_id = 14;
   bool can_undo = 15;
-  // Message ID of the newest message undo must keep: one from a cron run, External MCP, or Slack.
+  // Message ID of the newest message undo must keep: one from a routine run, External MCP, or Slack.
   // Empty when undo may reach the first message.
   string revert_floor = 21;
   // An allowed agent's execute or task call runs attached, so MoveToBackground has work to move.
   bool movable = 16;
   // Background Jobs running or holding an undelivered Completion Note, including those of hidden
-  // cron and External MCP runs whose destination is this conversation.
+  // Routine and External MCP runs whose destination is this conversation.
   repeated BackgroundJob background_jobs = 17;
   // Unanswered ask_user_question calls of this conversation's Web turns, in question ID order.
   repeated PendingQuestion pending_questions = 18;
@@ -493,7 +493,7 @@ message PromptResponse {
   optional string mention_warning = 2;
 }
 
-message CronJob {
+message Routine {
   string stem = 1;
   string status = 2;
   string last_run = 3;
@@ -550,10 +550,10 @@ message ListSkillsResponse {
   repeated Skill skills = 1;
 }
 
-message ListCronJobsRequest {}
+message ListRoutinesRequest {}
 
-message ListCronJobsResponse {
-  repeated CronJob jobs = 1;
+message ListRoutinesResponse {
+  repeated Routine jobs = 1;
 }
 
 // An empty path or one ending in / names index.html.
@@ -590,11 +590,11 @@ message PageEntry {
   optional string updated_at = 4;
 }
 
-message RunCronJobRequest {
+message RunRoutineRequest {
   string stem = 1;
 }
 
-message RunCronJobResponse {
+message RunRoutineResponse {
   string id = 1;
 }
 
@@ -1318,9 +1318,9 @@ service Web {
   // Sends a message to a chat as the caller. The default STEER delivery returns when the agent's turn ends; QUEUE and STASH return as soon as the message is queued. The result never holds the agent's reply: read it with History. Give every call its own messageId and resend the same one when retrying; in Web chats and Slack threads a repeated messageId is not posted twice.
   rpc Prompt(PromptRequest) returns (PromptResponse);
   // Lists the routines in agent files with each schedule's next run within the next 24 hours.
-  rpc ListCronJobs(ListCronJobsRequest) returns (ListCronJobsResponse);
+  rpc ListRoutines(ListRoutinesRequest) returns (ListRoutinesResponse);
   // Runs a routine now by its name, "<agent> · <schedule>", and returns the chat its report went to once the run finishes.
-  rpc RunCronJob(RunCronJobRequest) returns (RunCronJobResponse);
+  rpc RunRoutine(RunRoutineRequest) returns (RunRoutineResponse);
   // Returns one Hosted Page of a space by its path.
   rpc GetPage(PageRequest) returns (Page);
   // Lists the Hosted Pages of a space.

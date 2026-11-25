@@ -101,7 +101,7 @@ func TestHistoryTranscript(t *testing.T) {
 		OutputTrace:       []json.RawMessage{json.RawMessage(`{"id":"trace"}`)}, TokenUsage: &harness.TokenUsage{TotalTokens: 5}, ResponseID: "response-1",
 	}
 
-	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat, "producer": KindCronRun})
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat, "producer": KindRoutineRun})
 	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
 	entries := testHistoryEntries(t, s, "main")
 	require.Len(t, entries, 1)
@@ -349,7 +349,7 @@ func TestTranscriptChangesReachSyncDestination(t *testing.T) {
 	_, err, _ := next()
 	require.NoError(t, err, "initial refresh")
 
-	recordTestConversations(t, s, "main", map[string]ConversationKind{"producer": KindCronRun, "destination": KindWebChat})
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"producer": KindRoutineRun, "destination": KindWebChat})
 
 	hidden := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "hidden", false)
 	hidden.SyncDestination = "destination"
@@ -400,7 +400,7 @@ func TestTranscriptChanges(t *testing.T) {
 	}))
 	require.NoError(t, tx.Rollback())
 
-	_, err = s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, reports_to, kind, listed) VALUES ('destination', 'main', '', NULL, 'web_chat', TRUE), ('source', 'main', '', 'destination', 'cron_run', FALSE)`)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, reports_to, kind, listed) VALUES ('destination', 'main', '', NULL, 'web_chat', TRUE), ('source', 'main', '', 'destination', 'routine_run', FALSE)`)
 	require.NoError(t, err)
 
 	tx, err = s.db.BeginTx(ctx, nil)

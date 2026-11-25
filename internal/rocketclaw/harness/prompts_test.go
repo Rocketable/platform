@@ -65,7 +65,7 @@ func TestExpandPromptShellCommands(t *testing.T) {
 
 func TestExpandAgentPrompt(t *testing.T) {
 	t.Run("leaves prompt unchanged when disabled", func(t *testing.T) {
-		original := Agent{Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "review !`git status`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}
+		original := Agent{Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "review !`git status`", Location: "", Permission: PermissionSet{Buckets: nil}, FileMode: 0}
 		got := original
 
 		env := testPromptExpansionEnvironment(t)
@@ -85,7 +85,7 @@ func TestExpandAgentPrompt(t *testing.T) {
 		env, err := newPromptExpansionEnvironment(root, shellTemp, nil, &sandbox.Runtime{})
 		require.NoError(t, err)
 
-		original := Agent{Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "review !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}
+		original := Agent{Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "review !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, FileMode: 0}
 		got := original
 
 		expandAgentPrompt(context.Background(), &got, true, &env)
@@ -94,54 +94,33 @@ func TestExpandAgentPrompt(t *testing.T) {
 		require.Equal(t, "review !`cat MEMORY.md`", original.Prompt)
 	})
 
-	t.Run("expands through the agent custom shell", func(t *testing.T) {
+	t.Run("expands in host bash from the workspace with the agent's secrets, whatever its shell", func(t *testing.T) {
 		env := testPromptExpansionEnvironment(t)
-		got := Agent{Name: "review", Prompt: "review !`echo hi`", CustomShell: CustomShell{Path: writeCustomShell(t, env.root)}}
+		workspace, err := filepath.EvalSymlinks(env.hostDir)
+		require.NoError(t, err)
 
-		expandAgentPrompt(context.Background(), &got, true, &env)
+		secrets := map[string]string{"SECRET_KEY": "s3cr3t"}
+		for _, shell := range []CustomShell{
+			{Path: writeCustomShell(t, env.root), Secrets: secrets},
+			{Path: filepath.Join(env.root.Name(), "missing"), Secrets: secrets},
+			{Emulated: true, Dir: t.TempDir(), Secrets: secrets},
+			{Path: writeCustomShell(t, env.root), Emulated: true, Secrets: secrets},
+		} {
+			got := Agent{Name: "review", Prompt: "at !`pwd -P` key !`printf %s \"$SECRET_KEY\"`", CustomShell: shell}
 
-		require.Equal(t, "review custom:1:echo hi", got.Prompt)
-	})
+			expandAgentPrompt(t.Context(), &got, true, &env)
 
-	t.Run("missing custom shell expands to empty text", func(t *testing.T) {
-		env := testPromptExpansionEnvironment(t)
-		got := Agent{Name: "review", Prompt: "review !`echo hi` done", CustomShell: CustomShell{Path: filepath.Join(env.root.Name(), "missing")}}
-
-		expandAgentPrompt(context.Background(), &got, true, &env)
-
-		require.Equal(t, "review  done", got.Prompt)
-	})
-
-	t.Run("an easy agent expands in host bash with its secrets, an advanced emulated one only in its sandbox", func(t *testing.T) {
-		env := testPromptExpansionEnvironment(t)
-		shell := CustomShell{Path: writeCustomShell(t, env.root), Emulated: true, Secrets: map[string]string{"SECRET_KEY": "s3cr3t"}}
-		easy := Agent{Mode: AgentModeEasy, Prompt: "key !`printf %s \"$SECRET_KEY\"`", CustomShell: shell}
-		advanced := Agent{Mode: AgentModeAdvanced, Prompt: "review !`echo hi`", CustomShell: CustomShell{Path: shell.Path, Emulated: true}}
-
-		expandAgentPrompt(t.Context(), &easy, true, &env)
-		expandAgentPrompt(t.Context(), &advanced, true, &env)
-
-		require.Equal(t, "key s3cr3t", easy.Prompt)
-		require.Equal(t, "review ", advanced.Prompt, "no sandbox here: it expands to nothing rather than in host bash")
-	})
-
-	t.Run("emulated shell without a program expands to empty text", func(t *testing.T) {
-		env := testPromptExpansionEnvironment(t)
-		got := Agent{Name: "review", Prompt: "review !`echo hi` done", CustomShell: CustomShell{Emulated: true}}
-
-		expandAgentPrompt(context.Background(), &got, true, &env)
-
-		require.Equal(t, "review  done", got.Prompt)
+			require.Equal(t, "at "+workspace+"\n key s3cr3t", got.Prompt, shell)
+		}
 	})
 }
 
-func TestEasySkillExpandsInHostBash(t *testing.T) {
+func TestSkillExpandsInHostBashBeforeArguments(t *testing.T) {
 	loaded := LoadSkills(fstest.MapFS{"easy-skill/SKILL.md": mapFile("---\nname: easy-skill\ndescription: Expands in host bash\n---\n\nRun: !`pwd`\nKey: !`printf %s \"$SECRET_KEY\"`\n")}, "/virtual/skills").Skills
 	factory := testSkillFactory(t, loaded, nil)
 	factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
 
 	agent := agentWithSkillPermission()
-	agent.Mode = AgentModeEasy
 	agent.CustomShell = CustomShell{Path: writeCustomShell(t, factory.promptExpansion.root), Emulated: true, Secrets: map[string]string{"SECRET_KEY": "s3cr3t"}}
 
 	model, _ := factory.assembleTools(agent)

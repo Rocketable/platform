@@ -42,7 +42,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
-import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, ListTab, TabListName, Remote, Session, SavedTabs, SearchPage as SearchPageState, StripLayout, TabAttention, TranscriptEvent } from "@/types";
+import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, Routine, QueueItem, ListTab, TabListName, Remote, Session, SavedTabs, SearchPage as SearchPageState, StripLayout, TabAttention, TranscriptEvent } from "@/types";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import { AgentEditorPage, BuiltInNote, editAgent } from "@/agent-editor";
 import type { MountOptions, Mounted } from "../../oc/host/api";
@@ -455,7 +455,7 @@ function alertResumed(agent = "This agent") {
 }
 
 
-// A session created here is titled by its first message, or a cron run by its cron's name, until the session list has it.
+// A session created here is titled by its first message, or a routine run by its routine's name, until the session list has it.
 const firstMessages = new Map<string, string>();
 
 function sessionTitle(session: Session) {
@@ -465,7 +465,7 @@ function sessionTitle(session: Session) {
 function useRoute() {
   const pathname = usePathname() || "/";
   return {
-    cron: pathname === "/routines",
+    routines: pathname === "/routines",
     timeline: pathname.startsWith("/routines/") ? decodeSessionId(pathname.slice("/routines/".length)) : "",
     agents: pathname === "/agents",
     editor: /^\/agents\/(new|drafts\/[^/]+)$/.test(pathname),
@@ -488,19 +488,19 @@ function TabPane({ show, children }: { show: boolean; children: ReactNode }) {
 }
 
 // Memoized so app-level state changes, like opening the palette, do not redraw the hidden pages.
-const WarmTabs = memo(function WarmTabs({ cron, agents, skills, config }: { cron: boolean; agents: boolean; skills: boolean; config: boolean }) {
-  const [warm, setWarm] = useState({ cron, agents, skills, config });
+const WarmTabs = memo(function WarmTabs({ routines, agents, skills, config }: { routines: boolean; agents: boolean; skills: boolean; config: boolean }) {
+  const [warm, setWarm] = useState({ routines, agents, skills, config });
   useEffect(() => {
     setWarm((current) => ({
-      cron: current.cron || cron,
+      routines: current.routines || routines,
       agents: current.agents || agents,
       skills: current.skills || skills,
       config: current.config || config,
     }));
-  }, [cron, agents, skills, config]);
-  const shown = { cron, agents, skills, config };
-  return (["cron", "agents", "skills", "config"] as const).map((name) => {
-    const Page = { cron: CronPage, agents: AgentsPage, skills: SkillsPage, config: ConfigPage }[name];
+  }, [routines, agents, skills, config]);
+  const shown = { routines, agents, skills, config };
+  return (["routines", "agents", "skills", "config"] as const).map((name) => {
+    const Page = { routines: RoutinePage, agents: AgentsPage, skills: SkillsPage, config: ConfigPage }[name];
     return warm[name] ? <TabPane key={name} show={shown[name]}><Page /></TabPane> : null;
   });
 });
@@ -1009,7 +1009,7 @@ function pageLabel(page: string) {
   return `${space} · ${path.join("/")}`;
 }
 
-// A skill's or cron's page tab is titled with its name, and a hosted page's tab with its label.
+// A skill's or routine's page tab is titled with its name, and a hosted page's tab with its label.
 function pageTab(path: string): [string, typeof Search] | undefined {
   if (path.startsWith("/pages/")) return [pageLabel(path.slice("/pages/".length)), FileText];
   if (path.startsWith("/routines/")) return [decodeSessionId(path.slice("/routines/".length)), Clock];
@@ -1707,7 +1707,7 @@ function TabNotifications() {
   return null;
 }
 
-// Agents and cron jobs without a space show in every space; the rest only in the space of that name, ignoring case.
+// Agents and routines without a space show in every space; the rest only in the space of that name, ignoring case.
 function useInSpace() {
   const { state } = useContext(TabActions);
   const name = state.spaces.find((space) => space.id === state.space)?.name.toLowerCase();
@@ -2453,7 +2453,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = ![route.editor, route.cron, route.timeline, route.agents, route.skills, route.skill, route.config, route.search, route.pages, route.shortcuts, route.closed, route.page, route.remote].some(Boolean);
+  const showChat = ![route.editor, route.routines, route.timeline, route.agents, route.skills, route.skill, route.config, route.search, route.pages, route.shortcuts, route.closed, route.page, route.remote].some(Boolean);
   const [palette, setPalette] = useState<{ mode: PaletteMode | undefined; key: number; opencode?: OpenCodeServer }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
   const drafts = useMemo(() => new Map<string, ComposerDraft>(), [scope]);
@@ -2559,9 +2559,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
             {sidebar.medium ? <ResizableAside side="tabs" id="tab-sidebar" className={cn("border-r", !sidebar.open && "hidden")}><TabStrip tabs={tabs} newChat={newChat} /></ResizableAside> : null}
             <div className="flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]"><TabTitle />
             <main className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col", command?.target && "pt-[min(75dvh,30rem)]")}><ServerGate>
-              <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
+              <WarmTabs routines={route.routines} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}
-              {route.timeline ? <CronTimeline key={route.timeline} stem={route.timeline} /> : null}
+              {route.timeline ? <RoutineTimeline key={route.timeline} stem={route.timeline} /> : null}
               <PageIndex show={route.pages} />
               <ShortcutsPage show={route.shortcuts} />
               <AgentEditorPage show={route.editor} />
@@ -2766,26 +2766,26 @@ function paletteRows(
   mode: PaletteMode,
   typed: string,
   rows: Session[],
-  jobs: CronJob[],
+  jobs: Routine[],
   newChat: () => void,
   tabs: ReturnType<typeof useTabs>,
-  openCron: (mode: "cron" | "timeline") => void,
+  openRoutine: (mode: "routine" | "timeline") => void,
   runStem: (stem: string) => void,
   actions: { key: string; label: string; detail?: string; keep?: boolean; disabled?: boolean; run: () => void }[],
   recent: string[],
   origin: Space,
 ): { key: string; label?: string; detail?: string; session?: Session; keep?: boolean; disabled?: boolean; run: () => void }[] {
   const needle = typed.toLowerCase(), pages = searchPages(tabs);
-  if (mode === "cron") {
+  if (mode === "routine") {
     return jobs.filter((job) => job.status !== "ran" && (needle === "" || `${job.stem} ${job.schedule ?? ""} ${job.agent ?? ""}`.toLowerCase().includes(needle))).map((job) => ({
       key: job.stem, label: job.stem, detail: [job.schedule, job.agent].filter(Boolean).join(" · "), keep: true, run: () => runStem(job.stem),
     }));
   }
-  // Every cron with a definition or runs, retired ones too; runs come newest first.
+  // Every routine with a definition or runs, retired ones too; runs come newest first.
   if (mode === "timeline") {
     return [...Map.groupBy(jobs.filter((job) => job.stem.toLowerCase().includes(needle)), (job) => job.stem)].map(([stem, rows]) => {
       const runs = rows.filter((job) => job.status === "ran");
-      return { key: stem, label: stem, detail: `${runs.length} runs${runs.length ? ` · last ${cronWhen(runs[0].lastRun)} UTC` : ""}`, run: () => navigate(cronPath(stem)) };
+      return { key: stem, label: stem, detail: `${runs.length} runs${runs.length ? ` · last ${routineWhen(runs[0].lastRun)} UTC` : ""}`, run: () => navigate(routinePath(stem)) };
     });
   }
   // Match quality: 0 the whole label, 1 one contiguous run, 2 three or more letters in order with gaps, 3 none; all case-insensitive.
@@ -2802,8 +2802,8 @@ function paletteRows(
     ...actions,
     { key: "new", label: "Sessions: New", run: newChat },
     { key: "search", label: "Sessions: Search", run: () => tabs.open(freshSearch()) },
-    { key: "run-cron", label: "Routines: Run", keep: true, run: () => openCron("cron") },
-    { key: "cron-timeline", label: "Routines: Timeline", keep: true, run: () => openCron("timeline") },
+    { key: "run-routine", label: "Routines: Run", keep: true, run: () => openRoutine("routine") },
+    { key: "routine-timeline", label: "Routines: Timeline", keep: true, run: () => openRoutine("timeline") },
     ...([["routines", "Routines: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["closed", "Tabs: Recently closed"], ["shortcuts", "Help: Keyboard Shortcuts"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
   ].filter((item) => tier(item.label) < 3).sort((a, b) => {
@@ -2924,7 +2924,7 @@ function usePaletteSessions(query: string, sessions: boolean, entered: boolean) 
 const filterKeys = "tag|routine|agent|room|principal|server|model|space|is|sort";
 
 const paletteCopy = { sessions: { title: "Go to session or command", desc: "Search and open a session, or run a command.", placeholder: "Search sessions and commands" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
-  cron: { title: "Run routine", desc: "Search and run a routine.", placeholder: "Search routines" }, timeline: { title: "Routine timeline", desc: "Pick a routine to see all of its runs.", placeholder: "Search routines" } };
+  routine: { title: "Run routine", desc: "Search and run a routine.", placeholder: "Search routines" }, timeline: { title: "Routine timeline", desc: "Pick a routine to see all of its runs.", placeholder: "Search routines" } };
 type PaletteMode = keyof typeof paletteCopy;
 
 // "Sessions: New on <server>" turns the palette into a folder picker for a remote OpenCode
@@ -3033,15 +3033,15 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
       style.removeProperty("--search-height");
     };
   }, [mode]);
-  // Leaving session search for cron or folders swaps the input, so each mode focuses its own.
+  // Leaving session search for routines or folders swaps the input, so each mode focuses its own.
   useLayoutEffect(() => { if (mode !== undefined) input.current?.focus(); }, [mode]);
   const active = useRef<HTMLButtonElement>(null);
   const { search, filtered, free, matches, rows } = usePaletteSessions(query, mode === "sessions", entered);
-  const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" || mode === "timeline" });
-  const runCron = useMutation({
-    mutationFn: mutations.runCron,
+  const jobs = useQuery({ ...queries.routines(), staleTime: 10_000, enabled: mode === "commands" || mode === "routine" || mode === "timeline" });
+  const runRoutine = useMutation({
+    mutationFn: mutations.runRoutine,
     onSuccess: (id, { stem }) => {
-      void queryClient.invalidateQueries({ queryKey: ["cronJobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["routines"] });
       sidebar.invalidateQueries();
       if (id === "") return;
       firstMessages.set(id, stem);
@@ -3051,8 +3051,8 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   });
   // The folder picker leaves session search, so typed folders are never sent as a search.
   const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(""); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent, opencode);
-  const cronJobs = cronInSpace(jobs.data, useInSpace());
-  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, cronJobs, newChat, tabs, (cron) => { setQuery(""); setPick(""); setMode(cron); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...tree, ...commands, ...tabCommands, ...spaceCommands, ...keyCommands, ...attention ? [{ key: "attention-next", label: "Sessions: Next needing you", run: attention }] : [], ...timeline, ...outputs], recent, origin.space));
+  const routines = routineInSpace(jobs.data, useInSpace());
+  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, routines, newChat, tabs, (next) => { setQuery(""); setPick(""); setMode(next); }, (stem) => runRoutine.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...tree, ...commands, ...tabCommands, ...spaceCommands, ...keyCommands, ...attention ? [{ key: "attention-next", label: "Sessions: Next needing you", run: attention }] : [], ...timeline, ...outputs], recent, origin.space));
   // Draw more rows only as scrolling or the keyboard needs them; every choice stays reachable.
   const { shown, next, selected, handoffsOnly } = usePalettePage(items, pick, `${mode}:${query}`);
   const choose = (item: (typeof items)[number]) => {
@@ -3095,7 +3095,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
           variant="embedded"
           onKeyDown={onKeyDown}
         />}
-        {runCron.error || actions.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runCron.error ?? actions.error)?.message}</p> : null}
+        {runRoutine.error || actions.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runRoutine.error ?? actions.error)?.message}</p> : null}
         {remote.alert}
         {mode === "sessions" ? <div className="px-3 text-sm empty:hidden"><SearchStatus search={search} /></div> : null}
         <ul key={`${mode}:${query}`} data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
@@ -3181,7 +3181,7 @@ function paletteEmpty(mode: PaletteMode | undefined, sidebar: SidebarView, searc
   if (folders) return folders;
   if (mode === "sessions" && search.error) return "Search incomplete";
   if (mode === "sessions" && (!searchIsAuthoritative(sidebar) || search.pending || search.missing)) return "loading...";
-  return (mode === "cron" || mode === "timeline") && loadingJobs ? "Loading…" : "No matches";
+  return (mode === "routine" || mode === "timeline") && loadingJobs ? "Loading…" : "No matches";
 }
 
 function paletteMove(event: { key: string; preventDefault: () => void }, selected: number, count: number, enter: () => void) {
@@ -3903,7 +3903,7 @@ function searchChoices(word: string, rows: Session[], catalog: Agent[], principa
   const typed = new RegExp(`^(${filterKeys}):"?(.*?)"?$`, "is").exec(word);
   const key = typed?.[1].toLowerCase() ?? "", needle = typed?.[2].toLowerCase() ?? "";
   const remote = (field: "server" | "agent" | "model") => [...new Set(rows.flatMap((row) => row.server && row[field] ? [row[field]!] : []))];
-  const names = key === "space" ? spaces.map(({ name }) => name) : key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "routine" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"]
+  const names = key === "space" ? spaces.map(({ name }) => name) : key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "routine" ? [...new Set(rows.flatMap((row) => row.routineName ? [row.routineName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"]
     : key === "server" ? remote("server") : key === "model" ? [...new Set([...catalog.flatMap(({ model }) => model ? [model] : []), ...remote("model")])] : ["forked", "routine", "unread", "running", "queued", "waiting", "external"];
   const agents = key === "agent" ? [...catalog.filter((agent, i) => catalog.findIndex(({ name }) => name === agent.name) === i).map(({ name, model, reasoning, rocketclaw }) => ({ key: name, detail: [rocketclaw, model, reasoning].filter(Boolean).join(" · ") })), ...remote("agent").filter((name) => !catalog.some((agent) => agent.name === name)).map((name) => ({ key: name, detail: "OpenCode" }))] : [];
   const quoted = word.includes(':"');
@@ -4186,7 +4186,7 @@ function MessageHeader({ header, children }: { header?: string; children: ReactE
   </Tooltip>;
 }
 
-// Undo keeps floor, the newest message from a cron run, External MCP, or Slack, and every message before it.
+// Undo keeps floor, the newest message from a routine run, External MCP, or Slack, and every message before it.
 function keptByFloor(messageId?: string, floor?: string) {
   if (!messageId || !floor) return false;
   const [entry, index] = messageId.split(":").map(Number), [floorEntry, floorIndex] = floor.split(":").map(Number);
@@ -4605,7 +4605,7 @@ function emptyTranscriptMessage(opening: boolean, empty: boolean) {
 
 function TranscriptBody({ conversationId, working, terminal, origin, hasSandboxed, movable, refreshHistory, turns, rows, binding, detail, wide, loading, emptyMessage, delegations }: Pick<ComponentProps<typeof TranscriptLog>, "conversationId" | "working" | "terminal" | "origin" | "hasSandboxed" | "movable" | "refreshHistory"> & { turns: Turn[]; rows: ReturnType<typeof comparisonRows>; binding?: ShadowBinding; detail: TimelineRows; wide: boolean; loading: boolean; emptyMessage: string; delegations?: Pick<HistoryView, "delegations" | "reviewRationales"> }) {
   return <MessageScrollerContent className={cn("mx-auto w-full min-w-0", binding && wide ? "max-w-7xl" : "max-w-3xl")}>
-    {origin && ["cron", "external_mcp"].includes(origin.kind) ? <MessageScrollerItem messageId="origin"><OriginCard origin={origin} /></MessageScrollerItem> : null}
+    {origin && ["routine", "external_mcp"].includes(origin.kind) ? <MessageScrollerItem messageId="origin"><OriginCard origin={origin} /></MessageScrollerItem> : null}
     {(binding ? rows : turns).length === 0 && !working ? (
       <MessageScrollerItem className="flex flex-1 items-center justify-center">
         <p role="status" className="text-sm text-muted-foreground">{emptyMessage}</p>
@@ -4964,16 +4964,16 @@ function mergeShadowBindings(earlier: ShadowBinding[], followed: ShadowBinding[]
 }
 
 export function OriginCard({ origin }: { origin?: ChatOrigin }) {
-  if (!origin || (origin.kind !== "cron" && origin.kind !== "external_mcp")) return null;
+  if (!origin || (origin.kind !== "routine" && origin.kind !== "external_mcp")) return null;
   return (
     <details aria-label="Chat origin" className="group/origin mb-3 min-w-0 rounded-lg border">
       <summary className="cursor-pointer px-3 py-2 text-xs font-medium break-words">
-        {origin.kind === "cron" ? `Routine · ${origin.stem}` : `External MCP · ${origin.externalConversationId}`} · {origin.agent}
+        {origin.kind === "routine" ? `Routine · ${origin.stem}` : `External MCP · ${origin.externalConversationId}`} · {origin.agent}
         <span className="ml-2 text-muted-foreground group-open/origin:hidden">show more</span>
         <span className="ml-2 hidden text-muted-foreground group-open/origin:inline">show less</span>
       </summary>
       <div className="border-t px-3 py-2 text-sm whitespace-pre-wrap break-words">
-        {origin.kind === "cron" ? <>
+        {origin.kind === "routine" ? <>
           <p>Source: {origin.sourcePath}</p>
           <p>Stem: {origin.stem}</p>
           <p>Run kind: {origin.runKind}</p>
@@ -6037,17 +6037,17 @@ function PromptInput({ files, setFiles, sending, fileInput, children }: {
   </InputGroup></>;
 }
 
-function cronWhen(value: string) {
+function routineWhen(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" });
 }
 
-function cronAxisTime(ms: number) {
+function routineAxisTime(ms: number) {
   const d = new Date(ms);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-function CronMarker({ label, tooltip, pct, ran, onClick }: { label: string; tooltip: string; pct: number; ran: boolean; onClick?: () => void }) {
+function RoutineMarker({ label, tooltip, pct, ran, onClick }: { label: string; tooltip: string; pct: number; ran: boolean; onClick?: () => void }) {
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const id = useId();
   function showTooltip(event: SyntheticEvent<HTMLElement>) {
@@ -6065,11 +6065,11 @@ function CronMarker({ label, tooltip, pct, ran, onClick }: { label: string; tool
   );
 }
 
-function CronChatLink({ job, className, children }: { job: CronJob; className: string; children: ReactNode }) {
+function RoutineChatLink({ job, className, children }: { job: Routine; className: string; children: ReactNode }) {
   const sidebar = useContext(Sidebar);
   const open = useMutation({ mutationFn: mutations.createSession, onSuccess: ({ id }) => {
     sidebar.invalidateQueries();
-    void queryClient.invalidateQueries({ queryKey: ["cronJobs"] });
+    void queryClient.invalidateQueries({ queryKey: ["routines"] });
     navigate(sessionPath(id));
   } });
   return job.nextRun ? <Link href={sessionPath(job.nextRun)} className={className}>{children}</Link> : <>
@@ -6078,7 +6078,7 @@ function CronChatLink({ job, className, children }: { job: CronJob; className: s
   </>;
 }
 
-function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () => void }) {
+function RoutineRunPreview({ preview, onClose }: { preview: Routine; onClose: () => void }) {
   const conversationId = preview.origin!;
   const history = useQuery(queries.history({ id: conversationId }));
   const previewLines = useMemo(() => historyLines(history.data?.messages ?? []), [history.data]);
@@ -6086,7 +6086,7 @@ function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () =>
   return (
     <section aria-label="Run preview" className="rounded-md border p-3">
       <div className="flex items-center justify-between gap-2">
-        <CronChatLink job={preview} className="text-sm font-medium underline">{preview.stem} · {cronWhen(preview.lastRun)} UTC · Open chat →</CronChatLink>
+        <RoutineChatLink job={preview} className="text-sm font-medium underline">{preview.stem} · {routineWhen(preview.lastRun)} UTC · Open chat →</RoutineChatLink>
         <Button variant="ghost" size="icon" aria-label="Close preview" onClick={onClose}><X className="h-4 w-4" /></Button>
       </div>
       {history.isLoading ? <p role="status" className="text-sm text-muted-foreground">Loading run…</p> : null}
@@ -6100,27 +6100,27 @@ function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () =>
 }
 
 // Runs carry no space, so a job outside this space hides its runs too.
-function cronInSpace(jobs: CronJob[] = [], inSpace: (item: { space?: string }) => boolean) {
+function routineInSpace(jobs: Routine[] = [], inSpace: (item: { space?: string }) => boolean) {
   const away = new Set(jobs.filter((job) => !inSpace(job)).map((job) => job.stem));
   return jobs.filter((job) => !away.has(job.stem));
 }
 
-const cronPath = (stem: string) => `/routines/${encodeSessionId(stem)}`;
-const cronDay = (day: string) => new Date(day).toLocaleDateString("en-US", { dateStyle: "medium", timeZone: "UTC" });
+const routinePath = (stem: string) => `/routines/${encodeSessionId(stem)}`;
+const routineDay = (day: string) => new Date(day).toLocaleDateString("en-US", { dateStyle: "medium", timeZone: "UTC" });
 
-function cronGap(ms: number) {
+function routineGap(ms: number) {
   const minutes = Math.round(ms / 60_000), hours = Math.floor(minutes / 60);
   return minutes < 60 ? `${minutes}m` : hours < 24 ? `${hours}h ${minutes % 60}m` : `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
-// One cron's runs, the same rows the Routines page lists, as a journal. A failed load keeps what is shown and retries until it loads.
-function CronTimeline({ stem }: { stem: string }) {
-  const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, retry: true });
-  const rows = cronInSpace(jobs.data, useInSpace()).filter((job) => job.stem === stem);
+// One routine's runs, the same rows the Routines page lists, as a journal. A failed load keeps what is shown and retries until it loads.
+function RoutineTimeline({ stem }: { stem: string }) {
+  const jobs = useQuery({ ...queries.routines(), staleTime: 10_000, retry: true });
+  const rows = routineInSpace(jobs.data, useInSpace()).filter((job) => job.stem === stem);
   const [count, setCount] = useState(60);
   const [picked, setPicked] = useState("");
   const wide = useMedia("(min-width: 64rem)");
-  const run = useCronRun();
+  const run = useRoutineRun();
   if (!jobs.data) return <p role="status" className="p-4 text-sm text-muted-foreground">Loading…</p>;
   if (rows.length === 0) return <p className="p-4 text-sm text-muted-foreground">No routine named {stem} in this space.</p>;
   const job = rows.find((item) => item.status !== "ran");
@@ -6131,16 +6131,16 @@ function CronTimeline({ stem }: { stem: string }) {
   const showDay = (day: string) => {
     // The day and a page of older runs, so the day can scroll to the top.
     flushSync(() => setCount(Math.max(count, runs.findLastIndex((run) => run.lastRun.startsWith(day)) + 60)));
-    document.getElementById(`cron-day-${day}`)?.scrollIntoView();
+    document.getElementById(`routine-day-${day}`)?.scrollIntoView();
   };
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 overflow-y-auto p-4">
-      <CronOverview stem={stem} job={job} runs={runs} gaps={gaps} runButton={job ? run.button(stem) : null} />
+      <RoutineOverview stem={stem} job={job} runs={runs} gaps={gaps} runButton={job ? run.button(stem) : null} />
       {run.error}
-      {runs.length ? <CronDayBars runs={runs} through={job ? Date.now() : times[0]} onPick={showDay} /> : null}
+      {runs.length ? <RoutineDayBars runs={runs} through={job ? Date.now() : times[0]} onPick={showDay} /> : null}
       <div className={cn("grid items-start gap-4", wide && preview ? "grid-cols-2" : "grid-cols-1")}>
-        <CronJournal runs={runs.slice(0, count)} gaps={gaps} picked={picked} setPicked={setPicked} inline={!wide} />
-        {wide && preview ? <div className="sticky top-0"><CronRunPreview preview={preview} onClose={() => setPicked("")} /></div> : null}
+        <RoutineJournal runs={runs.slice(0, count)} gaps={gaps} picked={picked} setPicked={setPicked} inline={!wide} />
+        {wide && preview ? <div className="sticky top-0"><RoutineRunPreview preview={preview} onClose={() => setPicked("")} /></div> : null}
       </div>
       {count < runs.length ? <Button variant="outline" className="self-start" onClick={() => setCount(count + 100)}>Show older runs</Button> : null}
       {runs.length === 0 ? <p className="text-sm text-muted-foreground">No runs yet.</p> : null}
@@ -6149,7 +6149,7 @@ function CronTimeline({ stem }: { stem: string }) {
   );
 }
 
-function CronOverview({ stem, job, runs, gaps, runButton }: { stem: string; job?: CronJob; runs: CronJob[]; gaps: number[]; runButton: ReactNode }) {
+function RoutineOverview({ stem, job, runs, gaps, runButton }: { stem: string; job?: Routine; runs: Routine[]; gaps: number[]; runButton: ReactNode }) {
   const last = relativeTime(runs[0]?.lastRun ?? "");
   return <>
     <PageTitle><Link href="/routines" className="text-muted-foreground hover:underline">Routines</Link> / {stem} <span className="ml-1 rounded-full border px-2 align-middle text-xs font-normal">{job ? "Active" : "Retired"}</span></PageTitle>
@@ -6159,21 +6159,21 @@ function CronOverview({ stem, job, runs, gaps, runButton }: { stem: string; job?
       {job ? <details><summary className="cursor-pointer">Definition</summary><p className="mt-2 font-mono">{job.origin}</p><pre className="mt-2 whitespace-pre-wrap">{job.body || "No body."}</pre></details> : null}
     </div>
     <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-      <CronStat label="Runs" value={String(runs.length)} />
-      <CronStat label="Typical gap" value={gaps.length ? cronGap(gaps.toSorted((a, b) => a - b)[gaps.length >> 1]) : "—"} detail={gaps.length ? `Longest ${cronGap(Math.max(...gaps))}` : ""} />
-      <CronStat label="Last run" value={!last ? "—" : last === "now" ? "Just now" : `${last} ago`} detail={runs[0] ? `${cronWhen(runs[0].lastRun)} UTC` : ""} />
-      <CronStat label="Next run" value={!job ? "Retired" : job.upcoming?.length ? `${cronWhen(job.upcoming[0])} UTC` : "—"} />
+      <RoutineStat label="Runs" value={String(runs.length)} />
+      <RoutineStat label="Typical gap" value={gaps.length ? routineGap(gaps.toSorted((a, b) => a - b)[gaps.length >> 1]) : "—"} detail={gaps.length ? `Longest ${routineGap(Math.max(...gaps))}` : ""} />
+      <RoutineStat label="Last run" value={!last ? "—" : last === "now" ? "Just now" : `${last} ago`} detail={runs[0] ? `${routineWhen(runs[0].lastRun)} UTC` : ""} />
+      <RoutineStat label="Next run" value={!job ? "Retired" : job.upcoming?.length ? `${routineWhen(job.upcoming[0])} UTC` : "—"} />
     </dl>
-    {job?.upcoming?.length ? <section aria-label="Upcoming" className="flex flex-wrap items-center gap-2 text-sm"><h2 className="text-xs font-medium text-muted-foreground">Upcoming</h2>{job.upcoming.map((at) => <span key={at} className="rounded-md border px-2 py-0.5">{cronWhen(at)} UTC</span>)}</section> : null}
+    {job?.upcoming?.length ? <section aria-label="Upcoming" className="flex flex-wrap items-center gap-2 text-sm"><h2 className="text-xs font-medium text-muted-foreground">Upcoming</h2>{job.upcoming.map((at) => <span key={at} className="rounded-md border px-2 py-0.5">{routineWhen(at)} UTC</span>)}</section> : null}
   </>;
 }
 
-function CronStat({ label, value, detail }: { label: string; value: string; detail?: string }) {
+function RoutineStat({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return <div className="rounded-md border p-3"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="font-medium">{value}</dd>{detail ? <dd className="text-xs text-muted-foreground">{detail}</dd> : null}</div>;
 }
 
 // One bar per UTC day from the first run through the given time. Picking a day shows its runs.
-function CronDayBars({ runs, through, onPick }: { runs: CronJob[]; through: number; onPick: (day: string) => void }) {
+function RoutineDayBars({ runs, through, onPick }: { runs: Routine[]; through: number; onPick: (day: string) => void }) {
   const counts = Map.groupBy(runs, (run) => run.lastRun.slice(0, 10));
   const most = Math.max(...[...counts.values()].map((day) => day.length));
   const days: string[] = [];
@@ -6181,7 +6181,7 @@ function CronDayBars({ runs, through, onPick }: { runs: CronJob[]; through: numb
   return <div role="group" aria-label="Runs per day" className="flex h-20 shrink-0 items-end gap-0.5 overflow-x-auto pb-1">
     {days.map((day) => {
       const total = counts.get(day)?.length ?? 0;
-      return <button key={day} type="button" disabled={total === 0} aria-label={`${cronDay(day)}: ${total} runs`} title={`${cronDay(day)}: ${total} runs`} className="flex h-full min-w-2 flex-1 items-end rounded-sm hover:bg-accent focus-visible:outline-2" onClick={() => onPick(day)}>
+      return <button key={day} type="button" disabled={total === 0} aria-label={`${routineDay(day)}: ${total} runs`} title={`${routineDay(day)}: ${total} runs`} className="flex h-full min-w-2 flex-1 items-end rounded-sm hover:bg-accent focus-visible:outline-2" onClick={() => onPick(day)}>
         <span className="w-full rounded-sm bg-cyan-600 dark:bg-cyan-400" style={{ height: `${(total / most) * 100}%` }} />
       </button>;
     })}
@@ -6189,27 +6189,27 @@ function CronDayBars({ runs, through, onPick }: { runs: CronJob[]; through: numb
 }
 
 // Runs under a header per UTC day, each with the time since the run before it. Narrow screens preview a run under it.
-function CronJournal({ runs, gaps, picked, setPicked, inline }: { runs: CronJob[]; gaps: number[]; picked: string; setPicked: (origin: string) => void; inline: boolean }) {
+function RoutineJournal({ runs, gaps, picked, setPicked, inline }: { runs: Routine[]; gaps: number[]; picked: string; setPicked: (origin: string) => void; inline: boolean }) {
   const days = Map.groupBy(runs.map((run, index) => ({ run, gap: gaps[index] })), ({ run }) => run.lastRun.slice(0, 10));
   return <section aria-label="Runs" className="flex flex-col gap-4">
-    {[...days].map(([day, items]) => <section key={day} aria-labelledby={`cron-day-${day}`}>
-      <h2 id={`cron-day-${day}`} className="py-1 text-sm font-medium">{cronDay(day)}</h2>
+    {[...days].map(([day, items]) => <section key={day} aria-labelledby={`routine-day-${day}`}>
+      <h2 id={`routine-day-${day}`} className="py-1 text-sm font-medium">{routineDay(day)}</h2>
       <ul className="flex flex-col">
         {items.map(({ run, gap }) => <li key={run.origin}>
           <button type="button" aria-pressed={picked === run.origin} className={cn("flex w-full justify-between gap-4 rounded-md px-2 py-1.5 text-sm hover:bg-accent", picked === run.origin && "bg-accent")} onClick={() => setPicked(picked === run.origin ? "" : run.origin!)}>
             <span>{new Date(run.lastRun).toLocaleTimeString("en-US", { timeStyle: "short", timeZone: "UTC" })}</span>
-            <span className="text-xs text-muted-foreground">{gap === undefined ? "First run" : `+${cronGap(gap)}`}</span>
+            <span className="text-xs text-muted-foreground">{gap === undefined ? "First run" : `+${routineGap(gap)}`}</span>
           </button>
-          {inline && picked === run.origin ? <CronRunPreview preview={run} onClose={() => setPicked("")} /> : null}
+          {inline && picked === run.origin ? <RoutineRunPreview preview={run} onClose={() => setPicked("")} /> : null}
         </li>)}
       </ul>
     </section>)}
   </section>;
 }
 
-// Runs a cron after a confirmation, then opens its chat; its button spins until the run finishes.
-function useCronRun() {
-  const run = useMutation({ mutationFn: mutations.runCron, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["cronJobs"] }); } });
+// Runs a routine after a confirmation, then opens its chat; its button spins until the run finishes.
+function useRoutineRun() {
+  const run = useMutation({ mutationFn: mutations.runRoutine, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["routines"] }); } });
   const [confirmStem, setConfirmStem] = useState("");
   const confirmTrigger = useRef<HTMLButtonElement>(null);
   return {
@@ -6233,17 +6233,17 @@ function useCronRun() {
   };
 }
 
-function CronPage() {
-  const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000 });
-  const run = useCronRun();
+function RoutinePage() {
+  const jobs = useQuery({ ...queries.routines(), staleTime: 10_000 });
+  const run = useRoutineRun();
   const [runQuery, setRunQuery] = useState("");
-  const [preview, setPreview] = useState<CronJob | null>(null);
-  const rows = cronInSpace(jobs.data, useInSpace());
+  const [preview, setPreview] = useState<Routine | null>(null);
+  const rows = routineInSpace(jobs.data, useInSpace());
   const start = Date.now() - 12 * 3_600_000;
   const runNeedle = runQuery.trim().toLowerCase();
   const groups = [...Map.groupBy(rows, (job) => job.stem)].filter(([, items]) => runNeedle === "" || items.some((job) => [
     ...Object.values(job).flat(),
-    ...[job.lastRun, ...(job.upcoming ?? [])].filter(Boolean).map((at) => `${cronWhen(at)} UTC`),
+    ...[job.lastRun, ...(job.upcoming ?? [])].filter(Boolean).map((at) => `${routineWhen(at)} UTC`),
   ].join(" ").toLowerCase().includes(runNeedle))).map(([stem, items]) => ({
     stem,
     job: items.find((item) => item.status !== "ran"),
@@ -6263,26 +6263,26 @@ function CronPage() {
           <span className="relative h-4 min-w-0 flex-1">
             {[0, 6, 12, 18, 24, 30, 36].map((hour) => (
               <span key={hour} className="absolute -translate-x-1/2" style={{ left: `${(hour / 36) * 100}%` }}>
-                {cronAxisTime(start + hour * 3_600_000)}
+                {routineAxisTime(start + hour * 3_600_000)}
               </span>
             ))}
           </span>
         </div>
         {groups.map(({ stem, job, runs: jobRuns }) => (
           <div key={stem} className="flex items-center gap-2">
-            <span className="flex w-36 shrink-0 items-center gap-1 text-xs">{job ? run.button(stem) : <span className="size-6 shrink-0" />}<Link href={cronPath(stem)} className="truncate hover:underline">{stem}</Link></span>
+            <span className="flex w-36 shrink-0 items-center gap-1 text-xs">{job ? run.button(stem) : <span className="size-6 shrink-0" />}<Link href={routinePath(stem)} className="truncate hover:underline">{stem}</Link></span>
             <div className="relative h-4 min-w-0 flex-1 rounded-sm bg-muted">
               <button type="button" className="absolute inset-0 rounded-sm focus-visible:outline-2" aria-label={`Preview latest run of ${stem}`} disabled={jobRuns.length === 0} onClick={() => setPreview(jobRuns[0] ?? null)} />
-              {[...(job?.upcoming ?? []).map((at) => ({ key: at, at, label: `Expected ${stem} at ${cronWhen(at)} UTC`, tooltip: `Expected ${stem} at ${cronWhen(at)} UTC`, item: undefined })),
-                ...jobRuns.map((item) => ({ key: item.origin, at: item.lastRun, label: `Preview ${item.stem} at ${cronWhen(item.lastRun)} UTC`, tooltip: `Ran ${cronWhen(item.lastRun)} UTC`, item }))].map(({ key, at, label, tooltip, item }) => {
+              {[...(job?.upcoming ?? []).map((at) => ({ key: at, at, label: `Expected ${stem} at ${routineWhen(at)} UTC`, tooltip: `Expected ${stem} at ${routineWhen(at)} UTC`, item: undefined })),
+                ...jobRuns.map((item) => ({ key: item.origin, at: item.lastRun, label: `Preview ${item.stem} at ${routineWhen(item.lastRun)} UTC`, tooltip: `Ran ${routineWhen(item.lastRun)} UTC`, item }))].map(({ key, at, label, tooltip, item }) => {
                 const pct = ((Date.parse(at) - start) / (36 * 3_600_000)) * 100;
-                return Number.isFinite(pct) && pct >= 0 && pct <= 100 ? <CronMarker key={key} label={label} tooltip={tooltip} pct={pct} ran={!!item} onClick={item && (() => setPreview(item))} /> : null;
+                return Number.isFinite(pct) && pct >= 0 && pct <= 100 ? <RoutineMarker key={key} label={label} tooltip={tooltip} pct={pct} ran={!!item} onClick={item && (() => setPreview(item))} /> : null;
               })}
             </div>
           </div>
         ))}
       </section>
-      {preview && groups.some(({ stem }) => stem === preview.stem) ? <CronRunPreview preview={preview} onClose={() => setPreview(null)} /> : null}
+      {preview && groups.some(({ stem }) => stem === preview.stem) ? <RoutineRunPreview preview={preview} onClose={() => setPreview(null)} /> : null}
       {run.dialog}
     </div>
   );

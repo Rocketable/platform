@@ -34,7 +34,7 @@ func BenchmarkSidebarChat(b *testing.B) {
 func sidebarChatAllocationCheck(tb testing.TB) func() {
 	tb.Helper()
 
-	cron := &protocol.CronRun{Path: "cron/Weekly report.md", At: time.Date(2001, time.January, 2, 3, 4, 5, 0, time.UTC)}
+	cron := &protocol.RoutineRun{Path: "cron/Weekly report.md", At: time.Date(2001, time.January, 2, 3, 4, 5, 0, time.UTC)}
 	binding := ExternalMCPSessionState{ManagedConversationID: "sample-chat", Agent: "helper", OriginPairs: map[string]string{"topic": "Example", "note": "Sample"}}
 	cases := []struct {
 		facts ChatOriginFacts
@@ -43,8 +43,8 @@ func sidebarChatAllocationCheck(tb testing.TB) func() {
 	}{
 		{facts: ChatOriginFacts{ConversationID: "sample-chat"}},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: cron}, cron: true, stem: "cron/Weekly report.md"},
-		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: &protocol.CronRun{Path: "cron/.md", OneOff: true}}, cron: true, stem: "cron/.md"},
-		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: &protocol.CronRun{Path: "agents/marketing.md#*/5 * * * *"}}, cron: true, stem: "marketing"},
+		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: &protocol.RoutineRun{Path: "cron/.md", OneOff: true}}, cron: true, stem: "cron/.md"},
+		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: &protocol.RoutineRun{Path: "agents/marketing.md#*/5 * * * *"}}, cron: true, stem: "marketing"},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Binding: binding}},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Binding: binding, Run: cron}},
 	}
@@ -55,19 +55,19 @@ func sidebarChatAllocationCheck(tb testing.TB) func() {
 			row := SidebarSession{Conversation: protocol.Conversation{ID: "sample-chat"}, Origin: tc.facts}
 
 			chat, err := sidebarChat(tb.Context(), noSlackLookups{}, nil, &row)
-			if err != nil || chat.Cron != tc.cron || chat.CronName != tc.stem || chat.Session.Conversation.ID != row.Conversation.ID {
+			if err != nil || chat.Routine != tc.cron || chat.RoutineName != tc.stem || chat.Session.Conversation.ID != row.Conversation.ID {
 				tb.Fatalf("sidebarChat = %#v, %v; want cron %t, stem %q", chat, err, tc.cron, tc.stem)
 			}
 		}
 	}
 }
 
-func TestDecideCronOriginAllocationBudget(t *testing.T) {
-	require.LessOrEqual(t, testing.AllocsPerRun(1000, cronOriginAllocationCheck(t)), float64(6))
+func TestDecideRoutineOriginAllocationBudget(t *testing.T) {
+	require.LessOrEqual(t, testing.AllocsPerRun(1000, routineOriginAllocationCheck(t)), float64(6))
 }
 
-func BenchmarkDecideCronOrigin(b *testing.B) {
-	check := cronOriginAllocationCheck(b)
+func BenchmarkDecideRoutineOrigin(b *testing.B) {
+	check := routineOriginAllocationCheck(b)
 	b.ReportAllocs()
 
 	for b.Loop() {
@@ -75,17 +75,17 @@ func BenchmarkDecideCronOrigin(b *testing.B) {
 	}
 }
 
-func cronOriginAllocationCheck(tb testing.TB) func() {
+func routineOriginAllocationCheck(tb testing.TB) func() {
 	tb.Helper()
 
 	facts := ChatOriginFacts{ConversationID: "example-chat", CreatingSource: "example-run", ProducerAgent: "Helper Ω",
-		Run: &protocol.CronRun{Path: "agents/Weekly %s.md#30m", At: time.Date(2001, time.January, 2, 3, 4, 5, 0, time.UTC)}}
+		Run: &protocol.RoutineRun{Path: "agents/Weekly %s.md#30m", At: time.Date(2001, time.January, 2, 3, 4, 5, 0, time.UTC)}}
 
-	const want = "cron source: agents/weekly %s.md#30m stem: weekly %s · 30m run kind: scheduled run id: example-run agent: helper ω ran at: 2001-01-02t03:04:05z"
+	const want = "routine source: agents/weekly %s.md#30m stem: weekly %s · 30m run kind: scheduled run id: example-run agent: helper ω ran at: 2001-01-02t03:04:05z"
 
 	return func() {
 		origin, text := DecideOrigin(&facts)
-		if origin.(cronOrigin).Stem != "Weekly %s · 30m" || text != want {
+		if origin.(routineOrigin).Stem != "Weekly %s · 30m" || text != want {
 			tb.Fatalf("origin = %#v, text = %q", origin, text)
 		}
 	}

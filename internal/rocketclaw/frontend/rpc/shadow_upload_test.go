@@ -53,7 +53,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 	var child string
 	require.NoError(t, seeded.db.QueryRow(`SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL`).Scan(&child))
 
-	server := New(withoutBackgroundJobs(), sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{})
+	server := New(withoutBackgroundJobs(), sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockRoutines{})
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 

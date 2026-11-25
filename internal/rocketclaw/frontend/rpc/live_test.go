@@ -32,7 +32,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	routinefrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/routine"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
@@ -168,7 +168,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		require.NoError(t, err)
 
 		transport := grpc.NewServer()
-		New(rt, rt.Sessions, rt.Cfg, &mockChannels{}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) {
+		New(rt, rt.Sessions, rt.Cfg, &mockChannels{}, &mockRoutines{JobsFunc: func() ([]routinefrontend.Job, error) {
 			return nil, nil
 		}}).Register(transport)
 
@@ -665,7 +665,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(rt, rt.Sessions, rt.Cfg, &mockChannels{}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) { return nil, nil }}).Register(transport)
+	New(rt, rt.Sessions, rt.Cfg, &mockChannels{}, &mockRoutines{JobsFunc: func() ([]routinefrontend.Job, error) { return nil, nil }}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -769,7 +769,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 
 	transport := grpc.NewServer()
 
-	New(rt, rt.Sessions, rt.Cfg, &mockChannels{}, &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) { return nil, nil }}).Register(transport)
+	New(rt, rt.Sessions, rt.Cfg, &mockChannels{}, &mockRoutines{JobsFunc: func() ([]routinefrontend.Job, error) { return nil, nil }}).Register(transport)
 	go func() { _ = transport.Serve(listener) }()
 
 	t.Cleanup(transport.Stop)

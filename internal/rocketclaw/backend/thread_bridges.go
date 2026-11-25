@@ -500,7 +500,7 @@ func (m *threadBridgeManager) MentionThread(target protocol.TextConversationTarg
 		return false, false, err
 	}
 
-	report = thread.CreatedBy == ThreadCreatedByCron || paired
+	report = thread.CreatedBy == ThreadCreatedByRoutine || paired
 
 	conversationID, err := slackSessionID(context.Background(), m.store.db, target.ChannelID, target.ThreadID, target.MessageID, target.Agent)
 	if err != nil {

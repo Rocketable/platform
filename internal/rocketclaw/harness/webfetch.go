@@ -258,24 +258,22 @@ func checkWebFetchRedirect(ctx context.Context, call webFetchToolParams, origina
 	}
 
 	tc, _ := toolCallContextFrom(ctx)
-	permissions := tc.looper.Permissions
-	approval := "the reviewed script; listed in allowedNetworkTargets"
+	permissions, folder := tc.looper.Permissions, tc.looper.agent.CustomShell.Dir != ""
+	decision := permissions.evaluate("webfetch", hop.String())
+	targets := tc.looper.agent.NetworkTargets
+	listed := folder && targets != nil && networkTargetAllowed(targets, hop)
+	named := listed || !folder && decision.Matched && ruleNamesHost(decision.Rule.Pattern, hop)
 
-	var decision permissionDecision
+	if decision.Matched && decision.Action == permissionDeny {
+		return nil, permissionDeniedError(formatPermissionDenied(&decision))
+	}
 
-	named := false
-
-	if permissions.Easy {
-		if targets := tc.looper.agent.NetworkTargets; targets == nil || networkTargetAllowed(targets, hop) {
+	if folder && decision.Action == permissionAllow {
+		if listed || targets == nil {
 			return ctx, nil
 		}
-	} else {
-		decision = permissions.evaluate("webfetch", hop.String())
-		named = decision.Matched && ruleNamesHost(decision.Rule.Pattern, hop)
 
-		if decision.Matched && decision.Action == permissionDeny {
-			return nil, permissionDeniedError(formatPermissionDenied(&decision))
-		}
+		decision = permissionDecision{}
 	}
 
 	if !named {
@@ -289,15 +287,21 @@ func checkWebFetchRedirect(ctx context.Context, call webFetchToolParams, origina
 		ctx = context.WithValue(ctx, publicHopContext{}, true)
 	}
 
-	if !permissions.Easy {
-		if decision.Matched && decision.Action == permissionAllow {
-			return ctx, nil
-		}
+	if !folder && decision.Matched && decision.Action == permissionAllow {
+		return ctx, nil
+	}
 
-		approval = "automatic review"
-		if first := permissions.evaluate("webfetch", original); first.Action == permissionAllow {
-			approval = fmt.Sprintf("rule %q => allow", first.Rule.Pattern)
-		}
+	approval := "automatic review"
+	if first := permissions.evaluate("webfetch", original); first.Action == permissionAllow {
+		approval = fmt.Sprintf("rule %q => allow", first.Rule.Pattern)
+	}
+
+	if tc.reviewed {
+		approval = "the reviewed script; " + approval
+	}
+
+	if folder {
+		approval += "; listed in allowedNetworkTargets"
 	}
 
 	if tc.looper.InPermissionReview {

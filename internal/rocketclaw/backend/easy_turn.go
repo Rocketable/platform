@@ -21,7 +21,7 @@ import (
 
 func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents harness.Agents, skills harness.Skills, name string, turnEnv map[string]string, self string) error {
 	agent := agents.Items[name]
-	if !agent.CustomShell.Emulated && agent.Mode != harness.AgentModeEasy {
+	if agent.WorkingDirectory == "" {
 		return nil
 	}
 
@@ -42,7 +42,7 @@ func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents ha
 		}
 	}
 
-	uploadDir := filepath.Join(cfg.Workspace, EasyUploadDir(cfg, uploads))
+	uploadDir := filepath.Join(cfg.Workspace, UploadDir(cfg, uploads))
 	if err := os.MkdirAll(uploadDir, 0o700); err != nil {
 		return fmt.Errorf("uploads folder: %w", err)
 	}
@@ -95,7 +95,7 @@ func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents ha
 	return nil
 }
 
-func EasyUploadDir(cfg *config.Config, conversationID string) string {
+func UploadDir(cfg *config.Config, conversationID string) string {
 	return filepath.Join(cfg.RuntimeDirName(), "uploads", pathSegment(conversationID))
 }
 

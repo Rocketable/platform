@@ -10,7 +10,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend"
-	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	routinefrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/routine"
 	slackconnector "github.com/Rocketable/platform/internal/rocketclaw/frontend/slack"
 )
 
@@ -82,8 +82,8 @@ func (a *processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []fun
 	cfg := rt.Cfg.Clone()
 	var stops []func(context.Context) error
 
-	runner := &cronRunner{backend: rt}
-	cronjobs := cronfrontend.New(rt.Cfg, cfg.RuntimeDirName(), rt.Sessions, runner, rt.Log)
+	runner := &routineRunner{backend: rt}
+	routines := routinefrontend.New(rt.Cfg, cfg.RuntimeDirName(), rt.Sessions, runner, rt.Log)
 
 	var slack slackFrontend = inertSlack{}
 
@@ -99,11 +99,11 @@ func (a *processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []fun
 	}
 
 	stops = append(stops, slack.Stop)
-	if err := cronjobs.Start(rt.RunCtx); err != nil {
+	if err := routines.Start(rt.RunCtx); err != nil {
 		return nil, nil, err
 	}
-	stops = append(stops, cronjobs.Stop)
-	rt.CronJobs = cronjobs
+	stops = append(stops, routines.Stop)
+	rt.Routines = routines
 	done := slack.StartEvents(rt.RunCtx, rt)
 
 	if cfg.MCPExternal.Enabled {
@@ -121,7 +121,7 @@ func (a *processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []fun
 		stops = append(stops, startExternalMCPServer(rt.RunCtx, listener, cfg.MCPExternal.Users, agents, rt.Sessions, rt, rt.Log).Close)
 	}
 
-	stops = append(stops, startWebRPC(rt, a.tailnet, slack, cronjobs))
+	stops = append(stops, startWebRPC(rt, a.tailnet, slack, routines))
 
 	rt.AttachSlack(slack)
 	slack.Start(rt.RunCtx)

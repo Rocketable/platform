@@ -86,7 +86,7 @@ func (r *Runtime) ContinueRun(ctx context.Context, run, conversationID string, s
 	}
 
 	if !shared {
-		continued, err := execRows(ctx, tx, "link continued run", `UPDATE conversations c SET continues = $2, cron_run = $2,
+		continued, err := execRows(ctx, tx, "link continued run", `UPDATE conversations c SET continues = $2, routine_run = $2,
     preview = COALESCE(p.preview, c.preview), last_updated = COALESCE(p.last_updated, c.last_updated) FROM conversations p WHERE c.conversation_id = $1 AND c.continues IS NULL AND p.conversation_id = $2`, conversationID, run)
 		if err != nil {
 			return "", err
@@ -124,16 +124,16 @@ FROM conversations WHERE conversation_id = $1`, conversationID).Scan(&channelID,
 	return channelID, threadTS, channelSession, nil
 }
 
-func (s *SessionService) CronRun(ctx context.Context, conversationID string) (path string, run bool, err error) {
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(max(COALESCE(c.cron_path, r.cron_path)), ''), COALESCE(bool_or(c.kind IN ($2, $3)), FALSE)
-FROM conversations c LEFT JOIN conversations r ON r.conversation_id = c.cron_run WHERE c.conversation_id = $1`, conversationID, KindCronRun, KindOneOffCronRun).Scan(&path, &run); err != nil {
-		return "", false, fmt.Errorf("read cron run: %w", err)
+func (s *SessionService) RoutineRun(ctx context.Context, conversationID string) (path string, run bool, err error) {
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(max(COALESCE(c.routine_path, r.routine_path)), ''), COALESCE(bool_or(c.kind IN ($2, $3)), FALSE)
+FROM conversations c LEFT JOIN conversations r ON r.conversation_id = c.routine_run WHERE c.conversation_id = $1`, conversationID, KindRoutineRun, KindOneOffRoutineRun).Scan(&path, &run); err != nil {
+		return "", false, fmt.Errorf("read routine run: %w", err)
 	}
 
 	return path, run, nil
 }
 
-func CronStem(path string) string {
+func RoutineStem(path string) string {
 	if agent, schedule, ok := strings.Cut(strings.TrimPrefix(path, "agents/"), ".md#"); ok {
 		return agent + " · " + schedule
 	}

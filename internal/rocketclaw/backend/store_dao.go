@@ -29,21 +29,21 @@ type stateDAO struct {
 type ConversationKind string
 
 const (
-	KindWebChat        ConversationKind = "web_chat"
-	KindSlackThread    ConversationKind = "slack_thread"
-	KindCronRun        ConversationKind = "cron_run"
-	KindOneOffCronRun  ConversationKind = "one_off_cron_run"
-	KindExternalMCPRun ConversationKind = "external_mcp_run"
-	KindSubagent       ConversationKind = "subagent"
-	KindReview         ConversationKind = "review"
-	KindShadow         ConversationKind = "shadow"
-	KindRemote         ConversationKind = "remote"
-	KindAgentDraft     ConversationKind = "agent_draft"
+	KindWebChat          ConversationKind = "web_chat"
+	KindSlackThread      ConversationKind = "slack_thread"
+	KindRoutineRun       ConversationKind = "routine_run"
+	KindOneOffRoutineRun ConversationKind = "one_off_routine_run"
+	KindExternalMCPRun   ConversationKind = "external_mcp_run"
+	KindSubagent         ConversationKind = "subagent"
+	KindReview           ConversationKind = "review"
+	KindShadow           ConversationKind = "shadow"
+	KindRemote           ConversationKind = "remote"
+	KindAgentDraft       ConversationKind = "agent_draft"
 )
 
 type conversationFacts struct {
-	kind                               ConversationKind
-	slackChannel, slackThread, cronRun string
+	kind                                  ConversationKind
+	slackChannel, slackThread, routineRun string
 }
 
 func (d stateDAO) stickyConversationID(ctx context.Context, agent, username string, sticky harness.AgentSticky) (string, error) {
@@ -67,9 +67,9 @@ func (d stateDAO) createConversation(ctx context.Context, conversation protocol.
 
 	path, at := "", int64(0)
 	if run := conversation.Run; run != nil {
-		facts.kind, path, at = KindCronRun, run.Path, run.At.UnixNano()
+		facts.kind, path, at = KindRoutineRun, run.Path, run.At.UnixNano()
 		if run.OneOff {
-			facts.kind = KindOneOffCronRun
+			facts.kind = KindOneOffRoutineRun
 		}
 	}
 
@@ -84,9 +84,9 @@ space AS (
     INSERT INTO web_spaces (name) SELECT $4::text FROM existing WHERE n = 0 AND $4 <> ''
     ON CONFLICT ((lower(name))) DO UPDATE SET name = web_spaces.name RETURNING id
 )
-INSERT INTO conversations (conversation_id, agent, created_by, space_id, kind, listed, slack_channel, slack_thread, cron_run, cron_path, cron_run_at_unix_ns`+birth.column+`)
+INSERT INTO conversations (conversation_id, agent, created_by, space_id, kind, listed, slack_channel, slack_thread, routine_run, routine_path, routine_run_at_unix_ns`+birth.column+`)
 SELECT $1, $2, $3, max(id), $5, $11, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), NULLIF($10::bigint, 0)`+birth.value+` FROM space
-ON CONFLICT `+birth.conflict+` DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy, conversation.Space, facts.kind, facts.slackChannel, facts.slackThread, facts.cronRun, path, at,
+ON CONFLICT `+birth.conflict+` DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy, conversation.Space, facts.kind, facts.slackChannel, facts.slackThread, facts.routineRun, path, at,
 		facts.kind == KindWebChat || facts.kind == KindSlackThread)
 	if err != nil {
 		return false, err
@@ -979,7 +979,7 @@ FROM conversations WHERE conversation_id = $1 AND goal_objective IS NOT NULL`, s
 }
 
 const remindersSQL = `reminders AS (
-    SELECT id, conversation_id, agent, message, next_due_unix_ns, TRUE AS recurring, interval_ns, origin FROM schedules WHERE cron_path IS NULL
+    SELECT id, conversation_id, agent, message, next_due_unix_ns, TRUE AS recurring, interval_ns, origin FROM schedules WHERE routine_path IS NULL
     UNION ALL SELECT input_id, conversation_id, agent, message, run_at_unix_ns, FALSE, 0, origin FROM turns WHERE phase = 'waiting' AND reason = 'scheduled'
 )`
 
@@ -1439,7 +1439,7 @@ SELECT t.conversation_id, t.running, q.waiting > 0, t.trace, t.working AND w.fou
     SELECT key, value::jsonb AS item FROM steps WHERE conversation_id = $1 AND starts_with(key, $2)
 ), calls AS (
     SELECT key, item->>'call_id' AS call_id, item->>'name' AS name, item->>'arguments' AS arguments FROM items
-    WHERE item->>'type' = 'function_call' AND item->>'name' IN ('execute', 'task')
+    WHERE item->>'type' = 'function_call' AND item->>'name' IN ('execute', 'task', 'task_clone')
     ORDER BY key DESC LIMIT 50
 )
 SELECT call_id, name, CASE WHEN pg_input_is_valid(arguments, 'jsonb') THEN COALESCE(arguments::jsonb->>'description', '') ELSE '' END
@@ -1701,9 +1701,9 @@ SELECT 1`, channel, turnID, protocol.TerminalComplete, thread.ID, respondInThrea
 
 func (s *SessionService) markTurnEnd(ctx context.Context, tx *sql.Tx, turnID string, finish *turnFinish) error {
 	if !finish.outbound.PostsNothing() {
-		var cronPath, space, agent string
+		var routinePath, space, agent string
 		if err := tx.QueryRowContext(ctx, `WITH run AS (
-    SELECT c.cron_path, t.inbound_json->'Cronjob'->>'Space' AS space, t.inbound_json->'Cronjob'->>'Agent' AS agent
+    SELECT c.routine_path, t.inbound_json->'Routine'->>'Space' AS space, t.inbound_json->'Routine'->>'Agent' AS agent
     FROM conversations c JOIN turns t ON t.id = $4 WHERE c.conversation_id = $1 AND c.kind IN ($2, $3)
 ), runs AS (
     SELECT $1::text AS conversation_id
@@ -1712,18 +1712,18 @@ func (s *SessionService) markTurnEnd(ctx context.Context, tx *sql.Tx, turnID str
     SELECT count(*) AS n FROM turns t JOIN runs USING (conversation_id)
     WHERE t.id <> $4 AND (t.phase = 'running' OR t.phase = 'waiting' AND t.reason = 'queued' OR NOT t.takes_lane AND t.note = 'pending')
 )
-SELECT COALESCE(max(r.cron_path), ''), COALESCE(max(r.space), ''), COALESCE(max(r.agent), '') FROM run r CROSS JOIN pending p WHERE p.n = 0`,
-			finish.conversationID, KindCronRun, KindOneOffCronRun, turnID).Scan(&cronPath, &space, &agent); err != nil {
-			return fmt.Errorf("read cron run: %w", err)
+SELECT COALESCE(max(r.routine_path), ''), COALESCE(max(r.space), ''), COALESCE(max(r.agent), '') FROM run r CROSS JOIN pending p WHERE p.n = 0`,
+			finish.conversationID, KindRoutineRun, KindOneOffRoutineRun, turnID).Scan(&routinePath, &space, &agent); err != nil {
+			return fmt.Errorf("read routine run: %w", err)
 		}
 
-		if cronPath != "" {
-			stem := CronStem(cronPath)
+		if routinePath != "" {
+			stem := RoutineStem(routinePath)
 
 			if space == "" {
 				agents, err := LoadRuntimeAgents(s.definitions, s.definitions.Clone().RuntimeDirName())
 				if err != nil {
-					return fmt.Errorf("load cron agents: %w", err)
+					return fmt.Errorf("load routine agents: %w", err)
 				}
 
 				space = agents.Items[agent].Space
@@ -2146,14 +2146,14 @@ func (scheduledMessageScanner) scan(scanner rowScanner) (id string, message prot
 	return id, message, nil
 }
 
-func scanCronSchedule(scanner rowScanner) (CronScheduleState, error) {
+func scanRoutineSchedule(scanner rowScanner) (RoutineScheduleState, error) {
 	var (
-		schedule CronScheduleState
+		schedule RoutineScheduleState
 		nextDue  int64
 	)
 
 	if err := scanner.Scan(&schedule.ScheduleID, &schedule.RelativePath, &nextDue); err != nil {
-		return CronScheduleState{}, fmt.Errorf("scan cron schedule: %w", err)
+		return RoutineScheduleState{}, fmt.Errorf("scan routine schedule: %w", err)
 	}
 
 	schedule.NextDue = timeFromUnixNano(nextDue)

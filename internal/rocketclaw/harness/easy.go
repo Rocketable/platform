@@ -32,124 +32,95 @@ type AgentLoadConfig struct {
 }
 
 func (a *Agent) allowsSubagentModel(model string) bool {
-	return !strings.Contains(model, "*") && slices.ContainsFunc(a.Subagents, func(entry string) bool {
+	return !strings.Contains(model, "*") && slices.ContainsFunc(a.CloneModels, func(entry string) bool {
 		prefix, wildcard := strings.CutSuffix(entry, "*")
 
 		return entry == model || wildcard && len(model) > len(prefix) && strings.HasPrefix(model, prefix)
 	})
 }
 
-func easySubagents(node *yaml.Node) ([]string, error) {
-	subagents, err := easyList(frontmatterField(node, "subagents"), "subagents")
-	if err != nil {
-		return nil, err
+func easySubagents(field *yaml.Node) (models, targets []string, err error) {
+	if field.Kind != yaml.SequenceNode {
+		return nil, nil, errors.New("subagents: must be auto or a list of models and {agent: name} entries")
 	}
 
-	for _, entry := range subagents {
-		if strings.Contains(strings.TrimSuffix(entry, "*"), "*") {
-			return nil, fmt.Errorf("subagents: %q: * may only end an entry", entry)
+	for _, entry := range field.Content {
+		switch {
+		case entry.Kind == yaml.ScalarNode:
+			if strings.Contains(strings.TrimSuffix(entry.Value, "*"), "*") {
+				return nil, nil, fmt.Errorf("subagents: %q: * may only end an entry", entry.Value)
+			}
+
+			models = append(models, entry.Value)
+		case entry.Kind == yaml.MappingNode && len(entry.Content) == 2 && entry.Content[0].Value == "agent" && entry.Content[1].Kind == yaml.ScalarNode && entry.Content[1].Value != "":
+			name := entry.Content[1].Value
+			if strings.ContainsAny(name, "*?") {
+				return nil, nil, fmt.Errorf("subagents: agent %q: name one agent; wildcards are not supported", name)
+			}
+
+			targets = append(targets, name)
+		default:
+			return nil, nil, errors.New("subagents: must be auto or a list of models and {agent: name} entries")
 		}
 	}
 
-	if subagents == nil {
-		subagents = []string{strings.TrimSpace(frontmatterField(node, "model").Value)}
-	}
-
-	return subagents, nil
+	return models, targets, nil
 }
 
 func compileEasyAgent(agent *Agent, cfg *AgentLoadConfig) error {
-	node, keys := agent.FrontmatterNode, easyKeys()
-	if err := checkKeys(node, "", "not an easy-mode key", keys[""]...); err != nil {
-		return err
-	}
-
+	node := agent.FrontmatterNode
 	if agent.Space == "" {
 		return errors.New("space: required non-empty string")
 	}
 
 	for _, parent := range []string{"approver", "schema"} {
-		if err := checkKeys(frontmatterField(node, parent), parent+".", "not an easy-mode key", keys[parent]...); err != nil {
+		if err := checkKeys(frontmatterField(node, parent), AgentModeEasy, parent+"."); err != nil {
 			return err
 		}
 	}
-
-	maxRecursion := 1
 
 	var approver struct {
 		Model  string `yaml:"model"`
 		Prompt string `yaml:"prompt"`
 	}
 
-	for _, section := range []struct {
-		key, shape string
-		target     any
-	}{
-		{"maxRecursion", "an integer of 0 or more", &maxRecursion},
-		{"approver", "a mapping of model and prompt strings", &approver},
-	} {
-		if field := frontmatterField(node, section.key); field != nil && field.Decode(section.target) != nil {
-			return fmt.Errorf("%s: must be %s", section.key, section.shape)
-		}
+	if field := frontmatterField(node, "approver"); field != nil && field.Decode(&approver) != nil {
+		return errors.New("approver: must be a mapping of model and prompt strings")
 	}
 
 	if err := parseEmulatedShell(node, agent); err != nil {
 		return err
 	}
 
-	if err := errors.Join(parseAgentShell(node, agent), compileEasyApprover(agent, cfg)); err != nil {
+	var targets []string
+
+	agent.CloneModels = []string{strings.TrimSpace(frontmatterField(node, "model").Value)}
+	if field := frontmatterField(node, "subagents"); field != nil && (field.Kind != yaml.ScalarNode || field.Value != "auto") {
+		var err error
+		if agent.CloneModels, targets, err = easySubagents(field); err != nil {
+			return err
+		}
+	}
+
+	if err := errors.Join(parseAgentShell(node, agent), compileEasyApprover(agent, cfg, targets)); err != nil {
 		return err
 	}
 
-	if maxRecursion < 0 {
-		return errors.New("maxRecursion: must be an integer of 0 or more")
-	}
-
-	agent.MaxRecursion = &maxRecursion
 	agent.ApproverModel, agent.ApproverPrompt = strings.TrimSpace(approver.Model), approver.Prompt
 
-	subagents, err := easySubagents(node)
-	if err != nil {
+	if err := checkModelProviders(cfg, append([]string{agent.Model, agent.ApproverModel}, agent.CloneModels...)...); err != nil {
 		return err
 	}
 
-	agent.Subagents = subagents
-
-	for _, model := range append([]string{agent.Model, agent.ApproverModel}, agent.Subagents...) {
-		name, _ := ParseModelRef(model)
-		provider, _, qualified := strings.Cut(name, "/")
-
-		if !qualified {
-			provider = "openai"
-		}
-
-		if model != "" && !slices.Contains(cfg.Providers, provider) {
-			return fmt.Errorf("model %q: provider %q is not configured", model, provider)
-		}
-	}
-
-	if field := frontmatterField(node, "delegatedFrom"); field != nil {
-		all := true
-
-		switch {
-		case field.ShortTag() == "!!bool" && field.Decode(&all) == nil:
-			if !all {
-				agent.DelegatedFrom = []string{}
-			}
-		case field.Kind != yaml.SequenceNode || field.Decode(&agent.DelegatedFrom) != nil:
-			return errors.New("delegatedFrom: must be true, false, or a list of agent names")
-		}
-	}
-
-	return compileEasyPermissions(agent, cfg)
+	return compileEasyPermissions(agent, cfg, targets)
 }
 
-func compileEasyPermissions(agent *Agent, cfg *AgentLoadConfig) error {
-	agent.Permission = PermissionSet{Easy: true}
+func compileEasyPermissions(agent *Agent, cfg *AgentLoadConfig, targets []string) error {
+	agent.Permission = PermissionSet{}
 	permission := &agent.Permission
 
 	for _, bucket := range []string{"bash", "read", "edit", "glob", "grep", "webfetch", "websearch"} {
-		_ = permission.Set(bucket, "*", PermissionAuto)
+		_ = permission.Set(bucket, "*", PermissionAllow)
 	}
 
 	var servers []string
@@ -162,33 +133,45 @@ func compileEasyPermissions(agent *Agent, cfg *AgentLoadConfig) error {
 			return fmt.Errorf("opencode: server %q is not configured", server)
 		}
 
-		_ = permission.Set("opencode", server, PermissionAuto)
+		_ = permission.Set("opencode", server, PermissionAllow)
 	}
 
 	_ = permission.Set("rocketclaw", codeModeApproveSubject, PermissionAuto)
 
-	if len(agent.Subagents) > 0 && *agent.MaxRecursion > 0 {
-		_ = permission.Set("task", agent.Name, PermissionAllow)
+	for _, target := range targets {
+		_ = permission.Set("task", target, PermissionAuto)
 	}
 
-	if err := compileEasySections(agent, cfg, PermissionAuto); err != nil {
+	if len(agent.CloneModels) > 0 {
+		_ = permission.Set(taskCloneToolName, "*", PermissionAllow)
+	}
+
+	if err := compileEasySections(agent, cfg); err != nil {
 		return err
 	}
 
 	return compileEasyDecision(agent, cfg, permission)
 }
 
-func compileEasyApprover(agent *Agent, cfg *AgentLoadConfig) error {
+func compileEasyApprover(agent *Agent, cfg *AgentLoadConfig, targets []string) error {
 	var offUnlessListed yaml.Node
 
 	_ = yaml.Unmarshal([]byte("{rocketclaw: [], skills: [], allowedNetworkTargets: []}"), &offUnlessListed)
 
 	approver := embeddedGuardianAgent()
-	approver.Mode, approver.WorkingDirectory = AgentModeEasy, agent.WorkingDirectory
-	approver.FrontmatterNode = offUnlessListed.Content[0]
+	approver.WorkingDirectory, approver.FrontmatterNode = agent.WorkingDirectory, offUnlessListed.Content[0]
 
 	if node := frontmatterField(agent.FrontmatterNode, "approver"); node != nil {
 		approver.FrontmatterNode.Content = slices.Concat(node.Content, approver.FrontmatterNode.Content)
+	}
+
+	if field := frontmatterField(approver.FrontmatterNode, "subagents"); field != nil {
+		models, own, err := easySubagents(field)
+		if err != nil || len(models) > 0 {
+			return errors.New("approver.subagents: must be a list of {agent: name} entries")
+		}
+
+		targets = own
 	}
 
 	groups, _ := easyList(frontmatterField(approver.FrontmatterNode, "rocketclaw"), "rocketclaw")
@@ -198,11 +181,15 @@ func compileEasyApprover(agent *Agent, cfg *AgentLoadConfig) error {
 		}
 	}
 
-	if err := cmp.Or(parseEmulatedShell(approver.FrontmatterNode, &approver), compileEasySections(&approver, cfg, PermissionAllow)); err != nil {
+	if err := cmp.Or(parseEmulatedShell(approver.FrontmatterNode, &approver), compileEasySections(&approver, cfg)); err != nil {
 		return fmt.Errorf("approver.%w", err)
 	}
 
 	approver.CustomShell = agent.CustomShell
+	for _, target := range targets {
+		_ = approver.Permission.Set("task", target, PermissionAuto)
+	}
+
 	_ = approver.Permission.Set("rocketclaw", AllowBackgroundSubject, PermissionDeny)
 	_ = approver.Permission.Set("rocketclaw", "rocketclaw_restart", PermissionDeny)
 
@@ -219,7 +206,7 @@ func compileEasyApprover(agent *Agent, cfg *AgentLoadConfig) error {
 	return nil
 }
 
-func compileEasySections(agent *Agent, cfg *AgentLoadConfig, action PermissionAction) error {
+func compileEasySections(agent *Agent, cfg *AgentLoadConfig) error {
 	node, permission := agent.FrontmatterNode, &agent.Permission
 
 	if field := frontmatterField(node, "secretsARN"); field != nil && field.Decode(&agent.SecretsARN) != nil {
@@ -228,6 +215,10 @@ func compileEasySections(agent *Agent, cfg *AgentLoadConfig, action PermissionAc
 
 	if field := frontmatterField(node, "tags"); field != nil && field.Decode(&agent.TagGroups) != nil {
 		return errors.New("tags: must be a list of tag lists")
+	}
+
+	if err := checkTagGroups(agent.TagGroups); err != nil {
+		return fmt.Errorf("tags: %w", err)
 	}
 
 	field := frontmatterField(node, "mcp")
@@ -247,7 +238,7 @@ func compileEasySections(agent *Agent, cfg *AgentLoadConfig, action PermissionAc
 
 		grant[server] = map[string]PermissionAction{}
 		for _, facet := range facets {
-			grant[server][facet] = action
+			grant[server][facet] = PermissionAllow
 		}
 	}
 
@@ -281,7 +272,7 @@ func compileEasySections(agent *Agent, cfg *AgentLoadConfig, action PermissionAc
 		}
 
 		for _, subject := range subjects {
-			_ = permission.Set(subject[0], subject[1], action)
+			_ = permission.Set(subject[0], subject[1], PermissionAllow)
 		}
 	}
 
@@ -374,23 +365,23 @@ func parseEmulatedShell(node *yaml.Node, agent *Agent) error {
 	return nil
 }
 
-func checkKeys(node *yaml.Node, prefix, problem string, keys ...string) error {
+func checkKeys(node *yaml.Node, mode AgentMode, prefix string) error {
+	var keys []string
+
+	settings := AgentSettingsFor(mode)
+	for i := range settings {
+		if key, ok := strings.CutPrefix(settings[i].Key, prefix); ok && !strings.Contains(key, ".") {
+			keys = append(keys, key)
+		}
+	}
+
 	for i := 0; node != nil && i < len(node.Content); i += 2 {
 		if !slices.Contains(keys, node.Content[i].Value) {
-			return fmt.Errorf("%s%s: %s", prefix, node.Content[i].Value, problem)
+			return fmt.Errorf("%s%s: not an %s-mode key", prefix, node.Content[i].Value, mode)
 		}
 	}
 
 	return nil
-}
-
-func easyKeys() map[string][]string {
-	return map[string][]string{
-		"": {"mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN", "shell", "commands", "mcp", "opencode", "rocketclaw",
-			"tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema", "sticky", "decision"},
-		"approver": {"model", "prompt", "secretsARN", "commands", "mcp", "rocketclaw", "tags", "skills", "allowedNetworkTargets"},
-		"schema":   {"output"},
-	}
 }
 
 func easyList(node *yaml.Node, key string) ([]string, error) {

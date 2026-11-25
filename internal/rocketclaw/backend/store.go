@@ -59,7 +59,7 @@ func (t ThreadState) Sticky() harness.AgentSticky {
 
 type ThreadCreator string
 
-const ThreadCreatedByCron ThreadCreator = "cron"
+const ThreadCreatedByRoutine ThreadCreator = "routine"
 
 type ExternalMCPSessionState struct {
 	Agent                 string            `json:"agent,omitempty"`
@@ -68,7 +68,7 @@ type ExternalMCPSessionState struct {
 	OriginPairs           map[string]string `json:"origin_pairs,omitempty"`
 }
 
-type CronScheduleState struct {
+type RoutineScheduleState struct {
 	ScheduleID   string
 	RelativePath string
 	NextDue      time.Time
@@ -501,17 +501,17 @@ UPDATE schedules SET next_due_unix_ns = $2 WHERE id = $1`, id, timeUnixNano(mess
 	return message, true, nil
 }
 
-func (s *SessionService) SyncCronSchedules(schedules []CronScheduleState) error {
+func (s *SessionService) SyncRoutineSchedules(schedules []RoutineScheduleState) error {
 	ids, paths, due := make([]string, len(schedules)), make([]string, len(schedules)), make([]int64, len(schedules))
 	for i, schedule := range schedules {
 		ids[i], paths[i], due[i] = strings.TrimSpace(schedule.ScheduleID), strings.TrimSpace(schedule.RelativePath), timeUnixNano(schedule.NextDue)
 	}
 
-	_, err := execState(context.Background(), s.db, "sync cron schedules", `WITH observed AS (
-    INSERT INTO schedules (id, cron_path, next_due_unix_ns) SELECT * FROM unnest($1::text[], $2::text[], $3::bigint[])
-    ON CONFLICT (id) DO UPDATE SET cron_path = excluded.cron_path
+	_, err := execState(context.Background(), s.db, "sync routine schedules", `WITH observed AS (
+    INSERT INTO schedules (id, routine_path, next_due_unix_ns) SELECT * FROM unnest($1::text[], $2::text[], $3::bigint[])
+    ON CONFLICT (id) DO UPDATE SET routine_path = excluded.routine_path
 )
-DELETE FROM schedules WHERE cron_path IS NOT NULL AND id <> ALL($1)`, ids, paths, due)
+DELETE FROM schedules WHERE routine_path IS NOT NULL AND id <> ALL($1)`, ids, paths, due)
 
 	return err
 }
@@ -522,26 +522,26 @@ func (s *SessionService) ScheduleAgents(agents []string) {
 	s.scheduledMu.Unlock()
 }
 
-func (s *SessionService) ResetCronSchedules() error {
-	_, err := execState(context.Background(), s.db, "reset cron schedules", `DELETE FROM schedules WHERE cron_path IS NOT NULL`)
+func (s *SessionService) ResetRoutineSchedules() error {
+	_, err := execState(context.Background(), s.db, "reset routine schedules", `DELETE FROM schedules WHERE routine_path IS NOT NULL`)
 	return err
 }
 
-func (s *SessionService) DueCronSchedules(now time.Time) ([]CronScheduleState, error) {
-	return queryRows(context.Background(), s.db, `SELECT id, cron_path, next_due_unix_ns FROM schedules WHERE cron_path IS NOT NULL AND next_due_unix_ns <= $1 ORDER BY next_due_unix_ns, id`, "due cron schedules", scanCronSchedule, timeUnixNano(now))
+func (s *SessionService) DueRoutineSchedules(now time.Time) ([]RoutineScheduleState, error) {
+	return queryRows(context.Background(), s.db, `SELECT id, routine_path, next_due_unix_ns FROM schedules WHERE routine_path IS NOT NULL AND next_due_unix_ns <= $1 ORDER BY next_due_unix_ns, id`, "due routine schedules", scanRoutineSchedule, timeUnixNano(now))
 }
 
-func (s *SessionService) ClaimCronSchedule(due CronScheduleState, nextDue, now time.Time) (bool, error) {
+func (s *SessionService) ClaimRoutineSchedule(due RoutineScheduleState, nextDue, now time.Time) (bool, error) {
 	var claimed bool
 
-	err := queryScalar(context.Background(), s.db, "claim cron schedule", `WITH advanced AS (
-    UPDATE schedules SET next_due_unix_ns = $4 WHERE id = $1 AND cron_path = $2 AND next_due_unix_ns = $3 AND next_due_unix_ns <= $5 RETURNING cron_path
+	err := queryScalar(context.Background(), s.db, "claim routine schedule", `WITH advanced AS (
+    UPDATE schedules SET next_due_unix_ns = $4 WHERE id = $1 AND routine_path = $2 AND next_due_unix_ns = $3 AND next_due_unix_ns <= $5 RETURNING routine_path
 ), running AS (
-    SELECT t.id FROM advanced a JOIN conversations c ON c.cron_path = a.cron_path AND c.kind = $6
+    SELECT t.id FROM advanced a JOIN conversations c ON c.routine_path = a.routine_path AND c.kind = $6
     JOIN turns t USING (conversation_id) WHERE t.takes_lane AND t.phase NOT IN ('waiting', 'done')
 )
 SELECT count(*) > 0 FROM advanced LEFT JOIN running r ON TRUE WHERE r.id IS NULL`, &claimed, strings.TrimSpace(due.ScheduleID), strings.TrimSpace(due.RelativePath),
-		timeUnixNano(due.NextDue), timeUnixNano(nextDue), timeUnixNano(now), KindCronRun)
+		timeUnixNano(due.NextDue), timeUnixNano(nextDue), timeUnixNano(now), KindRoutineRun)
 
 	return claimed, err
 }
@@ -1061,7 +1061,7 @@ type SidebarSession struct {
 	Offline       bool
 	SpaceID       string
 	SlackChannel  string
-	CronPath      string
+	RoutinePath   string
 	Reply         string
 	Model         string
 	Attention     Attention
@@ -1081,16 +1081,16 @@ type ChatOriginFacts struct {
 	Binding                ExternalMCPSessionState
 	CreatingSource         string
 	ProducerAgent          string
-	Run                    *protocol.CronRun
+	Run                    *protocol.RoutineRun
 }
 
 const chatOriginSQL = `, creating AS NOT MATERIALIZED (
-    SELECT *, COALESCE(cron_run, CASE WHEN kind <> 'slack_thread' OR created_by = $2 THEN first_source END, '') AS creating_source FROM visible_chats
+    SELECT *, COALESCE(routine_run, CASE WHEN kind <> 'slack_thread' OR created_by = $2 THEN first_source END, '') AS creating_source FROM visible_chats
 ), origins AS (
     SELECT c.*, COALESCE(c.external_id, '') AS external, COALESCE(c.external_agent, '') AS binding_agent,
         CASE WHEN c.external_id IS NOT NULL THEN c.conversation_id ELSE '' END AS managed, COALESCE(c.origin_pairs, 'null') AS pairs,
-        COALESCE(p.agent, '') AS producer_agent, COALESCE(p.cron_path, '') AS run_path, p.cron_run_at_unix_ns AS run_at, p.kind IS NOT DISTINCT FROM $3 AS one_off
-    FROM creating c LEFT JOIN conversations p ON p.conversation_id = c.creating_source AND p.cron_run_at_unix_ns IS NOT NULL
+        COALESCE(p.agent, '') AS producer_agent, COALESCE(p.routine_path, '') AS run_path, p.routine_run_at_unix_ns AS run_at, p.kind IS NOT DISTINCT FROM $3 AS one_off
+    FROM creating c LEFT JOIN conversations p ON p.conversation_id = c.creating_source AND p.routine_run_at_unix_ns IS NOT NULL
 )`
 
 const shownChatsSQL = `, reporting AS (
@@ -1105,7 +1105,7 @@ const originColumns = `c.external, c.binding_agent, c.managed, c.pairs, c.creati
 
 type chatOriginScan struct {
 	pairs sql.RawBytes
-	run   protocol.CronRun
+	run   protocol.RoutineRun
 	at    sql.NullInt64
 }
 
@@ -1129,7 +1129,7 @@ func (scan *chatOriginScan) read(row rowScanner, facts *ChatOriginFacts, dest ..
 
 func (s *SessionService) ChatOriginFacts(ctx context.Context, id string) iter.Seq2[ChatOriginFacts, error] {
 	return func(yield func(ChatOriginFacts, error) bool) {
-		rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+chatOriginSQL+` SELECT c.conversation_id, c.created_by, `+originColumns+` FROM origins c`, id, ThreadCreatedByCron, KindOneOffCronRun)
+		rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+chatOriginSQL+` SELECT c.conversation_id, c.created_by, `+originColumns+` FROM origins c`, id, ThreadCreatedByRoutine, KindOneOffRoutineRun)
 		if err != nil {
 			yield(ChatOriginFacts{}, fmt.Errorf("query chat origin facts: %w", err))
 			return
@@ -1160,15 +1160,15 @@ func (s *SessionService) ChatOriginFacts(ctx context.Context, id string) iter.Se
 	}
 }
 
-type CronRunSource struct {
+type RoutineRunSource struct {
 	ConversationID       string
 	SourceConversationID string
-	Run                  protocol.CronRun
+	Run                  protocol.RoutineRun
 }
 
-const cronRunSourcesSQL = `WITH located AS (
-    SELECT conversation_id, reports_to, cron_path, cron_run_at_unix_ns FROM conversations
-    WHERE kind IN ('cron_run', 'one_off_cron_run') AND cron_path IS NOT NULL
+const routineRunSourcesSQL = `WITH located AS (
+    SELECT conversation_id, reports_to, routine_path, routine_run_at_unix_ns FROM conversations
+    WHERE kind IN ('routine_run', 'one_off_routine_run') AND routine_path IS NOT NULL
 ), firsts AS (
     SELECT e.conversation_id, min(e.id) AS id FROM located r JOIN entries e USING (conversation_id) GROUP BY e.conversation_id
 ), deliveries AS (
@@ -1177,23 +1177,23 @@ const cronRunSourcesSQL = `WITH located AS (
     WHERE r.reports_to IS NOT NULL
     UNION ALL SELECT e.id, c.conversation_id, c.continues FROM firsts e JOIN conversations c ON c.continues = e.conversation_id
 )
-SELECT d.conversation_id, r.conversation_id, r.cron_path, r.cron_run_at_unix_ns FROM deliveries d
+SELECT d.conversation_id, r.conversation_id, r.routine_path, r.routine_run_at_unix_ns FROM deliveries d
 JOIN conversations c ON c.conversation_id = d.conversation_id JOIN located r ON r.conversation_id = d.source
 WHERE c.retention = 'record' AND (c.revert_message_id = '' OR d.id < split_part(c.revert_message_id, ':', 1)::bigint
         OR d.id = split_part(c.revert_message_id, ':', 1)::bigint AND split_part(c.revert_message_id, ':', 2)::integer > 0)
-    AND (d.conversation_id = d.source OR c.kind NOT IN ('cron_run', 'one_off_cron_run', 'external_mcp_run'))
+    AND (d.conversation_id = d.source OR c.kind NOT IN ('routine_run', 'one_off_routine_run', 'external_mcp_run'))
 UNION
-SELECT t.conversation_id, r.conversation_id, r.cron_path, r.cron_run_at_unix_ns FROM turns t JOIN located r USING (conversation_id) JOIN conversations c USING (conversation_id)
+SELECT t.conversation_id, r.conversation_id, r.routine_path, r.routine_run_at_unix_ns FROM turns t JOIN located r USING (conversation_id) JOIN conversations c USING (conversation_id)
 WHERE c.retention = 'record' AND t.takes_lane AND (t.phase NOT IN ('waiting', 'done') OR t.terminal <> '')`
 
-func (s *SessionService) CronRunSources(ctx context.Context) ([]CronRunSource, error) {
-	return queryRows(ctx, s.db, cronRunSourcesSQL, "cron run sources", func(row rowScanner) (CronRunSource, error) {
+func (s *SessionService) RoutineRunSources(ctx context.Context) ([]RoutineRunSource, error) {
+	return queryRows(ctx, s.db, routineRunSourcesSQL, "routine run sources", func(row rowScanner) (RoutineRunSource, error) {
 		var (
-			source CronRunSource
+			source RoutineRunSource
 			at     int64
 		)
 		if err := row.Scan(&source.ConversationID, &source.SourceConversationID, &source.Run.Path, &at); err != nil {
-			return CronRunSource{}, fmt.Errorf("scan cron run source: %w", err)
+			return RoutineRunSource{}, fmt.Errorf("scan routine run source: %w", err)
 		}
 
 		source.Run.At = time.Unix(0, at).UTC()
@@ -1296,7 +1296,7 @@ SELECT
     k.conversation_id IS NOT NULL AS asking,
     FALSE AS automation,
     c.paused,
-    c.kind = 'web_chat' AND c.created_by NOT IN ('', $2) AND c.cron_run IS NULL AND NOT c.reported AND NOT (c.sticky = 'global' AND COALESCE(c.agent = ANY($7), FALSE)) AS pausable,
+    c.kind = 'web_chat' AND c.created_by NOT IN ('', $2) AND c.routine_run IS NULL AND NOT c.reported AND NOT (c.sticky = 'global' AND COALESCE(c.agent = ANY($7), FALSE)) AS pausable,
     c.name,
     c.forked_from,
     COALESCE(c.tags, '[]'::jsonb) AS tags,
@@ -1306,7 +1306,7 @@ SELECT
     COALESCE(c.space_id, '') AS space_id,
     '' AS reply,
     COALESCE(c.slack_channel, '') AS slack_channel,
-    COALESCE(run.cron_path, '') AS cron_path,
+    COALESCE(run.routine_path, '') AS routine_path,
     '' AS model,
     c.kind,
     '' AS remote_session,
@@ -1326,7 +1326,7 @@ SELECT
 FROM shown c
 LEFT JOIN reads u ON u.conversation_id = c.conversation_id
 LEFT JOIN everyone e ON TRUE
-LEFT JOIN conversations run ON run.conversation_id = c.cron_run
+LEFT JOIN conversations run ON run.conversation_id = c.routine_run
 LEFT JOIN running r ON r.conversation_id = c.conversation_id
 LEFT JOIN work w ON w.conversation_id = c.conversation_id
 LEFT JOIN asking k ON k.conversation_id = c.conversation_id
@@ -1345,7 +1345,7 @@ WHERE o.kind = 'remote' AND o.server = ANY($4) AND ($5::text[] IS NULL OR o.conv
 ), chats AS (
 SELECT * FROM local UNION ALL SELECT * FROM remote
 )
-SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, KindOneOffCronRun,
+SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByRoutine, KindOneOffRoutineRun,
 		slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)), chats, username, s.scheduledAgents())
 	if err != nil {
 		return nil, fmt.Errorf("query sidebar sessions: %w", err)
@@ -1367,7 +1367,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 	for rows.Next() {
 		var row SidebarSession
 
-		dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Automation, &row.Paused, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
+		dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Automation, &row.Paused, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.RoutinePath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
 			&row.Attention.Parked, &row.Attention.Unfollowed, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &since, &row.Queued, &row.External, &arrived)
 		if err := origin.read(rows, &row.Origin, dest...); err != nil {
 			return nil, fmt.Errorf("scan sidebar session: %w", err)
@@ -1879,7 +1879,7 @@ func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, convers
 )
 SELECT CASE WHEN c.slack_thread ~ '^[0-9]+(\.[0-9]+)?$' THEN to_timestamp(c.slack_thread::numeric) ELSE c.created_at END
 FROM conversations c LEFT JOIN continued k USING (conversation_id)
-WHERE c.conversation_id = $1 AND (c.retention = 'record' AND (c.listed OR c.kind IN ('cron_run', 'one_off_cron_run') AND c.reports_to IS NULL AND k.conversation_id IS NULL)
+WHERE c.conversation_id = $1 AND (c.retention = 'record' AND (c.listed OR c.kind IN ('routine_run', 'one_off_routine_run') AND c.reports_to IS NULL AND k.conversation_id IS NULL)
     OR c.slack_thread ~ '^[0-9]+(\.[0-9]+)?$')`, &created, conversationID)
 	if !errors.Is(err, sql.ErrNoRows) {
 		if err != nil {

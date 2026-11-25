@@ -30,8 +30,9 @@ func TestLoadedEmulatedAgent(t *testing.T) {
 
 	writeAgent(t, workspace, "bad", "---\ndescription: Bad\nmodel: gpt-6.1-sol\nshell: emulated\n---\nPrompt\n")
 
-	_, _, err = LoadRuntimeDefinitions(config.NewLockedConfig(&config.Config{Workspace: workspace}), ".rocketclaw")
-	require.ErrorContains(t, err, "bad.md: workingDirectory: required non-empty string")
+	warnings, err := validateRuntimeAssets(config.NewLockedConfig(&config.Config{Workspace: workspace}), ".rocketclaw", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	require.Equal(t, "Agent bad was not loaded: workingDirectory: required non-empty string.", warnings)
 }
 
 func TestSandboxErrorReachesWeb(t *testing.T) {
@@ -51,9 +52,11 @@ func TestSandboxErrorReachesWeb(t *testing.T) {
 	require.Error(t, err, "preparation ends with a reason, which the Web then shows")
 	require.Equal(t, "Emulated shell unavailable: "+err.Error(), rt.SandboxError())
 
-	writeAgent(t, workspace, "broken", "---\nmode: [\n---\nPrompt\n")
+	agents := filepath.Join(workspace, ".rocketclaw", "agents")
+	require.NoError(t, os.RemoveAll(agents))
+	require.NoError(t, os.WriteFile(agents, []byte("not a folder"), 0o644))
 	rt.prepareSandbox()
-	require.Contains(t, rt.SandboxError(), "Emulated shell unavailable: RocketClaw couldn't read its agents to tell whether one needs the sandbox: broken.md: parse YAML frontmatter")
+	require.Contains(t, rt.SandboxError(), "Emulated shell unavailable: RocketClaw couldn't read its agents to tell whether one needs the sandbox: read agents dir: ")
 
 	rt.Sessions.shells.errSandbox = sandbox.ErrPreparing
 	require.Equal(t, "Emulated shell getting ready: the first start builds the sandbox's Ubuntu image, which takes a minute or two; commands wait for it", rt.SandboxError())

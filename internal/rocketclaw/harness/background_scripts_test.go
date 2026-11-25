@@ -167,7 +167,7 @@ func TestBackgroundExecuteRetainsLargeResult(t *testing.T) {
 	require.Equal(t, "line\n\n[EOF]\n", page.Output)
 
 	loader := later.Tools[loadExecuteResultToolName]
-	decision, err := later.permissionDecision(loadExecuteResultToolName, &loader, json.RawMessage(`{"result_id":"`+id+`"}`))
+	decision, err := later.permissionDecision(loadExecuteResultToolName, &loader, json.RawMessage(`{"result_id":"`+id+`"}`), false)
 	require.NoError(t, err, "a later turn's dispatch admits a retained ID")
 	require.False(t, decision.denied)
 

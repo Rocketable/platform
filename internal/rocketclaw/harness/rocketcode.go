@@ -177,7 +177,7 @@ func (c *shellTempConfig) effectivePermissions(permissions PermissionSet) Permis
 	)
 	buckets = append(buckets, permissions.Buckets...)
 
-	return PermissionSet{Buckets: buckets, Sudo: permissions.Sudo, Easy: permissions.Easy, skillRead: permissions.skillRead}
+	return PermissionSet{Buckets: buckets, Sudo: permissions.Sudo, skillRead: permissions.skillRead}
 }
 
 func NewWithModelResolver(
