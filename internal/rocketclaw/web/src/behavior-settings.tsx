@@ -135,7 +135,7 @@ function Overlays({ overlays, onChange }: { overlays: string[]; onChange: (overl
 
 function Channels({ channels, disabled, onChange }: { channels: Channel[]; disabled: boolean; onChange: (channels: Channel[]) => void }) {
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000 });
-  const names = (agents.data?.agents ?? []).map((agent) => agent.name);
+  const names = (agents.data?.agents ?? []).filter((agent) => agent.sticky === "slack").map((agent) => agent.name);
   const keys = useKeys(channels.length);
   return (
     <div className="flex flex-col gap-3">

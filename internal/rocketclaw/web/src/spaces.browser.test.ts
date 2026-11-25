@@ -113,7 +113,7 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   expect(button.y + button.height).toBeLessThanOrEqual(list.y);
 }), 60_000);
 
-test("New session offers every agent, and a space shows its own and spaceless cron jobs, ignoring case", () => withPage({}, async (page, origin, _prompts, saved) => {
+test("New session offers every agent but sticky: slack ones, and a space shows its own and spaceless cron jobs, ignoring case", () => withPage({}, async (page, origin, _prompts, saved) => {
   const agents = async () => {
     await page.getByRole("button", { name: "Choose agent", exact: true }).click();
     await page.getByRole("menuitemradio", { name: "main", exact: true }).waitFor();
@@ -137,7 +137,7 @@ test("New session offers every agent, and a space shows its own and spaceless cr
   };
   // Main shows only spaceless cron jobs: opsreport hides with its run. Every session lists the agents the server offers.
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
-  expect(await agents()).toEqual(["main", "opsbot"]);
+  expect(await agents()).toEqual(["main", "opsbot", "channel"]);
   await openSaved(page, origin, "/routines", "Routines", saved);
   expect(await dashboard()).toEqual(["daily", "retired"]);
   await openSaved(page, origin, "/", "New session", saved);
