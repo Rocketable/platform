@@ -119,6 +119,16 @@ func TestModel(ctx context.Context, cfg *config.Config, ref string) (time.Durati
 	return time.Since(startedAt), nil
 }
 
+func TestDecisionModel(ctx context.Context, cfg *config.Config, ref string) (time.Duration, error) {
+	startedAt := time.Now()
+
+	if _, err := harness.TitleFits(ctx, harness.ObservabilityConfig{}, newDeciders(cfg), ref, "Model test", "Check that this decision model answers", ""); err != nil {
+		return 0, fmt.Errorf("test decision model %q: %w", ref, err)
+	}
+
+	return time.Since(startedAt), nil
+}
+
 func GenerateTitle(ctx context.Context, cfg *config.Config, request, recent string) (string, error) {
 	title, err := harness.GenerateTitle(ctx, newModelResolver(cfg, slog.Default()), cfg.TitleModel, request, recent)
 	if err != nil {

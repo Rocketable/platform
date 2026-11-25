@@ -8,7 +8,7 @@ const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
 type Behavior = { auto_approver_model: string; logging: { level: string }; slack: { channels: unknown[] } };
 const initial = { auto_approver_model: "old-model", slack: { channels: [{ channel: "#general", agents: ["main"], allowed_user_ids: ["U0"] }] }, logging: { level: "info" }, overlays: null, embedded_agents: { main: { model: "anthropic/opus#high" } }, future: 1 };
-const view = (behavior: Behavior, canEdit: boolean) => ({ workspace: "config", autoApproverModel: behavior.auto_approver_model, loggingLevel: behavior.logging.level, canEdit, behaviorJson: canEdit ? JSON.stringify(behavior) : undefined, mcpServerFacets: [{ server: "alpha", facets: ["read", "write"] }, { server: "zeta", facets: ["sudo"] }] });
+const view = (behavior: Behavior, canEdit: boolean) => ({ workspace: "config", autoApproverModel: behavior.auto_approver_model, loggingLevel: behavior.logging.level, canEdit, decisionProviders: ["typesafe"], behaviorJson: canEdit ? JSON.stringify(behavior) : undefined, mcpServerFacets: [{ server: "alpha", facets: ["read", "write"] }, { server: "zeta", facets: ["sudo"] }] });
 
 test("only admins edit the behavior settings, and the view changes only with the server's answer", async () => {
   const { chromium: engine } = await import(playwright!);
@@ -124,7 +124,21 @@ test("only admins edit the behavior settings, and the view changes only with the
     expect({ tested, saves: saves.length, editing: await save.isVisible() }).toEqual({ tested: [{ model: "gpt-realtime" }], saves: 3, editing: true });
     await save.click();
     await edit.waitFor();
-    expect(saves.at(-1)).toEqual({ ...withChannels, embedded_agents: { main: { model: "anthropic/opus#high", disabled: true }, voice: { model: "gpt-realtime" } } });
+    const withAgents = { ...withChannels, embedded_agents: { main: { model: "anthropic/opus#high", disabled: true }, voice: { model: "gpt-realtime" } } };
+    expect(saves.at(-1)).toEqual(withAgents);
+
+    await edit.click();
+    const titles = (name: string) => page.getByRole("group", { name, exact: true });
+    await titles("Title model").getByRole("combobox", { name: "Title model", exact: true }).fill("gpt-6-luna");
+    const judge = titles("Title decision model").getByRole("textbox", { name: "Title decision model", exact: true });
+    expect(await judge.getAttribute("placeholder")).toBe("Off");
+    await judge.fill("jev-latest");
+    await titles("Title decision model").getByRole("button", { name: "Test", exact: true }).click();
+    await titles("Title decision model").getByRole("status").getByText("Works. typesafe answered in 0.1 s.", { exact: true }).waitFor();
+    expect(tested.at(-1)).toEqual({ model: "typesafe/jev-latest", decision: true });
+    await save.click();
+    await edit.waitFor();
+    expect(saves.at(-1)).toEqual({ ...withAgents, title_model: "gpt-6-luna", title_decision_model: "typesafe/jev-latest" });
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

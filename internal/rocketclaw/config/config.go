@@ -51,9 +51,11 @@ type Behavior struct {
 	Slack             struct {
 		Channels []SlackChannelConfig `json:"channels"`
 	} `json:"slack"`
-	Logging        LoggingConfig        `json:"logging"`
-	Overlays       []string             `json:"overlays"`
-	EmbeddedAgents EmbeddedAgentsConfig `json:"embedded_agents"`
+	Logging            LoggingConfig        `json:"logging"`
+	Overlays           []string             `json:"overlays"`
+	EmbeddedAgents     EmbeddedAgentsConfig `json:"embedded_agents"`
+	TitleModel         string               `json:"title_model"`
+	TitleDecisionModel string               `json:"title_decision_model"`
 }
 
 type EmbeddedAgentsConfig struct {
@@ -71,6 +73,7 @@ func (c *Config) Behavior() Behavior {
 
 	b.AutoApproverModel, b.Slack.Channels = c.AutoApproverModel, c.Slack.Channels
 	b.Logging, b.Overlays, b.EmbeddedAgents = c.Logging, c.Overlays, c.EmbeddedAgents
+	b.TitleModel, b.TitleDecisionModel = c.TitleModel, c.TitleDecisionModel
 
 	return b
 }
@@ -78,6 +81,7 @@ func (c *Config) Behavior() Behavior {
 func (c *Config) SetBehavior(b *Behavior) {
 	c.AutoApproverModel, c.Slack.Channels = b.AutoApproverModel, b.Slack.Channels
 	c.Logging, c.Overlays, c.EmbeddedAgents = b.Logging, b.Overlays, b.EmbeddedAgents
+	c.TitleModel, c.TitleDecisionModel = b.TitleModel, b.TitleDecisionModel
 }
 
 const DefaultRuntimeDir = ".rocketclaw"
@@ -228,6 +232,8 @@ func (c *Config) DecisionProviderNames() []string {
 	for name := range c.Decision {
 		names = append(names, string(name))
 	}
+
+	slices.Sort(names)
 
 	return names
 }
@@ -420,13 +426,17 @@ func (c *Config) ValidateBehavior() error {
 		return err
 	}
 
-	for _, agent := range [...]struct {
-		field   string
-		setting *EmbeddedAgentConfig
-	}{{"embedded_agents.main.model", &c.EmbeddedAgents.Main}, {"embedded_agents.voice.model", &c.EmbeddedAgents.Voice}} {
-		if agent.setting.Model, err = normalizeOpenAIModel(agent.field, agent.setting.Model); err != nil {
+	for _, model := range [...]struct {
+		field string
+		model *string
+	}{{"embedded_agents.main.model", &c.EmbeddedAgents.Main.Model}, {"embedded_agents.voice.model", &c.EmbeddedAgents.Voice.Model}, {"title_model", &c.TitleModel}} {
+		if *model.model, err = normalizeOpenAIModel(model.field, *model.model); err != nil {
 			return err
 		}
+	}
+
+	if err := c.normalizeDecisionModel("title_decision_model", &c.TitleDecisionModel); err != nil {
+		return err
 	}
 
 	return c.validateSlack()
@@ -592,18 +602,21 @@ func (c *Config) validateDecision() error {
 		}
 	}
 
-	for _, setting := range []struct {
-		field string
-		model *string
-	}{{"auto_approver_decision.model", &c.AutoApproverDecision.Model}, {"title_decision_model", &c.TitleDecisionModel}} {
-		*setting.model = strings.TrimSpace(*setting.model)
-		if provider, model, _ := strings.Cut(*setting.model, "/"); *setting.model != "" && (model == "" || c.Decision[DecisionProvider(provider)] == DecisionProviderConfig{}) {
-			return fmt.Errorf("%s: %q must be provider/model with its provider configured in decision", setting.field, *setting.model)
-		}
+	if err := c.normalizeDecisionModel("auto_approver_decision.model", &c.AutoApproverDecision.Model); err != nil {
+		return err
 	}
 
 	if decision := c.AutoApproverDecision; decision.MinConfidence < 0 || decision.MinConfidence > 1 {
 		return errors.New("auto_approver_decision.min_confidence must be between 0 and 1")
+	}
+
+	return nil
+}
+
+func (c *Config) normalizeDecisionModel(field string, model *string) error {
+	*model = strings.TrimSpace(*model)
+	if provider, name, _ := strings.Cut(*model, "/"); *model != "" && (name == "" || c.Decision[DecisionProvider(provider)] == DecisionProviderConfig{}) {
+		return fmt.Errorf("%s: %q must be provider/model with its provider configured in decision", field, *model)
 	}
 
 	return nil

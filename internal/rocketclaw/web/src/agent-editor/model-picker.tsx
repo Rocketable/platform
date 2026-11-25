@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useMutation, useQuery, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
 import { ArrowUpRight, FlaskConical, LoaderCircle } from "lucide-react";
 import { mutations, queries } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -33,7 +33,6 @@ export function ModelPicker({ label, value, onModel }: { label: string; value: s
   const test = useMutation({ mutationFn: (model: string) => mutations.testModel({ model }) });
   const provider = current.model ? current.provider : picked, known = catalog.data?.[provider]?.models[current.model];
   const commit = (to: string, model: string, effort: string) => onModel(model && `${current.qualified || to !== "openai" ? `${to}/` : ""}${model}${effort && `#${effort}`}`);
-  const answer = test.variables === value && test.isSuccess ? test.data : undefined, failure = test.variables === value ? test.error?.message ?? answer?.error : undefined;
   return <div className="relative flex flex-col gap-1.5" onFocus={() => setUsed(true)}>
     <div className="flex gap-1.5">
       <Choose label={`${label} provider`} value={provider} items={providers.map((name) => [name, name])} onPick={(to) => { setPicked(to); commit(to, current.model, current.effort); }} />
@@ -46,9 +45,34 @@ export function ModelPicker({ label, value, onModel }: { label: string; value: s
       <span className="text-xs text-muted-foreground">Test sends one small paid request, only when you click.</span>
     </div>
     {open ? <Suggestions provider={provider} catalog={catalog} typed={typed} onPick={(model) => { setOpen(false); setTyped(undefined); commit(provider, model.id, efforts(model).includes(current.effort) ? current.effort : ""); }} /> : null}
-    {failure ? <p role="alert" className="text-xs text-destructive">{failure}</p> : null}
-    {answer && !failure ? <p role="status" className="text-xs text-emerald-700 dark:text-emerald-400">Works. {provider} answered in {(Number(answer.elapsedMs ?? 0) / 1000).toFixed(1)} s.</p> : null}
+    <TestOutcome test={test} value={value} provider={provider} />
   </div>;
+}
+
+export function DecisionModelPicker({ label, value, onModel }: { label: string; value: string; onModel: (ref: string) => void }) {
+  const providers = useQuery(queries.config()).data?.decisionProviders ?? [];
+  const [picked, setPicked] = useState<string>();
+  const test = useMutation({ mutationFn: (model: string) => mutations.testModel({ model, decision: true }) });
+  const slash = value.indexOf("/"), model = value.slice(slash + 1), provider = slash < 0 ? picked ?? providers[0] ?? "" : value.slice(0, slash);
+  const commit = (to: string, name: string) => onModel(name && `${to}/${name}`);
+  if (!providers.length && !value) return <p className="text-xs text-muted-foreground">Add a provider under <code>decision</code> in the config file to pick a decision model.</p>;
+  return <div className="flex flex-col gap-1.5">
+    <div className="flex gap-1.5">
+      <Choose label={`${label} provider`} value={provider} items={providers.map((name) => [name, name])} onPick={(to) => { setPicked(to); commit(to, model); }} />
+      <Input aria-label={label} placeholder="Off" value={model} onChange={(event) => commit(provider, event.target.value.trim())} />
+    </div>
+    <div className="flex flex-wrap items-center gap-1.5">
+      <Button size="sm" variant="outline" disabled={!model || test.isPending} onClick={() => test.mutate(value)}>{test.isPending ? <LoaderCircle className="animate-spin" /> : <FlaskConical />}Test</Button>
+      <span className="text-xs text-muted-foreground">Test sends one small paid request, only when you click.</span>
+    </div>
+    <TestOutcome test={test} value={value} provider={provider} />
+  </div>;
+}
+
+function TestOutcome({ test, value, provider }: { test: UseMutationResult<{ error?: string; elapsedMs?: string }, Error, string>; value: string; provider: string }) {
+  const answer = test.variables === value && test.isSuccess ? test.data : undefined, failure = test.variables === value ? test.error?.message ?? answer?.error : undefined;
+  if (failure) return <p role="alert" className="text-xs text-destructive">{failure}</p>;
+  return answer ? <p role="status" className="text-xs text-emerald-700 dark:text-emerald-400">Works. {provider} answered in {(Number(answer.elapsedMs ?? 0) / 1000).toFixed(1)} s.</p> : null;
 }
 
 function Suggestions({ provider, catalog, typed = "", onPick }: { provider: string; catalog: UseQueryResult<Catalog>; typed?: string; onPick: (model: Suggestion) => void }) {

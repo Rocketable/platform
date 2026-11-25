@@ -452,6 +452,8 @@ func setBehaviorFields(b *config.Behavior) []string {
 		{"logging.level", b.Logging.Level != ""},
 		{"overlays", b.Overlays != nil},
 		{"embedded_agents", b.EmbeddedAgents != config.EmbeddedAgentsConfig{}},
+		{"title_model", b.TitleModel != ""},
+		{"title_decision_model", b.TitleDecisionModel != ""},
 	} {
 		if field.set {
 			names = append(names, field.name)

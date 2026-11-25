@@ -5391,11 +5391,13 @@ type ConfigView struct {
 	McpExternal            bool                   `protobuf:"varint,9,opt,name=mcp_external,json=mcpExternal,proto3" json:"mcp_external,omitempty"`
 	TailscaleUser          string                 `protobuf:"bytes,11,opt,name=tailscale_user,json=tailscaleUser,proto3" json:"tailscale_user,omitempty"`
 	// Configured provider names, the openai provider always included; the server never lists models.
-	Providers     []string `protobuf:"bytes,12,rep,name=providers,proto3" json:"providers,omitempty"`
-	BehaviorJson  string   `protobuf:"bytes,13,opt,name=behavior_json,json=behaviorJson,proto3" json:"behavior_json,omitempty"`
-	CanEdit       bool     `protobuf:"varint,14,opt,name=can_edit,json=canEdit,proto3" json:"can_edit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Providers    []string `protobuf:"bytes,12,rep,name=providers,proto3" json:"providers,omitempty"`
+	BehaviorJson string   `protobuf:"bytes,13,opt,name=behavior_json,json=behaviorJson,proto3" json:"behavior_json,omitempty"`
+	CanEdit      bool     `protobuf:"varint,14,opt,name=can_edit,json=canEdit,proto3" json:"can_edit,omitempty"`
+	// Configured decision provider names, sorted.
+	DecisionProviders []string `protobuf:"bytes,16,rep,name=decision_providers,json=decisionProviders,proto3" json:"decision_providers,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ConfigView) Reset() {
@@ -5510,6 +5512,13 @@ func (x *ConfigView) GetCanEdit() bool {
 		return x.CanEdit
 	}
 	return false
+}
+
+func (x *ConfigView) GetDecisionProviders() []string {
+	if x != nil {
+		return x.DecisionProviders
+	}
+	return nil
 }
 
 type ListConfigRequest struct {
@@ -5636,10 +5645,12 @@ func (x *ListConfigResponse) GetConfig() *ConfigView {
 	return nil
 }
 
-// TestModelRequest names the model to try, as "provider/model#effort".
+// TestModelRequest names the model to try, as "provider/model#effort", or as "provider/model" for a
+// decision model, which is tried with one title check.
 type TestModelRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Model         string                 `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`
+	Decision      bool                   `protobuf:"varint,2,opt,name=decision,proto3" json:"decision,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5679,6 +5690,13 @@ func (x *TestModelRequest) GetModel() string {
 		return x.Model
 	}
 	return ""
+}
+
+func (x *TestModelRequest) GetDecision() bool {
+	if x != nil {
+		return x.Decision
+	}
+	return false
 }
 
 // TestModelResponse holds the provider's error text, empty when the model works, and how long the
@@ -11511,7 +11529,7 @@ const file_web_proto_rawDesc = "" +
 	"\x06agents\x18\x02 \x03(\tR\x06agents\"A\n" +
 	"\x0fConfigMCPServer\x12\x16\n" +
 	"\x06server\x18\x01 \x01(\tR\x06server\x12\x16\n" +
-	"\x06facets\x18\x02 \x03(\tR\x06facets\"\x98\x04\n" +
+	"\x06facets\x18\x02 \x03(\tR\x06facets\"\xc7\x04\n" +
 	"\n" +
 	"ConfigView\x12\x1c\n" +
 	"\tworkspace\x18\x01 \x01(\tR\tworkspace\x12\x1a\n" +
@@ -11525,15 +11543,17 @@ const file_web_proto_rawDesc = "" +
 	"\x0etailscale_user\x18\v \x01(\tR\rtailscaleUser\x12\x1c\n" +
 	"\tproviders\x18\f \x03(\tR\tproviders\x12#\n" +
 	"\rbehavior_json\x18\r \x01(\tR\fbehaviorJson\x12\x19\n" +
-	"\bcan_edit\x18\x0e \x01(\bR\acanEditJ\x04\b\x03\x10\x04J\x04\b\x05\x10\x06J\x04\b\n" +
+	"\bcan_edit\x18\x0e \x01(\bR\acanEdit\x12-\n" +
+	"\x12decision_providers\x18\x10 \x03(\tR\x11decisionProvidersJ\x04\b\x03\x10\x04J\x04\b\x05\x10\x06J\x04\b\n" +
 	"\x10\vR\vmcp_servers\"\x13\n" +
 	"\x11ListConfigRequest\"B\n" +
 	"\x1bSaveBehaviorSettingsRequest\x12#\n" +
 	"\rdocument_json\x18\x01 \x01(\tR\fdocumentJson\"=\n" +
 	"\x12ListConfigResponse\x12'\n" +
-	"\x06config\x18\x01 \x01(\v2\x0f.rpc.ConfigViewR\x06config\"(\n" +
+	"\x06config\x18\x01 \x01(\v2\x0f.rpc.ConfigViewR\x06config\"D\n" +
 	"\x10TestModelRequest\x12\x14\n" +
-	"\x05model\x18\x01 \x01(\tR\x05model\"H\n" +
+	"\x05model\x18\x01 \x01(\tR\x05model\x12\x1a\n" +
+	"\bdecision\x18\x02 \x01(\bR\bdecision\"H\n" +
 	"\x11TestModelResponse\x12\x14\n" +
 	"\x05error\x18\x01 \x01(\tR\x05error\x12\x1d\n" +
 	"\n" +

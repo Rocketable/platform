@@ -400,6 +400,16 @@ func TestTestModel(t *testing.T) {
 	require.NoError(t, err)
 
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/decisions" {
+			body, _ := io.ReadAll(r.Body)
+			assert.Contains(t, string(body), `"model":"judge"`)
+			assert.Contains(t, string(body), `"name":"title_fits"`)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"model":"judge","usage":{},"answers":[{"type":"predicate","name":"title_fits","probability":0.9}]}`)
+
+			return
+		}
+
 		var body struct {
 			Model           string `json:"model"`
 			MaxOutputTokens int64  `json:"max_output_tokens"`
@@ -429,7 +439,7 @@ func TestTestModel(t *testing.T) {
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Permissions: map[string][]string{"alice@example.com": {"Ops"}}, Providers: map[string]config.OpenAIConfig{
 		"work": {APIKey: "key", APIBaseURL: provider.URL, Auth: "api_key"},
 		"chat": {Auth: "chatgpt"},
-	}}
+	}, Decision: map[config.DecisionProvider]config.DecisionProviderConfig{config.DecisionOpenAI: {APIKey: "key", APIBaseURL: provider.URL}}}
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
@@ -469,6 +479,14 @@ func TestTestModel(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, proto.Equal(&TestModelResponse{Error: want}, failed), "%s: %v", model, failed)
 	}
+
+	judged, err := invoke[TestModelResponse](bob, connection, "TestModel", &TestModelRequest{Model: "openai/judge", Decision: true})
+	require.NoError(t, err)
+	require.Empty(t, judged.Error, "a decision model is tried with one title check")
+
+	unjudged, err := invoke[TestModelResponse](bob, connection, "TestModel", &TestModelRequest{Model: "typesafe/judge", Decision: true})
+	require.NoError(t, err)
+	require.True(t, proto.Equal(&TestModelResponse{Error: `test decision model "typesafe/judge": decision provider "typesafe" is not configured`}, unjudged), "%v", unjudged)
 }
 
 func TestTailnetCrossSitePages(t *testing.T) {
