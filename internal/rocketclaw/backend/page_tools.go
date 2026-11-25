@@ -79,8 +79,17 @@ func (p pageSpace) refused(err error) error {
 }
 
 func (p pageSpace) space(ctx context.Context) (string, error) {
-	space, err := p.sessions.resolvePageSpace(ctx, p.conversation, p.fallback)
-	return space, p.refused(err)
+	var space string
+
+	if err := p.sessions.db.QueryRowContext(ctx, pageBornSQL+` SELECT COALESCE(name, $2) FROM born_name`, p.conversation, p.fallback).Scan(&space); err != nil {
+		return "", fmt.Errorf("resolve page space: %w", err)
+	}
+
+	if space == "" {
+		return "", errors.New(p.noSpace)
+	}
+
+	return space, nil
 }
 
 func (p pageSpace) put(ctx context.Context, kind PageKind, name, contentType string, body []byte) (string, error) {

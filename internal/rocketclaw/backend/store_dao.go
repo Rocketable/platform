@@ -1187,20 +1187,6 @@ func (j conversationJournal) SaveTrace(ctx context.Context, turnID string, trace
 	return errExec
 }
 
-func settleStoppedTrace(ctx context.Context, journal conversationJournal, turnID string) error {
-	trace, err := queryRows(ctx, journal.store.db, `SELECT e.value FROM turns t CROSS JOIN LATERAL jsonb_array_elements(COALESCE(t.output_trace_json::jsonb, '[]')) WITH ORDINALITY e(value, n)
-WHERE t.id = $1 ORDER BY e.n`, "stopped turn trace", scanJSON, turnID)
-	if err == nil {
-		err = harness.SettleStoppedTrace(ctx, journal, turnID, trace)
-	}
-
-	if err != nil {
-		return fmt.Errorf("settle stopped turn calls: %w", err)
-	}
-
-	return journal.SaveTrace(ctx, turnID, trace)
-}
-
 const mergeCodeModeCallsSQL = `, saved AS (
     SELECT id, entry_json::jsonb AS entry FROM entries WHERE conversation_id = $1 AND entry_json->>'turn_id' = $2
 ), kept AS (
@@ -1251,11 +1237,7 @@ UPDATE turns a SET output_trace_json = a.output_trace_json, updated_at_unix_ns =
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit code mode call save: %w", err)
-	}
-
-	return nil
+	return commitState(tx, "code mode call save")
 }
 
 func (j conversationJournal) CodeModeCalls(ctx context.Context, turnID string) ([]json.RawMessage, error) {
@@ -1939,18 +1921,13 @@ func scanBackgroundJob(scanner rowScanner) (backgroundJob, error) {
 	return job, nil
 }
 
-func createBackgroundJob(ctx context.Context, db stateStoreDB, job *backgroundJob) (stored backgroundJob, created bool, err error) {
+func createBackgroundJob(ctx context.Context, db stateStoreDB, job *backgroundJob) error {
 	origin, _ := json.Marshal(job.origin)
 
-	inserted, err := execRows(ctx, db, "create background job", `INSERT INTO turns (conversation_id, input_id, kind, takes_lane, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message, reply_target)
+	_, err := execState(ctx, db, "create background job", `INSERT INTO turns (conversation_id, input_id, kind, takes_lane, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message, reply_target)
 VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, FALSE, 0, 0, '', $11, $11, '', $12, NULLIF($13, '')) ON CONFLICT (conversation_id, input_id) WHERE NOT takes_lane DO NOTHING`, job.conversationID, job.jobID, job.kind, job.agent, job.label, job.callID, job.subagentKey, string(removeSessionEntryNUL(origin)), job.runnerID, noteNone, timeUnixNano(time.Now()), strings.ReplaceAll(job.input, "\x00", ""), job.target)
-	if err != nil {
-		return backgroundJob{}, false, err
-	}
 
-	stored, err = scanBackgroundJob(db.QueryRowContext(ctx, `SELECT `+backgroundJobColumns+` FROM turns j LEFT JOIN conversations c USING (conversation_id) WHERE j.conversation_id = $1 AND j.input_id = $2 AND NOT j.takes_lane`, job.conversationID, job.jobID))
-
-	return stored, inserted > 0, err
+	return err
 }
 
 func (s *SessionService) finishBackgroundJob(ctx context.Context, job *backgroundJob) (bool, error) {

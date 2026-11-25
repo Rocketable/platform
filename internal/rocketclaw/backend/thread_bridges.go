@@ -80,8 +80,6 @@ func (noSlackLookups) SlackTagsMatching(context.Context, string) []string {
 	return nil
 }
 
-var _ protocol.PrimaryTextRouter = (*threadBridgeManager)(nil)
-
 func newThreadBridgeManager(runtime *config.LockedConfig, store *SessionService, logger *slog.Logger, factory bridgeFactory) *threadBridgeManager {
 	return &threadBridgeManager{
 		log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, factory: factory,
@@ -433,11 +431,7 @@ func (r *Runtime) postPausedMessageLocked(ctx context.Context, b *Bridge, inboun
 		return false, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit paused message: %w", err)
-	}
-
-	return false, nil
+	return false, commitState(tx, "paused message")
 }
 
 func (r *Runtime) SwitchConversationAgent(conversationID, agent string) (bool, error) {
@@ -874,7 +868,7 @@ func (b *Bridge) admitAgentWrite(ctx context.Context, mode sessionWriteMode, inb
 	}
 
 	if reply != nil {
-		if _, _, err := createBackgroundJob(ctx, tx, reply); err != nil {
+		if err := createBackgroundJob(ctx, tx, reply); err != nil {
 			return "", resubmit, err
 		}
 	}

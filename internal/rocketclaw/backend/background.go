@@ -248,7 +248,7 @@ func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, wor
 	}
 
 	if job.Detached {
-		if _, _, err := createBackgroundJob(ctx, r.store.db, run.row); err != nil {
+		if err := createBackgroundJob(ctx, r.store.db, run.row); err != nil {
 			r.mu.Lock()
 			delete(r.runs, key)
 			r.mu.Unlock()
@@ -278,7 +278,7 @@ func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, wor
 	case <-moved.Done():
 		defer close(run.recorded)
 
-		if _, _, err := createBackgroundJob(context.WithoutCancel(ctx), r.store.db, run.row); err != nil {
+		if err := createBackgroundJob(context.WithoutCancel(ctx), r.store.db, run.row); err != nil {
 			run.cancel(errBackgroundAbandoned)
 			<-run.done
 

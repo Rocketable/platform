@@ -518,7 +518,19 @@ func (b *Bridge) stopIdleTurn() *protocol.InboundMessage {
 		return nil
 	}
 
-	if err := settleStoppedTrace(ctx, conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, turn.id); err != nil {
+	journal := conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}
+
+	trace, err := queryRows(ctx, b.config.SessionService.db, `SELECT e.value FROM turns t CROSS JOIN LATERAL jsonb_array_elements(COALESCE(t.output_trace_json::jsonb, '[]')) WITH ORDINALITY e(value, n)
+WHERE t.id = $1 ORDER BY e.n`, "stopped turn trace", scanJSON, turn.id)
+	if err == nil {
+		err = harness.SettleStoppedTrace(ctx, journal, turn.id, trace)
+	}
+
+	if err == nil {
+		err = journal.SaveTrace(ctx, turn.id, trace)
+	}
+
+	if err != nil {
 		b.log.Error("settle idle active turn calls", "conversation_id", b.config.ConversationID, "turn_id", turn.id, "error", err)
 	}
 
@@ -560,18 +572,14 @@ func (b *Bridge) enqueue(ctx context.Context, request *bridgeRequest, operation 
 	}
 
 	if !stopped && request.inbound != nil && request.inbound.Kind == protocol.InboundKindSteer && b.inputOpen {
-		if request.queueItemID == "" {
-			request.queueItemID = cmp.Or(request.inbound.Metadata["web_message_id"], rand.Text())
-		}
+		request.queueItemID = cmp.Or(request.queueItemID, request.inbound.Metadata["web_message_id"], rand.Text())
 
 		if slices.ContainsFunc(b.steers, func(steer bridgeRequest) bool { return steer.queueItemID == request.queueItemID }) {
 			b.mu.Unlock()
 			return nil
 		}
 
-		if request.completion == nil {
-			request.completion = &turnCompletion{done: make(chan struct{})}
-		}
+		request.completion = cmp.Or(request.completion, &turnCompletion{done: make(chan struct{})})
 
 		b.steers = append(b.steers, *request)
 		b.saveSteersLocked(ctx)
@@ -626,10 +634,7 @@ func (b *Bridge) storeStopped(request *bridgeRequest, operation string) error {
 		}
 	}
 
-	owner := b.config.ConversationID
-	if request.producer != nil {
-		owner = request.producer.config.ConversationID
-	}
+	owner := cmp.Or(request.producer, b).config.ConversationID
 
 	queue, err := b.config.SessionService.ThreadQueueForConversation(owner)
 	if err != nil {
@@ -896,11 +901,7 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 	}
 	b.mu.Unlock()
 
-	owner := b
-	if request.producer != nil {
-		owner = request.producer
-	}
-
+	owner := cmp.Or(request.producer, b)
 	agent := owner.agentSnapshot()
 
 	if held, err := b.goalHoldsQueue(request); err != nil || held {
@@ -986,7 +987,11 @@ UPDATE turns SET id = $3, phase = $4, reason = NULL WHERE conversation_id = $1 A
 		}
 	}
 
-	if err := owner.admitShadowInputs(ctx, tx, request, agent, turnID); err != nil {
+	if err := owner.config.SessionService.startShadowManifests(ctx, tx, owner.config.ConversationID, agent, turnID, request.inbound); err != nil {
+		return false, err
+	}
+
+	if err := saveTurnInputs(ctx, tx, owner.config.ConversationID, turnID, &turnInputSnapshot{Agent: agent, Inputs: []harness.PromptInput{}}); err != nil {
 		return false, err
 	}
 
@@ -1652,7 +1657,18 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 		}
 
 		if moved, ok := errors.AsType[turnMovedError](errTurn); ok {
-			return b.handOver(ctx, msg.SlackReply, moved)
+			if moved.stopped {
+				thread, errThread := b.threads.recordedBridge(ctx, moved.thread)
+				if errThread != nil {
+					return errThread
+				}
+
+				thread.InterruptActiveTurn()
+			}
+
+			b.wakeHeldThreads(ctx, msg.SlackReply)
+
+			return nil
 		}
 
 		if errors.Is(errTurn, errTurnInterrupted) {
@@ -1775,21 +1791,6 @@ func (b *Bridge) channelSummary(ctx context.Context, turnID string) string {
 	}
 
 	return summary
-}
-
-func (b *Bridge) handOver(ctx context.Context, reply *protocol.SlackReplyTarget, moved turnMovedError) error {
-	if moved.stopped {
-		thread, err := b.threads.recordedBridge(ctx, moved.thread)
-		if err != nil {
-			return err
-		}
-
-		thread.InterruptActiveTurn()
-	}
-
-	b.wakeHeldThreads(ctx, reply)
-
-	return nil
 }
 
 func (b *Bridge) skipObsoleteGoal(ctx context.Context, request *bridgeRequest) (bool, error) {
@@ -2764,10 +2765,6 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 }
 
 func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mcpclient.ServerConfig {
-	if len(servers) == 0 {
-		return nil
-	}
-
 	out := make(map[string]mcpclient.ServerConfig, len(servers))
 	for name := range servers {
 		server := servers[name]
@@ -3677,13 +3674,7 @@ func reviewOriginHeader(origin *protocol.InboundMessage) string {
 }
 
 func provenanceToken(value string) string {
-	fields := strings.Fields(value)
-	value = strings.Join(fields, "_")
-	value = strings.ReplaceAll(value, "=", "-")
-	value = strings.ReplaceAll(value, "[", "(")
-	value = strings.ReplaceAll(value, "]", ")")
-
-	return value
+	return strings.NewReplacer("=", "-", "[", "(", "]", ")").Replace(strings.Join(strings.Fields(value), "_"))
 }
 
 func goalSteeringPrompt(goal *GoalState) string {

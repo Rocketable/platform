@@ -285,13 +285,6 @@ SELECT revision, navigation FROM recorded`, username, path, TabConversation(path
 	return revision, navigation, nil
 }
 
-func (s *SessionService) requestNavigation(ctx context.Context, username, path string) error {
-	_, err := execState(ctx, s.db, "request navigation", `INSERT INTO web_tab_states (username, revision, navigation, navigation_at) VALUES ($1, 0, $2, now())
-ON CONFLICT (username) DO UPDATE SET navigation = excluded.navigation, navigation_at = excluded.navigation_at`, username, path)
-
-	return err
-}
-
 const parkTickEvery = 2 * time.Second
 
 const sessionWorkSQL = `, watched AS (

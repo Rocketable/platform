@@ -729,7 +729,8 @@ func navigateTool(threads *threadBridgeManager, username string) harness.Tool {
 			}
 
 			target.Scheme, target.Host = "", ""
-			if err := threads.store.requestNavigation(ctx, username, target.String()); err != nil {
+			if _, err := execState(ctx, threads.store.db, "request navigation", `INSERT INTO web_tab_states (username, revision, navigation, navigation_at) VALUES ($1, 0, $2, now())
+ON CONFLICT (username) DO UPDATE SET navigation = excluded.navigation, navigation_at = excluded.navigation_at`, username, target.String()); err != nil {
 				return harness.ToolResult{}, err
 			}
 
@@ -812,7 +813,7 @@ func (s *SessionService) parkStopLine(ctx context.Context, conversationID, key s
 	}
 
 	if reply != nil {
-		if _, _, err := createBackgroundJob(ctx, tx, reply); err != nil {
+		if err := createBackgroundJob(ctx, tx, reply); err != nil {
 			return err
 		}
 	}

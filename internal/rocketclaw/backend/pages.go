@@ -44,20 +44,6 @@ const pageTargetSQL = pageBornSQL + `, made AS (
 
 const pageSpellingSQL = ` FROM hosted_pages p LEFT JOIN web_spaces w ON lower(w.name) = lower(p.space)`
 
-func (s *SessionService) resolvePageSpace(ctx context.Context, conversation, fallback string) (string, error) {
-	var space string
-
-	if err := s.db.QueryRowContext(ctx, pageBornSQL+` SELECT COALESCE(name, $2) FROM born_name`, conversation, fallback).Scan(&space); err != nil {
-		return "", fmt.Errorf("resolve page space: %w", err)
-	}
-
-	if space == "" {
-		return "", errNoPageSpace
-	}
-
-	return space, nil
-}
-
 func (s *SessionService) PutPage(ctx context.Context, page *Page, conversation, fallback string) error {
 	tx, err := s.beginStateTx(ctx, "page store")
 	if err != nil {

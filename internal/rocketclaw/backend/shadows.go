@@ -676,14 +676,6 @@ func (s *SessionService) bindShadows(ctx context.Context, db stateStoreDB, paren
 	return nil
 }
 
-func (b *Bridge) admitShadowInputs(ctx context.Context, db stateStoreDB, request *bridgeRequest, agent, turn string) error {
-	if err := b.config.SessionService.startShadowManifests(ctx, db, b.config.ConversationID, agent, turn, request.inbound); err != nil {
-		return err
-	}
-
-	return saveTurnInputs(ctx, db, b.config.ConversationID, turn, &turnInputSnapshot{Agent: agent, Inputs: []harness.PromptInput{}})
-}
-
 func (s *SessionService) startShadowManifests(ctx context.Context, db stateStoreDB, parent, agent, turnID string, inbound *protocol.InboundMessage) error {
 	files, err := agentDraftFiles(inbound)
 	if err != nil {

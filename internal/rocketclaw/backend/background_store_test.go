@@ -116,9 +116,7 @@ func finishTestBackgroundJob(t *testing.T, store *SessionService, job *backgroun
 func createTestBackgroundJob(t *testing.T, store *SessionService, job *backgroundJob) {
 	t.Helper()
 
-	_, created, err := createBackgroundJob(t.Context(), store.db, job)
-	require.NoError(t, err)
-	require.True(t, created)
+	require.NoError(t, createBackgroundJob(t.Context(), store.db, job))
 }
 
 func backgroundJobIDs(t *testing.T, store *SessionService, conversationID string) []string {
@@ -143,19 +141,22 @@ func TestBackgroundJobCreateKeepsFirstRow(t *testing.T) {
 
 	first := testBackgroundJob("main", "turn-1/call/a")
 	first.origin.SyncDestination = "visible"
-	stored, created, err := createBackgroundJob(t.Context(), store.db, first)
+	require.NoError(t, createBackgroundJob(t.Context(), store.db, first))
+
+	stored, err := store.backgroundJobs(t.Context(), "main")
 	require.NoError(t, err)
-	require.True(t, created)
-	require.Equal(t, backgroundRunning, stored.status)
-	require.Equal(t, noteNone, stored.noteState)
-	require.Equal(t, "visible", stored.origin.SyncDestination)
-	require.False(t, stored.createdAt.IsZero())
+	require.Len(t, stored, 1)
+	require.Equal(t, backgroundRunning, stored[0].status)
+	require.Equal(t, noteNone, stored[0].noteState)
+	require.Equal(t, "visible", stored[0].origin.SyncDestination)
+	require.False(t, stored[0].createdAt.IsZero())
 
 	second := testBackgroundJob("main", "turn-1/call/a")
 	second.label, second.runnerID = "other", "runner-2"
-	again, created, err := createBackgroundJob(t.Context(), store.db, second)
+	require.NoError(t, createBackgroundJob(t.Context(), store.db, second))
+
+	again, err := store.backgroundJobs(t.Context(), "main")
 	require.NoError(t, err)
-	require.False(t, created)
 	require.Equal(t, stored, again)
 }
 

@@ -69,5 +69,5 @@ func TestRocketcodeConfigIncludesMCPServers(t *testing.T) {
 
 	empty := NewConversation(config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), discardPublisher{}, &Config{ConversationID: "c2", Agent: "main", RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, UserQuestionAsker: &webQuestions{store: store, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, SessionService: store}, slog.New(slog.DiscardHandler))
 	emptyRC := empty.rocketcodeConfig(t.TempDir(), nil)
-	assert.Nil(t, emptyRC.MCPServers)
+	assert.Empty(t, emptyRC.MCPServers)
 }
