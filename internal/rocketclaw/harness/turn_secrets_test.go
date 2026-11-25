@@ -3,6 +3,7 @@ package harness
 import (
 	"cmp"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -66,7 +67,6 @@ func TestTurnSecretStoreEnv(t *testing.T) {
 	store := NewTurnSecretStore()
 	pasted := []byte("ghp_first-value")
 	require.NoError(t, store.Save("GITHUB_TOKEN", pasted))
-	first := store.values["GITHUB_TOKEN"]
 
 	clear(pasted)
 	require.NoError(t, store.Save("AWS_SECRET_ACCESS_KEY", []byte("aws-secret-value")))
@@ -74,7 +74,7 @@ func TestTurnSecretStoreEnv(t *testing.T) {
 
 	require.NoError(t, store.Save("GITHUB_TOKEN", []byte("ghp_second-value")))
 	require.Equal(t, []string{"AWS_SECRET_ACCESS_KEY=aws-secret-value", "GITHUB_TOKEN=ghp_second-value"}, store.Env())
-	require.Equal(t, make([]byte, len(first)), first)
+	require.Equal(t, "[secret:GITHUB_TOKEN] [secret:GITHUB_TOKEN]", store.Redact("ghp_first-value ghp_second-value"))
 	require.False(t, store.Holds("DB_PASSWORD"))
 }
 
@@ -95,14 +95,15 @@ func TestTurnSecretStoreErase(t *testing.T) {
 	store := NewTurnSecretStore()
 	require.NoError(t, store.Save("GITHUB_TOKEN", []byte("ghp_abcdefgh")))
 	require.NoError(t, store.Save("DB_PASSWORD", []byte("hunter2-hunter2")))
-	held := [][]byte{store.values["GITHUB_TOKEN"], store.values["DB_PASSWORD"]}
+	require.NoError(t, store.Save("DB_PASSWORD", []byte("hunter3-hunter3")))
+	held := slices.Concat(store.values["GITHUB_TOKEN"], store.values["DB_PASSWORD"])
 
 	store.Erase()
 
 	require.Empty(t, store.Env())
 	require.False(t, store.Holds("GITHUB_TOKEN"))
 	require.Equal(t, "ghp_abcdefgh hunter2-hunter2", store.Redact("ghp_abcdefgh hunter2-hunter2"))
-	require.Equal(t, [][]byte{make([]byte, 12), make([]byte, 15)}, held)
+	require.Equal(t, [][]byte{make([]byte, 12), make([]byte, 15), make([]byte, 15)}, held)
 }
 
 func TestTurnSecretStoreConcurrentUse(t *testing.T) {

@@ -24,11 +24,11 @@ func (e *TurnSecretError) Error() string {
 
 type TurnSecretStore struct {
 	mu     sync.Mutex
-	values map[string][]byte
+	values map[string][][]byte
 }
 
 func NewTurnSecretStore() *TurnSecretStore {
-	return &TurnSecretStore{values: map[string][]byte{}}
+	return &TurnSecretStore{values: map[string][][]byte{}}
 }
 
 func (s *TurnSecretStore) Save(name string, value []byte) error {
@@ -41,15 +41,14 @@ func (s *TurnSecretStore) Save(name string, value []byte) error {
 
 	held := make([]byte, len(value))
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	secret.Do(func() {
-		clear(s.values[name])
 		copy(held, value)
 	})
 
-	s.values[name] = held
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.values[name] = append(s.values[name], held)
 
 	return nil
 }
@@ -71,7 +70,7 @@ func (s *TurnSecretStore) Env() []string {
 
 	secret.Do(func() {
 		for _, name := range slices.Sorted(maps.Keys(s.values)) {
-			env = append(env, name+"="+string(s.values[name]))
+			env = append(env, name+"="+string(s.values[name][len(s.values[name])-1]))
 		}
 	})
 
@@ -82,13 +81,26 @@ func (s *TurnSecretStore) Redact(text string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	longestFirst := slices.SortedFunc(maps.Keys(s.values), func(a, b string) int {
-		return cmp.Or(cmp.Compare(len(s.values[b]), len(s.values[a])), strings.Compare(a, b))
+	type held struct {
+		name  string
+		value []byte
+	}
+
+	var all []held
+
+	for name, values := range s.values {
+		for _, value := range values {
+			all = append(all, held{name, value})
+		}
+	}
+
+	slices.SortFunc(all, func(a, b held) int {
+		return cmp.Or(cmp.Compare(len(b.value), len(a.value)), strings.Compare(a.name, b.name))
 	})
 
 	secret.Do(func() {
-		for _, name := range longestFirst {
-			text = strings.ReplaceAll(text, string(s.values[name]), "[secret:"+name+"]")
+		for _, h := range all {
+			text = strings.ReplaceAll(text, string(h.value), "[secret:"+h.name+"]")
 		}
 	})
 
@@ -100,8 +112,10 @@ func (s *TurnSecretStore) Erase() {
 	defer s.mu.Unlock()
 
 	secret.Do(func() {
-		for _, value := range s.values {
-			clear(value)
+		for _, values := range s.values {
+			for _, value := range values {
+				clear(value)
+			}
 		}
 	})
 
