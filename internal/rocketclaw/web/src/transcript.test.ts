@@ -5,7 +5,6 @@ import type { CallExpression, Expression, FunctionDeclaration, Node } from "type
 import { isBinaryExpression, isFunctionDeclaration, isVariableStatement } from "typescript/unstable/ast/is";
 import type { HistoryView, ShadowBinding, TranscriptEvent } from "./types";
 
-// Execute the retained UI's actual private functions without exporting non-components.
 const api = new API({ cwd: import.meta.dir });
 const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
 await api.close();
@@ -281,11 +280,9 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
     const loading = refreshHistory();
     for (let i = 0; i < 10; i++) expect(refreshHistory()).toBe(loading);
     expect(requests).toEqual([{ id: "session", limit: 50 }]);
-    // This response began before Prompt rendered its uncommitted input.
     draft.lines.push({ id: "local", role: "user", text: "same" });
     first.resolve(Response.json({ ...view([kept, event("turn", "turn:0", "user", "same", { inputId: "used" })], { revision: "applied", running: true }), origin: JSON.stringify({ kind: "cron" }) }));
     await first.promise;
-    // Wait for the real read to enter its second request, not for a timer.
     while (requests.length < 2) await Promise.resolve();
     expect(requests[1]).toEqual({ id: "session", revision: "applied", limit: 50 });
     expect(draft.lines.map((line) => line.id)).toEqual(["kept:0", "used", "local"]);
@@ -329,7 +326,6 @@ test("serialized reads coalesce signals and reconnects, use only applied revisio
     expect(restored.messages).toEqual([kept, event("later", "later:0", "assistant", "later")]);
     expect(restored.delegations).toEqual(["session/call"]);
     expect(toolTitle(historyLines(restored.messages).find((line: { toolCallId: string }) => line.toolCallId === "call"))).toBe("Run · print(1)");
-    // An authoritative reset with a retained cursor replaces public groups, not local commands.
     await refreshHistory();
     await refreshHistory();
     expect(requests.slice(7)).toEqual([{ id: "session", revision: "reopened", limit: 50 }, { id: "session", revision: "reopened", limit: 50 }]);
@@ -375,7 +371,6 @@ test("earlier pages prepend before followed entries until a reset restarts the v
     applyHistoryDelta(draft, view([event("6", "6:0", "user", "six")], { reset: false, revision: "next", replacedKeys: ["6"], entryKeys: ["5", "6"], start: "5", more: true }));
     expect(draft.lines.map((line) => line.text)).toEqual(["three", "four", "five", "six"]);
     expect(draft.start).toBe("3");
-    // A linked older message loads everything from it; a reset meanwhile discards that page.
     const linked = readEarlierHistory("session", draft, () => { changes++; }, "1");
     applyHistoryDelta(draft, view([event("9", "9:0", "user", "nine")], { revision: "restarted", start: "9", more: false }));
     pages[1].resolve(Response.json({ ...view([event("1", "1:0", "user", "one")], { start: "1", more: false }), origin: "" }));
@@ -522,7 +517,6 @@ test("actual stream handlers use metadata only as a hint, including on the first
   const draft = { sessionId: "" };
   const ids: string[] = [];
   const read = new Function("draft", "onDraftChange", "readHistoryDelta", transpiler.transformSync(`return ${callback.getText(source)};`))(draft, () => {}, (id: string) => { ids.push(id); });
-  // The composer can finish after its original new-chat component unmounts.
   draft.sessionId = "created";
   read();
   expect(ids).toEqual(["created"]);
@@ -654,8 +648,6 @@ for (const [prefix, delivery] of [["  /enqueue \t", "QUEUE"], ["  /stash \t", "S
   expect(queryClient.getQueryState(["queue", { id: "opaque" }]).isInvalidated).toBe(followUp !== "STEER");
 });
 
-// While the agent is paused, Send posts to the people here at once, also during a finishing reply: it steers rather
-// than queues and starts no busy state; /enqueue and /stash still queue.
 for (const [text, followUp] of [["lunch at noon?", "STEER"], ["/steer lunch", "STEER"], ["/enqueue later", "QUEUE"], ["/stash later", "STASH"], ["$stash later", "STEER"]]) for (const busy of [false, true]) test(`paused ${JSON.stringify(text)} goes out as ${followUp}, busy=${busy}`, async () => {
   const draft = { text, files: [], agent: "", edit: 0, submission: 0, sending: false, parked: [] as Line[], lines: [] as Line[], busy };
   const shown = followUp === "STEER" ? [text.replace("/steer ", "")] : [];
@@ -670,8 +662,6 @@ for (const [text, followUp] of [["lunch at noon?", "STEER"], ["/steer lunch", "S
   expect(queryClient.getQueryState(["queue", { id: "opaque" }]).isInvalidated).toBe(followUp !== "STEER");
 });
 
-// A message typed in New session that resumes a paused sticky session follows that session's pause, not the new
-// session's: it posts to the people there at once, also during a reply, and starts no busy state.
 for (const busy of [false, true]) test(`new session message into a paused sticky session posts, busy=${busy}`, async () => {
   const home = { text: "lunch at noon?", files: [], agent: "main", edit: 0, submission: 0, sending: false, busy: false, lines: [] as Line[], error: "" };
   const target = { ...home, text: "", sessionId: "sticky", busy, lines: [] as Line[], parked: [] as Line[] };
@@ -727,7 +717,7 @@ for (const failure of ["", "create", "upload", "prompt"]) test(`new-session send
   } } });
   try {
     const sending = send();
-    await send(); // A second submit while session creation is pending must not create another session.
+    await send();
     expect(calls).toEqual(["create"]);
     if (failure === "create") creating.reject(new Error("create refused"));
     else creating.resolve({ id });
@@ -761,7 +751,7 @@ test("composer renders exact input before Prompt completes and history failure d
     expect(requests[0]).toEqual({ id: "opaque", text: "  exact human input\n", delivery: "STEER", messageId: expect.any(String) });
     expect(draft.lines.at(-1)).toMatchObject({ id: requests[0].messageId, text: requests[0].text });
     expect(draft.lines.at(-1)?.complete).toBeUndefined();
-    expect(draft.lines.at(-1)?.principal).toBeUndefined(); // No identity means no guessed provisional author.
+    expect(draft.lines.at(-1)?.principal).toBeUndefined();
     idle.resolve(Response.json({ ...view([], { reset: false, entryKeys: ["prior"] }), origin: "" }));
     await loading;
     expect(draft.busy).toBe(true);
@@ -898,7 +888,7 @@ for (const command of ["stop", "enqueue", "stash", "steer"]) for (const busy of 
     expect(draft.parked).toEqual([]);
     expect(draft.text).toBe(failure ? text : "");
     expect(draft.files).toEqual(failure ? files : []);
-    expect(draft.edit).toBe(failure ? 2 : 1); // Restoring failed content is a new persisted edit.
+    expect(draft.edit).toBe(failure ? 2 : 1);
     expect(draft.sending).toBe(false);
     expect(error).toBe(failure ? "stash failed" : "");
   } finally { globalThis.fetch = originalFetch; }
