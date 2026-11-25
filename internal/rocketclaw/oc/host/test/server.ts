@@ -77,6 +77,8 @@ export const server = {
   streams: 0,
   extraText: "",
   terminals: [] as ReturnType<typeof terminal>[],
+  missingDirectory: "",
+  worktrees: [] as { directory: string }[],
 }
 
 /** Puts the server back as it starts: up, on the copy's version, with its sessions. */
@@ -86,6 +88,8 @@ export function reset() {
   server.extraText = ""
   server.sessions = sessions()
   server.terminals = []
+  server.missingDirectory = ""
+  server.worktrees = []
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status })
@@ -116,15 +120,34 @@ function stream(signal: AbortSignal | null | undefined) {
   )
 }
 
-function route(method: string, path: string, query: URLSearchParams) {
+async function route(request: Request, path: string, query: URLSearchParams) {
+  const { method } = request
   const [, id, rest] = /^\/session\/([^/]+)(?:\/(.*))?$/.exec(path) ?? []
 
   if (path === "/info") return json({ version: server.version, pid: 1, urls: [], paths: { tmp: "/tmp" } })
 
-  if (path === "/location") return json({ directory, project: { id: "prj", directory, canonical: directory } })
+  if (path === "/location") {
+    const target = server.missingDirectory ? query.get("location[directory]") ?? directory : directory
+    if (target === server.missingDirectory)
+      return json({ _tag: "LocationNotFoundError", location: { directory: target }, message: "Folder not found" }, 404)
+
+    return json({ directory: target, project: { id: "prj", directory: target, canonical: directory } })
+  }
 
   if (path === "/project")
-    return json([{ id: "prj", canonical: directory, time: { created: 0, updated: 0, active: 0 }, sandboxes: [] }])
+    return json([{
+      id: "prj",
+      canonical: directory,
+      time: { created: 0, updated: 0, active: 0 },
+      sandboxes: [],
+      ...(server.missingDirectory ? { vcs: "git" } : {}),
+    }])
+
+  if (path === "/worktree") return json(server.worktrees)
+  if (path === "/worktree/refresh" && server.missingDirectory) {
+    server.worktrees.push({ directory: "/repo/other" })
+    return new Response(null, { status: 204 })
+  }
 
   if (path === "/session/active") return json({ data: {} })
 
@@ -172,6 +195,13 @@ function route(method: string, path: string, query: URLSearchParams) {
     return json({ data: fork })
   }
 
+  if (id && rest === "move" && method === "POST") {
+    const destination = (await request.json() as { directory: string }).directory
+    server.sessions.set(id, { ...server.sessions.get(id)!, location: { directory: destination } })
+
+    return new Response(null, { status: 204 })
+  }
+
   if (id && !rest) return json({ data: server.sessions.get(id) }, server.sessions.has(id) ? 200 : 404)
 
   if (id && rest === "message") return json({ data: messages(id), cursor: {} })
@@ -203,5 +233,5 @@ export const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
   if (path === "/event") return stream(init?.signal ?? (input instanceof Request ? input.signal : undefined))
 
-  return route(request.method, path, target.searchParams)
+  return route(request, path, target.searchParams)
 }) as typeof globalThis.fetch

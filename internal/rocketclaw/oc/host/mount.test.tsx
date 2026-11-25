@@ -184,6 +184,25 @@ test("mounting a session renders its timeline from the server's proxy route", as
   expect(calls.reported.at(-1)).toBe("ses_a")
 })
 
+test("the embedded worktree picker moves a session out of a missing folder", async () => {
+  server.missingDirectory = "/repo/gone"
+  server.worktrees = [{ directory: server.missingDirectory }]
+  server.sessions.get("ses_a")!.location = { directory: server.missingDirectory }
+  const view = show()
+  const choose = await until(() => byText(view.root, "button", "Choose worktree"))
+
+  choose.click()
+  const other = await until(() => byText(view.portal, "[role=option]", "/repo/other"))
+  expect(byText(view.portal, "[role=option]", "/repo/gone")).toBeUndefined()
+  expect(byText(view.portal, "[role=option]", "New worktree")).toBeDefined()
+  expect(server.requests).toContain("POST /oc/box/api/worktree/refresh")
+  other.click()
+
+  await until(() => server.sessions.get("ses_a")?.location.directory === "/repo/other")
+  expect(server.requests).toContain("POST /oc/box/api/session/ses_a/move")
+  expect(calls.created).toEqual([])
+}, 10_000)
+
 test("the new timeline keeps sender labels in RocketClaw", async () => {
   const view = show()
   await answered(view)

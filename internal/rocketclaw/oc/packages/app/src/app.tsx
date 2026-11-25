@@ -65,6 +65,7 @@ function BodyTypography() {
   return null
 }
 
+// rocketclaw: no automatic crash reporting in the embedded view (upstream packages/app/src/app.tsx)
 export function AppBaseProviders(
   props: ParentProps<{
     locale?: Locale
