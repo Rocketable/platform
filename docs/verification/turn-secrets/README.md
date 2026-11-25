@@ -45,9 +45,8 @@ stateDiagram-v2
     Requested --> Declined: person declines
     Requested --> Withdrawn: turn ends / moves to background / stopped
     Requested --> Gone: process restarts
-    Held --> Held: command runs with it, output hidden
-    Held --> Held: asked again under same name (value replaced)
-    Held --> Erased: turn ends (finished, stopped, failed)
+    Held --> Held: a command runs with it (output hidden), or it is asked again under the same name (value replaced, old value still hidden)
+    Held --> Erased: native turn and its background jobs end; OpenCode run ends; next Web prompt relayed to the OpenCode session
     Held --> Gone: process restarts
     Refused --> [*]
     Declined --> [*]
