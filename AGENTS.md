@@ -122,7 +122,7 @@ On start, you must always read:
 - If a helper is only called once, inline it by default. Only extract it when it is reused or materially clarifies a dense block.
 - Single-use single-line functions are always violations and must be inlined.
 - New or touched one-line delegating wrappers that only delegate to another function, pass default arguments, rename a call, or preserve an old call shape are violations even when used more than once; call the target directly or give the function a real body that owns behavior.
-- Before running tests, inspect the actual touched diff for every Go standard violation: error variable names (`errCombined`, `errRead`, `errClose`, not `combinedErr`, `readErr`, `closeErr`), single-use helpers to inline, one-line delegating wrappers to delete by inlining, defensive guards to delete, accidental abstraction growth, mutex-hat placement, context misuse, unused context parameters in interface implementations, exported names, changed-line necessity, queue/order semantics for message flow, and source CLOC impact.
+- Before running tests, inspect the actual touched diff for every Go standard violation: single-use helpers to inline, one-line delegating wrappers to delete by inlining, defensive guards to delete, accidental abstraction growth, mutex-hat placement, context misuse, unused context parameters in interface implementations, exported names, changed-line necessity, queue/order semantics for message flow, and source CLOC impact.
 - Before final response, repeat the touched-diff standards pass after formatting/lint/test tools have modified files. Verify the user's original invariants explicitly, verify all required tests including CLOC/coverage budgets, and do not report success while any standard, budget, or semantic invariant remains failing.
 - Before finalizing Go edits, check touched constructors, callback and interface fields, and struct literals of library types against Injected Behavior Dependencies; do not add constructor fallback defaults.
 - When designing Go interfaces, do not add `context.Context` by convention. Include `context.Context` only when the method implementation must observe cancellation/deadlines or pass the context to downstream work. If every current implementation would name the parameter `_ context.Context`, the interface is wrong: remove the context parameter or redesign the API around the operation that actually needs cancellation.
@@ -130,8 +130,7 @@ On start, you must always read:
 - For goroutine coordination, use https://pkg.go.dev/golang.org/x/sync/errgroup and https://pkg.go.dev/github.com/alitto/pond/v2.
 - If you are using multiple mutexes in the same struct, consider whether you are making things overcomplex. Prefer reading once at the start and using the resulting value over time, or consolidating lifetimes under a single mutex hat.
 - Whenever you feel like adding a mutex, question why you need this mutex instead of using another mutex that encapsulates the lifetime of the variables you must work with.
-- In Go, error variables always start with `err`. For example: `errWriter`.
-- Before finalizing Go edits, review every new or renamed error variable in the touched diff and rename nonconforming locals such as `runErr`, `waitErr`, or `parseErr` to `errRun`, `errWait`, or `errParse`.
+- In Go, error variables always start with `err`: `errRun`, `errWait`, `errParse`, not `runErr`, `waitErr`, `parseErr`. Check every one the diff adds or renames.
 - Bias toward strong error types for new error contexts when practical. Prefer typed errors with `Unwrap` over ad hoc string-only `fmt.Errorf` wrappers when callers may benefit from structured operation context.
 - Prefer strong types over `map[string]any`. Use `map[string]any` only at truly dynamic boundaries where the key set is not known at compile time; otherwise define a small struct with explicit fields. In tests, typed request/result structs are still required when the shape is known; keep `map[string]any` confined to the unavoidable protocol/schema boundary and do not let it spread into helper APIs or assertions.
 - Use Go-style enum types for operation/category fields instead of raw strings.
@@ -162,9 +161,7 @@ JOIN shadow_parents p USING (conversation_id);
 
 ## Verification
 
-- Before finalizing Go changes, run `gofmt` on touched files.
-- Before finalizing Go changes, run `make lint`.
-- Before finalizing Go changes, run `make test`.
+- Before finalizing Go changes, run `gofmt` on touched files, then `make test`, which runs `make lint` first.
 - If any required verification cannot be run, stop and report why instead of claiming success.
 
 ## RocketClaw-Specific Requirements
@@ -192,7 +189,7 @@ JOIN shadow_parents p USING (conversation_id);
 - Never move, create, or hide first-party project code under `vendor/`, `third_party/`, generated-code paths, ignored paths, test-only files, or any metric-excluded directory to evade CLOC, coverage, lint, review, or ownership checks.
 - Metric constraints are requirements, not obstacles to route around. If a real implementation exceeds a budget, reduce first-party production code honestly, delete or simplify existing code, or stop and report the budget conflict.
 
-## Four Coding Principles
+## Coding Principles
 
 These behavioral guidelines reduce common LLM coding mistakes. They bias toward caution over speed; for trivial tasks, use judgment.
 
@@ -205,20 +202,7 @@ Do not assume. Do not hide confusion. Surface tradeoffs.
 - If a simpler approach exists, say so. Push back when warranted.
 - If something is unclear, stop, name what is confusing, and ask.
 
-### 2. Simplicity First
-
-Minimum code that solves the problem. Nothing speculative.
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that was not requested.
-- No error handling for impossible scenarios.
-- No defensive guards for impossible states or internal misuse unless the human partner explicitly asked for defensive coding.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-### 3. Surgical Changes
+### 2. Surgical Changes
 
 Touch only what you must. Clean up only your own mess.
 
@@ -230,7 +214,7 @@ Touch only what you must. Clean up only your own mess.
 
 Every changed line should trace directly to the user's request.
 
-### 4. Goal-Driven Execution
+### 3. Goal-Driven Execution
 
 Define success criteria. Loop until verified.
 
@@ -263,7 +247,6 @@ Bug fix = root cause, not symptom: a report names a symptom. Grep every caller o
 
 Rules:
 
-No abstractions that weren't explicitly requested.
 No new dependency if it can be avoided.
 No boilerplate nobody asked for.
 Deletion over addition. Boring over clever. Fewest files possible.
