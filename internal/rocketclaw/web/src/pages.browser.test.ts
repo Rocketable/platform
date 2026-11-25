@@ -210,11 +210,9 @@ test("a PDF page, which Chrome refuses to show in a sandboxed frame, opens in it
   expect(await link.getAttribute("href")).toBe("/pages-raw/Billing/q3/report.pdf");
   expect(await page.locator("iframe").count()).toBe(0);
   const [opened] = await Promise.all([page.waitForEvent("popup"), link.click()]);
-  await opened.waitForLoadState();
+  const isPDFViewer = (frame: { url(): string }) => frame.url().startsWith("chrome-extension://");
+  if (!opened.frames().some(isPDFViewer)) await opened.waitForEvent("framenavigated", { predicate: isPDFViewer, timeout: 5_000 });
   expect(opened.url()).toBe(`${origin}/pages-raw/Billing/q3/report.pdf`);
-  const viewer = () => opened.frames().some((frame: any) => frame.url().startsWith("chrome-extension://"));
-  for (let tries = 0; tries < 50 && !viewer(); tries++) await opened.waitForTimeout(100);
-  expect(viewer()).toBe(true);
 }), 60_000);
 
 for (const width of [1280, 320]) test(`the Page Index lists every space's pages under their space and opens them at ${width}px`, () => withPage(["Billing"], async (page, origin) => {
