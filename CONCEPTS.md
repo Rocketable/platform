@@ -165,7 +165,7 @@ Each command runs in a fresh sandbox with no network. Only the agent's declared 
 
 A small record of one Host Tool or MCP call a Code Mode script made, which Web lists under the script's Execute call and an agent reading the session also sees. When the whole script had a Permission Review, one more record holds only that decision.
 
-It holds the call's name, its clipped arguments, a status, a one-line summary of the output, and the outcome and reason of the call's Permission Review when it had one; it never holds the output. While its Harness Turn runs, each record is saved on its own when the call starts and when it finishes, so the turn's other saves never rewrite it; the finished turn keeps its records. An Execute call keeps a bounded number of records, and none are added after the turn ends.
+It holds the call's name, its clipped arguments, a status, a one-line summary of the output with every Turn Secret value hidden, and the outcome and reason of the call's Permission Review when it had one; it never holds the output. While its Harness Turn runs, each record is saved on its own when the call starts and when it finishes, so the turn's other saves never rewrite it; the finished turn keeps its records. An Execute call keeps a bounded number of records, and none are added after the turn ends.
 
 ### Spill
 
@@ -234,7 +234,7 @@ A Completion Note can wake a subagent after its Task call already returned. When
 
 An Execute script or Task subagent that keeps running after its tool call returned, owned by the conversation (a Subagent Session included) that started it. Only agents whose permissions allow background work can start one, and a human can move running work into one from Web.
 
-A Background Job is identified by the tool call that started it. It is saved as a turn of its owner that does not hold the owner's running-turn slot, and it is listed and woken where its owner reports to, if anywhere. It ends as completed, failed, stopped, or killed, and each ending produces one Completion Note, kept on the job's turn. An oversized result of a background Execute is retained privately for a limited time instead of becoming a Spill, and the Spill paging tool reads it from any turn of the owning conversation. A background Task job waits for its Subagent Session's turn; stopping it stops that turn and the subagent's own jobs.
+A Background Job is identified by the tool call that started it. It is saved as a turn of its owner that does not hold the owner's running-turn slot, and it is listed and woken where its owner reports to, if anywhere. It ends as completed, failed, stopped, or killed, and each ending produces one Completion Note, kept on the job's turn. An oversized result of a background Execute is retained privately for a limited time instead of becoming a Spill, and the Spill paging tool reads it from any turn of the owning conversation. A background Task job waits for its Subagent Session's turn; stopping it stops that turn and the subagent's own jobs. A Background Job keeps the Turn Secrets of the turn that started it alive until it finishes.
 
 A session write's reply is also a Background Job of the writing session, which needs no permission for background work. It waits for the other session's turn that takes the write, and the State Store settles it when that turn ends or a person removes the write. Stopping it leaves the other session alone. A subagent stopped with its Task job or its parent's turn drops its pending replies without notes.
 
@@ -245,6 +245,13 @@ The system message that tells a Background Job's owner how the job ended, consum
 It enters a running turn of the owner at its next step, or wakes the owner with a new turn. A note for a script killed by a restart waits for the owner's next turn instead, unless the owner is a Private Producer Conversation. A turn that fails or stops before saving leaves the notes it read for the owner's next turn without waking it again, unless the owner is a Private Producer Conversation, which may have no next turn: its notes wake it again at growing intervals until a wake saves, and only the first failure reaches its destination, saying the wake retries.
 
 A reply note answers one session write. It goes to the exact session that wrote, a Subagent Session or Private Producer Conversation included, and carries the write's queue item ID, the other session, its agent, the write mode, and how the other session's turn ended, with that turn's final answer framed as another session's answer rather than the user's instructions. A write that only stopped a running turn gets a note once that turn is over; a write a person removed, or a reply someone stopped, gets a note saying so, and a stopped reply's note waits for the owner's next turn without waking it.
+
+### Turn Secret
+
+A credential a person gives a running turn through a password form, under the environment variable name the agent asked for, which the turn's commands can use and the model never sees.
+*Avoid:* agent secret (an Easy Agent's `secretsARN` values, which its file names ahead of time)
+
+Only a turn a person started from the Web can ask, and only that person sees the form and answers; for a Remote OpenCode Session, the person who sent the run's prompt from the Web answers. The value lives only in RocketClaw's memory, never in the State Store, the Step Journal, or the transcript. A native turn gives it to every shell command it runs, but not to its Subagent Sessions, its Permission Reviews, or shell lines in prompts and skills; a Remote OpenCode Session gives it only to commands run through the MCP Bridge, never to the coding server's own shell. Every exact copy of a value the turn held under a name, including one replaced by asking again, reads `[secret:NAME]` in tool output and errors before they are saved or reach the model; encoded or split copies, and copies only in a call's structured details, are not caught. A native turn's secrets are erased once the turn and every Background Job holding it have ended; a Remote OpenCode Session's when its run ends, and each prompt relayed from the Web starts with none. A restart loses them, and a resumed ask reports that the secret is gone.
 
 ### Shadow Agent
 
@@ -349,7 +356,7 @@ It loads as soon as the page has a tab of a Remote OpenCode Session on a configu
 
 ### MCP Bridge
 
-The MCP server RocketClaw serves for each configured OpenCode coding server, through which an agent in a Remote OpenCode Session reads and changes that session's tags and works on the Hosted Pages of the session's Birth Space.
+The MCP server RocketClaw serves for each configured OpenCode coding server, through which an agent in a Remote OpenCode Session reads and changes that session's tags and works on the Hosted Pages of the session's Birth Space. It also lets that agent ask for Turn Secrets and run commands on the coding server that use them; a subagent's child session cannot.
 
 Each tool call acts on the Remote OpenCode Session that made it, or for a subagent's call on the nearest ancestor RocketClaw keeps a copy of, and is refused when there is none. RocketClaw adds the bridge to the coding server itself, one folder at a time: before relaying a person's message from the Web it adds it to that session's folder, so the turn the message starts already has the tools, and each sync adds it to every folder the server has open that lacks it. An addition lasts only until the server restarts or closes that folder, and the next message or sync adds it again.
 
