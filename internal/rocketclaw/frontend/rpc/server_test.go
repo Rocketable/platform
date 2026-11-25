@@ -3992,7 +3992,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 	catalog, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{})
 	require.NoError(t, err)
-	require.Len(t, catalog.Agents, 3, "the unselected catalog is independent of the database")
+	require.Len(t, catalog.Agents, 5, "the unselected catalog is independent of the database")
 }
 
 func TestContinueCronRun(t *testing.T) {
@@ -4194,7 +4194,7 @@ func TestStickySlackAgentsAnswerOnlyInSlackSessions(t *testing.T) {
 
 	current, names := offered("")
 	require.Empty(t, current)
-	require.Equal(t, []string{"main", "voice"}, names, "a new session is not offered a sticky: slack agent")
+	require.Equal(t, []string{"channel", "main", "voice"}, names, "the list without a session names sticky: slack agents, which Slack channel settings pick from")
 
 	_, err = server.createSession(ctx, &CreateSessionRequest{Agent: "channel"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)

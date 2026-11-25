@@ -27,7 +27,7 @@ test("only admins edit the behavior settings, and the view changes only with the
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/Protocol": return Response.json({ protoSha256: "config" });
       case "/api/ListConfig": return Response.json({ config });
-      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }, { name: "helper" }], currentAgent: "main" });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "main", sticky: "global" }, { name: "helper", sticky: "slack" }, { name: "support", sticky: "slack" }], currentAgent: "main" });
       case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       case "/api/TestModel": tested.push(await request.json()); return Response.json({ elapsedMs: "100" });
       case "/api/SaveBehaviorSettings": {
@@ -102,14 +102,17 @@ test("only admins edit the behavior settings, and the view changes only with the
     await page.getByRole("button", { name: "Add channel", exact: true }).click();
     await page.getByRole("textbox", { name: "Channel 2", exact: true }).fill("#ops");
     await pick("Add agent to channel 2", "helper");
-    await pick("Add agent to channel 2", "main");
+    await page.getByRole("combobox", { name: "Add agent to channel 2", exact: true }).click();
+    await page.getByRole("option", { name: "support", exact: true }).waitFor();
+    expect(await page.getByRole("option").allInnerTexts()).toEqual(["support"]);
+    await page.getByRole("option", { name: "support", exact: true }).click();
     await page.getByRole("textbox", { name: "Add user ID to channel 2", exact: true }).fill("U1");
     await page.keyboard.press("Enter");
     await page.getByRole("textbox", { name: "Wake when for channel 1", exact: true }).fill("someone asks how to deploy");
     await page.getByRole("textbox", { name: "Engagement for channel 1", exact: true }).fill("answer briefly");
     await save.click();
     await edit.waitFor();
-    const withChannels = { ...saved, slack: { channels: [{ ...initial.slack.channels[0], wake_when: "someone asks how to deploy", engagement: "answer briefly" }, { channel: "#ops", agents: ["helper", "main"], allowed_user_ids: ["U1"] }] } };
+    const withChannels = { ...saved, slack: { channels: [{ ...initial.slack.channels[0], wake_when: "someone asks how to deploy", engagement: "answer briefly" }, { channel: "#ops", agents: ["helper", "support"], allowed_user_ids: ["U1"] }] } };
     expect(saves.at(-1)).toEqual(withChannels);
 
     await page.route("https://models.dev/api.json", (route: { fulfill(options: object): Promise<void> }) => route.fulfill({ json: {}, headers: { "access-control-allow-origin": "*" } }));

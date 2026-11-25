@@ -2667,7 +2667,7 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
     if (kind === "copy") await copyText(document, popup.current!);
     if (kind === "new") {
       const { agents } = await rpc<AgentChoices>("ListAgents", {}, undefined, name);
-      const agent = offeredAgent(agents, "main");
+      const agent = offeredAgent(agents.filter((item) => item.sticky !== "slack"), "main");
       const { id, resumed } = await rpc<{ id: string; resumed?: boolean }>("CreateSession", { agent, spaceId: space }, undefined, name);
       if (resumed) alertResumed(agent);
       const optimistic: Line = { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), role: "user", text: document, principal };
@@ -5627,8 +5627,7 @@ function SessionComposer({
   // Clearing the send error also dismisses this composer's failed call.
   const setSendError = (value: string) => { draft.error = value; onDraftChange(); if (!value && voice.state === "error") stopVoice(); };
   const currentAgent = id === "" ? "main" : agents.data?.currentAgent ?? "";
-  // A new session offers every agent; the server narrows an existing one to its agent's space.
-  const catalog = agents.data?.agents ?? [];
+  const catalog = (agents.data?.agents ?? []).filter((item) => id !== "" || item.sticky !== "slack");
   // Sends switch to the shown agent, so an unlisted current agent moves to the first listed one.
   const selected = offeredAgent(catalog, agent, currentAgent) ?? currentAgent;
   const skills = useQuery({ ...queries.skills({ agent: selected }), enabled: selected !== "", placeholderData: undefined });

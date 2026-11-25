@@ -1424,9 +1424,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 		}
 	}
 
-	allowed = sameSpace(definitions, response.CurrentAgent, slices.DeleteFunc(allowed, func(name string) bool {
-		return id == "" && definitions.Items[name].Sticky == harness.AgentStickySlack || !limit.AllowsAgent(name)
-	}))
+	allowed = sameSpace(definitions, response.CurrentAgent, slices.DeleteFunc(allowed, func(name string) bool { return !limit.AllowsAgent(name) }))
 	cfg := s.cfg.Clone()
 
 	sticky, err := s.sessions.StickySessions(ctx, username, definitions)

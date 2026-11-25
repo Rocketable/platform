@@ -682,14 +682,14 @@ test("handoff hits and queued items format tags and markup", async () => {
   }
 }, 30_000);
 
-test("handoff's new session starts with main when offered, else the first offered agent", async () => {
+test("handoff's new session starts with main when offered, else the first offered agent that is not sticky: slack", async () => {
   const { chromium: engine } = await import(playwright!);
-  let offered: string[] = [];
+  let offered: { name: string; sticky?: string }[] = [];
   const created: (string | undefined)[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "source", agent: offered[0], name: "Source" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "source", agent: offered[0].name, name: "Source" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = path.join(dist, url.pathname);
       return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
@@ -699,7 +699,7 @@ test("handoff's new session starts with main when offered, else the first offere
       case "/api/Protocol": return Response.json({ protoSha256: "handoff-agent" });
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListConfig": return Response.json({ config: { workspace: "/workspace" } });
-      case "/api/ListAgents": return Response.json({ agents: offered.map((name) => ({ name })), currentAgent: input.conversationId ? offered[0] : "" });
+      case "/api/ListAgents": return Response.json({ agents: offered, currentAgent: input.conversationId ? offered[0].name : "" });
       case "/api/History": return Response.json({ messages: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
       case "/api/Handoff": return Response.json({ document: "doc" });
       case "/api/CreateSession": created.push(input.agent); return Response.json({ id: "created" });
@@ -710,7 +710,7 @@ test("handoff's new session starts with main when offered, else the first offere
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    for (const agents of [["assistant", "main"], ["ops-agent"]]) {
+    for (const agents of [[{ name: "assistant" }, { name: "main" }], [{ name: "channel", sticky: "slack" }, { name: "ops-agent" }]]) {
       offered = agents;
       await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
       await page.locator("textarea").fill("/handoff");
