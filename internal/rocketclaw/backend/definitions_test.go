@@ -764,7 +764,7 @@ func TestRocketCodeReadsAllowedSkillFilesFromConfiguredRuntimeDirectory(t *testi
 			require.NoError(t, err)
 
 			resolver := newModelResolver(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", Auth: "api_key"}}, slog.New(slog.DiscardHandler))
-			runtime, err := harness.NewWithModelResolver(resolver, &harness.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}}, root, agents, skills, "primary")
+			runtime, err := harness.NewWithModelResolver(resolver, &harness.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, TurnSecrets: harness.InertTurnSecrets{}}, root, agents, skills, "primary")
 			require.NoError(t, err)
 
 			action, _ := runtime.Permissions.Evaluate("read", filepath.ToSlash(filepath.Join(skillDir, "asset.txt")))
@@ -791,7 +791,7 @@ func TestRocketCodeInterpolatesPermissionPatternsFromShellEnv(t *testing.T) {
 	require.Equal(t, ".tmp/${ROCKETCLAW_METADATA_FRUIT}/note.txt", agents.Items["primary"].Permission.Buckets[0].Rules[1].Pattern)
 
 	resolver := newModelResolver(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", Auth: "api_key"}}, slog.New(slog.DiscardHandler))
-	runtime, err := harness.NewWithModelResolver(resolver, &harness.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, ShellEnv: map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}}, root, agents, skills, "primary")
+	runtime, err := harness.NewWithModelResolver(resolver, &harness.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, TurnSecrets: harness.InertTurnSecrets{}, ShellEnv: map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}}, root, agents, skills, "primary")
 	require.NoError(t, err)
 
 	action, _ := runtime.Permissions.Evaluate("edit", ".tmp/banana/note.txt")
@@ -903,7 +903,7 @@ func TestNoAgentDelegatesToBuiltinAgents(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	locked := config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", Auth: "api_key"}})
-	runtimeConfig := harness.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, BackgroundJobs: harness.InertBackgroundJobs{}}
+	runtimeConfig := harness.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, BackgroundJobs: harness.InertBackgroundJobs{}, TurnSecrets: harness.InertTurnSecrets{}}
 	runtime := func(agent string) (*harness.Runtime, error) {
 		root, agents, skills, resolver, err := prepareRocketCode(locked, agent)
 		require.NoError(t, err)

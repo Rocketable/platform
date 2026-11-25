@@ -107,7 +107,7 @@ func (s *SessionService) ProposeAgentDraftChanges(ctx context.Context, id, usern
 
 	agents.Items["main"] = active
 
-	runtimeConfig := harness.Config{ShellTempDir: filepath.Join(cfg.Workspace, cfg.RuntimeDirName()), SpillDir: rocketcodeSpillDir(cfg), RetainedResultDir: filepath.Join("retained", "unused"), ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, BackgroundJobs: harness.InertBackgroundJobs{}}
+	runtimeConfig := harness.Config{ShellTempDir: filepath.Join(cfg.Workspace, cfg.RuntimeDirName()), SpillDir: rocketcodeSpillDir(cfg), RetainedResultDir: filepath.Join("retained", "unused"), ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, BackgroundJobs: harness.InertBackgroundJobs{}, TurnSecrets: harness.InertTurnSecrets{}}
 
 	runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main")
 	if err != nil {

@@ -34,7 +34,7 @@ func GenerateOneShot(ctx context.Context, locked *config.LockedConfig, agent, in
 
 	defer func() { err = errors.Join(err, root.RemoveAll(scratch)) }()
 
-	runtimeConfig := harness.Config{ShellTempDir: filepath.Join(cfg.Workspace, scratch), SpillDir: rocketcodeSpillDir(cfg), RetainedResultDir: filepath.Join("retained", "unused"), ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, BackgroundJobs: harness.InertBackgroundJobs{}}
+	runtimeConfig := harness.Config{ShellTempDir: filepath.Join(cfg.Workspace, scratch), SpillDir: rocketcodeSpillDir(cfg), RetainedResultDir: filepath.Join("retained", "unused"), ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, BackgroundJobs: harness.InertBackgroundJobs{}, TurnSecrets: harness.InertTurnSecrets{}}
 
 	runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, agent)
 	if err != nil {

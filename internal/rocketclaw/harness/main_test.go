@@ -688,7 +688,7 @@ func TestAgentsWithoutInvalidReviewers(t *testing.T) {
 }
 
 func testConfig(shellTempDir string) *Config {
-	return &Config{ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, ParallelToolCalls: 0, ShellTempDir: shellTempDir, RetainedResultDir: "retained", Observability: ObservabilityConfig{}, ChildSessions: InertChildSessions{}, Journal: InertJournal{}, BackgroundJobs: InertBackgroundJobs{}, CustomTools: nil, ShellEnv: nil}
+	return &Config{ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, ParallelToolCalls: 0, ShellTempDir: shellTempDir, RetainedResultDir: "retained", Observability: ObservabilityConfig{}, ChildSessions: InertChildSessions{}, Journal: InertJournal{}, BackgroundJobs: InertBackgroundJobs{}, TurnSecrets: InertTurnSecrets{}, CustomTools: nil, ShellEnv: nil}
 }
 
 func testWorkspaceConfig(t *testing.T, workspace string) *Config {

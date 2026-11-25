@@ -50,6 +50,7 @@ type Config struct {
 	ChildSessions             ChildSessions
 	Journal                   Journal
 	BackgroundJobs            BackgroundJobs
+	TurnSecrets               TurnSecrets
 	CustomTools               []Tool
 	ShellEnv                  map[string]string
 	ChildContext              []SessionEntry
@@ -97,6 +98,17 @@ func (InertChildSessions) WriteSubagent(context.Context, *SubagentWrite) (bool, 
 func (InertChildSessions) AwaitSubagent(context.Context, string, string) (string, ReplayAttribution, error) {
 	return "", ReplayAttribution{}, errSubagentsUnavailable
 }
+
+type TurnSecrets interface {
+	Env() []string
+	Redact(text string) string
+}
+
+type InertTurnSecrets struct{}
+
+func (InertTurnSecrets) Env() []string { return nil }
+
+func (InertTurnSecrets) Redact(text string) string { return text }
 
 type ObservabilityConfig struct {
 	Enabled bool
