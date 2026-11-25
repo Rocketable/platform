@@ -1,7 +1,7 @@
 ---
 title: Frontend RPC Browser Tests Fail Without Their Setup, and That Blocks Verification
 date: 2026-10-29
-last_updated: 2026-11-19
+last_updated: 2026-11-25
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/frontend/rpc
 problem_type: developer_experience
@@ -67,7 +67,7 @@ On the session write replies work (PR #765), three workers in a row called these
 
 ## Guidance
 
-- **Do what CI does.** Run `bun install --frozen-lockfile` in `internal/rocketclaw/web` (`.github/workflows/test.yml:120`). Install `playwright-core` and Chromium and export both variables, as the "Install Playwright and Chromium for browser tests" step does (`test.yml:130`–`138`). `go test` also needs `ROCKETCLAW_TEST_DATABASE_URL` (`internal/rocketclaw/backend/harnessbridgetest/database.go:18`–`21`).
+- **Run `make test`** in `internal/rocketclaw` or `internal/rocketclaw/web`: it sets both Playwright variables and starts a database. A focused `go test` needs the same two exports from the top of either Makefile, plus `ROCKETCLAW_TEST_DATABASE_URL`.
 - **Never run `make vendor` or `go generate` alongside another test run in the same workspace.** That means no parallel tool calls, no background jobs, and no worker running one while the coordinator runs the other. `make test` already runs `go generate` and `lint` before its tests.
 - **Treat these failures as blocking.** A `frontend/rpc` failure from missing setup means the browser tests did not run. Fix the setup and rerun before you report the change as verified. Put this rule in worker instructions.
 
@@ -76,7 +76,7 @@ Read the errors this way:
 | Error | Cause | Can still happen when |
 |---|---|---|
 | `Could not resolve "@tanstack/react-query"` (or another web package) in a `bun test` step | No `internal/rocketclaw/web/node_modules` | A fresh workspace runs `go test` before `bun install`, or a focused run without `go generate ./internal/rocketclaw/internal/web` |
-| `Cannot find package 'undefined'` in a `bun test` step | `ROCKETCLAW_PLAYWRIGHT_MODULE` is unset where the tests ran | Tests run without CI's Playwright step |
+| `Cannot find package 'undefined'` in a `bun test` step | `ROCKETCLAW_PLAYWRIGHT_MODULE` is unset where the tests ran | A focused `go test` without those exports |
 | `not marked as explicit in vendor/modules.txt`, or `open ../../../vendor/...: no such file or directory` | `make vendor` rewrote `vendor/` during the test run | Any platform, when those targets overlap another test run in the same workspace. Wait for it to finish and rerun |
 | Chromium `SingletonSocket` path too long, or RPC `listen unix ...: bind: invalid argument` | Temporary socket pathname is too long | `TMPDIR` sits under a long workspace path |
 
