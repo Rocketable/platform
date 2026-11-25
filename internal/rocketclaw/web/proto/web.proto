@@ -512,8 +512,8 @@ message Agent {
   string permissions = 7;
   string origin = 8;
   string custom_shell = 9;
-  // Voices offered by the default openai provider, the default first; empty when unavailable.
-  repeated string voices = 10;
+  reserved 10;
+  reserved "voices";
   // New sessions in another space do not offer this agent; empty offers it in every space.
   string space = 11;
   // user or global for an agent with one Web session per person or one in all; empty when off.
@@ -1131,39 +1131,6 @@ message ReloadRequest { string reason = 1; }
 
 message ReloadResponse { string message = 1; }
 
-message VoiceRequest {
-  string conversation_id = 1;
-  string sdp = 2;
-  // One of the agent's voices; empty uses the provider's default.
-  string voice = 3;
-}
-
-enum VoiceSettingsAction {
-  reserved 1, 2;
-  reserved "START", "RESET";
-  READ = 0;
-  // UPDATE stores the agent, voice and transcript fields that are set; agent must be sticky: user.
-  UPDATE = 3;
-}
-
-message VoiceSettingsRequest {
-  reserved 2;
-  reserved "conversation_id";
-  VoiceSettingsAction action = 1;
-  optional string agent = 3;
-  optional string voice = 4;
-  optional bool transcript = 5;
-}
-
-// VoiceSettingsResponse is the caller's voice settings; a call goes to agent's sticky session.
-message VoiceSettingsResponse {
-  reserved 1;
-  reserved "conversation_id";
-  string agent = 2;
-  string voice = 3;
-  bool transcript = 4;
-}
-
 // A Web space every person shares.
 message Space {
   string id = 1;
@@ -1323,34 +1290,6 @@ message TabsResponse {
   repeated ListTab lists = 12;
 }
 
-// The first event answers the browser's SDP offer; the last ends the call.
-// A notice in between reports a hand-off the agent could not accept; typed
-// says a typed message superseded voice, so the browser mutes the voice
-// model until it answers the person's next speech. reply is a final reply
-// too long to speak, for the browser to show as written. reconnecting is
-// true while a Codex sideband reconnects and false once it is back.
-message VoiceEvent {
-  oneof event {
-    VoiceAnswer answer = 1;
-    VoiceEnded ended = 2;
-    string notice = 3;
-    bool typed = 4;
-    string reply = 5;
-    bool reconnecting = 6;
-  }
-}
-
-// route names the GPT-Live wire dialect: public or codex.
-message VoiceAnswer {
-  string sdp = 1;
-  string route = 2;
-}
-
-// reason is stopped, replaced, expired, safety, closed, lost or error.
-message VoiceEnded {
-  string reason = 1;
-}
-
 service Web {
   rpc UploadAttachment(stream Attachment) returns (Attachment);
   rpc DownloadAttachment(Attachment) returns (stream Attachment);
@@ -1360,8 +1299,6 @@ service Web {
   rpc WatchTyping(WatchTypingRequest) returns (stream TypingEvent);
   rpc WatchListing(WatchListingRequest) returns (stream ListingChanged);
   rpc ReportTyping(ReportTypingRequest) returns (ReportTypingResponse);
-  rpc Voice(VoiceRequest) returns (stream VoiceEvent);
-  rpc VoiceSettings(VoiceSettingsRequest) returns (VoiceSettingsResponse);
   rpc Tabs(TabsRequest) returns (TabsResponse);
   rpc Prompt(PromptRequest) returns (PromptResponse);
   rpc ListCronJobs(ListCronJobsRequest) returns (ListCronJobsResponse);

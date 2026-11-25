@@ -93,7 +93,7 @@ The old guard asked "which keys are dangerous?", and that list could never be co
 ## Prevention
 
 - Never merge a caller-controlled map into a map that also carries trusted keys. Give untrusted input its own field or type, and convert it in one place. If you catch yourself writing `delete(m, someKey)` after copying input into a shared map, the design is wrong.
-- `InboundMessage.Metadata` carries only context RocketClaw's own connectors set. Do not use it to carry outside keys. Today the connectors each set named keys: Web (`internal/rocketclaw/frontend/rpc/server.go`), voice (`internal/rocketclaw/frontend/rpc/voice.go`) and Slack (`internal/rocketclaw/frontend/slack/connector.go`). Only External MCP ever bulk-copied a map from outside. Keep it that way for any new connector, page or API.
+- `InboundMessage.Metadata` carries only context RocketClaw's own connectors set. Do not use it to carry outside keys. Today the connectors each set named keys: Web (`internal/rocketclaw/frontend/rpc/server.go`) and Slack (`internal/rocketclaw/frontend/slack/connector.go`). Only External MCP ever bulk-copied a map from outside. Keep it that way for any new connector, page or API.
 - To find who could abuse a shared map, list its readers, not its writers. Grep for `Metadata[` across the backend and frontends. The internal keys are spread across several packages and not all of them are `protocol` constants.
 - Test the whole map with `Equal`, not `NotContains` for a few chosen keys. The old unit test asserted that three keys were absent, and stayed green while every other key leaked.
 - Prove the exploit end to end before the fix. Seed a forbidden agent with a different prompt and assert the model request carries the allowed agent's prompt.

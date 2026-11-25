@@ -513,7 +513,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     await page.waitForFunction(() => document.querySelector("main textarea") instanceof HTMLTextAreaElement && (document.querySelector("main textarea") as HTMLTextAreaElement).value === "App composer draft edited beside preview");
     expect(await inline.count()).toBe(0);
     expect(github).toHaveLength(reopened);
-    expect(await page.locator("#bottom-navigation").getByRole("button").count()).toBe(6);
+    expect(await page.locator("#bottom-navigation").getByRole("button").count()).toBe(5);
     const filesRead = () => github.filter((pathname) => pathname.endsWith("/pulls/7/files")).length;
     let files = Promise.withResolvers<void>();
     filesHold = files.promise;

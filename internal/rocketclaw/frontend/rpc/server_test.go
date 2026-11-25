@@ -51,7 +51,7 @@ import (
 )
 
 func TestQueueEdit(t *testing.T) {
-	h := startVoiceHarness(t)
+	h := startWebHarness(t)
 	ctx := metadata.NewOutgoingContext(t.Context(), tailnetUser("alice"))
 	_, err := invoke[PromptResponse](ctx, h.conn, "Prompt", &PromptRequest{Id: "primary", MessageId: "waiting", Text: "original", Delivery: PromptDelivery_STASH})
 	require.NoError(t, err)
@@ -1161,7 +1161,7 @@ func TestSessionEntries(t *testing.T) {
 	cfg, err := config.Load(configPath, "", &config.AWSFetcher{})
 	require.NoError(t, err)
 
-	cfg.Workspace, cfg.EmbeddedAgents = t.TempDir(), config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Disabled: true}, Voice: config.EmbeddedAgentConfig{Disabled: true}}
+	cfg.Workspace, cfg.EmbeddedAgents = t.TempDir(), config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Disabled: true}}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -2367,7 +2367,6 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 
 	require.Equal(t, []string{"", "/usr/local/bin/agent-sandbox", "emulated"}, []string{catalog.Agents[0].CustomShell, catalog.Agents[1].CustomShell, catalog.Agents[2].CustomShell})
 	require.Equal(t, []string{"", "Billing", ""}, []string{catalog.Agents[0].GetSpace(), catalog.Agents[1].GetSpace(), catalog.Agents[2].GetSpace()})
-	require.Equal(t, "marin", catalog.Agents[0].Voices[0], "an API-key agent offers the public voices, its default first")
 
 	created, err := invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "planner"})
 	require.NoError(t, err)
@@ -4194,7 +4193,7 @@ func TestStickySlackAgentsAnswerOnlyInSlackSessions(t *testing.T) {
 
 	current, names := offered("")
 	require.Empty(t, current)
-	require.Equal(t, []string{"channel", "main", "voice"}, names, "the list without a session names sticky: slack agents, which Slack channel settings pick from")
+	require.Equal(t, []string{"channel", "main"}, names, "the list without a session names sticky: slack agents, which Slack channel settings pick from")
 
 	_, err = server.createSession(ctx, &CreateSessionRequest{Agent: "channel"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
@@ -4249,7 +4248,7 @@ func TestListAgentsShowsPermissionsAndOrigin(t *testing.T) {
 		origins[agent.Name], permissions[agent.Name] = agent.Origin, agent.Permissions
 	}
 
-	require.Equal(t, map[string]string{"careful": "workspace", "root": cfg.Overlays[0], "plain": "", "main": "built-in", "voice": "built-in"}, origins)
+	require.Equal(t, map[string]string{"careful": "workspace", "root": cfg.Overlays[0], "plain": "", "main": "built-in"}, origins)
 	require.Contains(t, permissions["careful"], "## Bash Permissions\n\nRules are listed in order. The last matching rule wins.\n\n- Deny `*`.\n- Require automatic approval by `plain` for `git *`.\n\n## Webfetch Permissions")
 	require.Contains(t, permissions["root"], "## Sudo Mode")
 }

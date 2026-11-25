@@ -1408,10 +1408,8 @@ func TestSessionsWriteRefusesBuiltinAgentChats(t *testing.T) {
 	agents, err := LoadRuntimeAgents(config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir)
 	require.NoError(t, err)
 
-	for _, target := range []string{"main", "voice"} {
-		for _, sender := range []string{"helper", "main", "voice"} {
-			require.EqualError(t, checkRecipient(agents, target, sender), fmt.Sprintf("agent %q is built into RocketClaw and accepts no writes from agents", target))
-		}
+	for _, sender := range []string{"helper", "main"} {
+		require.EqualError(t, checkRecipient(agents, "main", sender), `agent "main" is built into RocketClaw and accepts no writes from agents`)
 	}
 }
 

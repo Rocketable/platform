@@ -31,11 +31,9 @@ export type AttentionAction = "MARK_READ" | "MARK_UNREAD" | "PARK" | "PARK_UNTIL
 export type SessionBatch = { sessions?: Session[]; owner?: string; upstreamSuccess?: boolean; opencodeServers?: Remote["servers"]; agentTags?: Record<string, { tags?: string[] }>; version?: string; since?: string; removed?: string[]; tabs?: TabAttention[]; tabRevision?: string; navigate?: string };
 export type AgentChoices = { agents: Agent[]; currentAgent: string };
 export type CronJob = { stem: string; status: string; lastRun: string; nextRun: string; schedule?: string; body?: string; agent?: string; upcoming?: string[]; origin?: string; space?: string };
-// VoiceSettings is the signed-in person's voice state, kept by the server; a call goes to agent's sticky session.
-export type VoiceSettings = { agent: string; voice: string; transcript: boolean };
 // sticky is "user" or "global" for an agent with one session per person or one in all; stickySession is the one a
 // new session resumes.
-export type Agent = { name: string; model?: string; reasoning?: string; description?: string; verbosity?: string; prompt?: string; permissions?: string; origin?: string; customShell?: string; voices?: string[]; space?: string; rocketclaw?: string; sticky?: string; stickySession?: string };
+export type Agent = { name: string; model?: string; reasoning?: string; description?: string; verbosity?: string; prompt?: string; permissions?: string; origin?: string; customShell?: string; space?: string; rocketclaw?: string; sticky?: string; stickySession?: string };
 export type Skill = { name: string; description?: string; license?: string; compatibility?: string; content?: string; origin?: string };
 export type PageEntry = { space: string; path: string; updatedAt?: string };
 export type ConfigView = { workspace?: string; overlays?: string[]; slackChannels?: { channel?: string; agents?: string[] }[]; mcpServerFacets?: { server?: string; facets?: string[] }[]; loggingLevel?: string; autoApproverModel?: string; instrumentationEnabled?: boolean; mcpExternal?: boolean; tailscaleUser?: string; providers?: string[]; decisionProviders?: string[]; behaviorJson?: string; canEdit?: boolean };
@@ -57,10 +55,6 @@ export type AgentDraftPresence = { client: string; username?: string; variant: s
 export type AgentDraftProposal = { id: string; baseRevision: string; state: "open" | "accepted" | "rejected"; message: string; settings: { variant: string; key: string; valueYaml: string; reason: string }[]; bodies: { variant: string; body: string; reason: string }[] };
 export type AgentDraftView = { draft: AgentDraft; ops: AgentDraftOp[]; presence: AgentDraftPresence[]; proposals: AgentDraftProposal[]; messages?: AgentDraftMessage[] };
 export type SlackNamesResponse = { names?: Record<string, string> };
-// The first Voice frame carries the answer SDP and its wire dialect; notices may follow; a call ends with at most one ended frame.
-export type VoiceRoute = "public" | "codex";
-export type VoiceEndReason = "stopped" | "replaced" | "expired" | "safety" | "closed" | "lost" | "error";
-export type VoiceEvent = { answer?: { sdp: string; route: VoiceRoute }; notice?: string; typed?: boolean; reply?: string; reconnecting?: boolean; ended?: { reason: VoiceEndReason } };
 // SearchPage is a Search tab's name and its searches, active naming the shown one by id.
 export type SearchPage = { name?: string; searches: { id: string; name?: string; query: string }[]; active: string };
 // SavedTabs is every Web space and the signed-in person's saved tabs; last names the last tab of each space by space id,

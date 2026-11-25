@@ -60,7 +60,7 @@ Every span RocketClaw sends carries the OpenTelemetry GenAI attributes next to t
 Two more attributes decide what PostHog shows for a trace:
 
 - **Person.** PostHog takes a trace's person from `user.id` or `posthog.distinct_id` on its spans. Without either, it makes up a UUID. `Bridge.runTurn` sets `user.id` through `instrumentation.WithUser`. It uses the turn's `rocketclaw_principal_email` metadata, or else its `rocketclaw_principal` (`internal/rocketclaw/backend/bridge.go:1849`). `ApplyContextAttributes` copies `user.id` onto every span of the turn, as it does `session.id`. Who that is depends on where the turn came from:
-  - **Web and voice:** the Web username (`internal/rocketclaw/frontend/rpc/server.go:1635`, `internal/rocketclaw/frontend/rpc/voice.go:437`). The browser sends the same username to `posthog.identify` (`internal/rocketclaw/web/src/posthog.ts:23`), so a trace joins that person's page views and replays.
+  - **Web:** the Web username (`internal/rocketclaw/frontend/rpc/server.go:1635`). The browser sends the same username to `posthog.identify` (`internal/rocketclaw/web/src/posthog.ts:23`), so a trace joins that person's page views and replays.
   - **Slack:** the sender's email set by the connector (`internal/rocketclaw/frontend/slack/connector.go:1117`).
   - **External MCP:** the MCP principal, because caller metadata goes to a separate field and never sets the email key (`cmd/rocketclaw/mcp.go:193-199`).
   - **Cron:** no principal at all (`cmd/rocketclaw/cron.go:35`), so cron traces still get a random person.

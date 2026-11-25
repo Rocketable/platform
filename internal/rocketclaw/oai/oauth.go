@@ -453,7 +453,7 @@ func (e *codexStreamError) Error() string {
 }
 
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	token, err := FreshTokenIn(req.Context(), t.workspace, t.runtimeDir, t.provider, Token{})
+	token, err := freshTokenIn(req.Context(), t.workspace, t.runtimeDir, t.provider, Token{})
 	if err != nil {
 		return nil, err
 	}
@@ -524,7 +524,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 
-		token, err = FreshTokenIn(req.Context(), t.workspace, t.runtimeDir, t.provider, token)
+		token, err = freshTokenIn(req.Context(), t.workspace, t.runtimeDir, t.provider, token)
 		if err != nil {
 			if retryBody != nil {
 				_ = retryBody.Close()
@@ -641,7 +641,7 @@ func (e *MissingTokenError) Unwrap() error {
 	return os.ErrNotExist
 }
 
-func FreshTokenIn(ctx context.Context, workspace, runtimeDir, provider string, rejected Token) (Token, error) {
+func freshTokenIn(ctx context.Context, workspace, runtimeDir, provider string, rejected Token) (Token, error) {
 	var selected Token
 
 	_, err := updateAuthFileIn(workspace, runtimeDir, false, func(file *authFile) (bool, error) {

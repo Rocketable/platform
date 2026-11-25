@@ -117,19 +117,12 @@ test("only admins edit the behavior settings, and the view changes only with the
 
     await page.route("https://models.dev/api.json", (route: { fulfill(options: object): Promise<void> }) => route.fulfill({ json: {}, headers: { "access-control-allow-origin": "*" } }));
     await edit.click();
-    const builtIn = (name: string) => page.getByRole("group", { name: `${name} agent`, exact: true });
-    const voiceModel = builtIn("voice").getByRole("combobox", { name: "voice model", exact: true });
-    expect(await builtIn("main").getByRole("combobox", { name: "main model", exact: true }).inputValue()).toBe("opus");
-    expect(await voiceModel.inputValue()).toBe("");
-    expect(await builtIn("voice").getByRole("switch", { name: "voice", exact: true }).isChecked()).toBe(true);
-    await builtIn("main").getByRole("switch", { name: "main", exact: true }).click();
-    await voiceModel.fill("gpt-realtime");
-    await builtIn("voice").getByRole("button", { name: "Test", exact: true }).click();
-    await builtIn("voice").getByRole("status").getByText(/^Works\./).waitFor();
-    expect({ tested, saves: saves.length, editing: await save.isVisible() }).toEqual({ tested: [{ model: "gpt-realtime" }], saves: 3, editing: true });
+    const builtIn = page.getByRole("group", { name: "main agent", exact: true });
+    expect(await builtIn.getByRole("combobox", { name: "main model", exact: true }).inputValue()).toBe("opus");
+    await builtIn.getByRole("switch", { name: "main", exact: true }).click();
     await save.click();
     await edit.waitFor();
-    const withAgents = { ...withChannels, embedded_agents: { main: { model: "anthropic/opus#high", disabled: true }, voice: { model: "gpt-realtime" } } };
+    const withAgents = { ...withChannels, embedded_agents: { main: { model: "anthropic/opus#high", disabled: true } } };
     expect(saves.at(-1)).toEqual(withAgents);
 
     await edit.click();

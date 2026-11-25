@@ -210,7 +210,7 @@ After the commit the row is claimed, so no `pickLaterWork` can hand the held req
 
 ## What the model leaves out
 
-- Undo (`revert_message_id`, `historyMutation`), Fork and its resume line, Voice Hand-offs, `$goal`, `$workflow`,
+- Undo (`revert_message_id`, `historyMutation`), Fork and its resume line, `$goal`, `$workflow`,
   `$stop`, `$agent`, promoting or popping a queued item, the sidebar and `pausable`, attention marks, Shadow
   Sessions, hidden runs and producer hand-off. Their pause checks are early refusals or unchanged paths.
 - The sticky-cron auto-resume (`resumeScheduledSessions`) is not a separate actor: it calls the same

@@ -19,7 +19,7 @@ import (
 
 const maxIDBytes = 1024
 
-const webUnaryMethods, editorMethods = "Protocol Identity Reload Prompt History ForkSession StageRevert DeleteBranch MessageTree SummarizeBranch SearchMessages SearchSessions SlackNames Handoff ListAgents CreateSession ListConfig SaveBehaviorSettings ListSkills UpdateSession ListCronJobs RunCronJob ListSessionEntries LoadSessionEntries DeleteSessionEntries DeleteSession ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs GetPage ListPages ReportTyping FindPullRequests", "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat DraftLayers SaveDraft StopWaiting ProposeDraftChanges DecideProposal"
+const webUnaryMethods, editorMethods = "Protocol Identity Reload Prompt History ForkSession StageRevert DeleteBranch MessageTree SummarizeBranch SearchMessages SearchSessions SlackNames Handoff ListAgents CreateSession ListConfig SaveBehaviorSettings ListSkills UpdateSession ListCronJobs RunCronJob ListSessionEntries LoadSessionEntries DeleteSessionEntries DeleteSession ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion Tabs GetPage ListPages ReportTyping FindPullRequests", "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat DraftLayers SaveDraft StopWaiting ProposeDraftChanges DecideProposal"
 
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
@@ -61,7 +61,7 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 		return withoutDatabaseText("UploadAttachment", s.uploadAttachment(stream))
 	}}, {StreamName: "DownloadAttachment", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
 		return withoutDatabaseText("DownloadAttachment", s.downloadAttachment(stream))
-	}}, serverStream("Join", s.join), serverStream("WatchTyping", s.watchTyping), serverStream("WatchListing", s.watchListing), serverStream("Voice", s.voice), serverStream("ListSessions", s.listSessions)}
+	}}, serverStream("Join", s.join), serverStream("WatchTyping", s.watchTyping), serverStream("WatchListing", s.watchListing), serverStream("ListSessions", s.listSessions)}
 	registrar.RegisterService(&desc, s)
 }
 
@@ -164,8 +164,6 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 		return s.identity(ctx)
 	case "CreateSession":
 		return s.createSession(ctx, request.(*CreateSessionRequest))
-	case "VoiceSettings":
-		return s.voiceSettings(ctx, request.(*VoiceSettingsRequest))
 	case "History":
 		return s.historyRPC(ctx, request.(*HistoryRequest))
 	case "ForkSession":

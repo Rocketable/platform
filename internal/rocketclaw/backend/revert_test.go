@@ -1140,7 +1140,7 @@ func TestRevertLegacyQueuePromotionAndEnqueue(t *testing.T) {
 	require.Contains(t, <-requests, "new queue request")
 }
 
-func TestRevertStashKeepsVoiceInbound(t *testing.T) {
+func TestRevertStashKeepsWebInbound(t *testing.T) {
 	t.Parallel()
 
 	newBridge, s, requests, finals := newResumeTestBridges(t, false)
@@ -1160,20 +1160,19 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 	manager := newThreadBridgeManager(crashed.runtime, s, crashed.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return crashed }})
 	manager.bridges["main"] = crashed
 	rt := &Runtime{Sessions: s, threads: manager, Cfg: crashed.runtime}
-	voice := func(id, text string) protocol.ThreadQueueItem {
+	web := func(id, text string) protocol.ThreadQueueItem {
 		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: text}, true)
 		inbound.ConversationID, inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = "main", id, "alice"
-		inbound.Metadata[protocol.InboundMediaMetadataKey] = "Voice"
 
 		return protocol.ThreadQueueItem{ID: id, Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindSteer, Message: text, Inbound: inbound}
 	}
 
 	for range 2 {
-		item := voice("stored", "deploy it")
+		item := web("stored", "deploy it")
 		require.NoError(t, rt.StashQueueItem(t.Context(), "main", &item))
 	}
 
-	require.Len(t, crashed.requestCh, 1, "a re-delivered hand-off is admitted once")
+	require.Len(t, crashed.requestCh, 1, "a re-delivered item is admitted once")
 
 	restarted := newBridge()
 	restarted.config.ConversationID = "main"
@@ -1181,16 +1180,14 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 	runTestBridge(t, restarted)
 	require.NoError(t, restarted.PickLaterWork(t.Context()))
 
-	header := `[Web media=Voice principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n`
-	require.Contains(t, <-requests, header+"deploy it", "the stored voice item keeps its header across the restart")
+	header := `[Web principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n`
+	require.Contains(t, <-requests, header+"deploy it", "the stored item keeps its header across the restart")
 	require.Equal(t, "answer", readFinal(t, finals).Text)
 
-	item := voice("skill", "/docs-helper do it")
+	item := web("skill", "/docs-helper do it")
 	require.NoError(t, rt.StashQueueItem(t.Context(), "main", &item))
 
-	request := <-requests
-	require.Contains(t, request, header+"/docs-helper do it")
-	require.NotContains(t, request, "Use this skill for docs.", "spoken /skill text loads no skill")
+	require.Contains(t, <-requests, "Use this skill for docs.", "a stored /skill item loads its skill")
 	require.Equal(t, "answer", readFinal(t, finals).Text)
 }
 

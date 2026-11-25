@@ -115,7 +115,7 @@ Keep the routine's schedule conservative. If the human did not specify a cadence
 
 # Monitoring Agent Creation
 
-If the monitor routine needs an agent that does not exist or lacks necessary permissions, create or update one under `agents/`. `main`, `voice`, and `sticky: user` or `sticky: slack` agents cannot have routines, so they cannot be the monitoring agent.
+If the monitor routine needs an agent that does not exist or lacks necessary permissions, create or update one under `agents/`. `main` and `sticky: user` or `sticky: slack` agents cannot have routines, so they cannot be the monitoring agent.
 
 Use the `main-create-or-update-agent` skill for all other `agents/` edits.
 

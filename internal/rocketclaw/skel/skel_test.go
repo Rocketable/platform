@@ -690,7 +690,7 @@ func TestSyncIgnoresBuiltinAgentFiles(t *testing.T) {
 	for _, dir := range []string{repo, workspace} {
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, agentsRoot, "main"), 0o755))
 
-		for _, name := range []string{"main.md", "voice.md", "main/alt.md", "bot.md"} {
+		for _, name := range []string{"main.md", "main/alt.md", "bot.md"} {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, agentsRoot, name), []byte(dir), 0o644))
 		}
 	}
@@ -712,7 +712,7 @@ func TestSyncIgnoresBuiltinAgentFiles(t *testing.T) {
 	assert.Equal(t, []string{"bot.md", "examples"}, names)
 
 	for _, source := range []string{OverlayInfos(filepath.Join(workspace, targetRoot), []string{repo})[0].ClonePath, workspace} {
-		for _, name := range []string{"main.md", "voice.md", "main"} {
+		for _, name := range []string{"main.md", "main"} {
 			assert.Contains(t, logs.String(), `level=WARN msg="ignored file named after a built-in agent" path=`+filepath.Join(source, agentsRoot, name)+"\n")
 		}
 	}

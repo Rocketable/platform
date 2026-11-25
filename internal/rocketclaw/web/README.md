@@ -36,8 +36,8 @@ Chat messages default to **Markdown** output instead: GitHub-flavored Markdown w
 nested lists, task lists, and rules, with single line breaks kept. Code blocks,
 links, and Slack tags look as in Raw; raw HTML stays literal. The command
 palette's **Output: Raw** and **Output: Markdown** switch between them, and this
-browser remembers the choice across reloads and tabs. Search results, previews,
-and voice transcripts always use Raw.
+browser remembers the choice across reloads and tabs. Search results and
+previews always use Raw.
 
 GitHub pull-request links have an explicit **Preview** action beside the ordinary
 external link, in Raw and Markdown. Preview starts as a modal sheet on the right; its
@@ -207,12 +207,12 @@ every editor call too.
 
 The Agents page has **Create New Agent** and, on each agent, **Edit**, which
 reopens the newest draft of that agent still in editing, or else starts one as a
-copy. People limited to spaces do not see either button. The built-in agents,
-`main` and `voice`, have no **Edit**; their rows say "Built in. Turn it on or off
-and choose its model in Config → Behavior settings." instead.
+copy. People limited to spaces do not see either button. The built-in agent,
+`main`, has no **Edit**; its row says "Built in. Turn it on or off and choose
+its model in Config → Behavior settings." instead.
 
-Each agent's summary line ends with its origin: `built-in` for `main` and
-`voice`, the overlay's spec from `overlays`, or `workspace`, the highest layer
+Each agent's summary line ends with its origin: `built-in` for `main`, the
+overlay's spec from `overlays`, or `workspace`, the highest layer
 that holds its file. A file identical to the one in the layer below counts as
 that lower layer, so an unchanged copy of an overlay's agent in workspace
 `agents/` reads as that overlay.
@@ -232,10 +232,10 @@ first, then how to start: **Describe it** (name the agent, then describe it to t
 assistant), **Template** (a starter agent, which brings its own settings,
 instructions and mode), **Copy an agent** (a new agent, named after the original
 with `-copy` unless you name it, leaving the original as it is), or **Blank**. The
-copy list also offers **Edit** on each agent. Built-in agents show the same
+copy list also offers **Edit** on each agent. The built-in agent shows the same
 Behavior settings note there instead of Copy and Edit. A draft cannot be named,
-renamed or saved as `main` or `voice`; a draft already stored under one of those
-names can only be renamed, and its test chat and assistant are refused until then.
+renamed or saved as `main`; a draft already stored under that name can only be
+renamed, and its test chat and assistant are refused until then.
 
 **Form, File and History.** The settings pane edits one variant at a time. The
 Form shows required, common and changed settings with a plain explanation each,
@@ -357,79 +357,7 @@ for startup commands, browser identity and the transport contract. The Go
 handler takes identity from the browser connection; forwarded headers cannot
 select a user. Serve it directly to browsers rather than through another HTTP
 reverse proxy. Phones reach it over HTTPS through RocketClaw's own Tailscale node;
-see [Voice](#voice).
-
-## Voice
-
-The **Voice** page (`/voice`, also in the bottom navigation and the command
-palette) calls the signed-in person's own session of a `sticky: user` agent, the only
-agents it offers. It selects the person's saved choice, else the built-in `voice`,
-else the first agent offered. With none to offer, for example while `voice` is
-turned off, it shows "No voice agent is available. The built-in voice agent may be
-turned off; an admin can turn it on in Config → Behavior settings." RocketClaw keeps the person's agent, voice and transcript choice on the
-server: the same on every device and through restarts, and never shared with another
-person, even in one browser. Pick an agent and tap the orb to talk; tap it again to hang up. While a call is
-active the orb slowly ebbs and flows, its inner light swirls around a glowing heart,
-and two orbit rings spin around it; it swells and brightens with the voice model's
-speech, measured in the browser from the incoming audio. With reduced motion it stays still. The first
-tap creates the agent's sticky session and later taps, on any device, reuse it; each tap
-asks the server for it first. Picking another agent while idle saves it and moves to that
-agent's own sticky session; no conversation switches agent. A voice picker next to the agent picker lists the voices the
-default `openai` provider offers (ChatGPT-login and API-key providers offer different ones).
-Each person has one voice: a call uses it when the default `openai` provider offers it, and
-that provider's default otherwise, and the composer's voice button follows it too. Icon buttons on the right show the transcript and
-open the conversation, once the agent has one. The row stays on one line: on phones the agent picker drops
-its robot icon, and a long agent name is shortened. The page shows the call state, elapsed time and notices
-under the orb. **Show transcript** swaps the big orb for live captions (not saved)
-shown as a chat, with a small orb at the bottom that still starts and ends the call;
-the choice is kept with the person's voice settings. Leaving the page hangs up, and cancels a start
-still in progress; a session it already created stays.
-The screen stays awake while the Voice page is open or a call runs.
-
-Each session's composer has a voice button, on every screen size, that starts and
-ends a call on that session. It is not dictation: nothing is typed into the composer.
-On New session it first creates the session with the shown agent, as the first send
-does, then calls on it. Leaving the session ends its call.
-
-New session opens a sticky agent's existing session instead of starting one (see the
-[root README](../../../README.md#sticky-agents)), with an alert saying so: at once when
-the agent is picked and the catalog knows its session, else when the first message, or
-the voice button's call, goes there. A sticky session's picker offers only its agent,
-and other sessions' pickers offer no sticky agent.
-
-A tab runs one call at a time, and each person has one live call: starting voice
-anywhere else, on any conversation, ends their older call with "Voice moved to another
-device or tab." Other people's calls, even on the same conversation, keep running.
-A message the caller types mutes the voice until it answers new speech; other
-people's messages in the chat leave the call alone.
-A call also ends when the page closes or stays hidden for 30 seconds. There are no
-idle or no-speech timers. A hand-off the agent could not accept shows a notice, and
-the call continues.
-
-Every call keeps going through dead zones. A call that loses its connection (the
-audio connection fails, the page loses RocketClaw, RocketClaw loses OpenAI, or the
-audio is not up 20 seconds after OpenAI answers) starts a new call on the same
-conversation and microphone instead of ending. The first try comes 1 second
-later, and each failed try doubles the wait, up to 10 seconds, until it comes
-back, is hung up, or gives up; the status reads "Reconnecting…" meanwhile. A falling two-note
-tone marks the loss, a short tick plays every 5 seconds while reconnecting, and a
-rising two-note tone marks the call coming back. Each new call is a fresh OpenAI
-call that starts from the conversation's recent messages, so talk never handed off
-to the agent is not carried over. A try that fails 15 minutes or more after the
-loss, with the call not back since, gives up: the call ends with "Call ended:
-could not reconnect for 15 minutes.", so a call forgotten during an outage stops.
-A call that comes back counts the 15 minutes again from its next loss. Other
-failures, such as another device taking the call, OpenAI ending it, or a refused
-credential, end the call with a message and are not retried.
-
-The agent's final reply to a hand-off is spoken once, as written. A reply over
-about 990 tokens is not spoken: the voice says it is on the screen, and the Voice
-page turns its transcript on and shows the reply there, formatted as in the
-conversation. Questions are announced and
-answered in the app, never by voice. Voice needs microphone permission and a
-secure page: HTTPS, or `http://127.0.0.1` on the RocketClaw machine. See the
-[root README](../../../README.md#voice) for phone setup with `web.tsnet`,
-credentials, cost, and what OpenAI receives.
+see the [root README](../../../README.md#tailnet-setup).
 
 ## Local checks
 
@@ -474,7 +402,7 @@ get a **Behavior settings** section on the Config page. **Edit** shows one contr
 (see the [root README](../../../README.md#getting-started) for which fields they
 are); **Save** replaces the whole document and applies it to the running server,
 or shows the validation error and changes nothing. Its **Built-in agents** group
-has, for `main` and `voice`, an on/off switch and a model picker, empty for the
+has, for `main`, an on/off switch and a model picker, empty for the
 model the release ships. Its **Slack** group starts with the ambient decision model, picked
 the same way as the title decision model below (empty turns ambient listening off), above the
 channels. Its **Session titles** group has the title model picker and
@@ -506,7 +434,7 @@ script tag in `index.html`. A remote's views live under `/r/<name>/`, followed b
 that server's own path, so `/r/work/s/<id>` is chat `<id>` on `work`.
 `navigation.tsx` owns the rule: `usePathname` returns the path without the
 prefix, and `navigate` and `Link` keep the page's server unless told another.
-Under a remote, every RPC, the session stream, uploads, downloads, Voice, hosted
+Under a remote, every RPC, the session stream, uploads, downloads, hosted
 page frames and the OpenCode view use that remote's origin, and the remote
 signs the browser in itself. A remote serves only requests from other sites that
 name the trusted page in `Origin` (or navigate to it), so every call to a remote
@@ -542,7 +470,7 @@ offline, and one on another protocol keeps working with a notice.
 ## Tabs
 
 Tabs follow editor semantics.
-Sessions and pages (New session, Search, Voice, Routines, Agents, Skills, Settings) open in
+Sessions and pages (New session, Search, Routines, Agents, Skills, Settings) open in
 one strip, and a location never appears in two tabs. The URL always names the
 active tab. Tabs saved at `/cron` or `/cron/<name>`, from before the page was
 called Routines, were moved once to `/routines` and `/routines/<name>` by a
@@ -919,7 +847,7 @@ database migration.
   run ends, once nothing is left to wake it, and the Routines page of the routine's
   space is marked too; for
   a published page, an HTML file of it is stored, and the space's Pages list is
-  marked too. Agents, Skills, Settings, Shortcuts, Voice, and Recently closed
+  marked too. Agents, Skills, Settings, Shortcuts, and Recently closed
   are marked only by you. A session's turn or question reaches you, with a
   notification, when you sent or steered that turn from the Web, when the
   session is in your own tabs in any space, or when it is Shared in a space you
@@ -999,7 +927,7 @@ Touch devices and narrow screens use 48px navigation targets and 8px gaps;
 desktop uses 32px targets and 4px gaps. Screens narrower than 22rem keep 48px
 targets but tighten gaps and side padding to 4px. Icons are 24px in all layouts.
 The sidebar toggle sits at the bar's left end and the right pane toggle at its right end;
-between them, centered, are New session, Search sessions and commands, Voice, and
+between them, centered, are New session, Search sessions and commands, and
 Next session needing you (the inbox button).
 When remote RocketClaws or OpenCode servers are configured, New session opens a
 menu of where to start one, with the page's own server highlighted so Enter starts
@@ -1164,7 +1092,7 @@ may be incomplete; the Search page says so instead of reporting “No matches”
 hit from a stopped or failed turn opens its chat without jumping to a message. A
 failed search shows an error with Retry, and the next keystroke also retries.
 Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
-**Sessions: New**, **Sessions: Search**, **Voice**, **Routines: Dashboard**, **Routines: Run**,
+**Sessions: New**, **Sessions: Search**, **Routines: Dashboard**, **Routines: Run**,
 **List Agents**, **List Skills**, **Settings**, **Tabs: Previous**, **Tabs: Next**,
 **Tabs: Recently closed**, and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
 works (the desktop sidebar, not the narrow-screen drawer), and **Tabs: Reopen closed tab** while a tab is closed. In both palettes a command bound to a
@@ -1246,7 +1174,7 @@ Phones and tablets use a separate bottom action bar with 44px touch targets:
 **Send** when idle, **Queue** and **Steer** with a draft while working, or **Stop**
 with an empty draft. Return adds a newline, even with command suggestions open;
 Cmd/Ctrl+Return on a touch device performs the primary action. A narrow desktop
-window keeps desktop behavior. Voice remains available beside the composer actions.
+window keeps desktop behavior.
 After sending, focus returns to the composer so the next message can be typed.
 Steers wait in **Waiting to steer**, separate from both chat and the later-work
 queue. A persisted input in a History delta moves that input into chat at the point
@@ -1263,7 +1191,7 @@ turn is not stopped, but nothing more steers into it. While paused, Send becomes
 no turn, and the agent later reads it as people talking to each other, not as a
 request. A pending question is answered only from its card. Queued work, including
 stashed rows you pop, waits for the agent to be resumed: a queued row's Send or
-Steer is disabled, with the tooltip **Runs after the agent is resumed**. Starting a `/goal` or a voice request to the agent is refused,
+Steer is disabled, with the tooltip **Runs after the agent is resumed**. Starting a `/goal` is refused,
 and an active goal stops continuing. Other requests no person sent, such as
 another agent's message or a one-off scheduled message, are refused; a repeating
 scheduled message waits. Press the button again, or **Resume agent** in the
@@ -1330,6 +1258,11 @@ chats or pages; **New session** resets the Home draft. Reloading restores persis
 composer content after Identity and config are accepted. Sending is locked through upload and dispatch, preventing repeated
 clicks or Enter presses from submitting the same pending files twice. The composer
 then accepts another input while the original Prompt waits for its turn to finish.
+New session opens a sticky agent's existing session instead of starting one (see the
+[root README](../../../README.md#sticky-agents)), with an alert saying so: at once when
+the agent is picked and the catalog knows its session, else when the first message
+goes there. A sticky session's picker offers only its agent, and other sessions'
+pickers offer no sticky agent.
 If New-session Send resumes a sticky session, its old draft and files are stashed
 first, without running them. A failed stash leaves both drafts intact; a failed
 new send stays in the resumed session's message box with its files and error.
@@ -1645,12 +1578,6 @@ reports show no error.
   including External MCP agent refresh. It starts no agent turn, does not restart
   the process, and does not reread configuration. A refresh failure is reported
   after the assets have been replaced; it does not roll them back.
-- `POST /api/Voice` takes `{"conversationId":"<visible-id>","sdp":"<offer>","voice":"<name>"}`
-  (`voice` optional, one of the agent's `voices` from `ListAgents`) and
-  answers with SSE: `{"answer":{"sdp","route"}}`, any `{"notice":"…"}` frames, then
-  one `{"ended":{"reason"}}`.
-  Errors before the answer are JSON errors. The call lasts as long as the request;
-  aborting it hangs up. See the [transport README](../frontend/rpc/README.md#voice).
 
 All JSON RPCs use PascalCase method names, camelCase protobuf fields, and
 protobuf response envelopes. History includes `messages`, `revision`, `reset`,

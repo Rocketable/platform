@@ -362,7 +362,7 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 }
 
 func TestPromptAutoParks(t *testing.T) {
-	h := startVoiceHarness(t)
+	h := startWebHarness(t)
 	alice := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	attention := func() backend.Attention {
 		t.Helper()
@@ -391,7 +391,7 @@ func TestPromptAutoParks(t *testing.T) {
 	parked := attention()
 	require.True(t, parked.Parked && parked.UntilDone, "parked until it is done while the turn runs: %+v", parked)
 
-	h.replies <- voiceModelText(rand.Text(), "Done.")
+	h.replies <- modelReplyText(rand.Text(), "Done.")
 
 	require.NoError(t, turn.Wait())
 

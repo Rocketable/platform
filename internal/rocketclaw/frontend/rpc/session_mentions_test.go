@@ -17,7 +17,7 @@ import (
 )
 
 func TestNativeSessionMentionAttemptsDeliveryWhenQueuedButNotStashed(t *testing.T) {
-	h := startVoiceHarness(t)
+	h := startWebHarness(t)
 	cfg := h.rt.Cfg.Clone()
 	cfg.Web.Tsnet = &config.TsnetConfig{Origin: "https://claw.example.test"}
 	h.rt.Cfg.Store(cfg)
@@ -63,7 +63,7 @@ func TestNativeSessionMentionAttemptsDeliveryWhenQueuedButNotStashed(t *testing.
 }
 
 func TestRemoteSessionMentionsRejectTooManyRecipients(t *testing.T) {
-	h := startVoiceHarness(t)
+	h := startWebHarness(t)
 	cfg := h.rt.Cfg.Clone()
 	cfg.Web.Tsnet = &config.TsnetConfig{Origin: "https://claw.example.test"}
 	h.rt.Cfg.Store(cfg)

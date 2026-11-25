@@ -234,7 +234,7 @@ func TestSpacePermissions(t *testing.T) {
 	}{
 		{alice, "", []string{"ops-agent"}, ""},
 		{alice, "switched", []string{"ops-agent"}, "main-agent"},
-		{bob, "", []string{"loose", "main", "main-agent", "ops-agent", "voice"}, ""},
+		{bob, "", []string{"loose", "main", "main-agent", "ops-agent"}, ""},
 	} {
 		listed, err := server.listAgents(tc.ctx, tc.id)
 		require.NoError(t, err)
@@ -436,7 +436,7 @@ func TestSpacePermissions(t *testing.T) {
 }
 
 func TestSpacePermissionTurns(t *testing.T) {
-	h := startVoiceHarness(t)
+	h := startWebHarness(t)
 	cfg := h.server.cfg.Clone()
 
 	root, err := os.OpenRoot(cfg.Workspace)
@@ -470,7 +470,7 @@ func TestSpacePermissionTurns(t *testing.T) {
 		return <-h.requests, &turn
 	}
 	finish := func(turn *errgroup.Group) {
-		h.replies <- voiceModelText(rand.Text(), "Done.")
+		h.replies <- modelReplyText(rand.Text(), "Done.")
 
 		require.NoError(t, turn.Wait())
 	}
@@ -517,9 +517,6 @@ func TestSpacePermissionTurns(t *testing.T) {
 			_, err := prompt(ctx, "switched", "hello", PromptDelivery_QUEUE)
 			return err
 		}, nil},
-		{"Voice", func(ctx context.Context) error {
-			return h.server.voice(&VoiceRequest{ConversationId: "switched", Sdp: "offer-x"}, &mockServerStream{ContextFunc: func() context.Context { return ctx }})
-		}, nil},
 		{"UpdateSession", func(ctx context.Context) error {
 			_, err := h.server.updateSession(ctx, &UpdateSessionRequest{Id: "switched", Paused: new(true)})
 			return err
@@ -564,9 +561,6 @@ func TestSpacePermissionTurns(t *testing.T) {
 	offered, err := prompt(alice, "switched", "/agent", PromptDelivery_STEER)
 	require.NoError(t, err)
 	require.Equal(t, "ops-agent", offered.PrivateText)
-
-	_, err = h.server.voiceSettings(alice, &VoiceSettingsRequest{Action: VoiceSettingsAction_UPDATE, Agent: new("main-agent")})
-	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
 	request, turn := started(alice, "ops-chat")
 	require.Contains(t, request, "You are ops-agent.")
@@ -614,48 +608,18 @@ func TestSpacePermissionTurns(t *testing.T) {
 	require.Contains(t, request, "alice queued")
 	require.NotContains(t, request, "alice steer")
 
-	h.replies <- voiceModelText(rand.Text(), "Done.")
+	h.replies <- modelReplyText(rand.Text(), "Done.")
 
 	request = <-h.requests
 	require.Contains(t, request, "You are ops-agent.")
 	require.Contains(t, request, "alice edited")
 
-	h.replies <- voiceModelText(rand.Text(), "Done.")
+	h.replies <- modelReplyText(rand.Text(), "Done.")
 
 	require.Eventually(t, func() bool {
 		active, err := h.rt.Sessions.HasActiveTurn(t.Context(), "switched")
 		return err == nil && !active
 	}, 10*time.Second, 10*time.Millisecond)
-
-	reader, cancel, peer := h.call(t, "ops-chat", "offer-ops")
-	_, err = h.rt.SwitchConversationAgent("ops-chat", "main-agent")
-	require.NoError(t, err)
-	handOff(t, peer, "refused", "please continue")
-	notice := frame(t, reader)
-	require.Contains(t, notice, `"notice":`)
-	require.Contains(t, notice, "agent main-agent is outside your spaces")
-
-	items, err := h.rt.QueueItems("ops-chat")
-	require.NoError(t, err)
-	require.Empty(t, items)
-
-	active, err := h.rt.Sessions.HasActiveTurn(t.Context(), "ops-chat")
-	require.NoError(t, err)
-	require.False(t, active)
-
-	_, err = h.rt.SwitchConversationAgent("ops-chat", "ops-agent")
-	require.NoError(t, err)
-	handOff(t, peer, "admitted", "go ahead")
-
-	request = <-h.requests
-	require.Contains(t, request, "You are ops-agent.")
-	require.Contains(t, request, "please continue")
-
-	h.replies <- voiceModelText(rand.Text(), "Continued.")
-
-	peer.expect(t, "Continued.")
-	cancel()
-	h.ended(t)
 }
 
 func TestRunCronJobFollowsStickyAgent(t *testing.T) {

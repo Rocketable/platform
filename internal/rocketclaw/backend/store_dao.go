@@ -277,27 +277,6 @@ WHERE sticky = 'global' AND agent = ANY($1) OR sticky = 'user' AND agent = ANY($
 	return sessions, err
 }
 
-type VoiceSettings struct {
-	Agent      string
-	Voice      string
-	Transcript bool
-}
-
-func (s *SessionService) VoiceSettings(ctx context.Context, username string) (VoiceSettings, error) {
-	var settings VoiceSettings
-
-	_, err := scanFound("read voice settings", s.db.QueryRowContext(ctx, `SELECT agent, voice, transcript FROM voice_settings WHERE username = $1`, username).Scan(&settings.Agent, &settings.Voice, &settings.Transcript))
-
-	return settings, err
-}
-
-func (s *SessionService) UpdateVoiceSettings(ctx context.Context, username string, agent, voice *string, transcript *bool) error {
-	_, err := execState(ctx, s.db, "update voice settings", `INSERT INTO voice_settings (username, agent, voice, transcript) VALUES ($1, COALESCE($2, ''), COALESCE($3, ''), COALESCE($4, FALSE))
-ON CONFLICT (username) DO UPDATE SET agent = COALESCE($2, voice_settings.agent), voice = COALESCE($3, voice_settings.voice), transcript = COALESCE($4, voice_settings.transcript)`, username, agent, voice, transcript)
-
-	return err
-}
-
 func (s *SessionService) behaviorSettings(ctx context.Context) (config.Behavior, bool, error) {
 	var (
 		behavior config.Behavior

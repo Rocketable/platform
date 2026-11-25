@@ -14,7 +14,6 @@ const MaxInboundTextAttachmentBytes = 256 << 10
 const (
 	InboundRawTextMetadataKey        = "rocketclaw_raw_text"
 	InboundOriginMetadataKey         = "rocketclaw_origin"
-	InboundMediaMetadataKey          = "rocketclaw_media"
 	InboundPrincipalMetadataKey      = "rocketclaw_principal"
 	InboundPrincipalNameMetadataKey  = "rocketclaw_principal_name"
 	InboundPrincipalEmailMetadataKey = "rocketclaw_principal_email"

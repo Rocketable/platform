@@ -184,11 +184,3 @@ packages:
           pkgname: rpc
           structname: mockServerStream
           inpackage: false
-  net/http:
-    interfaces:
-      RoundTripper:
-        config:
-          dir: '{{.ConfigDir}}/internal/rocketclaw/frontend/rpc'
-          pkgname: rpc
-          structname: mockRoundTripper
-          inpackage: false

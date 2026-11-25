@@ -143,8 +143,6 @@ func TestHTTPBoundary(t *testing.T) {
 		{"StopBackgroundJob", `{"conversationId":"chat","jobId":"turn-1/call/a","reason":"user"}`, "invalid field reason"},
 		{"AnswerQuestion", `{"askId":"turn-1/call/q"}`, "conversationId is required"},
 		{"AnswerQuestion", `{"conversationId":"chat"}`, "askId is required"},
-		{"Voice", `{"sdp":"offer"}`, "conversationId is required"},
-		{"Voice", `{"conversationId":"chat"}`, "sdp is required"},
 		{"ReportTyping", `{"typing":true}`, "id is required"},
 	} {
 		response := httptest.NewRecorder()
