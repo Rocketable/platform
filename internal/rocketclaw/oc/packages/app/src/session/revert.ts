@@ -291,18 +291,33 @@ export function createSessionRevert(input: {
      * of an answer is lost, so the revert commits straight away instead of offering an Undo.
      */
     takeBack: async (sessionID: string) => {
+      // rocketclaw: do not capture another session after the interrupt request (upstream packages/app/src/session/revert.ts)
+      if (input.session.identity.params.id !== sessionID) return
       const target = { composer: prompt.capture(), directory: location().directory }
+      // rocketclaw: a new draft or queued prompt must survive an early stop (upstream packages/app/src/session/revert.ts)
+      const canRestore = () =>
+        target.composer.current().every((part) => part.type === "text" && part.content.trim() === "") &&
+        target.composer.context.items().length === 0 &&
+        data.session.pending.list(sessionID).length === 0
+
       // Interrupt acknowledges before the execution settles, so the start of an answer may still be on its way.
       await server.api.experimental.session.wait({ sessionID })
       const message = selectUnansweredPrompt(data.session.message.list(sessionID))
 
-      if (!message) return
+      if (!message || !canRestore()) return // rocketclaw: see canRestore (upstream packages/app/src/session/revert.ts)
       // The commit releases the prompt's blob refs, so the draft takes local copies of its media first.
       const restored = await pinPromptMedia(messageDraft(message, target.directory))
+      if (!canRestore()) return // rocketclaw: see canRestore (upstream packages/app/src/session/revert.ts)
       // The model called no tool, so any file that changed meanwhile is the user's own edit.
       await server.api.session.revert.stage({ sessionID, messageID: message.id, files: false })
-      await server.api.session.revert.commit({ sessionID })
+      // rocketclaw: undo the staging if the draft changed; restore before committing so later typing is not overwritten
+      // (upstream packages/app/src/session/revert.ts)
+      if (!canRestore()) {
+        await server.api.session.revert.clear({ sessionID })
+        return
+      }
       restore(target, message, restored)
+      await server.api.session.revert.commit({ sessionID })
 
       if (input.session.identity.params.id === sessionID)
         input.setActiveMessage(selectCursorAfterRevert(snapshot(sessionID), message.id))

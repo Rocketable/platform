@@ -25,7 +25,7 @@ export const linked = `ses_${"linked".padEnd(26, "0")}`
 
 // Newest first, as the server pages them; ses_a ran ses_child as a subagent and mentions the linked session.
 const messages = (id: string) => [
-  {
+  ...(server.unanswered === id ? [] : [{
     id: `msg_${id}_2`,
     type: "assistant",
     time: { created: 2, completed: 3 },
@@ -53,7 +53,7 @@ const messages = (id: string) => [
         : []),
     ],
     finish: "stop",
-  },
+  }]),
   { id: `msg_${id}_1`, type: "user", time: { created: 1 }, text: `question in ${id}`, metadata: { rocketclaw_username: "alice" } },
 ]
 
@@ -79,6 +79,8 @@ export const server = {
   terminals: [] as ReturnType<typeof terminal>[],
   missingDirectory: "",
   worktrees: [] as { directory: string }[],
+  unanswered: "",
+  stage: Promise.resolve(),
 }
 
 /** Puts the server back as it starts: up, on the copy's version, with its sessions. */
@@ -90,6 +92,8 @@ export function reset() {
   server.terminals = []
   server.missingDirectory = ""
   server.worktrees = []
+  server.unanswered = ""
+  server.stage = Promise.resolve()
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status })
@@ -149,7 +153,7 @@ async function route(request: Request, path: string, query: URLSearchParams) {
     return new Response(null, { status: 204 })
   }
 
-  if (path === "/session/active") return json({ data: {} })
+  if (path === "/session/active") return json({ data: server.unanswered ? { [server.unanswered]: {} } : {} })
 
   // v2.2.4 lists terminals per session and restores a server snapshot before attaching through a ticket.
   const terminalSession = /^\/experimental\/session\/([^/]+)\/terminal$/.exec(path)
@@ -201,6 +205,14 @@ async function route(request: Request, path: string, query: URLSearchParams) {
 
     return new Response(null, { status: 204 })
   }
+
+  if (id && rest === "interrupt") return json({ interrupted: true })
+  if (path === `/experimental/session/${server.unanswered}/wait`) return new Response(null, { status: 204 })
+  if (id && rest === "revert/stage") {
+    await server.stage
+    return json({ data: { messageID: `msg_${id}_1` } })
+  }
+  if (id && (rest === "revert/commit" || rest === "revert")) return new Response(null, { status: 204 })
 
   if (id && !rest) return json({ data: server.sessions.get(id) }, server.sessions.has(id) ? 200 : 404)
 

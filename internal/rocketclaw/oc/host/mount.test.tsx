@@ -799,6 +799,33 @@ const type = async (view: ReturnType<typeof show>, text: string) => {
   editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }))
 }
 
+test.each([false, true])("early Stop preserves new input arriving during the revert (edited: %s)", async (edited) => {
+  const id = `ses_stop_${edited}`
+  server.sessions.set(id, { ...server.sessions.get("ses_a")!, id })
+  server.unanswered = id
+  const stage = Promise.withResolvers<void>()
+  server.stage = stage.promise
+  const view = show(1400, id)
+  await until(() => view.root.textContent?.includes(`question in ${id}`))
+  const stop = await until(() => view.root.querySelector<HTMLButtonElement>('button[aria-label="Stop"]'))
+  const request = (method: string, operation: string) =>
+    server.requests.includes(`${method} /oc/box/api/session/${id}/revert${operation}`)
+
+  try {
+    stop.click()
+    await until(() => request("POST", "/stage"))
+    if (edited) await type(view, "New words")
+    stage.resolve()
+
+    await until(() => edited ? request("DELETE", "") : request("POST", "/commit"))
+    const editor = view.root.querySelector("[data-component=composer] [contenteditable=true]")
+    expect(editor?.textContent).toBe(edited ? "New words" : `question in ${id}`)
+    expect(request("POST", "/commit")).toBe(!edited)
+  } finally {
+    stage.resolve()
+  }
+}, 10_000)
+
 test("a typed draft survives disposing and remounting", async () => {
   const view = show()
   await answered(view)
