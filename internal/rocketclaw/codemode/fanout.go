@@ -42,7 +42,14 @@ func nextKey(thread *starlark.Thread) string {
 
 func concurrencyBuiltins() [6]*starlark.Builtin {
 	slots := semaphore.NewWeighted(MaxConcurrency)
-	race := makeRace(slots)
+	race := func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		callables, concurrency, err := unpackCallables(b.Name(), args, kwargs)
+		if err != nil {
+			return nil, err
+		}
+
+		return runRace(thread, slots, b.Name(), concurrency, callables)
+	}
 
 	return [...]*starlark.Builtin{
 		starlark.NewBuiltin("gather", makeGather(slots, false)),
@@ -95,17 +102,6 @@ func makeMap(slots *semaphore.Weighted, failFast bool) func(*starlark.Thread, *s
 		}
 
 		return runGather(thread, slots, b.Name(), limit, values, fn, failFast)
-	}
-}
-
-func makeRace(slots *semaphore.Weighted) func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error) {
-	return func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		callables, concurrency, err := unpackCallables(b.Name(), args, kwargs)
-		if err != nil {
-			return nil, err
-		}
-
-		return runRace(thread, slots, b.Name(), concurrency, callables)
 	}
 }
 

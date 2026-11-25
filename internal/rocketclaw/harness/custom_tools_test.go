@@ -373,7 +373,7 @@ func testLooperWithTools(tools map[string]looperTool) *looper {
 	var l looper
 
 	l.Tools = tools
-	l.PermissionReviewer = inertPermissionReviewer{}
+	l.PermissionReviewer = permissionReviewerWith(permissionReviewFailure("automatic permission reviewer is unavailable"))
 	l.observations = &turnObservations{journal: InertJournal{}}
 
 	return &l

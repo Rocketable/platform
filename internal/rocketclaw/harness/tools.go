@@ -386,10 +386,6 @@ func (f *toolFactory) findSkillsTool() looperTool {
 }
 
 func (f *toolFactory) availableSkillSubjects() []string {
-	if len(f.skills.Items) == 0 {
-		return nil
-	}
-
 	subjects := make([]string, 0, len(f.skills.Items))
 	for _, skill := range f.skills.Available(f.agent) {
 		subjects = append(subjects, skill.Name)

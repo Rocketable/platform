@@ -171,35 +171,13 @@ func TestNewWithModelResolverRejectsUnknownProvider(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	client := openai.NewClient()
-	tests := []struct {
-		name     string
-		resolve  testModelResolverFunc
-		wantText string
-	}{
-		{name: "resolver error", resolve: func(string) (*openai.Client, ProviderOrigin, error) {
-			return nil, ProviderOrigin{}, errors.New("unknown provider work")
-		}, wantText: "unknown provider work"},
-		{name: "nil client", resolve: func(string) (*openai.Client, ProviderOrigin, error) {
-			return nil, ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, nil
-		}, wantText: "client is required"},
-		{name: "empty provider", resolve: func(string) (*openai.Client, ProviderOrigin, error) {
-			return &client, ProviderOrigin{Model: "gpt-6.1-sol"}, nil
-		}, wantText: "provider is required"},
-		{name: "empty model", resolve: func(string) (*openai.Client, ProviderOrigin, error) {
-			return &client, ProviderOrigin{Provider: "work"}, nil
-		}, wantText: "model is required"},
-	}
+	_, err = NewWithModelResolver(testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
+		return nil, ProviderOrigin{}, errors.New("unknown provider work")
+	}), testConfig(dir), root, Agents{Items: map[string]Agent{
+		"main": {Name: "main", Model: "work/gpt-6.1-sol", Prompt: "prompt"},
+	}}, Skills{Items: map[string]Skill{}}, "main")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewWithModelResolver(tt.resolve, testConfig(dir), root, Agents{Items: map[string]Agent{
-				"main": {Name: "main", Model: "work/gpt-6.1-sol", Prompt: "prompt"},
-			}}, Skills{Items: map[string]Skill{}}, "main")
-
-			require.ErrorContains(t, err, tt.wantText)
-		})
-	}
+	require.ErrorContains(t, err, "unknown provider work")
 }
 
 func TestNewUsesResolverCompactThreshold(t *testing.T) {

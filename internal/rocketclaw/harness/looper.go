@@ -181,12 +181,6 @@ type permissionReviewer interface {
 	reviewPermission(context.Context, *permissionReviewRequest) permissionReviewDecision
 }
 
-type inertPermissionReviewer struct{}
-
-func (inertPermissionReviewer) reviewPermission(context.Context, *permissionReviewRequest) permissionReviewDecision {
-	return permissionReviewFailure("automatic permission reviewer is unavailable")
-}
-
 const recursiveReviewDenied = "tool call denied: automatic permission review cannot recursively require automatic approval. Choose a different action."
 
 type toolPermissionDecision struct {
@@ -749,10 +743,17 @@ func (l *looper) runTurn(
 		rendered = appendLiveTurnResponses(output, rendered, responseChatResponses(resp.Output))
 		reviewContext := pruneHistoryBeforeLatestCompaction(append(append([]responses.ResponseInputItemUnionParam{}, baseHistory...), turnItems...))
 
-		hadToolCalls, compactionOnly, toolOutputs, interrupted, err := l.dispatchProviderTools(turnCtx, resp, reviewContext, &doomLoop, output)
-		if err != nil || interrupted {
-			return emptyRecord, nil, interrupted, err
+		toolOutputs, err := l.dispatchToolCalls(turnCtx, resp, reviewContext, &doomLoop, output)
+		if err != nil {
+			if errors.Is(context.Cause(turnCtx), errTurnInterrupted) {
+				return emptyRecord, nil, true, nil
+			}
+
+			return emptyRecord, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
 		}
+
+		hadToolCalls := slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "function_call" })
+		compactionOnly := len(resp.Output) > 0 && !slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type != "compaction" })
 
 		if !hadToolCalls {
 			if compactionOnly {
@@ -917,23 +918,6 @@ func (l *looper) saveTurn(ctx context.Context, record *SessionEntry, resp *respo
 	o.saved = step
 
 	return nil
-}
-
-func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Response, reviewContext []responses.ResponseInputItemUnionParam, doomLoop *doomLoopTrap, output chan<- ChatResponse) (hadToolCalls, compactionOnly bool, toolOutputs []dispatchedToolOutput, interrupted bool, err error) {
-	hadToolCalls = slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "function_call" })
-
-	compactionOnly = len(resp.Output) > 0 && !slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type != "compaction" })
-
-	toolOutputs, err = l.dispatchToolCalls(ctx, resp, reviewContext, doomLoop, output)
-	if err == nil {
-		return hadToolCalls, compactionOnly, toolOutputs, false, nil
-	}
-
-	if errors.Is(context.Cause(ctx), errTurnInterrupted) {
-		return false, false, nil, true, nil
-	}
-
-	return false, false, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
 }
 
 func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, phase TurnPhase, applied *[]string) (bool, error) {
@@ -1796,10 +1780,6 @@ func (l *looper) dispatchToolCalls(
 		outputs = append(outputs, dispatchedToolOutput{})
 	}
 
-	if len(outputs) == 0 {
-		return nil, nil
-	}
-
 	taskIndex := 0
 
 	for i := range calls {
@@ -1877,7 +1857,12 @@ func (l *looper) dispatchToolCalls(
 
 			outputs[call.outputIndex] = dispatchedToolOutput{Param: toolCallOutput(call.callID, result)}
 
-			return l.recordCall(groupCtx, key, &outputs[call.outputIndex].Param, state)
+			recorded, errReplay := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfFunctionCallOutput: &outputs[call.outputIndex].Param}})
+			if errReplay != nil {
+				return errReplay
+			}
+
+			return saveStep(groupCtx, l.Journal, key, &callStep{Output: recorded, State: state})
 		})
 	}
 
@@ -1954,15 +1939,6 @@ func (l *looper) replayCall(ctx context.Context, outputs []dispatchedToolOutput,
 	return true, err
 }
 
-func (l *looper) recordCall(ctx context.Context, key string, output *responses.ResponseInputItemFunctionCallOutputParam, state PublicProgressState) error {
-	recorded, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfFunctionCallOutput: output}})
-	if err != nil {
-		return err
-	}
-
-	return saveStep(ctx, l.Journal, key, &callStep{Output: recorded, State: state})
-}
-
 func ToolCallResult(name string, result ToolResult, err error) ToolResult {
 	if err == nil {
 		return result
@@ -2020,17 +1996,7 @@ func (d *doomLoopTrap) trapped(name string, args json.RawMessage) bool {
 		d.recent = d.recent[len(d.recent)-3:]
 	}
 
-	if len(d.recent) < 3 {
-		return false
-	}
-
-	for _, recent := range d.recent {
-		if recent != sig {
-			return false
-		}
-	}
-
-	return true
+	return len(d.recent) == 3 && !slices.ContainsFunc(d.recent, func(recent toolCallSignature) bool { return recent != sig })
 }
 
 func (l *looper) permissionDecision(toolName string, tool *looperTool, args json.RawMessage) (toolPermissionDecision, error) {

@@ -130,28 +130,9 @@ type shellTempConfig struct {
 }
 
 func newShellTempConfig(root *os.Root, tempDir string) (shellTempConfig, error) {
-	info, err := os.Stat(tempDir)
+	tempAbs, rel, err := workspaceDir(root, "shell temp dir", tempDir)
 	if err != nil {
-		return shellTempConfig{}, fmt.Errorf("resolve shell temp dir %q: %w", tempDir, err)
-	}
-
-	if !info.IsDir() {
-		return shellTempConfig{}, fmt.Errorf("resolve shell temp dir %q: not a directory", tempDir)
-	}
-
-	rootAbs, err := filepath.Abs(root.Name())
-	if err != nil {
-		return shellTempConfig{}, fmt.Errorf("resolve workspace root %q: %w", root.Name(), err)
-	}
-
-	tempAbs, err := filepath.Abs(tempDir)
-	if err != nil {
-		return shellTempConfig{}, fmt.Errorf("resolve shell temp dir %q: %w", tempDir, err)
-	}
-
-	rel, err := filepath.Rel(rootAbs, tempAbs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return shellTempConfig{}, fmt.Errorf("resolve shell temp dir %q: must be inside workspace root", tempDir)
+		return shellTempConfig{}, err
 	}
 
 	if _, err := root.Stat(rel); err != nil {
@@ -159,9 +140,37 @@ func newShellTempConfig(root *os.Root, tempDir string) (shellTempConfig, error) 
 	}
 
 	return shellTempConfig{
-		tmpRelDir: filepath.ToSlash(filepath.Clean(rel)),
+		tmpRelDir: rel,
 		tmpDir:    tempAbs,
 	}, nil
+}
+
+func workspaceDir(root *os.Root, label, dir string) (abs, rel string, err error) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve %s %q: %w", label, dir, err)
+	}
+
+	if !info.IsDir() {
+		return "", "", fmt.Errorf("resolve %s %q: not a directory", label, dir)
+	}
+
+	rootAbs, err := filepath.Abs(root.Name())
+	if err != nil {
+		return "", "", fmt.Errorf("resolve workspace root %q: %w", root.Name(), err)
+	}
+
+	abs, err = filepath.Abs(dir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve %s %q: %w", label, dir, err)
+	}
+
+	rel, err = filepath.Rel(rootAbs, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("resolve %s %q: must be inside workspace root", label, dir)
+	}
+
+	return abs, filepath.ToSlash(filepath.Clean(rel)), nil
 }
 
 func (c shellTempConfig) ensureTempDir(root *os.Root) error {

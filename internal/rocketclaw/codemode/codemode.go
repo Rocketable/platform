@@ -376,10 +376,6 @@ func newKwargsValueBuiltin(callable string, tool HostTool) *starlark.Builtin {
 }
 
 func kwargsToMap(thread *starlark.Thread, kwargs []starlark.Tuple) (map[string]any, error) {
-	if len(kwargs) == 0 {
-		return map[string]any{}, nil
-	}
-
 	dict := starlark.NewDict(len(kwargs))
 	for _, kv := range kwargs {
 		if err := dict.SetKey(kv[0], kv[1]); err != nil {

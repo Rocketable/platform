@@ -32,18 +32,6 @@ func resolveModel(resolver ModelResolver, model string) (*openai.Client, Provide
 		return nil, ProviderOrigin{}, fmt.Errorf("resolve model %q: %w", model, err)
 	}
 
-	if client == nil {
-		return nil, ProviderOrigin{}, errors.New("resolved client is required")
-	}
-
-	if strings.TrimSpace(origin.Provider) == "" {
-		return nil, ProviderOrigin{}, errors.New("resolved provider is required")
-	}
-
-	if strings.TrimSpace(origin.Model) == "" {
-		return nil, ProviderOrigin{}, errors.New("resolved model is required")
-	}
-
 	return client, origin, nil
 }
 

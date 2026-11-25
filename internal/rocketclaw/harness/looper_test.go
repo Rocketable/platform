@@ -370,7 +370,7 @@ func testLooper(client responsesAPI) *looper {
 	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT6Luna}
 	l.CompactThreshold = defaultCompactThreshold
 	l.Client = client
-	l.PermissionReviewer = inertPermissionReviewer{}
+	l.PermissionReviewer = permissionReviewerWith(permissionReviewFailure("automatic permission reviewer is unavailable"))
 	l.Journal = InertJournal{}
 	l.turnSecrets = InertTurnSecrets{}
 	l.SteerDrain = InertSteerDrain{}
@@ -384,7 +384,7 @@ func emptyTestLooper() *looper {
 
 	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT6Luna}
 	l.CompactThreshold = defaultCompactThreshold
-	l.PermissionReviewer = inertPermissionReviewer{}
+	l.PermissionReviewer = permissionReviewerWith(permissionReviewFailure("automatic permission reviewer is unavailable"))
 	l.Journal = InertJournal{}
 	l.turnSecrets = InertTurnSecrets{}
 	l.SteerDrain = InertSteerDrain{}

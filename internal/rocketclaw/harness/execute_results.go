@@ -740,42 +740,15 @@ func resolveSpillRel(root *os.Root, spillDir string) (string, error) {
 		return defaultSpillRel, nil
 	}
 
-	info, err := os.Stat(spillDir)
+	if err := os.MkdirAll(spillDir, 0o700); err != nil {
+		return "", fmt.Errorf("create execute spill dir %q: %w", spillDir, err)
+	}
+
+	_, rel, err := workspaceDir(root, "execute spill dir", spillDir)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return "", fmt.Errorf("resolve execute spill dir %q: %w", spillDir, err)
-		}
-
-		if err := os.MkdirAll(spillDir, 0o700); err != nil {
-			return "", fmt.Errorf("create execute spill dir %q: %w", spillDir, err)
-		}
-
-		info, err = os.Stat(spillDir)
-		if err != nil {
-			return "", fmt.Errorf("resolve execute spill dir %q: %w", spillDir, err)
-		}
+		return "", err
 	}
 
-	if !info.IsDir() {
-		return "", fmt.Errorf("resolve execute spill dir %q: not a directory", spillDir)
-	}
-
-	rootAbs, err := filepath.Abs(root.Name())
-	if err != nil {
-		return "", fmt.Errorf("resolve workspace root %q: %w", root.Name(), err)
-	}
-
-	spillAbs, err := filepath.Abs(spillDir)
-	if err != nil {
-		return "", fmt.Errorf("resolve execute spill dir %q: %w", spillDir, err)
-	}
-
-	rel, err := filepath.Rel(rootAbs, spillAbs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("resolve execute spill dir %q: must be inside workspace root", spillDir)
-	}
-
-	rel = filepath.ToSlash(filepath.Clean(rel))
 	if err := root.MkdirAll(rel, 0o700); err != nil {
 		return "", fmt.Errorf("create execute spill dir: %w", err)
 	}
