@@ -449,6 +449,7 @@ func setBehaviorFields(b *config.Behavior) []string {
 	}{
 		{"auto_approver_model", b.AutoApproverModel != ""},
 		{"slack.channels", b.Slack.Channels != nil},
+		{"slack.ambient_decision_model", b.Slack.AmbientDecisionModel != ""},
 		{"logging.level", b.Logging.Level != ""},
 		{"overlays", b.Overlays != nil},
 		{"embedded_agents", b.EmbeddedAgents != config.EmbeddedAgentsConfig{}},

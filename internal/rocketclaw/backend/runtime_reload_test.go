@@ -107,7 +107,7 @@ func TestRuntimeReload(t *testing.T) {
 }
 
 func TestRuntimeSaveBehavior(t *testing.T) {
-	cfg := &config.Config{Workspace: t.TempDir(), AutoApproverModel: "gpt-a"}
+	cfg := &config.Config{Workspace: t.TempDir(), AutoApproverModel: "gpt-a", Decision: map[config.DecisionProvider]config.DecisionProviderConfig{config.DecisionOpenAI: {APIKey: "key"}}}
 	cfg.Slack.Channels = []config.SlackChannelConfig{{Channel: "@", Agents: []string{"primary"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#cron", Agents: []string{"primary"}, AllowedUserIDs: []string{"U1"}}}
 	require.NoError(t, cfg.ValidateBehavior())
 
@@ -206,6 +206,7 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 		{"overlay fails to sync", func(b *config.Behavior) { b.Overlays = []string{filepath.Join(t.TempDir(), "missing")} }, "apply configured rocketclaw overlay"},
 		{"voice model on an unconfigured provider", func(b *config.Behavior) { b.EmbeddedAgents.Voice.Model = "nope/gpt-x" }, `embedded_agents.voice.model: provider "nope" is not configured`},
 		{"title model on an unconfigured provider", func(b *config.Behavior) { b.TitleModel = "nope/gpt-x#low" }, `title_model: provider "nope" is not configured`},
+		{"ambient decision model on an unconfigured provider", func(b *config.Behavior) { b.Slack.AmbientDecisionModel = "typesafe/jev-latest" }, `slack.ambient_decision_model: "typesafe/jev-latest" must be provider/model with its provider configured in decision`},
 	} {
 		require.ErrorContains(t, rt.SaveBehavior(edit(tt.change)), tt.want, tt.name)
 
@@ -225,8 +226,10 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 
 	saved := edit(func(b *config.Behavior) {
 		b.AutoApproverModel, b.Logging.Level, b.EmbeddedAgents.Main.Disabled = "gpt-b", "warn", true
+		b.Slack.AmbientDecisionModel = " openai/gpt-6-luna "
 	})
 	require.NoError(t, rt.SaveBehavior(saved))
+	require.Equal(t, "openai/gpt-6-luna", rt.Cfg.Clone().Slack.AmbientDecisionModel, "a save turns ambient listening on at once")
 
 	agents, err = LoadRuntimeAgents(rt.Cfg, cfg.RuntimeDirName())
 	require.NoError(t, err)
@@ -278,8 +281,9 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 
 	rt.RunCtx, fail = t.Context(), ""
 
-	require.NoError(t, rt.SaveBehavior(edit(func(b *config.Behavior) { b.Overlays = []string{repo} })))
+	require.NoError(t, rt.SaveBehavior(edit(func(b *config.Behavior) { b.Overlays, b.Slack.AmbientDecisionModel = []string{repo}, "" })))
 	require.Equal(t, []string{repo}, rt.Cfg.Clone().Overlays)
+	require.Empty(t, rt.Cfg.Clone().Slack.AmbientDecisionModel, "a save turns ambient listening off at once")
 	require.Equal(t, rt.Cfg.Clone().Behavior(), stored())
 	require.Contains(t, liveAgent("remote.md"), "Remote prompt")
 	require.Equal(t, newAgent, liveAgent("primary.md"), "an overlay change re-stages runtime assets")

@@ -37,7 +37,7 @@ Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or t
 
 `rocketclaw run` exits with code 0 after a shutdown signal, with 1 on an error, including a Web node that fails its startup check (see [Tailnet setup](#tailnet-setup)), and with 255 when it asks to be started again: after the `rocketclaw_restart` tool, or when the Web page stops serving while it runs. It does not start itself again.
 
-Behavior Settings live in PostgreSQL instead: `auto_approver_model`, `slack.channels`, `logging.level`, `overlays`, `embedded_agents` (see [Built-in agents](#built-in-agents)), `title_model`, and `title_decision_model`. The first start copies them from the file once every startup check passes. After that, RocketClaw ignores them in the file and logs a warning naming each one it ignored. The people named in the file's `web.admins` (their Tailscale logins, for example `"web": {"admins": ["alice@example.com"]}`) edit them on the Config page, one control per setting. A save is checked whole and applies to the running server at once, or is refused and changes nothing. Everyone else sees the page read-only.
+Behavior Settings live in PostgreSQL instead: `auto_approver_model`, `slack.channels`, `slack.ambient_decision_model` (see [Ambient listening](#ambient-listening)), `logging.level`, `overlays`, `embedded_agents` (see [Built-in agents](#built-in-agents)), `title_model`, and `title_decision_model`. The first start copies them from the file once every startup check passes. After that, RocketClaw ignores them in the file and logs a warning naming each one it ignored. The people named in the file's `web.admins` (their Tailscale logins, for example `"web": {"admins": ["alice@example.com"]}`) edit them on the Config page, one control per setting. A save is checked whole and applies to the running server at once, or is refused and changes nothing. Everyone else sees the page read-only.
 
 If the stored settings stop RocketClaw from starting (the error starts with `stored behavior settings:`), fix them in place with `psql` on the `database_url` database:
 
@@ -207,7 +207,7 @@ Interactivity is no longer used and can be removed.
 
 #### Ambient listening
 
-With ambient listening, an allowed user does not have to mention the bot. It is off until `slack.ambient_decision_model` in `rocketclaw.json` names a decision model, such as `openai/gpt-6-luna`, whose provider is configured under `decision` (see [Agents and permissions](#agents-and-permissions)). Then the bot reads messages without a mention in two places:
+With ambient listening, an allowed user does not have to mention the bot. It is off until `slack.ambient_decision_model`, a Behavior Setting, names a decision model, such as `openai/gpt-6-luna`, whose provider is configured under `decision` in `rocketclaw.json` (see [Agents and permissions](#agents-and-permissions)); the provider's `api_key`, such as `decision.openai.api_key`, stays in the config file or secret. Admins set the model on the Config page under Slack, where **Test** sends it one small check. A save applies at once: emptying the model turns ambient listening off, and setting it turns it on, without a restart. Then the bot reads messages without a mention in two places:
 
 - **Joined Threads:** replies in a thread where the channel's first agent already has a conversation, or under that agent's own answer at the top of the channel. This starts in every configured channel, including threads answered before the upgrade. A thread belongs to the channel's first agent, so it stops being joined when that agent changes.
 - **Watched Channels:** any message in a channel whose row sets `wake_when`, what the bot listens for, written as a brief to a new teammate, including what does not count. `engagement` says how it answers. Both are edited on the Config page. The `@` row cannot be watched.
@@ -220,7 +220,7 @@ Ambient turns are unaddressed: the person did not ask the agent anything. Their 
 
 Release note for ambient listening:
 
-- Slack is no longer mention-only. With `slack.ambient_decision_model` set, the bot follows up in threads it is part of and speaks up in channels given a `wake_when`, and stays quiet otherwise.
+- Slack is no longer mention-only. With `slack.ambient_decision_model` set on the Config page, the bot follows up in threads it is part of and speaks up in channels given a `wake_when`, and stays quiet otherwise.
 - Subscribe the Slack app to `message.channels` and `message.groups`, add `groups:history` for private channels, and reinstall it.
 
 The bot uses Slack's agent sessions, which need two more steps: turn the app into an agent (**Agents** in the app settings, manifest `features.agent_view`), which cannot be undone, and subscribe to the bot events `agent_session_stopped` and `agent_session_title_changed`. Then every turn in a mention thread, whichever surface started it, shows Slack's working state until it ends, renewed before Slack's one-hour limit, and Stop from an allowed user ends the turn and its goal, like Web `/stop`. The thread's session in Slack is titled after the mention that created it, and renaming it, in Web or by an allowed user in Slack, renames it in both. `agent_view` also adds an agent chat to the app's Messages tab that RocketClaw never answers.

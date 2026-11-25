@@ -140,7 +140,18 @@ test("only admins edit the behavior settings, and the view changes only with the
     expect(tested.at(-1)).toEqual({ model: "typesafe/jev-latest", decision: true });
     await save.click();
     await edit.waitFor();
-    expect(saves.at(-1)).toEqual({ ...withAgents, title_model: "gpt-6-luna", title_decision_model: "typesafe/jev-latest" });
+    const withTitles = { ...withAgents, title_model: "gpt-6-luna", title_decision_model: "typesafe/jev-latest" };
+    expect(saves.at(-1)).toEqual(withTitles);
+
+    const listener = page.getByRole("group", { name: "Ambient decision model", exact: true }).getByRole("textbox", { name: "Ambient decision model", exact: true });
+    for (const name of ["jev-latest", ""]) {
+      await edit.click();
+      expect(await listener.getAttribute("placeholder")).toBe("Off");
+      await listener.fill(name);
+      await save.click();
+      await edit.waitFor();
+      expect(saves.at(-1)).toEqual({ ...withTitles, slack: { ...withTitles.slack, ambient_decision_model: name && `typesafe/${name}` } });
+    }
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

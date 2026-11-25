@@ -127,7 +127,7 @@ Restart is not a substitute for Reload when only overlay file contents changed.
 
 ### Behavior Settings
 
-The part of RocketClaw configuration that changes how the server behaves rather than where it runs or what secrets it holds: the auto-approver model, Slack channel routing and allowed users, logging level, the overlay list, and whether each Embedded Agent is on and which model it uses. They live in PostgreSQL as one document that the Web admins named in the config file (`web.admins`) edit on the Config page, and a save applies to the running server. The first start imports them from the config file; after that the file's copies are ignored. Setup and secrets stay in the config file or AWS Secrets Manager.
+The part of RocketClaw configuration that changes how the server behaves rather than where it runs or what secrets it holds: the auto-approver model, Slack channel routing and allowed users, the decision model that turns on and screens ambient listening, logging level, the overlay list, and whether each Embedded Agent is on and which model it uses. They live in PostgreSQL as one document that the Web admins named in the config file (`web.admins`) edit on the Config page, and a save applies to the running server. The first start imports them from the config file; after that the file's copies are ignored. Setup and secrets stay in the config file or AWS Secrets Manager.
 
 ## Model Providers
 
