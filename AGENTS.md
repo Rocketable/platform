@@ -122,16 +122,15 @@ On start, you must always read:
 - If a helper is only called once, inline it by default. Only extract it when it is reused or materially clarifies a dense block.
 - Single-use single-line functions are always violations and must be inlined.
 - New or touched one-line delegating wrappers that only delegate to another function, pass default arguments, rename a call, or preserve an old call shape are violations even when used more than once; call the target directly or give the function a real body that owns behavior.
-- Before running tests, inspect the actual touched diff for every Go standard violation: error variable names (`errCombined`, `errRead`, `errClose`, not `combinedErr`, `readErr`, `closeErr`), error type names ending in `Error`, single-use helpers to inline, one-line delegating wrappers to delete by inlining, defensive guards to delete, accidental abstraction growth, mutex-hat placement, context misuse, unused context parameters in interface implementations, exported names, changed-line necessity, queue/order semantics for message flow, and source CLOC impact.
+- Before running tests, inspect the actual touched diff for every Go standard violation: error variable names (`errCombined`, `errRead`, `errClose`, not `combinedErr`, `readErr`, `closeErr`), single-use helpers to inline, one-line delegating wrappers to delete by inlining, defensive guards to delete, accidental abstraction growth, mutex-hat placement, context misuse, unused context parameters in interface implementations, exported names, changed-line necessity, queue/order semantics for message flow, and source CLOC impact.
 - Before final response, repeat the touched-diff standards pass after formatting/lint/test tools have modified files. Verify the user's original invariants explicitly, verify all required tests including CLOC/coverage budgets, and do not report success while any standard, budget, or semantic invariant remains failing.
 - Before finalizing Go edits, check touched constructors, callback and interface fields, and struct literals of library types against Injected Behavior Dependencies; do not add constructor fallback defaults.
 - When designing Go interfaces, do not add `context.Context` by convention. Include `context.Context` only when the method implementation must observe cancellation/deadlines or pass the context to downstream work. If every current implementation would name the parameter `_ context.Context`, the interface is wrong: remove the context parameter or redesign the API around the operation that actually needs cancellation.
 - Avoid struct and interface embedding in Go; use named fields and explicit forwarding methods so ownership and method sets stay visible.
-- Avoid `sync/atomic`; if you find use of package `sync/atomic`, ask the human partner for permission first.
 - For goroutine coordination, use https://pkg.go.dev/golang.org/x/sync/errgroup and https://pkg.go.dev/github.com/alitto/pond/v2.
 - If you are using multiple mutexes in the same struct, consider whether you are making things overcomplex. Prefer reading once at the start and using the resulting value over time, or consolidating lifetimes under a single mutex hat.
 - Whenever you feel like adding a mutex, question why you need this mutex instead of using another mutex that encapsulates the lifetime of the variables you must work with.
-- In Go, error variables always start with `err` and error types always end with `Error`. For example: `errWriter` and `WriterError`.
+- In Go, error variables always start with `err`. For example: `errWriter`.
 - Before finalizing Go edits, review every new or renamed error variable in the touched diff and rename nonconforming locals such as `runErr`, `waitErr`, or `parseErr` to `errRun`, `errWait`, or `errParse`.
 - Bias toward strong error types for new error contexts when practical. Prefer typed errors with `Unwrap` over ad hoc string-only `fmt.Errorf` wrappers when callers may benefit from structured operation context.
 - Prefer strong types over `map[string]any`. Use `map[string]any` only at truly dynamic boundaries where the key set is not known at compile time; otherwise define a small struct with explicit fields. In tests, typed request/result structs are still required when the shape is known; keep `map[string]any` confined to the unavoidable protocol/schema boundary and do not let it spread into helper APIs or assertions.
@@ -227,7 +226,6 @@ Touch only what you must. Clean up only your own mess.
 - Do not refactor things that are not broken.
 - Match existing style, even if you would do it differently.
 - If you notice unrelated dead code, mention it; do not delete it.
-- Remove imports, variables, and functions that your changes made unused.
 - Do not remove pre-existing dead code unless asked.
 
 Every changed line should trace directly to the user's request.
