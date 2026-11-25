@@ -47,8 +47,8 @@ func callContext(ctx context.Context, resumable bool) (context.Context, context.
 
 	call, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
 	cancelUnlessShutdown := func() {
-		if cause := context.Cause(ctx); !errors.Is(cause, ErrShutdown) {
-			cancel(cause)
+		if errCause := context.Cause(ctx); !errors.Is(errCause, ErrShutdown) {
+			cancel(errCause)
 		}
 	}
 

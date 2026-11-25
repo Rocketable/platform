@@ -304,8 +304,8 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 	if len(usedServers) > 0 {
 		session := registry.Open()
 		defer func() {
-			if cerr := session.Close(); cerr != nil && err != nil {
-				err = errors.Join(err, cerr)
+			if errClose := session.Close(); errClose != nil && err != nil {
+				err = errors.Join(err, errClose)
 			}
 		}()
 

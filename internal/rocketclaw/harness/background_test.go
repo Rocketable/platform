@@ -273,7 +273,7 @@ func TestBackgroundForegroundCallKeepsTurnCancellation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				var (
-					seen     error
+					errSeen     error
 					finished bool
 				)
 
@@ -283,9 +283,9 @@ func TestBackgroundForegroundCallKeepsTurnCancellation(t *testing.T) {
 				loop := backgroundTestLooper(t, backgroundPermissions, jobs, func(ctx context.Context) (ToolResult, error) {
 					select {
 					case <-ctx.Done():
-						seen = context.Cause(ctx)
+						errSeen = context.Cause(ctx)
 
-						return ToolResult{}, fmt.Errorf("probe: %w", seen)
+						return ToolResult{}, fmt.Errorf("probe: %w", errSeen)
 					case <-release:
 						finished = true
 
@@ -317,7 +317,7 @@ func TestBackgroundForegroundCallKeepsTurnCancellation(t *testing.T) {
 				record := CodeModeCall{Type: codeModeCallTraceType, ParentCallID: "call-1", Key: "turn/call/call-1/host/0", Name: "probe", Arguments: "{}", Status: codeModeCallOK, Summary: "probed", Outcome: permissionReviewOutcomeAllow, Reason: "ok"}
 
 				if tc.cause == errTurnInterrupted {
-					require.ErrorIs(t, seen, errTurnInterrupted)
+					require.ErrorIs(t, errSeen, errTurnInterrupted)
 
 					record.Status, record.Summary = codeModeCallCancelled, "cancelled"
 				}

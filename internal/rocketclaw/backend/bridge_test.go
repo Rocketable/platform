@@ -731,14 +731,14 @@ func TestPickLaterWorkDoesNotClaimScheduledWhenTurnBusy(t *testing.T) {
 func TestBridgeStopDoesNotClassifyOrdinaryTurnAsInterrupted(t *testing.T) {
 	t.Parallel()
 
-	for _, cause := range []error{errShutdown, context.Canceled} {
+	for _, errCause := range []error{errShutdown, context.Canceled} {
 		bridgeCtx, cancelBridge := context.WithCancelCause(t.Context())
 		turn, cancel := context.WithCancel(bridgeCtx)
 		bridge := &Bridge{stopCh: make(chan struct{}), activeReply: protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ordinary", true), activeTurnCancel: cancel}
 		bridge.Stop()
-		cancelBridge(cause)
+		cancelBridge(errCause)
 		assert.False(t, bridge.activeTurnInterrupted)
-		assert.ErrorIs(t, context.Cause(turn), cause)
+		assert.ErrorIs(t, context.Cause(turn), errCause)
 	}
 }
 

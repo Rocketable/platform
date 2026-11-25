@@ -387,8 +387,8 @@ CREATE TRIGGER refuse_row BEFORE INSERT ON turns FOR EACH ROW EXECUTE FUNCTION r
 		require.Len(t, registry.move("main"), 1)
 		require.Error(t, call.Wait(), "the database refuses the row")
 
-		workErr := context.Cause(work.RunBackgroundCalls()[0].Ctx)
-		require.ErrorIs(t, workErr, errBackgroundAbandoned)
+		errWork := context.Cause(work.RunBackgroundCalls()[0].Ctx)
+		require.ErrorIs(t, errWork, errBackgroundAbandoned)
 		require.False(t, registry.movable("main"))
 		require.Len(t, work.DetachCalls(), 1, "the work detaches before its row is written")
 

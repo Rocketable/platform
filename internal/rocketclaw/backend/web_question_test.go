@@ -103,7 +103,7 @@ func TestWebQuestionWithdrawsUnlessLeftForRestart(t *testing.T) {
 	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	req := &protocol.AskUserQuestionRequest{ID: "turn-1/call/c1", ConversationID: conversationID, Question: "Ship?"}
 
-	ask := func(cause error) {
+	ask := func(errCause error) {
 		ctx, cancel := context.WithCancelCause(t.Context())
 		done := make(chan error, 1)
 
@@ -120,7 +120,7 @@ func TestWebQuestionWithdrawsUnlessLeftForRestart(t *testing.T) {
 
 			return waiting
 		}, 5*time.Second, 10*time.Millisecond)
-		cancel(cause)
+		cancel(errCause)
 		require.ErrorIs(t, <-done, context.Canceled)
 	}
 

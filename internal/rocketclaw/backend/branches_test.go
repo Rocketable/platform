@@ -363,12 +363,12 @@ func TestDeleteSiblingBranchKeepsTheCurrentPoint(t *testing.T) {
 
 	rows := branchTestRows(t, s)
 
-	for message, want := range map[string]error{
+	for message, errWant := range map[string]error{
 		fmt.Sprintf("%d:0", c): errNoBranchPoint, fmt.Sprintf("%d:0", a): errNoBranchPoint, fmt.Sprintf("%d:1", a): errNoBranchPoint,
 		fmt.Sprintf("%d:0", sibling): ErrRevertMessageGone, fmt.Sprintf("%d:2", c): ErrRevertMessageGone, "bad": ErrInvalidRevertMessage,
 	} {
 		_, err := rt.DeleteBranch(ctx, "chat", message, false)
-		require.ErrorIs(t, err, want, message)
+		require.ErrorIs(t, err, errWant, message)
 	}
 
 	require.Equal(t, rows, branchTestRows(t, s), "a refused delete removes nothing")
