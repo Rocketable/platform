@@ -860,7 +860,7 @@ google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# gvisor.dev/gvisor v0.0.0-20261124234935-683047b60a2a
+# gvisor.dev/gvisor v0.0.0-20261125014331-bbedb585cf2b
 ## explicit; go 1.27.3
 gvisor.dev/gvisor/pkg/atomicbitops
 gvisor.dev/gvisor/pkg/bits
