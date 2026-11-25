@@ -1,6 +1,6 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, queryOptions, type QueryStatus, useQueries, useQuery, useMutation, useIsMutating, useMutationState } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, queryOptions, useQueries, useQuery, useMutation, useIsMutating, useMutationState } from "@tanstack/react-query";
 import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
 import { Drawer } from "@base-ui/react/drawer";
@@ -10,13 +10,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from "@/components/ui/input-group";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCError } from "./api";
 import { draftContent } from "./drafts";
-import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceInputsPending, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PageEntry, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding, TreeNode } from "./types";
-import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Timer, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellRing, Bot, Brain, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Timer, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -44,7 +42,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
-import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, ListTab, TabListName, Remote, Session, SavedTabs, SearchPage as SearchPageState, StripLayout, TabAttention, TranscriptEvent, VoiceSettings } from "@/types";
+import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, ListTab, TabListName, Remote, Session, SavedTabs, SearchPage as SearchPageState, StripLayout, TabAttention, TranscriptEvent } from "@/types";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import { AgentEditorPage, BuiltInNote, editAgent } from "@/agent-editor";
 import type { MountOptions, Mounted } from "../../oc/host/api";
@@ -434,8 +432,6 @@ function usePausedChats() {
   return (id: string) => !!rows.find((row) => row.id === id)?.paused;
 }
 
-// The toggle button of a session a person started in the Web, next to Send, pauses or resumes its agent for everyone
-// in it, and says why beside it when the server refuses, as the voice call button does.
 function AgentPauseToggle({ id }: { id: string }) {
   const session = useContext(Sidebar).rows.find((row) => row.id === id), invalidate = useContext(SidebarInvalidation);
   const change = useMutation({ mutationFn: mutations.updateSession, onSuccess: invalidate });
@@ -478,7 +474,6 @@ function useRoute() {
     skill: pathname.startsWith("/skills/") ? pathname.slice("/skills/".length) : "",
     config: pathname === "/config",
     search: isSearch(pathname),
-    voice: pathname === "/voice",
     pages: pathname === "/pages",
     shortcuts: pathname === "/shortcuts",
     closed: pathname === "/closed",
@@ -1002,7 +997,7 @@ type Space = { id: string; name: string };
 // last names each space's last active tab; sharedOrder is this person's order of Shared tabs by path.
 type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string; last: Record<string, string>; sharedOrder: string[] };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
-const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/routines": ["Routines", Clock], "/agents": ["Agents", Bot], "/agents/new": ["Create New Agent", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard], "/closed": ["Recently closed", History] };
+const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/routines": ["Routines", Clock], "/agents": ["Agents", Bot], "/agents/new": ["Create New Agent", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard], "/closed": ["Recently closed", History] };
 
 // A Search page is /search or a location under it, each its own tab; it is titled with its name, else the query it shows.
 const isSearch = (path: string) => /^\/search(\/|$)/.test(path);
@@ -2446,10 +2441,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = ![route.editor, route.cron, route.timeline, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.pages, route.shortcuts, route.closed, route.page, route.remote].some(Boolean);
-  // The screen stays on while the Voice page is open or a call runs.
-  const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
-  useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
+  const showChat = ![route.editor, route.cron, route.timeline, route.agents, route.skills, route.skill, route.config, route.search, route.pages, route.shortcuts, route.closed, route.page, route.remote].some(Boolean);
   const [palette, setPalette] = useState<{ mode: PaletteMode | undefined; key: number; opencode?: OpenCodeServer }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
   const drafts = useMemo(() => new Map<string, ComposerDraft>(), [scope]);
@@ -2541,11 +2533,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
                 <div className="flex w-max items-center gap-[var(--navigation-gap)]">
                   <NewSessionButton newChat={newChat} openCode={(opencode) => setPalette((current) => ({ mode: "commands", key: current.key + 1, opencode }))} />
-                  {([["Search sessions and commands", Search, () => openPalette("sessions")], ["Voice", Mic, () => navigate("/voice")]] as const).map(([label, Icon, onClick]) => (
-                    <Tooltip key={label}><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label={label} onClick={onClick}>
-                      <Icon className="size-[var(--navigation-icon)]" />
-                    </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>
-                  ))}
+                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions and commands" onClick={() => openPalette("sessions")}>
+                    <Search className="size-[var(--navigation-icon)]" />
+                  </TooltipTrigger><TooltipContent side="top">Search sessions and commands</TooltipContent></Tooltip>
                   <AttentionButton />
                 </div>
               </div>
@@ -2559,7 +2549,6 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}
               {route.timeline ? <CronTimeline key={route.timeline} stem={route.timeline} /> : null}
-              {route.voice ? <VoicePage /> : null}
               <PageIndex show={route.pages} />
               <ShortcutsPage show={route.shortcuts} />
               <AgentEditorPage show={route.editor} />
@@ -2802,7 +2791,7 @@ function paletteRows(
     { key: "search", label: "Sessions: Search", run: () => tabs.open(freshSearch()) },
     { key: "run-cron", label: "Routines: Run", keep: true, run: () => openCron("cron") },
     { key: "cron-timeline", label: "Routines: Timeline", keep: true, run: () => openCron("timeline") },
-    ...([["voice", "Voice"], ["routines", "Routines: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["closed", "Tabs: Recently closed"], ["shortcuts", "Help: Keyboard Shortcuts"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
+    ...([["routines", "Routines: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["closed", "Tabs: Recently closed"], ["shortcuts", "Help: Keyboard Shortcuts"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
   ].filter((item) => tier(item.label) < 3).sort((a, b) => {
     // Better matches come first. Within a tier, recently run commands lead, except Timeline levels, which always keep the Config slider's order.
@@ -5626,10 +5615,7 @@ function SessionComposer({
   const [agentOpen, setAgentOpen] = useState(false);
   const [slashOff, setSlashOff] = useState(false);
   const [slashPick, setSlashPick] = useState("");
-  const voice = voiceFor(useVoice(), id);
-  const sendError = draft.error || voice.error;
-  // Clearing the send error also dismisses this composer's failed call.
-  const setSendError = (value: string) => { draft.error = value; onDraftChange(); if (!value && voice.state === "error") stopVoice(); };
+  const setSendError = (value: string) => { draft.error = value; onDraftChange(); };
   const currentAgent = id === "" ? "main" : agents.data?.currentAgent ?? "";
   const catalog = (agents.data?.agents ?? []).filter((item) => id !== "" || item.sticky !== "slack");
   // Sends switch to the shown agent, so an unlisted current agent moves to the first listed one.
@@ -5656,21 +5642,6 @@ function SessionComposer({
       drafts.set(sessionId, draft);
     }
     onDraftChange();
-  };
-  // A call from a new session creates it with the shown agent, as Send does.
-  const call = async (speaker: string) => {
-    let sessionId = draft.sessionId;
-    try {
-      if (sessionId === "") {
-        const created = await create.mutateAsync({ agent: selected });
-        sessionId = created.id;
-        if (created.resumed) alertResumed(selected);
-        goSession(sessionId, created.resumed);
-      }
-    } catch (err) {
-      return setSendError(err instanceof Error ? err.message : "create failed");
-    }
-    void startVoice(sessionId, speaker);
   };
   const send = (delivery?: PromptDelivery) => {
     const command = /^\p{White_Space}*\/(fork|handoff|undo|tree)\p{White_Space}*$/u.exec(draft.text);
@@ -5711,7 +5682,7 @@ function SessionComposer({
   const stop = () => stopComposer({ draft, id, busy, prompt, refreshHistory, setSendError });
   return (
     <>
-      {sendError ? <p className="px-3 pb-2 text-sm text-destructive sm:px-5">{sendError}</p> : null}
+      {draft.error ? <p className="px-3 pb-2 text-sm text-destructive sm:px-5">{draft.error}</p> : null}
       {draft.persistenceError ? <p role="alert" className="px-3 pb-2 text-sm text-destructive">{draft.persistenceError}</p> : null}
       <Composer
         files={files}
@@ -5739,7 +5710,6 @@ function SessionComposer({
         queued={queued}
         send={send}
         stop={stop}
-        call={call}
         steerQueued={promoteQueued}
         popQueued={(itemId) => popComposer({ draft, onDraftChange, id, itemId, selected, currentAgent, prompt, popQueueItem, setSendError })}
         removeQueued={(itemId) => void removeQueueItem.mutateAsync({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "remove failed"))}
@@ -5792,7 +5762,6 @@ function Composer({
   queued,
   send,
   stop,
-  call,
   steerQueued,
   popQueued,
   removeQueued,
@@ -5824,7 +5793,6 @@ function Composer({
   queued: QueueItem[];
   send: (delivery?: PromptDelivery) => Promise<void>;
   stop: () => Promise<void>;
-  call: (speaker: string) => Promise<void>;
   steerQueued: (id: string) => Promise<void>;
   popQueued: (id: string) => Promise<unknown>;
   removeQueued: (id: string) => void;
@@ -5851,7 +5819,6 @@ function Composer({
   const mentions = useComposerMentions(text, tags, messageInput, setText);
   const agent = catalog.find((item) => item.name === selected);
   const actions = <>
-    <VoiceToggle sessionId={sessionId} agent={selected} sending={sending} call={call} />
     <ComposerMore sending={sending} empty={empty} stash={() => void send("STASH")} />
     <ComposerSend sessionId={sessionId} touch={touch} busy={busy} sending={sending} empty={empty} stoppingCommand={isStopCommand(text)} sendLabel={sendLabel} mac={mac} send={send} stop={stop} />
   </>;
@@ -6306,191 +6273,6 @@ function CronPage() {
       {run.dialog}
     </div>
   );
-}
-
-function VoicePage() {
-  const identity = useQuery(queries.identity());
-  if (!identity.data) return null;
-  return <VoiceCall key={identity.data.username} username={identity.data.username} />;
-}
-
-const voiceFor = (voice: VoiceView, id: string): VoiceView => voice.conversationId === id ? voice : { state: "idle", conversationId: id, error: "", notice: "", captions: [] };
-
-function VoiceClock({ startedAt }: { startedAt: number }) {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
-  return ` · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-// VoiceOrb is the Voice page's call button. It ebbs and flows while a call is active,
-// and swells with the voice model's speech through --level, set every frame.
-function VoiceOrb({ state, ...props }: { state: VoiceState } & ComponentProps<"button">) {
-  const orb = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const element = orb.current;
-    if (state !== "live" || !element) return;
-    let frame = 0, level = 0;
-    const tick = () => {
-      level = Math.max(voiceLevel(), level * 0.9); // Rises at once, falls slowly.
-      element.style.setProperty("--level", level.toFixed(3));
-      frame = requestAnimationFrame(tick);
-    };
-    tick();
-    return () => {
-      cancelAnimationFrame(frame);
-      element.style.setProperty("--level", "0");
-    };
-  }, [state]);
-  return <button ref={orb} type="button" data-state={state} className="voice-orb" {...props}><span aria-hidden className="voice-orb-core" /><span aria-hidden className="voice-orb-rings" /></button>;
-}
-
-function VoicePicker({ voices, value, disabled, onPick }: { voices: string[]; value: string; disabled: boolean; onPick: (voice: string) => void }) {
-  const items = voices.map((name) => ({ value: name, label: name.charAt(0).toUpperCase() + name.slice(1) }));
-  return <Select items={items} value={value} disabled={disabled} onValueChange={(name) => { if (typeof name === "string") onPick(name); }}>
-    <SelectTrigger aria-label="Choose voice" className="data-[size=default]:h-11 sm:data-[size=default]:h-8"><SelectValue /></SelectTrigger>
-    <SelectContent><SelectGroup>{items.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent>
-  </Select>;
-}
-
-// VoiceTranscript shows the call's captions as a chat, following the newest line.
-function VoiceTranscript({ captions }: { captions: VoiceCaption[] }) {
-  const scroller = useRef<HTMLElement>(null);
-  useEffect(() => { scroller.current?.scrollTo({ top: scroller.current.scrollHeight }); }, [captions]);
-  return <section ref={scroller} aria-label="Transcript" className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto text-sm">
-    {captions.length === 0 ? <p className="m-auto text-muted-foreground">Nothing said yet.</p> : captions.map(({ id, role, text, written }) => written
-      // A reply too long to speak, formatted as in the conversation.
-      ? <div key={id} className="max-w-[85%] self-start rounded-2xl bg-muted px-3 py-2 whitespace-pre-wrap"><span className="sr-only">Agent: </span><TranscriptText text={text} /></div>
-      : <p key={id} className={cn("max-w-[85%] rounded-2xl px-3 py-2 whitespace-pre-wrap", role === "user" ? "self-end bg-primary text-primary-foreground" : "self-start bg-muted")}><span className="sr-only">{role === "user" ? "You: " : "Voice: "}</span>{text}</p>
-    )}
-  </section>;
-}
-
-const voiceStatus: Record<VoiceState, string> = { idle: "Tap to talk", connecting: "Connecting…", reconnecting: "Reconnecting…", live: "Listening", ending: "Ending…", error: "Tap to try again" };
-
-// VoiceStage is the orb with the call's status under it: big and centered, or small
-// at the bottom beside the transcript. It is one orb either way, so it shrinks rather than reappearing.
-// A call starts only once the agents have loaded, since they decide its voice; hanging up never waits.
-function VoiceStage({ voice, compact, busy, agents, selected, settingsLoading, error, onPress }: { voice: VoiceView; compact: boolean; busy: boolean; agents: QueryStatus; selected: string; settingsLoading: boolean; error?: string; onPress: () => void }) {
-  if (agents === "success" && !selected) return <p role="status" className="m-auto text-center text-sm text-muted-foreground">No voice agent is available. The built-in voice agent may be turned off; an admin can turn it on in Config → Behavior settings.</p>;
-  const loading = agents === "pending" || settingsLoading || !selected;
-  const active = voice.state !== "idle" && voice.state !== "error";
-  return <div className={cn("flex flex-col items-center", compact ? "shrink-0 gap-2" : "flex-1 justify-center gap-10 py-10")}>
-    <VoiceOrb state={voice.state === "reconnecting" ? "connecting" : voice.state} data-size={compact ? "small" : "large"} aria-label={active ? "End voice call" : "Start voice call"} aria-pressed={active} disabled={busy || voice.state === "ending" || (!active && loading)} onClick={onPress} />
-    <span role="status" aria-live="polite" className="text-sm tracking-wide text-muted-foreground">{voiceStatus[voice.state]}{voice.state === "live" ? <VoiceClock startedAt={voice.startedAt!} /> : null}</span>
-    <span aria-live="polite" className="text-center text-sm">{voice.notice}</span>
-    {error ? <p role="alert" className="text-center text-sm text-destructive">{error}</p> : null}
-  </div>;
-}
-
-function useVoiceSettings(username: string) {
-  const settings = useQuery(queries.voiceSettings(username));
-  const saved = settings.data ?? { agent: "", voice: "", transcript: false };
-  const save = (next: VoiceSettings) => queryClient.setQueryData(queries.voiceSettings(username).queryKey, next);
-  const version = useRef({ agent: 0, voice: 0, transcript: 0 });
-  const update = useMutation({
-    scope: { id: JSON.stringify(queries.voiceSettings(username).queryKey) },
-    mutationFn: (change: Partial<VoiceSettings>) => mutations.voiceSettings({ action: "UPDATE", ...change }),
-    onMutate: (change) => {
-      for (const key of ["agent", "voice", "transcript"] as const) if (key in change) version.current[key]++;
-      save({ ...saved, ...change });
-      return { saved, version: { ...version.current } };
-    },
-    onError: (_error, _change, before) => save(before!.saved),
-    // Keep newer local changes, while accepting replies to independent settings.
-    onSuccess: (next, _change, before) => {
-      const current = queryClient.getQueryData<VoiceSettings>(queries.voiceSettings(username).queryKey)!;
-      save({ ...next,
-        agent: before.version.agent === version.current.agent ? next.agent : current.agent,
-        voice: before.version.voice === version.current.voice ? next.voice : current.voice,
-        transcript: before.version.transcript === version.current.transcript ? next.transcript : current.transcript,
-      });
-    },
-  });
-  return { saved, update, loading: settings.isPending, problem: settings.error?.message };
-}
-
-function VoiceCall({ username }: { username: string }) {
-  const sidebar = useContext(Sidebar);
-  const { saved, update, loading, problem } = useVoiceSettings(username);
-  const agents = useQuery(queries.agents());
-  const catalog = (agents.data?.agents ?? []).filter((item) => item.sticky === "user");
-  const selected = offeredAgent(catalog, saved.agent, "voice") ?? "";
-  const agentInfo = catalog.find((item) => item.name === selected);
-  const [callId, setCallId] = useState("");
-  const snapshot = useVoice(), call = voiceFor(snapshot, callId);
-  const live = ["connecting", "reconnecting", "live", "ending"].includes(call.state);
-  const id = (live ? callId : "") || agentInfo?.stickySession || "";
-  const voice = voiceFor(snapshot, id);
-  // The page owns its call: leaving the page hangs it up.
-  useEffect(() => () => { if (voiceView().conversationId === id && voiceView().state !== "error") stopVoice(); }, [id]);
-  const [picking, setPicking] = useState(false);
-  const { mutate: saveSetting } = update;
-  const transcript = saved.transcript;
-  // A reply too long to speak turns the transcript on, as the button does, so it is on screen.
-  useEffect(() => {
-    const newest = () => voiceView().conversationId === id ? voiceView().captions.findLast((caption) => caption.written) : undefined;
-    let shown = newest();
-    return subscribeVoice(() => {
-      const written = newest();
-      if (written === shown) return;
-      shown = written;
-      if (written) saveSetting({ transcript: true }); // A new call's transcript starts empty.
-    });
-  }, [id, saveSetting]);
-  const active = !["idle", "error"].includes(voice.state);
-  const voices = agentInfo?.voices ?? [];
-  const speaker = voiceChoice(agentInfo, saved.voice);
-  // Leaving cancels a start still creating its conversation.
-  const left = useRef(false);
-  useEffect(() => () => { left.current = true; }, []);
-  const start = useMutation({ mutationFn: async () => {
-    const { id: next } = await mutations.createSession({ agent: selected });
-    sidebar.invalidateQueries();
-    void queryClient.invalidateQueries({ queryKey: ["agents"] });
-    if (left.current) return;
-    setCallId(next);
-    void startVoice(next, speaker);
-  } });
-  const error = [voice.error, call.error, problem, ...[start, update].map((mutation) => mutation.error?.message)].find(Boolean);
-  return (
-    <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col gap-4 p-4">
-      <PageTitle>Voice</PageTitle>
-      <div className="flex items-center gap-1.5 sm:gap-2 max-sm:[&>:first-child>svg:first-child]:hidden">
-        <AgentPicker catalog={catalog} selected={selected} setAgent={(name) => update.mutate({ agent: name })} open={picking} setOpen={setPicking} disabled={[active, start.isPending, update.isPending, catalog.length === 0].some(Boolean)} />
-        {agentInfo && voices.length > 0 ? <VoicePicker voices={voices} value={speaker} disabled={active || start.isPending} onPick={(name) => update.mutate({ voice: name })} /> : null}
-        <div className="ml-auto flex items-center gap-1">
-          <Button variant={transcript ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-8" aria-label="Show transcript" title="Show transcript" aria-pressed={transcript} onClick={() => update.mutate({ transcript: !transcript })}><Captions /></Button>
-          {id ? <Button variant="ghost" size="icon" className="size-11 sm:size-8" role="link" nativeButton={false} render={<Link href={sessionPath(id)} />} aria-label="Open conversation" title="Open conversation"><MessageSquare /></Button> : null}
-        </div>
-      </div>
-      {transcript ? <VoiceTranscript captions={voice.captions} /> : null}
-      <VoiceStage voice={voice} compact={transcript} busy={start.isPending} agents={agents.status} selected={selected} settingsLoading={loading} error={error} onPress={() => active ? stopVoice() : start.mutate()} />
-    </div>
-  );
-}
-
-// VoiceToggle calls with the session's agent, or with agent when the session is new.
-function VoiceToggle({ sessionId, agent, sending, call }: { sessionId: string; agent: string; sending: boolean; call: (speaker: string) => Promise<void> }) {
-  const route = useRoute();
-  const { state, notice } = voiceFor(useVoice(), sessionId);
-  const calling = state !== "idle" && state !== "error";
-  const choices = useQuery(queries.agents({ conversationId: sessionId }));
-  const identity = useQuery(queries.identity());
-  const settings = useQuery({ ...queries.voiceSettings(identity.data?.username ?? ""), enabled: identity.isSuccess });
-  const loadingVoice = voiceInputsPending(choices.status, identity.status, settings.status);
-  const speaker = voiceChoice(choices.data?.agents.find((item) => item.name === (sessionId ? choices.data?.currentAgent : agent)), settings.data?.voice);
-  // The session pane stays mounted on page routes, so leaving the session ends its call as unmounting does.
-  useEffect(() => () => { if (voiceView().conversationId === sessionId) stopVoice(); }, [route.id, sessionId]);
-  return <>
-    <span aria-live="polite" title={notice} className="hidden max-w-48 truncate text-xs text-muted-foreground empty:absolute sm:inline">{notice}</span>
-    <Tooltip><TooltipTrigger render={<Button type="button" variant={calling ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-7" disabled={!calling && (sending || loadingVoice)} />} aria-label="Voice call" aria-pressed={calling} onMouseDown={(event) => event.preventDefault()} onClick={() => void (calling ? stopVoice() : call(speaker))}>
-      {state === "connecting" ? <LoaderCircle className="animate-spin" /> : calling ? <MicOff /> : <Mic />}
-    </TooltipTrigger><TooltipContent>{calling ? `End voice call (${state})` : "Start voice call"}</TooltipContent></Tooltip>
-  </>;
 }
 
 function AgentsPage() {

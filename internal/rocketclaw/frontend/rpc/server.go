@@ -57,9 +57,6 @@ type Server struct {
 	runsStopped bool
 	runGroup    errgroup.Group
 
-	voiceMu    sync.Mutex
-	voiceCalls map[string]*context.CancelCauseFunc
-
 	listingSeed maphash.Seed
 	listingsMu  sync.Mutex
 	listings    map[string][]sessionListing
@@ -101,7 +98,7 @@ type CronJobs interface {
 }
 
 func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, runs: map[string][]*searchRun{}, voiceCalls: map[string]*context.CancelCauseFunc{}, listingSeed: maphash.MakeSeed(), listings: map[string][]sessionListing{}, typingWatchers: map[string]map[chan *TypingEvent]string{}, typingNewest: map[string]map[[2]string]uint32{}}
+	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, runs: map[string][]*searchRun{}, listingSeed: maphash.MakeSeed(), listings: map[string][]sessionListing{}, typingWatchers: map[string]map[chan *TypingEvent]string{}, typingNewest: map[string]map[[2]string]uint32{}}
 }
 
 func (s *Server) ListSessionEntries(ctx context.Context, request *SessionEntriesRequest) (*ListSessionEntriesResponse, error) {
@@ -1425,7 +1422,6 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 	}
 
 	allowed = sameSpace(definitions, response.CurrentAgent, slices.DeleteFunc(allowed, func(name string) bool { return !limit.AllowsAgent(name) }))
-	cfg := s.cfg.Clone()
 
 	sticky, err := s.sessions.StickySessions(ctx, username, definitions)
 	if err != nil {
@@ -1438,14 +1434,6 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 			continue
 		}
 
-		var voices []string
-
-		if cfg.OpenAI.Auth == "chatgpt" {
-			voices = newCodexVoice().voices()
-		} else if public, err := newPublicVoice(&cfg.OpenAI); err == nil {
-			voices = public.voices()
-		}
-
 		shell := agent.CustomShell.Path
 		if agent.CustomShell.Emulated {
 			shell = "emulated"
@@ -1456,7 +1444,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 			return nil, fmt.Errorf("list web agents: %w", err)
 		}
 
-		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt, Permissions: harness.PermissionPrompt(agent.Permission), Origin: origin, CustomShell: shell, Voices: voices, Space: agent.Space, Sticky: string(agent.Sticky), StickySession: sticky[name]})
+		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt, Permissions: harness.PermissionPrompt(agent.Permission), Origin: origin, CustomShell: shell, Space: agent.Space, Sticky: string(agent.Sticky), StickySession: sticky[name]})
 	}
 
 	return response, nil

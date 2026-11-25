@@ -22,7 +22,7 @@ Edit the agent file the way `main-create-or-update-agent` says: read the effecti
 ## Which agents can have routines
 
 - Any agent file, advanced or easy, can have `routines`.
-- `main` and `voice` are built in and have no agent file, so they cannot have routines. To schedule work for them, create a new agent through `main-create-or-update-agent`.
+- `main` is built in and has no agent file, so it cannot have routines. To schedule work for it, create a new agent through `main-create-or-update-agent`.
 - `routines` on a `sticky: user` or `sticky: slack` agent fail loading with `routines: a sticky: user agent cannot have routines` (or `sticky: slack`). Never add them there.
 - A `sticky: global` agent's routine runs report into its one shared session instead of a chat per run.
 - Only top-level agents' routines run. A shadow's own `routines` never run, and routine runs get no shadows.
@@ -119,7 +119,7 @@ Do this only for instruction changes. Do not ask these questions for schedule-on
 RocketClaw no longer reads `cron/` folders, in the workspace or in overlays, and ignores files left there without a warning. If `cron/*.md` (such as `cron/HEARTBEAT.md`) or `.rocketclaw/overlays/<clone>/cron/*.md` still exists, it no longer runs. When the human asks about one, or you find one while doing this skill, tell them and offer to migrate it:
 
 1. Read the file. Its `agent:` names the agent that ran it; its `schedule:` holds one schedule or a list; its body is the prompt.
-2. Add one `routines` entry per schedule to that agent, with the body as the instruction, following the rules above. When the file had no `agent:`, or names `main`, `voice`, or a `sticky: user` or `sticky: slack` agent, ask which agent should run it.
+2. Add one `routines` entry per schedule to that agent, with the body as the instruction, following the rules above. When the file had no `agent:`, or names `main` or a `sticky: user` or `sticky: slack` agent, ask which agent should run it.
 3. When the file's `space:` differs from the agent's `space`, the routine would run in the agent's space instead. Ask whether that is fine, or whether the job needs its own agent in that space.
 4. Delete the workspace `cron/` file. A file in an overlay clone cannot be deleted from the workspace: tell the human to move it into an agent in that overlay's repository and delete it there.
 5. Call `rocketclaw_reload` once, after all edits.

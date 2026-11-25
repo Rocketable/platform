@@ -228,7 +228,7 @@ func TestTransportRefreshUpdatesOnlySelectedProvider(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	got, err := FreshTokenIn(context.Background(), workspace, config.DefaultRuntimeDir, "work", Token{})
+	got, err := freshTokenIn(context.Background(), workspace, config.DefaultRuntimeDir, "work", Token{})
 	require.NoError(t, err)
 	require.Equal(t, "work-next", got.Access)
 
@@ -257,7 +257,7 @@ func TestConcurrentRefreshAndLoginDoesNotOverwriteNewLogin(t *testing.T) {
 	refreshDone := make(chan error, 1)
 
 	go func() {
-		_, err := FreshTokenIn(context.Background(), workspace, config.DefaultRuntimeDir, "openai", Token{})
+		_, err := freshTokenIn(context.Background(), workspace, config.DefaultRuntimeDir, "openai", Token{})
 		refreshDone <- err
 	}()
 
@@ -307,7 +307,7 @@ func TestFreshTokenInRefreshesOnlyInsideSkew(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"` + access + `","refresh_token":"next-refresh","expires_in":3600}`)), Header: make(http.Header)}, nil
 		})
 
-		got, err := FreshTokenIn(t.Context(), workspace, config.DefaultRuntimeDir, "openai", Token{})
+		got, err := freshTokenIn(t.Context(), workspace, config.DefaultRuntimeDir, "openai", Token{})
 		require.NoError(t, err)
 		require.Equal(t, refreshes, calls)
 
@@ -328,7 +328,7 @@ func TestFreshTokenInReportsMissingToken(t *testing.T) {
 	workspace := t.TempDir()
 	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh"})
 
-	_, err := FreshTokenIn(t.Context(), workspace, config.DefaultRuntimeDir, "work", Token{})
+	_, err := freshTokenIn(t.Context(), workspace, config.DefaultRuntimeDir, "work", Token{})
 	missing, ok := errors.AsType[*MissingTokenError](err)
 	require.True(t, ok, "%v", err)
 	require.Equal(t, "work", missing.Provider)
@@ -1803,7 +1803,7 @@ func TestNamedProviderSessionEndingRefreshUsesProviderGuidance(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	_, err := FreshTokenIn(context.Background(), workspace, config.DefaultRuntimeDir, "work", Token{})
+	_, err := freshTokenIn(context.Background(), workspace, config.DefaultRuntimeDir, "work", Token{})
 	require.ErrorContains(t, err, "refresh_token_reused")
 	require.ErrorContains(t, err, "`rocketclaw oai login work`")
 	require.NotContains(t, err.Error(), "run `rocketclaw oai login`")

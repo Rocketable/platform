@@ -179,7 +179,7 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $5 AND reason = $6 RETU
 
 func copyProvenance(dst, src *protocol.InboundMessage) {
 	dst.Source, dst.Human = src.Source, src.Human
-	for _, key := range []string{protocol.InboundOriginMetadataKey, protocol.InboundMediaMetadataKey, protocol.InboundPrincipalMetadataKey, protocol.InboundPrincipalNameMetadataKey, protocol.InboundPrincipalEmailMetadataKey, protocol.InboundSenderSessionMetadataKey, protocol.InboundSenderAgentMetadataKey, protocol.InboundSenderActionMetadataKey, protocol.InboundAmbientMetadataKey} {
+	for _, key := range []string{protocol.InboundOriginMetadataKey, protocol.InboundPrincipalMetadataKey, protocol.InboundPrincipalNameMetadataKey, protocol.InboundPrincipalEmailMetadataKey, protocol.InboundSenderSessionMetadataKey, protocol.InboundSenderAgentMetadataKey, protocol.InboundSenderActionMetadataKey, protocol.InboundAmbientMetadataKey} {
 		if value, ok := src.Metadata[key]; ok {
 			dst.Metadata[key] = value
 		} else {
@@ -239,7 +239,7 @@ func (b *Bridge) WriteSubagent(ctx context.Context, write *harness.SubagentWrite
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, write.Prompt, false)
 	inbound.PreserveWhitespace = true
-	inbound.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text", protocol.InboundSenderSessionMetadataKey: b.config.ConversationID, protocol.InboundSenderAgentMetadataKey: write.Delegator, inboundAgentMetadataKey: write.Agent}
+	inbound.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundSenderSessionMetadataKey: b.config.ConversationID, protocol.InboundSenderAgentMetadataKey: write.Delegator, inboundAgentMetadataKey: write.Agent}
 
 	if write.Unaddressed {
 		inbound.Metadata[protocol.InboundAmbientMetadataKey] = protocol.AmbientDelegated
@@ -2992,24 +2992,19 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 
 	var warnings []string
 
-	for _, embedded := range [...]struct {
-		name    string
-		setting config.EmbeddedAgentConfig
-	}{{"main", cfg.EmbeddedAgents.Main}, {"voice", cfg.EmbeddedAgents.Voice}} {
-		if embedded.setting.Disabled {
-			delete(agents.Items, embedded.name)
-			continue
-		}
+	if setting := cfg.EmbeddedAgents.Main; setting.Disabled {
+		delete(agents.Items, "main")
+	} else {
+		agent := builtin.Items["main"]
 
-		agent := builtin.Items[embedded.name]
-		if provider, _, qualified := strings.Cut(embedded.setting.Model, "/"); qualified && !slices.Contains(cfg.ProviderNames(), provider) {
-			warnings = append(warnings, "Agent "+embedded.name+" uses its shipped model because its Behavior Settings model names provider "+provider+", which is not configured.")
-		} else if embedded.setting.Model != "" {
-			agent.Model, agent.ReasoningEffort = harness.ParseModelRef(embedded.setting.Model)
+		if provider, _, qualified := strings.Cut(setting.Model, "/"); qualified && !slices.Contains(cfg.ProviderNames(), provider) {
+			warnings = append(warnings, "Agent main uses its shipped model because its Behavior Settings model names provider "+provider+", which is not configured.")
+		} else if setting.Model != "" {
+			agent.Model, agent.ReasoningEffort = harness.ParseModelRef(setting.Model)
 		}
 
 		agent.Prompt += "\n\n" + about
-		agents.Items[embedded.name] = agent
+		agents.Items["main"] = agent
 	}
 
 	agents, errsReviewer := agents.WithoutInvalidReviewers()
@@ -3738,7 +3733,7 @@ func buildPrompt(msg *protocol.InboundMessage, agent *harness.Agent, steer bool)
 }
 
 func inboundDirectSkill(msg *protocol.InboundMessage) *harness.PromptInputDirectSkill {
-	if !msg.Human || msg.Source != protocol.SourceWeb || msg.Metadata[protocol.InboundMediaMetadataKey] == "Voice" ||
+	if !msg.Human || msg.Source != protocol.SourceWeb ||
 		(msg.Kind != protocol.InboundKindPrompt && msg.Kind != protocol.InboundKindSteer && msg.Kind != protocol.InboundKindEnqueue) {
 		return nil
 	}
@@ -3782,8 +3777,8 @@ func parseDirectSkillTrigger(text string) *harness.PromptInputDirectSkill {
 }
 
 type promptProvenance struct {
-	origin, media, principal, sender, additionalInstructions string
-	unaddressed                                              bool
+	origin, principal, sender, additionalInstructions string
+	unaddressed                                       bool
 }
 
 func provenanceFromInbound(msg *protocol.InboundMessage) promptProvenance {
@@ -3800,13 +3795,9 @@ func provenanceFromInbound(msg *protocol.InboundMessage) promptProvenance {
 		origin = "System"
 	}
 
-	provenance := promptProvenance{origin: origin, media: "Text", unaddressed: msg.Metadata[protocol.InboundAmbientMetadataKey] != ""}
-	if origin := canonicalOverride(msg.Metadata[protocol.InboundOriginMetadataKey], "Slack", "Cron", "ExternalMCP", "System"); origin != "" {
+	provenance := promptProvenance{origin: origin, unaddressed: msg.Metadata[protocol.InboundAmbientMetadataKey] != ""}
+	if origin := strings.TrimSpace(msg.Metadata[protocol.InboundOriginMetadataKey]); slices.Contains([]string{"Slack", "Cron", "ExternalMCP", "System"}, origin) {
 		provenance.origin = origin
-	}
-
-	if media := canonicalOverride(msg.Metadata[protocol.InboundMediaMetadataKey], "Text", "Voice"); media != "" {
-		provenance.media = media
 	}
 
 	if msg.Human {
@@ -3816,20 +3807,8 @@ func provenanceFromInbound(msg *protocol.InboundMessage) promptProvenance {
 	return provenance
 }
 
-func canonicalOverride(value string, allowed ...string) string {
-	if value = strings.TrimSpace(value); slices.Contains(allowed, value) {
-		return value
-	}
-
-	return ""
-}
-
 func provenanceHeader(provenance *promptProvenance) string {
 	header := "[" + cmp.Or(provenanceToken(provenance.origin), "System")
-	if media := provenanceToken(provenance.media); media != "" && media != "Text" {
-		header += " media=" + media
-	}
-
 	if provenance.unaddressed {
 		header += " unaddressed"
 	}

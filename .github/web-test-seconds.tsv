@@ -8,7 +8,6 @@
 57	src/session-commands.browser.test.ts
 29	src/github-pr.browser.test.ts
 23	src/delegations.browser.test.ts
-22	src/voice-page.browser.test.ts
 20	src/notifications.browser.test.ts
 20	src/web-update.browser.test.ts
 18	src/composer.browser.test.ts

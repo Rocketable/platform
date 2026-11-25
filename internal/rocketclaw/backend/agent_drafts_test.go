@@ -512,15 +512,13 @@ func TestAgentDraftNameRule(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"main", "voice"} {
-		_, errCreate := store.CreateAgentDraft(ctx, "alice", AgentDraftOrigin{Name: name, Mode: harness.AgentModeEasy})
-		_, errRename := store.ApplyAgentDraftOp(ctx, draft.ID, &AgentDraftOp{BaseRevision: 1, Kind: AgentDraftRename, Value: name})
+	_, errCreate := store.CreateAgentDraft(ctx, "alice", AgentDraftOrigin{Name: "main", Mode: harness.AgentModeEasy})
+	_, errRename := store.ApplyAgentDraftOp(ctx, draft.ID, &AgentDraftOp{BaseRevision: 1, Kind: AgentDraftRename, Value: "main"})
 
-		for _, err := range []error{errCreate, errRename} {
-			_, ok := errors.AsType[*AgentDraftOpError](err)
-			require.True(t, ok, "%q: %v", name, err)
-			require.EqualError(t, err, `"`+name+`" belongs to a built-in agent: give the draft another name.`)
-		}
+	for _, err := range []error{errCreate, errRename} {
+		_, ok := errors.AsType[*AgentDraftOpError](err)
+		require.True(t, ok, "%v", err)
+		require.EqualError(t, err, `"main" belongs to a built-in agent: give the draft another name.`)
 	}
 
 	_, err = store.CreateAgentDraft(ctx, "alice", AgentDraftOrigin{Name: "blank"})

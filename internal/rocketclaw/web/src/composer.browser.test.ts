@@ -59,7 +59,6 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
       expect(await page.getByRole("button", { name: "Steer", exact: true }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Send", exact: true }).isDisabled()).toBe(true);
       await page.getByText("OpenAI / GPT-6.1 Sol", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "Voice call", exact: true }).waitFor();
       await mkdir(shots, { recursive: true });
       await page.screenshot({ path: path.join(shots, `native-composer-idle-${width}-${touch ? "touch" : "desktop"}.png`) });
 
@@ -95,13 +94,13 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
       await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
       expect(calls.at(-1)).toMatchObject({ text: "Please focus on the composer layout.", delivery: "QUEUE" });
       await page.locator("[data-queue-id]").waitFor();
-      await input.fill("Keep the voice control.");
+      await input.fill("Keep the steer control.");
       await page.mouse.move(0, 0);
       await page.getByRole("tooltip").waitFor({ state: "hidden" });
       await page.screenshot({ path: path.join(shots, `native-composer-queued-${width}-${touch ? "touch" : "desktop"}.png`) });
       await Promise.all([page.waitForResponse("**/api/Prompt"), steer.click()]);
       await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
-      expect(calls.at(-1)).toMatchObject({ text: "Keep the voice control.", delivery: "STEER" });
+      expect(calls.at(-1)).toMatchObject({ text: "Keep the steer control.", delivery: "STEER" });
       expect(await input.evaluate((element: HTMLTextAreaElement) => document.activeElement === element)).toBe(true);
       await input.fill("Save this for later");
       await page.getByRole("button", { name: "Composer actions", exact: true }).click();

@@ -289,7 +289,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 }
 
 func TestHistoryShowsFilesAnExecuteResultOrNoteCarried(t *testing.T) {
-	h := startVoiceHarness(t)
+	h := startWebHarness(t)
 	cfg := h.server.cfg.Clone()
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
@@ -313,6 +313,10 @@ func TestHistoryShowsFilesAnExecuteResultOrNoteCarried(t *testing.T) {
 	require.NoError(t, err)
 	quoted, err := json.Marshal(string(arguments))
 	require.NoError(t, err)
+	codeArguments, err := json.Marshal(map[string]string{"code": code})
+	require.NoError(t, err)
+	quotedCode, err := json.Marshal(string(codeArguments))
+	require.NoError(t, err)
 
 	var turn errgroup.Group
 
@@ -322,25 +326,25 @@ func TestHistoryShowsFilesAnExecuteResultOrNoteCarried(t *testing.T) {
 	})
 	assert.Contains(t, <-h.requests, "show the files")
 
-	h.replies <- voiceModelCode("r1", code)
+	h.replies <- modelReply("r1", `{"id":"fc_r1","type":"function_call","status":"completed","call_id":"call_r1","name":"execute","arguments":`+string(quotedCode)+`}`)
 
 	answer := <-h.requests
 	assert.Contains(t, answer, `"type":"input_image"`)
 
-	h.replies <- voiceModel("r2", `{"id":"fc_r2","type":"function_call","status":"completed","call_id":"call_r2","name":"execute","arguments":`+string(quoted)+`}`)
+	h.replies <- modelReply("r2", `{"id":"fc_r2","type":"function_call","status":"completed","call_id":"call_r2","name":"execute","arguments":`+string(quoted)+`}`)
 
 	note := <-h.requests
 	assert.Contains(t, note, "call_r2")
 
 	if !strings.Contains(note, `<execute id=`) {
-		h.replies <- voiceModelText("r3", "Started.")
+		h.replies <- modelReplyText("r3", "Started.")
 
 		note = <-h.requests
 	}
 
 	assert.Contains(t, note, `<execute id=`)
 
-	h.replies <- voiceModelText("r4", "Got them.")
+	h.replies <- modelReplyText("r4", "Got them.")
 
 	require.NoError(t, turn.Wait())
 

@@ -78,7 +78,7 @@ func TestBehaviorRoundTrip(t *testing.T) {
 	  "slack": {"channels": [{"channel": "#ops", "agents": ["main"], "allowed_user_ids": ["U123"]}], "ambient_decision_model": "openai/gpt-6-luna"},
 	  "logging": {"level": "warn"},
 	  "overlays": ["github.com/rocketable/overlay1@main"],
-	  "embedded_agents": {"main": {"disabled": true, "model": ""}, "voice": {"disabled": false, "model": "work/gpt-x#low"}},
+	  "embedded_agents": {"main": {"disabled": true, "model": "work/gpt-x#low"}},
 	  "title_model": "work/gpt-6-luna#minimal",
 	  "title_decision_model": "typesafe/jev-latest"
 	}`
@@ -101,7 +101,7 @@ func TestBehaviorRoundTrip(t *testing.T) {
 	assert.Equal(t, "xapp-test", cfg.Slack.AppToken)
 }
 
-func TestBehaviorWithoutEmbeddedAgentsLeavesBothOn(t *testing.T) {
+func TestBehaviorWithoutEmbeddedAgentsLeavesMainOn(t *testing.T) {
 	var behavior Behavior
 	require.NoError(t, json.Unmarshal([]byte(`{"auto_approver_model": "gpt-a", "logging": {"level": "warn"}}`), &behavior))
 
@@ -340,21 +340,20 @@ func TestValidateAutoApproverModels(t *testing.T) {
 
 func TestValidateEmbeddedAgentModels(t *testing.T) {
 	for _, tt := range []struct {
-		name        string
-		main, voice string
-		want        EmbeddedAgentsConfig
-		wantErr     string
+		name    string
+		main    string
+		want    EmbeddedAgentsConfig
+		wantErr string
 	}{
 		{name: "unset", want: EmbeddedAgentsConfig{}},
-		{name: "openai prefix", main: " openai/gpt-x#low ", voice: "gpt-y", want: EmbeddedAgentsConfig{Main: EmbeddedAgentConfig{Model: "gpt-x#low"}, Voice: EmbeddedAgentConfig{Model: "gpt-y"}}},
-		{name: "configured provider", voice: " work/gpt-x#high ", want: EmbeddedAgentsConfig{Voice: EmbeddedAgentConfig{Model: "work/gpt-x#high"}}},
+		{name: "openai prefix", main: " openai/gpt-x#low ", want: EmbeddedAgentsConfig{Main: EmbeddedAgentConfig{Model: "gpt-x#low"}}},
 		{name: "unconfigured provider", main: " nope/gpt-x ", want: EmbeddedAgentsConfig{Main: EmbeddedAgentConfig{Model: "nope/gpt-x"}}},
-		{name: "missing model", voice: "work/", wantErr: `embedded_agents.voice.model: invalid model "work/": expected model or provider/model`},
+		{name: "missing model", main: "work/", wantErr: `embedded_agents.main.model: invalid model "work/": expected model or provider/model`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
 			cfg.Providers = map[string]OpenAIConfig{"work": {APIKey: "work-key"}}
-			cfg.EmbeddedAgents.Main.Model, cfg.EmbeddedAgents.Voice.Model = tt.main, tt.voice
+			cfg.EmbeddedAgents.Main.Model = tt.main
 
 			err := cfg.ValidateBehavior()
 			if tt.wantErr != "" {

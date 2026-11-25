@@ -92,7 +92,7 @@ The final test does not show any of this. It asserts a looser string than before
 
 - The context is canceled after `BeginTx` and before `Commit` runs, whether by the test or by shutdown. This is the window that races.
 - Canceling before the operation starts is deterministic. `DB.BeginTx` and queries get their connection from `DB.conn`, which checks the context first and returns `ctx.Err()` (`sql.go:1328-1332`). Tests in `internal/rocketclaw/backend` that cancel first and then call the store (for example `store_test.go:65-69`, `origin_pairs_test.go:242-252`, and `store_cancellation_test.go`) are not affected.
-- Production code that classifies a `Commit` error as cancellation must also accept `sql.ErrTxDone`. No production code here does this today. The only non-test `errors.Is(..., context.Canceled)` in `internal` or `cmd` (`internal/rocketclaw/frontend/rpc/voice.go:296`) checks a context's cause, not a database error.
+- Production code that classifies a `Commit` error as cancellation must also accept `sql.ErrTxDone`. No production code here does this today. The only non-test `errors.Is(..., context.Canceled)` in `internal` or `cmd` (`internal/rocketclaw/backend/model_resolver.go:194`) checks a model provider's HTTP request error for logging, not a database error.
 
 ## Examples
 

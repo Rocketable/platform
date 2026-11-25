@@ -125,7 +125,7 @@ func (r *Runtime) SaveBehavior(behavior *config.Behavior) error {
 		return fmt.Errorf("validate behavior settings: %w", err)
 	}
 
-	for _, embedded := range [...]struct{ field, model string }{{"embedded_agents.main.model", candidate.EmbeddedAgents.Main.Model}, {"embedded_agents.voice.model", candidate.EmbeddedAgents.Voice.Model}, {"title_model", candidate.TitleModel}} {
+	for _, embedded := range [...]struct{ field, model string }{{"embedded_agents.main.model", candidate.EmbeddedAgents.Main.Model}, {"title_model", candidate.TitleModel}} {
 		if provider, _, qualified := strings.Cut(embedded.model, "/"); qualified && !slices.Contains(candidate.ProviderNames(), provider) {
 			return fmt.Errorf("validate behavior settings: %s: provider %q is not configured", embedded.field, provider)
 		}

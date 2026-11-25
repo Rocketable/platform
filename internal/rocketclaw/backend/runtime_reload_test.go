@@ -204,7 +204,7 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 		{"channel without agents", func(b *config.Behavior) { b.Slack.Channels[1].Agents = nil }, "slack.channels[].agents is required"},
 		{"frontend assets rejected", func(b *config.Behavior) { b.AutoApproverModel, rejectAssets = "gpt-s", true }, `cron job "report" is invalid`},
 		{"overlay fails to sync", func(b *config.Behavior) { b.Overlays = []string{filepath.Join(t.TempDir(), "missing")} }, "apply configured rocketclaw overlay"},
-		{"voice model on an unconfigured provider", func(b *config.Behavior) { b.EmbeddedAgents.Voice.Model = "nope/gpt-x" }, `embedded_agents.voice.model: provider "nope" is not configured`},
+		{"main model on an unconfigured provider", func(b *config.Behavior) { b.EmbeddedAgents.Main.Model = "nope/gpt-x" }, `embedded_agents.main.model: provider "nope" is not configured`},
 		{"title model on an unconfigured provider", func(b *config.Behavior) { b.TitleModel = "nope/gpt-x#low" }, `title_model: provider "nope" is not configured`},
 		{"ambient decision model on an unconfigured provider", func(b *config.Behavior) { b.Slack.AmbientDecisionModel = "typesafe/jev-latest" }, `slack.ambient_decision_model: "typesafe/jev-latest" must be provider/model with its provider configured in decision`},
 	} {

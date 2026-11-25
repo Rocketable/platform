@@ -60,8 +60,7 @@ type Behavior struct {
 }
 
 type EmbeddedAgentsConfig struct {
-	Main  EmbeddedAgentConfig `json:"main"`
-	Voice EmbeddedAgentConfig `json:"voice"`
+	Main EmbeddedAgentConfig `json:"main"`
 }
 
 type EmbeddedAgentConfig struct {
@@ -433,7 +432,7 @@ func (c *Config) ValidateBehavior() error {
 	for _, model := range [...]struct {
 		field string
 		model *string
-	}{{"embedded_agents.main.model", &c.EmbeddedAgents.Main.Model}, {"embedded_agents.voice.model", &c.EmbeddedAgents.Voice.Model}, {"title_model", &c.TitleModel}} {
+	}{{"embedded_agents.main.model", &c.EmbeddedAgents.Main.Model}, {"title_model", &c.TitleModel}} {
 		if *model.model, err = normalizeOpenAIModel(model.field, *model.model); err != nil {
 			return err
 		}

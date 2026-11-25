@@ -392,8 +392,7 @@ export async function appScenario(part: "lists" | "composer") {
       const navigation = page.locator("footer");
       const compactHeight = (await navigation.boundingBox())!.height;
       const navigationSearch = navigation.getByRole("button", { name: "Search sessions and commands", exact: true });
-      // The sidebar toggle, New session, Search, Voice, Next session needing you, and the theme toggle.
-      expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(6);
+      expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(5);
       expect(await navigation.getByRole("link").count()).toBe(0);
       expect((await navigationSearch.boundingBox())!.width).toBe(48);
       expect((await navigationSearch.locator("svg").boundingBox())!.width).toBe(24);
@@ -462,7 +461,7 @@ export async function appScenario(part: "lists" | "composer") {
         "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Routines: Dashboard", "Routines: Run", "Routines: Timeline", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Spaces: New space", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Copy link", "Tabs: Next⌘]", "Tabs: Previous⌘[", "Tabs: Recently closed", "Tabs: Show Parked⌘3", "Tabs: Show Recent⌘1", "Tabs: Show Spaces⌘2", "Tabs: Toggle sidebar⌘B",
         // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
         "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
-        "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded.", "Voice"]);
+        "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded."]);
       await page.keyboard.press("Escape");
       await commandPalette.waitFor({ state: "hidden" });
       // The search button opens one palette: sessions only when empty, matching commands above sessions once typed.
@@ -1441,7 +1440,7 @@ export async function appScenario(part: "lists" | "composer") {
         } else {
           expect(Math.abs(groupBox!.x + groupBox!.width / 2 - width / 2)).toBeLessThan(1);
         }
-        expect(await newChat.locator("..").getByRole("button").count()).toBe(4);
+        expect(await newChat.locator("..").getByRole("button").count()).toBe(3);
         const creations = ctrl.createdAgents.length;
         await newChat.click();
         await navPage.waitForURL(`${origin}/`);

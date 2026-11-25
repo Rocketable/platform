@@ -137,11 +137,10 @@ for (const width of [1280, 320]) test(`the bottom bar's buttons fit without over
     const { x, y, width, height } = node.getBoundingClientRect();
     return { x, y, width, height };
   }));
-  // The sidebar toggle, the four middle buttons, and the theme toggle, left to right without overlap.
-  expect(boxes).toHaveLength(6);
+  expect(boxes).toHaveLength(5);
   expect(await page.locator("#bottom-navigation").getByRole("button", { name: "Pull requests and issues", exact: true }).count()).toBe(0);
   expect(boxes[0].x).toBeLessThan(16);
-  expect(boxes[5].x + boxes[5].width).toBeGreaterThan(width - 16);
+  expect(boxes[4].x + boxes[4].width).toBeGreaterThan(width - 16);
   for (const [index, box] of boxes.entries()) {
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(width);

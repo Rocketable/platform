@@ -1760,7 +1760,7 @@ func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
 	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, &harness.Agent{Frontmatter: map[string]any{"additionalInstructions": " "}}, false))
 	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, &harness.Agent{Frontmatter: map[string]any{"additionalInstructions": 7}}, false))
 	assert.Equal(t, "[Slack principal=\"Alice\"]\n\nhello", buildPrompt(msg, &harness.Agent{Mode: harness.AgentModeEasy}, false), "easy agents get no reply-style line")
-	assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n task \n", buildPrompt(&protocol.InboundMessage{Source: protocol.SourceSystem, PreserveWhitespace: true, Text: " task \n", Metadata: map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text"}}, nil, false))
+	assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n task \n", buildPrompt(&protocol.InboundMessage{Source: protocol.SourceSystem, PreserveWhitespace: true, Text: " task \n", Metadata: map[string]string{protocol.InboundOriginMetadataKey: "System"}}, nil, false))
 }
 
 func TestParseDirectSkillTrigger(t *testing.T) {
@@ -1806,17 +1806,6 @@ func TestParseDirectSkillTrigger(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestVoiceInboundRunsNoSlashCommands(t *testing.T) {
-	t.Parallel()
-
-	skill := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "/docs-helper do it"}, true)
-	require.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "do it", PlainIfUnknown: true}, inboundDirectSkill(skill))
-
-	skill.Metadata[protocol.InboundMediaMetadataKey] = "Voice"
-	assert.Nil(t, inboundDirectSkill(skill), skill.Text)
-	assert.Equal(t, skill.Text, skill.Metadata[protocol.InboundRawTextMetadataKey])
 }
 
 func TestBridgeSteersJoinOpenTurn(t *testing.T) {
@@ -1895,14 +1884,14 @@ func TestStoppedSteerJoinsOnlyOpenTurns(t *testing.T) {
 func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "[System]", provenanceHeader(&promptProvenance{origin: " \t\n ", media: " \n "}))
-	assert.Equal(t, "[ExternalMCP principal=\"Alice [ops]=lead\" additional_instructions=\"line \\\"one\\\"\\nnext\"]", provenanceHeader(&promptProvenance{origin: "ExternalMCP", media: "Text", principal: " Alice [ops]=lead ", additionalInstructions: "line \"one\"\nnext"}))
-	assert.Equal(t, `[Slack principal="a\"b\\c"]`, provenanceHeader(&promptProvenance{origin: "Slack", media: "Text", principal: "a\"b\\c"}))
-	assert.Equal(t, "[Slack]", provenanceHeader(&promptProvenance{origin: "Slack", media: "Text", principal: "   "}))
-	assert.Equal(t, "[External_(MCP)-x media=Voice_(note)-clip]", provenanceHeader(&promptProvenance{origin: "External [MCP]=x", media: "Voice [note]=clip"}))
-	assert.Equal(t, promptProvenance{origin: "System", media: "Text"}, provenanceFromInbound(&protocol.InboundMessage{Source: protocol.SourceSystem, Metadata: map[string]string{protocol.InboundOriginMetadataKey: "Mallory", protocol.InboundMediaMetadataKey: "Dance"}}))
-	voice := provenanceFromInbound(&protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundMediaMetadataKey: "Voice", protocol.InboundPrincipalMetadataKey: "Alice"}})
-	assert.Equal(t, `[Web media=Voice principal="Alice"]`, provenanceHeader(&voice))
+	assert.Equal(t, "[System]", provenanceHeader(&promptProvenance{origin: " \t\n "}))
+	assert.Equal(t, "[ExternalMCP principal=\"Alice [ops]=lead\" additional_instructions=\"line \\\"one\\\"\\nnext\"]", provenanceHeader(&promptProvenance{origin: "ExternalMCP", principal: " Alice [ops]=lead ", additionalInstructions: "line \"one\"\nnext"}))
+	assert.Equal(t, `[Slack principal="a\"b\\c"]`, provenanceHeader(&promptProvenance{origin: "Slack", principal: "a\"b\\c"}))
+	assert.Equal(t, "[Slack]", provenanceHeader(&promptProvenance{origin: "Slack", principal: "   "}))
+	assert.Equal(t, "[External_(MCP)-x]", provenanceHeader(&promptProvenance{origin: "External [MCP]=x"}))
+	assert.Equal(t, promptProvenance{origin: "System"}, provenanceFromInbound(&protocol.InboundMessage{Source: protocol.SourceSystem, Metadata: map[string]string{protocol.InboundOriginMetadataKey: "Mallory"}}))
+	web := provenanceFromInbound(&protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}})
+	assert.Equal(t, `[Web principal="Alice"]`, provenanceHeader(&web))
 }
 
 func TestReviewOriginHeader(t *testing.T) {

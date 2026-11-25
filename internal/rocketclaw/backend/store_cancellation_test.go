@@ -22,7 +22,7 @@ func TestSessionOperationsRejectCanceledContext(t *testing.T) {
 	runtime := &Runtime{Sessions: store, background: registry}
 
 	for _, operation := range []string{
-		"append", "rename", "attachment", "voice", "tabs", "save tabs", "channel",
+		"append", "rename", "attachment", "tabs", "save tabs", "channel",
 		"history", "active turn", "Slack thread", "background jobs",
 		"completion notes", "page", "continue run", "external MCP metadata",
 	} {
@@ -39,8 +39,6 @@ func TestSessionOperationsRejectCanceledContext(t *testing.T) {
 				_, err = store.UpdateConversationDetails(ctx, "chat", new("not saved"))
 			case "attachment":
 				err = store.SaveAttachment(ctx, "chat", "", &protocol.OutboundAttachment{ID: "not-saved", Name: "note.txt", Data: []byte("not saved")}, false)
-			case "voice":
-				_, err = store.VoiceSettings(ctx, "alice")
 			case "tabs":
 				_, _, err = store.TabState(ctx, "alice")
 			case "save tabs":

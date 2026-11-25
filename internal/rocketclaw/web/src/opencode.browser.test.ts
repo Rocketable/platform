@@ -85,7 +85,7 @@ async function startThreadPRBrowser({ unavailable = true, pollClock = false, wid
 test("thread PR pane refreshes the OpenCode checkout and its files without losing the draft", async () => {
   const { page, draft, pane, checkout, commands, pendingMetadata, releaseMetadata, open, assertShellReads } = await startThreadPRBrowser({ width: 624 });
   await draft.fill("OpenCode draft before reading a PR");
-  expect(await page.locator("#bottom-navigation").getByRole("button").count()).toBe(6);
+  expect(await page.locator("#bottom-navigation").getByRole("button").count()).toBe(5);
   await open();
   await pane.getByRole("alert").getByText("Could not read the current checkout's pull request using this OpenCode server's gh login.", { exact: true }).waitFor();
   expect(await pane.getByLabel("Personal read token").count()).toBe(0);

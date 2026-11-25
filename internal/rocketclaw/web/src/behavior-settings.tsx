@@ -17,7 +17,7 @@ type Behavior = {
   slack: { channels: Channel[] | null; ambient_decision_model?: string };
   logging: { level: string };
   overlays: string[] | null;
-  embedded_agents?: { main?: EmbeddedAgent; voice?: EmbeddedAgent };
+  embedded_agents?: { main?: EmbeddedAgent };
   title_model?: string;
   title_decision_model?: string;
 };
@@ -25,7 +25,6 @@ type Option = { value: string; label: string };
 
 const option = (value: string): Option => ({ value, label: value });
 const levels = ["debug", "info", "warn", "error"].map(option);
-const embeddedAgents = ["main", "voice"] as const;
 
 export function BehaviorSettings({ view }: { view: ConfigView }) {
   const [draft, setDraft] = useState<Behavior>();
@@ -68,7 +67,7 @@ function BehaviorFields({ draft, disabled, onChange }: { draft: Behavior; disabl
         <Overlays overlays={draft.overlays ?? []} onChange={(overlays) => onChange({ overlays })} />
       </Group>
       <Group title="Built-in agents">
-        {embeddedAgents.map((name) => <EmbeddedAgentSettings key={name} name={name} agent={draft.embedded_agents?.[name] ?? {}} disabled={disabled} onChange={(agent) => onChange({ embedded_agents: { ...draft.embedded_agents, [name]: agent } })} />)}
+        <EmbeddedAgentSettings name="main" agent={draft.embedded_agents?.main ?? {}} disabled={disabled} onChange={(agent) => onChange({ embedded_agents: { ...draft.embedded_agents, main: agent } })} />
       </Group>
       <Group title="Session titles">
         <Labeled label="Title model" hint="Names Web sessions. Empty uses openai/gpt-6-luna#low.">

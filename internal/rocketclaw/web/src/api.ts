@@ -1,6 +1,6 @@
 import { hashKey, type QueryKey } from "@tanstack/react-query";
 import { server, serverURL } from "./navigation";
-import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, ListTab, SavedTabs, SearchPage, StripLayout, TranscriptEvent, TreeNode, VoiceSettings } from "./types";
+import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, ListTab, SavedTabs, SearchPage, StripLayout, TranscriptEvent, TreeNode } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -17,7 +17,7 @@ export async function rpc<T>(method: string, input: object = {}, signal?: AbortS
 // Read through EOF so errors after the terminal snapshot cannot commit a cache.
 export const listSessions = (signal?: AbortSignal, url = "/api/ListSessions") => sse<SessionBatch>(url, { signal });
 
-export async function* sse<T>(url: string, init: RequestInit): AsyncGenerator<T> {
+async function* sse<T>(url: string, init: RequestInit): AsyncGenerator<T> {
   const signal = init.signal;
   const response = await fetch(url, init);
   if (!response.ok) {
@@ -90,8 +90,6 @@ export const queries = {
   } }),
   messageTree: (input: { id: string }, revision?: string) => ({ queryKey: ["messageTree", input, revision], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ nodes: TreeNode[] }>("MessageTree", input, signal)).nodes }),
   queue: (input: { id: string }) => ({ queryKey: ["queue", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ items: QueueItem[] }>("ListQueue", input, signal)).items }),
-  // The server answers for the signed-in person; the username keeps one person's settings out of another's cache.
-  voiceSettings: (username: string) => ({ queryKey: ["voiceSettings", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<VoiceSettings>("VoiceSettings", {}, signal) }),
   tabs: (username: string, name = server()) => ({ queryKey: [{ server: name }, "tabs", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<SavedTabs>("Tabs", {}, signal, name) }),
 };
 
@@ -123,7 +121,6 @@ export const mutations = {
   decideProposal: (input: { id: string; proposalId: string; accept: boolean }) => rpc<AgentDraftProposal>("DecideProposal", input),
   testModel: (input: { model: string; decision?: boolean }) => rpc<{ error?: string; elapsedMs?: string }>("TestModel", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
-  voiceSettings: (input: { action: "UPDATE"; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
   saveBehaviorSettings: async (input: { documentJson: string }) => (await rpc<{ config: ConfigView }>("SaveBehaviorSettings", input)).config,
   tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; layout?: StripLayout; attention?: { paths: string[]; action: AttentionAction; until?: string }; autoPark?: boolean; listAdd?: ListTab; listForget?: ListTab; listOrder?: ListTab[] }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),
 };

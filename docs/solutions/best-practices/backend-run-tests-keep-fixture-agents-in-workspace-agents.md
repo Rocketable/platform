@@ -11,7 +11,7 @@ applies_when:
   - A test fixture writes agent files under cfg.RuntimeDirName()
   - ListAgents, an agent picker, or an agent filter in a test never shows an agent the fixture wrote
 symptoms:
-  - ListAgents returns only the built-in main and voice agents, never the agent the fixture wrote
+  - ListAgents returns only the built-in main agent, never the agent the fixture wrote
   - A browser test waiting for a fixture agent's name in the Web page times out
   - "A fixture's own main.md (description: ... fixture) never takes effect, while the test still passes"
 root_cause: test_isolation
@@ -42,7 +42,7 @@ A reload (`skel.ReplaceRuntimeAssetsAfterValidation`, `internal/rocketclaw/backe
 
 So when a test runs `backend.Run`, write fixture agents where startup reads them from: `<workspace>/agents/<name>.md`. Step 1 keeps an existing workspace file and step 3 copies the workspace's `agents/` last.
 
-Never name a fixture agent `main` or `voice`. Those are built-in agents that every load takes from the binary (`readRocketCodeDefinitionsIn`, `internal/rocketclaw/backend/bridge.go:2838`), and step 3 skips `agents/main.md`, `agents/voice.md`, `agents/main/` and `agents/voice/` in overlays and the workspace with a warning (`builtinAgentFilter`, `skel.go:674`). Such a fixture is ignored wherever it is written, and the test runs against the built-in agent. Give the fixture another name and use that name in the test. To change a built-in agent's model or turn it off, set `cfg.EmbeddedAgents`.
+Never name a fixture agent `main`. That is a built-in agent that every load takes from the binary (`readRocketCodeDefinitionsIn`, `internal/rocketclaw/backend/bridge.go:2838`), and step 3 skips `agents/main.md` and `agents/main/` in overlays and the workspace with a warning (`builtinAgentFilter`, `skel.go:674`). Such a fixture is ignored wherever it is written, and the test runs against the built-in agent. Give the fixture another name and use that name in the test. To change a built-in agent's model or turn it off, set `cfg.EmbeddedAgents`.
 
 Tests that build the RPC `Server` directly, without `backend.Run`, can keep writing the runtime directory: nothing rebuilds it there. `reads_test.go`, `opencode_test.go` and `shadow_upload_test.go` in `internal/rocketclaw/frontend/rpc` do this correctly.
 

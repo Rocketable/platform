@@ -20,7 +20,6 @@
 10.8	TestShadowHistoryUsesProducerDestinationIndex
 10.6	TestSearchSessionsLongQueryParse
 9.7	TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue
-9.4	TestVoice
 8.9	TestAgentDraftBodyDiff
 8.8	TestFinishTurnKeepsLargeAttachment
 8.7	TestAgentDraftAssistant
@@ -260,7 +259,7 @@
 1.1	TestInitializeSessionDBAdoptsReleasedStore
 1.0	TestShadowLifecycleDefinitionFailureAndRetry
 1.0	TestStoppedTurnReleasesItsNotes
-1.0	TestRevertStashKeepsVoiceInbound
+1.0	TestRevertStashKeepsWebInbound
 1.0	TestTailnetStopRestartsRocketClaw
 1.0	TestSearchMessagesSharedFlightCancellation
 1.0	TestSessionToolsBridgePermissions

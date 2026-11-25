@@ -564,12 +564,12 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM legacy_thread_queue`).Scan(&kept))
 	require.Equal(t, 1, kept)
 
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql", "112_routines_tab_paths.sql", "113_generated_name.sql", "114_web_tab_lists.sql")
+	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql", "112_routines_tab_paths.sql", "113_generated_name.sql", "114_web_tab_lists.sql", "115_drop_voice.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
 	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql", "112_routines_tab_paths.sql", "113_generated_name.sql", "114_web_tab_lists.sql"}, ledger)
+	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql", "099_external_run_reports_index.sql", "100_web_tab_folds.sql", "101_drop_top_shelf.sql", "102_web_card_order.sql", "103_drop_conversation_pinned.sql", "104_web_park_until_idle.sql", "105_web_tab_unfollowed.sql", "106_background_result_files.sql", "107_web_navigation.sql", "108_history_links.sql", "109_space_owned_pages.sql", "110_remote_automation.sql", "111_web_park_after_idle.sql", "112_routines_tab_paths.sql", "113_generated_name.sql", "114_web_tab_lists.sql", "115_drop_voice.sql"}, ledger)
 
 	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
 	require.NoError(t, err)
@@ -1045,6 +1045,53 @@ UNION ALL SELECT username || ' ' || last::text || ' ' || shared_order::text || '
 		"tab /cronjobs",
 		"tab /routines",
 		"tab /routines/ZGFpbHk",
+	}, paths)
+}
+
+func TestDropVoiceMigration(t *testing.T) {
+	t.Parallel()
+
+	store := newColdTestSessionServiceAt(t, t.TempDir())
+	ctx := t.Context()
+	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 115)
+	require.NoError(t, err)
+
+	_, err = store.db.ExecContext(ctx, `INSERT INTO voice_settings (username, agent, voice, transcript) VALUES ('alice', 'main', 'cedar', TRUE);
+INSERT INTO web_tab_states (username, space, revision, last, shared_order, card_order, navigation) VALUES
+    ('alice', 'main', 1, '{"main": "/voice"}', '["/voice"]', E'["local\\n/voice"]', '/voice'),
+    ('bob', 'main', 1, '{"main": "/voice", "ops": "/agents", "dev": "/voices"}', '["/agents", "/voice", "/voice/x"]', E'["main", "local\\n/voice", "remote\\n/voice", "local\\n/voices", "/voice"]', '/agents');
+INSERT INTO web_tabs (username, path, position, space) VALUES ('bob', '/voice', 0, 'main'), ('bob', '/voice/x', 1, 'main'), ('bob', '/voices', 2, 'main');
+INSERT INTO web_shared_tabs (space, path) VALUES ('main', '/voice'), ('main', '/agents');
+INSERT INTO web_closed_tabs (username, path, space, closed_at) VALUES ('bob', '/voice', 'main', now()), ('bob', '/agents', 'main', now());
+INSERT INTO web_tab_attention (username, path) VALUES ('bob', '/voice'), ('bob', '/agents');
+INSERT INTO web_tab_lists (username, list, server, path, space, position) VALUES ('bob', 'recent', 'local', '/voice', 'main', 0), ('bob', 'recent', 'remote', '/voice', 'main', 1), ('bob', 'recent', 'local', '/agents', 'main', 2);
+INSERT INTO behavior_settings (document) VALUES ('{"embedded_agents": {"main": {"disabled": true, "model": ""}, "voice": {"disabled": false, "model": "gpt-x"}}, "title_model": "gpt-y"}')`)
+	require.NoError(t, err)
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	tables, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND tablename = 'voice_settings'`, "voice tables")
+	require.NoError(t, err)
+	require.Empty(t, tables)
+
+	paths, err := queryStrings(ctx, store.db, `WITH entries AS (
+    SELECT 'tab ' || path AS entry FROM web_tabs UNION ALL SELECT 'shared ' || path FROM web_shared_tabs
+    UNION ALL SELECT 'closed ' || path FROM web_closed_tabs UNION ALL SELECT 'attention ' || path FROM web_tab_attention
+    UNION ALL SELECT 'list ' || server || ' ' || path FROM web_tab_lists
+    UNION ALL SELECT username || ' ' || last::text || ' ' || shared_order::text || ' ' || card_order::text || ' ' || navigation FROM web_tab_states
+    UNION ALL SELECT document::text FROM behavior_settings
+)
+SELECT entry FROM entries ORDER BY entry COLLATE "C"`, "voice paths")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		`alice {} [] [] `,
+		"attention /agents",
+		`bob {"dev": "/voices", "ops": "/agents"} ["/agents", "/voice/x"] ["main", "local\n/voices"] /agents`,
+		"closed /agents",
+		"list local /agents",
+		"shared /agents",
+		"tab /voice/x",
+		"tab /voices",
+		`{"title_model": "gpt-y", "embedded_agents": {"main": {"model": "", "disabled": true}}}`,
 	}, paths)
 }
 

@@ -80,7 +80,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 		})
 	}
 
-	for _, route := range []string{"GET /api/ListSessions", "GET /stream", "GET /typing", "GET /listing", "GET /api/DownloadAttachment", "POST /api/UploadAttachment", "POST /api/Voice"} {
+	for _, route := range []string{"GET /api/ListSessions", "GET /stream", "GET /typing", "GET /listing", "GET /api/DownloadAttachment", "POST /api/UploadAttachment"} {
 		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
 			method, query, required := strings.TrimPrefix(r.URL.Path, "/api/"), r.URL.Query(), ""
 
@@ -106,12 +106,6 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 			case "DownloadAttachment", "UploadAttachment":
 				request = &Attachment{ConversationId: query.Get("conversationId"), Id: query.Get("id"), Name: query.Get("name")}
 				response, required = &Attachment{}, map[string]string{"DownloadAttachment": "conversationId id", "UploadAttachment": "conversationId name"}[method]
-			case "Voice":
-				request, response = &VoiceRequest{}, &VoiceEvent{}
-				if err := httpInput(w, r, request, method); err != nil {
-					httpRPCError(w, status.Error(codes.InvalidArgument, err.Error()))
-					return
-				}
 			}
 
 			for name := range strings.FieldsSeq(required) {
@@ -525,8 +519,6 @@ func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, me
 		required = "conversationId jobId"
 	case "AnswerQuestion":
 		required = "conversationId askId"
-	case "Voice":
-		required = "conversationId sdp"
 	case "SaveBehaviorSettings":
 		required = "documentJson"
 	}

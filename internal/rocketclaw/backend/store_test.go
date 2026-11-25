@@ -621,7 +621,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{
 		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
-		"history_links", "voice_settings", "hosted_pages", "retired_hosted_pages", "hosted_pages_pending", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_attention", "web_closed_tabs", "web_tab_lists", "web_search_pages", "web_searches", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
+		"history_links", "hosted_pages", "retired_hosted_pages", "hosted_pages_pending", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_attention", "web_closed_tabs", "web_tab_lists", "web_search_pages", "web_searches", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
 		"agent_drafts", "agent_draft_ops", "agent_draft_presence", "agent_draft_proposals", "agent_draft_messages",
 		"behavior_settings",
 	}, tables)
@@ -2321,29 +2321,6 @@ func testReplayInput(messages ...replayInputMessage) []json.RawMessage {
 	}
 
 	return replayInput
-}
-
-func TestVoiceSettings(t *testing.T) {
-	store := newTestSessionService(t)
-	ctx := t.Context()
-
-	settings := func(username string) VoiceSettings {
-		t.Helper()
-
-		current, err := store.VoiceSettings(ctx, username)
-		require.NoError(t, err)
-
-		return current
-	}
-
-	assert.Equal(t, VoiceSettings{}, settings("alice"), "a person with no row gets the defaults")
-
-	agent, voice, on := "main", "cedar", true
-	require.NoError(t, store.UpdateVoiceSettings(ctx, "alice", &agent, nil, nil))
-	require.NoError(t, store.UpdateVoiceSettings(ctx, "alice", nil, &voice, &on))
-	require.NoError(t, store.UpdateVoiceSettings(ctx, "bob", nil, nil, &on))
-	assert.Equal(t, VoiceSettings{Agent: "main", Voice: "cedar", Transcript: true}, settings("alice"), "an update keeps the fields it was not given")
-	assert.Equal(t, VoiceSettings{Transcript: true}, settings("bob"))
 }
 
 func TestStickySessions(t *testing.T) {

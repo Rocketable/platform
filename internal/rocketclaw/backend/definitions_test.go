@@ -433,7 +433,7 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	requireRocketClawPermissionAction(t, helper.Permission, attachFilesToolName, harness.PermissionAllow)
 	requireRocketClawPermissionAction(t, helper.Permission, updateGoalToolName, harness.PermissionAllow)
 
-	prepared, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace, EmbeddedAgents: config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Disabled: true}, Voice: config.EmbeddedAgentConfig{Disabled: true}}}), config.DefaultRuntimeDir, nil)
+	prepared, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace, EmbeddedAgents: config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Disabled: true}}}), config.DefaultRuntimeDir, nil)
 	require.NoError(t, err)
 
 	for _, agent := range prepared.Items {
@@ -810,26 +810,26 @@ func TestLoadRocketCodeDefinitionsRejectsEscapingSkillSymlink(t *testing.T) {
 	require.Empty(t, skills.Items)
 }
 
-func TestRuntimeAgentsUseBuiltinMainAndVoice(t *testing.T) {
+func TestRuntimeAgentsUseBuiltinMain(t *testing.T) {
 	t.Parallel()
 
 	custom := "---\nmodel: gpt-5.4\nsticky: slack\n---\nCustom prompt\n"
 
 	for _, tt := range []struct {
-		name                       string
-		embedded                   config.EmbeddedAgentsConfig
-		layer                      map[string]string
-		wantMain                   bool
-		wantVoiceModel, wantEffort string
-		wantWarnings               []string
+		name                  string
+		embedded              config.EmbeddedAgentsConfig
+		layer                 map[string]string
+		wantMain              bool
+		wantModel, wantEffort string
+		wantWarnings          []string
 	}{
-		{name: "defaults", wantMain: true, wantVoiceModel: "gpt-6.1-sol", wantEffort: "high"},
-		{name: "draft layer", layer: map[string]string{"main.md": custom, "main/alt.md": custom, "voice.md": custom}, wantMain: true, wantVoiceModel: "gpt-6.1-sol", wantEffort: "high"},
-		{name: "main off", embedded: config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Disabled: true}}, wantVoiceModel: "gpt-6.1-sol", wantEffort: "high"},
-		{name: "voice model", embedded: config.EmbeddedAgentsConfig{Voice: config.EmbeddedAgentConfig{Model: "p/m#low"}}, wantMain: true, wantVoiceModel: "p/m", wantEffort: "low"},
+		{name: "defaults", wantMain: true, wantModel: "gpt-6.1-sol", wantEffort: "high"},
+		{name: "draft layer", layer: map[string]string{"main.md": custom, "main/alt.md": custom}, wantMain: true, wantModel: "gpt-6.1-sol", wantEffort: "high"},
+		{name: "main off", embedded: config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Disabled: true}}},
+		{name: "main model", embedded: config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Model: "p/m#low"}}, wantMain: true, wantModel: "p/m", wantEffort: "low"},
 		{
-			name: "voice model on an unconfigured provider", embedded: config.EmbeddedAgentsConfig{Voice: config.EmbeddedAgentConfig{Model: "gone/m#low"}}, wantMain: true, wantVoiceModel: "gpt-6.1-sol", wantEffort: "high",
-			wantWarnings: []string{"Agent voice uses its shipped model because its Behavior Settings model names provider gone, which is not configured."},
+			name: "main model on an unconfigured provider", embedded: config.EmbeddedAgentsConfig{Main: config.EmbeddedAgentConfig{Model: "gone/m#low"}}, wantMain: true, wantModel: "gpt-6.1-sol", wantEffort: "high",
+			wantWarnings: []string{"Agent main uses its shipped model because its Behavior Settings model names provider gone, which is not configured."},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -854,13 +854,9 @@ func TestRuntimeAgentsUseBuiltinMainAndVoice(t *testing.T) {
 				require.Equal(t, harness.AgentStickyGlobal, mainAgent.Sticky)
 				require.True(t, mainAgent.Permission.Sudo)
 				require.NotContains(t, mainAgent.Prompt, "Custom prompt")
+				require.Equal(t, tt.wantModel, mainAgent.Model)
+				require.Equal(t, tt.wantEffort, mainAgent.ReasoningEffort)
 			}
-
-			voice := agents.Items["voice"]
-			require.Equal(t, harness.AgentModeEasy, voice.Mode)
-			require.Equal(t, harness.AgentStickyUser, voice.Sticky)
-			require.Equal(t, tt.wantVoiceModel, voice.Model)
-			require.Equal(t, tt.wantEffort, voice.ReasoningEffort)
 		})
 	}
 }
@@ -895,23 +891,16 @@ func TestNoAgentDelegatesToBuiltinAgents(t *testing.T) {
 	action, _ := mainRuntime.Permissions.Evaluate("task", subjects[0])
 	require.Equal(t, harness.PermissionDeny, action)
 
-	voiceRuntime, err := runtime("voice")
+	writeAgent(t, workspace, "reviewed", "---\nmodel: gpt-6.1-sol\npermission:\n  bash:\n    \"*\": auto(main)\n---\nPrompt\n")
+
+	agents, err := LoadRuntimeAgents(locked, config.DefaultRuntimeDir)
 	require.NoError(t, err)
-	require.NotContains(t, voiceRuntime.Tools, "task")
-	require.NotContains(t, voiceRuntime.CodeModeHosts, "task")
+	require.NotContains(t, agents.Items, "reviewed")
+	require.Contains(t, agents.Items, "helper")
 
-	for builtin, sticky := range map[string]string{"main": "global", "voice": "user"} {
-		writeAgent(t, workspace, "reviewed", "---\nmodel: gpt-6.1-sol\npermission:\n  bash:\n    \"*\": auto("+builtin+")\n---\nPrompt\n")
-
-		agents, err := LoadRuntimeAgents(locked, config.DefaultRuntimeDir)
-		require.NoError(t, err)
-		require.NotContains(t, agents.Items, "reviewed")
-		require.Contains(t, agents.Items, "helper")
-
-		warnings, err := validateRuntimeAssets(locked, config.DefaultRuntimeDir, slog.New(slog.DiscardHandler))
-		require.NoError(t, err)
-		require.Equal(t, "Agent reviewed was not loaded: permission \"bash\" rule \"*\" references sticky: "+sticky+" reviewer agent \""+builtin+"\", which reviews only its own rules.", warnings)
-	}
+	warnings, err := validateRuntimeAssets(locked, config.DefaultRuntimeDir, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	require.Equal(t, "Agent reviewed was not loaded: permission \"bash\" rule \"*\" references sticky: global reviewer agent \"main\", which reviews only its own rules.", warnings)
 }
 
 func TestBuiltinAgentPromptsEndWithAbout(t *testing.T) {
@@ -944,27 +933,25 @@ func TestBuiltinAgentPromptsEndWithAbout(t *testing.T) {
 			agents, err := LoadRuntimeAgents(config.NewLockedConfig(&config.Config{Workspace: workspace, Revision: tt.revision, RevisionModified: tt.modified}), config.DefaultRuntimeDir)
 			require.NoError(t, err)
 
-			for _, name := range []string{"main", "voice"} {
-				prompt := agents.Items[name].Prompt
-				_, about, found := strings.Cut(prompt, "## About RocketClaw")
-				require.True(t, found, name)
-				require.Contains(t, about, "https://github.com/Rocketable/platform/blob/"+tt.ref+"/CONCEPTS.md", name)
+			prompt := agents.Items["main"].Prompt
+			_, about, found := strings.Cut(prompt, "## About RocketClaw")
+			require.True(t, found)
+			require.Contains(t, about, "https://github.com/Rocketable/platform/blob/"+tt.ref+"/CONCEPTS.md")
 
-				for _, note := range []string{unknownNote, modifiedNote} {
-					require.Equal(t, note == tt.note, strings.HasSuffix(about, "\n\n"+note), name)
-					require.Equal(t, note == tt.note, strings.Contains(about, note), name)
-				}
-
-				require.NotContains(t, about, "\n#", "nothing follows the About section")
-				require.NotContains(t, prompt, "{revision}")
-				require.Equal(t, name == "main", strings.Contains(prompt, "## The Web's RPC interface"), name)
-
-				for _, tool := range regexp.MustCompile(`rocketclaw_\w+`).FindAllString(prompt, -1) {
-					require.Contains(t, tools, tool, name)
-				}
+			for _, note := range []string{unknownNote, modifiedNote} {
+				require.Equal(t, note == tt.note, strings.HasSuffix(about, "\n\n"+note))
+				require.Equal(t, note == tt.note, strings.Contains(about, note))
 			}
 
-			require.True(t, strings.HasPrefix(agents.Items["main"].Prompt, "You are the main RocketClaw agent."))
+			require.NotContains(t, about, "\n#", "nothing follows the About section")
+			require.NotContains(t, prompt, "{revision}")
+			require.Contains(t, prompt, "## The Web's RPC interface")
+
+			for _, tool := range regexp.MustCompile(`rocketclaw_\w+`).FindAllString(prompt, -1) {
+				require.Contains(t, tools, tool)
+			}
+
+			require.True(t, strings.HasPrefix(prompt, "You are the main RocketClaw agent."))
 		})
 	}
 }

@@ -25,7 +25,7 @@ test("personal save replies retain intervening Shared edits, including refused s
     queryClient.setQueryData(key, initial);
     const response = Promise.withResolvers<Response>();
     const fetchMock = spyOn(globalThis, "fetch").mockImplementation(Object.assign(() => response.promise, { preconnect: fetch.preconnect }));
-    const reply: SavedTabs = { ...initial, revision: "2", stale, state: { ...initial.state, last: { main: "/voice" } }, shared: [{ space: "main", path: "/voice" }] };
+    const reply: SavedTabs = { ...initial, revision: "2", stale, state: { ...initial.state, last: { main: "/routines" } }, shared: [{ space: "main", path: "/routines" }] };
     const current: SavedTabs = { ...initial, shared: changed === "shared" ? [{ space: "main", path: "/search/new" }] : initial.shared };
     try {
       const pending = tabsCall("", state ? { state: initial.state, revision: 1 } : { attention: { paths: ["/s/old"], action: "MARK_UNREAD" } });

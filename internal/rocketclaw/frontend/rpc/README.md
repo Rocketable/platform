@@ -113,7 +113,7 @@ New messages save their exact generated bracket header alongside model-facing
 text as `prompt_header` in local replay. History and session-list previews remove only
 that saved prefix from user/developer display text. History exposes it as
 `TranscriptEvent.header`; the Web message footer shows it through an info icon
-on hover or click. New text headers omit `media=Text`. Old messages are not
+on hover or click. Old messages are not
 backfilled or guessed from their text. Model-facing text still includes the generated
 header; local header metadata is never sent to the provider. Assistant text is unchanged.
 `TranscriptEvent.principal` decodes only the stored header's top-level quoted
@@ -334,9 +334,9 @@ when it works or `error` with the provider's own words, such as an unknown model
 
 Drafts are stored on the server (see "Agent Draft" in `CONCEPTS.md`), so any editor
 can open one. `CreateAgentDraft` starts one blank in a mode, from a starter agent, or
-as a copy of the effective agent of that name. `main` and `voice` belong to the
-built-in agents: creating, renaming to or saving a draft with either name answers
-`InvalidArgument`, and a draft already stored under one is refused its test chat and
+as a copy of the effective agent of that name. `main` is the built-in agent's
+name: creating, renaming to or saving a draft with it answers `InvalidArgument`,
+and a draft already stored under it is refused its test chat and
 `ProposeDraftChanges` until renamed. `ListAgentDrafts` returns every draft,
 newest first, with its `save_state` (`editing`, `saving`, `waiting` for a merge, or
 `live`) and `existing`, true when a save destination already holds an agent of that
@@ -533,87 +533,6 @@ removal never replace recovered bytes. Missing or root-escaping historical files
 are omitted. This is a snapshot of available bytes, not a claim to recover an old
 file version. Originals are never resized in storage. Unreferenced blobs remain
 stored but cannot be downloaded; garbage collection is not part of this transport.
-
-## Voice
-
-`Voice(VoiceRequest) -> stream VoiceEvent` runs one GPT-Live call for exactly as
-long as its request lives. HTTP serves it only as `POST /api/Voice`, so
-`CrossOriginProtection` blocks cross-site starts; it is not a GET stream route. The
-body is `{"conversationId":"<visible-id>","sdp":"<offer>","voice":"<name>"}`; `voice`
-is optional and must be one the default `openai` provider offers (`ListAgents` lists them per
-agent, the default first: Codex's voices on `chatgpt`, the public API's on `api_key`),
-else the call is refused with `InvalidArgument`. The handler checks
-identity and visibility, takes credentials from the default `openai` provider,
-independently of the conversation agent's model (`api_key` uses the public API and honors `api_base_url`; `chatgpt`
-uses the saved login on Codex's fixed internal URLs), creates the call, and attaches
-its sideband socket before answering. SSE frames are `{"answer":{"sdp":"…","route":"public"|"codex"}}`
-first, then any `{"notice":"…"}` frames, then one `{"ended":{"reason":"…"}}` with
-reason `stopped`, `replaced`, `expired`, `safety`, `closed`, `lost`, or `error`. A
-notice reports a hand-off the agent refused; the call continues. Errors before the
-answer are ordinary JSON errors: `NotFound` for an unrecorded conversation, and
-`FailedPrecondition` (HTTP 400, code 9) for missing credentials, a failed ChatGPT
-token refresh (naming its `rocketclaw oai login` command), a plain-HTTP
-`api_base_url` whose host is not `localhost` or a loopback IP, or an OpenAI
-rejection, which reports only the upstream HTTP status. Voice requests to OpenAI
-drop `Authorization`, `Api-Key` and `Chatgpt-Account-Id` on any redirect to another
-scheme, host, or port.
-
-Each person (the caller's username) has one live call across all conversations; the
-newest wins, and the older stream ends with `replaced`. Different people's calls on
-one conversation run side by side. The server has no idle or no-speech timers.
-Aborting the request ends the call: over a live sideband the server sends `session.close` and waits up to 3 s;
-it then hangs up a public session that did not confirm, and closes the socket. The
-handler returns right after `ended`. OpenAI's `session.closed` ends the call as
-`expired`, `safety` (a content stop), or `closed`.
-
-`VoiceSettings(VoiceSettingsRequest) -> VoiceSettingsResponse` (`POST /api/VoiceSettings`)
-reads and changes the caller's voice settings: the agent the Voice page calls, their
-voice, and the transcript view. The action is `READ` (the default) or `UPDATE` (stores
-the `agent`, `voice` and `transcript` fields that are set; an agent the caller cannot
-choose, one that is not `sticky: user`, or a voice no route offers is
-`InvalidArgument`). Every action answers with the caller's whole settings row. The page
-calls the agent's sticky session, which `CreateSession` returns.
-
-When the sideband drops, a public call ends as `lost`. A Codex call reconnects as
-Codex does: it waits 200 ms, doubling to 5 s (reset after 30 s connected), then
-dials up to 5 times. A 404 or 410 ends it as `closed`, and 5 failed dials as `lost`.
-As in Codex, a normal close (1000) of a Codex sideband is no drop: it ends the call
-as `closed` at once. Stop cancels a dial in progress at once. While the sideband is
-down the browser gets `reconnecting: true`, and `false` once it is back; it shows
-"Reconnecting to the agent…" meanwhile. Audio keeps flowing, since it never passes
-through RocketClaw.
-Messages that failed to send go out first after reconnecting. A Codex call stopped
-while disconnected sends no `session.close`; the browser closing its audio ends it.
-
-Each hand-off is admitted in arrival order through `StashQueueItem`, without waiting
-for the turn: it joins the running turn as a Web steer or starts the next turn. It
-carries `media=Voice`, the caller's principal, and the hand-off ID as both the queue
-item ID and `web_message_id`, so a re-delivered hand-off is admitted once. It
-bypasses `Prompt`: `/` text in it never runs commands or skills. Its
-text is taken the moment the hand-off arrives and written exactly as Codex wraps it:
-`<realtime_delegation>` with the request in `<input>` and the voice conversation
-since the previous hand-off in `<transcript_delta>` (`user:`/`assistant:` lines; the
-request is added as a user line unless already said), XML-escaped and each cut to
-4 KiB behind a "…" (the request keeps its start, the transcript its end). Public
-hand-offs carry no request text, so that conversation is the request too. A hand-off with nothing to send is ignored, and talk after the last
-hand-off is not stored. A stopping runtime ends the call as `error`.
-
-Nothing is sent to the voice model while the agent works. When a turn this call
-handed off finishes, its final reply is sent once, as written, unless it is over
-3,960 bytes (about 990 tokens). Then, as Codex shows such a reply on screen, the
-browser gets it in a `reply` event and the voice model hears that it is on the
-screen. A user message the caller types during the call, matched by the principal
-in its prompt header, cancels the reply of every earlier hand-off, as Codex does;
-only a later hand-off speaks again. Other people's messages cancel nothing, even when
-they join the turn holding this call's hand-off. It
-also sends the browser a `typed` event: the browser mutes the voice model at once and
-unmutes it when the model begins a reply after the person spoke again, as Codex
-suppresses its speaker. Each pending
-question in the conversation is sent once as "I need your input. Please respond in
-the app." with its text and options; spoken words never answer it. OpenAI receives only the audio, the seed (up to 40 recent
-user messages and complete assistant replies as written, each cut to 600 bytes, 12,000
-bytes in total), those final replies, and those question notices: no tool names,
-arguments, or results, no progress, reasoning, or attachments.
 
 ## Start
 
@@ -845,18 +764,17 @@ The checks sit where requests already pass:
   reach it through `readableConversation`. History of a routine run trace checks
   the routine's space instead (`cronInLimit`), which is its agent's.
 - Agent choice: `agentChoices` and `ListAgents` drop agents outside the limit, which
-  covers `CreateSession`, `ForkSession`, `VoiceSettings`, and `/agent`. `sameSpace`
+  covers `CreateSession`, `ForkSession`, and `/agent`. `sameSpace`
   still offers every remaining choice when the current agent is outside the
   limit, so `/agent` can switch the session back.
 - Turns: `turnFeedable` refuses a prompt with content (`/goal`, steer, queue,
   stash), `SteerQueueItem`, `PopQueueItem`, `EditQueueItem`, `AnswerQuestion`, and
   `Handoff` when the session's current agent is outside the limit. A steer
-  prompt, `SteerQueueItem`, `AnswerQuestion`, and a voice hand-off join the turn
+  prompt, `SteerQueueItem`, and `AnswerQuestion` join the turn
   running there, which keeps the agent it started with after a switch, so they
   are also refused while that turn's agent is outside the limit. Queued, stashed,
   released, and edited items wait for a turn of their own, so they are taken. `/stop`, `/agent`, and `RemoveQueueItem` need only
-  a visible session. Voice checks when the call starts and at each hand-off; a
-  refused hand-off sends a notice and its lines wait for a later one.
+  a visible session.
 - Handlers outside those paths check for themselves: `Tabs` (only the person's
   spaces and Shared tabs, and creates missing listed spaces), `GetPage` and
   `ListPages`, `ListCronJobs` and `RunCronJob` (the routine's space and its agent;

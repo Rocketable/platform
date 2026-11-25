@@ -901,7 +901,7 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, input.Prompt, false)
 			inbound.PreserveWhitespace = true
 
-			inbound.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text", protocol.InboundSenderSessionMetadataKey: owner, protocol.InboundSenderAgentMetadataKey: agent.Name}
+			inbound.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundSenderSessionMetadataKey: owner, protocol.InboundSenderAgentMetadataKey: agent.Name}
 			if username := origin.Metadata[protocol.InboundPrincipalEmailMetadataKey]; username != "" {
 				inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey] = username
 			}
