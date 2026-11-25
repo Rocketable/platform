@@ -192,7 +192,7 @@ func TestAskSecretToolEndsWithoutAValue(t *testing.T) {
 	msg := webMessage(protocol.InboundKindPrompt, "publish", alice)
 	msg.ConversationID = "web:chat"
 
-	_, err := askSecretTool(service, harness.NewTurnSecretStore(), msg).Call(t.Context(), []byte(`{"name":"PATH","reason":"x"}`), nil)
+	_, err := askSecretTool(service, harness.NewTurnSecretStore(), msg, "every shell command").Call(t.Context(), []byte(`{"name":"PATH","reason":"x"}`), nil)
 	_, invalid := errors.AsType[*harness.TurnSecretError](err)
 	require.True(t, invalid, "got %v", err)
 	assert.Empty(t, service.PendingSecrets("web:chat", alice), "a bad name is refused before anyone is asked")
@@ -203,7 +203,7 @@ func TestAskSecretToolEndsWithoutAValue(t *testing.T) {
 		want string
 	}{
 		{"decline", func(context.CancelCauseFunc, context.CancelCauseFunc) error {
-			return service.AnswerSecret("web:chat", "", alice, nil, true)
+			return service.AnswerSecret("web:chat", service.PendingSecrets("web:chat", alice)[0].ID, alice, nil, true)
 		}, "Declined: the user chose not to give NPM_TOKEN"},
 		{"stop", func(stop, _ context.CancelCauseFunc) error {
 			stop(errTurnInterrupted)
@@ -222,7 +222,7 @@ func TestAskSecretToolEndsWithoutAValue(t *testing.T) {
 		results := make(chan harness.ToolResult, 1)
 
 		go func() {
-			result, err := askSecretTool(service, secrets, msg).Call(ctx, []byte(`{"name":"NPM_TOKEN","reason":"publish"}`), nil)
+			result, err := askSecretTool(service, secrets, msg, "every shell command").Call(ctx, []byte(`{"name":"NPM_TOKEN","reason":"publish"}`), nil)
 			assert.NoError(t, err)
 
 			results <- result

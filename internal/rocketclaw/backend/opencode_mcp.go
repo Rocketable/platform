@@ -17,22 +17,23 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-const openCodeMCPInstructions = `These tools act on your RocketClaw session's tags and on the Hosted Pages of its RocketClaw space. A subagent acts for the session that started it. Pages belong to the space, not to you: every chat working in that space can read, replace, or delete them, and they stay after your session ends. Only sessions created or forked from a RocketClaw Web space have a space; without one you can still tag your session. navigate_for_me takes the person who sent your latest prompt from the RocketClaw Web to another page of it.`
+const openCodeMCPInstructions = `These tools act on your RocketClaw session's tags and on the Hosted Pages of its RocketClaw space. A subagent acts for the session that started it. Pages belong to the space, not to you: every chat working in that space can read, replace, or delete them, and they stay after your session ends. Only sessions created or forked from a RocketClaw Web space have a space; without one you can still tag your session. navigate_for_me takes the person who sent your latest prompt from the RocketClaw Web to another page of it. ask_secret asks that person for a secret, which only run_with_secrets commands get, until your run ends.`
 
 func (r *Runtime) OpenCodeMCP() http.Handler {
 	servers := r.Cfg.Clone().OpenCode
-	mcpServers := make(map[string]*mcp.Server, len(servers))
 
-	for name, server := range servers {
+	handler := mcp.NewStreamableHTTPHandler(func(call *http.Request) *mcp.Server {
+		name := call.PathValue("name")
 		mcpServer := mcp.NewServer(&mcp.Implementation{Name: "rocketclaw", Version: "1.0.0"}, &mcp.ServerOptions{Instructions: openCodeMCPInstructions})
 
-		for _, tool := range r.openCodeTools("", "") {
+		for _, tool := range r.openCodeTools(name, servers[name], "", "", nil) {
 			tool.Parameters["type"] = "object"
 
-			mcpServer.AddTool(&mcp.Tool{Name: strings.TrimPrefix(tool.Name, "rocketclaw_"), Description: tool.Description, InputSchema: tool.Parameters}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-				out, err := r.callOpenCodeTool(ctx, name, server, tool.Name, request)
+			mcpServer.AddTool(&mcp.Tool{Name: strings.TrimPrefix(tool.Name, "rocketclaw_"), Description: tool.Description, InputSchema: tool.Parameters}, func(_ context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				out, err := r.callOpenCodeTool(call.Context(), name, servers[name], tool.Name, request)
 				if err != nil {
 					out = err.Error()
 				}
@@ -41,10 +42,8 @@ func (r *Runtime) OpenCodeMCP() http.Handler {
 			})
 		}
 
-		mcpServers[name] = mcpServer
-	}
-
-	handler := mcp.NewStreamableHTTPHandler(func(request *http.Request) *mcp.Server { return mcpServers[request.PathValue("name")] }, &mcp.StreamableHTTPOptions{Stateless: true, PropagateRequestCancellation: true, MaxRequestBodyBytes: 16 << 20})
+		return mcpServer
+	}, &mcp.StreamableHTTPOptions{Stateless: true, PropagateRequestCancellation: true, MaxRequestBodyBytes: 16 << 20})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		server, ok := servers[request.PathValue("name")]
@@ -66,6 +65,8 @@ func (r *Runtime) callOpenCodeTool(ctx context.Context, name string, server conf
 	if id == "" {
 		return "", errors.New(`this call names no OpenCode session; RocketClaw reads it from _meta["ai.opencode/sessionID"]`)
 	}
+
+	caller := id
 
 	var conversation string
 
@@ -97,22 +98,34 @@ func (r *Runtime) callOpenCodeTool(ctx context.Context, name string, server conf
 		id = parent.Data.ParentID
 	}
 
-	var username string
+	secretTool := tool == harness.AskSecretToolName || tool == runWithSecretsToolName
+	if secretTool && caller != id {
+		return "", errors.New("a subagent's session cannot ask for or use secrets; only the session the person prompted can")
+	}
 
-	if tool == navigateToolName {
+	var (
+		username string
+		secrets  *harness.TurnSecretStore
+	)
+
+	if tool == navigateToolName || secretTool {
 		senders, err := openCodeSenders(ctx, name, server, id, math.MinInt64, math.MaxInt64)
 		if err != nil {
 			return "", fmt.Errorf("read who prompted OpenCode session %s: %w", id, err)
 		}
 
 		if len(senders) == 0 || senders[0] == "" {
-			return "", errors.New("nobody sent this session's latest prompt from the RocketClaw Web, so there is nobody to take anywhere")
+			return "", errors.New("nobody sent this session's latest prompt from the RocketClaw Web, so there is nobody to take anywhere or ask for a secret")
 		}
 
 		username = senders[0]
 	}
 
-	tools := r.openCodeTools(conversation, username)
+	if secretTool {
+		secrets = r.Sessions.openCodeSecretStore(conversation)
+	}
+
+	tools := r.openCodeTools(name, server, conversation, username, secrets)
 
 	result, err := tools[slices.IndexFunc(tools, func(candidate harness.Tool) bool { return candidate.Name == tool })].Call(ctx, request.Params.Arguments, nil)
 	if err != nil {
@@ -180,7 +193,7 @@ func addOpenCodeBridges(ctx context.Context, origin, name string, server config.
 	}
 }
 
-func (r *Runtime) openCodeTools(conversation, username string) []harness.Tool {
+func (r *Runtime) openCodeTools(name string, server config.OpenCodeConfig, conversation, username string, secrets *harness.TurnSecretStore) []harness.Tool {
 	reply := func(tags []string, err error) (harness.ToolResult, error) {
 		data, _ := json.Marshal(struct {
 			Tags []string `json:"tags"`
@@ -190,6 +203,8 @@ func (r *Runtime) openCodeTools(conversation, username string) []harness.Tool {
 	}
 
 	return append(pageSpace{sessions: r.Sessions, threads: r.threads, conversation: conversation, noSpace: openCodePageNoSpace}.tools(), navigateTool(r.threads, username),
+		askSecretTool(r.Sessions, secrets, &protocol.InboundMessage{ConversationID: conversation, Metadata: map[string]string{protocol.InboundPrincipalEmailMetadataKey: username}}, "every "+runWithSecretsToolName+" command, and never your own shell tool,"),
+		openCodeRunTool(name, server, strings.TrimPrefix(conversation, "opencode:"+name+":"), secrets),
 		harness.Tool{Name: "get_tags", Description: `Return this session's RocketClaw tags as {"tags":[...]}.`, Parameters: map[string]any{"properties": map[string]any{}}, Call: func(ctx context.Context, _ json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 			return reply(sessionTags(ctx, r.Sessions.db, conversation))
 		}},

@@ -201,6 +201,12 @@ func (s *SessionService) ChangeAttention(ctx context.Context, username string, p
 	sent := action == AttentionSent
 	if sent {
 		action = AttentionParkUntilDone
+
+		for _, path := range paths {
+			if strings.HasPrefix(path, "/oc/") {
+				s.endOpenCodeRun(TabConversation(path))
+			}
+		}
 	}
 
 	tx, err := s.beginStateTx(ctx, "attention change")

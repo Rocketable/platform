@@ -106,8 +106,9 @@ type SessionService struct {
 	scheduledMu sync.Mutex
 	scheduled   []string
 
-	secretsMu sync.Mutex
-	secrets   map[webQuestionKey]*SecretRequest
+	secretsMu       sync.Mutex
+	secrets         map[webQuestionKey]*SecretRequest
+	openCodeSecrets map[string]*harness.TurnSecretStore
 }
 
 type ObservedSessionEntry struct {
@@ -215,7 +216,7 @@ func newSessionService(ctx context.Context, cfg *config.Config, db *sql.DB, logg
 		return nil, hideDSN(err, cfg.DatabaseURL, "initialize rocketclaw state store")
 	}
 
-	return &SessionService{db: db, log: logger, attachments: attachments, definitions: config.NewLockedConfig(cfg), jobs: noConversationJobs{}, historyWorkers: noHistoryWorkers{}, spillDir: rocketcodeSpillDir(cfg), secrets: map[webQuestionKey]*SecretRequest{}}, nil
+	return &SessionService{db: db, log: logger, attachments: attachments, definitions: config.NewLockedConfig(cfg), jobs: noConversationJobs{}, historyWorkers: noHistoryWorkers{}, spillDir: rocketcodeSpillDir(cfg), secrets: map[webQuestionKey]*SecretRequest{}, openCodeSecrets: map[string]*harness.TurnSecretStore{}}, nil
 }
 
 func (s *SessionService) UpsertThread(conversationID string, thread ThreadState) error {

@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/base64"
@@ -11,14 +12,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
@@ -42,6 +46,18 @@ type fakeOpenCode struct {
 
 	pending     map[string]map[string][]string
 	automations string
+
+	mu        sync.Mutex
+	requests  []string
+	terminals map[string]*fakeTerminal
+	ptys      []string
+}
+
+type fakeTerminal struct {
+	command *exec.Cmd
+	stdin   io.WriteCloser
+	output  *os.File
+	exited  chan struct{}
 }
 
 type openCodeTestMessage struct {
@@ -54,6 +70,15 @@ type openCodeTestMessage struct {
 func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if user, password, ok := r.BasicAuth(); !ok || user != "opencode" || password != "pw" {
 		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	f.mu.Lock()
+	f.requests = append(f.requests, r.Method+" "+r.URL.Path)
+	f.mu.Unlock()
+
+	if id, ok := strings.CutPrefix(r.URL.Path, "/api/pty"); ok {
+		f.serveTerminal(w, r, strings.TrimPrefix(id, "/"))
 		return
 	}
 
@@ -170,6 +195,11 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if i := slices.IndexFunc(f.sessions, func(session openCodeSession) bool { return session.ID == id }); i >= 0 && r.Method == http.MethodGet && !messages {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": f.sessions[i]})
+			return
+		}
+
 		if parent, ok := f.parents[id]; ok && !messages {
 			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{"parentID": parent}})
 			return
@@ -223,6 +253,96 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		text, _ := json.Marshal(reply)
 		_, _ = fmt.Fprintf(w, `{"data":[{"content":[{"type":"reasoning","text":"thinking"},{"type":"text","text":%s},{"type":"tool"}]}]}`, text)
+	}
+}
+
+func (f *fakeOpenCode) serveTerminal(w http.ResponseWriter, r *http.Request, id string) {
+	id, connect := strings.CutSuffix(id, "/connect")
+
+	f.mu.Lock()
+	terminal := f.terminals[id]
+	f.mu.Unlock()
+
+	switch {
+	case r.Method == http.MethodPost && id == "":
+		raw, _ := io.ReadAll(r.Body)
+
+		var body struct {
+			Command string            `json:"command"`
+			Args    []string          `json:"args"`
+			Env     map[string]string `json:"env"`
+		}
+
+		_ = json.Unmarshal(raw, &body)
+
+		command := exec.Command(body.Command, body.Args...)
+		command.Dir, command.Env = r.URL.Query().Get("location[directory]"), os.Environ()
+
+		for name, value := range body.Env {
+			command.Env = append(command.Env, name+"="+value)
+		}
+
+		output, writer, _ := os.Pipe()
+		command.Stdout, command.Stderr = writer, writer
+		stdin, _ := command.StdinPipe()
+
+		if command.Start() != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		_ = writer.Close()
+
+		f.mu.Lock()
+		id = fmt.Sprintf("pty_%d", len(f.ptys))
+		f.terminals[id] = &fakeTerminal{command: command, stdin: stdin, output: output, exited: make(chan struct{})}
+		f.ptys = append(f.ptys, string(raw))
+		f.mu.Unlock()
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{"id": id, "status": "running"}})
+	case terminal == nil:
+		w.WriteHeader(http.StatusNotFound)
+	case connect:
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("\x00{\"cursor\":0}"))
+
+		_, signal, _ := conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.TextMessage, bytes.ReplaceAll(signal, []byte("\n"), []byte("\r\n")))
+		_, _ = terminal.stdin.Write(signal)
+
+		chunk := make([]byte, 5)
+
+		for {
+			n, err := terminal.output.Read(chunk)
+			if n > 0 {
+				_ = conn.WriteMessage(websocket.TextMessage, bytes.ReplaceAll(chunk[:n], []byte("\n"), []byte("\r\n")))
+			}
+
+			if err != nil {
+				break
+			}
+		}
+
+		_ = terminal.command.Wait()
+		close(terminal.exited)
+
+		_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	case r.Method == http.MethodGet:
+		<-terminal.exited
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": id, "status": "exited", "exitCode": terminal.command.ProcessState.ExitCode()}})
+	case r.Method == http.MethodDelete:
+		_ = terminal.command.Process.Kill()
+
+		f.mu.Lock()
+		delete(f.terminals, id)
+		f.mu.Unlock()
+
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -785,7 +905,7 @@ func TestSyncOpenCodeMarksAskingStarts(t *testing.T) {
 	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
 	id := "opencode:box:ses_q"
 	path := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte(id))
-	sync := func(asking bool) []string {
+	poll := func(asking bool) []string {
 		t.Helper()
 
 		fake.pending = map[string]map[string][]string{"/api/form": {"/srv/app": {}}, "/api/permission/request": {"/srv/app": {}}}
@@ -798,14 +918,14 @@ func TestSyncOpenCodeMarksAskingStarts(t *testing.T) {
 		return attentionOn(t, s, id)
 	}
 
-	require.Empty(t, sync(false))
+	require.Empty(t, poll(false))
 
 	saved, err := s.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: path, Space: "main"}}}, 0)
 	require.NoError(t, err)
 	require.True(t, saved)
 	require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionPark, nil))
 
-	assert.Equal(t, []string{"alice quiet parked", "bob loud"}, sync(true), "the question makes Alice's park due")
+	assert.Equal(t, []string{"alice quiet parked", "bob loud"}, poll(true), "the question makes Alice's park due")
 
 	require.NoError(t, s.tickParks(ctx))
 	require.NoError(t, s.tickParks(ctx))
@@ -813,9 +933,9 @@ func TestSyncOpenCodeMarksAskingStarts(t *testing.T) {
 
 	_, err = s.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
 	require.NoError(t, err)
-	assert.Empty(t, sync(true), "a session that goes on asking marks no one again")
-	assert.Empty(t, sync(false))
-	assert.Equal(t, []string{"alice loud", "bob loud"}, sync(true), "asking again marks again")
+	assert.Empty(t, poll(true), "a session that goes on asking marks no one again")
+	assert.Empty(t, poll(false))
+	assert.Equal(t, []string{"alice loud", "bob loud"}, poll(true), "asking again marks again")
 }
 
 func TestOpenCodeShellsFollowEvents(t *testing.T) {
@@ -838,7 +958,7 @@ func TestOpenCodeShellsFollowEvents(t *testing.T) {
 	done := make(chan struct{})
 
 	go func() {
-		shells.follow(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "pw"})
+		shells.follow(ctx, &SessionService{}, "box", config.OpenCodeConfig{URL: server.URL, Password: "pw"})
 		close(done)
 	}()
 

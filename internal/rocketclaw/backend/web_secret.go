@@ -3,6 +3,7 @@ package backend
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,14 +17,14 @@ import (
 type SecretRequest struct {
 	ID, Name, Reason string
 
-	starter, answer string
-	secrets         *harness.TurnSecretStore
-	answered        chan struct{}
+	starter, answer, commands string
+	secrets                   *harness.TurnSecretStore
+	answered                  chan struct{}
 }
 
-func askSecretTool(sessions *SessionService, secrets *harness.TurnSecretStore, msg *protocol.InboundMessage) harness.Tool {
-	return harness.Tool{Name: harness.AskSecretToolName, Resumable: true, TurnBound: true, Description: "Ask the person who started this turn for a secret and wait. name: its environment variable; reason: why.\nThey paste it into a password form, so its value never reaches you. Once saved, every shell command for the rest of this turn sees it as $name. name is A-Z, 0-9 and _, ending in _TOKEN, _KEY, _SECRET or _PASSWORD. Asking again for a name replaces its value.", Permission: "rocketclaw", VisibilitySubjects: []string{harness.AskSecretToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{harness.AskSecretToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"name": map[string]any{"type": "string"}, "reason": map[string]any{"type": "string"}}, "required": []string{"name", "reason"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
-		ask := &SecretRequest{starter: msg.Metadata[protocol.InboundPrincipalEmailMetadataKey], secrets: secrets, answered: make(chan struct{})}
+func askSecretTool(sessions *SessionService, secrets *harness.TurnSecretStore, msg *protocol.InboundMessage, commands string) harness.Tool {
+	return harness.Tool{Name: harness.AskSecretToolName, Resumable: true, TurnBound: true, Description: "Ask the person who started this turn for a secret and wait. name: its environment variable; reason: why.\nThey paste it into a password form, so its value never reaches you. Once saved, " + commands + " for the rest of this turn sees it as $name. name is A-Z, 0-9 and _, ending in _TOKEN, _KEY, _SECRET or _PASSWORD. Asking again for a name replaces its value.", Permission: "rocketclaw", VisibilitySubjects: []string{harness.AskSecretToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{harness.AskSecretToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"name": map[string]any{"type": "string"}, "reason": map[string]any{"type": "string"}}, "required": []string{"name", "reason"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
+		ask := &SecretRequest{starter: msg.Metadata[protocol.InboundPrincipalEmailMetadataKey], commands: commands, secrets: secrets, answered: make(chan struct{})}
 
 		if err := json.Unmarshal(raw, ask); err != nil {
 			return harness.ToolResult{}, fmt.Errorf("parse secret request: %w", err)
@@ -33,7 +34,7 @@ func askSecretTool(sessions *SessionService, secrets *harness.TurnSecretStore, m
 			return harness.ToolResult{}, fmt.Errorf("ask secret: %w", err)
 		}
 
-		ask.ID = harness.ToolCallKey(ctx)
+		ask.ID = cmp.Or(harness.ToolCallKey(ctx), rand.Text())
 		key := webQuestionKey{msg.ConversationID, ask.ID}
 
 		ctx, cancel := context.WithCancelCause(ctx)
@@ -99,7 +100,7 @@ func (s *SessionService) AnswerSecret(conversationID, askID, username string, va
 			return fmt.Errorf("save turn secret: %w", err)
 		}
 
-		ask.answer = fmt.Sprintf("Saved: $%[1]s is set in every shell command for the rest of this turn only, and its value shows to you as [secret:%[1]s]. Do not print it, save it to disk, or put it in command arguments: use tools that read the variable, stdin, or a header file.", ask.Name)
+		ask.answer = fmt.Sprintf("Saved: $%[1]s is set in %[2]s for the rest of this turn only, and its value shows to you as [secret:%[1]s]. Do not print it, save it to disk, or put it in command arguments: use tools that read the variable, stdin, or a header file.", ask.Name, ask.commands)
 	}
 
 	delete(s.secrets, key)

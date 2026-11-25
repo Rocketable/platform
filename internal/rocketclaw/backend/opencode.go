@@ -70,7 +70,7 @@ type openCodeShells struct {
 	running map[string]string
 }
 
-func (shells *openCodeShells) follow(ctx context.Context, name string, server config.OpenCodeConfig) {
+func (shells *openCodeShells) follow(ctx context.Context, sessions *SessionService, name string, server config.OpenCodeConfig) {
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(server.URL, "/")+"/api/event", http.NoBody)
 	request.SetBasicAuth("opencode", server.Password)
 
@@ -91,8 +91,9 @@ func (shells *openCodeShells) follow(ctx context.Context, name string, server co
 		var event struct {
 			Type string `json:"type"`
 			Data struct {
-				ID   string `json:"id"`
-				Info struct {
+				ID        string `json:"id"`
+				SessionID string `json:"sessionID"`
+				Info      struct {
 					ID       string `json:"id"`
 					Status   string `json:"status"`
 					Metadata struct {
@@ -148,6 +149,8 @@ func (shells *openCodeShells) follow(ctx context.Context, name string, server co
 			shells.mu.Lock()
 			delete(shells.running, event.Data.ID)
 			shells.mu.Unlock()
+		case "session.idle", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted":
+			sessions.endOpenCodeRun("opencode:" + name + ":" + event.Data.SessionID)
 		}
 	}
 }
@@ -167,7 +170,7 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedCon
 		workers.Go(func() error {
 			for {
 				connection, cancel := context.WithTimeout(ctx, openCodeShellsEvery)
-				running.follow(connection, name, server)
+				running.follow(connection, s, name, server)
 
 				cancel()
 
@@ -286,7 +289,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		background[openCodeRoot(ctx, name, server, roots, id)] = true
 	}
 
-	for id := range openCodeWaiting(ctx, name, server) {
+	for id := range s.openCodeWaiting(ctx, name, server) {
 		asking[openCodeRoot(ctx, name, server, roots, id)] = true
 	}
 
@@ -320,6 +323,8 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 			}
 
 			if openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(session.ID)+"/message?type=idle&order=desc&limit=1", nil, &idle) == nil && len(idle.Data) > 0 && idle.Data[0].Time.Created > last.through {
+				s.endOpenCodeRun(id)
+
 				if senders, err := openCodeSenders(ctx, name, server, session.ID, last.through, idle.Data[0].Time.Created); err == nil {
 					cursor = &idle.Data[0].Time.Created
 
@@ -463,8 +468,16 @@ func openCodeRoot(ctx context.Context, name string, server config.OpenCodeConfig
 	return id
 }
 
-func openCodeWaiting(ctx context.Context, name string, server config.OpenCodeConfig) map[string]bool {
+func (s *SessionService) openCodeWaiting(ctx context.Context, name string, server config.OpenCodeConfig) map[string]bool {
 	waiting := map[string]bool{}
+
+	s.secretsMu.Lock()
+	for key := range s.secrets {
+		if id, ok := strings.CutPrefix(key.conversationID, "opencode:"+name+":"); ok {
+			waiting[id] = true
+		}
+	}
+	s.secretsMu.Unlock()
 
 	var locations []struct {
 		Directory string `json:"directory"`

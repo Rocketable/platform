@@ -2310,7 +2310,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	originHeader := reviewOriginHeader(origin)
 
 	if msg.Human && msg.Source == protocol.SourceWeb {
-		customTools = append(customTools, askUserQuestionTool(b.config.UserQuestionAsker, msg), askSecretTool(b.config.SessionService, shared.secrets, msg), navigateTool(b.threads, msg.Metadata[protocol.InboundPrincipalEmailMetadataKey]))
+		customTools = append(customTools, askUserQuestionTool(b.config.UserQuestionAsker, msg), askSecretTool(b.config.SessionService, shared.secrets, msg, "every shell command"), navigateTool(b.threads, msg.Metadata[protocol.InboundPrincipalEmailMetadataKey]))
 	}
 
 	if channel != "" {

@@ -1,13 +1,17 @@
 package backend
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -104,7 +108,7 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 		assert.NotContains(t, tool.InputSchema.(map[string]any)["properties"], "source", tool.Name)
 	}
 
-	assert.ElementsMatch(t, []string{"store", "read", "kv_store", "kv_read", "delete", "list", "get_tags", "toggle_tag", "navigate_for_me"}, names)
+	assert.ElementsMatch(t, []string{"store", "read", "kv_store", "kv_read", "delete", "list", "get_tags", "toggle_tag", "navigate_for_me", "ask_secret", "run_with_secrets"}, names)
 
 	fake.messages = map[string][]openCodeTestMessage{
 		"ses_a": {{Type: "user", Username: bob, Created: 1}, {Type: "user", Username: alice, Created: 2}},
@@ -210,4 +214,231 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 
 	out, failed = call("ses_c", "read", map[string]string{"path": "other.html"})
 	assert.True(t, failed, out)
+}
+
+func TestOpenCodeMCPTurnSecrets(t *testing.T) {
+	t.Parallel()
+
+	s := newOpenCodeTestService(t, "box")
+	ctx := t.Context()
+	fake := &fakeOpenCode{
+		sessions:  []openCodeSession{openCodeTestSession("ses_a", "", t.TempDir(), 1000)},
+		parents:   map[string]string{"ses_child": "ses_a"},
+		messages:  map[string][]openCodeTestMessage{"ses_a": {{Type: "user", Created: 1}}},
+		events:    make(chan string, 4),
+		terminals: map[string]*fakeTerminal{},
+	}
+	upstream := httptest.NewServer(fake)
+	t.Cleanup(upstream.Close)
+
+	box := config.OpenCodeConfig{URL: upstream.URL, Password: "pw"}
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+
+	cfg := config.NewLockedConfig(&config.Config{OpenCode: map[string]config.OpenCodeConfig{"box": box}})
+	rt := &Runtime{Cfg: cfg, Sessions: s, threads: &threadBridgeManager{runtime: cfg, store: s}}
+	mux := http.NewServeMux()
+	mux.Handle("/opencode/{name}/mcp", rt.OpenCodeMCP())
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "opencode", Version: "test"}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: server.URL + "/opencode/box/mcp", HTTPClient: &http.Client{Transport: basicAuthTransport{"opencode", "pw"}}, DisableStandaloneSSE: true}, &mcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, session.Close()) })
+
+	call := func(ctx context.Context, caller, tool string, arguments map[string]string) string {
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: arguments, Meta: mcp.Meta{"ai.opencode/sessionID": caller}})
+		if err != nil {
+			return err.Error()
+		}
+
+		return result.Content[0].(*mcp.TextContent).Text
+	}
+	ask := func(ctx context.Context, name string) <-chan string {
+		answer := make(chan string, 1)
+		go func() {
+			answer <- call(ctx, "ses_a", "ask_secret", map[string]string{"name": name, "reason": "open a pull request"})
+		}()
+
+		return answer
+	}
+	within := func(answer <-chan string) string {
+		t.Helper()
+
+		select {
+		case out := <-answer:
+			return out
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "the call never returned")
+
+			return ""
+		}
+	}
+	run := func(command string) string {
+		return call(ctx, "ses_a", "run_with_secrets", map[string]string{"command": command})
+	}
+
+	conversation := "opencode:box:ses_a"
+	pending := func(want int) []SecretRequest {
+		t.Helper()
+
+		require.Eventually(t, func() bool { return len(s.PendingSecrets(conversation, alice)) == want }, 5*time.Second, 10*time.Millisecond)
+
+		return s.PendingSecrets(conversation, alice)
+	}
+	value := "ghp_0123456789abcdef"
+	save := func() {
+		t.Helper()
+
+		saved := ask(ctx, "GITHUB_TOKEN")
+
+		require.NoError(t, s.AnswerSecret(conversation, pending(1)[0].ID, alice, []byte(value), false))
+		assert.Contains(t, within(saved), "Saved: $GITHUB_TOKEN is set in every rocketclaw_run_with_secrets command")
+	}
+	refused := "run_with_secrets: no secrets held; call ask_secret first"
+
+	brief, stop := context.WithTimeout(ctx, 5*time.Second)
+	defer stop()
+
+	assert.Contains(t, call(brief, "ses_a", "ask_secret", map[string]string{"name": "GITHUB_TOKEN", "reason": "x"}), "nobody sent", "a run not prompted from the RocketClaw Web cannot ask")
+
+	fake.messages["ses_a"] = append(fake.messages["ses_a"], openCodeTestMessage{Type: "user", Username: alice, Created: 2})
+
+	for _, tool := range []string{"ask_secret", "run_with_secrets"} {
+		assert.Contains(t, call(brief, "ses_child", tool, map[string]string{"name": "GITHUB_TOKEN", "reason": "x", "command": "true"}), "subagent", "a child session can neither ask nor use secrets")
+	}
+
+	assert.Equal(t, refused, run("true"))
+
+	saved := ask(ctx, "GITHUB_TOKEN")
+
+	pending(1)
+
+	for range 2 {
+		require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+
+		var asking bool
+		require.NoError(t, s.db.QueryRowContext(ctx, `SELECT asking FROM conversations WHERE conversation_id = $1`, conversation).Scan(&asking))
+		assert.True(t, asking, "a pending ask makes the synced row ask, and the next sync keeps it")
+	}
+
+	require.NoError(t, s.AnswerSecret(conversation, pending(1)[0].ID, alice, []byte(value), false))
+	assert.Contains(t, within(saved), "Saved: $GITHUB_TOKEN is set in every rocketclaw_run_with_secrets command")
+
+	for _, test := range []struct {
+		command, want string
+		code          int
+	}{
+		{`echo "$GITHUB_TOKEN"`, "[secret:GITHUB_TOKEN]\n", 0},
+		{"true", "", 0},
+		{"echo out; exit 3", "out\n", 3},
+		{"[ -t 0 ] || [ -t 1 ] || echo notty", "notty\n", 0},
+		{`read answer; echo "answer:$answer"; echo "$PAGER/$GIT_PAGER $GIT_TERMINAL_PROMPT $GH_PROMPT_DISABLED $TERM"`, "answer:\ncat/cat 0 1 dumb\n", 0},
+	} {
+		assert.Equal(t, fmt.Sprintf("Ran with $GITHUB_TOKEN set; exit code %d.\n%s", test.code, test.want), run(test.command), "a value split across frames still comes back as its placeholder")
+	}
+
+	assert.Contains(t, run("git init -q && git -c user.name=a -c user.email=a@example.com commit -q --allow-empty -m first && git log"), "\n    first\n", "git log neither pages nor waits")
+
+	fake.mu.Lock()
+	assert.Empty(t, fake.terminals, "every terminal is deleted")
+	assert.Len(t, fake.ptys, 6)
+
+	for _, created := range fake.ptys {
+		var body struct {
+			Command string            `json:"command"`
+			Args    []string          `json:"args"`
+			Env     map[string]string `json:"env"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(created), &body))
+		assert.Equal(t, map[string]string{"GITHUB_TOKEN": value}, body.Env)
+		assert.NotContains(t, body.Command+strings.Join(body.Args, " "), value)
+	}
+
+	assert.False(t, slices.ContainsFunc(fake.requests, func(request string) bool { return strings.HasSuffix(request, "/environment") }), "OpenCode's own shell never gets a value")
+	fake.mu.Unlock()
+
+	shells := &openCodeShells{running: map[string]string{}}
+	go shells.follow(ctx, s, "box", box)
+
+	withdrawn := ask(ctx, "NPM_TOKEN")
+
+	pending(1)
+
+	fake.events <- `{"type":"session.idle","data":{"sessionID":"ses_child"}}`
+
+	fake.events <- `{"type":"shell.created","data":{"info":{"id":"sh_1","status":"running","metadata":{"sessionID":"ses_a"}}}}`
+
+	require.Eventually(t, func() bool {
+		shells.mu.Lock()
+		defer shells.mu.Unlock()
+
+		return len(shells.running) == 1
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.Len(t, s.PendingSecrets(conversation, alice), 1, "a subagent going idle does not end the run")
+
+	fake.events <- `{"type":"session.idle","data":{"sessionID":"ses_a"}}`
+
+	assert.Contains(t, within(withdrawn), "No answer", "the run's end withdraws a pending ask")
+	assert.Equal(t, refused, run("true"), "and erases its secrets")
+
+	for _, event := range []string{"session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"} {
+		save()
+
+		fake.events <- `{"type":"` + event + `","data":{"sessionID":"ses_a"}}`
+
+		require.Eventually(t, func() bool { return run("true") == refused }, 5*time.Second, 10*time.Millisecond, event)
+	}
+
+	save()
+
+	late := make(chan string, 1)
+	go func() { late <- run(`while [ ! -e go ]; do sleep 0.01; done; echo "$GITHUB_TOKEN"`) }()
+
+	require.Eventually(t, func() bool {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+
+		return len(fake.terminals) == 1
+	}, 5*time.Second, 10*time.Millisecond)
+
+	fake.events <- `{"type":"session.idle","data":{"sessionID":"ses_a"}}`
+
+	require.Eventually(t, func() bool {
+		s.secretsMu.Lock()
+		defer s.secretsMu.Unlock()
+
+		_, held := s.openCodeSecrets[conversation]
+
+		return !held
+	}, 5*time.Second, 10*time.Millisecond)
+
+	folder, err := os.OpenRoot(fake.sessions[0].Location.Directory)
+	require.NoError(t, err)
+	require.NoError(t, folder.WriteFile("go", nil, 0o600))
+	require.NoError(t, folder.Close())
+	assert.Equal(t, "Ran with $GITHUB_TOKEN set; exit code 0.\n[secret:GITHUB_TOKEN]\n", within(late), "a run ending during a command still hides the values that command got")
+
+	save()
+
+	withdrawn = ask(ctx, "NPM_TOKEN")
+
+	pending(1)
+
+	fake.sessions[0].Time.Updated = 2000
+	fake.messages["ses_a"] = append(fake.messages["ses_a"], openCodeTestMessage{Type: "idle", Created: 3, Outcome: "succeeded"})
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	assert.Contains(t, within(withdrawn), "No answer", "a sync that sees the run ended withdraws its ask")
+	assert.Equal(t, refused, run("true"), "and erases its secrets")
+
+	save()
+	require.NoError(t, s.ChangeAttention(ctx, alice, []string{"/oc/" + base64.RawURLEncoding.EncodeToString([]byte(conversation))}, AttentionSent, nil))
+	assert.Equal(t, refused, run("true"), "relaying a new Web prompt starts the run with no secrets")
+
+	canceled, cancel := context.WithCancel(ctx)
+	ask(canceled, "NPM_TOKEN")
+	pending(1)
+	cancel()
+	pending(0)
 }
