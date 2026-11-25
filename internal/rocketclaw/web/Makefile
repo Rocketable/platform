@@ -38,10 +38,22 @@ lint:
 test:
 	go -C .. generate ./internal/web
 	@set -eu; \
-	cleanup() { pkill -P 1 -f 'ms-playwright/[c]hromium' || true; }; \
+	db=; \
+	cleanup() { \
+		if [ -n "$$db" ]; then docker rm -f -v "$$db" >/dev/null 2>&1 || true; fi; \
+		pkill -P 1 -f 'ms-playwright/[c]hromium' || true; \
+	}; \
 	cleanup; \
 	trap cleanup EXIT INT TERM; \
 	bash -o pipefail -c 'find ./src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" -exec ls -S {} + | xargs -n 1 -P 4 bun test'; \
+	if [ -z "$${ROCKETCLAW_TEST_DATABASE_URL:-}" ]; then \
+		db=$$(docker run -d --pull=always -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rocketclaw_test -p 127.0.0.1::5432 postgres:latest); \
+		port=$$(docker port "$$db" 5432/tcp); \
+		port=$${port##*:}; \
+		i=0; \
+		while [ "$$i" -lt 30 ] && ! docker exec "$$db" pg_isready -U postgres -d rocketclaw_test >/dev/null 2>&1; do i=$$((i + 1)); sleep 1; done; \
+		export ROCKETCLAW_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:$$port/rocketclaw_test?sslmode=disable"; \
+	fi; \
 	go -C .. test ./frontend/rpc -run 'Test(PublicProgressRealBrowser|RevertRealBackendBrowser|ShadowsRealBackendBrowser|SessionEntries|SidebarHTTPStreamsBeforeGoTailAndCancels|PagesRealBrowser|ReloadRealBackendBrowser|RemoteRocketClawRealBrowser|AgentEditor(EditingAndSaving|PreviewAndChat)RealBackendBrowser)$$' -count=1
 	$(MAKE) check-cloc-budget
 

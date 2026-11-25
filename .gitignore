@@ -1,4 +1,3 @@
-.tmp/
 .context/
 .env
 bin/
@@ -8,3 +7,4 @@ testsandbox/
 !.opencode/
 !.opencode/skills/
 !.opencode/skills/**
+.tmp/
