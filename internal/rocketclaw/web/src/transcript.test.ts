@@ -509,12 +509,15 @@ test("actual stream handlers use metadata only as a hint, including on the first
   visit(source);
   let reads = 0;
   const refreshHistory = () => { reads++; };
-  const compile = (node: Expression) => new Function("id", "refreshHistory", transpiler.transformSync(`return ${node.getText(source)};`))("session", refreshHistory);
+  const secrets: unknown[] = [];
+  const queryClient = { invalidateQueries: (filter: unknown) => { secrets.push(filter); } };
+  const compile = (node: Expression) => new Function("id", "refreshHistory", "queryClient", transpiler.transformSync(`return ${node.getText(source)};`))("session", refreshHistory, queryClient);
   const opened = compile(onopen!), signaled = compile(onmessage!);
   opened(); opened();
   signaled({ data: JSON.stringify({ conversationId: "other", revision: "future" }) });
   signaled({ data: JSON.stringify({ conversationId: "session", revision: "older" }) });
   expect(reads).toBe(3);
+  expect(secrets).toEqual(Array(3).fill({ queryKey: ["secrets", "session"] }));
   expect(onmessage!.getText(source)).not.toContain("change.revision");
   const hook = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "useSessionStream") as FunctionDeclaration;
   const refresh = hook.body!.statements.filter(isVariableStatement).flatMap((node) => [...node.declarationList.declarations]).find((node) => node.name.getText(source) === "refreshHistory")!;

@@ -1,6 +1,6 @@
 import { hashKey, type QueryKey } from "@tanstack/react-query";
 import { server, serverURL } from "./navigation";
-import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, StripLayout, TranscriptEvent, TreeNode, VoiceSettings } from "./types";
+import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PendingSecret, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, StripLayout, TranscriptEvent, TreeNode, VoiceSettings } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -90,6 +90,7 @@ export const queries = {
   } }),
   messageTree: (input: { id: string }, revision?: string) => ({ queryKey: ["messageTree", input, revision], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ nodes: TreeNode[] }>("MessageTree", input, signal)).nodes }),
   queue: (input: { id: string }) => ({ queryKey: ["queue", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ items: QueueItem[] }>("ListQueue", input, signal)).items }),
+  secrets: (conversationId: string) => ({ queryKey: ["secrets", conversationId], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ secrets?: PendingSecret[] }>("PendingSecrets", { conversationId }, signal)).secrets ?? [] }),
   // The server answers for the signed-in person; the username keeps one person's settings out of another's cache.
   voiceSettings: (username: string) => ({ queryKey: ["voiceSettings", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<VoiceSettings>("VoiceSettings", {}, signal) }),
   tabs: (username: string, name = server()) => ({ queryKey: [{ server: name }, "tabs", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<SavedTabs>("Tabs", {}, signal, name) }),
@@ -123,6 +124,7 @@ export const mutations = {
   decideProposal: (input: { id: string; proposalId: string; accept: boolean }) => rpc<AgentDraftProposal>("DecideProposal", input),
   testModel: (input: { model: string }) => rpc<{ error?: string; elapsedMs?: string }>("TestModel", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
+  answerSecret: (input: { conversationId: string; askId: string; value?: string; decline?: boolean }) => rpc("AnswerSecret", input),
   voiceSettings: (input: { action: "UPDATE"; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
   saveBehaviorSettings: async (input: { documentJson: string }) => (await rpc<{ config: ConfigView }>("SaveBehaviorSettings", input)).config,
   tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; layout?: StripLayout; attention?: { paths: string[]; action: AttentionAction; until?: string }; autoPark?: boolean }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),

@@ -15,7 +15,7 @@ import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field
 import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceInputsPending, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
-import type { ChatOrigin, HistoryView, MessageMatch, PageEntry, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding, TreeNode } from "./types";
+import type { ChatOrigin, HistoryView, MessageMatch, PageEntry, PendingQuestion, PendingSecret, PromptDelivery, SearchSessionsResponse, ShadowBinding, TreeNode } from "./types";
 import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Timer, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, Fragment, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
@@ -355,9 +355,9 @@ function QueuePanel({
 const jobState = (job: BackgroundJob) => ({ completed: "finished", stopped: job.stoppedBy ? `stopped by ${job.stoppedBy}` : "stopped", killed: "killed (server restarted)" } as Record<string, string | undefined>)[job.state] ?? job.state;
 const jobStatus = (job: BackgroundJob) => job.state === "running" ? "running" : ["failed", "killed"].includes(job.state) ? "error" : undefined;
 
-// jobsSlot is the composer's question card and Background Jobs list, or nothing when the conversation has neither.
-function jobsSlot(id: string, jobs: BackgroundJob[] | undefined, onChange: () => Promise<unknown>, openCall: (callId: string) => void, card: ReactNode) {
-  return jobs?.length || card ? <>{card}{jobs?.length ? <BackgroundJobs id={id} jobs={jobs} onChange={onChange} openCall={openCall} /> : null}</> : null;
+// jobsSlot is the composer's secret and question cards and Background Jobs list, or nothing when the conversation has none.
+function jobsSlot(id: string, jobs: BackgroundJob[] | undefined, onChange: () => Promise<unknown>, openCall: (callId: string) => void, ...cards: ReactNode[]) {
+  return jobs?.length || cards.some(Boolean) ? <>{cards}{jobs?.length ? <BackgroundJobs id={id} jobs={jobs} onChange={onChange} openCall={openCall} /> : null}</> : null;
 }
 
 function BackgroundJobs({ id, jobs, openCall, onChange }: { id: string; jobs: BackgroundJob[]; openCall: (callId: string) => void; onChange: () => Promise<unknown> }) {
@@ -418,9 +418,39 @@ function useQuestion(id: string, draft: ComposerDraft, paused: boolean, onChange
   return { answering: mutation.isPending, pending: !!question, take, card };
 }
 
+function SecretCard({ conversationId, secret, onChange }: { conversationId: string; secret: PendingSecret; onChange: () => Promise<unknown> }) {
+  const field = useRef<HTMLInputElement>(null), id = useId();
+  const answer = useMutation({ mutationFn: mutations.answerSecret, onSuccess: onChange, onError: (error) => error instanceof RPCError && error.code === 5 ? onChange() : undefined });
+  const send = (decline: boolean) => {
+    const value = field.current!.value;
+    field.current!.value = "";
+    answer.mutate({ conversationId, askId: secret.id, ...(decline ? { decline } : { value: new TextEncoder().encode(value).toBase64() }) });
+  };
+  return <form aria-label="Secret" className="ph-no-capture my-1 flex flex-col gap-3 rounded-lg border p-3" onSubmit={(event) => { event.preventDefault(); send(false); }}>
+    <Field>
+      <FieldLabel htmlFor={id}>The agent asks for a secret: {secret.name}</FieldLabel>
+      <p className="text-sm text-muted-foreground">{secret.reason}</p>
+      <Input id={id} ref={field} type="password" autoComplete="off" disabled={answer.isPending} />
+      <p className="text-xs text-muted-foreground">Paste it as one line. The agent never sees the value; its commands read it from ${secret.name}.</p>
+      <FieldError>{answer.error?.message}</FieldError>
+    </Field>
+    <div className="flex gap-2">
+      <Button type="submit" size="sm" disabled={answer.isPending}>Save</Button>
+      <Button type="button" variant="ghost" size="sm" disabled={answer.isPending} onClick={() => send(true)}>Decline</Button>
+    </div>
+  </form>;
+}
+
+function useSecrets(conversationId: string, enabled: boolean, refetchInterval?: number) {
+  const query = useQuery({ ...queries.secrets(conversationId), enabled, refetchInterval });
+  const secrets = enabled ? query.data ?? [] : [];
+  return { pending: secrets.length > 0, card: secrets.length ? <Fragment key="secrets">{secrets.map((secret) => <SecretCard key={secret.id} conversationId={conversationId} secret={secret} onChange={query.refetch} />)}</Fragment> : null };
+}
+
 // composerLabels says what Send does: post to the people here while the agent is paused, answer the pending question,
 // queue behind the running turn, or send.
-function composerLabels(paused: boolean, asking: boolean, busy: boolean, id: string) {
+function composerLabels(paused: boolean, asking: boolean, busy: boolean, id: string, secret = false): { placeholder: string; sendLabel: string } {
+  if (secret) return { ...composerLabels(paused, asking, busy, id), placeholder: "Paste the secret in the form above, not here" };
   if (paused) return { placeholder: "Message the people here", sendLabel: "Send to the people here" };
   if (asking) return { placeholder: "Answer the question", sendLabel: "Send answer" };
   if (busy) return { placeholder: "Queue a follow-up", sendLabel: "Send to queue" };
@@ -3278,13 +3308,14 @@ function RemoteSession({ id }: { id: string }) {
   const server = id.split(":")[1] ?? "";
   const { servers, kept, first } = useOpenCodeTabs();
   const configured = servers.includes(server);
-  const offline = sidebar.rows.find((row) => row.id === id)?.offline;
+  const row = sidebar.rows.find((each) => each.id === id), offline = row?.offline;
   // The session the view last reported for its route, which can be a subagent's; the route's own until it reports.
   const [report, setReport] = useState({ route: "", shown: "" });
   const reported = !!id && report.route === id;
   const visible = configured && (!offline || reported);
   const start = configured ? id : first;
   const { failed, created, retry } = useRemoteView({ id, start, servers, kept, visible, shown: reported ? report.shown : "", setReport, container });
+  const secrets = useSecrets(id, visible && !!row?.asking, 2000);
   const typingId = reported ? report.shown : id;
   const name = useServer();
   // The composer that last took input, whose emptying by OpenCode's own code (a send of any kind) fires no input event.
@@ -3306,6 +3337,7 @@ function RemoteSession({ id }: { id: string }) {
   if (!start && !id) return null;
   return <>
     {id ? <RemoteStatus server={server} configured={configured} visible={visible} reported={reported} failed={failed} created={created} retry={retry} /> : null}
+    <section aria-label="Secrets" className="shrink-0 px-3 pt-2 empty:hidden">{secrets.card}</section>
     {/* The pill sits beside the view, over the view's own layers, below OpenCode's header: 48 px, or about 81 px of
         tabs and location bar once OpenCode's 768 px breakpoint (oc/host/media.ts) finds the view narrow. OpenCode
         measures the view's content box (oc/host/mount.tsx), inside the 1 px padding of oc/host/scope.css, so the
@@ -4849,10 +4881,10 @@ export function useSessionStream(id: string, draft: ComposerDraft, onDraftChange
     if (!id || !scope) return;
     const stream = new EventSource(`${serverURL()}/stream?${new URLSearchParams({ id })}`);
     void refreshHistory();
-    stream.onopen = () => { void refreshHistory(); };
+    stream.onopen = () => { void refreshHistory(); void queryClient.invalidateQueries({ queryKey: ["secrets", id] }); };
     stream.onmessage = (event) => {
       const change = JSON.parse(String(event.data)) as { conversationId: string; revision: string };
-      if (change.conversationId === id) void refreshHistory();
+      if (change.conversationId === id) { void refreshHistory(); void queryClient.invalidateQueries({ queryKey: ["secrets", id] }); }
     };
     return () => {
       stream.close();
@@ -5541,7 +5573,8 @@ function SessionComposer({
     setAgentOpen(false);
   };
   const pausedIn = usePausedChats(), paused = pausedIn(id), question = useQuestion(id, draft, paused, refreshHistory, setSendError);
-  const { placeholder, sendLabel } = composerLabels(paused, question.pending, busy, id);
+  const secrets = useSecrets(id, id !== "");
+  const { placeholder, sendLabel } = composerLabels(paused, question.pending, busy, id, secrets.pending);
   const goSession = (sessionId: string, resumed = false) => {
     void draftContent(JSON.stringify([scope, ""]), () => ({ text: "", files: [], agent: "" })).catch(() => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; onDraftChange(); });
     draft.sessionId = sessionId;
@@ -5638,7 +5671,7 @@ function SessionComposer({
         popQueued={(itemId) => popComposer({ draft, onDraftChange, id, itemId, selected, currentAgent, prompt, popQueueItem, setSendError })}
         removeQueued={(itemId) => void removeQueueItem.mutateAsync({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "remove failed"))}
         reorderQueued={(itemIds) => void reorderQueue.mutateAsync({ id, itemIds }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "reorder failed"))}
-        jobs={jobsSlot(id, draft.jobs, refreshHistory, (callId) => void openCall(draft, onDraftChange, scrollToMessage, callId), question.card)}
+        jobs={jobsSlot(id, draft.jobs, refreshHistory, (callId) => void openCall(draft, onDraftChange, scrollToMessage, callId), secrets.card, question.card)}
       />
     </>
   );
