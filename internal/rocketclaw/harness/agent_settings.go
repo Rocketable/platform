@@ -29,7 +29,6 @@ type AgentSetting struct {
 
 func AgentSettings() []AgentSetting {
 	easy, advanced, both := []AgentMode{AgentModeEasy}, []AgentMode{AgentModeAdvanced}, []AgentMode{AgentModeEasy, AgentModeAdvanced}
-	decisionDefault := "The installation's decision model for an easy agent; none for a reviewer agent."
 
 	return []AgentSetting{
 		{Key: "mode", Modes: both, Group: "Basics", Label: "Agent type", Control: AgentSettingChoice, Choices: []string{"easy", "advanced"}, Common: true,
@@ -123,16 +122,13 @@ func AgentSettings() []AgentSetting {
 			Explanation: "Which agents may start, message or stop this agent's chats. It may stay next to full access.",
 			Default:     "Any agent, or none for a full-access agent.", Allowed: "true, false, or a list of agent names without repeats."},
 		{Key: "approver", Modes: easy, Group: "Review", Label: "Reviewer", Control: AgentSettingFile,
-			Explanation: "How the guardian reviews this agent's calls: its model, extra rules, a quick decision check before it, and tools of its own.",
-			Default:     "The guardian on the installation's review model, with only read, glob and grep in the agent's folder.", Allowed: "A map of model, prompt, decision and the reviewer's own secretsARN, commands, mcp, rocketclaw, tags, skills and allowedNetworkTargets."},
-		{Key: "approver", Modes: advanced, Group: "Review", Label: "As a reviewer", Control: AgentSettingFile,
-			Explanation: "Used only when another agent names this one in auto(agent): a quick decision check before this agent reviews.",
-			Default:     "No quick decision check.", Allowed: "A map with only decision."},
+			Explanation: "How the guardian reviews this agent's calls: its model, extra rules, and tools of its own.",
+			Default:     "The guardian on the installation's review model, with only read, glob and grep in the agent's folder.", Allowed: "A map of model, prompt and the reviewer's own secretsARN, commands, mcp, rocketclaw, tags, skills and allowedNetworkTargets."},
 		{Key: "approver.model", Modes: easy, Group: "Review", Label: "Review model", Control: AgentSettingModel,
 			Explanation: "The model the guardian reviews this agent's calls on.",
 			Default:     "The installation's review model.", Allowed: "A model name written like the model setting."},
 		{Key: "approver.prompt", Modes: easy, Group: "Review", Label: "Review rules", Control: AgentSettingText,
-			Explanation: "Rules added to the guardian's own for this agent; they never replace them. Without decision rules too, no quick decision check runs.",
+			Explanation: "Rules added to the guardian's own for this agent; they never replace them.",
 			Default:     "Only the guardian's rules.", Allowed: "Any text."},
 		{Key: "approver.commands", Modes: easy, Group: "Review", Label: "Reviewer's server commands", Control: AgentSettingFile,
 			Explanation: "Named commands the guardian itself may run on the server while it reviews. Listing any gives it a shell in the agent's folder. Nothing reviews the guardian's own calls.",
@@ -155,18 +151,6 @@ func AgentSettings() []AgentSetting {
 		{Key: "approver.skills", Modes: easy, Group: "Review", Label: "Reviewer's skills", Control: AgentSettingList,
 			Explanation: "Folders under skills/ whose skills, at any depth, the guardian itself may load.",
 			Default:     "No skills.", Allowed: "auto for all skills, or a list of existing folder names."},
-		{Key: "approver.decision", Modes: both, Group: "Review", Label: "Quick decision check", Control: AgentSettingFile,
-			Explanation: "A decision model asked before the reviewer; a confident answer settles the review.",
-			Default:     decisionDefault, Allowed: "A map of model, minConfidence and prompt."},
-		{Key: "approver.decision.model", Modes: both, Group: "Review", Label: "Decision model", Control: AgentSettingText,
-			Explanation: "The model asked first.",
-			Default:     decisionDefault, Allowed: "A provider/model name whose provider is configured for decisions."},
-		{Key: "approver.decision.minConfidence", Modes: both, Group: "Review", Label: "Minimum confidence", Control: AgentSettingText,
-			Explanation: "How sure the decision model must be before its answer counts.",
-			Default:     "The installation's setting, otherwise 0.9.", Allowed: "A number from 0 to 1."},
-		{Key: "approver.decision.prompt", Modes: both, Group: "Review", Label: "Decision rules", Control: AgentSettingText,
-			Explanation: "Rules only the decision model reads.",
-			Default:     "No extra rules.", Allowed: "Any text."},
 		{Key: "delegatedFrom", Modes: easy, Group: "Who can write", Label: "Who may write to its chats", Control: AgentSettingFile,
 			Explanation: "Which agents may start, message or stop this agent's chats.",
 			Default:     "Any agent.", Allowed: "true, false, or a list of agent names."},

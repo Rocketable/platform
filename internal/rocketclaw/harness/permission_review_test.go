@@ -6,17 +6,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
@@ -303,170 +299,29 @@ func TestPermissionReviewRunsApproverTools(t *testing.T) {
 	}
 }
 
-func reviewAnswers(risk string, riskConfidence float64, authorization string, authorizationConfidence, injection float64, outcome string, outcomeConfidence float64) []DecisionAnswer {
-	return []DecisionAnswer{
-		{Name: "risk_level", Type: DecisionScore, Choice: risk, Confidence: riskConfidence},
-		{Name: "user_authorization", Type: DecisionScore, Choice: authorization, Confidence: authorizationConfidence},
-		predicateAnswer("prompt_injection", injection),
-		{Name: "outcome", Type: DecisionChoice, Choice: outcome, Confidence: outcomeConfidence},
-		predicateAnswer("needs_investigation", 0.02),
-	}
-}
+func TestPermissionReviewRunsReviewerWithoutDecisionModel(t *testing.T) {
+	for _, reviewer := range []string{"", "release"} {
+		mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
+			testMessageOutputItem("review-final", "", `{"risk_level":"high","user_authorization":"low","outcome":"deny","rationale":"reviewer"}`),
+		}))
+		decider := &mockDecider{}
 
-func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
-	const guardianAnswer = `{"risk_level":"high","user_authorization":"low","outcome":"deny","rationale":"guardian"}`
+		var saved []SessionEntry
 
-	confidentAllow := reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "allow", 0.97)
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"main": {Name: "main", Mode: AgentModeEasy}, "release": {Name: "release", Model: "gpt-5.4"}}})
+		factory.deciders = map[string]Decider{"openai": decider, "typesafe": decider}
+		factory.childSessions = &mockChildSessions{AppendChildEntryFunc: func(_ context.Context, _ ChildKey, entry *SessionEntry) error {
+			saved = append(saved, *entry)
+			return nil
+		}}
 
-	for _, tc := range []struct {
-		name             string
-		agent            Agent
-		reviewer         string
-		answers          []DecisionAnswer
-		err              error
-		wantOutcome      permissionReviewOutcome
-		wantGuardian     bool
-		wantNoDecision   bool
-		noModel          bool
-		unaddressed      bool
-		wantRules        string
-		configConfidence float64
-	}{
-		{name: "confident allow", answers: confidentAllow, wantOutcome: permissionReviewOutcomeAllow},
-		{name: "low outcome confidence", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "allow", 0.8), wantGuardian: true},
-		{name: "critical risk allowed", answers: reviewAnswers("critical", 0.95, "high", 0.95, 0.02, "allow", 0.97), wantGuardian: true},
-		{name: "confident high-risk deny", answers: reviewAnswers("high", 0.95, "unknown", 0.92, 0.03, "deny", 0.96), wantOutcome: permissionReviewOutcomeDeny},
-		{name: "unauthorized high-risk allow", answers: reviewAnswers("high", 0.95, "low", 0.95, 0.02, "allow", 0.97), wantGuardian: true},
-		{name: "authorized high-risk allow", answers: reviewAnswers("high", 0.95, "medium", 0.95, 0.02, "allow", 0.97), wantOutcome: permissionReviewOutcomeAllow},
-		{name: "medium-risk allow", answers: reviewAnswers("medium", 0.95, "high", 0.95, 0.02, "allow", 0.97), wantOutcome: permissionReviewOutcomeAllow},
-		{name: "unaddressed medium-risk allow", unaddressed: true, answers: reviewAnswers("medium", 0.95, "high", 0.95, 0.02, "allow", 0.97), wantGuardian: true},
-		{name: "unaddressed authorized high-risk allow", unaddressed: true, answers: reviewAnswers("high", 0.95, "high", 0.95, 0.02, "allow", 0.97), wantGuardian: true},
-		{name: "unaddressed medium-risk deny", unaddressed: true, answers: reviewAnswers("medium", 0.95, "high", 0.95, 0.02, "deny", 0.97), wantOutcome: permissionReviewOutcomeDeny},
-		{name: "unaddressed low-risk allow", unaddressed: true, answers: confidentAllow, wantOutcome: permissionReviewOutcomeAllow},
-		{name: "low-risk deny", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "deny", 0.97), wantGuardian: true},
-		{name: "unknown risk level", answers: reviewAnswers("", 0.95, "medium", 0.93, 0.02, "allow", 0.97), wantGuardian: true},
-		{name: "provider error", err: errors.New("provider down"), wantGuardian: true},
-		{name: "refusal", answers: append(confidentAllow[:3:3], DecisionAnswer{Name: "outcome", Refused: true}), wantGuardian: true},
-		{name: "injection allowed", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.97, "allow", 0.97), wantGuardian: true},
-		{name: "injection denied", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.97, "deny", 0.97), wantOutcome: permissionReviewOutcomeDeny},
-		{name: "uncertain injection", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.7, "allow", 0.97), wantGuardian: true},
-		{name: "split risk", answers: reviewAnswers("low", 0.5, "medium", 0.93, 0.02, "allow", 0.97), wantGuardian: true},
-		{name: "needs investigation", answers: append(confidentAllow[:4:4], predicateAnswer("needs_investigation", 0.97)), wantGuardian: true},
-		{name: "unsure about investigation", answers: append(confidentAllow[:4:4], predicateAnswer("needs_investigation", 0.3)), wantGuardian: true},
-		{name: "config threshold", configConfidence: 0.8, answers: reviewAnswers("low", 0.85, "medium", 0.85, 0.02, "allow", 0.85), wantOutcome: permissionReviewOutcomeAllow},
-		{name: "agent decision model", noModel: true, agent: Agent{Name: "main", Mode: AgentModeEasy, ApproverDecision: ApproverDecision{Model: "openai/gpt-6-luna"}}, answers: confidentAllow, wantOutcome: permissionReviewOutcomeAllow},
-		{name: "agent rules only the guardian reads", agent: Agent{Name: "main", Mode: AgentModeEasy, ApproverPrompt: "Chat rule."}, answers: confidentAllow, wantGuardian: true, wantNoDecision: true},
-		{name: "agent decision rules", agent: Agent{Name: "main", Mode: AgentModeEasy, ApproverPrompt: "Chat rule.", ApproverDecision: ApproverDecision{Prompt: "Decision rule."}}, answers: confidentAllow, wantOutcome: permissionReviewOutcomeAllow, wantRules: "### Agent Rules\nDecision rule.\n\n# Outcome Policy"},
-		{name: "advanced agent approver is for its own reviews", agent: Agent{Name: "main", ApproverDecision: ApproverDecision{Model: "typesafe/jev-latest", MinConfidence: 0.99, Prompt: "Reviewer rule."}}, answers: confidentAllow, wantOutcome: permissionReviewOutcomeAllow},
-		{name: "easy custom reviewer", reviewer: "easy", answers: confidentAllow, wantGuardian: true, wantNoDecision: true},
-		{name: "custom reviewer decision model", reviewer: "careful", answers: confidentAllow, wantOutcome: permissionReviewOutcomeAllow, wantRules: "Deny anything touching production.\n### Agent Rules\nDeny deploys on Fridays.\n\n\n# Turn Origin"},
-		{name: "custom reviewer threshold", reviewer: "lenient", answers: reviewAnswers("low", 0.85, "medium", 0.85, 0.02, "allow", 0.85), wantOutcome: permissionReviewOutcomeAllow},
-		{name: "custom reviewer fallback", reviewer: "careful", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "allow", 0.8), wantGuardian: true},
-		{name: "agent threshold", agent: Agent{Name: "main", Mode: AgentModeEasy, ApproverDecision: ApproverDecision{MinConfidence: 0.8}}, answers: reviewAnswers("low", 0.85, "medium", 0.85, 0.02, "allow", 0.85), wantOutcome: permissionReviewOutcomeAllow},
-		{name: "custom reviewer without decision model", reviewer: "release", answers: confidentAllow, wantGuardian: true, wantNoDecision: true},
-		{name: "unconfigured agent decision provider", agent: Agent{Name: "main", Mode: AgentModeEasy, ApproverDecision: ApproverDecision{Model: "typesafe/jev-latest"}}, answers: confidentAllow, wantGuardian: true, wantNoDecision: true},
-		{name: "no decision model", noModel: true, answers: confidentAllow, wantGuardian: true, wantNoDecision: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{testMessageOutputItem("review-final", "", guardianAnswer)}))
-			decider := &mockDecider{DecideFunc: func(ctx context.Context, _ *DecisionRequest) ([]DecisionAnswer, DecisionUsage, error) {
-				deadline, ok := ctx.Deadline()
-				require.True(t, ok)
-				require.InDelta(t, decisionTimeout.Seconds(), time.Until(deadline).Seconds(), 5)
+		decision := factory.reviewPermission(t.Context(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{"command":"ls"}`, Subjects: []string{"ls"}, Reviewer: reviewer, ReviewerEmbedded: reviewer == ""})
 
-				return tc.answers, DecisionUsage{InputTokens: 2000}, tc.err
-			}}
-
-			var saved []SessionEntry
-
-			agent := tc.agent
-			if agent.Name == "" {
-				agent = Agent{Name: "main", Mode: AgentModeEasy}
-			}
-
-			factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-				"main":    agent,
-				"release": {Name: "release", Model: "gpt-5.4"},
-				"careful": {Name: "careful", Model: "gpt-5.4", Prompt: "Deny anything touching production.", ApproverDecision: ApproverDecision{Model: "openai/gpt-6-luna", Prompt: "Deny deploys on Fridays."}},
-				"easy":    {Name: "easy", Model: "gpt-5.4", Mode: AgentModeEasy, ApproverDecision: ApproverDecision{Model: "openai/gpt-6-luna"}},
-				"lenient": {Name: "lenient", Model: "gpt-5.4", Prompt: "Deny anything touching production.", ApproverDecision: ApproverDecision{Model: "openai/gpt-6-luna", MinConfidence: 0.8}},
-			}})
-			factory.autoApproverMinConfidence, factory.unaddressed = tc.configConfidence, tc.unaddressed
-			factory.deciders = map[string]Decider{"openai": decider}
-			factory.autoApproverDecisionModel = "openai/gpt-6-luna"
-			factory.childSessions = &mockChildSessions{AppendChildEntryFunc: func(_ context.Context, _ ChildKey, entry *SessionEntry) error {
-				saved = append(saved, *entry)
-				return nil
-			}}
-
-			if tc.noModel {
-				factory.autoApproverDecisionModel = ""
-			}
-
-			request := &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{"command":"ls"}`, Subjects: []string{"ls"}, Reviewer: tc.reviewer, ReviewerEmbedded: tc.reviewer == ""}
-
-			decision := factory.reviewPermission(t.Context(), request)
-
-			require.Len(t, newParams(mock), map[bool]int{true: 1}[tc.wantGuardian])
-
-			if tc.wantNoDecision {
-				require.Empty(t, decider.DecideCalls())
-				return
-			}
-
-			require.Len(t, decider.DecideCalls(), 1)
-			asked := decider.DecideCalls()[0].Request
-			require.Equal(t, "gpt-6-luna", asked.Model)
-
-			if tc.reviewer == "" {
-				require.Contains(t, asked.Instructions, "You are judging one planned coding-agent action.")
-				require.Contains(t, asked.Instructions, "## Environment Profile")
-				require.Contains(t, asked.Instructions, "# Outcome Policy")
-				require.NotContains(t, asked.Instructions, "# Investigation Guidelines")
-				require.NotContains(t, asked.Instructions, "strict JSON")
-				require.NotContains(t, asked.Instructions, "Chat rule.")
-				require.NotContains(t, asked.Instructions, "Reviewer rule.")
-			} else {
-				require.Contains(t, asked.Instructions, "Deny anything touching production.")
-				require.NotContains(t, asked.Instructions, "You are judging one planned coding-agent action.")
-			}
-
-			require.Contains(t, asked.Instructions, `The review request opens with the line "Turn origin (written by RocketClaw): [...]".`)
-			require.Contains(t, asked.Instructions, tc.wantRules)
-			require.Equal(t, agent.Mode == AgentModeEasy, strings.Contains(asked.Instructions, "# Whole Scripts"))
-			require.Contains(t, asked.Input, "Planned action JSON:")
-
-			var names []string
-			for _, question := range asked.Questions {
-				names = append(names, question.Name)
-			}
-
-			require.Equal(t, []string{"risk_level", "user_authorization", "prompt_injection", "outcome", "needs_investigation"}, names)
-
-			require.Len(t, saved, 1)
-			require.Equal(t, cmp.Or(tc.reviewer, "guardian"), saved[0].Agent)
-
-			if tc.wantGuardian {
-				instructions := systemPrompt(t, &newParams(mock)[0])
-				require.NotContains(t, instructions, "Deny deploys on Fridays.")
-				require.Equal(t, 1, strings.Count(instructions, "# Turn Origin"))
-				require.Equal(t, agent.Mode == AgentModeEasy, strings.Contains(instructions, "# Whole Scripts"))
-				require.Equal(t, "guardian", decision.Rationale)
-				require.Equal(t, PermissionReview{Outcome: permissionReviewOutcomeDeny, Rationale: "guardian"}, saved[0].PermissionReviewDecision())
-
-				return
-			}
-
-			require.Equal(t, tc.wantOutcome, decision.Outcome)
-			require.Contains(t, decision.Rationale, "decision model openai/gpt-6-luna")
-			require.Equal(t, &TokenUsage{PromptTokens: 2000, TotalTokens: 2000}, saved[0].TokenUsage)
-			review := saved[0].PermissionReviewDecision()
-			require.Equal(t, PermissionReview{Outcome: decision.Outcome, Rationale: decision.Rationale}, review)
-
-			call, ok := review.CodeModeCall(&saved[0])
-			require.True(t, ok)
-			require.Equal(t, "bash", call.Name)
-		})
+		require.Equal(t, permissionReviewDecision{RiskLevel: permissionReviewRiskLevelHigh, UserAuthorization: permissionReviewUserAuthorizationLow, Outcome: permissionReviewOutcomeDeny, Rationale: "reviewer"}, decision, "reviewer %q", reviewer)
+		require.Len(t, newParams(mock), 1)
+		require.Empty(t, decider.DecideCalls())
+		require.NotEmpty(t, saved)
+		require.Equal(t, cmp.Or(reviewer, "guardian"), saved[0].Agent)
 	}
 }
 
@@ -558,34 +413,6 @@ func TestUnaddressedTurnReviewsCallsAnAllowRuleRuns(t *testing.T) {
 
 func TestEmbeddedGuardianPromptUnchanged(t *testing.T) {
 	require.Equal(t, "fc444351882ea4b3c0efc224d4d72d9e9f7fa88eb2a7030b244a0b6caf60492c", fmt.Sprintf("%x", sha256.Sum256([]byte(embeddedGuardianPrompt))))
-}
-
-func TestPermissionReviewExpandsDecisionRules(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = root.Close() })
-
-	env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, &sandbox.Runtime{})
-	require.NoError(t, err)
-
-	decider := &mockDecider{DecideFunc: func(context.Context, *DecisionRequest) ([]DecisionAnswer, DecisionUsage, error) {
-		return reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "allow", 0.97), DecisionUsage{}, nil
-	}}
-
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{
-		"main": {Name: "main", Mode: AgentModeEasy, ApproverDecision: ApproverDecision{Model: "openai/gpt-6-luna", Prompt: "Deny !`printf 'deploys'`."}},
-	}})
-	factory.deciders = map[string]Decider{"openai": decider}
-	factory.expandPromptShellCommands = PromptShellCommandExpansion{SubagentPrompts: true}
-	factory.promptExpansion = env
-	factory.childSessions = &mockChildSessions{AppendChildEntryFunc: func(context.Context, ChildKey, *SessionEntry) error { return nil }}
-
-	request := &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{"command":"ls"}`, Subjects: []string{"ls"}, ReviewerEmbedded: true}
-	require.Equal(t, permissionReviewOutcomeAllow, factory.reviewPermission(t.Context(), request).Outcome)
-
-	require.Len(t, decider.DecideCalls(), 1)
-	require.Contains(t, decider.DecideCalls()[0].Request.Instructions, "### Agent Rules\nDeny deploys.\n")
 }
 
 func TestPermissionReviewSystemPromptIncludesCodeMode(t *testing.T) {

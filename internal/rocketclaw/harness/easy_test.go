@@ -49,9 +49,7 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 		{"subagent star inside", easyRequired + "\nsubagents: ['work/*#high']", `main.md: subagents: "work/*#high": * may only end an entry`},
 		{"unknown approver provider", easyRequired + "\napprover: {model: nope/gpt-6}", `main.md: model "nope/gpt-6": provider "nope" is not configured`},
 		{"misspelled approver key", easyRequired + "\napprover: {promt: rules}", "main.md: approver.promt: not an easy-mode key"},
-		{"unknown approver decision provider", easyRequired + "\napprover: {decision: {model: typesafe/jev-latest}}", `main.md: decision model "typesafe/jev-latest": provider "typesafe" is not configured in decision`},
-		{"unqualified approver decision model", easyRequired + "\napprover: {decision: {model: gpt-6-luna}}", `main.md: decision model "gpt-6-luna": provider "gpt-6-luna" is not configured in decision`},
-		{"approver confidence above one", easyRequired + "\napprover: {decision: {model: openai/gpt-6-luna, minConfidence: 2}}", "main.md: approver.decision.minConfidence: must be between 0 and 1"},
+		{"approver decision", easyRequired + "\napprover: {decision: {model: openai/gpt-6-luna}}", "main.md: approver.decision: not an easy-mode key"},
 		{"unknown decision tool provider", easyRequired + "\ndecision: [typesafe/jev-latest]", `main.md: decision model "typesafe/jev-latest": provider "typesafe" is not configured in decision`},
 		{"decision auto", easyRequired + "\ndecision: auto", "main.md: decision: must be a list of provider/model names"},
 		{"unknown rocketclaw group", easyRequired + "\nrocketclaw: [chat]", `main.md: rocketclaw: unknown group "chat"`},
@@ -131,7 +129,7 @@ func TestLoadEasyAgentFields(t *testing.T) {
 		agent, errs := loadEasyTestAgent(t, easyRequired+`
 subagents: [work/gpt-6-luna#max, gpt-6-luna]
 maxRecursion: 0
-approver: {model: work/gpt-6-luna#max, prompt: Deny writes., decision: {model: openai/gpt-6-luna, minConfidence: 0.8, prompt: Deny outside writes.}}
+approver: {model: work/gpt-6-luna#max, prompt: Deny writes.}
 decision: [openai/gpt-6-luna]
 secretsARN: ["arn::marketing-read"]
 commands: {stripe-write: "stripe -c $ROCKETCLAW_METADATA_CUSTOMER_ID"}
@@ -152,7 +150,6 @@ schema: {output: {type: object, properties: {answer: {type: string}}}}`)
 		require.Equal(t, []string{"work/gpt-6-luna#max", "gpt-6-luna"}, agent.Subagents)
 		require.Equal(t, "work/gpt-6-luna#max", agent.ApproverModel)
 		require.Equal(t, "Deny writes.", agent.ApproverPrompt)
-		require.Equal(t, ApproverDecision{Model: "openai/gpt-6-luna", MinConfidence: 0.8, Prompt: "Deny outside writes."}, agent.ApproverDecision)
 		require.Equal(t, []string{"arn::marketing-read"}, agent.SecretsARN)
 		require.Equal(t, map[string]string{"stripe-write": "stripe -c $ROCKETCLAW_METADATA_CUSTOMER_ID"}, agent.Commands)
 		require.Equal(t, [][]string{{"triage", "resolved"}}, agent.TagGroups)

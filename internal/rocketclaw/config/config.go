@@ -17,33 +17,32 @@ import (
 )
 
 type Config struct {
-	Workspace            string                                      `json:"workspace"`
-	DatabaseURL          string                                      `json:"database_url"`
-	Attachments          AttachmentsConfig                           `json:"attachments,omitzero"`
-	WorkDir              string                                      `json:"-"`
-	Revision             string                                      `json:"-"`
-	RevisionModified     bool                                        `json:"-"`
-	Overlays             []string                                    `json:"overlays,omitempty"`
-	Web                  WebConfig                                   `json:"web,omitzero"`
-	ServerDisplayName    string                                      `json:"server_display_name,omitempty"`
-	Logging              LoggingConfig                               `json:"logging"`
-	MCPExternal          MCPExternalConfig                           `json:"mcp_external"`
-	MCPServers           map[string]MCPServerConfig                  `json:"mcp_servers,omitempty"`
-	OpenCode             map[string]OpenCodeConfig                   `json:"opencode,omitempty"`
-	RocketClaws          map[string]RemoteRocketClawConfig           `json:"rocketclaws,omitempty"`
-	TrustedRocketClaws   []string                                    `json:"trusted_rocketclaws,omitempty"`
-	Slack                SlackConfig                                 `json:"slack"`
-	OpenAI               OpenAIConfig                                `json:"openai"`
-	Providers            map[string]OpenAIConfig                     `json:"providers,omitempty"`
-	AutoApproverModel    string                                      `json:"auto_approver_model"`
-	AgentEditorModel     string                                      `json:"agent_editor_model,omitempty"`
-	TitleModel           string                                      `json:"title_model,omitempty"`
-	TitleDecisionModel   string                                      `json:"title_decision_model,omitempty"`
-	Decision             map[DecisionProvider]DecisionProviderConfig `json:"decision,omitempty"`
-	AutoApproverDecision AutoApproverDecisionConfig                  `json:"auto_approver_decision,omitzero"`
-	PostHog              PostHogConfig                               `json:"posthog,omitzero"`
-	Permissions          map[string][]string                         `json:"permissions,omitempty"`
-	EmbeddedAgents       EmbeddedAgentsConfig                        `json:"embedded_agents,omitzero"`
+	Workspace          string                                      `json:"workspace"`
+	DatabaseURL        string                                      `json:"database_url"`
+	Attachments        AttachmentsConfig                           `json:"attachments,omitzero"`
+	WorkDir            string                                      `json:"-"`
+	Revision           string                                      `json:"-"`
+	RevisionModified   bool                                        `json:"-"`
+	Overlays           []string                                    `json:"overlays,omitempty"`
+	Web                WebConfig                                   `json:"web,omitzero"`
+	ServerDisplayName  string                                      `json:"server_display_name,omitempty"`
+	Logging            LoggingConfig                               `json:"logging"`
+	MCPExternal        MCPExternalConfig                           `json:"mcp_external"`
+	MCPServers         map[string]MCPServerConfig                  `json:"mcp_servers,omitempty"`
+	OpenCode           map[string]OpenCodeConfig                   `json:"opencode,omitempty"`
+	RocketClaws        map[string]RemoteRocketClawConfig           `json:"rocketclaws,omitempty"`
+	TrustedRocketClaws []string                                    `json:"trusted_rocketclaws,omitempty"`
+	Slack              SlackConfig                                 `json:"slack"`
+	OpenAI             OpenAIConfig                                `json:"openai"`
+	Providers          map[string]OpenAIConfig                     `json:"providers,omitempty"`
+	AutoApproverModel  string                                      `json:"auto_approver_model"`
+	AgentEditorModel   string                                      `json:"agent_editor_model,omitempty"`
+	TitleModel         string                                      `json:"title_model,omitempty"`
+	TitleDecisionModel string                                      `json:"title_decision_model,omitempty"`
+	Decision           map[DecisionProvider]DecisionProviderConfig `json:"decision,omitempty"`
+	PostHog            PostHogConfig                               `json:"posthog,omitzero"`
+	Permissions        map[string][]string                         `json:"permissions,omitempty"`
+	EmbeddedAgents     EmbeddedAgentsConfig                        `json:"embedded_agents,omitzero"`
 }
 
 type Behavior struct {
@@ -244,11 +243,6 @@ func (c *Config) DecisionProviderNames() []string {
 type DecisionProviderConfig struct {
 	APIKey     string `json:"api_key"`
 	APIBaseURL string `json:"api_base_url,omitempty"`
-}
-
-type AutoApproverDecisionConfig struct {
-	Model         string  `json:"model,omitempty"`
-	MinConfidence float64 `json:"min_confidence,omitempty"`
 }
 
 func (c *Config) Provider(name string) (OpenAIConfig, bool) {
@@ -613,14 +607,6 @@ func (c *Config) validateDecision() error {
 		case strings.TrimSpace(c.Decision[name].APIKey) == "":
 			return fmt.Errorf("decision[%q].api_key is required", name)
 		}
-	}
-
-	if err := c.normalizeDecisionModel("auto_approver_decision.model", &c.AutoApproverDecision.Model); err != nil {
-		return err
-	}
-
-	if decision := c.AutoApproverDecision; decision.MinConfidence < 0 || decision.MinConfidence > 1 {
-		return errors.New("auto_approver_decision.min_confidence must be between 0 and 1")
 	}
 
 	return nil

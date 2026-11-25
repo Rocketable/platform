@@ -30,8 +30,6 @@ type toolFactory struct {
 	resolver                  ModelResolver
 	workspaceInstructions     string
 	autoApproverModel         string
-	autoApproverDecisionModel string
-	autoApproverMinConfidence float64
 	deciders                  map[string]Decider
 	parallelToolCalls         int
 	expandPromptShellCommands PromptShellCommandExpansion
