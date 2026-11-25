@@ -136,7 +136,7 @@ require (
 	golang.zx2c4.com/wireguard/windows v1.1.1 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20261123191846-1e707ab9fbc2 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261123191846-1e707ab9fbc2 // indirect
-	gvisor.dev/gvisor v0.0.0-20261124190646-2bf06df5b1d5 // indirect
+	gvisor.dev/gvisor v0.0.0-20261124234935-683047b60a2a // indirect
 	modernc.org/libc v1.82.13 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.13.0 // indirect
