@@ -189,7 +189,7 @@ func (s Skills) FindAvailable(query string, agent *Agent) string {
 
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return formatSkills("## Matching skills", list)
+		return formatSkills(list)
 	}
 
 	normalizedQuery := strings.ToLower(query)
@@ -225,7 +225,7 @@ func (s Skills) FindAvailable(query string, agent *Agent) string {
 		list[i] = matches[i].skill
 	}
 
-	return formatSkills("## Matching skills", list[:len(matches)])
+	return formatSkills(list[:len(matches)])
 }
 
 func (s Skills) Available(agent *Agent) []Skill {
@@ -362,15 +362,13 @@ func (s Skills) readableDirs(root *os.Root) map[string]skillReadDir {
 	return dirs
 }
 
-func formatSkills(heading string, skills []Skill) string {
-	lines := make([]string, 1, len(skills)+1)
-
-	lines[0] = heading
+func formatSkills(skills []Skill) string {
+	parts := append(make([]string, 0, 1+4*len(skills)), "## Matching skills")
 	for _, skill := range skills {
-		lines = append(lines, fmt.Sprintf("- **%s**: %s", skill.Name, skill.Description))
+		parts = append(parts, "\n- **", skill.Name, "**: ", skill.Description)
 	}
 
-	return strings.Join(lines, "\n")
+	return strings.Join(parts, "")
 }
 
 func composeSystemPromptWithSkills(base string, skills Skills, agent *Agent) string {
