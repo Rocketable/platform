@@ -1,6 +1,5 @@
 import { expect, onTestFinished, test } from "bun:test";
-import { href, withPage, current, names, order, until, openSaved, openFromPalette, menu, chooseSpace, newSpace, shared, sharedNames, focus, menuLines, sharedMenu, strip, type SharedTab, type Change, type Saved } from "./tabs-browser_test";
-import type { SavedListing } from "./session-list";
+import { listed, href, withPage, current, names, order, until, openSaved, openFromPalette, menu, chooseSpace, newSpace, shared, sharedNames, focus, menuLines, sharedMenu, strip, type SharedTab, type Change, type Saved } from "./tabs-browser_test";
 import type { SearchPage } from "./types";
 
 test("spaces show only their own tabs, return to their last tab, follow opened tabs, and survive reload", () => withPage({}, async (page, origin, _prompts, saved) => {
@@ -832,20 +831,21 @@ test("Shared rows step, arrow, and reorder like this person's tabs, and Escape l
 // Asia/Kolkata has no daylight saving, so its 9:00 is always 03:30 UTC.
 test("Park moves tabs of any kind to Parked, which lists every space's, stepping skips it and bulk closes take it, Unpark returns tabs to their group and place, and a closed tab comes back parked only while its park has a time", () => withPage({ timezoneId: "Asia/Kolkata" }, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true }), parked = page.getByRole("tablist", { name: "Parked tabs" }), row = (name: string) => parked.getByRole("tab", { name, exact: true });
-  const header = page.getByRole("button", { name: "Parked", exact: true }), sent = (count: number) => until(() => saved.sent.length === count);
+  const show = (view: string) => page.getByRole("group", { name: "Sidebar view" }).getByRole("button", { name: view, exact: true }).click(), sent = (count: number) => until(() => saved.sent.length === count);
   // The person's tabs are in Ops, Bravo and Charlie in its Work group; Hotel, in Main, is parked until they unpark it.
   saved.spaces.push({ id: "ops", name: "Ops" });
   saved.state = { ...saved.state, space: "ops", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [...[href("alpha"), href("bravo"), href("charlie"), href("delta"), "/routines"].map((path, i) => ({ path, space: "ops", group: i === 1 || i === 2 ? "work" : undefined })), { path: href("hotel"), space: "main" }] };
   saved.attention = [{ path: href("hotel"), parked: true }];
   await page.goto(`${origin}${href("alpha")}`);
-  await header.waitFor();
-  expect([await header.getAttribute("aria-expanded"), await parked.getByRole("tab").count()]).toEqual(["false", 0]);
-  await header.click();
+  await tab("Alpha").waitFor();
+  expect(await parked.getByRole("tab").count()).toBe(0);
+  await show("Parked");
   expect(await row("Hotel").getAttribute("aria-description")).toBe("Space: Main, Forked session, Parked");
 
   // Park sends one change naming the tab's location and moves the tab to Parked at once.
+  await show("Spaces");
   await menu(page, "Bravo", "Park", "Until I unpark");
-  await row("Bravo").waitFor();
+  await tab("Bravo").waitFor({ state: "detached" });
   await sent(1);
   expect(saved.sent).toEqual([{ paths: [href("bravo")], action: "PARK" }]);
   expect(await order(page)).toEqual(["Alpha", "Work", "Charlie", "Delta", "Routines"]);
@@ -854,16 +854,18 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   await sent(2);
   const nine = await page.evaluate(() => { const at = new Date(); at.setDate(at.getDate() + 1); at.setHours(9, 0, 0, 0); return at.toISOString(); });
   expect([saved.sent[1], nine.slice(10)]).toEqual([{ paths: ["/routines"], action: "PARK", until: nine }, "T03:30:00.000Z"]);
-  await parked.locator('[role="tab"][aria-label="Routines"][aria-description^="Space: Ops, Parked until "]').waitFor();
   // Parked from its keyboard menu, Charlie leaves Work empty, whose header stays, though Work was saved before every
   // group held its place, and focus moves to the strip's selected tab.
   await tab("Charlie").focus();
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Park", exact: true }).press("ArrowRight");
   await page.getByRole("menuitem", { name: "Until I unpark", exact: true }).press("Enter");
-  await row("Charlie").waitFor();
+  await tab("Charlie").waitFor({ state: "detached" });
   await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Ops tabs"] [role="tab"][aria-label="Alpha"]'));
   expect(await order(page)).toEqual(["Alpha", "Work", "Delta"]);
+  await show("Parked");
+  await parked.locator('[role="tab"][aria-label="Routines"][aria-description^="Space: Ops, Parked until "]').waitFor();
+  await row("Charlie").waitFor();
 
   // Cmd/Ctrl+] skips parked tabs.
   for (const id of ["delta", "alpha"]) {
@@ -874,35 +876,43 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   for (const name of ["Charlie", "Bravo"]) {
     await row(name).click({ button: "right" });
     await page.getByRole("menuitem", { name: "Unpark", exact: true }).click();
-    await tab(name).waitFor();
+    await row(name).waitFor({ state: "detached" });
   }
   await sent(5);
   expect(saved.sent.slice(3)).toEqual([{ paths: [href("charlie")], action: "UNPARK" }, { paths: [href("bravo")], action: "UNPARK" }]);
+  await show("Spaces");
   expect(await order(page)).toEqual(["Alpha", "Work", "Bravo", "Charlie", "Delta"]);
 
-  // Close on a Parked row closes the tab. Reopened, one whose park has a time is still parked; one parked until unparked
+  // Close in a Parked row's menu closes the tab. Reopened, one whose park has a time is still parked; one parked until unparked
   // is an ordinary tab, as closing it ended its park.
+  await show("Parked");
   for (const [name, path] of [["Routines", "/routines"], ["Hotel", href("hotel")]]) {
-    await parked.getByRole("button", { name: `Close ${name}` }).click();
+    await row(name).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Close", exact: true }).click();
     await row(name).waitFor({ state: "detached" });
     await until(() => saved.closed[0]?.path === path);
   }
-  await header.waitFor({ state: "detached" });
+  await page.getByText("No parked tabs.").waitFor();
   expect(saved.attention.find((item) => item.path === href("hotel"))?.parked).toBe(false);
   for (const polled = saved.polls + 2; saved.polls < polled;) await Bun.sleep(20);
   await page.keyboard.press("Control+Alt+t");
   await page.waitForURL(`**${href("hotel")}`);
+  await show("Spaces");
   await page.locator(`button${current}[aria-label="Main"]`).waitFor();
   await tab("Hotel").waitFor();
   await page.keyboard.press("Control+Alt+t");
   await page.waitForURL("**/routines");
+  await tab("Routines").waitFor();
+  expect(await strip(page).locator('[data-tab="/routines"]').evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("0.6");
+  await show("Parked");
   await row("Routines").waitFor();
-  expect(await tab("Routines").count()).toBe(0);
 
   // Bulk closes take this space's parked tabs too: Close others closes the parked Routines tab with the rest of Ops.
+  await show("Spaces");
   await menu(page, "Alpha", "Close others");
   await until(() => saved.state.tabs.map((item) => item.path).join() === [href("alpha"), href("hotel"), "group:work"].join());
-  await header.waitFor({ state: "detached" });
+  await show("Parked");
+  await page.getByText("No parked tabs.").waitFor();
 }), 60_000);
 
 test("Park until it is done is offered for a session, not a page, and parks the tab, which Parked says waits for its turn", () => withPage({}, async (page, origin, _prompts, saved) => {
@@ -927,10 +937,13 @@ test("Park until it is done is offered for a session, not a page, and parks the 
   await menu(page, "Alpha", "Park", "Until it is done");
   await until(() => saved.sent.length === 1);
   expect(saved.sent[0]).toEqual({ paths: [href("alpha")], action: "PARK_UNTIL_DONE" });
+  await strip(page).locator(`[data-tab="${href("alpha")}"]`).and(page.locator(".opacity-60")).waitFor();
+  await page.getByRole("button", { name: "Parked", exact: true }).click();
   await parked.locator('[role="tab"][aria-label="Alpha"][aria-description$="Parked until it is done"]').waitFor();
   expect(await parked.getByRole("tab", { name: "Alpha", exact: true }).locator("svg").getAttribute("class")).toContain("lucide-message-square");
 
   // Cmd/Ctrl+Shift+S parks the session in view the same way, and on a page parks nothing.
+  await page.getByRole("button", { name: "Spaces", exact: true }).click();
   await strip(page).getByRole("tab", { name: "Routines", exact: true }).click();
   await page.waitForURL(`${origin}/routines`);
   await page.keyboard.press("Control+Shift+s");
@@ -938,6 +951,7 @@ test("Park until it is done is offered for a session, not a page, and parks the 
   await page.keyboard.press("Control+Shift+s");
   await until(() => saved.sent.length === 2);
   expect(saved.sent[1]).toEqual({ paths: [href("bravo")], action: "PARK_UNTIL_DONE" });
+  await page.getByRole("button", { name: "Parked", exact: true }).click();
   await parked.locator('[role="tab"][aria-label="Bravo"][aria-description$="Parked until it is done"]').waitFor();
 }), 30_000);
 
@@ -1003,6 +1017,7 @@ test("the palette offers the tab in view the same attention items, without Mute 
   await until(() => saved.sent.length === 1);
   expect(saved.sent[0]).toEqual({ paths: [href("alpha")], action: "PARK", until: await page.evaluate(() => new Date("2030-01-02T10:30").toISOString()) });
   const stated = await page.evaluate(() => `Parked until ${new Date("2030-01-02T10:30").toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`);
+  await page.getByRole("button", { name: "Parked", exact: true }).click();
   await parked.locator(`[role="tab"][aria-label="Alpha"][aria-description$="${stated}"]`).waitFor();
   expect(await parked.getByRole("tab", { name: "Alpha", exact: true }).locator("svg").getAttribute("class")).toContain("lucide-clock");
 }), 30_000);
@@ -1073,8 +1088,8 @@ test("a new chat created while another page shows opens when New session shows a
   await page.waitForURL(`**${href("fresh")}`);
 }), 30_000);
 
-test("every tab offers Unfollow, which then offers Follow, the two act on their own tabs of a selection, and a parked tab that asks says Needs you on the folded Parked header", () => withPage({}, async (page, origin, _prompts, saved) => {
-  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true }), parked = page.getByRole("button", { name: /^Parked/ });
+test("every tab offers Unfollow, which then offers Follow, and the two act on their own tabs of a selection", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const lines = async (name: string) => {
     await tab(name).click({ button: "right" });
     await page.getByRole("menuitem").first().waitFor();
@@ -1083,9 +1098,8 @@ test("every tab offers Unfollow, which then offers Follow, the two act on their 
     await page.getByRole("menu").waitFor({ state: "hidden" });
     return items;
   };
-  saved.state = { ...saved.state, space: "main", tabs: [href("alpha"), href("charlie"), "/routines", href("golf")].map((path) => ({ path, space: "main" })) };
+  saved.state = { ...saved.state, space: "main", tabs: [href("alpha"), href("charlie"), "/routines"].map((path) => ({ path, space: "main" })) };
   saved.shared = [{ space: "main", path: href("bravo") }];
-  saved.attention = [{ path: href("golf"), parked: true, unfollowed: true }];
   await page.goto(`${origin}${href("alpha")}`);
   await tab("Routines").waitFor();
   const after = (items: string[], item: string) => items[items.indexOf(item) + 1];
@@ -1112,12 +1126,6 @@ test("every tab offers Unfollow, which then offers Follow, the two act on their 
   await menu(page, "Charlie", "Unfollow");
   await until(() => saved.sent.length === 4);
   expect(saved.sent[3]).toEqual({ paths: [href("charlie")], action: "UNFOLLOW" });
-
-  expect(await parked.getAttribute("aria-expanded")).toBe("false");
-  expect(await parked.getByText("Needs you", { exact: true }).isVisible()).toBe(true);
-  await parked.click();
-  await parked.and(page.locator('[aria-expanded="true"]')).waitFor();
-  expect(await parked.getByText("Needs you").count()).toBe(0);
 }), 60_000);
 
 function opsCard(page: any, saved: Saved, sessionIDs: string[]) {
@@ -1201,249 +1209,44 @@ test("unfolding the current Ops space card restores its tabs and full menu", () 
   expect(await header.getByRole("button", { name: "Work", exact: true }).locator("span").evaluate((name: HTMLElement) => getComputedStyle(name).fontWeight)).toBe("500");
 }));
 
-test("with more than one space Parked is a tree whose spaces fold on their own and stay folded after a reload", () => withPage({}, async (page, origin, _prompts, saved) => {
-  const started = performance.now();
-  let waitingFor: string | undefined, bravoVisible = false;
-  let beforeReload: { elapsedMs: number; panelExpanded: boolean; listSessionsCalls: number } | undefined, reloadLoadedMs: number | undefined;
-  let reloadTabs: string | { panelExpanded: boolean; opsFolded: boolean } = "reload not committed";
-  onTestFinished(() => {
-    if (!waitingFor || bravoVisible) return;
-    expect<boolean>(bravoVisible, `Parked tree did not show Bravo after reload; waiting for ${waitingFor}: ${JSON.stringify({
-      elapsedMs: Math.round(performance.now() - started), opsFoldSaved: saved.layout?.folded?.["parked:/ops"] === true,
-      beforeReload, reloadLoadedMs, reloadTabs, listSessionsCallsAtFailure: saved.polls,
-    })}`).toBe(true);
-  });
+test("Parked keeps one list of every space's parked tabs in the person's order: a newly parked tab is born on top, rows move by dragging or Shift+Arrow, and the X unparks a tab", () => withPage({}, async (page, origin, _prompts, saved) => {
   saved.spaces.push({ id: "ops", name: "Ops" });
-  saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }, { path: href("charlie"), space: "ops" }, { path: href("bravo"), space: "main" }] };
+  saved.state = { ...saved.state, space: "main", tabs: [...["alpha", "bravo", "delta"].map((id) => ({ path: href(id), space: "main" })), ...["charlie", "echo"].map((id) => ({ path: href(id), space: "ops" }))] };
   saved.attention = [{ path: href("bravo"), parked: true }, { path: href("charlie"), parked: true }];
-  const parked = page.getByRole("tablist", { name: "Parked tabs" }), tree = () => parked.locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+  const parked = page.getByRole("tablist", { name: "Parked tabs" }), row = (name: string) => parked.getByRole("tab", { name, exact: true });
+  const rows = () => parked.locator("[data-recent]").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => [node.querySelector('[role="tab"]')!.getAttribute("aria-label"), node.querySelector('[role="tab"] span[aria-hidden="true"]')!.textContent!.split(" · ")[0]]));
+  const stored = () => JSON.stringify(listed(saved, "parked").map((tab) => tab.path));
   await page.goto(`${origin}${href("alpha")}`);
   await page.getByRole("button", { name: "Parked", exact: true }).click();
-  await parked.getByRole("button", { name: "Parked in Ops", exact: true }).waitFor();
-  expect(await tree()).toEqual(["Parked in Main", "Bravo", "Parked in Ops", "Charlie"]);
+  await row("Charlie").waitFor();
+  expect(await rows()).toEqual([["Bravo", "Main"], ["Charlie", "Ops"]]);
+  expect(await parked.locator("[aria-expanded]").count()).toBe(0);
+  await until(() => stored() === JSON.stringify([href("bravo"), href("charlie")]));
 
-  waitingFor = "the Ops fold to hide Charlie";
-  await parked.getByRole("button", { name: "Parked in Ops", exact: true }).click();
-  await parked.getByRole("tab", { name: "Charlie", exact: true }).waitFor({ state: "detached" });
-  waitingFor = "the Ops fold save";
-  await until(() => saved.layout?.folded?.["parked:/ops"] === true);
-  beforeReload = {
-    elapsedMs: Math.round(performance.now() - started),
-    panelExpanded: saved.state.groups.some(({ id, collapsed }) => id === "parked" && collapsed === false),
-    listSessionsCalls: saved.polls,
-  };
-  page.on("framenavigated", (frame: unknown) => {
-    if (frame === page.mainFrame() && reloadTabs === "reload not committed") reloadTabs = "not requested";
-  });
-  let tabsRead: object | undefined;
-  page.on("request", (request: { url(): string; postData(): string | null }) => {
-    if (reloadTabs === "not requested" && request.url() === `${origin}/api/Tabs` && request.postData() === "{}") {
-      tabsRead = request;
-      reloadTabs = "awaiting response";
-    }
-  });
-  page.on("response", async (response: { request(): object; status(): number; json(): Promise<Saved> }) => {
-    if (response.request() !== tabsRead) return;
-    reloadTabs = `HTTP ${response.status()}, body unread`;
-    try {
-      const reply = await response.json();
-      reloadTabs = {
-        panelExpanded: reply.state.groups.some(({ id, collapsed }) => id === "parked" && collapsed === false),
-        opsFolded: reply.layout?.folded?.["parked:/ops"] === true,
-      };
-    } catch {
-      reloadTabs = `HTTP ${response.status()}, unreadable tab state`;
-    }
-  });
-  waitingFor = "the page to finish reloading";
+  saved.attention.push({ path: href("delta"), parked: true });
+  await row("Delta").waitFor();
+  await until(() => stored() === JSON.stringify([href("delta"), href("bravo"), href("charlie")]));
+  expect(await rows()).toEqual([["Delta", "Main"], ["Bravo", "Main"], ["Charlie", "Ops"]]);
+
+  await row("Charlie").dragTo(row("Delta"));
+  await until(() => stored() === JSON.stringify([href("charlie"), href("delta"), href("bravo")]));
+  await row("Charlie").press("Shift+ArrowDown");
+  await until(() => stored() === JSON.stringify([href("delta"), href("charlie"), href("bravo")]));
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).toBe("Charlie");
   await page.reload();
-  reloadLoadedMs = Math.round(performance.now() - started);
-  waitingFor = "Bravo to be visible";
-  await parked.getByRole("tab", { name: "Bravo", exact: true }).waitFor();
-  bravoVisible = true;
-  expect(await tree()).toEqual(["Parked in Main", "Bravo", "Parked in Ops"]);
-}));
+  await row("Bravo").waitFor();
+  expect(await rows()).toEqual([["Delta", "Main"], ["Charlie", "Ops"], ["Bravo", "Main"]]);
 
-test("Parked rows move among their space's by dragging or Shift+Arrow, in an order saved for this person, and Parked resizes from its top edge", async () => {
-  const started = performance.now(), elapsed = () => Math.round(performance.now() - started);
-  let waitingFor = "open browser", fixture: Saved | undefined;
-  let lastRows: (string | null)[] | undefined, lastHeight: number | undefined, pollsBeforeReload: number | undefined;
-  const reload: { startedMs?: number; committedMs?: number; listingHeadersMs?: number; listingFinishedMs?: number; foxtrotWaitStartedMs?: number; foxtrotWaitFinishedMs?: number } = {};
-  const firstReloadRequests: Record<string, string> = { Identity: "not requested", Protocol: "not requested", Tabs: "not requested", ListSessions: "not requested" };
-  const snapshotReads: string[] = [];
-  let renderedAfterReload: string | undefined;
-  onTestFinished(() => {
-    if (waitingFor) {
-      expect({
-        waitingFor, elapsedMs: elapsed(), reload, firstReloadRequests, snapshotReads, renderedAfterReload, lastRows, lastHeight, savedOrder: fixture?.layout?.order, pollsBeforeReload, polls: fixture?.polls,
-      }, `Expected to finish: ${waitingFor}`).toMatchObject({ waitingFor: "" });
-    }
-  });
-  await withPage({}, async (page, origin, _prompts, saved) => {
-    waitingFor = "load Alpha";
-    fixture = saved;
-    saved.spaces.push({ id: "ops", name: "Ops" });
-    saved.state = { ...saved.state, space: "main", tabs: [...["alpha", "foxtrot", "bravo", "charlie", "delta"].map((id) => ({ path: href(id), space: "main" })), { path: href("echo"), space: "ops" }] };
-    saved.attention = ["bravo", "charlie", "delta", "echo"].map((id) => ({ path: href(id), parked: true }));
-    const parked = page.getByRole("tablist", { name: "Parked tabs" }), row = (name: string) => parked.getByRole("tab", { name, exact: true });
-    const rows = async () => lastRows = await parked.getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
-    const placed = async (...ids: string[]) => {
-      waitingFor = `save order: ${ids.join(", ")}`;
-      await until(() => JSON.stringify(saved.layout?.order) === JSON.stringify(ids.map((id) => `parked:/main\n${href(id)}`)));
-      waitingFor = `show order: ${ids.join(", ")}`;
-      await parked.getByRole("tab").nth(ids.indexOf("delta")).filter({ hasText: "Delta" }).waitFor();
-    };
-    await page.goto(`${origin}${href("alpha")}`);
-    waitingFor = "open Parked";
-    await page.getByRole("button", { name: "Parked", exact: true }).click();
-    waitingFor = "show Echo";
-    await row("Echo").waitFor();
-    expect(await rows()).toEqual(["Bravo", "Charlie", "Delta", "Echo"]);
+  await parked.getByRole("button", { name: "Unpark Bravo", exact: true }).click();
+  await row("Bravo").waitFor({ state: "detached" });
+  expect(saved.sent.at(-1)).toEqual({ paths: [href("bravo")], action: "UNPARK" });
+  await until(() => stored() === JSON.stringify([href("delta"), href("charlie")]));
+  expect(saved.state.tabs.some((tab) => tab.path === href("bravo"))).toBe(true);
 
-    waitingFor = "drag Parked rows";
-    await row("Charlie").dragTo(row("Echo"));
-    await row("Delta").dragTo(row("Bravo"));
-    await placed("delta", "bravo", "charlie");
-    expect(await rows()).toEqual(["Delta", "Bravo", "Charlie", "Echo"]);
-    waitingFor = "move Parked rows with Shift+Arrow";
-    await row("Charlie").press("Shift+ArrowDown");
-    await row("Delta").press("Shift+ArrowDown");
-    await placed("bravo", "delta", "charlie");
-    expect([await rows(), await page.evaluate(() => document.activeElement?.getAttribute("aria-label"))]).toEqual([["Bravo", "Delta", "Charlie", "Echo"], "Delta"]);
-
-    waitingFor = "resize Parked";
-    const height = async () => lastHeight = (await parked.locator("xpath=..").boundingBox()).height, handle = page.getByRole("separator", { name: "Resize Parked" });
-    const before = await height(), edge = await handle.boundingBox();
-    await page.mouse.move(edge.x + 20, edge.y + 3);
-    await page.mouse.down();
-    await page.mouse.move(edge.x + 20, edge.y + 35);
-    await page.mouse.up();
-    const dragged = await height();
-    expect(dragged).toBeCloseTo(before - 32, -1);
-    await handle.press("ArrowUp");
-    expect(await height()).toBeCloseTo(dragged + 16, 0);
-
-    waitingFor = "save Parked expansion";
-    await until(() => saved.state.groups.some(({ id, collapsed }) => id === "parked" && collapsed === false));
-    saved.attention.push({ path: href("foxtrot"), parked: true });
-    pollsBeforeReload = saved.polls;
-    const reloadRequests = new WeakMap<object, { rpc: string; first: boolean }>();
-    page.on("framenavigated", (frame: unknown) => {
-      if (frame === page.mainFrame()) reload.committedMs ??= elapsed();
-    });
-    page.on("request", (request: { url(): string }) => {
-      if (reload.committedMs === undefined) return;
-      const [, rpc] = /^\/api\/(Identity|Protocol|Tabs|ListSessions)$/.exec(new URL(request.url()).pathname) ?? [];
-      if (!rpc) return;
-      const first = firstReloadRequests[rpc] === "not requested";
-      if (first) firstReloadRequests[rpc] = "pending";
-      if (first || rpc === "ListSessions") reloadRequests.set(request, { rpc, first });
-    });
-    page.on("response", (response: { request(): object; status(): number }) => {
-      const observed = reloadRequests.get(response.request());
-      if (observed?.rpc === "ListSessions" && observed.first) {
-        reload.listingHeadersMs = elapsed();
-        firstReloadRequests.ListSessions = `headers received (HTTP ${response.status()})`;
-      }
-    });
-    page.on("requestfinished", (request: object & { existingResponse(): { status(): number } | null }) => {
-      const observed = reloadRequests.get(request);
-      if (!observed) return;
-      if (observed.first) firstReloadRequests[observed.rpc] = `finished (HTTP ${request.existingResponse()?.status()})`;
-      if (observed.rpc === "ListSessions") reload.listingFinishedMs ??= elapsed();
-    });
-    page.on("requestfailed", (request: object & { failure(): { errorText: string } | null }) => {
-      const observed = reloadRequests.get(request);
-      if (observed?.first) firstReloadRequests[observed.rpc] = `failed (${request.failure()?.errorText})`;
-    });
-    page.on("console", (message: { text(): string }) => {
-      const text = message.text(), prefix = "parked-snapshot ";
-      if (text.startsWith(prefix)) snapshotReads.push(text.slice(prefix.length));
-      if (text.startsWith("parked-render ")) renderedAfterReload = text.slice("parked-render ".length);
-    });
-    await page.addInitScript((foxtrot: string) => {
-      const foxtrotState = (listing?: SavedListing) => {
-        const row = listing?.rows.find(({ id }) => id === "foxtrot");
-        return !listing ? "no snapshot" : !row ? "missing" : row.parked ? "parked" : "unparked";
-      };
-      let lastRender: string | undefined;
-      const observeParked = () => {
-        const sidebar = document.getElementById("tab-sidebar");
-        const list = sidebar?.querySelector('[role="tablist"][aria-label="Parked tabs"]');
-        const strip = '[role="tablist"][data-card]';
-        const state = {
-          panel: list ? {
-            expanded: list.parentElement?.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded"),
-            rows: Array.from(list.querySelectorAll('[role="tab"]'), (row) => row.getAttribute("aria-label")),
-          } : "no Parked panel",
-          foxtrotOnStrip: sidebar?.querySelector(`${strip} [data-tab="${foxtrot}"]`)?.closest(strip)?.getAttribute("aria-label") ?? null,
-        };
-        const render = JSON.stringify(state);
-        if (render === lastRender) return;
-        lastRender = render;
-        console.debug(`parked-render ${Math.round(performance.now())}ms after navigation: ${render}`);
-      };
-      new MutationObserver(observeParked).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-label", "aria-expanded"] });
-      observeParked();
-      const dbName = "rocketclaw-session-list-v2";
-      const trace = (event: string) => console.debug(`parked-snapshot ${Math.round(performance.now())}ms after navigation: ${event}`);
-      const open = IDBFactory.prototype.open;
-      IDBFactory.prototype.open = function (this: IDBFactory, ...args: Parameters<typeof open>) {
-        const request = open.apply(this, args);
-        if (args[0] === dbName) {
-          trace("open");
-          for (const event of ["success", "error", "blocked", "upgradeneeded"]) request.addEventListener(event, () => trace(`open ${event}`));
-        }
-        return request;
-      };
-      const get = IDBObjectStore.prototype.get;
-      IDBObjectStore.prototype.get = function (this: IDBObjectStore, key: Parameters<typeof get>[0]) {
-        const request = get.call(this, key);
-        const tx = this.transaction;
-        if (tx.db.name === dbName && this.name === "snapshots" && tx.mode === "readonly") {
-          const read = typeof key === "string" ? "generation" : "saved rows";
-          trace(`${read} get`);
-          request.addEventListener("success", () => trace(`${read} get success${read === "saved rows" ? ` (Foxtrot: ${foxtrotState(request.result)})` : ""}`));
-          request.addEventListener("error", () => trace(`${read} get error`));
-          for (const event of ["complete", "abort"]) tx.addEventListener(event, () => trace(`${read} transaction ${event}`));
-        }
-        return request;
-      };
-      const put = IDBObjectStore.prototype.put;
-      IDBObjectStore.prototype.put = function (this: IDBObjectStore, ...args: Parameters<typeof put>) {
-        const request = put.apply(this, args);
-        if (this.transaction.db.name === dbName && this.name === "snapshots" && Array.isArray(args[1])) {
-          trace(`live snapshot write queued (Foxtrot: ${foxtrotState(args[0])})`);
-        }
-        return request;
-      };
-    }, href("foxtrot"));
-    waitingFor = "finish reload";
-    reload.startedMs = elapsed();
-    await page.reload();
-    waitingFor = "show Foxtrot after reload";
-    reload.foxtrotWaitStartedMs = elapsed();
-    const restored = await page.waitForFunction(() => {
-      const list = document.querySelector('#tab-sidebar [role="tablist"][aria-label="Parked tabs"]');
-      if (!list) return;
-      const tabs = [...list.querySelectorAll('[role="tab"]')].filter((tab) => tab.checkVisibility({ visibilityProperty: true }) && !tab.closest('[aria-hidden="true"]'));
-      const tab = tabs.find((item) => item.getAttribute("aria-label") === "Foxtrot");
-      if (!tab) return;
-      const { width, height } = tab.getBoundingClientRect();
-      if (width <= 0 || height <= 0) return;
-      return [
-        tabs.map((item) => item.getAttribute("aria-label")),
-        list.parentElement!.getBoundingClientRect().height,
-      ] as const;
-    });
-    reload.foxtrotWaitFinishedMs = elapsed();
-    waitingFor = "check restored Parked order and height";
-    [lastRows, lastHeight] = await restored.jsonValue();
-    expect([lastRows, lastHeight]).toEqual([["Bravo", "Delta", "Charlie", "Foxtrot", "Echo"], expect.closeTo(dragged + 16, 0)]);
-    waitingFor = "check page errors and close browser";
-  });
-  waitingFor = "";
-});
+  saved.attention.find((item) => item.path === href("bravo"))!.parked = true;
+  await row("Bravo").waitFor();
+  await until(() => stored() === JSON.stringify([href("bravo"), href("delta"), href("charlie")]));
+}), 30_000);
 
 function parkSharedHotel(saved: Saved) {
   saved.spaces.push({ id: "ops", name: "Ops" });
@@ -1635,59 +1438,35 @@ test("a folded space card and the card order follow this person to another Rocke
   expect(await tabNames(page, "Ops tabs on 127.0.0.1")).toEqual([]);
 })), 30_000);
 
-test("with parked tabs on more than one RocketClaw, Parked is a tree of servers whose rows act on their own server", () => {
-  const started = performance.now(), stages: Record<string, number> = { "start browser": 0 };
-  const step = (name: string) => { stages[name] = Math.round(performance.now() - started); };
-  let local: Saved | undefined, remotePolls = 0, sent: Change[] | undefined, lastTree: (string | null)[] | undefined;
-  const nearDeadline = setTimeout(() => {
-    console.error("Cross-server Parked test still running near its deadline", JSON.stringify({ elapsedMs: Math.round(performance.now() - started), stageStartMs: stages, localPolls: local?.polls, remotePolls, remoteAttention: sent, lastParkedTree: lastTree }));
-  }, 4_500).unref();
-  return withPage({}, async (page, origin, _prompts, saved) => {
-    step("set up fixtures");
-    local = saved;
-    const remote = serveRemote({ spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [{ path: href("india"), space: "lab" }], groups: [], space: "lab", last: {}, sharedOrder: [] }, shared: [] },
-      (sent) => {
-        remotePolls++;
-        return [{ id: "india", name: "India", agent: "main", spaceId: "lab", parked: !sent.length }];
-      });
-    sent = remote.sent;
-    try {
-      await addRemote(page, remote.url);
-      saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }, { path: href("bravo"), space: "main" }] };
-      saved.attention = [{ path: href("bravo"), parked: true }];
-      const parked = page.getByRole("tablist", { name: "Parked tabs" }), tree = () => parked.locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
-      step("navigate");
-      await page.goto(`${origin}${href("alpha")}`);
-      step("open Parked");
-      await page.getByRole("button", { name: "Parked", exact: true }).click();
-      step("wait for work branch");
-      await parked.getByRole("button", { name: "Parked on work", exact: true }).waitFor();
-      step("check both branches");
-      lastTree = await tree();
-      expect(lastTree).toEqual(["Parked on 127.0.0.1", "Bravo", "Parked on work", "India"]);
-      expect(await parked.getByRole("tab", { name: "India", exact: true }).getAttribute("aria-description")).toBe("Space: Lab, work, Parked");
-      expect(await parked.getByRole("button", { name: "Close India" }).count()).toBe(0);
+test("with parked tabs on more than one RocketClaw, Parked lists them in one list whose rows name their server and act on their own server", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const remote = serveRemote({ spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [{ path: href("india"), space: "lab" }], groups: [], space: "lab", last: {}, sharedOrder: [] }, shared: [] },
+    (sent) => [{ id: "india", name: "India", agent: "main", spaceId: "lab", parked: !sent.length }]);
+  try {
+    await addRemote(page, remote.url);
+    saved.state = { ...saved.state, space: "main", tabs: [{ path: href("alpha"), space: "main" }, { path: href("bravo"), space: "main" }] };
+    saved.attention = [{ path: href("bravo"), parked: true }];
+    const parked = page.getByRole("tablist", { name: "Parked tabs" }), india = parked.getByRole("tab", { name: "India", exact: true });
+    await page.goto(`${origin}${href("alpha")}`);
+    await page.getByRole("button", { name: "Parked", exact: true }).click();
+    await india.waitFor();
+    await parked.getByRole("tab", { name: "Bravo", exact: true }).waitFor();
+    expect((await parked.getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toSorted()).toEqual(["Bravo", "India"]);
+    expect(await parked.locator("[aria-expanded]").count()).toBe(0);
+    expect([await india.getAttribute("aria-description"), await india.locator('span[aria-hidden="true"]').last().textContent()]).toEqual(["Space: Lab, work, Parked", "Lab · work · Parked"]);
+    expect(await parked.getByRole("button", { name: "Close India" }).count()).toBe(0);
 
-      step("open India menu");
-      await parked.getByRole("tab", { name: "India", exact: true }).click({ button: "right" });
-      await page.getByRole("menuitem").first().waitFor();
-      expect(await menuLines(page)).toEqual(["Pull requests and issues", "Hosted Pages", "—", "Unpark", "Auto-park when I send", "Unfollow"]);
-      step("click Unpark");
-      await page.getByRole("menuitem", { name: "Unpark", exact: true }).click();
-      step("wait for remote Unpark");
-      await until(() => remote.sent.length === 1);
-      expect(remote.sent).toEqual([{ paths: [href("india")], action: "UNPARK" }]);
-      step("wait for India to leave Parked");
-      await parked.getByRole("tab", { name: "India", exact: true }).waitFor({ state: "detached" });
-      step("check remaining Parked rows");
-      lastTree = await tree();
-      expect(lastTree).toEqual(["Bravo"]);
-      step("close fixtures and browser");
-    } finally {
-      remote.server.stop(true);
-    }
-  }).finally(() => clearTimeout(nearDeadline));
-});
+    await india.click({ button: "right" });
+    await page.getByRole("menuitem").first().waitFor();
+    expect(await menuLines(page)).toEqual(["Pull requests and issues", "Hosted Pages", "—", "Unpark", "Auto-park when I send", "Unfollow"]);
+    await page.getByRole("menuitem", { name: "Unpark", exact: true }).click();
+    await until(() => remote.sent.length === 1);
+    expect(remote.sent).toEqual([{ paths: [href("india")], action: "UNPARK" }]);
+    await india.waitFor({ state: "detached" });
+    expect(await parked.getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Bravo"]);
+  } finally {
+    remote.server.stop(true);
+  }
+}));
 
 test("New session and the palette offer every RocketClaw's OpenCode servers from any page, and start the session on the server that has it", () => withPage({}, async (page, origin, _prompts, saved) => {
   const remote = serveRemote({ spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [], groups: [], space: "lab", last: {}, sharedOrder: [] }, shared: [] }, () => []);

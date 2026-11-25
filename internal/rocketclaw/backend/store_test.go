@@ -621,7 +621,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{
 		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
-		"history_links", "voice_settings", "hosted_pages", "retired_hosted_pages", "hosted_pages_pending", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_attention", "web_closed_tabs", "web_search_pages", "web_searches", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
+		"history_links", "voice_settings", "hosted_pages", "retired_hosted_pages", "hosted_pages_pending", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_attention", "web_closed_tabs", "web_tab_lists", "web_search_pages", "web_searches", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
 		"agent_drafts", "agent_draft_ops", "agent_draft_presence", "agent_draft_proposals", "agent_draft_messages",
 		"behavior_settings",
 	}, tables)
@@ -2821,6 +2821,89 @@ func TestWebClosedTabs(t *testing.T) {
 	rows, err := queryStrings(ctx, store.db, `SELECT 'page' FROM web_search_pages UNION ALL SELECT 'search' FROM web_searches`, "search rows")
 	require.NoError(t, err)
 	assert.Empty(t, rows, "a closed tab's page and searches go with it")
+}
+
+func TestWebTabLists(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"a": KindWebChat, "b": KindWebChat})
+
+	add := func(username string, list TabList, tab ListTab) {
+		t.Helper()
+
+		tab.List = list
+		require.NoError(t, store.AddToList(ctx, username, tab))
+	}
+	listed := func(username string, list TabList) []string {
+		t.Helper()
+
+		tabs, err := store.TabLists(ctx, username)
+		require.NoError(t, err)
+
+		out := []string{}
+
+		for _, tab := range tabs {
+			if tab.List == list {
+				out = append(out, fmt.Sprint(tab.Server, " ", tab.Path, " ", tab.Space))
+			}
+		}
+
+		return out
+	}
+
+	saved, err := store.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: "/s/YQ", Space: "main"}}, Space: "main"}, 0)
+	require.NoError(t, err)
+	require.True(t, saved)
+
+	add("alice", RecentList, ListTab{Path: "/s/YQ", Space: "main"})
+	add("alice", RecentList, ListTab{Server: "lab", Path: "/s/Yg", Space: "ops"})
+	add("alice", RecentList, ListTab{Path: "/cron", Space: "main"})
+	assert.Equal(t, []string{" /cron main", "lab /s/Yg ops", " /s/YQ main"}, listed("alice", RecentList), "a new tab is born on top, on every server")
+
+	add("alice", RecentList, ListTab{Path: "/s/a", Space: "ops"})
+	assert.Equal(t, []string{" /cron main", "lab /s/Yg ops", " /s/YQ ops"}, listed("alice", RecentList), "adding a listed tab under another spelling keeps its place and takes its new space")
+	assert.Empty(t, listed("bob", RecentList), "each person's lists are their own")
+
+	add("alice", ParkedList, ListTab{Path: "/cron", Space: "main"})
+	add("alice", ParkedList, ListTab{Path: "/s/YQ", Space: "main"})
+	assert.Equal(t, []string{" /s/YQ main", " /cron main"}, listed("alice", ParkedList), "each list keeps its own tabs and order")
+
+	require.NoError(t, store.OrderList(ctx, "alice", RecentList, []ListTab{{Path: "/s/YQ"}, {Server: "lab", Path: "/s/Yg"}, {Path: "/cron"}}))
+	assert.Equal(t, []string{" /s/YQ ops", "lab /s/Yg ops", " /cron main"}, listed("alice", RecentList), "the person's order stays")
+	assert.Equal(t, []string{" /s/YQ main", " /cron main"}, listed("alice", ParkedList), "ordering one list leaves the other alone")
+	add("alice", RecentList, ListTab{Path: "/s/YQ", Space: "ops"})
+	add("alice", RecentList, ListTab{Path: "/routines", Space: "main"})
+	assert.Equal(t, []string{" /routines main", " /s/YQ ops", "lab /s/Yg ops", " /cron main"}, listed("alice", RecentList), "adding keeps the order and a new tab goes above it")
+
+	require.NoError(t, store.ForgetFromList(ctx, "alice", ListTab{List: RecentList, Path: "/routines"}))
+	assert.Equal(t, []string{" /s/YQ ops", "lab /s/Yg ops", " /cron main"}, listed("alice", RecentList), "a forgotten tab leaves the list")
+	require.NoError(t, store.ForgetFromList(ctx, "alice", ListTab{List: ParkedList, Path: "/cron"}))
+	assert.Equal(t, []string{" /s/YQ main"}, listed("alice", ParkedList), "forgetting from one list leaves the other alone")
+
+	saved, err = store.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: "/s/YQ", Space: "main"}, {Path: "/cron", Space: "main"}}, Space: "main"}, 1)
+	require.NoError(t, err)
+	assert.True(t, saved, "list changes leave the tab state's revision alone")
+
+	_, err = store.db.ExecContext(ctx, `DELETE FROM conversations WHERE conversation_id IN ('a', 'b')`)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"lab /s/Yg ops", " /cron main"}, listed("alice", RecentList), "deleting a session deletes its listing here, never another server's")
+	assert.Empty(t, listed("alice", ParkedList))
+
+	for i := range 25 {
+		add("alice", RecentList, ListTab{Path: fmt.Sprint("/pages/main/agent/", i), Space: "main"})
+		add("alice", ParkedList, ListTab{Path: fmt.Sprint("/pages/main/agent/", i), Space: "main"})
+	}
+
+	got := listed("alice", RecentList)
+	assert.Len(t, got, 20, "Recent keeps only 20")
+	assert.Equal(t, " /pages/main/agent/24 main", got[0])
+	assert.Equal(t, " /pages/main/agent/5 main", got[19])
+	assert.Len(t, listed("alice", ParkedList), 25, "Parked keeps every parked tab")
+
+	add("alice", RecentList, ListTab{Path: "/pages/main/agent/5", Space: "main"})
+	assert.Equal(t, got, listed("alice", RecentList), "adding a kept tab drops nothing and moves nothing")
 }
 
 func TestConversationKindsAtCreation(t *testing.T) {

@@ -22,7 +22,7 @@ tags: [web, tabs, tab-groups, sticky-groups, delete-group, placeholder, web-tabs
 
 ## Context
 
-A Web tab group has no position or space of its own. The strip is one ordered list of tabs, and a group is drawn where its first member is (`arrange`, `internal/rocketclaw/web/src/ui.tsx:1003`). Its space is its members' space. The saved form drops every group without members except the reserved `parked` entry, which keeps whether Parked is collapsed (`savedState`, `ui.tsx:1074-1077`). So, with nothing else, a group vanishes when its last tab closes or leaves it.
+A Web tab group has no position or space of its own. The strip is one ordered list of tabs, and a group is drawn where its first member is (`arrange`, `internal/rocketclaw/web/src/ui.tsx:1003`). Its space is its members' space. The saved form drops every group without members (`savedState`, `ui.tsx:1110-1113`). So, with nothing else, a group vanishes when its last tab closes or leaves it.
 
 On 2026-11-03 "Keep group when empty" made that optional. It needed an empty group to stay exactly where it was, across reloads and devices. Two designs were weighed:
 
@@ -42,7 +42,7 @@ Every group holds one placeholder entry among the person's tabs, with path `grou
 
 Because the entry is not a real location, anything that treats tabs as pages must skip it. In the Web:
 
-- `stripOf(space)` holds a space's unparked tabs including placeholders; each space's card draws its group headers and drop targets from it. `shownOf(space)` leaves placeholders out, and closing, stepping (Cmd/Ctrl+[ and ]), selection (`selectionIn`) and the tab menu's commands read it (`ui.tsx:1281-1284`, `:1425`, `:1702-1703`); the card's keyboard stop skips placeholders itself (`ui.tsx:1891`). `tabsOf(space)`, which bulk closes and a group's member list read, leaves them out too but keeps parked tabs (`ui.tsx:1283`, `:1409`, `:1448`).
+- `stripOf(space)` holds a space's unparked tabs, and the parked tab in view, including placeholders; each space's card draws its group headers and drop targets from it. `shownOf(space)` leaves placeholders out, and closing, stepping (Cmd/Ctrl+[ and ]), selection (`selectionIn`) and the tab menu's commands read it (`ui.tsx:1281-1284`, `:1425`, `:1702-1703`); the card's keyboard stop skips placeholders itself (`ui.tsx:1891`). `tabsOf(space)`, which bulk closes and a group's member list read, leaves them out too but keeps parked tabs (`ui.tsx:1283`, `:1409`, `:1448`).
 - `entry()` skips placeholders when picking a space's first tab (`ui.tsx:1034-1037`).
 - `savedTabs()` drops a placeholder whose group is gone (`ui.tsx:1050`). Without that filter the orphan would keep being saved, and the strip would throw reading `group!.collapsed` on a group that no longer exists.
 - Close group needs no filter, because its member list comes from `tabsOf`, which leaves the placeholder out (`ui.tsx:1448`). `close()` itself would close a `group:` path it is given, since it acts on paths in `shown`, in Parked, or anywhere in the person's tabs other than the page in view (`ui.tsx:1286-1293`). Delete group closes the same members, so it removes the placeholder itself (`ui.tsx:1455`).
@@ -73,7 +73,7 @@ Reading the current space's real tabs in the Web:
 
 ```ts
 // ui.tsx:1281-1283
-const stripOf = (space: string) => state.tabs.filter((tab) => tab.space === space && !parked.has(tab.path));
+const stripOf = (space: string) => state.tabs.filter((tab) => tab.space === space && (!parked.has(tab.path) || tab.path === pathname));
 const shownOf = (space: string) => stripOf(space).filter((tab) => !isKeeper(tab));
 const tabsOf = (space: string) => state.tabs.filter((tab) => tab.space === space && !isKeeper(tab));
 ```

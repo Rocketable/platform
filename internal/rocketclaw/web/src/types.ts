@@ -68,7 +68,9 @@ export type SearchPage = { name?: string; searches: { id: string; name?: string;
 // revision counts saves; stale reports a save refused because it was made from an older revision than the one saved.
 // shared is every space's Shared tabs, the same for every person, oldest added first, a Search tab with its one page.
 // closed is the person's last closed tabs, newest first, which a server older than them leaves out.
-export type SavedTabs = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: string; stale?: boolean; shared: { space: string; path: string; search?: SearchPage }[]; unshared?: SearchPage; layout?: StripLayout; closed?: { path: string; space?: string; search?: SearchPage }[]; autoPark?: boolean };
+export type SavedTabs = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: string; stale?: boolean; shared: { space: string; path: string; search?: SearchPage }[]; unshared?: SearchPage; layout?: StripLayout; closed?: { path: string; space?: string; search?: SearchPage }[]; autoPark?: boolean; lists?: ListTab[] };
+export type TabListName = "recent" | "parked";
+export type ListTab = { list: TabListName; server: string; path: string; space: string };
 // StripLayout is how this person lays out their tab strip on every RocketClaw, kept by the local server: whether each of
 // its cards and Parked branches is folded, by its key, and the order of its cards and of each Parked branch's tabs, by
 // their keys.

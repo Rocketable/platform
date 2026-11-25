@@ -14,6 +14,12 @@ if (playwright) {
   chromium.launch = async (...args: unknown[]) => {
     const browser = await launch(...args);
     open.add(browser);
+    const newContext = browser.newContext.bind(browser);
+    browser.newContext = async (...options: unknown[]) => {
+      const context = await newContext(...options);
+      await context.addInitScript(() => { if (window.origin !== "null" && localStorage.getItem("sidebar-view") === null) localStorage.setItem("sidebar-view", "spaces"); });
+      return context;
+    };
     return browser;
   };
   afterEach(async () => {

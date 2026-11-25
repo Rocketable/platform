@@ -1217,6 +1217,13 @@ message TabState {
   repeated string shared_order = 6;
 }
 
+message ListTab {
+  string list = 1;
+  string server = 2;
+  string path = 3;
+  string space = 4;
+}
+
 // SharedTab is one tab in a space's Shared group, which every Web user sees: its space id and location, and for a
 // Search tab its one page.
 message SharedTab {
@@ -1288,6 +1295,9 @@ message TabsRequest {
   optional bool auto_park = 15;
   // layout replaces the caller's layout when set.
   StripLayout layout = 16;
+  ListTab list_add = 17;
+  ListTab list_forget = 18;
+  repeated ListTab list_order = 19;
 }
 
 // TabsResponse is every space, oldest first, and the caller's saved tab state and its revision.
@@ -1310,6 +1320,7 @@ message TabsResponse {
   // auto_park is whether the caller auto-parks every session they chose nothing for.
   bool auto_park = 10;
   StripLayout layout = 11;
+  repeated ListTab lists = 12;
 }
 
 // The first event answers the browser's SDP offer; the last ends the call.

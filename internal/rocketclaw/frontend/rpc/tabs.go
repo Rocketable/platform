@@ -38,12 +38,22 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		err = status.Error(codes.InvalidArgument, backend.ErrSpaceRejected.Error())
 	}
 
+	if (request.ListAdd != nil || request.ListForget != nil || len(request.ListOrder) > 0) && err == nil {
+		lists, errLists := s.sessions.TabLists(ctx, username)
+		if errLists != nil {
+			return nil, fmt.Errorf("web tabs: %w", errLists)
+		}
+
+		return &TabsResponse{Lists: webListTabs(lists, limit)}, nil
+	}
+
 	var (
 		spaces   []backend.Space
 		shared   []backend.Tab
 		layout   backend.StripLayout
 		state    backend.TabState
 		closed   []backend.Tab
+		lists    []backend.ListTab
 		response = &TabsResponse{Stale: (request.State != nil && !saved) || refused}
 	)
 
@@ -65,6 +75,10 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 
 	if err == nil {
 		closed, err = s.sessions.ClosedTabs(ctx, username)
+	}
+
+	if err == nil {
+		lists, err = s.sessions.TabLists(ctx, username)
 	}
 
 	if err == nil && !saved {
@@ -91,6 +105,8 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	response.Unshared = webSearchPage(unshared)
 	response.Closed = webTabs(closed)
 	response.Layout = &StripLayout{Folded: layout.Folded, Order: layout.Order}
+
+	response.Lists = webListTabs(lists, limit)
 
 	for _, space := range spaces {
 		if limit.AllowsSpaceID(space.ID) {
@@ -142,6 +158,8 @@ func (s *Server) changeTabs(ctx context.Context, username string, limit backend.
 		err = s.sessions.SaveStripLayout(ctx, username, &backend.StripLayout{Folded: request.Layout.Folded, Order: request.Layout.Order})
 	case request.AutoPark != nil:
 		err = s.sessions.SetAutoParkAll(ctx, username, *request.AutoPark)
+	case request.ListAdd != nil || request.ListForget != nil || len(request.ListOrder) > 0:
+		err = s.changeList(ctx, username, limit, request)
 	}
 
 	if err != nil {
@@ -149,6 +167,77 @@ func (s *Server) changeTabs(ctx context.Context, username string, limit backend.
 	}
 
 	return saved, refused, unshared, nil
+}
+
+func knownTabList(list backend.TabList) bool {
+	return list == backend.RecentList || list == backend.ParkedList
+}
+
+func (s *Server) changeList(ctx context.Context, username string, limit backend.SpaceLimit, request *TabsRequest) error {
+	if request.ListAdd != nil {
+		return s.addToList(ctx, username, limit, request.ListAdd)
+	}
+
+	var err error
+
+	if forget := request.ListForget; forget != nil {
+		if list := backend.TabList(forget.List); knownTabList(list) {
+			err = s.sessions.ForgetFromList(ctx, username, backend.ListTab{List: list, Server: forget.Server, Path: forget.Path})
+		} else {
+			err = status.Error(codes.InvalidArgument, "unknown tab list")
+		}
+	} else {
+		list := backend.TabList(request.ListOrder[0].List)
+		order := make([]backend.ListTab, 0, len(request.ListOrder))
+
+		for _, tab := range request.ListOrder {
+			if backend.TabList(tab.List) != list {
+				list = ""
+			}
+
+			order = append(order, backend.ListTab{Server: tab.Server, Path: tab.Path})
+		}
+
+		if knownTabList(list) {
+			err = s.sessions.OrderList(ctx, username, list, order)
+		} else {
+			err = status.Error(codes.InvalidArgument, "an order names one known tab list")
+		}
+	}
+
+	if err != nil {
+		return fmt.Errorf("web tab list: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Server) addToList(ctx context.Context, username string, limit backend.SpaceLimit, tab *ListTab) error {
+	list := backend.TabList(tab.List)
+	if !knownTabList(list) {
+		return fmt.Errorf("web tab list: %w", status.Error(codes.InvalidArgument, "unknown tab list"))
+	}
+
+	path, errPath := url.PathUnescape(tab.Path)
+	if tab.Path == "/" || strings.HasPrefix(tab.Path, "group:") || errPath != nil || !utf8.ValidString(path) {
+		return fmt.Errorf("web tab list: %w", status.Error(codes.InvalidArgument, "a listed tab is an open tab's escaped path"))
+	}
+
+	if tab.Server == "" && !limit.AllowsSpaceID(tab.Space) {
+		return fmt.Errorf("web tab list: %w", status.Error(codes.PermissionDenied, "this space is outside your spaces"))
+	}
+
+	if id := backend.TabConversation(tab.Path); tab.Server == "" && id != "" {
+		if err := s.visibleConversation(ctx, id); err != nil {
+			return err
+		}
+	}
+
+	if err := s.sessions.AddToList(ctx, username, backend.ListTab{List: list, Server: tab.Server, Path: tab.Path, Space: tab.Space}); err != nil {
+		return fmt.Errorf("web tab list: %w", err)
+	}
+
+	return nil
 }
 
 func (s *Server) changeAttention(ctx context.Context, username string, change *AttentionChange) error {
@@ -220,6 +309,16 @@ func savedTabState(state *TabState) *backend.TabState {
 	}
 
 	return saved
+}
+
+func webListTabs(saved []backend.ListTab, limit backend.SpaceLimit) (out []*ListTab) {
+	for _, tab := range saved {
+		if tab.Server != "" || limit.AllowsSpaceID(tab.Space) {
+			out = append(out, &ListTab{List: string(tab.List), Server: tab.Server, Path: tab.Path, Space: tab.Space})
+		}
+	}
+
+	return out
 }
 
 func webSearchPage(saved *backend.SearchPage) *SearchPage {

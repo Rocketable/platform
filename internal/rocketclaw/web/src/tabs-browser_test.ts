@@ -1,7 +1,7 @@
 import { expect } from "bun:test";
 import path from "node:path";
 import { unpacked } from "./test-browsers";
-import type { SearchPage, StripLayout, TabAttention } from "./types";
+import type { ListTab, SearchPage, StripLayout, TabAttention, TabListName } from "./types";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
@@ -26,15 +26,30 @@ export type SharedTab = { space: string; path: string; search?: SearchPage };
 const plain = (page?: SearchPage) => JSON.stringify(page ? [page.name ?? "", page.searches.map(({ id, name, query }) => [id, name ?? "", query]), page.active] : null);
 export type Change = { paths: string[]; action: string; until?: string };
 // attention is this person's attention on each tab location, sent is every attention change, and polls counts session lists.
-export type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; layout?: StripLayout; attention: TabAttention[]; sent: Change[]; polls: number; autoPark?: boolean; deletes: string[]; titleGate?: Promise<unknown> };
+export type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; layout?: StripLayout; lists: ListTab[]; visits: ListTab[]; attention: TabAttention[]; sent: Change[]; polls: number; autoPark?: boolean; deletes: string[]; titleGate?: Promise<unknown> };
 
 // Mirrors the server's Tabs call: it saves the state or the layout, changes one space, adds, removes, or edits Shared tabs, or changes
 // attention, then answers with every space, the saved state, every space's Shared tabs in order, and the layout.
 // A taken name, ignoring case, deleting the last space, and sharing New session are refused, and a save made from an
 // older revision is stale. A deleted space's Shared tabs join the first remaining space's, once each, keeping their order.
 // Attention changes act as the server's do, and a save closing a tab parked without a time unparks it.
-function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SharedTab; unshare?: SharedTab; editShared?: SharedTab & { base?: SearchPage }; attention?: Change; autoPark?: boolean; layout?: StripLayout }) {
+export const listed = (saved: Saved, list: TabListName) => saved.lists.filter((tab) => tab.list === list);
+
+function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SharedTab; unshare?: SharedTab; editShared?: SharedTab & { base?: SearchPage }; attention?: Change; autoPark?: boolean; layout?: StripLayout; listAdd?: ListTab; listForget?: ListTab; listOrder?: ListTab[] }) {
   if (input.attention) saved.sent.push(input.attention);
+  const same = (a: ListTab) => (b: ListTab) => a.list === b.list && a.server === b.server && a.path === b.path;
+  if (input.listAdd) {
+    const tab = input.listAdd;
+    if (tab.list === "recent") saved.visits.push(tab);
+    saved.lists = saved.lists.some(same(tab)) ? saved.lists.map((item) => same(tab)(item) ? tab : item) : [tab, ...saved.lists];
+    saved.lists = saved.lists.filter((item) => item.list !== "recent" || listed(saved, "recent").indexOf(item) < 20);
+  }
+  if (input.listForget) saved.lists = saved.lists.filter((tab) => !same(input.listForget!)(tab));
+  if (input.listOrder) {
+    const order = input.listOrder, list = order[0].list;
+    saved.lists = [...saved.lists.filter((tab) => tab.list !== list), ...listed(saved, list).toSorted((a, b) => order.findIndex(same(a)) - order.findIndex(same(b)))];
+  }
+  if (input.listAdd || input.listForget || input.listOrder) return Response.json({ lists: saved.lists });
   if (input.autoPark !== undefined) saved.autoPark = input.autoPark;
   if (input.layout) saved.layout = input.layout;
   for (const path of input.attention?.paths ?? []) {
@@ -83,7 +98,7 @@ export async function withPage(options: object, run: (page: any, origin: string,
   const { chromium: engine } = await import(playwright!);
   const prompts: { id: string; text: string }[] = [];
   const sessions = structuredClone(rows);
-  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, sharedOrder: [] }, revision: 0, refused: 0, shared: [], closed: [], attention: [], sent: [], polls: 0, deletes: [] };
+  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, sharedOrder: [] }, revision: 0, refused: 0, shared: [], closed: [], lists: [], visits: [], attention: [], sent: [], polls: 0, deletes: [] };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });

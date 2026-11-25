@@ -255,7 +255,7 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       for (const width of [1280, 320]) {
         await page.setViewportSize({ width, height: 800 });
         await dialog.getByRole("button", { name: "Tabs: Toggle sidebar", exact: true }).waitFor({ state: width === 1280 ? "visible" : "detached" });
-        expect(await keys()).toEqual({ "Sessions: New": [modifier, alternate, "N"], "Tabs: Next": [modifier, "]"], "Tabs: Previous": [modifier, "["], ...(width === 1280 ? { "Tabs: Toggle sidebar": [modifier, "B"] } : {}) });
+        expect(await keys()).toEqual({ "Sessions: New": [modifier, alternate, "N"], "Tabs: Next": [modifier, "]"], "Tabs: Previous": [modifier, "["], "Tabs: Show Recent": [modifier, "1"], "Tabs: Show Spaces": [modifier, "2"], "Tabs: Show Parked": [modifier, "3"], ...(width === 1280 ? { "Tabs: Toggle sidebar": [modifier, "B"] } : {}) });
         await dialog.evaluate((node: HTMLElement) => Promise.all(node.getAnimations({ subtree: true }).map((animation) => animation.finished)));
         expect(await dialog.evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth && [...node.querySelectorAll("kbd")].every((key) => {
           const bounds = key.getBoundingClientRect(), parent = node.getBoundingClientRect();
@@ -283,7 +283,7 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       const shortcutList = page.getByRole("list", { name: "Keyboard shortcuts" });
       const shortcutKeys: string[][] = await shortcutList.getByRole("listitem").evaluateAll((items: Element[]) => items.map((item) => [...item.querySelectorAll("kbd")].map((key) => key.textContent!)));
       expect(shortcutKeys).toEqual([
-        [modifier, "P"], [modifier, "Shift", "P"], [modifier, alternate, "N"], [modifier, "["], [modifier, "]"], [modifier, alternate, "T"], [modifier, "Shift", "A"], [modifier, "Shift", "S"], [modifier, "B"], [modifier, "Shift", "B"], ["Escape"], [modifier, "Enter"], [modifier, alternate, "Enter"]]);
+        [modifier, "P"], [modifier, "Shift", "P"], [modifier, alternate, "N"], [modifier, "["], [modifier, "]"], [modifier, alternate, "T"], [modifier, "Shift", "A"], [modifier, "Shift", "S"], [modifier, "B"], [modifier, "1"], [modifier, "2"], [modifier, "3"], [modifier, "Shift", "B"], ["Escape"], [modifier, "Enter"], [modifier, alternate, "Enter"]]);
       // Chromium keeps new and closed tabs, windows and tab cycling for itself and never hands these keys to a page
       // (kReservedCommandIds, chrome/browser/ui/accelerator_table.cc). Headless test browsers do hand them over, so a test
       // pressing one passes while the real key does nothing; RocketClaw adds Alt instead, as in mod+Alt+N.

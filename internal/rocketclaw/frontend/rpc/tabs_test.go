@@ -312,6 +312,53 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	response, err = call("bob", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&StripLayout{}, response.Layout), "another person's layout is not theirs: %v", response.Layout)
+
+	listed := func(response *TabsResponse) []string {
+		out := make([]string, 0, len(response.Lists))
+		for _, tab := range response.Lists {
+			out = append(out, tab.List+" "+tab.Server+" "+tab.Path+" "+tab.Space)
+		}
+
+		return out
+	}
+	_, err = call("alice", &TabsRequest{ListAdd: &ListTab{List: "recent", Path: "/s/YQ", Space: "main"}})
+	require.NoError(t, err)
+	response, err = call("alice", &TabsRequest{ListAdd: &ListTab{List: "recent", Server: "lab", Path: "/s/bm9uZQ", Space: "ops"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"recent lab /s/bm9uZQ ops", "recent  /s/YQ main"}, listed(response), "an add answers with the lists, a new tab on top, and another server's path is its own")
+	assert.Nil(t, response.State, "an add answers with the lists alone")
+
+	_, err = call("alice", &TabsRequest{ListAdd: &ListTab{List: "parked", Path: "/s/YQ", Space: "main"}})
+	require.NoError(t, err)
+	response, err = call("alice", &TabsRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"parked  /s/YQ main", "recent lab /s/bm9uZQ ops", "recent  /s/YQ main"}, listed(response), "every read carries the lists to the person's other devices")
+	response, err = call("alice", &TabsRequest{ListOrder: []*ListTab{{List: "recent", Path: "/s/YQ"}, {List: "recent", Server: "lab", Path: "/s/bm9uZQ"}}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"parked  /s/YQ main", "recent  /s/YQ main", "recent lab /s/bm9uZQ ops"}, listed(response), "an order answers with the list in that order")
+	response, err = call("alice", &TabsRequest{ListForget: &ListTab{List: "parked", Path: "/s/YQ"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"recent  /s/YQ main", "recent lab /s/bm9uZQ ops"}, listed(response), "a forgotten tab leaves its list alone")
+	assert.Nil(t, response.State, "a forget answers with the lists alone")
+
+	for path, code := range map[string]codes.Code{"/": codes.InvalidArgument, "group:g": codes.InvalidArgument, "/pages/x/%": codes.InvalidArgument, "/s/cHJpdmF0ZS1Y": codes.PermissionDenied, "/s/bm9uZQ": codes.NotFound} {
+		_, err = call("alice", &TabsRequest{ListAdd: &ListTab{List: "parked", Path: path, Space: "main"}})
+		assert.Equal(t, code, status.Code(err), path)
+	}
+
+	for _, request := range []*TabsRequest{
+		{ListAdd: &ListTab{List: "recent", Server: "lab", Path: "/pages/x/%FF", Space: "ops"}},
+		{ListAdd: &ListTab{List: "closed", Path: "/s/YQ", Space: "main"}},
+		{ListForget: &ListTab{List: "closed", Path: "/s/YQ"}},
+		{ListOrder: []*ListTab{{List: "recent", Path: "/s/YQ"}, {List: "parked", Path: "/s/YQ"}}},
+	} {
+		_, err = call("alice", request)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err), "%v", request)
+	}
+
+	response, err = call("bob", &TabsRequest{})
+	require.NoError(t, err)
+	assert.Empty(t, listed(response), "another person's lists are not theirs")
 }
 
 func TestPromptAutoParks(t *testing.T) {
@@ -433,6 +480,21 @@ func TestTabsSpaceLimit(t *testing.T) {
 	spaces, shared := read(alice)
 	require.Equal(t, []string{"Ops"}, spaces)
 	require.Equal(t, []string{path("ops-chat")}, shared)
+
+	for _, tab := range []*ListTab{{List: "recent", Path: "/cron", Space: mainID}, {List: "parked", Path: path("main-chat"), Space: opsID}} {
+		_, err := server.tabs(alice, &TabsRequest{ListAdd: tab})
+		require.Equal(t, codes.PermissionDenied, status.Code(err), "%v", tab)
+	}
+
+	require.NoError(t, sessions.AddToList(t.Context(), "alice", backend.ListTab{List: backend.RecentList, Path: "/cron", Space: mainID}))
+	response, err := server.tabs(alice, &TabsRequest{ListAdd: &ListTab{List: "recent", Path: path("ops-chat"), Space: opsID}})
+	require.NoError(t, err)
+	require.Len(t, response.Lists, 1, "a listed tab outside her spaces is left out")
+	require.Equal(t, path("ops-chat"), response.Lists[0].Path)
+	response, err = server.tabs(alice, &TabsRequest{})
+	require.NoError(t, err)
+	require.Len(t, response.Lists, 1, "a read leaves out a listed tab outside her spaces too")
+	require.Equal(t, path("ops-chat"), response.Lists[0].Path)
 
 	spaces, shared = read(bob)
 	require.Equal(t, []string{"Main", "Ops"}, spaces)
