@@ -3754,6 +3754,16 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, err)
 		require.Equal(t, "Handoff verification", sourceName(), "a blank name regenerates the title from the conversation")
 
+		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", &UpdateSessionRequest{Id: source, Name: new("Handoff draft")})
+		require.NoError(t, err)
+		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", &UpdateSessionRequest{Id: source, Name: new("")})
+		require.NoError(t, err)
+		require.Equal(t, "Handoff verification (was Handoff draft)", sourceName(), "regenerating keeps the name it replaces")
+
+		var generated string
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT generated_name FROM conversations WHERE conversation_id = $1`, source).Scan(&generated))
+		require.Equal(t, "Handoff verification (was Handoff draft)", generated, "a regenerated name hands the session back to automatic titles")
+
 		cfg.OpenAI.APIBaseURL = ":invalid"
 		server.cfg.Store(cfg)
 
@@ -3765,7 +3775,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", &UpdateSessionRequest{Id: source, Name: new("")})
 		require.ErrorContains(t, err, "regenerate web session title")
-		require.Equal(t, "Handoff verification", sourceName(), "a failed regeneration keeps the old name")
+		require.Equal(t, "Handoff verification (was Handoff draft)", sourceName(), "a failed regeneration keeps the old name")
 
 		cfg.OpenAI.APIBaseURL = provider.URL
 		server.cfg.Store(cfg)

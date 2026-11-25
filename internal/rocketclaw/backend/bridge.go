@@ -2468,22 +2468,35 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 	}
 
-	if request := strings.TrimSpace(cmp.Or(msg.Metadata[protocol.InboundRawTextMetadataKey], msg.Text)); !captured && len(observed) == 0 && msg.Human && msg.Source == protocol.SourceWeb && !b.shadow && layer == nil && request != "" {
-		b.titles.Go(func() {
-			var name string
-			if queryScalar(ctx, b.config.SessionService.db, "read session name", `SELECT name FROM conversations WHERE conversation_id = $1`, &name, b.config.ConversationID) == nil && name != "" {
-				return
-			}
+	if request := strings.TrimSpace(cmp.Or(msg.Metadata[protocol.InboundRawTextMetadataKey], msg.Text)); msg.Human && msg.Source == protocol.SourceWeb && !b.shadow && layer == nil && request != "" {
+		if !captured && len(observed) == 0 {
+			b.titles.Go(func() {
+				var name string
+				if queryScalar(ctx, b.config.SessionService.db, "read session name", `SELECT name FROM conversations WHERE conversation_id = $1`, &name, b.config.ConversationID) == nil && name != "" {
+					return
+				}
 
-			title, err := harness.GenerateTitle(ctx, resolver, runtimeCfg.TitleModel, request, "")
-			if err == nil {
-				_, err = execState(ctx, b.config.SessionService.db, "name session", `UPDATE conversations SET name = $2 WHERE conversation_id = $1 AND name = ''`, b.config.ConversationID, title)
-			}
+				title, err := harness.GenerateTitle(ctx, resolver, runtimeCfg.TitleModel, request, "")
+				if err == nil {
+					_, _, err = b.config.SessionService.NameGenerated(ctx, b.config.ConversationID, title, false)
+				}
 
-			if err != nil {
-				b.log.Warn("name session from its first message", "conversation_id", b.config.ConversationID, "error", err)
+				if err != nil {
+					b.log.Warn("name session from its first message", "conversation_id", b.config.ConversationID, "error", err)
+				}
+			})
+		} else if runtimeCfg.TitleDecisionModel != "" {
+			switch first, recent, people, err := titleConversation(observed); {
+			case err != nil:
+				b.log.Warn("read the conversation to check its title", "conversation_id", b.config.ConversationID, "error", err)
+			case (people+1)%titleCheckEvery == 0:
+				b.titles.Go(func() {
+					if err := b.retitle(ctx, runtimeCfg, rocketcodeConfig.Observability, rocketcodeConfig.Deciders, resolver, cmp.Or(first, request), recent+"User: "+request); err != nil {
+						b.log.Warn("check whether the session title still fits", "conversation_id", b.config.ConversationID, "error", err)
+					}
+				})
 			}
-		})
+		}
 	}
 
 	prepared.TurnID, prepared.Responses = turnID, output
@@ -3393,6 +3406,82 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 	}
 
 	return outbound
+}
+
+const titleCheckEvery = 4
+
+func titleConversation(observed []ObservedSessionEntry) (first, recent string, people int, err error) {
+	var transcript strings.Builder
+
+	for i := range observed {
+		if observed[i].ID == 0 {
+			continue
+		}
+
+		raw := observed[i].Entry.ReplayInput
+
+		items, err := harness.ReplayInputToParams(raw)
+		if err != nil {
+			return "", "", 0, fmt.Errorf("decode title history: %w", err)
+		}
+
+		for j := range items {
+			role, text, ok, err := ReplayInputMessageRoleText(&items[j], raw[j])
+			if err != nil {
+				return "", "", 0, err
+			}
+
+			var header string
+			if items[j].OfMessage != nil {
+				header, _ = items[j].OfMessage.ExtraFields()["prompt_header"].(string)
+			}
+
+			person, text := role == "user" && PromptPrincipal(header) != "", strings.TrimSpace(text)
+
+			switch {
+			case !ok || text == "" || !person && role != "assistant":
+			case person && first == "":
+				first, people = text, people+1
+			case person:
+				people++
+
+				fmt.Fprintf(&transcript, "User: %s\n\n", text)
+			default:
+				fmt.Fprintf(&transcript, "Assistant: %s\n\n", text)
+			}
+		}
+	}
+
+	return first, transcript.String(), people, nil
+}
+
+func (b *Bridge) retitle(ctx context.Context, runtimeCfg *config.Config, observability harness.ObservabilityConfig, deciders map[string]harness.Decider, resolver harness.ModelResolver, request, recent string) error {
+	var name string
+
+	found, err := scanFound("read generated session name", b.config.SessionService.db.QueryRowContext(ctx, `SELECT name FROM conversations WHERE conversation_id = $1 AND (name = '' OR name = generated_name)`, b.config.ConversationID).Scan(&name))
+	if err != nil || !found {
+		return err
+	}
+
+	name, _, _ = strings.Cut(name, " (was ")
+
+	fits, err := harness.TitleFits(ctx, observability, deciders, runtimeCfg.TitleDecisionModel, name, request, recent)
+	if err != nil {
+		return fmt.Errorf("judge session title: %w", err)
+	}
+
+	if fits {
+		return nil
+	}
+
+	title, err := harness.GenerateTitle(ctx, resolver, runtimeCfg.TitleModel, request, recent)
+	if err != nil {
+		return fmt.Errorf("regenerate session title: %w", err)
+	}
+
+	_, _, err = b.config.SessionService.NameGenerated(ctx, b.config.ConversationID, title, false)
+
+	return err
 }
 
 type replayInputMessage struct{ role, text string }

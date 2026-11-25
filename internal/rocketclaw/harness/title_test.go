@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,44 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTitleFits(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		answer  DecisionAnswer
+		want    bool
+		wantErr string
+	}{
+		{name: "fits", answer: predicateAnswer("title_fits", 0.5), want: true},
+		{name: "outgrown", answer: predicateAnswer("title_fits", 0.2)},
+		{name: "refused", answer: DecisionAnswer{Name: "title_fits", Refused: true}, wantErr: "decide with typesafe/jev-latest: no answer about the title"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			decider := &mockDecider{DecideFunc: func(_ context.Context, request *DecisionRequest) ([]DecisionAnswer, DecisionUsage, error) {
+				input, err := json.Marshal(request.Input)
+				require.NoError(t, err)
+				assert.JSONEq(t, `{"title":"Worktree setup","original_request":"`+strings.Repeat("a", 2000)+`","recent_conversation":"User: fix the discombobulation"}`, string(input))
+				assert.Equal(t, "jev-latest", request.Model)
+				assert.Equal(t, []string{"title_fits"}, []string{request.Questions[0].Name})
+
+				return []DecisionAnswer{tc.answer}, DecisionUsage{}, nil
+			}}
+
+			fits, err := TitleFits(t.Context(), ObservabilityConfig{}, map[string]Decider{"typesafe": decider}, "typesafe/jev-latest", "Worktree setup", strings.Repeat("a", 3000), "User: fix the discombobulation")
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, fits)
+		})
+	}
+}
 
 func TestGenerateTitle(t *testing.T) {
 	t.Parallel()

@@ -64,6 +64,30 @@ func GenerateTitle(ctx context.Context, resolver ModelResolver, titleModel, requ
 	return "", errors.New("model returned no title")
 }
 
+func TitleFits(ctx context.Context, observability ObservabilityConfig, deciders map[string]Decider, ref, title, request, recent string) (bool, error) {
+	answers, _, err := decide(ctx, observability, deciders, ref, &DecisionRequest{
+		Input: struct {
+			Title              string `json:"title"`
+			OriginalRequest    string `json:"original_request"`
+			RecentConversation string `json:"recent_conversation"`
+		}{title, strings.ToValidUTF8(request[:min(len(request), 2000)], ""), strings.ToValidUTF8(recent[max(len(recent)-6000, 0):], "")},
+		Questions: []DecisionQuestion{{
+			Name: "title_fits", Type: DecisionPredicate,
+			Instructions: "Does the title still name what this conversation is about now? Weigh the recent conversation over the original request. A conversation that moved on to a different task, feature, problem, or subject has outgrown its title. A title that names the broader effort the recent messages belong to still fits.",
+			Options:      []DecisionOption{{Value: "true", Description: "The title still names the conversation's current subject."}, {Value: "false", Description: "The conversation is now about something the title does not name."}},
+		}},
+	})
+	if err != nil {
+		return false, err
+	}
+
+	if len(answers) != 1 || answers[0].Refused {
+		return false, fmt.Errorf("decide with %s: no answer about the title", ref)
+	}
+
+	return answers[0].Probability >= 0.5, nil
+}
+
 func GenerateSummary(ctx context.Context, resolver ModelResolver, model, effort, transcript string) (string, error) {
 	text, err := respondOnce(ctx, resolver, model, effort, summaryPrompt, "<conversation>\n"+strings.ToValidUTF8(transcript[max(len(transcript)-16000, 0):], "")+"\n</conversation>")
 	if summary := strings.TrimSpace(text); err != nil || summary != "" {
