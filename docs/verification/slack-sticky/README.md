@@ -5,6 +5,12 @@ Sessions, Thread Sessions, and the `slack_respond_in_thread` ratchet. **It does 
 means the properties hold for the finite worlds below, under the assumptions below. The step table maps each model
 step to the code that will build it, or to the current code it changes.
 
+**Gate status, ambient status once a turn worked (2026-11-25): VERIFIED** for the finite worlds below. A full
+`make -k PASS_WORKERS=12` run passed every check, or found its named violation for a check that must fail,
+except `liveness-ambient-thread`, which was stopped from outside the run (SIGTERM, not the time limit); a rerun
+of that check alone passed (622,721 distinct states, depth 41, 4m59s with 12 workers). Two ambient worlds were
+made smaller to finish. See [Status once an ambient turn worked](#status-once-an-ambient-turn-worked).
+
 **Gate status, extended with ambient listening: VERIFIED** for the finite worlds below. On 2026-11-24, one
 `make -k` run of the extended model exited 0 in 39m59s:
 
@@ -238,7 +244,10 @@ Slack call, or one critical section.
 | `Ambient` admit | `SubmitMention` (`backend/thread_bridges.go`) with the ambient key: the Thread Session of `thread_ts`, or of `ts` for a top-level message; the same `slack:<ch>:<ts>` duplicate check as mentions, `slack:<ch>:<ts>:<edited_ts>` for an edit; no status | one "Slack mention admission" transaction |
 | no-reply | new `slack_no_reply` tool, only on ambient turns: saves a `/no-reply` turn step | one write, journaled |
 | finish (ambient) | `Bridge.finish` (`backend/bridge.go`) reads the `/no-reply` step before `finishTurn` and clears the outbound text and files, so the saved `outbound_json` is silent | "finish" transaction |
-| status, settle (ambient) | connector `SendResponse` (`frontend/slack/connector.go`), new deferred branch: no `c.sessions` entry, no `agents.sessions.setStatus`, no settle; nothing posts without text or files | none |
+| tool (ambient) | a tool call other than `slack_no_reply` finishes: its trace item, or its Code Mode operation, is saved; `SessionService.TurnProgress` (`backend/store_dao.go`) reports `Worked` while the row is `running` | one write, journaled |
+| status (ambient) | `startSession` keeps a hidden session for a deferred turn and sends nothing; `pollSession` shows `processing` and the checklist once `TurnProgress` reports `Worked`; `sessionTurn` skips a hidden session, so the mention handler and Stop see only shown ones | Slack call |
+| finish (ambient), `worked` read | `Bridge.finish` and `stopIdleTurn` (`backend/bridge.go`) read `TurnProgress.Worked` before `finishTurn` clears the turn's steps and save it as the outbound's `Worked` in `outbound_json`; the model's `worked` no longer changes once the turn delivers | one read, then the "finish" transaction |
+| settle (ambient) | `finishResponse` settles a deferred turn only when its outbound carries `Worked`, whether or not this process showed its status; `PostsNothing` still posts nothing without text or files, or after a failure or a Stop, and deletes the turn's checklist | Slack call |
 
 ## Properties
 
@@ -397,11 +406,12 @@ results did not change (see Results, extended model).
 - **Admission** goes through the mention admission and its duplicate check: one key per Slack message, whichever event
   carried it, and a key of its own for each edit. It queues the message in the Thread Session of the message's thread,
   of its own `ts` for a top-level message, and writes no status.
-- **The ambient turn is deferred.** It never shows Slack's working status, is never in the connector's status
-  sessions, and never settles a status, so a mention waiting behind it keeps its own. It may call `slack_no_reply`,
-  which saves a turn step. At finish, a saved step clears the output, and the cleared output is what is saved for
-  delivery. The turn posts its answer with the footer, or nothing: after no-reply, or with no answer or files, or after
-  a failure or a Stop from Web.
+- **The ambient turn is deferred.** It shows nothing until a tool call other than `slack_no_reply` has finished,
+  which its saved progress records. From then on it shows Slack's working status and Stop like a mention turn, and
+  its end settles the status. A turn that never finished such a call writes no status at all, so a mention waiting
+  behind it keeps its own. It may call `slack_no_reply`, which saves a turn step. At finish, a saved step clears the
+  output, and the cleared output is what is saved for delivery. The turn posts its answer with the footer, or nothing:
+  after no-reply, or with no answer or files, or after a failure or a Stop from Web or Slack.
 
 ```mermaid
 stateDiagram-v2
@@ -428,9 +438,12 @@ stateDiagram-v2
 stateDiagram-v2
     direction TB
     [*] --> Waiting: queued in Thread Queue
-    Waiting --> Running: turn starts
+    Waiting --> Running: turn starts, no status
+    Running --> Working: a tool call other than slack_no_reply finished (status and Stop shown)
     Running --> Posted: answer or files, with footer
     Running --> Silent: slack_no_reply, empty, failed, or stopped from Web
+    Working --> Posted: answer or files, with footer (status settles)
+    Working --> Silent: slack_no_reply, empty, failed, or stopped from Web or Slack (status settles, nothing posts)
     Posted --> [*]
     Silent --> [*]
 ```
@@ -440,8 +453,11 @@ stateDiagram-v2
 - **`Ambient`** (fair): the `message` handler. Each delivery is one step (gate and classify, with the channel's agent
   read once); the screen and the admission are the next step. Slack delivers each message, and each mention's copy,
   at least once and up to `Dups` more times, in any order with the `app_mention`s.
-- **`Lane`**: an ambient turn skips the status and settle writes, may take a no-reply step, and finishes with an answer
-  or silent (no-reply saved, empty, failed, or stopped from Web). A silent turn posts nothing.
+- **`Lane`**: an ambient turn may take a counted tool step (a tool call other than `slack_no_reply` finished, durable)
+  and a no-reply step, in either order. It shows its status only after the counted step, settles only if it took
+  one, and finishes with an answer or silent (no-reply saved, empty, failed, or stopped from Web), shown or not. A
+  silent turn posts nothing.
+- **`StopDeliver`**: a Slack Stop of an ambient turn that showed its status ends it silent.
 - **`Lifecycle`**: a crash also loses the event being screened.
 - The world is one channel, which is watched. The new items:
 
@@ -464,12 +480,15 @@ Safety (invariants), added:
   the bot.
 - `AmbientInThread`: an ambient message queues in the Thread Session of its own thread, never in a Channel Session.
 - `SilentPostsNothing`: a turn that called no-reply, or ended silent, posts nothing, across a crash.
-- `AmbientWritesNoStatus`: an ambient turn never writes a Slack status.
+- `AmbientStatusAfterWork`: an ambient turn writes a Slack status, shown or settled, only after a tool call other
+  than `slack_no_reply` finished. It replaced `AmbientWritesNoStatus` (an ambient turn never writes one).
 
 Liveness, added: `AmbientSettles`, every admitted ambient message finishes. Fairness is unchanged, plus weak fairness
 for `Ambient`, as for `Slack`.
 
-Witness, added: `NoAmbientAnswer`, which claims the reply and the edit in root 1's thread are never both answered there.
+Witnesses, added: `NoAmbientAnswer`, which claims the reply and the edit in root 1's thread are never both answered
+there; and `NoAmbientStopBeforeMention`, which claims a Slack Stop never ends an ambient turn that showed its status
+while a mention waits behind it with the mention then answered.
 
 The must-fail mutations:
 
@@ -480,7 +499,8 @@ The must-fail mutations:
 | `ambient-mention-root` | a reply under a mention root with no Thread Session is screened and admitted | `NoAmbientUnderMentionRoot` |
 | `no-reply-footer` | a turn whose no-reply step is saved still posts the footer | `SilentPostsNothing` |
 | `volatile-no-reply` | the no-reply step is kept in memory only; a crash before finish forgets it | `SilentPostsNothing` |
-| `deferred-session` | an ambient turn is tracked as a status session | `AmbientWritesNoStatus` |
+| `early-status` | an ambient turn shows its status from its start (replaced `deferred-session`) | `AmbientStatusAfterWork` |
+| `no-reply-status` | the progress counts a `slack_no_reply` call as work | `AmbientStatusAfterWork` |
 
 ### Results, extended model
 
@@ -541,6 +561,71 @@ One model bug was fixed before these runs: the `Window` let an admission record 
 screening the message's last delivery, so its admission ran again (`OneAdmission`, in the first safety world). A day's
 window outlasts a 5-second screen, so `Quiet` now also requires that no event for the message is being screened. No
 counterexample needed a change to the design.
+
+### Status once an ambient turn worked
+
+On 2026-11-25 the ambient turn changed from showing no status at all to showing it once a tool call other than
+`slack_no_reply` has finished. The model gained a durable `worked` flag per turn and a `Lane` step that sets it on a
+running ambient turn; the status step and the settle require it for an ambient turn (`ShowsStatus`), a Slack Stop of an
+ambient turn ends it silent, and `AmbientStatusAfterWork` replaced `AmbientWritesNoStatus`. The settle reads `worked`,
+which survives a crash, and not the in-memory `shown`: settling only a shown turn would leave a status up after a crash
+between the status and the settle, against `StatusClears`. That variant was reasoned through, not run.
+
+All runs used TLC2 2026.11.19.180144 (rev `bc1b506`) and OpenJDK 21.0.13.1 on linux/aarch64, 16 cores. Logs are in
+`.tmp/run/slack-sticky-model/<check>.log`.
+
+Required (must pass), with 4 workers unless noted:
+
+| Check | World | Distinct states | Depth | Time |
+| --- | --- | --- | --- | --- |
+| `safety`, `sources`, `stops`, `config`, `replies` and the 6 earlier liveness checks | as in [Results](#results), `AmbientOn = FALSE` | the same as in Results, each | the same | `safety` 9m57s, `stops` 3m27s, `liveness-thread` 2m54s, `liveness-channel` 2m17s, the rest under 1 minute |
+| `ambient-watched` | as before | 1,095,018 | 35 | 44s |
+| `ambient-config` | as before | 11,005,296 | 43 | 9m35s |
+| `liveness-ambient-thread` | as before | 622,721 | 41 | 9m57s |
+| `liveness-ambient-edit` | as before | 622,721 | 41 | 9m52s |
+| `ambient-thread` | **smaller:** root 1, thread mention 3, reply 9, no edit; up to twice; 1 Stop; 1 crash; 12 workers | 5,575,142 | 46 | 1m37s |
+| `liveness-ambient-watched` | **smaller:** root 1, top-level message 10, no Report Thread reply; up to twice; 1 crash; 12 workers | 365,006 | 33 | 3m17s |
+
+The new step multiplies the ambient worlds: `ambient-watched` grew from 376,794 to 1,095,018 distinct states,
+`ambient-config` from 2,173,008 to 11,005,296 and `liveness-ambient-thread` from 319,233 to 622,721. Two worlds no
+longer finished:
+
+- `ambient-thread` with the edit 11 as well (its 2026-11-24 world): killed at 1800 seconds with 4 workers, at
+  49,833,465 distinct states, depth 44, 4,090,589 still queued, no violation; a rerun with 12 workers was stopped by
+  hand after about 8 minutes at 14.6 million distinct states with a growing queue. The edit now runs only in
+  `liveness-ambient-edit` (each message once), and the world gained a Stop: it still has a mention waiting behind an
+  ambient reply that shows its status mid-turn, duplicates and a crash, and Stop now reaches that reply.
+- `liveness-ambient-watched` with the Report Thread reply 12: stopped by hand after 27 minutes at 1,036,919 distinct
+  states, no violation. The reply is never admitted, and `ambient-watched` still checks it with every invariant.
+
+Must fail (1 worker):
+
+| Check | World | Violation | States | Depth |
+| --- | --- | --- | --- | --- |
+| `early-status` | top-level message 10 (replaced `deferred-session`) | `AmbientStatusAfterWork` | 8 | 5 |
+| `no-reply-status` | top-level message 10 | `AmbientStatusAfterWork` | 20 | 6 |
+| `witness-ambient-stop` | root 1, thread mention 3, reply 9; 1 Stop | `NoAmbientStopBeforeMention` | 101,725 | 30 |
+| `settle-after-close` | as before | `StatusClears` | 292 | 15 |
+| `stop-by-conv` | as before | `StopPrecise` | 574 | 10 |
+| `no-reply-footer` | as before | `SilentPostsNothing` | 54 | 8 |
+| `volatile-no-reply` | as before | `SilentPostsNothing` | 217 | 9 |
+| `witness-stop-moved` | as before | `NoStopAfterMove` | 236 | 13 |
+| `witness-ambient-reply` | as before | `NoAmbientAnswer` | 122,671 | 27 |
+| `no-ratchet`, `volatile-ratchet` | as before | `RatchetHonored` | 47, 139 | 8, 9 |
+
+In the `no-reply-status` trace the turn calls `slack_no_reply`, then shows its status. In the `witness-ambient-stop`
+trace root 1 moves into its thread, reply 9 queues there ahead of mention 3, runs, works and shows its status, a Stop
+ends it silent while mention 3 waits, and mention 3 then runs and is answered.
+
+Not run on this model: the other must-fail checks (`split-move`, `no-hold`, `no-root-first`, `per-conv-dedup`,
+`thread-only-lookup`, `legacy-report`, `no-start-check`, `key-without-agent`, `no-footer-switch`,
+`no-wake-on-release`, the earlier witnesses, `short-window`, `witness-expiry`, `ambient-mentions`,
+`ambient-root-channel`, `ambient-mention-root`). They are not about status, and their worlds without ambient messages
+behave as before.
+
+What this change leaves out: which calls count is one nondeterministic step. The code counts a finished call that made
+no `slack_no_reply` operation, or a finished Code Mode operation other than `slack_no_reply`; the model does not tell
+calls apart. The poll's 3-second delay is the gap between the step and the status step.
 
 What the ambient extension leaves out, beyond the list above:
 

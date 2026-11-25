@@ -532,6 +532,15 @@ func (b *Bridge) stopIdleTurn() *protocol.InboundMessage {
 	outbound := b.newOutboundMessage(turn.inbound, turn.id, "", true)
 	outbound.Terminal = protocol.TerminalStopped
 
+	if outbound.Deferred {
+		progress, err := b.config.SessionService.TurnProgress(ctx, turn.id)
+		if err != nil {
+			b.log.Error("read idle active turn progress", "conversation_id", b.config.ConversationID, "turn_id", turn.id, "error", err)
+		}
+
+		outbound.Worked = progress.Worked
+	}
+
 	finish := turnFinish{conversationID: strings.TrimSpace(turn.conversationID), outbound: outbound, terminal: protocol.TerminalStopped, hidden: hiddenRun(turn.inbound)}
 
 	outbound, err = b.config.SessionService.finishTurn(ctx, turn.id, &finish)
@@ -1866,6 +1875,13 @@ func (b *Bridge) finish(ctx context.Context, request *bridgeRequest, finish *tur
 		if silent {
 			outbound.Text, outbound.Attachments = "", nil
 		}
+
+		progress, err := b.config.SessionService.TurnProgress(ctx, request.turnID)
+		if err != nil {
+			return inputPersistenceError{cause: err}
+		}
+
+		outbound.Worked = progress.Worked
 	}
 
 	if terminal != "" && msg.SyncDestination == "" {

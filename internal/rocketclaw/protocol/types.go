@@ -134,8 +134,8 @@ type SlackReplyTarget struct{ ChannelID, MessageTS, ThreadTS, EditTS string }
 type TextConversationTarget struct{ ChannelID, MessageID, ThreadID, Agent string }
 
 type TurnProgress struct {
-	Running, Asking bool
-	Steps           []TurnStep
+	Running, Asking, Worked bool
+	Steps                   []TurnStep
 }
 
 type TurnStep struct {
@@ -195,7 +195,7 @@ type OutboundMessage struct {
 	GoalTurn, GoalComplete, GoalActive bool
 	GoalTurnNumber, GoalMaxTurns       int
 	Terminal                           Terminal
-	ChannelQuiet, Deferred             bool
+	ChannelQuiet, Deferred, Worked     bool
 }
 
 func NewInboundMessage(source Source, kind InboundKind, text string, human bool) *InboundMessage {

@@ -1393,7 +1393,7 @@ func TestSendResponseSettlesStatusOfTurnThatDidNotRun(t *testing.T) {
 
 			connector := newAdhocConnector(server.URL, newMentionRouter(true))
 			if tt.live {
-				connector.sessions["turn-2"] = &slackSession{channelID: "C123", threadTS: "111.222", poll: time.NewTimer(time.Hour)}
+				connector.sessions["turn-2"] = &slackSession{channelID: "C123", threadTS: "111.222", status: slack.AgentSessionStatusProcessing, poll: time.NewTimer(time.Hour)}
 			}
 
 			require.NoError(t, connector.SendResponse(t.Context(), &protocol.OutboundMessage{ConversationID: "slack-thread:C123:111.222:main", Complete: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}}))
@@ -1539,7 +1539,7 @@ func TestSendResponseFindsLostTopLevelPostInChannelHistory(t *testing.T) {
 }
 
 type agentSessionCalls struct {
-	statuses, posts, edits, renames []string
+	statuses, posts, edits, deletes, renames []string
 }
 
 func newAgentSessionServer(t *testing.T, errStatus string) (*httptest.Server, *agentSessionCalls) {
@@ -1567,6 +1567,9 @@ func newAgentSessionServer(t *testing.T, errStatus string) (*httptest.Server, *a
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555." + strconv.Itoa(len(calls.posts))})
 		case "/chat.update":
 			calls.edits = append(calls.edits, r.PostForm.Get("ts")+" "+r.PostForm.Get("blocks"))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts")})
+		case "/chat.delete":
+			calls.deletes = append(calls.deletes, r.PostForm.Get("channel")+" "+r.PostForm.Get("ts"))
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts")})
 		case "/agents.sessions.rename":
 			calls.renames = append(calls.renames, r.PostForm.Get("title")+" "+r.PostForm.Get("channel_id")+" "+r.PostForm.Get("thread_ts"))
@@ -1629,46 +1632,193 @@ func TestMentionTurnSetsAgentSessionStatus(t *testing.T) {
 
 func TestDeferredTurnPostsOnlyItsAnswer(t *testing.T) {
 	server, calls := newAgentSessionServer(t, "")
+	progress := protocol.TurnProgress{Running: true}
+	connector := newProgressConnector(t, server.URL, &progress)
 
 	interrupts := 0
-	router := newFooterRouter(t, nil)
-	router.InterruptTurnFunc = func(context.Context, string) error {
+	connector.threadRouter.(*primaryTextRouterMock).InterruptTurnFunc = func(context.Context, string) error {
 		interrupts++
 
 		return nil
 	}
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
 
-	deferred := func(terminal protocol.Terminal, text string) *protocol.OutboundMessage {
-		msg := newMentionThreadTurn("turn-1", terminal)
-		msg.Text, msg.Deferred = text, true
+	require.NoError(t, connector.SendResponse(t.Context(), newDeferredTurn("", "")))
+	require.Contains(t, connector.sessions, "turn-1", "the turn's progress is polled")
+	connector.pollSession("turn-1", connector.sessions["turn-1"])
+	assert.Empty(t, calls.statuses, "the turn shows no working status before a tool call finished")
 
-		return msg
-	}
-
-	require.NoError(t, connector.SendResponse(t.Context(), deferred("", "")))
-	assert.Empty(t, connector.sessions, "Slack Stop cannot find the turn")
-	assert.Empty(t, calls.statuses, "the turn shows no working status")
-
-	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(&slackevents.AgentSessionStoppedEvent{Type: "agent_session_stopped", Channel: "C123", ThreadTimestamp: "111.222", User: "U123", EventTimestamp: fmt.Sprintf("%.6f", float64(time.Now().UnixMicro())/1e6)}))
-	assert.Zero(t, interrupts, "Slack Stop leaves the turn running")
+	pressSlackStop(t, connector, time.Now())
+	assert.Zero(t, interrupts, "Slack Stop cannot find the turn yet")
 
 	calls.statuses = nil
 
-	require.NoError(t, connector.SendResponse(t.Context(), deferred(protocol.TerminalComplete, "answer")))
+	require.NoError(t, connector.SendResponse(t.Context(), newDeferredTurn(protocol.TerminalComplete, "answer")))
 	require.Len(t, calls.posts, 1)
 	assert.Contains(t, calls.posts[0], `"text":"answer"`)
 
 	texts, _ := slackContextTexts(t, calls.posts[0])
 	assert.Equal(t, []string{"main · done · <" + testFooterLink + "|Open in Web>"}, texts)
 
-	for _, silent := range []*protocol.OutboundMessage{deferred(protocol.TerminalComplete, ""), deferred(protocol.TerminalFailed, "internal error"), deferred(protocol.TerminalStopped, "")} {
+	for _, silent := range []*protocol.OutboundMessage{newDeferredTurn(protocol.TerminalComplete, ""), newDeferredTurn(protocol.TerminalFailed, "internal error"), newDeferredTurn(protocol.TerminalStopped, "")} {
 		require.NoError(t, connector.SendResponse(t.Context(), silent))
 		connector.AbortResponse(silent)
 	}
 
 	assert.Len(t, calls.posts, 1, "a turn without an answer, a failed one and a stopped one post nothing")
-	assert.Empty(t, calls.statuses, "a mention queued behind the turn keeps its status, title and initiator")
+	assert.Empty(t, calls.statuses, "a turn that never finished a tool call writes no status, so a mention queued behind it keeps its status, title and initiator")
+
+	require.NoError(t, connector.SendResponse(t.Context(), newDeferredTurn("", "")))
+
+	progress.Running = false
+
+	connector.pollSession("turn-1", connector.sessions["turn-1"])
+	assert.Empty(t, connector.sessions, "the poll ends the session of a turn that no longer runs")
+	assert.Empty(t, calls.statuses, "a turn that never showed its status writes none when its poll finds it ended")
+}
+
+func newDeferredTurn(terminal protocol.Terminal, text string) *protocol.OutboundMessage {
+	msg := newMentionThreadTurn("turn-1", terminal)
+	msg.Text, msg.Deferred = text, true
+
+	return msg
+}
+
+func pressSlackStop(t *testing.T, connector *Connector, pressedAt time.Time) {
+	t.Helper()
+
+	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(&slackevents.AgentSessionStoppedEvent{Type: "agent_session_stopped", Channel: "C123", ThreadTimestamp: "111.222", User: "U123", EventTimestamp: fmt.Sprintf("%.6f", float64(pressedAt.UnixMicro())/1e6)}))
+}
+
+func TestDeferredTurnShowsStatusOnceItWorked(t *testing.T) {
+	for _, tt := range []struct {
+		name, text string
+		stop       bool
+		terminal   protocol.Terminal
+		statuses   []string
+	}{
+		{name: "stays quiet after working", terminal: protocol.TerminalComplete, statuses: []string{"processing C123 111.222", "active C123 111.222"}},
+		{name: "stopped from Slack", stop: true, terminal: protocol.TerminalStopped, statuses: []string{"processing C123 111.222", "processing C123 111.222", "active C123 111.222", "active C123 111.222"}},
+		{name: "answers after working", text: "answer", terminal: protocol.TerminalComplete, statuses: []string{"processing C123 111.222", "active C123 111.222"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server, calls := newAgentSessionServer(t, "")
+			progress := protocol.TurnProgress{Running: true}
+			connector := newProgressConnector(t, server.URL, &progress)
+
+			var interrupted []string
+
+			connector.threadRouter.(*primaryTextRouterMock).InterruptTurnFunc = func(_ context.Context, turnID string) error {
+				interrupted = append(interrupted, turnID)
+
+				return nil
+			}
+
+			require.NoError(t, connector.SendResponse(t.Context(), newDeferredTurn("", "")))
+			connector.pollSession("turn-1", connector.sessions["turn-1"])
+			assert.Empty(t, calls.statuses, "nothing shows before a tool call finished")
+
+			beforeShown := time.Now()
+			progress = protocol.TurnProgress{Running: true, Worked: true, Steps: []protocol.TurnStep{{ID: "call-1", Title: "Read the thread", State: protocol.TurnStepRunning}}}
+
+			connector.pollSession("turn-1", connector.sessions["turn-1"])
+
+			if tt.stop {
+				pressSlackStop(t, connector, beforeShown)
+				assert.Empty(t, interrupted, "a Stop pressed before the turn showed its status leaves it running")
+
+				pressSlackStop(t, connector, time.Now().Add(time.Millisecond))
+				assert.Equal(t, []string{"turn-1"}, interrupted)
+			}
+
+			final := newDeferredTurn(tt.terminal, tt.text)
+			final.Worked = true
+
+			require.NoError(t, connector.SendResponse(t.Context(), final))
+
+			assert.Equal(t, tt.statuses, calls.statuses)
+			assert.Empty(t, connector.sessions)
+
+			if tt.text == "" {
+				assert.Len(t, calls.posts, 1, "the checklist posts, and the end posts no footer")
+				assert.Equal(t, []string{"C123 555.1"}, calls.deletes, "a turn that posts nothing deletes its checklist")
+				assert.Empty(t, calls.edits)
+
+				return
+			}
+
+			require.Len(t, calls.posts, 2, "the checklist, then the answer")
+			assert.Contains(t, calls.posts[1], `"text":"answer"`)
+			assert.Empty(t, calls.deletes, "a turn that answers keeps its checklist")
+			require.Len(t, calls.edits, 1)
+			assert.Contains(t, calls.edits[0], `"title":"Done"`)
+		})
+	}
+}
+
+func TestDeferredTurnStatusReplacesWaitingMentionsOnceItWorked(t *testing.T) {
+	server, calls := newAgentSessionServer(t, "")
+	progress := protocol.TurnProgress{Running: true}
+	connector := newProgressConnector(t, server.URL, &progress)
+	connector.botUserID = "U999"
+
+	var interrupted []string
+
+	router := connector.threadRouter.(*primaryTextRouterMock)
+	router.SubmitMentionFunc = func(context.Context, string, protocol.TextConversationTarget, *protocol.InboundMessage) (bool, error) {
+		return true, nil
+	}
+	router.InterruptTurnFunc = func(_ context.Context, turnID string) error {
+		interrupted = append(interrupted, turnID)
+
+		return nil
+	}
+
+	require.NoError(t, connector.SendResponse(t.Context(), newDeferredTurn("", "")))
+
+	mention := newSlackAppMentionEvent()
+	mention.TimeStamp, mention.ThreadTimeStamp = "111.333", "111.222"
+	connector.handleAppMentionEvent(t.Context(), mention, slackNativeForward{})
+
+	progress.Worked = true
+
+	connector.pollSession("turn-1", connector.sessions["turn-1"])
+	pressSlackStop(t, connector, time.Now().Add(time.Millisecond))
+
+	stopped := newDeferredTurn(protocol.TerminalStopped, "")
+	stopped.Worked = true
+
+	require.NoError(t, connector.SendResponse(t.Context(), stopped))
+	require.NoError(t, connector.SendResponse(t.Context(), newMentionThreadTurn("turn-2", "")))
+
+	assert.Equal(t, []string{"turn-1"}, interrupted, "Stop ends the deferred turn, not the waiting mention")
+	assert.Equal(t, []string{
+		"processing C123 111.222",
+		"processing C123 111.222", "active C123 111.222", "active C123 111.222",
+		"processing C123 111.222",
+	}, calls.statuses, "the mention's status, then the deferred turn's once it worked, then the mention's turn")
+}
+
+func TestMentionWaitingBehindQuietDeferredTurnKeepsItsStatus(t *testing.T) {
+	server, calls := newAgentSessionServer(t, "")
+	progress := protocol.TurnProgress{Running: true}
+	connector := newProgressConnector(t, server.URL, &progress)
+	connector.botUserID = "U999"
+	connector.threadRouter.(*primaryTextRouterMock).SubmitMentionFunc = func(context.Context, string, protocol.TextConversationTarget, *protocol.InboundMessage) (bool, error) {
+		return true, nil
+	}
+
+	require.NoError(t, connector.SendResponse(t.Context(), newDeferredTurn("", "")))
+
+	mention := newSlackAppMentionEvent()
+	mention.TimeStamp, mention.ThreadTimeStamp = "111.333", "111.222"
+	connector.handleAppMentionEvent(t.Context(), mention, slackNativeForward{})
+	connector.pollSession("turn-1", connector.sessions["turn-1"])
+
+	progress.Worked = true
+
+	require.NoError(t, connector.SendResponse(t.Context(), newDeferredTurn(protocol.TerminalComplete, "")))
+
+	assert.Equal(t, []string{"processing C123 111.222"}, calls.statuses, "the end of a turn that only called slack_no_reply leaves the waiting mention's status, whatever its progress reads once its steps are cleared")
 }
 
 func TestResumedMentionTurnSetsProcessingAgain(t *testing.T) {

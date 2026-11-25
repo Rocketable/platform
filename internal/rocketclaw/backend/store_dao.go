@@ -1428,13 +1428,26 @@ func (s *SessionService) TurnProgress(ctx context.Context, turnID string) (proto
 	rowID, _, _ := strings.Cut(turnID, "/")
 
 	err := s.db.QueryRowContext(ctx, `WITH turn AS (
-    SELECT conversation_id, phase NOT IN ('waiting', 'done') AS running, COALESCE(output_trace_json::text, '[]') AS trace FROM turns WHERE id = $1
+    SELECT conversation_id, phase NOT IN ('waiting', 'done') AS running, phase = 'running' AS working, COALESCE(NULLIF(output_trace_json::jsonb, 'null'), '[]') AS trace
+    FROM turns WHERE id = $1
 ), questions AS (
     SELECT count(*) AS waiting FROM turn t JOIN steps q ON q.conversation_id = t.conversation_id
     LEFT JOIN steps a ON a.conversation_id = q.conversation_id AND a.key = left(q.key, -length('`+webQuestionStep+`')) || '/answer'
     WHERE q.key LIKE '%`+webQuestionStep+`' AND a.key IS NULL
+), operations AS (
+    SELECT s.value::jsonb AS op FROM turn t JOIN steps s ON s.conversation_id = t.conversation_id AND starts_with(s.key, $1 || '/code_mode/')
+), quiet AS (
+    SELECT DISTINCT op->>'parent_call_id' AS call_id FROM operations WHERE op->>'name' = $2
+), finished AS (
+    SELECT p->'progress'->>'id' AS call_id FROM turn t CROSS JOIN jsonb_array_elements(t.trace) p
+    WHERE p->>'type' = 'rocketcode_public_progress' AND p->'progress'->>'kind' IN ('tool', 'delegation') AND p->'progress'->>'state' NOT IN ('working', 'review')
+), work AS (
+    SELECT f.call_id FROM finished f LEFT JOIN quiet q USING (call_id) WHERE q.call_id IS NULL
+    UNION ALL SELECT op->>'parent_call_id' FROM operations WHERE op->>'type' = 'rocketcode_code_mode_call' AND op->>'name' <> $2 AND op->>'status' <> 'running'
+), worked AS (
+    SELECT count(*) > 0 AS found FROM work
 )
-SELECT t.conversation_id, t.running, q.waiting > 0, t.trace FROM turn t CROSS JOIN questions q`, rowID).Scan(&conversationID, &progress.Running, &progress.Asking, &raw)
+SELECT t.conversation_id, t.running, q.waiting > 0, t.trace, t.working AND w.found FROM turn t CROSS JOIN questions q CROSS JOIN worked w`, rowID, harness.NoReplyToolName).Scan(&conversationID, &progress.Running, &progress.Asking, &raw, &progress.Worked)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && !progress.Running {
 		return protocol.TurnProgress{}, nil
 	}

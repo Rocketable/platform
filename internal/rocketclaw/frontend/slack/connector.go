@@ -320,8 +320,8 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 	}
 
 	if !msg.Complete {
-		if channelID, threadTS := slackStatusThread(msg.SlackReply); !msg.Deferred && c.sessions[msg.TurnID] == nil && threadTS != "" && c.mentionThread(ctx, msg) {
-			c.startSession(ctx, msg.ConversationID, msg.TurnID, channelID, threadTS)
+		if channelID, threadTS := slackStatusThread(msg.SlackReply); c.sessions[msg.TurnID] == nil && threadTS != "" && c.mentionThread(ctx, msg) {
+			c.startSession(ctx, msg, channelID, threadTS)
 		}
 
 		return nil
@@ -334,6 +334,8 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 	}()
 
 	if msg.PostsNothing() {
+		c.finishResponse(ctx, msg, msg.TurnID != "")
+
 		return nil
 	}
 
@@ -361,7 +363,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 		c.log.Warn("upload Slack response attachments", "error_type", fmt.Sprintf("%T", err))
 	}
 
-	settle := len(footer) > 0 && !msg.Deferred
+	settle := len(footer) > 0
 
 	if msg.TurnID == "" && msg.Text == "" {
 		settle = false
@@ -382,7 +384,7 @@ func (c *Connector) AbortResponse(msg *protocol.OutboundMessage) {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	c.finishResponse(cleanupCtx, msg, !msg.Deferred && c.mentionThread(cleanupCtx, msg))
+	c.finishResponse(cleanupCtx, msg, c.mentionThread(cleanupCtx, msg))
 }
 
 func (c *Connector) RenameThreadSession(ctx context.Context, conversationID, name string) {
@@ -481,13 +483,15 @@ func (c *Connector) mentionFooter(ctx context.Context, msg *protocol.OutboundMes
 	return c.slackFooter(msg.Agent, state, msg.ConversationID)
 }
 
-func (c *Connector) startSession(ctx context.Context, conversationID, turnID, channelID, threadTS string) {
-	session := &slackSession{conversationID: conversationID, channelID: channelID, threadTS: threadTS, processingSince: time.Now()}
+func (c *Connector) startSession(ctx context.Context, msg *protocol.OutboundMessage, channelID, threadTS string) {
+	session := &slackSession{conversationID: msg.ConversationID, channelID: channelID, threadTS: threadTS}
 
-	c.sendStatus(ctx, session, slack.AgentSessionStatusProcessing)
+	if !msg.Deferred {
+		c.sendStatus(ctx, session, slack.AgentSessionStatusProcessing)
+	}
 
-	session.poll = time.AfterFunc(c.sessionPoll, func() { c.pollSession(turnID, session) })
-	c.sessions[turnID] = session
+	session.poll = time.AfterFunc(c.sessionPoll, func() { c.pollSession(msg.TurnID, session) })
+	c.sessions[msg.TurnID] = session
 }
 
 func (c *Connector) pollSession(turnID string, session *slackSession) {
@@ -507,11 +511,14 @@ func (c *Connector) pollSession(turnID string, session *slackSession) {
 	case err != nil:
 		c.log.Warn("read turn progress for Slack", "conversation_id", session.conversationID, "turn_id", turnID, "error", err)
 	case !progress.Running:
-		c.endSession(ctx, turnID, "")
-		c.sendStatus(ctx, session, slack.AgentSessionStatusActive)
+		c.endSession(ctx, turnID, "", false)
+
+		if session.status != "" {
+			c.sendStatus(ctx, session, slack.AgentSessionStatusActive)
+		}
 
 		return
-	default:
+	case session.status != "" || progress.Worked:
 		status := slack.AgentSessionStatusProcessing
 		if progress.Asking {
 			status = slack.AgentSessionStatusSuspended
@@ -527,7 +534,7 @@ func (c *Connector) pollSession(turnID string, session *slackSession) {
 	session.poll.Reset(c.sessionPoll)
 }
 
-func (c *Connector) endSession(ctx context.Context, turnID string, terminal protocol.Terminal) {
+func (c *Connector) endSession(ctx context.Context, turnID string, terminal protocol.Terminal, postsNothing bool) {
 	session := c.sessions[turnID]
 	if session == nil {
 		return
@@ -535,6 +542,14 @@ func (c *Connector) endSession(ctx context.Context, turnID string, terminal prot
 
 	delete(c.sessions, turnID)
 	session.poll.Stop()
+
+	if postsNothing && session.checklistTS != "" {
+		if _, _, err := c.api.DeleteMessageContext(ctx, session.channelID, session.checklistTS); err != nil {
+			c.log.Warn("delete Slack turn checklist", "conversation_id", session.conversationID, "error", err)
+		}
+
+		return
+	}
 
 	end := protocol.TurnStepFailed
 	if terminal == protocol.TerminalComplete {
@@ -583,6 +598,11 @@ func (c *Connector) showChecklist(ctx context.Context, session *slackSession, st
 
 func (c *Connector) sendStatus(ctx context.Context, session *slackSession, status string) {
 	c.setSessionStatus(ctx, &slack.AgentSessionSetStatusParameters{Status: status, ChannelID: session.channelID, ThreadTS: session.threadTS})
+
+	if session.status == "" {
+		session.processingSince = time.Now()
+	}
+
 	session.status, session.sent = status, time.Now()
 }
 
@@ -603,7 +623,7 @@ func (c *Connector) settleSession(ctx context.Context, channelID, threadTS strin
 
 func (c *Connector) sessionTurn(channelID, threadTS string) (string, *slackSession) {
 	for id, session := range c.sessions {
-		if session.channelID == channelID && session.threadTS == threadTS {
+		if session.status != "" && session.channelID == channelID && session.threadTS == threadTS {
 			return id, session
 		}
 	}
@@ -881,9 +901,9 @@ func (c *Connector) sendTitledResponse(ctx context.Context, msg *protocol.Outbou
 }
 
 func (c *Connector) finishResponse(ctx context.Context, msg *protocol.OutboundMessage, mention bool) {
-	c.endSession(ctx, msg.TurnID, cmp.Or(msg.Terminal, protocol.TerminalComplete))
+	c.endSession(ctx, msg.TurnID, cmp.Or(msg.Terminal, protocol.TerminalComplete), msg.PostsNothing())
 
-	if channelID, threadTS := slackStatusThread(msg.SlackReply); mention && threadTS != "" {
+	if channelID, threadTS := slackStatusThread(msg.SlackReply); mention && (msg.Worked || !msg.Deferred) && threadTS != "" {
 		c.setSessionStatus(ctx, &slack.AgentSessionSetStatusParameters{Status: slack.AgentSessionStatusActive, ChannelID: channelID, ThreadTS: threadTS})
 	}
 }
