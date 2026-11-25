@@ -57,4 +57,9 @@ test:
 	go -C .. test ./frontend/rpc -run 'Test(PublicProgressRealBrowser|RevertRealBackendBrowser|ShadowsRealBackendBrowser|SessionEntries|SidebarHTTPStreamsBeforeGoTailAndCancels|PagesRealBrowser|ReloadRealBackendBrowser|RemoteRocketClawRealBrowser|AgentEditor(EditingAndSaving|PreviewAndChat)RealBackendBrowser)$$' -count=1
 	$(MAKE) check-cloc-budget
 
-.PHONY: cloc check-cloc-budget lint test
+test-files:
+	@test -n "$(TESTS)" || { echo 'name the files: make test-files TESTS="src/tabs.browser.test.ts"' >&2; exit 1; }
+	go -C .. generate ./internal/web
+	printf '%s\n' $(TESTS) | xargs -n 1 -P 4 bun test
+
+.PHONY: cloc check-cloc-budget lint test test-files
