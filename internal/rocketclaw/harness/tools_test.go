@@ -105,7 +105,7 @@ func TestBashPermissionsCheckWholeScript(t *testing.T) {
 	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, filepath.Join(root.Name(), ".tmp")), nil, &sandbox.Runtime{}, InertTurnSecrets{})
 	tool := tools["bash"]
 
-	loop := &looper{Journal: InertJournal{}, Permissions: parsePermissionYAML(t, `bash: {"scripts/cmd *": allow}`), Tools: tools, observations: &turnObservations{journal: InertJournal{}}}
+	loop := &looper{turnSecrets: InertTurnSecrets{}, Journal: InertJournal{}, Permissions: parsePermissionYAML(t, `bash: {"scripts/cmd *": allow}`), Tools: tools, observations: &turnObservations{journal: InertJournal{}}}
 	for _, tt := range []struct {
 		command string
 		denied  bool

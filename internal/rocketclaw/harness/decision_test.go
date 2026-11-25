@@ -341,7 +341,7 @@ func TestExecuteDecisionReturnsADict(t *testing.T) {
 	run := func(permissions PermissionSet) (ToolResult, error) {
 		factory := &toolFactory{baseTools: baseTools}
 		model, hosts := factory.assembleTools(&Agent{Permission: permissions})
-		looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+		looper := &looper{turnSecrets: InertTurnSecrets{}, Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 		ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})
 
 		raw, err := json.Marshal(struct {
@@ -439,7 +439,7 @@ func TestExecuteDecisionTakesImageFileObjects(t *testing.T) {
 
 			baseTools["decision"] = decision
 			model, hosts := (&toolFactory{baseTools: baseTools}).assembleTools(&Agent{Permission: permissions})
-			looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+			looper := &looper{turnSecrets: InertTurnSecrets{}, Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 			ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})
 
 			host, _ := codeModeHostToolsFromContext(ctx)

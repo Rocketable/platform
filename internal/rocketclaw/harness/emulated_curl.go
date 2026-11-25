@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-func curl(ctx context.Context, log *slog.Logger, client *http.Client, folder string, args []string, cwd string, stdout, stderr io.Writer) int {
+func curl(ctx context.Context, log *slog.Logger, secrets TurnSecrets, client *http.Client, folder string, args []string, cwd string, stdout, stderr io.Writer) int {
 	c, msg := parseCurlArgs(args)
 	if msg != "" {
 		_, _ = fmt.Fprintf(stderr, "curl: %s (this curl fetches through webfetch and takes -s -S -f -L -o)\n", msg)
@@ -59,7 +59,7 @@ func curl(ctx context.Context, log *slog.Logger, client *http.Client, folder str
 	if n, _ := resp.Body.Read(make([]byte, 1)); n > 0 {
 		fetched := *resp.Request.URL
 		fetched.User, fetched.RawQuery, fetched.ForceQuery, fetched.Fragment, fetched.RawFragment = nil, "", false, "", ""
-		log.Warn("emulated shell limit reached", "limit", "curl_response", "limit_bytes", maxCurlBytes, "content_length", resp.ContentLength, "url", fetched.String(), "to_file", c.output != "")
+		log.Warn("emulated shell limit reached", "limit", "curl_response", "limit_bytes", maxCurlBytes, "content_length", resp.ContentLength, "url", secrets.Redact(fetched.String()), "to_file", c.output != "")
 
 		return failed(63, fmt.Errorf("response exceeds %d MiB", maxCurlBytes>>20))
 	}

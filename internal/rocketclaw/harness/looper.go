@@ -166,6 +166,7 @@ type looper struct {
 	InPermissionReview bool
 	Observability      ObservabilityConfig
 	Journal            Journal
+	turnSecrets        TurnSecrets
 	observations       *turnObservations
 	SteerDrain         SteerDrain
 	promptExpansion    promptExpansionEnvironment
@@ -1857,14 +1858,20 @@ func (l *looper) dispatchToolCalls(
 			}
 
 			if err != nil {
+				result = ToolCallResult(call.name, ToolResult{}, err)
+
+				if text := l.turnSecrets.Redact(err.Error()); text != err.Error() {
+					err = errors.New(text)
+				}
+
 				recordSpanError(span, err)
 
 				if runCtx.Err() != nil {
 					return fmt.Errorf("run tool %q: %w", call.name, err)
 				}
-
-				result = ToolCallResult(call.name, ToolResult{}, err)
 			}
+
+			result.Output = l.turnSecrets.Redact(result.Output)
 
 			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", err != nil))
 

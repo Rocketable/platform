@@ -59,7 +59,7 @@ func TestExecuteReturnsTypedMCPResults(t *testing.T) {
 	execute := func() string {
 		t.Helper()
 
-		looper := &looper{Journal: journal, observations: &turnObservations{journal: journal, turnID: "turn-1"}, Permissions: permissions}
+		looper := &looper{turnSecrets: InertTurnSecrets{}, Journal: journal, observations: &turnObservations{journal: journal, turnID: "turn-1"}, Permissions: permissions}
 		ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, callID: "call-1"})
 
 		raw, err := json.Marshal(map[string]string{"code": `def main():

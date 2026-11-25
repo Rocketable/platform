@@ -209,6 +209,7 @@ func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, err
 		InPermissionReview: f.inPermissionReview,
 		Observability:      f.observability,
 		Journal:            InertJournal{},
+		turnSecrets:        f.shellSystem.turnSecrets,
 		SteerDrain:         InertSteerDrain{},
 		promptExpansion:    f.promptExpansion,
 		spillRel:           f.spillRel,

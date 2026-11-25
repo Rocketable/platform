@@ -408,7 +408,7 @@ func TestWebFetchReplaysFromJournal(t *testing.T) {
 
 	journal := recordingJournal()
 	observations := &turnObservations{journal: journal, turnID: "turn-1"}
-	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: &looper{Journal: journal, observations: observations, Permissions: permissions}, observations: observations, output: nil, callID: "call-1"})
+	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: &looper{turnSecrets: InertTurnSecrets{}, Journal: journal, observations: observations, Permissions: permissions}, observations: observations, output: nil, callID: "call-1"})
 	tool := webFetchTool(http.DefaultClient)
 
 	for path, want := range map[string]string{"/page": "", "/gone": "HTTP 410"} {

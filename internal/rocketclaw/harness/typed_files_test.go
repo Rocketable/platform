@@ -66,7 +66,7 @@ func runTypedScript(t *testing.T, files fileSystem, code string) string {
 	permissions := parsePermissionYAML(t, "read: allow\nedit: allow\nglob: allow\ngrep: allow")
 	factory := &toolFactory{baseTools: makeSandboxedTools(files, nil)}
 	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
-	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+	looper := &looper{turnSecrets: InertTurnSecrets{}, Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations})
 
 	raw, err := json.Marshal(executeParams{Code: code})
@@ -572,7 +572,7 @@ func TestExecuteReplaysTypedResults(t *testing.T) {
 		t.Helper()
 
 		model, hosts := (&toolFactory{baseTools: makeSandboxedTools(sfs, nil)}).assembleTools(&Agent{Permission: permissions})
-		looper := &looper{Journal: journal, observations: observations, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+		looper := &looper{turnSecrets: InertTurnSecrets{}, Journal: journal, observations: observations, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 		ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, callID: "call-1"})
 
 		raw, err := json.Marshal(executeParams{Code: code})

@@ -23,7 +23,7 @@ const (
 	emulatedHome             = "/tmp"
 )
 
-func runEmulated(ctx context.Context, rt *sandbox.Runtime, shell *CustomShell, command, stdin, cwd string, turnEnv, hostEnv, secretEnv []string, timeout time.Duration) (sandbox.Result, error) {
+func runEmulated(ctx context.Context, rt *sandbox.Runtime, shell *CustomShell, command, stdin, cwd string, turnEnv, hostEnv []string, secrets TurnSecrets, timeout time.Duration) (sandbox.Result, error) {
 	if shell.Dir == "" {
 		return sandbox.Result{}, errors.New("emulated shell: the agent's folder is not set up for this turn")
 	}
@@ -33,9 +33,10 @@ func runEmulated(ctx context.Context, rt *sandbox.Runtime, shell *CustomShell, c
 		return sandbox.Result{}, fmt.Errorf("emulated shell: workdir %s is outside this agent's folders", cwd)
 	}
 
+	secretEnv := secrets.Env()
 	env := append(slices.Concat(turnEnv, secretEnv), "PATH=/extensions:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOME="+emulatedHome, "TMPDIR="+emulatedHome, "LANG=C.UTF-8", "TZ=UTC")
-	host := &emulatedHost{shell: shell, env: slices.Clone(hostEnv), client: easyWebFetchClient(shell.NetworkTargets)}
+	host := &emulatedHost{shell: shell, env: slices.Clone(hostEnv), secrets: secrets, client: easyWebFetchClient(shell.NetworkTargets)}
 
 	for k, v := range shell.Secrets {
 		host.env = append(host.env, k+"="+v)
@@ -88,14 +89,15 @@ func emulatedBashResult(res sandbox.Result, err error) BashResult {
 }
 
 type emulatedHost struct {
-	shell  *CustomShell
-	env    []string
-	client *http.Client
+	shell   *CustomShell
+	env     []string
+	secrets TurnSecrets
+	client  *http.Client
 }
 
 func (h *emulatedHost) Command(ctx context.Context, log *slog.Logger, name string, args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if name == sandbox.Curl {
-		return curl(ctx, log, h.client, h.shell.Dir, args, cwd, stdout, stderr)
+		return curl(ctx, log, h.secrets, h.client, h.shell.Dir, args, cwd, stdout, stderr)
 	}
 
 	cmd := exec.CommandContext(ctx, "/bin/bash", append([]string{"--noprofile", "--norc", "-c", h.shell.Commands[name] + ` "$@"`, name}, args...)...)

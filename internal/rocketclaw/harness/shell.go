@@ -174,10 +174,9 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 
 	env := append(os.Environ(), sss.env...)
 	env = append(env, "TMPDIR="+sss.shellTemp.tmpDir)
-	secretEnv := sss.turnSecrets.Env()
 
 	if customShell.Emulated {
-		return emulatedBashResult(runEmulated(ctx, sss.sandbox, customShell, params.Command, params.Stdin.text, hostDir, sss.env, env, secretEnv, timeout))
+		return emulatedBashResult(runEmulated(ctx, sss.sandbox, customShell, params.Command, params.Stdin.text, hostDir, sss.env, env, sss.turnSecrets, timeout))
 	}
 
 	commandCtx, cancel := context.WithTimeout(ctx, timeout+shellTimeoutGrace)
@@ -185,7 +184,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 
 	timedOut := false
 
-	env = slices.Concat(env, customShell.Env, secretEnv)
+	env = slices.Concat(env, customShell.Env, sss.turnSecrets.Env())
 	shell, args := withCustomShell(customShell, params.Command)
 	cmd := exec.CommandContext(commandCtx, shell, args...)
 	cmd.Dir, cmd.Env = hostDir, env

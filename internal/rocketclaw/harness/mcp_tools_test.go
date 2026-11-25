@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"net"
 	"net/http"
@@ -253,7 +254,7 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 
 	output := make(chan ChatResponse, 8)
 	observations := &turnObservations{journal: InertJournal{}}
-	looper := &looper{Journal: InertJournal{}, observations: observations, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+	looper := &looper{turnSecrets: InertTurnSecrets{}, Journal: InertJournal{}, observations: observations, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: output, callID: "exec-1"})
 	run := model[executeToolName]
 	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return ask_user_question(question=\"ship it?\")\n"}`), output, emptyToolCallMetadata())
@@ -293,6 +294,7 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 
 	looper := &looper{
 		Journal:       InertJournal{},
+		turnSecrets:   InertTurnSecrets{},
 		observations:  &turnObservations{journal: InertJournal{}},
 		Permissions:   permissions,
 		Tools:         model,
@@ -343,7 +345,7 @@ func TestCodeModeHostsSurviveModelWithoutHosts(t *testing.T) {
 	agent := &Agent{Permission: permissions}
 	model, hosts := factory.assembleTools(agent)
 
-	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+	looper := &looper{turnSecrets: InertTurnSecrets{}, Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})
 
 	run := model[executeToolName]
@@ -395,7 +397,7 @@ func TestExecuteBashOutputSurvivesContainers(t *testing.T) {
 
 	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, sss)}
 	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
-	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+	looper := &looper{turnSecrets: InertTurnSecrets{}, Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})
 
 	for _, test := range []struct{ name, expression, want string }{
@@ -718,6 +720,7 @@ func TestExecuteSearchAndRun(t *testing.T) {
 
 	looper := &looper{
 		Journal:      InertJournal{},
+		turnSecrets:  InertTurnSecrets{},
 		observations: &turnObservations{journal: InertJournal{}},
 		Permissions:  permissions,
 	}
@@ -804,6 +807,75 @@ func TestExecuteSendsShellEnvToMCPServers(t *testing.T) {
 	result, err := loop.Tools[executeToolName].Call(ctx, json.RawMessage(`{"code":"def main():\n    return demo_whoami()\n"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
 	assert.Equal(t, "123", result.Output)
+}
+
+func TestExecuteHidesTurnSecretsFromScriptsJournalAndSpill(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	const value = "ghp-turn-value"
+
+	secrets := NewTurnSecretStore()
+	require.NoError(t, secrets.Save("GITHUB_TOKEN", []byte(value)))
+
+	journal := recordingJournal()
+	config := testWorkspaceConfig(t, dir)
+	config.TurnSecrets, config.Journal = secrets, journal
+	config.CustomTools = []Tool{{Name: "push", Permission: "push", VisibilitySubjects: []string{"push"}, Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+		return ToolResult{}, errors.New("push rejected " + value)
+	}}}
+
+	code, err := json.Marshal(executeParams{Code: `def main():
+    r = bash(command=r'''printf '%s' "$GITHUB_TOKEN"''')
+    return r.output + "\n" + push().error + "\n" + "line\n" * 2100
+`})
+	require.NoError(t, err)
+
+	var (
+		mock    *mockResponsesAPI
+		spilled []string
+	)
+
+	mock = mockResponseFunc(func(context.Context, *responses.ResponseNewParams) (*responses.Response, error) {
+		if len(newParams(mock)) == 1 {
+			return responseWithFunctionCalls("run", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, string(code))}), nil
+		}
+
+		return responseWithMessage("final", "done"), fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+
+			data, err := root.ReadFile(name)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", name, err)
+			}
+
+			spilled = append(spilled, string(data))
+
+			return nil
+		})
+	})
+	loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), config, root, Agents{Items: map[string]Agent{
+		"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, "bash: allow\npush: allow")},
+	}}, Skills{Items: map[string]Skill{}}, "main")
+	require.NoError(t, err)
+
+	_, err = loop.runPrompt(t.Context(), "turn-1", []string{"print it"}, emptySession(), discardSession())
+	require.NoError(t, err)
+
+	step, ok, err := journal.Load(t.Context(), "turn-1/call/call/host/0")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Contains(t, string(step), `"output":"[secret:GITHUB_TOKEN]"`)
+
+	records := journal.SaveCodeModeCallCalls()
+	require.Contains(t, marshalJSON(t, records), `"status":"ok","summary":"[secret:GITHUB_TOKEN]"`)
+	require.Contains(t, marshalJSON(t, records), `"name":"push","arguments":"{}","status":"error","summary":"push rejected [secret:GITHUB_TOKEN]"`)
+	require.Contains(t, spilled, "[secret:GITHUB_TOKEN]\npush: push rejected [secret:GITHUB_TOKEN]\n"+strings.Repeat("line\n", 2100), "the script got the placeholder, and the result it spilled during the turn keeps it")
+	require.NotContains(t, marshalJSON(t, []any{journal.SaveCalls(), journal.SaveTurnCalls(), records, journal.SaveTraceCalls(), newParams(mock), spilled}), value)
 }
 
 func TestCodeModeSearchOpenCodeShape(t *testing.T) {
@@ -949,7 +1021,7 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 		t.Helper()
 
 		model, _ := (&toolFactory{baseTools: makeSandboxedTools(sfs, nil)}).assembleTools(&Agent{Permission: permissions})
-		looper := &looper{Journal: journal, observations: observations, Permissions: permissions, Tools: model, CodeModeHosts: map[string]looperTool{"note": host("note"), "other": host("other"), "drain": drain}}
+		looper := &looper{turnSecrets: InertTurnSecrets{}, Journal: journal, observations: observations, Permissions: permissions, Tools: model, CodeModeHosts: map[string]looperTool{"note": host("note"), "other": host("other"), "drain": drain}}
 		ctx := context.WithValue(base, toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: "call-1"})
 
 		raw, err := json.Marshal(map[string]string{"code": code})
@@ -1272,7 +1344,7 @@ func TestHostToolsReportACancelledContextAsAnError(t *testing.T) {
 	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell-tmp"))
 	factory := &toolFactory{baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}, InertTurnSecrets{}))}
 	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
-	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+	looper := &looper{turnSecrets: InertTurnSecrets{}, Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 	ctx, cancel := context.WithCancel(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations}))
 	cancel()
 

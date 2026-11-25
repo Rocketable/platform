@@ -852,6 +852,19 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 		errRun = fmt.Errorf("%s stopped: %w", name, context.Cause(runCtx))
 	}
 
+	if output := tc.looper.turnSecrets.Redact(result.Output); output != result.Output {
+		bash, ok := result.Data.(BashResult)
+		result.Output, result.Data, bash.Output = output, nil, output
+
+		if ok {
+			result.Data = bash
+		}
+	}
+
+	if errRun != nil && tc.looper.turnSecrets.Redact(errRun.Error()) != errRun.Error() {
+		errRun = errors.New(tc.looper.turnSecrets.Redact(errRun.Error()))
+	}
+
 	if errRun != nil && runCtx.Err() != nil {
 		return result, errors.Join(errRun, tc.observations.recordCodeModeCall(ctx, record.cancel(), false))
 	}

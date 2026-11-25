@@ -125,7 +125,7 @@ func (e *emulated) bash(t *testing.T, command string) BashResult {
 func (e *emulated) sandboxed(t *testing.T, command string) BashResult {
 	t.Helper()
 
-	return emulatedBashResult(runEmulated(t.Context(), e.sss.sandbox, &e.shell, command, "", e.shell.Dir, e.sss.env, append(os.Environ(), e.sss.env...), e.sss.turnSecrets.Env(), defaultShellTimeout*time.Millisecond))
+	return emulatedBashResult(runEmulated(t.Context(), e.sss.sandbox, &e.shell, command, "", e.shell.Dir, e.sss.env, append(os.Environ(), e.sss.env...), e.sss.turnSecrets, defaultShellTimeout*time.Millisecond))
 }
 
 func (e *emulated) ok(t *testing.T, command, want string) {

@@ -27,6 +27,8 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -370,6 +372,7 @@ func testLooper(client responsesAPI) *looper {
 	l.Client = client
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.Journal = InertJournal{}
+	l.turnSecrets = InertTurnSecrets{}
 	l.SteerDrain = InertSteerDrain{}
 	l.observations = &turnObservations{journal: l.Journal}
 
@@ -383,6 +386,7 @@ func emptyTestLooper() *looper {
 	l.CompactThreshold = defaultCompactThreshold
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.Journal = InertJournal{}
+	l.turnSecrets = InertTurnSecrets{}
 	l.SteerDrain = InertSteerDrain{}
 	l.observations = &turnObservations{journal: l.Journal}
 
@@ -1830,6 +1834,57 @@ func TestLooperJournalsCompletedToolOutputBeforeContinuation(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok, "the call's own result is journaled independently of the turn")
 	require.Contains(t, string(raw), "first-result")
+}
+
+func TestLooperHidesTurnSecretsInToolResultsAndErrors(t *testing.T) {
+	const value = "ghp-turn-value"
+
+	secrets := NewTurnSecretStore()
+	require.NoError(t, secrets.Save("GITHUB_TOKEN", []byte(value)))
+
+	recorder := tracetest.NewSpanRecorder()
+	sink := recordingJournal()
+	mock := mockResponses(
+		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{
+			testFunctionCall("tool-1", "call-1", "printed", `{}`),
+			testFunctionCall("tool-2", "call-2", "failed", `{}`),
+		}),
+		responseWithMessage("resp-final", "done"),
+	)
+	looper := testLooper(mock)
+	looper.Journal, looper.turnSecrets = sink, secrets
+	looper.Observability = ObservabilityConfig{Enabled: true, Tracer: sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder)).Tracer("test")}
+	looper.Permissions = parsePermissionYAML(t, "printed: allow\nfailed: allow")
+	printed, failed := testLooperTool("printed"), testLooperTool("failed")
+	printed.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return TextToolResult("token " + value), nil
+	}
+	failed.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return ToolResult{}, errors.New("push rejected " + value)
+	}
+	looper.Tools = map[string]looperTool{"printed": printed, "failed": failed}
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "run tools", output)
+
+	close(input)
+
+	require.NoError(t, looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1)))
+
+	sent := marshalJSON(t, newParams(mock)[1].Input)
+	require.Contains(t, sent, "token [secret:GITHUB_TOKEN]")
+	require.Contains(t, sent, "push rejected [secret:GITHUB_TOKEN]")
+
+	spans := recorder.Ended()
+	statuses := make([]string, 0, 2*len(spans))
+
+	for _, span := range spans {
+		statuses = append(statuses, span.Status().Description, fmt.Sprint(span.Events()))
+	}
+
+	require.Contains(t, statuses, "push rejected [secret:GITHUB_TOKEN]")
+	require.NotContains(t, marshalJSON(t, []any{sent, sink.SaveCalls(), sink.SaveTurnCalls(), statuses}), value)
 }
 
 func TestLooperClosesObservationsAfterCompletedSessionEntry(t *testing.T) {
