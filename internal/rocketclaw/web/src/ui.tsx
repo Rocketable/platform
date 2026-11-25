@@ -16,9 +16,9 @@ import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCErro
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceInputsPending, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PageEntry, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding, TreeNode } from "./types";
-import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Timer, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Timer, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
-import { createContext, Fragment, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
+import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { flushSync } from "react-dom";
@@ -44,7 +44,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
-import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, StripLayout, TabAttention, TranscriptEvent, VoiceSettings } from "@/types";
+import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, ListTab, TabListName, Remote, Session, SavedTabs, SearchPage as SearchPageState, StripLayout, TabAttention, TranscriptEvent, VoiceSettings } from "@/types";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import { AgentEditorPage, BuiltInNote, editAgent } from "@/agent-editor";
 import type { MountOptions, Mounted } from "../../oc/host/api";
@@ -1110,7 +1110,7 @@ function loadTabs(path: string, owner?: string, saved?: SavedTabs, shared: Saved
 
 const savedState = (state: TabState): SavedTabs["state"] => {
   const tabs = state.tabs.flatMap(({ path, preview, group, space, search }) => preview ? [] : [{ path, group, space, search }]);
-  return { tabs, groups: state.groups.filter((group) => group.id === "parked" || tabs.some((tab) => tab.group === group.id)), space: state.space, last: state.last, sharedOrder: state.sharedOrder };
+  return { tabs, groups: state.groups.filter((group) => tabs.some((tab) => tab.group === group.id)), space: state.space, last: state.last, sharedOrder: state.sharedOrder };
 };
 
 type ClosedTab = NonNullable<SavedTabs["closed"]>[number];
@@ -1118,8 +1118,17 @@ const noShared: SavedTabs["shared"] = [], noClosed: ClosedTab[] = [], noLayout: 
 
 // This person's strip layout, kept by the local server, from the saved tabs its view or its session list fetches.
 function useLayout(): [StripLayout, (change: (layout: StripLayout) => StripLayout) => void] {
-  const owner = useQuery(queries.identity("")).data?.username, saved = useQuery({ ...queries.tabs(owner ?? "", ""), enabled: false }).data;
-  return [saved?.layout ?? noLayout, saveLayout];
+  return [useLocalTabs()?.layout ?? noLayout, saveLayout];
+}
+
+function useLocalTabs() {
+  const owner = useQuery(queries.identity("")).data?.username;
+  return useQuery({ ...queries.tabs(owner ?? "", ""), enabled: false }).data;
+}
+
+function localTabsKey() {
+  const owner = queryClient.getQueryData<{ username: string }>(queries.identity("").queryKey)?.username;
+  return { owner, queryKey: queries.tabs(owner ?? "", "").queryKey };
 }
 
 // A layout change saves the whole layout to the local server, one save at a time in order, and the cache takes it at
@@ -1127,7 +1136,7 @@ function useLayout(): [StripLayout, (change: (layout: StripLayout) => StripLayou
 // answer then replaces the cache. Before the layout arrives nothing is saved, which would replace it.
 let laying: { latest?: StripLayout; saves: Promise<unknown> } = { saves: Promise.resolve() };
 function saveLayout(change: (layout: StripLayout) => StripLayout) {
-  const owner = queryClient.getQueryData<{ username: string }>(queries.identity("").queryKey)?.username, { queryKey } = queries.tabs(owner ?? "", "");
+  const { owner, queryKey } = localTabsKey();
   const saved = queryClient.getQueryData<SavedTabs>(queryKey);
   if (owner === undefined || !saved) return;
   const layout = laying.latest = change(laying.latest ?? saved.layout ?? noLayout);
@@ -1313,9 +1322,7 @@ function useTabs() {
   const update = (change: (tabs: Tab[]) => Tab[]) => setState((current) => ({ ...current, tabs: arrange(change(current.tabs)) }));
   const regroup = (match: (tab: Tab) => boolean, group?: string) => update((tabs) => tabs.map((tab) => match(tab) ? { ...tab, group } : tab));
   const edit = (id: string, change: Partial<TabGroup>) => setState((current) => ({ ...current, groups: current.groups.map((group) => group.id === id ? { ...group, ...change } : group) }));
-  // A space's card and menus show its tabs and groups, leaving out parked tabs, which show in Parked; shown leaves out
-  // groups' placeholders too, and the space's tabs, which bulk closes take, include parked ones.
-  const stripOf = (space: string) => state.tabs.filter((tab) => tab.space === space && !parked.has(tab.path));
+  const stripOf = (space: string) => state.tabs.filter((tab) => tab.space === space && (!parked.has(tab.path) || tab.path === pathname));
   const shownOf = (space: string) => stripOf(space).filter((tab) => !isKeeper(tab));
   const tabsOf = (space: string) => state.tabs.filter((tab) => tab.space === space && !isKeeper(tab));
   const groupsOf = (space: string) => state.groups.filter((group) => stripOf(space).some((tab) => tab.group === group.id));
@@ -1377,7 +1384,7 @@ function useTabs() {
     return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, false, reply.shared) }) : open(path, "", undefined, false, shared, search);
   };
   return {
-    name, viewed, state, sharedIn, stripOf, shownOf, shared, closed, pathname, close, enter, edit, editor, setEditor, settle, picking, setPicking, parked, setParked, open, newIn,
+    name, viewed, state, sharedIn, stripOf, shownOf, shared, closed, pathname, close, enter, edit, editor, setEditor, settle, picking, setPicking, parked, setParked, attend, open, newIn,
     deleted: (path: string) => close([path]),
     // Opening a tab, or a Shared row without a tab of its own, enters its space; another server's moves the page there.
     go: (path: string, space: string, inShared = false) => {
@@ -1403,8 +1410,6 @@ function useTabs() {
       const space = shared.find((tab) => tab.path === from)?.space ?? current.space;
       return { ...current, sharedOrder: [...new Set([...moveQueueId(sharedIn(space, current.sharedOrder), from, to), ...current.sharedOrder])].filter((path) => shared.some((tab) => tab.path === path)) };
     }),
-    // Collapsing Parked is this person's choice for every space, kept as the member-less group of that id.
-    fold: (id: "parked", collapsed: boolean) => setState((current) => ({ ...current, groups: [...current.groups.filter((group) => group.id !== id), { id, name: "", color: "Grey", collapsed }] })),
     // A rejected name keeps the old one.
     renameSpace: (id: string, name: string) => spaceChange.mutate({ renameSpace: { id, name } }),
     deleteSpace: async (doomed: string) => {
@@ -1467,6 +1472,7 @@ function useTabs() {
           const id = crypto.getRandomValues(new Uint32Array(2)).join("-");
           setState((current) => ({ ...current, groups: [...current.groups, { id, name: "", color: Object.keys(groupColors)[groupsOf(space).length % Object.keys(groupColors).length] }] }));
           update((tabs) => join(adopt(tabs).map((item) => paths.has(item.path) ? { ...item, group: id } : item), keeper(id), id, space));
+          setPreference(SIDEBAR_VIEW_KEY, "spaces");
           setEditor({ id, open: true });
         } },
         ...groupsOf(space).filter((group) => selected.some((item) => item.group !== group.id)).map((group) => ({ key: `group-${group.id}`, label: `Add to group "${groupName(group)}"`, sub: { menu: "Add to group", label: groupName(group) }, run: () => update((tabs) => selected.reduce((joined, item) => join(joined, item.path, group.id, space), adopt(tabs))) })),
@@ -1700,7 +1706,7 @@ function useInSpace() {
   return (item: { space?: string }) => !item.space || item.space.toLowerCase() === name;
 }
 
-const arrows: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }, sharedDrag = "application/x-rocketclaw-shared", parkedDrag = "application/x-rocketclaw-parked";
+const arrows: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }, sharedDrag = "application/x-rocketclaw-shared", listDrag = "application/x-rocketclaw-tab-list";
 type MenuAnchor = Element | { getBoundingClientRect: () => DOMRect };
 const popupClass = "min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none", itemClass = "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent";
 
@@ -1764,17 +1770,181 @@ function cardWork(name: string, paths: string[], rows: Session[], waiting: Set<s
   return { unread: new Set(paths.filter((path) => waiting.has(rowKey(path, name)))), asking: rows.some((row) => row.asking && all.has(rowPath(row))), running: rows.some((row) => row.running && !row.asking && all.has(rowPath(row))) };
 }
 
-// The strip lists the cards of every server, then Parked, which stays at the bottom with its own scroll. The page's
-// server's tabs are live; each other server's are its saved tabs, whose changes save there.
+const stripViews = [["recent", "Recent"], ["spaces", "Spaces"], ["parked", "Parked"]] as const, SIDEBAR_VIEW_KEY = "sidebar-view";
+
 function TabStrip({ tabs, newChat }: { tabs: TabStoreValue; newChat: () => void }) {
   const here = useServer(), names = ["", ...rocketclaws().map((remote) => remote.name)];
+  return <StoreChain names={names.filter((name) => name !== here)} stores={[tabs]} render={(stores) => <SidebarViews stores={stores.toSorted((a, b) => names.indexOf(a.name) - names.indexOf(b.name))} newChat={newChat} />} />;
+}
+
+function SidebarViews({ stores, newChat }: { stores: TabStoreValue[]; newChat: () => void }) {
+  const view = usePreference(SIDEBAR_VIEW_KEY) ?? "recent", { servers } = useContext(Sidebar), lists = useLists();
+  const unread = (server: string, path: string, parked = false) => { const mark = attentionOf(servers[server], path); return !!mark?.unreadAt && (parked || !mark.parked) && !servers[server]?.offline; };
+  const spaces = stores.flatMap((tabs) => [...new Set(tabs.state.spaces.flatMap((space) => [...tabs.sharedIn(space.id), ...tabs.shownOf(space.id).map((tab) => tab.path)]))].map((path) => ({ server: tabs.name, path })));
+  const counts = { recent: recentOf(stores, lists, servers).filter((tab) => unread(tab.server, tab.path)).length, spaces: spaces.filter((tab) => unread(tab.server, tab.path)).length, parked: parkedOf(stores).filter((tab) => unread(tab.server, tab.path, true)).length };
   return <div data-tab-lists className="flex h-full shrink-0 flex-col">
+    <div role="group" aria-label="Sidebar view" className="flex shrink-0 gap-0.5 border-b p-1">
+      {stripViews.map(([key, label]) => <button key={key} type="button" aria-pressed={view === key} onClick={() => setPreference(SIDEBAR_VIEW_KEY, key)}
+        className="flex min-w-0 flex-auto items-center justify-center gap-1 rounded-md px-1 py-1 text-xs font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring aria-pressed:bg-accent aria-pressed:text-foreground">
+        <span className="truncate">{label}</span>{counts[key] ? <span aria-hidden="true" className="min-w-4 rounded-full bg-muted px-1 text-[11px] text-muted-foreground">{counts[key]}</span> : null}
+      </button>)}
+    </div>
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-width:thin]">
-      <StoreChain names={names.filter((name) => name !== here)} stores={[tabs]} render={(stores) => <Cards stores={stores.toSorted((a, b) => names.indexOf(a.name) - names.indexOf(b.name))} newChat={newChat} />} />
+      {view === "spaces" ? <Cards stores={stores} newChat={newChat} /> : view === "parked" ? <ParkedTabs stores={stores} /> : <RecentTabs stores={stores} />}
+      <ParkedSync stores={stores} />
       <div className="min-h-4 flex-1" onDoubleClick={newChat} />
     </div>
-    <ParkedSection tabs={tabs} />
   </div>;
+}
+
+type ListChange = { listAdd?: ListTab; listForget?: ListTab; listOrder?: ListTab[] };
+const sameListed = (a: ListTab) => (b: ListTab) => a.list === b.list && a.server === b.server && a.path === b.path;
+const listOf = (lists: ListTab[] | undefined, list: TabListName) => (lists ?? []).filter((tab) => tab.list === list);
+const addListed = (tab: ListTab) => (old: ListTab[]) => old.some(sameListed(tab)) ? old : [tab, ...old];
+const forgetListed = (tab: ListTab) => (old: ListTab[]) => old.filter((item) => !sameListed(tab)(item));
+let listSaves: { latest?: ListChange; pending?: ListTab[]; saves: Promise<unknown> } = { saves: Promise.resolve() };
+const listListeners = new Set<() => void>();
+const showLists = (pending?: ListTab[]) => { listSaves.pending = pending; for (const listener of listListeners) listener(); };
+const savedLists = () => listSaves.pending ?? queryClient.getQueryData<SavedTabs>(localTabsKey().queryKey)?.lists;
+function saveList(change: ListChange, apply: (old: ListTab[]) => ListTab[]) {
+  const { owner, queryKey } = localTabsKey();
+  if (owner === undefined || !queryClient.getQueryData<SavedTabs>(queryKey)) return;
+  listSaves.latest = change;
+  showLists(apply(savedLists() ?? []));
+  listSaves.saves = listSaves.saves.then(() => mutations.tabs(change, "")).then((reply) => {
+    let done = false;
+    const settled = () => {
+      if (done || listSaves.latest !== change) return true;
+      if (queryClient.getQueryState(queryKey)?.fetchStatus === "fetching") return false;
+      done = true;
+      queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, lists: reply.lists }, { updatedAt: queryClient.getQueryState(queryKey)?.dataUpdatedAt });
+      showLists();
+      return true;
+    };
+    if (settled()) return;
+    const stop = queryClient.getQueryCache().subscribe(() => { if (settled()) stop(); });
+  }, () => {
+    listSaves = { saves: Promise.resolve() };
+    showLists();
+    void queryClient.invalidateQueries({ queryKey });
+  });
+}
+
+function useLists() {
+  const saved = useLocalTabs()?.lists;
+  const pending = useSyncExternalStore((listener) => { listListeners.add(listener); return () => void listListeners.delete(listener); }, () => listSaves.pending);
+  return pending ?? saved;
+}
+
+function useRecordVisit({ name, state }: TabStoreValue, browsing: boolean) {
+  const loaded = useLocalTabs() !== undefined;
+  const record = useEffectEvent(() => {
+    const path = state.active, tab = state.tabs.find((item) => item.path === path), visit: ListTab = { list: "recent", server: name, path, space: tab?.space ?? state.space };
+    if (state.owner === undefined || browsing || !path || path === "/" || tab?.preview || !document.hasFocus()) return;
+    if (!savedLists()?.some(sameListed(visit))) saveList({ listAdd: visit }, addListed(visit));
+  });
+  const returned = useEffectEvent(async () => {
+    await queryClient.refetchQueries({ queryKey: localTabsKey().queryKey });
+    record();
+  });
+  useEffect(() => record(), [state.active, state.owner, browsing, loaded]);
+  useEffect(() => {
+    const focused = () => void returned();
+    addEventListener("focus", focused);
+    return () => removeEventListener("focus", focused);
+  }, []);
+}
+
+const placeOf = (tabs: TabStoreValue, item: ListTab) => {
+  const own = tabs.state.tabs.find((tab) => tab.path === item.path);
+  return { own, space: own?.space ?? (isShared(tabs.shared, item.space, item.path) ? item.space : tabs.shared.find((tab) => tab.path === item.path)?.space ?? item.space) };
+};
+
+const recentOf = (stores: TabStoreValue[], lists: ListTab[] | undefined, servers: Record<string, ServerView>) => listOf(lists, "recent").filter((item) => {
+  const tabs = stores.find((store) => store.name === item.server), mark = attentionOf(servers[item.server], item.path);
+  const open = !!tabs && (tabs.state.tabs.some((tab) => tab.path === item.path && !tab.preview) || tabs.shared.some((tab) => tab.path === item.path));
+  return open && !(mark?.parked && !mark.untilDone);
+});
+
+function RecentTabs({ stores }: { stores: TabStoreValue[] }) {
+  const { servers } = useContext(Sidebar), lists = useLists(), recent = listOf(lists, "recent");
+  return <TabList stores={stores} list="recent" label="Recent tabs" items={recentOf(stores, lists, servers)} remove={(item) => saveList({ listForget: item }, forgetListed(item))}
+    removeLabel={(title) => `Remove ${title} from Recent`} empty={lists && !recent.length ? "Tabs you open show up here." : undefined} />;
+}
+
+const parkedOf = (stores: TabStoreValue[]) => stores.flatMap((tabs) => parkedRows(tabs.state.tabs, tabs.shared, tabs.parked).map((tab): ListTab => ({ list: "parked", server: tabs.name, path: tab.path, space: tab.space ?? "" })));
+
+function ParkedTabs({ stores }: { stores: TabStoreValue[] }) {
+  const parked = parkedOf(stores), lists = useLists(), listed = listOf(lists, "parked");
+  const items = [...parked.filter((tab) => !listed.some(sameListed(tab))), ...listed.flatMap((tab) => parked.find(sameListed(tab)) ?? [])];
+  if (!lists) return null;
+  if (!items.length) return <p className="px-3 py-2 text-sm text-muted-foreground">No parked tabs.</p>;
+  return <TabList stores={stores} list="parked" label="Parked tabs" items={items} remove={(item) => stores.find((store) => store.name === item.server)?.attend([item.path], "UNPARK")}
+    removeLabel={(title) => `Unpark ${title}`} />;
+}
+
+function ParkedSync({ stores }: { stores: TabStoreValue[] }) {
+  const { servers } = useContext(Sidebar), lists = useLists(), parked = parkedOf(stores), listed = listOf(lists, "parked"), [focus, setFocus] = useState(0);
+  const live = (server: string) => servers[server]?.enumerationComplete && !servers[server]?.stale && servers[server]?.marks !== undefined && stores.some((store) => store.name === server);
+  const listing = (tab: ListTab) => live(tab.server) && parkedPaths(servers[tab.server]).has(tab.path), loaded = lists !== undefined;
+  const signature = JSON.stringify([parked, listed, stores.map((store) => live(store.name) ? [...parkedPaths(servers[store.name])].sort() : null)]);
+  const sync = useEffectEvent(() => {
+    if (!lists || !document.hasFocus()) return;
+    for (const tab of parked.toReversed()) if (listing(tab) && !listed.some(sameListed(tab))) saveList({ listAdd: tab }, addListed(tab));
+    for (const tab of listed) if (live(tab.server) && !listing(tab) && !parked.some(sameListed(tab))) saveList({ listForget: tab }, forgetListed(tab));
+  });
+  useEffect(() => sync(), [signature, loaded, focus]);
+  useEffect(() => {
+    const focused = () => setFocus((count) => count + 1);
+    addEventListener("focus", focused);
+    return () => removeEventListener("focus", focused);
+  }, []);
+  return null;
+}
+
+function TabList({ stores, list, label, items, empty, remove, removeLabel }: { stores: TabStoreValue[]; list: TabListName; label: string; items: ListTab[]; empty?: string; remove: (item: ListTab) => void; removeLabel: (title: string) => string }) {
+  const page = stores.find((tabs) => tabs.viewed)!, node = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState<ListMenu>(), [editing, setEditing] = useState<string>();
+  const storeOf = (item: ListTab) => stores.find((store) => store.name === item.server)!, key = (item: ListTab) => `${item.server}\n${item.path}`, all = listOf(useLists(), list);
+  const move = (from: ListTab, to: ListTab) => {
+    const keys = all.map(key), moved = moveQueueId(keys, key(from), key(to)), order = moved.map((id) => all[keys.indexOf(id)]);
+    if (moved !== keys) saveList({ listOrder: order }, (old) => [...old.filter((tab) => tab.list !== list), ...order]);
+  };
+  const at = (node: Element) => items.find((item) => key(item) === node.closest<HTMLElement>("[data-recent]")?.dataset.recent), stop = items.find((item) => item.server === page.name && item.path === page.pathname) ?? items[0];
+  const menuAt = (item: ListTab, anchor: MenuAnchor) => {
+    const { own, space } = placeOf(storeOf(item), item);
+    setMenu({ path: item.path, anchor, server: item.server, space, shared: !own });
+  };
+  return <TabStore.Provider value={page}>
+    <div ref={node} role="tablist" aria-label={label} aria-orientation="vertical" className="flex shrink-0 flex-col gap-0.5 px-1 pt-1"
+      onDragStart={(event) => { dragging = "list"; event.dataTransfer.setData(listDrag, key(at(event.target as Element)!)); }}
+      onDragOver={(event) => { if (dragging === "list") event.preventDefault(); }}
+      onDragEnd={() => { dragging = ""; }}
+      onDrop={(event) => {
+        const from = items.find((item) => key(item) === event.dataTransfer.getData(listDrag)), to = at(event.target as Element);
+        if (dragging === "list" && from && to) move(from, to);
+      }}
+      onKeyDown={(event) => {
+        const target = event.target as HTMLElement;
+        const moveBy = () => { const from = at(target), to = from && items[items.indexOf(from) + arrows[event.key]]; if (from && to) move(from, to); };
+        if (target.role !== "tab" || (event.key !== "Enter" && event.key !== " ")) return tabKeys(event, page.pathname, (_, anchor) => { const item = at(anchor as Element); if (item) menuAt(item, anchor); }, moveBy);
+        event.preventDefault();
+        target.click();
+      }}>
+      {items.map((item) => <div key={key(item)} data-recent={key(item)}><ListRow item={item} tabs={storeOf(item)} page={page} stop={item === stop} editing={item.server === page.name && item.path === editing} endEdit={() => setEditing(undefined)}
+        openMenu={(anchor) => menuAt(item, anchor)} remove={() => { flushSync(() => remove(item)); selected(node)?.focus(); }} removeLabel={removeLabel} /></div>)}
+      {empty ? <p className="px-2 pt-2 text-xs text-muted-foreground">{empty}</p> : null}
+    </div>
+    <ListMenuPopup tabs={page} menu={menu} setMenu={setMenu} list={node} setEditing={setEditing} />
+  </TabStore.Provider>;
+}
+
+function ListRow({ item, tabs, page, stop, editing, endEdit, openMenu, remove, removeLabel }: { item: ListTab; tabs: TabStoreValue; page: TabStoreValue; stop: boolean; editing: boolean; endEdit: () => void; openMenu: (anchor: MenuAnchor) => void; remove: () => void; removeLabel: (title: string) => string }) {
+  const view = useContext(Sidebar).servers[item.server], here = item.server === page.name, { own, space } = placeOf(tabs, item);
+  const spaceName = tabs.state.spaces.find((entry) => entry.id === space)?.name ?? "", active = here && item.path === page.pathname, search = own?.search ?? sharedTab(tabs.shared, space, item.path)?.search;
+  const props = { description: `${own ? "" : "Shared, "}Space: ${spaceName}${here ? "" : `, ${serverLabel(item.server)}`}`, detail: [spaceName, !here && serverLabel(item.server)].filter(Boolean).join(" · "), chosen: false,
+    rule: tabs.state.groups.find((group) => group.id === own?.group)?.color, active, stop, shared: !own, space, editing, endEdit, open: () => tabs.go(item.path, space, !own), openMenu, close: remove, closeLabel: removeLabel };
+  return here ? <TabItem tab={own ?? { path: item.path, search }} {...props} /> : <RemoteRow tab={{ path: item.path, search }} view={view} offline={view?.offline} {...props} />;
 }
 
 // Each other server's tabs come from a store of their own, so the strip gathers them one server at a time.
@@ -2121,134 +2291,20 @@ function GroupEditor({ tabs, node }: { tabs: TabStoreValue; node: RefObject<HTML
   </Popover.Root>;
 }
 
-// Parked lists this person's parked tabs of every space at the bottom of the strip, collapsed until they open it, and
-// shows the active one while collapsed. With more than one space it is a tree: each space with parked tabs is a branch
-// that folds on its own, again showing the active one while folded. A parked tab keeps its space, group and place among
-// their tabs, where unparking returns it. It is a list of its own, whose rows open, close and take their menu: the page's
-// server's rows its whole menu, another server's Pull requests and their attention items, which act there.
 type ParkedRow = Tab & { shared?: boolean };
-type ParkedMenu = { path: string; anchor: MenuAnchor; server: string; space: string; shared?: boolean };
+type ListMenu = CardMenu & { server: string };
 const parkedPaths = (view: Pick<SidebarView, "rows" | "marks">) => new Set([...view.rows.flatMap((row) => row.parked ? [rowPath(row)] : []), ...(view.marks ?? []).flatMap((mark) => mark.parked ? [mark.path] : [])]);
 const parkedRows = (tabs: Tab[], shared: SavedTabs["shared"], parked: Set<string>): ParkedRow[] =>
   [...tabs.filter((tab) => parked.has(tab.path)), ...shared.flatMap((tab) => parked.has(tab.path) && !tabs.some((own) => own.path === tab.path) ? [{ ...tab, shared: true }] : [])];
 
-function useParkedTree({ state, pathname, shared, parked }: TabStoreValue) {
-  const here = useServer(), [layout] = useLayout(), folds = layout.folded ?? noFolds, order = layout.order ?? [], { servers } = useContext(Sidebar);
-  const sections = ["", ...rocketclaws().map((remote) => remote.name)].map((name) => {
-    const view = servers[name], saved = view?.tabs;
-    return name === here ? { name, spaces: state.spaces, rows: parkedRows(state.tabs, shared, parked) }
-      : { name, spaces: saved?.spaces ?? [], rows: parkedRows(saved?.state.tabs ?? [], saved?.shared ?? [], view ? parkedPaths(view) : new Set<string>()) };
-  }).filter((section) => section.rows.length);
-  const collapsed = state.groups.find((group) => group.id === "parked")?.collapsed ?? true;
-  const tree = sections.map((section) => {
-    const fold = `parked:@${section.name}`, shut = collapsed || (sections.length > 1 && (folds[fold] ?? false));
-    const asks = new Set((servers[section.name]?.rows ?? []).flatMap((row) => row.asking ? [rowPath(row)] : []));
-    const branches = section.spaces.flatMap((space) => {
-      const id = `parked:${section.name}/${space.id}`, rank = (tab: Tab) => order.indexOf(`${id}\n${tab.path}`) + 1 || Infinity, closed = shut || (folds[id] ?? false);
-      const there = section.rows.filter((tab) => tab.space === space.id).sort((a, b) => rank(a) - rank(b) || 0);
-      const active = (tab: Tab) => section.name === here && tab.path === pathname, shown = closed ? there.filter(active) : there;
-      return there.length ? [{ space, id, closed, size: there.length, shown, asking: closed && there.some((tab) => asks.has(tab.path) && !active(tab)) }] : [];
-    });
-    return { name: section.name, showSpaces: section.spaces.length > 1 && !shut, fold, shut, branches, count: branches.reduce((sum, branch) => sum + branch.size, 0), asking: branches.some((branch) => branch.asking) };
-  });
-  const visible = tree.flatMap((section) => section.branches.flatMap((branch) => branch.shown.map((tab) => ({ ...tab, server: section.name, branch: branch.id, key: `${section.name}\n${tab.path}` }))));
-  return { tree, visible, collapsed, here, count: tree.reduce((sum, section) => sum + section.count, 0), stop: (visible.find((tab) => tab.server === here && tab.path === pathname) ?? visible[0])?.key };
-}
-
-type ParkedShown = ReturnType<typeof useParkedTree>["visible"][number];
-function moveParked(visible: ParkedShown[], from?: ParkedShown, to?: ParkedShown) {
-  if (!from || !to || from === to || from.branch !== to.branch) return;
-  const paths = moveQueueId(visible.flatMap((tab) => tab.branch === to.branch ? [tab.path] : []), from.path, to.path);
-  saveLayout((layout) => ({ ...layout, order: [...(layout.order ?? []).filter((key) => !key.startsWith(`${to.branch}\n`)), ...paths.map((path) => `${to.branch}\n${path}`)] }));
-}
-
-function ParkedBox({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
-  const box = useRef<HTMLDivElement>(null), [stored, setStored] = useState(() => Number(localStorage.getItem("parked-height"))), share = stored || 100 / 3;
-  const resize = (height: number) => {
-    const next = Math.min(Math.max(height / box.current!.parentElement!.clientHeight * 100, 10), 90);
-    setStored(next);
-    localStorage.setItem("parked-height", String(next));
-  };
-  return <>
-    {collapsed ? null : <div role="separator" aria-orientation="horizontal" aria-label="Resize Parked" aria-valuenow={Math.round(share)} aria-valuemin={10} aria-valuemax={90} tabIndex={0}
-      className="relative z-10 -my-0.75 h-1.5 shrink-0 cursor-row-resize touch-none outline-none hover:bg-border focus-visible:bg-ring"
-      onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
-      onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) resize(box.current!.getBoundingClientRect().bottom - event.clientY); }}
-      onKeyDown={(event) => {
-        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-        event.preventDefault();
-        resize(box.current!.getBoundingClientRect().height + (event.key === "ArrowUp" ? 16 : -16));
-      }} />}
-    <div ref={box} className="flex shrink-0 flex-col gap-0.5 overflow-y-auto border-t px-1 pt-1 [scrollbar-width:thin]" style={{ maxHeight: `${share}%` }}>{children}</div>
-  </>;
-}
-
-function ParkedSection({ tabs }: { tabs: TabStoreValue }) {
-  const [menu, setMenu] = useState<ParkedMenu>(), [editing, setEditing] = useState<string>(), list = useRef<HTMLDivElement>(null), sidebar = useContext(Sidebar), { setCommand } = useContext(SessionCommands);
+function ListMenuPopup({ tabs, menu, setMenu, list, setEditing }: { tabs: TabStoreValue; menu?: ListMenu; setMenu: (menu?: ListMenu) => void; list: RefObject<HTMLDivElement | null>; setEditing: (path: string) => void }) {
+  const sidebar = useContext(Sidebar), { setCommand } = useContext(SessionCommands);
   const send = (server: string): Attend => (paths, action, until) => void tabsCall(server, { attention: { paths, action, until } }).then(sidebar.servers[server].invalidateQueries, () => undefined);
   const items = !menu ? [] : menu.server === tabs.name ? [...threadPanelItems(menu, true, menu.server), ...menuItems(tabs, menu, sidebar, new Set([menu.path]), () => setEditing(menu.path), (id) => setCommand({ mode: "delete", source: id }))]
     : [...threadPanelItems(menu, true, menu.server), ...attentionItems(sidebar.servers[menu.server], menu.path, [menu.path], send(menu.server), tabs.setPicking)];
-  return <TabStore.Provider value={tabs}>
-    <ParkedTabs tabs={tabs} list={list} editing={editing} endEdit={() => setEditing(undefined)} openMenu={setMenu} close={(path) => { flushSync(() => tabs.close([path])); selected(list)?.focus(); }} />
-    <TabMenu items={items} anchor={menu?.anchor} close={() => setMenu(undefined)} refocus={(key) => /^(close|park|unpark)/.test(key) ? selected(list) ?? true : true} />
-  </TabStore.Provider>;
+  return <TabMenu items={items} anchor={menu?.anchor} close={() => setMenu(undefined)} refocus={(key) => /^(close|park|unpark)/.test(key) ? selected(list) ?? true : true} />;
 }
 
-function ParkedTabs({ tabs, list, editing, endEdit, openMenu, close }: { tabs: TabStoreValue; list: RefObject<HTMLDivElement | null>; editing?: string; endEdit: () => void; openMenu: (menu: ParkedMenu) => void; close: (path: string) => void }) {
-  const { pathname, fold } = tabs, { tree, visible, collapsed, here, count, stop } = useParkedTree(tabs), visit = useVisit(), sidebar = useContext(Sidebar);
-  const at = (node: Element) => visible.find((tab) => tab.key === node.closest<HTMLElement>("[data-parked]")?.dataset.parked);
-  const menuOf = (tab: ParkedRow, server: string, anchor: MenuAnchor) => openMenu({ path: tab.path, anchor, server, space: tab.space ?? "", shared: tab.shared });
-  const header = "flex w-full shrink-0 items-center gap-1.5 px-1.5 text-xs font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring";
-  if (!count) return null;
-  return <ParkedBox collapsed={collapsed}>
-    <button type="button" aria-expanded={!collapsed} className="flex h-7 w-fit shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => fold("parked", !collapsed)}>
-      <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium text-black", groupColors.Grey)}><SquareParking aria-hidden="true" className="size-3" />Parked</span>
-      <span aria-hidden="true" className="text-xs text-muted-foreground">{count}</span>
-      {collapsed && tree.some((section) => section.asking) ? needsYou : null}
-    </button>
-    <div ref={list} role="tablist" aria-label="Parked tabs" aria-orientation="vertical" className="flex flex-col gap-0.5"
-      onClickCapture={(event) => {
-        const tab = (event.target as Element).closest('[role="tab"]') && at(event.target as Element);
-        if (!tab || (tab.server === here && tab.path === pathname)) return;
-        event.stopPropagation();
-        visit(tab.server, tab.path);
-      }}
-      onDragStart={(event) => { dragging = "parked"; event.dataTransfer.setData(parkedDrag, at(event.target as Element)!.key); }}
-      onDragOver={(event) => { if (dragging === "parked") event.preventDefault(); }}
-      onDragEnd={() => { dragging = ""; }}
-      onDrop={(event) => { if (dragging === "parked") moveParked(visible, visible.find((tab) => tab.key === event.dataTransfer.getData(parkedDrag)), at(event.target as Element)); }}
-      onKeyDown={(event) => {
-        const moveBy = () => { const from = at(event.target as Element)!; moveParked(visible, from, visible[visible.indexOf(from) + arrows[event.key]]); };
-        if ((event.target as HTMLElement).role !== "tab" || (event.key !== "Enter" && event.key !== " ")) return tabKeys(event, pathname, (_, anchor) => { const tab = at(anchor as Element); if (tab) menuOf(tab, tab.server, anchor); }, moveBy);
-        event.preventDefault();
-        (event.target as HTMLElement).click();
-      }}>
-      {tree.map((section) => <Fragment key={section.name}>
-        {tree.length > 1 && !collapsed ? <button type="button" aria-expanded={!section.shut} aria-label={`Parked on ${serverLabel(section.name)}`} className={cn(header, "mt-1 h-7 rounded-md font-semibold text-foreground")} onClick={() => foldCard(section.fold, !section.shut)}>
-          <ChevronDown aria-hidden="true" className={cn("size-3.5", section.shut && "-rotate-90")} />{serverLabel(section.name)}{sidebar.servers[section.name]?.offline ? <span className="font-normal">· offline</span> : null}{section.shut && section.asking ? needsYou : null}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-muted px-1.5 text-center text-[11px]">{section.count}</span>
-        </button> : null}
-        {section.branches.map(({ space, id, closed, size, shown, asking }) => <Fragment key={space.id}>
-          {section.showSpaces ? <button type="button" aria-expanded={!closed} aria-label={`Parked in ${space.name}${tree.length > 1 ? ` on ${serverLabel(section.name)}` : ""}`} className={cn(header, "mt-1 h-6 rounded-t-md bg-muted/50")} onClick={() => foldCard(id, !closed)}>
-            {closed ? <Folder aria-hidden="true" className="size-3.5" /> : <FolderOpen aria-hidden="true" className="size-3.5" />}{space.name}{asking ? needsYou : null}<span aria-hidden="true" className="ml-auto min-w-5 rounded-full bg-background px-1.5 text-center text-[11px]">{size}</span><ChevronDown aria-hidden="true" className={cn("size-3.5", closed && "-rotate-90")} />
-          </button> : null}
-          <div className={cn("flex flex-col [&_[role=tab]]:py-1", section.showSpaces && "rounded-b-md bg-muted/30 p-0.5")}>
-            {shown.map((tab) => <ParkedItem key={tab.path} tab={tab} server={section.name} here={here} space={space.name} active={section.name === here && tab.path === pathname} stop={stop === `${section.name}\n${tab.path}`} editing={section.name === here && tab.path === editing} endEdit={endEdit} close={() => close(tab.path)} openMenu={(anchor) => menuOf(tab, section.name, anchor)} />)}
-          </div>
-        </Fragment>)}
-      </Fragment>)}
-    </div>
-  </ParkedBox>;
-}
-
-function ParkedItem({ tab, server, here, space, close, ...props }: { tab: ParkedRow; server: string; here: string; space: string; active: boolean; stop: boolean; editing: boolean; endEdit: () => void; close: () => void; openMenu: (anchor: MenuAnchor) => void }) {
-  const view = useContext(Sidebar).servers[server], description = `${tab.shared ? "Shared, " : ""}Space: ${space}${server === here ? "" : `, ${serverLabel(server)}`}`;
-  return <div data-parked={`${server}\n${tab.path}`}>
-    {server === here ? <TabItem tab={tab} shared={tab.shared} description={description} chosen={false} close={tab.shared ? undefined : close} {...props} />
-      : <RemoteRow tab={tab} view={view} offline={view?.offline} shared={tab.shared} description={description} chosen={false} {...props} />}
-  </div>;
-}
-
-// Another server's Parked row reads that server's sessions and tab rows, so its title and badges are that server's.
 function RemoteRow({ tab, view, ...props }: { tab: Tab; view?: ServerView } & Omit<ComponentProps<typeof TabItem>, "tab">) {
   const sidebar = useContext(Sidebar), value = useMemo(() => view ? { ...sidebar, ...view } : sidebar, [sidebar, view]);
   return <Sidebar.Provider value={value}><TabItem tab={{ path: tab.path, search: tab.search }} {...props} /></Sidebar.Provider>;
@@ -2286,7 +2342,7 @@ function timerText(mark?: Omit<TabAttention, "path">) {
 // A detail line, such as a parked tab's park, sits under the title inside the tab, so the row's highlight covers both. A
 // row of a server that stopped answering is greyed and says so. A Shared row names its space, which renaming it edits in.
 // Clicking a tab not in view opens it, by default on the page's server.
-function TabItem({ tab, description, detail, chosen, rule, active, stop, shared, space, offline, editing, endEdit, open = () => navigate(tab.path), close, openMenu }: { tab: Tab; description: string; detail?: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; space?: string; offline?: boolean; editing: boolean; endEdit: () => void; open?: () => void; close?: () => void; openMenu: (anchor: MenuAnchor) => void }) {
+function TabItem({ tab, description, detail, chosen, rule, active, stop, shared, space, offline, editing, endEdit, open = () => navigate(tab.path), close, closeLabel, openMenu }: { tab: Tab; description: string; detail?: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; space?: string; offline?: boolean; editing: boolean; endEdit: () => void; open?: () => void; close?: () => void; closeLabel?: (title: string) => string; openMenu: (anchor: MenuAnchor) => void }) {
   const sidebar = useContext(Sidebar);
   const id = pathSession(tab.path);
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
@@ -2312,13 +2368,13 @@ function TabItem({ tab, description, detail, chosen, rule, active, stop, shared,
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{offline ? `${title} · Server offline` : title}</TooltipContent></Tooltip>
     {active ? <button type="button" aria-label="Tab actions" className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground last:mr-1 hover:bg-accent hover:text-foreground" onClick={(event) => openMenu(event.currentTarget)}><Ellipsis className="size-3.5" /></button> : null}
-    <TabEnd shared={shared} close={close} title={title} />
+    <TabEnd shared={shared} close={close} label={closeLabel} title={title} />
   </div>;
 }
 
-function TabEnd({ shared, close, title }: { shared?: boolean; close?: () => void; title: string }) {
-  if (shared) return <span aria-hidden="true" title="In Shared: everyone in this space sees it" className="mr-1 flex size-6 shrink-0 items-center justify-center text-muted-foreground"><Users className="size-3.5" /></span>;
-  return close ? <button type="button" aria-label={`Close ${title}`} className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={close}><X className="size-3.5" /></button> : null;
+function TabEnd({ shared, close, label, title }: { shared?: boolean; close?: () => void; label?: (title: string) => string; title: string }) {
+  if (close) return <button type="button" aria-label={label?.(title) ?? `Close ${title}`} className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={close}><X className="size-3.5" /></button>;
+  return shared ? <span aria-hidden="true" title="In Shared: everyone in this space sees it" className="mr-1 flex size-6 shrink-0 items-center justify-center text-muted-foreground"><Users className="size-3.5" /></span> : null;
 }
 
 // Enter and leaving the field save, on the server of the tab's section; Escape restores the old name first, so its blur
@@ -2405,6 +2461,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const tabs = useTabs();
   const { close: closeTab, pathname } = tabs;
   const sidebar = useTabSidebar(pathname);
+  useRecordVisit(tabs, palette.mode !== undefined);
   const newChat = useCallback(() => {
     const draft = drafts.get("") ?? drafts.get(conversation.id)!;
     if ([!scope, draft.reverting, !draft.hydrated].some(Boolean)) return;
@@ -2439,6 +2496,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       : mod && event.altKey && !event.shiftKey && event.code === "KeyN" ? newChat
       : mod && event.altKey && !event.shiftKey && event.code === "KeyT" && tabs.closed.length ? tabs.reopen
       : plain && (event.code === "BracketLeft" || event.code === "BracketRight") ? () => tabs.step(event.code === "BracketLeft")
+      : plain && /^Digit[123]$/.test(event.code) ? () => setPreference(SIDEBAR_VIEW_KEY, stripViews[Number(event.code.at(-1)) - 1][0])
       : undefined;
     if (!action) return;
     event.preventDefault();
@@ -2523,6 +2581,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
 function keyCommands({ step, closed, reopen }: ReturnType<typeof useTabs>, toggle: () => void, medium: boolean) {
   return [{ key: "tab-previous", label: "Tabs: Previous", run: () => step(true) }, { key: "tab-next", label: "Tabs: Next", run: () => step(false) },
     ...closed.length ? [{ key: "tab-reopen", label: "Tabs: Reopen closed tab", run: reopen }] : [], ...medium ? [{ key: "tab-sidebar", label: "Tabs: Toggle sidebar", run: toggle }] : [],
+    ...stripViews.map(([key, label]) => ({ key: `sidebar-${key}`, label: `Tabs: Show ${label}`, run: () => setPreference(SIDEBAR_VIEW_KEY, key) })),
     ...THEME_MODES.map(({ id, label }) => ({ key: `theme-${id}`, label: `Theme: ${label}`, run: () => setThemeMode(id) }))];
 }
 
@@ -3067,6 +3126,7 @@ const shortcuts = [
   { id: "attention-next", label: "Next session needing you", where: "Waiting tabs: sessions that ask a question, then the rest, longest waiting first", keys: ["mod", "Shift", "A"] },
   { id: "tab-park-done", label: "Park the tab until it is done", where: "A session's tab", keys: ["mod", "Shift", "S"] },
   { id: "tab-sidebar", label: "Show or hide the tab sidebar", where: "Tabs in the left sidebar, on a wide window", keys: ["mod", "B"] },
+  ...stripViews.map(([key, label], index) => ({ id: `sidebar-${key}`, label: `Show ${label} in the tab sidebar`, keys: ["mod", String(index + 1)] })),
   { id: "right-pane", label: "Show or hide the right pane", where: "Opens a session's pull requests, or closes the open pane", keys: ["mod", "Shift", "B"] },
   { id: "page-close", label: "Close the tab", where: "Pages other than sessions and Search pages", keys: ["Escape"] },
   { id: "message-steer", label: "Steer the running turn", where: "Message box, while a turn runs", keys: ["mod", "Enter"] },

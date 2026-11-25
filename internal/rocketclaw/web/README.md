@@ -528,7 +528,8 @@ out. The Page Index lists every server's pages, each space titled with its
 server, and a page opens on its own server; a failing remote shows its error
 there. Each server marks its own tabs (see Unread below), and the page notifies
 from every server's listing; a server that is offline or on another protocol
-offers no attention items in its rows' menus. The tab strip lists every
+offers no attention items in its rows' menus. The tab sidebar's Recent view
+lists the tabs you opened on every server, and its Spaces view lists every
 server's cards, one for each of its spaces, in one list (see Spaces below). Another
 server's cards show its saved tabs, and changes to them save on that server;
 entering one of its spaces or opening one of its tabs opens that server's view
@@ -599,6 +600,27 @@ database migration.
   Reopen closed tab**) reopens the newest, in a remote OpenCode session too, whose
   New terminal command has no default key for that reason. A reopened tab leaves the list, and so
   does a deleted session's tab. A preview tab is never saved, so it never lists.
+- **Recent.** The sidebar shows one view at a time, picked at its top:
+  **Recent**, the default, **Spaces** (see Spaces below), and **Parked** (see
+  Park below); this browser remembers which. Cmd/Ctrl+1, +2 and +3 show
+  Recent, Spaces and Parked, and each view's button counts its unread tabs; Parked's counts the parked
+  tabs with something new on them. Recent is one list, in your order, of up
+  to 20 tabs you opened, in every space and on every server, the tab in view
+  highlighted where it sits. Each row names its space, and its server when it
+  is another's. A tab joins the list at the top the first time you settle on
+  it, and the bottom one drops off when the list is full; opening a listed tab
+  again never moves it. Drag a row onto another, or press Shift+Arrow on it, to
+  reorder the list. A row's **X** removes it from Recent and leaves the tab
+  open; **Close** in its menu closes the tab. The local server keeps the list,
+  so it and your order follow you to your other devices once their window is
+  focused or becomes visible. A visit is a focused window settling on a tab:
+  browsing the command palette, a preview, New session, and a group's
+  placeholder are not visits, and a window brought back to the front records
+  the tab it shows when Recent lacks it. A row shows while its tab is open: a
+  tab parked until it is done stays, dimmed, and one parked until a time or
+  until you unpark it shows only in Parked. Something new on a row marks it but
+  never moves it. Rows open and take their menu like other tabs; Recent has no
+  selection.
 - **Next tab needing you.** Cmd/Ctrl+Shift+A, the inbox button in the bottom
   navigation, or **Sessions: Next needing you** opens the next bold tab, of any kind (see Unread below): first
   sessions asking a question, then the rest, each longest waiting first.
@@ -669,31 +691,29 @@ database migration.
   time. Until it is done lasts until the session's next turn
   ends, finished, failed, or stopped, also when nothing runs yet; Cmd/Ctrl+Shift+S
   parks the session in view that way, and on any other tab does nothing. A parked tab
-  leaves the strip for the **Parked** section
-  at the bottom, which lists your parked tabs from every space, each with when
-  its park ends, and its header counts them. A session parked until a time or until
-  you unpark it shows a clock in place of its icon, unless it asks you a question. It folds like a card, starts folded, and folded still shows
-  the tab in view. Unfolded, it is as tall as its rows need, up to a third of
-  the strip; drag its top edge, or focus the edge and press Up/Down, to change
-  that limit, which is kept in this browser. With more than one space it is a tree: each space with
-  parked tabs is a branch that folds on its own, again still showing the tab in
-  view, and stays as you left it. With Remote RocketClaws, when more than one
-  server has parked tabs, each server is a branch above its spaces; a row opens
-  on its own server in its space, its menu's attention items act there, and it
-  has no close button. Drag a parked row onto another row of its space, or
-  press Shift+Arrow on it, to reorder it for you alone; a row you have not
-  placed comes last. A parked tab keeps its space, group, and place, whatever its
-  place in Parked, and
-  **Unpark**, in its menu in place of Park, puts it back there.
+  leaves its card for the sidebar's **Parked** view, except the tab in view,
+  which stays in its card, dimmed. Parked lists your parked tabs from every
+  space, each with when its park ends, and the view's button counts them. A
+  session parked until a time or until you unpark it shows a clock in place of
+  its icon, unless it asks you a question. Parked is one list built the same way as
+  Recent, across every space and Remote RocketClaw, in your order: a tab joins
+  at the top when it is parked and leaves when it is unparked, and you drag a
+  row, or press Shift+Arrow on it, to reorder the list, which follows you to
+  your other devices. Each row names its space, and its server when it is
+  another's, and shows when its park ends. A row's **X** unparks the tab;
+  **Close** in its menu closes it. A row of another server opens there, in its
+  space, and its menu's attention items act there. A parked tab
+  keeps its space, group, and place, and **Unpark**, in its menu in place of
+  Park, puts it back there.
   It is never bold and never notifies, but what happens on it is remembered:
   unparked, it is bold if something happened that you have not seen, without a
   notification. It comes back by itself, bold with a notification, when its
   time is up (“Park ended”), when the turn it waited for ends (the reply's own
   notification), or when its agent asks you a question, within a poll, also
   when you had closed it; on a tab you unfollowed a question leaves the park
-  alone, and a park that ends brings no mark or notification. Folded, Parked's
-  header, a server and a space say **Needs you** while a row they hide asks
-  you something. A parked Shared row stays
+  alone, and a park that ends brings no mark or notification. Folded, a server
+  or a space in Parked says **Needs you** while a row it hides asks you
+  something. A parked Shared row stays
   where it is, dimmed for you alone; Parked also lists a parked Shared row,
   which opens in its space without a tab of your own. Screen readers hear “Parked”, “Parked
   until …”, or “Parked until it is done”. Close others, Close to the right,
@@ -762,8 +782,8 @@ database migration.
 - **Spaces.** Spaces are shared by everyone except people limited to spaces
   (below): the server keeps one list, oldest first, starting with **Main**, and
   names are unique ignoring case. Every tab
-  belongs to one space. The strip is one list of cards from every RocketClaw
-  server: one card per space, which holds that space's Shared tabs (see Shared
+  belongs to one space. The sidebar's Spaces view is one list of cards from
+  every RocketClaw server: one card per space, which holds that space's Shared tabs (see Shared
   below) above your own.
   You put the cards in your own order: drag a card's title onto another card,
   above or below its middle, or press Shift+ArrowUp or Shift+ArrowDown on the
@@ -788,9 +808,8 @@ database migration.
   server, and opening one of its tabs moves the page to that server. Every
   card starts unfolded; a folded card lists only the tab in view, when it is
   one of the card's, under its group's header or the Shared pill, which still
-  go bold and say **Needs you** for the tabs the fold hides. Your card order, your order of parked
-  tabs, and which cards and
-  Parked branches are folded are saved on the local server, so they are the same
+  go bold and say **Needs you** for the tabs the fold hides. Your card order
+  and which cards are folded are saved on the local server, so they are the same
   on every server's page and every device. The **…** menu offers **Go to
   space**, which enters the space (another server's space opens in that
   server's view), then **Rename space** and, while the server has more than one
@@ -940,7 +959,7 @@ database migration.
   everyone. Every group holds its place with a hidden tab row whose path is
   `group:<id>`, which no tab command sees; a group saved before every group
   had one gets it after its last tab. Groups with no tabs, that row included,
-  are dropped, except the entry that keeps whether you collapsed Parked. Tabs whose space is gone join the
+  are dropped. Tabs whose space is gone join the
   first space keeping their group, and tabs whose group is gone leave it. A
   window reloads them when it becomes visible or regains focus: it takes in
   changes made elsewhere, merged with its own unsaved ones, but stays on its own

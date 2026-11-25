@@ -121,6 +121,7 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await parked.getByRole("tab").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Unpark", exact: true }).click();
   await unparking;
+  await page.getByRole("button", { name: "Spaces", exact: true }).click();
   await chatTab.getByRole("tab").click();
   await page.waitForURL((url: URL) => url.pathname === chat);
   await page.locator("#transcript-scroll").getByText("Remote reply", { exact: true }).first().waitFor();

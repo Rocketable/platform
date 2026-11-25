@@ -747,6 +747,74 @@ WHERE t.username = $1 GROUP BY t.username, t.path, p.id ORDER BY t.closed_at DES
 	}, username)
 }
 
+type TabList string
+
+const (
+	RecentList TabList = "recent"
+	ParkedList TabList = "parked"
+)
+
+type ListTab struct {
+	List                TabList
+	Server, Path, Space string
+}
+
+func (s *SessionService) AddToList(ctx context.Context, username string, tab ListTab) error {
+	conversation := ""
+	if tab.Server == "" {
+		conversation = TabConversation(tab.Path)
+	}
+
+	_, err := execState(ctx, s.db, "add tab to list", `WITH incoming AS (
+    SELECT $2::text AS list, $3::text AS server, $4::text AS path, $5::text AS space, $6::text AS conversation_id
+), added AS (
+    SELECT i.list, i.server, COALESCE(`+tabPathSQL+`, i.path) AS path, i.space, c.conversation_id
+    FROM incoming i LEFT JOIN conversations c ON c.conversation_id = i.conversation_id
+), others AS (
+    SELECT r.server, r.path, r.position, row_number() OVER (ORDER BY r.position, r.server, r.path) AS n
+    FROM web_tab_lists r JOIN added a ON r.list = a.list AND (r.server, r.path) <> (a.server, a.path)
+    WHERE r.username = $1
+), top AS (
+    SELECT COALESCE(min(position), 0) - 1 AS position FROM others
+), dropped AS (
+    DELETE FROM web_tab_lists w USING others o
+    WHERE w.username = $1 AND w.list = $2 AND w.server = o.server AND w.path = o.path AND $2 = '`+string(RecentList)+`' AND o.n > 19
+)
+INSERT INTO web_tab_lists (username, list, server, path, conversation_id, space, position)
+SELECT $1, a.list, a.server, a.path, a.conversation_id, a.space, t.position FROM added a CROSS JOIN top t
+ON CONFLICT (username, list, server, path) DO UPDATE SET space = excluded.space, conversation_id = excluded.conversation_id`,
+		username, tab.List, tab.Server, tab.Path, tab.Space, conversation)
+
+	return err
+}
+
+func (s *SessionService) ForgetFromList(ctx context.Context, username string, tab ListTab) error {
+	_, err := execState(ctx, s.db, "forget listed tab", `DELETE FROM web_tab_lists WHERE username = $1 AND list = $2 AND server = $3 AND path = $4`, username, tab.List, tab.Server, tab.Path)
+
+	return err
+}
+
+func (s *SessionService) OrderList(ctx context.Context, username string, list TabList, order []ListTab) error {
+	servers, paths := make([]string, 0, len(order)), make([]string, 0, len(order))
+	for _, tab := range order {
+		servers, paths = append(servers, tab.Server), append(paths, tab.Path)
+	}
+
+	_, err := execState(ctx, s.db, "order tab list", `WITH wanted AS (
+    SELECT server, path, n FROM unnest($3::text[], $4::text[]) WITH ORDINALITY AS o(server, path, n)
+)
+UPDATE web_tab_lists r SET position = w.n FROM wanted w WHERE r.username = $1 AND r.list = $2 AND r.server = w.server AND r.path = w.path`, username, list, servers, paths)
+
+	return err
+}
+
+func (s *SessionService) TabLists(ctx context.Context, username string) ([]ListTab, error) {
+	return queryRows(ctx, s.db, `SELECT list, server, path, space FROM web_tab_lists WHERE username = $1 ORDER BY list, position, server, path`, "tab lists", func(row rowScanner) (ListTab, error) {
+		var tab ListTab
+		return tab, row.Scan(&tab.List, &tab.Server, &tab.Path, &tab.Space)
+	}, username)
+}
+
 func (s *SessionService) SharedTabs(ctx context.Context) ([]Tab, error) {
 	return queryRows(ctx, s.db, `SELECT t.space, t.path, `+searchPageSQL+` FROM web_shared_tabs t
 `+searchPageJoinSQL+`

@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test } from "bun:test";
-import { href, withPage, names, italic, behind, paletteReady, animation, order, until, openSaved, openFromPalette, follow, menu, chooseSpace, shared, sharedNames, focus, strip } from "./tabs-browser_test";
+import { listed, href, withPage, names, italic, behind, paletteReady, animation, order, until, openSaved, openFromPalette, follow, menu, chooseSpace, shared, sharedNames, focus, strip, type Saved } from "./tabs-browser_test";
 
 test("each opened location keeps a tab; close commands, middle-click, and drag survive reload", () => withPage({}, async (page, origin, prompts, saved) => {
   await page.goto(`${origin}/`);
@@ -1031,3 +1031,155 @@ test("an emptied group stays in place through reload, offers New session, takes 
   expect(await order(page)).toEqual(["Charlie", "Alpha"]);
   await until(() => !saved.state.groups.some((group) => group.name === "Work") && !saved.state.tabs.some((item) => item.path.startsWith("group:")));
 }), 60_000);
+
+const recent = (page: any) => page.getByRole("tablist", { name: "Recent tabs" });
+const recentNames = (page: any) => recent(page).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
+const recentRow = (page: any, name: string) => recent(page).getByRole("tab", { name, exact: true });
+async function openRecent(page: any, origin: string, saved: Saved, id: string) {
+  saved.spaces.push({ id: "ops", name: "Ops" });
+  saved.state = { tabs: [{ path: href("alpha"), space: "main" }, { path: href("bravo"), space: "main" }, { path: href("echo"), space: "ops" }], groups: [], space: "main", last: {}, sharedOrder: [] };
+  saved.revision = 1;
+  await page.goto(`${origin}${href(id)}`);
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  await recentRow(page, id[0].toUpperCase() + id.slice(1)).waitFor();
+}
+
+test("Recent keeps the person's order: a new tab is born on top, a visit never moves a row, rows move by dragging or Shift+Arrow, and the X removes a row but leaves its tab open", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const stored = () => listed(saved, "recent").map((tab) => tab.path);
+  await openRecent(page, origin, saved, "alpha");
+  await follow(page, "bravo");
+  await follow(page, "echo");
+  await until(() => saved.visits.length === 3);
+  expect(await recentNames(page)).toEqual(["Echo", "Bravo", "Alpha"]);
+  expect(saved.visits.map((visit) => `${visit.path} ${visit.space}`)).toEqual([`${href("alpha")} main`, `${href("bravo")} main`, `${href("echo")} ops`]);
+  expect([await recentRow(page, "Echo").innerText(), await recentRow(page, "Bravo").innerText()]).toEqual(["Echo\nOps", "Bravo\nMain"]);
+  expect(await recent(page).locator("p").count()).toBe(0);
+
+  await recentRow(page, "Alpha").click();
+  await page.waitForURL(`**${href("alpha")}`);
+  await Bun.sleep(300);
+  expect([saved.visits.length, await recentNames(page)]).toEqual([3, ["Echo", "Bravo", "Alpha"]]);
+
+  await recentRow(page, "Alpha").dragTo(recentRow(page, "Echo"));
+  await until(() => JSON.stringify(stored()) === JSON.stringify([href("alpha"), href("echo"), href("bravo")]));
+  expect(await recentNames(page)).toEqual(["Alpha", "Echo", "Bravo"]);
+  await recentRow(page, "Alpha").press("Shift+ArrowDown");
+  await until(() => JSON.stringify(stored()) === JSON.stringify([href("echo"), href("alpha"), href("bravo")]));
+  expect([await recentNames(page), await page.evaluate(() => document.activeElement?.getAttribute("aria-label"))]).toEqual([["Echo", "Alpha", "Bravo"], "Alpha"]);
+  await page.reload();
+  await recentRow(page, "Bravo").waitFor();
+  expect(await recentNames(page)).toEqual(["Echo", "Alpha", "Bravo"]);
+
+  await recent(page).getByRole("button", { name: "Remove Bravo from Recent", exact: true }).click();
+  await recentRow(page, "Bravo").waitFor({ state: "detached" });
+  await until(() => !stored().includes(href("bravo")));
+  expect(saved.state.tabs.some((tab) => tab.path === href("bravo"))).toBe(true);
+
+  await recentRow(page, "Echo").focus();
+  await page.keyboard.press("Shift+F10");
+  const closedSaved = page.waitForResponse(async (response: any) => response.url().endsWith("/api/Tabs") && (await response.json()).closed?.some((tab: { path: string }) => tab.path === href("echo")));
+  await page.getByRole("menuitem", { name: "Close", exact: true }).click();
+  await recentRow(page, "Echo").waitFor({ state: "detached" });
+  expect(await recentNames(page)).toEqual(["Alpha"]);
+  await closedSaved;
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  await page.keyboard.press("Control+Alt+t");
+  await page.waitForURL(`**${href("echo")}`);
+  await recentRow(page, "Echo").waitFor();
+  expect([await recentNames(page), saved.visits.length]).toEqual([["Echo", "Alpha"], 3]);
+}), 30_000);
+
+test("browsing the palette records no visit; a tab it opens on Enter that Recent lacks is born on top", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const step = async (key: string, id: string) => { await page.keyboard.press(key); await page.waitForURL(`**${href(id)}`); };
+  await openRecent(page, origin, saved, "alpha");
+  await follow(page, "bravo");
+  await follow(page, "alpha");
+  await until(() => saved.visits.length === 2);
+  await page.keyboard.press("Control+p");
+  await paletteReady(page);
+  await step("ArrowDown", "bravo");
+  await step("ArrowDown", "charlie");
+  await step("ArrowUp", "bravo");
+  await step("Escape", "alpha");
+  await page.getByRole("dialog", { name: "Go to session" }).waitFor({ state: "hidden" });
+  await Bun.sleep(300);
+  expect(saved.visits.length).toBe(2);
+  expect(await recentNames(page)).toEqual(["Bravo", "Alpha"]);
+
+  await page.keyboard.press("Control+p");
+  await paletteReady(page);
+  await step("ArrowDown", "bravo");
+  await step("ArrowDown", "charlie");
+  await page.keyboard.press("Enter");
+  await until(() => saved.visits.length === 3);
+  expect(saved.visits.at(-1)?.path).toBe(href("charlie"));
+  await recentRow(page, "Charlie").waitFor();
+  expect(await recentNames(page)).toEqual(["Charlie", "Bravo", "Alpha"]);
+}), 30_000);
+
+test("Recent follows the person to their other windows, and a window brought back records the tab it shows when Recent lacks it", () => withPage({}, async (page, origin, _prompts, saved) => {
+  await openRecent(page, origin, saved, "alpha");
+  await follow(page, "bravo");
+  await until(() => saved.visits.length === 2);
+  const other = await page.context().browser().newPage({ viewport: { width: 1280, height: 800 } });
+  onTestFinished(() => other.close());
+  await other.goto(`${origin}${href("echo")}`);
+  await other.getByRole("button", { name: "Recent", exact: true }).click();
+  await recentRow(other, "Echo").waitFor();
+  await until(() => listed(saved, "recent")[0]?.path === href("echo"));
+  expect(await recentNames(other)).toEqual(["Echo", "Bravo", "Alpha"]);
+
+  await page.bringToFront();
+  await focus(page);
+  await recentRow(page, "Echo").waitFor();
+  expect([await recentNames(page), saved.visits.length]).toEqual([["Echo", "Bravo", "Alpha"], 3]);
+
+  await other.bringToFront();
+  await focus(other);
+  await recent(other).getByRole("button", { name: "Remove Bravo from Recent", exact: true }).click();
+  await until(() => !listed(saved, "recent").some((tab) => tab.path === href("bravo")));
+  await page.bringToFront();
+  await focus(page);
+  await until(() => listed(saved, "recent")[0]?.path === href("bravo"));
+  await other.bringToFront();
+  await focus(other);
+  await other.waitForFunction(() => document.querySelector('[aria-label="Recent tabs"] [role="tab"]')?.getAttribute("aria-label") === "Bravo");
+  expect(await recentNames(other)).toEqual(["Bravo", "Echo", "Alpha"]);
+}), 30_000);
+
+test("in Recent, a tab parked until it is done stays dimmed, one parked until a time leaves, and something new on a row never moves it", () => withPage({}, async (page, origin, _prompts, saved) => {
+  await openRecent(page, origin, saved, "alpha");
+  await follow(page, "bravo");
+  await follow(page, "echo");
+  await until(() => saved.visits.length === 3);
+  saved.attention.push({ path: href("bravo"), parked: true, untilDone: true }, { path: href("alpha"), parked: true, until: new Date(Date.now() + 3_600_000).toISOString() });
+  await recentRow(page, "Alpha").waitFor({ state: "detached" });
+  expect(await recentNames(page)).toEqual(["Echo", "Bravo"]);
+  expect(await recentRow(page, "Bravo").innerText()).toContain("Parked until it is done");
+
+  Object.assign(saved.attention[0], { parked: false, untilDone: false, unreadAt: new Date().toISOString() });
+  await page.waitForSelector('[aria-label="Recent tabs"] [data-tab][data-unread="true"]');
+  expect(await recentNames(page)).toEqual(["Echo", "Bravo"]);
+}), 30_000);
+
+test("Cmd/Ctrl+1, 2 and 3 show Recent, Spaces and Parked, and each view's button counts its unread tabs", () => withPage({}, async (page, origin, _prompts, saved) => {
+  await openRecent(page, origin, saved, "alpha");
+  await follow(page, "bravo");
+  await until(() => saved.visits.length === 2);
+  const view = (name: string) => page.getByRole("button", { name, exact: true }), labels = () => Promise.all(["Recent", "Spaces", "Parked"].map((name) => view(name).textContent()));
+  expect(await labels()).toEqual(["Recent", "Spaces", "Parked"]);
+  saved.attention.push({ path: href("alpha"), unreadAt: new Date().toISOString() }, { path: href("echo"), parked: true, unreadAt: new Date().toISOString() });
+  await view("Parked").filter({ hasText: "1" }).waitFor();
+  expect(await labels()).toEqual(["Recent1", "Spaces1", "Parked1"]);
+  for (const [key, name] of [["2", "Spaces"], ["3", "Parked"], ["1", "Recent"]]) {
+    await page.keyboard.press(`Control+${key}`);
+    await view(name).and(page.locator('[aria-pressed="true"]')).waitFor();
+  }
+}), 30_000);
+
+test("a browser that has not picked a sidebar view opens on Recent", () => withPage({}, async (page, origin) => {
+  await page.addInitScript(() => localStorage.removeItem("sidebar-view"));
+  await page.goto(`${origin}${href("alpha")}`);
+  await page.getByRole("button", { name: "Recent", exact: true }).and(page.locator('[aria-pressed="true"]')).waitFor();
+  await recentRow(page, "Alpha").waitFor();
+}));
