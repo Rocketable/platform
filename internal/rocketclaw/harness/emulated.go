@@ -34,8 +34,8 @@ func runEmulated(ctx context.Context, rt *sandbox.Runtime, shell *CustomShell, c
 	}
 
 	secretEnv := secrets.Env()
-	env := append(slices.Concat(turnEnv, secretEnv), "PATH=/extensions:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-		"HOME="+emulatedHome, "TMPDIR="+emulatedHome, "LANG=C.UTF-8", "TZ=UTC")
+	env := slices.Concat(turnEnv, secretEnv, []string{"PATH=/extensions:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"HOME=" + emulatedHome, "TMPDIR=" + emulatedHome, "LANG=C.UTF-8", "TZ=UTC"})
 	host := &emulatedHost{shell: shell, env: slices.Clone(hostEnv), secrets: secrets, client: easyWebFetchClient(shell.NetworkTargets)}
 
 	for k, v := range shell.Secrets {

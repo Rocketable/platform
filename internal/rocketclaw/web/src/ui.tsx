@@ -355,7 +355,6 @@ function QueuePanel({
 const jobState = (job: BackgroundJob) => ({ completed: "finished", stopped: job.stoppedBy ? `stopped by ${job.stoppedBy}` : "stopped", killed: "killed (server restarted)" } as Record<string, string | undefined>)[job.state] ?? job.state;
 const jobStatus = (job: BackgroundJob) => job.state === "running" ? "running" : ["failed", "killed"].includes(job.state) ? "error" : undefined;
 
-// jobsSlot is the composer's secret and question cards and Background Jobs list, or nothing when the conversation has none.
 function jobsSlot(id: string, jobs: BackgroundJob[] | undefined, onChange: () => Promise<unknown>, openCall: (callId: string) => void, ...cards: ReactNode[]) {
   return jobs?.length || cards.some(Boolean) ? <>{cards}{jobs?.length ? <BackgroundJobs id={id} jobs={jobs} onChange={onChange} openCall={openCall} /> : null}</> : null;
 }
@@ -449,8 +448,7 @@ function useSecrets(conversationId: string, enabled: boolean, refetchInterval?: 
 
 // composerLabels says what Send does: post to the people here while the agent is paused, answer the pending question,
 // queue behind the running turn, or send.
-function composerLabels(paused: boolean, asking: boolean, busy: boolean, id: string, secret = false): { placeholder: string; sendLabel: string } {
-  if (secret) return { ...composerLabels(paused, asking, busy, id), placeholder: "Paste the secret in the form above, not here" };
+function composerLabels(paused: boolean, asking: boolean, busy: boolean, id: string) {
   if (paused) return { placeholder: "Message the people here", sendLabel: "Send to the people here" };
   if (asking) return { placeholder: "Answer the question", sendLabel: "Send answer" };
   if (busy) return { placeholder: "Queue a follow-up", sendLabel: "Send to queue" };
@@ -5574,7 +5572,8 @@ function SessionComposer({
   };
   const pausedIn = usePausedChats(), paused = pausedIn(id), question = useQuestion(id, draft, paused, refreshHistory, setSendError);
   const secrets = useSecrets(id, id !== "");
-  const { placeholder, sendLabel } = composerLabels(paused, question.pending, busy, id, secrets.pending);
+  const labels = composerLabels(paused, question.pending, busy, id);
+  const { sendLabel } = labels, placeholder = secrets.pending ? "Paste the secret in the form above, not here" : labels.placeholder;
   const goSession = (sessionId: string, resumed = false) => {
     void draftContent(JSON.stringify([scope, ""]), () => ({ text: "", files: [], agent: "" })).catch(() => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; onDraftChange(); });
     draft.sessionId = sessionId;

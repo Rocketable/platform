@@ -472,7 +472,7 @@ func (s *SessionService) openCodeWaiting(ctx context.Context, name string, serve
 	waiting := map[string]bool{}
 
 	s.secretsMu.Lock()
-	for key := range s.secrets {
+	for key := range s.secretAsks {
 		if id, ok := strings.CutPrefix(key.conversationID, "opencode:"+name+":"); ok {
 			waiting[id] = true
 		}

@@ -107,7 +107,7 @@ type SessionService struct {
 	scheduled   []string
 
 	secretsMu       sync.Mutex
-	secrets         map[webQuestionKey]*SecretRequest
+	secretAsks      map[webQuestionKey]*SecretRequest
 	openCodeSecrets map[string]*harness.TurnSecretStore
 }
 
@@ -216,7 +216,7 @@ func newSessionService(ctx context.Context, cfg *config.Config, db *sql.DB, logg
 		return nil, hideDSN(err, cfg.DatabaseURL, "initialize rocketclaw state store")
 	}
 
-	return &SessionService{db: db, log: logger, attachments: attachments, definitions: config.NewLockedConfig(cfg), jobs: noConversationJobs{}, historyWorkers: noHistoryWorkers{}, spillDir: rocketcodeSpillDir(cfg), secrets: map[webQuestionKey]*SecretRequest{}, openCodeSecrets: map[string]*harness.TurnSecretStore{}}, nil
+	return &SessionService{db: db, log: logger, attachments: attachments, definitions: config.NewLockedConfig(cfg), jobs: noConversationJobs{}, historyWorkers: noHistoryWorkers{}, spillDir: rocketcodeSpillDir(cfg), secretAsks: map[webQuestionKey]*SecretRequest{}, openCodeSecrets: map[string]*harness.TurnSecretStore{}}, nil
 }
 
 func (s *SessionService) UpsertThread(conversationID string, thread ThreadState) error {
@@ -1245,8 +1245,8 @@ func (s *SessionService) sidebarRows(ctx context.Context, username string, chats
 
 	s.secretsMu.Lock()
 
-	asking := make([]string, 0, len(s.secrets))
-	for key := range s.secrets {
+	asking := make([]string, 0, len(s.secretAsks))
+	for key := range s.secretAsks {
 		asking = append(asking, key.conversationID)
 	}
 	s.secretsMu.Unlock()

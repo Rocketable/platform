@@ -41,9 +41,9 @@ func (s *SessionService) endOpenCodeRun(conversation string) {
 		delete(s.openCodeSecrets, conversation)
 	}
 
-	for key, ask := range s.secrets {
+	for key, ask := range s.secretAsks {
 		if key.conversationID == conversation {
-			delete(s.secrets, key)
+			delete(s.secretAsks, key)
 			close(ask.answered)
 		}
 	}

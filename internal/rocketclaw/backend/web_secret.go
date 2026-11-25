@@ -45,7 +45,7 @@ func askSecretTool(sessions *SessionService, secrets *harness.TurnSecretStore, m
 		}
 
 		sessions.secretsMu.Lock()
-		sessions.secrets[key] = ask
+		sessions.secretAsks[key] = ask
 		sessions.secretsMu.Unlock()
 
 		errAsk := sessions.change(context.WithoutCancel(ctx), `saved AS (SELECT TRUE AS added)`+markAskingSQL, key.conversationID, key.questionID)
@@ -57,7 +57,7 @@ func askSecretTool(sessions *SessionService, secrets *harness.TurnSecretStore, m
 		}
 
 		sessions.secretsMu.Lock()
-		delete(sessions.secrets, key)
+		delete(sessions.secretAsks, key)
 
 		text := cmp.Or(ask.answer, "No answer: the turn stopped or moved this script to the background while ask_secret waited, so the request for "+ask.Name+" was withdrawn and nobody will answer it; it is not set. Ask in the turn that receives this job's result if you still need it.")
 		sessions.secretsMu.Unlock()
@@ -72,7 +72,7 @@ func (s *SessionService) PendingSecrets(conversationID, username string) []Secre
 
 	var pending []SecretRequest
 
-	for key, ask := range s.secrets {
+	for key, ask := range s.secretAsks {
 		if key.conversationID == conversationID && ask.starter == username {
 			pending = append(pending, *ask)
 		}
@@ -89,7 +89,7 @@ func (s *SessionService) AnswerSecret(conversationID, askID, username string, va
 
 	key := webQuestionKey{conversationID, askID}
 
-	ask, waiting := s.secrets[key]
+	ask, waiting := s.secretAsks[key]
 	switch {
 	case !waiting || ask.starter != username:
 		return &QuestionNotPendingError{ConversationID: conversationID, QuestionID: askID}
@@ -103,7 +103,7 @@ func (s *SessionService) AnswerSecret(conversationID, askID, username string, va
 		ask.answer = fmt.Sprintf("Saved: $%[1]s is set in %[2]s for the rest of this turn only, and its value shows to you as [secret:%[1]s]. Do not print it, save it to disk, or put it in command arguments: use tools that read the variable, stdin, or a header file.", ask.Name, ask.commands)
 	}
 
-	delete(s.secrets, key)
+	delete(s.secretAsks, key)
 	close(ask.answered)
 
 	return nil
