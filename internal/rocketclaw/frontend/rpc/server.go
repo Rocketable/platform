@@ -1172,6 +1172,12 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 			return nil, err
 		}
 
+		if title != "" {
+			if title, _, err = s.sessions.NameGenerated(ctx, request.Id, title, true); err != nil {
+				return nil, fmt.Errorf("update web conversation: %w", err)
+			}
+		}
+
 		request.Name = &title
 	}
 

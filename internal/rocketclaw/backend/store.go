@@ -431,6 +431,20 @@ func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversa
 	return rows > 0, commitState(tx, "conversation details update")
 }
 
+func (s *SessionService) NameGenerated(ctx context.Context, conversationID, title string, replaceChosen bool) (name string, renamed bool, err error) {
+	renamed, err = scanFound("name session", s.db.QueryRowContext(ctx, `WITH current AS (
+    SELECT conversation_id, regexp_replace(name, ' \(was .*\)$', '') AS previous FROM conversations
+    WHERE conversation_id = $1 AND ($3 OR name = '' OR name = generated_name)
+), retitled AS (
+    SELECT conversation_id, CASE WHEN previous IN ('', $2) THEN $2 ELSE $2 || ' (was ' || previous || ')' END AS name FROM current
+)
+UPDATE conversations c SET name = r.name, generated_name = r.name FROM retitled r
+WHERE c.conversation_id = r.conversation_id AND ($3 OR c.name = '' OR c.name = c.generated_name)
+RETURNING c.name`, conversationID, title, replaceChosen).Scan(&name))
+
+	return name, renamed, err
+}
+
 func (s *SessionService) MoveConversation(ctx context.Context, conversationID, spaceID string) error {
 	_, err := execState(ctx, s.db, "move conversation", `UPDATE conversations SET space_id = $2 WHERE conversation_id = $1`, conversationID, spaceID)
 	return err

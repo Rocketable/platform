@@ -302,6 +302,46 @@ func TestSidebarSessionNames(t *testing.T) {
 	require.False(t, updated)
 }
 
+func TestNameGeneratedKeepsThePreviousName(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, service.UpsertThread("chat", ThreadState{Agent: "main"}))
+
+	for _, step := range []struct {
+		chosen, title string
+		replaceChosen bool
+		want          string
+		renamed       bool
+	}{
+		{title: "Worktree to add retroturboencabulator", want: "Worktree to add retroturboencabulator", renamed: true},
+		{title: "Fix retroturboencabulator discombobulation", want: "Fix retroturboencabulator discombobulation (was Worktree to add retroturboencabulator)", renamed: true},
+		{title: "Ship the discombobulation fix", want: "Ship the discombobulation fix (was Fix retroturboencabulator discombobulation)", renamed: true},
+		{title: "Ship the discombobulation fix", want: "Ship the discombobulation fix", renamed: true},
+		{chosen: "My encabulator notes", title: "Encabulator release", want: "My encabulator notes"},
+		{title: "Encabulator release", replaceChosen: true, want: "Encabulator release (was My encabulator notes)", renamed: true},
+		{title: "Encabulator rollout", want: "Encabulator rollout (was Encabulator release)", renamed: true},
+	} {
+		if step.chosen != "" {
+			_, err := service.UpdateConversationDetails(ctx, "chat", &step.chosen)
+			require.NoError(t, err)
+		}
+
+		name, renamed, err := service.NameGenerated(ctx, "chat", step.title, step.replaceChosen)
+		require.NoError(t, err)
+		require.Equal(t, step.renamed, renamed, step.title)
+
+		var stored string
+		require.NoError(t, queryScalar(ctx, service.db, "read name", `SELECT name FROM conversations WHERE conversation_id = 'chat'`, &stored))
+		require.Equal(t, step.want, stored)
+
+		if renamed {
+			require.Equal(t, step.want, name)
+		}
+	}
+}
+
 func TestSidebarSessionsListFirstTurnBeforeHistory(t *testing.T) {
 	t.Parallel()
 

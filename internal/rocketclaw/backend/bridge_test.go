@@ -4013,6 +4013,68 @@ func TestFirstWebMessageNamesUnnamedSession(t *testing.T) {
 	require.Equal(t, []string{nt.conversationID + "=", named + "=Chosen name"}, names(), "only a session's first message names it")
 }
 
+func TestEveryFourthWebMessageChecksTheSessionTitle(t *testing.T) {
+	t.Parallel()
+
+	decisions := make(chan string, 8)
+	judge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		decisions <- string(body)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"model":"judge","usage":{},"answers":[{"type":"predicate","name":"title_fits","probability":0.1}]}`)
+	}))
+	t.Cleanup(judge.Close)
+
+	nt := newNoteTest(t, answerNoteTest)
+	nt.cfg.Decision, nt.cfg.TitleDecisionModel = map[config.DecisionProvider]config.DecisionProviderConfig{config.DecisionOpenAI: {APIKey: "test", APIBaseURL: judge.URL}}, "openai/judge"
+	manager, _ := nt.run(t, ignoreOutbound)
+
+	send := func(text string) {
+		msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, text, true)
+		msg.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "alice"}
+
+		bridge := nt.bridge(t, manager, nt.conversationID)
+		require.NoError(t, bridge.Submit(t.Context(), msg))
+		readFinalFor(t, nt.finals, nt.conversationID)
+		bridge.titles.Wait()
+	}
+	name := func() string {
+		var name string
+		require.NoError(t, queryScalar(t.Context(), nt.service.db, "read name", `SELECT name FROM conversations WHERE conversation_id = $1`, &name, nt.conversationID))
+
+		return name
+	}
+
+	for _, text := range []string{"add a worktree", "second", "third"} {
+		send(text)
+	}
+
+	require.Empty(t, decisions, "the first three messages do not check the title")
+	_, _, err := nt.service.NameGenerated(t.Context(), nt.conversationID, "Worktree setup", false)
+	require.NoError(t, err)
+
+	send("now fix the discombobulation")
+	require.Len(t, decisions, 1)
+
+	asked := <-decisions
+	for _, want := range []string{`\"title\":\"Worktree setup\"`, `\"original_request\":\"add a worktree\"`, `User: second`, `User: now fix the discombobulation`} {
+		require.Contains(t, asked, want)
+	}
+
+	require.Equal(t, "Session title (was Worktree setup)", name(), "an outgrown title is regenerated and keeps the old one")
+
+	_, err = nt.service.UpdateConversationDetails(t.Context(), nt.conversationID, new("Chosen name"))
+	require.NoError(t, err)
+
+	for _, text := range []string{"fifth", "sixth", "seventh", "eighth"} {
+		send(text)
+	}
+
+	require.Empty(t, decisions, "a chosen name is never checked")
+	require.Equal(t, "Chosen name", name())
+}
+
 func (nt *noteTest) bridge(t *testing.T, manager *threadBridgeManager, conversationID string) *Bridge {
 	t.Helper()
 

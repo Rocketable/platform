@@ -1417,7 +1417,10 @@ title model (`title_model`, `openai/gpt-6-luna#low` by default) names it from th
 message in the background, as OpenCode does; a name set meanwhile wins. **Regenerate title** in the
 command palette, or saving a blank name, names it again from its first request and
 recent messages, and stays unavailable until that finishes. A failed attempt keeps
-the old name.
+the old name. The new title keeps the name it replaces, as in
+`Encabulator rollout (was Encabulator notes)`. When `title_decision_model` is set, every
+fourth message a person sends checks whether a generated title still fits, and
+renames the session the same way when it does not; a typed name is never checked.
 Pins and names are shared with everyone who can see the session and persist
 across reloads and devices.
 Remote OpenCode names sync both ways: renaming here updates OpenCode, a blank name

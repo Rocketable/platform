@@ -38,6 +38,7 @@ type Config struct {
 	AutoApproverModel    string                                      `json:"auto_approver_model"`
 	AgentEditorModel     string                                      `json:"agent_editor_model,omitempty"`
 	TitleModel           string                                      `json:"title_model,omitempty"`
+	TitleDecisionModel   string                                      `json:"title_decision_model,omitempty"`
 	Decision             map[DecisionProvider]DecisionProviderConfig `json:"decision,omitempty"`
 	AutoApproverDecision AutoApproverDecisionConfig                  `json:"auto_approver_decision,omitzero"`
 	PostHog              PostHogConfig                               `json:"posthog,omitzero"`
@@ -591,14 +592,17 @@ func (c *Config) validateDecision() error {
 		}
 	}
 
-	decision := &c.AutoApproverDecision
-
-	decision.Model = strings.TrimSpace(decision.Model)
-	if provider, model, _ := strings.Cut(decision.Model, "/"); decision.Model != "" && (model == "" || c.Decision[DecisionProvider(provider)] == DecisionProviderConfig{}) {
-		return fmt.Errorf("auto_approver_decision.model: %q must be provider/model with its provider configured in decision", decision.Model)
+	for _, setting := range []struct {
+		field string
+		model *string
+	}{{"auto_approver_decision.model", &c.AutoApproverDecision.Model}, {"title_decision_model", &c.TitleDecisionModel}} {
+		*setting.model = strings.TrimSpace(*setting.model)
+		if provider, model, _ := strings.Cut(*setting.model, "/"); *setting.model != "" && (model == "" || c.Decision[DecisionProvider(provider)] == DecisionProviderConfig{}) {
+			return fmt.Errorf("%s: %q must be provider/model with its provider configured in decision", setting.field, *setting.model)
+		}
 	}
 
-	if decision.MinConfidence < 0 || decision.MinConfidence > 1 {
+	if decision := c.AutoApproverDecision; decision.MinConfidence < 0 || decision.MinConfidence > 1 {
 		return errors.New("auto_approver_decision.min_confidence must be between 0 and 1")
 	}
 
