@@ -57,6 +57,8 @@ linters:
         linters:
           - gocyclo
   settings:
+    dupword:
+      skip-raw-strings: true
     depguard:
       rules:
         main:

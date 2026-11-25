@@ -1,7 +1,7 @@
 ---
 title: Dupword Fix Rewrites Repeated Words in Test Strings and Production SQL
 date: 2026-10-05
-last_updated: 2026-11-17
+last_updated: 2026-11-25
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/backend
 problem_type: best_practice
@@ -71,10 +71,7 @@ The broken query was in production code, and every `ListSessions` call would hav
 
 CI does not catch this either. The `checks` job in `.github/workflows/test.yml` runs the same `--fix` target (`test.yml:71`), and its check that the tree is unchanged (`test.yml:68`) runs before lint. So a repeat in a committed literal is fixed only inside the CI checkout and never fails the job. A local `make lint` or `make test`, though, edits your working copy.
 
-A check that would stop this was not added here, because it needs a CI or Makefile change, or a linter-settings change that needs approval:
-
-- fail when lint changes the tree, by running `git diff --exit-code` after the lint step in CI, or by running golangci-lint without `--fix` there;
-- or set `dupword`'s `skip-raw-strings: true`, which stops it from checking the backtick strings that hold the SQL.
+Since 2026-11-25, `internal/rocketclaw/.golangci.yml` sets `dupword`'s `skip-raw-strings: true`, with the owner's approval, so `--fix` no longer checks or rewrites backtick strings, where the SQL lives. A double-quoted literal, like the Starlark fixture above, is still checked and still rewritten, so the guidance above still applies to those. Lint still does not fail when it changes the tree.
 
 ## When to Apply
 
