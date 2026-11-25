@@ -189,10 +189,7 @@ func TestSpacePermissions(t *testing.T) {
 			return err
 		}, codes.OK},
 		{"DownloadAttachment", func(ctx context.Context, id string) error {
-			return server.downloadAttachment(&mockServerStream{ContextFunc: func() context.Context { return ctx }, RecvMsgFunc: func(message any) error {
-				proto.Merge(message.(*Attachment), &Attachment{ConversationId: id, Id: "file"})
-				return nil
-			}})
+			return server.downloadAttachment(&Attachment{ConversationId: id, Id: "file"}, &mockServerStream{ContextFunc: func() context.Context { return ctx }})
 		}, codes.NotFound},
 	} {
 		require.Equal(t, codes.PermissionDenied, status.Code(tc.read(alice, "main-born")), tc.name)

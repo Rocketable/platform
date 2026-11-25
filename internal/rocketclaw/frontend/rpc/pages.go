@@ -27,6 +27,10 @@ func (s *Server) pageCall(ctx context.Context, request any) (any, error) {
 		return s.messageTree(ctx, request)
 	case *SummarizeBranchRequest:
 		return s.summarizeBranch(ctx, request)
+	case *ListConfigRequest:
+		return s.listConfig(ctx)
+	case *SaveBehaviorSettingsRequest:
+		return s.saveBehaviorSettings(ctx, request)
 	case *PendingSecretsRequest, *AnswerSecretRequest:
 		return s.secretCall(ctx, request)
 	default:

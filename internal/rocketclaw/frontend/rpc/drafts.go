@@ -12,33 +12,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
-	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
-
-func (s *Server) createAgentDraft(ctx context.Context, username string, request *CreateAgentDraftRequest) (*AgentDraft, error) {
-	draft, err := s.sessions.CreateAgentDraft(ctx, username, backend.AgentDraftOrigin{Name: request.Name, Mode: harness.AgentMode(request.Mode), Template: request.Template, Copy: request.Copy})
-	if err != nil {
-		return nil, agentDraftError("CreateAgentDraft", err)
-	}
-
-	return agentDraftView(draft), nil
-}
-
-func (s *Server) listAgentDrafts(ctx context.Context) (*ListAgentDraftsResponse, error) {
-	drafts, err := s.sessions.ListAgentDrafts(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("web agent drafts: %w", err)
-	}
-
-	response := &ListAgentDraftsResponse{Templates: backend.AgentDraftTemplates()}
-	for i := range drafts {
-		response.Drafts = append(response.Drafts, agentDraftView(&drafts[i]))
-	}
-
-	return response, nil
-}
 
 func (s *Server) getAgentDraft(ctx context.Context, username string, request *GetAgentDraftRequest) (*GetAgentDraftResponse, error) {
 	if request.Since == 0 {
@@ -173,15 +149,6 @@ func (s *Server) applyAgentDraftOp(ctx context.Context, username string, request
 	return &ApplyAgentDraftOpResponse{Revision: revision, Cursor: int32(cursor)}, nil
 }
 
-func (s *Server) setAgentDraftPresence(ctx context.Context, username string, request *SetAgentDraftPresenceRequest) (*SetAgentDraftPresenceResponse, error) {
-	presence := request.GetPresence()
-	if err := s.sessions.SetAgentDraftPresence(ctx, request.Id, backend.AgentDraftPresence{Client: presence.GetClient(), Username: username, Variant: presence.GetVariant(), Place: presence.GetPlace()}); err != nil {
-		return nil, fmt.Errorf("web agent draft presence: %w", err)
-	}
-
-	return &SetAgentDraftPresenceResponse{}, nil
-}
-
 func (s *Server) sendAgentDraft(ctx context.Context, send *backend.AgentDraftSend) (*DraftPromptResponse, error) {
 	_, principal, err := s.principal(ctx)
 	if err != nil {
@@ -244,28 +211,6 @@ func (s *Server) saveDraft(ctx context.Context, username string, request *SaveDr
 	}
 
 	return response, nil
-}
-
-func (s *Server) stopWaiting(ctx context.Context, username string, request *StopWaitingRequest) (*SaveDraftResponse, error) {
-	state, err := s.sessions.StopAgentDraftWaiting(ctx, request.Id, username, backend.AgentDraftWaitStopped)
-	if err != nil {
-		return nil, agentDraftError("StopWaiting", err)
-	}
-
-	return &SaveDraftResponse{SaveState: string(state)}, nil
-}
-
-func agentSettings(request *AgentSettingsRequest) *AgentSettingsResponse {
-	response := &AgentSettingsResponse{}
-
-	settings := harness.AgentSettingsFor(harness.AgentMode(request.Mode))
-	for i := range settings {
-		setting := &settings[i]
-		response.Settings = append(response.Settings, &AgentSettingHelp{Key: setting.Key, Group: setting.Group, Label: setting.Label, Explanation: setting.Explanation, DefaultText: setting.Default,
-			Allowed: setting.Allowed, Control: string(setting.Control), Choices: setting.Choices, Required: setting.Required, Common: setting.Common})
-	}
-
-	return response
 }
 
 func agentDraftView(draft *backend.AgentDraft) *AgentDraft {

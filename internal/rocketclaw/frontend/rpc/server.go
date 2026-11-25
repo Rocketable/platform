@@ -99,7 +99,7 @@ type CronJobs interface {
 }
 
 func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, runs: map[string][]*searchRun{}, voiceCalls: map[string]*context.CancelCauseFunc{}, listingSeed: maphash.MakeSeed(), listings: map[string][]sessionListing{}, typingWatchers: map[string]map[chan *TypingEvent]string{}, typingNewest: map[string]map[[2]string]uint32{}}
+	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, searches: map[string]*searchFlight{}, runs: map[string][]*searchRun{}, voiceCalls: map[string]*context.CancelCauseFunc{}, listingSeed: maphash.MakeSeed(), listings: map[string][]sessionListing{}, typingWatchers: map[string]map[chan *TypingEvent]string{}, typingNewest: map[string]map[[2]string]uint32{}}
 }
 
 func (s *Server) ListSessionEntries(ctx context.Context, request *SessionEntriesRequest) (*ListSessionEntriesResponse, error) {
@@ -982,24 +982,6 @@ func conversationKind(kind backend.ConversationKind) ConversationKind {
 	return ConversationKind_WEB_CHAT
 }
 
-func (s *Server) humanConversation(ctx context.Context, id string) (bool, error) {
-	_, run, err := s.sessions.CronRun(ctx, id)
-	if err != nil {
-		return false, fmt.Errorf("resolve web conversation visibility: %w", err)
-	}
-
-	if run {
-		return false, nil
-	}
-
-	_, pair, recorded, err := s.sessions.ExternalMCPSessionByConversationID(id)
-	if err != nil {
-		return false, fmt.Errorf("resolve web conversation visibility: %w", err)
-	}
-
-	return !recorded || pair.PrivateConversationID != id, nil
-}
-
 func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error) {
 	_, limit, err := s.spaceLimit(ctx)
 	if err != nil {
@@ -1455,29 +1437,6 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 	return response, nil
 }
 
-func (s *Server) sessionAgentChoices(ctx context.Context, id string) ([]string, error) {
-	choices, err := s.agentChoices(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	thread, _, err := s.sessions.Thread(id)
-	if err != nil {
-		return nil, fmt.Errorf("read selected conversation: %w", err)
-	}
-
-	definitions, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
-	if err != nil {
-		return nil, fmt.Errorf("load web agents: %w", err)
-	}
-
-	if choices, err = s.sameKind(ctx, definitions, thread, choices); err != nil {
-		return nil, err
-	}
-
-	return sameSpace(definitions, thread.Agent, choices), nil
-}
-
 func (s *Server) sameKind(ctx context.Context, definitions harness.Agents, thread backend.ThreadState, allowed []string) ([]string, error) {
 	var taken map[string]string
 
@@ -1831,11 +1790,26 @@ func webGoal(text string, words []string) (goal protocol.GoalRequest, prompt, re
 }
 
 func (s *Server) agentReply(ctx context.Context, id string, words []string) (*PromptResponse, error) {
-	choices, err := s.sessionAgentChoices(ctx, id)
+	choices, err := s.agentChoices(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
+	thread, _, err := s.sessions.Thread(id)
+	if err != nil {
+		return nil, fmt.Errorf("read selected conversation: %w", err)
+	}
+
+	definitions, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
+	if err != nil {
+		return nil, fmt.Errorf("load web agents: %w", err)
+	}
+
+	if choices, err = s.sameKind(ctx, definitions, thread, choices); err != nil {
+		return nil, err
+	}
+
+	choices = sameSpace(definitions, thread.Agent, choices)
 	if len(words) == 1 {
 		return &PromptResponse{PrivateText: strings.Join(choices, ", ")}, nil
 	}
@@ -1893,8 +1867,18 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 
 	for i := range items {
 		text := strings.Join(append([]string{items[i].Message}, items[i].Content.TextAttachments...), "\n\n")
+		edit, principal := items[i].Message, items[i].Principal
+
 		if inbound := items[i].Inbound; inbound != nil {
 			text = inbound.Text
+
+			if raw, ok := inbound.Metadata[protocol.InboundRawTextMetadataKey]; ok {
+				edit = raw
+			}
+
+			if inbound.Metadata[protocol.InboundSenderSessionMetadataKey] != "" {
+				principal = "agent " + inbound.Metadata[protocol.InboundSenderAgentMetadataKey] + " (session " + inbound.Metadata[protocol.InboundSenderSessionMetadataKey] + ")"
+			}
 		}
 
 		input := &TranscriptEvent{Role: "user", Text: text}
@@ -1908,22 +1892,9 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 			protocol.InboundKindHeld:  PromptDelivery_STASH,
 		}[items[i].Kind]
 
-		principal := items[i].Principal
-		if inbound := items[i].Inbound; inbound != nil && inbound.Metadata[protocol.InboundSenderSessionMetadataKey] != "" {
-			principal = "agent " + inbound.Metadata[protocol.InboundSenderAgentMetadataKey] + " (session " + inbound.Metadata[protocol.InboundSenderSessionMetadataKey] + ")"
-		}
-
 		item := &QueueItem{Id: items[i].ID, Text: input.Text, Attachments: input.Attachments, Delivery: delivery, Principal: principal}
-
-		text = items[i].Message
-		if inbound := items[i].Inbound; inbound != nil {
-			if raw, ok := inbound.Metadata[protocol.InboundRawTextMetadataKey]; ok {
-				text = raw
-			}
-		}
-
-		if text != input.Text {
-			item.EditText = new(text)
+		if edit != input.Text {
+			item.EditText = new(edit)
 		}
 
 		response.Items = append(response.Items, item)
@@ -2192,7 +2163,7 @@ func (s *Server) visibleConversation(ctx context.Context, id string) error {
 	}
 
 	if kind == backend.KindAgentDraft && limit.Limited() {
-		return agentEditorRefusal()
+		return errAgentEditorClosed
 	}
 
 	parent, err := s.sessions.ShadowParent(ctx, id)
@@ -2204,12 +2175,21 @@ func (s *Server) visibleConversation(ctx context.Context, id string) error {
 		return fmt.Errorf("web comparison: %w", status.Error(codes.PermissionDenied, "shadow sessions are read-only"))
 	}
 
-	visible, err := s.humanConversation(ctx, id)
+	_, run, err := s.sessions.CronRun(ctx, id)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve web conversation visibility: %w", err)
 	}
 
-	if !visible {
+	if !run {
+		_, pair, recorded, err := s.sessions.ExternalMCPSessionByConversationID(id)
+		if err != nil {
+			return fmt.Errorf("resolve web conversation visibility: %w", err)
+		}
+
+		run = recorded && pair.PrivateConversationID == id
+	}
+
+	if run {
 		return fmt.Errorf("web queue: %w", status.Error(codes.PermissionDenied, "private conversation"))
 	}
 

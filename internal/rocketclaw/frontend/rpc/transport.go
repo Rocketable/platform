@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -18,6 +19,8 @@ import (
 )
 
 const maxIDBytes = 1024
+
+var errAgentEditorClosed = fmt.Errorf("web agent editor: %w", status.Error(codes.PermissionDenied, "people limited to spaces cannot use the agent editor"))
 
 const webUnaryMethods, editorMethods = "Protocol Identity Reload Prompt History ForkSession StageRevert DeleteBranch MessageTree SummarizeBranch SearchMessages SearchSessions SlackNames Handoff ListAgents CreateSession ListConfig SaveBehaviorSettings ListSkills UpdateSession ListCronJobs RunCronJob ListSessionEntries LoadSessionEntries DeleteSessionEntries DeleteSession ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion PendingSecrets AnswerSecret VoiceSettings Tabs GetPage ListPages ReportTyping FindPullRequests", "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat DraftLayers SaveDraft StopWaiting ProposeDraftChanges DecideProposal"
 
@@ -54,9 +57,7 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 
 	desc.Streams = []grpc.StreamDesc{{StreamName: "UploadAttachment", ClientStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
 		return withoutDatabaseText("UploadAttachment", s.uploadAttachment(stream))
-	}}, {StreamName: "DownloadAttachment", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
-		return withoutDatabaseText("DownloadAttachment", s.downloadAttachment(stream))
-	}}, serverStream("Join", s.join), serverStream("WatchTyping", s.watchTyping), serverStream("Voice", s.voice), serverStream("ListSessions", s.listSessions)}
+	}}, serverStream("DownloadAttachment", s.downloadAttachment), serverStream("Join", s.join), serverStream("WatchTyping", s.watchTyping), serverStream("Voice", s.voice), serverStream("ListSessions", s.listSessions)}
 	registrar.RegisterService(&desc, s)
 }
 
@@ -149,8 +150,6 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 		return s.runCronJob(ctx, request.(*RunCronJobRequest))
 	case "UpdateSession":
 		return s.updateSession(ctx, request.(*UpdateSessionRequest))
-	case "ListConfig", "SaveBehaviorSettings":
-		return s.configCall(ctx, method, request)
 	case "ListSkills":
 		return s.listSkills(ctx, request.(*ListSkillsRequest))
 	case "ListAgents":
@@ -216,17 +215,48 @@ func (s *Server) editorCall(ctx context.Context, method string, request any) (an
 
 	switch method {
 	case "CreateAgentDraft":
-		return s.createAgentDraft(ctx, username, request.(*CreateAgentDraftRequest))
+		create := request.(*CreateAgentDraftRequest)
+
+		draft, err := s.sessions.CreateAgentDraft(ctx, username, backend.AgentDraftOrigin{Name: create.Name, Mode: harness.AgentMode(create.Mode), Template: create.Template, Copy: create.Copy})
+		if err != nil {
+			return nil, agentDraftError("CreateAgentDraft", err)
+		}
+
+		return agentDraftView(draft), nil
 	case "ListAgentDrafts":
-		return s.listAgentDrafts(ctx)
+		drafts, err := s.sessions.ListAgentDrafts(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("web agent drafts: %w", err)
+		}
+
+		response := &ListAgentDraftsResponse{Templates: backend.AgentDraftTemplates()}
+		for i := range drafts {
+			response.Drafts = append(response.Drafts, agentDraftView(&drafts[i]))
+		}
+
+		return response, nil
 	case "GetAgentDraft":
 		return s.getAgentDraft(ctx, username, request.(*GetAgentDraftRequest))
 	case "ApplyAgentDraftOp":
 		return s.applyAgentDraftOp(ctx, username, request.(*ApplyAgentDraftOpRequest))
 	case "SetAgentDraftPresence":
-		return s.setAgentDraftPresence(ctx, username, request.(*SetAgentDraftPresenceRequest))
+		change := request.(*SetAgentDraftPresenceRequest)
+		if err := s.sessions.SetAgentDraftPresence(ctx, change.Id, backend.AgentDraftPresence{Client: change.GetPresence().GetClient(), Username: username, Variant: change.GetPresence().GetVariant(), Place: change.GetPresence().GetPlace()}); err != nil {
+			return nil, fmt.Errorf("web agent draft presence: %w", err)
+		}
+
+		return &SetAgentDraftPresenceResponse{}, nil
 	case "AgentSettings":
-		return agentSettings(request.(*AgentSettingsRequest)), nil
+		response := &AgentSettingsResponse{}
+
+		settings := harness.AgentSettingsFor(harness.AgentMode(request.(*AgentSettingsRequest).Mode))
+		for i := range settings {
+			setting := &settings[i]
+			response.Settings = append(response.Settings, &AgentSettingHelp{Key: setting.Key, Group: setting.Group, Label: setting.Label, Explanation: setting.Explanation, DefaultText: setting.Default,
+				Allowed: setting.Allowed, Control: string(setting.Control), Choices: setting.Choices, Required: setting.Required, Common: setting.Common})
+		}
+
+		return response, nil
 	case "DraftPrompt":
 		prompt := request.(*DraftPromptRequest)
 		return s.sendAgentDraft(ctx, &backend.AgentDraftSend{ID: prompt.Id, Username: username, Texts: []string{prompt.Text}})
@@ -238,7 +268,12 @@ func (s *Server) editorCall(ctx context.Context, method string, request any) (an
 	case "SaveDraft":
 		return s.saveDraft(ctx, username, request.(*SaveDraftRequest))
 	case "StopWaiting":
-		return s.stopWaiting(ctx, username, request.(*StopWaitingRequest))
+		state, err := s.sessions.StopAgentDraftWaiting(ctx, request.(*StopWaitingRequest).Id, username, backend.AgentDraftWaitStopped)
+		if err != nil {
+			return nil, agentDraftError("StopWaiting", err)
+		}
+
+		return &SaveDraftResponse{SaveState: string(state)}, nil
 	case "ProposeDraftChanges":
 		return s.proposeDraftChanges(ctx, username, request.(*ProposeDraftChangesRequest))
 	case "DecideProposal":
@@ -264,23 +299,10 @@ func (s *Server) editor(ctx context.Context) (string, error) {
 	}
 
 	if limit.Limited() {
-		return "", agentEditorRefusal()
+		return "", errAgentEditorClosed
 	}
 
 	return username, nil
-}
-
-func agentEditorRefusal() error {
-	return fmt.Errorf("web agent editor: %w", status.Error(codes.PermissionDenied, "people limited to spaces cannot use the agent editor"))
-}
-
-func (s *Server) configCall(ctx context.Context, method string, request any) (any, error) {
-	switch method {
-	case "SaveBehaviorSettings":
-		return s.saveBehaviorSettings(ctx, request.(*SaveBehaviorSettingsRequest))
-	default:
-		return s.listConfig(ctx)
-	}
 }
 
 func (s *Server) identity(ctx context.Context) (*IdentityResponse, error) {
@@ -325,9 +347,5 @@ func (s *Server) historyRPC(ctx context.Context, request *HistoryRequest) (*Hist
 		return nil, err
 	}
 
-	if err := s.listPending(ctx, response, request); err != nil {
-		return nil, err
-	}
-
-	return response, nil
+	return response, s.listPending(ctx, response, request)
 }

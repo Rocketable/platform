@@ -20,7 +20,7 @@ func TestHTTPJSONCompressionAllocations(t *testing.T) {
 func TestHTTPJSONCompression(t *testing.T) {
 	t.Parallel()
 
-	var writers sync.Pool
+	writers := sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
 
 	for _, text := range []string{"", "alpha", "quote\" 日本語"} {
 		t.Run(text, func(t *testing.T) {
@@ -57,7 +57,7 @@ func TestHTTPJSONCompression(t *testing.T) {
 }
 
 func BenchmarkHTTPJSONCompression(b *testing.B) {
-	var writers sync.Pool
+	writers := sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
 
 	data := bytes.Repeat([]byte(`{"message":"hello"}`), 256)
 	request := httptest.NewRequest(http.MethodPost, "/api/Example", http.NoBody)

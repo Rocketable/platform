@@ -104,16 +104,7 @@ func (u *uploadFrames) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func (s *Server) downloadAttachment(stream grpc.ServerStream) error {
-	request := &Attachment{}
-	if err := stream.RecvMsg(request); err != nil {
-		return fmt.Errorf("receive download request: %w", err)
-	}
-
-	if err := validRequest(request.ProtoReflect()); err != nil {
-		return err
-	}
-
+func (s *Server) downloadAttachment(request *Attachment, stream grpc.ServerStream) error {
 	history, err := s.history(stream.Context(), &HistoryRequest{Id: request.ConversationId})
 	if err != nil {
 		return err

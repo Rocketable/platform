@@ -700,6 +700,7 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 	started := make(chan context.Context, 3)
 	release := make(chan struct{})
 	server := &Server{
+		searches: map[string]*searchFlight{},
 		sessions: sessions,
 		cfg:      new(config.LockedConfig),
 		channels: &mockChannels{SlackTagsMatchingFunc: func(ctx context.Context, _ string) []string {
@@ -793,6 +794,7 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 
 	matching := map[string][]string{"cs-operators": {"S01ABCDEF56"}, "sam": {"U01ABCDEF23"}}
 	server := &Server{
+		searches: map[string]*searchFlight{},
 		sessions: sessions,
 		cfg:      new(config.LockedConfig),
 		channels: &mockChannels{SlackTagsMatchingFunc: func(_ context.Context, needle string) []string {
@@ -840,6 +842,7 @@ func TestSearchSessionsSharedFlightCancellation(t *testing.T) {
 	started := make(chan context.Context, 3)
 	release := make(chan struct{})
 	server := &Server{
+		searches: map[string]*searchFlight{},
 		sessions: sessions,
 		channels: &mockChannels{SlackTagsMatchingFunc: func(ctx context.Context, _ string) []string {
 			started <- ctx
@@ -939,6 +942,7 @@ func TestSearchSessionsUnreadPerCaller(t *testing.T) {
 
 	release := make(chan struct{})
 	server := &Server{
+		searches: map[string]*searchFlight{},
 		sessions: sessions,
 		channels: &mockChannels{SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) {
 			<-release
@@ -1016,7 +1020,7 @@ WHERE c.conversation_id = v.id`)
 		SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) { return "support", []string{"main"}, nil },
 		SlackTagsMatchingFunc:          func(context.Context, string) []string { return []string{"U7"} },
 	}
-	server := &Server{sessions: sessions, channels: channels}
+	server := &Server{sessions: sessions, channels: channels, searches: map[string]*searchFlight{}}
 
 	_, err = server.searchSessions(t.Context(), &SearchSessionsRequest{Query: "billing", Messages: true})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
@@ -1060,6 +1064,7 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
 	server := &Server{
+		searches: map[string]*searchFlight{},
 		backend:  withoutBackgroundJobs(),
 		sessions: sessions,
 		cfg:      config.NewLockedConfig(cfg),

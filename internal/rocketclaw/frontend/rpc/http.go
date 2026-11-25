@@ -41,7 +41,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 
 	app := web.Handler(cfg, serverName)
 
-	var gzipWriters sync.Pool
+	gzipWriters := sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
 
 	mux.Handle("GET /", app)
 	mux.Handle("GET /api/", http.NotFoundHandler())
@@ -345,10 +345,7 @@ func httpJSON(w http.ResponseWriter, r *http.Request, body []byte, writers *sync
 
 	w.Header().Set("Content-Encoding", "gzip")
 
-	compressed, ok := writers.Get().(*gzip.Writer)
-	if !ok {
-		compressed = gzip.NewWriter(io.Discard)
-	}
+	compressed := writers.Get().(*gzip.Writer)
 
 	compressed.Reset(w)
 	_, _ = compressed.Write(body)
@@ -423,10 +420,7 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Add("Vary", "Accept-Encoding")
 
-		compressed, ok := writers.Get().(*gzip.Writer)
-		if !ok {
-			compressed = gzip.NewWriter(io.Discard)
-		}
+		compressed := writers.Get().(*gzip.Writer)
 
 		compressed.Reset(w)
 		defer func() {

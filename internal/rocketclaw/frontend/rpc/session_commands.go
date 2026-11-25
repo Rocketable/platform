@@ -372,10 +372,6 @@ func sharedSearch[T any](ctx context.Context, s *Server, key string, work search
 		scanCtx, cancel = context.WithCancel(context.WithoutCancel(ctx))
 
 		flight = &searchFlight{cancel: cancel, done: make(chan struct{})}
-		if s.searches == nil {
-			s.searches = make(map[string]*searchFlight)
-		}
-
 		s.searches[key] = flight
 	}
 
