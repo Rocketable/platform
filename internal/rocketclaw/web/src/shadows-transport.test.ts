@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { listSessions } from "./api";
 import type { HistoryView } from "./types";
 
-// Go's TestShadowsRealBackendBrowser owns the real backend, provider and store.
 test("real child-only changes refresh paired shadow turns through the parent stream", async () => {
   const url = process.env.ROCKETCLAW_SHADOW_TEST_URL!;
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
@@ -16,7 +15,6 @@ test("real child-only changes refresh paired shadow turns through the parent str
     page.on("request", (request: { url(): string; postDataJSON(): { id: string } }) => {
       const requestURL = new URL(request.url());
       if (requestURL.pathname === "/stream") streams.push(requestURL.searchParams.get("id")!);
-      // PR discovery reads the same endpoint independently of the live transcript.
       if (requestURL.pathname === "/api/History" && !requestURL.searchParams.has("pull-request-discovery")) { reads.push(request.postDataJSON().id); pendingReads++; }
     });
     for (const settled of ["requestfinished", "requestfailed"]) page.on(settled, (request: { url(): string }) => {
@@ -50,11 +48,6 @@ test("real child-only changes refresh paired shadow turns through the parent str
     const parentText = await rows.evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => (node.children[0] as HTMLElement).innerText));
     expect(parentText.every((text: string) => !text.includes("gpt-shadow"))).toBe(true);
     expect((await page.locator("[data-shadow-cell]").allTextContents()).join("\n")).not.toContain("answer");
-    // Inactive B has no browser reads. A held child does not create a polling
-    // loop during this bounded observation window either. Send returns while the
-    // parent turn is still delivering; its close re-reads History once more, and
-    // so does the page when the second turn's Prompt call returns after that
-    // close. Observe from both re-reads after the page's reads settle.
     while ((await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).some((batch) => batch.sessions?.some((session) => session.id === "parent" && session.running))) await page.waitForTimeout(10);
     while (prompts < 2 || reads.length === readsAtPrompt) await page.waitForTimeout(10);
     for (let settled = -1; pendingReads || settled !== reads.length; await page.waitForTimeout(100)) settled = reads.length;

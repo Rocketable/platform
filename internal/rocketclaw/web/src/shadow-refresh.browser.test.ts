@@ -43,7 +43,6 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/History": {
-        // The desktop pull request watch reads history too; these reads are the transcript's.
         if (url.searchParams.has("pull-request-discovery")) return Response.json({ messages: [], more: false });
         reads.push(input);
         if (input.id === "parent") return Response.json(mode === "earlier" && !input.before ? { ...tail, reset: !input.revision } : parent);
@@ -95,7 +94,6 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
     stream!.enqueue(`data: ${JSON.stringify({ conversationId: "parent", revision: "complete" })}\n\n`);
     if (mode !== "earlier") {
       await refreshed;
-      // Wait for the parent metadata to render before releasing the old child snapshot.
       await page.locator("[data-shadow-cell]").getByText("Completed silently.", { exact: true }).or(page.locator("[data-shadow-cell]").getByText("Completed.", { exact: true })).waitFor();
       delayed.resolve(Response.json(view([message("a", 1, "Partial child answer")])));
     } else await refreshed;
@@ -106,7 +104,6 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
     expect(streams).toEqual(["parent"]);
     expect(reads.every((read) => read.id !== "b")).toBe(true);
     expect(reads.every((read) => read.limit === 50 || read.id === "parent" && !!read.before && !!read.from)).toBe(true);
-    // A fingerprint key change cancels the obsolete read; its replacement owns a fresh signal.
     expect(failedReads).toHaveLength(mode === "earlier" ? 0 : 1);
     if (mode === "cached") {
       const backoffs = [1000, 2000, 4000];
