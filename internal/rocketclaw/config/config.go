@@ -376,20 +376,10 @@ func (c *Config) Validate() error {
 		return errors.New("mcp_external.listen_addr is required when mcp_external is enabled")
 	}
 
-	if err := c.validateMCPServers(); err != nil {
-		return err
-	}
-
-	if err := c.validateOpenCode(); err != nil {
-		return err
-	}
-
-	if err := c.validateRocketClaws(); err != nil {
-		return err
-	}
-
-	if err := c.validatePermissions(); err != nil {
-		return err
+	for _, validate := range []func() error{c.validateMCPServers, c.validateOpenCode, c.validateRocketClaws, c.validatePermissions} {
+		if err := validate(); err != nil {
+			return err
+		}
 	}
 
 	if c.Slack.BotToken == "" && c.Slack.AppToken == "" {
@@ -410,7 +400,14 @@ func (c *Config) ValidateBehavior() error {
 		c.Logging.Level = "debug"
 	}
 
-	c.Overlays = normalizeStrings(c.Overlays)
+	overlays := make([]string, 0, len(c.Overlays))
+	for _, overlay := range c.Overlays {
+		if overlay = strings.TrimSpace(overlay); overlay != "" {
+			overlays = append(overlays, overlay)
+		}
+	}
+
+	c.Overlays = overlays
 
 	var err error
 
@@ -694,15 +691,4 @@ func validateMCPServerName(name string) error {
 	}
 
 	return nil
-}
-
-func normalizeStrings(values []string) []string {
-	normalized := make([]string, 0, len(values))
-	for _, value := range values {
-		if value = strings.TrimSpace(value); value != "" {
-			normalized = append(normalized, value)
-		}
-	}
-
-	return normalized
 }

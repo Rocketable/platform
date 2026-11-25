@@ -306,10 +306,24 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 	startedAt := time.Now()
 
 	defer func() {
-		c.logDelivery(msg, startedAt, err)
+		outcome := "acknowledged"
+
+		switch {
+		case err != nil:
+			outcome = "failed"
+		case msg.Terminal == protocol.TerminalStopped:
+			outcome = "stopped"
+		case msg.Terminal == protocol.TerminalFailed:
+			outcome = "generation_failed"
+		case msg.Text == "" && len(msg.Attachments) == 0:
+			outcome = "empty"
+		}
+
+		c.log.Info("Slack delivery returned", "event", "slack_delivery", "conversation_id", msg.ConversationID, "turn_id", msg.TurnID, "channel", msg.SlackReply.ChannelID, "thread_ts", msg.SlackReply.ThreadTS, "outcome", outcome, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
 	}()
 
 	footerText, footer := c.mentionFooter(ctx, msg)
+	channelID, threadTS := slackReplyDestination(msg.SlackReply)
 
 	switch {
 	case msg.Text != "" && msg.GoalTurn:
@@ -317,7 +331,12 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 	case msg.Text != "":
 		_, err = c.sendTitledResponse(ctx, msg, "💬 "+msg.Agent, slackTruncatedText(msg.Text, slackTextLimit), footer, "reply")
 	case len(footer) > 0:
-		c.sendFooterOnlyResponse(ctx, msg, footerText, footer)
+		key := msg.TurnID + "/footer"
+		footer[0].(*slack.ContextBlock).BlockID = key
+
+		if _, errFooter := c.postOnce(ctx, msg.ConversationID, key, channelID, threadTS, slack.MsgOptionText(footerText, false), slack.MsgOptionBlocks(footer...)); errFooter != nil {
+			c.log.Warn("send Slack footer-only reply", "conversation_id", msg.ConversationID, "turn_id", msg.TurnID, "error", errFooter)
+		}
 	}
 
 	if err != nil {
@@ -328,7 +347,6 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 		c.log.Info("Slack text accepted", "event", "slack_text_delivery", "outcome", "accepted", "conversation_id", msg.ConversationID, "turn_id", msg.TurnID, "channel", msg.SlackReply.ChannelID, "thread_ts", msg.SlackReply.ThreadTS, "duration_ms", time.Since(startedAt).Milliseconds())
 	}
 
-	channelID, threadTS := slackReplyDestination(msg.SlackReply)
 	if err := c.uploadResponseAttachments(ctx, channelID, threadTS, msg.Attachments); err != nil {
 		c.log.Warn("upload Slack response attachments", "error_type", fmt.Sprintf("%T", err))
 	}
@@ -409,18 +427,6 @@ func titledMessageLayout(header, text string) (blocks []slack.Block, overflow []
 	return blocks, bodyChunks[rootBodyCount:]
 }
 
-func (c *Connector) slackFooter(agent, state, conversationID string) (string, []slack.Block) {
-	text := agent + " · " + state
-
-	if link, err := c.threadRouter.WebURL(conversationID); err != nil {
-		c.log.Warn("build Slack footer Web link", "conversation_id", conversationID, "error", err)
-	} else {
-		text += " · <" + link + "|Open in Web>"
-	}
-
-	return text, []slack.Block{slack.NewContextBlock("", slack.NewTextBlockObject(slack.MarkdownType, text, false, false))}
-}
-
 func (c *Connector) mentionThread(ctx context.Context, msg *protocol.OutboundMessage) bool {
 	if msg.TurnID == "" {
 		return false
@@ -450,7 +456,15 @@ func (c *Connector) mentionFooter(ctx context.Context, msg *protocol.OutboundMes
 		state = string(msg.Terminal)
 	}
 
-	return c.slackFooter(msg.Agent, state, msg.ConversationID)
+	text := msg.Agent + " · " + state
+
+	if link, err := c.threadRouter.WebURL(msg.ConversationID); err != nil {
+		c.log.Warn("build Slack footer Web link", "conversation_id", msg.ConversationID, "error", err)
+	} else {
+		text += " · <" + link + "|Open in Web>"
+	}
+
+	return text, []slack.Block{slack.NewContextBlock("", slack.NewTextBlockObject(slack.MarkdownType, text, false, false))}
 }
 
 func (c *Connector) startSession(ctx context.Context, conversationID, turnID, channelID, threadTS string) {
@@ -564,15 +578,6 @@ func (c *Connector) setSessionStatus(ctx context.Context, params *slack.AgentSes
 	}
 }
 
-func (c *Connector) settleSession(ctx context.Context, channelID, threadTS string) {
-	c.responseMu.Lock()
-	defer c.responseMu.Unlock()
-
-	if turnID, _ := c.sessionTurn(channelID, threadTS); turnID == "" {
-		c.setSessionStatus(ctx, &slack.AgentSessionSetStatusParameters{Status: slack.AgentSessionStatusActive, ChannelID: channelID, ThreadTS: threadTS})
-	}
-}
-
 func (c *Connector) sessionTurn(channelID, threadTS string) (string, *slackSession) {
 	for id, session := range c.sessions {
 		if session.channelID == channelID && session.threadTS == threadTS {
@@ -601,33 +606,6 @@ func (c *Connector) handleAgentSessionTitleChanged(ctx context.Context, ev *slac
 			return
 		}
 	}
-}
-
-func (c *Connector) sendFooterOnlyResponse(ctx context.Context, msg *protocol.OutboundMessage, footerText string, footer []slack.Block) {
-	key := msg.TurnID + "/footer"
-	footer[0].(*slack.ContextBlock).BlockID = key
-	channelID, threadTS := slackReplyDestination(msg.SlackReply)
-
-	if _, err := c.postOnce(ctx, msg.ConversationID, key, channelID, threadTS, slack.MsgOptionText(footerText, false), slack.MsgOptionBlocks(footer...)); err != nil {
-		c.log.Warn("send Slack footer-only reply", "conversation_id", msg.ConversationID, "turn_id", msg.TurnID, "error", err)
-	}
-}
-
-func (c *Connector) logDelivery(msg *protocol.OutboundMessage, startedAt time.Time, err error) {
-	outcome := "acknowledged"
-
-	switch {
-	case err != nil:
-		outcome = "failed"
-	case msg.Terminal == protocol.TerminalStopped:
-		outcome = "stopped"
-	case msg.Terminal == protocol.TerminalFailed:
-		outcome = "generation_failed"
-	case msg.Text == "" && len(msg.Attachments) == 0:
-		outcome = "empty"
-	}
-
-	c.log.Info("Slack delivery returned", "event", "slack_delivery", "conversation_id", msg.ConversationID, "turn_id", msg.TurnID, "channel", msg.SlackReply.ChannelID, "thread_ts", msg.SlackReply.ThreadTS, "outcome", outcome, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
 }
 
 func (c *Connector) recordChannelFact(ctx context.Context, channelID, name string, observedAt time.Time) {
@@ -934,29 +912,22 @@ func (c *Connector) runSocketLoop(ctx context.Context) {
 	for ctx.Err() == nil {
 		client := c.newSocketClient(c.api)
 		runCtx, cancel := context.WithCancel(ctx)
-		done := make(chan error, 1)
 
-		go func() {
-			done <- c.runSocketClient(runCtx, client)
-		}()
+		var running errgroup.Group
 
-		var errRun error
+		running.Go(func() error {
+			defer cancel()
+
+			return c.runSocketClient(runCtx, client)
+		})
 
 	clientLoop:
 		for {
 			select {
-			case <-ctx.Done():
-				cancel()
-
-				errRun = <-done
-
+			case <-runCtx.Done():
 				break clientLoop
 			case event, ok := <-client.Events:
 				if !ok {
-					cancel()
-
-					errRun = <-done
-
 					break clientLoop
 				}
 
@@ -968,23 +939,15 @@ func (c *Connector) runSocketLoop(ctx context.Context) {
 
 				select {
 				case c.socketEvents <- event:
-				case <-ctx.Done():
-					cancel()
-
-					errRun = <-done
-
-					break clientLoop
-				case errRun = <-done:
-					cancel()
+				case <-runCtx.Done():
 					break clientLoop
 				}
-			case errRun = <-done:
-				cancel()
-				break clientLoop
 			}
 		}
 
-		if errRun != nil && ctx.Err() == nil {
+		cancel()
+
+		if errRun := running.Wait(); errRun != nil && ctx.Err() == nil {
 			c.log.Warn("Slack socket mode stopped", "error", errRun)
 		}
 
@@ -1059,20 +1022,12 @@ func (c *Connector) handleAgentSessionStopped(ctx context.Context, ev *slackeven
 }
 
 func (c *Connector) addGoalCompleteReaction(ctx context.Context, channelID, messageTS, logMessage string) {
-	if strings.TrimSpace(channelID) == "" || strings.TrimSpace(messageTS) == "" {
-		return
-	}
-
 	if err := c.api.AddReactionContext(ctx, slackGoalCompleteReaction, slack.NewRefToMessage(channelID, messageTS)); err != nil {
 		c.log.Warn(logMessage, "channel", channelID, "message_ts", messageTS, "error", err)
 	}
 }
 
 func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.AppMentionEvent, forward slackNativeForward) {
-	if ev == nil {
-		return
-	}
-
 	if ev.User == "" || ev.User == c.botUserID || ev.BotID != "" || ev.Edited != nil || strings.HasPrefix(ev.Channel, "D") || !slices.ContainsFunc(c.config.Clone().Slack.Channels, func(channel config.SlackChannelConfig) bool {
 		return slices.Contains(channel.AllowedUserIDs, strings.TrimSpace(ev.User))
 	}) {
@@ -1154,7 +1109,11 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	accepted, err := c.threadRouter.SubmitMention(ctx, agent, target, inbound)
 	if err != nil || !accepted {
-		c.settleSession(ctx, ev.Channel, threadTS)
+		c.responseMu.Lock()
+		if turnID, _ := c.sessionTurn(ev.Channel, threadTS); turnID == "" {
+			c.setSessionStatus(ctx, &slack.AgentSessionSetStatusParameters{Status: slack.AgentSessionStatusActive, ChannelID: ev.Channel, ThreadTS: threadTS})
+		}
+		c.responseMu.Unlock()
 	}
 
 	if err != nil && !accepted {
@@ -1386,9 +1345,6 @@ func (c *Connector) refreshNames(ctx context.Context) {
 
 func (c *Connector) slackPrincipal(ctx context.Context, userID string) (principal, name, email string) {
 	userID = strings.TrimSpace(userID)
-	if userID == "" {
-		return "", "", ""
-	}
 
 	user, err := c.api.GetUserInfoContext(ctx, userID)
 	if err != nil {

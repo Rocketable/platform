@@ -254,10 +254,8 @@ func (m *Manager) runTickerLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 
-		if err := m.scanScheduled(ctx); err != nil {
-			if ctx.Err() == nil {
-				m.log.Error("scan scheduled cronjobs", "error", err)
-			}
+		if err := m.scanScheduled(ctx); err != nil && ctx.Err() == nil {
+			m.log.Error("scan scheduled cronjobs", "error", err)
 		}
 	}
 }

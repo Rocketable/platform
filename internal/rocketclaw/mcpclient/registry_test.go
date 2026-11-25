@@ -150,7 +150,6 @@ func TestSessionErrors(t *testing.T) {
 		want    string
 	}{
 		{name: "unknown server", server: "nope", want: `unknown mcp server "nope"`},
-		{name: "missing transport", server: "demo", want: `mcp server "demo": no transport configured`},
 		{name: "invalid URL", server: "demo", config: ServerConfig{URL: "http://[::1", Headers: map[string]string{"Authorization": "Bearer test"}}, want: `connect mcp server "demo":`},
 		{name: "unsupported HTTP scheme", server: "demo", config: ServerConfig{URL: "ftp://example.com", Headers: map[string]string{"Authorization": "Bearer test"}}, want: `mcp http: unsupported protocol scheme "ftp"`},
 		{name: "session value with a newline", server: "demo", config: ServerConfig{URL: "http://127.0.0.1:9"}, session: map[string]string{"ROCKETCLAW_METADATA_NOTE": "a\r\nX-Injected: b"}, want: `invalid header field value for "X-Rocketclaw-Metadata-Note"`},

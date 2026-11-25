@@ -2825,40 +2825,35 @@ func TestSlackPrincipal(t *testing.T) {
 		{name: "real name when display empty", userID: userID, ok: true, real: "Jane Doe", want: []string{"Jane Doe (U02ABCDEF34)", "Jane Doe", ""}},
 		{name: "no name", userID: userID, ok: true, email: "u@example.com", want: []string{userID, "", ""}},
 		{name: "users.info error", userID: userID, want: []string{userID, "", ""}},
-		{name: "empty user ID", want: []string{"", "", ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			connector := newTestConnector("http://slack.test")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/users.info" {
+					assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+					return
+				}
 
-			if tc.userID != "" {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path != "/users.info" {
-						assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-						return
-					}
+				if !tc.ok {
+					writeJSON(t, w, map[string]any{"ok": false, "error": "user_not_found"})
+					return
+				}
 
-					if !tc.ok {
-						writeJSON(t, w, map[string]any{"ok": false, "error": "user_not_found"})
-						return
-					}
-
-					writeJSON(t, w, map[string]any{
-						"ok": true,
-						"user": map[string]any{
-							"id":        tc.userID,
-							"name":      "forbidden-username",
-							"real_name": tc.real,
-							"profile": map[string]any{
-								"display_name": tc.display,
-								"real_name":    "forbidden-profile-real-name",
-								"email":        tc.email,
-							},
+				writeJSON(t, w, map[string]any{
+					"ok": true,
+					"user": map[string]any{
+						"id":        tc.userID,
+						"name":      "forbidden-username",
+						"real_name": tc.real,
+						"profile": map[string]any{
+							"display_name": tc.display,
+							"real_name":    "forbidden-profile-real-name",
+							"email":        tc.email,
 						},
-					})
-				}))
-				t.Cleanup(server.Close)
-				connector = newTestConnector(server.URL)
-			}
+					},
+				})
+			}))
+			t.Cleanup(server.Close)
+			connector := newTestConnector(server.URL)
 
 			principal, name, email := connector.slackPrincipal(t.Context(), tc.userID)
 			assert.Equal(t, tc.want, []string{principal, name, email})

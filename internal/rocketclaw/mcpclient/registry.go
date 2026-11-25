@@ -183,7 +183,7 @@ func (s *Session) connect(ctx context.Context, name string) (*mcp.ClientSession,
 		}
 
 		cs, err = client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
-	case cfg.URL != "":
+	default:
 		t := &mcp.StreamableClientTransport{Endpoint: cfg.URL, DisableStandaloneSSE: true}
 		t.HTTPClient = &http.Client{Timeout: httpClientTimeout, CheckRedirect: sameHostRedirects}
 
@@ -201,8 +201,6 @@ func (s *Session) connect(ctx context.Context, name string) (*mcp.ClientSession,
 		}
 
 		cs, err = client.Connect(ctx, t, nil)
-	default:
-		return nil, fmt.Errorf("mcp server %q: no transport configured", name)
 	}
 
 	if err != nil {
