@@ -130,7 +130,6 @@ On start, you must always read:
 - For goroutine coordination, use https://pkg.go.dev/golang.org/x/sync/errgroup and https://pkg.go.dev/github.com/alitto/pond/v2.
 - If you are using multiple mutexes in the same struct, consider whether you are making things overcomplex. Prefer reading once at the start and using the resulting value over time, or consolidating lifetimes under a single mutex hat.
 - Whenever you feel like adding a mutex, question why you need this mutex instead of using another mutex that encapsulates the lifetime of the variables you must work with.
-- In Go, error variables always start with `err`: `errRun`, `errWait`, `errParse`, not `runErr`, `waitErr`, `parseErr`. Check every one the diff adds or renames.
 - Bias toward strong error types for new error contexts when practical. Prefer typed errors with `Unwrap` over ad hoc string-only `fmt.Errorf` wrappers when callers may benefit from structured operation context.
 - Prefer strong types over `map[string]any`. Use `map[string]any` only at truly dynamic boundaries where the key set is not known at compile time; otherwise define a small struct with explicit fields. In tests, typed request/result structs are still required when the shape is known; keep `map[string]any` confined to the unavoidable protocol/schema boundary and do not let it spread into helper APIs or assertions.
 - Use Go-style enum types for operation/category fields instead of raw strings.
