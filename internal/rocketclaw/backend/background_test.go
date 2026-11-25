@@ -33,7 +33,7 @@ func testTurnRoot(t *testing.T) *turnRoot {
 	root, err := os.OpenRoot(t.TempDir())
 	require.NoError(t, err)
 
-	shared := &turnRoot{root: root, users: 1}
+	shared := &turnRoot{root: root, secrets: harness.NewTurnSecretStore(), users: 1}
 	t.Cleanup(shared.release)
 
 	return shared

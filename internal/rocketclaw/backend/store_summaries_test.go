@@ -372,12 +372,11 @@ func TestSidebarSessionsMarkUnansweredQuestions(t *testing.T) {
 
 	require.False(t, asking())
 
-	questions := &webQuestions{store: service}
-	require.NoError(t, questions.change(ctx, askWebQuestionSQL, "asking", "turn-1/call/c1"+webQuestionStep, "{}"))
+	require.NoError(t, service.change(ctx, askWebQuestionSQL, "asking", "turn-1/call/c1"+webQuestionStep, "{}"))
 	require.True(t, asking())
 	require.Equal(t, []string{alice + " loud"}, attentionOn(t, service, "asking"))
 
-	require.NoError(t, questions.change(ctx, saveWebQuestionStep, "asking", "turn-1/call/c1/answer", "{}"))
+	require.NoError(t, service.change(ctx, saveWebQuestionStep, "asking", "turn-1/call/c1/answer", "{}"))
 	require.False(t, asking())
 
 	_, err = service.finishTurn(ctx, "turn-1", &turnFinish{conversationID: strings.TrimSpace("asking"), outbound: protocol.NewOutboundMessage("asking", ""), entries: []harness.SessionEntry{*testSessionEntry("question", "answer")}})
@@ -386,7 +385,7 @@ func TestSidebarSessionsMarkUnansweredQuestions(t *testing.T) {
 
 	_, err = service.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
 	require.NoError(t, err)
-	require.NoError(t, questions.change(ctx, askWebQuestionSQL, "asking", "turn-0/call/c2"+webQuestionStep, "{}"))
+	require.NoError(t, service.change(ctx, askWebQuestionSQL, "asking", "turn-0/call/c2"+webQuestionStep, "{}"))
 	require.False(t, asking(), "a question no running turn waits on asks nothing")
 	require.Empty(t, attentionOn(t, service, "asking"), "and marks no one")
 }

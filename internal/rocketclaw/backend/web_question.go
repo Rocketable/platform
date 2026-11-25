@@ -17,7 +17,9 @@ const saveWebQuestionStep = `saved AS (
     RETURNING old.key IS NULL AS added
 )`
 
-const askWebQuestionSQL = saveWebQuestionStep + `, running AS (
+const askWebQuestionSQL = saveWebQuestionStep + markAskingSQL
+
+const markAskingSQL = `, running AS (
     SELECT id, conversation_id, inbound_json FROM turns WHERE conversation_id = $1 AND phase NOT IN ('waiting', 'done') AND takes_lane
     ORDER BY created_at_unix_ns LIMIT 1
 ), turn AS (
@@ -55,7 +57,7 @@ func (q *webQuestions) AskUserQuestion(ctx context.Context, req *protocol.AskUse
 	}
 
 	data, _ := json.Marshal(req)
-	if err := q.change(ctx, askWebQuestionSQL, req.ConversationID, req.ID+webQuestionStep, string(removeSessionEntryNUL(data))); err != nil {
+	if err := q.store.change(ctx, askWebQuestionSQL, req.ConversationID, req.ID+webQuestionStep, string(removeSessionEntryNUL(data))); err != nil {
 		return protocol.AskUserQuestionAnswer{}, err
 	}
 
@@ -83,12 +85,12 @@ func (q *webQuestions) AskUserQuestion(ctx context.Context, req *protocol.AskUse
 			return protocol.AskUserQuestionAnswer{}, errWait
 		}
 
-		return protocol.AskUserQuestionAnswer{}, errors.Join(errWait, q.change(context.WithoutCancel(ctx), `withdrawn AS (DELETE FROM steps WHERE conversation_id = $1 AND key = $2)`, req.ConversationID, req.ID+webQuestionStep))
+		return protocol.AskUserQuestionAnswer{}, errors.Join(errWait, q.store.change(context.WithoutCancel(ctx), `withdrawn AS (DELETE FROM steps WHERE conversation_id = $1 AND key = $2)`, req.ConversationID, req.ID+webQuestionStep))
 	}
 }
 
-func (q *webQuestions) change(ctx context.Context, ctes, conversationID, key string, value ...any) error {
-	_, err := execState(ctx, q.store.db, fmt.Sprintf("write turn step %q", key), `WITH `+ctes+` SELECT pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_object('conversationId', $1::text, 'revision', pg_current_xact_id()::text)::text)`, append([]any{conversationID, key}, value...)...)
+func (s *SessionService) change(ctx context.Context, ctes, conversationID, key string, value ...any) error {
+	_, err := execState(ctx, s.db, fmt.Sprintf("write turn step %q", key), `WITH `+ctes+` SELECT pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_object('conversationId', $1::text, 'revision', pg_current_xact_id()::text)::text)`, append([]any{conversationID, key}, value...)...)
 
 	return err
 }
@@ -132,7 +134,7 @@ func (r *Runtime) AnswerQuestion(ctx context.Context, conversationID, questionID
 	answer.Source = protocol.SourceWeb
 	data, _ := json.Marshal(answer)
 
-	if err := q.change(ctx, saveWebQuestionStep, conversationID, questionID+"/answer", string(removeSessionEntryNUL(data))); err != nil {
+	if err := q.store.change(ctx, saveWebQuestionStep, conversationID, questionID+"/answer", string(removeSessionEntryNUL(data))); err != nil {
 		return err
 	}
 

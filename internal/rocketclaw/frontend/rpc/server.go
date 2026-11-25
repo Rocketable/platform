@@ -2105,6 +2105,38 @@ func (s *Server) answerQuestion(ctx context.Context, request *AnswerQuestionRequ
 	return &AnswerQuestionResponse{}, nil
 }
 
+func (s *Server) secretCall(ctx context.Context, request any) (any, error) {
+	username, _, err := s.principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if listing, ok := request.(*PendingSecretsRequest); ok {
+		response := &PendingSecretsResponse{}
+		for _, ask := range s.sessions.PendingSecrets(listing.ConversationId, username) {
+			response.Secrets = append(response.Secrets, &PendingSecret{Id: ask.ID, Name: ask.Name, Reason: ask.Reason})
+		}
+
+		return response, nil
+	}
+
+	answer := request.(*AnswerSecretRequest)
+	defer clear(answer.Value)
+
+	err = s.sessions.AnswerSecret(answer.ConversationId, answer.AskId, username, answer.Value, answer.Decline)
+	if notPending, ok := errors.AsType[*backend.QuestionNotPendingError](err); ok {
+		err = status.Error(codes.NotFound, notPending.Error())
+	} else if invalid, ok := errors.AsType[*harness.TurnSecretError](err); ok {
+		err = status.Error(codes.InvalidArgument, invalid.Error())
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("web answer secret: %w", err)
+	}
+
+	return &AnswerSecretResponse{}, nil
+}
+
 func (s *Server) promptable(ctx context.Context, id string) (backend.ConversationKind, error) {
 	kind, err := s.sessions.ConversationKind(ctx, id)
 	if err != nil || kind == backend.KindRemote {

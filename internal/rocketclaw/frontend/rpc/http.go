@@ -514,7 +514,7 @@ func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, me
 		required = "ids"
 	case "RunCronJob":
 		required = "stem"
-	case "MoveToBackground":
+	case "MoveToBackground", "PendingSecrets":
 		required = "conversationId"
 	case "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "EditQueueItem":
 		required = "id itemId"
@@ -526,7 +526,7 @@ func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, me
 		required = "id itemIds"
 	case "StopBackgroundJob":
 		required = "conversationId jobId"
-	case "AnswerQuestion":
+	case "AnswerQuestion", "AnswerSecret":
 		required = "conversationId askId"
 	case "Voice":
 		required = "conversationId sdp"

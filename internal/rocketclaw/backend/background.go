@@ -172,7 +172,8 @@ func newBackgroundRegistry(store *SessionService, notes backgroundNotes, log *sl
 }
 
 type turnRoot struct {
-	root *os.Root
+	root    *os.Root
+	secrets *harness.TurnSecretStore
 
 	mu    sync.Mutex
 	users int
@@ -192,6 +193,7 @@ func (r *turnRoot) release() {
 
 	if last {
 		_ = r.root.Close()
+		r.secrets.Erase()
 	}
 }
 

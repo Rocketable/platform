@@ -102,7 +102,7 @@ func TestLoadRocketCodeDefinitionsSudo(t *testing.T) {
 
 	for subject, want := range map[string]harness.PermissionAction{
 		reloadToolName: harness.PermissionAllow, scheduleMessageToolName: harness.PermissionAllow, attachFilesToolName: harness.PermissionAllow,
-		updateGoalToolName: harness.PermissionAllow, askUserQuestionToolName: harness.PermissionAllow, navigateToolName: harness.PermissionAllow, respondInThreadToolName: harness.PermissionAllow,
+		updateGoalToolName: harness.PermissionAllow, askUserQuestionToolName: harness.PermissionAllow, harness.AskSecretToolName: harness.PermissionAllow, navigateToolName: harness.PermissionAllow, respondInThreadToolName: harness.PermissionAllow,
 		restartToolName: harness.PermissionAuto, sessionsWriteToolName: harness.PermissionAuto, sessionsListToolName: harness.PermissionAuto,
 	} {
 		action, _ := tagged.Permission.Evaluate("rocketclaw", subject)
@@ -147,7 +147,7 @@ func TestLoadRocketCodeDefinitionsEasy(t *testing.T) {
 	require.NoError(t, err)
 
 	open, none, grouped := agents.Items["open"], agents.Items["none"], agents.Items["grouped"]
-	for _, subject := range []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName, navigateToolName, respondInThreadToolName} {
+	for _, subject := range []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName, harness.AskSecretToolName, navigateToolName, respondInThreadToolName} {
 		requireRocketClawPermissionAction(t, open.Permission, subject, harness.PermissionAllow)
 		requireRocketClawPermissionAction(t, none.Permission, subject, harness.PermissionAllow)
 	}

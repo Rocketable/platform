@@ -786,6 +786,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 	case body := <-bodies:
 		assert.Contains(t, body, "- rocketclaw_attach_files_to_response(", "platform tools are listed inside execute")
 		assert.NotContains(t, body, "- ask_user_question(")
+		assert.NotContains(t, body, "- ask_secret(")
 	case err := <-done:
 		t.Fatalf("Run returned before the startup message ran: %v", err)
 	case <-time.After(10 * time.Second):

@@ -153,7 +153,6 @@ func TestWebQuestionMarksItsReaders(t *testing.T) {
 
 	service := newTestSessionService(t)
 	ctx := t.Context()
-	questions := &webQuestions{store: service}
 
 	const (
 		session = "web:asks"
@@ -188,7 +187,7 @@ func TestWebQuestionMarksItsReaders(t *testing.T) {
 
 	ask := func(conversationID, key string) []string {
 		t.Helper()
-		require.NoError(t, questions.change(ctx, askWebQuestionSQL, conversationID, key, "{}"))
+		require.NoError(t, service.change(ctx, askWebQuestionSQL, conversationID, key, "{}"))
 
 		return attentionOn(t, service, conversationID)
 	}

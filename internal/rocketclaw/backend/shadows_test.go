@@ -535,8 +535,8 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			child := NewConversation(cfg, publisher, &Config{ConversationID: childID, Agent: "primary/a", SessionService: store}, slog.New(slog.DiscardHandler))
 			child.shadow = true
 
-			prohibited := make([]harness.Tool, 0, 8)
-			for _, name := range []string{askUserQuestionToolName, navigateToolName, sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName} {
+			prohibited := make([]harness.Tool, 0, 9)
+			for _, name := range []string{askUserQuestionToolName, harness.AskSecretToolName, navigateToolName, sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName} {
 				prohibited = append(prohibited, harness.Tool{Name: name})
 			}
 

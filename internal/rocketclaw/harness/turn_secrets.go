@@ -12,6 +12,8 @@ import (
 	"sync"
 )
 
+const AskSecretToolName = "ask_secret"
+
 var turnSecretNamePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*_(TOKEN|KEY|SECRET|PASSWORD)$`)
 
 type TurnSecretError struct {
@@ -31,10 +33,18 @@ func NewTurnSecretStore() *TurnSecretStore {
 	return &TurnSecretStore{values: map[string][][]byte{}}
 }
 
-func (s *TurnSecretStore) Save(name string, value []byte) error {
-	switch {
-	case len(name) > 64 || !turnSecretNamePattern.MatchString(name):
+func CheckTurnSecretName(name string) error {
+	if len(name) > 64 || !turnSecretNamePattern.MatchString(name) {
 		return &TurnSecretError{Name: name, Problem: "the name must be at most 64 bytes of A-Z, 0-9 and _, start with a letter, and end in _TOKEN, _KEY, _SECRET or _PASSWORD"}
+	}
+
+	return nil
+}
+
+func (s *TurnSecretStore) Save(name string, value []byte) error {
+	switch err := CheckTurnSecretName(name); {
+	case err != nil:
+		return err
 	case len(value) < 8 || len(value) > 64<<10 || bytes.ContainsAny(value, "\x00\r\n"):
 		return &TurnSecretError{Name: name, Problem: "the value must be a single line of 8 bytes to 64 KiB with no NUL byte"}
 	}

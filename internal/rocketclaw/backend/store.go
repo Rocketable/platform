@@ -105,6 +105,9 @@ type SessionService struct {
 
 	scheduledMu sync.Mutex
 	scheduled   []string
+
+	secretsMu sync.Mutex
+	secrets   map[webQuestionKey]*SecretRequest
 }
 
 type ObservedSessionEntry struct {
@@ -212,7 +215,7 @@ func newSessionService(ctx context.Context, cfg *config.Config, db *sql.DB, logg
 		return nil, hideDSN(err, cfg.DatabaseURL, "initialize rocketclaw state store")
 	}
 
-	return &SessionService{db: db, log: logger, attachments: attachments, definitions: config.NewLockedConfig(cfg), jobs: noConversationJobs{}, historyWorkers: noHistoryWorkers{}, spillDir: rocketcodeSpillDir(cfg)}, nil
+	return &SessionService{db: db, log: logger, attachments: attachments, definitions: config.NewLockedConfig(cfg), jobs: noConversationJobs{}, historyWorkers: noHistoryWorkers{}, spillDir: rocketcodeSpillDir(cfg), secrets: map[webQuestionKey]*SecretRequest{}}, nil
 }
 
 func (s *SessionService) UpsertThread(conversationID string, thread ThreadState) error {
@@ -1239,6 +1242,14 @@ func (s *SessionService) sidebarRows(ctx context.Context, username string, chats
 		return nil, err
 	}
 
+	s.secretsMu.Lock()
+
+	asking := make([]string, 0, len(s.secrets))
+	for key := range s.secrets {
+		asking = append(asking, key.conversationID)
+	}
+	s.secretsMu.Unlock()
+
 	rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+chatOriginSQL+shownChatsSQL+`,
 running AS (
     SELECT DISTINCT ON (conversation_id) conversation_id, inbound_json->>'Text' AS prompt, to_timestamp(created_at_unix_ns / 1e9) AS started_at
@@ -1275,7 +1286,7 @@ SELECT
     CASE WHEN c.found THEN c.last_updated ELSE r.started_at END AS updated,
     c.running,
     COALESCE(w.background, FALSE) AS background,
-    k.conversation_id IS NOT NULL AS asking,
+    k.conversation_id IS NOT NULL OR c.conversation_id = ANY($8::text[]) AS asking,
     FALSE AS automation,
     c.paused,
     c.kind = 'web_chat' AND c.created_by NOT IN ('', $2) AND c.cron_run IS NULL AND NOT c.reported AND NOT (c.sticky = 'global' AND COALESCE(c.agent = ANY($7), FALSE)) AS pausable,
@@ -1328,7 +1339,7 @@ WHERE o.kind = 'remote' AND o.server = ANY($4) AND ($5::text[] IS NULL OR o.conv
 SELECT * FROM local UNION ALL SELECT * FROM remote
 )
 SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, KindOneOffCronRun,
-		slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)), chats, username, s.scheduledAgents())
+		slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)), chats, username, s.scheduledAgents(), asking)
 	if err != nil {
 		return nil, fmt.Errorf("query sidebar sessions: %w", err)
 	}

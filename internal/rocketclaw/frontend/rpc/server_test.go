@@ -4635,6 +4635,61 @@ func TestQuestionRPCs(t *testing.T) {
 	require.Len(t, core.AnswerQuestionCalls(), 2, "an unrecorded conversation never reaches the backend")
 }
 
+func TestSecretRPCs(t *testing.T) {
+	h := startVoiceHarness(t)
+
+	var typed errgroup.Group
+
+	h.prompt(&typed, "publish the package")
+	assert.Contains(t, <-h.requests, "- ask_secret(", "a person's Web turn gets the secret tool")
+
+	h.replies <- voiceModelCode("s1", "def main():\n    return ask_secret(name='NPM_TOKEN', reason='publish')\n")
+
+	alice, bob := metadata.NewOutgoingContext(t.Context(), tailnetUser("alice")), metadata.NewOutgoingContext(t.Context(), tailnetUser("bob"))
+	pending := func(ctx context.Context) []*PendingSecret {
+		response, err := invoke[PendingSecretsResponse](ctx, h.conn, "PendingSecrets", &PendingSecretsRequest{ConversationId: "primary"})
+		require.NoError(t, err)
+
+		return response.Secrets
+	}
+
+	require.Eventually(t, func() bool { return len(pending(alice)) == 1 }, 10*time.Second, 10*time.Millisecond)
+
+	ask := pending(alice)[0]
+	assert.Equal(t, []string{"NPM_TOKEN", "publish"}, []string{ask.Name, ask.Reason})
+	assert.Empty(t, pending(bob), "a viewer who did not start the turn sees no request")
+
+	questions, err := h.rt.PendingQuestions(t.Context(), "primary")
+	require.NoError(t, err)
+	assert.Empty(t, questions, "voice reads only questions, so it never learns of a secret request")
+
+	_, err = invoke[AnswerSecretResponse](bob, h.conn, "AnswerSecret", &AnswerSecretRequest{ConversationId: "primary", AskId: ask.Id, Value: []byte("npm_secretvalue1")})
+	require.Equal(t, codes.NotFound, status.Code(err), "%v", err)
+
+	short, err := http.Post(h.url+"/api/AnswerSecret", "application/json", strings.NewReader(`{"conversationId":"primary","askId":"`+ask.Id+`","value":"`+base64.StdEncoding.EncodeToString([]byte("short"))+`"}`))
+	require.NoError(t, err)
+	require.NoError(t, short.Body.Close())
+	require.Equal(t, http.StatusBadRequest, short.StatusCode, "a value the store refuses keeps the request waiting")
+	require.Len(t, pending(alice), 1)
+
+	answer := &AnswerSecretRequest{ConversationId: "primary", AskId: ask.Id, Value: []byte("npm_secretvalue1")}
+	_, err = h.server.secretCall(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")), answer)
+	require.NoError(t, err)
+	assert.Equal(t, make([]byte, len("npm_secretvalue1")), answer.Value, "the handler clears its copy after handing it over")
+
+	body := <-h.requests
+	assert.Contains(t, body, "Saved: $NPM_TOKEN is set")
+	assert.NotContains(t, body, "npm_secretvalue1")
+
+	h.replies <- voiceModelText("r2", "Published.")
+
+	require.NoError(t, typed.Wait())
+	require.Eventually(t, func() bool { return len(pending(alice)) == 0 }, 10*time.Second, 10*time.Millisecond)
+
+	_, err = invoke[AnswerSecretResponse](alice, h.conn, "AnswerSecret", &AnswerSecretRequest{ConversationId: "primary", AskId: ask.Id, Decline: true})
+	require.Equal(t, codes.NotFound, status.Code(err), "an answer after the ask ended stores nothing")
+}
+
 func noSandboxError() string { return "" }
 
 func noSlackWarning() string { return "" }

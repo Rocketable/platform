@@ -102,11 +102,14 @@ func (InertChildSessions) AwaitSubagent(context.Context, string, string) (string
 type TurnSecrets interface {
 	Env() []string
 	Redact(text string) string
+	Holds(name string) bool
 }
 
 type InertTurnSecrets struct{}
 
 func (InertTurnSecrets) Env() []string { return nil }
+
+func (InertTurnSecrets) Holds(string) bool { return false }
 
 func (InertTurnSecrets) Redact(text string) string { return text }
 

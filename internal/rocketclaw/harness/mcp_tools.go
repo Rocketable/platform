@@ -808,6 +808,10 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 
 	if found && step.Name == want.Name && step.Hash == want.Hash {
 		switch {
+		case name == AskSecretToolName && (!step.Done || !tc.looper.turnSecrets.Holds(fmt.Sprint(args["name"]))):
+			result := TextToolResult(fmt.Sprintf("RocketClaw restarted, so the secret %v is gone. Call ask_secret again if you still need it.", args["name"]))
+
+			return result, tc.observations.recordCodeModeCall(ctx, record.finish(result, nil), true)
 		case step.Err != "":
 			errStep := errors.New(step.Err)
 

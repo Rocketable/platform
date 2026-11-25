@@ -596,6 +596,29 @@ message AnswerQuestionRequest {
 
 message AnswerQuestionResponse {}
 
+message PendingSecret {
+  string id = 1;
+  string name = 2;
+  string reason = 3;
+}
+
+message PendingSecretsRequest {
+  string conversation_id = 1;
+}
+
+message PendingSecretsResponse {
+  repeated PendingSecret secrets = 1;
+}
+
+message AnswerSecretRequest {
+  string conversation_id = 1;
+  string ask_id = 2;
+  bytes value = 3;
+  bool decline = 4;
+}
+
+message AnswerSecretResponse {}
+
 message ConfigChannel {
   string channel = 1;
   repeated string agents = 2;
@@ -1343,6 +1366,8 @@ service Web {
   rpc GetPage(PageRequest) returns (Page);
   rpc ListPages(ListPagesRequest) returns (ListPagesResponse);
   rpc AnswerQuestion(AnswerQuestionRequest) returns (AnswerQuestionResponse);
+  rpc PendingSecrets(PendingSecretsRequest) returns (PendingSecretsResponse);
+  rpc AnswerSecret(AnswerSecretRequest) returns (AnswerSecretResponse);
   rpc History(HistoryRequest) returns (HistoryResponse);
   rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse);
   rpc StageRevert(StageRevertRequest) returns (StageRevertResponse);
