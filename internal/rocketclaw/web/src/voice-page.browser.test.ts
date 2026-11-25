@@ -17,7 +17,7 @@ type TransportProbe = {
 
 test("Voice page calls each person's sticky session of a sticky: user agent, keeps settings on the server, and the composer toggle ends its call on leaving the session", async () => {
   const { chromium: engine } = await import(playwright!);
-  const browser = await engine.launch({ executablePath: chromium, headless: true, args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--disable-features=WebRtcHideLocalIpsWithMdns", "--autoplay-policy=no-user-gesture-required"] });
+  const browser = await engine.launch({ executablePath: chromium, headless: true, args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--disable-features=WebRtcHideLocalIpsWithMdns", "--disable-blink-features=TransferableRTCDataChannel", "--autoplay-policy=no-user-gesture-required"] });
   // A second page plays OpenAI: it answers each offer and drives the oai-events channel.
   const openai = await browser.newPage();
   const sessions: object[] = [], prompts: object[] = [], calls: string[] = [], spoken: string[] = [], agents: Record<string, string> = {};
