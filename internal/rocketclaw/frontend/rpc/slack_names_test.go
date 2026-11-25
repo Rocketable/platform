@@ -72,8 +72,8 @@ func TestSlackNames(t *testing.T) {
 	require.Equal(t, map[string]string{"C1": "general", "S1": "operations", "U1": "Riley"}, body.Names)
 
 	response = httptest.NewRecorder()
-	signedIn("alice", NewHTTPHandler(connection, new(config.LockedConfig), "")).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/SlackNames", strings.NewReader(`{"ids":[],"query":"ri"}`)))
-	require.Equal(t, http.StatusOK, response.Code)
+	signedIn("alice", NewHTTPHandler(connection, new(config.LockedConfig), "")).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/SlackNames", strings.NewReader(`{"query":"ri"}`)))
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 
 	body.Names = nil
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))

@@ -509,8 +509,6 @@ func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, me
 		required = "id"
 	case "SearchMessages", "SearchSessions":
 		required = "query"
-	case "SlackNames":
-		required = "ids"
 	case "RunCronJob":
 		required = "stem"
 	case "MoveToBackground":
