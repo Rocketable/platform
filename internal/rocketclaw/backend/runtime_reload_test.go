@@ -18,7 +18,7 @@ import (
 func TestRuntimeReload(t *testing.T) {
 	sessions := newTestSessionService(t)
 
-	for _, scenario := range []string{"success", "invalid-agent", "invalid-frontend", "refresh-failure", "cron-refresh-failure"} {
+	for _, scenario := range []string{"success", "invalid-agent", "refresh-failure", "cron-refresh-failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			cfg := &config.Config{Workspace: t.TempDir(), Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"primary"}}}}}
 			root, err := os.OpenRoot(cfg.Workspace)
@@ -44,15 +44,8 @@ func TestRuntimeReload(t *testing.T) {
 			require.NoError(t, root.WriteFile("agents/primary.md", []byte(updated), 0o600))
 			require.NoError(t, root.WriteFile("rocketclaw.json", []byte("invalid config"), 0o600))
 
-			assembler := &frontendAssemblerMock{GateFunc: passGate, ValidateAssetsFunc: func(*config.Config, string) error {
-				if scenario == "invalid-frontend" {
-					return errors.New("invalid staged frontend")
-				}
-
-				return nil
-			}}
 			refresh, cron := &runtimeRefresherMock{}, &runtimeRefresherMock{}
-			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, RunCtx: t.Context(), Sessions: sessions, Assemble: assembler, sandboxes: sandbox.None{}, ExternalMCPAgents: refresh, Routines: cron}
+			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, RunCtx: t.Context(), Sessions: sessions, sandboxes: sandbox.None{}, ExternalMCPAgents: refresh, Routines: cron}
 			refreshed := func(failure string) error {
 				require.False(t, rt.reloadMu.TryLock(), "reload remains serialized through each refresh")
 				live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/primary.md")
@@ -82,24 +75,16 @@ func TestRuntimeReload(t *testing.T) {
 
 			live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/primary.md")
 			require.NoError(t, err)
+			require.Equal(t, updated, string(live))
+			require.Equal(t, warnings, rt.SlackWarning())
+			require.Len(t, refresh.RefreshCalls(), 1)
 
-			if scenario == "invalid-frontend" {
-				require.Equal(t, oldAgent, string(live))
-				require.Empty(t, refresh.RefreshCalls())
-				require.Empty(t, cron.RefreshCalls())
-				require.Empty(t, rt.SlackWarning())
-			} else {
-				require.Equal(t, updated, string(live))
-				require.Equal(t, warnings, rt.SlackWarning())
-				require.Len(t, refresh.RefreshCalls(), 1)
-
-				routineCalls := 1
-				if scenario == "refresh-failure" {
-					routineCalls = 0
-				}
-
-				require.Len(t, cron.RefreshCalls(), routineCalls)
+			routineCalls := 1
+			if scenario == "refresh-failure" {
+				routineCalls = 0
 			}
+
+			require.Len(t, cron.RefreshCalls(), routineCalls)
 		})
 	}
 }
@@ -129,28 +114,12 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 	require.NoError(t, putBehaviorSettings(t.Context(), store.db, new(cfg.Behavior())))
 
 	var (
-		fail         string
-		rejectAssets bool
-		cancelRun    context.CancelFunc
+		fail      string
+		cancelRun context.CancelFunc
 	)
 
 	refresh, cron := &runtimeRefresherMock{}, &runtimeRefresherMock{}
-	rt := &Runtime{
-		Cfg: config.NewLockedConfig(cfg), Log: log, logLevel: new(slog.LevelVar), RunCtx: t.Context(), Sessions: store, ExternalMCPAgents: refresh, Routines: cron, sandboxes: sandbox.None{},
-		Assemble: &frontendAssemblerMock{GateFunc: passGate, ValidateAssetsFunc: func(_ *config.Config, runtimeDir string) error {
-			if rejectAssets {
-				return errors.New(`cron job "report" is invalid`)
-			}
-
-			if fail == "swap" {
-				for _, dir := range []string{runtimeDir, cfg.RuntimeDirName()} {
-					require.NoError(t, root.MkdirAll(dir+"/attachments/kept", 0o755))
-				}
-			}
-
-			return nil
-		}},
-	}
+	rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, logLevel: new(slog.LevelVar), RunCtx: t.Context(), Sessions: store, ExternalMCPAgents: refresh, Routines: cron, sandboxes: sandbox.None{}}
 	refresh.RefreshFunc = func() error {
 		switch {
 		case fail == "refresh" && rt.Cfg.Clone().AutoApproverModel == "gpt-c":
@@ -200,16 +169,12 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 		want   string
 	}{
 		{"channel without agents", func(b *config.Behavior) { b.Slack.Channels[1].Agents = nil }, "slack.channels[].agents is required"},
-		{"frontend assets rejected", func(b *config.Behavior) { b.AutoApproverModel, rejectAssets = "gpt-s", true }, `cron job "report" is invalid`},
 		{"overlay fails to sync", func(b *config.Behavior) { b.Overlays = []string{filepath.Join(t.TempDir(), "missing")} }, "apply configured rocketclaw overlay"},
 		{"main model on an unconfigured provider", func(b *config.Behavior) { b.EmbeddedAgents.Main.Model = "nope/gpt-x" }, `embedded_agents.main.model: provider "nope" is not configured`},
 		{"title model on an unconfigured provider", func(b *config.Behavior) { b.TitleModel = "nope/gpt-x#low" }, `title_model: provider "nope" is not configured`},
 		{"ambient decision model on an unconfigured provider", func(b *config.Behavior) { b.Slack.AmbientDecisionModel = "typesafe/jev-latest" }, `slack.ambient_decision_model: "typesafe/jev-latest" must be provider/model with its provider configured in decision`},
 	} {
 		require.ErrorContains(t, rt.SaveBehavior(edit(tt.change)), tt.want, tt.name)
-
-		rejectAssets = false
-
 		require.Equal(t, before, rt.Cfg.Clone().Behavior(), tt.name)
 		require.Equal(t, before, stored(), tt.name)
 		require.Equal(t, oldAgent, liveAgent("primary.md"), tt.name)
@@ -257,7 +222,6 @@ func TestRuntimeSaveBehavior(t *testing.T) {
 		want      string
 		refreshes int
 	}{
-		{"swap", func(b *config.Behavior) { b.Overlays, b.Logging.Level = []string{repo}, "error" }, "commit rocketclaw reload stage", 0},
 		{"refresh", func(b *config.Behavior) { b.AutoApproverModel, b.Logging.Level = "gpt-c", "error" }, "refresh failed", 2},
 		{"cron", func(b *config.Behavior) { b.AutoApproverModel, b.Logging.Level = "gpt-e", "error" }, "refresh routines after restoring: cron refresh failed", 2},
 		{"commit", func(b *config.Behavior) { b.Overlays, b.Logging.Level = []string{repo}, "error" }, "commit behavior settings", 2},

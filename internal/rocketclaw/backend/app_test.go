@@ -73,21 +73,14 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 
 	assembler := &frontendAssemblerMock{
 		GateFunc: passGate,
-		ValidateAssetsFunc: func(got *config.Config, runtimeDir string) error {
-			require.Equal(t, cfg, got)
-			require.True(t, runtimeDir == cfg.RuntimeDirName() || strings.HasPrefix(runtimeDir, cfg.RuntimeDirName()+"-reload-"))
-
-			data, err := root.ReadFile(runtimeDir + "/agents/primary.md")
-			require.NoError(t, err)
-			require.Equal(t, agent, string(data))
-
-			order = append(order, "validated")
-
-			return nil
-		},
 		AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 			assembledRT = rt
 			require.Equal(t, cfg, rt.Cfg.Clone())
+
+			data, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/primary.md")
+			require.NoError(t, err)
+			require.Equal(t, agent, string(data))
+
 			require.NoError(t, rt.RunCtx.Err())
 			require.NoError(t, rt.Sessions.db.PingContext(rt.RunCtx))
 			require.Same(t, rt.threads, rt.TextRouter)
@@ -152,7 +145,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	require.NoError(t, seed.Stop())
 
 	require.ErrorIs(t, Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), ErrRestartRequested)
-	require.Equal(t, []string{"validated", "validated", "assembled", "slack stopped", "extra stopped"}, order)
+	require.Equal(t, []string{"assembled", "slack stopped", "extra stopped"}, order)
 
 	for _, resource := range resources {
 		_, err := resource.Stat()
@@ -203,8 +196,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 		finals := make(chan string, 4)
 		copyDone := make(chan struct{})
 		assembler := &frontendAssemblerMock{
-			GateFunc:           passGate,
-			ValidateAssetsFunc: func(*config.Config, string) error { return nil },
+			GateFunc: passGate,
 			AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 				events := rt.Subscribe(rt.RunCtx)
 				go func() {
@@ -382,8 +374,7 @@ func TestRunMergesStoredBehaviorSettings(t *testing.T) {
 		close(copyDone)
 
 		err := Run(t.Context(), cfg, slog.New(slog.NewTextHandler(&logs, nil)), level, &frontendAssemblerMock{
-			GateFunc:           passGate,
-			ValidateAssetsFunc: func(*config.Config, string) error { return nil },
+			GateFunc: passGate,
 			AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 				live = rt.Cfg.Clone()
 				return copyDone, nil, nil
@@ -530,8 +521,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 
 			stops := 0
 			assembler := &frontendAssemblerMock{
-				GateFunc:           passGate,
-				ValidateAssetsFunc: func(*config.Config, string) error { return nil },
+				GateFunc: passGate,
 				AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 					runtimes <- rt
 
@@ -632,8 +622,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 
 			go func() {
 				done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), &frontendAssemblerMock{
-					GateFunc:           passGate,
-					ValidateAssetsFunc: func(*config.Config, string) error { return nil },
+					GateFunc: passGate,
 					AssembleFunc: func(*Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 						return nil, nil, nil
 					},
@@ -648,20 +637,6 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 			require.NoError(t, <-done)
 		})
 	}
-}
-
-func TestRunStopsOnInvalidFrontendAssets(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-
-	errInvalid := errors.New("invalid cron")
-	assembler := &frontendAssemblerMock{GateFunc: passGate, ValidateAssetsFunc: func(*config.Config, string) error { return errInvalid }}
-	require.ErrorIs(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), errInvalid)
-	assert.Empty(t, assembler.AssembleCalls())
 }
 
 func TestRunTakesTheLockThenGatesThenMigrates(t *testing.T) {
@@ -688,7 +663,7 @@ func TestRunTakesTheLockThenGatesThenMigrates(t *testing.T) {
 	require.NoError(t, client.TryCreateTable())
 
 	errGate := errors.New("the Web node needs a login")
-	errInvalid := errors.New("invalid cron")
+	errAssemble := errors.New("frontends assembled")
 	errCurrentGate := errGate
 	assembler := &frontendAssemblerMock{
 		GateFunc: func(ctx context.Context, _ *config.Config, _ *slog.Logger) (func() error, error) {
@@ -698,7 +673,7 @@ func TestRunTakesTheLockThenGatesThenMigrates(t *testing.T) {
 
 			return func() error { return nil }, errCurrentGate
 		},
-		ValidateAssetsFunc: func(*config.Config, string) error { return errInvalid },
+		AssembleFunc: func(*Runtime) (<-chan struct{}, []func(context.Context) error, error) { return nil, nil, errAssemble },
 	}
 	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}
 
@@ -711,7 +686,7 @@ func TestRunTakesTheLockThenGatesThenMigrates(t *testing.T) {
 
 	errCurrentGate = nil
 
-	require.ErrorIs(t, Run(t.Context(), cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), errInvalid)
+	require.ErrorIs(t, Run(t.Context(), cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{}), errAssemble)
 	require.True(t, migrated(), "a fresh database migrates once the gate passes")
 	require.Len(t, assembler.GateCalls(), 2)
 }
@@ -746,8 +721,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 	lastStep := "Slack mention submission not started"
 
 	assembler := &frontendAssemblerMock{
-		GateFunc:           passGate,
-		ValidateAssetsFunc: func(*config.Config, string) error { return nil },
+		GateFunc: passGate,
 		AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 			msg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "first message"}, true)
 			msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}

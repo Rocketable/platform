@@ -34,7 +34,6 @@ const (
 type FrontendAssembler interface {
 	Gate(context.Context, *config.Config, *slog.Logger) (func() error, error)
 	Assemble(*Runtime) (<-chan struct{}, []func(context.Context) error, error)
-	ValidateAssets(*config.Config, string) error
 }
 
 type lockedRun struct {
@@ -236,7 +235,7 @@ func (s *lockedRun) serve(runCtx context.Context, rocketcodeSessions *SessionSer
 	*rt = Runtime{
 		Cfg: rocketcodeSessions.definitions, Log: logger, logLevel: s.logLevel, RunCtx: runCtx,
 		Sessions:          rocketcodeSessions,
-		ExternalMCPAgents: inertRefresher{}, Routines: inertRefresher{}, Assemble: s.assemble, sandboxes: s.sandboxes,
+		ExternalMCPAgents: inertRefresher{}, Routines: inertRefresher{}, sandboxes: s.sandboxes,
 		TextRouter: threadBridges, threads: threadBridges, background: background,
 		questions: questions, shutdown: shutdown, slackWarningText: slackWarningText,
 	}
@@ -427,10 +426,6 @@ func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config, s
 
 	if err := sessions.placePendingPages(ctx, runtimeDir); err != nil {
 		return "", err
-	}
-
-	if err := s.assemble.ValidateAssets(cfg, runtimeDir); err != nil {
-		return "", fmt.Errorf("validate frontend assets: %w", err)
 	}
 
 	if found {

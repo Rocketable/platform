@@ -115,7 +115,7 @@ func (o *agentDraftOverlay) copyDraft(t *testing.T) string {
 func (o *agentDraftOverlay) save(t *testing.T, id, destination string, pullRequest bool) (AgentDraftSaveState, error) {
 	t.Helper()
 
-	return o.ds.rt.Sessions.SaveAgentDraft(t.Context(), o.ds.rt, &AgentDraftSave{ID: id, Variant: "a", Destination: destination, Author: "alice", PullRequest: pullRequest})
+	return o.ds.rt.Sessions.SaveAgentDraft(t.Context(), o.ds.draftRuntime, &AgentDraftSave{ID: id, Variant: "a", Destination: destination, Author: "alice", PullRequest: pullRequest})
 }
 
 func (o *agentDraftOverlay) merged(t *testing.T, id string) AgentDraftSaveState {
@@ -142,8 +142,8 @@ func TestSaveAgentDraftPushesToOverlay(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "hook-ran")
 
 	moveBranch := func(change func(dir string)) {
-		o.ds.validate = func(string) error {
-			o.ds.validate = func(string) error { return nil }
+		o.ds.draftRuntime.ValidateAgentFileFunc = func(name string, data []byte) error {
+			o.ds.draftRuntime.ValidateAgentFileFunc = o.ds.rt.ValidateAgentFile
 
 			hooks, err := filepath.Glob(filepath.Join(o.ds.workspace, config.DefaultRuntimeDir, "agent-save-*", "*", ".git", "hooks"))
 			require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestSaveAgentDraftPushesToOverlay(t *testing.T) {
 
 			o.teammate(t, change)
 
-			return nil
+			return o.ds.rt.ValidateAgentFile(name, data)
 		}
 	}
 
@@ -314,8 +314,8 @@ func TestAgentDraftMergeCheckEndsOnlyItsOwnWait(t *testing.T) {
 	o.teammate(t, func(dir string) { testGit(t, dir, "merge", "--no-ff", "-m", "merge", "origin/"+first.Branch) })
 
 	newer := *first
-	o.ds.validate = func(string) error {
-		o.ds.validate = func(string) error { return nil }
+	o.ds.draftRuntime.ReloadFunc = func(reason string) (string, error) {
+		o.ds.draftRuntime.ReloadFunc = o.ds.rt.Reload
 
 		_, err := o.ds.rt.Sessions.StopAgentDraftWaiting(t.Context(), id, "bob", AgentDraftWaitStopped)
 		require.NoError(t, err)
@@ -324,10 +324,10 @@ func TestAgentDraftMergeCheckEndsOnlyItsOwnWait(t *testing.T) {
 		_, _, err = o.ds.rt.Sessions.moveAgentDraft(t.Context(), id, "alice", AgentDraftWaiting, nil, agentDraftWait{pending: &newer})
 		require.NoError(t, err)
 
-		return nil
+		return o.ds.rt.Reload(reason)
 	}
 
-	_, err = o.ds.rt.Sessions.CheckAgentDraftMerge(t.Context(), o.ds.rt, id, "bob")
+	_, err = o.ds.rt.Sessions.CheckAgentDraftMerge(t.Context(), o.ds.draftRuntime, id, "bob")
 	require.NoError(t, err)
 
 	draft := o.ds.draft(t, id)

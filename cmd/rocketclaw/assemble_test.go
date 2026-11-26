@@ -20,20 +20,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 )
 
-func TestValidateAssetsAcceptsWorkspaceWithoutRoutines(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "agents"), 0o755))
-	require.NoError(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, ".rocketclaw"))
-}
-
-func TestValidateAssetsLeavesABadRoutineToItsAgent(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(workspace, "agents"), 0o755))
-
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "helper.md"), []byte("---\nmodel: gpt-6.1-sol\nroutines: [every 30min]\n---\nBody"), 0o644))
-	require.NoError(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, "."))
-}
-
 func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
@@ -85,8 +71,7 @@ func TestAssembleFrontendsWiresSlackRoutineAndMCP(t *testing.T) {
 			}
 			assembler := &processAssembler{}
 			require.NoError(t, backend.Run(t.Context(), cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), &FrontendAssemblerMock{
-				GateFunc:           assembler.Gate,
-				ValidateAssetsFunc: assembler.ValidateAssets,
+				GateFunc: assembler.Gate,
 				AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 					rt.RunCtx = ctx
 					done, stops, err := assembler.Assemble(rt)

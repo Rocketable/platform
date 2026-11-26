@@ -2,22 +2,12 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend"
-	routinefrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/routine"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
-
-func (processAssembler) ValidateAssets(cfg *config.Config, runtimeDir string) error {
-	if err := routinefrontend.ValidateRuntimeDefinitions(config.NewLockedConfig(cfg), runtimeDir); err != nil {
-		return fmt.Errorf("validate routine definitions: %w", err)
-	}
-	return nil
-}
 
 type routineRunner struct {
 	backend frontend.Backend

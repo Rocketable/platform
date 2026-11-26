@@ -41,9 +41,9 @@ func TestRunStartsPastAnInvalidAgent(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
-	errFrontend := errors.New("frontend assets checked")
-	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, slog.New(slog.DiscardHandler), new(slog.LevelVar), &frontendAssemblerMock{GateFunc: passGate, ValidateAssetsFunc: func(*config.Config, string) error { return errFrontend }}, sandbox.None{})
-	require.ErrorIs(t, err, errFrontend, "agent definitions passed with the invalid agent left out")
+	errAssemble := errors.New("frontends assembled")
+	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, slog.New(slog.DiscardHandler), new(slog.LevelVar), &frontendAssemblerMock{GateFunc: passGate, AssembleFunc: func(*Runtime) (<-chan struct{}, []func(context.Context) error, error) { return nil, nil, errAssemble }}, sandbox.None{})
+	require.ErrorIs(t, err, errAssemble, "agent definitions passed with the invalid agent left out")
 }
 
 func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {

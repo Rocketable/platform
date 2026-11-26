@@ -28,9 +28,6 @@ var _ FrontendAssembler = &frontendAssemblerMock{}
 //			GateFunc: func(context1 context.Context, config1 *config.Config, logger *slog.Logger) (func() error, error) {
 //				panic("mock out the Gate method")
 //			},
-//			ValidateAssetsFunc: func(config1 *config.Config, s string) error {
-//				panic("mock out the ValidateAssets method")
-//			},
 //		}
 //
 //		// use mockedFrontendAssembler in code that requires FrontendAssembler
@@ -43,9 +40,6 @@ type frontendAssemblerMock struct {
 
 	// GateFunc mocks the Gate method.
 	GateFunc func(context1 context.Context, config1 *config.Config, logger *slog.Logger) (func() error, error)
-
-	// ValidateAssetsFunc mocks the ValidateAssets method.
-	ValidateAssetsFunc func(config1 *config.Config, s string) error
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -63,17 +57,9 @@ type frontendAssemblerMock struct {
 			// Logger is the logger argument value.
 			Logger *slog.Logger
 		}
-		// ValidateAssets holds details about calls to the ValidateAssets method.
-		ValidateAssets []struct {
-			// Config1 is the config1 argument value.
-			Config1 *config.Config
-			// S is the s argument value.
-			S string
-		}
 	}
-	lockAssemble       sync.RWMutex
-	lockGate           sync.RWMutex
-	lockValidateAssets sync.RWMutex
+	lockAssemble sync.RWMutex
+	lockGate     sync.RWMutex
 }
 
 // Assemble calls AssembleFunc.
@@ -145,41 +131,5 @@ func (mock *frontendAssemblerMock) GateCalls() []struct {
 	mock.lockGate.RLock()
 	calls = mock.calls.Gate
 	mock.lockGate.RUnlock()
-	return calls
-}
-
-// ValidateAssets calls ValidateAssetsFunc.
-func (mock *frontendAssemblerMock) ValidateAssets(config1 *config.Config, s string) error {
-	if mock.ValidateAssetsFunc == nil {
-		panic("frontendAssemblerMock.ValidateAssetsFunc: method is nil but FrontendAssembler.ValidateAssets was just called")
-	}
-	callInfo := struct {
-		Config1 *config.Config
-		S       string
-	}{
-		Config1: config1,
-		S:       s,
-	}
-	mock.lockValidateAssets.Lock()
-	mock.calls.ValidateAssets = append(mock.calls.ValidateAssets, callInfo)
-	mock.lockValidateAssets.Unlock()
-	return mock.ValidateAssetsFunc(config1, s)
-}
-
-// ValidateAssetsCalls gets all the calls that were made to ValidateAssets.
-// Check the length with:
-//
-//	len(mockedFrontendAssembler.ValidateAssetsCalls())
-func (mock *frontendAssemblerMock) ValidateAssetsCalls() []struct {
-	Config1 *config.Config
-	S       string
-} {
-	var calls []struct {
-		Config1 *config.Config
-		S       string
-	}
-	mock.lockValidateAssets.RLock()
-	calls = mock.calls.ValidateAssets
-	mock.lockValidateAssets.RUnlock()
 	return calls
 }
