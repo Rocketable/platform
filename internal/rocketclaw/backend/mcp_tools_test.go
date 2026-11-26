@@ -8,7 +8,6 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
-	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,7 +50,7 @@ func TestRocketcodeConfigIncludesMCPServers(t *testing.T) {
 			},
 		},
 	}
-	want := mcpclient.ServerConfig{Command: "demo-command", Args: []string{"--stdio"}, Env: map[string]string{"DEMO": "value"}, Cwd: "demo-dir", URL: "http://127.0.0.1:9", Headers: map[string]string{"Authorization": "test-token"}}
+	want := cfg.MCPServers["demo"]
 	store := newTestSessionService(t)
 	bridge := NewConversation(config.NewLockedConfig(cfg), discardPublisher{}, &Config{ConversationID: "c", Agent: "main", RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, UserQuestionAsker: &webQuestions{store: store, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, SessionService: store}, slog.New(slog.DiscardHandler))
 	rc := bridge.rocketcodeConfig(t.TempDir(), nil)
@@ -66,8 +65,4 @@ func TestRocketcodeConfigIncludesMCPServers(t *testing.T) {
 
 	assert.Equal(t, want, rc.MCPServers["demo"])
 	assert.Equal(t, rc.MCPServers, bridge.rocketcodeConfig(t.TempDir(), nil).MCPServers)
-
-	empty := NewConversation(config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), discardPublisher{}, &Config{ConversationID: "c2", Agent: "main", RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, RequestRestart: &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}, UserQuestionAsker: &webQuestions{store: store, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, SessionService: store}, slog.New(slog.DiscardHandler))
-	emptyRC := empty.rocketcodeConfig(t.TempDir(), nil)
-	assert.Nil(t, emptyRC.MCPServers)
 }

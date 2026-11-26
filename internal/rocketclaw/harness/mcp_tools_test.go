@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -69,7 +70,7 @@ func TestCodeModeHostInputSchemaRequiredFields(t *testing.T) {
 func TestMCPToolsOmitsWithoutAllow(t *testing.T) {
 	t.Parallel()
 
-	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
+	reg := mcpclient.New(t.TempDir(), map[string]config.MCPServerConfig{
 		"demo": {URL: "http://127.0.0.1:9"},
 	}, nil)
 
@@ -454,7 +455,7 @@ func TestExecuteParseFailureDoesNotRunHost(t *testing.T) {
 func TestMCPServerVisibility(t *testing.T) {
 	t.Parallel()
 
-	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
+	reg := mcpclient.New(t.TempDir(), map[string]config.MCPServerConfig{
 		"demo": {URL: "http://127.0.0.1:9"},
 		"acme": {URL: "http://127.0.0.1:9"},
 	}, nil)
@@ -489,7 +490,7 @@ func TestMCPServerVisibility(t *testing.T) {
 func TestExecuteExactToolGrant(t *testing.T) {
 	t.Parallel()
 
-	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
+	reg := mcpclient.New(t.TempDir(), map[string]config.MCPServerConfig{
 		"github": {URL: "http://127.0.0.1:9"},
 	}, nil)
 
@@ -521,7 +522,7 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: full}}}, nil, nil
 		})
 	})
-	reg := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}}, nil)
+	reg := mcpclient.New(root.Name(), map[string]config.MCPServerConfig{"demo": {URL: url}}, nil)
 	permissions := parsePermissionYAML(t, "mcp: {demo: {all: allow}}")
 	factory := &toolFactory{mcpRegistry: reg, baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, nil), spillRel: defaultSpillRel, promptExpansion: promptExpansionEnvironment{root: root}}
 	loop := testLooper(mockResponses())
@@ -702,7 +703,7 @@ func TestExecuteSearchAndRun(t *testing.T) {
 		})
 	})
 
-	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{"demo": {URL: url}}, nil)
+	reg := mcpclient.New(t.TempDir(), map[string]config.MCPServerConfig{"demo": {URL: url}}, nil)
 
 	var permissions PermissionSet
 	require.NoError(t, permissions.Set("mcp", "demo.*", PermissionAllow))
@@ -743,7 +744,7 @@ func TestExecuteSearchAndRun(t *testing.T) {
 func TestExecuteConnectsOnlyToMCPServersTheScriptUses(t *testing.T) {
 	t.Parallel()
 
-	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{"demo": {URL: "http://127.0.0.1:9"}}, nil)
+	reg := mcpclient.New(t.TempDir(), map[string]config.MCPServerConfig{"demo": {URL: "http://127.0.0.1:9"}}, nil)
 	permissions := parsePermissionYAML(t, "mcp: {demo: {all: allow}}")
 	run := (&toolFactory{mcpRegistry: reg}).mcpToolsFor(&Agent{Permission: permissions}, nil)[executeToolName]
 	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions}
@@ -788,10 +789,10 @@ func TestExecuteSendsShellEnvToMCPServers(t *testing.T) {
 	require.NoError(t, permissions.Set("mcp", "demo.*", PermissionAllow))
 
 	client := openai.NewClient()
-	config := testWorkspaceConfig(t, dir)
-	config.ShellEnv = map[string]string{"ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID": "123"}
-	config.MCPWorkspace, config.MCPServers = dir, map[string]mcpclient.ServerConfig{"demo": {URL: url}}
-	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: permissions}}}, Skills{Items: map[string]Skill{}}, "main")
+	cfg := testWorkspaceConfig(t, dir)
+	cfg.ShellEnv = map[string]string{"ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID": "123"}
+	cfg.MCPWorkspace, cfg.MCPServers = dir, map[string]config.MCPServerConfig{"demo": {URL: url}}
+	loop, err := NewWithModelResolver(testResolverForClient(&client), cfg, root, Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: permissions}}}, Skills{Items: map[string]Skill{}}, "main")
 	require.NoError(t, err)
 
 	loop.observations = &turnObservations{journal: InertJournal{}}
@@ -848,7 +849,7 @@ func TestCodeModeSearchOpenCodeShape(t *testing.T) {
 func TestToolsForIncludesExecuteWhenConfigured(t *testing.T) {
 	t.Parallel()
 
-	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
+	reg := mcpclient.New(t.TempDir(), map[string]config.MCPServerConfig{
 		"demo": {URL: "http://127.0.0.1:9"},
 	}, nil)
 
@@ -1062,7 +1063,7 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 			})
 		}
 	})
-	reg := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}}, nil)
+	reg := mcpclient.New(root.Name(), map[string]config.MCPServerConfig{"demo": {URL: url}}, nil)
 
 	fetching := make(chan struct{}, 1)
 	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {

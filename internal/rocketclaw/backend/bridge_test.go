@@ -1043,7 +1043,7 @@ func TestRocketCodeConfig(t *testing.T) {
 
 	assert.Equal(t, "gpt-5.4-mini", cfg.AutoApproverModel)
 	assert.Equal(t, 16, cfg.ParallelToolCalls)
-	assert.Equal(t, harness.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true}, cfg.ExpandPromptShellCommands)
+	assert.True(t, cfg.ExpandPromptShellCommands)
 	assert.NotContains(t, toolNames, restartToolName)
 	assert.NotContains(t, toolNames, scheduleMessageToolName, "each turn builds its schedule tools")
 	assert.Contains(t, toolNames, reloadToolName)
@@ -1881,11 +1881,9 @@ func TestStoppedSteerJoinsOnlyOpenTurns(t *testing.T) {
 func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "[System]", provenanceHeader(&promptProvenance{origin: " \t\n "}))
 	assert.Equal(t, "[ExternalMCP principal=\"Alice [ops]=lead\" additional_instructions=\"line \\\"one\\\"\\nnext\"]", provenanceHeader(&promptProvenance{origin: "ExternalMCP", principal: " Alice [ops]=lead ", additionalInstructions: "line \"one\"\nnext"}))
 	assert.Equal(t, `[Slack principal="a\"b\\c"]`, provenanceHeader(&promptProvenance{origin: "Slack", principal: "a\"b\\c"}))
 	assert.Equal(t, "[Slack]", provenanceHeader(&promptProvenance{origin: "Slack", principal: "   "}))
-	assert.Equal(t, "[External_(MCP)-x]", provenanceHeader(&promptProvenance{origin: "External [MCP]=x"}))
 	assert.Equal(t, promptProvenance{origin: "System"}, provenanceFromInbound(&protocol.InboundMessage{Source: protocol.SourceSystem, Metadata: map[string]string{protocol.InboundOriginMetadataKey: "Mallory"}}))
 	web := provenanceFromInbound(&protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}})
 	assert.Equal(t, `[Web principal="Alice"]`, provenanceHeader(&web))

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/openai/openai-go/v3/shared"
@@ -39,7 +40,7 @@ func withCustomShell(customShell *CustomShell, command string) (path string, arg
 type Config struct {
 	AutoApproverModel         shared.ResponsesModel
 	Deciders                  map[string]Decider
-	ExpandPromptShellCommands PromptShellCommandExpansion
+	ExpandPromptShellCommands bool
 	ParallelToolCalls         int
 	ShellTempDir              string
 	SpillDir                  string
@@ -54,7 +55,7 @@ type Config struct {
 	OriginHeader              string
 	Unaddressed               bool
 	Sandbox                   sandbox.Runtime
-	MCPServers                map[string]mcpclient.ServerConfig
+	MCPServers                map[string]config.MCPServerConfig
 	MCPWorkspace              string
 }
 
@@ -101,12 +102,6 @@ func (InertChildSessions) AwaitSubagent(context.Context, string, string) (string
 type ObservabilityConfig struct {
 	Enabled bool
 	Tracer  trace.Tracer
-}
-
-type PromptShellCommandExpansion struct {
-	PrimaryPrompts  bool
-	SubagentPrompts bool
-	SkillPrompts    bool
 }
 
 type shellTempConfig struct {
@@ -188,25 +183,25 @@ func NewWithModelResolver(
 	skills Skills,
 	defaultAgent string,
 ) (*Runtime, error) {
-	config := *configInput
+	cfg := *configInput
 
-	shellEnv, err := shellEnvList(config.ShellEnv)
+	shellEnv, err := shellEnvList(cfg.ShellEnv)
 	if err != nil {
 		return nil, err
 	}
 
-	shellTemp, err := newShellTempConfig(root, config.ShellTempDir)
+	shellTemp, err := newShellTempConfig(root, cfg.ShellTempDir)
 	if err != nil {
 		return nil, err
 	}
 
-	spillRel, err := resolveSpillRel(root, config.SpillDir)
+	spillRel, err := resolveSpillRel(root, cfg.SpillDir)
 	if err != nil {
 		return nil, err
 	}
 
-	if !filepath.IsLocal(config.RetainedResultDir) {
-		return nil, fmt.Errorf("retained result dir %q must be a relative path inside the spill dir", config.RetainedResultDir)
+	if !filepath.IsLocal(cfg.RetainedResultDir) {
+		return nil, fmt.Errorf("retained result dir %q must be a relative path inside the spill dir", cfg.RetainedResultDir)
 	}
 
 	agents, errsReviewer := agents.WithoutInvalidReviewers()
@@ -223,7 +218,7 @@ func NewWithModelResolver(
 	prepared := make(map[string]Agent, len(agents.Items))
 	for name := range agents.Items {
 		agent := agents.Items[name]
-		InterpolatePermissions(&agent, config.ShellEnv)
+		InterpolatePermissions(&agent, cfg.ShellEnv)
 		prepared[name] = agent
 	}
 
@@ -233,7 +228,7 @@ func NewWithModelResolver(
 
 	activeAgent := agents.Items[defaultAgent]
 
-	sb := config.Sandbox
+	sb := cfg.Sandbox
 
 	promptExpansion, err := newPromptExpansionEnvironment(root, shellTemp, shellEnv, &sb)
 	if err != nil {
@@ -245,26 +240,26 @@ func NewWithModelResolver(
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
 
 	baseTools, shellSystem := newSandboxedTools(root, spillRel, shellTemp, shellEnv, &sb)
-	if len(config.Deciders) > 0 {
-		baseTools["decision"] = decisionTool(config.Deciders, config.Observability)
+	if len(cfg.Deciders) > 0 {
+		baseTools["decision"] = decisionTool(cfg.Deciders, cfg.Observability)
 	}
 
-	customTools, err := customLooperTools(config.CustomTools, baseTools)
+	customTools, err := customLooperTools(cfg.CustomTools, baseTools)
 	if err != nil {
 		return nil, err
 	}
 
 	maps.Copy(baseTools, customTools)
 
-	mcpRegistry := mcpclient.New(config.MCPWorkspace, config.MCPServers, config.ShellEnv)
+	mcpRegistry := mcpclient.New(cfg.MCPWorkspace, cfg.MCPServers, cfg.ShellEnv)
 
 	factory := &toolFactory{
 		resolver:                  resolver,
 		workspaceInstructions:     workspaceInstructions,
-		autoApproverModel:         cmp.Or(config.AutoApproverModel, defaultOpenAIModel),
-		deciders:                  config.Deciders,
-		parallelToolCalls:         config.ParallelToolCalls,
-		expandPromptShellCommands: config.ExpandPromptShellCommands,
+		autoApproverModel:         cmp.Or(cfg.AutoApproverModel, defaultOpenAIModel),
+		deciders:                  cfg.Deciders,
+		parallelToolCalls:         cfg.ParallelToolCalls,
+		expandPromptShellCommands: cfg.ExpandPromptShellCommands,
 		promptExpansion:           promptExpansion,
 		agent:                     &activeAgent,
 		recursionRemaining:        activeAgent.MaxRecursion,
@@ -272,15 +267,15 @@ func NewWithModelResolver(
 		skills:                    skills,
 		baseTools:                 baseTools,
 		shellSystem:               shellSystem,
-		childContext:              config.ChildContext,
-		originHeader:              config.OriginHeader,
-		unaddressed:               config.Unaddressed,
+		childContext:              cfg.ChildContext,
+		originHeader:              cfg.OriginHeader,
+		unaddressed:               cfg.Unaddressed,
 		shellTemp:                 shellTemp,
 		spillRel:                  spillRel,
-		retainedRel:               filepath.Join(spillRel, config.RetainedResultDir),
-		observability:             config.Observability,
-		childSessions:             config.ChildSessions,
-		backgroundJobs:            config.BackgroundJobs,
+		retainedRel:               filepath.Join(spillRel, cfg.RetainedResultDir),
+		observability:             cfg.Observability,
+		childSessions:             cfg.ChildSessions,
+		backgroundJobs:            cfg.BackgroundJobs,
 		mcpRegistry:               mcpRegistry,
 	}
 
@@ -289,7 +284,7 @@ func NewWithModelResolver(
 		return nil, fmt.Errorf("agent %q model: %w", activeAgent.Name, err)
 	}
 
-	looper.Journal = config.Journal
+	looper.Journal = cfg.Journal
 
 	return looper, nil
 }

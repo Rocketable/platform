@@ -32,7 +32,7 @@ type toolFactory struct {
 	autoApproverModel         string
 	deciders                  map[string]Decider
 	parallelToolCalls         int
-	expandPromptShellCommands PromptShellCommandExpansion
+	expandPromptShellCommands bool
 	promptExpansion           promptExpansionEnvironment
 	agent                     *Agent
 	recursionRemaining        *int
@@ -449,7 +449,7 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, input skillTool
 	}
 
 	content := strings.TrimSpace(skill.Content)
-	if f.expandPromptShellCommands.SkillPrompts {
+	if f.expandPromptShellCommands {
 		content = f.promptExpansion.expandShellCommands(ctx, content)
 	}
 

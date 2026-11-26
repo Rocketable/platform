@@ -103,7 +103,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	}
 
 	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
-	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
+	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands, &f.promptExpansion)
 
 	childFactory := *f
 	childFactory.inPermissionReview = true

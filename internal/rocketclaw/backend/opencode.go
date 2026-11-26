@@ -32,6 +32,10 @@ const (
 	openCodeShellsEvery  = 15 * time.Minute
 )
 
+type openCodeLocation struct {
+	Directory string `json:"directory"`
+}
+
 type openCodeSession struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -110,9 +114,7 @@ func (shells *openCodeShells) follow(ctx context.Context, name string, server co
 
 		switch event.Type {
 		case "server.connected":
-			var locations []struct {
-				Directory string `json:"directory"`
-			}
+			var locations []openCodeLocation
 			if openCodeCall(ctx, name, server, http.MethodGet, "/api/debug/location", nil, &locations) != nil {
 				return
 			}
@@ -505,9 +507,7 @@ func openCodeRoot(ctx context.Context, name string, server config.OpenCodeConfig
 func openCodeWaiting(ctx context.Context, name string, server config.OpenCodeConfig) map[string]bool {
 	waiting := map[string]bool{}
 
-	var locations []struct {
-		Directory string `json:"directory"`
-	}
+	var locations []openCodeLocation
 	if openCodeCall(ctx, name, server, http.MethodGet, "/api/debug/location", nil, &locations) != nil {
 		return waiting
 	}

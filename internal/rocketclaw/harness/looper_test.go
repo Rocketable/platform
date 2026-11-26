@@ -2474,7 +2474,7 @@ Use this skill for docs.
 `)}, "/virtual/skills").Skills
 	agent := agentWithSkillPermission()
 	factory := testSkillFactory(t, loaded, agent)
-	factory.expandPromptShellCommands.SkillPrompts = true
+	factory.expandPromptShellCommands = true
 
 	mock := mockResponses(responseWithMessage("resp-final", "done"))
 	looper := testLooper(mock)
@@ -2568,7 +2568,7 @@ Use this skill for docs.
 			looper := testLooper(mock)
 			looper.Permissions = agent.Permission
 			factory := testSkillFactory(t, loaded, agent)
-			factory.expandPromptShellCommands.SkillPrompts = true
+			factory.expandPromptShellCommands = true
 			looper.Tools = map[string]looperTool{"skill": factory.skillTool()}
 			looper.promptExpansion = factory.promptExpansion
 			sink := recordingJournal()
@@ -2674,7 +2674,7 @@ func TestLooperUnknownSlashSkillStaysPlainText(t *testing.T) {
 			looper := testLooper(mock)
 			looper.Permissions = tc.agent.Permission
 			factory := testSkillFactory(t, loaded, tc.agent)
-			factory.expandPromptShellCommands.SkillPrompts = true
+			factory.expandPromptShellCommands = true
 
 			if tc.skillTool {
 				looper.Tools = map[string]looperTool{"skill": factory.skillTool()}
@@ -2701,7 +2701,7 @@ func TestLooperUnknownSlashSkillStaysPlainText(t *testing.T) {
 func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	loaded := LoadSkills(fstest.MapFS{"docs-helper/SKILL.md": mapFile("---\nname: docs-helper\ndescription: Docs\n---\nInstructions !`echo run >> calls`")}, "/virtual/skills").Skills
 	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
-	factory.expandPromptShellCommands.SkillPrompts = true
+	factory.expandPromptShellCommands = true
 	mock := mockResponses(responseWithMessage("resp-final", "original answer"))
 	looper := testLooper(mock)
 	looper.Permissions = agentWithSkillPermission().Permission
@@ -3825,7 +3825,7 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 	loaded := LoadSkills(fstest.MapFS{"docs-helper/SKILL.md": mapFile("---\nname: docs-helper\ndescription: Docs\n---\nInstructions $ARGUMENTS !`echo run >> calls; cat state`")}, "/virtual/skills").Skills
 	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
-	factory.expandPromptShellCommands.SkillPrompts = true
+	factory.expandPromptShellCommands = true
 	root := factory.promptExpansion.root
 	require.NoError(t, root.WriteFile("state", []byte("old"), 0o600))
 

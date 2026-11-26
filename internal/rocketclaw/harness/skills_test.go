@@ -647,7 +647,7 @@ Args: $ARGUMENTS
 	require.NoError(t, err)
 
 	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
-	factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
+	factory.expandPromptShellCommands = true
 	factory.promptExpansion = env
 
 	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"id":"arg-skill","arguments":"!`+"`"+`cat SECRET.md`+"`"+`","direct":true}`), nil, emptyToolCallMetadata())
@@ -707,7 +707,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 		require.NoError(t, root.WriteFile("main-convert-agent-to-easy/SKILL.md", data, 0o644))
 		skills := LoadSkills(root.FS(), dir).Skills
 		factory := testSkillFactory(t, skills, agentWithSkillPermission())
-		factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
+		factory.expandPromptShellCommands = true
 		factory.promptExpansion, err = newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, &sandbox.Runtime{})
 		require.NoError(t, err)
 		result, err := factory.skillTool().Call(t.Context(), json.RawMessage(`{"id":"main-convert-agent-to-easy"}`), nil, emptyToolCallMetadata())
@@ -742,7 +742,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 			require.NoError(t, root.RemoveAll("EFFECT"))
 
 			factory := testSkillFactory(t, loaded, agent)
-			factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
+			factory.expandPromptShellCommands = true
 			factory.promptExpansion = env
 
 			model, _ := factory.assembleTools(agent)

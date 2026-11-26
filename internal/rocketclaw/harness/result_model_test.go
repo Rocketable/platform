@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
@@ -188,7 +189,7 @@ func newResultModelEnv(t *testing.T) *resultModelEnv {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "nope"}}}
 		})
 	})
-	env.registry = mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{"uploader": {URL: url}}, nil)
+	env.registry = mcpclient.New(t.TempDir(), map[string]config.MCPServerConfig{"uploader": {URL: url}}, nil)
 
 	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell"))
 	env.tools = makeSandboxedTools(&sandboxedFileSystem{mu: sync.Mutex{}, root: root}, newSandboxedShellSystem(root, &shellTemp, nil, &sandbox.Runtime{}))
