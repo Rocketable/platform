@@ -1810,7 +1810,7 @@ const sameListed = (a: ListTab) => (b: ListTab) => a.list === b.list && a.server
 const listOf = (lists: ListTab[] | undefined, list: TabListName) => (lists ?? []).filter((tab) => tab.list === list);
 const addListed = (tab: ListTab) => (old: ListTab[]) => old.some(sameListed(tab)) ? old : [tab, ...old];
 const forgetListed = (tab: ListTab) => (old: ListTab[]) => old.filter((item) => !sameListed(tab)(item));
-let listSaves: { latest?: ListChange; pending?: ListTab[]; saves: Promise<unknown> } = { saves: Promise.resolve() };
+const listSaves: { latest?: ListChange; pending?: ListTab[]; saves: Promise<unknown> } = { saves: Promise.resolve() };
 const listListeners = new Set<() => void>();
 const showLists = (pending?: ListTab[]) => { listSaves.pending = pending; for (const listener of listListeners) listener(); };
 const savedLists = () => listSaves.pending ?? queryClient.getQueryData<SavedTabs>(localTabsKey().queryKey)?.lists;
@@ -1832,8 +1832,7 @@ function saveList(change: ListChange, apply: (old: ListTab[]) => ListTab[]) {
     if (settled()) return;
     const stop = queryClient.getQueryCache().subscribe(() => { if (settled()) stop(); });
   }, () => {
-    listSaves = { saves: Promise.resolve() };
-    showLists();
+    if (listSaves.latest === change) showLists();
     void queryClient.invalidateQueries({ queryKey });
   });
 }
