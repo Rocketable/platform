@@ -392,7 +392,7 @@ export async function appScenario(part: "lists" | "composer") {
       const navigation = page.locator("footer");
       const compactHeight = (await navigation.boundingBox())!.height;
       const navigationSearch = navigation.getByRole("button", { name: "Search sessions and commands", exact: true });
-      expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(5);
+      expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(6);
       expect(await navigation.getByRole("link").count()).toBe(0);
       expect((await navigationSearch.boundingBox())!.width).toBe(48);
       expect((await navigationSearch.locator("svg").boundingBox())!.width).toBe(24);
@@ -1440,7 +1440,7 @@ export async function appScenario(part: "lists" | "composer") {
         } else {
           expect(Math.abs(groupBox!.x + groupBox!.width / 2 - width / 2)).toBeLessThan(1);
         }
-        expect(await newChat.locator("..").getByRole("button").count()).toBe(3);
+        expect(await newChat.locator("..").getByRole("button").count()).toBe(4);
         const creations = ctrl.createdAgents.length;
         await newChat.click();
         await navPage.waitForURL(`${origin}/`);

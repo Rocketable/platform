@@ -137,10 +137,10 @@ for (const width of [1280, 320]) test(`the bottom bar's buttons fit without over
     const { x, y, width, height } = node.getBoundingClientRect();
     return { x, y, width, height };
   }));
-  expect(boxes).toHaveLength(5);
+  expect(boxes).toHaveLength(6);
   expect(await page.locator("#bottom-navigation").getByRole("button", { name: "Pull requests and issues", exact: true }).count()).toBe(0);
   expect(boxes[0].x).toBeLessThan(16);
-  expect(boxes[4].x + boxes[4].width).toBeGreaterThan(width - 16);
+  expect(boxes[5].x + boxes[5].width).toBeGreaterThan(width - 16);
   for (const [index, box] of boxes.entries()) {
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(width);
@@ -148,6 +148,35 @@ for (const width of [1280, 320]) test(`the bottom bar's buttons fit without over
     expect(Math.round(box.height)).toBe(width === 320 ? 48 : 32);
     if (index) expect(boxes[index - 1].x + boxes[index - 1].width).toBeLessThanOrEqual(box.x);
   }
+}), 30_000);
+
+test("Home opens main's session, else the latest sticky: user session, and hides when there is neither", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const home = page.locator("#bottom-navigation").getByRole("button", { name: "Home", exact: true });
+  const reload = async () => {
+    const agents = page.waitForResponse((response: { url(): string }) => response.url().endsWith("/api/ListAgents"));
+    await page.goto(`${origin}${href("alpha")}`);
+    await agents;
+    await page.locator("#bottom-navigation").getByRole("button", { name: "Search sessions and commands", exact: true }).waitFor();
+  };
+  const lands = async (path: string) => {
+    await reload();
+    await home.click();
+    await page.waitForURL(`${origin}${path}`);
+  };
+  await lands("/");
+
+  saved.agents = [{ name: "notes", sticky: "user", stickySession: "bravo" }, { name: "main", sticky: "global", stickySession: "charlie" }];
+  await lands(href("charlie"));
+
+  saved.agents = [{ name: "notes", sticky: "user", stickySession: "bravo" }, { name: "todo", sticky: "user", stickySession: "delta" }, { name: "team", sticky: "global", stickySession: "alpha" }];
+  saved.updated = { alpha: "2026-11-25T12:00:00Z", bravo: "2026-11-25T09:00:00Z", delta: "2026-11-25T10:00:00Z" };
+  await lands(href("delta"));
+  saved.updated = { ...saved.updated, bravo: "2026-11-25T11:00:00Z" };
+  await lands(href("bravo"));
+
+  saved.agents = [{ name: "notes", sticky: "user" }, { name: "team", sticky: "global", stickySession: "alpha" }, { name: "channel", sticky: "slack" }];
+  await reload();
+  expect(await home.count()).toBe(0);
 }), 30_000);
 
 test("a tab menu's Copy link copies the tab in view's whole address, and another tab's own", () => withPage({ permissions: ["clipboard-read", "clipboard-write"] }, async (page, origin, _prompts, saved) => {

@@ -927,8 +927,11 @@ Touch devices and narrow screens use 48px navigation targets and 8px gaps;
 desktop uses 32px targets and 4px gaps. Screens narrower than 22rem keep 48px
 targets but tighten gaps and side padding to 4px. Icons are 24px in all layouts.
 The sidebar toggle sits at the bar's left end and the right pane toggle at its right end;
-between them, centered, are New session, Search sessions and commands, and
+between them, centered, are Home, New session, Search sessions and commands, and
 Next session needing you (the inbox button).
+Home opens the `main` agent's session, or New session while `main` has none yet.
+Where `main` is off or not allowed for the person, Home opens their most recently
+used `sticky: user` session, and with neither it is hidden.
 When remote RocketClaws or OpenCode servers are configured, New session opens a
 menu of where to start one, with the page's own server highlighted so Enter starts
 it there. The menu names the local server by the first label of the page's host

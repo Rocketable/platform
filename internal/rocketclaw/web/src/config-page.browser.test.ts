@@ -83,7 +83,9 @@ test("only admins edit the behavior settings, and the view changes only with the
     expect(await page.getByText("old-model", { exact: true }).count()).toBe(1);
     expect(await page.getByText("info", { exact: true }).filter({ visible: true }).count()).toBe(1);
 
+    const refetched = page.waitForResponse((response: { url(): string }) => response.url().endsWith("/api/ListAgents"));
     release.resolve();
+    await refetched;
     await page.getByText("new-model", { exact: true }).waitFor();
     await page.getByText("warn", { exact: true }).waitFor();
     await edit.waitFor();
