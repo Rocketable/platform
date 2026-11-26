@@ -12,9 +12,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
   const current = await unpacked(path.join(dist, "index.html")).text();
   const script = current.match(/src="(\/assets\/main-[^"]+)"/)![1];
   const styles = current.match(/href="(\/assets\/styles-[^"]+)"/)![1];
-  // The index page the server answers with; undefined answers HTTP 500.
   let served: string | undefined = current;
-  // Why emulated shells cannot run, as Identity reports it.
   let sandboxError = "";
   let slackWarning: string | undefined;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
@@ -53,7 +51,6 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     };
     const notice = page.getByText("A new version of RocketClaw is available.", { exact: true });
     const refresh = page.getByRole("button", { name: "Refresh", exact: true });
-    // Narrow screens keep the tabs in a drawer behind the footer's Show sidebar button.
     const tabs = width < 768 ? page.getByRole("button", { name: "Show sidebar", exact: true }) : page.getByRole("tablist", { name: "Main tabs" }).locator("..");
     await Promise.all([waitForIndexCheck(), page.goto(`http://127.0.0.1:${server.port}/`)]);
     await tabs.waitFor();
@@ -65,8 +62,6 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     await recheck();
     await notice.waitFor();
     expect(await page.getByRole("status").filter({ hasText: "A new version of RocketClaw is available." }).count()).toBe(1);
-    // Nothing on the page may hide behind the bar, and the bar may not hide the right pane toggle's slot (the toggle is
-    // disabled without a thread, so it takes no pointer).
     const unobstructed = async (locator: { evaluate<T>(fn: (el: Element) => T): Promise<T> }) => locator.evaluate((el: Element) => {
       const box = el.getBoundingClientRect();
       return box.width > 0 && box.top >= 0 && box.left >= 0 && box.bottom <= innerHeight && box.right <= innerWidth && el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
@@ -74,12 +69,10 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     for (const target of [refresh, page.getByRole("button", { name: "Show pull requests and issues", exact: true }).locator(".."), tabs, page.locator("footer").getByRole("button", { name: "New session", exact: true })]) expect(await unobstructed(target)).toBe(true);
     await page.screenshot({ path: path.join(shots, `web-update-${width}.png`) });
 
-    // A failed check keeps what the last successful check showed.
     served = undefined;
     await recheck();
     expect(await notice.count()).toBe(1);
 
-    // Rolling back to this tab's build removes the bar.
     served = current;
     await recheck();
     expect(await notice.count()).toBe(0);
@@ -96,7 +89,6 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     await recheck();
     expect(await notice.count()).toBe(0);
 
-    // The server's notice about the sandbox shows in the same bar, as written, until it clears.
     const message = "Emulated shell unavailable: this machine doesn't have bubblewrap, which the sandbox is built on; install the bubblewrap package and restart RocketClaw";
     const alert = page.getByRole("alert").filter({ hasText: message });
     sandboxError = message;
