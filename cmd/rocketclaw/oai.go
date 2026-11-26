@@ -56,14 +56,24 @@ func runOAI(args []string) error {
 }
 
 func runOAILogin(args []string) error {
-	provider, headless, secretsARN, help, err := parseOAILogin(args)
-	if err != nil {
-		return err
+	flagSet := flag.NewFlagSet("oai login", flag.ContinueOnError)
+	flagSet.SetOutput(io.Discard)
+	headless := flagSet.Bool("headless", false, "")
+	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
+	err := flagSet.Parse(args)
+	provider := cmp.Or(flagSet.Arg(0), "openai")
+	if err == nil && flagSet.NArg() > 0 {
+		err = flagSet.Parse(flagSet.Args()[1:])
 	}
-	if help {
+	switch {
+	case errors.Is(err, flag.ErrHelp):
 		return printStdout(oaiHelpText, "oai help")
+	case err != nil:
+		return fmt.Errorf("parse oai login flags: %w", err)
+	case flagSet.NArg() > 0:
+		return errors.New("oai login accepts no more than one provider")
 	}
-	selected, cfg, err := loadRuntimeConfig(secretsARN, "")
+	selected, cfg, err := loadRuntimeConfig(*secretsARN, "")
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}
@@ -72,8 +82,8 @@ func runOAILogin(args []string) error {
 		return fmt.Errorf("unknown provider %q", provider)
 	}
 	var secret config.Config
-	if secretsARN != "" {
-		body, err := secretFetcher.SecretString(context.Background(), secretsARN)
+	if *secretsARN != "" {
+		body, err := secretFetcher.SecretString(context.Background(), *secretsARN)
 		if err != nil {
 			return fmt.Errorf("load secret: %w", err)
 		}
@@ -85,7 +95,7 @@ func runOAILogin(args []string) error {
 	}
 
 	acquire := oai.AcquireBrowserToken
-	if headless {
+	if *headless {
 		acquire = oai.AcquireDeviceToken
 	}
 	token, err := acquire(context.Background(), os.Stdout)
@@ -105,38 +115,6 @@ func runOAILogin(args []string) error {
 		result += fmt.Sprintf("Restart RocketClaw to use ChatGPT OAuth for %s.\n", provider)
 	}
 	return printStdout(result, "oai login result")
-}
-
-func parseOAILogin(args []string) (string, bool, string, bool, error) {
-	provider, headless, secretsARN := "", false, ""
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case arg == "--headless" && headless:
-			return "", false, "", false, errors.New("duplicate --headless")
-		case arg == "--headless":
-			headless = true
-		case arg == "-h" || arg == "--help":
-			return cmp.Or(provider, "openai"), headless, secretsARN, true, nil
-		case (arg == "--aws-secrets-manager-arn" || strings.HasPrefix(arg, "--aws-secrets-manager-arn=")) && secretsARN != "":
-			return "", false, "", false, errors.New("duplicate --aws-secrets-manager-arn")
-		case arg == "--aws-secrets-manager-arn":
-			if i+1 >= len(args) {
-				return "", false, "", false, errors.New("flag needs an argument: -aws-secrets-manager-arn")
-			}
-			i++
-			secretsARN = args[i]
-		case strings.HasPrefix(arg, "--aws-secrets-manager-arn="):
-			secretsARN = strings.TrimPrefix(arg, "--aws-secrets-manager-arn=")
-		case strings.HasPrefix(arg, "-"):
-			return "", false, "", false, fmt.Errorf("unknown flag %q", arg)
-		case provider != "":
-			return "", false, "", false, errors.New("oai login accepts no more than one provider")
-		default:
-			provider = arg
-		}
-	}
-	return cmp.Or(provider, "openai"), headless, secretsARN, false, nil
 }
 
 func runOAIList(args []string) error {
