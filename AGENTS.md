@@ -160,7 +160,7 @@ JOIN shadow_parents p USING (conversation_id);
 
 ## Verification
 
-- Before finalizing Go changes, run `gofmt` on touched files, then `make test`, which runs `make lint` first.
+- Before pushing, run `gofmt` on touched files and `make lint`, then the tests of what you changed: each touched Go package whole, never a single test (`make -C internal/rocketclaw coverage-profile GOTESTPKGS=./frontend/rpc`), and the web test files that cover touched web code (`make -C internal/rocketclaw/web test-files TESTS="src/x.browser.test.ts"`). Do not run the full `make test` locally: CI runs the full suite on every push to a PR and again in the merge queue, and nothing merges red. When CI fails on your PR, fix it in the commit it belongs to.
 - If any required verification cannot be run, stop and report why instead of claiming success.
 
 ## RocketClaw-Specific Requirements
