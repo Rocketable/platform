@@ -1176,7 +1176,7 @@ func writeSessionTranscriptRow(output *strings.Builder, escape *strings.Replacer
 }
 
 func sessionToolComparisonResult(ctx context.Context, db stateStoreDB, id string, before int64, output *strings.Builder, escape *strings.Replacer) (harness.ToolResult, error) {
-	shadows, err := shadowHistoryDB(ctx, db, id, "", 0, before)
+	shadows, err := shadowBindingsDB(ctx, db, id, "", 0, before)
 	if err != nil {
 		return harness.ToolResult{}, err
 	}

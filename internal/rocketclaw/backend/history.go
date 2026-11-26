@@ -180,8 +180,8 @@ const shadowHistorySQL = `WITH ` + sessionHistorySQL + `, owners AS (
     FROM conversations b JOIN owners o ON o.id = b.shadow_parent
 ) `
 
-func shadowHistoryDB(ctx context.Context, db stateStoreDB, id, source string, from, before int64) ([]protocol.ShadowBinding, error) {
-	bindings, err := queryRows(ctx, db, shadowHistorySQL+`
+func shadowBindingsDB(ctx context.Context, db stateStoreDB, id, source string, from, before int64) ([]protocol.ShadowBinding, error) {
+	return queryRows(ctx, db, shadowHistorySQL+`
 SELECT parent_conversation_id, parent_agent, shadow_agent, child_conversation_id
 FROM bindings ORDER BY parent_conversation_id COLLATE "C", parent_agent COLLATE "C", shadow_agent COLLATE "C"`, "shadow history bindings", func(row rowScanner) (protocol.ShadowBinding, error) {
 		var binding protocol.ShadowBinding
@@ -191,7 +191,11 @@ FROM bindings ORDER BY parent_conversation_id COLLATE "C", parent_agent COLLATE 
 
 		return binding, nil
 	}, id, source, from, before)
-	if err != nil {
+}
+
+func shadowHistoryDB(ctx context.Context, db stateStoreDB, id, source string, from, before int64) ([]protocol.ShadowBinding, error) {
+	bindings, err := shadowBindingsDB(ctx, db, id, source, from, before)
+	if err != nil || len(bindings) == 0 {
 		return nil, err
 	}
 
