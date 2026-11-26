@@ -5,16 +5,16 @@ package rpc;
 option go_package = "github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc";
 
 message ListSessionsRequest {
-  // The location of the caller's active tab while its window has focus, else empty.
+  // The location of the caller's active tab while its window has focus, else empty. Only the Web page's own poll
+  // records it as viewed and clears that location's unread mark; for any other caller it changes nothing.
   string viewing = 1;
   // The version of the last complete listing the caller holds. When the server still knows it, the
   // listing sends only the rows that changed since; otherwise it sends every row.
   string since = 2;
   // The caller marked the viewing tab unread while it was in view: the view counts without clearing the mark.
   bool hold = 3;
-  // Set by the server for a poll from a page it serves or trusts: only such a poll records the view and clears that
-  // location's mark.
-  bool same_origin = 4;
+  reserved 4;
+  reserved "same_origin";
 }
 
 message Session {

@@ -84,7 +84,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 
 	for _, route := range []string{"GET /api/ListSessions", "GET /stream", "GET /typing", "GET /listing", "GET /api/DownloadAttachment", "POST /api/UploadAttachment"} {
 		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
-			method, query, required := strings.TrimPrefix(r.URL.Path, "/api/"), r.URL.Query(), ""
+			method, query, required, ctx := strings.TrimPrefix(r.URL.Path, "/api/"), r.URL.Query(), "", r.Context()
 
 			var request, response proto.Message
 
@@ -95,7 +95,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 
 				list := &ListSessionsRequest{Since: query.Get("since")}
 				if protection.Check(&post) == nil {
-					list.Viewing, list.Hold, list.SameOrigin = query.Get("viewing"), query.Has("hold"), true
+					list.Viewing, list.Hold, ctx = query.Get("viewing"), query.Has("hold"), metadata.AppendToOutgoingContext(ctx, "rocketclaw-web-poll", "true")
 				}
 
 				request, response = list, &ListSessionsResponse{}
@@ -117,7 +117,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 				}
 			}
 
-			stream, err := connection.NewStream(r.Context(), &grpc.StreamDesc{ClientStreams: method == "UploadAttachment", ServerStreams: method != "UploadAttachment"}, "/rpc.Web/"+method)
+			stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ClientStreams: method == "UploadAttachment", ServerStreams: method != "UploadAttachment"}, "/rpc.Web/"+method)
 			if err == nil {
 				err = stream.SendMsg(request)
 			}

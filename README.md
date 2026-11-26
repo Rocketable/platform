@@ -531,6 +531,10 @@ Release note for removing Web voice:
 - `/voice` links return 404.
 - `/api/Voice` and `/api/VoiceSettings` are gone.
 
+Release note for read-only Web calls:
+
+- `ListSessions` no longer takes `sameOrigin`: only the Web page's own poll records which tab a person is viewing.
+
 ### Harness feedback server
 
 `cmd/harnessfeedback` is a separate program, not part of RocketClaw. It serves one MCP tool, `report(summary, details)`, for an agent to report a problem with its harness: a confusing tool error, a misleading description, a missing capability. Install it with `GOPRIVATE=github.com/Rocketable/platform go install github.com/Rocketable/platform/cmd/harnessfeedback@main` and run it as a `command` server; RocketClaw starts it for each `execute` call that uses it, so an installed binary starts faster than `go run`:

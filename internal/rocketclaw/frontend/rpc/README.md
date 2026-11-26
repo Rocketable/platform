@@ -190,10 +190,13 @@ with the caller's attention on it: `unread_at` (empty once read), `marked_unread
 `until_done` (the park lasts until the session is idle after its work, with no time)
 and `note` (the notification text a timer wrote).
 Its `viewing` field names the location of the caller's focused tab, of any kind,
-such as `/s/<id>` or `/routines`. The HTTP adapter sets `same_origin` only for
-same-origin requests (the only other requests that reach it are links another
-site opens), and only such a request, before the listing, records the
-view and clears that location's mark unless `hold` is set and the mark is quiet.
+such as `/s/<id>` or `/routines`. The HTTP adapter marks the call as the Web
+page's poll, with the gRPC metadata `rocketclaw-web-poll`, only for same-origin
+requests (the only other requests that reach it are links another site opens),
+and only such a call, before the listing, records the view and clears that
+location's mark unless `hold` is set and the mark is quiet. The mark is not a
+request field, so no caller can claim it through the request: `/rpc_mcp` never
+sets it, and its `ListSessions` only reads.
 Parks end on the server, not in this call: a loop in the web process wakes every
 person's parks that came due, and a closed tab whose park ended goes back where
 it was. The first
