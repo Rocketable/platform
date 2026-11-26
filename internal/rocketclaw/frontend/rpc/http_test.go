@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +24,7 @@ import (
 	"testing/iotest"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -31,6 +34,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 func TestHTTPEventFramingAllocationBudget(t *testing.T) {
@@ -323,6 +327,138 @@ func TestHTTPReload(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, response.Code)
 	require.JSONEq(t, `{"code":2,"message":"web reload: invalid staged assets"}`, response.Body.String())
 	require.Empty(t, core.RunTurnCalls())
+}
+
+func TestHTTPRPCMCP(t *testing.T) {
+	t.Parallel()
+
+	core := &mockBackend{SandboxErrorFunc: noSandboxError, SlackWarningFunc: noSlackWarning, ReloadFunc: func(reason string) (string, error) {
+		if reason == "broken" {
+			return "", errors.New("invalid staged assets")
+		}
+
+		return "reloaded for " + reason, nil
+	}}
+	listener, err := net.Listen("unix", testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+	New(core, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() {
+		transport.Stop()
+		require.NoError(t, serving.Wait())
+	})
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	handler := NewHTTPHandler(connection, new(config.LockedConfig), "")
+	connect := func(login string) (*mcp.ClientSession, string) {
+		server := httptest.NewServer(signedIn(login, handler))
+		t.Cleanup(server.Close)
+
+		session, err := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "test"}, nil).Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: server.URL + "/rpc_mcp", DisableStandaloneSSE: true}, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, session.Close()) })
+
+		return session, server.URL
+	}
+	call := func(session *mcp.ClientSession, tool string, arguments any) (string, bool) {
+		t.Helper()
+
+		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: tool, Arguments: arguments})
+		require.NoError(t, err)
+		require.Len(t, result.Content, 1)
+
+		return result.Content[0].(*mcp.TextContent).Text, result.IsError
+	}
+
+	alice, aliceURL := connect("alice")
+	bob, _ := connect("bob")
+
+	listed, err := alice.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+
+	type inputSchema struct {
+		Properties map[string]struct {
+			Description string `json:"description"`
+		} `json:"properties"`
+	}
+
+	names, schemas, descriptions := make([]string, 0, len(listed.Tools)), map[string]inputSchema{}, map[string]string{}
+
+	for _, tool := range listed.Tools {
+		raw, err := json.Marshal(tool.InputSchema)
+		require.NoError(t, err)
+
+		var schema inputSchema
+		require.NoError(t, json.Unmarshal(raw, &schema))
+		require.NotEmpty(t, tool.Description, "%s needs a comment in web.proto", tool.Name)
+
+		names, schemas[tool.Name], descriptions[tool.Name] = append(names, tool.Name), schema, tool.Description
+	}
+
+	require.ElementsMatch(t, append(strings.Fields(webUnaryMethods+" "+editorMethods), "ListSessions", "DownloadAttachment", "UploadAttachment"), names)
+	require.Contains(t, descriptions["Prompt"], "read it with History")
+	require.Contains(t, schemas["Prompt"].Properties["messageId"].Description, "resend the same one when retrying")
+
+	webMethods := File_web_proto.Services().ByName("Web").Methods()
+
+	for _, method := range names {
+		fields, want := webMethods.ByName(protoreflect.Name(method)).Input().Fields(), []string{"messages"}
+		if !webMethods.ByName(protoreflect.Name(method)).IsStreamingClient() {
+			want = make([]string, fields.Len())
+			for i := range want {
+				want[i] = fields.Get(i).JSONName()
+			}
+		}
+
+		require.ElementsMatch(t, want, slices.Collect(maps.Keys(schemas[method].Properties)), method)
+	}
+
+	text, failed := call(alice, "Reload", &ReloadRequest{Reason: "updated assets"})
+	require.False(t, failed, text)
+	require.JSONEq(t, `{"message":"reloaded for updated assets"}`, text)
+	require.Len(t, core.ReloadCalls(), 1)
+
+	for login, session := range map[string]*mcp.ClientSession{"alice": alice, "bob": bob} {
+		text, failed := call(session, "Identity", nil)
+		require.False(t, failed, text)
+
+		var identity IdentityResponse
+		require.NoError(t, protojson.Unmarshal([]byte(text), &identity))
+		require.Equal(t, login, identity.Username)
+	}
+
+	text, failed = call(alice, "RunCronJob", &RunCronJobRequest{})
+	require.True(t, failed)
+	require.Equal(t, "rpc error: code = InvalidArgument desc = stem is required", text)
+
+	text, failed = call(alice, "Reload", &ReloadRequest{Reason: "broken"})
+	require.True(t, failed)
+	require.Equal(t, "rpc error: code = Unknown desc = web reload: invalid staged assets", text)
+
+	response, err := http.Get(aliceURL + "/rpc_mcp")
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
+
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, aliceURL+"/rpc_mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"Identity"}}`))
+	require.NoError(t, err)
+
+	request.Header = http.Header{"Content-Type": {"application/json"}, "Accept": {"application/json, text/event-stream"}}
+
+	response, err = http.DefaultClient.Do(request)
+	require.NoError(t, err)
+
+	without, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Contains(t, string(without), `\"username\":\"alice\"`)
 }
 
 func TestHTTPStreams(t *testing.T) {

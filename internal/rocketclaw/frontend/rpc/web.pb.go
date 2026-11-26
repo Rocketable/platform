@@ -4037,13 +4037,19 @@ func (x *Attachment) GetConversationId() string {
 }
 
 type PromptRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Text          string                 `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`
-	Delivery      PromptDelivery         `protobuf:"varint,3,opt,name=delivery,proto3,enum=rpc.PromptDelivery" json:"delivery,omitempty"`
-	AttachmentIds []string               `protobuf:"bytes,4,rep,name=attachment_ids,json=attachmentIds,proto3" json:"attachment_ids,omitempty"`
-	MessageId     string                 `protobuf:"bytes,5,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
-	MentionIds    []string               `protobuf:"bytes,6,rep,name=mention_ids,json=mentionIds,proto3" json:"mention_ids,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The chat's id.
+	Id   string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Text string `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`
+	// STEER (the default) sends now, into the running turn or as the next turn; QUEUE runs it as a
+	// later turn; STASH holds it until someone sends it.
+	Delivery PromptDelivery `protobuf:"varint,3,opt,name=delivery,proto3,enum=rpc.PromptDelivery" json:"delivery,omitempty"`
+	// Ids UploadAttachment returned.
+	AttachmentIds []string `protobuf:"bytes,4,rep,name=attachment_ids,json=attachmentIds,proto3" json:"attachment_ids,omitempty"`
+	// A unique id for this message; resend the same one when retrying.
+	MessageId string `protobuf:"bytes,5,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	// Ids of the teammates the message tags, who get a link-only notification.
+	MentionIds    []string `protobuf:"bytes,6,rep,name=mention_ids,json=mentionIds,proto3" json:"mention_ids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

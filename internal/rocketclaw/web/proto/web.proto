@@ -474,11 +474,17 @@ enum PromptDelivery {
 }
 
 message PromptRequest {
+  // The chat's id.
   string id = 1;
   string text = 2;
+  // STEER (the default) sends now, into the running turn or as the next turn; QUEUE runs it as a
+  // later turn; STASH holds it until someone sends it.
   PromptDelivery delivery = 3;
+  // Ids UploadAttachment returned.
   repeated string attachment_ids = 4;
+  // A unique id for this message; resend the same one when retrying.
   string message_id = 5;
+  // Ids of the teammates the message tags, who get a link-only notification.
   repeated string mention_ids = 6;
 }
 
@@ -1291,65 +1297,127 @@ message TabsResponse {
 }
 
 service Web {
+  // Stores one file for a chat. The first message names conversationId and name and may carry data; later messages carry only data. Each chunk is at most 256 KiB. Returns the stored file's id, name, MIME type and size; pass the id in Prompt.attachmentIds.
   rpc UploadAttachment(stream Attachment) returns (Attachment);
+  // Returns a file's exact bytes in chunks of at most 256 KiB. conversationId is the chat whose history or queue shows the file, and id is the attachment id.
   rpc DownloadAttachment(Attachment) returns (stream Attachment);
+  // Lists the chats the caller can see, one response per chat, then a final empty response that says whether the listing is complete. Set since to the version of a listing already held to receive only the rows that changed.
   rpc ListSessions(ListSessionsRequest) returns (stream ListSessionsResponse);
+  // Creates a chat with the chosen agent and returns its id. For a sticky agent it returns that agent's existing chat, with resumed set, instead of creating one.
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  // Streams a content-free hint whenever a chat changes; read History to see what changed.
   rpc Join(JoinRequest) returns (stream ConversationChange);
+  // Streams who starts or stops typing in a chat.
   rpc WatchTyping(WatchTypingRequest) returns (stream TypingEvent);
+  // Streams a hint whenever the caller's chat list changes.
   rpc WatchListing(WatchListingRequest) returns (stream ListingChanged);
+  // Tells the chat's other viewers that the caller is typing or stopped.
   rpc ReportTyping(ReportTypingRequest) returns (ReportTypingResponse);
+  // Reads and changes the caller's tabs, spaces and attention: mark read or unread, park and unpark, sharing, and the Recent and Parked lists.
   rpc Tabs(TabsRequest) returns (TabsResponse);
+  // Sends a message to a chat as the caller. The default STEER delivery returns when the agent's turn ends; QUEUE and STASH return as soon as the message is queued. The result never holds the agent's reply: read it with History. Give every call its own messageId and resend the same one when retrying; in Web chats and Slack threads a repeated messageId is not posted twice.
   rpc Prompt(PromptRequest) returns (PromptResponse);
+  // Lists the routines in agent files with each schedule's next run within the next 24 hours.
   rpc ListCronJobs(ListCronJobsRequest) returns (ListCronJobsResponse);
+  // Runs a routine now by its name, "<agent> · <schedule>", and returns the chat its report went to once the run finishes.
   rpc RunCronJob(RunCronJobRequest) returns (RunCronJobResponse);
+  // Returns one Hosted Page of a space by its path.
   rpc GetPage(PageRequest) returns (Page);
+  // Lists the Hosted Pages of a space.
   rpc ListPages(ListPagesRequest) returns (ListPagesResponse);
+  // Answers a question an agent asked in a chat with the selected options and custom text. The first answer wins.
   rpc AnswerQuestion(AnswerQuestionRequest) returns (AnswerQuestionResponse);
+  // Returns a chat's transcript with its running turns, waiting queue, background jobs and open questions. Pass the revision from the previous answer to receive only what changed, and limit or before to page through older messages.
   rpc History(HistoryRequest) returns (HistoryResponse);
+  // Copies a chat up to its current point into a new chat and returns the new chat's id.
   rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse);
+  // Moves a chat's current point back to just before or just after a message without deleting anything, and returns the message text to edit.
   rpc StageRevert(StageRevertRequest) returns (StageRevertResponse);
+  // Permanently deletes a branch of a chat's message tree. A dry run reports what would be deleted.
   rpc DeleteBranch(DeleteBranchRequest) returns (DeleteBranchResponse);
+  // Returns every branch of a chat: its user messages and agent replies.
   rpc MessageTree(MessageTreeRequest) returns (MessageTreeResponse);
+  // Appends a summary of another branch of the chat at its current point.
   rpc SummarizeBranch(SummarizeBranchRequest) returns (SummarizeBranchResponse);
+  // Searches the text of messages in every chat the caller can see.
   rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
+  // Searches the chats the caller can see by name, room, agent, origin and preview, and by message
+  // text when messages is set.
   rpc SearchSessions(SearchSessionsRequest) returns (SearchSessionsResponse);
+  // Returns display names for Slack user ids, or the Slack people whose names match query.
   rpc SlackNames(SlackNamesRequest) returns (SlackNamesResponse);
+  // Sends link-only notifications to the teammates a message tags.
   rpc NotifySessionMentions(PromptRequest) returns (PromptResponse);
+  // Writes a handoff document that summarizes a chat for another session to continue from.
   rpc Handoff(HandoffRequest) returns (HandoffResponse);
+  // Lists the agents the caller can choose, for a new chat or for the chat named by conversationId.
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+  // Lists the skills the caller can see, or only those the named agent may use.
   rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
+  // Returns the server settings the caller may see; administrators also get the behavior settings.
   rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
+  // Sends one short request to a model, named as provider/model#effort, and reports how long it took or the provider's error.
   rpc TestModel(TestModelRequest) returns (TestModelResponse);
+  // Starts an agent draft: blank in a mode, from a starter agent, or as a copy of an existing agent.
   rpc CreateAgentDraft(CreateAgentDraftRequest) returns (AgentDraft);
+  // Lists every agent draft, newest first, with its save state, and the starter agents' names.
   rpc ListAgentDrafts(ListAgentDraftsRequest) returns (ListAgentDraftsResponse);
+  // Returns an agent draft, the edits made after since, and where other editors are working.
   rpc GetAgentDraft(GetAgentDraftRequest) returns (GetAgentDraftResponse);
+  // Applies one edit to an agent draft and returns the draft's new revision.
   rpc ApplyAgentDraftOp(ApplyAgentDraftOpRequest) returns (ApplyAgentDraftOpResponse);
+  // Records where the caller's editor is working in an agent draft, so other editors can see it.
   rpc SetAgentDraftPresence(SetAgentDraftPresenceRequest) returns (SetAgentDraftPresenceResponse);
+  // Returns the help for every setting of one agent mode, in agent-file order.
   rpc AgentSettings(AgentSettingsRequest) returns (AgentSettingsResponse);
+  // Sends a message to an agent draft's test chat and returns once it is stored, without waiting for the answers.
   rpc DraftPrompt(DraftPromptRequest) returns (DraftPromptResponse);
+  // Gives an agent draft a new, empty test chat and sends it the replayed messages in order.
   rpc RestartDraftChat(RestartDraftChatRequest) returns (DraftPromptResponse);
+  // Lists, for an agent draft's name, each configuration layer's file and what saving to it would write.
   rpc DraftLayers(DraftLayersRequest) returns (DraftLayersResponse);
+  // Saves one variant of an agent draft to the workspace or a Git overlay, or reports the changes to review first.
   rpc SaveDraft(SaveDraftRequest) returns (SaveDraftResponse);
+  // Stops waiting for a draft's saved change to merge and returns the draft to editing.
   rpc StopWaiting(StopWaitingRequest) returns (SaveDraftResponse);
+  // Asks the assistant to propose changes to an agent draft, as a proposal editors accept or reject.
   rpc ProposeDraftChanges(ProposeDraftChangesRequest) returns (AgentDraftProposal);
+  // Accepts or rejects an open proposal on an agent draft, once, for every editor.
   rpc DecideProposal(DecideProposalRequest) returns (AgentDraftProposal);
+  // Replaces the whole behavior settings document. Administrators only.
   rpc SaveBehaviorSettings(SaveBehaviorSettingsRequest) returns (ListConfigResponse);
+  // Renames a chat, toggles one of its tags, or pauses or resumes its agent.
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
+  // Returns the hash of this API's schema, so a client can tell when the server changed.
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
+  // Returns the caller's username and principal and whether they are limited to spaces.
   rpc Identity(IdentityRequest) returns (IdentityResponse);
+  // Reloads the agents, skills and other runtime files from the workspace and overlays.
   rpc Reload(ReloadRequest) returns (ReloadResponse);
+  // Lists the messages waiting in a chat's queue.
   rpc ListQueue(ListQueueRequest) returns (ListQueueResponse);
+  // Removes a waiting message from a chat's queue without running it.
   rpc RemoveQueueItem(QueueItemRequest) returns (QueueItemResponse);
+  // Sends a waiting message now, into the running turn or as the next turn.
   rpc SteerQueueItem(QueueItemRequest) returns (QueueItemResponse);
+  // Moves a held message into the queue so it runs as a later turn.
   rpc PopQueueItem(QueueItemRequest) returns (QueueItemResponse);
+  // Replaces the text of a waiting message and makes the caller its author.
   rpc EditQueueItem(QueueItemRequest) returns (QueueItemResponse);
+  // Puts a chat's waiting messages in the listed order.
   rpc ReorderQueue(ReorderQueueRequest) returns (QueueItemResponse);
+  // Moves the chat's running tool and subagent calls that may run in the background into Background Jobs.
   rpc MoveToBackground(MoveToBackgroundRequest) returns (MoveToBackgroundResponse);
+  // Stops one running Background Job of a chat.
   rpc StopBackgroundJob(StopBackgroundJobRequest) returns (StopBackgroundJobResponse);
+  // Lists the ids and types of a chat's saved entries.
   rpc ListSessionEntries(SessionEntriesRequest) returns (ListSessionEntriesResponse);
+  // Returns a chat's saved entries as JSON.
   rpc LoadSessionEntries(SessionEntriesRequest) returns (LoadSessionEntriesResponse);
+  // Deletes a chat's saved entries, keeping the chat and its tags.
   rpc DeleteSessionEntries(SessionEntriesRequest) returns (DeleteSessionEntriesResponse);
+  // Deletes a chat for everyone, with its history and the runs that report into it.
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+  // Finds the pull request links that shell commands created or mentioned in their output.
   rpc FindPullRequests(FindPullRequestsRequest) returns (FindPullRequestsResponse);
 }
