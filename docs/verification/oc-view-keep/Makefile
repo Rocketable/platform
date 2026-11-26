@@ -9,7 +9,7 @@
 # files and each check's log go to WORK, the repository's .tmp/verification/oc-view-keep unless set otherwise.
 
 TLA_VERSION = 1.8.0
-TLA_SHA256 = fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713
+TLA_SHA256 = 67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928
 WORK ?= ../../../.tmp/verification/oc-view-keep
 TOOLS = $(WORK)/tla2tools-$(TLA_VERSION).jar
 SHA256SUM = $(if $(shell command -v sha256sum),sha256sum,shasum -a 256)

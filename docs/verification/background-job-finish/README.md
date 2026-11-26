@@ -47,10 +47,14 @@ Witnesses, each of which must fail: `NeverSavedAfterRefusals` (a save works afte
 make -C docs/verification/background-job-finish
 ```
 
-Requires Java 11+, `curl` and Make; the Makefile downloads `tla2tools.jar` v1.8.0 and checks its SHA-256, and writes to
+Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0, verifies SHA-256
+`67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`, and writes to
 the repository root's `.tmp/verification/background-job-finish/`, like the other models here.
 
 ## Results
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (1 pass, 7 named counterexamples) in 6s.
 
 Recorded 2026-11-22 on Linux (aarch64), OpenJDK 21.0.13.1, TLC `2026.11.19.180144` (rev `bc1b506`), one worker.
 `make -k all` exited 0; every check matched its expected outcome.

@@ -8,8 +8,8 @@
 make -C docs/verification/pr-pane-checkout
 ```
 
-The jar is `tla2tools.jar` v1.8.0, SHA-256 `fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`.
-The 2026-11-20 run used a local copy of the previous pin because the release download no longer matched it.
+The jar is `tla2tools.jar` v1.8.0, SHA-256 `67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`.
+The 2026-11-20 run used a local copy of the then-pinned jar because the release download no longer matched it.
 
 TLC2 Version 2026.11.15.002146 (rev: bc1b506), OpenJDK 21.0.13.1. Each check finishes in about a second.
 
@@ -46,6 +46,9 @@ stateDiagram-v2
 - `LoginFailureAlerts`: in a folder with a named branch, a broken login still shows the banner. This keeps a fix from hiding real login failures.
 
 ## Checks
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (2 passes, 3 named counterexamples) in 3s.
 
 On 2026-11-21, `make check` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 

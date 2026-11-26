@@ -1,6 +1,12 @@
 # Live Hosted Page pane
 
-`make -C docs/verification/live-hosted-page-pane` translates the PlusCal and checks it with the pinned TLA+ tools. TLC `2026.11.19.180144` (`bc1b506`) on Java `21.0.13.1` explored 315,648 distinct states (2,629,825 generated, depth 26) in 33 seconds. `CurrentSelection`, `LastSuccess`, `NoRedundantMount` and `FreshWhenStable` passed.
+`make -C docs/verification/live-hosted-page-pane` translates the PlusCal and checks it with `tla2tools.jar` v1.8.0,
+SHA-256 `67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`.
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (1 pass, 5 named counterexamples) in 36s.
+
+TLC `2026.11.19.180144` (`bc1b506`) on Java `21.0.13.1` explored 315,648 distinct states (2,629,825 generated, depth 26) in 33 seconds. `CurrentSelection`, `LastSuccess`, `NoRedundantMount` and `FreshWhenStable` passed.
 
 | Check | Expected violation |
 | --- | --- |

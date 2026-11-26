@@ -32,9 +32,9 @@ cd $WORK && java -Djava.io.tmpdir=$WORK/java -XX:+UseParallelGC -Xmx4g -cp $WORK
 Translation: `java -cp tla2tools-1.8.0.jar pcal.trans -nocfg CronFollowUpUnloadedAgent.tla`, run on a scratch
 copy under `$WORK/translate` and copied back. The `Makefile` does this.
 
-- Tools: `tla2tools.jar` v1.8.0, SHA-256 `fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`
-  (`TLC2 Version 2026.11.19.180144 (rev: bc1b506)`, `pcal.trans Version 1.12`). OpenJDK 21.0.13.1. 16 workers
-  on 16 cores (Linux aarch64).
+- Tools: `tla2tools.jar` v1.8.0, SHA-256 `67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`.
+- The original run used TLC `2026.11.19.180144` (rev `bc1b506`), `pcal.trans` 1.12, and OpenJDK 21.0.13.1,
+  with 16 workers on 16 cores (Linux aarch64).
 - `-deadlock` turns off deadlock reporting. Once every follow-up has settled, every process waits, and that is
   the intended end state, not a deadlock. Liveness still checks those final states as stuttering.
 - A passing check needs exit 0 and `Model checking completed. No error has been found.` A check that must fail
@@ -148,6 +148,9 @@ Design switches:
   `switchConversationAgent`).
 
 ## Results
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (4 passes, 10 named counterexamples) in 1m 57s.
 
 | Check | Constants | Expect | Result | States generated / distinct | Depth | Time |
 |---|---|---|---|---|---|---|

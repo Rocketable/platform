@@ -2,7 +2,7 @@ SHELL := /bin/bash
 WORK := $(abspath ../../../.tmp/run/live-hosted-page-pane)
 MODEL := HostedPagePane.tla
 TOOLS := $(WORK)/tla2tools-1.8.0.jar
-SHA := fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713
+SHA := 67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928
 JAVA := java -Djava.io.tmpdir=$(WORK)/java -XX:+UseParallelGC -Xmx1g -cp $(TOOLS)
 CHECKS := normal stale keep-absent clear-error remount witness
 EXPECTED_stale := CurrentSelection

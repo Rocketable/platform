@@ -20,7 +20,7 @@ make -C docs/verification/tab-attention fail-follow-ignored # a server that igno
 ```
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256
-`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. The tools, the translator's copy, Java's
+`67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`. The tools, the translator's copy, Java's
 temporary files, TLC's working files and each check's log go to the repository root's
 `.tmp/verification/tab-attention/`. A check passes only when TLC exits 0 and reports
 `Model checking completed. No error has been found.` `fail-old-turn-end` passes only when TLC exits 12 or 13 and
@@ -75,10 +75,13 @@ not as one composed world.
 
 ## Recorded run
 
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (2 passes, 2 named counterexamples) in 39m.
+
 2026-11-18, on aarch64 (16 workers), OpenJDK 21.0.13, TLC `2026.11.06.222357 (rev: d8fb231)`, `pcal.trans` 1.12:
 `one-window` and `two-windows` passed and `fail-old-turn-end` found `DoneEndsOnlyWhenIdle` violated, as required.
-The release now serves a rebuilt `tla2tools.jar` under the same v1.8.0 tag, which fails the pinned checksum; the run
-used a local copy of the pinned jar, whose SHA-256 matches `TLA_SHA256` and whose manifest names revision `d8fb231`.
+The release then served a rebuilt `tla2tools.jar` that failed the checksum. The run used a local copy that matched
+the pin at the time and whose manifest named revision `d8fb231`.
 Both new liveness properties were also checked for teeth on throwaway copies: with the idle end disabled, TLC finds
 `IdleEndsDone` violated, and with the restore disabled, `QuestionRestores`.
 
@@ -86,8 +89,8 @@ Rerun 2026-11-18 after the `tla2tools.jar` pin moved to build `bc1b506` (one ups
 
 Rerun 2026-11-19 with Follow: TLC `2026.11.15.002146 (rev: bc1b506)`, OpenJDK 21.0.13 on linux/aarch64 (16 workers);
 every check passed or failed as required, and both worlds reached `UnfollowedParkAsked` and `PopsAfterRefollow`. The
-release again serves a rebuilt `tla2tools.jar` that fails the pin; the run used a local copy of the pinned jar, whose
-SHA-256 matches `TLA_SHA256` and whose manifest names revision `bc1b506`.
+release again served a rebuilt `tla2tools.jar` that failed the checksum. The run used a local copy that matched
+the pin at the time and whose manifest named revision `bc1b506`.
 
 ## Limits
 
