@@ -152,14 +152,20 @@ for (const width of [1280, 320]) test(`the bottom bar's buttons fit without over
 
 test("Home opens main's session, else the latest sticky: user session, and hides when there is neither", () => withPage({}, async (page, origin, _prompts, saved) => {
   const home = page.locator("#bottom-navigation").getByRole("button", { name: "Home", exact: true });
+  const search = page.locator("#bottom-navigation").getByRole("button", { name: "Search sessions and commands", exact: true });
   const reload = async () => {
     const agents = page.waitForResponse((response: { url(): string }) => response.url().endsWith("/api/ListAgents"));
     await page.goto(`${origin}${href("alpha")}`);
     await agents;
-    await page.locator("#bottom-navigation").getByRole("button", { name: "Search sessions and commands", exact: true }).waitFor();
+    await search.waitFor();
   };
-  const lands = async (path: string) => {
+  const lands = async (path: string, updatedAt?: string) => {
     await reload();
+    if (updatedAt) {
+      await search.click();
+      await page.locator(`time[datetime="${updatedAt}"]`).waitFor({ state: "attached" });
+      await page.keyboard.press("Escape");
+    }
     await home.click();
     await page.waitForURL(`${origin}${path}`);
   };
@@ -170,9 +176,9 @@ test("Home opens main's session, else the latest sticky: user session, and hides
 
   saved.agents = [{ name: "notes", sticky: "user", stickySession: "bravo" }, { name: "todo", sticky: "user", stickySession: "delta" }, { name: "team", sticky: "global", stickySession: "alpha" }];
   saved.updated = { alpha: "2026-11-25T12:00:00Z", bravo: "2026-11-25T09:00:00Z", delta: "2026-11-25T10:00:00Z" };
-  await lands(href("delta"));
+  await lands(href("delta"), saved.updated.delta);
   saved.updated = { ...saved.updated, bravo: "2026-11-25T11:00:00Z" };
-  await lands(href("bravo"));
+  await lands(href("bravo"), saved.updated.bravo);
 
   saved.agents = [{ name: "notes", sticky: "user" }, { name: "team", sticky: "global", stickySession: "alpha" }, { name: "channel", sticky: "slack" }];
   await reload();
