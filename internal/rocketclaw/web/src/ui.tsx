@@ -3280,7 +3280,7 @@ function RemoteStatus({ server, configured, visible, reported, failed, created, 
   </>;
 }
 
-type RemoteViewProps = { id: string; start: string; servers: string[]; kept: Record<string, string[]>; visible: boolean; shown: string; setReport: (report: { route: string; shown: string }) => void; container: RefObject<HTMLDivElement | null> };
+type RemoteViewProps = { id: string; start: string; servers: string[]; kept: Record<string, string[]>; visible: boolean; shown: string; setReport: Dispatch<SetStateAction<{ route: string; shown: string }>>; container: RefObject<HTMLDivElement | null> };
 
 function useRemoteView({ id, start, servers, kept, visible, shown, setReport, container }: RemoteViewProps) {
   const sidebar = useContext(Sidebar);
@@ -3307,8 +3307,9 @@ function useRemoteView({ id, start, servers, kept, visible, shown, setReport, co
   });
   const closeTab = useEffectEvent((other: string, session: string) => tabs.deleted(remoteRow(other, session)));
   const reportSession = useEffectEvent((other: string, session: string) => {
-    if (visible) remoteView.shown = session;
-    setReport({ route: id, shown: `opencode:${other}:${session}` });
+    const route = visible && remoteView.route === id ? id : "";
+    if (route) remoteView.shown = session;
+    setReport({ route, shown: `opencode:${other}:${session}` });
   });
   const messageLink = useEffectEvent((other: string, session: string, message: string) => `opencode:${other}:${session}` === id ? messageURL(path, message) : "");
   const view = useRef<{ mounted: Mounted; id: string; messageID?: string }>(undefined);
@@ -3325,6 +3326,7 @@ function useRemoteView({ id, start, servers, kept, visible, shown, setReport, co
     view.current.mounted.setVisible(visible);
     const { openPalette, quotable, quote } = view.current.mounted;
     Object.assign(remoteView, visible ? { route: id, shown: shown.slice(`opencode:${server}:`.length) || sessionID, openPalette, quotable, quote } : { route: "", shown: "", ...inertView });
+    if (visible) setReport((current) => !current.route && current.shown === id ? { route: id, shown: id } : current);
     announceRemoteView();
   });
   // The view opens on the session shown when it mounts; later sessions move it.
@@ -3339,7 +3341,7 @@ function useRemoteView({ id, start, servers, kept, visible, shown, setReport, co
   });
   const wanted = !!start;
   const configured = servers.join("\n");
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!wanted) return;
     let gone = false;
     void (import(/* @vite-ignore */ retries ? `${ocEntry}?retry=${retries}` : ocEntry) as Promise<OcModule>).then((module) => {
@@ -3351,11 +3353,12 @@ function useRemoteView({ id, start, servers, kept, visible, shown, setReport, co
       gone = true;
       view.current?.mounted.dispose();
       view.current = undefined;
+      setReport({ route: "", shown: "" });
       Object.assign(remoteView, { route: "", shown: "", ...inertView });
       announceRemoteView();
     };
-  }, [wanted, configured, retries]);
-  useEffect(() => show(), [id, visible, keep, messageID]);
+  }, [wanted, configured, retries, setReport]);
+  useLayoutEffect(() => show(), [id, visible, keep, messageID]);
   return { failed, created: create.error?.message ?? "", retry: () => { setFailed(""); setRetries((count) => count + 1); } };
 }
 

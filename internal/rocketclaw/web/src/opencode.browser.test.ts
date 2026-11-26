@@ -217,8 +217,9 @@ test("thread PR pane adds quotes and diff notes without sending from the OpenCod
 }, 30_000);
 
 // A RocketClaw Web serving the built view at /oc-ui/ and the fake OpenCode server behind /oc/box/api/.
-function start() {
+function start(initialTabs = ["ses_a"]) {
   reset();
+  const servers: Record<string, string> = { box };
   const rows: Session[] = [
     { id: "opencode:box:ses_a", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_a", preview: "Alpha work", server: "box", directory: "/repo", updatedAt: new Date().toISOString() },
     { id: "opencode:box:ses_off", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_off", preview: "Old work", server: "box", directory: "/srv/old", offline: true, tags: ["billing"] },
@@ -291,7 +292,7 @@ function start() {
         cancel() { typing.delete(own); },
       }), { headers: { "Content-Type": "text/event-stream" } });
     }
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, opencodeServers: { box }, agentTags: { main: { tags: ["customer"] } } })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, opencodeServers: servers, agentTags: { main: { tags: ["customer"] } } })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = path.join(dist, url.pathname);
       if (await Bun.file(`${file}.gz`).exists()) return unpacked(file);
@@ -318,7 +319,7 @@ function start() {
         return Response.json({ id: `opencode:box:${body.data.id}` });
       }
       case "/api/Tabs": case "/api/ChangeTabs":
-        return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), space: "main" }], groups: [], space: "main", last: {} } });
+        return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: initialTabs.map((id) => ({ path: route(`opencode:box:${id}`), space: "main" })), groups: [], space: "main", last: {} } });
       case "/api/FindPullRequests": {
         const runs = input.runs as { command: string; output: string }[];
         return Response.json({ created: runs.filter((run) => run.command.startsWith("gh pr create")).map((run) => run.output), mentioned: [] });
@@ -326,7 +327,7 @@ function start() {
       default: return Response.json({});
     }
   } });
-  return { web, calls, release, terminals, creates, entryFailures, typing, rows, holdOpenCode, base: `http://127.0.0.1:${web.port}` };
+  return { web, calls, release, terminals, creates, entryFailures, typing, rows, servers, holdOpenCode, base: `http://127.0.0.1:${web.port}` };
 }
 
 test("a hosted page opens beside the embedded OpenCode session", async () => {
@@ -970,17 +971,55 @@ test("one OpenCode view loads with the page, waits hidden behind other tabs, and
 
 test("remote sessions list, tag, go offline, and start", async () => {
   const { chromium: engine } = await import(playwright!);
-  const { web, calls, release, creates, entryFailures, base } = start();
-  release();
+  const { web, calls, release, creates, entryFailures, base, rows, servers } = start(["ses_off", "ses_a"]);
+  fake.sessions.set("ses_off", { ...fake.sessions.get("ses_a")!, id: "ses_off" });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
     const openTabs = () => page.locator('[aria-label="Main tabs"] [data-tab]').evaluateAll((nodes: Element[]) => nodes.map((node) => node.getAttribute("data-tab")));
+    const view = page.locator("main [data-oc-view]");
+    const visibleView = page.locator("main [data-oc-view]:not([data-oc-hidden])");
+    const offline = page.getByText("box is offline; this session reopens when it is reachable.");
 
-    await page.goto(`${base}${route("opencode:box:ses_a")}`);
-    await page.locator("main [data-oc-view] [data-slot=session-review-toggle]").waitFor();
+    await page.goto(`${base}${route("opencode:box:ses_off")}`);
+    await offline.waitFor();
+    release();
+    await view.getByText("answer in ses_off").waitFor({ state: "attached" });
+    rows[1].name = "Still offline";
+    await page.getByRole("tab", { name: "Still offline", exact: true }).waitFor();
+    expect(await offline.isVisible()).toBe(true);
+    expect(await visibleView.count()).toBe(0);
+    rows[1].offline = false;
+    const recovered = visibleView.getByText("answer in ses_off");
+    await recovered.waitFor();
+    rows[1].offline = true;
+    rows[1].name = "Recovered session";
+    const offlineTab = page.getByRole("tab", { name: "Recovered session", exact: true });
+    await offlineTab.waitFor();
+    expect(await recovered.isVisible()).toBe(true);
+
+    const previous = await visibleView.elementHandle();
+    servers.spare = box;
+    await page.waitForFunction((node: Element) => !node.isConnected, previous);
+    await view.getByText("answer in ses_off").waitFor({ state: "attached" });
+    expect(await offline.isVisible()).toBe(true);
+    expect(await visibleView.count()).toBe(0);
+
+    const warmTab = page.getByRole("tab", { name: "Alpha work", exact: true });
+    await warmTab.click();
+    await visibleView.getByText("answer in ses_a").waitFor();
+    const warmView = await visibleView.elementHandle();
+    expect((await openTabs()).slice(0, 2)).toEqual([route("opencode:box:ses_off"), route("opencode:box:ses_a")]);
+    await offlineTab.click();
+    await offline.waitFor();
+    expect(await warmView.evaluate((node: Element) => node.isConnected && node.hasAttribute("data-oc-hidden"))).toBe(true);
+    await warmTab.click();
+    await visibleView.getByText("answer in ses_a").waitFor();
+    expect(await view.count()).toBe(1);
+    expect(await warmView.evaluate((node: Element) => node.isConnected && !node.hasAttribute("data-oc-hidden"))).toBe(true);
+    await visibleView.locator("[data-slot=session-review-toggle]").waitFor();
 
     await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("Name session");
@@ -996,15 +1035,11 @@ test("remote sessions list, tag, go offline, and start", async () => {
     await page.getByRole("button", { name: "Sessions: Add tag…" }).click();
     const tag = page.getByRole("dialog", { name: "Add tag" }).getByLabel("Tag");
     expect(await page.locator("datalist option").evaluateAll((options: Element[]) => options.map((option) => (option as HTMLOptionElement).value))).toEqual(["billing"]);
-    await tag.fill("billing");
+    await tag.fill("release");
     await tag.press("Enter");
     await until(() => calls.some(({ path }) => path === "/api/UpdateSession"));
-    expect(calls.find(({ path }) => path === "/api/UpdateSession")?.body).toEqual({ id: "opencode:box:ses_a", tag: "billing" });
+    expect(calls.find(({ path }) => path === "/api/UpdateSession")?.body).toEqual({ id: "opencode:box:ses_a", tag: "release" });
 
-    // An offline server's session shows a notice instead of the view; a server no longer configured, another.
-    await page.goto(`${base}${route("opencode:box:ses_off")}`);
-    await page.getByText("box is offline; this session reopens when it is reachable.").waitFor();
-    expect(await page.locator("[data-oc-view]").count()).toBe(0);
     await page.goto(`${base}${route("opencode:gone:ses_x")}`);
     await page.getByText("This OpenCode session is no longer available.").waitFor();
 
@@ -1051,7 +1086,6 @@ test("remote sessions list, tag, go offline, and start", async () => {
     expect(await openTabs()).toEqual(expect.arrayContaining([route("opencode:box:ses_a"), route("opencode:box:ses_child")]));
 
     // OpenCode's New session, from inside the view, goes through RocketClaw: the session's own folder, a new tab.
-    const view = page.locator("main [data-oc-view]");
     const palette = page.locator("[data-oc-portal] .command-palette");
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     await view.getByText("answer in ses_a").waitFor();
