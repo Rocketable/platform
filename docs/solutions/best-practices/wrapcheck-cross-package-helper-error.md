@@ -1,7 +1,7 @@
 ---
 title: Wrapcheck Cross-Package Helper Error
 date: 2026-08-31
-last_updated: 2026-11-17
+last_updated: 2026-11-25
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/backend
 problem_type: best_practice
@@ -13,6 +13,7 @@ applies_when:
   - A package returns an error that originated in another package
   - wrapcheck fails make lint if that error is returned unwrapped
   - "Reviewers ask to drop fmt.Errorf(\"%w\", err) with no extra prefix"
+  - The returned error is a gRPC status whose message reaches a client
 related_components:
   - internal/rocketclaw/protocol
   - cmd/rocketclaw
@@ -59,6 +60,12 @@ When identical helpers show up across packages:
 
 Empty `%w` is a lint-boundary adapter, not a message. Add a real prefix only when the call site has new context.
 
+### Not for gRPC status errors whose message a client reads
+
+Wrapping a gRPC status error, even with an empty `%w`, changes the message a reader gets back. `status.FromError` finds the wrapped status and keeps its code, but replaces the message with the wrapper's whole `err.Error()` (`vendor/google.golang.org/grpc/status/status.go`, `FromError`). So `status.Convert(fmt.Errorf("%w", err)).Message()` is `rpc error: code = Unknown desc = web reload: invalid staged assets` instead of `web reload: invalid staged assets`, and the Web API's JSON error body changes with it.
+
+When a cross-package helper hands a gRPC error to code that reports it, return a `*status.Status` instead of an `error`: `status.New(code, msg)` for errors you create and `status.Convert(err)` for the call's error. The caller turns it back into an error with `.Err()`. wrapcheck only looks at returned `error` values, so it has nothing to flag, and the code and message stay exactly what the server sent. `invokeJSON` in `internal/rocketclaw/frontend/rpc/http.go` does this for both `POST /api/<Method>` and the `/rpc_mcp` tools, and `TestHTTPReload` pins the unchanged `/api` error body.
+
 ## Why This Matters
 
 Reviewers treat `fmt.Errorf("%w", err)` as noise and ask to return `err`. That edit is a wrapcheck failure the moment the helper lives in another package. The next person "fixes" lint by putting the helper back, disabling wrapcheck, or adding `//nolint`. All three fight the repo rules.
@@ -72,7 +79,7 @@ Keeping one copy at the lowest layer avoids two copies drifting apart. Callers i
 - Reviewing a `fmt.Errorf("%w", err)` with no prefix in a wrapcheck-enabled module.
 - Deduplicating identical functions in `internal/rocketclaw`. (`make lint` lints `./...` from `internal/rocketclaw`, so `cmd/rocketclaw` is not wrapcheck-checked today.)
 
-Do not apply this to same-package returns. Do not treat it as a reason to copy `loadRuntimeConfig` into `serve.go`.
+Do not apply this to same-package returns. Do not treat it as a reason to copy `loadRuntimeConfig` into `serve.go`. Do not apply the empty `%w` to a gRPC status error whose message a client reads; return a `*status.Status` instead, as above.
 
 ## Evidence
 
