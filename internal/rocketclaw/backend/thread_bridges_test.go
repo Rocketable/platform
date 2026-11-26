@@ -527,13 +527,9 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	runTestManager(t, manager)
 
 	require.NoError(t, manager.StartActiveGoals(t.Context()))
-	require.Len(t, submittedMessages(bridge), 1)
-	assert.Equal(t, protocol.GoalActionContinue, submittedMessages(bridge)[0].GoalAction)
-	assert.Equal(t, map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, submittedMessages(bridge)[0].Metadata, "the restart continuation keeps the goal's setter")
-	assert.Equal(t, `[Web principal="Alice"]`, submittedMessages(bridge)[0].OriginHeader, "and its origin")
-	assert.Equal(t, "Continue the active goal loop.", submittedMessages(bridge)[0].Text)
-	assert.Equal(t, conversationID, submittedMessages(bridge)[0].ConversationID)
-	assert.Equal(t, &protocol.SlackReplyTarget{}, submittedMessages(bridge)[0].SlackReply)
+	require.Len(t, bridge.ContinueGoalCalls(), 1)
+	assert.Nil(t, bridge.ContinueGoalCalls()[0].Reply)
+	assert.Empty(t, submittedMessages(bridge))
 }
 
 func TestThreadBridgeManagerSkipsActiveGoalContinuationForResumedTurn(t *testing.T) {
@@ -550,7 +546,7 @@ func TestThreadBridgeManagerSkipsActiveGoalContinuationForResumedTurn(t *testing
 	runTestManager(t, manager)
 
 	require.NoError(t, manager.StartActiveGoals(t.Context()))
-	assert.Empty(t, submittedMessages(bridge))
+	assert.Empty(t, bridge.ContinueGoalCalls())
 }
 
 func TestThreadBridgeManagerPickLaterWorkUsesLiveBridge(t *testing.T) {
@@ -922,6 +918,7 @@ func newDirectBridgeMock() *directBridgeMock {
 	mock.InterruptActiveTurnFunc = func() *protocol.InboundMessage { return nil }
 	mock.SwitchAgentFunc = func(string) {}
 	mock.PickLaterWorkFunc = func(context.Context) error { return nil }
+	mock.ContinueGoalFunc = func(context.Context, *protocol.SlackReplyTarget, *turnCompletion) (bool, error) { return true, nil }
 
 	return mock
 }

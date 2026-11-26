@@ -39,6 +39,7 @@ type directBridge interface {
 	InterruptActiveTurn() *protocol.InboundMessage
 	SwitchAgent(agent string)
 	PickLaterWork(ctx context.Context) error
+	ContinueGoal(ctx context.Context, reply *protocol.SlackReplyTarget, completion *turnCompletion) (bool, error)
 }
 
 type bridgeFactory interface {
@@ -242,12 +243,7 @@ func (m *threadBridgeManager) StartActiveGoals(ctx context.Context) error {
 			return fmt.Errorf("start active goal bridge: %w", err)
 		}
 
-		goal, _, err := m.store.Goal(conversationID)
-		if err != nil {
-			return fmt.Errorf("load active goal: %w", err)
-		}
-
-		if err := managed.Submit(ctx, goalContinuation(conversationID, &goal)); err != nil {
+		if _, err := managed.ContinueGoal(ctx, nil, nil); err != nil {
 			return fmt.Errorf("submit active goal continuation: %w", err)
 		}
 	}
@@ -303,11 +299,6 @@ func (r *Runtime) SetAgentPaused(ctx context.Context, conversationID, by string,
 		return err
 	}
 
-	goal, found, err := r.Sessions.Goal(conversationID)
-	if err != nil {
-		return fmt.Errorf("load resumed goal: %w", err)
-	}
-
 	running, err := r.Sessions.HasActiveTurn(ctx, conversationID)
 	if err != nil {
 		return err
@@ -318,8 +309,8 @@ func (r *Runtime) SetAgentPaused(ctx context.Context, conversationID, by string,
 	b.goalHeld = false
 	b.mu.Unlock()
 
-	if held && found && goal.Status == GoalStatusActive && !running {
-		if err := b.Submit(ctx, goalContinuation(conversationID, &goal)); err != nil {
+	if held && !running {
+		if _, err := b.ContinueGoal(ctx, nil, nil); err != nil {
 			return fmt.Errorf("submit resumed goal continuation: %w", err)
 		}
 	}

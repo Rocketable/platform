@@ -71,7 +71,7 @@ Each connector chooses the string. The backend prints it in the model header, an
 
 ### Goal
 
-An objective a person sets on a conversation from Web that keeps its agent taking turns toward it until the agent marks it complete, someone stops it, or its turn budget, when it has one, is spent.
+An objective a person sets on a conversation from Web, or an agent sets on its own conversation, that keeps its agent taking turns toward it until the agent marks it complete or blocked, someone stops it, or its turn budget, when it has one, is spent. A goal with a check command ends as complete or blocked only when that command, run in the agent's shell, exits 0; a forced goal cannot end as blocked. A stopped, blocked or out-of-turns goal can be resumed with its turn count reset; a completed one cannot. At most one continuation of a goal waits at a time, and the State Store records each goal turn, progress note, check result, stop and resume for the Web's Goal panel.
 
 While a Goal continues, its next turn takes the conversation's next slot ahead of waiting Thread Queue items, and its turns act for the person who set it: their tools see that person's name and email, though the model header names no Principal, since a goal turn is not a person's prompt. Stopping the conversation's running turn stops its Goal too.
 

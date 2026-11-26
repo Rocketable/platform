@@ -85,7 +85,40 @@ type GoalState struct {
 	PrincipalName  string    `json:"principal_name,omitempty"`
 	PrincipalEmail string    `json:"principal_email,omitempty"`
 	Origin         string    `json:"origin,omitempty"`
+	Check          string    `json:"check,omitempty"`
+	Force          bool      `json:"force,omitempty"`
 }
+
+type GoalEventKind string
+
+const (
+	GoalEventUpdate GoalEventKind = "update"
+	GoalEventTurn   GoalEventKind = "turn"
+	GoalEventStop   GoalEventKind = "stop"
+	GoalEventResume GoalEventKind = "resume"
+)
+
+type GoalCheckResult string
+
+const (
+	GoalCheckPassed GoalCheckResult = "passed"
+	GoalCheckFailed GoalCheckResult = "failed"
+)
+
+type GoalEvent struct {
+	ID          int64
+	Kind        GoalEventKind
+	Turn        int
+	Status      string
+	Note        string
+	Check       GoalCheckResult
+	CheckOutput string
+	EntryID     int64
+	Principal   string
+	At          time.Time
+}
+
+const goalEventTextLimit = 4000
 
 type SessionService struct {
 	db             *sql.DB
@@ -281,7 +314,11 @@ func (s *SessionService) BeginGoal(conversationID string, goal *GoalState) error
 func beginGoalDB(ctx context.Context, db stateStoreDB, conversationID string, goal *GoalState) error {
 	now := time.Now().UTC()
 
-	rows, err := execRows(ctx, db, "begin goal", `UPDATE conversations SET goal_objective = $2, goal_max_turns = $3, goal_turns_used = 0, goal_status = $4, goal_note = '', goal_created_at_unix_ns = $5, goal_updated_at_unix_ns = $5, goal_principal_name = $6, goal_principal_email = $7, goal_origin = $8 WHERE conversation_id = $1 AND COALESCE(goal_status NOT IN ('', $4), TRUE)`, conversationID, goal.Objective, goal.MaxTurns, GoalStatusActive, timeUnixNano(now), goal.PrincipalName, goal.PrincipalEmail, goal.Origin)
+	if _, err := execState(ctx, db, "clear goal events", `DELETE FROM goal_events WHERE conversation_id = $1`, conversationID); err != nil {
+		return err
+	}
+
+	rows, err := execRows(ctx, db, "begin goal", `UPDATE conversations SET goal_objective = $2, goal_max_turns = $3, goal_turns_used = 0, goal_status = $4, goal_note = '', goal_created_at_unix_ns = $5, goal_updated_at_unix_ns = $5, goal_principal_name = $6, goal_principal_email = $7, goal_origin = $8, goal_check = $9, goal_force = $10 WHERE conversation_id = $1 AND COALESCE(goal_status NOT IN ('', $4), TRUE)`, conversationID, goal.Objective, goal.MaxTurns, GoalStatusActive, timeUnixNano(now), goal.PrincipalName, goal.PrincipalEmail, goal.Origin, goal.Check, goal.Force)
 	if err != nil {
 		return err
 	}
@@ -301,17 +338,94 @@ func (s *SessionService) UpdateGoalStatus(conversationID, status, note string) (
 	status = strings.TrimSpace(status)
 	switch status {
 	case GoalStatusProgress:
-		return s.setGoalStatus(conversationID, GoalStatusActive, note)
+		status = GoalStatusActive
 	case GoalStatusComplete, GoalStatusBlocked:
 	default:
 		return GoalState{}, fmt.Errorf("unsupported goal status %q", status)
 	}
 
-	return s.setGoalStatus(conversationID, status, note)
+	goal, _, err := s.setGoalStatus(conversationID, status, note)
+
+	return goal, err
 }
 
 func (s *SessionService) StopGoal(conversationID string) error {
-	_, err := s.setGoalStatus(conversationID, GoalStatusStopped, "stopped by human")
+	_, _, err := s.setGoalStatus(conversationID, GoalStatusStopped, "stopped by human")
+	return err
+}
+
+func (s *SessionService) ResumeGoal(ctx context.Context, conversationID, principal string) (bool, error) {
+	rows, err := execRows(ctx, s.db, "resume goal", `WITH resumed AS (
+    UPDATE conversations SET goal_status = $2, goal_turns_used = 0, goal_updated_at_unix_ns = $3 WHERE conversation_id = $1 AND goal_status = ANY($4) RETURNING conversation_id
+)
+INSERT INTO goal_events (conversation_id, kind, principal, at_unix_ns) SELECT conversation_id, $5, $6, $3 FROM resumed`, conversationID, GoalStatusActive, timeUnixNano(time.Now().UTC()), []string{GoalStatusStopped, GoalStatusBlocked, GoalStatusBudgetExhausted}, GoalEventResume, principal)
+	if rows > 0 {
+		s.ringListing()
+	}
+
+	return rows > 0, err
+}
+
+func (s *SessionService) RecordGoalUpdate(conversationID string, event *GoalEvent) error {
+	return insertGoalEvent(context.Background(), s.db, conversationID, event)
+}
+
+func insertGoalEvent(ctx context.Context, db stateStoreDB, conversationID string, event *GoalEvent) error {
+	output := event.CheckOutput
+	if len(output) > goalEventTextLimit {
+		output = strings.ToValidUTF8(output[len(output)-goalEventTextLimit:], "")
+	}
+
+	note := event.Note
+	if len(note) > goalEventTextLimit {
+		note = strings.ToValidUTF8(note[:goalEventTextLimit], "")
+	}
+
+	_, err := execState(ctx, db, "record goal event", `INSERT INTO goal_events (conversation_id, kind, turn, status, note, check_result, check_output, principal, at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		conversationID, event.Kind, event.Turn, event.Status, strings.TrimSpace(note), event.Check, output, event.Principal, timeUnixNano(time.Now().UTC()))
+
+	return err
+}
+
+func (s *SessionService) GoalEvents(ctx context.Context, conversationID string) ([]GoalEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, kind, turn, status, note, check_result, check_output, entry_id, principal, at_unix_ns FROM goal_events WHERE conversation_id = $1 ORDER BY id`, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("read goal events: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var events []GoalEvent
+
+	for rows.Next() {
+		var (
+			event GoalEvent
+			at    int64
+		)
+
+		if err := rows.Scan(&event.ID, &event.Kind, &event.Turn, &event.Status, &event.Note, &event.Check, &event.CheckOutput, &event.EntryID, &event.Principal, &at); err != nil {
+			return nil, fmt.Errorf("scan goal event: %w", err)
+		}
+
+		event.At = timeFromUnixNano(at)
+		events = append(events, event)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read goal events: %w", err)
+	}
+
+	return events, nil
+}
+
+func claimGoalContinuation(ctx context.Context, db stateStoreDB, conversationID string) (bool, error) {
+	rows, err := execRows(ctx, db, "claim goal continuation", `UPDATE conversations SET goal_pending = TRUE WHERE conversation_id = $1 AND goal_status = $2 AND NOT goal_pending`, conversationID, GoalStatusActive)
+
+	return rows > 0, err
+}
+
+func releaseGoalContinuation(ctx context.Context, db stateStoreDB, conversationID string) error {
+	_, err := execState(ctx, db, "release goal continuation", `UPDATE conversations SET goal_pending = FALSE WHERE goal_pending AND ($1 = '' OR conversation_id = $1)`, conversationID)
+
 	return err
 }
 
@@ -1053,6 +1167,7 @@ type SidebarSession struct {
 	Asking        bool
 	Automation    bool
 	Paused        bool
+	Goal          bool
 	Name          string
 	ForkedFrom    string
 	Tags          []string
@@ -1296,6 +1411,7 @@ SELECT
     k.conversation_id IS NOT NULL AS asking,
     FALSE AS automation,
     c.paused,
+    COALESCE(c.goal_status, '') = '`+GoalStatusActive+`' AS goal,
     c.kind = 'web_chat' AND c.created_by NOT IN ('', $2) AND c.routine_run IS NULL AND NOT c.reported AND NOT (c.sticky = 'global' AND COALESCE(c.agent = ANY($7), FALSE)) AS pausable,
     c.name,
     c.forked_from,
@@ -1333,7 +1449,7 @@ LEFT JOIN asking k ON k.conversation_id = c.conversation_id
 LEFT JOIN external_runs x ON x.conversation_id = c.conversation_id
 WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY($5))
 ), remote AS (
-SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.automation, FALSE AS paused, FALSE AS pausable, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
+SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.automation, FALSE AS paused, FALSE AS goal, FALSE AS pausable, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
     o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at, COALESCE(u.quiet, FALSE),
     COALESCE(u.parked, FALSE), COALESCE(u.unfollowed, FALSE), u.until, COALESCE(u.until_done, FALSE), COALESCE(u.note, ''), COALESCE(u.auto_park, e.auto_park, TRUE),
     0, FALSE AS queued, FALSE AS external_mcp, 0,
@@ -1367,7 +1483,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByRoutine
 	for rows.Next() {
 		var row SidebarSession
 
-		dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Automation, &row.Paused, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.RoutinePath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
+		dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Automation, &row.Paused, &row.Goal, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.RoutinePath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
 			&row.Attention.Parked, &row.Attention.Unfollowed, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &since, &row.Queued, &row.External, &arrived)
 		if err := origin.read(rows, &row.Origin, dest...); err != nil {
 			return nil, fmt.Errorf("scan sidebar session: %w", err)
@@ -1430,8 +1546,12 @@ func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, c
 
 		if _, err := tx.ExecContext(ctx, `UPDATE conversations SET goal_objective = NULL, goal_max_turns = NULL, goal_turns_used = NULL,
     goal_status = NULL, goal_note = NULL, goal_created_at_unix_ns = NULL, goal_updated_at_unix_ns = NULL,
-    goal_principal_name = NULL, goal_principal_email = NULL, goal_origin = '' WHERE conversation_id = $1`, c.id); err != nil {
+    goal_principal_name = NULL, goal_principal_email = NULL, goal_origin = '', goal_check = '', goal_force = FALSE, goal_pending = FALSE WHERE conversation_id = $1`, c.id); err != nil {
 			return 0, false, fmt.Errorf("delete stale goal: %w", err)
+		}
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM goal_events WHERE conversation_id = $1`, c.id); err != nil {
+			return 0, false, fmt.Errorf("delete stale goal events: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -1599,26 +1719,41 @@ SELECT e.entry_json FROM latest l JOIN entries e USING (id)`, strings.TrimSpace(
 	return &entry, nil
 }
 
-func (s *SessionService) setGoalStatus(conversationID, status, note string) (GoalState, error) {
+func (s *SessionService) setGoalStatus(conversationID, status, note string) (GoalState, bool, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	ctx := context.Background()
 
 	tx, err := s.beginStateTx(ctx, "goal status update")
 	if err != nil {
-		return GoalState{}, err
+		return GoalState{}, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := execRows(ctx, tx, "set active goal status", `UPDATE conversations SET goal_status = $1, goal_note = $2, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (goal_status = '' OR goal_status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive); err != nil {
-		return GoalState{}, err
+	rows, err := execRows(ctx, tx, "set active goal status", `UPDATE conversations SET goal_status = $1, goal_note = $2, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (goal_status = '' OR goal_status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive)
+	if err != nil {
+		return GoalState{}, false, err
+	}
+
+	if rows > 0 && status == GoalStatusStopped {
+		if err := insertGoalEvent(ctx, tx, conversationID, &GoalEvent{Kind: GoalEventStop}); err != nil {
+			return GoalState{}, false, err
+		}
 	}
 
 	goal, _, err := (stateDAO{db: tx}).goal(ctx, conversationID)
 	if err != nil {
-		return GoalState{}, err
+		return GoalState{}, false, err
 	}
 
-	return goal, commitState(tx, "goal status update")
+	if err := commitState(tx, "goal status update"); err != nil {
+		return GoalState{}, false, err
+	}
+
+	if rows > 0 && status != GoalStatusActive {
+		s.ringListing()
+	}
+
+	return goal, rows > 0, nil
 }
 
 func (s *SessionService) beginStateTx(ctx context.Context, label string) (*sql.Tx, error) {

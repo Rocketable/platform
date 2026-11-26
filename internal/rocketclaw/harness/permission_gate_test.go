@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"go.starlark.net/starlark"
@@ -22,6 +23,46 @@ func TestCheckNestedPermissionOutsideToolCall(t *testing.T) {
 
 	err := CheckNestedPermission(t.Context(), "execute", "mcp", "demo.echo", map[string]any{"message": "hi"})
 	require.ErrorContains(t, err, "outside a tool call")
+}
+
+func TestRunToolCallBash(t *testing.T) {
+	t.Parallel()
+
+	_, err := RunToolCallBash(t.Context(), "true", "check")
+	require.ErrorContains(t, err, "inside a tool call")
+
+	root, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.WriteFile("marker.txt", []byte("here"), 0o600))
+
+	client := openai.NewClient()
+	callIn := func(permission string) context.Context {
+		agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, permission)}
+		loop, err := NewWithModelResolver(testResolverForClient(&client), testWorkspaceConfig(t, root.Name()), root, Agents{Items: map[string]Agent{"main": agent}}, Skills{Items: map[string]Skill{}}, "main")
+		require.NoError(t, err)
+
+		return context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: loop, observations: loop.observations, callID: "call-1"})
+	}
+
+	ctx := callIn("bash: {'*': allow, 'rm *': deny}")
+
+	passed, err := RunToolCallBash(ctx, `test -f marker.txt && printf "found $(cat marker.txt)"`, "check")
+	require.NoError(t, err)
+	require.Equal(t, BashResult{Output: "found here", Success: true}, passed)
+
+	failed, err := RunToolCallBash(ctx, "printf missing; exit 3", "check")
+	require.NoError(t, err)
+	require.False(t, failed.Success)
+	require.Contains(t, failed.Output, "missing")
+
+	_, err = RunToolCallBash(ctx, "rm marker.txt", "check")
+	require.ErrorContains(t, err, "denied")
+	_, err = root.Stat("marker.txt")
+	require.NoError(t, err, "a denied command does not run")
+
+	_, err = RunToolCallBash(callIn("bash: deny"), "true", "check")
+	require.ErrorContains(t, err, "no bash tool")
 }
 
 func TestToolCallAgent(t *testing.T) {

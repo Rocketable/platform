@@ -1221,6 +1221,8 @@ func TestSessionEntries(t *testing.T) {
 
 			return nil
 		},
+		StopGoalFunc:   func(context.Context, string) (bool, error) { return true, nil },
+		ResumeGoalFunc: func(context.Context, string, string) (bool, error) { return false, nil },
 		PopQueueItemFunc: func(_ context.Context, conversationID, itemID string) (bool, error) {
 			items, err := sessions.ThreadQueueForConversation(conversationID)
 			if err != nil {
@@ -1767,6 +1769,30 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, "A goal is already in progress in this conversation. Stop it before starting another.", busy.PrivateText)
 		require.Len(t, goals, 1)
 		require.Len(t, turns, before)
+
+		stopped, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: " /goal STOP ", Delivery: PromptDelivery_QUEUE})
+		require.NoError(t, err)
+		require.Equal(t, "Goal stopped. The running turn, if any, finishes.", stopped.PrivateText)
+
+		resumed, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/goal resume", Delivery: PromptDelivery_STEER})
+		require.NoError(t, err)
+		require.Equal(t, "There is no stopped, blocked, or out-of-turns goal to resume in this conversation.", resumed.PrivateText)
+		require.Equal(t, []string{"alice"}, []string{core.ResumeGoalCalls()[0].S1}, "a resume names who resumed")
+
+		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "/goal stop the flaky tests", Delivery: PromptDelivery_STEER})
+		require.NoError(t, err)
+		require.Equal(t, "stop the flaky tests", goals[len(goals)-1].Objective, "more words make an objective")
+		require.Len(t, turns, before)
+
+		require.NoError(t, sessions.UpsertThread("goal-panel", backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
+		require.NoError(t, sessions.BeginGoal("goal-panel", &backend.GoalState{Objective: "ship it", MaxTurns: 3, Check: "make test", Force: true, PrincipalName: "alice"}))
+		require.NoError(t, sessions.RecordGoalUpdate("goal-panel", &backend.GoalEvent{Kind: backend.GoalEventUpdate, Turn: 1, Status: backend.GoalStatusComplete, Check: backend.GoalCheckFailed, CheckOutput: "FAIL"}))
+
+		shown, err := invoke[GetGoalResponse](ctx, connection, "GetGoal", &GetGoalRequest{Id: "goal-panel"})
+		require.NoError(t, err)
+		require.Equal(t, []any{"ship it", "active", int32(3), "make test", true, "alice"}, []any{shown.Goal.Objective, shown.Goal.Status, shown.Goal.MaxTurns, shown.Goal.Check, shown.Goal.Force, shown.Goal.PrincipalName})
+		require.Len(t, shown.Events, 1)
+		require.Equal(t, []any{GoalEventKind_GOAL_EVENT_KIND_UPDATE, int32(1), "complete", GoalCheckResult_GOAL_CHECK_RESULT_FAILED, "FAIL", ""}, []any{shown.Events[0].Kind, shown.Events[0].Turn, shown.Events[0].Status, shown.Events[0].Check, shown.Events[0].CheckOutput, shown.Events[0].MessageId})
 	})
 
 	require.NoError(t, sessions.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{

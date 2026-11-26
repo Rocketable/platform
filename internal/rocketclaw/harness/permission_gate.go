@@ -93,6 +93,34 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 	return reviewNestedCall(ctx, &tc, decision.review, ReviewTurn(ToolCallKey(ctx)))
 }
 
+func RunToolCallBash(ctx context.Context, command, description string) (BashResult, error) {
+	tc, ok := toolCallContextFrom(ctx)
+	if !ok {
+		return BashResult{}, errors.New("bash runs only inside a tool call")
+	}
+
+	tool, ok := tc.looper.CodeModeHosts["bash"]
+	if !ok {
+		return BashResult{}, errors.New("this agent has no bash tool")
+	}
+
+	args, err := json.Marshal(map[string]string{"command": command, "description": description})
+	if err != nil {
+		return BashResult{}, fmt.Errorf("marshal bash arguments: %w", err)
+	}
+
+	if err := CheckNestedToolCall(ctx, "bash", &tool, args); err != nil {
+		return BashResult{}, err
+	}
+
+	result, err := tool.Call(ctx, args, tc.output, toolCallMetadata{})
+	if err != nil {
+		return BashResult{}, err
+	}
+
+	return result.Data.(BashResult), nil
+}
+
 func reviewNestedCall(ctx context.Context, tc *toolCallContext, review *permissionReviewRequest, turn string) error {
 	review.ReviewContext = slices.Clone(tc.reviewInput)
 	review.CurrentTurnInputs = slices.Clone(tc.currentTurnInputs)

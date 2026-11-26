@@ -257,13 +257,39 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 		}
 	}
 
-	if err := r.Sessions.BeginGoal(inbound.ConversationID, &GoalState{Objective: goal.Objective, MaxTurns: goal.MaxTurns, PrincipalName: inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], PrincipalEmail: inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey], Origin: reviewOriginHeader(inbound)}); err != nil {
+	if err := r.Sessions.BeginGoal(inbound.ConversationID, goalStateFor(inbound, goal)); err != nil {
 		return fmt.Errorf("persist goal: %w", err)
 	}
 
 	inbound.GoalAction = protocol.GoalActionKickoff
 
 	return bridge.Submit(ctx, inbound)
+}
+
+func (r *Runtime) StopGoal(ctx context.Context, conversationID string) (bool, error) {
+	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
+		return false, err
+	}
+
+	_, stopped, err := r.Sessions.setGoalStatus(conversationID, GoalStatusStopped, "stopped by human")
+
+	return stopped, err
+}
+
+func (r *Runtime) ResumeGoal(ctx context.Context, conversationID, principal string) (bool, error) {
+	bridge, err := r.mutableBridge(ctx, conversationID)
+	if err != nil {
+		return false, err
+	}
+
+	resumed, err := r.Sessions.ResumeGoal(ctx, conversationID, principal)
+	if err != nil || !resumed {
+		return false, err
+	}
+
+	_, err = bridge.ContinueGoal(ctx, nil, nil)
+
+	return true, err
 }
 
 func (r *Runtime) QueueItems(conversationID string) ([]protocol.ThreadQueueItem, error) {

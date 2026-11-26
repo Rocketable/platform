@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
@@ -160,6 +162,43 @@ func (s *Server) deleteBranch(ctx context.Context, request *DeleteBranchRequest)
 
 	return &DeleteBranchResponse{Messages: int32(deletion.Messages), NestedBranches: int32(deletion.NestedBranches), SubagentSessions: int32(deletion.SubagentSessions),
 		QueuedMessages: int32(deletion.QueuedMessages), Current: deletion.Current}, nil
+}
+
+func (s *Server) getGoal(ctx context.Context, request *GetGoalRequest) (*GetGoalResponse, error) {
+	if err := s.readableConversation(ctx, request.Id); err != nil {
+		return nil, err
+	}
+
+	goal, found, err := s.sessions.Goal(request.Id)
+	if err != nil {
+		return nil, fmt.Errorf("web goal: %w", err)
+	}
+
+	if !found {
+		return &GetGoalResponse{}, nil
+	}
+
+	events, err := s.sessions.GoalEvents(ctx, request.Id)
+	if err != nil {
+		return nil, fmt.Errorf("web goal: %w", err)
+	}
+
+	response := &GetGoalResponse{Goal: &Goal{Objective: goal.Objective, Status: goal.Status, MaxTurns: int32(goal.MaxTurns), TurnsUsed: int32(goal.TurnsUsed), Check: goal.Check, Force: goal.Force,
+		PrincipalName: goal.PrincipalName, CreatedAt: goal.CreatedAt.Format(time.RFC3339Nano), UpdatedAt: goal.UpdatedAt.Format(time.RFC3339Nano), Note: goal.Note}}
+
+	for i := range events {
+		event := &events[i]
+		item := &GoalEvent{Id: event.ID, Kind: GoalEventKind(GoalEventKind_value["GOAL_EVENT_KIND_"+strings.ToUpper(string(event.Kind))]), Turn: int32(event.Turn), Status: event.Status, Note: event.Note,
+			Check: GoalCheckResult(GoalCheckResult_value["GOAL_CHECK_RESULT_"+strings.ToUpper(string(event.Check))]), CheckOutput: event.CheckOutput, Principal: event.Principal, At: event.At.Format(time.RFC3339Nano)}
+
+		if event.EntryID > 0 {
+			item.MessageId = strconv.FormatInt(event.EntryID, 10)
+		}
+
+		response.Events = append(response.Events, item)
+	}
+
+	return response, nil
 }
 
 func (s *Server) messageTree(ctx context.Context, request *MessageTreeRequest) (*MessageTreeResponse, error) {

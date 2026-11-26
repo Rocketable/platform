@@ -344,7 +344,7 @@ func TestUpdateGoalToolRecordsProgressNoteWithoutEndingGoal(t *testing.T) {
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
 	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "fix lint", MaxTurns: 3}))
 
-	tool := updateGoalTool(store, "thread-1")
+	tool := updateGoalTool(store, "thread-1", &GoalState{})
 	assert.Contains(t, fmt.Sprint(tool.Parameters), "what you are thinking")
 
 	result, err := tool.Call(t.Context(), []byte(`{"status":"progress","note":"patched parser; tests next"}`), nil)
@@ -356,6 +356,69 @@ func TestUpdateGoalToolRecordsProgressNoteWithoutEndingGoal(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, GoalStatusActive, goal.Status)
 	assert.Equal(t, "patched parser; tests next", goal.Note)
+}
+
+func TestGoalToolsHonorForceAndCheck(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
+
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "fix it"}, true)
+	inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey] = "Alice", "alice@example.com"
+
+	create := createGoalTool(store, "thread-1", inbound)
+	result, err := create.Call(t.Context(), []byte(`{"objective":" fix lint ","max_turns":4,"check":"make lint","force":true}`), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "goal started; it continues after this turn ends", result.Output)
+
+	goal, ok, err := store.Goal("thread-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, []any{"fix lint", 4, "make lint", true, GoalStatusActive, "Alice", "alice@example.com", `[Web principal="Alice"]`}, []any{goal.Objective, goal.MaxTurns, goal.Check, goal.Force, goal.Status, goal.PrincipalName, goal.PrincipalEmail, goal.Origin})
+
+	result, err = create.Call(t.Context(), []byte(`{"objective":"another"}`), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "A goal is already in progress in this conversation.", result.Output)
+
+	update := updateGoalTool(store, "thread-1", &goal)
+	assert.Equal(t, []string{GoalStatusProgress, GoalStatusComplete}, update.Parameters["properties"].(map[string]any)["status"].(map[string]any)["enum"], "a forced goal offers no blocked status")
+	assert.Contains(t, goalSteeringPrompt(&goal), "Completion check command:\nmake lint")
+	assert.NotContains(t, goalSteeringPrompt(&goal), "status blocked")
+
+	for _, status := range []string{GoalStatusBlocked, GoalStatusComplete} {
+		result, err = update.Call(t.Context(), fmt.Appendf(nil, `{"status":%q}`, status), nil)
+		require.NoError(t, err)
+		assert.Contains(t, result.Output, "The goal stays active", status)
+	}
+
+	result, err = update.Call(t.Context(), []byte(`{"status":"progress","note":"still linting"}`), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "goal progress recorded", result.Output, "progress runs no check")
+
+	goal, _, err = store.Goal("thread-1")
+	require.NoError(t, err)
+	assert.Equal(t, GoalStatusActive, goal.Status)
+
+	unforced := updateGoalTool(store, "thread-1", &GoalState{})
+	assert.Equal(t, []string{GoalStatusProgress, GoalStatusComplete, GoalStatusBlocked}, unforced.Parameters["properties"].(map[string]any)["status"].(map[string]any)["enum"])
+	result, err = unforced.Call(t.Context(), []byte(`{"status":"blocked","note":"needs access"}`), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "goal marked blocked", result.Output)
+
+	events, err := store.GoalEvents(t.Context(), "thread-1")
+	require.NoError(t, err)
+
+	updates := make([][]any, 0, len(events))
+	for _, event := range events {
+		updates = append(updates, []any{event.Kind, event.Turn, event.Status, event.Note, event.Check, event.CheckOutput})
+	}
+
+	assert.Equal(t, [][]any{
+		{GoalEventUpdate, 1, GoalStatusComplete, "", GoalCheckFailed, "bash runs only inside a tool call"},
+		{GoalEventUpdate, 1, GoalStatusProgress, "still linting", GoalCheckResult(""), ""},
+		{GoalEventUpdate, 1, GoalStatusBlocked, "needs access", GoalCheckResult(""), ""},
+	}, updates, "a refused blocked records nothing, and a check that cannot run is recorded as failed")
 }
 
 func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
@@ -388,6 +451,20 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, 2, goal.TurnsUsed)
+
+	_, err = bridge.config.SessionService.UpdateGoalStatus("thread-1", GoalStatusComplete, "done")
+	require.NoError(t, err)
+	finishTestGoalTurn(t, bridge, msg)
+
+	events, err := bridge.config.SessionService.GoalEvents(t.Context(), "thread-1")
+	require.NoError(t, err)
+
+	turns := make([][]any, 0, len(events))
+	for _, event := range events {
+		turns = append(turns, []any{event.Kind, event.Turn, event.Status})
+	}
+
+	assert.Equal(t, [][]any{{GoalEventTurn, 1, GoalStatusActive}, {GoalEventTurn, 2, GoalStatusActive}, {GoalEventTurn, 3, GoalStatusComplete}}, turns, "the turn that completes the goal is recorded too")
 }
 
 func TestFinishGoalTurnHumanResteeringDoesNotConsumeBudget(t *testing.T) {

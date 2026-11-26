@@ -683,7 +683,7 @@ func httpInput(input io.Reader, request proto.Message, method string) error {
 	switch method {
 	case "Prompt":
 		required = "id text"
-	case "History", "ForkSession", "StageRevert", "MessageTree", "Handoff", "UpdateSession", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "DeleteSession", "ListQueue", "ReportTyping":
+	case "History", "ForkSession", "StageRevert", "MessageTree", "Handoff", "UpdateSession", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "DeleteSession", "ListQueue", "ReportTyping", "GetGoal":
 		required = "id"
 	case "SearchMessages", "SearchSessions":
 		required = "query"

@@ -21,6 +21,9 @@ var _ directBridge = &directBridgeMock{}
 //
 //		// make and configure a mocked directBridge
 //		mockeddirectBridge := &directBridgeMock{
+//			ContinueGoalFunc: func(ctx context.Context, reply *protocol.SlackReplyTarget, completion *turnCompletion) (bool, error) {
+//				panic("mock out the ContinueGoal method")
+//			},
 //			InterruptActiveTurnFunc: func() *protocol.InboundMessage {
 //				panic("mock out the InterruptActiveTurn method")
 //			},
@@ -46,6 +49,9 @@ var _ directBridge = &directBridgeMock{}
 //
 //	}
 type directBridgeMock struct {
+	// ContinueGoalFunc mocks the ContinueGoal method.
+	ContinueGoalFunc func(ctx context.Context, reply *protocol.SlackReplyTarget, completion *turnCompletion) (bool, error)
+
 	// InterruptActiveTurnFunc mocks the InterruptActiveTurn method.
 	InterruptActiveTurnFunc func() *protocol.InboundMessage
 
@@ -66,6 +72,15 @@ type directBridgeMock struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
+		// ContinueGoal holds details about calls to the ContinueGoal method.
+		ContinueGoal []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Reply is the reply argument value.
+			Reply *protocol.SlackReplyTarget
+			// Completion is the completion argument value.
+			Completion *turnCompletion
+		}
 		// InterruptActiveTurn holds details about calls to the InterruptActiveTurn method.
 		InterruptActiveTurn []struct {
 		}
@@ -95,12 +110,53 @@ type directBridgeMock struct {
 			Agent string
 		}
 	}
+	lockContinueGoal        sync.RWMutex
 	lockInterruptActiveTurn sync.RWMutex
 	lockPickLaterWork       sync.RWMutex
 	lockRun                 sync.RWMutex
 	lockStop                sync.RWMutex
 	lockSubmit              sync.RWMutex
 	lockSwitchAgent         sync.RWMutex
+}
+
+// ContinueGoal calls ContinueGoalFunc.
+func (mock *directBridgeMock) ContinueGoal(ctx context.Context, reply *protocol.SlackReplyTarget, completion *turnCompletion) (bool, error) {
+	if mock.ContinueGoalFunc == nil {
+		panic("directBridgeMock.ContinueGoalFunc: method is nil but directBridge.ContinueGoal was just called")
+	}
+	callInfo := struct {
+		Ctx        context.Context
+		Reply      *protocol.SlackReplyTarget
+		Completion *turnCompletion
+	}{
+		Ctx:        ctx,
+		Reply:      reply,
+		Completion: completion,
+	}
+	mock.lockContinueGoal.Lock()
+	mock.calls.ContinueGoal = append(mock.calls.ContinueGoal, callInfo)
+	mock.lockContinueGoal.Unlock()
+	return mock.ContinueGoalFunc(ctx, reply, completion)
+}
+
+// ContinueGoalCalls gets all the calls that were made to ContinueGoal.
+// Check the length with:
+//
+//	len(mockeddirectBridge.ContinueGoalCalls())
+func (mock *directBridgeMock) ContinueGoalCalls() []struct {
+	Ctx        context.Context
+	Reply      *protocol.SlackReplyTarget
+	Completion *turnCompletion
+} {
+	var calls []struct {
+		Ctx        context.Context
+		Reply      *protocol.SlackReplyTarget
+		Completion *turnCompletion
+	}
+	mock.lockContinueGoal.RLock()
+	calls = mock.calls.ContinueGoal
+	mock.lockContinueGoal.RUnlock()
+	return calls
 }
 
 // InterruptActiveTurn calls InterruptActiveTurnFunc.

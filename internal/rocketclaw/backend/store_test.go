@@ -620,7 +620,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	tables, err := queryStrings(t.Context(), store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema()`, "tables")
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{
-		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
+		"conversations", "goal_events", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
 		"history_links", "hosted_pages", "retired_hosted_pages", "hosted_pages_pending", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_attention", "web_closed_tabs", "web_tab_lists", "web_search_pages", "web_searches", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
 		"agent_drafts", "agent_draft_ops", "agent_draft_presence", "agent_draft_proposals", "agent_draft_messages",
 		"behavior_settings",

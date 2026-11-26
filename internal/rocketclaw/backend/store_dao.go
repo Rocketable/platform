@@ -962,8 +962,8 @@ func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, b
 		createdAt, updatedAt int64
 	)
 
-	found, err := scanFound("read goal", d.db.QueryRowContext(ctx, `SELECT goal_objective, goal_max_turns, goal_turns_used, goal_status, goal_note, goal_created_at_unix_ns, goal_updated_at_unix_ns, goal_principal_name, goal_principal_email, goal_origin
-FROM conversations WHERE conversation_id = $1 AND goal_objective IS NOT NULL`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &createdAt, &updatedAt, &goal.PrincipalName, &goal.PrincipalEmail, &goal.Origin))
+	found, err := scanFound("read goal", d.db.QueryRowContext(ctx, `SELECT goal_objective, goal_max_turns, goal_turns_used, goal_status, goal_note, goal_created_at_unix_ns, goal_updated_at_unix_ns, goal_principal_name, goal_principal_email, goal_origin, goal_check, goal_force
+FROM conversations WHERE conversation_id = $1 AND goal_objective IS NOT NULL`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &createdAt, &updatedAt, &goal.PrincipalName, &goal.PrincipalEmail, &goal.Origin, &goal.Check, &goal.Force))
 	if err != nil || !found {
 		return GoalState{}, false, err
 	}
@@ -1144,6 +1144,7 @@ type activeTurn struct {
 type turnFinish struct {
 	conversationID string
 	entries        []harness.SessionEntry
+	lastEntryID    int64
 	accountGoal    bool
 	outbound       *protocol.OutboundMessage
 	terminal       protocol.Terminal
@@ -1585,7 +1586,13 @@ FROM shadow_turns t WHERE a.id = $1 AND t.child_turn_id = $1 AND $2 = 'stopped' 
 	}
 
 	if finish.accountGoal {
-		if _, err := tx.ExecContext(ctx, `UPDATE conversations SET goal_turns_used = goal_turns_used + 1, goal_status = CASE WHEN goal_max_turns > 0 AND goal_turns_used + 1 >= goal_max_turns THEN $1 ELSE $2 END, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (goal_status = '' OR goal_status = $2)`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(time.Now()), finish.conversationID); err != nil {
+		if _, err := tx.ExecContext(ctx, `WITH accounted AS (
+    UPDATE conversations SET goal_turns_used = goal_turns_used + 1, goal_status = CASE WHEN goal_max_turns > 0 AND goal_turns_used + 1 >= goal_max_turns THEN $1 ELSE $2 END, goal_updated_at_unix_ns = $3
+    WHERE conversation_id = $4 AND (goal_status = '' OR goal_status = $2) RETURNING goal_status
+)
+INSERT INTO goal_events (conversation_id, kind, turn, status, entry_id, at_unix_ns)
+SELECT c.conversation_id, $5, c.goal_turns_used + 1, COALESCE(a.goal_status, c.goal_status), $6, $3
+FROM conversations c LEFT JOIN accounted a ON TRUE WHERE c.conversation_id = $4 AND c.goal_objective IS NOT NULL`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(time.Now()), finish.conversationID, GoalEventTurn, finish.lastEntryID); err != nil {
 			return nil, fmt.Errorf("account goal turn: %w", err)
 		}
 	}
@@ -1832,7 +1839,8 @@ func (f *turnFinish) applyEffects(ctx context.Context, tx stateStoreDB, turnID s
 
 func (f *turnFinish) appendEntries(ctx context.Context, db stateStoreDB, turnID string) error {
 	for i := range f.entries {
-		if _, err := appendSessionEntryDB(ctx, db, f.conversationID, &f.entries[i]); err != nil {
+		var err error
+		if f.lastEntryID, err = appendSessionEntryDB(ctx, db, f.conversationID, &f.entries[i]); err != nil {
 			return err
 		}
 	}
