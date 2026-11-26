@@ -31,6 +31,7 @@ export function BehaviorSettings({ view }: { view: ConfigView }) {
   const client = useQueryClient();
   const save = useMutation({ mutationFn: mutations.saveBehaviorSettings, onSuccess: (config) => {
     client.setQueryData(queries.config().queryKey, config);
+    void client.invalidateQueries({ queryKey: ["agents"] });
     setDraft(undefined);
   } });
   if (!draft) {

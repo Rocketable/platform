@@ -1,7 +1,7 @@
 import { expect } from "bun:test";
 import path from "node:path";
 import { unpacked } from "./test-browsers";
-import type { ListTab, SearchPage, StripLayout, TabAttention, TabListName } from "./types";
+import type { Agent, ListTab, SearchPage, StripLayout, TabAttention, TabListName } from "./types";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
@@ -26,7 +26,7 @@ export type SharedTab = { space: string; path: string; search?: SearchPage };
 const plain = (page?: SearchPage) => JSON.stringify(page ? [page.name ?? "", page.searches.map(({ id, name, query }) => [id, name ?? "", query]), page.active] : null);
 export type Change = { paths: string[]; action: string; until?: string };
 // attention is this person's attention on each tab location, sent is every attention change, and polls counts session lists.
-export type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; layout?: StripLayout; lists: ListTab[]; visits: ListTab[]; attention: TabAttention[]; sent: Change[]; polls: number; autoPark?: boolean; deletes: string[]; titleGate?: Promise<unknown> };
+export type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; layout?: StripLayout; lists: ListTab[]; visits: ListTab[]; attention: TabAttention[]; sent: Change[]; polls: number; autoPark?: boolean; deletes: string[]; titleGate?: Promise<unknown>; agents: Agent[]; updated: Record<string, string> };
 
 // Mirrors the server's Tabs call: it saves the state or the layout, changes one space, adds, removes, or edits Shared tabs, or changes
 // attention, then answers with every space, the saved state, every space's Shared tabs in order, and the layout.
@@ -98,14 +98,14 @@ export async function withPage(options: object, run: (page: any, origin: string,
   const { chromium: engine } = await import(playwright!);
   const prompts: { id: string; text: string }[] = [];
   const sessions = structuredClone(rows);
-  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, sharedOrder: [] }, revision: 0, refused: 0, shared: [], closed: [], lists: [], visits: [], attention: [], sent: [], polls: 0, deletes: [] };
+  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, sharedOrder: [] }, revision: 0, refused: 0, shared: [], closed: [], lists: [], visits: [], attention: [], sent: [], polls: 0, deletes: [], agents: [{ name: "main" }, { name: "opsbot", space: "OPS" }, { name: "channel", sticky: "slack" }], updated: {} };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     // A session's attention rides its row; the other tabs' come as tab rows.
     if (url.pathname === "/api/ListSessions") {
       saved.polls++;
-      const listed = sessions.map((row) => ({ ...row, ...saved.attention.find((item) => item.path === href(row.id)) })), tabs = saved.attention.filter((item) => !item.path.startsWith("/s/"));
+      const listed = sessions.map((row) => ({ ...row, updatedAt: saved.updated[row.id], ...saved.attention.find((item) => item.path === href(row.id)) })), tabs = saved.attention.filter((item) => !item.path.startsWith("/s/"));
       return new Response(`data: ${JSON.stringify({ sessions: listed, owner: "tester", upstreamSuccess: true, tabs })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     }
     if (!url.pathname.startsWith("/api/")) {
@@ -122,7 +122,7 @@ export async function withPage(options: object, run: (page: any, origin: string,
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/Protocol": return Response.json({ protoSha256: "tabs" });
       case "/api/ListConfig": return Response.json({ config: { workspace: "tabs" } });
-      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }, { name: "opsbot", space: "OPS" }, { name: "channel", sticky: "slack" }], currentAgent: "main" });
+      case "/api/ListAgents": return Response.json({ agents: saved.agents, currentAgent: "main" });
       case "/api/ListCronJobs": return Response.json({ jobs: [{ stem: "daily", status: "" }, { stem: "opsreport", status: "", space: "Ops" },
         { stem: "opsreport", status: "ran", lastRun: new Date().toISOString() }, { stem: "retired", status: "ran", lastRun: new Date().toISOString() }] });
       case "/api/History": return Response.json({ messages: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });

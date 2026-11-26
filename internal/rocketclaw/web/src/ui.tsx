@@ -14,7 +14,7 @@ import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field
 import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import type { ChatOrigin, HistoryView, MessageMatch, PageEntry, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding, TreeNode } from "./types";
-import { ArrowUp, BellRing, Bot, Brain, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Timer, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellRing, Bot, Brain, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, House, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Timer, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -1622,6 +1622,19 @@ function useNextAttention(path: string) {
 // Cmd/Ctrl+Shift+A, or this bottom bar button, opens the next tab waiting for this person, and Cmd/Ctrl+Shift+S parks
 // the tab in view until it is done, as its palette command does. Each key is RocketClaw's even while it has nothing to
 // do, so neither OpenCode nor the browser takes it.
+function HomeButton() {
+  const agents = useQuery({ ...queries.agents(), staleTime: 60_000 }).data?.agents ?? [];
+  const { rows } = useContext(Sidebar);
+  const main = agents.find((agent) => agent.name === "main");
+  const used = (id: string) => Date.parse(rows.find((row) => row.id === id)?.updatedAt ?? "") || 0;
+  const recent = agents.flatMap((agent) => agent.sticky === "user" && agent.stickySession ? [agent.stickySession] : []).toSorted((a, b) => used(b) - used(a))[0];
+  const home = main ? main.stickySession : recent;
+  if (!main && !home) return null;
+  return <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Home" onClick={() => navigate(home ? sessionPath(home) : "/")}>
+    <House className="size-[var(--navigation-icon)]" />
+  </TooltipTrigger><TooltipContent side="top">Home</TooltipContent></Tooltip>;
+}
+
 function AttentionButton() {
   const path = usePathname(), next = useNextAttention(path), tabs = useContext(TabActions), sidebar = useContext(Sidebar);
   const onKey = useEffectEvent((event: KeyboardEvent) => {
@@ -2532,6 +2545,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} />
               <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
                 <div className="flex w-max items-center gap-[var(--navigation-gap)]">
+                  <HomeButton />
                   <NewSessionButton newChat={newChat} openCode={(opencode) => setPalette((current) => ({ mode: "commands", key: current.key + 1, opencode }))} />
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions and commands" onClick={() => openPalette("sessions")}>
                     <Search className="size-[var(--navigation-icon)]" />
