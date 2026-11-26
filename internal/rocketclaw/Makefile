@@ -1,5 +1,7 @@
 export ROCKETCLAW_PLAYWRIGHT_MODULE ?= $(HOME)/.cache/playwright-core/node_modules/playwright-core
 export ROCKETCLAW_CHROMIUM ?= $(shell bun -e 'console.log(require("$(ROCKETCLAW_PLAYWRIGHT_MODULE)").chromium.executablePath())' 2>/dev/null)
+export TMPDIR := $(abspath $(dir $(shell jj git root 2>/dev/null || echo $(CURDIR)/../../.git)))/.tmp/t
+$(shell mkdir -p $(TMPDIR))
 COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
 COVERAGE_REQUIRED ?= 91.8

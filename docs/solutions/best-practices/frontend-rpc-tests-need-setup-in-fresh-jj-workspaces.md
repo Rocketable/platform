@@ -1,7 +1,7 @@
 ---
 title: Frontend RPC Browser Tests Fail Without Their Setup, and That Blocks Verification
 date: 2026-10-29
-last_updated: 2026-11-25
+last_updated: 2026-11-26
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/frontend/rpc
 problem_type: developer_experience
@@ -59,7 +59,7 @@ All paths are under `internal/rocketclaw/frontend/rpc/`. These tests need two th
 1. **The web packages in `internal/rocketclaw/web/node_modules`.** A new JJ workspace has none, because `internal/rocketclaw/web/.gitignore:2` ignores them. Without them, Bun cannot load `internal/rocketclaw/web/src/api.ts`, whose first line imports `@tanstack/react-query`.
 2. **`ROCKETCLAW_PLAYWRIGHT_MODULE` and `ROCKETCLAW_CHROMIUM`.** `playwright-core` is not in `internal/rocketclaw/web/package.json`. The test files load it from the variable, for example `await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!)` (`internal/rocketclaw/web/src/pages-transport.test.ts:5`). When the variable is unset, Bun prints `Cannot find package 'undefined'`. Nothing in the message names the variable.
 
-Unix socket paths are limited to 108 bytes on Linux. The socket helper appends `rpc-<random>/s` beneath `TMPDIR` (`testSocketPath`, `server_test.go:4068`–`4079`), and Chromium puts its `SingletonSocket` there too, so a long `TMPDIR`, such as one under a deeply nested workspace's `.tmp/`, makes RPC socket binds fail with `invalid argument` and Chromium abort with `Socket path too long`. Keep `TMPDIR` short.
+Unix socket paths are limited to 108 bytes on Linux. The socket helper appends `rpc-<random>/s` beneath `TMPDIR` (`testSocketPath`, `server_test.go:4068`–`4079`), and Chromium puts its `SingletonSocket` there too, so a long `TMPDIR`, such as one under a deeply nested workspace's `.tmp/`, makes RPC socket binds fail with `invalid argument` and Chromium abort with `Socket path too long`. Both RocketClaw Makefiles set `TMPDIR` to `.tmp/t` in the main checkout, which is short enough, whatever `TMPDIR` the caller set; a focused `go test` outside them needs the same.
 
 `vendor/` is a separate trap. `make vendor` runs `go mod tidy` and `go mod vendor` and so deletes and rewrites `vendor/`. Two make runs in one workspace share the same `vendor/`. Some tests also run the Go toolchain mid-run: `buildStdioHelper` calls `go build` (`internal/rocketclaw/mcpclient/registry_test.go:351`, `:354`). A test run that started cleanly can break when another run rewrites `vendor/` under it. `go generate`, which `make test` runs first, deletes and rewrites the mocks and the built bundles the same way.
 
@@ -78,7 +78,7 @@ Read the errors this way:
 | `Could not resolve "@tanstack/react-query"` (or another web package) in a `bun test` step | No `internal/rocketclaw/web/node_modules` | A fresh workspace runs `go test` before `bun install`, or a focused run without `go generate ./internal/rocketclaw/internal/web` |
 | `Cannot find package 'undefined'` in a `bun test` step | `ROCKETCLAW_PLAYWRIGHT_MODULE` is unset where the tests ran | A focused `go test` without those exports |
 | `not marked as explicit in vendor/modules.txt`, or `open ../../../vendor/...: no such file or directory` | `make vendor` rewrote `vendor/` during the test run | Any platform, when those targets overlap another test run in the same workspace. Wait for it to finish and rerun |
-| Chromium `SingletonSocket` path too long, or RPC `listen unix ...: bind: invalid argument` | Temporary socket pathname is too long | `TMPDIR` sits under a long workspace path |
+| Chromium `SingletonSocket` path too long, or RPC `listen unix ...: bind: invalid argument` | Temporary socket pathname is too long | A focused `go test` outside the Makefiles runs with `TMPDIR` under a long workspace path |
 
 The `vendor/modules.txt` message points at `go.mod`, but nothing is wrong with it. Do not "fix" `go.mod`.
 
