@@ -86,10 +86,6 @@ func startExternalMCPServer(
 		}
 
 		if ok {
-			session.Agent = strings.TrimSpace(session.Agent)
-			session.PrivateConversationID = strings.TrimSpace(session.PrivateConversationID)
-			session.ManagedConversationID = strings.TrimSpace(session.ManagedConversationID)
-
 			if requestedAgent != session.Agent {
 				logger.Warn(
 					"external MCP requested agent mismatched persisted session agent; using persisted agent",
@@ -97,10 +93,6 @@ func startExternalMCPServer(
 					"requested_agent", requestedAgent,
 					"used_agent", session.Agent,
 				)
-			}
-
-			if session.Agent == "" || session.ManagedConversationID == "" {
-				return externalmcp.SessionResult{}, fmt.Errorf("external_conversation_id %q has incomplete persisted state", externalConversationID)
 			}
 		} else {
 			session.Agent = requestedAgent
