@@ -364,11 +364,13 @@ see [Voice](#voice).
 The **Voice** page (`/voice`, also in the bottom navigation and the command
 palette) calls the signed-in person's own session of a `sticky: user` agent, the only
 agents it offers. It selects the person's saved choice, else the built-in `voice`,
-else the first agent offered. With none to offer, for example while `voice` is
-turned off, it shows "No voice agent is available. The built-in voice agent may be
-turned off; an admin can turn it on in Config → Behavior settings." RocketClaw keeps the person's agent, voice and transcript choice on the
-server: the same on every device and through restarts, and never shared with another
-person, even in one browser. Pick an agent and tap the orb to talk; tap it again to hang up. While a call is
+else the first agent offered. With none to offer and no active call, it shows
+"No voice agent is available. The built-in voice agent may be turned off; an
+admin can turn it on in Config → Behavior settings." An active call can still
+be ended if no agent is available. RocketClaw keeps the person's agent, voice
+and transcript choice on the server: the same on every device and through
+restarts, and never shared with another person, even in one browser. Pick an
+agent and tap the orb to talk; tap it again to hang up. While a call is
 active the orb slowly ebbs and flows, its inner light swirls around a glowing heart,
 and two orbit rings spin around it; it swells and brightens with the voice model's
 speech, measured in the browser from the incoming audio. With reduced motion it stays still. The first

@@ -549,20 +549,33 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     expect((await probe()).mics - start.mics).toBe(1);
     await page.getByRole("button", { name: "End voice call", exact: true }).click({ force: true });
     await status.getByText("Tap to talk", { exact: true }).waitFor();
-    // Start always asks the server, so a session another device made the sticky one is the one called.
     await page.route("**/api/CreateSession", (route: any) => route.fulfill({ json: { id: "voice-other", resumed: true } }));
-    await page.getByRole("button", { name: "Start voice call", exact: true }).click();
-    await live();
+    const catalogRefresh = Promise.withResolvers<void>();
+    await page.route("**/api/ListAgents", async (route: any) => {
+      await catalogRefresh.promise;
+      await route.fulfill({ json: { agents: [{ name: "plain" }, { name: "room", sticky: "global" }] } });
+    });
+    try {
+      await page.getByRole("button", { name: "Start voice call", exact: true }).click();
+      await live();
+    } finally {
+      catalogRefresh.resolve();
+    }
     expect(calls.at(-1)).toBe("voice-other");
     expect(spoken.at(-1)).toBe("cedar");
-    expect(alerts).toHaveLength(4); // Voice expects the sticky session, so it does not alert.
-    await page.getByRole("button", { name: "End voice call", exact: true }).click({ force: true });
-    await status.getByText("Tap to talk", { exact: true }).waitFor();
-    await page.route("**/api/ListAgents", (route: any) => route.fulfill({ json: { agents: [{ name: "plain" }, { name: "room", sticky: "global" }] } }));
+    expect(alerts).toHaveLength(4);
+    await voicePicker.waitFor({ state: "detached" });
+    const hangUp = page.getByRole("button", { name: "End voice call", exact: true });
+    expect(await hangUp.count()).toBe(1);
+    expect(await hangUp.isEnabled()).toBe(true);
+    await live();
+    await hangUp.click({ force: true });
+    const noVoice = page.getByText("No voice agent is available. The built-in voice agent may be turned off; an admin can turn it on in Config → Behavior settings.", { exact: true });
+    await noVoice.waitFor();
     await page.reload();
     await page.getByLabel("Transcript", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Choose agent", exact: true }).and(page.locator(":disabled")).waitFor();
-    await page.getByText("No voice agent is available. The built-in voice agent may be turned off; an admin can turn it on in Config → Behavior settings.", { exact: true }).waitFor();
+    await picker.and(page.locator(":disabled")).waitFor();
+    await noVoice.waitFor();
     expect(await page.getByRole("button", { name: "Start voice call", exact: true }).count()).toBe(0);
   } finally {
     await browser.close();

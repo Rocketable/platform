@@ -6371,9 +6371,9 @@ const voiceStatus: Record<VoiceState, string> = { idle: "Tap to talk", connectin
 // at the bottom beside the transcript. It is one orb either way, so it shrinks rather than reappearing.
 // A call starts only once the agents have loaded, since they decide its voice; hanging up never waits.
 function VoiceStage({ voice, compact, busy, agents, selected, settingsLoading, error, onPress }: { voice: VoiceView; compact: boolean; busy: boolean; agents: QueryStatus; selected: string; settingsLoading: boolean; error?: string; onPress: () => void }) {
-  if (agents === "success" && !selected) return <p role="status" className="m-auto text-center text-sm text-muted-foreground">No voice agent is available. The built-in voice agent may be turned off; an admin can turn it on in Config → Behavior settings.</p>;
+  const active = !["idle", "error"].includes(voice.state);
+  if (!active && agents === "success" && !selected) return <p role="status" className="m-auto text-center text-sm text-muted-foreground">No voice agent is available. The built-in voice agent may be turned off; an admin can turn it on in Config → Behavior settings.</p>;
   const loading = agents === "pending" || settingsLoading || !selected;
-  const active = voice.state !== "idle" && voice.state !== "error";
   return <div className={cn("flex flex-col items-center", compact ? "shrink-0 gap-2" : "flex-1 justify-center gap-10 py-10")}>
     <VoiceOrb state={voice.state === "reconnecting" ? "connecting" : voice.state} data-size={compact ? "small" : "large"} aria-label={active ? "End voice call" : "Start voice call"} aria-pressed={active} disabled={busy || voice.state === "ending" || (!active && loading)} onClick={onPress} />
     <span role="status" aria-live="polite" className="text-sm tracking-wide text-muted-foreground">{voiceStatus[voice.state]}{voice.state === "live" ? <VoiceClock startedAt={voice.startedAt!} /> : null}</span>
