@@ -683,6 +683,30 @@ OpenCode moves to the server at the first sync the server accepts it.
 Remote forks use `ForkSession`, which records the new session before returning,
 just as `CreateSession` does. Their tabs can save without waiting for a sync.
 
+`NewHTTPHandler` also serves the Web RPC to MCP clients at `/rpc_mcp`, a stateless
+streamable-HTTP MCP server. It sits behind the same tailnet sign-in and cross-site
+rule as `/api`, so an MCP client on an untagged tailnet device acts as its owner,
+with that person's full authority, exactly as the browser does. Nothing in it is
+written per method: when the handler starts, every Web RPC method with an `/api/<Method>`
+route, unary or streaming, becomes a tool named after it, built from the method's
+protobuf descriptor and called through the same code as the unary `/api` routes, so a
+method added to or changed in the Web RPC reaches `/rpc_mcp` with no MCP-specific
+edit. Methods served only on other paths (`/stream`, `/typing`, `/listing`) are not
+tools. A tool's arguments are the method's request in protobuf JSON, checked as `/api`
+checks them (absent arguments count as `{}`); a method that streams requests, such as
+`UploadAttachment`, takes them in order as `{"messages": [...]}`. Its result is the
+response in protobuf JSON, or a JSON array of every response when the method streams
+responses, such as `ListSessions` or `DownloadAttachment`; a failure is a tool error
+whose text carries the gRPC code and message. Each tool's description is its `rpc`'s
+comment in `web.proto`, and its input schema lists the request's top-level fields by
+their protobuf JSON names, each described by its field comment there; `protoc` keeps
+those comments in the embedded `web.binpb`, which `go generate` writes. Every `rpc`
+needs a comment, and comments name fields by their JSON names. The server's
+instructions describe only this translation, never a single method. `GET /rpc_mcp` answers 405.
+Its access log names the tool a request called after a `#`, as in
+`POST /rpc_mcp#Prompt`, with one line per tool when a request calls several,
+so agent calls can be told apart from browser calls.
+
 Each `opencode` server's MCP bridge is served at `/opencode/<name>/mcp` on the
 node, outside this proxy. It answers coding servers, not browsers: the tailnet
 handler lets that path alone through without a Tailscale user, and the bridge takes

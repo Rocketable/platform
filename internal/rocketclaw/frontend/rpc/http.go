@@ -2,9 +2,11 @@ package rpc
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"compress/gzip"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"slices"
 	"strconv"
@@ -22,14 +25,17 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/internal/web"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
 	"tailscale.com/client/tailscale/apitype"
 )
 
@@ -42,6 +48,18 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 
 	var gzipWriters sync.Pool
 
+	var described descriptorpb.FileDescriptorSet
+	if err := proto.Unmarshal(webDescriptorSet, &described); err != nil {
+		panic(fmt.Errorf("read embedded web descriptors: %w", err))
+	}
+
+	webFile, err := protodesc.NewFile(described.GetFile()[0], nil)
+	if err != nil {
+		panic(fmt.Errorf("build embedded web descriptors: %w", err))
+	}
+
+	webMethods := webFile.Services().ByName("Web").Methods()
+
 	mux.Handle("GET /", app)
 	mux.Handle("GET /api/", http.NotFoundHandler())
 	mux.Handle("POST /api/", http.NotFoundHandler())
@@ -53,26 +71,10 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 	}
 
 	for method := range strings.FieldsSeq(webUnaryMethods + " " + editorMethods) {
-		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
-		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
-		responseType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Output().FullName())
-
 		mux.HandleFunc("POST /api/"+method, func(w http.ResponseWriter, r *http.Request) {
-			request, response := requestType.New().Interface(), responseType.New().Interface()
-
-			if err := httpInput(w, r, request, method); err != nil {
-				httpRPCError(w, status.Error(codes.InvalidArgument, err.Error()))
-				return
-			}
-
-			if err := connection.Invoke(r.Context(), "/rpc.Web/"+method, request, response, grpc.MaxCallRecvMsgSize(math.MaxInt32)); err != nil {
-				httpRPCError(w, err)
-				return
-			}
-
-			body, err := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(response)
-			if err != nil {
-				httpRPCError(w, err)
+			body, failure := invokeJSON(r.Context(), connection, webMethods.ByName(protoreflect.Name(method)), http.MaxBytesReader(w, r.Body, 4<<20))
+			if failure != nil {
+				httpRPCError(w, failure.Err())
 				return
 			}
 
@@ -128,29 +130,20 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 				err = stream.CloseSend()
 			}
 
-			if err == nil || errors.Is(err, io.EOF) {
-				err = stream.RecvMsg(response)
-			}
-
 			if method == "UploadAttachment" {
-				if err == nil {
-					err = stream.RecvMsg(&Attachment{})
-					if errors.Is(err, io.EOF) {
-						body, errMarshal := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(response)
-						if errMarshal == nil {
-							httpJSON(w, r, body, &gzipWriters)
-							return
-						}
-
-						err = errMarshal
-					} else if err == nil {
-						err = status.Error(codes.Internal, "multiple upload receipts")
-					}
+				body, failure := receiveJSON(stream, err, webMethods.ByName("UploadAttachment"))
+				if failure != nil {
+					httpRPCError(w, failure.Err())
+					return
 				}
 
-				httpRPCError(w, err)
+				httpJSON(w, r, body, &gzipWriters)
 
 				return
+			}
+
+			if err == nil || errors.Is(err, io.EOF) {
+				err = stream.RecvMsg(response)
 			}
 
 			if err != nil && method != "ListSessions" {
@@ -167,7 +160,52 @@ func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serve
 		})
 	}
 
+	handleRPCMCP(mux, connection, webMethods)
+
 	return refuseOtherSites(protection, mux)
+}
+
+//go:embed web.binpb
+var webDescriptorSet []byte
+
+func handleRPCMCP(mux *http.ServeMux, connection *grpc.ClientConn, webMethods protoreflect.MethodDescriptors) {
+	tools := mcp.NewServer(&mcp.Implementation{Name: "rocketclaw", Version: "1.0.0"}, &mcp.ServerOptions{Instructions: `Each tool calls the RocketClaw Web RPC method of the same name that /api serves, as the tailnet user who connected, with that user's full authority. Arguments are the request in protobuf JSON; a method that streams requests takes them as {"messages": [...]}. The result is the response in protobuf JSON, or a JSON array of every response when the method streams responses.`})
+
+	for i := range webMethods.Len() {
+		descriptor, route := webMethods.Get(i), "/api/"+string(webMethods.Get(i).Name())
+		_, posted := mux.Handler(&http.Request{Method: http.MethodPost, URL: &url.URL{Path: route}})
+		_, got := mux.Handler(&http.Request{Method: http.MethodGet, URL: &url.URL{Path: route}})
+
+		if posted != "POST "+route && got != "GET "+route {
+			continue
+		}
+
+		properties, fields := map[string]any{}, descriptor.Input().Fields()
+		for j := range fields.Len() {
+			properties[fields.Get(j).JSONName()] = map[string]any{"description": strings.Join(strings.Fields(fields.Get(j).ParentFile().SourceLocations().ByDescriptor(fields.Get(j)).LeadingComments), " ")}
+		}
+
+		schema := map[string]any{"type": "object", "properties": properties}
+		if descriptor.IsStreamingClient() {
+			schema = map[string]any{"type": "object", "properties": map[string]any{"messages": map[string]any{"type": "array", "items": schema}}}
+		}
+
+		tools.AddTool(&mcp.Tool{Name: string(descriptor.Name()), Description: strings.Join(strings.Fields(descriptor.ParentFile().SourceLocations().ByDescriptor(descriptor).LeadingComments), " "), InputSchema: schema}, func(ctx context.Context, call *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if recorded, ok := ctx.Value(accessKey{}).(*accessRecorder); ok {
+				recorded.mu.Lock()
+				recorded.tools = append(recorded.tools, call.Params.Name)
+				recorded.mu.Unlock()
+			}
+
+			body, failure := invokeJSON(ctx, connection, descriptor, strings.NewReader(cmp.Or(string(call.Params.Arguments), "{}")))
+
+			return &mcp.CallToolResult{IsError: failure != nil, Content: []mcp.Content{&mcp.TextContent{Text: cmp.Or(string(body), fmt.Sprint(failure.Err()))}}}, nil
+		})
+	}
+
+	rpcMCP := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return tools }, &mcp.StreamableHTTPOptions{Stateless: true, PropagateRequestCancellation: true})
+	mux.Handle("POST /rpc_mcp", rpcMCP)
+	mux.Handle("GET /rpc_mcp", rpcMCP)
 }
 
 func refuseOtherSites(protection *http.CrossOriginProtection, next http.Handler) http.Handler {
@@ -216,7 +254,11 @@ type accessRecorder struct {
 	writer http.ResponseWriter
 	status int
 	bytes  int
+	mu     sync.Mutex
+	tools  []string
 }
+
+type accessKey struct{}
 
 func (a *accessRecorder) Header() http.Header {
 	return a.writer.Header()
@@ -278,9 +320,24 @@ func NewTailnetHandler(client tailnetWhoIs, trusted []string, accessLog io.Write
 
 		defer func(r *http.Request) {
 			host, _, _ := net.SplitHostPort(r.RemoteAddr)
-			_, _ = fmt.Fprintf(accessLog, "%s - %s [%s] %s %d %d %s %s %dms\n", host, login, start.Format("02/Jan/2006:15:04:05 -0700"),
-				strconv.Quote(r.Method+" "+r.URL.EscapedPath()+" "+r.Proto), cmp.Or(recorded.status, http.StatusOK), recorded.bytes,
-				strconv.Quote(cmp.Or(r.Referer(), "-")), strconv.Quote(cmp.Or(r.UserAgent(), "-")), time.Since(start).Milliseconds())
+			targets := []string{r.URL.EscapedPath()}
+
+			recorded.mu.Lock()
+			slices.Sort(recorded.tools)
+
+			if len(recorded.tools) > 0 {
+				targets = targets[:0]
+				for _, tool := range recorded.tools {
+					targets = append(targets, r.URL.EscapedPath()+"#"+tool)
+				}
+			}
+			recorded.mu.Unlock()
+
+			for _, target := range targets {
+				_, _ = fmt.Fprintf(accessLog, "%s - %s [%s] %s %d %d %s %s %dms\n", host, login, start.Format("02/Jan/2006:15:04:05 -0700"),
+					strconv.Quote(r.Method+" "+target+" "+r.Proto), cmp.Or(recorded.status, http.StatusOK), recorded.bytes,
+					strconv.Quote(cmp.Or(r.Referer(), "-")), strconv.Quote(cmp.Or(r.UserAgent(), "-")), time.Since(start).Milliseconds())
+			}
 		}(r)
 
 		if bridge, _ := path.Match("/opencode/*/mcp", r.URL.Path); bridge {
@@ -307,7 +364,7 @@ func NewTailnetHandler(client tailnetWhoIs, trusted []string, accessLog io.Write
 		}
 
 		login = who.UserProfile.LoginName
-		r = r.Clone(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-tailnet-login-bin", login, "rocketclaw-tailnet-name-bin", who.UserProfile.DisplayName))
+		r = r.Clone(context.WithValue(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-tailnet-login-bin", login, "rocketclaw-tailnet-name-bin", who.UserProfile.DisplayName), accessKey{}, recorded))
 
 		if page {
 			if r.Method == http.MethodOptions {
@@ -479,8 +536,75 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 	}
 }
 
-func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, method string) error {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+func invokeJSON(ctx context.Context, connection *grpc.ClientConn, descriptor protoreflect.MethodDescriptor, body io.Reader) (out []byte, failure *status.Status) {
+	inputs := []io.Reader{body}
+	requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
+
+	if descriptor.IsStreamingClient() {
+		var batch struct{ Messages []json.RawMessage }
+		if err := json.NewDecoder(body).Decode(&batch); err != nil {
+			return nil, status.New(codes.InvalidArgument, err.Error())
+		}
+
+		inputs = inputs[:0]
+		for _, message := range batch.Messages {
+			inputs = append(inputs, bytes.NewReader(message))
+		}
+	}
+
+	requests := make([]proto.Message, len(inputs))
+	for i, input := range inputs {
+		requests[i] = requestType.New().Interface()
+		if err := httpInput(input, requests[i], string(descriptor.Name())); err != nil {
+			return nil, status.New(codes.InvalidArgument, err.Error())
+		}
+	}
+
+	stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ClientStreams: descriptor.IsStreamingClient(), ServerStreams: descriptor.IsStreamingServer()}, "/rpc.Web/"+string(descriptor.Name()), grpc.MaxCallRecvMsgSize(math.MaxInt32))
+	for _, request := range requests {
+		if err == nil {
+			err = stream.SendMsg(request)
+		}
+	}
+
+	if err == nil {
+		err = stream.CloseSend()
+	}
+
+	return receiveJSON(stream, err, descriptor)
+}
+
+func receiveJSON(stream grpc.ClientStream, err error, descriptor protoreflect.MethodDescriptor) (out []byte, failure *status.Status) {
+	responseType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Output().FullName())
+	responses := []json.RawMessage{}
+
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+
+	for err == nil {
+		response := responseType.New().Interface()
+		if err = stream.RecvMsg(response); err == nil {
+			out, err = (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(response)
+			responses = append(responses, out)
+		}
+	}
+
+	if !errors.Is(err, io.EOF) {
+		return nil, status.Convert(err)
+	}
+
+	if !descriptor.IsStreamingServer() {
+		return out, nil
+	}
+
+	out, err = json.Marshal(responses)
+
+	return out, status.Convert(err)
+}
+
+func httpInput(input io.Reader, request proto.Message, method string) error {
+	body, err := io.ReadAll(input)
 	if err != nil {
 		return fmt.Errorf("read request body: %w", err)
 	}

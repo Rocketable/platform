@@ -246,6 +246,8 @@ Release note for Slack answering mentions only:
 
 MCP clients call `session_prompt` with a conversation ID and an agent with `sticky: off` (or no `sticky` setting). Each MCP conversation keeps its own Web chat run by that agent. Sticky agents are not exposed through External MCP, so the built-in agent is not either; add a `sticky: off` agent to the workspace or an overlay for callers to name. Continue the chat or switch between non-sticky agents from Web.
 
+Tailnet users can also point an MCP client at `https://<web node>/rpc_mcp` to call the Web's own RPCs as themselves; see [the Web transport README](internal/rocketclaw/frontend/rpc/README.md#identity-boundary).
+
 Set `mcp_external.enabled` to `true` and `mcp_external.listen_addr` to serve External MCP. `mcp_external.users` maps each login to its password, for example `"users": {"ci-bot": "set-me"}`, and callers send them with HTTP Basic auth. Without `mcp_external.users`, External MCP asks callers for no login at all; an empty object `{}` refuses every caller. Like any value in `rocketclaw.json`, a password can come from AWS Secrets Manager. `rocketclaw run --aws-secrets-manager-users-arn ARN` instead takes all the logins from that JSON secret, in the same login-to-password shape, replacing `mcp_external.users`. RocketClaw reads the logins when it starts.
 
 An agent, advanced or easy, schedules itself with `routines` in its own file; there is no other way to schedule an agent. `routines` is a list of schedules, each alone or mapped to an instruction. A schedule is a 5-field cron expression, a Go duration such as `30m`, or an `@daily`-style shortcut. For a single future run, an agent uses `rocketclaw_schedule_message`.
@@ -787,13 +789,13 @@ With `--aws-secrets-manager-arn ARN`, the three commands read providers from the
 
 RocketClaw logs a health line once a minute with memory, Go scheduler, and database connection figures.
 
-RocketClaw writes its log to standard error and an access log of the Web page to standard output, so the two stay apart. The access log has one line for every HTTP request the tailnet node serves, refused ones included, in the Combined Log Format followed by how long the request took, in whole milliseconds:
+RocketClaw writes its log to standard error and an access log of the Web page to standard output, so the two stay apart. The access log has one line for every HTTP request the tailnet node serves, refused ones included, and one per tool call for a `/rpc_mcp` request that carries several, in the Combined Log Format followed by how long the request took, in whole milliseconds:
 
 ```text
 100.64.0.7 - alice@example.com [23/Nov/2026:06:34:36 +0000] "POST /api/Reload HTTP/1.1" 200 15 "-" "curl/8.7.1" 3ms
 ```
 
-The login is the caller's Tailscale login, or `-` when RocketClaw has none for the request. The byte count is the size of the response body, after compression. A stream's line is written when it ends. Lines leave out the query string and every header except `Referer` and `User-Agent`, and quotes and control characters in the quoted fields are escaped.
+The login is the caller's Tailscale login, or `-` when RocketClaw has none for the request. The byte count is the size of the response body, after compression. A stream's line is written when it ends. Lines leave out the query string and every header except `Referer` and `User-Agent`, and quotes and control characters in the quoted fields are escaped. A `/rpc_mcp` request's line names the tool it called after a `#`, as in `"POST /rpc_mcp#Prompt HTTP/1.1"`; a request that calls several tools at once gets one such line per tool, sorted by name, each with the request's status, size and time.
 
 When profiling is enabled, RocketClaw also samples blocking events at an average of one per 10 milliseconds spent blocked and one in 100 mutex contention events.
 

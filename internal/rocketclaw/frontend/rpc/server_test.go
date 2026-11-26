@@ -34,6 +34,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/gorilla/websocket"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/assert"
@@ -44,6 +45,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
@@ -270,6 +272,7 @@ func TestTailnetAccessLog(t *testing.T) {
 		var logged bytes.Buffer
 
 		handler := NewTailnetHandler(whois, nil, &logged, NewHTTPHandler(connection, new(config.LockedConfig), ""))
+		mcpHeader := http.Header{"Content-Type": {"application/json"}, "Accept": {"application/json, text/event-stream"}}
 		stamp := "[" + time.Now().Format("02/Jan/2006:15:04:05 -0700") + "]"
 
 		for _, tt := range []struct {
@@ -282,8 +285,14 @@ func TestTailnetAccessLog(t *testing.T) {
 			{"unknown method", http.MethodPost, "/api/NoSuchMethod", "100.64.0.7:41641", http.Header{}, `100.64.0.7 - alice@example.com ` + stamp + ` "POST /api/NoSuchMethod HTTP/1.1" 404 %d "-" "-" 0ms`},
 			{"stream", http.MethodGet, "/stream?id=secret", "100.64.0.7:41641", http.Header{}, `100.64.0.7 - alice@example.com ` + stamp + ` "GET /stream HTTP/1.1" 200 %d "-" "-" 0ms`},
 			{"refused caller", http.MethodPost, "/api/Reload", "100.64.0.9:41641", http.Header{}, `100.64.0.9 - - ` + stamp + ` "POST /api/Reload HTTP/1.1" 401 %d "-" "-" 0ms`},
+			{"mcp tool", http.MethodPost, "/rpc_mcp", "100.64.0.7:41641", mcpHeader, `100.64.0.7 - alice@example.com ` + stamp + ` "POST /rpc_mcp#Identity HTTP/1.1" 200 %d "-" "-" 0ms`},
+			{"mcp batch", http.MethodPost, "/rpc_mcp", "100.64.0.7:41641", mcpHeader, `100.64.0.7 - alice@example.com ` + stamp + ` "POST /rpc_mcp#Identity HTTP/1.1" 200 %[1]d "-" "-" 0ms` + "\n" + `100.64.0.7 - alice@example.com ` + stamp + ` "POST /rpc_mcp#Protocol HTTP/1.1" 200 %[1]d "-" "-" 0ms`},
 		} {
-			request := httptest.NewRequest(tt.method, tt.target, strings.NewReader(`{}`))
+			body := map[string]string{
+				"mcp tool":  `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"Identity"}}`,
+				"mcp batch": `[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"Protocol"}},{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"Identity"}}]`,
+			}[tt.name]
+			request := httptest.NewRequest(tt.method, tt.target, strings.NewReader(cmp.Or(body, `{}`)))
 			request.RemoteAddr = tt.remote
 			request.Header = tt.header
 			request.Header.Set("Authorization", "Bearer secret")
@@ -3160,6 +3169,47 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		exact := "  keep\n\t this  text \"intact\" attachment:literal prose  \n"
 		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: conversation, Text: exact, Delivery: PromptDelivery_QUEUE, AttachmentIds: []string{file.Id, imageFile.Id}})
 		require.NoError(t, err)
+
+		agent, err := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "test"}, nil).Connect(ctx, &mcp.StreamableClientTransport{Endpoint: startHTTPTestServer(t, connection).URL + "/rpc_mcp", DisableStandaloneSSE: true}, nil)
+
+		require.NoError(t, err)
+		defer func() { require.NoError(t, agent.Close()) }()
+
+		callTool := func(name string, arguments any) []byte {
+			result, err := agent.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: arguments})
+			require.NoError(t, err)
+			require.False(t, result.IsError, "%s: %v", name, result.Content)
+
+			return []byte(result.Content[0].(*mcp.TextContent).Text)
+		}
+		protoJSON := func(message proto.Message) json.RawMessage {
+			raw, err := protojson.Marshal(message)
+			require.NoError(t, err)
+
+			return raw
+		}
+
+		var receipt Attachment
+		require.NoError(t, protojson.Unmarshal(callTool("UploadAttachment", map[string][]json.RawMessage{"messages": {protoJSON(&Attachment{ConversationId: conversation, Name: "mcp.bin", Data: []byte("first ")}), protoJSON(&Attachment{Data: []byte("second")})}}), &receipt))
+		require.Equal(t, "mcp.bin", receipt.Name)
+		require.Equal(t, int64(len("first second")), receipt.Size)
+
+		var chunks, listings []json.RawMessage
+
+		downloaded := make([]byte, 0, len(imageData))
+
+		require.NoError(t, json.Unmarshal(callTool("DownloadAttachment", protoJSON(&Attachment{ConversationId: conversation, Id: imageFile.Id})), &chunks))
+
+		for _, raw := range chunks {
+			var chunk Attachment
+			require.NoError(t, protojson.Unmarshal(raw, &chunk))
+
+			downloaded = append(downloaded, chunk.Data...)
+		}
+
+		require.Equal(t, imageData, downloaded)
+		require.NoError(t, json.Unmarshal(callTool("ListSessions", protoJSON(&ListSessionsRequest{})), &listings))
+		require.NotEmpty(t, listings)
 		reopened, err := backend.NewSessionServiceIn(t.Context(), storageConfig, slog.New(slog.DiscardHandler))
 
 		require.NoError(t, err)
