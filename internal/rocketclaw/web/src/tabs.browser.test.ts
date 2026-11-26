@@ -1181,6 +1181,58 @@ test("Recent follows the person to their other windows, and a window brought bac
   expect(await recentNames(other)).toEqual(["Bravo", "Echo", "Alpha"]);
 }), 30_000);
 
+test("a rejected Recent removal leaves a newer removal pending", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const tabs = ["charlie", "bravo", "alpha"].map((id) => ({ path: href(id), space: "main" }));
+  saved.state.tabs = tabs;
+  saved.lists = tabs.map((tab) => ({ ...tab, list: "recent", server: "" }));
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  await page.getByRole("button", { name: "Recent", exact: true }).click();
+  const rejectFirst = Promise.withResolvers<void>();
+  const finishSecond = Promise.withResolvers<void>();
+  const secondStarted = Promise.withResolvers<void>();
+  await page.route("**/api/Tabs", async (route: any) => {
+    const removal = route.request().postDataJSON()?.listForget;
+    if (removal?.path === href("alpha")) {
+      await rejectFirst.promise;
+      await route.fulfill({ status: 400, json: { code: 3, message: "removal rejected" } });
+    } else if (removal?.path === href("bravo")) {
+      secondStarted.resolve();
+      await finishSecond.promise;
+      await route.continue();
+    } else await route.continue();
+  });
+  try {
+    for (const name of ["Alpha", "Bravo"]) {
+      await recent(page).getByRole("button", { name: `Remove ${name} from Recent`, exact: true }).click();
+      await recentRow(page, name).waitFor({ state: "detached" });
+    }
+    rejectFirst.resolve();
+    await secondStarted.promise;
+    expect(await recentNames(page)).toEqual(["Charlie"]);
+    await page.evaluate((path: string) => {
+      window.fetch = new Proxy(window.fetch, {
+        apply(send, receiver, args: Parameters<typeof fetch>) {
+          const [input, init] = args;
+          if (String(input).endsWith("/api/Tabs") && typeof init?.body === "string" && JSON.parse(init.body).listForget?.path === path) {
+            document.documentElement.dataset.thirdRemovalSent = "true";
+          }
+          return Reflect.apply(send, receiver, args);
+        },
+      });
+    }, href("charlie"));
+    await recent(page).getByRole("button", { name: "Remove Charlie from Recent", exact: true }).click();
+    await recentRow(page, "Charlie").waitFor({ state: "detached" });
+    expect(await page.evaluate(() => document.documentElement.dataset.thirdRemovalSent)).toBeUndefined();
+    finishSecond.resolve();
+    await recentRow(page, "Alpha").waitFor();
+    expect(await recentNames(page)).toEqual(["Alpha"]);
+    expect(await page.evaluate(() => document.documentElement.dataset.thirdRemovalSent)).toBe("true");
+  } finally {
+    rejectFirst.resolve();
+    finishSecond.resolve();
+  }
+}), 30_000);
+
 test("in Recent, a tab parked until it is done stays dimmed, one parked until a time leaves, and something new on a row never moves it", () => withPage({}, async (page, origin, _prompts, saved) => {
   await openRecent(page, origin, saved, "alpha");
   await follow(page, "bravo");
