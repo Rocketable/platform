@@ -301,7 +301,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 func sidebarSession(chat *backend.SidebarChat) *Session {
 	row := &chat.Session
 	conversation := row.Conversation
-	session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Automation: row.Automation, Paused: row.Paused, Pausable: row.Pausable, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Routine: chat.Routine, RoutineName: chat.RoutineName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
+	session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Automation: row.Automation, Paused: row.Paused, Goal: row.Goal, Pausable: row.Pausable, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Routine: chat.Routine, RoutineName: chat.RoutineName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
 		Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label()}
 
 	if !row.StateSince.IsZero() {
@@ -1711,8 +1711,8 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return nil, fmt.Errorf("web prompt: %w", status.Error(codes.FailedPrecondition, "A test chat takes messages only from its agent editor's Send."))
 	}
 
-	if len(words) > 0 && words[0] == "/agent" {
-		return s.agentReply(ctx, request.Id, words)
+	if reply, handled, err := s.commandReply(ctx, request.Id, principal, words); handled {
+		return reply, err
 	}
 
 	goal, text, rejection := webGoal(request.Text, words)
@@ -1827,6 +1827,49 @@ func webGoal(text string, words []string) (goal protocol.GoalRequest, prompt, re
 	goal, rejection = protocol.ParseGoalRequest(strings.TrimPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), words[0]))
 
 	return goal, goal.Objective, rejection
+}
+
+func (s *Server) commandReply(ctx context.Context, id, principal string, words []string) (*PromptResponse, bool, error) {
+	switch {
+	case len(words) > 0 && words[0] == "/agent":
+		reply, err := s.agentReply(ctx, id, words)
+		return reply, true, err
+	case len(words) == 2 && strings.EqualFold(words[0], "/goal") && slices.Contains([]string{"stop", "resume"}, strings.ToLower(words[1])):
+		reply, err := s.goalReply(ctx, id, principal, strings.EqualFold(words[1], "resume"))
+		return reply, true, err
+	}
+
+	return nil, false, nil
+}
+
+func (s *Server) goalReply(ctx context.Context, id, principal string, resume bool) (*PromptResponse, error) {
+	if !resume {
+		stopped, err := s.backend.StopGoal(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("web goal stop: %w", err)
+		}
+
+		if !stopped {
+			return &PromptResponse{PrivateText: "No goal is active in this conversation."}, nil
+		}
+
+		return &PromptResponse{PrivateText: "Goal stopped. The running turn, if any, finishes."}, nil
+	}
+
+	if _, err := s.pausedSend(ctx, id, protocol.InboundKindPrompt); err != nil {
+		return nil, err
+	}
+
+	resumed, err := s.backend.ResumeGoal(ctx, id, principal)
+	if err != nil {
+		return nil, fmt.Errorf("web goal resume: %w", err)
+	}
+
+	if !resumed {
+		return &PromptResponse{PrivateText: "There is no stopped, blocked, or out-of-turns goal to resume in this conversation."}, nil
+	}
+
+	return &PromptResponse{PrivateText: "Goal resumed with a fresh turn count."}, nil
 }
 
 func (s *Server) agentReply(ctx context.Context, id string, words []string) (*PromptResponse, error) {

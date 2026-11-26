@@ -629,6 +629,42 @@ test("tab status icons and running titles keep their layout and shimmer in both 
   await tab("India").and(page.locator('[aria-description$="Waiting for a timer"]')).waitFor();
   expect(await tab("India").getAttribute("aria-description")).toBe("Space: Main, Waiting for a timer");
   expect(await tab("India").locator("svg").getAttribute("class")).toContain("lucide-timer");
+
+  await page.goto(`${origin}${href("juliet")}`);
+  await tab("Juliet").and(page.locator('[aria-description$="Goal active"]')).waitFor();
+  expect(await tab("Juliet").getAttribute("aria-description")).toBe("Space: Main, Forked session, Goal active");
+  expect(await tab("Juliet").locator("svg").getAttribute("class")).toContain("lucide-target");
+}), 60_000);
+
+test("the goal glyph and a bare /goal open the Goal panel with the current run's bar, its turns and the earlier run", () => withPage({}, async (page, origin, prompts) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  await page.goto(`${origin}${href("juliet")}`);
+  await tab("Juliet").locator("svg.lucide-target").click();
+  await page.waitForURL((url: URL) => url.searchParams.get("goal") === "1");
+  const panel = page.getByRole("complementary", { name: "Goal" });
+  await panel.getByText("Fix the flaky auth tests", { exact: true }).waitFor();
+  expect(await panel.getByText("check: make test · force: cannot end as blocked", { exact: true }).count()).toBe(1);
+  expect(await panel.getByRole("img").getAttribute("aria-label")).toBe("1 / 3 turns, 1 progress noted");
+  expect(await panel.getByRole("img").locator("span").count()).toBe(3);
+  expect(await panel.getByText("Turn 1 · Rerunning the suite", { exact: true }).count()).toBe(1);
+  expect(await panel.getByText("Rerunning the suite", { exact: true }).count()).toBe(1);
+  expect(await panel.getByRole("link", { name: "Open turn in chat" }).getAttribute("href")).toBe(`${href("juliet")}?goal=1&message=43`);
+  expect(await panel.getByText("Resumed by Ann", { exact: false }).count()).toBe(1);
+  await panel.getByText("Run 1 · 3 turns · out of turns", { exact: true }).click();
+  await panel.getByText("Turn 2 · Check failed", { exact: true }).click();
+  await panel.getByText("FAIL auth/session_test.go:88").waitFor();
+  await panel.getByRole("button", { name: "Stop goal", exact: true }).click();
+  await panel.getByText("Goal stopped.", { exact: true }).waitFor();
+  expect(prompts.at(-1)).toMatchObject({ id: "juliet", text: "/goal stop" });
+
+  await page.goto(`${origin}${href("juliet")}`);
+  await panel.waitFor({ state: "detached" });
+  const composer = page.getByPlaceholder("Message or /command");
+  await composer.fill("/goal");
+  await composer.press("Enter");
+  await composer.press("Enter");
+  await panel.getByText("Fix the flaky auth tests", { exact: true }).waitFor();
+  expect(prompts.filter((prompt) => prompt.text.trim() === "/goal")).toEqual([]);
 }), 60_000);
 
 test("with reduced motion a running tab's title shows a still gradient", () => withPage({ reducedMotion: "reduce" }, async (page, origin) => {

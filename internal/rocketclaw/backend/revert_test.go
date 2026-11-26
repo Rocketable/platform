@@ -636,8 +636,6 @@ func TestAgentPauseStorageFailures(t *testing.T) {
 			"pause store failed", []string{"resume", "post"}},
 		{"commit", reject + `CREATE CONSTRAINT TRIGGER reject_pause AFTER INSERT ON entries DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_pause()`, `DROP FUNCTION reject_pause() CASCADE`,
 			"pause store failed", []string{"resume", "post"}},
-		{"goal", `ALTER TABLE conversations RENAME COLUMN goal_objective TO unavailable_goal_objective`, `ALTER TABLE conversations RENAME COLUMN unavailable_goal_objective TO goal_objective`,
-			"load resumed goal", []string{"resume"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := t.Context()

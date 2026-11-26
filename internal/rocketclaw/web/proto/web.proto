@@ -85,6 +85,8 @@ message Session {
   bool unfollowed = 41;
   // A remote OpenCode session waits on an active automation timer that will wake it, its own or a child session's.
   bool automation = 42;
+  // A goal is active in the session, between its turns too, until it ends or someone stops it.
+  bool goal = 43;
 }
 
 // TabAttention is the caller's attention on a tab location that is not a session, as a Session row carries a
@@ -235,6 +237,67 @@ message StageRevertRequest { string id = 1; string message_id = 2; RevertBoundar
 message StageRevertResponse { string revert_message_id = 1; TranscriptEvent prompt = 2; }
 message DeleteBranchRequest { string id = 1; string message_id = 2; bool dry_run = 3; }
 message DeleteBranchResponse { int32 messages = 1; int32 nested_branches = 2; int32 subagent_sessions = 3; int32 queued_messages = 4; bool current = 5; }
+message GetGoalRequest { string id = 1; }
+// A chat's goal as its Goal panel shows it. Absent when the chat never had a goal.
+message Goal {
+  string objective = 1;
+  // active, complete, blocked, stopped or budget_exhausted (out of turns).
+  string status = 2;
+  // 0 means no turn limit.
+  int32 max_turns = 3;
+  // Goal turns used since the goal started or was last resumed.
+  int32 turns_used = 4;
+  // The bash command that must exit 0 before the goal ends as complete or blocked, empty for none.
+  string check = 5;
+  // The agent cannot end the goal as blocked.
+  bool force = 6;
+  string principal_name = 7;
+  // RFC3339Nano.
+  string created_at = 8;
+  string updated_at = 9;
+  // The latest note the agent or a stop recorded.
+  string note = 10;
+}
+enum GoalEventKind {
+  GOAL_EVENT_KIND_UNSPECIFIED = 0;
+  // The agent called rocketclaw_update_goal.
+  GOAL_EVENT_KIND_UPDATE = 1;
+  // A goal turn ended.
+  GOAL_EVENT_KIND_TURN = 2;
+  // A person or the server stopped the goal.
+  GOAL_EVENT_KIND_STOP = 3;
+  // A person resumed the goal; turn numbers start again at 1.
+  GOAL_EVENT_KIND_RESUME = 4;
+}
+enum GoalCheckResult {
+  GOAL_CHECK_RESULT_NONE = 0;
+  GOAL_CHECK_RESULT_PASSED = 1;
+  // The check exited non-zero or could not run, so the goal stayed active.
+  GOAL_CHECK_RESULT_FAILED = 2;
+}
+message GoalEvent {
+  int64 id = 1;
+  GoalEventKind kind = 2;
+  // The goal turn the event belongs to, counted from 1 since the goal started or was last resumed.
+  int32 turn = 3;
+  // update: the status the agent asked for (progress, complete or blocked). turn: the goal's status after the turn.
+  string status = 4;
+  string note = 5;
+  GoalCheckResult check = 6;
+  // The end of a failed check's output, or why it could not run.
+  string check_output = 7;
+  // turn: the transcript entry the turn saved, for a `?message=` link; empty when it saved none.
+  string message_id = 8;
+  // resume: who resumed the goal.
+  string principal = 9;
+  // RFC3339Nano.
+  string at = 10;
+}
+message GetGoalResponse {
+  Goal goal = 1;
+  // Oldest first, since the goal started.
+  repeated GoalEvent events = 2;
+}
 message MessageTreeRequest { string id = 1; }
 message MessageTreeNode { string id = 1; string parent_id = 2; string role = 3; string text = 4; bool outside = 5; bool pickable = 6; bool through = 7; bool on_path = 8; bool current = 9; string branch_id = 10; bool deletable = 11; }
 message MessageTreeResponse { repeated MessageTreeNode nodes = 1; }
@@ -1357,6 +1420,10 @@ service Web {
   rpc StageRevert(StageRevertRequest) returns (StageRevertResponse);
   // Permanently deletes a branch of a chat's message tree. A dry run reports what would be deleted.
   rpc DeleteBranch(DeleteBranchRequest) returns (DeleteBranchResponse);
+  // Returns a chat's goal and what happened in each of its turns, for the Goal panel. Use the chat's `id`.
+  rpc GetGoal(GetGoalRequest) returns (GetGoalResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
   // Returns every branch of a chat: its user messages and agent replies.
   rpc MessageTree(MessageTreeRequest) returns (MessageTreeResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;

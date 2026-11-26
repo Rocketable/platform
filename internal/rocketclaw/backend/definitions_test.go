@@ -813,7 +813,7 @@ func TestNoAgentDelegatesToBuiltinAgents(t *testing.T) {
 func TestBuiltinAgentPromptsEndWithAbout(t *testing.T) {
 	t.Parallel()
 
-	tools := []string{reloadToolName, restartToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, navigateToolName, stopBackgroundJobToolName,
+	tools := []string{reloadToolName, restartToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, createGoalToolName, navigateToolName, stopBackgroundJobToolName,
 		sessionsListToolName, sessionsGetToolName, sessionsCurrentIDToolName, sessionsWriteToolName, sessionsGetURLToolName, sessionsMoveToolName, setTagToolName, getTagsToolName}
 
 	const (

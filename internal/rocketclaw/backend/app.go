@@ -242,6 +242,10 @@ func (s *lockedRun) serve(runCtx context.Context, rocketcodeSessions *SessionSer
 
 	rt.prepareSandbox()
 
+	if err := releaseGoalContinuation(runCtx, rocketcodeSessions.db, ""); err != nil {
+		return err
+	}
+
 	resumeJobs, err := background.recoverJobs(runCtx)
 	if err != nil {
 		return err

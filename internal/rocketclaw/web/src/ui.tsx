@@ -14,7 +14,7 @@ import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field
 import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import type { ChatOrigin, HistoryView, MessageMatch, PageEntry, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding, TreeNode } from "./types";
-import { ArrowUp, BellRing, Bot, Brain, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, House, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Timer, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellRing, Bot, Brain, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, Folder, FolderOpen, GitFork, GripVertical, History, Hourglass, House, Inbox, Keyboard, Link2, ListChecks, LoaderCircle, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Target, Timer, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -27,6 +27,7 @@ import { TimelineDetailCard } from "./timeline-detail-card";
 import { BehaviorSettings } from "./behavior-settings";
 import { ThreadPRContent, ThreadPRWatch, threadGitHubLabel } from "./thread-pr-panel";
 import { floorReason, MessageTree } from "./tree-panel";
+import { GoalView } from "./goal-panel";
 import { SelectionQuote, type DiffNote, type PRComposer } from "./github-pr-preview";
 import type { GitHubPR } from "./github-pr";
 import { reportTyping, TypingPill } from "./typing";
@@ -902,7 +903,7 @@ function SidebarToggle({ open, toggle }: { open: boolean; toggle: () => void }) 
 function PanelToggle() {
   const session = pathSession(usePathname());
   const search = new URLSearchParams(useSearch());
-  const open = ["delegation", "skill", "pullRequests", "pagePreview", "tree"].some((panel) => search.has(panel));
+  const open = ["delegation", "skill", "pullRequests", "pagePreview", "tree", "goal"].some((panel) => search.has(panel));
   const label = open ? "Hide right pane" : "Show pull requests and issues";
   const Icon = open ? PanelRightClose : PanelRightOpen;
   const toggle = () => navigate(panelHref(open ? undefined : "1", "pullRequests"));
@@ -2324,11 +2325,12 @@ const needsYou = <span className="ml-auto shrink-0 rounded-full bg-amber-200 px-
 // or a shell command. A park until a time or until unparked shows a clock, else background work an hourglass, also
 // while a turn runs, else an automation timer that will wake the session a stopwatch. Only a turn not waiting on this
 // person is working, so its title shimmers. A chat whose agent is paused shows a pause glyph in place of the chat icon,
-// else a forked session a fork glyph. A title being regenerated spins in place of every other glyph and shimmers.
+// else a session with an active goal a bullseye, between its turns too, else a forked session a fork glyph. A title
+// being regenerated spins in place of every other glyph and shimmers.
 function tabActivity(session: Session, unread: boolean, clocked: boolean, regenerating: boolean) {
-  const Chat = session.paused ? CirclePause : session.forkedFrom ? GitFork : MessageSquare;
+  const Chat = session.paused ? CirclePause : session.goal ? Target : session.forkedFrom ? GitFork : MessageSquare;
   const activity = session.asking ? ["Needs your answer"] : [session.running && "Turn running", session.background && "Background work running", session.automation && "Waiting for a timer"];
-  return [[session.forkedFrom && "Forked session", session.paused && "Agent paused", regenerating && "Regenerating title", ...activity, unread && "Unread"].filter(Boolean).join(", "), regenerating ? LoaderCircle : session.asking ? Chat : clocked ? Clock : session.background ? Hourglass : session.automation ? Timer : Chat, regenerating || (session.running && !session.asking)] as const;
+  return [[session.forkedFrom && "Forked session", session.paused && "Agent paused", session.goal && "Goal active", regenerating && "Regenerating title", ...activity, unread && "Unread"].filter(Boolean).join(", "), regenerating ? LoaderCircle : session.asking ? Chat : clocked ? Clock : session.background ? Hourglass : session.automation ? Timer : Chat, regenerating || (session.running && !session.asking)] as const;
 }
 
 const tabLabel = (tab: Pick<Tab, "path" | "search">, session: Session, SessionIcon: typeof Search): [string, typeof Search] =>
@@ -2349,6 +2351,12 @@ function timerText(mark?: Omit<TabAttention, "path">) {
 // A detail line, such as a parked tab's park, sits under the title inside the tab, so the row's highlight covers both. A
 // row of a server that stopped answering is greyed and says so. A Shared row names its space, which renaming it edits in.
 // Clicking a tab not in view opens it, by default on the page's server.
+function openGoalPanel(event: React.MouseEvent, goal: boolean, path: string) {
+  if (!goal) return;
+  event.stopPropagation();
+  navigate(`${path}?goal=1`);
+}
+
 function TabItem({ tab, description, detail, chosen, rule, active, stop, shared, space, offline, editing, endEdit, open = () => navigate(tab.path), close, closeLabel, openMenu }: { tab: Tab; description: string; detail?: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; space?: string; offline?: boolean; editing: boolean; endEdit: () => void; open?: () => void; close?: () => void; closeLabel?: (title: string) => string; openMenu: (anchor: MenuAnchor) => void }) {
   const sidebar = useContext(Sidebar);
   const id = pathSession(tab.path);
@@ -2368,7 +2376,7 @@ function TabItem({ tab, description, detail, chosen, rule, active, stop, shared,
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className="flex min-w-0 flex-1" />}>
       <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={[description, activity, aside, offline && "Server offline"].filter(Boolean).join(", ")} tabIndex={stop ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) open(); }}>
-        <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 self-start motion-safe:group-data-[regenerating=true]:animate-spin" />
+        <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 self-start motion-safe:group-data-[regenerating=true]:animate-spin" onClick={(event) => openGoalPanel(event, Icon === Target, tab.path)} />
         <span className="flex min-w-0 flex-1 flex-col"><span className="flex min-w-0 items-center gap-1.5">
           {editing ? <TabRename session={session} tab={tab} shared={shared} space={space} placeholder={title} endEdit={endEdit} /> : <><span className="truncate group-data-[unread=true]:font-bold group-data-[asking=true]:font-semibold group-data-[asking=true]:text-amber-600 dark:group-data-[asking=true]:text-amber-300 motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span><ParkedUnreadDot mark={mark} />{session.asking ? needsYou : null}</>}
         </span><span aria-hidden="true" className="truncate text-xs text-muted-foreground empty:hidden">{[detail, aside].filter(Boolean).join(" · ")}</span></span>
@@ -2575,7 +2583,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
                 </MessageScrollerProvider>
               </TabPane>
              </ServerGate></main></div>
-              {showChat ? <><DelegationPanel id={route.id} /><SkillPanel /><TreePanel id={route.id} drafts={drafts} onDraftChange={onDraftChange} /></> : null}
+              {showChat ? <><DelegationPanel id={route.id} /><SkillPanel /><TreePanel id={route.id} drafts={drafts} onDraftChange={onDraftChange} /><GoalPanel id={route.id} drafts={drafts} /></> : null}
                <ThreadPRPanel drafts={drafts} onDraftChange={onDraftChange} />
                <HostedPagePanel />
            </div>
@@ -2999,7 +3007,8 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
   const draft = drafts.get(id);
   const treeOpen = new URL(origin.href, location.origin).searchParams.has("tree");
-  const tree = origin.path.startsWith("/s/") ? [{ key: "tree", label: `Sessions: ${treeOpen ? "Hide" : "Show"} message tree`, run: () => navigate(panelHref(treeOpen ? undefined : "1", "tree")) }] : [];
+  const goalOpen = new URL(origin.href, location.origin).searchParams.has("goal");
+  const tree = origin.path.startsWith("/s/") ? [{ key: "tree", label: `Sessions: ${treeOpen ? "Hide" : "Show"} message tree`, run: () => navigate(panelHref(treeOpen ? undefined : "1", "tree")) }, { key: "goal-panel", label: `Sessions: ${goalOpen ? "Hide" : "Show"} goal`, run: () => navigate(panelHref(goalOpen ? undefined : "1", "goal")) }] : [];
   const commands = id ? slashCommands.filter(({ name }) => name !== "tree" && (name !== "undo" || draft?.revertEligible && (draft.canUndo || !draft.revertMessageId && !!unsavedRequest(draft.lines))) && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: ["fork", "handoff", "stop", "agent"].includes(name) ? `Sessions: ${label}` : `Command: ${label} (/${name})`, disabled: [!draft?.hydrated, draft?.sending, draft?.reverting].some(Boolean), run: () => {
     if (name === "fork" || name === "handoff") setCommand({ mode: name, source: id });
     else composer.current!(name);
@@ -4464,7 +4473,8 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Tur
   const search = useSearch();
   const messageId = conversationId && pagePath() === sessionPath(conversationId) ? new URLSearchParams(search).get("message") : null;
   const targetId = messageId ?? (target?.conversationId === conversationId ? target.message.messageId : null);
-  const targetTurn = targetId ? turns.findIndex((turn) => turn.user.some((line) => line.messageId === targetId) || turn.items.some((line) => line.role === "assistant" && line.messageId === targetId)) : -1;
+  const targets = (line: Line) => line.messageId === targetId || !!line.messageId?.startsWith(`${targetId}:`);
+  const targetTurn = targetId ? turns.findIndex((turn) => turn.user.some(targets) || turn.items.some((line) => line.role === "assistant" && targets(line))) : -1;
   const targetKey = targetTurn < 0 ? undefined : turnKey(turns[targetTurn]);
   const seen = useCallback(() => {
     const element = viewport.current;
@@ -4488,7 +4498,7 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Tur
     if (!targetKey) return;
     scrollToMessage(`turn-${targetKey}`, { align: "center", behavior: "instant" });
     const frame = requestAnimationFrame(() => {
-      const line = [...(viewport.current?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [])].find((node) => node.dataset.messageId === targetId);
+      const line = [...(viewport.current?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [])].find((node) => node.dataset.messageId === targetId || !!node.dataset.messageId?.startsWith(`${targetId}:`));
       line?.scrollIntoView({ block: "center", behavior: "instant" });
       seen();
     });
@@ -5230,6 +5240,16 @@ function TreePanel({ id, drafts, onDraftChange }: { id: string; drafts: Map<stri
   return <SidePanel label="Message tree" close={close}><MessageTree key={id} id={id} revision={draft.revision} moving={moving} pick={pick} refresh={refresh} close={close} /></SidePanel>;
 }
 
+function GoalPanel({ id, drafts }: { id: string; drafts: Map<string, ComposerDraft> }) {
+  const show = new URLSearchParams(useSearch()).has("goal");
+  const wide = useMedia("(min-width: 64rem)");
+  const active = !!useContext(Sidebar).rows.find((row) => row.id === id)?.goal;
+  const draft = drafts.get(id);
+  if (!show || !draft) return null;
+  const link = (message: string) => `${sessionPath(id)}?${new URLSearchParams(wide ? { goal: "1", message } : { message })}`;
+  return <SidePanel label="Goal" close={() => navigate(panelHref())}><GoalView key={id} id={id} revision={draft.revision} active={active} link={link} /></SidePanel>;
+}
+
 function SkillPanel() {
   const name = new URLSearchParams(useSearch()).get("skill") ?? "";
   if (!name) return null;
@@ -5657,11 +5677,11 @@ function SessionComposer({
     onDraftChange();
   };
   const send = (delivery?: PromptDelivery) => {
-    const command = /^\p{White_Space}*\/(fork|handoff|undo|tree)\p{White_Space}*$/u.exec(draft.text);
+    const command = /^\p{White_Space}*\/(fork|handoff|undo|tree|goal)\p{White_Space}*$/u.exec(draft.text);
     if (delivery !== "STASH" && command) {
       if (command[1] === "undo") { setText(""); return revert.run(); }
       if (!id) { setSendError("Open a session first."); return Promise.resolve(); }
-      if (command[1] === "tree") navigate(panelHref("1", "tree"));
+      if (command[1] === "tree" || command[1] === "goal") navigate(panelHref("1", command[1]));
       else setCommand({ mode: command[1] as "fork" | "handoff", source: id });
       setText("");
       return Promise.resolve();

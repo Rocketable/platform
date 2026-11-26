@@ -75,6 +75,9 @@ var _ frontend.Backend = &BackendMock{}
 //			ReorderQueueItemsFunc: func(context1 context.Context, s string, strings []string) error {
 //				panic("mock out the ReorderQueueItems method")
 //			},
+//			ResumeGoalFunc: func(context1 context.Context, s string, s1 string) (bool, error) {
+//				panic("mock out the ResumeGoal method")
+//			},
 //			RunTurnFunc: func(context1 context.Context, inboundMessage *protocol.InboundMessage) error {
 //				panic("mock out the RunTurn method")
 //			},
@@ -104,6 +107,9 @@ var _ frontend.Backend = &BackendMock{}
 //			},
 //			StopBackgroundJobFunc: func(context1 context.Context, s string, s1 string) (bool, error) {
 //				panic("mock out the StopBackgroundJob method")
+//			},
+//			StopGoalFunc: func(context1 context.Context, s string) (bool, error) {
+//				panic("mock out the StopGoal method")
 //			},
 //			SubscribeFunc: func(context1 context.Context) iter.Seq[protocol.Event] {
 //				panic("mock out the Subscribe method")
@@ -172,6 +178,9 @@ type BackendMock struct {
 	// ReorderQueueItemsFunc mocks the ReorderQueueItems method.
 	ReorderQueueItemsFunc func(context1 context.Context, s string, strings []string) error
 
+	// ResumeGoalFunc mocks the ResumeGoal method.
+	ResumeGoalFunc func(context1 context.Context, s string, s1 string) (bool, error)
+
 	// RunTurnFunc mocks the RunTurn method.
 	RunTurnFunc func(context1 context.Context, inboundMessage *protocol.InboundMessage) error
 
@@ -201,6 +210,9 @@ type BackendMock struct {
 
 	// StopBackgroundJobFunc mocks the StopBackgroundJob method.
 	StopBackgroundJobFunc func(context1 context.Context, s string, s1 string) (bool, error)
+
+	// StopGoalFunc mocks the StopGoal method.
+	StopGoalFunc func(context1 context.Context, s string) (bool, error)
 
 	// SubscribeFunc mocks the Subscribe method.
 	SubscribeFunc func(context1 context.Context) iter.Seq[protocol.Event]
@@ -358,6 +370,15 @@ type BackendMock struct {
 			// Strings is the strings argument value.
 			Strings []string
 		}
+		// ResumeGoal holds details about calls to the ResumeGoal method.
+		ResumeGoal []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// S1 is the s1 argument value.
+			S1 string
+		}
 		// RunTurn holds details about calls to the RunTurn method.
 		RunTurn []struct {
 			// Context1 is the context1 argument value.
@@ -430,6 +451,13 @@ type BackendMock struct {
 			// S1 is the s1 argument value.
 			S1 string
 		}
+		// StopGoal holds details about calls to the StopGoal method.
+		StopGoal []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+		}
 		// Subscribe holds details about calls to the Subscribe method.
 		Subscribe []struct {
 			// Context1 is the context1 argument value.
@@ -467,6 +495,7 @@ type BackendMock struct {
 	lockQueueItems              sync.RWMutex
 	lockReload                  sync.RWMutex
 	lockReorderQueueItems       sync.RWMutex
+	lockResumeGoal              sync.RWMutex
 	lockRunTurn                 sync.RWMutex
 	lockRunningAgent            sync.RWMutex
 	lockSandboxError            sync.RWMutex
@@ -477,6 +506,7 @@ type BackendMock struct {
 	lockStartGoal               sync.RWMutex
 	lockStashQueueItem          sync.RWMutex
 	lockStopBackgroundJob       sync.RWMutex
+	lockStopGoal                sync.RWMutex
 	lockSubscribe               sync.RWMutex
 	lockSwitchConversationAgent sync.RWMutex
 	lockValidateAgentFile       sync.RWMutex
@@ -1146,6 +1176,46 @@ func (mock *BackendMock) ReorderQueueItemsCalls() []struct {
 	return calls
 }
 
+// ResumeGoal calls ResumeGoalFunc.
+func (mock *BackendMock) ResumeGoal(context1 context.Context, s string, s1 string) (bool, error) {
+	if mock.ResumeGoalFunc == nil {
+		panic("BackendMock.ResumeGoalFunc: method is nil but Backend.ResumeGoal was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}{
+		Context1: context1,
+		S:        s,
+		S1:       s1,
+	}
+	mock.lockResumeGoal.Lock()
+	mock.calls.ResumeGoal = append(mock.calls.ResumeGoal, callInfo)
+	mock.lockResumeGoal.Unlock()
+	return mock.ResumeGoalFunc(context1, s, s1)
+}
+
+// ResumeGoalCalls gets all the calls that were made to ResumeGoal.
+// Check the length with:
+//
+//	len(mockedBackend.ResumeGoalCalls())
+func (mock *BackendMock) ResumeGoalCalls() []struct {
+	Context1 context.Context
+	S        string
+	S1       string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}
+	mock.lockResumeGoal.RLock()
+	calls = mock.calls.ResumeGoal
+	mock.lockResumeGoal.RUnlock()
+	return calls
+}
+
 // RunTurn calls RunTurnFunc.
 func (mock *BackendMock) RunTurn(context1 context.Context, inboundMessage *protocol.InboundMessage) error {
 	if mock.RunTurnFunc == nil {
@@ -1505,6 +1575,42 @@ func (mock *BackendMock) StopBackgroundJobCalls() []struct {
 	mock.lockStopBackgroundJob.RLock()
 	calls = mock.calls.StopBackgroundJob
 	mock.lockStopBackgroundJob.RUnlock()
+	return calls
+}
+
+// StopGoal calls StopGoalFunc.
+func (mock *BackendMock) StopGoal(context1 context.Context, s string) (bool, error) {
+	if mock.StopGoalFunc == nil {
+		panic("BackendMock.StopGoalFunc: method is nil but Backend.StopGoal was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+	}{
+		Context1: context1,
+		S:        s,
+	}
+	mock.lockStopGoal.Lock()
+	mock.calls.StopGoal = append(mock.calls.StopGoal, callInfo)
+	mock.lockStopGoal.Unlock()
+	return mock.StopGoalFunc(context1, s)
+}
+
+// StopGoalCalls gets all the calls that were made to StopGoal.
+// Check the length with:
+//
+//	len(mockedBackend.StopGoalCalls())
+func (mock *BackendMock) StopGoalCalls() []struct {
+	Context1 context.Context
+	S        string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+	}
+	mock.lockStopGoal.RLock()
+	calls = mock.calls.StopGoal
+	mock.lockStopGoal.RUnlock()
 	return calls
 }
 

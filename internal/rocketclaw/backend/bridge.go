@@ -47,6 +47,7 @@ const (
 	reloadToolName                 = "rocketclaw_reload"
 	attachFilesToolName            = "rocketclaw_attach_files_to_response"
 	updateGoalToolName             = "rocketclaw_update_goal"
+	createGoalToolName             = "rocketclaw_create_goal"
 	askUserQuestionToolName        = "ask_user_question"
 	scheduleMessageToolName        = "rocketclaw_schedule_message"
 	resetScheduledMessagesToolName = "rocketclaw_reset_scheduled_messages"
@@ -348,6 +349,33 @@ func (b *Bridge) Submit(ctx context.Context, msg *protocol.InboundMessage) error
 	msg.ConversationID = b.config.ConversationID
 
 	return b.enqueue(ctx, &bridgeRequest{inbound: msg}, "submit inbound message")
+}
+
+func (b *Bridge) ContinueGoal(ctx context.Context, reply *protocol.SlackReplyTarget, completion *turnCompletion) (bool, error) {
+	store := b.config.SessionService
+
+	claimed, err := claimGoalContinuation(ctx, store.db, b.config.ConversationID)
+	if err != nil || !claimed {
+		return false, err
+	}
+
+	goal, _, err := store.Goal(b.config.ConversationID)
+	if err == nil {
+		inbound := goalContinuation(b.config.ConversationID, &goal)
+		inbound.Text += "\n\n" + goalSteeringPrompt(&goal)
+
+		if reply != nil {
+			*inbound.SlackReply = *reply
+		}
+
+		err = b.enqueue(ctx, &bridgeRequest{inbound: inbound, completion: completion}, "submit goal continuation")
+	}
+
+	if err != nil {
+		return false, errors.Join(err, releaseGoalContinuation(context.WithoutCancel(ctx), store.db, b.config.ConversationID))
+	}
+
+	return true, nil
 }
 
 func (b *Bridge) InterruptActiveTurn() *protocol.InboundMessage {
@@ -757,6 +785,8 @@ func (b *Bridge) storeQueued() {
 	for {
 		select {
 		case request := <-b.requestCh:
+			b.releaseGoalContinuation(&request)
+
 			if err := b.storeStopped(&request, "store waiting request"); err != nil && !errors.Is(err, protocol.ErrBridgeStopped) {
 				b.log.Error("store waiting request during shutdown", "conversation_id", b.config.ConversationID, "error", err)
 			}
@@ -766,8 +796,19 @@ func (b *Bridge) storeQueued() {
 	}
 }
 
+func (b *Bridge) releaseGoalContinuation(request *bridgeRequest) {
+	if request.inbound == nil || request.inbound.GoalAction != protocol.GoalActionContinue || request.turnID != "" {
+		return
+	}
+
+	if err := releaseGoalContinuation(context.Background(), b.config.SessionService.db, b.config.ConversationID); err != nil {
+		b.log.Error("release goal continuation", "conversation_id", b.config.ConversationID, "error", err)
+	}
+}
+
 func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 	b.log.Info("bridge dequeued request", "event", "request_dequeued", "conversation_id", b.config.ConversationID, "has_inbound", request.inbound != nil, "turn_id", request.turnID, "scheduled_message_id", request.scheduledMessageID, "queue_item_id", request.queueItemID, "queue_len", len(b.requestCh))
+	b.releaseGoalContinuation(request)
 	b.mu.Lock()
 
 	for b.settlement != nil {
@@ -2051,31 +2092,17 @@ func (b *Bridge) turnInputs(ctx context.Context, turnID string) (snapshot turnIn
 }
 
 func (b *Bridge) finishGoalTurn(ctx context.Context, request *bridgeRequest) error {
-	msg := request.inbound
-
-	goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
-	if err != nil {
-		return fmt.Errorf("load goal after turn: %w", err)
+	var reply *protocol.SlackReplyTarget
+	if request.inbound != nil {
+		reply = request.inbound.SlackReply
 	}
 
-	if !ok || strings.TrimSpace(goal.Status) != GoalStatusActive {
-		return nil
+	continued, err := b.ContinueGoal(ctx, reply, request.completion)
+	if continued {
+		request.completion = nil
 	}
 
-	inbound := goalContinuation(b.config.ConversationID, &goal)
-	inbound.Text += "\n\n" + goalSteeringPrompt(&goal)
-
-	if msg != nil && msg.SlackReply != nil {
-		*inbound.SlackReply = *msg.SlackReply
-	}
-
-	if err := b.enqueue(ctx, &bridgeRequest{inbound: inbound, completion: request.completion}, "submit goal continuation"); err != nil {
-		return err
-	}
-
-	request.completion = nil
-
-	return nil
+	return err
 }
 
 func turnReplayEntries(observed []ObservedSessionEntry, restored, contextEntries []harness.SessionEntry) iter.Seq2[harness.SessionEntry, error] {
@@ -2398,6 +2425,18 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		customTools = append(customTools, sessionsWriteTool(b, origin, msg, rootAgent, self))
 	}
 
+	goal, goalFound, err := b.config.SessionService.Goal(b.config.ConversationID)
+	if err != nil {
+		return runResult{}, fmt.Errorf("load goal tools: %w", err)
+	}
+
+	switch {
+	case goalFound && strings.TrimSpace(goal.Status) == GoalStatusActive:
+		customTools = append(customTools, updateGoalTool(b.config.SessionService, b.config.ConversationID, &goal))
+	case !unaddressed:
+		customTools = append(customTools, createGoalTool(b.config.SessionService, b.config.ConversationID, origin))
+	}
+
 	pageAgent, _, _ := strings.Cut(rootAgent, "/")
 
 	pageFallback := agents.Items[pageAgent].Space
@@ -2414,7 +2453,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	switch {
 	case layer != nil:
 		rocketcodeConfig.CustomTools = slices.DeleteFunc(rocketcodeConfig.CustomTools, func(tool harness.Tool) bool {
-			return slices.Contains([]string{sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName}, tool.Name)
+			return slices.Contains([]string{sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, createGoalToolName}, tool.Name)
 		})
 	case !b.shadow && !b.underShadow:
 		rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: b.background, root: shared, conversationID: b.config.ConversationID, origin: msg}
@@ -2837,9 +2876,6 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 	shellEnv = b.shellEnvFor(shellEnv)
 
 	tools = append(tools, reloadTool(b.config.RequestReload), listSessionsTool(b.config.SessionService, b.threads), getSessionTool(b.config.SessionService), sessionsGetURLTool(b.threads), stopBackgroundJobTool(b.background, b.config.ConversationID))
-	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
-		tools = append(tools, updateGoalTool(b.config.SessionService, b.config.ConversationID))
-	}
 
 	if len(runtimeCfg.OpenCode) > 0 {
 		tools = append(tools, openCodeAPITool(runtimeCfg.OpenCode))
@@ -2849,7 +2885,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 
 	if b.shadow || b.underShadow {
 		tools = slices.DeleteFunc(tools, func(tool harness.Tool) bool {
-			return slices.Contains([]string{askUserQuestionToolName, navigateToolName, sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName}, tool.Name)
+			return slices.Contains([]string{askUserQuestionToolName, navigateToolName, sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, createGoalToolName, reloadToolName, restartToolName}, tool.Name)
 		})
 	}
 
@@ -3012,7 +3048,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 		skills = harness.LoadSkills(skillsFS, filepath.Join(cfg.Workspace, runtimeDir, "skills")).Skills
 	}
 
-	tools := []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName, navigateToolName, respondInThreadToolName, noReplyToolName}
+	tools := []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, createGoalToolName, askUserQuestionToolName, navigateToolName, respondInThreadToolName, noReplyToolName}
 
 	for name := range agents.Items {
 		agent := agents.Items[name]
@@ -3399,8 +3435,17 @@ func noReplyTool(store *SessionService, conversationID, turnID string) harness.T
 	}}
 }
 
-func updateGoalTool(store *SessionService, conversationID string) harness.Tool {
-	return harness.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use progress when reporting continuing progress, complete when the goal is achieved, or blocked when progress cannot continue.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusProgress, GoalStatusComplete, GoalStatusBlocked}}, "note": map[string]any{"type": "string", "description": "Status note for the goal update. Use this to explain what is going on, what changed, what you are thinking, where the goal is heading next, what was completed, or what is blocking progress. It should mirror the substance of the visible Progress summary."}}, "required": []string{"status"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
+func updateGoalTool(store *SessionService, conversationID string, active *GoalState) harness.Tool {
+	description, statuses := "Update the active RocketClaw goal loop status for this conversation. Use progress when reporting continuing progress, complete when the goal is achieved, or blocked when progress cannot continue.", []string{GoalStatusProgress, GoalStatusComplete, GoalStatusBlocked}
+	if active.Force {
+		description, statuses = "Update the active RocketClaw goal loop status for this conversation. Use progress when reporting continuing progress, or complete when the goal is achieved. This goal cannot end as blocked: keep working until it is complete.", statuses[:2]
+	}
+
+	if active.Check != "" {
+		description += " Ending the goal first runs its check command in your shell; when the check fails, the goal stays active and you get its output."
+	}
+
+	return harness.Tool{Name: updateGoalToolName, Description: description, Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": statuses}, "note": map[string]any{"type": "string", "description": "Status note for the goal update. Use this to explain what is going on, what changed, what you are thinking, where the goal is heading next, what was completed, or what is blocking progress. It should mirror the substance of the visible Progress summary."}}, "required": []string{"status"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		var input struct {
 			Status string `json:"status"`
 			Note   string `json:"note"`
@@ -3409,17 +3454,83 @@ func updateGoalTool(store *SessionService, conversationID string) harness.Tool {
 			return harness.ToolResult{}, fmt.Errorf("parse goal update: %w", err)
 		}
 
+		input.Status = strings.TrimSpace(input.Status)
+		if active.Force && input.Status == GoalStatusBlocked {
+			return harness.TextToolResult("This goal cannot end as blocked. The goal stays active: keep working toward its objective."), nil
+		}
+
+		event := GoalEvent{Kind: GoalEventUpdate, Turn: active.TurnsUsed + 1, Status: input.Status, Note: input.Note}
+
+		if (input.Status == GoalStatusComplete || input.Status == GoalStatusBlocked) && active.Check != "" {
+			check, err := harness.RunToolCallBash(ctx, active.Check, "Run the goal check")
+
+			reply := ""
+
+			switch {
+			case err != nil:
+				event.CheckOutput, reply = err.Error(), "The goal stays active: its check `"+active.Check+"` could not run: "+err.Error()
+			case !check.Success:
+				event.CheckOutput, reply = check.String(), "The goal stays active: its check `"+active.Check+"` failed. Keep working from its output:\n\n"+check.String()
+			}
+
+			if reply != "" {
+				event.Check = GoalCheckFailed
+
+				return harness.TextToolResult(reply), store.RecordGoalUpdate(conversationID, &event)
+			}
+
+			event.Check = GoalCheckPassed
+		}
+
 		goal, err := store.UpdateGoalStatus(conversationID, input.Status, input.Note)
 		if err != nil {
 			return harness.ToolResult{}, err
 		}
 
-		if strings.TrimSpace(input.Status) == GoalStatusProgress {
+		if err := store.RecordGoalUpdate(conversationID, &event); err != nil {
+			return harness.ToolResult{}, err
+		}
+
+		if input.Status == GoalStatusProgress {
 			return harness.TextToolResult("goal progress recorded"), nil
 		}
 
 		return harness.TextToolResult("goal marked " + strings.TrimSpace(goal.Status)), nil
 	}}
+}
+
+func createGoalTool(store *SessionService, conversationID string, origin *protocol.InboundMessage) harness.Tool {
+	return harness.Tool{Name: createGoalToolName, Description: "Start a RocketClaw goal loop in this conversation, as a person's /goal does. Start one only when a person or your instructions explicitly ask for a goal; do not start one for ordinary tasks. After this turn ends, you keep getting turns toward the objective until you mark it complete or blocked with " + updateGoalToolName + ", a person stops it, or max_turns runs out.", Permission: "rocketclaw", VisibilitySubjects: []string{createGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{createGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{
+		"objective": map[string]any{"type": "string", "description": "The concrete objective to keep working toward."},
+		"max_turns": map[string]any{"type": "integer", "description": "How many goal turns to allow; 0 or omitted is unlimited."},
+		"check":     map[string]any{"type": "string", "description": "A bash command run in your shell when the goal is marked complete or blocked; when it exits non-zero, the goal stays active. Omit unless asked for."},
+		"force":     map[string]any{"type": "boolean", "description": "true leaves no way to end the goal as blocked. Omit unless asked for."},
+	}, "required": []string{"objective"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
+		var input struct {
+			Objective string `json:"objective"`
+			MaxTurns  int    `json:"max_turns"`
+			Check     string `json:"check"`
+			Force     bool   `json:"force"`
+		}
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return harness.ToolResult{}, fmt.Errorf("parse goal start: %w", err)
+		}
+
+		err := store.BeginGoal(conversationID, goalStateFor(origin, protocol.GoalRequest{Objective: input.Objective, MaxTurns: input.MaxTurns, Check: strings.TrimSpace(input.Check), Force: input.Force}))
+		if errors.Is(err, protocol.ErrGoalAlreadyActive) {
+			return harness.TextToolResult("A goal is already in progress in this conversation."), nil
+		}
+
+		if err != nil {
+			return harness.ToolResult{}, err
+		}
+
+		return harness.TextToolResult("goal started; it continues after this turn ends"), nil
+	}}
+}
+
+func goalStateFor(inbound *protocol.InboundMessage, goal protocol.GoalRequest) *GoalState {
+	return &GoalState{Objective: goal.Objective, MaxTurns: goal.MaxTurns, Check: goal.Check, Force: goal.Force, PrincipalName: inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], PrincipalEmail: inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey], Origin: reviewOriginHeader(inbound)}
 }
 
 func (b *Bridge) armScheduledMessage(id string, message *protocol.ScheduledMessageState) {
@@ -3824,7 +3935,16 @@ func goalSteeringPrompt(goal *GoalState) string {
 		turnBudget = fmt.Sprintf("%d of %d turns used", goal.TurnsUsed, goal.MaxTurns)
 	}
 
-	return "Active goal loop:\nObjective:\n" + strings.TrimSpace(goal.Objective) + "\n\nTurn budget: " + turnBudget + "\n\nContinue making concrete progress toward the objective. At the end of every visible goal response, include a Progress summary: section. For status progress, summarize what changed this turn, the current state, and the next concrete step. For status complete, summarize what was achieved and any validation or check result. For status blocked, summarize what happened, the concrete blocker, and what human input, access, or decision is needed. Call rocketclaw_update_goal with status progress, complete, or blocked, and put the same substance from the visible Progress summary in note."
+	prompt := "Active goal loop:\nObjective:\n" + strings.TrimSpace(goal.Objective) + "\n\nTurn budget: " + turnBudget
+	if goal.Check != "" {
+		prompt += "\n\nCompletion check command:\n" + goal.Check + "\n\nMarking the goal complete or blocked first runs this command in your shell. When it exits non-zero, the goal stays active: continue from its output instead of declaring the goal done."
+	}
+
+	if goal.Force {
+		return prompt + "\n\nContinue making concrete progress toward the objective. This goal cannot end as blocked: when something stands in the way, find another route. At the end of every visible goal response, include a Progress summary: section. For status progress, summarize what changed this turn, the current state, and the next concrete step. For status complete, summarize what was achieved and any validation or check result. Call rocketclaw_update_goal with status progress or complete, and put the same substance from the visible Progress summary in note."
+	}
+
+	return prompt + "\n\nContinue making concrete progress toward the objective. At the end of every visible goal response, include a Progress summary: section. For status progress, summarize what changed this turn, the current state, and the next concrete step. For status complete, summarize what was achieved and any validation or check result. For status blocked, summarize what happened, the concrete blocker, and what human input, access, or decision is needed. Call rocketclaw_update_goal with status progress, complete, or blocked, and put the same substance from the visible Progress summary in note."
 }
 
 func externalMCPMetadataEnv(conversationID string, metadata map[string]string) map[string]string {

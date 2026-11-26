@@ -839,6 +839,11 @@ database migration.
   remote OpenCode session's running child session (a background subagent) or shell command.
   Screen readers hear “Background work running”. A question waiting on this person
   keeps the chat icon.
+- **Active goals** swap a session's chat icon for a bullseye for as long as the goal
+  is active, between its turns too; a paused agent's pause glyph wins, and a park's
+  clock, background work's hourglass and a timer's stopwatch replace it as they
+  replace the chat icon.
+  Screen readers hear “Goal active”.
 - **Automation timers** swap a remote OpenCode session's chat icon for a stopwatch
   while an active OpenCode automation timer will wake it or one of its child
   sessions: one that runs at a time, every interval, or on a cron. Paused automations and
@@ -1136,7 +1141,33 @@ until explicitly sent, and `/steer <text>` sends now or guides the running turn.
 Only the outer delivery command is removed; inner commands and text are preserved.
 `/goal <objective>` starts a goal
 loop on the conversation, with a `maxTurns:` option; its first turn runs right away when idle, otherwise after the active turn.
-Bare `/goal` privately shows usage, and `/stop` ends the goal.
+`check: <command>` gives the goal a bash command, quoted when it has spaces, as in
+`/goal check: "make lint && make test" fix the build`. When the agent marks the goal
+complete or blocked, the command first runs in the agent's shell, under its bash
+permissions, for up to two minutes; when it exits non-zero, or cannot run, the goal
+stays active and the agent gets its output. `force: yes` (or `true`, `on`, `1`) takes
+`blocked` away from the agent, so only completion, `/stop`, or `maxTurns:` ends the goal.
+`/goal stop` ends the goal and lets the running turn finish; `/stop` ends both.
+`/goal resume` restarts a stopped, blocked or out-of-turns goal with its objective,
+`check:` and `force:`, counting turns from 1 again; a completed goal does not resume, and
+neither does any goal while the agent is paused. Only the bare words are commands:
+`/goal stop the flaky tests` starts a goal with that objective.
+An agent can start the same loop with `rocketclaw_create_goal`, which takes the same
+options; its tool description tells it to do so only when asked for a goal.
+
+Bare `/goal`, **Sessions: Show goal** in the command palette, and a click on a tab's
+bullseye open the **Goal** panel on the right, a sheet on narrow screens. Its header holds
+the objective, the goal's status, who set it and when, its `check:` and `force:`, Stop goal
+or Resume goal, and a bar with one mark per turn of the current run: filled for a turn with
+a progress note, hollow for a turn without one, red for a failed check, green, amber or
+grey for the turn that completed, blocked or used the last turn, a pulse for the turn
+running now, and dashed for the turns left under `maxTurns:`. Past 60 turns each mark
+stands for several turns and shows the worst of them. Under the bar it warns about checks
+failing turn after turn, turns without notes, and the same note repeating. Below, the
+turns are listed newest first, the newest finished one open, with each progress note,
+each check's result and a failed check's output, and **Open turn in chat**, which scrolls
+the chat to that turn. A resume starts a new run, and earlier runs fold into one line each.
+The panel refreshes as turns finish and as the goal stops, resumes or ends.
 A message is a command only when its first word is `/` plus a command name or
 the name of a skill the agent can use, as in `/review the diff`. Any other first
 word stays plain text, so `/tmp is full`, `/Users/ann/notes failed`, and `//`

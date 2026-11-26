@@ -6,7 +6,7 @@ import type { Agent, ListTab, SearchPage, StripLayout, TabAttention, TabListName
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
-const rows: { id: string; name: string; agent: string; running?: boolean; background?: boolean; spaceId?: string; unreadAt?: string; asking?: boolean; forkedFrom?: string; automation?: boolean }[] = [
+const rows: { id: string; name: string; agent: string; running?: boolean; background?: boolean; spaceId?: string; unreadAt?: string; asking?: boolean; forkedFrom?: string; automation?: boolean; goal?: boolean }[] = [
   { id: "alpha", name: "Alpha", agent: "main" },
   { id: "bravo", name: "Bravo", agent: "main" },
   { id: "charlie", name: "Charlie", agent: "main" },
@@ -19,7 +19,22 @@ const rows: { id: string; name: string; agent: string; running?: boolean; backgr
   { id: "golf", name: "Golf", agent: "main", running: true, asking: true },
   { id: "hotel", name: "Hotel", agent: "main", forkedFrom: "alpha" },
   { id: "india", name: "India", agent: "main", automation: true },
+  { id: "juliet", name: "Juliet", agent: "main", forkedFrom: "alpha", goal: true },
 ];
+const at = "2026-11-26T10:00:00Z";
+const julietGoal = {
+  goal: { objective: "Fix the flaky auth tests", status: "active", maxTurns: 3, turnsUsed: 1, check: "make test", force: true, principalName: "Ann", createdAt: at },
+  events: [
+    { id: "1", kind: "GOAL_EVENT_KIND_UPDATE", turn: 1, status: "progress", note: "Fixed the token refresh race", at },
+    { id: "2", kind: "GOAL_EVENT_KIND_TURN", turn: 1, status: "active", messageId: "41", at },
+    { id: "3", kind: "GOAL_EVENT_KIND_UPDATE", turn: 2, status: "complete", check: "GOAL_CHECK_RESULT_FAILED", checkOutput: "FAIL auth/session_test.go:88", at },
+    { id: "4", kind: "GOAL_EVENT_KIND_TURN", turn: 2, status: "active", messageId: "42", at },
+    { id: "5", kind: "GOAL_EVENT_KIND_TURN", turn: 3, status: "budget_exhausted", at },
+    { id: "6", kind: "GOAL_EVENT_KIND_RESUME", principal: "Ann", at },
+    { id: "7", kind: "GOAL_EVENT_KIND_UPDATE", turn: 1, status: "progress", note: "Rerunning the suite", at },
+    { id: "8", kind: "GOAL_EVENT_KIND_TURN", turn: 1, status: "active", messageId: "43", at },
+  ],
+};
 export const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
 export type SharedTab = { space: string; path: string; search?: SearchPage };
 // A Search page as the server compares it: field order and empty names do not matter.
@@ -133,7 +148,8 @@ export async function withPage(options: object, run: (page: any, origin: string,
           sessions.push({ id: "fresh", name: "Ops chat", agent: "opsbot", spaceId: "ops" });
         }
         return Response.json({ id: "fresh" });
-      case "/api/Prompt": prompts.push(input); return Response.json({ privateText: "" });
+      case "/api/Prompt": prompts.push(input); return Response.json({ privateText: input.text === "/goal stop" ? "Goal stopped." : "" });
+      case "/api/GetGoal": return Response.json(input.id === "juliet" ? julietGoal : {});
       case "/api/Tabs": case "/api/ChangeTabs": return tabsCall(saved, input);
       case "/api/DeleteSession":
         if (saved.deletes.push(input.id) === 1) return Response.json({ message: "this session has a running turn; stop it first", code: 9 }, { status: 400 });

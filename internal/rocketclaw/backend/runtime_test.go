@@ -833,6 +833,80 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 	assert.Equal(t, `[Web principal="Alice"]`, goal.Origin)
 }
 
+func TestRuntimeStopAndResumeGoalKeepOneContinuation(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	conversationID := "web:goal"
+	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+
+	cfg := &config.Config{Workspace: filepath.Join(t.TempDir(), "missing")}
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
+	manager := newThreadBridgeManager(config.NewLockedConfig(cfg), store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
+	runTestManager(t, manager)
+	manager.bridges = map[string]directBridge{conversationID: bridge}
+	rt := &Runtime{threads: manager, Sessions: store, Cfg: config.NewLockedConfig(cfg)}
+	ctx := t.Context()
+
+	pending := func() bool {
+		var claimed bool
+		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT goal_pending FROM conversations WHERE conversation_id = $1`, conversationID).Scan(&claimed))
+
+		return claimed
+	}
+
+	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 2, Check: "make test", Force: true, PrincipalName: "Alice", PrincipalEmail: "alice@example.com", Origin: `[Web principal="Alice"]`}))
+	_, err := execState(ctx, store.db, "use turns", `UPDATE conversations SET goal_turns_used = 2, goal_status = $2 WHERE conversation_id = $1`, conversationID, GoalStatusBudgetExhausted)
+	require.NoError(t, err)
+
+	stopped, err := rt.StopGoal(ctx, conversationID)
+	require.NoError(t, err)
+	assert.False(t, stopped, "only an active goal stops")
+
+	resumed, err := rt.ResumeGoal(ctx, conversationID, "Ann")
+	require.NoError(t, err)
+	require.True(t, resumed)
+
+	goal, _, err := store.Goal(conversationID)
+	require.NoError(t, err)
+	assert.Equal(t, []any{GoalStatusActive, 0, "make test", true}, []any{goal.Status, goal.TurnsUsed, goal.Check, goal.Force}, "a resume resets the turn count and keeps the goal's options")
+	require.Len(t, bridge.requestCh, 1)
+	assert.True(t, pending())
+
+	stopped, err = rt.StopGoal(ctx, conversationID)
+	require.NoError(t, err)
+	assert.True(t, stopped)
+
+	resumed, err = rt.ResumeGoal(ctx, conversationID, "Ann")
+	require.NoError(t, err)
+	require.True(t, resumed)
+	assert.Len(t, bridge.requestCh, 1, "the continuation still queued from before the stop serves the resumed goal")
+
+	continued, err := bridge.ContinueGoal(ctx, nil, nil)
+	require.NoError(t, err)
+	assert.False(t, continued, "a turn ending while a continuation waits queues no second one")
+
+	request := <-bridge.requestCh
+	assert.Equal(t, protocol.GoalActionContinue, request.inbound.GoalAction)
+	assert.True(t, strings.HasPrefix(request.inbound.Text, "Continue the active goal loop.\n\nActive goal loop:\nObjective:\nship it"), request.inbound.Text)
+	assert.Equal(t, map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, request.inbound.Metadata, "the continuation acts for the goal's setter")
+	assert.Equal(t, `[Web principal="Alice"]`, request.inbound.OriginHeader)
+	assert.Equal(t, &protocol.SlackReplyTarget{}, request.inbound.SlackReply)
+	bridge.releaseGoalContinuation(&request)
+	assert.False(t, pending(), "taking the continuation releases the claim")
+
+	continued, err = bridge.ContinueGoal(ctx, nil, nil)
+	require.NoError(t, err)
+	assert.True(t, continued)
+
+	resumed, err = rt.ResumeGoal(ctx, conversationID, "Ann")
+	require.NoError(t, err)
+	assert.False(t, resumed, "an active goal does not resume")
+
+	require.NoError(t, releaseGoalContinuation(ctx, store.db, ""))
+	assert.False(t, pending(), "startup releases every claim the lost request channel held")
+}
+
 func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	t.Parallel()
 

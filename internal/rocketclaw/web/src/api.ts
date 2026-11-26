@@ -1,6 +1,6 @@
 import { hashKey, type QueryKey } from "@tanstack/react-query";
 import { server, serverURL } from "./navigation";
-import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, Routine, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, ListTab, SavedTabs, SearchPage, StripLayout, TranscriptEvent, TreeNode } from "./types";
+import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, Routine, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, ListTab, SavedTabs, SearchPage, StripLayout, TranscriptEvent, TreeNode, Goal, GoalEvent } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -88,6 +88,7 @@ export const queries = {
     const body = await rpc<Omit<HistoryView, "origin"> & { origin: string }>("History", input, signal);
     return { ...body, origin: body.origin ? JSON.parse(body.origin) as ChatOrigin : undefined };
   } }),
+  goal: (input: { id: string }, revision?: string, active?: boolean) => ({ queryKey: ["goal", input, revision, active], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ goal?: Goal; events?: GoalEvent[] }>("GetGoal", input, signal) }),
   messageTree: (input: { id: string }, revision?: string) => ({ queryKey: ["messageTree", input, revision], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ nodes: TreeNode[] }>("MessageTree", input, signal)).nodes }),
   queue: (input: { id: string }) => ({ queryKey: ["queue", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ items: QueueItem[] }>("ListQueue", input, signal)).items }),
   tabs: (username: string, name = server()) => ({ queryKey: [{ server: name }, "tabs", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<SavedTabs>("Tabs", {}, signal, name) }),

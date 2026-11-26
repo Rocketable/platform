@@ -31,6 +31,31 @@ func TestParseGoalRequestMaxTurnsDefaultAndOverrides(t *testing.T) {
 	}
 }
 
+func TestParseGoalRequestCheckAndForce(t *testing.T) {
+	t.Parallel()
+
+	for text, want := range map[string]protocol.GoalRequest{
+		"check: ./scripts/check.sh ship it":                         {Objective: "ship it", Check: "./scripts/check.sh"},
+		"check:./scripts/check.sh ship it":                          {Objective: "ship it", Check: "./scripts/check.sh"},
+		`check: "make lint && make test $TARGET" ship it`:           {Objective: "ship it", Check: "make lint && make test $TARGET"},
+		`check: 'grep -q "ok" out.txt' ship it`:                     {Objective: "ship it", Check: `grep -q "ok" out.txt`},
+		`check: "./check.sh \"a b\" \\\$HOME" don't stop`:           {Objective: "don't stop", Check: `./check.sh "a b" \$HOME`},
+		"force: yes ship it":                                        {Objective: "ship it", Force: true},
+		"force:ON ship it":                                          {Objective: "ship it", Force: true},
+		"force: 0 ship it":                                          {Objective: "ship it"},
+		"maxTurns: 3 force: true check: ./check.sh maxTurns: 4 fix": {Objective: "fix", MaxTurns: 4, Check: "./check.sh", Force: true},
+	} {
+		goal, rejection := protocol.ParseGoalRequest(text)
+		require.Empty(t, rejection, text)
+		assert.Equal(t, want, goal, text)
+	}
+
+	for _, text := range []string{"check:", `check: "unterminated ship`, "check: '' ship", "force:", "force: maybe ship", "check: ./check.sh"} {
+		_, rejection := protocol.ParseGoalRequest(text)
+		assert.NotEmpty(t, rejection, text)
+	}
+}
+
 func TestParseGoalRequestKeepsParametersAfterObjective(t *testing.T) {
 	t.Parallel()
 
