@@ -4,6 +4,7 @@ COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
 COVERAGE_REQUIRED ?= 91.8
 GOTESTRUN ?= .
+GOTESTPKGS ?= github.com/Rocketable/platform/cmd/rocketclaw/... ./...
 GO_SOURCE_CLOC_BUDGET ?= 46250
 GO_SOURCE_CLOC_HAZARD_ZONE ?= 500
 
@@ -113,7 +114,7 @@ coverage-profile:
 		done; \
 		export ROCKETCLAW_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:$$port/rocketclaw_test?sslmode=disable"; \
 	fi; \
-	go test -race -count 1 -covermode=atomic -coverpkg=$(COVERPKG) -coverprofile=$(COVERPROFILE) -run '$(GOTESTRUN)' github.com/Rocketable/platform/cmd/rocketclaw/... ./...
+	go test -race -count 1 -covermode=atomic -coverpkg=$(COVERPKG) -coverprofile=$(COVERPROFILE) -run '$(GOTESTRUN)' $(GOTESTPKGS)
 
 .FORCE:
 
