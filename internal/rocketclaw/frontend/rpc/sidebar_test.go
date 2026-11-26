@@ -477,7 +477,11 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 	path := func(id string) string { return "/s/" + base64.RawURLEncoding.EncodeToString([]byte(id)) }
 	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-00")}, backend.AttentionPark, &soon, 0))
 
-	_, done, sessions := list(&ListSessionsRequest{Since: done.Version, SameOrigin: true})
+	plain := ctx
+	ctx = metadata.NewIncomingContext(plain, metadata.Join(tailnetUser("alice"), metadata.Pairs("rocketclaw-web-poll", "true")))
+	_, done, sessions := list(&ListSessionsRequest{Since: done.Version})
+	ctx = plain
+
 	require.Len(t, sessions, 1)
 	require.True(t, sessions["chat-00"].Parked)
 	require.Equal(t, soon.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano), sessions["chat-00"].Until)

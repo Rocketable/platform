@@ -88,7 +88,7 @@ UNION ALL SELECT format('tab %s unread=%s', path, unread_at IS NOT NULL) FROM we
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 	unread := func(login, viewing string) map[string]string {
-		listed, err := invoke[ListSessionsResponse](metadata.NewOutgoingContext(t.Context(), tailnetUser(login)), connection, "ListSessions", &ListSessionsRequest{Viewing: viewing, SameOrigin: true})
+		listed, err := invoke[ListSessionsResponse](metadata.NewOutgoingContext(t.Context(), metadata.Join(tailnetUser(login), metadata.Pairs("rocketclaw-web-poll", "true"))), connection, "ListSessions", &ListSessionsRequest{Viewing: viewing})
 		require.NoError(t, err)
 
 		out := map[string]string{}
@@ -109,6 +109,11 @@ UNION ALL SELECT format('tab %s unread=%s', path, unread_at IS NOT NULL) FROM we
 	const at = "2026-10-22T10:00:00.5Z"
 
 	mark()
+
+	_, err = invoke[ListSessionsResponse](metadata.NewOutgoingContext(t.Context(), tailnetUser("alice")), connection, "ListSessions", &ListSessionsRequest{Viewing: "/s/eA"})
+	require.NoError(t, err)
+	assert.Equal(t, marked, reads(), "a call that is not the Web page's poll, such as one through /rpc_mcp, records no view")
+
 	assert.Equal(t, map[string]string{"x": at + " marked", "y": "", "/cron": at}, unread("alice", ""), "an empty viewing lists alice's marks")
 	assert.Equal(t, marked, reads(), "and leaves her view of y and her marks unchanged")
 	assert.Equal(t, map[string]string{"x": "", "y": ""}, unread("bob", ""), "bob has no mark")

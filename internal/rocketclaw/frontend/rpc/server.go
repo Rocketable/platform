@@ -189,7 +189,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		navigation string
 	)
 
-	if request.SameOrigin {
+	if len(metadata.ValueFromIncomingContext(ctx, "rocketclaw-web-poll")) > 0 {
 		if revision, navigation, err = s.sessions.PollAttention(ctx, owner, request.Viewing, request.Hold); err != nil {
 			return fmt.Errorf("web tab view: %w", err)
 		}

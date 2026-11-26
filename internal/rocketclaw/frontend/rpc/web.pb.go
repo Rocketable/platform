@@ -266,16 +266,14 @@ func (AttentionAction) EnumDescriptor() ([]byte, []int) {
 
 type ListSessionsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The location of the caller's active tab while its window has focus, else empty.
+	// The location of the caller's active tab while its window has focus, else empty. Only the Web page's own poll
+	// records it as viewed and clears that location's unread mark; for any other caller it changes nothing.
 	Viewing string `protobuf:"bytes,1,opt,name=viewing,proto3" json:"viewing,omitempty"`
 	// The version of the last complete listing the caller holds. When the server still knows it, the
 	// listing sends only the rows that changed since; otherwise it sends every row.
 	Since string `protobuf:"bytes,2,opt,name=since,proto3" json:"since,omitempty"`
 	// The caller marked the viewing tab unread while it was in view: the view counts without clearing the mark.
-	Hold bool `protobuf:"varint,3,opt,name=hold,proto3" json:"hold,omitempty"`
-	// Set by the server for a poll from a page it serves or trusts: only such a poll records the view and clears that
-	// location's mark.
-	SameOrigin    bool `protobuf:"varint,4,opt,name=same_origin,json=sameOrigin,proto3" json:"same_origin,omitempty"`
+	Hold          bool `protobuf:"varint,3,opt,name=hold,proto3" json:"hold,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -327,13 +325,6 @@ func (x *ListSessionsRequest) GetSince() string {
 func (x *ListSessionsRequest) GetHold() bool {
 	if x != nil {
 		return x.Hold
-	}
-	return false
-}
-
-func (x *ListSessionsRequest) GetSameOrigin() bool {
-	if x != nil {
-		return x.SameOrigin
 	}
 	return false
 }
@@ -10729,13 +10720,11 @@ var File_web_proto protoreflect.FileDescriptor
 
 const file_web_proto_rawDesc = "" +
 	"\n" +
-	"\tweb.proto\x12\x03rpc\"z\n" +
+	"\tweb.proto\x12\x03rpc\"l\n" +
 	"\x13ListSessionsRequest\x12\x18\n" +
 	"\aviewing\x18\x01 \x01(\tR\aviewing\x12\x14\n" +
 	"\x05since\x18\x02 \x01(\tR\x05since\x12\x12\n" +
-	"\x04hold\x18\x03 \x01(\bR\x04hold\x12\x1f\n" +
-	"\vsame_origin\x18\x04 \x01(\bR\n" +
-	"sameOrigin\"\xf7\a\n" +
+	"\x04hold\x18\x03 \x01(\bR\x04holdJ\x04\b\x04\x10\x05R\vsame_origin\"\xf7\a\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
