@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
@@ -53,7 +54,7 @@ func TestExecuteReturnsTypedMCPResults(t *testing.T) {
 	var permissions PermissionSet
 	require.NoError(t, permissions.Set("mcp", "demo.*", PermissionAllow))
 
-	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{"demo": {URL: url}}, nil)
+	reg := mcpclient.New(t.TempDir(), map[string]config.MCPServerConfig{"demo": {URL: url}}, nil)
 	run := (&toolFactory{mcpRegistry: reg}).mcpToolsFor(&Agent{Permission: permissions}, nil)[executeToolName]
 	journal := recordingJournal()
 	execute := func() string {

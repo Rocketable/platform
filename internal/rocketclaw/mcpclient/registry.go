@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -26,22 +27,13 @@ const httpClientTimeout = 60 * time.Second
 
 var errSessionClosed = errors.New("mcp session closed")
 
-type ServerConfig struct {
-	Command string
-	Args    []string
-	Env     map[string]string
-	Cwd     string
-	URL     string
-	Headers map[string]string
-}
-
 type Registry struct {
 	workspace string
-	servers   map[string]ServerConfig
+	servers   map[string]config.MCPServerConfig
 }
 
-func New(workspace string, servers map[string]ServerConfig, sessionEnv map[string]string) Registry {
-	cloned := make(map[string]ServerConfig, len(servers))
+func New(workspace string, servers map[string]config.MCPServerConfig, sessionEnv map[string]string) Registry {
+	cloned := make(map[string]config.MCPServerConfig, len(servers))
 	for name, cfg := range servers {
 		env := make(map[string]string, len(cfg.Env)+len(sessionEnv))
 		for key, val := range cfg.Env {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -101,7 +102,7 @@ func TestFlattenCallToolResult(t *testing.T) {
 func TestRegistrySnapshot(t *testing.T) {
 	t.Parallel()
 
-	config := ServerConfig{
+	server := config.MCPServerConfig{
 		Command: "echo",
 		Args:    []string{"hello"},
 		Env:     map[string]string{"LANG": "C", "ROCKETCLAW_CONVERSATION_ID": "fake", "ROCKETCLAW_METADATA_CASE": "fake"},
@@ -109,21 +110,21 @@ func TestRegistrySnapshot(t *testing.T) {
 		URL:     "http://example",
 		Headers: map[string]string{"Accept": "application/json", "x-rocketclaw-conversation-id": "fake", "X-ROCKETCLAW-METADATA-CASE": "fake"},
 	}
-	servers := map[string]ServerConfig{
-		"beta":  config,
+	servers := map[string]config.MCPServerConfig{
+		"beta":  server,
 		"alpha": {Command: "echo"},
 	}
 	sessionEnv := map[string]string{"ROCKETCLAW_CONVERSATION_ID": "conv", "ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID": "123"}
 	reg := New("/ws", servers, sessionEnv)
 
-	config.Args[0] = "changed"
-	config.Env["LANG"] = "changed"
-	config.Headers["Accept"] = "changed"
-	servers["beta"] = ServerConfig{Command: "changed"}
-	servers["gamma"] = ServerConfig{}
+	server.Args[0] = "changed"
+	server.Env["LANG"] = "changed"
+	server.Headers["Accept"] = "changed"
+	servers["beta"] = config.MCPServerConfig{Command: "changed"}
+	servers["gamma"] = config.MCPServerConfig{}
 	sessionEnv["ROCKETCLAW_CONVERSATION_ID"] = "changed"
 
-	assert.Equal(t, ServerConfig{
+	assert.Equal(t, config.MCPServerConfig{
 		Command: "echo",
 		Args:    []string{"hello"},
 		Env:     map[string]string{"LANG": "C", "ROCKETCLAW_CONVERSATION_ID": "conv", "ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID": "123"},
@@ -131,7 +132,7 @@ func TestRegistrySnapshot(t *testing.T) {
 		URL:     "http://example",
 		Headers: map[string]string{"Accept": "application/json", "X-ROCKETCLAW-CONVERSATION-ID": "conv", "X-ROCKETCLAW-METADATA-INTERCOM-CONVERSATION-ID": "123"},
 	}, reg.servers["beta"])
-	assert.Equal(t, ServerConfig{
+	assert.Equal(t, config.MCPServerConfig{
 		Command: "echo",
 		Env:     map[string]string{"ROCKETCLAW_CONVERSATION_ID": "conv", "ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID": "123"},
 		Headers: map[string]string{"X-ROCKETCLAW-CONVERSATION-ID": "conv", "X-ROCKETCLAW-METADATA-INTERCOM-CONVERSATION-ID": "123"},
@@ -145,22 +146,22 @@ func TestSessionErrors(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		server  string
-		config  ServerConfig
+		config  config.MCPServerConfig
 		session map[string]string
 		want    string
 	}{
 		{name: "unknown server", server: "nope", want: `unknown mcp server "nope"`},
 		{name: "missing transport", server: "demo", want: `mcp server "demo": no transport configured`},
-		{name: "invalid URL", server: "demo", config: ServerConfig{URL: "http://[::1", Headers: map[string]string{"Authorization": "Bearer test"}}, want: `connect mcp server "demo":`},
-		{name: "unsupported HTTP scheme", server: "demo", config: ServerConfig{URL: "ftp://example.com", Headers: map[string]string{"Authorization": "Bearer test"}}, want: `mcp http: unsupported protocol scheme "ftp"`},
-		{name: "session value with a newline", server: "demo", config: ServerConfig{URL: "http://127.0.0.1:9"}, session: map[string]string{"ROCKETCLAW_METADATA_NOTE": "a\r\nX-Injected: b"}, want: `invalid header field value for "X-Rocketclaw-Metadata-Note"`},
-		{name: "escaping cwd", server: "demo", config: ServerConfig{Command: "echo", Cwd: ".."}, want: `cwd ".." escapes workspace`},
-		{name: "missing command", server: "demo", config: ServerConfig{Command: "./missing-mcp-command"}, want: `connect mcp server "demo":`},
+		{name: "invalid URL", server: "demo", config: config.MCPServerConfig{URL: "http://[::1", Headers: map[string]string{"Authorization": "Bearer test"}}, want: `connect mcp server "demo":`},
+		{name: "unsupported HTTP scheme", server: "demo", config: config.MCPServerConfig{URL: "ftp://example.com", Headers: map[string]string{"Authorization": "Bearer test"}}, want: `mcp http: unsupported protocol scheme "ftp"`},
+		{name: "session value with a newline", server: "demo", config: config.MCPServerConfig{URL: "http://127.0.0.1:9"}, session: map[string]string{"ROCKETCLAW_METADATA_NOTE": "a\r\nX-Injected: b"}, want: `invalid header field value for "X-Rocketclaw-Metadata-Note"`},
+		{name: "escaping cwd", server: "demo", config: config.MCPServerConfig{Command: "echo", Cwd: ".."}, want: `cwd ".." escapes workspace`},
+		{name: "missing command", server: "demo", config: config.MCPServerConfig{Command: "./missing-mcp-command"}, want: `connect mcp server "demo":`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			reg := New(t.TempDir(), map[string]ServerConfig{"demo": tt.config}, tt.session)
+			reg := New(t.TempDir(), map[string]config.MCPServerConfig{"demo": tt.config}, tt.session)
 
 			session := reg.Open()
 
@@ -210,7 +211,7 @@ func TestHTTPCallTool(t *testing.T) {
 		})
 	})
 
-	reg := New(t.TempDir(), map[string]ServerConfig{"demo": {URL: url}}, nil)
+	reg := New(t.TempDir(), map[string]config.MCPServerConfig{"demo": {URL: url}}, nil)
 
 	session := reg.Open()
 
@@ -271,7 +272,7 @@ func TestListToolsError(t *testing.T) {
 			}
 		})
 	})
-	reg := New(t.TempDir(), map[string]ServerConfig{"demo": {URL: url}}, nil)
+	reg := New(t.TempDir(), map[string]config.MCPServerConfig{"demo": {URL: url}}, nil)
 
 	session := reg.Open()
 
@@ -307,7 +308,7 @@ func TestHTTPHeaders(t *testing.T) {
 
 	url := "http://" + ln.Addr().String()
 
-	reg := New(t.TempDir(), map[string]ServerConfig{"demo": {
+	reg := New(t.TempDir(), map[string]config.MCPServerConfig{"demo": {
 		URL:     url,
 		Headers: map[string]string{"Authorization": "Bearer secret", "X-Rocketclaw-Metadata-Intercom-Conversation-Id": "fake"},
 	}}, map[string]string{"ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID": "123"})
@@ -330,7 +331,7 @@ func TestStdioCallTool(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "marker"), []byte("ok"), 0o600))
 
-	reg := New(workspace, map[string]ServerConfig{
+	reg := New(workspace, map[string]config.MCPServerConfig{
 		"local": {
 			Command: helper,
 			Env:     map[string]string{"MCPCLIENT_MARKER": "from-env", "ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID": "fake"},
@@ -364,7 +365,7 @@ func TestStdioServerSeesOnlyItsOwnSessionEnv(t *testing.T) {
 
 	helper := buildStdioHelper(t)
 	workspace := t.TempDir()
-	servers := map[string]ServerConfig{"local": {Command: helper}}
+	servers := map[string]config.MCPServerConfig{"local": {Command: helper}}
 
 	open := func(caseID string) *Session {
 		session := New(workspace, servers, map[string]string{"ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID": caseID}).Open()
@@ -509,7 +510,7 @@ func TestSessionConnectConcurrent(t *testing.T) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "b"}}}, nil, nil
 		})
 	})
-	reg := New(t.TempDir(), map[string]ServerConfig{
+	reg := New(t.TempDir(), map[string]config.MCPServerConfig{
 		"s1": {URL: url1},
 		"s2": {URL: url2},
 	}, nil)

@@ -28,7 +28,7 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	client := openai.NewClient()
 
 	config := testWorkspaceConfig(t, dir)
-	config.ExpandPromptShellCommands.PrimaryPrompts = true
+	config.ExpandPromptShellCommands = true
 	looper, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "remember !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, dirs: nil, fsys: nil}, "main")
@@ -135,7 +135,7 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 	client := openai.NewClient()
 
 	config := testWorkspaceConfig(t, dir)
-	config.ExpandPromptShellCommands.PrimaryPrompts = true
+	config.ExpandPromptShellCommands = true
 	config.ShellEnv = map[string]string{"ROCKETCLAW_CONVERSATION_ID": "prompt", "TMPDIR": "/ignored"}
 	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "env !`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"` tmp !`printf %s \"$TMPDIR\"`", Location: "", Permission: parsePermissionYAML(t, `edit: {"${ROCKETCLAW_CONVERSATION_ID}/note.txt": allow}`), FileMode: 0},
@@ -229,7 +229,7 @@ func TestNewExpandsBodyOnHostAndInputThroughCustomShell(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	config := testWorkspaceConfig(t, dir)
-	config.ExpandPromptShellCommands.PrimaryPrompts = true
+	config.ExpandPromptShellCommands = true
 	client := openai.NewClient()
 	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Model: "gpt-5.4", Prompt: "remember !`echo hi`", CustomShell: CustomShell{Path: writeCustomShell(t, root)}},
@@ -688,7 +688,7 @@ func TestAgentsWithoutInvalidReviewers(t *testing.T) {
 }
 
 func testConfig(shellTempDir string) *Config {
-	return &Config{ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, ParallelToolCalls: 0, ShellTempDir: shellTempDir, RetainedResultDir: "retained", Observability: ObservabilityConfig{}, ChildSessions: InertChildSessions{}, Journal: InertJournal{}, BackgroundJobs: InertBackgroundJobs{}, CustomTools: nil, ShellEnv: nil}
+	return &Config{ExpandPromptShellCommands: false, ParallelToolCalls: 0, ShellTempDir: shellTempDir, RetainedResultDir: "retained", Observability: ObservabilityConfig{}, ChildSessions: InertChildSessions{}, Journal: InertJournal{}, BackgroundJobs: InertBackgroundJobs{}, CustomTools: nil, ShellEnv: nil}
 }
 
 func testWorkspaceConfig(t *testing.T, workspace string) *Config {

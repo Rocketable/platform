@@ -118,7 +118,7 @@ func TestExpandAgentPrompt(t *testing.T) {
 func TestSkillExpandsInHostBashBeforeArguments(t *testing.T) {
 	loaded := LoadSkills(fstest.MapFS{"easy-skill/SKILL.md": mapFile("---\nname: easy-skill\ndescription: Expands in host bash\n---\n\nRun: !`pwd`\nKey: !`printf %s \"$SECRET_KEY\"`\n")}, "/virtual/skills").Skills
 	factory := testSkillFactory(t, loaded, nil)
-	factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
+	factory.expandPromptShellCommands = true
 
 	agent := agentWithSkillPermission()
 	agent.CustomShell = CustomShell{Path: writeCustomShell(t, factory.promptExpansion.root), Emulated: true, Secrets: map[string]string{"SECRET_KEY": "s3cr3t"}}

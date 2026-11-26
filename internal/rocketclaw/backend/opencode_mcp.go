@@ -161,9 +161,7 @@ func addOpenCodeBridges(ctx context.Context, origin, name string, server config.
 		Name string `json:"name"`
 	}
 
-	var locations []struct {
-		Directory string `json:"directory"`
-	}
+	var locations []openCodeLocation
 	if openCodeCall(ctx, name, server, http.MethodGet, "/api/debug/location", nil, &locations) != nil {
 		return
 	}

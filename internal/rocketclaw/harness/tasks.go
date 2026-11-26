@@ -174,7 +174,7 @@ func (f *toolFactory) childSystemPrompt(agent *Agent) string {
 }
 
 func (f *toolFactory) sessionSystemPrompt(ctx context.Context, agent *Agent) string {
-	expandAgentPrompt(ctx, agent, f.expandPromptShellCommands.PrimaryPrompts, &f.promptExpansion)
+	expandAgentPrompt(ctx, agent, f.expandPromptShellCommands, &f.promptExpansion)
 
 	return strings.TrimSpace(agent.Prompt+"\n\n"+f.workspaceInstructions) + "\n\nWhen a turn carries a note that the message did not address you, " + UnaddressedReadOnly
 }

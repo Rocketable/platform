@@ -30,7 +30,6 @@ import (
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
-	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	openai "github.com/openai/openai-go/v3"
@@ -2854,21 +2853,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 		})
 	}
 
-	return harness.Config{AutoApproverModel: runtimeCfg.AutoApproverModel, Deciders: newDeciders(runtimeCfg), ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), ExpandPromptShellCommands: harness.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true}, ParallelToolCalls: 16, Observability: harness.ObservabilityConfig{Enabled: runtimeCfg.PostHog.ProjectToken != "", Tracer: otel.Tracer("rocketcode")}, ChildSessions: b, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: harness.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, Sandbox: *b.config.SessionService.shells.current(), MCPServers: toMCPClientServers(runtimeCfg.MCPServers), MCPWorkspace: runtimeCfg.Workspace}
-}
-
-func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mcpclient.ServerConfig {
-	if len(servers) == 0 {
-		return nil
-	}
-
-	out := make(map[string]mcpclient.ServerConfig, len(servers))
-	for name := range servers {
-		server := servers[name]
-		out[name] = mcpclient.ServerConfig{Command: server.Command, Args: server.Args, Env: server.Env, Cwd: server.Cwd, URL: server.URL, Headers: server.Headers}
-	}
-
-	return out
+	return harness.Config{AutoApproverModel: runtimeCfg.AutoApproverModel, Deciders: newDeciders(runtimeCfg), ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), ExpandPromptShellCommands: true, ParallelToolCalls: 16, Observability: harness.ObservabilityConfig{Enabled: runtimeCfg.PostHog.ProjectToken != "", Tracer: otel.Tracer("rocketcode")}, ChildSessions: b, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: harness.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, Sandbox: *b.config.SessionService.shells.current(), MCPServers: runtimeCfg.MCPServers, MCPWorkspace: runtimeCfg.Workspace}
 }
 
 func appendOverlayPromptToAgent(agents harness.Agents, agentName string, cfg *config.Config) {
@@ -3794,7 +3779,7 @@ func provenanceFromInbound(msg *protocol.InboundMessage) promptProvenance {
 }
 
 func provenanceHeader(provenance *promptProvenance) string {
-	header := "[" + cmp.Or(provenanceToken(provenance.origin), "System")
+	header := "[" + provenance.origin
 	if provenance.unaddressed {
 		header += " unaddressed"
 	}
@@ -3831,16 +3816,6 @@ func reviewOriginHeader(origin *protocol.InboundMessage) string {
 	}
 
 	return provenanceHeader(&provenance)
-}
-
-func provenanceToken(value string) string {
-	fields := strings.Fields(value)
-	value = strings.Join(fields, "_")
-	value = strings.ReplaceAll(value, "=", "-")
-	value = strings.ReplaceAll(value, "[", "(")
-	value = strings.ReplaceAll(value, "]", ")")
-
-	return value
 }
 
 func goalSteeringPrompt(goal *GoalState) string {
