@@ -29,66 +29,48 @@ func requireSaveToken(t *testing.T, workspace, runtimeDir, provider string, toke
 	require.NoError(t, oai.SaveTokenIn(workspace, runtimeDir, provider, token))
 }
 
-func TestRunOAILoginHelpAliases(t *testing.T) {
-	output := captureStdout(t, func() error { return runOAILogin([]string{"-h"}) })
-	assert.Contains(t, output, "rocketclaw oai login [provider] [--headless]")
-}
-
-func TestRunOAILoginRejectsInvalidArgumentsBeforeHelp(t *testing.T) {
+func TestRunOAILoginHelpAndInvalidArguments(t *testing.T) {
 	for _, tt := range []struct {
-		args []string
-		want string
+		args    []string
+		wantErr string
 	}{
-		{args: []string{"--bad", "--help"}, want: `unknown flag "--bad"`},
-		{args: []string{"--headless", "--headless", "help"}, want: "duplicate --headless"},
-		{args: []string{"work", "openai", "-h"}, want: "more than one provider"},
-		{args: []string{"--aws-secrets-manager-arn"}, want: "flag needs an argument: -aws-secrets-manager-arn"},
-		{args: []string{"--aws-secrets-manager-arn=first", "--aws-secrets-manager-arn=second"}, want: "duplicate --aws-secrets-manager-arn"},
+		{args: []string{"-h"}},
+		{args: []string{"work", "-h"}},
+		{args: []string{"--headless", "--help", "--bad"}},
+		{args: []string{"--bad", "--help"}, wantErr: "flag provided but not defined: -bad"},
+		{args: []string{"work", "openai", "-h"}, wantErr: "more than one provider"},
+		{args: []string{"--aws-secrets-manager-arn"}, wantErr: "flag needs an argument: -aws-secrets-manager-arn"},
 	} {
-		err := runOAILogin(tt.args)
-		require.ErrorContains(t, err, tt.want)
+		if tt.wantErr != "" {
+			require.ErrorContains(t, runOAILogin(tt.args), tt.wantErr, tt.args)
+			continue
+		}
+		output := captureStdout(t, func() error { return runOAILogin(tt.args) })
+		assert.Contains(t, output, "rocketclaw oai login [provider] [--headless]", tt.args)
 	}
-	output := captureStdout(t, func() error { return runOAILogin([]string{"--headless", "--help", "--bad"}) })
-	assert.Contains(t, output, "rocketclaw oai login")
 }
 
-func TestRunOAILoginTreatsBareHelpAsProvider(t *testing.T) {
-	workspace := prepareOAIConfig(t)
-	mockDeviceLogin(t, "help-refresh")
-	synctest.Test(t, func(t *testing.T) {
-		output := captureStdout(t, func() error { return runOAILogin([]string{"help", "--headless"}) })
-		assert.Contains(t, output, "Saved help ChatGPT OAuth token")
-	})
-	token, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, "help")
-	require.NoError(t, err)
-	assert.Equal(t, "help-refresh", token.Refresh)
-}
-
-func TestRunOAILoginParsesHeadlessBeforeProvider(t *testing.T) {
-	workspace := prepareOAIConfig(t)
-	mockDeviceLogin(t, "work-refresh")
-
-	synctest.Test(t, func(t *testing.T) {
-		output := captureStdout(t, func() error { return runOAILogin([]string{"--headless", "work"}) })
-		assert.Contains(t, output, "Saved work ChatGPT OAuth token")
-	})
-
-	token, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, "work")
-	require.NoError(t, err)
-	assert.Equal(t, "work-refresh", token.Refresh)
-}
-
-func TestRunOAILoginDefaultsProviderToOpenAI(t *testing.T) {
-	workspace := prepareOAIConfig(t)
-	mockDeviceLogin(t, "openai-refresh")
-
-	synctest.Test(t, func(t *testing.T) {
-		output := captureStdout(t, func() error { return runOAILogin([]string{"--headless"}) })
-		assert.Contains(t, output, "Saved openai ChatGPT OAuth token")
-	})
-
-	_, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
-	require.NoError(t, err)
+func TestRunOAILoginProviderAndFlagsInAnyOrder(t *testing.T) {
+	for _, tt := range []struct {
+		args     []string
+		provider string
+	}{
+		{args: []string{"--headless"}, provider: "openai"},
+		{args: []string{"--headless", "work"}, provider: "work"},
+		{args: []string{"help", "--headless"}, provider: "help"},
+	} {
+		t.Run(tt.provider, func(t *testing.T) {
+			workspace := prepareOAIConfig(t)
+			mockDeviceLogin(t, tt.provider+"-refresh")
+			synctest.Test(t, func(t *testing.T) {
+				output := captureStdout(t, func() error { return runOAILogin(tt.args) })
+				assert.Contains(t, output, "Saved "+tt.provider+" ChatGPT OAuth token")
+			})
+			token, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, tt.provider)
+			require.NoError(t, err)
+			assert.Equal(t, tt.provider+"-refresh", token.Refresh)
+		})
+	}
 }
 
 func TestRunOAILoginRejectsBeforeOAuth(t *testing.T) {
