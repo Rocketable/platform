@@ -182,15 +182,6 @@ func runAgentEditorBrowser(t *testing.T, pattern string) {
 	assembly := &mockFrontendAssembler{GateFunc: passGate, AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 		ready <- rt
 		return rt.RunCtx.Done(), nil, nil
-	}, ValidateAssetsFunc: func(c *config.Config, stage string) error {
-		if _, err := os.Stat(filepath.Join(c.Workspace, stage, "agents", "hold.md")); err == nil {
-			select {
-			case <-releaseSave:
-			case <-t.Context().Done():
-			}
-		}
-
-		return nil
 	}}
 
 	var running errgroup.Group
@@ -203,8 +194,50 @@ func runAgentEditorBrowser(t *testing.T, pattern string) {
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
+	core := &mockBackend{
+		ReloadFunc: rt.Reload,
+		ValidateAgentFileFunc: func(name string, data []byte) error {
+			if name == "hold" {
+				select {
+				case <-releaseSave:
+				case <-t.Context().Done():
+				}
+			}
+
+			return rt.ValidateAgentFile(name, data)
+		},
+		SaveBehaviorFunc:            rt.SaveBehavior,
+		SubscribeFunc:               rt.Subscribe,
+		CreateConversationFunc:      rt.CreateConversation,
+		ContinueRunFunc:             rt.ContinueRun,
+		SwitchConversationAgentFunc: rt.SwitchConversationAgent,
+		RunningAgentFunc:            rt.RunningAgent,
+		RunTurnFunc:                 rt.RunTurn,
+		StageRevertFunc:             rt.StageRevert,
+		DeleteBranchFunc:            rt.DeleteBranch,
+		AgentPausedFunc:             rt.AgentPaused,
+		SetAgentPausedFunc:          rt.SetAgentPaused,
+		PostPausedMessageFunc:       rt.PostPausedMessage,
+		QueueItemsFunc:              rt.QueueItems,
+		PromoteQueueItemFunc:        rt.PromoteQueueItem,
+		PopQueueItemFunc:            rt.PopQueueItem,
+		DeleteQueueItemFunc:         rt.DeleteQueueItem,
+		EditQueueItemFunc:           rt.EditQueueItem,
+		ReorderQueueItemsFunc:       rt.ReorderQueueItems,
+		StashQueueItemFunc:          rt.StashQueueItem,
+		StartGoalFunc:               rt.StartGoal,
+		MoveToBackgroundFunc:        rt.MoveToBackground,
+		StopBackgroundJobFunc:       rt.StopBackgroundJob,
+		BackgroundJobsFunc:          rt.BackgroundJobs,
+		CompletionNotesFunc:         rt.CompletionNotes,
+		PendingQuestionsFunc:        rt.PendingQuestions,
+		AnswerQuestionFunc:          rt.AnswerQuestion,
+		SandboxErrorFunc:            rt.SandboxError,
+		SlackWarningFunc:            rt.SlackWarning,
+	}
+
 	transport := grpc.NewServer()
-	New(rt, rt.Sessions, rt.Cfg, &mockChannels{}, &mockRoutines{JobsFunc: func() ([]routinefrontend.Job, error) { return nil, nil }}).Register(transport)
+	New(core, rt.Sessions, rt.Cfg, &mockChannels{}, &mockRoutines{JobsFunc: func() ([]routinefrontend.Job, error) { return nil, nil }}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })

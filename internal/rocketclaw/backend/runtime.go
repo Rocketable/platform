@@ -41,7 +41,6 @@ type Runtime struct {
 	Sessions          *SessionService
 	ExternalMCPAgents runtimeRefresher
 	Routines          runtimeRefresher
-	Assemble          FrontendAssembler
 	sandboxes         sandboxPreparer
 
 	reloadMu sync.Mutex
@@ -76,13 +75,10 @@ func (r *Runtime) Reload(reason string) (string, error) {
 
 	var warnings string
 
-	if err := skel.ReplaceRuntimeAssetsAfterValidation(cfg.Workspace, cfg.RuntimeDirName(), new(cfg.Behavior()), r.Log, r.Cfg, func(runtimeDir string) error {
-		var err error
-		if warnings, err = validateRuntimeAssets(r.Cfg, runtimeDir, r.Log); err != nil {
-			return err
-		}
+	if err := skel.ReplaceRuntimeAssetsAfterValidation(cfg.Workspace, cfg.RuntimeDirName(), new(cfg.Behavior()), r.Log, r.Cfg, func(runtimeDir string) (err error) {
+		warnings, err = validateRuntimeAssets(r.Cfg, runtimeDir, r.Log)
 
-		return r.Assemble.ValidateAssets(cfg, runtimeDir)
+		return err
 	}, func() error { return nil }); err != nil {
 		return "", fmt.Errorf("reload runtime assets: %w", err)
 	}
@@ -146,17 +142,10 @@ func (r *Runtime) SaveBehavior(behavior *config.Behavior) error {
 
 	var warnings string
 
-	validate := func(runtimeDir string) error {
-		var err error
-		if warnings, err = validateRuntimeAssets(config.NewLockedConfig(candidate), runtimeDir, r.Log); err != nil {
-			return err
-		}
+	validate := func(runtimeDir string) (err error) {
+		warnings, err = validateRuntimeAssets(config.NewLockedConfig(candidate), runtimeDir, r.Log)
 
-		if err := r.Assemble.ValidateAssets(candidate, runtimeDir); err != nil {
-			return fmt.Errorf("validate frontend assets: %w", err)
-		}
-
-		return nil
+		return err
 	}
 	applied := false
 	apply := func() error {

@@ -121,8 +121,7 @@ func TestTailnetStopRestartsRocketClaw(t *testing.T) {
 	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test", AuthKey: "tskey-auth-test"}}}
 	assembler := &processAssembler{}
 	require.ErrorIs(t, backend.Run(ctx, cfg, slog.New(slog.DiscardHandler), new(slog.LevelVar), &FrontendAssemblerMock{
-		GateFunc:           assembler.Gate,
-		ValidateAssetsFunc: assembler.ValidateAssets,
+		GateFunc: assembler.Gate,
 		AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 			done, stops, err := assembler.Assemble(rt)
 			require.NoError(t, assembler.tailnet.https.Close())

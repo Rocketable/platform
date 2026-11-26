@@ -59,12 +59,6 @@ func New(cfg *config.LockedConfig, runtimeDir string, store routineScheduleStore
 	return &Manager{cfg: cfg, store: store, run: run, log: logger.With("component", "routine"), now: time.Now, tickerInterval: time.Minute, runtimeDir: runtimeDir}
 }
 
-func ValidateRuntimeDefinitions(cfg *config.LockedConfig, runtimeDir string) error {
-	_, err := loadDefinitionsIn(cfg, runtimeDir)
-
-	return err
-}
-
 func (m *Manager) Start(ctx context.Context) error {
 	definitions, err := loadDefinitionsIn(m.cfg, m.runtimeDir)
 	if err != nil {

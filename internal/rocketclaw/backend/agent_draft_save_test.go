@@ -23,20 +23,19 @@ import (
 const supportBot = "---\nmodel: gpt-6.1-sol\n---\nHelp.\n"
 
 type agentDraftSave struct {
-	rt        *Runtime
-	workspace string
-	validate  func(stagedWorkDir string) error
-	stop      func()
+	rt           *Runtime
+	draftRuntime *agentDraftRuntimeMock
+	workspace    string
+	stop         func()
 }
 
 func startAgentDraftSave(t *testing.T, workspace, dsn string, overlays ...string) *agentDraftSave {
 	t.Helper()
 
-	ds := &agentDraftSave{workspace: workspace, validate: func(string) error { return nil }}
+	ds := &agentDraftSave{workspace: workspace}
 	runtimes := make(chan *Runtime, 1)
 	assembler := &frontendAssemblerMock{
-		GateFunc:           passGate,
-		ValidateAssetsFunc: func(_ *config.Config, stagedWorkDir string) error { return ds.validate(stagedWorkDir) },
+		GateFunc: passGate,
 		AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 			runtimes <- rt
 			return nil, nil, nil
@@ -59,6 +58,7 @@ func startAgentDraftSave(t *testing.T, workspace, dsn string, overlays ...string
 
 	select {
 	case ds.rt = <-runtimes:
+		ds.draftRuntime = &agentDraftRuntimeMock{ReloadFunc: ds.rt.Reload, ValidateAgentFileFunc: ds.rt.ValidateAgentFile}
 		return ds
 	case err := <-done:
 		t.Fatalf("Run returned before assembling: %v", err)
@@ -106,7 +106,7 @@ func (ds *agentDraftSave) save(t *testing.T, id string, reviewed ...string) (Age
 		save.Reviewed, save.ReviewedFile = true, &reviewed[0]
 	}
 
-	return ds.rt.Sessions.SaveAgentDraft(t.Context(), ds.rt, save)
+	return ds.rt.Sessions.SaveAgentDraft(t.Context(), ds.draftRuntime, save)
 }
 
 func refusal(t *testing.T, err error) *AgentDraftSaveError {
@@ -150,21 +150,18 @@ func TestSaveAgentDraftGoesLive(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, old.Close()) })
 
-	validations := 0
-	ds.validate = func(string) error {
-		validations++
-		if validations == 1 {
-			_, errSecond := ds.save(t, draft.ID)
-			require.EqualError(t, refusal(t, errSecond), "Someone is saving this draft already.")
-		}
+	ds.draftRuntime.ValidateAgentFileFunc = func(name string, data []byte) error {
+		ds.draftRuntime.ValidateAgentFileFunc = ds.rt.ValidateAgentFile
 
-		return nil
+		_, errSecond := ds.save(t, draft.ID)
+		require.EqualError(t, refusal(t, errSecond), "Someone is saving this draft already.")
+
+		return ds.rt.ValidateAgentFile(name, data)
 	}
 
 	state, err := ds.save(t, draft.ID)
 	require.NoError(t, err)
 	require.Equal(t, AgentDraftLive, state)
-	require.Equal(t, 2, validations, "the save checks a stage holding the draft, then Reload checks its own")
 
 	held, err := io.ReadAll(old)
 	require.NoError(t, err)
@@ -195,20 +192,23 @@ func TestSaveAgentDraftGoesLive(t *testing.T) {
 	ds.edit(t, draft.ID, &AgentDraftOp{Kind: AgentDraftEditBody, Variant: "a", Splices: []AgentDraftSplice{{Insert: "Three. "}}})
 
 	ctx, cancel := context.WithCancel(t.Context())
-	ds.validate = func(string) error { cancel(); return nil }
+	ds.draftRuntime.ValidateAgentFileFunc = func(name string, data []byte) error {
+		cancel()
+		return ds.rt.ValidateAgentFile(name, data)
+	}
 
-	state, err = ds.rt.Sessions.SaveAgentDraft(ctx, ds.rt, &AgentDraftSave{ID: draft.ID, Variant: "a", Destination: "workspace", Author: "alice"})
+	state, err = ds.rt.Sessions.SaveAgentDraft(ctx, ds.draftRuntime, &AgentDraftSave{ID: draft.ID, Variant: "a", Destination: "workspace", Author: "alice"})
 	require.NoError(t, err)
 	require.Equal(t, AgentDraftLive, state)
 	require.Equal(t, AgentDraftLive, ds.draft(t, draft.ID).SaveState)
 
 	ds.edit(t, draft.ID, &AgentDraftOp{Kind: AgentDraftEditBody, Variant: "a", Splices: []AgentDraftSplice{{Insert: "Four. "}}})
-	ds.validate = func(string) error { return nil }
+	ds.draftRuntime.ValidateAgentFileFunc = ds.rt.ValidateAgentFile
 
 	ended, end := context.WithCancel(t.Context())
 	end()
 
-	state, err = ds.rt.Sessions.SaveAgentDraft(ended, ds.rt, &AgentDraftSave{ID: draft.ID, Variant: "a", Destination: "workspace", Author: "alice"})
+	state, err = ds.rt.Sessions.SaveAgentDraft(ended, ds.draftRuntime, &AgentDraftSave{ID: draft.ID, Variant: "a", Destination: "workspace", Author: "alice"})
 	require.NoError(t, err)
 	require.Equal(t, AgentDraftLive, state)
 	require.Equal(t, AgentDraftLive, ds.draft(t, draft.ID).SaveState)
@@ -292,11 +292,11 @@ func TestSaveAgentDraftReviewsChangedFile(t *testing.T) {
 	require.Equal(t, &newer, ds.agentFile(t, "", "support-bot"))
 
 	newest := newer + "Short.\n"
-	ds.validate = func(string) error {
+	ds.draftRuntime.ValidateAgentFileFunc = func(name string, data []byte) error {
 		writeAgentFile(t, ds.workspace, "support-bot", newest)
-		ds.validate = func(string) error { return nil }
+		ds.draftRuntime.ValidateAgentFileFunc = ds.rt.ValidateAgentFile
 
-		return nil
+		return ds.rt.ValidateAgentFile(name, data)
 	}
 
 	_, err = ds.save(t, draft.ID, newer)
@@ -344,23 +344,12 @@ func TestSaveAgentDraftLiveOnlyWithWhatItSaved(t *testing.T) {
 	require.NoError(t, err)
 	ds.edit(t, draft.ID, &AgentDraftOp{Kind: AgentDraftSetField, Variant: "a", Key: "model", Value: "gpt-6-luna"})
 
-	duringReload := func(run func(stagedWorkDir string)) {
-		validations := 0
-		ds.validate = func(stagedWorkDir string) error {
-			validations++
-			if validations == 2 {
-				run(stagedWorkDir)
-			}
-
-			return nil
-		}
-	}
-
 	claimed := "---\nmodel: gpt-6-luna\n---\nHelp.\n"
 
-	duringReload(func(string) {
+	ds.draftRuntime.ReloadFunc = func(reason string) (string, error) {
 		ds.edit(t, draft.ID, &AgentDraftOp{Kind: AgentDraftEditBody, Variant: "a", Splices: []AgentDraftSplice{{Insert: "Bob. "}}})
-	})
+		return ds.rt.Reload(reason)
+	}
 
 	state, err := ds.save(t, draft.ID)
 	require.NoError(t, err)
@@ -375,9 +364,12 @@ func TestSaveAgentDraftLiveOnlyWithWhatItSaved(t *testing.T) {
 
 	rewritten := "---\nmodel: gpt-6.1-terra\n---\nRewritten.\n"
 
-	duringReload(func(stagedWorkDir string) {
-		writeAgentFile(t, filepath.Join(ds.workspace, stagedWorkDir), "support-bot", rewritten)
-	})
+	ds.draftRuntime.ReloadFunc = func(reason string) (string, error) {
+		receipt, err := ds.rt.Reload(reason)
+		writeAgentFile(t, filepath.Join(ds.workspace, config.DefaultRuntimeDir), "support-bot", rewritten)
+
+		return receipt, err
+	}
 
 	saved := "---\nmodel: gpt-6-luna\n---\nBob. Help.\n"
 	state, err = ds.save(t, draft.ID)

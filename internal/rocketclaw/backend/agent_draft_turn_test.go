@@ -85,8 +85,7 @@ func startAgentDraftTest(t *testing.T, agents map[string]string, answer func(w h
 
 	runtimes := make(chan *Runtime, 1)
 	assembler := &frontendAssemblerMock{
-		GateFunc:           passGate,
-		ValidateAssetsFunc: func(*config.Config, string) error { return nil },
+		GateFunc: passGate,
 		AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 			runtimes <- rt
 			return nil, nil, nil

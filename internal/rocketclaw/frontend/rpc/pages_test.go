@@ -199,7 +199,7 @@ func TestPagesRealBrowser(t *testing.T) {
 	assembly := &mockFrontendAssembler{GateFunc: passGate, AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 		ready <- rt
 		return rt.RunCtx.Done(), nil, nil
-	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
+	}}
 
 	var running errgroup.Group
 	running.Go(func() error {

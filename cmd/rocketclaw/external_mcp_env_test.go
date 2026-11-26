@@ -35,8 +35,6 @@ type externalMCPStarted struct {
 	endpoint string
 }
 
-func (externalMCPAssembler) ValidateAssets(*config.Config, string) error { return nil }
-
 func (externalMCPAssembler) Gate(context.Context, *config.Config, *slog.Logger) (func() error, error) {
 	return func() error { return nil }, nil
 }

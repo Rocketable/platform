@@ -31,6 +31,9 @@ packages:
       runtimeRefresher:
         config:
           structname: runtimeRefresherMock
+      agentDraftRuntime:
+        config:
+          structname: agentDraftRuntimeMock
       slackLookup:
         config:
           structname: slackLookupMock
