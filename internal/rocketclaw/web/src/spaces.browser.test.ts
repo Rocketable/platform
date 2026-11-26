@@ -915,6 +915,22 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   await page.getByText("No parked tabs.").waitFor();
 }), 60_000);
 
+test("a parked tab with something new is the one the Parked count counts, marked in its row without turning bold", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const views = page.getByRole("group", { name: "Sidebar view" }), parked = page.getByRole("tablist", { name: "Parked tabs" });
+  const row = (id: string) => parked.locator(`[data-tab="${href(id)}"]`);
+  saved.state = { ...saved.state, space: "main", tabs: ["alpha", "bravo", "charlie"].map((id) => ({ path: href(id), space: "main" })) };
+  saved.attention = [{ path: href("bravo"), parked: true, unreadAt: "2026-10-22T10:00:00Z" }, { path: href("charlie"), parked: true }];
+  await page.goto(`${origin}${href("alpha")}`);
+  await strip(page).getByRole("tab", { name: "Alpha", exact: true }).waitFor();
+  await views.getByRole("button", { name: "Parked", exact: true }).click();
+  await row("charlie").waitFor();
+  expect(await views.getByRole("button", { name: "Parked", exact: true }).locator("span[aria-hidden]").innerText()).toBe("1");
+  expect(await row("bravo").getByRole("tab").getAttribute("aria-description")).toBe("Space: Main, Unread, Parked");
+  expect(await row("charlie").getByRole("tab").getAttribute("aria-description")).toBe("Space: Main, Parked");
+  expect([await row("bravo").locator("[data-parked-unread]").isVisible(), await row("charlie").locator("[data-parked-unread]").count()]).toEqual([true, 0]);
+  expect([await row("bravo").getAttribute("data-unread"), await row("charlie").getAttribute("data-unread")]).toEqual(["false", "false"]);
+}));
+
 test("Park until it is done is offered for a session, not a page, and parks the tab, which Parked says waits for its turn", () => withPage({}, async (page, origin, _prompts, saved) => {
   const parked = page.getByRole("tablist", { name: "Parked tabs" });
   const parkMenu = async (name: string) => {
