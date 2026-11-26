@@ -95,7 +95,6 @@
 # opt out standing (per-run override: the babysit:off token). This governs that
 # standing watch only -- lfg's in-pipeline babysit is bounded (3 fix rounds) and
 # still runs, since it is how that pipeline reaches "CI decided".
-auto_babysit: false
 
 # --- ce-plan scoping confirmation ---
 # By default /ce-plan pauses before research/plan-write to show a scoping
