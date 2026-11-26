@@ -11,7 +11,6 @@ const shots = path.resolve(import.meta.dir, "../../../../.tmp/web-screenshots");
 for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web question at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
   const question = (id: string, multiple: boolean, ...labels: string[]): PendingQuestion => ({ id, question: `Question ${id}?`, details: `Details of ${id}`, multiple, options: labels.map((label) => ({ label, value: label.toLowerCase(), description: label === "Yes" ? "Ship it now" : "" })) });
-  // Each answer moves the turn on to its next question; the last one already ended when it is answered.
   const next = [question("q2", true, "Alpha", "Beta", "Gamma"), question("q3", false, "Red", "Blue"), question("q4", false, "Late")];
   let questions = [question("q1", false, "Yes", "No")];
   let rejectAnswer = true;
@@ -55,22 +54,18 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web quest
     await card.getByText("Question q1?").waitFor();
     await page.screenshot({ path: path.join(shots, `question-single-${width}.png`) });
 
-    // A closed and reopened tab lists the question again from History.
     await page.reload();
     await card.getByText("Question q1?").waitFor();
-    // A single choice sends the picked option.
     await card.getByLabel(/^Yes/).check();
     await card.getByRole("button", { name: "Submit" }).click();
     await card.getByText("Question q2?").waitFor();
 
-    // A multiple choice sends every checked option, in option order.
     await card.getByLabel("Gamma").check();
     await card.getByLabel("Alpha").check();
     await page.screenshot({ path: path.join(shots, `question-multiple-${width}.png`) });
     await card.getByRole("button", { name: "Submit" }).click();
     await card.getByText("Question q3?").waitFor();
 
-    // Send answers with the composer's text instead of queueing it.
     const composer = page.locator("textarea");
     expect(await composer.getAttribute("placeholder")).toBe("Answer the question");
     await composer.fill("my own answer");
