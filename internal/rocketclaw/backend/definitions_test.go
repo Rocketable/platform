@@ -41,7 +41,7 @@ func TestSessionTagDefinitions(t *testing.T) {
 			require.NoError(t, root.WriteFile(".rocketclaw/agents/primary.md", []byte("---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_get_tags: allow\n    rocketclaw_sessions: allow\n"+frontmatter+"---\nPrompt\n"), 0o644))
 
 			if tags == "example" {
-				data, err := os.ReadFile("../skel/agents/examples/session-tags.example.md")
+				data, err := os.ReadFile("../skel/.rocketclaw/skills/main-create-or-update-agent/session-tags.example.md")
 				require.NoError(t, err)
 				require.NoError(t, root.WriteFile(".rocketclaw/agents/primary.md", data, 0o644))
 			}

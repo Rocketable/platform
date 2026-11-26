@@ -33,7 +33,7 @@ type OverlayInfo struct {
 	Spec, URL, Ref, ClonePath string
 }
 
-//go:embed all:.rocketclaw all:agents
+//go:embed all:.rocketclaw
 var payload embed.FS
 
 //go:embed builtin
@@ -53,12 +53,10 @@ func BuiltinAgent(name string) bool {
 }
 
 func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger *slog.Logger) error {
-	if err := syncFSFiltered(payload, agentsRoot, filepath.Join(workspace, agentsRoot), "unpacking embedded rocketclaw setup files", logger, false, false, inertFileFilter{}); err != nil {
-		return fmt.Errorf("unpack embedded rocketclaw overlay %s: %w", agentsRoot, err)
-	}
-
-	if err := os.MkdirAll(filepath.Join(workspace, skillsRoot), 0o755); err != nil {
-		return fmt.Errorf("create rocketclaw skills overlay directory: %w", err)
+	for _, root := range [...]string{agentsRoot, skillsRoot} {
+		if err := os.MkdirAll(filepath.Join(workspace, root), 0o755); err != nil {
+			return fmt.Errorf("create rocketclaw %s overlay directory: %w", root, err)
+		}
 	}
 
 	target := filepath.Join(workspace, runtimeDir)
@@ -82,12 +80,12 @@ func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger 
 }
 
 func SyncEffectiveRuntimeAssets(workspace, target string, overlays []string, logger *slog.Logger) error {
-	if err := syncFSFiltered(payload, payloadRoot, target, "syncing embedded rocketclaw skeleton", logger, true, false, inertFileFilter{}); err != nil {
+	if err := syncFSFiltered(payload, payloadRoot, target, "syncing embedded rocketclaw skeleton", logger, inertFileFilter{}); err != nil {
 		return fmt.Errorf("sync embedded rocketclaw skeleton: %w", err)
 	}
 
-	if err := syncFSFiltered(payload, agentsRoot, filepath.Join(target, agentsRoot), "syncing embedded rocketclaw runtime assets", logger, true, false, inertFileFilter{}); err != nil {
-		return fmt.Errorf("sync embedded rocketclaw runtime assets %s: %w", agentsRoot, err)
+	if err := os.MkdirAll(filepath.Join(target, agentsRoot), 0o755); err != nil {
+		return fmt.Errorf("create rocketclaw runtime agents directory: %w", err)
 	}
 
 	overlayInfos := OverlayInfos(target, overlays)
@@ -448,8 +446,6 @@ func overlayWorkspaceIn(workspace, target string, logger *slog.Logger) error {
 			filepath.Join(target, root),
 			"applying rocketclaw overlay directory",
 			logger,
-			true,
-			true,
 			builtinAgentFilter{source: workspace, logger: logger, next: workspaceOverlayFilter{workspace: workspace, root: root}},
 		); err != nil {
 			return err
@@ -579,7 +575,7 @@ func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) er
 			return fmt.Errorf("stat overlay directory %s: %w", root, err)
 		}
 
-		if err := syncFSFiltered(os.DirFS(overlay.ClonePath), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, true, true, builtinAgentFilter{source: overlay.ClonePath, logger: logger, next: inertFileFilter{}}); err != nil {
+		if err := syncFSFiltered(os.DirFS(overlay.ClonePath), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, builtinAgentFilter{source: overlay.ClonePath, logger: logger, next: inertFileFilter{}}); err != nil {
 			return err
 		}
 	}
@@ -690,7 +686,7 @@ func (f builtinAgentFilter) skip(name string, d fs.DirEntry) bool {
 	return f.next.skip(name, d)
 }
 
-func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger, overwrite, preserveExecutable bool, filter fileFilter) error {
+func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger, filter fileFilter) error {
 	logger.Info(message, "path", target)
 
 	if err := fs.WalkDir(src, root, func(name string, d fs.DirEntry, err error) error {
@@ -730,27 +726,13 @@ func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger
 			return fmt.Errorf("create parent directory for %s: %w", dst, err)
 		}
 
-		if !overwrite {
-			if _, err := os.Stat(dst); err == nil {
-				logger.Debug("preserved existing embedded rocketclaw file", "path", dst)
-				return nil
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("stat skeleton target %s: %w", dst, err)
-			}
+		info, err := d.Info()
+		if err != nil {
+			return fmt.Errorf("stat skeleton source file %s: %w", name, err)
 		}
 
 		mode := os.FileMode(0o644)
-
-		if preserveExecutable {
-			info, err := d.Info()
-			if err != nil {
-				return fmt.Errorf("stat skeleton source file %s: %w", name, err)
-			}
-
-			if info.Mode().Perm()&0o111 != 0 {
-				mode = 0o755
-			}
-		} else if strings.HasSuffix(dst, ".sh") {
+		if info.Mode().Perm()&0o111 != 0 {
 			mode = 0o755
 		}
 

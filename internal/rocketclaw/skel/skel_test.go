@@ -29,7 +29,7 @@ func TestSyncFSOverwritesEmbeddedFiles(t *testing.T) {
 		".rocketclaw/nested/tool.txt": {Data: []byte("nested")},
 	}
 
-	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, inertFileFilter{}))
+	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), inertFileFilter{}))
 
 	data, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
 	require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestSyncReportsWorkspaceDirectoryConflicts(t *testing.T) {
 		dirMode os.FileMode
 		want    string
 	}{
-		{name: "agents file", path: agentsRoot, want: "unpack embedded rocketclaw overlay agents"},
+		{name: "agents file", path: agentsRoot, want: "create rocketclaw agents overlay directory"},
 		{name: "skills file", path: skillsRoot, want: "create rocketclaw skills overlay directory"},
 		{name: "target file", path: targetRoot, want: "reset rocketclaw target"},
 		{name: "scripts file", path: scriptsRoot, want: "apply rocketclaw overlay: rocketclaw overlay path is not a directory"},
@@ -189,7 +189,7 @@ func TestSyncFSFilteredPreservesSourceExecutableBit(t *testing.T) {
 		"scripts/plain.sh": {Data: []byte("plain"), Mode: 0o644},
 	}
 
-	require.NoError(t, syncFSFiltered(src, scriptsRoot, root, "test sync", testLogger(), true, true, inertFileFilter{}))
+	require.NoError(t, syncFSFiltered(src, scriptsRoot, root, "test sync", testLogger(), inertFileFilter{}))
 
 	info, err := os.Stat(filepath.Join(root, "run"))
 	require.NoError(t, err)
@@ -201,7 +201,7 @@ func TestSyncFSFilteredPreservesSourceExecutableBit(t *testing.T) {
 }
 
 func TestSyncFSFilteredReportsMissingSourceRoot(t *testing.T) {
-	err := syncFSFiltered(fstest.MapFS{}, payloadRoot, filepath.Join(t.TempDir(), targetRoot), "test sync", testLogger(), true, false, inertFileFilter{})
+	err := syncFSFiltered(fstest.MapFS{}, payloadRoot, filepath.Join(t.TempDir(), targetRoot), "test sync", testLogger(), inertFileFilter{})
 	require.ErrorContains(t, err, "copy skeleton source")
 	require.ErrorContains(t, err, "walk skeleton source")
 }
@@ -215,7 +215,7 @@ func TestSyncFSFilteredReportsTargetDirectoryForFile(t *testing.T) {
 		".rocketclaw/AGENTS.md": {Data: []byte("seed")},
 	}
 
-	err := syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, inertFileFilter{})
+	err := syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), inertFileFilter{})
 	require.ErrorContains(t, err, "write skeleton file")
 }
 
@@ -229,7 +229,7 @@ func TestSyncFSFilteredReportsTargetFileForDirectory(t *testing.T) {
 		".rocketclaw/nested/file.txt": {Data: []byte("seed")},
 	}
 
-	err := syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, inertFileFilter{})
+	err := syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), inertFileFilter{})
 	require.ErrorContains(t, err, "create skeleton directory")
 }
 
@@ -657,6 +657,7 @@ func TestSyncCreatesEmbeddedRuntimeSupport(t *testing.T) {
 
 	for _, name := range []string{
 		filepath.Join(targetRoot, ".gitignore"),
+		filepath.Join(targetRoot, skillsRoot, "main-create-or-update-agent", "session-tags.example.md"),
 	} {
 		data, err := os.ReadFile(filepath.Join(tmp, name))
 		require.NoError(t, err)
@@ -670,8 +671,7 @@ func TestSyncCreatesEmbeddedRuntimeSupport(t *testing.T) {
 	for _, dir := range []string{agentsRoot, filepath.Join(targetRoot, agentsRoot)} {
 		entries, err := os.ReadDir(filepath.Join(tmp, dir))
 		require.NoError(t, err)
-		require.Len(t, entries, 1, dir)
-		assert.Equal(t, "examples", entries[0].Name(), dir)
+		assert.Empty(t, entries, dir)
 	}
 }
 
@@ -709,7 +709,7 @@ func TestSyncIgnoresBuiltinAgentFiles(t *testing.T) {
 		names = append(names, entry.Name())
 	}
 
-	assert.Equal(t, []string{"bot.md", "examples"}, names)
+	assert.Equal(t, []string{"bot.md"}, names)
 
 	for _, source := range []string{OverlayInfos(filepath.Join(workspace, targetRoot), []string{repo})[0].ClonePath, workspace} {
 		for _, name := range []string{"main.md", "main"} {
@@ -831,24 +831,31 @@ func TestReplaceRuntimeAssetsAfterValidationCommitsFreshOverlayAndRefreshesScrip
 	assert.Equal(t, "new script", string(data))
 }
 
+func TestValidateRuntimeAssetsWithStagesAgentsWithoutWorkspaceAgents(t *testing.T) {
+	workspace := t.TempDir()
+
+	require.NoError(t, ValidateRuntimeAssetsWith(workspace, nil, testLogger(), nil, func(stagedWorkDir string) error {
+		entries, err := os.ReadDir(filepath.Join(workspace, stagedWorkDir, agentsRoot))
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+
+		return nil
+	}))
+}
+
 func TestValidateRuntimeAssetsWithStagesTheFile(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "bot.md"), []byte("old"), 0o644))
 
-	example, err := os.ReadFile(filepath.Join(agentsRoot, "examples", "session-tags.example.md"))
-	require.NoError(t, err)
-
 	errValidate := errors.New("invalid staged assets")
 	staged := ""
-	err = ValidateRuntimeAssetsWith(workspace, nil, testLogger(), map[string][]byte{"agents/bot.md": []byte("new")}, func(stagedWorkDir string) error {
+	err := ValidateRuntimeAssetsWith(workspace, nil, testLogger(), map[string][]byte{"agents/bot.md": []byte("new")}, func(stagedWorkDir string) error {
 		staged = stagedWorkDir
 
-		for file, want := range map[string]string{"bot.md": "new", "examples/session-tags.example.md": string(example)} {
-			data, err := os.ReadFile(filepath.Join(workspace, stagedWorkDir, agentsRoot, file))
-			require.NoError(t, err)
-			assert.Equal(t, want, string(data))
-		}
+		data, err := os.ReadFile(filepath.Join(workspace, stagedWorkDir, agentsRoot, "bot.md"))
+		require.NoError(t, err)
+		assert.Equal(t, "new", string(data))
 
 		return errValidate
 	})
@@ -890,7 +897,7 @@ func TestSyncFSRootMapping(t *testing.T) {
 			}
 
 			target := filepath.Join(t.TempDir(), "target")
-			require.NoError(t, syncFSFiltered(src, tt.root, target, "test sync", testLogger(), true, false, inertFileFilter{}))
+			require.NoError(t, syncFSFiltered(src, tt.root, target, "test sync", testLogger(), inertFileFilter{}))
 
 			if tt.want == "." {
 				info, err := os.Stat(target)
