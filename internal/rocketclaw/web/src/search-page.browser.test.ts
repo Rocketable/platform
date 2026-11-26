@@ -62,7 +62,7 @@ function serve(rows: object[], search: (input: SearchInput) => Promise<object> |
         return Response.json({ message: (error as Error).message, code: 13 }, { status: 500 });
       }
     }
-    if (url.pathname === "/api/Tabs") return tabs.reply(request);
+    if (url.pathname === "/api/Tabs" || url.pathname === "/api/ChangeTabs") return tabs.reply(request);
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = path.join(dist, url.pathname);
     return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
@@ -106,7 +106,7 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
       const { query } = await request.json() as { query: string };
       return Response.json(response(query, [], ({ 'tag:"Needs review" is:forked': ['tag:"Needs review"', "is:forked"], 'tag:"Needs review"': ['tag:"Needs review"'], "is:forked": ["is:forked"] } as Record<string, string[]>)[query]));
     }
-    if (url.pathname === "/api/Tabs") return api.reply(request);
+    if (url.pathname === "/api/Tabs" || url.pathname === "/api/ChangeTabs") return api.reply(request);
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = path.join(dist, url.pathname);
     return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
@@ -246,7 +246,7 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     expect(shown("alice")!.searches.map((item) => item.name)).toEqual(["Alice"]);
     await until(() => shown("bob")?.searches.length === 1);
     // Closing Bob's only search closes his page, not to Alice's last message.
-    const closed = page.waitForResponse((reply: { url(): string; request(): { postDataJSON(): { state?: { tabs: SavedTab[] } } } }) => reply.url().endsWith("/api/Tabs") && reply.request().postDataJSON().state?.tabs.every((tab) => !tab.search));
+    const closed = page.waitForResponse((reply: { url(): string; request(): { postDataJSON(): { state?: { tabs: SavedTab[] } } } }) => reply.url().endsWith("/api/ChangeTabs") && reply.request().postDataJSON().state?.tabs.every((tab) => !tab.search));
     await page.getByRole("button", { name: "Close search 1" }).click();
     await page.waitForURL(`http://127.0.0.1:${server.port}/`);
     await closed; // Navigation does not wait for the tab save.
@@ -857,7 +857,7 @@ test("newer search replaces an in-flight search and retries errors", async () =>
       }
       return Response.json(response(query, [{ conversationId: "chat", field: "" }], [], { messages: [{ conversationId: "chat", message: { messageId: "1:0", role: "user", text: `Match ${query}`, complete: true } }] }));
     }
-    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: `/s/${btoa("chat").replaceAll("=", "")}`, space: "main" }], groups: [], space: "main", last: {} } });
+    if (url.pathname === "/api/Tabs" || url.pathname === "/api/ChangeTabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: `/s/${btoa("chat").replaceAll("=", "")}`, space: "main" }], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = path.join(dist, url.pathname);
     return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
@@ -1101,7 +1101,7 @@ test("message matches jump after history loads and last close returns to the las
       if (delayHistory && id === "one") await pending.promise;
       return Response.json({ messages: messages(id), origin: "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages(id).map((message) => message.entryKey))], running: false, terminal: "" });
     }
-    if (url.pathname === "/api/Tabs") return api.reply(request);
+    if (url.pathname === "/api/Tabs" || url.pathname === "/api/ChangeTabs") return api.reply(request);
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = path.join(dist, url.pathname);
     return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
@@ -1220,7 +1220,7 @@ test("search formats rows, windows around matches, and resolves tag names", asyn
       if (query === "fenced" || query === "streaming") return Response.json(response(query, [{ conversationId: "long", field: "" }], [], { messages: [{ conversationId: "long", message: { messageId: "3:0", role: "assistant", text: ["keep-out-before", "padding", "```text", ...code.map((line) => line.replace("MATCH", query)), ...(query === "fenced" ? ["```", "padding", "keep-out-after"] : [])].join("\n"), complete: query === "fenced" } }] }));
       return Response.json(response(query));
     }
-    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+    if (url.pathname === "/api/Tabs" || url.pathname === "/api/ChangeTabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = path.join(dist, url.pathname);
     return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));

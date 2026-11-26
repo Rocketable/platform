@@ -42,7 +42,7 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
           return Response.json({});
         }
         case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], pendingQuestions: [], messages: [{ entryKey: "turn", itemId: "reply", inputId: "", turnId: "turn", role: "assistant", text: "The session is ready. You can send a new request, queue a follow-up, or steer the work already in progress.", complete: true }], running, revision: String(running), reset: true, entryKeys: ["turn"], start: "0", more: false });
-        case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+        case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
         default: return Response.json({});
       }
     } });
@@ -235,7 +235,7 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
         return Response.json({});
       }
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], pendingQuestions: questions, messages, running, revision: String(revision), reset: true, entryKeys: messages.map((message) => message.entryKey), start: "0", more: false });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });

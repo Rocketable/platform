@@ -134,7 +134,7 @@ export async function withPage(options: object, run: (page: any, origin: string,
         }
         return Response.json({ id: "fresh" });
       case "/api/Prompt": prompts.push(input); return Response.json({ privateText: "" });
-      case "/api/Tabs": return tabsCall(saved, input);
+      case "/api/Tabs": case "/api/ChangeTabs": return tabsCall(saved, input);
       case "/api/DeleteSession":
         if (saved.deletes.push(input.id) === 1) return Response.json({ message: "this session has a running turn; stop it first", code: 9 }, { status: 400 });
         sessions.splice(sessions.findIndex((row) => row.id === input.id), 1);

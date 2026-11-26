@@ -103,7 +103,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
         if (input.id === "created" && failFirstTurn) return Response.json({ message: "First turn failed", code: 13 }, { status: 500 });
         return Response.json({ privateText: "" });
       }
-      case "/api/Tabs":
+      case "/api/Tabs": case "/api/ChangeTabs":
         // A focus refresh must return the saved tabs, not report the active session closed elsewhere.
         if (input.state) { tabs.state = input.state; tabs.revision = String(Number(tabs.revision) + 1); }
         return Response.json(tabs);
@@ -643,7 +643,7 @@ test("handoff hits and queued items format tags and markup", async () => {
       case "/api/ListQueue": return Response.json({ items: input.id === "dest" ? [{ id: "q1", text: marked, delivery: "QUEUE" }] : [] });
       case "/api/Handoff": return Response.json({ document: "doc" });
       case "/api/SearchMessages": return Response.json({ matches: [{ conversationId: "dest", message: message("2:0", "user", marked) }] });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
@@ -703,7 +703,7 @@ test("handoff's new session starts with main when offered, else the first offere
       case "/api/History": return Response.json({ messages: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
       case "/api/Handoff": return Response.json({ document: "doc" });
       case "/api/CreateSession": created.push(input.agent); return Response.json({ id: "created" });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });

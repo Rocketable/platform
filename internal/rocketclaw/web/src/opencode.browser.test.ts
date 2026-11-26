@@ -317,7 +317,7 @@ function start() {
         const body: { data: { id: string } } = await forked.json();
         return Response.json({ id: `opencode:box:${body.data.id}` });
       }
-      case "/api/Tabs":
+      case "/api/Tabs": case "/api/ChangeTabs":
         return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), space: "main" }], groups: [], space: "main", last: {} } });
       case "/api/FindPullRequests": {
         const runs = input.runs as { command: string; output: string }[];
@@ -901,7 +901,7 @@ test("one OpenCode view loads with the page, waits hidden behind other tabs, and
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/ListConfig": return Response.json({ config: {} });
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [route("opencode:box:ses_a"), route(`opencode:box:${linked}`), route("opencode:far:ses_a"), chat].map((tab) => ({ path: tab, space: "main" })), groups: [], space: "main", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [route("opencode:box:ses_a"), route(`opencode:box:${linked}`), route("opencode:far:ses_a"), chat].map((tab) => ({ path: tab, space: "main" })), groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });

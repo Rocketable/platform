@@ -103,7 +103,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`messa
         head = "9:0";
         return Response.json({ appended: true });
       }
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });

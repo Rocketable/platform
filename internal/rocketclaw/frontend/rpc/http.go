@@ -180,17 +180,14 @@ func handleRPCMCP(mux *http.ServeMux, connection *grpc.ClientConn, webMethods pr
 			continue
 		}
 
-		properties, fields := map[string]any{}, descriptor.Input().Fields()
-		for j := range fields.Len() {
-			properties[fields.Get(j).JSONName()] = map[string]any{"description": strings.Join(strings.Fields(fields.Get(j).ParentFile().SourceLocations().ByDescriptor(fields.Get(j)).LeadingComments), " ")}
-		}
-
-		schema := map[string]any{"type": "object", "properties": properties}
+		schema := messageSchema(descriptor.Input(), map[protoreflect.FullName]bool{})
 		if descriptor.IsStreamingClient() {
 			schema = map[string]any{"type": "object", "properties": map[string]any{"messages": map[string]any{"type": "array", "items": schema}}}
 		}
 
-		tools.AddTool(&mcp.Tool{Name: string(descriptor.Name()), Description: strings.Join(strings.Fields(descriptor.ParentFile().SourceLocations().ByDescriptor(descriptor).LeadingComments), " "), InputSchema: schema}, func(ctx context.Context, call *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		readOnly := descriptor.Options().(*descriptorpb.MethodOptions).GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS
+
+		tools.AddTool(&mcp.Tool{Name: string(descriptor.Name()), Description: strings.Join(strings.Fields(descriptor.ParentFile().SourceLocations().ByDescriptor(descriptor).LeadingComments), " "), InputSchema: schema, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly}}, func(ctx context.Context, call *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if recorded, ok := ctx.Value(accessKey{}).(*accessRecorder); ok {
 				recorded.mu.Lock()
 				recorded.tools = append(recorded.tools, call.Params.Name)
@@ -206,6 +203,69 @@ func handleRPCMCP(mux *http.ServeMux, connection *grpc.ClientConn, webMethods pr
 	rpcMCP := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return tools }, &mcp.StreamableHTTPOptions{Stateless: true, PropagateRequestCancellation: true})
 	mux.Handle("POST /rpc_mcp", rpcMCP)
 	mux.Handle("GET /rpc_mcp", rpcMCP)
+}
+
+func messageSchema(message protoreflect.MessageDescriptor, seen map[protoreflect.FullName]bool) map[string]any {
+	if seen[message.FullName()] {
+		return map[string]any{"type": "object"}
+	}
+
+	seen[message.FullName()] = true
+	defer delete(seen, message.FullName())
+
+	properties, fields := map[string]any{}, message.Fields()
+	for i := range fields.Len() {
+		field := fields.Get(i)
+
+		var schema map[string]any
+
+		switch {
+		case field.IsMap():
+			schema = map[string]any{"type": "object", "additionalProperties": valueSchema(field.MapValue(), seen)}
+		case field.IsList():
+			schema = map[string]any{"type": "array", "items": valueSchema(field, seen)}
+		default:
+			schema = valueSchema(field, seen)
+		}
+
+		location := field.ParentFile().SourceLocations().ByDescriptor(field)
+		if comment := strings.Join(strings.Fields(cmp.Or(location.LeadingComments, location.TrailingComments)), " "); comment != "" {
+			schema["description"] = comment
+		}
+
+		properties[field.JSONName()] = schema
+	}
+
+	return map[string]any{"type": "object", "properties": properties}
+}
+
+func valueSchema(field protoreflect.FieldDescriptor, seen map[protoreflect.FullName]bool) map[string]any {
+	schema := map[string]any{"type": "string"}
+
+	switch field.Kind() {
+	case protoreflect.MessageKind, protoreflect.GroupKind:
+		return messageSchema(field.Message(), seen)
+	case protoreflect.BoolKind:
+		schema["type"] = "boolean"
+	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind, protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		schema["type"] = "integer"
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind, protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		schema["type"] = []string{"integer", "string"}
+	case protoreflect.FloatKind, protoreflect.DoubleKind:
+		schema["type"] = "number"
+	case protoreflect.BytesKind:
+		schema["contentEncoding"] = "base64"
+	case protoreflect.EnumKind:
+		names := []string{}
+		for i := range field.Enum().Values().Len() {
+			names = append(names, string(field.Enum().Values().Get(i).Name()))
+		}
+
+		schema["enum"] = names
+	case protoreflect.StringKind:
+	}
+
+	return schema
 }
 
 func refuseOtherSites(protection *http.CrossOriginProtection, next http.Handler) http.Handler {

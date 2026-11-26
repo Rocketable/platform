@@ -28,7 +28,7 @@ test("only admins edit the behavior settings, and the view changes only with the
       case "/api/Protocol": return Response.json({ protoSha256: "config" });
       case "/api/ListConfig": return Response.json({ config });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main", sticky: "global" }, { name: "helper", sticky: "slack" }, { name: "support", sticky: "slack" }], currentAgent: "main" });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       case "/api/TestModel": tested.push(await request.json()); return Response.json({ elapsedMs: "100" });
       case "/api/SaveBehaviorSettings": {
         const { documentJson } = await request.json() as { documentJson: string };

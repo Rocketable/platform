@@ -535,6 +535,7 @@ Release note for read-only Web calls:
 
 - `ListSessions` no longer takes `sameOrigin`: only the Web page's own poll records which tab a person is viewing.
 - Attachments no longer have `originalUnverified`. Files an agent attached in a chat from before 2026-09-18 that nobody has opened since no longer appear in it. Database migration 117 drops the column.
+- `Tabs` only returns the caller's tabs now and takes no fields; every change goes through `ChangeTabs`, which takes what `Tabs` used to. A Web page and a remote RocketClaw on different versions show each other's tabs but cannot change them until both are upgraded.
 
 ### Harness feedback server
 

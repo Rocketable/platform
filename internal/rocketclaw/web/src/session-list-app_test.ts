@@ -243,7 +243,7 @@ export async function appScenario(part: "lists" | "composer") {
         case "/api/EditQueueItem":
           ctrl.queue = ctrl.queue.map((item) => item.id === input.itemId ? { ...item, text: input.text } : item);
           return Response.json({});
-        case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+        case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
         default: return Response.json({});
       }
     } catch (error) { return Response.json({ message: (error as Error).message, code: (error as RPCError).code }, { status: (error as RPCError).code === 16 ? 401 : 500 }); }

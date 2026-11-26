@@ -37,7 +37,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
         return Response.json({ revertMessageId: marker, prompt: messages[index] });
       }
       case "/api/Prompt": prompts.push(input); return Response.json({ privateText: "" });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
@@ -286,7 +286,7 @@ test("revert an unsaved latest turn by input ID", async () => {
         return Response.json({ messages: visible, origin: "", delegations: [], revision: marker || "running", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(visible.map((item) => item.entryKey))], running: !marker, terminal: "", start: "0", more: false, revertEligible: true, revertMessageId: marker, revertFloor: "1:0", canUndo: true });
       }
       case "/api/StageRevert": staged.push(input.messageId); marker = "9:0"; return Response.json({ revertMessageId: marker, prompt: messages[3] });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
