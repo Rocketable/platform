@@ -34,15 +34,14 @@ What did not explain it:
 
 `backend.Run` rebuilds the runtime directory at startup, so anything a test writes there first is gone by the time the server answers. Startup calls `skel.SyncInWithOverlays` (`internal/rocketclaw/backend/app.go:419`), which:
 
-1. unpacks the shipped example agents (`agents/examples/`) into the workspace's own `agents/` without overwriting existing files (`internal/rocketclaw/skel/skel.go:52`, `overwrite` is `false`);
-2. empties the runtime directory except a short keep list (`.rocketcode`, `attachments`, `sandbox`, `uploads`, `auth.json`, `auth.json.lock`, `.auth.json-*` files, and, at startup only, the overlay clones; `resetRuntimeDirectory`, `skel.go:599`, called at `skel.go:61`);
-3. rebuilds it from the built-in assets, then configured overlays, then last the workspace's `agents`, `skills`, `cron` and `scripts` directories, each overwriting what came before (`SyncEffectiveRuntimeAssets` called at `skel.go:69`, `overlayWorkspaceIn` at `skel.go:421`).
+1. empties the runtime directory except a short keep list (`.rocketcode`, `attachments`, `sandbox`, `uploads`, `auth.json`, `auth.json.lock`, `.auth.json-*` files, and, at startup only, the overlay clones; `resetRuntimeDirectory`, called from `SyncInWithOverlays` in `internal/rocketclaw/skel/skel.go`);
+2. rebuilds it from the built-in assets, then configured overlays, then last the workspace's `agents`, `skills`, `cron` and `scripts` directories, each overwriting what came before (`SyncEffectiveRuntimeAssets`, `overlayWorkspaceIn`).
 
-A reload (`skel.ReplaceRuntimeAssetsAfterValidation`, `internal/rocketclaw/backend/runtime.go:64`) runs steps 2 and 3 through a validated staging copy, so it wipes runtime-only fixtures too.
+A reload (`skel.ReplaceRuntimeAssetsAfterValidation`, `internal/rocketclaw/backend/runtime.go:64`) runs both steps through a validated staging copy, so it wipes runtime-only fixtures too.
 
-So when a test runs `backend.Run`, write fixture agents where startup reads them from: `<workspace>/agents/<name>.md`. Step 1 keeps an existing workspace file and step 3 copies the workspace's `agents/` last.
+So when a test runs `backend.Run`, write fixture agents where startup reads them from: `<workspace>/agents/<name>.md`. Startup only creates the workspace's `agents/` when it is missing, and step 2 copies it last.
 
-Never name a fixture agent `main`. That is a built-in agent that every load takes from the binary (`readRocketCodeDefinitionsIn`, `internal/rocketclaw/backend/bridge.go:2838`), and step 3 skips `agents/main.md` and `agents/main/` in overlays and the workspace with a warning (`builtinAgentFilter`, `skel.go:674`). Such a fixture is ignored wherever it is written, and the test runs against the built-in agent. Give the fixture another name and use that name in the test. To change a built-in agent's model or turn it off, set `cfg.EmbeddedAgents`.
+Never name a fixture agent `main`. That is a built-in agent that every load takes from the binary (`readRocketCodeDefinitionsIn`, `internal/rocketclaw/backend/bridge.go:2838`), and step 2 skips `agents/main.md` and `agents/main/` in overlays and the workspace with a warning (`builtinAgentFilter` in `skel.go`). Such a fixture is ignored wherever it is written, and the test runs against the built-in agent. Give the fixture another name and use that name in the test. To change a built-in agent's model or turn it off, set `cfg.EmbeddedAgents`.
 
 Tests that build the RPC `Server` directly, without `backend.Run`, can keep writing the runtime directory: nothing rebuilds it there. `reads_test.go`, `opencode_test.go` and `shadow_upload_test.go` in `internal/rocketclaw/frontend/rpc` do this correctly.
 

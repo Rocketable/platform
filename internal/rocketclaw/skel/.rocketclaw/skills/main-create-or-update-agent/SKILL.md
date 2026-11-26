@@ -58,6 +58,8 @@ A scalar `permission: allow` does not grant global access. Use explicit permissi
 
 If the human wants an agent with every tool and feature, set `sudo: yes` and omit `permission`, except `permission.rocketclaw.rocketclaw_set_tag` tag groups. Sudo offers every tool and sends every call to `guardian` for review, except skills, `task`, and the default-on RocketClaw tools. Also set a bounded `maxRecursion`, because a sudo agent can delegate to every agent but other sudo agents, itself included. No other agent starts, writes into or reads a sudo agent's sessions, except that sudo agents may read them. To keep a sudo agent away from an agent, add `task: {<name>: deny}`: that keeps both `task` and the session tools off it, and `"*": deny` keeps them off every other agent, while its own sessions stay reachable.
 
+For an example agent with `permission.rocketclaw.rocketclaw_set_tag` tag groups, see `session-tags.example.md` in this skill's folder.
+
 Built-in permission buckets:
 - `read`: root-relative file paths for the `read` tool
 - `glob`: requested glob patterns for the `glob` tool
