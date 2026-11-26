@@ -286,7 +286,7 @@ func TestAttachmentMetadata(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	attachment := protocol.OutboundAttachment{ID: "snapshot", Name: "report.txt", MIMEType: "text/plain", Data: []byte(strings.Repeat("original", 700000)), OriginalUnverified: true}
+	attachment := protocol.OutboundAttachment{ID: "snapshot", Name: "report.txt", MIMEType: "text/plain", Data: []byte(strings.Repeat("original", 700000))}
 	require.NoError(t, service.SaveAttachment(t.Context(), "producer", "", &attachment, false))
 
 	var columns []string

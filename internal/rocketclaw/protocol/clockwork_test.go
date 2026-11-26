@@ -20,7 +20,7 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	message.Routine = &RoutineMessage{RelativePath: "job.md"}
 	message.Terminal = TerminalStopped
 	message.Attachments = []OutboundAttachment{
-		{ID: "report", Name: "report.txt", MIMEType: "text/plain", Data: []byte("report"), OriginalUnverified: true, Size: 6},
+		{ID: "report", Name: "report.txt", MIMEType: "text/plain", Data: []byte("report"), Size: 6},
 		{ID: "image", Name: "image.png", MIMEType: "image/png", Data: []byte("image"), Size: 5},
 	}
 	message.Attachments = append(message.Attachments, make([]OutboundAttachment, 8)...)

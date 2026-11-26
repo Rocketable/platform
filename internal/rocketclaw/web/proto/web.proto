@@ -462,7 +462,8 @@ message Attachment {
   string name = 2;
   string mime_type = 3;
   int64 size = 4;
-  bool original_unverified = 5;
+  reserved 5;
+  reserved "original_unverified";
   bytes data = 6;
   string conversation_id = 7;
 }

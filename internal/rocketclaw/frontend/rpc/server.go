@@ -17,7 +17,6 @@ import (
 	"log/slog"
 	"maps"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -399,14 +398,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		}
 	}
 
-	root, err := os.OpenRoot(s.cfg.Clone().Workspace)
-	if err != nil {
-		return nil, fmt.Errorf("open attachment workspace: %w", err)
-	}
-
-	defer func() { _ = root.Close() }()
-
-	calls := make(map[[2]string]string)
+	calls := make(map[[2]string]bool)
 	current := view.Inventory
 	current.Entries = make(map[string]string)
 
@@ -429,7 +421,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 		response.ReplacedKeys = append(response.ReplacedKeys, entry.Key)
 
-		messages, err := s.transcriptEntry(ctx, root, entry, request.Id, routineTrace, calls)
+		messages, err := s.transcriptEntry(ctx, entry, request.Id, routineTrace, calls)
 		if err != nil {
 			return nil, err
 		}
@@ -496,7 +488,7 @@ func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse
 	return nil
 }
 
-func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *backend.ObservedSessionEntry, conversationID string, routineTrace bool, calls map[[2]string]string) ([]*TranscriptEvent, error) {
+func (s *Server) transcriptEntry(ctx context.Context, entry *backend.ObservedSessionEntry, conversationID string, routineTrace bool, calls map[[2]string]bool) ([]*TranscriptEvent, error) {
 	items, err := harness.ReplayInputToParams(entry.Entry.ReplayInput)
 	if err != nil {
 		return nil, fmt.Errorf("decode web history: %w", err)
@@ -543,7 +535,7 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 			continue
 		}
 
-		attachments, err := s.sessions.ReplayAttachments(ctx, producer, root, entry.Entry.ReplayInput[i], calls)
+		attachments, err := s.sessions.ReplayAttachments(ctx, producer, entry.Entry.ReplayInput[i], calls)
 		if err != nil {
 			return nil, fmt.Errorf("project history attachments: %w", err)
 		}

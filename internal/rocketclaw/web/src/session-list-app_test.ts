@@ -83,7 +83,7 @@ export async function appScenario(part: "lists" | "composer") {
   };
   const uploadedFiles: { meta: Attachment; data: Buffer }[] = [];
   const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1kAAAAASUVORK5CYII=", "base64");
-  const image: Attachment = { id: "history-image", name: "history.png", mimeType: "image/png", size: String(imageBytes.length), conversationId: "private-source", originalUnverified: true };
+  const image: Attachment = { id: "history-image", name: "history.png", mimeType: "image/png", size: String(imageBytes.length), conversationId: "private-source" };
   const downloadConversations: string[] = [];
   const jobs = [
       { stem: "daily", status: "", lastRun: "", nextRun: "", schedule: "24h", body: "Daily prompt", agent: "planner", upcoming: [new Date(Date.now() + 3_600_000).toISOString(), new Date(Date.now() + 18 * 3_600_000).toISOString()], origin: "cron/daily.md" },
@@ -2015,14 +2015,14 @@ export async function appScenario(part: "lists" | "composer") {
       await attachmentPage.addInitScript(() => Object.defineProperty(crypto, "randomUUID", { value: undefined }));
       await attachmentPage.goto(`${origin}/s/${Buffer.from("visible-files").toString("base64url")}`);
       await attachmentPage.getByRole("img", { name: "history.png", exact: true }).waitFor();
-      await attachmentPage.getByText(`${image.size} bytes · Original unverified`, { exact: true }).waitFor();
+      await attachmentPage.getByText(`${image.size} bytes`, { exact: true }).waitFor();
       await attachmentPage.waitForFunction(() => (document.querySelector('img[alt="history.png"]') as HTMLImageElement)?.naturalWidth === 1);
       const downloadLink = attachmentPage.getByRole("link", { name: "Download history.png", exact: true });
       expect(await downloadLink.getAttribute("href")).toContain("conversationId=visible-files");
       const downloading = attachmentPage.waitForEvent("download");
       await downloadLink.click();
       expect((await downloading).suggestedFilename()).toBe("history.png");
-      const live = { ...image, id: "live-image", name: "live.png", originalUnverified: false };
+      const live = { ...image, id: "live-image", name: "live.png" };
       ctrl.history.push(
         { entryKey: "files", itemId: "files:1", inputId: "consumed-0", role: "user", text: "queued message now consumed", turnId: "", complete: true },
         { entryKey: "files", itemId: "files:2", inputId: "", role: "assistant", text: "reply to queued message", turnId: "", complete: true },

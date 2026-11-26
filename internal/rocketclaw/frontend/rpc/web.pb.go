@@ -3936,16 +3936,15 @@ func (x *CodeModeCall) GetMentionedPullRequests() []string {
 
 // Attachment download frames carry at most 256 KiB. History carries metadata only.
 type Attachment struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	Id                 string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name               string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	MimeType           string                 `protobuf:"bytes,3,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
-	Size               int64                  `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`
-	OriginalUnverified bool                   `protobuf:"varint,5,opt,name=original_unverified,json=originalUnverified,proto3" json:"original_unverified,omitempty"`
-	Data               []byte                 `protobuf:"bytes,6,opt,name=data,proto3" json:"data,omitempty"`
-	ConversationId     string                 `protobuf:"bytes,7,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name           string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	MimeType       string                 `protobuf:"bytes,3,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
+	Size           int64                  `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`
+	Data           []byte                 `protobuf:"bytes,6,opt,name=data,proto3" json:"data,omitempty"`
+	ConversationId string                 `protobuf:"bytes,7,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Attachment) Reset() {
@@ -4004,13 +4003,6 @@ func (x *Attachment) GetSize() int64 {
 		return x.Size
 	}
 	return 0
-}
-
-func (x *Attachment) GetOriginalUnverified() bool {
-	if x != nil {
-		return x.OriginalUnverified
-	}
-	return false
 }
 
 func (x *Attachment) GetData() []byte {
@@ -11053,16 +11045,15 @@ const file_web_proto_rawDesc = "" +
 	"\asummary\x18\b \x01(\tR\asummary\x122\n" +
 	"\x15created_pull_requests\x18\t \x03(\tR\x13createdPullRequests\x126\n" +
 	"\x17mentioned_pull_requests\x18\n" +
-	" \x03(\tR\x15mentionedPullRequestsJ\x04\b\x03\x10\x04\"\xcf\x01\n" +
+	" \x03(\tR\x15mentionedPullRequestsJ\x04\b\x03\x10\x04\"\xb9\x01\n" +
 	"\n" +
 	"Attachment\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
 	"\tmime_type\x18\x03 \x01(\tR\bmimeType\x12\x12\n" +
-	"\x04size\x18\x04 \x01(\x03R\x04size\x12/\n" +
-	"\x13original_unverified\x18\x05 \x01(\bR\x12originalUnverified\x12\x12\n" +
+	"\x04size\x18\x04 \x01(\x03R\x04size\x12\x12\n" +
 	"\x04data\x18\x06 \x01(\fR\x04data\x12'\n" +
-	"\x0fconversation_id\x18\a \x01(\tR\x0econversationId\"\xcb\x01\n" +
+	"\x0fconversation_id\x18\a \x01(\tR\x0econversationIdJ\x04\b\x05\x10\x06R\x13original_unverified\"\xcb\x01\n" +
 	"\rPromptRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12/\n" +
