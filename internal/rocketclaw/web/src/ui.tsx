@@ -2350,7 +2350,7 @@ function TabItem({ tab, description, detail, chosen, rule, active, stop, shared,
   // dimmed; its park shows under its title.
   const mark = id ? rowAttention(session) : attentionOf(sidebar, tab.path), unread = !!mark?.unreadAt && !mark.parked, aside = timerText(mark);
   const regenerating = useMutationState({ filters: { mutationKey: ["regenerateTitle"], status: "pending", predicate: (mutation) => (mutation.state.variables as { id: string }).id === id } }).length > 0;
-  const [activity, SessionIcon, working] = tabActivity(session, unread, !!mark?.parked && !mark.untilDone, regenerating);
+  const [activity, SessionIcon, working] = tabActivity(session, !!mark?.unreadAt, !!mark?.parked && !mark.untilDone, regenerating);
   const [label, Icon] = tabLabel(tab, session, SessionIcon);
   const title = useTabTitle(tab.path, label);
   const ref = useRef<HTMLDivElement>(null);
@@ -2363,13 +2363,17 @@ function TabItem({ tab, description, detail, chosen, rule, active, stop, shared,
         onClick={() => { if (!active) open(); }}>
         <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 self-start motion-safe:group-data-[regenerating=true]:animate-spin" />
         <span className="flex min-w-0 flex-1 flex-col"><span className="flex min-w-0 items-center gap-1.5">
-          {editing ? <TabRename session={session} tab={tab} shared={shared} space={space} placeholder={title} endEdit={endEdit} /> : <><span className="truncate group-data-[unread=true]:font-bold group-data-[asking=true]:font-semibold group-data-[asking=true]:text-amber-600 dark:group-data-[asking=true]:text-amber-300 motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>{session.asking ? needsYou : null}</>}
+          {editing ? <TabRename session={session} tab={tab} shared={shared} space={space} placeholder={title} endEdit={endEdit} /> : <><span className="truncate group-data-[unread=true]:font-bold group-data-[asking=true]:font-semibold group-data-[asking=true]:text-amber-600 dark:group-data-[asking=true]:text-amber-300 motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span><ParkedUnreadDot mark={mark} />{session.asking ? needsYou : null}</>}
         </span><span aria-hidden="true" className="truncate text-xs text-muted-foreground empty:hidden">{[detail, aside].filter(Boolean).join(" · ")}</span></span>
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{offline ? `${title} · Server offline` : title}</TooltipContent></Tooltip>
     {active ? <button type="button" aria-label="Tab actions" className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground last:mr-1 hover:bg-accent hover:text-foreground" onClick={(event) => openMenu(event.currentTarget)}><Ellipsis className="size-3.5" /></button> : null}
     <TabEnd shared={shared} close={close} label={closeLabel} title={title} />
   </div>;
+}
+
+function ParkedUnreadDot({ mark }: { mark?: Omit<TabAttention, "path"> }) {
+  return mark?.unreadAt && mark.parked ? <span data-parked-unread aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-primary" /> : null;
 }
 
 function TabEnd({ shared, close, label, title }: { shared?: boolean; close?: () => void; label?: (title: string) => string; title: string }) {
