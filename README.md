@@ -534,6 +534,7 @@ Release note for removing Web voice:
 Release note for read-only Web calls:
 
 - `ListSessions` no longer takes `sameOrigin`: only the Web page's own poll records which tab a person is viewing.
+- Attachments no longer have `originalUnverified`. Files an agent attached in a chat from before 2026-09-18 that nobody has opened since no longer appear in it. Database migration 117 drops the column.
 
 ### Harness feedback server
 

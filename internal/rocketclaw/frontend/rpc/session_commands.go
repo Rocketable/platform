@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"unicode"
@@ -203,18 +202,11 @@ func (s *Server) summarizeBranch(ctx context.Context, request *SummarizeBranchRe
 		return nil, fmt.Errorf("read branch summary source: %w", err)
 	}
 
-	root, err := os.OpenRoot(s.cfg.Clone().Workspace)
-	if err != nil {
-		return nil, fmt.Errorf("open attachment workspace: %w", err)
-	}
-
-	defer func() { _ = root.Close() }()
-
 	var messages []*TranscriptEvent
 
-	calls := make(map[[2]string]string)
+	calls := make(map[[2]string]bool)
 	for i := range entries {
-		events, err := s.transcriptEntry(ctx, root, &entries[i], request.Id, false, calls)
+		events, err := s.transcriptEntry(ctx, &entries[i], request.Id, false, calls)
 		if err != nil {
 			return nil, err
 		}

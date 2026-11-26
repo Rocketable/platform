@@ -3505,37 +3505,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		require.Equal(t, data, received)
 
-		require.NoError(t, root.MkdirAll("artifacts/memes", 0o700))
-		require.NoError(t, root.WriteFile("artifacts/memes/old.png", []byte("old image bytes"), 0o600))
-		outside, err := os.OpenRoot(t.TempDir())
-
-		require.NoError(t, err)
-		defer func() { require.NoError(t, outside.Close()) }()
-
-		require.NoError(t, outside.WriteFile("secret", []byte("outside workspace"), 0o600))
-		require.NoError(t, root.Symlink(filepath.Join(outside.Name(), "secret"), "escape"))
-
-		legacy := []json.RawMessage{
-			json.RawMessage(`{"type":"function_call","call_id":"legacy","name":"rocketclaw_attach_files_to_response","arguments":"{\"attachments\":[{\"path\":\"artifacts/memes/old.png\"},{\"path\":\"escape\"},{\"path\":\"missing\"}]}"}`),
-			json.RawMessage(`{"type":"function_call_output","call_id":"legacy","output":"queued attachments for final response"}`),
-		}
-		_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: legacy})
-		require.NoError(t, err)
-		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
-		require.NoError(t, err)
-		require.Len(t, history.Messages[len(history.Messages)-1].Attachments, 1)
-
-		recovered := history.Messages[len(history.Messages)-1].Attachments[0]
-		require.True(t, recovered.OriginalUnverified)
-		require.Empty(t, recovered.Data)
-		require.NoError(t, root.WriteFile("artifacts/memes/old.png", []byte("overwritten"), 0o600))
-
-		history, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
-		require.NoError(t, err)
-		require.True(t, proto.Equal(recovered, history.Messages[len(history.Messages)-1].Attachments[0]))
-		stored, err := reopened.LoadAttachment(ctx, conversation, recovered.Id, false)
-		require.NoError(t, err)
-		require.Equal(t, []byte("old image bytes"), stored.Data)
 		nestedFile := protocol.OutboundAttachment{ID: "nested-generated", Name: "nested.png", MIMEType: "image/png", Data: []byte("nested image")}
 		require.NoError(t, sessions.SaveAttachment(ctx, conversation, "attaching-turn", &nestedFile, false))
 		_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "attaching-turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
@@ -3640,7 +3609,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, err)
 		stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/DownloadAttachment")
 		require.NoError(t, err)
-		require.NoError(t, stream.SendMsg(&Attachment{ConversationId: conversation, Id: recovered.Id}))
+		require.NoError(t, stream.SendMsg(&Attachment{ConversationId: conversation, Id: nestedFile.ID}))
 		require.NoError(t, stream.CloseSend())
 		require.Equal(t, codes.NotFound, status.Code(stream.RecvMsg(&Attachment{})))
 	})
@@ -3858,7 +3827,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		for _, replay := range []string{
 			`[{"type":"compaction","content":42}]`,
-			`[{"type":"function_call","name":"rocketclaw_attach_files_to_response","call_id":"broken","arguments":"invalid"},{"type":"function_call_output","call_id":"broken","output":"queued attachments for final response"}]`,
 		} {
 			_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', $1::jsonb)::json WHERE id = $2`, replay, entryID)
 			require.NoError(t, err)

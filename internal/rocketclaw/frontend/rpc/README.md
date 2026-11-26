@@ -516,7 +516,7 @@ Queued references remain valid until removed or consumed.
 protobuf JSON shape (using protojson) is:
 
 ```json
-{"id":"opaque-id","name":"image.png","mimeType":"image/png","size":"1520338","originalUnverified":false,"conversationId":"producer-id"}
+{"id":"opaque-id","name":"image.png","mimeType":"image/png","size":"1520338","conversationId":"producer-id"}
 ```
 
 `data` is absent from transcript/queue metadata. `conversationId` there identifies
@@ -534,11 +534,7 @@ stores ownership, file metadata, and byte counts only; migration
 `001_baseline.sql` creates that metadata table. The default directory is
 `<workspace>/.rocketclaw/attachments` (or `.femtoclaw/attachments` for the legacy
 configuration). See the root README for the `attachments` configuration.
-Historical successful tool calls may recover still-available workspace files
-once; recovered metadata says `original_unverified=true`. Later overwrites or
-removal never replace recovered bytes. Missing or root-escaping historical files
-are omitted. This is a snapshot of available bytes, not a claim to recover an old
-file version. Originals are never resized in storage. Unreferenced blobs remain
+Originals are never resized in storage. Unreferenced blobs remain
 stored but cannot be downloaded; garbage collection is not part of this transport.
 
 ## Start

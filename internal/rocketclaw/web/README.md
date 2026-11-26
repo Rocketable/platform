@@ -1279,7 +1279,7 @@ History, queued messages, and live replies show attachment names and download
 actions. Raster images have inline previews, including attachment-only replies.
 Files retain their original bytes; previews do not resize or re-encode uploads.
 HTML, SVG, and other active formats download instead of rendering in the app's
-origin. An **Original unverified** label appears when supplied by the backend.
+origin.
 Typing `/` lists commands and the selected agent's allowed skills, and typing
 `/skill` lists only the skills;
 typing a name filters the list, and choosing a skill leaves room for arguments.
