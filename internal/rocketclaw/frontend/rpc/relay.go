@@ -65,7 +65,7 @@ func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, cfg *config
 
 			if admission.created > 0 {
 				tab := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte(id))
-				_ = connection.Invoke(context.WithoutCancel(r.Context()), "/rpc.Web/Tabs", &TabsRequest{Attention: &AttentionChange{Paths: []string{tab}, Action: AttentionAction_SENT, Admitted: admission.created}}, &TabsResponse{})
+				_ = connection.Invoke(context.WithoutCancel(r.Context()), "/rpc.Web/ChangeTabs", &ChangeTabsRequest{Attention: &AttentionChange{Paths: []string{tab}, Action: AttentionAction_SENT, Admitted: admission.created}}, &TabsResponse{})
 			}
 		})
 	}

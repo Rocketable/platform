@@ -60,7 +60,7 @@ test("a loud mark the server sets raises one desktop notification per window, a 
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
-      case "/api/Tabs":
+      case "/api/Tabs": case "/api/ChangeTabs":
         if (input.state) tabs.splice(0, tabs.length, ...input.state.tabs);
         return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs, groups: [], space: "main", last: {} }, revision: "1", shared: [{ space: "main", path: `/s/${encode("team")}` }] });
       default: return Response.json({});
@@ -180,7 +180,7 @@ test("a person marks tabs read or unread from the tab menu or the palette, each 
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: [], messages: [], mentionIds: [] });
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
-      case "/api/Tabs": {
+      case "/api/Tabs": case "/api/ChangeTabs": {
         const ids = input.attention?.action === "MARK_UNREAD" ? input.attention.paths.map((item) => decodeSessionId(item.slice(3))) : [];
         if (ids.length) marked.push(ids);
         for (const id of ids) if (!rows.find((row) => row.id === id)!.unreadAt) set(id, { unreadAt: new Date().toISOString(), markedUnread: true });
@@ -306,7 +306,7 @@ test("a routine tab's loud mark turns it bold and notifies with its note, a park
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/ListRoutines": return Response.json({ jobs: [] });
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
-      case "/api/Tabs":
+      case "/api/Tabs": case "/api/ChangeTabs":
         if (input.state) [state, revision] = [input.state, revision + 1];
         else reloads++;
         return Response.json({ spaces: [{ id: "main", name: "Main" }, { id: "team", name: "Team" }], state, revision: String(revision), shared: [{ space: "team", path: "/search/d", search: ops }] });
@@ -413,7 +413,7 @@ test("a call that took the person to a page shows its link in the chat, which op
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/ListRoutines": return Response.json({ jobs: [] });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: chat, space: "main" }], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [] });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: chat, space: "main" }], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [] });
       case "/api/History": return Response.json({ messages: [{ role: "tool", text: "execute\n{}", complete: true, turnId: "t", entryKey: "t", itemId: "go", inputId: "", toolName: "execute", toolCallId: "go",
         codeModeCalls: [{ name: "rocketclaw_navigate_for_me", arguments: JSON.stringify({ location: `https://rc.example${cron}` }), status: "ok", summary: `https://rc.example${cron}` }] }],
         delegations: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: ["t"], running: false, terminal: "", backgroundJobs: [], pendingQuestions: [], start: "0", more: false });

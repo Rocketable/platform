@@ -108,7 +108,7 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   observed.stage = "remote card";
   await page.goto(`${local}/`);
   const chatTab = page.getByRole("tablist", { name: "Main tabs on work" }).locator('[data-tab^="/s/"]');
-  const change = (action: string) => page.waitForRequest((request: { url(): string; postData(): string | null }) => request.url() === `${remote}/api/Tabs` && JSON.parse(request.postData()!).attention?.action === action);
+  const change = (action: string) => page.waitForRequest((request: { url(): string; postData(): string | null }) => request.url() === `${remote}/api/ChangeTabs` && JSON.parse(request.postData()!).attention?.action === action);
   const parking = change("PARK");
   await chatTab.getByRole("tab").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Park", exact: true }).click();
@@ -164,8 +164,8 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
     await menu.getByRole("menuitem", { name: "Go to space", exact: true }).click();
     await menu.waitFor({ state: "hidden" });
   };
-  await page.evaluate(async () => { await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ createSpace: "Side" }) }); });
-  await page.evaluate(async (url: string) => { await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ createSpace: "Billing" }) }); }, remote);
+  await page.evaluate(async () => { await fetch("/api/ChangeTabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ createSpace: "Side" }) }); });
+  await page.evaluate(async (url: string) => { await fetch(`${url}/api/ChangeTabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ createSpace: "Billing" }) }); }, remote);
   await page.goto(`${local}/`);
   const current = (url: string, name: string) => page.evaluate(async ([url, name]: string[]) => {
     const view = await (await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();

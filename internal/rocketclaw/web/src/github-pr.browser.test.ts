@@ -414,7 +414,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/Prompt": prompts++; return Response.json({});
-      case "/api/Tabs":
+      case "/api/Tabs": case "/api/ChangeTabs":
         if (input.state) { tabs.state = input.state; tabs.revision = String(Number(tabs.revision) + 1); }
         return Response.json(tabs);
       case "/api/History": {
@@ -675,7 +675,7 @@ test("the PR pane quotes its description and adds diff notes to the native draft
       case "/api/SlackNames": return Response.json({ names: { U42: "Riley" } });
       case "/api/Prompt": prompts.push(await request.json()); return Response.json({});
       case "/api/UploadAttachment": await uploadHold; return Response.json({ id: "attachment", name: "notes.txt", mimeType: "text/plain", size: "5" });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: sessionPath(session), space: "main" }], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [] });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: sessionPath(session), space: "main" }], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [] });
       case "/api/History": return Response.json({ messages: [{ role: "tool", text: "execute\n{}", complete: true, turnId: "t", entryKey: "t", itemId: "create", inputId: "", toolName: "execute", toolCallId: "create", codeModeCalls: [{ name: "bash", arguments: JSON.stringify({ command: "gh pr create --fill" }), status: "ok", summary: pr, createdPullRequests: [pr] }] }], delegations: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: ["t"], running: false, terminal: "", backgroundJobs: [], pendingQuestions: [], start: "0", more: false });
       default: return Response.json({});
     }

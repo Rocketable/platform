@@ -182,7 +182,7 @@ test("sidebar listing objects stay separate from older clients' row arrays", asy
       listings.push(url.searchParams.get("since") ?? "");
       return new Response(`data: ${JSON.stringify({ owner: "alice", sessions: [{ id: "fresh", name: "Fresh list" }], upstreamSuccess: true, version: "fresh" })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     }
-    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+    if (url.pathname === "/api/Tabs" || url.pathname === "/api/ChangeTabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
     return unpacked(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html"));
   } });
@@ -233,7 +233,7 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "command-hints" });
       if (url.pathname === "/api/ListConfig") return Response.json({ config: {} });
       if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
-      if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      if (url.pathname === "/api/Tabs" || url.pathname === "/api/ChangeTabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       return Response.json({});
     } });
     const browser = await engine.launch({ executablePath: chromium, headless: true });
@@ -348,7 +348,7 @@ test("room autocomplete keeps selections and full labels on each search surface"
       }).sort((a, b) => a.start - b.start);
       return Response.json({ terms, text: "", needle: "", matches: (results[query] ?? []).map((index) => ({ conversationId: rows[index].id, field: "Preview", text: rows[index].preview })), messages: [], mentionIds: [] });
     }
-    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+    if (url.pathname === "/api/Tabs" || url.pathname === "/api/ChangeTabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
     return Response.json({});
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
@@ -463,7 +463,7 @@ test("actual App renders independent public lifecycle and reconnect replacements
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/Prompt": expect(input.text).toBe("/stop"); running = false; revision++; return Response.json({ privateText: "" });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
@@ -531,7 +531,7 @@ test("session titles and turn-rail previews format tags and markup", async () =>
       case "/api/SlackNames": return Response.json({ names: { S1: "handle" } });
       case "/api/History": return Response.json({ messages: [{ messageId: "1:0", entryKey: "1", itemId: "1:0", inputId: "", role: "user", text: preview, complete: true, turnId: "" }], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: ["1"], running: false, terminal: "" });
       case "/api/ListQueue": return Response.json({ items: [] });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });

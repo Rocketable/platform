@@ -18,6 +18,8 @@ func (s *Server) pageCall(ctx context.Context, request any) (any, error) {
 	case *ListPagesRequest:
 		return s.listPages(ctx, request)
 	case *TabsRequest:
+		return s.tabs(ctx, &ChangeTabsRequest{})
+	case *ChangeTabsRequest:
 		return s.tabs(ctx, request)
 	case *ReportTypingRequest:
 		return s.reportTyping(ctx, request)

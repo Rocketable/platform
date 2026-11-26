@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse, error) {
+func (s *Server) tabs(ctx context.Context, request *ChangeTabsRequest) (*TabsResponse, error) {
 	username, _, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
@@ -117,7 +117,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	return response, nil
 }
 
-func (s *Server) changeTabs(ctx context.Context, username string, limit backend.SpaceLimit, request *TabsRequest) (saved, refused bool, unshared *backend.SearchPage, err error) {
+func (s *Server) changeTabs(ctx context.Context, username string, limit backend.SpaceLimit, request *ChangeTabsRequest) (saved, refused bool, unshared *backend.SearchPage, err error) {
 	shared := cmp.Or(request.Share, request.EditShared, request.Unshare)
 
 	switch {
@@ -173,7 +173,7 @@ func knownTabList(list backend.TabList) bool {
 	return list == backend.RecentList || list == backend.ParkedList
 }
 
-func (s *Server) changeList(ctx context.Context, username string, limit backend.SpaceLimit, request *TabsRequest) error {
+func (s *Server) changeList(ctx context.Context, username string, limit backend.SpaceLimit, request *ChangeTabsRequest) error {
 	if request.ListAdd != nil {
 		return s.addToList(ctx, username, limit, request.ListAdd)
 	}

@@ -32,7 +32,7 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/ListPages": return Response.json({ pages });
       case "/api/UpdateSession": moves.push(input); return Response.json({});
-      case "/api/Tabs": if (input.state) saved.state = input.state; return Response.json(saved);
+      case "/api/Tabs": case "/api/ChangeTabs": if (input.state) saved.state = input.state; return Response.json(saved);
       case "/api/GetPage":
         reads.push(input);
         return input.space === "Billing" && input.path === "revenue" && input.data ? Response.json({ space: "Billing", contentType: "application/json", body: Buffer.from(`{"total":3}`).toString("base64") }) : Response.json({ code: 5, message: "page not found" }, { status: 404 });
@@ -245,7 +245,7 @@ for (const down of [false, true]) test(`the Page Index lists every RocketClaw's 
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { ...cors, "Content-Type": "text/event-stream" } });
     if (down && url.pathname === "/api/ListPages") return Response.json({ code: 14, message: "Unavailable" }, { status: 503, headers: cors });
-    const replies: Record<string, unknown> = { "/api/Identity": { username: "tester" }, "/api/Tabs": { spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [], groups: [], space: "lab", last: {} }, shared: [] }, "/api/ListPages": { pages: [{ space: "Lab", path: "index.html" }] } };
+    const replies: Record<string, unknown> = { "/api/Identity": { username: "tester" }, "/api/Tabs": { spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [], groups: [], space: "lab", last: {} }, shared: [] }, "/api/ChangeTabs": { spaces: [{ id: "lab", name: "Lab" }], state: { tabs: [], groups: [], space: "lab", last: {} }, shared: [] }, "/api/ListPages": { pages: [{ space: "Lab", path: "index.html" }] } };
     return Response.json(replies[url.pathname] ?? {}, { headers: cors });
   } });
   try {

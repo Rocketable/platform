@@ -289,7 +289,7 @@ for (const width of [1280, 390]) test(`palette search handoffs stay in their ope
   // A personal save can return the old Shared page after its newer edit was acknowledged.
   const held = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   let blocked = false;
-  await page.route("**/api/Tabs", async (route: any) => {
+  await page.route("**/api/ChangeTabs", async (route: any) => {
     const input = route.request().postDataJSON();
     if (input.editShared && !saved.shared.some((tab) => tab.path === "/search/ack")) saved.shared.push({ space: "blue", path: "/search/ack", search: { name: "Acknowledged", searches: [], active: "" } });
     const response = await route.fetch(), reply = await response.json();
@@ -332,8 +332,8 @@ for (const width of [1280, 390]) test(`palette search handoffs stay in their ope
     };
     return queries;
   });
-  const resumed = page.waitForResponse((response: any) => response.url().endsWith("/api/Tabs") && !!response.request().postDataJSON().state);
-  const nextSave = page.waitForRequest((request: any) => request.url().endsWith("/api/Tabs") && !!request.postDataJSON().state);
+  const resumed = page.waitForResponse((response: any) => response.url().endsWith("/api/ChangeTabs") && !!response.request().postDataJSON().state);
+  const nextSave = page.waitForRequest((request: any) => request.url().endsWith("/api/ChangeTabs") && !!request.postDataJSON().state);
   release.resolve();
   await (await resumed).finished();
   await nextSave;
@@ -342,7 +342,7 @@ for (const width of [1280, 390]) test(`palette search handoffs stay in their ope
   await palette.getByRole("button", { name: /^Search: Acknowledged/ }).waitFor();
   await page.keyboard.press("Escape");
   expect(await queries.jsonValue()).not.toContain("other");
-  await page.unroute("**/api/Tabs");
+  await page.unroute("**/api/ChangeTabs");
   await page.reload();
   await page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true }).waitFor();
   await at(scoped);
@@ -499,7 +499,7 @@ test("Recently closed lists closed tabs newest first and reopens one where it wa
   expect(await rows()).toEqual(["CharlieMain", "BravoMain"]);
 
   // Pressed again before the save reopening the first has answered, Cmd/Ctrl+Alt+T reopens the next.
-  await page.route("**/api/Tabs", async (route: any) => { await Bun.sleep(500); await route.continue(); });
+  await page.route("**/api/ChangeTabs", async (route: any) => { await Bun.sleep(500); await route.continue(); });
   await page.keyboard.press("Control+Alt+t");
   await page.waitForURL(`**${href("charlie")}`);
   await page.keyboard.press("Control+Alt+t");
@@ -1343,7 +1343,7 @@ function serveRemote(tabs: RemoteTabs, sessions: (sent: Change[]) => object[]) {
     if (input.attention) sent.push(input.attention);
     const stale = !!input.state && input.revision !== saved.revision;
     if (input.state && !stale) [saved.state, saved.revision] = [input.state, saved.revision + 1];
-    const replies: Record<string, unknown> = { "/api/Identity": { username: "tester" }, "/api/Protocol": { protoSha256: "tabs" }, "/api/Tabs": stale ? { ...saved, stale } : saved, "/api/ListConfig": { config: { workspace: "tabs" } }, "/api/ListAgents": { agents: [{ name: "main" }], currentAgent: "main" }, "/api/ListRoutines": { jobs: [] }, "/api/ListQueue": { items: [] }, "/api/CreateSession": { id: "opencode:far:ses_far" },
+    const replies: Record<string, unknown> = { "/api/Identity": { username: "tester" }, "/api/Protocol": { protoSha256: "tabs" }, "/api/Tabs": stale ? { ...saved, stale } : saved, "/api/ChangeTabs": stale ? { ...saved, stale } : saved, "/api/ListConfig": { config: { workspace: "tabs" } }, "/api/ListAgents": { agents: [{ name: "main" }], currentAgent: "main" }, "/api/ListRoutines": { jobs: [] }, "/api/ListQueue": { items: [] }, "/api/CreateSession": { id: "opencode:far:ses_far" },
       "/api/History": { messages: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" } };
     return Response.json(replies[url.pathname] ?? {}, { headers: cors });
   } });

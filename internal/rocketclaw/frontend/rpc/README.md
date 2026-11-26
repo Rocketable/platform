@@ -219,7 +219,7 @@ list. An SSE `complete` event is sent only after successful gRPC EOF. HTTP itera
 failure or wire cut can leave a visible prefix, which is not a completed list.
 Cancellation cancels the gRPC call, including pending reads, and releases database
 rows.
-`Tabs` changes attention through `attention`: locations, an action (mark read,
+`ChangeTabs` changes attention through `attention`: locations, an action (mark read,
 mark unread, park, park until done, unpark), and an RFC 3339 time for a park.
 Park until done parks a session's tab until the session is idle after its work:
 no turn running, no message queued, no Background Job to wake it and no active
@@ -701,10 +701,20 @@ checks them (absent arguments count as `{}`); a method that streams requests, su
 response in protobuf JSON, or a JSON array of every response when the method streams
 responses, such as `ListSessions` or `DownloadAttachment`; a failure is a tool error
 whose text carries the gRPC code and message. Each tool's description is its `rpc`'s
-comment in `web.proto`, and its input schema lists the request's top-level fields by
-their protobuf JSON names, each described by its field comment there; `protoc` keeps
-those comments in the embedded `web.binpb`, which `go generate` writes. Every `rpc`
-needs a comment, and comments name fields by their JSON names. The server's
+comment in `web.proto`, and its input schema is the request's whole protobuf shape:
+every field by its JSON name and type, nested messages as objects, repeated fields as
+arrays, maps as objects, enums as their value names, and 64-bit integers as a number
+or a string, as protobuf JSON accepts. Each field is described by its comment there,
+and a message that contains itself stops at the repeat. `protoc` keeps those comments
+and options in the embedded `web.binpb`, which `go generate` writes. Every `rpc`
+needs a comment, and comments name fields by their JSON names. A method marked
+`option idempotency_level = NO_SIDE_EFFECTS` is a read-only tool, which clients may
+call without asking; any other tool may change things. Reads and writes are separate
+methods, such as `Tabs` and `ChangeTabs`, so a read can carry the mark. A read may
+still cache, catch up with what already happened elsewhere, or tell the caller its
+result is ready: `History` stores a copy of a file a tool returned inline so the
+file's card can download it, `GetAgentDraft` applies a merge that already landed,
+and `SearchSessions` marks its tab unread when a search finishes. The server's
 instructions describe only this translation, never a single method. `GET /rpc_mcp` answers 405.
 Its access log names the tool a request called after a `#`, as in
 `POST /rpc_mcp#Prompt`, with one line per tool when a request calls several,
@@ -802,7 +812,7 @@ The checks sit where requests already pass:
   are also refused while that turn's agent is outside the limit. Queued, stashed,
   released, and edited items wait for a turn of their own, so they are taken. `/stop`, `/agent`, and `RemoveQueueItem` need only
   a visible session.
-- Handlers outside those paths check for themselves: `Tabs` (only the person's
+- Handlers outside those paths check for themselves: `Tabs` and `ChangeTabs` (only the person's
   spaces and Shared tabs, and creates missing listed spaces), `GetPage` and
   `ListPages`, `ListRoutines` and `RunRoutine` (the routine's space and its agent;
   `RunRoutine` refuses others with "this routine or its agent is outside your spaces"),

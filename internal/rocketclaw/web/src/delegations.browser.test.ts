@@ -33,7 +33,7 @@ function serve(histories: Record<string, History>) {
         return Response.json({ ...history, messages, revision: input.id, reset: true, replacedKeys: [], removedKeys: [], entryKeys: [input.id], running: false, terminal: "", backgroundJobs: [] });
       }
       case "/api/ListQueue": return Response.json({ items: [] });
-      case "/api/Tabs": return Response.json({ revision: "1", spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ revision: "1", spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });

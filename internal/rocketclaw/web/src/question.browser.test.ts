@@ -40,7 +40,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web quest
         return Response.json({});
       }
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], pendingQuestions: input.id === "chat" ? questions : [], messages: [], revision: questions.map((asked) => asked.id).join(), reset: true, entryKeys: [], running: input.id === "chat", start: "0", more: false });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
@@ -119,7 +119,7 @@ test("a limited person cannot answer a question of an agent outside their spaces
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/Prompt": case "/api/AnswerQuestion": calls.push({ path: url.pathname, text: input.text }); return Response.json({ privateText: "" });
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], pendingQuestions: [{ id: "q1", question: "Ship it?", details: "", multiple: false, options: [{ label: "Yes", value: "yes", description: "" }] }], messages: [], revision: "q1", reset: true, entryKeys: [], running: true, start: "0", more: false });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "ops", name: "Ops" }], state: { tabs: [], groups: [], space: "ops", last: {} } });
+      case "/api/Tabs": case "/api/ChangeTabs": return Response.json({ spaces: [{ id: "ops", name: "Ops" }], state: { tabs: [], groups: [], space: "ops", last: {} } });
       default: return Response.json({});
     }
   } });

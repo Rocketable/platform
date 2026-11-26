@@ -1111,7 +1111,7 @@ test("Recent keeps the person's order: a new tab is born on top, a visit never m
 
   await recentRow(page, "Echo").focus();
   await page.keyboard.press("Shift+F10");
-  const closedSaved = page.waitForResponse(async (response: any) => response.url().endsWith("/api/Tabs") && (await response.json()).closed?.some((tab: { path: string }) => tab.path === href("echo")));
+  const closedSaved = page.waitForResponse(async (response: any) => response.url().endsWith("/api/ChangeTabs") && (await response.json()).closed?.some((tab: { path: string }) => tab.path === href("echo")));
   await page.getByRole("menuitem", { name: "Close", exact: true }).click();
   await recentRow(page, "Echo").waitFor({ state: "detached" });
   expect(await recentNames(page)).toEqual(["Alpha"]);
@@ -1190,7 +1190,7 @@ test("a rejected Recent removal leaves a newer removal pending", () => withPage(
   const rejectFirst = Promise.withResolvers<void>();
   const finishSecond = Promise.withResolvers<void>();
   const secondStarted = Promise.withResolvers<void>();
-  await page.route("**/api/Tabs", async (route: any) => {
+  await page.route("**/api/ChangeTabs", async (route: any) => {
     const removal = route.request().postDataJSON()?.listForget;
     if (removal?.path === href("alpha")) {
       await rejectFirst.promise;
@@ -1213,7 +1213,7 @@ test("a rejected Recent removal leaves a newer removal pending", () => withPage(
       window.fetch = new Proxy(window.fetch, {
         apply(send, receiver, args: Parameters<typeof fetch>) {
           const [input, init] = args;
-          if (String(input).endsWith("/api/Tabs") && typeof init?.body === "string" && JSON.parse(init.body).listForget?.path === path) {
+          if (String(input).endsWith("/api/ChangeTabs") && typeof init?.body === "string" && JSON.parse(init.body).listForget?.path === path) {
             document.documentElement.dataset.thirdRemovalSent = "true";
           }
           return Reflect.apply(send, receiver, args);

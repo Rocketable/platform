@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 func TestHTTPEventFramingAllocationBudget(t *testing.T) {
@@ -384,12 +385,15 @@ func TestHTTPRPCMCP(t *testing.T) {
 	require.NoError(t, err)
 
 	type inputSchema struct {
-		Properties map[string]struct {
-			Description string `json:"description"`
-		} `json:"properties"`
+		Type                 json.RawMessage         `json:"type"`
+		Description          string                  `json:"description"`
+		Enum                 []string                `json:"enum"`
+		Items                *inputSchema            `json:"items"`
+		Properties           map[string]*inputSchema `json:"properties"`
+		AdditionalProperties *inputSchema            `json:"additionalProperties"`
 	}
 
-	names, schemas, descriptions := make([]string, 0, len(listed.Tools)), map[string]inputSchema{}, map[string]string{}
+	names, schemas, descriptions, readOnly := make([]string, 0, len(listed.Tools)), map[string]inputSchema{}, map[string]string{}, map[string]bool{}
 
 	for _, tool := range listed.Tools {
 		raw, err := json.Marshal(tool.InputSchema)
@@ -399,12 +403,27 @@ func TestHTTPRPCMCP(t *testing.T) {
 		require.NoError(t, json.Unmarshal(raw, &schema))
 		require.NotEmpty(t, tool.Description, "%s needs a comment in web.proto", tool.Name)
 
-		names, schemas[tool.Name], descriptions[tool.Name] = append(names, tool.Name), schema, tool.Description
+		names, schemas[tool.Name], descriptions[tool.Name], readOnly[tool.Name] = append(names, tool.Name), schema, tool.Description, tool.Annotations.ReadOnlyHint
 	}
 
 	require.ElementsMatch(t, append(strings.Fields(webUnaryMethods+" "+editorMethods), "ListSessions", "DownloadAttachment", "UploadAttachment"), names)
 	require.Contains(t, descriptions["Prompt"], "read it with History")
 	require.Contains(t, schemas["Prompt"].Properties["messageId"].Description, "resend the same one when retrying")
+	require.Equal(t, []string{"STEER", "QUEUE", "STASH"}, schemas["Prompt"].Properties["delivery"].Enum)
+	require.JSONEq(t, `"string"`, string(schemas["Prompt"].Properties["attachmentIds"].Items.Type))
+
+	op := schemas["ApplyAgentDraftOp"].Properties["op"]
+	require.JSONEq(t, `["integer", "string"]`, string(op.Properties["revision"].Type))
+	require.JSONEq(t, `"integer"`, string(op.Properties["splices"].Items.Properties["remove"].Type))
+	require.JSONEq(t, `"string"`, string(op.Properties["externalMcp"].Properties["metadata"].AdditionalProperties.Type))
+	require.Equal(t, map[string]bool{"History": true, "Prompt": false}, map[string]bool{"History": readOnly["History"], "Prompt": readOnly["Prompt"]})
+
+	recursive, err := json.Marshal(messageSchema((&descriptorpb.DescriptorProto{}).ProtoReflect().Descriptor(), map[protoreflect.FullName]bool{}))
+	require.NoError(t, err)
+
+	var descriptorSchema inputSchema
+	require.NoError(t, json.Unmarshal(recursive, &descriptorSchema))
+	require.Empty(t, descriptorSchema.Properties["nestedType"].Items.Properties, "a message that contains itself stops at the repeat")
 
 	webMethods := File_web_proto.Services().ByName("Web").Methods()
 
