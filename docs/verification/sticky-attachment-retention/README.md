@@ -42,17 +42,14 @@ make -C docs/verification/sticky-attachment-retention fixed    # one check
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar`
 v1.8.0 and verifies SHA-256
-`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`.
+`67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`.
 The tools, the translator's copy, Java's temporary files, TLC's
 working files and each check's log go to the repository root's
 `.tmp/verification/sticky-attachment-retention/`. A passing check needs TLC exit
 0 and `Model checking completed. No error has been found.`; a check that must
 fail needs TLC exit 12 (safety) or 13 (liveness) and its named violation.
 
-On 2026-11-15 the tlaplus project replaced the v1.8.0 release's
-`tla2tools.jar`, so a fresh download fails the pinned checksum. The recorded run
-used a jar with the pinned checksum already on the machine, copied into the work
-directory. The pin is unchanged.
+The 2026-11-18 run used a local copy of the then-pinned jar because a fresh download no longer matched it.
 
 ## An attachment's life
 
@@ -118,6 +115,9 @@ Assumptions:
 - Attachment ids are never reused.
 
 ## Checks and result
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (1 pass, 3 named counterexamples) in 7s.
 
 On 2026-11-21, `make all` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 

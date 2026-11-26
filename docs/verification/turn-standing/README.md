@@ -28,7 +28,7 @@ make -C docs/verification/turn-standing safety   # one check
 You need Java 11+, `curl`, `shasum`, `perl` and Make.
 
 The Makefile downloads `tla2tools.jar` v1.8.0 and checks its SHA-256
-`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`, the same pin as `docs/verification/slack-sticky`.
+`67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`, the same pin as `docs/verification/slack-sticky`.
 Everything else lives under `.tmp/run/turn-standing-model/`: the tools, the translator's scratch copy, Java's
 temporary files, TLC metadata, and every log, with full counterexample traces.
 
@@ -147,6 +147,9 @@ reachable:
 - `NoLateNote`: a non-waking note runs with a later turn of its standing.
 
 ## Results
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (3 passes, 8 named counterexamples) in 1m 24s.
 
 Inputs are numbered; each world says which are addressed and which unaddressed. Logs and full traces are in
 `.tmp/run/turn-standing-model/<check>.log`.

@@ -21,13 +21,12 @@ make -C docs/verification/code-mode-call-records fixed    # one check
 ```
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256
-`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. The tools, the translator's copy, Java's temporary
+`67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`. The tools, the translator's copy, Java's temporary
 files, TLC's working files and each check's log go to the repository root's `.tmp/verification/code-mode-call-records/`.
 A passing check needs TLC exit 0 and `Model checking completed. No error has been found.`. A check that must fail needs
 TLC exit 12 (safety) or 13 (liveness) and its named violation, so a parse or tool error never counts.
 
-A fresh download no longer matches the pinned checksum. The recorded run used a jar with the pinned checksum that was
-already on the machine, copied into the work directory.
+The 2026-11-22 run used a local copy of the previous pin because a fresh download no longer matched it.
 
 ## What the code does
 
@@ -166,6 +165,9 @@ cancels a call in the saved entry), `NeverCancelledScratchSaved` (recovery cance
 saves it) and `NeverFinishWaits` (the turn save waits for a record that holds the row lock).
 
 ## Results
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (4 passes, 11 named counterexamples) in 12s.
 
 Recorded 2026-11-22 on Linux (aarch64, 16 cores), OpenJDK 21.0.13.1, TLC `2026.11.19.180144` (rev `bc1b506`),
 `pcal.trans` 1.12, one TLC worker. `make -k all` ran every check in about 13 s with the tools in place and exited 0,

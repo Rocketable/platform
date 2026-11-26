@@ -11,7 +11,7 @@ make -C docs/verification/session-done              # translate, then every chec
 make -C docs/verification/session-done a-recovery   # one check
 ```
 
-Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256 `fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. The tools, the translator's copies, Java's temporary files, TLC's working files and each check's log go to the repository root's `.tmp/verification/session-done/`. A check that must pass passes only when TLC exits 0 and reports `Model checking completed. No error has been found.`; a check that must fail passes only when TLC exits 12 or 13 and names the violation the Makefile expects.
+Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256 `67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`. The tools, the translator's copies, Java's temporary files, TLC's working files and each check's log go to the repository root's `.tmp/verification/session-done/`. A check that must pass passes only when TLC exits 0 and reports `Model checking completed. No error has been found.`; a check that must fail passes only when TLC exits 12 or 13 and names the violation the Makefile expects.
 
 ## The park
 
@@ -54,6 +54,9 @@ A park is owed an end when it is an auto-park, or when a busy period has ended s
 - Every park starts from `Init`. Parks open or paused by a question when migration 111 runs instead start from its backfill, which sets the threshold to the session's stored idle marker (one less when the park already saw its work end); `TestParkAfterIdleMigration` checks that those rows end like parks the model covers.
 
 ## What each check proves
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (3 passes, 4 named counterexamples) in 9m 29s.
 
 On 2026-11-24, `make` passed (exit 0, 21 minutes) with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1` on linux/aarch64 (16 workers). Every Doorbell check runs with `MaxSends = 2` and `MaxManual = 1`.
 

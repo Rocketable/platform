@@ -14,7 +14,7 @@ make -C docs/verification/oc-view-keep keep    # one check
 ```
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256
-`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. The tools, the translator's copy, Java's
+`67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`. The tools, the translator's copy, Java's
 temporary files, TLC's working files and each check's log go to the repository root's
 `.tmp/verification/oc-view-keep/`. A passing check needs TLC exit 0 and
 `Model checking completed. No error has been found.`; a check that must fail needs TLC exit 12 (an invariant) or 13 (a
@@ -82,6 +82,9 @@ one TLC worker, so the first counterexample is the same on every run.
   the person's Retry, which the model does not force.
 
 ## Recorded run
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (2 passes, 4 named counterexamples) in 4s.
 
 2026-11-22, linux/aarch64, OpenJDK 21.0.13.1, TLC `2026.11.19.180144 (rev: bc1b506)`, `pcal.trans` 1.12: every check
 matched its expected outcome; `make` took about 5 s with the tools already downloaded.

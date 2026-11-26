@@ -14,7 +14,7 @@ make -k -C docs/verification/message-tree       # every check, even after one fa
 make -C docs/verification/message-tree move     # one check
 ```
 
-Needs Java 11+, `curl`, `shasum`, `perl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and checks its SHA-256 `fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. Tools, the translator's scratch copy, Java's temporary files, TLC metadata and every log (with full counterexample traces) live under the repository root's `.tmp/run/message-tree-model/`. Each TLC run is killed after 600 seconds, which fails its check. A passing check must exit 0 and print `Model checking completed. No error has been found.`; a must-fail check must exit 12 or 13 and print its named violation, so a parse error or a timeout never counts as an expected failure.
+Needs Java 11+, `curl`, `shasum`, `perl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and checks its SHA-256 `67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`. Tools, the translator's scratch copy, Java's temporary files, TLC metadata and every log (with full counterexample traces) live under the repository root's `.tmp/run/message-tree-model/`. Each TLC run is killed after 600 seconds, which fails its check. A passing check must exit 0 and print `Model checking completed. No error has been found.`; a must-fail check must exit 12 or 13 and print its named violation, so a parse error or a timeout never counts as an expected failure.
 
 `MessageTree.tla` holds the algorithm, the properties and the generated translation. Edit outside the `BEGIN TRANSLATION`/`END TRANSLATION` markers, then `make translate`. The constant `Mutation` is `"none"` for the design as planned; each other value turns one rule off.
 
@@ -77,6 +77,9 @@ Liveness: `QueuedEventuallyRun` (`<>[](Len(queue) = 0)`), with weak fairness on 
 Witness: `NeverBranched` must fail, which shows a branch is reachable.
 
 ## Checks and results
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (6 passes, 7 named counterexamples) in 11s.
 
 TLC 2026.11.19.180144 (`tla2tools.jar` v1.8.0), OpenJDK 21.0.13.1, run 2026-11-23. Every PASS check took about one second.
 

@@ -17,7 +17,7 @@ make -C docs/verification/oc-view-session view    # one check
 ```
 
 Requires Java 11+, `curl` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies SHA-256
-`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. The tools, the translator's copy, Java's
+`67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`. The tools, the translator's copy, Java's
 temporary files, TLC's working files and each check's log go to the repository root's
 `.tmp/verification/oc-view-session/`. A passing check needs TLC exit 0 and
 `Model checking completed. No error has been found.`; a check that must fail needs TLC exit 12 and its named
@@ -78,6 +78,9 @@ same on every run.
   session has loaded.
 
 ## Recorded run
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (2 passes, 6 named counterexamples) in 16s; the Lean check passed too.
 
 2026-11-13, on arm64, OpenJDK 21.0.13, TLC `2026.11.06.222357 (rev: d8fb231)`, `pcal.trans` 1.12:
 every check matched its expected outcome; `make` took 10 to 12 s including the tools download. Translating changed

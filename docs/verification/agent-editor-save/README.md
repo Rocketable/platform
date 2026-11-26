@@ -27,7 +27,7 @@ make -C docs/verification/agent-editor-save claim-reply-lost
 
 You need Java 11+, `curl`, `shasum` and Make. The runner downloads `tla2tools.jar`
 v1.8.0, verifies SHA-256
-`fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`, and keeps the
+`67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`, and keeps the
 tools, the translator's scratch copy, Java temporary files, TLC metadata and every
 log and trace under the repository root's `.tmp/run/agent-editor-save/`. A passing
 check needs TLC exit 0 and `Model checking completed. No error has been found.`. A
@@ -151,6 +151,9 @@ bytes as its base. Stop waiting does not close the pull request.
 | `Probe…` | Reachability probes: each must be violated, which shows the state the passing checks rely on can happen |
 
 ## Checks
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (4 passes, 29 named counterexamples) in 7m 1s.
 
 On 2026-11-21, `make check` passed with TLC `2026.11.19.180144` (rev `bc1b506`) and OpenJDK `21.0.13.1`.
 

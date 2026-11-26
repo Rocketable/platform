@@ -16,7 +16,7 @@ make -C docs/verification/tab-selection-escape fixed      # one check
 ```
 
 Requires Java 11 or newer, `curl`, `shasum` and Make. The Makefile downloads `tla2tools.jar` v1.8.0 and verifies
-SHA-256 `fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713`. The tools, the translator's copy, Java's
+SHA-256 `67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`. The tools, the translator's copy, Java's
 temporary files, TLC's metadata and each check's log go to the repository root's `.tmp/run/tab-selection-escape-model/`.
 A passing check must exit 0 and print `Model checking completed. No error has been found.`; a check that must fail must
 exit 12 or 13 and print its named violation, so a parse error never counts as an expected failure.
@@ -84,6 +84,9 @@ safety property depends on the menu taking focus.
 
 ## Recorded run
 
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (2 passes, 4 named counterexamples) in 8s; the Lean check passed too.
+
 2026-11-17, `make -C docs/verification/tab-selection-escape`, one TLC worker, 1 GiB heap. OpenJDK 21.0.13.0.3, TLC
 `2026.11.06.222357 (rev: d8fb231)`, `pcal.trans` 1.12. `make` exited 0 in 7.3 s, translation included; each TLC run
 reported finishing in at most 1 s.
@@ -102,9 +105,9 @@ Rerun 2026-11-18 after the `tla2tools.jar` pin moved to build `bc1b506` (one ups
 The passing checks exhausted their state graphs. A failing check stops at its first counterexample, so its counts are
 the explored prefix.
 
-On this date the v1.8.0 release URL served a `tla2tools.jar` whose SHA-256 is
+During the 2026-11-17 run, the v1.8.0 release URL served a `tla2tools.jar` with SHA-256
 `7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f`, so the Makefile's checksum step refused it. The run
-used a `tla2tools.jar` already downloaded under the repository's `.tmp/` that matches the pinned SHA-256, placed in the
+used a `tla2tools.jar` already downloaded under the repository's `.tmp/` that matched the pin at the time, placed in the
 work directory, where the same checksum step accepted it.
 
 ## Assumptions and what is left out

@@ -2,7 +2,7 @@ SHELL := /bin/bash
 override WORK := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../../..)/.tmp/composer-mention-selection
 MODEL := ComposerMentionSelection.tla
 TLA_VERSION := 1.8.0
-TLA_SHA256 := fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713
+TLA_SHA256 := 67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928
 TOOLS := $(WORK)/tla2tools.jar
 JAVA := java -Djava.io.tmpdir=$(WORK)/java -XX:-UsePerfData -XX:+UseParallelGC -cp $(TOOLS)
 TLC := $(JAVA) -Xmx256m tlc2.TLC -workers 1 -noGenerateSpecTE

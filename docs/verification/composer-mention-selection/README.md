@@ -29,9 +29,13 @@ The model assumes each labeled event is atomic with respect to other events; a c
 | `fixed` | The caret is ready after acceptance, a later full selection stays put until the edit, the replacement clears the tag, and the edit finishes. |
 | `old` | `ReplacementRemovesTag` fails with an acceptance, full selection, frame restore, then insertion instead of replacement. |
 
-Run `make -C docs/verification/composer-mention-selection`. The check uses the pinned TLA+ tools; all tool files, translation output and logs stay under `.tmp/`.
+Run `make -C docs/verification/composer-mention-selection`. The check uses `tla2tools.jar` v1.8.0 with SHA-256
+`67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928`; all tool files, translation output and logs stay under `.tmp/`.
 
 ## Result
+
+On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
+matched every TLC outcome (1 pass, 1 named counterexample) in 1s.
 
 Verified before implementing the fix, using Linux arm64, OpenJDK 21.0.13.1, PlusCal 1.12 and TLC 2026.11.19.180144. Each check used one worker and took less than one second.
 

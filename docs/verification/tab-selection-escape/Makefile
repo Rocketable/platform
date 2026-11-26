@@ -3,7 +3,7 @@ ROOT := $(abspath ../../..)
 WORK := $(ROOT)/.tmp/run/tab-selection-escape-model
 MODEL := $(CURDIR)/TabSelectionEscape.tla
 TLA_VERSION := 1.8.0
-TLA_SHA256 := fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713
+TLA_SHA256 := 67f9575c3b9ef7a0787b1bded34812862ffe79d711298e5a75b1a77720b19928
 TOOLS := $(WORK)/tla2tools-$(TLA_VERSION).jar
 JAVA := java -Djava.io.tmpdir=$(WORK)/java -XX:+UseParallelGC
 TLC := $(JAVA) -Xmx1g -cp $(TOOLS) tlc2.TLC -workers 1 -noGenerateSpecTE
