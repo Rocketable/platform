@@ -3613,6 +3613,8 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 	assert.True(t, strings.HasPrefix(requestBody.Input[0].Content, "Prompt\n"))
 	assert.Equal(t, "developer", requestBody.Input[1].Role)
 	assert.Equal(t, "RocketClaw goal state:\nStatus: progress\nLast reported note:\npatched parser; checking connectors", requestBody.Input[1].Content)
+	assert.Equal(t, "developer", requestBody.Input[2].Role)
+	assert.Equal(t, goalSteeringPrompt(&GoalState{Objective: "ship it", MaxTurns: 5}), requestBody.Input[2].Content)
 
 	for i := range requestBody.Input {
 		if requestBody.Input[i].Role == "assistant" {
@@ -3621,7 +3623,7 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 	}
 }
 
-func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
+func TestRunTurnRestatesActiveGoalBesideThePrompt(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
@@ -3631,7 +3633,8 @@ func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 	var (
 		requestBody struct {
 			Input []struct {
-				Role string `json:"role"`
+				Role    string `json:"role"`
+				Content string `json:"content"`
 			} `json:"input"`
 		}
 		errRequest error
@@ -3669,16 +3672,35 @@ func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 	require.NoError(t, service.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 5}))
 
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "thread-1", Agent: "primary", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "continue", false)
-	msg.GoalAction = protocol.GoalActionContinue
-	msg.ConversationID = "thread-1"
 
-	_, err = runTestTurn(context.Background(), bridge, msg, "turn-1")
+	for turn, text := range []string{"continue", "a person's message mid-goal"} {
+		msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, text, turn == 1)
+
+		msg.ConversationID = "thread-1"
+		if turn == 0 {
+			msg.GoalAction = protocol.GoalActionContinue
+		}
+
+		_, err = runTestTurn(context.Background(), bridge, msg, fmt.Sprintf("turn-%d", turn))
+		require.NoError(t, err)
+		require.NoError(t, errRequest)
+
+		last := requestBody.Input[len(requestBody.Input)-1]
+		steering := requestBody.Input[len(requestBody.Input)-2]
+		assert.Equal(t, "developer", steering.Role, text)
+		assert.True(t, strings.HasPrefix(steering.Content, "Active goal loop:\nObjective:\nship it\n\nTurn budget: "), steering.Content)
+		assert.Equal(t, "user", last.Role, text)
+		assert.Contains(t, last.Content, text)
+		assert.NotContains(t, last.Content, "Active goal loop", "the prompt the chat shows carries no goal instructions")
+	}
+
+	entries, err := service.ObserveEntries(t.Context(), "thread-1")
 	require.NoError(t, err)
-	require.NoError(t, errRequest)
-	require.Greater(t, len(requestBody.Input), 1)
-	assert.Equal(t, "developer", requestBody.Input[0].Role)
-	assert.Equal(t, "user", requestBody.Input[1].Role)
+
+	saved, err := json.Marshal(entries)
+	require.NoError(t, err)
+	assert.Contains(t, string(saved), "a person's message mid-goal")
+	assert.NotContains(t, string(saved), "Active goal loop", "the saved chat history the Web shows holds no goal instructions")
 }
 
 func TestExternalMCPMetadataDeveloperMessageSorted(t *testing.T) {

@@ -1147,6 +1147,9 @@ complete or blocked, the command first runs in the agent's shell, under its bash
 permissions, for up to two minutes; when it exits non-zero, or cannot run, the goal
 stays active and the agent gets its output. `force: yes` (or `true`, `on`, `1`) takes
 `blocked` away from the agent, so only completion, `/stop`, or `maxTurns:` ends the goal.
+Every turn while a goal is active, including a message someone sends during it, restates
+the goal and its instructions to the agent beside the prompt. The chat does not show them:
+each automatic goal turn appears as one "Continue the active goal loop." line.
 `/goal stop` ends the goal and lets the running turn finish; `/stop` ends both.
 `/goal resume` restarts a stopped, blocked or out-of-turns goal with its objective,
 `check:` and `force:`, counting turns from 1 again; a completed goal does not resume, and

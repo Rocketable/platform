@@ -362,7 +362,6 @@ func (b *Bridge) ContinueGoal(ctx context.Context, reply *protocol.SlackReplyTar
 	goal, _, err := store.Goal(b.config.ConversationID)
 	if err == nil {
 		inbound := goalContinuation(b.config.ConversationID, &goal)
-		inbound.Text += "\n\n" + goalSteeringPrompt(&goal)
 
 		if reply != nil {
 			*inbound.SlackReply = *reply
@@ -2278,6 +2277,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 				entry := harness.SessionEntry{Version: 1, Type: "goal_state", ReplayInput: replayInput}
 				snapshot.ContextEntries = append(snapshot.ContextEntries, entry)
 			}
+
+			snapshot.ContextEntries = append(snapshot.ContextEntries, harness.SessionEntry{Version: 1, Type: "goal_state", ReplayInput: replayInputForMessage("developer", goalSteeringPrompt(&goal))})
 		}
 
 		if shellEnv, childContext, err = b.turnShellEnv(ctx, self, origin, &snapshot.ContextEntries); err != nil {
@@ -2547,10 +2548,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	} else {
 		agent := agents.Items[agentName]
 
-		prompt, err := b.buildPrompt(msg, &agent)
-		if err != nil {
-			return runResult{}, err
-		}
+		prompt := buildPrompt(msg, &agent, false)
 
 		header, _, _ = strings.Cut(prompt, "\n\n")
 		prepared = harness.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey], msg.Metadata[agentDraftMessageMetadataKey], turnID+"/initial"), TurnID: turnID, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: inboundDirectSkill(msg)}
@@ -3749,21 +3747,6 @@ func ReplayInputMessageRoleText(item *responses.ResponseInputItemUnionParam, raw
 	}
 
 	return role, text, true, nil
-}
-
-func (b *Bridge) buildPrompt(msg *protocol.InboundMessage, agent *harness.Agent) (string, error) {
-	prompt := buildPrompt(msg, agent, false)
-
-	goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
-	if err != nil {
-		return "", fmt.Errorf("load active goal: %w", err)
-	}
-
-	if !ok || strings.TrimSpace(goal.Status) != GoalStatusActive {
-		return prompt, nil
-	}
-
-	return prompt + "\n\n" + goalSteeringPrompt(&goal), nil
 }
 
 func buildPrompt(msg *protocol.InboundMessage, agent *harness.Agent, steer bool) string {
