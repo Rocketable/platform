@@ -1161,7 +1161,12 @@ async function tabsCall(name: string, input: Parameters<typeof mutations.tabs>[0
     if (!old) return;
     // A personal save's incidental snapshots must not undo changes received while it was in flight.
     const shared = input.state && old.shared !== before?.shared ? old.shared : reply.shared;
-    if (reply.stale) return input.state ? { ...reply, shared } : undefined;
+    if (reply.stale) {
+      if (!input.state) return;
+      const repair = listSaves.repair;
+      if (repair?.queryHash === queryKeyHash(key)) repair.controller.abort();
+      return { ...reply, shared };
+    }
     const { closed } = reply;
     return JSON.stringify([old.shared, old.closed]) !== JSON.stringify([shared, closed]) ? { ...old, shared, closed } : undefined;
   });
@@ -1811,23 +1816,49 @@ const sameListed = (a: ListTab) => (b: ListTab) => a.list === b.list && a.server
 const listOf = (lists: ListTab[] | undefined, list: TabListName) => (lists ?? []).filter((tab) => tab.list === list);
 const addListed = (tab: ListTab) => (old: ListTab[]) => old.some(sameListed(tab)) ? old : [tab, ...old];
 const forgetListed = (tab: ListTab) => (old: ListTab[]) => old.filter((item) => !sameListed(tab)(item));
-const listSaves: { latest?: ListChange; pending?: ListTab[]; saves: Promise<unknown> } = { saves: Promise.resolve() };
+const listSaves: { latest?: ListChange; pending?: ListTab[]; saves: Promise<unknown>; repair?: { queryHash: string; controller: AbortController } } = { saves: Promise.resolve() };
 const listListeners = new Set<() => void>();
 const showLists = (pending?: ListTab[]) => { listSaves.pending = pending; for (const listener of listListeners) listener(); };
 const savedLists = () => listSaves.pending ?? queryClient.getQueryData<SavedTabs>(localTabsKey().queryKey)?.lists;
+
+async function repairLists(owner: string, change: ListChange) {
+  if (listSaves.latest !== change || localTabsKey().owner !== owner) return;
+  const { queryKey, queryFn } = queries.tabs(owner, ""), cache = queryClient.getQueryCache();
+  const query = cache.find({ queryKey, exact: true });
+  if (!query?.state.data) return;
+  const controller = new AbortController(), repair = listSaves.repair = { queryHash: query.queryHash, controller };
+  const stop = cache.subscribe((event) => {
+    if (event.query === query && (event.type === "removed" || (event.type === "updated" && event.action.type === "success" && !event.action.manual))) controller.abort();
+  });
+  controller.signal.addEventListener("abort", stop, { once: true });
+  try {
+    const result = await queryFn({ signal: controller.signal }).catch(() => undefined);
+    if (result && !controller.signal.aborted && localTabsKey().owner === owner) {
+      queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, lists: result.lists }, { updatedAt: query.state.dataUpdatedAt });
+    }
+  } finally {
+    controller.abort();
+    if (listSaves.repair === repair) listSaves.repair = undefined;
+  }
+}
+
 function saveList(change: ListChange, apply: (old: ListTab[]) => ListTab[]) {
   const { owner, queryKey } = localTabsKey();
-  if (owner === undefined || !queryClient.getQueryData<SavedTabs>(queryKey)) return;
+  const before = queryClient.getQueryState<SavedTabs>(queryKey);
+  if (owner === undefined || !before?.data) return;
+  listSaves.repair?.controller.abort();
   listSaves.latest = change;
   showLists(apply(savedLists() ?? []));
   listSaves.saves = listSaves.saves.then(() => mutations.tabs(change, "")).then((reply) => {
     let done = false;
     const settled = () => {
       if (done || listSaves.latest !== change) return true;
-      if (queryClient.getQueryState(queryKey)?.fetchStatus === "fetching") return false;
+      const state = queryClient.getQueryState(queryKey);
+      if (state?.fetchStatus === "fetching") return false;
       done = true;
-      queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, lists: reply.lists }, { updatedAt: queryClient.getQueryState(queryKey)?.dataUpdatedAt });
+      queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, lists: reply.lists }, { updatedAt: state?.dataUpdatedAt });
       showLists();
+      if (state && state.dataUpdateCount !== before.dataUpdateCount) queueMicrotask(() => void repairLists(owner, change));
       return true;
     };
     if (settled()) return;

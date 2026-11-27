@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { API } from "typescript/unstable/async";
-import { isFunctionDeclaration } from "typescript/unstable/ast/is";
+import { isFunctionDeclaration, isVariableStatement } from "typescript/unstable/ast/is";
 import type { SavedTabs } from "./types";
 
 // Exercise the actual cache publication without a UI-only export, as the picker tests do.
@@ -8,10 +8,12 @@ const api = new API({ cwd: import.meta.dir });
 const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
 await api.close();
 const call = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "tabsCall")!.getText(source);
+const saves = source.statements.find((node) => isVariableStatement(node) && node.declarationList.declarations[0]?.name.getText(source) === "listSaves")!.getText(source);
 const javascript = new Bun.Transpiler({ loader: "tsx" }).transformSync(`
   import { QueryClient } from ${JSON.stringify(import.meta.resolve("@tanstack/react-query"))};
-  import { mutations } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};
+  import { mutations, queryKeyHash } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};
   const queryClient = new QueryClient();
+  ${saves}
   ${call}
   export { tabsCall, queryClient };
 `);

@@ -1187,7 +1187,7 @@ test("browsing the palette records no visit; a tab it opens on Enter that Recent
   expect(await recentNames(page)).toEqual(["Charlie", "Bravo", "Alpha"]);
 }), 30_000);
 
-test("Recent follows the person to their other windows, and a window brought back records the tab it shows when Recent lacks it", () => withPage({}, async (page, origin, _prompts, saved) => {
+test.each(["before ack", "through ack", "before refusal", "before another read"] as const)("Recent follows the person to their other windows with a Tabs read %s", (timing) => withPage({}, async (page, origin, _prompts, saved) => {
   await openRecent(page, origin, saved, "alpha");
   await follow(page, "bravo");
   await until(() => saved.visits.length === 2);
@@ -1206,15 +1206,117 @@ test("Recent follows the person to their other windows, and a window brought bac
 
   await other.bringToFront();
   await focus(other);
-  await recent(other).getByRole("button", { name: "Remove Bravo from Recent", exact: true }).click();
-  await until(() => !listed(saved, "recent").some((tab) => tab.path === href("bravo")));
-  await page.bringToFront();
-  await focus(page);
-  await until(() => listed(saved, "recent")[0]?.path === href("bravo"));
-  await other.bringToFront();
-  await focus(other);
-  await other.waitForFunction(() => document.querySelector('[aria-label="Recent tabs"] [role="tab"]')?.getAttribute("aria-label") === "Bravo");
-  expect(await recentNames(other)).toEqual(["Bravo", "Echo", "Alpha"]);
+  const removed = Promise.withResolvers<void>(), reply = Promise.withResolvers<void>();
+  const folding = Promise.withResolvers<void>(), saveFold = Promise.withResolvers<void>();
+  const reading = Promise.withResolvers<void>(), finishRead = Promise.withResolvers<void>();
+  const acknowledged = Promise.withResolvers<void>(), repairSettled = Promise.withResolvers<void>();
+  await other.exposeFunction("tabsResponseDecoded", (tag: string) => {
+    if (tag === "removal") acknowledged.resolve();
+    if (tag === "repair") repairSettled.resolve();
+  });
+  await other.evaluate(() => {
+    const json = Response.prototype.json;
+    Response.prototype.json = async function () {
+      const data = await json.call(this), tag = this.headers.get("x-test-tabs-response");
+      if (tag) {
+        const { port1, port2 } = new MessageChannel();
+        port1.onmessage = () => {
+          port1.close();
+          port2.close();
+          void (window as typeof window & { tabsResponseDecoded: (tag: string) => Promise<void> }).tabsResponseDecoded(tag);
+        };
+        port2.postMessage(null);
+      }
+      return data;
+    };
+  });
+  await other.route("**/api/ChangeTabs", async (route: any) => {
+    const change = route.request().postDataJSON();
+    if (change?.layout) {
+      folding.resolve();
+      await saveFold.promise;
+      return route.continue();
+    }
+    if (change?.listForget?.path !== href("bravo")) return route.continue();
+    const response = await route.fetch();
+    removed.resolve();
+    await reply.promise;
+    await route.fulfill({ response, headers: { ...response.headers(), "x-test-tabs-response": "removal" } });
+  });
+
+  try {
+    await recent(other).getByRole("button", { name: "Remove Bravo from Recent", exact: true }).click();
+    await removed.promise;
+    expect(listed(saved, "recent").map((tab) => tab.path)).toEqual([href("echo"), href("alpha")]);
+    await page.bringToFront();
+    await focus(page);
+    await until(() => listed(saved, "recent")[0]?.path === href("bravo"));
+    saved.shared = [{ space: "main", path: href("golf") }];
+    await other.bringToFront();
+    await focus(other);
+    await other.getByRole("button", { name: "Spaces", exact: true }).click();
+    await shared(other).getByRole("tab", { name: "Golf", exact: true }).waitFor();
+    const sharedPill = other.getByRole("button", { name: "Shared in Main", exact: true });
+    if (timing === "before ack") {
+      await sharedPill.click();
+      await folding.promise;
+      await sharedPill.and(other.locator('[aria-expanded="false"]')).waitFor();
+    } else if (timing === "through ack") {
+      await other.route("**/api/Tabs", async (route: any) => {
+        const response = await route.fetch();
+        reading.resolve();
+        await finishRead.promise;
+        await route.fulfill({ response });
+      });
+      await focus(other);
+      await reading.promise;
+    } else {
+      await other.route("**/api/Tabs", async (route: any) => {
+        const request = route.request();
+        other.on("requestfailed", (failed: any) => { if (failed === request) repairSettled.resolve(); });
+        const response = await route.fetch();
+        reading.resolve();
+        await finishRead.promise;
+        await route.fulfill({ response, headers: { ...response.headers(), "x-test-tabs-response": "repair" } });
+      }, { times: 1 });
+    }
+    await other.getByRole("button", { name: "Recent", exact: true }).click();
+    expect(await recentNames(other)).toEqual(["Echo", "Alpha"]);
+    reply.resolve();
+    await acknowledged.promise;
+    if (timing === "before refusal" || timing === "before another read") {
+      await reading.promise;
+      saved.shared.push({ space: "main", path: href("charlie") });
+      saved.lists = [{ list: "recent", path: href("charlie"), space: "main", server: "" }, ...saved.lists.filter((tab) => tab.path !== href("bravo"))];
+      if (timing === "before refusal") {
+        saved.revision++;
+        await other.getByRole("button", { name: "Spaces", exact: true }).click();
+        await other.getByRole("button", { name: "Close Alpha", exact: true }).click();
+        await other.getByRole("button", { name: "Recent", exact: true }).click();
+      } else {
+        await focus(other);
+      }
+      await recentRow(other, "Charlie").waitFor({ timeout: 3000 });
+      if (timing === "before refusal") expect(saved.refused).toBe(1);
+      await other.getByRole("button", { name: "Spaces", exact: true }).click();
+      finishRead.resolve();
+      await repairSettled.promise;
+      await other.getByRole("button", { name: "Recent", exact: true }).click();
+      expect(await recentNames(other)).toEqual(timing === "before refusal" ? ["Charlie", "Echo"] : ["Charlie", "Echo", "Alpha"]);
+      return;
+    }
+    finishRead.resolve();
+    await recentRow(other, "Bravo").waitFor({ timeout: 3000 });
+    expect([await recentNames(other), saved.visits.length]).toEqual([["Bravo", "Echo", "Alpha"], 4]);
+    if (timing === "before ack") {
+      await other.getByRole("button", { name: "Spaces", exact: true }).click();
+      expect(await sharedPill.getAttribute("aria-expanded")).toBe("false");
+    }
+  } finally {
+    reply.resolve();
+    saveFold.resolve();
+    finishRead.resolve();
+  }
 }), 30_000);
 
 test("a rejected Recent removal leaves a newer removal pending", () => withPage({}, async (page, origin, _prompts, saved) => {
