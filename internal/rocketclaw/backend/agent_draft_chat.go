@@ -204,10 +204,6 @@ func (s *SessionService) startAgentDraftTestChat(ctx context.Context, draft *Age
 		return err
 	}
 
-	if _, err := execState(ctx, s.db, "bind agent draft test chat", `UPDATE conversations SET agent_draft_id = $2 WHERE conversation_id = $1`, chat, draft.ID); err != nil {
-		return err
-	}
-
 	_, err := s.ApplyAgentDraftOp(ctx, draft.ID, &AgentDraftOp{BaseRevision: draft.Revision, OpID: rand.Text(), Author: username, Kind: AgentDraftSetTestChat, Value: chat})
 
 	return err
