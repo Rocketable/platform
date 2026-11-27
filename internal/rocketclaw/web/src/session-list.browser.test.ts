@@ -58,7 +58,6 @@ test("saved sidebar snapshots isolate owners and commit atomically", async () =>
       await storage.saveCompleteSessions("a", "v1", { rows: [], version: "v3" }, await storage.loadSnapshotGeneration("a", "v1"));
       return { version, running: rows[0].running, fullPreview: rows[0].preview === "start\0" + "x".repeat(17 * 1024 * 1024) + "\0end", empty: await storage.loadSavedSessions("a", "v1") };
     });
-    // The saved listing keeps rows as listed, so a poll since its version leaves unchanged rows right.
     expect(restored).toEqual({
       version: "v1",
       fullPreview: true,
@@ -124,7 +123,6 @@ test("pending saves and owner switches cannot leak owners or overwrite newer sna
       switchGate.release();
       await pendingOwnerSave;
 
-      // Keep a real write transaction active while the owner is invalidated.
       const put = IDBObjectStore.prototype.put;
       const writing = Promise.withResolvers<void>();
       let holdTransaction = true;
@@ -202,7 +200,6 @@ test("sidebar listing objects stay separate from older clients' row arrays", asy
       const tx = db.transaction("snapshots", "readwrite");
       tx.objectStore("snapshots").put([{ id: "old", name: "Old cached list" }], ["alice", "cache-format"]);
       await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error); });
-      // Keep an older page's connection open while the current app starts.
       Object.defineProperty(window, "oldSnapshotDB", { value: db });
     });
     await page.goto(origin);
@@ -249,9 +246,8 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       await create.waitFor();
       expect(await create.locator("kbd").allTextContents()).toEqual([modifier, alternate, "N"]);
       expect(await dialog.getByRole("button", { name: "Sessions: Search", exact: true }).locator("kbd").count()).toBe(0);
-      // Each command with a working shortcut shows it on its row; the sidebar toggle exists only while Cmd/Ctrl+B works.
       const keys = async () => Object.fromEntries(await dialog.locator("li > button").filter({ has: page.locator("kbd") }).evaluateAll((buttons: Element[]) => buttons.map((button) => [button.firstElementChild!.firstElementChild!.textContent, [...button.querySelectorAll("kbd")].map((key) => key.textContent)])));
-      expect(await dialog.getByRole("complementary").count()).toBe(0); // No shortcut footer.
+      expect(await dialog.getByRole("complementary").count()).toBe(0);
       for (const width of [1280, 320]) {
         await page.setViewportSize({ width, height: 800 });
         await dialog.getByRole("button", { name: "Tabs: Toggle sidebar", exact: true }).waitFor({ state: width === 1280 ? "visible" : "detached" });
@@ -276,7 +272,6 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       await sessions.getByPlaceholder("Search sessions and commands", { exact: true }).fill("sessions: new");
       await sessions.getByRole("button", { name: "Sessions: New", exact: true }).waitFor();
       expect(await sessions.getByRole("button", { name: "Sessions: New", exact: true }).locator("kbd").allTextContents()).toEqual([modifier, alternate, "N"]);
-      // The read-only Shortcuts page lists every key the palette shows, plus the message box's and Escape.
       await sessions.getByPlaceholder("Search sessions and commands", { exact: true }).fill("keyboard");
       await sessions.getByRole("button", { name: "Help: Keyboard Shortcuts", exact: true }).click();
       await page.waitForURL("**/shortcuts");
@@ -284,13 +279,10 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       const shortcutKeys: string[][] = await shortcutList.getByRole("listitem").evaluateAll((items: Element[]) => items.map((item) => [...item.querySelectorAll("kbd")].map((key) => key.textContent!)));
       expect(shortcutKeys).toEqual([
         [modifier, "P"], [modifier, "Shift", "P"], [modifier, alternate, "N"], [modifier, "["], [modifier, "]"], [modifier, alternate, "T"], [modifier, "Shift", "A"], [modifier, "Shift", "S"], [modifier, "B"], [modifier, "1"], [modifier, "2"], [modifier, "3"], [modifier, "Shift", "B"], ["Escape"], [modifier, "Enter"], [modifier, alternate, "Enter"]]);
-      // Chromium keeps new and closed tabs, windows and tab cycling for itself and never hands these keys to a page
-      // (kReservedCommandIds, chrome/browser/ui/accelerator_table.cc). Headless test browsers do hand them over, so a test
-      // pressing one passes while the real key does nothing; RocketClaw adds Alt instead, as in mod+Alt+N.
       const reserved = ["T", "W", "N", "Tab"].flatMap((key) => [`${modifier}+${key}`, `${modifier}+Shift+${key}`]);
       expect(shortcutKeys.map((keys) => keys.join("+")).filter((keys) => reserved.includes(keys))).toEqual([]);
       await page.getByRole("dialog").waitFor({ state: "detached" });
-      await page.keyboard.press("Escape"); // A page tab closes with Escape.
+      await page.keyboard.press("Escape");
       await page.waitForURL((url: URL) => url.pathname !== "/shortcuts");
       for (const hasTouch of [true, false]) {
         const shortPage = await browser.newPage({ viewport: { width: 320, height: 256 }, hasTouch, isMobile: hasTouch });
@@ -391,7 +383,6 @@ test("room autocomplete keeps selections and full labels on each search surface"
       await surface.getByRole("button", { name: "agent:main", exact: true }).click();
       await surface.getByRole("button", { name: 'room:"Blue garden"', exact: true }).click();
       await input.fill(longRooms.map((room) => `room:${JSON.stringify(room)} `).join(""));
-      // The search spinner animates until the response; let it settle before waiting on animations.
       await surface.getByRole("img", { name: "Searching", exact: true }).waitFor({ state: "detached" });
       for (const width of [1280, 320]) {
         await page.setViewportSize({ width, height: 800 });
@@ -432,7 +423,6 @@ test("room autocomplete keeps selections and full labels on each search surface"
 }, 30_000);
 
 test("actual App renders independent public lifecycle and reconnect replacements at narrow widths", async () => {
-  // Build current sources in memory; leave the parent's shared embedded assets untouched.
   const build = await Bun.build({ entrypoints: ["./src/main.tsx"], target: "browser", define: { "process.env.NODE_ENV": '"production"' } });
   expect(build.success).toBe(true);
   const script = await build.outputs[0].text();
@@ -470,7 +460,6 @@ test("actual App renders independent public lifecycle and reconnect replacements
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
-    // Show each call on its own so the per-call lifecycle summaries stay visible.
     await page.addInitScript((rows: string) => localStorage.setItem("timeline-detail", rows), JSON.stringify({ version: 1, rows: timelineLevels.find((level) => level.id === "everything")!.rows }));
     for (const width of [900, 375]) {
       running = true; revision++;
@@ -482,7 +471,6 @@ test("actual App renders independent public lifecycle and reconnect replacements
       await log.getByText("Held partial suffix", { exact: true }).waitFor();
       expect(await log.locator('[data-slot="bubble-content"]').filter({ hasText: "Held partial suffix" }).count()).toBe(1);
       expect(await log.locator('[data-slot="message"][data-message-id]').count()).toBe(0);
-      // Transcript rendering can finish before the composer's local draft hydration.
       await page.getByRole("button", { name: "Stop", exact: true }).and(page.locator(":enabled")).waitFor();
       expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
       messages = [...messages, event("B:outcome", "tool", "B result", { toolCallId: "B", parentId: "producer/turn/response", state: "completed", agent: "canonical-child", model: "child/model" })]; revision++;
@@ -493,7 +481,6 @@ test("actual App renders independent public lifecycle and reconnect replacements
       expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
       expect(await log.evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth)).toBe(true);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      // No hint: reopening must fetch the missed replacement on its own.
       messages = messages.map((message) => message.itemId === "text" ? { ...message, text: "Short", state: "completed", complete: true } : message); revision++;
       stream = Promise.withResolvers();
       await page.reload();
