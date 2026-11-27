@@ -888,7 +888,7 @@ func TestRuntimeStopAndResumeGoalKeepOneContinuation(t *testing.T) {
 
 	request := <-bridge.requestCh
 	assert.Equal(t, protocol.GoalActionContinue, request.inbound.GoalAction)
-	assert.True(t, strings.HasPrefix(request.inbound.Text, "Continue the active goal loop.\n\nActive goal loop:\nObjective:\nship it"), request.inbound.Text)
+	assert.Equal(t, "Continue the active goal loop.", request.inbound.Text, "the goal is restated to the agent beside the prompt, not inside it")
 	assert.Equal(t, map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, request.inbound.Metadata, "the continuation acts for the goal's setter")
 	assert.Equal(t, `[Web principal="Alice"]`, request.inbound.OriginHeader)
 	assert.Equal(t, &protocol.SlackReplyTarget{}, request.inbound.SlackReply)
