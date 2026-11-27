@@ -729,11 +729,12 @@ test("each space's card lists its own Shared tabs under a Shared pill that folds
   await main.and(page.locator('[aria-expanded="false"]')).waitFor();
   expect([await sharedNames(page), await opsNames()]).toEqual([[], ["Delta", "Alpha"]]);
   await until(() => saved.layout?.folded?.["#shared/main"] === true);
-  await main.click();
+  const foldSaved = (value: boolean) => page.waitForResponse((response: any) => response.ok() && response.url().endsWith("/api/ChangeTabs") && response.request().postDataJSON().layout?.folded?.["#shared/main"] === value);
+  await Promise.all([foldSaved(false), main.click()]);
   await main.and(page.locator('[aria-expanded="true"]')).waitFor();
   await shared(page).getByRole("tab", { name: "Alpha", exact: true }).click();
   await page.waitForURL(`**${href("alpha")}`);
-  await main.click();
+  await Promise.all([foldSaved(true), main.click()]);
   await main.and(page.locator('[aria-expanded="false"]')).waitFor();
   expect(await sharedNames(page)).toEqual(["Alpha"]);
   await page.reload();
