@@ -192,7 +192,7 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 	store := newTestSessionService(t)
 
 	const conversationID = "web-queue"
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "main"})
 
 	bus := newTestBus()
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: bus, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
@@ -1313,7 +1313,7 @@ func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 	service.jobs = registry
 
 	runTestManager(t, manager)
-	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
+	createWebChat(t, service, protocol.Conversation{ID: conversationID, Agent: "primary"})
 
 	bridge := NewConversation(locked, bus, &Config{ConversationID: conversationID, Agent: "primary", SessionService: service}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	bridge.threads, bridge.background = manager, registry
@@ -2051,9 +2051,11 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	privateConversationID := "external_mcp:planner:private"
 
 	writeAgent(t, cfg.Clone().Workspace, "selected", "---\ndescription: Selected\nmodel: gpt-6.1-sol\npermission: {}\n---\nSelected canonical instructions\n")
-	require.NoError(t, service.UpsertThread(threadKey, ThreadState{Agent: "selected"}))
-	require.NoError(t, service.UpsertThread(privateConversationID, ThreadState{Agent: "planner"}))
-	_, err := service.db.ExecContext(t.Context(), `UPDATE conversations SET external_id = 'public-1', external_run = $1, external_agent = 'planner', origin_pairs = 'null' WHERE conversation_id = $2`, privateConversationID, threadKey)
+
+	_, err := service.SetThreadAgentIfExists(threadKey, "selected")
+	require.NoError(t, err)
+	createWebChat(t, service, protocol.Conversation{ID: privateConversationID, Agent: "planner"})
+	_, err = service.db.ExecContext(t.Context(), `UPDATE conversations SET external_id = 'public-1', external_run = $1, external_agent = 'planner', origin_pairs = 'null' WHERE conversation_id = $2`, privateConversationID, threadKey)
 	require.NoError(t, err)
 	_, err = service.AppendEntryID(t.Context(), threadKey, testSessionEntry("canonical context", "canonical history"))
 	require.NoError(t, err)
@@ -2200,7 +2202,7 @@ func TestBridgeReleasesCallerOfClaimedQueueItem(t *testing.T) {
 
 	service := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, service.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: "main", Agent: "main"})
 
 	message := func() *protocol.InboundMessage {
 		inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)
@@ -3043,7 +3045,7 @@ Request: $ARGUMENTS
 				promote := kind == protocol.InboundKindEnqueue && strings.HasPrefix(invocation, "/skill ")
 				if kind == protocol.InboundKindEnqueue {
 					item := protocol.ThreadQueueItem{ID: conversationID + "-queued", ConversationID: conversationID, Source: source, Message: invocation, Principal: "Alice", Content: protocol.InboundContent{Text: invocation, TextAttachments: []string{"attachment-only argument"}}}
-					require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
+					createWebChat(t, service, protocol.Conversation{ID: conversationID, Agent: "primary"})
 					manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: service, bridges: map[string]directBridge{conversationID: bridge}}
 					require.NoError(t, service.PutThreadQueueItem("removed", &item))
 					removed, err := manager.deleteQueueItem(t.Context(), conversationID, "removed")
@@ -4032,7 +4034,7 @@ func newNoteTest(t *testing.T, respond noteTestResponder) *noteTest {
 	t.Cleanup(server.Close)
 
 	nt.cfg = &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"primary"}}}}}
-	require.NoError(t, nt.service.UpsertThread(nt.conversationID, ThreadState{Agent: "primary"}))
+	createWebChat(t, nt.service, protocol.Conversation{ID: nt.conversationID, Agent: "primary"})
 
 	return nt
 }
@@ -4085,7 +4087,7 @@ func TestFirstWebMessageNamesUnnamedSession(t *testing.T) {
 
 	nt := newNoteTest(t, answerNoteTest)
 	named := "web:named"
-	require.NoError(t, nt.service.UpsertThread(named, ThreadState{Agent: "primary"}))
+	createWebChat(t, nt.service, protocol.Conversation{ID: named, Agent: "primary"})
 	_, err := nt.service.UpdateConversationDetails(t.Context(), named, new("Chosen name"))
 	require.NoError(t, err)
 
@@ -4753,7 +4755,7 @@ FROM conversations WHERE conversation_id IN ('cron:daily', 'web:cron:daily') ORD
 		private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
 
 		for _, conversationID := range []string{private, managed} {
-			require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
+			createWebChat(t, nt.service, protocol.Conversation{ID: conversationID, Agent: "primary"})
 		}
 
 		origin := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "plan", true)
@@ -4797,7 +4799,7 @@ func TestHiddenRunFailedWakeRetries(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		nt.service = newTestSessionServiceAt(t, nt.cfg.Workspace)
 		for _, conversationID := range []string{nt.conversationID, private, managed} {
-			require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
+			createWebChat(t, nt.service, protocol.Conversation{ID: conversationID, Agent: "primary"})
 		}
 
 		manager, shutdown := nt.run(t, ignoreOutbound)
@@ -4905,7 +4907,7 @@ func TestEmptyProducerWakeLeavesDestinationFree(t *testing.T) {
 	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
 
 	for _, conversationID := range []string{private, managed} {
-		require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
+		createWebChat(t, nt.service, protocol.Conversation{ID: conversationID, Agent: "primary"})
 	}
 
 	wake := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
@@ -4943,7 +4945,7 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
 
 	for _, conversationID := range []string{private, managed} {
-		require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
+		createWebChat(t, nt.service, protocol.Conversation{ID: conversationID, Agent: "primary"})
 	}
 
 	origin := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "plan", true)

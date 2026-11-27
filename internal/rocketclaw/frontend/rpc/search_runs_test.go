@@ -12,6 +12,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -43,7 +44,7 @@ func newSearchRunTest(t *testing.T) *searchRunTest {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
 	const thread = "slack-thread:C1:1.1"
-	require.NoError(t, sessions.UpsertThread(thread, backend.ThreadState{Agent: "main"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: thread, Agent: "main"})
 	_, err = sessions.AppendEntryID(t.Context(), thread, &harness.SessionEntry{})
 	require.NoError(t, err)
 	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `UPDATE conversations SET slack_channel = 'C1' WHERE conversation_id = $1`, thread)

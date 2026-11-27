@@ -170,7 +170,7 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 		return NewConversation(cfg, discardPublisher{}, bridgeCfg, store.log)
 	}})
 	for _, id := range []string{"existing", "blocked"} {
-		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "primary"}))
+		createWebChat(t, store, protocol.Conversation{ID: id, Agent: "primary"})
 	}
 
 	existing, err := manager.recordedBridge(t.Context(), "existing")

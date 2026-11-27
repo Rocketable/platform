@@ -16,6 +16,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -57,7 +58,7 @@ func TestSummarizeBranch(t *testing.T) {
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "primary"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "chat", Agent: "primary"})
 
 	server := &Server{sessions: sessions, cfg: config.NewLockedConfig(cfg), backend: withoutBackgroundJobs()}
 	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))

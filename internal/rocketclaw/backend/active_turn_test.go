@@ -88,7 +88,7 @@ func newResumeTestBridges(t *testing.T, blocked bool, databaseURL ...string) (ne
 	t.Cleanup(func() { close(release) })
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
+	createWebChat(t, service, protocol.Conversation{ID: conversationID, Agent: "primary"})
 
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 	newBridge = func() *Bridge {
@@ -525,7 +525,7 @@ func TestStopBeforeProducerTurnRegistersCancelStopsTurn(t *testing.T) {
 	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
 
 	for _, conversationID := range []string{private, managed} {
-		require.NoError(t, nt.service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
+		createWebChat(t, nt.service, protocol.Conversation{ID: conversationID, Agent: "primary"})
 	}
 
 	submit := func(text string) {
@@ -594,7 +594,7 @@ func TestStartActiveTurnsStartsRowWorkers(t *testing.T) {
 
 	managedID, privateID := protocol.SlackThreadConversationID("C123", "111.222"), "external_mcp:planner:private"
 	for _, id := range []string{managedID, privateID} {
-		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, service, protocol.Conversation{ID: id, Agent: "main"})
 	}
 
 	msg := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "work", true)
@@ -1618,7 +1618,7 @@ func TestPausedChatFinishesInterruptedReply(t *testing.T) {
 	shutdown := runTestBridge(t, interrupted)
 	require.Contains(t, <-requests, "seed")
 
-	require.NoError(t, service.UpsertThread("web:caller", ThreadState{Agent: "primary"}))
+	createWebChat(t, service, protocol.Conversation{ID: "web:caller", Agent: "primary"})
 
 	reply := testReply("web:caller", "turn-1/call/steer", conversationID)
 	outcome, _, err := manager.writeSession(t.Context(), conversationID, reply.jobID, sessionWriteSteer, agentWrite("also check 2025"), reply)
@@ -1921,7 +1921,7 @@ func TestSilentRoutineLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 	manager, shutdown := newTestBridgeManager(t, config.NewLockedConfig(cfg), service, finals)
 
-	require.NoError(t, service.UpsertThread("cron:daily", ThreadState{Agent: "job", CreatedBy: ThreadCreatedByRoutine}))
+	createWebChat(t, service, protocol.Conversation{ID: "cron:daily", Agent: "job", CreatedBy: string(ThreadCreatedByRoutine)})
 
 	bridge, err := manager.recordedBridge(t.Context(), "cron:daily")
 	require.NoError(t, err)
@@ -2098,7 +2098,7 @@ DELETE FROM conversations WHERE conversation_id IN ('cron:pending', 'web:cron:pe
 				writeAgent(t, runtime.Clone().Workspace, "a-loaded", "---\ndescription: First loaded\nmodel: gpt-6.1-sol\npermission: {}\n---\nSorted fallback instructions\n")
 			}
 
-			require.NoError(t, store.UpsertThread("cron:pending", ThreadState{Agent: "worker", CreatedBy: ThreadCreatedByRoutine}))
+			createWebChat(t, store, protocol.Conversation{ID: "cron:pending", Agent: "worker", CreatedBy: string(ThreadCreatedByRoutine)})
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original job", false)
 			inbound.RequireOutputDecision = true
@@ -2295,7 +2295,7 @@ func TestDueFollowUpOfTurnedOffRoutineAgentOpensNoChat(t *testing.T) {
 			t.Parallel()
 
 			newBridge, store, calls, finals := newResumeTestBridges(t, false)
-			require.NoError(t, store.UpsertThread("cron:pending", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByRoutine}))
+			createWebChat(t, store, protocol.Conversation{ID: "cron:pending", Agent: "main", CreatedBy: string(ThreadCreatedByRoutine)})
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original job", false)
 			inbound.RequireOutputDecision = true
@@ -2582,7 +2582,7 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 		t.Run(stored, func(t *testing.T) {
 			newBridge, service, requests, finals := newResumeTestBridges(t, false)
 			managedID, privateID := newBridge().config.ConversationID, "external_mcp:primary:private"
-			require.NoError(t, service.UpsertThread(privateID, ThreadState{Agent: "primary"}))
+			createWebChat(t, service, protocol.Conversation{ID: privateID, Agent: "primary"})
 
 			msg := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "support ticket", true)
 			msg.ConversationID, msg.SyncDestination = privateID, managedID
@@ -2702,7 +2702,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
+	createWebChat(t, service, protocol.Conversation{ID: conversationID, Agent: "primary"})
 
 	asked, answers := make(chan string, 4), make(chan protocol.AskUserQuestionAnswer, 1)
 	asker := &userQuestionAskerMock{AskUserQuestionFunc: func(ctx context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
@@ -2853,7 +2853,7 @@ func TestResumedTurnFailurePostsInternalErrorFinal(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
+	createWebChat(t, service, protocol.Conversation{ID: conversationID, Agent: "primary"})
 
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	msg.ConversationID, msg.SlackReply = conversationID, &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
@@ -2946,7 +2946,7 @@ func TestShutdownReleasesRoutineRunnerWait(t *testing.T) {
 	var shutdown func()
 
 	rt.threads, shutdown = newTestBridgeManager(t, template.runtime, service, finals)
-	require.NoError(t, service.UpsertThread("cron:daily", ThreadState{Agent: "primary", CreatedBy: ThreadCreatedByRoutine}))
+	createWebChat(t, service, protocol.Conversation{ID: "cron:daily", Agent: "primary", CreatedBy: string(ThreadCreatedByRoutine)})
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
 	inbound.ConversationID, inbound.SyncDestination, inbound.RequireOutputDecision = "cron:daily", template.config.ConversationID, true

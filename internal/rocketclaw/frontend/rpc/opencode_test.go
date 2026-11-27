@@ -14,6 +14,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -99,7 +100,7 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	_, err = server.updateSession(ctx, &UpdateSessionRequest{Id: created.Id, Paused: new(true)})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "only a Web chat's agent pauses")
 
-	require.NoError(t, sessions.UpsertThread("web", backend.ThreadState{Agent: "primary"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "web", Agent: "primary"})
 
 	_, err = server.updateSession(ctx, &UpdateSessionRequest{Id: "web", Tag: new("customer")})
 	require.NoError(t, err, "a tag the agent allows")

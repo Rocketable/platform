@@ -1091,7 +1091,7 @@ func TestOversizedTurnRecordFailsReads(t *testing.T) {
 	ctx := t.Context()
 
 	for id, text := range map[string]string{"small": "hi", "large": strings.Repeat("x", 2000), "small-live": "hi", "live": strings.Repeat("x", 2000)} {
-		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, s, protocol.Conversation{ID: id, Agent: "main"})
 		seedActiveTurn(t, s, id, id, testReplayEntry(`{"type":"message","role":"user","content":"`+text+`"}`))
 
 		if !strings.HasSuffix(id, "live") {
@@ -1170,7 +1170,7 @@ func TestHiddenRunViews(t *testing.T) {
 	const chat, run = "ticket-123", "external_mcp:main:ticket-123"
 
 	for _, id := range []string{chat, run} {
-		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, s, protocol.Conversation{ID: id, Agent: "main"})
 	}
 
 	finishTestRunTurn(t, s, run, chat, "run-1", testSessionEntry("mcp question", "mcp answer"))
@@ -1242,7 +1242,7 @@ func TestUndoKeepsHiddenRunEntries(t *testing.T) {
 	const chat, run = "chat", "one-off-cron:cron/remind.md:20260101T000000Z:run"
 
 	for _, id := range []string{chat, run} {
-		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, s, protocol.Conversation{ID: id, Agent: "main"})
 	}
 
 	_, err := s.AppendEntryID(ctx, chat, testSessionEntry("first question", "first answer"))

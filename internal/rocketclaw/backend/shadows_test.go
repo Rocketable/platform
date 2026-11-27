@@ -89,7 +89,8 @@ func TestShadowBindingsCreation(t *testing.T) {
 		require.True(t, found)
 		require.Contains(t, []string{"primary/a", "primary/z"}, thread.Agent)
 		require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: child, Agent: thread.Agent}))
-		require.NoError(t, store.UpsertThread(child, ThreadState{Agent: "primary"}), "explicit ownership, not the agent name, prevents recursion")
+		_, err = store.reconcileShadows(t.Context(), store.db, child, "primary")
+		require.NoError(t, err, "explicit ownership, not the agent name, prevents recursion")
 	}
 
 	var count int
@@ -386,7 +387,7 @@ func TestShadowImplicitCreation(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newShadowTestStore(t)
-	require.NoError(t, store.UpsertThread("cron:private", ThreadState{Agent: "primary", CreatedBy: ThreadCreatedByRoutine}))
+	createWebChat(t, store, protocol.Conversation{ID: "cron:private", Agent: "primary", CreatedBy: string(ThreadCreatedByRoutine)})
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "primary", &ExternalMCPSessionState{ManagedConversationID: "visible", PrivateConversationID: "mcp:private", Agent: "primary"}))
 
 	conversation := "slack-channel:C1:primary"
@@ -1174,7 +1175,6 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 				parentID = "0parent"
 				ownerID = "external_mcp:private"
 				require.NoError(t, store.RegisterExternalMCPConversation("external", "primary", &ExternalMCPSessionState{ManagedConversationID: parentID, PrivateConversationID: ownerID, Agent: "primary"}))
-				require.NoError(t, store.UpsertThread(ownerID, ThreadState{Agent: "primary"}))
 			} else {
 				require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "primary"}))
 			}
@@ -1535,7 +1535,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 		bridgeCfg.SessionService, bridgeCfg.RequestRestart = store, &runtimeRestarterMock{RestartFunc: func(string) string { return "" }}
 		return NewConversation(cfg, finalsPublisher{finals: finals}, bridgeCfg, slog.New(slog.DiscardHandler))
 	}})
-	require.NoError(t, store.UpsertThread("parent", ThreadState{Agent: "primary"}))
+	createWebChat(t, store, protocol.Conversation{ID: "parent", Agent: "primary"})
 	parent, err := manager.recordedBridge(t.Context(), "parent")
 	require.NoError(t, err)
 
@@ -2030,7 +2030,7 @@ func TestShadowChildrenFollowTheParentsMove(t *testing.T) {
 
 	s, _ := newShadowTestStore(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("parent", ThreadState{Agent: "primary"}))
+	createWebChat(t, s, protocol.Conversation{ID: "parent", Agent: "primary"})
 	children, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'parent' ORDER BY 1`, "shadow children")
 	require.NoError(t, err)
 	require.Len(t, children, 2)

@@ -85,7 +85,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.NoError(t, rt.Sessions.db.PingContext(rt.RunCtx))
 			require.Same(t, rt.threads, rt.TextRouter)
 
-			require.NoError(t, rt.threads.store.UpsertThread(threadID, ThreadState{Agent: "primary"}))
+			createWebChat(t, rt.threads.store, protocol.Conversation{ID: threadID, Agent: "primary"})
 			require.NoError(t, rt.threads.PickLaterWork(rt.RunCtx, threadID))
 
 			bridge := rt.threads.bridges[threadID].(*Bridge)
@@ -179,7 +179,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 	conversationID := "web-queued"
 	seed, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	require.NoError(t, seed.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
+	createWebChat(t, seed, protocol.Conversation{ID: conversationID, Agent: "primary"})
 	boundary, err := seed.AppendEntryID(t.Context(), conversationID, testSessionEntry("recorded", "answer"))
 	require.NoError(t, err)
 	_, _, err = stageRevertDB(t.Context(), seed.db, conversationID, fmt.Sprintf("%d:0", boundary), protocol.RevertBefore)

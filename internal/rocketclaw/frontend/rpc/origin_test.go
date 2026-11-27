@@ -70,7 +70,7 @@ func TestChatOriginFactsMatchHistory(t *testing.T) {
 		"web:" + scheduled: {Agent: "main", CreatedBy: "alice"}, "web:" + oneOff: {Agent: "main", CreatedBy: "alice"},
 		"web-cron-synced": {Agent: "main", CreatedBy: "alice"}, "web-later-cron": {Agent: "main", CreatedBy: "alice"}, "web-empty": {Agent: "main", CreatedBy: "alice"},
 	} {
-		require.NoError(t, sessions.UpsertThread(id, thread))
+		createWebChat(t, sessions, protocol.Conversation{ID: id, Agent: thread.Agent, CreatedBy: string(thread.CreatedBy)})
 	}
 
 	_, err = db.ExecContext(ctx, `UPDATE conversations SET kind = 'slack_thread', slack_channel = split_part(conversation_id, ':', 2), slack_thread = split_part(conversation_id, ':', 3)

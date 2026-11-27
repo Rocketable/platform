@@ -811,7 +811,7 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
 	const id = "tag-search"
-	require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"})
 	_, err = sessions.AppendEntryID(t.Context(), id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","content":"ping <!subteam^S01ABCDEF56>"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"unrelated reply"}`),
@@ -957,7 +957,7 @@ func TestSearchSessionsUnreadPerCaller(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
 	for _, id := range []string{"slack-thread:C1:1.1", "web-session:alice", "web-session:bob"} {
-		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
+		createWebChat(t, sessions, protocol.Conversation{ID: id, Agent: "main"})
 		_, err := sessions.AppendEntryID(t.Context(), id, &harness.SessionEntry{})
 		require.NoError(t, err)
 	}
@@ -1024,7 +1024,7 @@ func TestSearchSessionsResponse(t *testing.T) {
 	entries := make(map[string]int64)
 
 	for _, chat := range []struct{ id, user string }{{"slack-thread:C1:1.1", "ping <@U7> about billing"}, {"web-session:desk", "hello"}, {"web-session:lower", "billing question"}} {
-		require.NoError(t, sessions.UpsertThread(chat.id, backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
+		createWebChat(t, sessions, protocol.Conversation{ID: chat.id, Agent: "main", CreatedBy: "alice"})
 		entries[chat.id], err = sessions.AppendEntryID(ctx, chat.id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(fmt.Sprintf(`{"type":"message","role":"user","content":%q}`, chat.user)),
 			json.RawMessage(`{"type":"message","role":"assistant","content":"done"}`),
@@ -1097,7 +1097,7 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 	}
 	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
-	require.NoError(t, sessions.UpsertThread("source", backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "source", Agent: "main", CreatedBy: "alice"})
 	require.NoError(t, sessions.SaveAttachment(ctx, "source", "", &protocol.OutboundAttachment{ID: "parity-file", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}, true))
 	_, err = sessions.AppendEntryID(ctx, "source", &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\nheader request"}`),
@@ -1477,7 +1477,7 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, codes.Internal, status.Code(err))
 	require.ErrorContains(t, err, "received no request message")
 
-	require.NoError(t, sessions.UpsertThread("prompted", backend.ThreadState{Agent: "general"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "prompted", Agent: "general"})
 
 	for _, tt := range []struct {
 		text, want string
@@ -1784,7 +1784,7 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, "stop the flaky tests", goals[len(goals)-1].Objective, "more words make an objective")
 		require.Len(t, turns, before)
 
-		require.NoError(t, sessions.UpsertThread("goal-panel", backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
+		createWebChat(t, sessions, protocol.Conversation{ID: "goal-panel", Agent: "main", CreatedBy: "alice"})
 		require.NoError(t, sessions.BeginGoal("goal-panel", &backend.GoalState{Objective: "ship it", MaxTurns: 3, Check: "make test", Force: true, PrincipalName: "alice"}))
 		require.NoError(t, sessions.RecordGoalUpdate("goal-panel", &backend.GoalEvent{Kind: backend.GoalEventUpdate, Turn: 1, Status: backend.GoalStatusComplete, Check: backend.GoalCheckFailed, CheckOutput: "FAIL"}))
 
@@ -1962,14 +1962,14 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: hidden, Agent: "producer", Run: run}))
 	}
 
-	require.NoError(t, sessions.UpsertThread("private-X", backend.ThreadState{Agent: "producer"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "private-X", Agent: "producer"})
 
 	_, err = seeded.db.ExecContext(ctx, `UPDATE conversations SET external_id = 'external', external_run = 'private-X', external_agent = 'producer', origin_pairs = '{"Original-Key":"Value <&> Unicode Ω"}' WHERE conversation_id = $1`, id)
 	require.NoError(t, err)
 
 	_, err = seeded.db.ExecContext(ctx, `UPDATE conversations SET kind = 'external_mcp_run', listed = FALSE WHERE conversation_id = 'private-X'`)
 	require.NoError(t, err)
-	require.NoError(t, sessions.UpsertThread("empty-web", backend.ThreadState{Agent: "selected", CreatedBy: "alice"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "empty-web", Agent: "selected", CreatedBy: "alice"})
 
 	listedSessions, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
@@ -2605,7 +2605,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.NoError(t, err)
 
 	for _, conversationID := range []string{"large-a", "large-b"} {
-		require.NoError(t, sessions.UpsertThread(conversationID, backend.ThreadState{Agent: "selected"}))
+		createWebChat(t, sessions, protocol.Conversation{ID: conversationID, Agent: "selected"})
 		_, err = sessions.AppendEntryID(ctx, conversationID, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: entry.Timestamp.Add(time.Hour), ReplayInput: largeReplay})
 		require.NoError(t, err)
 	}
@@ -2695,7 +2695,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.NoError(t, err)
 
 	corrupt := "cron:corrupt-delegations"
-	require.NoError(t, sessions.UpsertThread(corrupt, backend.ThreadState{Agent: "general"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: corrupt, Agent: "general"})
 	_, err = sessions.AppendEntryID(ctx, corrupt, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "corrupt-turn", Timestamp: time.Now()})
 	require.NoError(t, err)
 	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "corrupt-turn", ConversationKey: corrupt, Agent: "general"}))
@@ -2731,7 +2731,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.True(t, proto.Equal(jobs, again))
 	t.Run("a cron run is one row whatever chats and sessions it has", func(t *testing.T) {
 		const destination, subagent = "opaque-human-Y", "cron-subagent"
-		require.NoError(t, sessions.UpsertThread(destination, backend.ThreadState{Agent: "general"}))
+		createWebChat(t, sessions, protocol.Conversation{ID: destination, Agent: "general"})
 		_, err = db.ExecContext(ctx, `UPDATE conversations SET continues = $2 WHERE conversation_id = $1`, destination, sources[0])
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, call_turn, call_id)
@@ -3135,7 +3135,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 	t.Run("durable attachments", func(t *testing.T) {
 		const conversation = "attachment-visible"
-		require.NoError(t, sessions.UpsertThread(conversation, backend.ThreadState{Agent: "general"}))
+		createWebChat(t, sessions, protocol.Conversation{ID: conversation, Agent: "general"})
 
 		previousRunTurn := core.RunTurnFunc
 
@@ -3194,7 +3194,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		imageFile := &Attachment{}
 		require.NoError(t, imageUpload.RecvMsg(imageFile))
 		require.Equal(t, "image/png", imageFile.MimeType)
-		require.NoError(t, sessions.UpsertThread(conversation, backend.ThreadState{Agent: "general"}))
 
 		exact := "  keep\n\t this  text \"intact\" attachment:literal prose  \n"
 		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: conversation, Text: exact, Delivery: PromptDelivery_QUEUE, AttachmentIds: []string{file.Id, imageFile.Id}})
@@ -3647,7 +3646,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			agentPath := filepath.Join(cfg.RuntimeDirName(), "agents", kind+".md")
 			require.NoError(t, root.WriteFile(agentPath, []byte(file), 0o600))
 			t.Cleanup(func() { require.NoError(t, root.Remove(agentPath)) })
-			require.NoError(t, sessions.UpsertThread(conversation, backend.ThreadState{Agent: kind}))
+			createWebChat(t, sessions, protocol.Conversation{ID: conversation, Agent: kind})
 
 			previousRunTurn := core.RunTurnFunc
 			core.RunTurnFunc = func(_ context.Context, inbound *protocol.InboundMessage) error {
@@ -4094,7 +4093,7 @@ func TestContinueRoutineRun(t *testing.T) {
 			require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "planner", CreatedBy: "routine", Run: &protocol.RoutineRun{Path: "cron/daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}}))
 
 			if report != "" {
-				require.NoError(t, sessions.UpsertThread(report, backend.ThreadState{Agent: "planner", CreatedBy: backend.ThreadCreatedByRoutine}))
+				createWebChat(t, sessions, protocol.Conversation{ID: report, Agent: "planner", CreatedBy: string(backend.ThreadCreatedByRoutine)})
 				_, err := db.ExecContext(ctx, `UPDATE conversations SET reports_to = $2 WHERE conversation_id = $1`, run, report)
 				require.NoError(t, err)
 			}

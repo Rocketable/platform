@@ -36,7 +36,7 @@ func TestTabs(t *testing.T) {
 	require.NoError(t, sessions.RegisterExternalMCPConversation("external", "main", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "a", Agent: "main"}))
 
 	for _, id := range []string{"b", "c"} {
-		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
+		createWebChat(t, sessions, protocol.Conversation{ID: id, Agent: "main"})
 	}
 
 	db := openTestTurns(t, dsn).db

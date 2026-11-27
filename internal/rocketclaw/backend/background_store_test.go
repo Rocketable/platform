@@ -900,7 +900,7 @@ func TestSidebarMarksRunningBackgroundJobs(t *testing.T) {
 	store := newTestSessionService(t)
 
 	for _, id := range []string{"idle", "own", "destination", "reported"} {
-		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, store, protocol.Conversation{ID: id, Agent: "main"})
 		_, err := store.AppendEntryID(t.Context(), id, testSessionEntry("question", "answer"))
 		require.NoError(t, err)
 	}

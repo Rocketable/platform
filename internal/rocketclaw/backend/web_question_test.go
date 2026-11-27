@@ -164,7 +164,7 @@ func TestWebQuestionMarksItsReaders(t *testing.T) {
 		frank   = "frank@example.com"
 	)
 
-	require.NoError(t, service.UpsertThread(session, ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: session, Agent: "main"})
 	require.NoError(t, service.ShareTab(ctx, "main", sessionPath(session), nil))
 	require.NoError(t, startTurnDB(ctx, service.db, turnID, session, webMessage(protocol.InboundKindPrompt, "ask", bob)))
 
@@ -238,7 +238,7 @@ func TestWebTurnQuestionContinuesAfterRestart(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "primary"}))
+	createWebChat(t, service, protocol.Conversation{ID: conversationID, Agent: "primary"})
 
 	finals := make(chan *protocol.OutboundMessage, 4)
 	cfg := config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}})

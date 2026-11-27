@@ -782,34 +782,19 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 		return "", false, err
 	}
 
-	if agent.Sticky != harness.AgentStickyOff {
-		start.conversationID, resumed, err = m.store.CreateStickyConversation(ctx, protocol.Conversation{ID: start.conversationID, Agent: start.agent, CreatedBy: string(start.createdBy), Space: agent.Space}, agent.Sticky)
-		if err != nil {
-			return "", false, fmt.Errorf("persist sticky Web session: %w", err)
-		}
+	start.conversationID, resumed, err = m.store.CreateStickyConversation(ctx, protocol.Conversation{ID: start.conversationID, Agent: start.agent, CreatedBy: string(start.createdBy), Space: agent.Space}, agent.Sticky)
+	if err != nil {
+		return "", false, fmt.Errorf("persist new Web session: %w", err)
+	}
 
+	if agent.Sticky != harness.AgentStickyOff {
 		if _, err := m.store.checkSessionTarget(ctx, reply.conversationID, inbound.Metadata[protocol.InboundSenderSessionMetadataKey], start.conversationID); err != nil {
 			return "", false, err
 		}
 	}
 
-	thread := ThreadState{Agent: start.agent, CreatedBy: start.createdBy}
-
-	managed, err := m.ensureThreadBridge(ctx, start.conversationID, thread)
-	if err != nil {
+	if _, err := m.ensureThreadBridge(ctx, start.conversationID, ThreadState{Agent: start.agent, CreatedBy: start.createdBy}); err != nil {
 		return "", false, err
-	}
-
-	if agent.Sticky == harness.AgentStickyOff {
-		if err := m.store.UpsertThread(start.conversationID, thread); err != nil {
-			m.mu.Lock()
-			delete(m.bridges, start.conversationID)
-			m.mu.Unlock()
-
-			managed.Stop()
-
-			return "", false, fmt.Errorf("persist new Web session: %w", err)
-		}
 	}
 
 	if !resumed {

@@ -245,7 +245,7 @@ func TestForkPausedChatStartsLive(t *testing.T) {
 
 	sessions := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, sessions.UpsertThread("source", ThreadState{Agent: "main"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "source", Agent: "main"})
 
 	for _, text := range []string{"first", "second"} {
 		_, err := sessions.AppendEntryID(ctx, "source", testSessionEntry(text, text+" answer"))

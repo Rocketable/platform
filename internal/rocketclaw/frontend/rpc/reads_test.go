@@ -13,6 +13,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -37,7 +38,7 @@ func TestSessionReads(t *testing.T) {
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
 
 	for _, id := range []string{"x", "y"} {
-		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
+		createWebChat(t, sessions, protocol.Conversation{ID: id, Agent: "main"})
 		_, err := sessions.AppendEntryID(t.Context(), id, &harness.SessionEntry{})
 		require.NoError(t, err)
 	}
