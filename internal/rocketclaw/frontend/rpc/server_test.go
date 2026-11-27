@@ -23,7 +23,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
@@ -234,99 +233,13 @@ func TestTailnetHandlerPassesOpenCodeMCP(t *testing.T) {
 	whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) {
 		return &apitype.WhoIsResponse{Node: &tailcfg.Node{Tags: []string{"tag:server"}}, UserProfile: &tailcfg.UserProfile{LoginName: "tagged-devices"}}, nil
 	}}
-	handler := NewTailnetHandler(whois, nil, io.Discard, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }))
+	handler := NewTailnetHandler(whois, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }))
 
 	for path, code := range map[string]int{"/opencode/box/mcp": http.StatusTeapot, "/opencode/box/other": http.StatusUnauthorized, "/api/Identity": http.StatusUnauthorized} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, http.NoBody))
 		require.Equal(t, code, response.Code, path)
 	}
-}
-
-func TestTailnetAccessLog(t *testing.T) {
-	t.Parallel()
-
-	listener, err := net.Listen("unix", testSocketPath(t))
-	require.NoError(t, err)
-
-	transport := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error { return stream.SendMsg(&ConversationChange{}) }))
-
-	var serving errgroup.Group
-	serving.Go(func() error { return transport.Serve(listener) })
-	t.Cleanup(func() { transport.Stop(); require.NoError(t, serving.Wait()) })
-
-	whois := &mockTailnetWhoIs{WhoIsFunc: func(_ context.Context, address string) (*apitype.WhoIsResponse, error) {
-		if address == "100.64.0.9:41641" {
-			return &apitype.WhoIsResponse{Node: &tailcfg.Node{Tags: []string{"tag:server"}}, UserProfile: &tailcfg.UserProfile{LoginName: "tagged-devices"}}, nil
-		}
-
-		return &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "alice@example.com"}}, nil
-	}}
-
-	synctest.Test(t, func(t *testing.T) {
-		connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-		require.NoError(t, err)
-
-		defer func() { require.NoError(t, connection.Close()) }()
-
-		var logged bytes.Buffer
-
-		handler := NewTailnetHandler(whois, nil, &logged, NewHTTPHandler(connection, new(config.LockedConfig), ""))
-		mcpHeader := http.Header{"Content-Type": {"application/json"}, "Accept": {"application/json, text/event-stream"}}
-		stamp := "[" + time.Now().Format("02/Jan/2006:15:04:05 -0700") + "]"
-
-		for _, tt := range []struct {
-			name, method, target, remote string
-			header                       http.Header
-			line                         string
-		}{
-			{"call", http.MethodPost, "/api/Reload?token=secret", "100.64.0.7:41641", http.Header{"User-Agent": {"curl/8.7.1"}}, `100.64.0.7 - alice@example.com ` + stamp + ` "POST /api/Reload HTTP/1.1" 200 %d "-" "curl/8.7.1" 0ms`},
-			{"cross-site", http.MethodPost, "/api/Reload?token=secret", "100.64.0.7:41641", http.Header{"Sec-Fetch-Site": {"cross-site"}, "Referer": {`https://evil.example/"x"`}, "User-Agent": {"evil\x1b\nagent"}}, `100.64.0.7 - alice@example.com ` + stamp + ` "POST /api/Reload HTTP/1.1" 403 %d "https://evil.example/\"x\"" "evil\x1b\nagent" 0ms`},
-			{"unknown method", http.MethodPost, "/api/NoSuchMethod", "100.64.0.7:41641", http.Header{}, `100.64.0.7 - alice@example.com ` + stamp + ` "POST /api/NoSuchMethod HTTP/1.1" 404 %d "-" "-" 0ms`},
-			{"stream", http.MethodGet, "/stream?id=secret", "100.64.0.7:41641", http.Header{}, `100.64.0.7 - alice@example.com ` + stamp + ` "GET /stream HTTP/1.1" 200 %d "-" "-" 0ms`},
-			{"refused caller", http.MethodPost, "/api/Reload", "100.64.0.9:41641", http.Header{}, `100.64.0.9 - - ` + stamp + ` "POST /api/Reload HTTP/1.1" 401 %d "-" "-" 0ms`},
-			{"mcp tool", http.MethodPost, "/rpc_mcp", "100.64.0.7:41641", mcpHeader, `100.64.0.7 - alice@example.com ` + stamp + ` "POST /rpc_mcp#Identity HTTP/1.1" 200 %d "-" "-" 0ms`},
-			{"mcp batch", http.MethodPost, "/rpc_mcp", "100.64.0.7:41641", mcpHeader, `100.64.0.7 - alice@example.com ` + stamp + ` "POST /rpc_mcp#Identity HTTP/1.1" 200 %[1]d "-" "-" 0ms` + "\n" + `100.64.0.7 - alice@example.com ` + stamp + ` "POST /rpc_mcp#Protocol HTTP/1.1" 200 %[1]d "-" "-" 0ms`},
-		} {
-			body := map[string]string{
-				"mcp tool":  `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"Identity"}}`,
-				"mcp batch": `[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"Protocol"}},{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"Identity"}}]`,
-			}[tt.name]
-			request := httptest.NewRequest(tt.method, tt.target, strings.NewReader(cmp.Or(body, `{}`)))
-			request.RemoteAddr = tt.remote
-			request.Header = tt.header
-			request.Header.Set("Authorization", "Bearer secret")
-			request.Header.Set("Cookie", "session=secret")
-
-			logged.Reset()
-
-			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, request)
-			require.Equal(t, fmt.Sprintf(tt.line, response.Body.Len())+"\n", logged.String(), tt.name)
-			require.NotContains(t, logged.String(), "secret", tt.name)
-		}
-	})
-
-	t.Run("informational response", func(t *testing.T) {
-		var logged bytes.Buffer
-
-		handler := NewTailnetHandler(whois, nil, &logged, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusEarlyHints)
-			w.WriteHeader(http.StatusNoContent)
-		}))
-		server := httptest.NewServer(handler)
-		t.Cleanup(server.Close)
-
-		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, http.NoBody)
-		require.NoError(t, err)
-		response, err := server.Client().Do(request)
-		require.NoError(t, err)
-		require.NoError(t, response.Body.Close())
-		server.Close()
-
-		require.Equal(t, http.StatusNoContent, response.StatusCode)
-		require.Contains(t, logged.String(), `"GET / HTTP/1.1" 204 0 `)
-	})
 }
 
 func TestTailnetIdentity(t *testing.T) {
@@ -374,7 +287,7 @@ func TestTailnetIdentity(t *testing.T) {
 				next = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("refused caller reached the Web handler") })
 			}
 
-			handler := NewTailnetHandler(whois, nil, io.Discard, next)
+			handler := NewTailnetHandler(whois, nil, next)
 
 			for _, method := range []string{"Identity", "ListConfig"} {
 				request := httptest.NewRequest(http.MethodPost, "/api/"+method, strings.NewReader(`{}`))
@@ -536,7 +449,7 @@ func TestTailnetCrossSitePages(t *testing.T) {
 		request.Header.Set("Origin", origin)
 
 		response := httptest.NewRecorder()
-		NewTailnetHandler(whois, trusted, io.Discard, next).ServeHTTP(response, request)
+		NewTailnetHandler(whois, trusted, next).ServeHTTP(response, request)
 
 		return response
 	}
@@ -4442,7 +4355,7 @@ func signedIn(login string, next http.Handler) http.Handler {
 		return &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: login}}, nil
 	}}
 
-	return NewTailnetHandler(whois, nil, io.Discard, next)
+	return NewTailnetHandler(whois, nil, next)
 }
 
 func testSocketPath(t *testing.T) string {

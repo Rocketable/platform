@@ -366,7 +366,7 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 		return &apitype.WhoIsResponse{Node: node, UserProfile: &tailcfg.UserProfile{LoginName: "zoe@example.com"}}, nil
 	}}
 	proxy, _, _ = startProxyTestRPC(t, upstream.URL, &mockChannels{})
-	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, []string{"https://local.tail1234.ts.net"}, io.Discard, proxy))
+	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, []string{"https://local.tail1234.ts.net"}, proxy))
 	t.Cleanup(tailnet.Close)
 
 	for _, listener := range []*httptest.Server{web, tailnet} {
@@ -515,7 +515,7 @@ func TestWatchListing(t *testing.T) {
 	whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) {
 		return &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoe@example.com"}}, nil
 	}}
-	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, []string{"https://other.tail1234.ts.net"}, io.Discard, handler))
+	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, []string{"https://other.tail1234.ts.net"}, handler))
 	t.Cleanup(tailnet.Close)
 
 	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, tailnet.URL+"/listing", http.NoBody)

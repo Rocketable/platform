@@ -828,13 +828,7 @@ With `--aws-secrets-manager-arn ARN`, the three commands read providers from the
 
 RocketClaw logs a health line once a minute with memory, Go scheduler, and database connection figures.
 
-RocketClaw writes its log to standard error and an access log of the Web page to standard output, so the two stay apart. The access log has one line for every HTTP request the tailnet node serves, refused ones included, and one per tool call for a `/rpc_mcp` request that carries several, in the Combined Log Format followed by how long the request took, in whole milliseconds:
-
-```text
-100.64.0.7 - alice@example.com [23/Nov/2026:06:34:36 +0000] "POST /api/Reload HTTP/1.1" 200 15 "-" "curl/8.7.1" 3ms
-```
-
-The login is the caller's Tailscale login, or `-` when RocketClaw has none for the request. The byte count is the size of the response body, after compression. A stream's line is written when it ends. Lines leave out the query string and every header except `Referer` and `User-Agent`, and quotes and control characters in the quoted fields are escaped. A `/rpc_mcp` request's line names the tool it called after a `#`, as in `"POST /rpc_mcp#Prompt HTTP/1.1"`; a request that calls several tools at once gets one such line per tool, sorted by name, each with the request's status, size and time.
+RocketClaw writes its log to standard error.
 
 When profiling is enabled, RocketClaw also samples blocking events at an average of one per 10 milliseconds spent blocked and one in 100 mutex contention events.
 
