@@ -9,7 +9,6 @@ const href = "https://github.com/sample/fixture-repository-marker/pull/7/files";
 const metadata = { title: "Synthetic title marker", body: "description-marker <img src='https://untrusted.invalid/image' onerror='window.descriptionRan=1'> ![image](https://untrusted.invalid/image) <img src=/same-origin-image alt=same-origin-alt><script>window.descriptionRan=1</script>", state: "open", draft: true, merged: false, changed_files: 101, user: { login: "demo-author" }, updated_at: "2026-11-12T12:00:00Z", additions: 12, deletions: 3, head: { sha: "head", ref: "feature/pr-reader" }, base: { sha: "base", ref: "main" } };
 const file = (n: number) => ({ filename: n === 100 ? "file-marker-z-last.txt" : `file-marker-${n}.txt`, status: n === 100 ? "renamed" : "modified", additions: 1, deletions: 0, ...(n === 100 ? { previous_filename: "previous-file-marker.txt", patch: "@@ -0,0 +1 @@\n+last-page-patch-marker" } : n ? {} : { patch: "@@ -0,0 +1 @@\n+patch-marker <script>example</script>" }) });
 
-// Compile a focused browser entry in memory; never replace the caller-owned tracked bundle.
 async function assets() {
   const entry = path.join(import.meta.dir, "github-pr-browser-entry.tsx");
   const result = await Bun.build({ entrypoints: [entry], target: "browser", minify: true, define: { "process.env.NODE_ENV": '"production"' }, plugins: [{ name: "preview-test-entry", setup(build) {
@@ -44,8 +43,6 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
   let pending = Promise.withResolvers<void>();
   try {
     const page = await browser.newPage();
-    // Headless focus emulation keeps real tabs visible. Exercise the page-lifecycle
-    // event directly so this regression does not depend on window-manager focus.
     const visibility = async (state: DocumentVisibilityState) => page.evaluate(async (state: DocumentVisibilityState) => {
       Object.defineProperty(document, "visibilityState", { configurable: true, value: state });
       Object.defineProperty(document, "hidden", { configurable: true, value: state === "hidden" });
@@ -107,7 +104,6 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     expect(await page.getByRole("link", { name: "change", exact: true }).getAttribute("href")).toBe(href);
     expect(await page.getByRole("link", { name: "change", exact: true }).getAttribute("target")).toBe("_blank");
     await page.waitForFunction(() => (window as any).posthog.sessionRecording?.started === true);
-    // Observe cancellation only after PostHog has installed its native fetch instrumentation.
     await page.evaluate(() => {
       (window as any).requestAborts = 0;
       const fetchRequest = window.fetch;
@@ -341,7 +337,6 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     await page.evaluate(() => (window as any).unmountPreview());
     await viewer().waitFor({ state: "detached" });
     await page.waitForFunction((before: number) => (window as any).requestAborts > before, beforeUnmount);
-    // Recorder output is buffered; positive controls must reach its emitted snapshot, not just the DOM.
     await page.waitForFunction(() => {
       const data = JSON.stringify((window as any).telemetryEvents);
       return data.includes('"$snapshot"') && data.includes("recordable-positive-control") && data.includes("network-positive-control") && data.includes("public-control.test/control");
@@ -527,7 +522,6 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     await composer.fill("Draft still editable beside the PR pane");
     expect(await composer.isEnabled()).toBe(true);
     await prs.getByText("Loading files…").waitFor();
-    // A thread update looks for PRs again in the background without moving the PR already shown.
     const title = prs.getByText(metadata.title, { exact: true });
     const top = (await title.boundingBox())!.y;
     const held = Promise.withResolvers<void>();
@@ -549,7 +543,6 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     const patchBox = (await prs.getByRole("region", { name: "File patch", exact: true }).boundingBox())!;
     const treeBox = (await prs.getByRole("region", { name: "Changed files", exact: true }).boundingBox())!;
     expect(treeBox.x).toBeGreaterThanOrEqual(patchBox.x + patchBox.width - 1);
-    // Refresh also reads the shown PR again, which starts its file list over.
     files = Promise.withResolvers<void>();
     filesHold = files.promise;
     const beforeRefresh = filesRead();
@@ -588,7 +581,6 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     await page.waitForFunction((node: HTMLElement) => document.activeElement === node, await actions.elementHandle());
     expect(await composer.inputValue()).toBe("Draft still editable beside the PR pane");
     await page.keyboard.press("Escape");
-    // The watch's first look answers from what the pane already read, and sets what counts as new.
     const subagentLook = () => page.waitForResponse((response: any) => response.url().includes("/api/History?pull-request-discovery") && response.request().postDataJSON().id === child);
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole("button", { name: "Show pull requests and issues", exact: true }).waitFor();
@@ -602,7 +594,6 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     expect(await prs.count()).toBe(0);
     second = true;
     updatedAt = "2026-01-05T00:00:00Z";
-    // The picker shows only once the thread has more than one PR.
     await prs.getByRole("combobox", { name: "Thread pull request or issue" }).waitFor();
     expect(await prs.getByRole("combobox", { name: "Thread pull request or issue" }).textContent()).toContain("#8");
     await prs.getByText("0 of 0 files loaded", { exact: true }).waitFor();
@@ -635,7 +626,6 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     await prs.getByRole("button", { name: "Refresh", exact: true }).click();
     await reading;
     const aborted = page.waitForEvent("requestfailed", (request: { url(): string }) => request.url().includes("/issues/12/comments"));
-    // Cmd/Ctrl+Shift+B does what the button does, also while the message box has focus.
     await composer.focus();
     await page.keyboard.press("ControlOrMeta+Shift+B");
     await prs.waitFor({ state: "detached" });
