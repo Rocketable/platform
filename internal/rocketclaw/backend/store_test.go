@@ -105,7 +105,7 @@ func TestSessionTagsCommitRollback(t *testing.T) {
 	group := []string{"triage", "resolved"}
 
 	for _, id := range []string{"owning", "other"} {
-		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, store, protocol.Conversation{ID: id, Agent: "main"})
 		_, err := store.toggleSessionTag(ctx, id, "customer", []string{"customer"})
 		require.NoError(t, err)
 	}
@@ -839,7 +839,7 @@ func TestSessionServiceActiveGoalThreads(t *testing.T) {
 	assert.Nil(t, threads)
 
 	for _, id := range []string{"active", "legacy", "terminal"} {
-		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByRoutine}))
+		createWebChat(t, store, protocol.Conversation{ID: id, Agent: "planner", CreatedBy: string(ThreadCreatedByRoutine)})
 		require.NoError(t, store.BeginGoal(id, &GoalState{Objective: "work", MaxTurns: 1}))
 	}
 
@@ -1041,7 +1041,8 @@ func TestSessionServiceSerializesConcurrentAccess(t *testing.T) {
 			_, err := service.AppendEntryID(t.Context(), "main", testSessionEntryAt(time.Unix(int64(25-i), 123456789).UTC(), fmt.Sprintf("user %d 日本 %s", i, strings.Repeat("full preview ", 100))))
 			errCh <- err
 
-			errCh <- service.UpsertThread(fmt.Sprintf("thread-%02d", i), ThreadState{Agent: "main"})
+			_, _, err = service.CreateStickyConversation(t.Context(), protocol.Conversation{ID: fmt.Sprintf("thread-%02d", i), Agent: "main"}, harness.AgentStickyOff)
+			errCh <- err
 		}(i)
 	}
 
@@ -1146,29 +1147,15 @@ func TestSessionServiceConcurrentGoalTurnsPreserveAccounting(t *testing.T) {
 	assert.Equal(t, GoalStatusBudgetExhausted, goal.Status)
 }
 
-func TestSessionServiceThreadAgentUpdatePreservesCreator(t *testing.T) {
-	t.Parallel()
-
-	service := newTestSessionService(t)
-	require.NoError(t, service.UpsertThread("thread", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByRoutine}))
-	require.NoError(t, service.UpsertThread("thread", ThreadState{Agent: "main"}))
-
-	thread, ok, err := service.Thread("thread")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, ThreadState{Agent: "main", CreatedBy: ThreadCreatedByRoutine}, thread)
-}
-
 func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	recordTestConversations(t, service, "main", map[string]ConversationKind{"main": KindWebChat, "thread": KindWebChat})
+	recordTestConversations(t, service, "ops", map[string]ConversationKind{"main": KindWebChat, "thread": KindWebChat})
 	_, err := service.AppendEntryID(context.Background(), "main", testSessionEntry("main", "assistant"))
 	require.NoError(t, err)
 	_, err = service.AppendEntryID(context.Background(), "thread", testSessionEntry("thread", "assistant"))
 	require.NoError(t, err)
-	require.NoError(t, service.UpsertThread("main", ThreadState{Agent: "ops"}))
 	require.NoError(t, service.BeginGoal("main", &GoalState{Objective: "ship it", MaxTurns: 5}))
 	seedActiveTurn(t, service, "main", "unshadowed-active", nil)
 	manager := newThreadBridgeManager(service.definitions, service, service.log, &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
@@ -1365,8 +1352,8 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		decoy := protocol.SlackThreadConversationID("DX1", slackTestTS(cutoff.Add(-time.Hour))) + "/call-1"
 		unrelated := id + "/unrelated"
 
-		require.NoError(t, store.UpsertThread(decoy, ThreadState{Agent: "planner"}))
-		require.NoError(t, store.UpsertThread(unrelated, ThreadState{Agent: "planner"}))
+		createWebChat(t, store, protocol.Conversation{ID: decoy, Agent: "planner"})
+		createWebChat(t, store, protocol.Conversation{ID: unrelated, Agent: "planner"})
 		_, err = store.AppendEntryID(t.Context(), unrelated, testSessionEntryAt(cutoff.Add(time.Hour), unrelated))
 		require.NoError(t, err)
 		children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent = $1 ORDER BY 1`, "owned children", id)
@@ -1500,10 +1487,9 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 
 	store := newTestSessionService(t)
 
-	require.ErrorContains(t, store.UpsertThread(" ", ThreadState{Agent: "agent"}), "thread conversation ID is required")
 	require.EqualError(t, store.BeginGoal(" ", &GoalState{Objective: "obj", MaxTurns: 1}), "goal conversation ID is required")
 	require.EqualError(t, store.BeginGoal("thread-1", &GoalState{Objective: " ", MaxTurns: 1}), "goal objective is required")
-	require.NoError(t, store.UpsertThread("thread-1", ThreadState{Agent: "agent"}))
+	createWebChat(t, store, protocol.Conversation{ID: "thread-1", Agent: "agent"})
 	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "obj", MaxTurns: -1}))
 	goal, ok, err := store.Goal("thread-1")
 	require.NoError(t, err)
@@ -1549,12 +1535,12 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	_, err := store.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention) VALUES ('unmanaged-web', '', '', 'web_chat', FALSE, 'nested')`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.UpsertThread("empty-recorded", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByRoutine}))
-	require.NoError(t, store.UpsertThread("empty-new", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByRoutine}))
-	require.NoError(t, store.UpsertThread("empty-running", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByRoutine}))
-	require.NoError(t, store.UpsertThread("continuing", ThreadState{Agent: "planner"}))
-	require.NoError(t, store.UpsertThread("old-web", ThreadState{Agent: "planner"}))
-	require.NoError(t, store.UpsertThread("active-web", ThreadState{Agent: "planner"}))
+	createWebChat(t, store, protocol.Conversation{ID: "empty-recorded", Agent: "planner", CreatedBy: string(ThreadCreatedByRoutine)})
+	createWebChat(t, store, protocol.Conversation{ID: "empty-new", Agent: "planner", CreatedBy: string(ThreadCreatedByRoutine)})
+	createWebChat(t, store, protocol.Conversation{ID: "empty-running", Agent: "planner", CreatedBy: string(ThreadCreatedByRoutine)})
+	createWebChat(t, store, protocol.Conversation{ID: "continuing", Agent: "planner"})
+	createWebChat(t, store, protocol.Conversation{ID: "old-web", Agent: "planner"})
+	createWebChat(t, store, protocol.Conversation{ID: "active-web", Agent: "planner"})
 	_, err = store.db.ExecContext(t.Context(), `UPDATE conversations SET created_at = $1, continues = CASE conversation_id WHEN 'continuing' THEN 'cron:daily:new' WHEN 'active-web' THEN 'cron:daily:continued' END
 WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web')`, oldTime)
 	require.NoError(t, err)
@@ -1563,7 +1549,10 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 	require.NoError(t, store.startSubagent(t.Context(), "active-web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/helper", Turn: "turn-0", Call: "helper"}, Agent: "planner"}))
 	require.NoError(t, store.startSubagent(t.Context(), "cron:daily:old", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/helper", Turn: "turn-0", Call: "helper"}, Agent: "planner"}))
 	seedActiveTurn(t, store, "empty-running", "running", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "running"})
-	require.NoError(t, store.UpsertThread(activeOldThread, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByRoutine}))
+	_, err = store.SetThreadAgentIfExists(activeOldThread, "selected")
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(t.Context(), `UPDATE conversations SET created_by = $2 WHERE conversation_id = $1`, activeOldThread, ThreadCreatedByRoutine)
+	require.NoError(t, err)
 
 	for conversationID, ts := range map[string]time.Time{
 		oldThread:                      oldTime,
@@ -1792,7 +1781,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	store := newTestSessionServiceAt(t, t.TempDir())
 
 	webID := "web-queued"
-	require.NoError(t, store.UpsertThread(webID, ThreadState{Agent: "planner"}))
+	createWebChat(t, store, protocol.Conversation{ID: webID, Agent: "planner"})
 	webItem := protocol.ThreadQueueItem{ID: "web-q1", ConversationID: webID, Message: "first web message", Principal: "alice", Source: protocol.SourceWeb}
 	require.NoError(t, store.PutThreadQueueItem(webItem.ID, &webItem))
 
@@ -1811,7 +1800,6 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	managedID := protocol.SlackThreadConversationID("C1", slackTestTS(cutoff.Add(-time.Hour)))
 	privateID := "external_mcp:planner:private"
 	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateID, ManagedConversationID: managedID}))
-	require.NoError(t, store.UpsertThread(privateID, ThreadState{Agent: "planner"}))
 
 	for _, conversationID := range []string{privateID, managedID} {
 		_, err := store.AppendEntryID(t.Context(), conversationID, testSessionEntryAt(cutoff.Add(-time.Hour), conversationID))
@@ -1913,7 +1901,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 				case id == "cron:scheduled":
 					recordTestConversations(t, store, "planner", map[string]ConversationKind{id: KindRoutineRun})
 				default:
-					require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner"}))
+					createWebChat(t, store, protocol.Conversation{ID: id, Agent: "planner"})
 				}
 			}
 
@@ -2275,6 +2263,13 @@ func recordTestConversations(tb testing.TB, s *SessionService, agent string, kin
 		_, err := s.recordConversation(tb.Context(), &protocol.Conversation{ID: id, Agent: agent}, facts, harness.AgentStickyOff)
 		require.NoError(tb, err)
 	}
+}
+
+func createWebChat(tb testing.TB, s *SessionService, conversation protocol.Conversation) {
+	tb.Helper()
+
+	_, _, err := s.CreateStickyConversation(tb.Context(), conversation, harness.AgentStickyOff)
+	require.NoError(tb, err)
 }
 
 func recordLegacyDelegations(t *testing.T, s *SessionService, parent string, calls ...string) {

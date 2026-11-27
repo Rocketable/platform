@@ -3,6 +3,7 @@ package backend
 import (
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,7 +78,7 @@ func TestExternalMCPConversationCleanupRemovesOnlyBoundSessions(t *testing.T) {
 
 	session := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "chat-1"}
 	require.NoError(t, store.RegisterExternalMCPConversation("public", "managed-agent", &session))
-	require.NoError(t, store.UpsertThread("unrelated", ThreadState{Agent: "other"}))
+	createWebChat(t, store, protocol.Conversation{ID: "unrelated", Agent: "other"})
 
 	for _, conversationID := range []string{session.PrivateConversationID, session.ManagedConversationID, "unrelated"} {
 		_, err := store.AppendEntryID(t.Context(), conversationID, testSessionEntry(conversationID, "assistant"))

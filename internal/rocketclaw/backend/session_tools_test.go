@@ -544,8 +544,8 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	require.NoError(t, service.UpsertThread("web:empty", ThreadState{Agent: "main"}))
-	require.NoError(t, service.UpsertThread("web:stored", ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: "web:empty", Agent: "main"})
+	createWebChat(t, service, protocol.Conversation{ID: "web:stored", Agent: "main"})
 	require.NoError(t, service.BeginGoal("web:stored", &GoalState{Objective: "work", MaxTurns: 3}))
 	recordTestConversations(t, service, "main", map[string]ConversationKind{"external_mcp:private": KindExternalMCPRun, "cron:one": KindRoutineRun, "exec:one": KindWebChat, "slack-thread:C1:1": KindSlackThread})
 	recordPrivateHistories(t, service, map[string]ConversationKind{"unrecorded": KindWebChat})
@@ -1164,7 +1164,7 @@ SELECT COUNT(*) FROM entries, running WHERE conversation_id = $1 AND turns > 0`,
 func pausedTestChat(t *testing.T, s *SessionService, conversationID string) *Runtime {
 	t.Helper()
 
-	require.NoError(t, s.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: conversationID, Agent: "main"})
 
 	bridge := &Bridge{config: Config{ConversationID: conversationID, SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})}
@@ -1353,8 +1353,8 @@ func TestSessionToolsReachOnlyTargets(t *testing.T) {
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(cfg), store: store, bridges: map[string]directBridge{}, slackLookups: noSlackLookups{}}
 
 	for _, agent := range []string{"writer", "editor", "lead", "main"} {
+		createWebChat(t, store, protocol.Conversation{ID: "web:" + agent, Agent: agent})
 		runningTestBridge(t, store, manager, "web:"+agent)
-		require.NoError(t, store.UpsertThread("web:"+agent, ThreadState{Agent: agent}))
 	}
 
 	recordTestConversations(t, store, "retired", map[string]ConversationKind{"web:retired": KindWebChat})
@@ -1594,7 +1594,7 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 			writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\n"+permission+"\n---\nPrompt\n")
 			nt.cfg.AutoApproverModel = "review-model"
 			nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
-			require.NoError(t, nt.service.UpsertThread(caller, ThreadState{Agent: "primary"}))
+			createWebChat(t, nt.service, protocol.Conversation{ID: caller, Agent: "primary"})
 
 			manager, _ := nt.run(t, ignoreOutbound)
 
@@ -1668,7 +1668,7 @@ func replyNoteTest(t *testing.T, code string, answer noteTestResponder) *noteTes
 	})
 	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: {primary: allow}\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nPrompt\n")
 	nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
-	require.NoError(t, nt.service.UpsertThread("web:caller", ThreadState{Agent: "primary"}))
+	createWebChat(t, nt.service, protocol.Conversation{ID: "web:caller", Agent: "primary"})
 
 	return nt
 }
@@ -1790,7 +1790,7 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 	writeAgent(t, nt.cfg.Workspace, "primary", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n---\nPrompt\n")
 	writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission:\n  task: {primary: allow}\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nResearch\n")
 	nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
-	require.NoError(t, nt.service.UpsertThread("web:ops", ThreadState{Agent: "primary"}))
+	createWebChat(t, nt.service, protocol.Conversation{ID: "web:ops", Agent: "primary"})
 
 	manager, _ := nt.run(t, ignoreOutbound)
 	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("ask ops")))
@@ -1946,7 +1946,7 @@ func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 
 			writeResponseMessage(t, w, "resp", "msg", "noted")
 		})
-		require.NoError(t, nt.service.UpsertThread("web:ops", ThreadState{Agent: "main"}))
+		createWebChat(t, nt.service, protocol.Conversation{ID: "web:ops", Agent: "main"})
 
 		reply := testReply("web:caller", "turn-1/call/s", "web:ops")
 		reply.label, reply.runnerID, reply.origin = string(sessionWriteStop), "turn-closed", &protocol.InboundMessage{ConversationID: "web:caller", Source: protocol.SourceWeb}
@@ -1973,7 +1973,7 @@ func TestCheckSessionTarget(t *testing.T) {
 
 	s, _ := newSessionSearchFixture(t)
 	recordTestConversations(t, s, "main", map[string]ConversationKind{"one-off-cron:run": KindOneOffRoutineRun})
-	require.NoError(t, s.UpsertThread("caller", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "caller", Agent: "main"})
 
 	_, err := s.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, reports_to, kind, listed) VALUES ('external_mcp:private', 'main', '', $1, 'external_mcp_run', FALSE)
 ON CONFLICT (conversation_id) DO UPDATE SET reports_to = excluded.reports_to`, searchChatX)
@@ -2101,7 +2101,7 @@ func TestSessionToolsCriteria(t *testing.T) {
 	require.Equal(t, header+rowH+rowB+"[criteria: terms=tag:billing; text=]\n", call(&sessionListParams{Criteria: "tag:billing", Since: "2026-01-04T00:00:00Z", Limit: 200}))
 	require.Equal(t, header+rowH+rowB+strings.Replace(rowW, "\t1\t", "\t3\t", 1)+"[criteria: terms=tag:billing; text=]\n", call(&sessionListParams{Criteria: "tag:billing", Since: epoch, Limit: 200}))
 
-	require.NoError(t, s.UpsertThread("missing", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "missing", Agent: "main"})
 	insertSessionEntryWithoutSummary(t, s, "missing", testSessionEntry("old", "answer"))
 	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET preview = NULL, last_updated = NULL WHERE conversation_id = 'missing'`)
 	require.NoError(t, err)

@@ -142,7 +142,7 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 	}
 
 	const handoff = "web:cron:cron/daily.md:1"
-	require.NoError(t, s.UpsertThread(handoff, ThreadState{Agent: "main", CreatedBy: ThreadCreatedByRoutine}))
+	createWebChat(t, s, protocol.Conversation{ID: handoff, Agent: "main", CreatedBy: string(ThreadCreatedByRoutine)})
 	recordTestConversations(t, s, "main", map[string]ConversationKind{handoff + "/call-1": KindSubagent})
 	handoffID, err := s.AppendEntryID(ctx, handoff, testSessionEntry("handoff prompt", "handoff answer"))
 	require.NoError(t, err)
@@ -427,7 +427,7 @@ func TestMessageSearchReadsStoppedTurnText(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("chat", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "chat", Agent: "main"})
 	seedActiveTurn(t, s, "chat", "stopped", testReplayEntry(
 		`{"type":"message","role":"user","content":"find the needle"}`,
 		`{"type":"function_call","call_id":"call","name":"Read","arguments":"{}"}`,
@@ -467,7 +467,7 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("web-chat", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "web-chat", Agent: "main"})
 	reference := uploadTestAttachment(t, s, "web-chat", "turn-file")
 	turn := &testCheckpoint{TurnID: "turn-1", ConversationKey: "web-chat", ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web principal=\"Stopped Writer\"]","content":` + jsonString("stopped question\n\n"+reference) + `}`),
@@ -618,7 +618,7 @@ func TestSearchMessagesMatchesLowercasedSubstrings(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("web-chat", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "web-chat", Agent: "main"})
 
 	texts := []string{"Sam said hi", "sample levels", "100% done", "1000 done", "snake_case", "snakeXcase", `C:\path`, "C:/path",
 		"ping <@U123>", "ping <!subteam^S9>", "\u212Aelvin", "KELVIN", "İstanbul", "Istanbul"}
@@ -701,7 +701,7 @@ func TestSearchMessagesReadEveryBranch(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 
 	first, err := s.AppendEntryID(ctx, "main", testReplayEntry(
 		`{"type":"message","role":"user","content":"needle 1"}`,
@@ -721,7 +721,6 @@ func TestSearchMessagesReadEveryBranch(t *testing.T) {
 	_, err = s.AppendEntryID(ctx, "cron:daily", testSessionEntry("needle cron", "answer"))
 	require.NoError(t, err)
 	require.NoError(t, s.RegisterExternalMCPConversation("public", "main", &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "managed", Agent: "main"}))
-	require.NoError(t, s.UpsertThread("private", ThreadState{Agent: "main"}))
 	_, err = s.AppendEntryID(ctx, "private", testSessionEntry("needle private", "answer"))
 	require.NoError(t, err)
 	require.Empty(t, messageSearchTestRows(t, s, "private"), "search never shows a private External MCP conversation, so its entries get no text")
@@ -802,7 +801,7 @@ func TestSearchMessagesMatchesGoReference(t *testing.T) {
 
 	for chat := range 10 {
 		id := fmt.Sprintf("chat%d", chat)
-		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, s, protocol.Conversation{ID: id, Agent: "main"})
 
 		prompts := make([]string, 8)
 

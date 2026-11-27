@@ -37,10 +37,17 @@ func openTestTurns(tb testing.TB, dsn string) testTurns {
 	return testTurns{db: db}
 }
 
+func createWebChat(tb testing.TB, sessions *backend.SessionService, conversation protocol.Conversation) {
+	tb.Helper()
+
+	_, _, err := sessions.CreateStickyConversation(tb.Context(), conversation, harness.AgentStickyOff)
+	require.NoError(tb, err)
+}
+
 func (s testTurns) RecordSlackThread(t *testing.T, sessions *backend.SessionService, id string, thread backend.ThreadState) {
 	t.Helper()
 
-	require.NoError(t, sessions.UpsertThread(id, thread))
+	createWebChat(t, sessions, protocol.Conversation{ID: id, Agent: thread.Agent, CreatedBy: string(thread.CreatedBy)})
 	channel, ts, _ := strings.Cut(strings.TrimPrefix(id, "slack-thread:"), ":")
 	_, err := s.db.ExecContext(t.Context(), `UPDATE conversations SET kind = 'slack_thread', slack_channel = $2, slack_thread = $3 WHERE conversation_id = $1`, id, channel, ts)
 	require.NoError(t, err)

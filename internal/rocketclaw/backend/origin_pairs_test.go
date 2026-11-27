@@ -268,7 +268,7 @@ func TestChatOriginFactsReportsFailures(t *testing.T) {
 	ctx := t.Context()
 
 	for _, id := range []string{"first", "second"} {
-		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, store, protocol.Conversation{ID: id, Agent: "main"})
 	}
 
 	seen := 0

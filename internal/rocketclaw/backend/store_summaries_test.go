@@ -46,7 +46,7 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 			require.NoError(t, err)
 			insertSessionEntryWithoutSummary(t, service, tc.name, entry)
 			insertSessionEntryWithoutSummary(t, service, tc.name, &harness.SessionEntry{Timestamp: entry.Timestamp, ReplayInput: replayInputForMessage("assistant", " \n")})
-			require.NoError(t, service.UpsertThread(tc.name, ThreadState{Agent: "main"}))
+			createWebChat(t, service, protocol.Conversation{ID: tc.name, Agent: "main"})
 			require.Equal(t, tc.want, sidebarSummaries(t, service)[tc.name].LastMessage)
 
 			for _, message := range []struct{ role, text, want string }{
@@ -146,7 +146,7 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 			for _, id := range []string{"empty", "history"} {
 				switch creation {
 				case "upsert":
-					require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
+					createWebChat(t, service, protocol.Conversation{ID: id, Agent: "main"})
 				case "external MCP":
 					require.NoError(t, service.RegisterExternalMCPConversation("public-"+id, "main", &ExternalMCPSessionState{PrivateConversationID: "private-" + id, ManagedConversationID: id, Agent: "main"}))
 				}
@@ -208,7 +208,7 @@ SELECT 'history-only-' || n, '{}', '' FROM generate_series(1, 4096) n`)
 	require.NoError(t, err)
 
 	for _, id := range []string{"visible", "empty"} {
-		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, service, protocol.Conversation{ID: id, Agent: "main"})
 	}
 
 	for range 2 {
@@ -252,7 +252,7 @@ func TestSidebarSessionNames(t *testing.T) {
 	stamp := time.Date(2026, 1, 1, 0, 0, 0, 123456000, time.UTC)
 
 	for _, id := range []string{"a", "Z", "ä"} {
-		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, service, protocol.Conversation{ID: id, Agent: "main"})
 		_, err := service.AppendEntryID(ctx, id, testSessionEntryAt(stamp, "original"))
 		require.NoError(t, err)
 	}
@@ -266,7 +266,7 @@ func TestSidebarSessionNames(t *testing.T) {
 	updated, err := service.UpdateConversationDetails(ctx, "a", new("Renamed"))
 	require.NoError(t, err)
 	require.True(t, updated)
-	require.NoError(t, service.UpsertThread("a", ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: "a", Agent: "main"})
 
 	var ids []string
 
@@ -307,7 +307,7 @@ func TestNameGeneratedKeepsThePreviousName(t *testing.T) {
 
 	service := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, service.UpsertThread("chat", ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: "chat", Agent: "main"})
 
 	for _, step := range []struct {
 		chosen, title string
@@ -347,7 +347,7 @@ func TestSidebarSessionsListFirstTurnBeforeHistory(t *testing.T) {
 
 	service := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, service.UpsertThread("new", ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: "new", Agent: "main"})
 	seedActiveTurn(t, service, "new", "first-turn", nil)
 	updated, err := service.UpdateConversationDetails(ctx, "new", new("Draft"))
 	require.NoError(t, err)
@@ -389,7 +389,7 @@ func TestSidebarSessionsMarkUnansweredQuestions(t *testing.T) {
 
 	service := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, service.UpsertThread("asking", ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: "asking", Agent: "main"})
 	seedActiveTurn(t, service, "asking", "turn-1", nil)
 
 	saved, err := service.SaveTabState(ctx, alice, &TabState{Tabs: []Tab{{Path: sessionPath("asking"), Space: "main"}}}, 0)
@@ -438,7 +438,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	recordTestConversations(t, service, "main", map[string]ConversationKind{"cron:private": KindRoutineRun, "one-off-cron:private": KindOneOffRoutineRun, "private": KindExternalMCPRun})
 
 	for _, id := range []string{"a", "Z", "ä", "empty", "missing", "zero", "cron:private", "one-off-cron:private", "private"} {
-		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, service, protocol.Conversation{ID: id, Agent: "main"})
 
 		if id != "zero" {
 			_, err := service.toggleSessionTag(t.Context(), id, "customer", []string{"customer", "internal"})
@@ -599,7 +599,7 @@ func BenchmarkSidebarSessionTags(b *testing.B) {
 	for i := range 32 {
 		id := fmt.Sprintf("tagged-%02d", i)
 		tags[id] = id + strings.Repeat("x", 64<<10)
-		require.NoError(b, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(b, service, protocol.Conversation{ID: id, Agent: "main"})
 		_, err := service.AppendEntryID(b.Context(), id, testSessionEntry("question", "answer"))
 		require.NoError(b, err)
 		_, err = service.toggleSessionTag(b.Context(), id, tags[id], []string{tags[id]})
@@ -634,7 +634,7 @@ func BenchmarkSidebarSessions(b *testing.B) {
 	for i := range previews {
 		id := fmt.Sprintf("sidebar-%02d", i)
 		previews[i] = strings.Repeat(id, 8192)
-		require.NoError(b, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(b, service, protocol.Conversation{ID: id, Agent: "main"})
 		_, err := service.AppendEntryID(b.Context(), id, testSessionEntry("question", previews[i]))
 		require.NoError(b, err)
 	}
@@ -666,7 +666,7 @@ func TestSidebarSessionsWorkTimes(t *testing.T) {
 	service := newTestSessionService(t)
 	ctx := t.Context()
 	require.NoError(t, service.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "main", PrivateConversationID: "private", ManagedConversationID: "mcp"}))
-	require.NoError(t, service.UpsertThread("busy", ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: "busy", Agent: "main"})
 
 	weekAgo := time.Now().Add(-7 * 24 * time.Hour).Truncate(time.Microsecond).UTC()
 	for _, id := range []string{"mcp", "busy"} {
@@ -761,7 +761,7 @@ func TestSidebarSessionsCloseRowsOnEarlyStopAndCancellation(t *testing.T) {
 
 	service := newTestSessionService(t)
 	for _, id := range []string{"a", "b"} {
-		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, service, protocol.Conversation{ID: id, Agent: "main"})
 		_, err := service.AppendEntryID(t.Context(), id, testSessionEntry(strings.Repeat(id, 16384), ""))
 		require.NoError(t, err)
 	}
@@ -800,7 +800,7 @@ func TestSidebarSessionsCancelPendingDatabaseRow(t *testing.T) {
 
 	service := newTestSessionServiceAt(t, workspace)
 	for _, id := range []string{"a", "b"} {
-		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, service, protocol.Conversation{ID: id, Agent: "main"})
 		_, err := service.AppendEntryID(t.Context(), id, testSessionEntry(id, ""))
 		require.NoError(t, err)
 	}
@@ -950,7 +950,7 @@ func TestEntryPreviewCommitsWithItsEntry(t *testing.T) {
 
 	service := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, service.UpsertThread("chat", ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: "chat", Agent: "main"})
 	_, err := service.AppendEntryID(ctx, "chat", testSessionEntry("question", "first"))
 	require.NoError(t, err)
 
@@ -1028,7 +1028,7 @@ func TestChatEntryFactsFollowWrites(t *testing.T) {
 	recordTestConversations(t, s, "main", map[string]ConversationKind{"early": KindRoutineRun, "late": KindRoutineRun})
 
 	for _, id := range []string{"attached", "own"} {
-		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, s, protocol.Conversation{ID: id, Agent: "main"})
 	}
 
 	facts := func(id string) (hasEntries bool, creatingSource string) {

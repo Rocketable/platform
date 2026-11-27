@@ -19,6 +19,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
@@ -1156,7 +1157,7 @@ func TestToggleManualTag(t *testing.T) {
 
 	agents := harness.Agents{Items: map[string]harness.Agent{"main": {TagGroups: [][]string{{"customer", "internal"}}}}}
 
-	require.NoError(t, s.UpsertThread("web", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "web", Agent: "main"})
 	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session)
 VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), 'ses_a')`)
 	require.NoError(t, err)
@@ -1271,7 +1272,7 @@ func TestSearchSessionsFiltersByServerAgentAndModel(t *testing.T) {
 	require.NoError(t, root.MkdirAll(".rocketclaw/agents", 0o755))
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
 	require.NoError(t, root.WriteFile(".rocketclaw/agents/primary.md", []byte("---\nmodel: gpt-6.1-sol\n---\nPrompt\n"), 0o644))
-	require.NoError(t, s.UpsertThread("web-session:local", ThreadState{Agent: "primary"}))
+	createWebChat(t, s, protocol.Conversation{ID: "web-session:local", Agent: "primary"})
 	_, err = s.AppendEntryID(ctx, "web-session:local", testSessionEntry("question", "answer"))
 	require.NoError(t, err)
 

@@ -47,7 +47,7 @@ func TestDeleteCurrentBranchStopsItsTurnAndRunsTheQueueFromTheBranchPoint(t *tes
 	b := newBridge()
 	b.config.ConversationID = "main"
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 
 	for _, text := range []string{"A text", "B text"} {
 		_, err := s.AppendEntryID(ctx, "main", testSessionEntry(text, "reply"))
@@ -130,7 +130,7 @@ func TestDeleteSiblingBranchKeepsSteeringTheRunningTurn(t *testing.T) {
 	b := newBridge()
 	b.config.ConversationID = "main"
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 
 	_, err := s.AppendEntryID(ctx, "main", testSessionEntry("A text", "a reply"))
 	require.NoError(t, err)
@@ -171,7 +171,7 @@ func TestDeleteBranchRemovesItsComparisons(t *testing.T) {
 
 	s, _ := newShadowTestStore(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("chat", ThreadState{Agent: "primary"}))
+	createWebChat(t, s, protocol.Conversation{ID: "chat", Agent: "primary"})
 	children, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'chat' ORDER BY 1`, "shadow children")
 	require.NoError(t, err)
 	require.Len(t, children, 2)
@@ -405,7 +405,7 @@ func TestBranchSummaryLandsOnTheCurrentPathAndReachesTheNextTurn(t *testing.T) {
 	b := newBridge()
 	b.config.ConversationID = "main"
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 
 	appendEntry := func(user, assistant string) int64 {
 		id, err := s.AppendEntryID(ctx, "main", testSessionEntry(user, assistant))

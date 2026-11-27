@@ -13,6 +13,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -40,7 +41,7 @@ func TestTyping(t *testing.T) {
 	require.NoError(t, root.MkdirAll(cfg.RuntimeDirName()+"/agents", 0o700))
 
 	for _, id := range []string{"x", "y"} {
-		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
+		createWebChat(t, sessions, protocol.Conversation{ID: id, Agent: "main"})
 	}
 
 	listener, err := net.Listen("unix", testSocketPath(t))

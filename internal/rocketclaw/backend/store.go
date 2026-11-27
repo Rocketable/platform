@@ -252,48 +252,6 @@ func newSessionService(ctx context.Context, cfg *config.Config, db *sql.DB, logg
 	return &SessionService{db: db, log: logger, attachments: attachments, definitions: config.NewLockedConfig(cfg), jobs: noConversationJobs{}, historyWorkers: noHistoryWorkers{}, spillDir: rocketcodeSpillDir(cfg), parkWake: make(chan struct{}, 1), listingWatchers: map[chan struct{}]string{}}, nil
 }
 
-func (s *SessionService) UpsertThread(conversationID string, thread ThreadState) error {
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
-		return errors.New("thread conversation ID is required")
-	}
-
-	thread.Agent = strings.TrimSpace(thread.Agent)
-	thread.CreatedBy = ThreadCreator(strings.TrimSpace(string(thread.CreatedBy)))
-
-	ctx := context.Background()
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin thread upsert: %w", err)
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
-	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
-		return err
-	}
-
-	summary, err := loadSessionSummary(ctx, tx, conversationID)
-	if err != nil {
-		return err
-	}
-
-	if _, err := tx.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ($1, $2, $3, $4, TRUE) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN conversations.created_by ELSE excluded.created_by END`, conversationID, thread.Agent, string(thread.CreatedBy), KindWebChat); err != nil {
-		return fmt.Errorf("upsert managed conversation: %w", err)
-	}
-
-	if err := saveSessionSummary(ctx, tx, summary); err != nil {
-		return err
-	}
-
-	if _, err := s.reconcileShadows(ctx, tx, conversationID, thread.Agent); err != nil {
-		return err
-	}
-
-	return commitState(tx, "thread upsert")
-}
-
 func (s *SessionService) BeginGoal(conversationID string, goal *GoalState) error {
 	conversationID = strings.TrimSpace(conversationID)
 	goal.Objective = strings.TrimSpace(goal.Objective)

@@ -606,8 +606,6 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 			require.False(t, removed, "consumed or dropped steer cannot be dropped again")
 		}
 
-		require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
-
 		content := protocol.InboundContent{Text: "/skill stop \"typed args\"  Next", TextAttachments: []string{"acquired text file", "acquired forwarded thread"}, Attachments: []protocol.InboundAttachment{{Name: "original.png", MIMEType: "image/png", Data: []byte("original")}}}
 		queued := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &content, true)
 		queued.Metadata[protocol.InboundPrincipalMetadataKey] = "original author"
@@ -716,7 +714,7 @@ func TestRuntimeRunTurnCancelPublishesEmptyComplete(t *testing.T) {
 
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.0")
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "main"})
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
@@ -770,7 +768,7 @@ func TestRuntimeRunTurnRejectsUnrecordedConversationAndSyncDestination(t *testin
 	inbound.ConversationID = "missing"
 	require.ErrorContains(t, rt.RunTurn(t.Context(), inbound), `conversation "missing" is not recorded`)
 
-	require.NoError(t, store.UpsertThread("web:1", ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: "web:1", Agent: "main"})
 
 	inbound.ConversationID = "web:1"
 	inbound.SyncDestination = "missing-y"
@@ -782,7 +780,7 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 
 	store := newTestSessionService(t)
 	conversationID := "web:goal"
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "main"})
 
 	cfg := &config.Config{Workspace: filepath.Join(t.TempDir(), "missing")}
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
@@ -820,7 +818,7 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 	require.ErrorContains(t, rt.StartGoal(t.Context(), &protocol.InboundMessage{ConversationID: "web:missing"}, protocol.GoalRequest{Objective: "x"}), `conversation "web:missing" is not recorded`)
 
 	slackThread := protocol.SlackThreadConversationID("C123", "1.1")
-	require.NoError(t, store.UpsertThread(slackThread, ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: slackThread, Agent: "main"})
 	manager.bridges[slackThread] = bridge
 	inbound := webGoal()
 	inbound.ConversationID = slackThread
@@ -838,7 +836,7 @@ func TestRuntimeStopAndResumeGoalKeepOneContinuation(t *testing.T) {
 
 	store := newTestSessionService(t)
 	conversationID := "web:goal"
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "main"})
 
 	cfg := &config.Config{Workspace: filepath.Join(t.TempDir(), "missing")}
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, Agent: "main", SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
@@ -913,7 +911,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	store := newTestSessionService(t)
 	target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
 	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "main"})
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
@@ -1067,7 +1065,7 @@ func TestRuntimeReorderQueueItemsIsAtomic(t *testing.T) {
 
 			store := newTestSessionService(t)
 			conversationID := protocol.SlackThreadConversationID("C123", "111.0")
-			require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+			createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "main"})
 
 			for i, id := range []string{"q1", "q2", "q3"} {
 				require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Message: id, Source: protocol.SourceWeb, Position: i, StashAt: time.Unix(int64(i+1), 0).UTC()}))
@@ -1104,7 +1102,7 @@ func TestRuntimeQueueEditRunsWithTurnAgent(t *testing.T) {
 			bridge := newBridge()
 			bridge.config.ConversationID = "main"
 
-			require.NoError(t, store.UpsertThread("main", ThreadState{Agent: "primary"}))
+			createWebChat(t, store, protocol.Conversation{ID: "main", Agent: "primary"})
 			manager := newThreadBridgeManager(bridge.runtime, store, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 			manager.bridges["main"] = bridge
 			rt := &Runtime{Sessions: store, threads: manager, Cfg: bridge.runtime}
@@ -1157,7 +1155,7 @@ func TestRuntimeQueueEditRejectsPreservedSteer(t *testing.T) {
 	bridge := newBridge()
 	bridge.config.ConversationID = "main"
 
-	require.NoError(t, store.UpsertThread("main", ThreadState{Agent: "primary"}))
+	createWebChat(t, store, protocol.Conversation{ID: "main", Agent: "primary"})
 	manager := newThreadBridgeManager(bridge.runtime, store, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	manager.bridges["main"] = bridge
 	rt := &Runtime{Sessions: store, threads: manager, Cfg: bridge.runtime}
@@ -1200,7 +1198,7 @@ func TestRuntimeQueueEditMakesTheEditorTheSender(t *testing.T) {
 	bridge := newBridge()
 	bridge.config.ConversationID = "main"
 
-	require.NoError(t, store.UpsertThread("main", ThreadState{Agent: "primary"}))
+	createWebChat(t, store, protocol.Conversation{ID: "main", Agent: "primary"})
 	manager := newThreadBridgeManager(bridge.runtime, store, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
 	manager.bridges["main"] = bridge
 	rt := &Runtime{Sessions: store, threads: manager, Cfg: bridge.runtime}
@@ -1253,7 +1251,7 @@ func TestRuntimePoppedWebStashRunsAsEnqueue(t *testing.T) {
 
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "1.1")
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "main"})
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
@@ -1284,7 +1282,7 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 	store := newTestSessionServiceAt(t, workspace)
 
 	const conversationID = "web-held"
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "main"})
 
 	var logs lockedBuffer
 

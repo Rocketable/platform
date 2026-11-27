@@ -268,7 +268,7 @@ SELECT definition FROM definitions ORDER BY definition`
 
 	for i, store := range []*SessionService{first, second} {
 		agent := []string{"alpha", "beta"}[i]
-		require.NoError(t, store.UpsertThread("same", ThreadState{Agent: agent}))
+		createWebChat(t, store, protocol.Conversation{ID: "same", Agent: agent})
 	}
 
 	for i, store := range []*SessionService{first, second} {

@@ -57,13 +57,14 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 		{ConversationID: protocol.SlackThreadConversationID("D123", "333.444"), Agent: "helper", SessionService: store},
 	} {
 		bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), discardPublisher{}, &cfg, slog.New(slog.DiscardHandler))
-		require.NoError(t, store.UpsertThread(cfg.ConversationID, ThreadState{Agent: cfg.Agent}))
+		createWebChat(t, store, protocol.Conversation{ID: cfg.ConversationID, Agent: cfg.Agent})
 		require.NoError(t, startTestBridge(t.Context(), bridge))
 		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), time.Hour, "later", false))
 		bridge.Stop()
 	}
 
-	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("D123", "111.222"), ThreadState{Agent: "selected"}))
+	_, err := store.SetThreadAgentIfExists(protocol.SlackThreadConversationID("D123", "111.222"), "selected")
+	require.NoError(t, err)
 
 	created := make([]Config, 0, 2)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
@@ -80,7 +81,7 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 	}, created)
 }
 
-func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
+func TestThreadBridgeManagerStartsNoBridgeWhenThreadIsNotPersisted(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
@@ -88,28 +89,16 @@ func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
 	writeAgent(t, workspace, "primary", "---\ndescription: Test agent\nmodel: gpt-6.1-sol\n---\nPrompt\n")
 
 	store := newWorkspaceSessionService(t)
-	bridges := make([]*directBridgeMock, 0, 2)
 	cfg := &config.Config{Workspace: workspace, Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: "https://rocketclaw.example.ts.net"}}}
-	manager := newThreadBridgeManager(config.NewLockedConfig(cfg), store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
-		bridge := newDirectBridgeMock()
-		bridges = append(bridges, bridge)
-
-		return bridge
-	}})
+	factory := &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }}
+	manager := newThreadBridgeManager(config.NewLockedConfig(cfg), store, slog.New(slog.DiscardHandler), factory)
 	runTestManager(t, manager)
-
-	start := &threadStart{agent: "primary"}
 
 	_, err := store.db.ExecContext(t.Context(), `ALTER TABLE conversations ADD CONSTRAINT reject_thread CHECK (false) NOT VALID`)
 	require.NoError(t, err)
-	_, _, err = manager.createSession(t.Context(), start, nil, "", nil, nil)
+	_, _, err = manager.createSession(t.Context(), &threadStart{agent: "primary"}, nil, "", nil, nil)
 	require.ErrorContains(t, err, "persist new Web session")
-	require.Len(t, bridges, 1)
-	assert.Len(t, bridges[0].StopCalls(), 1)
-
-	_, err = manager.ensureThreadBridge(t.Context(), start.conversationID, ThreadState{Agent: "primary"})
-	require.NoError(t, err)
-	require.Len(t, bridges, 2, "the retry starts a fresh bridge")
+	assert.Empty(t, factory.newBridgeCalls())
 }
 
 func TestRuntimeSwitchesConversationAgent(t *testing.T) {
@@ -118,7 +107,7 @@ func TestRuntimeSwitchesConversationAgent(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 
 	const id = "opaque-web-id"
-	require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main", CreatedBy: "alice"}))
+	createWebChat(t, store, protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"})
 	bridge := &Bridge{config: Config{ConversationID: id, Agent: "main"}}
 	rt := &Runtime{threads: &threadBridgeManager{store: store, bridges: map[string]directBridge{id: bridge}}}
 	switched, err := rt.SwitchConversationAgent(id, "planner")
@@ -136,9 +125,9 @@ func TestThreadBridgeManagerMentionThreadRecognizesReportThreads(t *testing.T) {
 	t.Parallel()
 
 	store := newWorkspaceSessionService(t)
-	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("C123", "1.1"), ThreadState{Agent: "main", CreatedBy: ThreadCreatedByRoutine}))
+	createWebChat(t, store, protocol.Conversation{ID: protocol.SlackThreadConversationID("C123", "1.1"), Agent: "main", CreatedBy: string(ThreadCreatedByRoutine)})
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{PrivateConversationID: "external_mcp:private", ManagedConversationID: protocol.SlackThreadConversationID("C123", "2.2"), Agent: "main"}))
-	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("C123", "3.3"), ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: protocol.SlackThreadConversationID("C123", "3.3"), Agent: "main"})
 
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
 
@@ -515,7 +504,7 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "planner"})
 	require.NoError(t, beginGoalDB(t.Context(), store.db, conversationID, &GoalState{Objective: "ship it", MaxTurns: 5, PrincipalName: "Alice", PrincipalEmail: "alice@example.com", Origin: `[Web principal="Alice"]`}))
 
 	bridge := newDirectBridgeMock()
@@ -537,7 +526,7 @@ func TestThreadBridgeManagerSkipsActiveGoalContinuationForResumedTurn(t *testing
 
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "planner"})
 	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 5}))
 	seedActiveTurn(t, store, conversationID, "turn-resumed", nil)
 
@@ -554,7 +543,7 @@ func TestThreadBridgeManagerPickLaterWorkUsesLiveBridge(t *testing.T) {
 
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "main"})
 
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})
@@ -571,7 +560,7 @@ func TestStartQueuedConversationsReportsLaterWorkErrors(t *testing.T) {
 
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID})
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "one"}))
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
 		return newDirectBridgeMock()
@@ -587,8 +576,8 @@ func TestStartQueuedConversationsWakesEachRecordedConversationOnce(t *testing.T)
 	first := protocol.SlackThreadConversationID("D123", "111.222")
 	second := protocol.SlackThreadConversationID("D124", "222.333")
 
-	require.NoError(t, store.UpsertThread(first, ThreadState{Agent: "main"}))
-	require.NoError(t, store.UpsertThread(second, ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: first, Agent: "main"})
+	createWebChat(t, store, protocol.Conversation{ID: second, Agent: "main"})
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: first, Message: "one"}))
 	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{ID: "q2", ConversationID: first, Message: "two"}))
 	require.NoError(t, store.PutThreadQueueItem("q3", &protocol.ThreadQueueItem{ID: "q3", ConversationID: second, Message: "three"}))
@@ -966,7 +955,7 @@ func TestPromotedAgentQueueItemStaysNonHuman(t *testing.T) {
 	store := newTestSessionService(t)
 
 	const conversationID = "web:cron:digest"
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "main"})
 
 	bus := newTestBus()
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: bus, config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1)}
@@ -1007,7 +996,7 @@ func agentWrite(text string) *protocol.InboundMessage {
 
 func runningTestBridge(t *testing.T, store *SessionService, manager *threadBridgeManager, conversationID string) *Bridge {
 	t.Helper()
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	createWebChat(t, store, protocol.Conversation{ID: conversationID, Agent: "main"})
 
 	_, cancel := context.WithCancel(t.Context())
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: newTestBus(), config: Config{ConversationID: conversationID, SessionService: store}, threads: manager, requestCh: make(chan bridgeRequest, 8), stopCh: make(chan struct{}),

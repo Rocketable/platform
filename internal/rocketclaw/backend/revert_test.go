@@ -26,7 +26,7 @@ func TestRevertQueueAdmissionAndRetry(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 	id, err := s.AppendEntryID(ctx, "main", testSessionEntry("abandoned", "answer"))
 	require.NoError(t, err)
 	require.NoError(t, s.PutThreadQueueItem("stashed-before", &protocol.ThreadQueueItem{ID: "stashed-before", ConversationID: "main", Source: protocol.SourceWeb, Principal: "alice", Kind: protocol.InboundKindHeld, Message: "for later"}))
@@ -70,7 +70,7 @@ func TestRevertSettlesAndPreservesWaitingWork(t *testing.T) {
 	b := newBridge()
 	b.config.ConversationID = "main"
 
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "primary"})
 	id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("replace", "abandoned"))
 	require.NoError(t, err)
 
@@ -150,7 +150,7 @@ func TestRevertWaitsForDeliverySettlement(t *testing.T) {
 			b := newBridge()
 			b.config.ConversationID = "main"
 
-			require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
+			createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "primary"})
 			id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("old", "answer"))
 			require.NoError(t, err)
 
@@ -461,7 +461,7 @@ func TestPauseGatesTurnAdmission(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 
 	bridge := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})}
@@ -679,7 +679,7 @@ func TestRevertProviderPrefixAndCompletedRetry(t *testing.T) {
 	b := newBridge()
 	b.config.ConversationID = "main"
 
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "primary"})
 
 	entry := testSessionEntry("retained", "retained answer")
 	entry.ReplayInput = append(entry.ReplayInput, testSessionEntry("abandoned", "abandoned answer").ReplayInput...)
@@ -727,7 +727,7 @@ func TestRevertCompletedFallbackAndPreparationFailure(t *testing.T) {
 	b := newBridge()
 	b.config.ConversationID = "main"
 
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "primary"})
 	id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("earlier", "answer"))
 	require.NoError(t, err)
 
@@ -758,7 +758,7 @@ func TestRevertHistorySnapshot(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 	id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("first", "answer"))
 	require.NoError(t, err)
 	view, err := s.ObserveHistory(t.Context(), "main", "", 0, 0, 1, &HistoryInventory{})
@@ -783,7 +783,7 @@ func TestRevertAdmissionRollbackAndConcurrentIdentity(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 	id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("old", "answer"))
 	require.NoError(t, err)
 
@@ -822,7 +822,7 @@ func TestRevertAdmissionRollbackAndConcurrentIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, queue, 1)
 	require.Equal(t, "new", queue[0].ID)
-	require.NoError(t, s.UpsertThread("other", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "other", Agent: "main"})
 	other, err := s.AppendEntryID(t.Context(), "other", testSessionEntry("other history", "kept"))
 	require.NoError(t, err)
 	_, _, err = stageRevertDB(t.Context(), s.db, "other", fmt.Sprintf("%d:0", other), protocol.RevertBefore)
@@ -841,7 +841,7 @@ func TestRevertGoalIdentityAndPrompt(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "objective"}, true)
 	inbound.ConversationID, inbound.GoalTurn, inbound.GoalAction = "main", true, protocol.GoalActionKickoff
@@ -871,7 +871,7 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "waiting"}, true)
 	inbound.ConversationID, inbound.Metadata["web_message_id"] = "main", "waiting"
@@ -937,7 +937,7 @@ func TestRevertLatestUnsavedTurn(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 	_, err := s.AppendEntryID(ctx, "main", testSessionEntry("kept", "answer"))
 	require.NoError(t, err)
 
@@ -985,7 +985,7 @@ func TestRevertPreservationFailureCompletesOwners(t *testing.T) {
 			_, err := s.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
 			ctx := t.Context()
-			require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+			createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 			id, err := s.AppendEntryID(ctx, "main", testSessionEntry("old", "answer"))
 			require.NoError(t, err)
 
@@ -1062,7 +1062,7 @@ func TestSendAfterRevertKeepsPreservedOwners(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 	id, err := s.AppendEntryID(ctx, "main", testSessionEntry("old", "answer"))
 	require.NoError(t, err)
 	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id), protocol.RevertBefore)
@@ -1117,7 +1117,7 @@ func TestRevertLegacyQueuePromotionAndEnqueue(t *testing.T) {
 	b := newBridge()
 	b.config.ConversationID = "main"
 
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "primary"})
 	manager := newThreadBridgeManager(b.runtime, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager, Cfg: b.runtime}
@@ -1154,7 +1154,7 @@ func TestRevertStashKeepsWebInbound(t *testing.T) {
 
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills/docs-helper", 0o755))
 	require.NoError(t, root.WriteFile(".rocketclaw/skills/docs-helper/SKILL.md", []byte("---\nname: docs-helper\ndescription: Write docs\n---\n\nUse this skill for docs.\n"), 0o644))
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "primary"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "primary"})
 	manager := newThreadBridgeManager(crashed.runtime, s, crashed.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return crashed }})
 	manager.bridges["main"] = crashed
 	rt := &Runtime{Sessions: s, threads: manager, Cfg: crashed.runtime}
@@ -1202,7 +1202,7 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 			_, err := s.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
 			ctx := t.Context()
-			require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+			createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 
 			entry := testSessionEntry("keep", "kept")
 			entry.ReplayInput = append(entry.ReplayInput, testSessionEntry("old", "abandoned").ReplayInput...)
@@ -1264,7 +1264,7 @@ func TestRevertStorageFailuresAreNotEmptySuccess(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 	b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(nil, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 	manager.bridges["main"] = b
@@ -1332,7 +1332,7 @@ func TestRevertStageFailurePreservesHistory(t *testing.T) {
 			_, err := s.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
 			ctx := t.Context()
-			require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+			createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 			id, err := s.AppendEntryID(ctx, "main", testSessionEntry("original", "answer"))
 			require.NoError(t, err)
 
@@ -1402,7 +1402,7 @@ func TestRevertCorruptHistoryCannotBeAdmitted(t *testing.T) {
 			_, err := s.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
 			ctx := t.Context()
-			require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+			createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 			recordTestConversations(t, s, "main", map[string]ConversationKind{"run": KindRoutineRun})
 			_, err = s.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'main' WHERE conversation_id = 'run'`)
 			require.NoError(t, err)
@@ -1460,7 +1460,7 @@ func TestRevertSavedAttachmentRetryIdentity(t *testing.T) {
 		{Type: "input_text", Text: prompt}, {Type: "input_image", ImageURL: attachments[0].URL}, {Type: "input_image", ImageURL: attachments[1].URL},
 	}})
 	require.NoError(t, err)
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 	_, err = s.AppendEntryID(t.Context(), "main", &harness.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{raw}})
 	require.NoError(t, err)
 	accepted, err := reconcileWebDB(t.Context(), s.db, inbound)
@@ -1556,7 +1556,7 @@ func TestRevertUnsavedTurnOnALowerBranch(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+	createWebChat(t, s, protocol.Conversation{ID: "main", Agent: "main"})
 	kept, err := s.AppendEntryID(ctx, "main", testSessionEntry("kept", "answer"))
 	require.NoError(t, err)
 	sibling, err := s.AppendEntryID(ctx, "main", testSessionEntry("sibling", "higher ID"))

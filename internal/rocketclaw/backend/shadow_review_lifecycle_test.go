@@ -25,7 +25,7 @@ func TestShadowReviewClearProducerHistory(t *testing.T) {
 	recordTestConversations(t, store, "primary", map[string]ConversationKind{"other": KindWebChat})
 
 	for _, id := range []string{"private", "projected-private", "unrelated/producer"} {
-		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "primary"}))
+		createWebChat(t, store, protocol.Conversation{ID: id, Agent: "primary"})
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: id, Agent: "primary", SessionService: store}}
 		request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "original", false)}
 
@@ -271,7 +271,6 @@ func TestShadowReviewClearLiveProducer(t *testing.T) {
 	cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})
 	store.definitions = cfg
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "primary", &ExternalMCPSessionState{ManagedConversationID: "0visible", PrivateConversationID: "private", Agent: "primary"}))
-	require.NoError(t, store.UpsertThread("private", ThreadState{Agent: "primary"}))
 	manager, shutdown := newTestBridgeManager(t, cfg, store, make(chan *protocol.OutboundMessage, 4))
 	t.Cleanup(shutdown)
 

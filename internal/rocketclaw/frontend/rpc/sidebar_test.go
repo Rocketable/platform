@@ -81,7 +81,7 @@ func sidebarChoicesFixture(tb testing.TB, count int) (*Server, context.Context) 
 
 	for i := range count {
 		id := fmt.Sprintf("chat-%02d", i)
-		require.NoError(tb, sessions.UpsertThread(id, backend.ThreadState{Agent: "choice-00"}))
+		createWebChat(tb, sessions, protocol.Conversation{ID: id, Agent: "choice-00"})
 		_, err := sessions.AppendEntryID(tb.Context(), id, &harness.SessionEntry{})
 		require.NoError(tb, err)
 	}

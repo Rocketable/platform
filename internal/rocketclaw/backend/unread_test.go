@@ -76,7 +76,7 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, service.UpsertThread("web:elsewhere", ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: "web:elsewhere", Agent: "main"})
 
 	for name, tc := range map[string]struct {
 		inbound  *protocol.InboundMessage
@@ -107,7 +107,7 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			conversationID, turnID := "web:"+name, "turn:"+name
-			require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+			createWebChat(t, service, protocol.Conversation{ID: conversationID, Agent: "main"})
 			require.NoError(t, startTurnDB(ctx, service.db, turnID, conversationID, tc.inbound))
 			require.NoError(t, saveTestTurn(ctx, service, conversationID, turnID, tc.applied, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: turnID}))
 
@@ -136,7 +136,7 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 		})
 	}
 
-	require.NoError(t, service.UpsertThread("web:late", ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: "web:late", Agent: "main"})
 	require.NoError(t, startTurnDB(ctx, service.db, "turn:late", "web:late", webMessage(protocol.InboundKindPrompt, "ask", alice)))
 
 	path := sessionPath("web:late")
@@ -155,7 +155,7 @@ UNION ALL SELECT path FROM web_tab_attention WHERE conversation_id = 'web:late'`
 	finish("web:late", "turn:late", protocol.TerminalComplete)
 	assert.Empty(t, unreadBy(t, service, "web:late"), "the late finish writes no second mark")
 
-	require.NoError(t, service.UpsertThread("web:shared", ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: "web:shared", Agent: "main"})
 	require.NoError(t, service.ShareTab(ctx, "main", sessionPath("web:shared"), nil))
 	require.NoError(t, startTurnDB(ctx, service.db, "turn:shared", "web:shared", slack))
 	require.NoError(t, saveTestTurn(ctx, service, "web:shared", "turn:shared", nil, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "turn:shared"}))
@@ -176,7 +176,7 @@ func TestTurnEndReachesKeepersAndSharedViewers(t *testing.T) {
 		erin    = "erin@example.com"
 	)
 
-	require.NoError(t, service.UpsertThread(session, ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: session, Agent: "main"})
 
 	for person, state := range map[string]*TabState{
 		alice: {Tabs: []Tab{{Path: sessionPath(session), Space: "main"}}},
@@ -265,7 +265,7 @@ func TestMarkUnread(t *testing.T) {
 	}
 
 	for _, id := range []string{"web:shared", "web:turn", "web:held"} {
-		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, service, protocol.Conversation{ID: id, Agent: "main"})
 	}
 
 	viewedAgo(t, service, bob, "web:turn", 0)
@@ -304,7 +304,7 @@ func TestTabViewLocksStateBeforeAttention(t *testing.T) {
 	const conversationID = "web:view-locks"
 
 	path := sessionPath(conversationID)
-	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	createWebChat(t, service, protocol.Conversation{ID: conversationID, Agent: "main"})
 	require.NoError(t, service.ChangeAttention(ctx, alice, []string{path}, AttentionUnread, nil, 0))
 
 	tx, err := service.db.BeginTx(ctx, nil)

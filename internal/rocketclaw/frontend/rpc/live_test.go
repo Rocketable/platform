@@ -397,7 +397,7 @@ func TestHistoryNamesUnnamedImagesOfOlderRows(t *testing.T) {
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "chat", Agent: "main"})
 
 	picture, pdf := []byte("\x89PNG\r\n\x1a\nimage"), []byte("%PDF-1.4 otter")
 	imageURL, pdfURL := "data:image/png;base64,"+base64.StdEncoding.EncodeToString(picture), "data:application/pdf;base64,"+base64.StdEncoding.EncodeToString(pdf)
@@ -452,7 +452,7 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "chat", Agent: "main"})
 	checkpoint := &testCheckpoint{TurnID: "turn-1", ConversationKey: "chat", Agent: "main", Model: "model", ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","input_id":"input-1","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\nquestion"}`),
 		json.RawMessage(`{"type":"reasoning","summary":[{"text":"Recorded summary"}],"encrypted_content":"secret"}`),
@@ -555,7 +555,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "chat", Agent: "main"})
 	_, err = seeded.db.ExecContext(t.Context(), `INSERT INTO entries (id, conversation_id, entry_json, entry_timestamp) VALUES
         (9007199254741001, 'chat', '{"type":"turn","replay_input":[{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\n  /skill exact\n"},{"type":"message","role":"assistant","content":"answer"}]}', '')`)
 	require.NoError(t, err)
@@ -814,7 +814,7 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "chat", Agent: "main"})
 	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
 	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
@@ -914,7 +914,7 @@ func TestHistoryFollowsHiddenRun(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
 	for _, id := range []string{"chat", "external_mcp:main:run"} {
-		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
+		createWebChat(t, sessions, protocol.Conversation{ID: id, Agent: "main"})
 	}
 
 	db, err := sql.Open("pgx", dsn)
@@ -974,7 +974,7 @@ func TestHistoryLinksBackgroundTaskSubagent(t *testing.T) {
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "chat", Agent: "main"})
 	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
 	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
@@ -1017,7 +1017,7 @@ func TestHistoryShowsLiveReasoningSummaries(t *testing.T) {
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "chat", Agent: "main"})
 	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
 	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	checkpoint := &testCheckpoint{TurnID: "turn", ConversationKey: "chat", Agent: "main", DisplayModel: "root/model", ReplayInput: []json.RawMessage{
@@ -1058,7 +1058,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-	require.NoError(t, sessions.UpsertThread("public", backend.ThreadState{Agent: "main"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "public", Agent: "main"})
 	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
 	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	checkpoint := &testCheckpoint{TurnID: "turn", ConversationKey: "public", Agent: "main", DisplayModel: "root/model", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{
@@ -1247,7 +1247,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 	for _, outcome := range []harness.PublicProgressState{harness.PublicProgressFailed, harness.PublicProgressStopped, harness.PublicProgressCompleted} {
 		t.Run("delegation="+string(outcome), func(t *testing.T) {
 			id := "delegation-" + string(outcome)
-			require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
+			createWebChat(t, sessions, protocol.Conversation{ID: id, Agent: "main"})
 			progress, err := json.Marshal(harness.PublicProgress{ID: "child", ParentID: "turn/response", Kind: harness.PublicProgressDelegation, State: outcome, Agent: "child", Model: "child/model"})
 			require.NoError(t, err)
 
@@ -1432,7 +1432,7 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "chat", Agent: "main"})
 	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
 	ctx := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 
@@ -1529,7 +1529,7 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	require.Empty(t, poll.Messages)
 	require.Equal(t, view.ReviewRationales, poll.ReviewRationales)
 
-	require.NoError(t, sessions.UpsertThread("live", backend.ThreadState{Agent: "main"}))
+	createWebChat(t, sessions, protocol.Conversation{ID: "live", Agent: "main"})
 	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "live-turn", ConversationKey: "live", Agent: "main", ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","content":"ask"}`),
 	}, OutputTrace: []json.RawMessage{

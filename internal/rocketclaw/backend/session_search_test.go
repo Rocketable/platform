@@ -79,11 +79,13 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 		{"cron:cron/daily.md:20260102T030405.000000000Z:run", "main", "billing producer", "done", 8},
 		{"external_mcp:private", "producer", "billing secret", "done", 9},
 	} {
-		require.NoError(t, s.UpsertThread(chat.id, ThreadState{Agent: chat.agent}))
+		createWebChat(t, s, protocol.Conversation{ID: chat.id, Agent: chat.agent})
+		_, err := s.SetThreadAgentIfExists(chat.id, chat.agent)
+		require.NoError(t, err)
 
 		entry := testSessionEntry(chat.user, chat.preview)
 		entry.Timestamp = time.Date(2026, 1, chat.day, 0, 0, 0, 0, time.UTC)
-		_, err := s.AppendEntryID(ctx, chat.id, entry)
+		_, err = s.AppendEntryID(ctx, chat.id, entry)
 		require.NoError(t, err)
 	}
 
@@ -154,8 +156,9 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 	t.Parallel()
 	s, slack := newSessionSearchFixture(t)
 	ctx := t.Context()
-	require.NoError(t, s.UpsertThread("written-web", ThreadState{Agent: "main"}))
-	require.NoError(t, s.UpsertThread(searchChatW, ThreadState{Agent: "other", CreatedBy: ThreadCreator(`Writer "One"`)}))
+	createWebChat(t, s, protocol.Conversation{ID: "written-web", Agent: "main"})
+	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET created_by = $2 WHERE conversation_id = $1`, searchChatW, `Writer "One"`)
+	require.NoError(t, err)
 	require.NoError(t, s.startSubagent(ctx, "written-web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "main"}), "an unindexed subagent session leaves search complete")
 	recordTestConversations(t, s, "main", map[string]ConversationKind{"cron:daily": KindRoutineRun})
 
@@ -209,7 +212,7 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 		require.True(t, slices.Equal(tc.ids, ids), "%s: chats %q", tc.query, ids)
 	}
 
-	_, _, err := stageRevertDB(ctx, s.db, "written-web", fmt.Sprintf("%d:0", authored), protocol.RevertBefore)
+	_, _, err = stageRevertDB(ctx, s.db, "written-web", fmt.Sprintf("%d:0", authored), protocol.RevertBefore)
 	require.NoError(t, err)
 	filtered, matches := searchTestSessions(t, s, slack, `principal:"Writer Cut"`, SearchFields)
 	require.Len(t, matches, 1, "a person who wrote only on a branch left behind stays a participant")
@@ -648,7 +651,7 @@ func TestSearchSessionsSortOrder(t *testing.T) {
 	ctx := t.Context()
 
 	for _, id := range []string{"c", "e", "d", "b", "a"} {
-		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
+		createWebChat(t, s, protocol.Conversation{ID: id, Agent: "main"})
 	}
 
 	insertSessionEntryWithoutSummary(t, s, "c", testSessionEntry("old", "answer"))
