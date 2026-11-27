@@ -71,6 +71,8 @@ jobs:
       - run: make -C internal/rocketclaw lint
       - run: make -C internal/funneld lint
       - run: make -C internal/harnessfeedback lint
+      - name: Lint fixes are committed
+        run: git diff --exit-code && test -z "$(git status --porcelain)"
       - if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
         with:
