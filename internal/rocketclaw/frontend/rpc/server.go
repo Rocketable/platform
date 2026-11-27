@@ -442,10 +442,10 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		response.Revision = base64.RawURLEncoding.EncodeToString(data)
 	}
 
-	return response, s.reviewRationales(ctx, response, view.Reviews)
+	return response, s.reviewRationales(ctx, response, view.Delegations)
 }
 
-func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse, reviews []string) error {
+func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse, delegations []backend.Delegation) error {
 	response.ReviewRationales = make(map[string]string)
 	unrecorded := make(map[string]*TranscriptEvent)
 
@@ -455,15 +455,19 @@ func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse
 		}
 	}
 
-	for _, review := range reviews {
-		entries, err := s.sessions.ObserveEntries(ctx, review)
+	for _, review := range delegations {
+		if review.Kind != backend.KindReview {
+			continue
+		}
+
+		entries, err := s.sessions.ObserveEntries(ctx, review.ID)
 		if err != nil {
 			return fmt.Errorf("read permission review: %w", err)
 		}
 
 		var rationales []string
 
-		script := unrecorded[review]
+		script := unrecorded[review.ID]
 
 		for i := range entries {
 			decision := entries[i].Entry.PermissionReviewDecision()
@@ -481,7 +485,7 @@ func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse
 		}
 
 		if len(rationales) > 0 {
-			response.ReviewRationales[review] = strings.Join(rationales, "\n")
+			response.ReviewRationales[review.ID] = strings.Join(rationales, "\n")
 		}
 	}
 
