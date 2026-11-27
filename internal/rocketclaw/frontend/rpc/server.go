@@ -1013,15 +1013,15 @@ func (s *Server) listRoutines(ctx context.Context) (*ListRoutinesResponse, error
 	}
 
 	response := &ListRoutinesResponse{}
-	spaces, private := map[string]string{}, map[string]bool{}
+	visible := make(map[string]bool)
 
 	for i := range jobs {
 		job := &jobs[i]
 
 		row := &Routine{Stem: backend.RoutineStem(job.RelativePath), Schedule: job.Schedule, Body: job.Body, Agent: job.Agent, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
 
-		spaces[row.Stem], private[row.Stem] = row.Space, agents.PrivateFrom(job.Agent, username)
-		if !limit.AllowsSpaceName(row.Space) || private[row.Stem] {
+		visible[row.Stem] = limit.AllowsSpaceName(row.Space) && !agents.PrivateFrom(job.Agent, username)
+		if !visible[row.Stem] {
 			continue
 		}
 
@@ -1044,7 +1044,7 @@ func (s *Server) listRoutines(ctx context.Context) (*ListRoutinesResponse, error
 	runs := map[string]*Routine{}
 
 	for _, source := range sources {
-		if stem := backend.RoutineStem(source.Run.Path); !limit.AllowsSpaceName(spaces[stem]) || private[stem] {
+		if allowed, known := visible[backend.RoutineStem(source.Run.Path)]; known && !allowed || !known && !limit.AllowsSpaceName("") {
 			continue
 		}
 
