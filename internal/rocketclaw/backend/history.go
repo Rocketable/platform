@@ -27,7 +27,6 @@ type HistorySnapshot struct {
 	Entries     []ObservedSessionEntry
 	Delegations []Delegation
 	Lineage     []SidebarSession
-	Reviews     []string
 	Shadows     []protocol.ShadowBinding
 	Eligible    bool
 	Predecessor string
@@ -138,16 +137,6 @@ SELECT c.conversation_id, c.kind, c.agent FROM ancestors a JOIN conversations c 
 
 			return level, nil
 		}, id)
-	if err != nil {
-		return view, err
-	}
-
-	ids := make([]string, len(view.Delegations))
-	for i := range view.Delegations {
-		ids[i] = view.Delegations[i].ID
-	}
-
-	view.Reviews, err = queryStrings(ctx, tx, `SELECT conversation_id FROM conversations WHERE conversation_id = ANY($1) AND kind = $2`, "history reviews", ids, KindReview)
 	if err != nil {
 		return view, err
 	}
