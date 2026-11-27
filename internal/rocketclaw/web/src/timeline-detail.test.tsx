@@ -3,14 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { navigations, projectTimeline, setTimelineRows, subscribeTimelineRows, timelineCategories, timelineLevel, timelineLevels, timelineRows, type TimelineRows } from "./timeline-detail";
 
-// bun test has no DOM; the store reads localStorage and listens on window.
 const saved = new Map<string, string>();
 Object.assign(globalThis, { window: globalThis, localStorage: { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => saved.set(key, value) } });
 const fromOtherTab = (key: string, value: string | null) => dispatchEvent(Object.assign(new Event("storage"), { key, newValue: value }));
 const levelRows = (id: string) => timelineLevels.find((level) => level.id === id)!.rows;
 const compact = levelRows("compact");
 
-// Observe startup before other tests change the shared settings.
 const initial = { rows: timelineRows(), again: timelineRows(), stored: new Map(saved) };
 test("nothing stored reads as Compact, stays stable and writes nothing", () => {
   expect(initial.rows).toEqual(compact);
@@ -51,7 +49,6 @@ test("another tab's value for the key reloads with Compact fallbacks; other keys
     ["5", compact],
     [JSON.stringify({ version: 1, rows: "everything" }), compact],
     [null, compact],
-    // Values saved before only Execute and Thinking collapsed still read as their level.
     [JSON.stringify({ version: 1, rows: Object.fromEntries(timelineCategories.map(({ id }) => [id, { placement: "separate", details: "expanded" }])) }), levelRows("everything")],
     [JSON.stringify({ version: 1, rows: { ...levelRows("everything"), skills: undefined, extra: { placement: "separate" }, notices: { placement: "loud" }, execute: { placement: "separate", details: "wide" }, thinking: "open" } }),
       { ...levelRows("everything"), skills: compact.skills, notices: compact.notices, execute: { placement: "separate", details: "collapsed" }, thinking: compact.thinking }],
@@ -103,7 +100,6 @@ test("rows keep time order, merge grouped runs and split at replies and separate
   expect(shape([thought("t1"), call("e1", "execute"), call("e2", "execute"), call("e3", "execute"), call("s1", "skill"), reply("a1")], "compact")).toEqual(["Used 4 tools[t1,e1,e2,e3,s1]", "a1"]);
   expect(shape([call("s1", "skill"), call("task1", "task"), call("w1", "websearch"), call("b1", "bash")], "detailed")).toEqual(["s1", "task1", "Used 1 tool[w1]", "b1+"]);
   expect(shape([thought("t1"), call("e1", "execute"), call("task1", "task"), notice("n1"), call("w1", "websearch")], "everything")).toEqual(["t1+", "e1+", "task1+", "n1+", "w1+"]);
-  // Off Everything, categories without a Collapse setting start closed even when shown separately.
   const custom = { ...levelRows("everything"), thinking: { placement: "hidden", details: "expanded" } } satisfies TimelineRows;
   expect(projectTimeline([thought("t1"), call("e1", "execute"), call("task1", "task"), notice("n1")], custom).map((row) => row.kind === "line" && `${row.line.id}${row.open ? "+" : ""}`)).toEqual(["e1+", "task1", "n1"]);
   expect(shape([thought("t1"), call("e1", "execute"), call("w1", "websearch"), reply("a1")], "messages")).toEqual(["a1"]);
@@ -170,6 +166,5 @@ test("Custom rows open Advanced and offer group and collapse only where they app
   expect(html).toContain('aria-pressed="false" aria-label="Execute visibility"');
   expect(html).not.toContain('aria-label="Execute group"');
   for (const label of ["Thinking", "Subagents", "Skills", "Instructions", "Other tools"]) expect(html).toContain(`aria-label="${label} group"`);
-  // As in OpenCode, only Execute and Thinking offer Collapse.
   expect([...html.match(/aria-label="[^"]+ collapse"/g) ?? []]).toEqual(['aria-label="Thinking collapse"']);
 });
