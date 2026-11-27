@@ -57,7 +57,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     else await action.click();
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "Second request");
     expect(await input.evaluate((node: HTMLTextAreaElement) => node === document.activeElement && node.selectionStart === node.value.length && node.selectionEnd === node.value.length)).toBe(true);
-    // Composer restoration precedes the queue and history refreshes.
     await page.getByText("Second answer", { exact: true }).waitFor({ state: "detached" });
     expect(await page.getByText("Second answer", { exact: true }).count()).toBe(0);
     expect(await page.getByText("Waiting request", { exact: true }).count()).toBe(1);
@@ -65,7 +64,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     await input.fill("Edited replacement");
     await page.getByRole("button", { name: "Add files", exact: true }).click();
     await page.locator('input[type="file"]').setInputFiles({ name: "draft.txt", mimeType: "text/plain", buffer: Buffer.from("private bytes") });
-    // Read the persisted bytes, not a timer; the next reload must restore File objects.
     while (!await page.evaluate(async () => {
       const db = await new Promise<IDBDatabase>((resolve) => { const open = indexedDB.open("rocketclaw-drafts", 1); open.onsuccess = () => resolve(open.result); });
       const rows = await new Promise<{ text: string; files: { file: File }[] }[]>((resolve) => { const read = db.transaction("content").objectStore("content").getAll(); read.onsuccess = () => resolve(read.result); });
@@ -83,7 +81,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     expect(await page.locator("[data-message-id]").count()).toBe(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: path.resolve(import.meta.dir, `../../../../.tmp/rocketclaw/revert-message/revert-${width}.png`) });
-    // The previous display-principal key format cannot establish login ownership.
     await page.evaluate(async () => {
       const db = await new Promise<IDBDatabase>((resolve) => { const open = indexedDB.open("rocketclaw-drafts", 1); open.onsuccess = () => resolve(open.result); });
       await new Promise<void>((resolve) => {
@@ -101,7 +98,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     username = "alice";
     await page.reload(); await input.waitFor();
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "First request");
-    // A failed polling refresh retains Query data, but must revoke local draft scope.
     rejected = true;
     await page.getByText("Identity rejected", { exact: true }).first().waitFor();
     expect(await input.inputValue()).toBe("");
@@ -122,7 +118,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     await page.waitForFunction(() => !document.querySelector("textarea")?.closest("fieldset")?.disabled);
     expect(await input.inputValue()).toBe("");
     await input.fill("Keep named draft");
-    // New session must clear only the persisted empty-session composer before remount.
     await page.goto(`http://127.0.0.1:${server.port}/`);
     for (const outcome of ["reset", "failure", "navigate", "scope"]) {
       const storageFailure = outcome === "failure" || outcome === "scope";
@@ -148,7 +143,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
         indexedDB.open = (...args) => {
           indexedDB.open = open;
           const request = open(...args);
-          // Delay the application's open callback, then use the actual IndexedDB transaction.
           Object.defineProperty(request, "onsuccess", { set(callback) {
             request.addEventListener("success", (event) => { control.releaseClear = () => callback.call(request, event); });
           } });
@@ -164,10 +158,9 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       }, storageFailure);
       await page.keyboard.press("Control+Alt+n");
       await page.waitForFunction(() => !!(window as unknown as { releaseClear?: () => void }).releaseClear);
-      await page.keyboard.press("Control+Alt+n"); // A duplicate request must not enqueue another reset.
+      await page.keyboard.press("Control+Alt+n");
       await input.focus();
       await page.keyboard.type(" typed while clearing");
-      // Use actual pointer clicks: disabled controls must not dispatch draft edits.
       const buttons = ["Add files", "Remove scratch.txt", "Composer actions", "Send"];
       if (outcome === "reset") buttons.unshift("/goal <objective> Start a goal loop");
       for (const name of buttons) {
@@ -234,7 +227,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
         await page.keyboard.press("Control+Alt+n");
       }
       await page.waitForFunction(() => document.querySelector("textarea")?.value === "" && !document.querySelector("textarea")?.closest("fieldset")?.disabled);
-      // One reset plus the new composer's ordinary hydration save, not two resets.
       if (outcome === "reset") {
         await page.waitForFunction(() => (window as unknown as { clearWrites: number }).clearWrites >= 2);
         expect(await page.evaluate(() => (window as unknown as { clearWrites: number }).clearWrites)).toBe(2);
@@ -249,7 +241,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
   } finally { await browser.close(); server.stop(true); }
 }, 60_000);
 
-// OpenCode reverts a running turn's message after interrupting it; History has no message ID for it yet.
 test("revert an unsaved latest turn by input ID", async () => {
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
   const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
@@ -297,18 +288,14 @@ test("revert an unsaved latest turn by input ID", async () => {
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat")}`);
     const message = (text: string) => page.locator('[data-slot="message"]').filter({ hasText: text });
-    // Message actions stay invisible until hover, so count hidden buttons too.
     const revert = (text: string) => message(text).getByRole("button", { name: "Revert message", exact: true, includeHidden: true });
     const live = message(liveText.trimEnd());
     await revert(liveText.trimEnd()).waitFor({ state: "attached" });
     expect(await revert("Saved request").count()).toBe(1);
-    // A message at or before the floor, say a Slack message, keeps its Revert, disabled, saying why.
     expect(await revert("Saved request").isDisabled()).toBe(true);
     expect(await revert("Saved request").locator("..").getAttribute("title")).toBe("Revert can't go back past a message from a routine run, External MCP, or Slack");
-    // An older stopped turn cannot be reverted, so its Revert stays in place, disabled, saying why.
     expect(await revert("Stopped request").isDisabled()).toBe(true);
     expect(await revert("Stopped request").locator("..").getAttribute("title")).toBe("This message can't be reverted");
-    // Like OpenCode's undo, /undo starts from the newest request, not the newest saved one.
     const input = page.locator("textarea");
     await input.fill("/undo"); await input.press("Enter");
     await page.waitForFunction((text: string) => document.querySelector("textarea")?.value === text, liveText);
