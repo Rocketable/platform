@@ -6,7 +6,6 @@ import type { Session, TranscriptEvent } from "./types";
 
 const screenshots = path.resolve(import.meta.dir, "../../../../.tmp/web-screenshots");
 
-// Invoked by Go's TestSessionEntries with real isolated PostgreSQL storage.
 test("transcript and entry HTTP proxy reach Go", async () => {
   const url = process.env.ROCKETCLAW_ENTRY_TEST_URL!;
   const id = process.env.ROCKETCLAW_ENTRY_TEST_ID!;
@@ -21,7 +20,6 @@ test("transcript and entry HTTP proxy reach Go", async () => {
   const batches = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`));
   expect(batches.flatMap((batch) => batch.sessions ?? []).map((session) => session.id)).toEqual(["empty-web", id]);
   expect([batches[0], batches.at(-1)]).toEqual([{ owner: "alice" }, { upstreamSuccess: true, version: expect.any(String) }]);
-  // Since that version, an unchanged list sends no rows, only a new version naming the one it was sent since.
   const version = batches.at(-1)!.version!;
   const since = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions?${new URLSearchParams({ since: version })}`));
   expect(since.flatMap((batch) => batch.sessions ?? [])).toEqual([]);
@@ -33,10 +31,8 @@ test("transcript and entry HTTP proxy reach Go", async () => {
     const session = updated.find((session) => session.id === id)!;
     expect(session.preview).toBe(original.preview);
     expect(session.updatedAt).toBe(original.updatedAt);
-    // A listing leaves out default values: an unnamed session has no name.
     expect(session.name ?? "").toBe(name.trim());
   }
-  // The agent of a chat a person started pauses and resumes; a listing leaves out a live chat's paused.
   for (const paused of [true, false]) {
     await call("UpdateSession", { id: "empty-web", paused });
     const listed = (await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).flatMap((batch) => batch.sessions ?? []);
@@ -73,7 +69,6 @@ test("transcript and entry HTTP proxy reach Go", async () => {
   expect(loaded.entries[0].id).toBe(listed.entries[0].id);
   expect(JSON.parse(loaded.entries[0].json).type).toBe("turn");
 
-  // Serve the compiled App while the actual Go handler supplies its data.
   const playwrightModule = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!;
   const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
   const web = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
@@ -129,10 +124,8 @@ test("transcript and entry HTTP proxy reach Go", async () => {
       expect(await page.getByRole("group", { name: "Show messages from" }).count()).toBe(0);
       const trace = page.getByRole("region", { name: /^Turn \d+$/ }).filter({ hasText: "tagged" }).locator(':scope > [data-slot="trace"] > [data-slot="trace-collapsible"]');
       const traceTrigger = trace.locator(':scope > [data-slot="trace-collapsible-trigger"]');
-      // The tag call ran inside the execute script; only the script's own row is shown.
       const tool = trace.locator('[data-slot="trace-collapsible"]').filter({ hasText: "tagged" });
       const toolBody = tool.locator("pre").first();
-      // The default Compact level folds each turn's activity into one closed Chain of Thought row.
       expect(await page.locator('[aria-label^="Turn "] > [data-slot="trace"] > [data-slot="trace-collapsible"] > [aria-expanded="true"]').count()).toBe(0);
       expect(await traceTrigger.innerText()).toContain("Used 1 tool");
       expect(await toolBody.isVisible()).toBe(false);
@@ -143,7 +136,6 @@ test("transcript and entry HTTP proxy reach Go", async () => {
       expect(await trace.innerText()).not.toContain("rocketclaw_set_tag");
       await tool.locator('[data-slot="trace-collapsible-trigger"]').first().press("Enter");
       await toolBody.waitFor();
-      // The transcript is still scrolling to follow the opening row, so a mouse click can release on another element.
       await tool.getByRole("button", { name: "Collapse tool" }).press("Enter");
       await toolBody.waitFor({ state: "hidden" });
       await page.screenshot({ path: path.join(screenshots, filename) });
@@ -201,7 +193,6 @@ test("transcript and entry HTTP proxy reach Go", async () => {
     }
   } finally { await browser.close(); web.stop(true); }
 
-  // Every message here was copied from a run: a wipe keeps them, as undo would.
   expect(await call("DeleteSessionEntries", { id })).toEqual({ deleted: "0" });
   expect(await call("ListSessionEntries", { id })).not.toEqual({ entries: [] });
   expect(await call("LoadSessionEntries", { id })).not.toEqual({ entries: [] });
