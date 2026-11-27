@@ -72,7 +72,6 @@ test("arrowing through the palette previews sessions in this space; Escape retur
   expect(await behind(page)).toEqual(["Alpha", "Charlie*"]);
   await step("ArrowDown", "delta");
   expect(await behind(page)).toEqual(["Alpha", "Delta*"]);
-  // Echo was born in another space, so its row shows where the palette opened.
   await step("ArrowDown", "alpha");
   await step("ArrowUp", "delta");
   await step("Escape", "alpha");
@@ -114,7 +113,6 @@ test("a palette preview stays in its window: never saved, and kept while other w
   await paletteReady(page);
   await page.keyboard.press("ArrowDown");
   await page.waitForURL(`**${href("bravo")}`);
-  // A save would follow the preview's render at once; none comes.
   await page.waitForTimeout(300);
   expect(saved.revision).toBe(before);
   expect(saved.state).toMatchObject({ tabs: [{ path: href("alpha") }], last: { main: href("alpha") } });
@@ -257,7 +255,6 @@ test("saved tabs, deep links, keyboard, page close, palette commands, and the si
   expect(await names(page)).toEqual(["Bravo", "Alpha"]);
   expect(await tab("Alpha").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
   await page.keyboard.press("Shift+F10");
-  // Alpha is the last tab, so Close to the right closes nothing.
   await page.getByRole("menuitem", { name: "Close to the right", exact: true }).click();
   await page.getByRole("menu").waitFor({ state: "hidden" });
   expect(await names(page)).toEqual(["Bravo", "Alpha"]);
@@ -505,7 +502,6 @@ test("running tabs keep a reachable close control, and closing hands focus to th
   for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"], [href("delta"), "Delta"], ["/search", "Search"]]) {
     await page.goto(`${origin}${link}`);
     await tab(name).waitFor();
-    // The strip draws before the saved tabs load, but only loaded tabs are saved; leaving earlier drops this tab.
     await until(() => saved.state.tabs.some((tab) => tab.path === link));
   }
   await tab("Delta").waitFor();
@@ -523,7 +519,6 @@ test("running tabs keep a reachable close control, and closing hands focus to th
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Close", exact: true }).press("Enter");
   await page.waitForURL(`**${href("charlie")}`);
-  // The menu hands focus back as it finishes closing, which can land after the URL changes.
   await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Main tabs"] [role="tab"][aria-label="Charlie"]'));
 }), 60_000);
 
@@ -544,7 +539,6 @@ test("narrow screens show the tabs in a drawer opened by the footer's sidebar bu
   await page.waitForURL(`**${href("alpha")}`);
   await strip(page).waitFor({ state: "detached" });
   expect(await title.textContent()).toBe("Alpha");
-  // Picking the tab already shown closes the drawer too, by touch or mouse.
   for (const pick of ["tap", "click"]) {
     await toggle[pick]();
     await tab("Alpha")[pick]();
@@ -553,7 +547,6 @@ test("narrow screens show the tabs in a drawer opened by the footer's sidebar bu
   expect(page.url()).toEndWith(href("alpha"));
 
   const cdp = await page.context().newCDPSession(page);
-  // Moves come at a finger's 60 Hz pace: Chrome on Linux turns an instant burst into a fling that navigates back.
   const swipe = async (x: number, y: number, dx: number) => {
     await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
     for (let step = 1; step <= 12; step++) {
@@ -562,7 +555,6 @@ test("narrow screens show the tabs in a drawer opened by the footer's sidebar bu
     }
     await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   };
-  // A swipe that starts in a text field is left to the field.
   const field = (await page.getByPlaceholder("Message or /command").boundingBox())!;
   await swipe(field.x + 20, field.y + 20, 200);
   await page.waitForTimeout(300);
@@ -572,7 +564,6 @@ test("narrow screens show the tabs in a drawer opened by the footer's sidebar bu
   await swipe(250, 300, -230);
   await strip(page).waitFor({ state: "detached" });
 
-  // Escape closes only the drawer, not the non-chat tab behind it.
   await page.goto(`${origin}/config`);
   await title.getByText("Settings", { exact: true }).waitFor();
   await toggle.tap();
@@ -622,7 +613,6 @@ test("tab status icons and running titles keep their layout and shimmer in both 
     }
     return Math.max(...levels) - Math.min(...levels);
   };
-  // Only a selected title in dark mode dims under the band; each state and each scheme is swept once.
   await page.emulateMedia({ colorScheme: "dark" });
   expect(await sweep("Delta")).toBeGreaterThan(8);
   await tab("Alpha").click();
@@ -720,7 +710,6 @@ test("collapsed group badges do not rescan sessions for each hidden tab", () => 
   await header.getByText("Needs you", { exact: true }).waitFor();
   expect(await names(page)).toEqual(["Row 0"]);
   expect(await header.locator("button span").first().evaluate((node: HTMLElement) => getComputedStyle(node).fontWeight)).toBe("700");
-  // Count decoding work, not elapsed time; allow several renders, but not a scan per hidden tab.
   expect(await page.evaluate(() => (window as unknown as { groupReads: number }).groupReads)).toBeLessThan(sessions.length * tabs.length * 8);
 }), 30_000);
 
@@ -735,7 +724,6 @@ test("an unread tab shows a bold title", () => withPage({}, async (page, origin,
   expect(await weight("Alpha")).toBe("400");
   expect(await tab("Foxtrot").getAttribute("aria-description")).toBe(description);
 
-  // A collapsed group holding an unread tab shows a bold name.
   const header = strip(page).getByRole("button", { name: "Work", exact: true });
   const groupWeight = () => header.locator("span").evaluate((name: HTMLElement) => getComputedStyle(name).fontWeight);
   await openSaved(page, origin, href("bravo"), "Bravo", saved);
@@ -761,7 +749,6 @@ test("a tab waiting on this person's answer stops shimmering and needs them, as 
   expect(await animation(tab("Golf").getByText("Golf", { exact: true }))).toBe("none");
   expect(await tab("Golf").getByText("Needs you", { exact: true }).isVisible()).toBe(true);
   expect(await tab("Alpha").getByText("Needs you").count()).toBe(0);
-  // Read, it does not count in the window title.
   expect(await page.title()).toBe("lab - RocketClaw");
 
   const field = page.getByRole("textbox", { name: "Group name" });
@@ -789,13 +776,11 @@ for (const [platform, modifier] of [["MacIntel", "⌘"], ["Linux x86_64", "Ctrl"
     { id: "asked-new", name: "Asked new", agent: "main", running: true, asking: true, stateSince: at(3), unreadAt: at(5) },
     { id: "unread-old", name: "Unread old", agent: "main", unreadAt: at(2) },
     { id: "asked-old", name: "Asked old", agent: "main", running: true, asking: true, stateSince: at(1), unreadAt: at(0) },
-    // Read, parked, or without a tab, a session does not wait for this person, even while it asks.
     { id: "asked-read", name: "Asked read", agent: "main", running: true, asking: true, stateSince: at(0) },
     { id: "parked", name: "Parked", agent: "main", unreadAt: at(0), parked: true },
     { id: "untabbed", name: "Untabbed", agent: "main", running: true, asking: true, stateSince: at(0), unreadAt: at(0) },
   ];
   const ops = { name: "Ops", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" };
-  // Unread old is only in Shared, and the Ops Search page waits through its tab row.
   saved.state = { ...saved.state, space: "main", tabs: [...sessions.flatMap(({ id }) => ["untabbed", "unread-old"].includes(id) ? [] : [{ path: href(id), space: "main" }]), { path: "/search/dash", space: "main", search: ops }] };
   saved.shared = [{ space: "main", path: href("unread-old") }];
   const done = { upstreamSuccess: true, tabs: [{ path: "/search/dash", unreadAt: at(3) }] };
@@ -807,7 +792,6 @@ for (const [platform, modifier] of [["MacIntel", "⌘"], ["Linux x86_64", "Ctrl"
     await page.keyboard.press(`${key}+Shift+a`);
     await page.waitForURL((url: URL) => url.pathname === path);
   }
-  // A Shared row it visits gains no tab of this person's.
   expect(await names(page)).not.toContain("Unread old");
   await page.keyboard.press(`${key}+Shift+p`);
   const command = page.getByRole("dialog", { name: "Run command", exact: true }).getByRole("button", { name: "Sessions: Next needing you", exact: true });
@@ -821,7 +805,6 @@ for (const [platform, modifier] of [["MacIntel", "⌘"], ["Linux x86_64", "Ctrl"
   await until(() => saved.state.last.main === "/search/dash");
   saved.state.tabs.find((tab) => tab.path === "/search/dash")!.search!.searches[0].query = "changed elsewhere";
   saved.revision++;
-  // Leave as a refreshed query reaches the DOM, before passive effects can write the old page's URL.
   const leaving = await page.evaluate((modifier: string) => new Promise<string>((resolve) => {
     const input = document.querySelector<HTMLInputElement>('input[aria-label="Search sessions"]')!;
     const observer = new MutationObserver(() => {
@@ -898,7 +881,6 @@ test("tab groups take a name and color, collapse, adopt opened tabs, follow drag
   expect(await tab("Bravo").getAttribute("aria-description")).toBe("Group Work, Space: Main");
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
 
-  // The new group holds its place with a placeholder among its tabs.
   await until(() => saved.state.groups.some((group) => group.name === "Work") && saved.state.tabs.filter((tab) => tab.group).map((tab) => tab.path).toSorted().join() === [href("alpha"), href("bravo"), `group:${saved.state.groups[0].id}`].toSorted().join());
   await page.reload();
   await tab("Alpha").waitFor();
@@ -951,7 +933,6 @@ test("Cmd/Ctrl+click and Shift+click select tabs that the tab menu groups and un
   await tab("Charlie").click({ modifiers: ["ControlOrMeta"] });
   expect(page.url()).toEndWith(href("alpha"));
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("In selection, Space: Main");
-  // An unselected tab's menu acts on it alone, and a selected one's menu has no Rename session.
   expect(await items("Bravo")).toContain("Rename session");
   expect(await items("Bravo")).toContain("Pull requests and issues");
   expect(await items("Charlie")).not.toContain("Rename session");
@@ -961,21 +942,18 @@ test("Cmd/Ctrl+click and Shift+click select tabs that the tab menu groups and un
   await page.keyboard.press("Escape");
   expect(await order(page)).toEqual(["Work", "Alpha", "Charlie", "Bravo", "Delta"]);
 
-  // Shift+click selects the shown tabs from the active one; the selection joins a group together.
   await menu(page, "Delta", "Add to group", "New group");
   await page.keyboard.press("Escape");
   await tab("Bravo").click({ modifiers: ["Shift"] });
   expect(await page.evaluate(() => getSelection()!.toString())).toBe("");
   expect(await tab("Bravo").getAttribute("aria-description")).toBe("In selection, Space: Main");
   expect(await tab("Delta").getAttribute("aria-description")).toBe("Group Blue group, Space: Main, Turn running, Background work running");
-  // Work, emptied, stays where it was.
   await menu(page, "Bravo", "Add to group", "Blue group");
   expect(await order(page)).toEqual(["Work", "Blue group", "Delta", "Alpha", "Charlie", "Bravo"]);
   await menu(page, "Alpha", "Remove from group");
   expect(await order(page)).toEqual(["Work", "Blue group", "Delta", "Alpha", "Charlie", "Bravo"]);
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("In selection, Space: Main");
 
-  // Escape on a tab drops the selection; a plain click on the active tab does too.
   await tab("Alpha").focus();
   await page.keyboard.press("Escape");
   expect(await tab("Bravo").getAttribute("aria-description")).toBe("Space: Main");
@@ -1039,7 +1017,6 @@ test("tab group editor moves New session in, ungroups, closes, and deletes; coll
   await strip(page).getByRole("button", { name: "Work", exact: true }).click();
   await until(() => saved.state.groups.some((group) => group.collapsed));
   await page.reload();
-  // Charlie comes from the URL before saved tabs load; Alpha waits for the saved group too.
   await tab("Alpha").waitFor();
   expect(await order(page)).toEqual(["Alpha", "Work", "Charlie"]);
   await tab("Alpha").focus();
@@ -1050,7 +1027,6 @@ test("tab group editor moves New session in, ungroups, closes, and deletes; coll
   await page.keyboard.press("Shift+F10");
   await page.getByRole("button", { name: "Ungroup", exact: true }).click();
   expect(await order(page)).toEqual(["Alpha", "Work", "Bravo", "New session", "Charlie"]);
-  // The editor hands focus back to the emptied group's header as it finishes closing; Delete group removes the group.
   await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Main tabs"] [aria-label="Work"]'));
   await strip(page).getByRole("button", { name: "Edit Work", exact: true }).click();
   await page.getByRole("button", { name: "Delete group", exact: true }).click();
@@ -1070,7 +1046,6 @@ test("tab group editor moves New session in, ungroups, closes, and deletes; coll
 
   await menu(page, "Charlie", "Add to group", "New group");
   await page.keyboard.press("Escape");
-  // A tab whose group the saved state no longer has leaves the group.
   await until(() => saved.state.groups.some((group) => group.color === "Grey"));
   saved.state.groups = [];
   await page.reload();
@@ -1091,7 +1066,6 @@ test("an emptied group stays in place through reload, offers New session, takes 
   expect(await order(page)).toEqual(["Alpha", "Work", "Bravo", "Charlie", "Delta"]);
   expect(await fresh.count()).toBe(0);
 
-  // Emptied by a close and a drag out, it stays where it was, and so it reloads.
   await menu(page, "Bravo", "Close");
   await tab("Charlie").dragTo(tab("Alpha"));
   expect(await order(page)).toEqual(["Charlie", "Alpha", "Work", "Delta"]);
@@ -1100,7 +1074,6 @@ test("an emptied group stays in place through reload, offers New session, takes 
   await fresh.waitFor();
   expect(await order(page)).toEqual(["Charlie", "Alpha", "Work", "Delta"]);
 
-  // A tab dropped on it joins it; closing the group's tabs keeps it, and its New session starts one inside it.
   await tab("Delta").dragTo(fresh);
   expect(await tab("Delta").getAttribute("aria-description")).toStartWith("Group Work, ");
   expect(await fresh.count()).toBe(0);
@@ -1112,7 +1085,6 @@ test("an emptied group stays in place through reload, offers New session, takes 
   expect(await order(page)).toEqual(["Charlie", "Alpha", "Work", "New session"]);
   expect(await tab("New session").getAttribute("aria-description")).toBe("Group Work, Space: Main");
 
-  // Delete group closes its tabs and removes it.
   await command("Delete group");
   await page.waitForURL(`**${href("alpha")}`);
   expect(await order(page)).toEqual(["Charlie", "Alpha"]);
