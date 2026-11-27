@@ -6,13 +6,11 @@ const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 const pages = [{ space: "Gone", path: "index.html" }, { space: "Ops", path: "index.html" }, { space: "Billing", path: "index.html" }, { space: "Billing", path: "q3/report.html" }];
-// The page keeps every message it receives, and its fragment token, for the test to read.
 const script = `<script>window.replies = []; addEventListener("message", (event) => replies.push(event.data)); window.token = new URLSearchParams(location.hash.slice(1)).get("rc");</script>`;
 
 async function withPage(spaces: string[], run: (page: any, origin: string, reads: object[], moves: object[]) => Promise<void>, options = {}) {
   const { chromium: engine } = await import(playwright!);
   const reads: object[] = [], moves: object[] = [];
-  // The shared spaces, and the tab state the page saves.
   const saved = { spaces: spaces.map((name, index) => ({ id: `s${index}`, name })), state: { tabs: [], groups: [], space: "s0", last: {} } };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
@@ -55,7 +53,6 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
   }
 }
 
-// The current space's card is the one whose name is marked current.
 const strip = (page: any) => page.locator('div:has(> div > button[aria-current="true"]) > [role="tablist"]');
 const names = (page: any) => strip(page).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
 const space = (page: any) => page.locator('button[aria-current="true"]').getAttribute("aria-label");
@@ -69,7 +66,6 @@ async function chooseSpace(page: any, name: string) {
 
 test("a page link opens in the space named by its segment, ignoring case, on a fresh load and in the app", () => withPage(["Main", "billing"], async (page, origin) => {
   await page.goto(`${origin}/pages/Billing/index.html`);
-  // The strip draws before the spaces load; the tab then moves to the space its link names.
   await page.locator('button[aria-current="true"][aria-label="billing"]').waitFor();
   await page.waitForURL(`${origin}/pages/billing/index.html`);
 
@@ -80,7 +76,6 @@ test("a page link opens in the space named by its segment, ignoring case, on a f
   await page.waitForURL(`${origin}/pages/billing/q3/report.html`);
   expect((await names(page)).toSorted()).toEqual(["billing · index.html", "billing · q3/report.html"]);
 
-  // Without a matching space the page opens in the current space, and no space is added.
   await chooseSpace(page, "Main");
   await go(page, "/pages/Finance/index.html");
   await strip(page).getByRole("tab", { name: "Finance · index.html", exact: true }).waitFor();
@@ -183,7 +178,6 @@ test("a sandboxed page reads its space's Page Data only with its token and from 
   expect(token).toMatch(/^\d+-\d+-\d+-\d+$/);
   const frame = await (await iframe.elementHandle()).contentFrame();
   await frame.waitForFunction(() => (window as any).token);
-  // The top window answers nothing it posts itself, even with the token.
   await page.evaluate((token: string) => {
     (window as any).replies = [];
     addEventListener("message", (event) => (window as any).replies.push(event.data));
@@ -197,7 +191,6 @@ test("a sandboxed page reads its space's Page Data only with its token and from 
     parent.postMessage({ type: "rocketclaw.read", id: 5, key: "missing", token }, "*");
   });
   await frame.waitForFunction(() => (window as any).replies.length === 2);
-  // Independent reads can finish in either order; each reply belongs to its request ID.
   expect(await frame.evaluate(() => (window as any).replies.toSorted((a: { id: number }, b: { id: number }) => a.id - b.id))).toEqual([{ type: "rocketclaw.read", id: 4, value: { total: 3 } }, { type: "rocketclaw.read", id: 5, error: "page not found" }]);
   expect(reads).toHaveLength(2);
   expect(reads).toEqual(expect.arrayContaining([{ space: "Billing", path: "revenue", data: true }, { space: "Billing", path: "missing", data: true }]));
@@ -216,7 +209,6 @@ test("a PDF page, which Chrome refuses to show in a sandboxed frame, opens in it
 }), 60_000);
 
 for (const width of [1280, 320]) test(`the Page Index lists every space's pages under their space and opens them at ${width}px`, () => withPage(["Billing"], async (page, origin) => {
-  // Narrow screens keep the tabs in a drawer, opened to find the tab and closed again.
   const opened = async (name: string) => {
     if (width === 320) await page.getByRole("button", { name: "Show sidebar", exact: true }).click();
     await strip(page).getByRole("tab", { name, exact: true }).waitFor();
