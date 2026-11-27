@@ -3,13 +3,10 @@ import { afterEach, expect, test } from "bun:test";
 const local = process.env.ROCKETCLAW_REMOTE_TEST_LOCAL!, remote = process.env.ROCKETCLAW_REMOTE_TEST_REMOTE!;
 const observed = { stage: "launch", url: "", completed: false, errors: [] as string[], requests: [] as string[] };
 
-// Bun's test deadline is uncatchable and closes Chromium, so report already-observed state without querying the page.
 afterEach(() => {
   if (!observed.completed) console.error("Remote transport test failed", JSON.stringify(observed));
 });
 
-// Go's TestRemoteRocketClawRealBrowser serves a local RocketClaw and a remote "work" behind its tailnet handler, at
-// names under one tailnet suffix that the browser maps to this machine. "gone" is declared but never answers.
 test("a local page works, lists, searches and follows a chat on a remote RocketClaw", async () => {
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true, args: [`--host-resolver-rules=MAP *.${process.env.ROCKETCLAW_REMOTE_TEST_SUFFIX} 127.0.0.1`] });
@@ -30,7 +27,6 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   page.on("requestfailed", (request: { url(): string; failure(): { errorText: string } | null }) => {
     if (/\/api\/(Protocol|Identity)$/.test(request.url())) observed.requests.push(`failed ${request.failure()?.errorText} ${request.url()}`);
   });
-  // Advance the page's polling and debounce timers; the database clock remains real.
   observed.stage = "remote reply";
   await page.clock.install();
   await page.goto(`${local}/r/work/`);
@@ -41,15 +37,11 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   const chat = new URL(page.url()).pathname;
   expect(chat).toStartWith("/r/work/s/");
   const id = Buffer.from(chat.slice("/r/work/s/".length), "base64url").toString();
-  // The chat's tab is saved on the remote, where the local page reads it for notifications.
   while (!await page.evaluate(async (url: string) => (await (await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).state.tabs.some((tab: { path: string }) => tab.path.startsWith("/s/")), remote)) await Bun.sleep(100);
 
-  // On the local server, the palette lists the remote chat under its server's name, and a filter finds it there.
   observed.stage = "remote palette";
   await page.goto(`${local}/`);
   await page.getByRole("textbox").waitFor();
-  // The footer's New session menu starts one on a remote, where the remote is the highlighted choice, and from there on
-  // the local server, named by the first label of the page's host.
   await page.getByRole("button", { name: "New session", exact: true }).click();
   await page.getByRole("menuitem", { name: "work", exact: true }).click();
   await page.waitForURL((url: URL) => url.pathname === "/r/work/");
@@ -60,32 +52,26 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await page.getByRole("textbox").waitFor();
   await page.keyboard.press("Control+p");
   const palette = page.getByRole("dialog", { name: "Go to session" });
-  // The fake provider also names the chat, after its reply.
   const row = palette.getByRole("button").filter({ hasText: "work · " });
   await row.waitFor();
-  // A filter asks every server; until its answer, the rows shown are the last answer's.
   await palette.getByPlaceholder("Search sessions").fill("agent:other");
   await page.clock.fastForward(500);
   await row.waitFor({ state: "hidden" });
   await palette.getByPlaceholder("Search sessions").fill("agent:main");
   await page.clock.fastForward(500);
   await row.waitFor();
-  // Agent choices offer the remote's own agents too, under its name.
   await palette.getByPlaceholder("Search sessions").fill("agent:sc");
   await page.clock.fastForward(500);
   await palette.getByRole("button").filter({ hasText: "scout" }).filter({ hasText: "work · gpt-6.1-sol" }).waitFor();
   await palette.getByPlaceholder("Search sessions").fill("");
   await page.keyboard.press("Escape");
 
-  // A new reply on the remote, while a local page shows, notifies: the chat is in one of the remote's tabs.
   observed.stage = "remote notification";
-  // The remote counts a chat viewed in the last 10 seconds as read (internal/rocketclaw/backend/store_dao.go).
   expect(await page.evaluate(async () => (await fetch("/test/view-expired", { method: "POST" })).ok)).toBe(true);
   await page.evaluate(async ([url, conversation]: string[]) => { await fetch(`${url}/api/Prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: conversation, text: "Again" }) }); }, [remote, id]);
   await page.clock.fastForward(2_000);
   await page.waitForFunction(() => (window as unknown as { shown: string[] }).shown.length > 0);
 
-  // A remote that stops answering keeps its rows, offline, until it answers again.
   observed.stage = "offline palette row";
   expect(await page.evaluate(async () => (await fetch("/test/remote/down", { method: "POST" })).ok)).toBe(true);
   await page.keyboard.press("Control+p");
@@ -97,14 +83,11 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await row.filter({ hasNotText: "offline" }).waitFor();
   await page.keyboard.press("Escape");
 
-  // Opening the remote chat from the local page lands on its server.
   observed.stage = "open remote chat";
   await page.keyboard.press("Control+p");
   await row.click();
   await page.waitForURL((url: URL) => url.pathname === chat);
 
-  // On a local page the remote chat is in the remote's Main card, whose items act on the remote: Park moves it to
-  // Parked, whose Unpark puts it back, and opening it lands on its server, in its space.
   observed.stage = "remote card";
   await page.goto(`${local}/`);
   const chatTab = page.getByRole("tablist", { name: "Main tabs on work" }).locator('[data-tab^="/s/"]');
@@ -154,8 +137,6 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   }), attachment)).toBe(0);
   await other.close();
 
-  // A space's card enters it, saving it as the current space: on this server, and on a remote, whose page opens even in
-  // an empty space, which it enters on arrival.
   observed.stage = "enter spaces";
   const enter = async (space: string, server: string) => {
     const name = `${space} space actions on ${server}`;
@@ -179,13 +160,11 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   const online = page.waitForRequest((request: { url(): string; frame(): { url(): string } }) => request.url() === `${remote}/api/Protocol` && request.frame().url() === `${local}/r/work/config`);
   await page.goto(`${local}/r/work/config`);
   await page.getByText(process.env.ROCKETCLAW_REMOTE_TEST_WORKSPACE!, { exact: true }).waitFor();
-  // Config can render before Protocol answers; establish online before taking the remote offline.
   observed.stage = "online remote config protocol";
   const protocol = await (await online).response();
   expect(protocol?.ok()).toBe(true);
   await protocol!.finished();
 
-  // With the remote off, its page says so and a local space is still a choice away.
   observed.stage = "offline remote config page";
   expect(await page.evaluate(async () => (await fetch("/test/remote/down", { method: "POST" })).ok)).toBe(true);
   await page.clock.fastForward(2_000);
@@ -194,7 +173,6 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await page.waitForURL((url: URL) => !url.pathname.startsWith("/r/work"));
   expect(await page.evaluate(async () => (await fetch("/test/remote/up", { method: "POST" })).ok)).toBe(true);
 
-  // A remote on another protocol keeps working with a notice and never reloads the page; a local one reloads it.
   observed.stage = "remote version notice";
   await page.goto(`${local}/r/work/agents`);
   await page.evaluate(() => Object.assign(window, { kept: true }));
