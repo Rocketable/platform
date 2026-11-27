@@ -10,8 +10,6 @@ const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 type SnapshotCommits = { snapshotCommits: Record<string, PromiseWithResolvers<void>[]> };
 
-// Polls after the first send the version they hold and get only changed rows and the IDs removed since; the list
-// keeps the rest in the server's order. A reload holds the saved version, so it is not sent every row again.
 test("session list polls ask for changes since the version they hold", async () => {
   const { chromium: engine } = await import(playwright!);
   const row = (id: string, preview: string, updatedAt: string): Session => ({ id, preview, title: "", agent: "main", updatedAt });
