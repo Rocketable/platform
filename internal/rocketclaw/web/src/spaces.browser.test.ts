@@ -10,11 +10,9 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   expect(await space.getAttribute("aria-label")).toBe("Main");
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
 
-  // A new space is named as it is made, and entering it, empty, opens New session there.
   await newSpace(page, "Ops");
   await choose("Ops", "menuitemradio");
   await page.waitForURL(`${origin}/`);
-  // A name another space has, ignoring case, is refused and stays to be changed.
   await page.keyboard.press("Control+Shift+p");
   await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Spaces: New space", exact: true }).click();
   await page.getByRole("textbox", { name: "Space name" }).fill("OPS");
@@ -40,13 +38,11 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   await choose("Main", "menuitemradio");
   await page.waitForURL(`**${href("charlie")}`);
 
-  // Opening a tab that lives in another space switches to it, and reload keeps both.
   await openFromPalette(page, "Bravo");
   await page.waitForURL(`**${href("bravo")}`);
   expect(await space.getAttribute("aria-label")).toBe("Ops");
   await until(() => saved.state.space !== "main" && Object.values(saved.state.last).includes(href("bravo")));
   await page.reload();
-  // Bravo comes from the URL before saved spaces load; New session waits for the saved tabs.
   await tab("New session").waitFor();
   expect(await space.getAttribute("aria-label")).toBe("Ops");
   expect(await names(page)).toEqual(["New session", "Bravo"]);
@@ -61,13 +57,11 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   await choose("Main", "menuitemradio");
   await page.waitForURL(`**${href("charlie")}`);
   expect(await names(page)).toEqual(["Alpha", "Charlie"]);
-  // New session is never duplicated: opening it brings its tab into this space.
   await page.getByRole("button", { name: "New session", exact: true }).click();
   await page.waitForURL(`${origin}/`);
   expect(await names(page)).toEqual(["Alpha", "Charlie", "New session"]);
   expect(await space.getAttribute("aria-label")).toBe("Main");
 
-  // A tab moved to another space shows only there.
   await choose("Ops", "menuitemradio");
   await page.waitForURL(`**${href("bravo")}`);
   expect(await names(page)).toEqual(["Bravo"]);
@@ -79,7 +73,6 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   await page.waitForURL(`**${href("bravo")}`);
   expect(await names(page)).toEqual(["Alpha", "Bravo"]);
 
-  // Deleting a space moves its tabs to the first space, and the last space stays.
   await choose("Delete space");
   await page.locator(`button${current}[aria-label="Main"]`).waitFor();
   expect(await names(page)).toEqual(["Alpha", "Charlie", "New session", "Bravo"]);
@@ -89,7 +82,6 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["Go to space", "Rename space"]);
   await page.keyboard.press("Escape");
 
-  // A tab saved without a space shows only in the first space.
   const settled = () => until(() => saved.spaces.length === 1 && saved.state.tabs.every((tab) => tab.space === "main"));
   await settled();
   saved.state.tabs = saved.state.tabs.map((tab) => ({ ...tab, space: tab.path === href("alpha") ? "" : tab.space }));
@@ -100,7 +92,6 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   expect(await names(page)).toEqual(["New session"]);
   await choose("Delete space");
 
-  // A space deleted elsewhere hands its tabs, groups kept, to the first space; the menu sits atop the tabs.
   await page.locator(`button${current}[aria-label="Main"]`).waitFor();
   await settled();
   saved.state.tabs = saved.state.tabs.map((tab) => tab.path === href("bravo") ? { ...tab, space: "gone", group: "kept" } : tab);
@@ -135,7 +126,6 @@ test("New session offers every agent but sticky: slack ones, and a space shows i
     await page.getByRole("button", { name: "Preview latest run of daily", exact: true }).waitFor();
     return (await page.getByRole("button", { name: /^Preview latest run of / }).evaluateAll((nodes: HTMLElement[]) => nodes.filter((node) => node.checkVisibility()).map((node) => node.getAttribute("aria-label")))).map((label: string) => label.replace("Preview latest run of ", ""));
   };
-  // Main shows only spaceless cron jobs: opsreport hides with its run. Every session lists the agents the server offers.
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
   expect(await agents()).toEqual(["main", "opsbot", "channel"]);
   await openSaved(page, origin, "/routines", "Routines", saved);
@@ -143,7 +133,6 @@ test("New session offers every agent but sticky: slack ones, and a space shows i
   await openSaved(page, origin, "/", "New session", saved);
   expect(await agents()).toEqual(["main", "opsbot"]);
   expect(await runnable()).toEqual(["daily"]);
-  // The OPS agent and the Ops job belong to a space named ops.
   await newSpace(page, "ops");
   await chooseSpace(page, "ops", "menuitemradio");
   expect(await agents()).toEqual(["main", "opsbot"]);
@@ -171,7 +160,6 @@ test("Search pages are tabs of their own: renamed in place, shared as one page, 
   await field.fill("Deploys");
   await field.press("Enter");
 
-  // Shared, it is one page for everyone in the space: its row is titled by that page, and edits there save to it.
   await menu(page, "Deploys", "Add to Shared");
   const row = (name: string) => shared(page).getByRole("tab", { name, exact: true });
   await row("Deploys").waitFor();
@@ -185,17 +173,13 @@ test("Search pages are tabs of their own: renamed in place, shared as one page, 
   await field.press("Enter");
   await row("Prod deploys").waitFor();
   await until(() => saved.shared[0].search?.name === "Prod deploys" && saved.shared[0].search.searches[0].query === "deploys prod");
-  // Another person's change reaches the open page when its window is focused.
   saved.shared[0].search = { name: "Prod deploys", searches: [{ id: "x", query: "rollback" }], active: "x" };
   await focus(page);
   await page.waitForFunction(() => (document.querySelector('main input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "rollback");
-  // An edit made from a page someone changed meanwhile is made again onto theirs, keeping both.
   saved.shared[0].search = { name: "Prod deploys", searches: [{ id: "x", query: "rollback" }, { id: "y", query: "other person" }], active: "x" };
   await page.getByRole("button", { name: "New search", exact: true }).click();
   await query.fill("mine");
   await until(() => JSON.stringify(saved.shared[0].search?.searches.map((item) => item.query)) === JSON.stringify(["rollback", "other person", "mine"]));
-  // Taken out of Shared, the page as saved stays as this person's own, with their own searches there, so nothing anyone
-  // added is lost.
   expect(await sharedMenu(page, "Prod deploys")).toEqual(["Rename search", "—", "Close", "Close others", "Close to the right", "Close all", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park", "Unfollow", "—", "Add to group"]);
   await page.getByRole("menuitem", { name: "Add to group", exact: true }).click();
   await page.getByRole("menuitem", { name: "New group", exact: true }).click();
@@ -208,7 +192,6 @@ test("Search pages are tabs of their own: renamed in place, shared as one page, 
   await until(() => JSON.stringify(saved.state.tabs.find((item) => item.path === "/search/one")?.search?.searches.map((item) => item.query)) === JSON.stringify(["rollback", "other person", "mine", "deploys"]));
   await page.waitForFunction(() => (document.querySelector('main input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "mine");
 
-  // Grouped, then moved to another space, the page keeps its name and searches, also after reload.
   expect(await tab("Prod deploys").getAttribute("aria-description")).toMatch(/^Group /);
   await newSpace(page, "Ops");
   await chooseSpace(page, "Main", "menuitemradio");
@@ -286,7 +269,6 @@ for (const width of [1280, 390]) test(`palette search handoffs stay in their ope
   await focus(page);
   await open();
   await palette.getByRole("button", { name: /^Search: other/ }).waitFor();
-  // A personal save can return the old Shared page after its newer edit was acknowledged.
   const held = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   let blocked = false;
   await page.route("**/api/ChangeTabs", async (route: any) => {
@@ -300,7 +282,6 @@ for (const width of [1280, 390]) test(`palette search handoffs stay in their ope
     }
     await route.fulfill({ response, json: reply });
   });
-  // Browsing the palette saves nothing, so moving a tab makes the personal save that is held.
   await page.keyboard.press("Escape");
   await palette.waitFor({ state: "hidden" });
   if (width === 390) await page.getByRole("button", { name: "Show sidebar", exact: true }).click();
@@ -318,7 +299,6 @@ for (const width of [1280, 390]) test(`palette search handoffs stay in their ope
   const local = new URL(page.url()).pathname;
   expect(local).toBe("/search/team");
   await until(() => saved.shared.find((tab) => tab.path === local)?.search?.active === "local");
-  // This row arrives only with the edit reply, not with its optimistic cache update.
   await open();
   await input.fill("Acknowledged");
   await palette.getByRole("button", { name: /^Search: Acknowledged/ }).waitFor();
@@ -377,7 +357,6 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   await page.keyboard.press("Escape");
   await menu(page, "Bravo", "Add to group", "Work");
 
-  // A new space takes New session, and its tab menu offers no group from Main.
   await newSpace(page, "Ops");
   await chooseSpace(page, "Ops", "menuitemradio");
   await tab("New session").click({ button: "right" });
@@ -390,7 +369,6 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
 
-  // Moving the group keeps its name and color; moving one member out of it leaves the group.
   await chooseSpace(page, "Main", "menuitemradio");
   await page.waitForURL(`**${href("charlie")}`);
   expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Charlie"]);
@@ -410,7 +388,6 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   expect(await order(page)).toEqual(["Alpha", "Charlie"]);
   expect(await tab("Alpha").getAttribute("aria-description")).toBe("Space: Main");
 
-  // Reload keeps spaces, groups, colors, collapsed state, and memberships.
   await until(() => saved.state.groups.some((group) => group.collapsed));
   await page.reload();
   await tab("Alpha").waitFor();
@@ -426,7 +403,6 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   expect(await order(page)).toEqual(["New session", "Work", "Bravo"]);
   expect(await tab("Bravo").getAttribute("aria-description")).toBe("Group Work, Space: Ops");
 
-  // New tab in group brings New session over from Main.
   await chooseSpace(page, "Main", "menuitemradio");
   await page.getByRole("button", { name: "New session", exact: true }).click();
   await page.waitForURL(`${origin}/`);
@@ -438,7 +414,6 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   expect(await order(page)).toEqual(["Work", "Bravo", "New session"]);
   expect(await tab("New session").getAttribute("aria-description")).toBe("Group Work, Space: Ops");
 
-  // Deleting Ops moves the collapsed group, intact, to Main.
   await header.click();
   await chooseSpace(page, "Delete space");
   await page.locator(`button${current}[aria-label="Main"]`).waitFor();
@@ -498,7 +473,6 @@ test("Recently closed lists closed tabs newest first and reopens one where it wa
   await list.getByRole("button").filter({ hasText: "Echo" }).waitFor({ state: "detached" });
   expect(await rows()).toEqual(["CharlieMain", "BravoMain"]);
 
-  // Pressed again before the save reopening the first has answered, Cmd/Ctrl+Alt+T reopens the next.
   await page.route("**/api/ChangeTabs", async (route: any) => { await Bun.sleep(500); await route.continue(); });
   await page.keyboard.press("Control+Alt+t");
   await page.waitForURL(`**${href("charlie")}`);
@@ -517,14 +491,12 @@ test("tabs follow a person across windows: a window takes in changes on focus bu
   await openSaved(other, origin, href("charlie"), "Charlie", saved);
   expect(await names(other)).toEqual(["Alpha", "Bravo", "Charlie"]);
 
-  // The other window closes the tab this one shows, and opens another: this window moves off the closed tab.
   await menu(other, "Bravo", "Close");
   await until(() => !saved.state.tabs.some((tab) => tab.path === href("bravo")));
   await page.evaluate(() => { dispatchEvent(new Event("visibilitychange")); });
   await page.waitForURL(`**${href("charlie")}`);
   expect(await names(page)).toEqual(["Alpha", "Charlie"]);
 
-  // A tab opened elsewhere shows up on focus alone, and this window stays where it is.
   await openSaved(other, origin, href("delta"), "Delta", saved);
   await page.evaluate(() => { dispatchEvent(new Event("focus")); });
   await strip(page).getByRole("tab", { name: "Delta", exact: true }).waitFor();
@@ -533,7 +505,6 @@ test("tabs follow a person across windows: a window takes in changes on focus bu
 
 test("a change made from tabs older than another window's save keeps both", () => withPage({}, async (page, origin, _prompts, saved) => {
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
-  // Another window opens Charlie, and this one, without reloading, opens Bravo: its save is refused and merged.
   [saved.state.tabs, saved.revision] = [[...saved.state.tabs, { path: href("charlie"), space: "main" }], saved.revision + 1];
   await openFromPalette(page, "Bravo");
   await strip(page).getByRole("tab", { name: "Charlie", exact: true }).waitFor();
@@ -563,7 +534,6 @@ test("a session can be renamed in Shared without opening a personal tab", () => 
 test("Shared hides while empty, takes tabs from the tab menu, highlights both copies, and changes only through its menu", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true }), row = (name: string) => shared(page).getByRole("tab", { name, exact: true });
   const header = page.getByRole("button", { name: "Shared in Main", exact: true }), commands = page.getByRole("dialog", { name: "Run command" });
-  // A fresh server shows no Shared group, and New session cannot be shared.
   await openSaved(page, origin, "/", "New session", saved);
   expect(await header.count()).toBe(0);
   await tab("New session").click({ button: "right" });
@@ -578,8 +548,6 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
   await page.keyboard.press("Escape");
   await commands.waitFor({ state: "hidden" });
 
-  // Add to Shared shares the tab in this space and keeps it among this person's tabs, and the Shared group shows above
-  // the person's tabs in the space's card; opening the tab highlights both copies.
   for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"]]) await openSaved(page, origin, href(id), name, saved);
   await menu(page, "Alpha", "Add to Shared");
   await row("Alpha").waitFor();
@@ -592,8 +560,6 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
   await page.waitForURL(`**${href("alpha")}`);
   expect([await row("Alpha").getAttribute("aria-selected"), await tab("Alpha").getAttribute("aria-selected")]).toEqual(["true", "true"]);
 
-  // A Shared row has no close button, ignores middle-clicks, and takes no drops of this person's tabs; its menu is the
-  // one their own tab and the page's bar offer.
   expect(await shared(page).getByRole("button", { name: "Close Alpha" }).count()).toBe(0);
   const lines = async (open: () => Promise<void>) => {
     await open();
@@ -610,7 +576,6 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
   await tab("Bravo").dragTo(row("Alpha"));
   expect(await names(page)).toEqual(["New session", "Alpha", "Bravo"]);
   expect(await sharedNames(page)).toEqual(["Alpha"]);
-  // This person's copy of a Shared tab offers Remove from Shared, and their other tabs Add to Shared.
   for (const [name, item] of [["Alpha", "Remove from Shared"], ["Bravo", "Add to Shared"]]) {
     await tab(name).click({ button: "right" });
     await page.getByRole("menuitem", { name: item, exact: true }).waitFor();
@@ -618,7 +583,6 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
     await page.getByRole("menu").waitFor({ state: "hidden" });
   }
 
-  // A Shared tab that is not this person's opens and reloads without joining their tabs.
   await menu(page, "Bravo", "Add to Shared");
   await row("Bravo").waitFor();
   await menu(page, "Bravo", "Close");
@@ -642,8 +606,6 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
   await page.keyboard.press("Escape");
   await commands.waitFor({ state: "hidden" });
 
-  // Removing the Shared tab in view enters the space; removing one this person has open leaves their copy, and removing
-  // the last one hides Shared.
   await sharedMenu(page, "Bravo");
   await page.getByRole("menuitem", { name: "Remove from Shared", exact: true }).click();
   await page.waitForURL(`${origin}/`);
@@ -654,8 +616,6 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
   expect(await names(page)).toEqual(["New session", "Alpha"]);
   expect(saved.shared).toEqual([]);
 
-  // From a Shared tab that is not this person's, Cmd/Ctrl+[ and ] step to this space's last tab and, past the Shared
-  // rows, its first, and closing one of their tabs moves focus to their first tab.
   await openSaved(page, origin, href("bravo"), "Bravo", saved);
   await menu(page, "Bravo", "Add to Shared");
   await row("Bravo").waitFor();
@@ -679,22 +639,18 @@ test("other people's Shared changes arrive on focus, and a window on a Shared ta
   saved.state.tabs = [{ path: href("charlie"), space: "ops" }];
   saved.shared = [{ space: "main", path: href("charlie") }];
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
-  // A tab shared in this space opens here, ahead of this person's copy in another space.
   await row("Charlie").click();
   await page.waitForURL(`**${href("charlie")}`);
   expect([await space.getAttribute("aria-label"), await row("Charlie").getAttribute("aria-selected"), await names(page)]).toEqual(["Main", "true", ["Alpha"]]);
-  // Another window's save leaves this window on its Shared tab.
   await until(() => saved.state.last.main === href("charlie"));
   [saved.state.tabs, saved.revision] = [[...saved.state.tabs, { path: href("delta"), space: "main" }], saved.revision + 1];
   await focus(page);
   await strip(page).getByRole("tab", { name: "Delta", exact: true }).waitFor();
   expect([page.url().endsWith(href("charlie")), await space.getAttribute("aria-label")]).toEqual([true, "Main"]);
-  // Another person's share shows on focus, and the window stays where it is.
   saved.shared.push({ space: "main", path: href("bravo") });
   await focus(page);
   await row("Bravo").waitFor();
   expect(page.url()).toEndWith(href("charlie"));
-  // Another person removes the Shared tab in view: the window enters its space.
   saved.shared = saved.shared.filter((tab) => tab.path !== href("charlie"));
   await focus(page);
   await page.waitForURL(`**${href("alpha")}`);
@@ -709,7 +665,6 @@ test("a space another person deletes is left as if this window deleted it", () =
   await page.goto(`${origin}${href("charlie")}`);
   await page.locator(`button${current}[aria-label="Ops"]`).waitFor();
   expect([await row("Charlie", "Ops").getAttribute("aria-selected"), await names(page)]).toEqual(["true", ["Bravo"]]);
-  // Another person deletes Ops: the server moves its Shared tabs to Main, and this window follows with its own Ops tabs.
   saved.spaces = saved.spaces.filter((item) => item.id !== "ops");
   saved.shared = [{ space: "main", path: href("charlie") }];
   await focus(page);
@@ -743,13 +698,11 @@ test("each space's card lists its own Shared tabs under a Shared pill that folds
   await chooseSpace(page, "Ops", "menuitemradio");
   await page.waitForURL(`${origin}/`);
   expect([await main.getAttribute("aria-expanded"), await sharedNames(page), await opsNames()]).toEqual(["false", [], ["Delta", "Alpha"]]);
-  // Main's last tab was a Shared one, which entering Main returns to.
   await chooseSpace(page, "Main", "menuitemradio");
   await page.waitForURL(`**${href("alpha")}`);
   expect(await names(page)).toEqual(["Charlie"]);
   await main.click();
   await main.and(page.locator('[aria-expanded="true"]')).waitFor();
-  // Deleting Ops moves its Shared tabs into Main's, a tab shared in both once, in the order they were shared.
   await chooseSpace(page, "Ops", "menuitemradio");
   await page.waitForURL(`${origin}/`);
   await chooseSpace(page, "Delete space");
@@ -791,26 +744,20 @@ test("Shared rows step, arrow, and reorder like this person's tabs, and Escape l
   saved.shared = [{ space: "main", path: "/shortcuts" }, { space: "main", path: href("bravo") }];
   await page.goto(`${origin}${href("alpha")}`);
   await row("Bravo").waitFor();
-  // Cmd/Ctrl+] steps through the Shared rows, then this person's tabs, each tab once, wrapping.
   for (const link of ["/shortcuts", href("bravo"), href("alpha"), "/shortcuts"]) {
     await page.keyboard.press("Control+BracketRight");
     await page.waitForURL(`${origin}${link}`);
   }
-  // Escape and the page's close button leave a page that is only in Shared alone.
   expect(await page.getByRole("button", { name: "Close", exact: true }).count()).toBe(0);
   await page.keyboard.press("Escape");
   await page.keyboard.press("Control+BracketRight");
   await page.waitForURL(`**${href("bravo")}`);
   expect(await names(page)).toEqual(["Alpha", "Bravo"]);
-  // Arrows cross between the Shared rows and this person's tabs.
   await row("Bravo").focus();
   await page.keyboard.press("ArrowDown");
   expect(await focused(tab("Alpha"))).toBe(true);
   await page.keyboard.press("ArrowUp");
   expect(await focused(row("Bravo"))).toBe(true);
-  // Shift+Arrow and dragging move a Shared row among the Shared rows for this person alone, and Shift+Arrow keeps it
-  // focused. The order survives a reload, and a row shared since goes last. A Shared row dropped on this person's tabs
-  // moves nothing.
   const order = (...paths: string[]) => until(() => JSON.stringify(saved.state.sharedOrder) === JSON.stringify(paths));
   await row("Shortcuts").focus();
   await page.keyboard.press("Shift+ArrowDown");
@@ -829,11 +776,9 @@ test("Shared rows step, arrow, and reorder like this person's tabs, and Escape l
   expect(await sharedNames(page)).toEqual(["Charlie", "Bravo", "Shortcuts"]);
 }), 30_000);
 
-// Asia/Kolkata has no daylight saving, so its 9:00 is always 03:30 UTC.
 test("Park moves tabs of any kind to Parked, which lists every space's, stepping skips it and bulk closes take it, Unpark returns tabs to their group and place, and a closed tab comes back parked only while its park has a time", () => withPage({ timezoneId: "Asia/Kolkata" }, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true }), parked = page.getByRole("tablist", { name: "Parked tabs" }), row = (name: string) => parked.getByRole("tab", { name, exact: true });
   const show = (view: string) => page.getByRole("group", { name: "Sidebar view" }).getByRole("button", { name: view, exact: true }).click(), sent = (count: number) => until(() => saved.sent.length === count);
-  // The person's tabs are in Ops, Bravo and Charlie in its Work group; Hotel, in Main, is parked until they unpark it.
   saved.spaces.push({ id: "ops", name: "Ops" });
   saved.state = { ...saved.state, space: "ops", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [...[href("alpha"), href("bravo"), href("charlie"), href("delta"), "/routines"].map((path, i) => ({ path, space: "ops", group: i === 1 || i === 2 ? "work" : undefined })), { path: href("hotel"), space: "main" }] };
   saved.attention = [{ path: href("hotel"), parked: true }];
@@ -843,20 +788,16 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   await show("Parked");
   expect(await row("Hotel").getAttribute("aria-description")).toBe("Space: Main, Forked session, Parked");
 
-  // Park sends one change naming the tab's location and moves the tab to Parked at once.
   await show("Spaces");
   await menu(page, "Bravo", "Park", "Until I unpark");
   await tab("Bravo").waitFor({ state: "detached" });
   await sent(1);
   expect(saved.sent).toEqual([{ paths: [href("bravo")], action: "PARK" }]);
   expect(await order(page)).toEqual(["Alpha", "Work", "Charlie", "Delta", "Routines"]);
-  // A timed park is reckoned in the browser's local time, and its row says when it ends.
   await menu(page, "Routines", "Park", "Tomorrow 9:00");
   await sent(2);
   const nine = await page.evaluate(() => { const at = new Date(); at.setDate(at.getDate() + 1); at.setHours(9, 0, 0, 0); return at.toISOString(); });
   expect([saved.sent[1], nine.slice(10)]).toEqual([{ paths: ["/routines"], action: "PARK", until: nine }, "T03:30:00.000Z"]);
-  // Parked from its keyboard menu, Charlie leaves Work empty, whose header stays, though Work was saved before every
-  // group held its place, and focus moves to the strip's selected tab.
   await tab("Charlie").focus();
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Park", exact: true }).press("ArrowRight");
@@ -868,12 +809,10 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   await parked.locator('[role="tab"][aria-label="Routines"][aria-description^="Space: Ops, Parked until "]').waitFor();
   await row("Charlie").waitFor();
 
-  // Cmd/Ctrl+] skips parked tabs.
   for (const id of ["delta", "alpha"]) {
     await page.keyboard.press("Control+BracketRight");
     await page.waitForURL(`**${href(id)}`);
   }
-  // Unpark returns each tab to its group and place.
   for (const name of ["Charlie", "Bravo"]) {
     await row(name).click({ button: "right" });
     await page.getByRole("menuitem", { name: "Unpark", exact: true }).click();
@@ -884,8 +823,6 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   await show("Spaces");
   expect(await order(page)).toEqual(["Alpha", "Work", "Bravo", "Charlie", "Delta"]);
 
-  // Close in a Parked row's menu closes the tab. Reopened, one whose park has a time is still parked; one parked until unparked
-  // is an ordinary tab, as closing it ended its park.
   await show("Parked");
   for (const [name, path] of [["Routines", "/routines"], ["Hotel", href("hotel")]]) {
     await row(name).click({ button: "right" });
@@ -908,7 +845,6 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   await show("Parked");
   await row("Routines").waitFor();
 
-  // Bulk closes take this space's parked tabs too: Close others closes the parked Routines tab with the rest of Ops.
   await show("Spaces");
   await menu(page, "Alpha", "Close others");
   await until(() => saved.state.tabs.map((item) => item.path).join() === [href("alpha"), href("hotel"), "group:work"].join());
@@ -959,7 +895,6 @@ test("Park until it is done is offered for a session, not a page, and parks the 
   await parked.locator('[role="tab"][aria-label="Alpha"][aria-description$="Parked until it is done"]').waitFor();
   expect(await parked.getByRole("tab", { name: "Alpha", exact: true }).locator("svg").getAttribute("class")).toContain("lucide-message-square");
 
-  // Cmd/Ctrl+Shift+S parks the session in view the same way, and on a page parks nothing.
   await page.getByRole("button", { name: "Spaces", exact: true }).click();
   await strip(page).getByRole("tab", { name: "Routines", exact: true }).click();
   await page.waitForURL(`${origin}/routines`);
@@ -988,7 +923,6 @@ test("Auto-park is offered for a session's tab, not a page's, and turns on and o
   await menu(page, "Alpha", "Auto-park when I send");
   await until(() => saved.sent.length === 1);
   expect(saved.sent[0]).toEqual({ paths: [href("alpha")], action: "AUTO_PARK" });
-  // The session list, asked again, says the session auto-parks, and its menu offers to stop.
   while (!(await items("Alpha")).includes("Stop auto-parking")) await Bun.sleep(50);
   await menu(page, "Alpha", "Stop auto-parking");
   await until(() => saved.sent.length === 2);
@@ -1006,7 +940,6 @@ test("the palette offers the tab in view the same attention items, without Mute 
   const parked = page.getByRole("tablist", { name: "Parked tabs" }), commands = page.getByRole("dialog", { name: "Run command" }), dialog = page.getByRole("dialog", { name: "Park until" });
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
   await page.keyboard.press("Control+Shift+p");
-  // The tab commands whose label holds the query, sorted; looser matches the palette lists after them are left out.
   const filter = async (query: string) => {
     await page.getByPlaceholder("Type a command").fill(query);
     return (await commands.getByRole("button").allInnerTexts()).map((text: string) => text.split("\n")[0]).filter((label: string) => label.startsWith("Tabs: ") && label.toLowerCase().includes(query.toLowerCase())).toSorted();
@@ -1017,7 +950,6 @@ test("the palette offers the tab in view the same attention items, without Mute 
   await page.keyboard.press("Escape");
   await commands.waitFor({ state: "hidden" });
 
-  // Pick a time starts at the next whole hour: today, or tomorrow when that is past midnight.
   const opensAt = async (now: string) => {
     await page.clock.setFixedTime(new Date(await page.evaluate((at: string) => new Date(at).toISOString(), now)));
     await menu(page, "Alpha", "Park", "Pick a time…");
@@ -1056,7 +988,6 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   expect([await sharedNames(page), await opacity(href("bravo")), await names(page)]).toEqual([["Bravo", "Ops"], "0.6", ["Alpha"]]);
   expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests and issues", "Hosted Pages", "—", "Rename session", "Regenerate title", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send", "Unfollow", "—", "Add to group", "—", "Delete session"]);
   await close();
-  // Another person's session list carries none of this person's parks, so for them the row is as it was.
   saved.attention = [];
   await row("Bravo").and(page.locator('[aria-description="Shared, Space: Main"]')).waitFor();
   expect(await opacity(href("bravo"))).toBe("1");
@@ -1086,7 +1017,6 @@ test("a Shared row moves to another space as a tab of the person's own, staying 
   expect([await names(page), await sharedNames(page)]).toEqual([["Alpha"], ["Bravo"]]);
 }), 30_000);
 
-// The new-chat Transcript stays mounted, hidden, on other pages; its creation must not pull the person off the page they chose.
 test("a new chat created while another page shows opens when New session shows again", () => withPage({}, async (page, origin, prompts) => {
   const held = Promise.withResolvers<void>(), requested = Promise.withResolvers<void>();
   await page.route("**/api/CreateSession", async (route: { continue(): Promise<void> }) => { requested.resolve(); await held.promise; await route.continue(); });
