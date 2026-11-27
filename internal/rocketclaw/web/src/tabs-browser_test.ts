@@ -11,11 +11,8 @@ const rows: { id: string; name: string; agent: string; running?: boolean; backgr
   { id: "bravo", name: "Bravo", agent: "main" },
   { id: "charlie", name: "Charlie", agent: "main" },
   { id: "delta", name: "Delta", agent: "main", running: true, background: true },
-  // Echo was born in the ops space, and its background work runs while no turn does.
   { id: "echo", name: "Echo", agent: "main", spaceId: "ops", background: true },
-  // A turn of the person's ended unseen, and another runs now.
   { id: "foxtrot", name: "Foxtrot", agent: "main", running: true, unreadAt: "2026-10-22T10:00:00Z" },
-  // Golf's running turn waits on the person's answer.
   { id: "golf", name: "Golf", agent: "main", running: true, asking: true },
   { id: "hotel", name: "Hotel", agent: "main", forkedFrom: "alpha" },
   { id: "india", name: "India", agent: "main", automation: true },
@@ -37,17 +34,10 @@ const julietGoal = {
 };
 export const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
 export type SharedTab = { space: string; path: string; search?: SearchPage };
-// A Search page as the server compares it: field order and empty names do not matter.
 const plain = (page?: SearchPage) => JSON.stringify(page ? [page.name ?? "", page.searches.map(({ id, name, query }) => [id, name ?? "", query]), page.active] : null);
 export type Change = { paths: string[]; action: string; until?: string };
-// attention is this person's attention on each tab location, sent is every attention change, and polls counts session lists.
 export type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; layout?: StripLayout; lists: ListTab[]; visits: ListTab[]; attention: TabAttention[]; sent: Change[]; polls: number; autoPark?: boolean; deletes: string[]; titleGate?: Promise<unknown>; agents: Agent[]; updated: Record<string, string> };
 
-// Mirrors the server's Tabs call: it saves the state or the layout, changes one space, adds, removes, or edits Shared tabs, or changes
-// attention, then answers with every space, the saved state, every space's Shared tabs in order, and the layout.
-// A taken name, ignoring case, deleting the last space, and sharing New session are refused, and a save made from an
-// older revision is stale. A deleted space's Shared tabs join the first remaining space's, once each, keeping their order.
-// Attention changes act as the server's do, and a save closing a tab parked without a time unparks it.
 export const listed = (saved: Saved, list: TabListName) => saved.lists.filter((tab) => tab.list === list);
 
 function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SharedTab; unshare?: SharedTab; editShared?: SharedTab & { base?: SearchPage }; attention?: Change; autoPark?: boolean; layout?: StripLayout; listAdd?: ListTab; listForget?: ListTab; listOrder?: ListTab[] }) {
@@ -98,8 +88,6 @@ function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: numb
     saved.shared = saved.shared.filter((tab) => tab.space !== input.deleteSpace || !has(first, tab.path)).map((tab) => tab.space === input.deleteSpace ? { ...tab, space: first } : tab);
   }
   if (input.share && !has(input.share.space, input.share.path)) saved.shared.push(input.share);
-  // An edit replaces a Shared Search page's one page when made from the page as saved; one made from a page that has
-  // since changed, or that is no longer shared, is refused as stale. Taking a page out of Shared returns it.
   const edited = input.editShared && saved.shared.find((tab) => tab.space === input.editShared!.space && tab.path === input.editShared!.path);
   if (input.editShared && (!edited || plain(edited.search) !== plain(input.editShared.base))) return Response.json({ ...saved, stale: true });
   if (edited) edited.search = input.editShared!.search;
@@ -117,7 +105,6 @@ export async function withPage(options: object, run: (page: any, origin: string,
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    // A session's attention rides its row; the other tabs' come as tab rows.
     if (url.pathname === "/api/ListSessions") {
       saved.polls++;
       const listed = sessions.map((row) => ({ ...row, updatedAt: saved.updated[row.id], ...saved.attention.find((item) => item.path === href(row.id)) })), tabs = saved.attention.filter((item) => !item.path.startsWith("/s/"));
@@ -126,7 +113,6 @@ export async function withPage(options: object, run: (page: any, origin: string,
     if (!url.pathname.startsWith("/api/")) {
       const file = path.join(dist, url.pathname);
       if (await Bun.file(`${file}.gz`).exists()) return unpacked(file);
-      // Named like the Go handler names a server's page.
       const index = (await unpacked(path.join(dist, "index.html")).text()).replace("<title>RocketClaw</title>", "<title>lab - RocketClaw</title>");
       return new Response(index, { headers: { "Content-Type": "text/html" } });
     }
@@ -142,7 +128,6 @@ export async function withPage(options: object, run: (page: any, origin: string,
         { stem: "opsreport", status: "ran", lastRun: new Date().toISOString() }, { stem: "retired", status: "ran", lastRun: new Date().toISOString() }] });
       case "/api/History": return Response.json({ messages: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
       case "/api/CreateSession":
-        // opsbot names the OPS space, which its first session creates, as the server does.
         if (input.agent === "opsbot") {
           saved.spaces.push({ id: "ops", name: "OPS" });
           sessions.push({ id: "fresh", name: "Ops chat", agent: "opsbot", spaceId: "ops" });
@@ -155,7 +140,6 @@ export async function withPage(options: object, run: (page: any, origin: string,
         if (saved.deletes.push(input.id) === 1) return Response.json({ message: "this session has a running turn; stop it first", code: 9 }, { status: 400 });
         sessions.splice(sessions.findIndex((row) => row.id === input.id), 1);
         return Response.json({});
-      // Fixed fixture: searching a row's exact name returns that row.
       case "/api/SearchSessions": return Response.json({ terms: [], text: input.query, needle: input.query.toLowerCase(), matches: rows.filter((row) => row.name === input.query).map((row) => ({ conversationId: row.id, field: "Name", text: row.name })), messages: [], mentionIds: [] });
       default: return Response.json({});
     }
@@ -176,21 +160,16 @@ export async function withPage(options: object, run: (page: any, origin: string,
   }
 }
 
-// The current space's card is the one whose name is marked current.
 export const current = '[aria-current="true"]', strip = (page: any) => page.locator(`div:has(> div > button${current}) > [role="tablist"][data-card]`);
 export const names = (page: any) => strip(page).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
 export const italic = (tab: any) => tab.evaluate((node: HTMLElement) => getComputedStyle(node).fontStyle === "italic");
-// The open palette hides the strip from role queries, so tabs are read as names, an italic one marked "*".
 export const behind = (page: any) => page.locator(`div:has(> div > button${current}) > [role="tablist"] [role="tab"]`).evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => `${node.getAttribute("aria-label")}${getComputedStyle(node).fontStyle === "italic" ? "*" : ""}`));
-// The palette focuses its input after it shows its rows; arrows pressed before then are lost.
 export async function paletteReady(page: any) {
   await page.getByRole("dialog", { name: "Go to session" }).getByRole("button").filter({ hasText: "Echo" }).waitFor();
   await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Search sessions and commands");
 }
 export const animation = (locator: any) => locator.evaluate((node: Element) => getComputedStyle(node).animationName);
-// Group headers are the strip's only controls that report aria-expanded.
 export const order = (page: any) => strip(page).locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
-// Saves reach the server after the page changes, so a test waits for them before reloading.
 export async function until(check: () => boolean) {
   for (const started = Date.now(); !check(); await Bun.sleep(10)) if (Date.now() - started > 5_000) throw new Error("the saved tab state never matched");
 }
@@ -207,7 +186,6 @@ export async function openFromPalette(page: any, name: string) {
   await palette.getByPlaceholder("Search sessions").press("Enter");
   await palette.waitFor({ state: "hidden" });
 }
-// An in-app link, like a Search result, opens a session without the palette.
 export async function follow(page: any, id: string) {
   await page.evaluate((link: string) => { history.pushState(null, "", link); dispatchEvent(new PopStateEvent("popstate")); }, href(id));
   await page.waitForURL(`**${href(id)}`);
@@ -217,13 +195,11 @@ export async function menu(page: any, name: string, ...items: string[]) {
   for (const item of items) await page.getByRole("menuitem", { name: item, exact: true }).click();
   await page.getByRole("menu").waitFor({ state: "hidden" });
 }
-// A space card's actions, beside its title: Go to space enters it; Rename and Delete space change it.
 async function spaceAction(page: any, space: string, item: string) {
   await page.getByRole("button", { name: `${space} space actions`, exact: true }).click();
   await page.getByRole("menuitem", { name: item, exact: true }).click();
   await page.getByRole("menu").waitFor({ state: "hidden" });
 }
-// Entering a space is its card's Go to space; Rename and Delete space are the current card's actions.
 export async function chooseSpace(page: any, item: string, role = "menuitem") {
   if (role === "menuitemradio") {
     await spaceAction(page, item, "Go to space");
@@ -231,7 +207,6 @@ export async function chooseSpace(page: any, item: string, role = "menuitem") {
   }
   await spaceAction(page, await page.locator(`button${current}`).getAttribute("aria-label"), item);
 }
-// New space is a palette command, one per server with several, that asks for the space's name.
 export async function newSpace(page: any, name: string, command = "Spaces: New space") {
   await page.keyboard.press("Control+Shift+p");
   await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: command, exact: true }).click();
@@ -242,10 +217,8 @@ export async function newSpace(page: any, name: string, command = "Spaces: New s
 export const shared = (page: any, space = "Main") => page.getByRole("tablist", { name: `${space} Shared tabs` });
 export const sharedNames = (page: any) => shared(page).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
 export const focus = (page: any) => page.evaluate(() => { dispatchEvent(new Event("focus")); });
-// The open menu's items in order, with "—" for the line between two sections.
 export const menuLines = (page: any): Promise<string[]> => page.getByRole("menu").first().locator('[role="menuitem"], [role="separator"]')
   .evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("role") === "separator" ? "—" : node.innerText));
-// Opens a Shared row's menu and lists its items and section lines, leaving it open.
 export async function sharedMenu(page: any, name: string) {
   await shared(page).getByRole("tab", { name, exact: true }).click({ button: "right" });
   await page.getByRole("menuitem").first().waitFor();
