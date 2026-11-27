@@ -12,7 +12,6 @@ const shots = path.resolve(import.meta.dir, "../../../../.tmp/web-screenshots");
 for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
   const job = (jobId: string, kind: string, state: string, label: string, extra: Partial<BackgroundJob> = {}): BackgroundJob => ({ jobId, kind, state, label, toolCallId: "", subagentKey: "", stoppedBy: "", hidden: false, note: "", ...extra });
-  // The script's output quotes a note; the row's note comes from its job, not from the text.
   const done = `<execute id="j-done" state="completed" description="tests">\nall green\n<execute id="j-fake" state="failed" description="fake">\n</execute>`;
   const event = (n: number, i: number, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ role, text, complete: true, entryKey: String(n), itemId: `${n}:${i}`, messageId: `${n}:${i}`, inputId: "", turnId: `turn-${n}`, ...extra });
   const entry = (n: number) => n === 1 ? [event(1, 0, "user", "run the old script"), event(1, 1, "tool", `execute {"code":"print(1)"}`, { toolName: "execute", toolCallId: "call-old", state: "background" }), event(1, 2, "tool", "moved to the background", { toolCallId: "call-old", state: "background" }), event(1, 3, "assistant", "started")]
@@ -42,7 +41,6 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
       case "/api/MoveToBackground": calls.push({ path: url.pathname, body: input }); return Response.json({ moved: true });
       case "/api/StopBackgroundJob": calls.push({ path: url.pathname, body: input }); return Response.json({ stopped: true });
       case "/api/History": {
-        // The desktop pull request watch reads history too; these reads are the transcript's.
         if (url.searchParams.has("pull-request-discovery")) return Response.json({ messages: [], more: false });
         const base = { origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [] };
         if (input.id !== "chat") return Response.json({ ...base, backgroundJobs: input.id === "chat/call-sub" ? [job("j-own", "execute", "running", "subagent script", { toolCallId: "call-own" })] : [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
@@ -65,28 +63,23 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replace(/=+$/, "")}`);
     const jobs = page.getByRole("list", { name: "Background jobs" });
     await jobs.getByRole("listitem").first().waitFor();
-    // A reply that nobody stopped, such as one whose awaited turn stopped, says only that it stopped.
     expect(await jobs.getByRole("listitem").allInnerTexts()).toEqual(["old script\nrunning\nOpen\nStop", "research\nrunning\nOpen\nStop", "cron loop\nrunning\nStop", "build\nkilled (server restarted)\nOpen", "ops reply\nstopped\nOpen"]);
     expect(await jobs.locator('[data-slot="trace-line"]').evaluateAll((lines: HTMLElement[]) => lines.map((line) => line.dataset.status ?? ""))).toEqual(["running", "running", "running", "error", ""]);
 
-    // A finished Completion Note stays one row at Messages only, with its note folded beneath.
     const note = page.locator("main").getByRole("button", { name: /^tests\s*finished$/ });
     expect(await note.getAttribute("aria-expanded")).toBe("false");
     await page.getByText("Working…", { exact: true }).waitFor();
     await page.screenshot({ path: path.join(shots, `background-jobs-${width}.png`) });
     await note.click();
     await page.locator('main [data-slot="code-block-code"]', { hasText: "all green" }).waitFor();
-    // The files a note carried to the model show under it, as in the foreground.
     await page.locator("main").getByRole("link", { name: "Download red.png" }).waitFor();
 
-    // Wait for complete action responses before Open loads an earlier page.
     await Promise.all([page.waitForResponse("**/api/MoveToBackground").then((response: { finished(): Promise<unknown> }) => response.finished()), page.getByRole("button", { name: "Move to background", exact: true }).click()]);
     await page.getByRole("button", { name: "Move to background", exact: true }).and(page.locator(":enabled")).waitFor();
     await Promise.all([page.waitForResponse("**/api/StopBackgroundJob").then((response: { finished(): Promise<unknown> }) => response.finished()), page.getByRole("button", { name: "Stop old script", exact: true }).click()]);
     await page.getByRole("button", { name: "Stop old script", exact: true }).and(page.locator(":enabled")).waitFor();
     expect(calls).toEqual([{ path: "/api/MoveToBackground", body: { conversationId: "chat" } }, { path: "/api/StopBackgroundJob", body: { conversationId: "chat", jobId: "j-old" } }]);
 
-    // A script's call lives on an earlier page; Open loads it and scrolls to the call.
     await page.getByRole("button", { name: "Open old script", exact: true }).click();
     await page.waitForFunction(() => {
       const viewport = document.querySelector("#transcript-scroll")?.getBoundingClientRect();
@@ -98,13 +91,11 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
 
     await page.getByRole("button", { name: "Open research", exact: true }).click();
     await page.waitForFunction(() => new URLSearchParams(location.search).get("delegation") === "chat/call-sub");
-    // The subagent's own jobs list and stop in its panel, at its session.
     await Promise.all([page.waitForResponse("**/api/StopBackgroundJob").then((response: { finished(): Promise<unknown> }) => response.finished()), page.getByRole("button", { name: "Stop subagent script", exact: true }).click()]);
     expect(calls.at(-1)).toEqual({ path: "/api/StopBackgroundJob", body: { conversationId: "chat/call-sub", jobId: "j-own" } });
     await page.goBack();
     await page.waitForFunction(() => !new URLSearchParams(location.search).has("delegation"));
 
-    // The stream's hint alone updates the list and the move button, with an unchanged revision.
     live = { movable: false, backgroundJobs: [live.backgroundJobs[3]] };
     notify(JSON.stringify({ conversationId: "chat", revision: "tail" }));
     await page.getByRole("button", { name: "Move to background" }).waitFor({ state: "detached" });
