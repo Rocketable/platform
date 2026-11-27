@@ -222,12 +222,12 @@ func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error)
 	stickyValue, identity := frontmatterValue(frontmatterNode, "sticky", "off"), ""
 
 	sticky, ok := map[string]AgentSticky{"off": AgentStickyOff, "user": AgentStickyUser, "global": AgentStickyGlobal, "slack": AgentStickySlack}[stickyValue]
-	if address, err := mail.ParseAddress(stickyValue); !ok && err == nil && address.Address == stickyValue {
-		sticky, identity, ok = AgentStickyIdentity, stickyValue, true
-	}
-
 	if !ok {
-		return Agent{}, errors.New("sticky: must be off, user, global, slack or one email address")
+		if address, err := mail.ParseAddress(stickyValue); err != nil || address.Address != stickyValue {
+			return Agent{}, errors.New("sticky: must be off, user, global, slack or one email address")
+		}
+
+		sticky, identity = AgentStickyIdentity, stickyValue
 	}
 
 	name := strings.TrimSuffix(filePath, filepath.Ext(filePath))
