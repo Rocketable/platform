@@ -28,7 +28,6 @@ export async function appScenario(part: "lists" | "composer") {
   const searchQueries: string[] = [];
   const manySearchHold = Promise.withResolvers<void>();
   const lastSearchHold = Promise.withResolvers<void>();
-  // Fixed SearchSessions fixtures: the conversation IDs, in server order, and the filter terms each query returns.
   const searches: Record<string, string[]> = {
     "needle-17mib": ["kept"], "PREVIEW": ["slack-thread:C:1", "kept"], "ORIGINAL-KEY": ["kept"], "preview": ["slack-thread:C:1"], "partial preview 445": ["prefix-445"],
     "is:forked fixture 0": ["perf-0"], "Release notes": ["named"], "Original preview": ["named"], "agent:main room:room matching": ["slack-thread:C:active", "slack-thread:C:resolved"],
@@ -62,7 +61,6 @@ export async function appScenario(part: "lists" | "composer") {
     createStarted: Promise.withResolvers<void>(),
     history: [] as TranscriptEvent[],
     running: false,
-    // Like the server, a held Prompt makes only its own conversation report running.
     prompting: new Set<string>(),
     lastInputId: "",
     rows: [] as Session[],
@@ -126,7 +124,7 @@ export async function appScenario(part: "lists" | "composer") {
         try {
           controller.enqueue(`event: error\ndata: ${JSON.stringify({ message: (error as Error).message, code: (error as RPCError).code ?? 13 })}\n\n`);
           controller.close();
-        } catch { /* The wire-cut case already closed the stream. */ }
+        } catch {}
       }
     } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/UploadAttachment") {
@@ -252,7 +250,6 @@ export async function appScenario(part: "lists" | "composer") {
   const origin = `http://127.0.0.1:${port}`;
   const browser = await engine.launch({ executablePath: chromium, headless: true, args: ["--disable-features=OverscrollHistoryNavigation"] });
   const shown = async (page: { getByText: (text: string, opts?: { exact?: boolean }) => { first: () => { waitFor: (opts: { state: "visible" | "hidden"; timeout?: number }) => Promise<void> }; count: () => Promise<number> } }, text: string) => {
-    // A session's tab title can repeat its row title.
     await page.getByText(text, { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
   };
   const hidden = async (page: { getByText: (text: string, opts?: { exact?: boolean }) => { count: () => Promise<number> } }, text: string) => {
@@ -271,7 +268,6 @@ export async function appScenario(part: "lists" | "composer") {
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, hasTouch: true });
     const page = await context.newPage();
-    // Session rows are observed through the Cmd+P palette once the app has mounted.
     const openSessions = async (target: typeof page) => {
       await target.locator("footer").waitFor({ state: "attached" });
       await target.keyboard.press("Control+p");
@@ -359,7 +355,7 @@ export async function appScenario(part: "lists" | "composer") {
       await shown(sessionPalette, "Huge");
       await hidden(sessionPalette, "will vanish");
       expect(historyRequests).toEqual([]);
-      await search.fill("needle-17mib"); // Text past the title's first line is the body, which Cmd+P never matches.
+      await search.fill("needle-17mib");
       await hidden(sessionPalette, "Huge");
       await search.fill("HUG");
       await shown(sessionPalette, "Huge");
@@ -412,7 +408,6 @@ export async function appScenario(part: "lists" | "composer") {
       expect(await sessionPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
       await search.waitFor();
       await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
-      // The palette scales in; measure alignment only after its opening animation settles.
       await sessionPalette.evaluate((node: HTMLElement) => Promise.all(node.getAnimations({ subtree: true }).map((animation) => animation.finished)));
       const channelRow = sessionPalette.getByRole("button").filter({ hasText: "filter preview" });
       expect(await channelRow.locator("span[title]:not([data-slot])").getAttribute("title")).toBe("room · main");
@@ -420,7 +415,7 @@ export async function appScenario(part: "lists" | "composer") {
       const webRow = sessionPalette.getByRole("button").filter({ hasText: "saved preview" });
       expect(await webRow.locator("span[title]:not([data-slot])").textContent()).toBe("main");
       expect(await webRow.locator("time").isVisible()).toBe(true);
-      expect(historyRequests).toEqual([]); // Empty Cmd+P does not load histories.
+      expect(historyRequests).toEqual([]);
       searchQueries.length = 0;
       await search.fill("agent:");
       await sessionPalette.getByRole("button", { name: "main gpt", exact: true }).click();
@@ -432,9 +427,9 @@ export async function appScenario(part: "lists" | "composer") {
       expect(searchQueries).toEqual(["agent:main", "agent:main room:room"]);
       await sessionPalette.getByRole("button", { name: "room:room", exact: true }).click();
       await sessionPalette.getByRole("button", { name: "agent:main", exact: true }).click();
-      expect(historyRequests).toEqual([]); // Search is the server's; it never reads per-chat histories.
+      expect(historyRequests).toEqual([]);
       searchQueries.length = 0;
-      await search.fill("PREVIEW"); // Plain text matches titles here, in the session list's order, with no request.
+      await search.fill("PREVIEW");
       await sessionPalette.getByRole("button").filter({ hasText: "will vanish" }).waitFor({ state: "detached" });
       await sessionPalette.getByRole("button").filter({ hasText: "filter preview" }).waitFor();
       expect(await sessionPalette.getByRole("button").locator('[data-slot="session-title"]').allTextContents()).toEqual(["saved preview", "filter preview"]);
@@ -456,15 +451,12 @@ export async function appScenario(part: "lists" | "composer") {
       const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
       await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
       expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-      // The theme commands run earlier in this test come first, as recently used.
       expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Theme: Auto", "Theme: Dark", "Theme: Light", "Help: Keyboard Shortcuts", "List Agents", "List Skills",
         "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Routines: Dashboard", "Routines: Run", "Routines: Timeline", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Spaces: New space", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Copy link", "Tabs: Next⌘]", "Tabs: Previous⌘[", "Tabs: Recently closed", "Tabs: Show Parked⌘3", "Tabs: Show Recent⌘1", "Tabs: Show Spaces⌘2", "Tabs: Toggle sidebar⌘B",
-        // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
         "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
         "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded."]);
       await page.keyboard.press("Escape");
       await commandPalette.waitFor({ state: "hidden" });
-      // The search button opens one palette: sessions only when empty, matching commands above sessions once typed.
       await page.evaluate(() => localStorage.setItem("command-history", JSON.stringify(["tab-close-others"])));
       await navigationSearch.click();
       await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
@@ -472,13 +464,12 @@ export async function appScenario(part: "lists" | "composer") {
       const commandRows = sessionPalette.locator("ul > li > button").filter({ hasNot: page.locator('[data-slot="session-title"]') });
       await search.fill("tabs: close");
       await sessionPalette.getByRole("button", { name: "Tabs: Close", exact: true }).waitFor();
-      // An exact match leads; recent then alphabetical contiguous matches follow, ahead of the sessions, and the Search hand-off comes last.
       expect(await commandRows.allTextContents()).toEqual(["Tabs: Close", "Tabs: Close others", "Tabs: Close all", "Tabs: Close to the right", "Tabs: Recently closed", "Search in this space for 'tabs: close'", "Search everywhere for 'tabs: close'"]);
       expect(await sessionPalette.locator("ul > li > button").first().textContent()).toBe("Tabs: Close");
       await search.fill("tabs: close t");
       await sessionPalette.getByRole("button", { name: "Tabs: Close all", exact: true }).waitFor({ state: "detached" });
-      expect(await commandRows.allTextContents()).toEqual(["Tabs: Close to the right", "Tabs: Close others", "Search in this space for 'tabs: close t'", "Search everywhere for 'tabs: close t'"]); // A contiguous match beats a recent fuzzy one.
-      await search.fill("routine: run"); // A bare key is not a filter.
+      expect(await commandRows.allTextContents()).toEqual(["Tabs: Close to the right", "Tabs: Close others", "Search in this space for 'tabs: close t'", "Search everywhere for 'tabs: close t'"]);
+      await search.fill("routine: run");
       await sessionPalette.getByRole("button", { name: "Routines: Run", exact: true }).waitFor();
       await search.fill("is:forked routine: run");
       await sessionPalette.getByRole("button", { name: "Routines: Run", exact: true }).waitFor({ state: "detached" });
@@ -548,10 +539,10 @@ export async function appScenario(part: "lists" | "composer") {
       const listAgents = sessionPalette.getByRole("button", { name: "List Agents", exact: true });
       await search.fill("lag");
       await listAgents.waitFor();
-      await search.fill("lg"); // Fuzzy matching starts at three letters.
+      await search.fill("lg");
       await listAgents.waitFor({ state: "detached" });
       await search.fill("lag");
-      await search.press("Enter"); // A fuzzy command on top yields to the sessions; none match, so Search takes the text.
+      await search.press("Enter");
       await page.waitForURL((url: URL) => url.pathname.startsWith("/search/") && url.searchParams.get("q") === "lag");
       await page.goBack();
       await page.waitForURL(origin + "/");
@@ -560,7 +551,7 @@ export async function appScenario(part: "lists" | "composer") {
       await listAgents.waitFor();
       await search.press("ArrowDown");
       await search.press("ArrowUp");
-      await search.press("Enter"); // Picked with the arrows, it runs without waiting for session results.
+      await search.press("Enter");
       await page.waitForURL("**/agents");
       await page.getByRole("button", { name: /^other/ }).click();
       expect(await page.getByRole("heading", { name: "Shell" }).locator("..").getByText("/usr/local/bin/agent-sandbox").textContent()).toBe("/usr/local/bin/agent-sandbox");
@@ -580,7 +571,6 @@ export async function appScenario(part: "lists" | "composer") {
       await page.getByRole("menuitemradio", { name: "other gpt" }).click();
       ctrl.holdPrompt = true;
       await page.getByPlaceholder("Message a new session").fill("hello\n\nwhile held");
-      // A send during an identity refresh has no provisional author, so send just after a refresh.
       const identityResponse = await page.waitForResponse("**/api/Identity");
       const identityTransfer = { finished: false, error: "" };
       await identityResponse.finished().then((error: Error | null) => { identityTransfer.finished = true; identityTransfer.error = error?.message ?? ""; }, (error: Error) => { identityTransfer.error = error.message; });
@@ -602,7 +592,6 @@ export async function appScenario(part: "lists" | "composer") {
       await page.locator("textarea:enabled").waitFor();
       expect(await page.locator("textarea").evaluate((input: HTMLTextAreaElement) => document.activeElement === input)).toBe(true);
       expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
-      // Selecting chat text offers quoting without replacing the native context menu.
       await page.locator("textarea").fill("My draft");
       const selectedQuote: string = await page.locator("#transcript-scroll").evaluate((element: HTMLElement) => {
         const range = document.createRange();
@@ -637,7 +626,7 @@ export async function appScenario(part: "lists" | "composer") {
         expect(await page.locator("textarea").evaluate((element: HTMLTextAreaElement) => element.scrollTop > 0)).toBe(true);
         expect(await page.locator("textarea").inputValue()).toBe(longDraft);
         await page.locator("textarea").fill("");
-        await page.locator('#transcript-scroll [data-slot="bubble-content"] p').first().click({ trial: true }); // Measure after the responsive layout finishes resizing.
+        await page.locator('#transcript-scroll [data-slot="bubble-content"] p').first().click({ trial: true });
         const word = await page.locator('#transcript-scroll [data-slot="bubble-content"] p').first().evaluate((element: HTMLElement) => {
           const range = document.createRange();
           range.setStart(element.firstChild!, 0);
@@ -663,7 +652,6 @@ export async function appScenario(part: "lists" | "composer") {
           await quoteButton.waitFor({ state: "hidden" });
         }
       }
-      // The original Prompt is still blocked while interventions use the same conversation.
       ctrl.holdPrompt = false;
       ctrl.holdInterventions = true;
       ctrl.history = [{ entryKey: "intervention-run", itemId: "intervention-run:0", inputId: ctrl.lastInputId, role: "user", text: "hello\n\nwhile held", turnId: "intervention-run", complete: true }];
@@ -713,7 +701,6 @@ export async function appScenario(part: "lists" | "composer") {
       }
       await parking.waitFor({ state: "hidden" });
       await chat.getByText("identical follow-up", { exact: true }).nth(1).waitFor();
-      // A stale queue poll must not resurrect either consumed steer.
       expect(await page.locator("[data-queue-id]").count()).toBe(1);
       ctrl.history.push({ entryKey: "intervention-run", itemId: "intervention-run:4", inputId: "", role: "assistant", turnId: "intervention-run", text: "After steering", complete: false });
       stream.enqueue(`data: ${JSON.stringify({ conversationId: "web-session:new", revision: "hint" })}\n\n`);
@@ -742,7 +729,6 @@ export async function appScenario(part: "lists" | "composer") {
       await shown(page, "private reply for created session");
       expect(await page.getByPlaceholder("Message or /command").inputValue()).toBe("newer draft while the turn runs");
       await page.setViewportSize({ width: 1280, height: 800 });
-      // A consumed picker must follow a later explicit switch, including after navigation.
       ctrl.holdPrompt = false;
       await page.locator("textarea").fill("/agent main");
       await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -787,7 +773,6 @@ export async function appScenario(part: "lists" | "composer") {
       ctrl.holdCreate = false;
       promptHold = Promise.withResolvers();
 
-      // Browser Back restores the same home draft before creation resolves.
       await page.locator("footer").getByRole("button", { name: "New session", exact: true }).click();
       createHold = Promise.withResolvers();
       ctrl.holdCreate = true;
@@ -819,7 +804,6 @@ export async function appScenario(part: "lists" | "composer") {
       await page.getByPlaceholder("Message or /command").fill("held in A");
       await page.getByRole("button", { name: "Send" }).click();
       await ctrl.promptStarted.promise;
-      // A held prompt must not make another session's History report it as running.
       const otherHistory = await fetch(`${origin}/api/History`, { method: "POST", body: JSON.stringify({ id: "gone" }) });
       expect((await otherHistory.json()).running).toBe(false);
       await goToSession(page, "will vanish");
@@ -830,11 +814,9 @@ export async function appScenario(part: "lists" | "composer") {
       const promptResponse = page.waitForResponse("**/api/Prompt*");
       promptHold.resolve("private reply for A");
       await (await promptResponse).finished();
-      // A completed render after the response must not clear B's draft or append A's reply.
       await page.getByPlaceholder("Message or /command").press("End");
       expect(await page.getByPlaceholder("Message or /command").inputValue()).toBe("B draft");
       await hidden(page, "private reply for A");
-      // A late failure must not complete a newer, still-blocked steer in this session.
       promptHold = Promise.withResolvers();
       ctrl.promptStarted = Promise.withResolvers();
       await page.locator("textarea").fill("older failing turn");
@@ -850,7 +832,6 @@ export async function appScenario(part: "lists" | "composer") {
       const olderFailure = page.waitForResponse((response: { request: () => { postDataJSON: () => { text: string } }; url: () => string }) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "older failing turn");
       olderTurn.reject(new RPCError("older turn failed late", 13));
       await (await olderFailure).finished();
-      // Removal of its optimistic row proves the browser processed the rejection.
       await page.getByText("older failing turn", { exact: true }).waitFor({ state: "hidden" });
       expect(await page.locator("textarea").inputValue()).toBe("newer unsent draft");
       expect(await page.locator("textarea").getAttribute("placeholder")).toBe("Queue a follow-up");
@@ -879,7 +860,7 @@ export async function appScenario(part: "lists" | "composer") {
       await shown(sessionPalette, "merged-live");
       await shown(sessionPalette, "prefix-only");
       expect(page.url()).toBe(selectedURL);
-      await search.fill("will vanish"); // A retained snapshot row need not be on the first rendered page.
+      await search.fill("will vanish");
       await shown(sessionPalette, "will vanish");
 
       await search.fill("");
@@ -892,7 +873,6 @@ export async function appScenario(part: "lists" | "composer") {
       await page.reload();
       await page.waitForFunction(() => (window as unknown as { __openHeld: boolean }).__openHeld);
       await page.keyboard.press("Control+p");
-      // The saved list loads before the poll, whose since is the saved version.
       const polls = ctrl.listCalls;
       await search.fill("will vanish");
       await hidden(sessionPalette, "will vanish");
@@ -957,7 +937,6 @@ export async function appScenario(part: "lists" | "composer") {
       await shown(sessionPalette, "saved preview");
       await shown(sessionPalette, "will vanish");
       await sessionPalette.getByRole("button").filter({ hasText: "will vanish" }).click();
-      // Leave Alice's HTTP stream alive despite the App abort so its tail really arrives after Bob.
       await page.evaluate(() => {
         window.fetch = new Proxy(window.fetch, {
           apply(target, receiver, [input, init]) {
@@ -978,8 +957,6 @@ export async function appScenario(part: "lists" | "composer") {
       await shown(sessionPalette, "alice held preview");
       await sessionPalette.locator('span[title="main · alice-only-tag"]').waitFor();
       const oldRequest = await ownerRequest;
-      // Wait for Alice's stream to end however it ends. The test's own timeout bounds this, not a 30s
-      // waitForEvent timer started many steps before the tail is released.
       const oldResponse = new Promise<void>((resolve) => {
         for (const event of ["requestfinished", "requestfailed"]) page.on(event, (request: unknown) => { if (request === oldRequest) resolve(); });
       });
@@ -1020,7 +997,6 @@ export async function appScenario(part: "lists" | "composer") {
       blocked.resolve();
       await shown(page, "new protocol preview");
 
-      // Recovery title matches must find Bob's replacement row, not the earlier Alice rows.
       for (const rejection of ["mismatch", "unauthorized"] as const) {
         await page.keyboard.press("Control+p");
         await sessionPalette.waitFor();
@@ -1043,8 +1019,6 @@ export async function appScenario(part: "lists" | "composer") {
         blocked.resolve();
       }
 
-      // Complete live identity fetches in the same task, so observer
-      // notifications may coalesce away reset's intermediate pending result.
       await page.evaluate(() => {
         const original = window.fetch;
         Object.defineProperty(window, "__restoreIdentityFetch", { value: () => { window.fetch = original; } });
@@ -1141,13 +1115,11 @@ export async function appScenario(part: "lists" | "composer") {
         await runningPalette.getByText("latest assistant reply", { exact: true }).waitFor();
         expect(await indicator.count()).toBe(0);
         expect(await runningPalette.getByRole("button").filter({ hasText: "latest assistant reply" }).boundingBox()).toEqual(before);
-        // A turn waiting on the person's answer says it needs them in place of the running indicator.
         ctrl.yieldBatches = complete([{ ...slackRow("slack-thread:C:running-chat", "latest assistant reply"), running: true, asking: true }], "bob");
         await runningPalette.getByText("Needs you", { exact: true }).waitFor();
         expect(await indicator.count()).toBe(0);
       }
       await runningPage.close();
-      // Exercise the palette layout and suggestions against the built App.
       const matrixRows = [
         { ...slackRow("slack-thread:C:winner", "row and origin union"), name: "Winner", forkedFrom: "original", tags: ["customer", "Needs review", 'say "hello"'] },
         slackRow("slack-thread:C:another", "Another chat"),
@@ -1166,7 +1138,6 @@ export async function appScenario(part: "lists" | "composer") {
         await layoutDialog.waitFor();
         for (const width of [390, 1024, 1280]) {
           await layoutPage.setViewportSize({ width, height: 844 });
-          // Keyboards resize the visual viewport without resizing the layout viewport.
           await layoutPage.evaluate(() => {
             const viewport = window.visualViewport!;
             Object.defineProperty(viewport, "height", { configurable: true, value: 360 });
@@ -1280,15 +1251,13 @@ export async function appScenario(part: "lists" | "composer") {
       const manyDialog = many.getByRole("dialog", { name: "Go to session or command", exact: true });
       await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length === 50);
       await manyDialog.getByPlaceholder("Search sessions").pressSequentially("is:forked fixture 0", { delay: 20 });
-      await many.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null); // The title matches stay, dimmed, until the response.
+      await many.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null);
       await many.waitForTimeout(300);
-      expect(await many.evaluate(() => (window as unknown as { searchFetches: number }).searchFetches)).toBe(1); // Typing settles into one request.
+      expect(await many.evaluate(() => (window as unknown as { searchFetches: number }).searchFetches)).toBe(1);
       manySearchHold.resolve();
-      // The shown list follows the response.
       await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button [data-slot="session-title"]').length === 1);
       expect(await manyDialog.getByText("Search fixture 0", { exact: true }).count()).toBe(1);
       await manyDialog.getByPlaceholder("Search sessions").fill("is:forked not-in-any-row");
-      // While the next response is held, the earlier response's rows are matched against the new text at once.
       await manyDialog.getByText("Search fixture 0", { exact: true }).waitFor({ state: "detached" });
       lastSearchHold.resolve();
       await manyDialog.getByText("No matches", { exact: true }).waitFor();
@@ -1314,7 +1283,7 @@ export async function appScenario(part: "lists" | "composer") {
       await shown(pendingDialog, "matching active");
       for (const prefix of ["agent:main", "room:missing"]) {
         await pendingSearch.fill(prefix);
-        await pendingSearch.press("Enter"); // Sends the term; its empty response opens nothing.
+        await pendingSearch.press("Enter");
         await pendingPage.waitForTimeout(300);
         expect(new URL(pendingPage.url()).pathname).toBe("/");
         expect(await pendingDialog.isVisible()).toBe(true);
@@ -1351,18 +1320,15 @@ export async function appScenario(part: "lists" | "composer") {
         await navPage.keyboard.press("Control+Shift+p");
         await navPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: ({ Routines: "Routines: Dashboard", Agents: "List Agents", Skills: "List Skills", Config: "Settings" } as Record<string, string>)[name], exact: true }).click();
         await navPage.locator('[data-slot="dialog-overlay"]').waitFor({ state: "hidden" });
-        // The top-left corner is a tab, whose tooltip would take the next Escape.
         await navPage.mouse.move(0, navPage.viewportSize()!.height / 2);
         await navPage.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
       };
       const navMain = navPage.locator("main");
       const navTabs = navPage.getByRole("tablist", { name: "Main tabs" });
-      // Closing a page closes its tab, and a neighbouring tab becomes active.
       const closed = async (name: string) => {
         await navPage.waitForURL((url: URL) => url.pathname !== `/${name.toLowerCase()}`);
         expect(await navTabs.getByRole("tab", { name: name === "Config" ? "Settings" : name, exact: true }).count()).toBe(0);
       };
-      // Escape first closes search suggestions without leaving the page.
       await navPage.keyboard.press("Control+Shift+p");
       await navPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
       await navPage.getByRole("dialog").waitFor({ state: "detached" });
@@ -1377,13 +1343,11 @@ export async function appScenario(part: "lists" | "composer") {
       const searchPage = new URL(navPage.url()).pathname;
       expect(searchPage.startsWith("/search/")).toBe(true);
       expect(await navMain.getByPlaceholder("Search or agent: or room:").inputValue()).toBe("");
-      // A Search page holds its searches, so Escape leaves it open; its close button closes it.
       await navPage.keyboard.press("Escape");
       await navPage.waitForTimeout(100);
       expect(new URL(navPage.url()).pathname).toBe(searchPage);
       await navTabs.getByRole("button", { name: "Close Search", exact: true }).click();
       await closed("Search");
-      // The width loop below opens and closes every page; only Config's content is checked here.
       await openPage("Config");
       await navPage.waitForURL(`${origin}/config`);
       await shown(navPage.locator("main"), "Configured user");
@@ -1393,7 +1357,6 @@ export async function appScenario(part: "lists" | "composer") {
       await closed("Config");
       const chatPath = `/s/${Buffer.from("slack-thread:C:active").toString("base64url")}`;
       for (const width of [1280, 390]) {
-        // Narrow screens keep the tabs in a drawer, which picking a tab closes.
         const toChat = async () => {
           if (width === 390) await navPage.getByRole("button", { name: "Show sidebar", exact: true }).click();
           await navTabs.getByRole("tab", { name: "matching active", exact: true }).click();
@@ -1469,7 +1432,6 @@ export async function appScenario(part: "lists" | "composer") {
       for (const width of [1280, 390]) {
         await routinePage.setViewportSize({ width, height: 844 });
         await routinePage.goto(`${origin}/routines`);
-        // Each cron's line names it, linked to its journal, which lists its runs; only a cron with a definition can run.
         const daily = routinePage.getByRole("link", { name: "daily", exact: true });
         await daily.waitFor();
         const search = routinePage.getByRole("textbox", { name: "Search", exact: true });
@@ -1513,7 +1475,6 @@ export async function appScenario(part: "lists" | "composer") {
         expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
         await expected.press("Escape");
         await routinePage.getByRole("button", { name: /^Expected daily at / }).last().hover();
-        // The page scroller clips overflow, so the tooltip's far edge must be painted, not just laid out.
         expect(await routinePage.getByRole("tooltip").evaluate((node: HTMLElement) => { const box = node.getBoundingClientRect(); return node.contains(document.elementFromPoint(box.right - 1, box.top + box.height / 2)); })).toBe(true);
         const silent = routinePage.getByRole("button", { name: /^Preview silent at / });
         await silent.tap();
@@ -1565,16 +1526,13 @@ export async function appScenario(part: "lists" | "composer") {
       expect(await routinePage.getByRole("button", { name: "Running daily", exact: true }).isDisabled()).toBe(true);
       routineHold.resolve("new-cron-chat");
       await routinePage.waitForURL("**/s/bmV3LWNyb24tY2hhdA");
-      // The page is still 390px wide, where the tabs sit in the drawer.
       await routinePage.getByRole("button", { name: "Show sidebar", exact: true }).click();
       await routinePage.getByRole("tab", { name: "daily", exact: true }).waitFor();
       await routinePage.close();
 
-      // Routines: Timeline shows one routine's rows from the Routines page as a journal: 131 retired runs, 3 hours apart, from Aug 15 18:00 to Sep 1 00:00 UTC.
       jobs.push(...Array.from({ length: 130 }, (_, i) => ({ stem: "retired", status: "ran", lastRun: new Date(Date.parse("2026-09-01T00:00:00Z") - (i + 1) * 3 * 3_600_000).toISOString(), nextRun: "", origin: `old-source-${i}` })));
       const timelinePage = await context.newPage();
       const runRows = timelinePage.getByRole("region", { name: "Runs", exact: true }).locator("button[aria-pressed]");
-      // The first load fails; the page keeps loading, shows no error, and retries until it loads.
       routineFailures = 1;
       await timelinePage.goto(`${origin}/routines/${btoa("retired").replaceAll("=", "")}`);
       await timelinePage.getByRole("status").filter({ hasText: "Loading…" }).waitFor();
@@ -1611,7 +1569,6 @@ export async function appScenario(part: "lists" | "composer") {
         expect((await historyRequest.response())?.ok()).toBe(true);
         const row = (await runRows.first().boundingBox())!, beside = (await preview.boundingBox())!;
         expect(width > 1024 ? beside.x >= row.x + row.width : beside.y >= row.y + row.height).toBe(true);
-        // Picking a day shows its runs, loading older ones as needed, as Show older runs does.
         await (width > 1024 ? timelinePage.getByRole("button", { name: "Show older runs", exact: true }) : timelinePage.getByRole("button", { name: "Aug 15, 2026: 2 runs", exact: true })).click();
         expect(await runRows.count()).toBe(131);
         if (width < 1024) expect(await timelinePage.getByRole("heading", { name: "Aug 15, 2026", exact: true }).evaluate((node: HTMLElement) => { const box = node.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; })).toBe(true);
@@ -1619,7 +1576,6 @@ export async function appScenario(part: "lists" | "composer") {
         expect(await timelinePage.getByRole("button", { name: "Show older runs", exact: true }).count()).toBe(0);
       }
       expect(await timelinePage.getByRole("button", { name: "Run retired", exact: true }).count()).toBe(0);
-      // An active cron's journal shows its definition and runs it like the Routines page.
       await timelinePage.goto(`${origin}/routines/${btoa("daily").replaceAll("=", "")}`);
       await timelinePage.getByText("Definition", { exact: true }).click();
       expect(await timelinePage.getByText("cron/daily.md", { exact: true }).isVisible()).toBe(true);
@@ -1656,7 +1612,6 @@ export async function appScenario(part: "lists" | "composer") {
       const transcriptPage = await browser.newPage();
       for (const width of [1280, 390]) {
         transcriptStreams.clear();
-        // Keep the preview list overflowing even with the preset's compact spacing.
         await transcriptPage.setViewportSize({ width, height: 600 });
         await transcriptPage.goto(`${origin}/s/${Buffer.from(`jump-${width}`).toString("base64url")}`);
         const rail = transcriptPage.getByRole("navigation", { name: "Conversation turns" });
@@ -1708,7 +1663,6 @@ export async function appScenario(part: "lists" | "composer") {
           const el = document.querySelector("#transcript-scroll")!;
           return el.scrollHeight - el.clientHeight - el.scrollTop < 2;
         });
-        // Reaching the bottom with a wheel, or with the scrollbar after a jump, keeps following new text.
         await scroll.hover();
         for (const [step, reach] of [
           () => transcriptPage.mouse.wheel(0, 400),
@@ -1754,7 +1708,6 @@ export async function appScenario(part: "lists" | "composer") {
         await transcriptPage.setViewportSize({ width, height: 600 });
         await transcriptPage.goto(`${origin}/s/${Buffer.from(`code-${width}`).toString("base64url")}`);
         await transcriptPage.locator('pre[aria-label="sh"]').waitFor();
-        // The default Compact level folds the call into a closed Chain of Thought row.
         await transcriptPage.getByRole("button", { name: "Used 1 tool", exact: true }).click();
         await transcriptPage.getByRole("button", { name: "bash", exact: true }).click();
         expect(await transcriptPage.locator("#transcript-scroll pre").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["bash", "sh"]);
@@ -1786,7 +1739,6 @@ export async function appScenario(part: "lists" | "composer") {
         await copy.click();
         await transcriptPage.getByRole("status").filter({ hasText: "Copied" }).first().waitFor();
         expect(await transcriptPage.evaluate(() => navigator.clipboard.readText())).toBe(codeText);
-        // Exercise the plain-HTTP path with the secure-context API unavailable.
         await transcriptPage.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true }));
         await transcriptPage.getByRole("button", { name: "Copy bash", exact: true }).click();
         await transcriptPage.waitForFunction(() => Array.from(document.querySelectorAll('[role="status"]')).filter((el) => el.textContent === "Copied").length === 2);
@@ -1797,13 +1749,10 @@ export async function appScenario(part: "lists" | "composer") {
         await tool.locator("pre").waitFor({ state: "hidden" });
         await tool.locator('[data-slot="trace-collapsible-trigger"]').first().click();
         await tool.locator("pre").waitFor();
-        // A partial streamed fence is rendered as code before its closing fence arrives.
         ctrl.history = [...ctrl.history.filter((message) => message.entryKey !== "fenced-stream"), { entryKey: "fenced-stream", itemId: "fenced-stream:0", inputId: "", role: "assistant", text: "~~~py\n  streamed", turnId: "fenced-stream", complete: false }];
         (await transcriptStream(`code-${width}`).promise).enqueue(`data: ${JSON.stringify({ conversationId: `code-${width}`, revision: "hint" })}\n\n`);
         await transcriptPage.locator('pre[aria-label="py"]').waitFor();
-        // Markdown output ends every code block with a line break, as a closed fence does.
         expect(await transcriptPage.locator('pre[aria-label="py"]').textContent()).toBe("  streamed\n");
-        // One remembered wrap setting applies to every block, inline and expanded, long tokens included.
         const fits = (label: string) => transcriptPage.locator(`#transcript-scroll pre[aria-label="${label}"]`).evaluate((el: HTMLElement) => el.scrollWidth <= el.clientWidth);
         expect([await fits("bash"), await fits("sh")]).toEqual([false, false]);
         await transcriptPage.getByRole("button", { name: "Wrap sh", exact: true }).click();
@@ -1826,7 +1775,6 @@ export async function appScenario(part: "lists" | "composer") {
         expect(await transcriptPage.evaluate(() => localStorage.getItem("code-wrap"))).toBe("false");
       }
       await transcriptPage.close();
-      // Timeline detail: Compact by default, live updates keep an opened row open, and palette levels reshape and persist.
       const step = (role: string, text: string, extra: Record<string, string> = {}) => ({ role, text, ...extra });
       const detailItems = [
         step("user", "Check the build"), step("thinking", "Planning the check"),
@@ -1849,11 +1797,9 @@ export async function appScenario(part: "lists" | "composer") {
       expect(await grouped.getAttribute("aria-expanded")).toBe("true");
       const palette = async (name: string) => {
         await detailPage.keyboard.press("Control+Shift+p");
-        // The palette draws 50 rows at first; typing the name keeps a late command among them.
         await detailPage.getByRole("dialog", { name: "Run command" }).getByPlaceholder("Type a command").fill(name);
         await detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: new RegExp(`^${name}`) }).click();
       };
-      // At Detailed the lone thought is its own group, and opening it shows the thought without a second Thought row.
       await palette("Timeline: Detailed");
       transcriptStreams.clear();
       await detailPage.reload();
@@ -1864,7 +1810,6 @@ export async function appScenario(part: "lists" | "composer") {
       await palette("Timeline: Everything");
       await detailPage.locator('pre[aria-label="Script"]').waitFor();
       expect(JSON.parse((await detailPage.evaluate(() => localStorage.getItem("timeline-detail")))!).rows.execute).toEqual({ placement: "separate", details: "expanded" });
-      // A skill row opens its skill in the right panel, which links to the skill's own page and back to the list.
       await detailPage.getByRole("link", { name: "View skill: release", exact: true }).click();
       const skillPanel = detailPage.getByRole("complementary", { name: "Skill", exact: true });
       await skillPanel.getByText("release steps", { exact: true }).waitFor();
@@ -1886,12 +1831,10 @@ export async function appScenario(part: "lists" | "composer") {
       await detailPage.getByRole("dialog", { name: "Run command" }).getByPlaceholder("Type a command").fill("Timeline:");
       const levels = detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: /^Timeline: / });
       expect(await levels.filter({ hasText: "Current · " }).allTextContents()).toEqual(["Timeline: EverythingCurrent · Show all activity separately and expanded."]);
-      // Running a level does not move it to the top with recent commands.
       expect((await levels.allTextContents()).map((text: string) => text.match(/^Timeline: (Messages only|Quiet|Compact|Detailed|Everything)/)![1])).toEqual(["Messages only", "Quiet", "Compact", "Detailed", "Everything"]);
       await levels.filter({ hasText: "Messages only" }).click();
       await detailPage.getByText("Build is green", { exact: true }).waitFor();
       expect(await detailPage.locator('#transcript-scroll [data-slot="trace-collapsible-trigger"]').count()).toBe(0);
-      // Chat messages render as Markdown by default; Output: Raw restores Slack formatting and persists across reloads.
       ctrl.history = [step("assistant", "| Name | Role |\n|---|---|\n| Alice | Developer |")].map((item, index) => ({ ...item, entryKey: "table", itemId: `table:${index}`, inputId: "", turnId: "", complete: true }));
       await detailPage.goto(`${origin}/s/${Buffer.from("markdown-output").toString("base64url")}`);
       const table = detailPage.locator("#transcript-scroll table");
@@ -1906,7 +1849,6 @@ export async function appScenario(part: "lists" | "composer") {
       expect(await detailPage.evaluate(() => localStorage.getItem("output-mode"))).toBe("raw");
       await palette("Output: Markdown");
       await table.waitFor();
-      // Pointer input reaches the Config slider: clicking its far end selects Everything.
       await detailPage.goto(`${origin}/config`);
       const sliderBox = (await detailPage.getByRole("group", { name: "Timeline detail" }).boundingBox())!;
       await detailPage.mouse.click(sliderBox.x + sliderBox.width - 1, sliderBox.y + sliderBox.height / 2);
@@ -1914,7 +1856,6 @@ export async function appScenario(part: "lists" | "composer") {
       expect(JSON.parse((await detailPage.evaluate(() => localStorage.getItem("timeline-detail")))!).rows).toEqual(timelineLevels.at(-1)!.rows);
       await detailPage.close();
       ctrl.history = [];
-      // The agent menu lists each agent with its model and effort; the agents refetch every 2s without closing it.
       const agentPage = await browser.newPage({ viewport: { width: 1280, height: 844 } });
       await agentPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: [{ name: "other", model: "gpt" }, { name: "main", model: "root/model", reasoning: "high" }], currentAgent: "other" } }));
       await agentPage.goto(`${origin}/s/${Buffer.from("named").toString("base64url")}`);
@@ -1941,7 +1882,6 @@ export async function appScenario(part: "lists" | "composer") {
         if (width === 390) {
           await detailsPage.setViewportSize({ width: 320, height: 568 });
           const selector = detailsPage.getByRole("button", { name: "Choose agent", exact: true });
-          // A viewport update can move both controls between separate boundingBox calls.
           const [selectorBox, sendBox] = await selector.evaluate((element: HTMLElement) => [element, element.closest("[data-native-composer]")!.querySelector('button[aria-label="Send"]')!].map((node) => {
             const { width, height, y } = node.getBoundingClientRect();
             return { width, height, y };
@@ -1989,10 +1929,9 @@ export async function appScenario(part: "lists" | "composer") {
         await detailsPage.keyboard.press("Control+p");
         await detailsPalette.getByText("Release notes", { exact: true }).waitFor();
         await search.fill("Release notes");
-        // Server pending does not track the deferred rendering of these rows.
         await detailsPage.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button [data-slot="session-title"]').length === 1);
         expect(await detailsPalette.locator('li > button [data-slot="session-title"]').count()).toBe(1);
-        await search.fill("Original preview"); // A named session's preview is no longer its title.
+        await search.fill("Original preview");
         await detailsPage.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button [data-slot="session-title"]').length === 0);
         expect(await detailsPalette.locator('li > button [data-slot="session-title"]').count()).toBe(0);
         await detailsPage.keyboard.press("Escape");
@@ -2011,7 +1950,6 @@ export async function appScenario(part: "lists" | "composer") {
       ctrl.history = [{ entryKey: "files", itemId: "files:0", inputId: "", role: "tool", text: "Delivered image", toolCallId: "result", turnId: "", complete: true, attachments: [image] }];
       transcriptStreams.clear();
       const attachmentPage = await browser.newPage();
-      // Direct HTTP deployments have getRandomValues, but not secure-context randomUUID.
       await attachmentPage.addInitScript(() => Object.defineProperty(crypto, "randomUUID", { value: undefined }));
       await attachmentPage.goto(`${origin}/s/${Buffer.from("visible-files").toString("base64url")}`);
       await attachmentPage.getByRole("img", { name: "history.png", exact: true }).waitFor();
@@ -2047,7 +1985,6 @@ export async function appScenario(part: "lists" | "composer") {
         element.dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer }));
       });
       await attachmentPage.getByRole("button", { name: "Remove drop.bin", exact: true }).waitFor();
-      // A pasted screenshot arrives as a clipboard file, as with cmd+V or the context menu's Paste.
       await attachmentPage.locator("textarea").evaluate((element: HTMLElement) => {
         const clipboardData = new DataTransfer();
         clipboardData.items.add(new File([new Uint8Array([137, 80, 78, 71])], "image.png", { type: "image/png" }));
@@ -2125,7 +2062,6 @@ export async function appScenario(part: "lists" | "composer") {
       }));
       await attachmentPage.getByRole("link", { name: "Download keep.bin", exact: true }).waitFor();
       expect(await attachmentPage.getByText("exact file draft", { exact: true }).count()).toBe(1);
-      // The active turn makes Enter queue; the in-flight lock prevents a second upload/send.
       await attachmentPage.locator('input[type="file"]').setInputFiles({ name: "queued.bin", mimeType: "application/octet-stream", buffer: Buffer.from("queue") });
       promptHold = Promise.withResolvers();
       ctrl.holdPrompt = true;
@@ -2190,7 +2126,6 @@ export async function appScenario(part: "lists" | "composer") {
       promptHold = Promise.withResolvers();
       ctrl.promptStarted = Promise.withResolvers();
       const photoPage = await browser.newPage();
-      // Raw output shows the sent text verbatim, so its trailing whitespace is observable.
       await photoPage.addInitScript(() => localStorage.setItem("output-mode", "raw"));
       await photoPage.goto(`${origin}/s/${Buffer.from("photo-session").toString("base64url")}`);
       await photoPage.locator("textarea").fill("What's this? \n");
@@ -2250,7 +2185,7 @@ export async function appScenario(part: "lists" | "composer") {
         const control = desktopPage.locator("footer").getByRole("button", { name, exact: true });
         await control.hover();
         await desktopPage.locator('[data-slot="tooltip-content"]').filter({ hasText: name }).waitFor();
-        await desktopPage.mouse.move(0, desktopPage.viewportSize()!.height / 2); // The top-left corner is a tab with its own tooltip.
+        await desktopPage.mouse.move(0, desktopPage.viewportSize()!.height / 2);
         await desktopPage.locator('[data-slot="tooltip-content"]').filter({ hasText: name }).waitFor({ state: "hidden" });
       }
       await desktopPage.keyboard.press("Tab");
@@ -2267,7 +2202,6 @@ export async function appScenario(part: "lists" | "composer") {
       await desktopPage.waitForURL("**/config");
       expect(await desktopPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       await desktopPage.close();
-      // Held work is server-backed and silent; keyboard Pop only releases to the queue.
       ctrl.history = [];
       ctrl.queue = [];
       ctrl.running = false;
@@ -2339,7 +2273,6 @@ export async function appScenario(part: "lists" | "composer") {
       });
       const steer = heldRow.getByRole("button", { name: "Steer", exact: true });
       await steer.click();
-      // A second click while the steer is in flight would claim the row again and fail as not recorded.
       await steer.click({ force: true });
       expect(await steer.isDisabled()).toBe(true);
       steerRelease.resolve();
@@ -2358,7 +2291,6 @@ export async function appScenario(part: "lists" | "composer") {
       expect(await stashPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await stashPage.close();
 
-      // Reading queued/stashed text is local, including for one very long row.
       const queueText = `First line with **literal markup**\n\n  Indented line\n${"unbroken".repeat(100)}\n${"Another complete line\n".repeat(30)}Final line`;
       for (const width of [1280, 320]) for (const count of [1, 3]) {
         ctrl.history = [];
@@ -2482,7 +2414,6 @@ export async function appScenario(part: "lists" | "composer") {
         expect(await editor.isDisabled()).toBe(true);
         if (width === 1280 && count === 3) {
           const documentBefore = await queuePage.evaluateHandle(() => document);
-          // Match navigation.tsx's SPA navigation; a reload would replace the mutation cache.
           await queuePage.evaluate((pathname: string) => {
             history.pushState(null, "", pathname);
             window.dispatchEvent(new PopStateEvent("popstate"));
@@ -2602,7 +2533,6 @@ export async function appScenario(part: "lists" | "composer") {
         await queuePage.close();
       }
 
-      // A session whose agent is no longer listed shows, and moves to, the first listed agent.
       type PromptResponse = { url: () => string; request: () => { postDataJSON: () => { text: string } } };
       ctrl.history = [];
       ctrl.queue = [];
@@ -2633,7 +2563,6 @@ export async function appScenario(part: "lists" | "composer") {
       await shown(retiredPage, "agent is not currently allowed");
       expect(await retiredPage.locator("textarea").inputValue()).toBe("hello");
       expect(retiredPrompts()).toEqual(["retired-session:held hello", "retired-session:/agent other"]);
-      // A rejected switch keeps the stash held instead of popping it to the unlisted agent.
       ctrl.queue = [{ id: "kept-stash", text: "kept stash", delivery: "STASH", principal: ctrl.principal }];
       const keptRow = retiredPage.locator('[data-queue-id="kept-stash"]');
       await keptRow.getByRole("button", { name: "Pop", exact: true }).click();
@@ -2647,7 +2576,6 @@ export async function appScenario(part: "lists" | "composer") {
       await helloSent;
       expect(retiredPrompts().slice(2)).toEqual(["retired-session:/agent other", "retired-session:hello"]);
       expect(ctrl.currentAgents.get("retired-session")).toBe("other");
-      // Sending already-queued work also switches the unlisted agent first.
       ctrl.currentAgents.set("retired-session", "retired");
       ctrl.queue = [{ id: "queued-work", text: "queued work", delivery: "QUEUE", principal: ctrl.principal }];
       transcriptStreams.clear();
@@ -2659,7 +2587,6 @@ export async function appScenario(part: "lists" | "composer") {
       expect(retiredPrompts().at(-1)).toBe("retired-session:/agent other");
       expect(ctrl.queue[0].delivery).toBe("STEER");
       ctrl.queue = [];
-      // An unrecorded agent is not a mismatch, and a new chat without `main` starts on the first listed agent.
       ctrl.currentAgents.set("blank-session", "");
       transcriptStreams.clear();
       await retiredPage.goto(`${origin}/s/${Buffer.from("blank-session").toString("base64url")}`);
@@ -2675,7 +2602,6 @@ export async function appScenario(part: "lists" | "composer") {
       await retiredPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
       await retiredPage.close();
 
-      // Alice reads Bob's recorded authors, never her current identity, in every delivery surface.
       const bob = 'Bob Smith Ω <img src=x onerror="alert(1)"> ' + "LongName".repeat(18);
       const rawHeader = String.raw`[Web principal=${JSON.stringify(bob)} additional_instructions="principal=\"not the author\""]`;
       ctrl.username = "alice";
@@ -2689,7 +2615,6 @@ export async function appScenario(part: "lists" | "composer") {
       ctrl.running = false;
       transcriptStreams.clear();
       const authorPage = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-      // A background tab connecting first must not receive this conversation's hint.
       await page.evaluate(() => {
         const stream = new EventSource("/stream?id=background-session");
         Object.assign(window, { __backgroundStream: stream });
@@ -2741,7 +2666,6 @@ export async function appScenario(part: "lists" | "composer") {
       expect(await authorChat.locator('[data-slot="message-author"]').allTextContents()).toEqual([bob, bob]);
       expect(await authorPage.locator('[data-queue-id="bob-queue"] [data-slot="message-author"]').textContent()).toBe(bob);
 
-      // An identity refresh cannot supply a provisional author; recorded authors remain visible.
       const refreshing = Promise.withResolvers<void>();
       const refreshStarted = Promise.withResolvers<void>();
       await authorPage.route("**/api/Identity", async (route: { continue(): Promise<void> }) => { refreshStarted.resolve(); await refreshing.promise; await route.continue(); });
