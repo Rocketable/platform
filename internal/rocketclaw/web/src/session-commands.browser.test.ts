@@ -77,7 +77,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
         if (failHandoff) return Response.json({ message: "Handoff provider failed", code: 13 }, { status: 500 });
         await handoffReady.promise;
         return Response.json({ document: handoffDocument });
-      // Fixed fixture: the server reads IS:FORKED as the fork filter.
       case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: input.query === "IS:FORKED" ? [{ conversationId: "forked", field: "Preview", text: "" }] : [], messages: [], mentionIds: [] });
       case "/api/SearchMessages": searches.push(input.query); return Response.json({ matches: Object.entries(histories).flatMap(([conversationId, messages]) => messages.filter((item) => item.text.toLowerCase().includes(input.query.toLowerCase())).map((message) => ({ conversationId, message }))) });
       case "/api/CreateSession": await newSessionReady.promise; histories.created = []; return Response.json({ id: "created" });
@@ -104,7 +103,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
         return Response.json({ privateText: "" });
       }
       case "/api/Tabs": case "/api/ChangeTabs":
-        // A focus refresh must return the saved tabs, not report the active session closed elsewhere.
         if (input.state) { tabs.state = input.state; tabs.revision = String(Number(tabs.revision) + 1); }
         return Response.json(tabs);
       default: return Response.json({});
@@ -115,7 +113,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     const page = await browser.newPage({ viewport: { width, height }, isMobile: width < 640, hasTouch: width < 640 });
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
-    // Draft hydration needs both scope requests before it can read IndexedDB.
     const draftScopeRequests = new Map<{ url(): string }, string>();
     page.on("request", (request: { url(): string }) => {
       if (/\/api\/(Identity|ListConfig)$/.test(request.url())) draftScopeRequests.set(request, "pending");
@@ -132,26 +129,22 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     const revertButton = headerMessage.getByRole("button", { name: "Revert message", exact: true, includeHidden: true });
     await copyButton.waitFor({ state: "attached" });
     expect(await copyButton.isVisible()).toBe(false);
-    // Copy is always last with Revert before it; a session that cannot revert says why instead of hiding it.
     expect(await headerMessage.locator('[data-slot="message-actions"] button').evaluateAll((nodes: Element[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["Revert message", "Copy link", "Copy message"]);
     expect(await revertButton.isDisabled()).toBe(true);
     expect(await revertButton.locator("..").getAttribute("title")).toBe("Revert isn't available in this session");
     if (width >= 640) await headerMessage.hover();
     else await headerMessage.getByText("First request", { exact: true }).tap();
     await copyButton.waitFor();
-    // A tap focuses the message to show its actions; only keyboard focus draws the ring.
     if (width < 640) expect(await headerMessage.evaluate((node: HTMLElement) => document.activeElement === node && getComputedStyle(node).outlineStyle)).toBe("none");
     const tooltip = page.locator('[data-slot="tooltip-content"]');
     expect(await tooltip.count()).toBe(0);
     const bubble = headerMessage.locator('[data-slot="bubble-content"]');
     if (width >= 640) {
-      // The header waits for the pointer to rest on the bubble.
       const started = Date.now();
       await bubble.hover();
       await tooltip.waitFor();
       expect(Date.now() - started).toBeGreaterThanOrEqual(1400);
     } else {
-      // Holding text still selects it; holding blank bubble space shows the header.
       const cdp = await page.context().newCDPSession(page);
       const hold = async (x: number, y: number) => {
         await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
@@ -271,7 +264,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     expect(commandBounds.x + commandBounds.width).toBeLessThanOrEqual(width);
     expect(commandBounds.y + commandBounds.height).toBeLessThanOrEqual(height);
     await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/command-palette-${width}.png`), await page.screenshot());
-    // A Web chat's agent pauses and resumes from the palette, which offers whichever the chat needs.
     const pauseIndex = (await commands.getByRole("button").allTextContents()).indexOf("Sessions: Pause agent");
     for (let index = 0; index < pauseIndex; index++) await commandSearch.press("ArrowDown");
     await commandSearch.press("Enter");
@@ -313,7 +305,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       expect(await page.getByRole("button", { name: "Remove draft.txt", exact: true }).count()).toBe(1);
       expect(prompts).toHaveLength(0);
     }
-    // MRU follows command IDs, not sessions or labels, without section dividers.
     await page.keyboard.press("Meta+Shift+p");
     expect(await commands.getByRole("button").first().textContent()).toBe("Command: Steer turn (/steer)");
     const history = await page.evaluate(() => localStorage.getItem("command-history"));
@@ -420,7 +411,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/palette-rows-${width}.png`), await page.screenshot());
     await search.fill("IS:FORKED");
     await palette.locator('ul[data-pending="false"]').waitFor();
-    // The shown list follows the response in a background render.
     await page.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button [data-slot="session-title"]').length === 1);
     expect(await palette.getByRole("img", { name: "Forked session", exact: true }).count()).toBe(1);
     await page.keyboard.press("Escape");
@@ -429,10 +419,8 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.waitForURL("**/s/" + btoa("source").replace(/=+$/, ""));
     forkParents.destination = "source";
 
-    // Handoff originates from an ordinary session, independent of the fork above.
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
     await composer.waitFor();
-    // Plain HTTP on a LAN address does not expose crypto.randomUUID.
     await page.evaluate(() => Object.defineProperty(crypto, "randomUUID", { value: undefined, configurable: true }));
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Handoff session");
@@ -490,7 +478,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await handoffSeen.promise;
     expect(handoffs).toEqual(["source", "source", "source", "source"]);
     expect(await composer.isVisible()).toBe(false);
-    // The dialog's entrance scale also changes its buttons' measured bounds.
     await dialog.evaluate((element: HTMLElement) => Promise.all(element.getAnimations().map((animation) => animation.finished)));
     const bounds = await dialog.boundingBox();
     expect(bounds.height).toBeLessThan(height * 0.75);
@@ -532,7 +519,6 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     expect(prompts).toHaveLength(1);
     await destinationSearch.fill("First request");
     if (width < 640) {
-      // Exercise the reduced viewport available while a mobile keyboard is open.
       await page.setViewportSize({ width, height: 360 });
       await page.waitForFunction(() => document.querySelector('[role="dialog"]')!.getBoundingClientRect().bottom <= window.innerHeight);
       const keyboardBounds = await dialog.boundingBox();
