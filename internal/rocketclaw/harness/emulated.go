@@ -82,7 +82,7 @@ func emulatedBashResult(res sandbox.Result, err error) BashResult {
 		code = strconv.Itoa(res.ExitCode)
 	}
 
-	return BashResult{Output: string(res.Output), ErrorCode: code, Success: code == ""}
+	return BashResult{Output: string(res.Output), ErrorCode: code}
 }
 
 type emulatedHost struct {

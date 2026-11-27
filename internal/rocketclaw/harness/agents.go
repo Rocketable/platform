@@ -34,7 +34,6 @@ type Agent struct {
 	Permission      PermissionSet
 	OutputSchema    map[string]any
 	FrontmatterNode *yaml.Node
-	FileMode        fs.FileMode
 	Sticky          AgentSticky
 	Identity        string
 	ReplyHint       string
@@ -200,11 +199,6 @@ func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error)
 		return Agent{}, fmt.Errorf("read agent: %w", err)
 	}
 
-	info, err := fs.Stat(fsys, filePath)
-	if err != nil {
-		return Agent{}, fmt.Errorf("stat agent: %w", err)
-	}
-
 	frontmatter, frontmatterNode, prompt, err := parseAgentFrontmatter(data)
 	if err != nil {
 		return Agent{}, err
@@ -270,7 +264,7 @@ func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error)
 		return Agent{}, errors.New("maxRecursion: must be an integer of 0 or more")
 	}
 
-	agent := Agent{Name: name, Model: model, ReasoningEffort: modelEffort, MaxRecursion: &maxRecursion, Space: space, Prompt: strings.TrimSpace(prompt), Location: filePath, OutputSchema: outputSchema, FrontmatterNode: frontmatterNode, FileMode: info.Mode(), Sticky: sticky, Identity: identity, Routines: routines}
+	agent := Agent{Name: name, Model: model, ReasoningEffort: modelEffort, MaxRecursion: &maxRecursion, Space: space, Prompt: strings.TrimSpace(prompt), Location: filePath, OutputSchema: outputSchema, FrontmatterNode: frontmatterNode, Sticky: sticky, Identity: identity, Routines: routines}
 	if mode == AgentModeEasy {
 		if err := compileEasyAgent(&agent, cfg); err != nil {
 			return Agent{}, err

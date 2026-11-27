@@ -15,10 +15,7 @@ import (
 
 type PromptInputRole string
 
-const (
-	PromptInputRoleUser      PromptInputRole = "user"
-	PromptInputRoleDeveloper PromptInputRole = "developer"
-)
+const PromptInputRoleUser PromptInputRole = "user"
 
 type PromptInput struct {
 	ID                  string
@@ -94,11 +91,6 @@ func sniffAttachmentMIME(data []byte, fallback string) string {
 }
 
 func PromptInputMessage(input *PromptInput) responses.ResponseInputItemUnionParam {
-	role := responses.EasyInputMessageRoleUser
-	if input.Role == PromptInputRoleDeveloper {
-		role = responses.EasyInputMessageRoleDeveloper
-	}
-
 	var content responses.EasyInputMessageContentUnionParam
 
 	if len(input.Texts) > 1 || len(input.Attachments) > 0 {
@@ -125,7 +117,7 @@ func PromptInputMessage(input *PromptInput) responses.ResponseInputItemUnionPara
 		content = easyInputStringContent(strings.Join(input.Texts, ""))
 	}
 
-	message := inputMessageParam(role, content)
+	message := inputMessageParam(responses.EasyInputMessageRoleUser, content)
 
 	extra := map[string]any{}
 	if input.Header != "" {

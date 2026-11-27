@@ -395,22 +395,11 @@ func testSessionStore() *sessionEntryRecorder {
 	return &store
 }
 
-func testPromptInput(role PromptInputRole, text string, responseCh chan<- ChatResponse) PromptInput {
+func testPromptInput(text string, responseCh chan<- ChatResponse) PromptInput {
 	var input PromptInput
 
-	input.Role = role
+	input.Role = PromptInputRoleUser
 	input.Texts = []string{text}
-	input.Responses = responseCh
-
-	return input
-}
-
-func testPromptInputWithAttachments(role PromptInputRole, text string, attachments []Attachment, responseCh chan<- ChatResponse) PromptInput {
-	var input PromptInput
-
-	input.Role = role
-	input.Texts = []string{text}
-	input.Attachments = attachments
 	input.Responses = responseCh
 
 	return input
@@ -583,7 +572,7 @@ func TestLooperReloadsSessionWithCurrentRuntimeConfig(t *testing.T) {
 	interrupts := make(chan os.Signal, 1)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "next question", output)
+	input <- testPromptInput("next question", output)
 
 	close(input)
 
@@ -624,34 +613,6 @@ func TestLooperReloadsSessionWithCurrentRuntimeConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, marshalJSON(t, decoded[0]), `"content":"next question"`)
 	require.Contains(t, marshalJSON(t, decoded[0]), `"role":"user"`)
-}
-
-func TestLooperSendsAndReplaysDeveloperPromptInput(t *testing.T) {
-	mock := mockResponses(responseWithMessage("resp-final", "done"))
-	looper := testLooper(mock)
-	output := make(chan ChatResponse, 10)
-
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleDeveloper, "keep this rule", output)
-
-	close(input)
-
-	var saved []SessionEntry
-
-	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
-		saved = append(saved, *entry)
-
-		return nil
-	}}, make(chan os.Signal, 1))
-
-	require.NoError(t, err)
-	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList[0]))
-	require.Len(t, saved, 1)
-	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, string(saved[0].ReplayInput[0]))
-
-	history, _, err := loadSession(sessionEntries(saved), "openai")
-	require.NoError(t, err)
-	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, marshalJSON(t, history[0]))
 }
 
 func TestLooperExecuteResultTurnExit(t *testing.T) {
@@ -713,7 +674,7 @@ func TestLooperExecuteResultTurnExit(t *testing.T) {
 				return nil, ctx.Err()
 			})
 
-			input := testPromptInput(PromptInputRoleUser, "large output", nil)
+			input := testPromptInput("large output", nil)
 			input.TurnID = "turn-1"
 
 			_, _, interrupted, err := loop.runTurn(ctx, make(chan ChatResponse, 10), interrupts, nil, nil, &input)
@@ -781,7 +742,7 @@ func TestLooperPromptInputShellCommandExpansion(t *testing.T) {
 			looper := testLooper(mock)
 			looper.promptExpansion = testPromptExpansionEnvironment(t)
 			output := make(chan ChatResponse, 10)
-			input := testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil)
+			input := testPromptInput("before !`printf hello` after", nil)
 			input.ExpandShellCommands = tc.enabled
 			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, nil, &input)
 
@@ -803,7 +764,7 @@ func TestLooperClosesPromptResponseChannelAfterTurn(t *testing.T) {
 	output := make(chan ChatResponse, 1)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
+	input <- testPromptInput("question", output)
 
 	close(input)
 
@@ -824,9 +785,9 @@ func TestLooperAppendsOneSessionEntryPerCompletedTurn(t *testing.T) {
 	secondOutput := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 2)
-	input <- testPromptInput(PromptInputRoleUser, "first question", firstOutput)
+	input <- testPromptInput("first question", firstOutput)
 
-	input <- testPromptInput(PromptInputRoleUser, "second question", secondOutput)
+	input <- testPromptInput("second question", secondOutput)
 
 	close(input)
 
@@ -851,7 +812,7 @@ func TestLoopClosesPromptResponsesWhenSessionLoadFails(t *testing.T) {
 	output := make(chan ChatResponse, 1)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
+	input <- testPromptInput("question", output)
 
 	close(input)
 
@@ -943,7 +904,7 @@ func TestLooperPersistsAndReplaysCompactionItems(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
+	input <- testPromptInput("question", output)
 
 	close(input)
 
@@ -979,7 +940,7 @@ func TestLooperContinuesAfterCompactionOnlyResponse(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
+	input <- testPromptInput("question", output)
 
 	close(input)
 
@@ -1035,7 +996,7 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 			output := make(chan ChatResponse, 10)
 
 			input := make(chan PromptInput, 1)
-			input <- testPromptInput(PromptInputRoleUser, "new question", output)
+			input <- testPromptInput("new question", output)
 
 			close(input)
 
@@ -1114,7 +1075,7 @@ func TestLooperKeepsTheItemsTheCompactEndpointRetains(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "new question", output)
+	input <- testPromptInput("new question", output)
 
 	close(input)
 
@@ -1188,9 +1149,9 @@ func TestLooperKeepsChatGPTOverflowCompaction(t *testing.T) {
 	require.NoError(t, err)
 
 	input := make(chan PromptInput, 2)
-	input <- testPromptInput(PromptInputRoleUser, "question one", make(chan ChatResponse, 16))
+	input <- testPromptInput("question one", make(chan ChatResponse, 16))
 
-	input <- testPromptInput(PromptInputRoleUser, "question two", make(chan ChatResponse, 16))
+	input <- testPromptInput("question two", make(chan ChatResponse, 16))
 
 	close(input)
 
@@ -1261,9 +1222,9 @@ func TestLooperCompactsChatGPTHistoryInChunksWhenWholeCompactionOverflows(t *tes
 	require.NoError(t, err)
 
 	input := make(chan PromptInput, 2)
-	input <- testPromptInput(PromptInputRoleUser, "question one", make(chan ChatResponse, 16))
+	input <- testPromptInput("question one", make(chan ChatResponse, 16))
 
-	input <- testPromptInput(PromptInputRoleUser, "question two", make(chan ChatResponse, 16))
+	input <- testPromptInput("question two", make(chan ChatResponse, 16))
 
 	close(input)
 
@@ -1307,7 +1268,7 @@ func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
 			output := make(chan ChatResponse, 10)
 
 			input := make(chan PromptInput, 1)
-			input <- testPromptInput(PromptInputRoleUser, "new question", output)
+			input <- testPromptInput("new question", output)
 
 			close(input)
 
@@ -1347,7 +1308,7 @@ func TestLooperDoesNotCompactUnansweredToolCall(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "new question", output)
+	input <- testPromptInput("new question", output)
 
 	close(input)
 
@@ -1367,7 +1328,7 @@ func TestLooperDoesNotCompactOtherProviderErrors(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
+	input <- testPromptInput("question", output)
 
 	close(input)
 
@@ -1398,7 +1359,7 @@ func TestLooperStopsOnCompactedRetryError(t *testing.T) {
 			output := make(chan ChatResponse, 10)
 
 			input := make(chan PromptInput, 1)
-			input <- testPromptInput(PromptInputRoleUser, "new question", output)
+			input <- testPromptInput("new question", output)
 
 			close(input)
 
@@ -1436,9 +1397,9 @@ func TestLooperPersistsAndReplaysWebSearchCalls(t *testing.T) {
 	nextOutput := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 2)
-	input <- testPromptInput(PromptInputRoleUser, "search", output)
+	input <- testPromptInput("search", output)
 
-	input <- testPromptInput(PromptInputRoleUser, "continue", nextOutput)
+	input <- testPromptInput("continue", nextOutput)
 
 	close(input)
 
@@ -1480,7 +1441,7 @@ func TestWebSearchOutputWithEmptyActionTypeIsTraceOnly(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "search", output)
+	input <- testPromptInput("search", output)
 
 	close(input)
 
@@ -1566,7 +1527,7 @@ func TestLooperPermissionReviewUsesPrunedHistory(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "fetch the allowed page", output)
+	input <- testPromptInput("fetch the allowed page", output)
 
 	close(input)
 
@@ -1597,7 +1558,7 @@ func TestJournalTurnBeforeFirstProviderCall(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "hello", output)
+	input <- testPromptInput("hello", output)
 
 	close(input)
 
@@ -1634,7 +1595,7 @@ func TestJournalProviderResponseBeforeToolDispatch(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "read", output)
+	input <- testPromptInput("read", output)
 
 	close(input)
 
@@ -1754,7 +1715,7 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "run tools", output)
+	input <- testPromptInput("run tools", output)
 
 	close(input)
 
@@ -1818,7 +1779,7 @@ func TestLooperJournalsCompletedToolOutputBeforeContinuation(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "run tool", output)
+	input <- testPromptInput("run tool", output)
 
 	close(input)
 
@@ -1845,7 +1806,7 @@ func TestLooperClosesObservationsAfterCompletedSessionEntry(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
+	input <- testPromptInput("question", output)
 
 	close(input)
 
@@ -1892,7 +1853,7 @@ func TestLooperReportsToolErrorsInBand(t *testing.T) {
 		output := make(chan ChatResponse, 10)
 
 		input := make(chan PromptInput, 1)
-		input <- testPromptInput(PromptInputRoleUser, "run tool", output)
+		input <- testPromptInput("run tool", output)
 
 		close(input)
 		err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
@@ -2120,37 +2081,6 @@ func TestLooperSendsAndReplaysUserAttachments(t *testing.T) {
 	require.Contains(t, serialized, `"prompt_header":"[Web]"`)
 }
 
-func TestLooperSendsAndReplaysDeveloperAttachments(t *testing.T) {
-	attachments := []Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64,aW1hZ2U="}}
-	mock := mockResponses(responseWithMessage("resp-final", "done"))
-	looper := testLooper(mock)
-	output := make(chan ChatResponse, 10)
-
-	input := make(chan PromptInput, 1)
-	input <- testPromptInputWithAttachments(PromptInputRoleDeveloper, "see attached", attachments, output)
-
-	close(input)
-
-	var saved []SessionEntry
-
-	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
-		saved = append(saved, *entry)
-
-		return nil
-	}}, make(chan os.Signal, 1))
-
-	require.NoError(t, err)
-	serialized := marshalJSON(t, newParams(mock)[0].Input.OfInputItemList)
-	require.Contains(t, serialized, `"role":"developer"`)
-	require.Contains(t, serialized, `"type":"input_image"`)
-
-	history, _, err := loadSession(sessionEntries(saved), "openai")
-	require.NoError(t, err)
-	serialized = marshalJSON(t, history)
-	require.Contains(t, serialized, `"role":"developer"`)
-	require.Contains(t, serialized, `"image_url":"data:image/png;base64,aW1hZ2U="`)
-}
-
 func TestLooperSendsToolOutputAttachments(t *testing.T) {
 	mock := mockResponses(
 		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "read", `{}`)}),
@@ -2166,7 +2096,7 @@ func TestLooperSendsToolOutputAttachments(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "read image", output)
+	input <- testPromptInput("read image", output)
 
 	close(input)
 
@@ -2207,7 +2137,7 @@ func TestLooperDeniesToolCallsInBand(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "run denied tool", output)
+	input <- testPromptInput("run denied tool", output)
 
 	close(input)
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
@@ -2364,7 +2294,7 @@ func TestLooperAppliesWebFetchURLPermissions(t *testing.T) {
 		output := make(chan ChatResponse, 10)
 
 		input := make(chan PromptInput, 1)
-		input <- testPromptInput(PromptInputRoleUser, "fetch docs", output)
+		input <- testPromptInput("fetch docs", output)
 
 		close(input)
 
@@ -2402,7 +2332,7 @@ func TestLooperAppliesWebFetchURLPermissions(t *testing.T) {
 		output := make(chan ChatResponse, 10)
 
 		input := make(chan PromptInput, 1)
-		input <- testPromptInput(PromptInputRoleUser, "fetch docs", output)
+		input <- testPromptInput("fetch docs", output)
 
 		close(input)
 
@@ -2451,7 +2381,7 @@ func TestLooperGatesSkillByName(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "load skills", output)
+	input <- testPromptInput("load skills", output)
 
 	close(input)
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
@@ -2584,7 +2514,7 @@ Use this skill for docs.
 					return []PromptInput{call}, nil
 				}}
 
-				input <- testPromptInput(PromptInputRoleUser, "start", output)
+				input <- testPromptInput("start", output)
 			} else {
 				input <- call
 			}
@@ -2723,7 +2653,7 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "start", output)
+	input <- testPromptInput("start", output)
 
 	close(input)
 
@@ -2795,7 +2725,7 @@ func TestLooperTrapsDoomLoopInBand(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "repeat", output)
+	input <- testPromptInput("repeat", output)
 
 	close(input)
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
@@ -2817,7 +2747,7 @@ func TestLooperPrintsReasoningSummary(t *testing.T) {
 	interrupts := make(chan os.Signal, 1)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
+	input <- testPromptInput("question", output)
 
 	close(input)
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), interrupts)
@@ -2843,7 +2773,7 @@ func TestLooperStreamsReasoningBeforeToolCalls(t *testing.T) {
 	looper.Tools = map[string]looperTool{"skill": skillTool}
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "what time?", output)
+	input <- testPromptInput("what time?", output)
 
 	close(input)
 
@@ -2860,7 +2790,7 @@ func TestLooperUpdatesSessionStoreAfterCompletedTurn(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
+	input <- testPromptInput("question", output)
 
 	close(input)
 
@@ -2894,7 +2824,7 @@ func TestLooperOmitsInterruptedTurnsFromSession(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "will interrupt", output)
+	input <- testPromptInput("will interrupt", output)
 
 	close(input)
 
@@ -2928,7 +2858,7 @@ func runJournaledTurn(ctx context.Context, looper *looper, journal *mockJournal,
 	output := make(chan ChatResponse, 20)
 
 	input := make(chan PromptInput, 1)
-	prompt := testPromptInput(PromptInputRoleUser, text, output)
+	prompt := testPromptInput(text, output)
 
 	prompt.TurnID = "turn-1"
 	input <- prompt
@@ -3532,7 +3462,7 @@ func TestLooperResumedTurnKeepsCodeModeCalls(t *testing.T) {
 
 	output := make(chan ChatResponse, 20)
 	input := make(chan PromptInput, 1)
-	prompt := testPromptInput(PromptInputRoleUser, "question", output)
+	prompt := testPromptInput("question", output)
 
 	prompt.TurnID = "turn-1"
 	input <- prompt
@@ -3558,7 +3488,7 @@ func TestLooperPrintsCommentaryResponses(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
+	input <- testPromptInput("question", output)
 
 	close(input)
 
@@ -3596,7 +3526,7 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 		output := make(chan ChatResponse, 10)
 
 		input := make(chan PromptInput, 1)
-		input <- testPromptInput(PromptInputRoleUser, "question", output)
+		input <- testPromptInput("question", output)
 
 		close(input)
 
@@ -3650,7 +3580,7 @@ func TestLooperReturnsProviderRequestErrors(t *testing.T) {
 		output := make(chan ChatResponse, 10)
 
 		input := make(chan PromptInput, 1)
-		input <- testPromptInput(PromptInputRoleUser, "question", output)
+		input <- testPromptInput("question", output)
 
 		close(input)
 
@@ -3687,7 +3617,7 @@ func TestLooperClassifiesTerminalTooManyRequestsErrors(t *testing.T) {
 			output := make(chan ChatResponse, 10)
 
 			input := make(chan PromptInput, 1)
-			input <- testPromptInput(PromptInputRoleUser, "question", output)
+			input <- testPromptInput("question", output)
 
 			close(input)
 
@@ -3732,7 +3662,7 @@ func TestLooperRetriesTooManyRequestsRequestError(t *testing.T) {
 				output := make(chan ChatResponse, 10)
 
 				input := make(chan PromptInput, 1)
-				input <- testPromptInput(PromptInputRoleUser, "question", output)
+				input <- testPromptInput("question", output)
 
 				close(input)
 
@@ -3784,7 +3714,7 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "look something up", output)
+	input <- testPromptInput("look something up", output)
 
 	close(input)
 
@@ -3848,7 +3778,7 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "look something up", output)
+	input <- testPromptInput("look something up", output)
 
 	close(input)
 
@@ -3880,7 +3810,7 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	looper.SteerDrain = InertSteerDrain{}
 
 	input = make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "continue", make(chan ChatResponse, 10))
+	input <- testPromptInput("continue", make(chan ChatResponse, 10))
 
 	close(input)
 
@@ -3957,7 +3887,7 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 		output := make(chan ChatResponse, 10)
 
 		input := make(chan PromptInput, 1)
-		input <- testPromptInput(PromptInputRoleUser, "run both", output)
+		input <- testPromptInput("run both", output)
 
 		close(input)
 
@@ -4067,7 +3997,7 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "what's 2+2?", output)
+	input <- testPromptInput("what's 2+2?", output)
 
 	close(input)
 

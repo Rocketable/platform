@@ -49,11 +49,11 @@ func TestRunToolCallBash(t *testing.T) {
 
 	passed, err := RunToolCallBash(ctx, `test -f marker.txt && printf "found $(cat marker.txt)"`, "check")
 	require.NoError(t, err)
-	require.Equal(t, BashResult{Output: "found here", Success: true}, passed)
+	require.Equal(t, BashResult{Output: "found here"}, passed)
 
 	failed, err := RunToolCallBash(ctx, "printf missing; exit 3", "check")
 	require.NoError(t, err)
-	require.False(t, failed.Success)
+	require.NotEmpty(t, failed.ErrorCode)
 	require.Contains(t, failed.Output, "missing")
 
 	_, err = RunToolCallBash(ctx, "rm marker.txt", "check")
