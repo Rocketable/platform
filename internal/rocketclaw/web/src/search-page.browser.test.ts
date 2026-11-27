@@ -7,7 +7,6 @@ const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
 type Match = { conversationId: string; field?: string; text?: string };
-// A SearchSessions response from fixed fixtures; each term is its text at its first, or the given, position in query.
 const response = (query: string, matches: Match[] = [], terms: (string | [string, number])[] = [], extra: object = {}) => ({
   terms: terms.map((term) => {
     const [text, start] = typeof term === "string" ? [term, query.indexOf(term)] : term;
@@ -17,7 +16,6 @@ const response = (query: string, matches: Match[] = [], terms: (string | [string
 });
 
 type SavedTab = { path: string; search?: { name?: string; searches: { id: string; name?: string; query: string }[]; active: string } };
-// tabsApi keeps each person's saved tabs as the server does, so a reload reopens Search pages with their searches.
 function tabsApi(owner: () => string) {
   const saved = new Map<string, { tabs: SavedTab[] }>();
   let revision = 0;
@@ -34,7 +32,6 @@ function tabsApi(owner: () => string) {
   };
 }
 
-// until polls check, as saves follow typing after a pause.
 async function until(check: () => boolean) {
   for (let tries = 0; !check(); tries++) {
     if (tries > 100) throw new Error("timed out waiting for a save");
@@ -42,9 +39,7 @@ async function until(check: () => boolean) {
   }
 }
 
-// A SearchSessions request: a Search page names its tab and search, and whether the person entered the query.
 type SearchInput = { query: string; filters?: boolean; messages?: boolean; tab?: string; searchId?: string; entered?: boolean; fresh?: boolean };
-// serve answers the App's requests with rows and a SearchSessions fixture, and records every API path.
 function serve(rows: object[], search: (input: SearchInput) => Promise<object> | object, agents: object[] = [{ name: "main" }]) {
   const paths = new Set<string>(), tabs = tabsApi(() => "tester");
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
@@ -119,7 +114,6 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     const shown = (who = owner) => api.tabs(who).find((tab) => tab.path === new URL(page.url()).pathname)?.search;
     const opened = (url: URL) => url.pathname.startsWith("/search/");
     await page.goto(`http://127.0.0.1:${server.port}/`);
-    // The footer Search button is Cmd/Ctrl+P; the Search page is the "Sessions: Search" command, also under Cmd/Ctrl+Shift+P.
     await page.getByRole("button", { name: "Search sessions" }).click();
     await page.getByRole("dialog", { name: "Go to session" }).getByPlaceholder("Search sessions").waitFor();
     expect(new URL(page.url()).pathname).toBe("/");
@@ -133,7 +127,7 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     expect(await tabs.count()).toBe(1);
     expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("search-tabs:")))).toEqual([]);
     await page.goto(`http://127.0.0.1:${server.port}/`);
-    await page.getByRole("button", { name: "Search sessions and commands" }).waitFor(); // The shortcut listens once the app renders.
+    await page.getByRole("button", { name: "Search sessions and commands" }).waitFor();
     await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
@@ -141,7 +135,6 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     await search.fill("same");
     await page.getByRole("button", { name: "New search" }).click();
     await search.fill("same");
-    // Each "Sessions: Search" opens a page of its own, saved with this person's tabs.
     expect(api.tabs().filter((tab) => opened(new URL(tab.path, page.url())))).toHaveLength(2);
     await until(() => shown()?.searches.at(-1)?.query === "same");
     const saved = shown()!;
@@ -211,7 +204,6 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     await page.reload();
     await pills.nth(1).waitFor();
     expect(await search.inputValue()).toBe("");
-    // Remove right to left so surviving pills keep their offsets while the next response is pending.
     while (await pills.count()) await pills.last().click();
     await search.fill("edited");
     expect(await tabs.first().textContent()).toBe("Saved query");
@@ -232,12 +224,11 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     expect(await tabs.count()).toBe(1);
     expect(await tabs.first().evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
     expect(await search.inputValue()).toBe("same");
-    await search.fill(""); // An owner switch opens the URL search for the new owner, from an empty one.
+    await search.fill("");
     await page.waitForURL((url: URL) => opened(url) && !url.search);
     await tabs.first().click();
     await name.fill("Alice");
     await name.press("Enter");
-    // Finish Alice's save before subsequent requests sign in as Bob.
     await until(() => shown("alice")?.searches[0]?.name === "Alice");
     await page.evaluate(() => localStorage.setItem("last-seen:alice", "/s/b25l?message=private"));
     owner = "bob";
@@ -245,11 +236,10 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     expect(await search.inputValue()).toBe("");
     expect(shown("alice")!.searches.map((item) => item.name)).toEqual(["Alice"]);
     await until(() => shown("bob")?.searches.length === 1);
-    // Closing Bob's only search closes his page, not to Alice's last message.
     const closed = page.waitForResponse((reply: { url(): string; request(): { postDataJSON(): { state?: { tabs: SavedTab[] } } } }) => reply.url().endsWith("/api/ChangeTabs") && reply.request().postDataJSON().state?.tabs.every((tab) => !tab.search));
     await page.getByRole("button", { name: "Close search 1" }).click();
     await page.waitForURL(`http://127.0.0.1:${server.port}/`);
-    await closed; // Navigation does not wait for the tab save.
+    await closed;
     expect(api.tabs("bob").filter((tab) => tab.search)).toEqual([]);
     await page.keyboard.press("Control+p");
     const dialog = page.getByRole("dialog", { name: "Go to session" });
@@ -356,7 +346,7 @@ test("search URL follows the active tab, folds legacy filters, and reopens a mat
     await page.goto(`${origin}/`);
     await page.evaluate(() => localStorage.setItem("search-tabs:tester", JSON.stringify({ tabs: [{ id: "legacy", query: "outage", agentFilter: "acme-cs-support", roomFilter: "" }], active: "legacy" })));
     await page.goto(origin + link);
-    await opened(1); // The legacy tab, folded once into its query, matches the folded link, and moves into the page's tab.
+    await opened(1);
     const saved = () => api.tabs().find((tab) => tab.path === "/search")?.search?.searches;
     await until(() => !!saved());
     expect(saved()).toEqual([{ id: "legacy", query: folded }]);
@@ -408,7 +398,6 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     if (query === "CHAR is:forked") await filterHeld.promise;
     if (query === "rlie is:forked") await removedHeld.promise;
     if (query === "is:forked brav" && failing) throw new Error("search unavailable");
-    // As the server does for Cmd+P, the fixture applies only the filters: Alpha and Bravo are forked, Alpha is tagged bug.
     const ids = query.startsWith("tag:bug ") ? ["a"] : query.includes("is:forked") ? ["a", "b"] : [];
     return response(query, ids.map((conversationId) => ({ conversationId })), query.startsWith("tag:") ? [query.split(" ")[0]] : []);
   });
@@ -421,18 +410,18 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     const palette = page.getByRole("dialog", { name: "Go to session" });
     const input = palette.getByPlaceholder("Search sessions");
     const titles = (expected: string[]) => page.waitForFunction((expected: string[]) => [...document.querySelectorAll('[role="dialog"] li > button [data-slot="session-title"]')].map((node) => node.textContent).join("|") === expected.join("|"), expected, { timeout: 5000 });
-    await titles(["Alpha", "Bravo", "Charlie"]); // Empty Cmd+P lists the sidebar without a request.
+    await titles(["Alpha", "Bravo", "Charlie"]);
     await input.fill("tag:");
     await palette.getByRole("button", { name: "bug", exact: true }).waitFor();
     await input.fill("is:fo");
     await palette.getByRole("button", { name: "forked", exact: true }).waitFor();
     for (const typing of ["sort:ne", "agent:", "   "]) await input.fill(typing);
-    await input.fill("CHAR"); // A title match, never the body: Bravo only says charlie in its preview.
+    await input.fill("CHAR");
     await titles(["Charlie"]);
     expect(await palette.getByRole("button", { name: "Search everywhere for 'CHAR'", exact: true }).count()).toBe(1);
     await page.waitForTimeout(400);
-    expect(requests).toEqual([]); // Unfinished operators and plain text are not sent.
-    await input.fill("CHAR is:forked"); // Adding a filter keeps the title matches, dimmed, until the server answers.
+    expect(requests).toEqual([]);
+    await input.fill("CHAR is:forked");
     await page.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null);
     await titles(["Charlie"]);
     await input.press("ArrowDown");
@@ -447,11 +436,11 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     await input.fill("tag:bu");
     await titles([]);
     while (requests.at(-1)?.query !== "tag:bu") await page.waitForTimeout(50);
-    expect(requests.at(-1)).toEqual({ query: "tag:bu", filters: true }); // No tab: the palette's search ends with its request.
-    expect(await pills.count()).toBe(0); // A term still being typed stays in the input.
+    expect(requests.at(-1)).toEqual({ query: "tag:bu", filters: true });
+    expect(await pills.count()).toBe(0);
     await input.pressSequentially("g x");
     await started.promise;
-    expect(await pills.count()).toBe(0); // Pills wait for the server's reading.
+    expect(await pills.count()).toBe(0);
     expect(await input.inputValue()).toBe("tag:bug x");
     held.resolve();
     await pills.first().waitFor();
@@ -463,10 +452,10 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     await pills.first().click();
     expect(await input.inputValue()).toBe("xy");
 
-    await input.fill("is:forked a"); // The server's forked rows, matched by title here.
+    await input.fill("is:forked a");
     await titles(["Alpha", "Bravo"]);
     await input.pressSequentially("v");
-    await input.press("Enter"); // Before the pause ends: Enter sends the text and opens the first row whose title holds it, not Alpha.
+    await input.press("Enter");
     await page.waitForURL(`**/s/${Buffer.from("b").toString("base64url")}`);
     expect(requests.filter(({ query }) => query === "is:forked av")).toHaveLength(1);
 
@@ -475,19 +464,19 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     await input.fill("is:forked nothing");
     await palette.getByText("No matches", { exact: true }).waitFor();
     expect(await palette.locator("li > button.bg-accent").textContent()).toBe("Search everywhere for 'is:forked nothing'");
-    await input.press("Enter"); // A filtered query with no result opens nothing, not even Search everywhere.
+    await input.press("Enter");
     await page.waitForTimeout(100);
     expect(await palette.isVisible()).toBe(true);
     await input.fill("is:forked brav");
     await palette.getByRole("alert").filter({ hasText: "Search failed" }).waitFor();
     await palette.getByText("Search incomplete", { exact: true }).waitFor();
-    await input.press("Enter"); // A failed search opens nothing either.
+    await input.press("Enter");
     await page.waitForTimeout(100);
     expect(await palette.isVisible()).toBe(true);
     expect(page.url()).toBe(opened);
     failing = false;
     await input.press("End");
-    await input.pressSequentially(" "); // The next keystroke retries the same text.
+    await input.pressSequentially(" ");
     await titles(["Bravo"]);
     expect(await palette.getByRole("alert").count()).toBe(0);
     expect(paths.has("/api/SearchOrigins")).toBe(false);
@@ -504,7 +493,7 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     await input.press("End");
     await input.press("Enter");
     await page.waitForTimeout(100);
-    expect(await palette.isVisible()).toBe(true); // A removed session never turns into a deliberate handoff.
+    expect(await palette.isVisible()).toBe(true);
   } finally {
     held.resolve();
     filterHeld.resolve();
@@ -551,7 +540,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     await search.fill("needle");
     await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="Search results"] [role="group"]')].map((node) => node.getAttribute("aria-label")).join("|") === "Release conversation|Needle notes|Origin chat", undefined, { timeout: 5000 });
     const hits = results.getByRole("group", { name: "Release conversation" });
-    expect(await hits.getByRole("heading").textContent()).toBe("Release conversation(2)"); // Only message text matched: no field row.
+    expect(await hits.getByRole("heading").textContent()).toBe("Release conversation(2)");
     expect(await hits.locator('a[href*="?message="]').count()).toBe(2);
     expect(await hits.getByRole("link", { name: /Context before NEEDLE/ }).locator("mark").allTextContents()).toEqual(["NEEDLE", "needle"]);
     const preview = results.getByRole("group", { name: "Needle notes" });
@@ -562,7 +551,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     expect(await field.locator("mark").textContent()).toBe("needle");
     expect(requests).toEqual([{ query: "needle", messages: true, tab: "/search", searchId: expect.any(String), entered: true }]);
 
-    await search.fill("chat is:forked"); // A saved query ending in a filter reopens with that filter.
+    await search.fill("chat is:forked");
     await results.getByRole("group", { name: "Release conversation" }).waitFor();
     await stored("chat is:forked");
     requests.length = 0;
@@ -571,7 +560,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     expect(requests[0]).toEqual({ query: "chat is:forked", messages: true, tab: "/search", searchId: expect.any(String), entered: false });
     expect(await search.inputValue()).toBe("chat is:forked");
 
-    await search.fill("outage tag:"); // Typing leaves the bare operator out; Enter and reopening send it.
+    await search.fill("outage tag:");
     await sent("outage");
     await search.press("Enter");
     await results.getByRole("group", { name: "Origin chat" }).waitFor();
@@ -586,11 +575,11 @@ test("/search renders the server's groups, notices and pills", async () => {
     const agentPill = (name: string) => page.getByRole("button", { name: `agent:${name}`, exact: true });
     await agentPill("main").waitFor();
     expect(await search.inputValue()).toBe("prefix-agent:main ");
-    await agentPill("main").click(); // Removal cuts the server's offsets, not the first matching text.
+    await agentPill("main").click();
     expect(await search.inputValue()).toBe("prefix-agent:main ");
     await sent("prefix-agent:main");
 
-    await search.fill("foo tag:bug bar"); // Editing text never deletes a middle pill or glues text to it.
+    await search.fill("foo tag:bug bar");
     const tagPill = page.getByRole("button", { name: "tag:bug", exact: true });
     await tagPill.waitFor();
     expect(await search.inputValue()).toBe("foo bar");
@@ -603,7 +592,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     await tagPill.click();
     await search.fill("foo tag:bug bar");
     await tagPill.waitFor();
-    await search.fill("outage"); // Select-all and type.
+    await search.fill("outage");
     await stored("tag:bug outage");
     await sent("tag:bug outage");
     await tagPill.waitFor();
@@ -613,7 +602,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     await search.fill("");
     await search.pressSequentially("agent:");
     await page.getByRole("button", { name: "main", exact: true }).click();
-    await sent("agent:main"); // Held: the second pick comes before this response.
+    await sent("agent:main");
     expect(await search.inputValue()).toBe("agent:main ");
     await search.press("End");
     await search.pressSequentially("agent:");
@@ -633,7 +622,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     await stored("agent:other ");
     await agentPill("other").click();
 
-    await search.fill("late"); // A match the sidebar has not loaded is pending, not "No matches".
+    await search.fill("late");
     await results.getByText("Session search is still loading.").waitFor();
     expect(await results.getByText("No matches").count()).toBe(0);
     rows.push({ id: "late-chat", name: "Late chat", preview: "", agent: "main" });
@@ -683,12 +672,10 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
     const handoff = palette.getByRole("button", { name: "Search everywhere for 'needle'", exact: true });
     await handoff.waitFor();
     await palette.getByRole("button").filter({ hasText: "Needle notes" }).waitFor();
-    // The title match is one row, with no message or field rows, and the hand-off comes last.
     expect(await palette.locator("li > button").evaluateAll((buttons: Element[]) => buttons.map((button) => button.querySelector('[data-slot="session-title"]')?.textContent ?? button.textContent))).toEqual(["Needle notes", "Search in this space for 'needle'", "Search everywhere for 'needle'"]);
     expect(requests).toEqual([]);
     expect(await page.evaluate(() => Reflect.get(window, "agentScans"))).toBe(0);
 
-    // Remote sessions suggest their servers, agents and models; RocketClaw agents their configured models.
     for (const [typed, offered] of [["server:", ["box"]], ["agent:", ["main", "build"]], ["model:", ["gpt-6.1-sol", "anthropic/claude-opus-4-7"]], ["model:OPUS", ["anthropic/claude-opus-4-7"]]] as const) {
       await input.fill(typed);
       const choices = palette.locator("ul.bg-popover li span.font-medium");
@@ -697,14 +684,14 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
       if (typed === "agent:") expect(await page.evaluate(() => Reflect.get(window, "agentScans"))).toBeGreaterThan(0);
     }
 
-    await input.fill("done. updated"); // Markdown reads as the row shows it.
+    await input.fill("done. updated");
     await palette.getByRole("button").filter({ hasText: "Done. Updated the runbook" }).waitFor();
-    await input.fill("CHECKLIST"); // A match deep in a long title shows from just before it, highlighted.
+    await input.fill("CHECKLIST");
     const long = palette.locator('[data-slot="session-title"]').filter({ hasText: "checklist" });
     await long.locator("mark").waitFor();
     expect(await long.textContent()).toBe("…then the deploy checklist");
     expect(await long.locator("mark").textContent()).toBe("checklist");
-    await input.fill("zzz"); // No title matches: the empty state shows above the hand-off.
+    await input.fill("zzz");
     await palette.getByText("No matches", { exact: true }).waitFor();
     await input.fill("needle");
     await handoff.click();
@@ -715,7 +702,6 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
     await results.getByRole("link", { name: /Context before NEEDLE/ }).waitFor();
     expect(requests).toEqual([{ query: "needle", messages: true, tab: first, searchId: expect.any(String), entered: true }]);
 
-    // New text opens a Search page of its own, even from a Search page.
     await page.keyboard.press("Control+p");
     await input.fill("release");
     await palette.getByRole("button", { name: "Search everywhere for 'release'", exact: true }).click();
@@ -726,7 +712,6 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
     expect(await page.getByRole("tablist", { name: "Searches" }).getByRole("tab").allTextContents()).toEqual(["release"]);
     const strip = page.getByRole("tablist", { name: "Main tabs" });
     for (const name of ["needle", "release"]) await strip.getByRole("tab", { name, exact: true }).waitFor();
-    // Back and Forward between the two entries switch the open search with the address.
     const searchInput = page.getByRole("textbox", { name: "Search sessions", exact: true });
     await page.goBack();
     await at("needle");
@@ -735,8 +720,6 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
     await at("release");
     await page.waitForFunction(() => (document.querySelector('input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "release");
     expect(await searchInput.inputValue()).toBe("release");
-    // Typed text in Cmd+P lists the Search pages by title or query, never an empty query, whose Enter opens the first
-    // session; text one already searches for reopens it.
     await page.keyboard.press("Control+p");
     const pages = palette.getByRole("button", { name: /^Search: / });
     await palette.getByRole("button").filter({ hasText: "Needle notes" }).waitFor();
@@ -780,13 +763,12 @@ test("Cmd+P draws large session lists only as scrolling and keyboard navigation 
     const input = palette.getByPlaceholder("Search sessions");
     await input.fill("Report");
     await palette.getByText("Report 0000", { exact: true }).waitFor();
-    // Let deferred work finish too: an initial-value-only limit is not paging.
     await page.evaluate(() => new Promise((resolve) => requestIdleCallback(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
     const buttons = palette.locator("li > button");
     expect(await buttons.count()).toBe(50);
     expect(await palette.locator('[data-slot="session-title"]').allTextContents()).toEqual(rows.slice(0, 50).map(({ name }) => name));
     expect(await page.evaluate(() => Reflect.get(window, "unrelated"))).toEqual([]);
-    await input.press("ArrowUp"); // Wrap past both hand-offs to the last session, without dropping choices.
+    await input.press("ArrowUp");
     await page.keyboard.press("ArrowUp");
     await page.keyboard.press("ArrowUp");
     await page.waitForURL(`**/s/${btoa("report-599").replaceAll("=", "")}`);
@@ -929,7 +911,6 @@ test("typing reuses message results and new replies preserve selected text", asy
     let listings = 0;
     await page.route((url: URL) => url.pathname === "/api/ListSessions", (route: { continue(): Promise<void> }) => {
       if (++listings === 1) return route.continue();
-      // Hold refreshes until page close: new sidebar rows legitimately rebuild results.
       polling.resolve();
     });
     await page.route("**/api/Tabs", async (route: { continue(): Promise<void> }) => {
@@ -1032,7 +1013,6 @@ test("a Search page's search runs on its server, entered when typed, not on retu
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
-    // The page also searches a remote RocketClaw, unreachable here; the page records what it sends there.
     await page.route(`${origin}/search`, async (route: { fetch(): Promise<{ text(): Promise<string> }>; fulfill(options: object): Promise<void> }) => {
       const reply = await route.fetch();
       await route.fulfill({ response: reply, body: (await reply.text()).replace("</head>", '<script id="rocketclaws" type="application/json">[{"name":"work","url":"http://127.0.0.1:9"}]</script></head>') });
@@ -1055,9 +1035,8 @@ test("a Search page's search runs on its server, entered when typed, not on retu
     const searchId = api.tabs().find((tab) => tab.path === "/search")!.search!.searches[0].id;
     const ran = (entered: boolean) => ({ query: "wide", messages: true, tab: "/search", searchId, entered });
     expect(requests).toEqual([ran(true)]);
-    await results.getByRole("heading").getByRole("link", { name: "Wide 0", exact: true }).click(); // Leaving only stops waiting.
+    await results.getByRole("heading").getByRole("link", { name: "Wide 0", exact: true }).click();
     await page.waitForURL(`**/s/${btoa("wide-0").replaceAll("=", "")}`);
-    // Returning takes the server's answer, not entered, and draws it 200 rows at a time.
     await page.getByRole("tablist", { name: "Main tabs" }).getByRole("tab", { name: "wide", exact: true }).click();
     await results.getByRole("group", { name: "Wide 0", exact: true }).waitFor();
     expect(requests).toEqual([ran(true), ran(false)]);
@@ -1137,7 +1116,6 @@ test("message matches jump after history loads and last close returns to the las
       return !!viewport && !!target && target.bottom > viewport.top && target.top < viewport.bottom;
     });
     await page.getByRole("button", { name: "sandboxed" }).click();
-    // The Search page's tab, titled by its query, returns to it.
     const searchTab = page.getByRole("tablist", { name: "Main tabs" }).getByRole("tab", { name: "one", exact: true });
     clickingRestoredSearchTab = true;
     await searchTab.click();
