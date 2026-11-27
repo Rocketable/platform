@@ -131,14 +131,15 @@ test("a palette preview stays in its window: never saved, and kept while other w
 
 for (const width of [1280, 320]) test(`the bottom bar's buttons fit without overlap at ${width}px`, () => withPage({ viewport: { width, height: 800 }, hasTouch: width === 320 }, async (page, origin) => {
   await page.goto(`${origin}${href("alpha")}`);
-  const buttons = page.locator("#bottom-navigation").getByRole("button");
-  await buttons.first().waitFor();
+  const bar = page.locator("#bottom-navigation");
+  const buttons = bar.getByRole("button");
+  await bar.getByRole("button", { name: "Home", exact: true }).waitFor();
   const boxes = await buttons.evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => {
     const { x, y, width, height } = node.getBoundingClientRect();
     return { x, y, width, height };
   }));
   expect(boxes).toHaveLength(6);
-  expect(await page.locator("#bottom-navigation").getByRole("button", { name: "Pull requests and issues", exact: true }).count()).toBe(0);
+  expect(await bar.getByRole("button", { name: "Pull requests and issues", exact: true }).count()).toBe(0);
   expect(boxes[0].x).toBeLessThan(16);
   expect(boxes[5].x + boxes[5].width).toBeGreaterThan(width - 16);
   for (const [index, box] of boxes.entries()) {
