@@ -362,7 +362,7 @@ func TestRoutineRunEndMarksRoutineTabs(t *testing.T) {
 		require.NoError(t, err)
 
 		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "run", false)
-		inbound.Routine = &protocol.RoutineMessage{RelativePath: path, Agent: "marketing", Space: space}
+		inbound.Routine = &protocol.RoutineMessage{Agent: "marketing", Space: space}
 		require.NoError(t, startTurnDB(ctx, service.db, "turn:"+runID, runID, inbound))
 		_, err = service.finishTurn(ctx, "turn:"+runID, &turnFinish{conversationID: runID, outbound: protocol.NewOutboundMessage(runID, "done")})
 		require.NoError(t, err)

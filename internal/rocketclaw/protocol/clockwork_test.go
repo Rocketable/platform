@@ -14,10 +14,9 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	message := NewOutboundMessage("conversation", "reply")
 	message.ConsumedID, message.ConsumedText, message.ConsumedRawText = "web-input", "same text attachment:ref", "same text"
 	message.ConsumedSource = SourceWeb
-	message.ConsumedHeader = `[Web principal="alice"]`
 	message.Agent, message.Model, message.SourceConversationID, message.ReasoningEffort = "planner", "work/model-a", "producer-x", new("high")
 	message.SlackReply = &SlackReplyTarget{ChannelID: "C1", ThreadTS: "1.2"}
-	message.Routine = &RoutineMessage{RelativePath: "job.md"}
+	message.Routine = &RoutineMessage{Agent: "job"}
 	message.Terminal = TerminalStopped
 	message.Attachments = []OutboundAttachment{
 		{ID: "report", Name: "report.txt", MIMEType: "text/plain", Data: []byte("report"), Size: 6},
@@ -34,7 +33,6 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	require.Equal(t, "same text attachment:ref", clone.ConsumedText)
 	require.Equal(t, "same text", clone.ConsumedRawText)
 	require.Equal(t, SourceWeb, clone.ConsumedSource)
-	require.Equal(t, message.ConsumedHeader, clone.ConsumedHeader)
 	require.Equal(t, "planner", clone.Agent)
 	require.Equal(t, "work/model-a", clone.Model)
 	require.Equal(t, "producer-x", clone.SourceConversationID)
@@ -47,13 +45,13 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	require.NotSame(t, &message.Attachments[0].Data[0], &clone.Attachments[0].Data[0])
 
 	clone.SlackReply.ThreadTS = "changed"
-	clone.Routine.RelativePath = "changed"
+	clone.Routine.Agent = "changed"
 	clone.Attachments[0].Name = "changed"
 	clone.Attachments[0].Data[0] = 'X'
 	clone.Attachments[1].Data[0] = 'Y'
 
 	require.Equal(t, "1.2", message.SlackReply.ThreadTS)
-	require.Equal(t, "job.md", message.Routine.RelativePath)
+	require.Equal(t, "job", message.Routine.Agent)
 	require.Equal(t, "report.txt", message.Attachments[0].Name)
 	require.Equal(t, byte('r'), message.Attachments[0].Data[0])
 	require.Equal(t, byte('i'), message.Attachments[1].Data[0])

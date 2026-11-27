@@ -1155,7 +1155,7 @@ UNION ALL SELECT 'index ' || to_regclass('conversations_routine_runs')::text ORD
 	queue, err := store.ThreadQueueForConversation(run)
 	require.NoError(t, err)
 	require.Len(t, queue, 1)
-	require.Equal(t, &protocol.RoutineMessage{RelativePath: "agents/a.md#1h", Agent: "a", RanAt: "2026-01-01T00:00:00Z", Space: "Ops"}, queue[0].Inbound.Routine, "a waiting follow-up of an old run still carries its routine")
+	require.Equal(t, &protocol.RoutineMessage{Agent: "a", Space: "Ops"}, queue[0].Inbound.Routine, "a waiting follow-up of an old run still carries its routine")
 
 	sources, err := store.RoutineRunSources(ctx)
 	require.NoError(t, err)

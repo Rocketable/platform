@@ -97,10 +97,7 @@ type OutboundAttachment struct {
 	Size           int64
 }
 
-type RoutineMessage struct {
-	RelativePath, Agent, RanAt string
-	Space                      string
-}
+type RoutineMessage struct{ Agent, Space string }
 
 type InboundMessage struct {
 	Source                Source
@@ -177,23 +174,22 @@ const (
 )
 
 type OutboundMessage struct {
-	ConsumedID, ConsumedText           string
-	ConsumedHeader                     string
-	ConsumedRawText                    string
-	ConsumedSource                     Source
-	Text                               string
-	ConversationID, TurnID             string
-	Agent                              string
-	Model, SourceConversationID        string
-	ReasoningEffort                    *string
-	Routine                            *RoutineMessage
-	Complete                           bool
-	SlackReply                         *SlackReplyTarget
-	Attachments                        []OutboundAttachment
-	GoalTurn, GoalComplete, GoalActive bool
-	GoalTurnNumber, GoalMaxTurns       int
-	Terminal                           Terminal
-	ChannelQuiet, Deferred, Worked     bool
+	ConsumedID, ConsumedText       string
+	ConsumedRawText                string
+	ConsumedSource                 Source
+	Text                           string
+	ConversationID, TurnID         string
+	Agent                          string
+	Model, SourceConversationID    string
+	ReasoningEffort                *string
+	Routine                        *RoutineMessage
+	Complete                       bool
+	SlackReply                     *SlackReplyTarget
+	Attachments                    []OutboundAttachment
+	GoalTurn, GoalComplete         bool
+	GoalTurnNumber, GoalMaxTurns   int
+	Terminal                       Terminal
+	ChannelQuiet, Deferred, Worked bool
 }
 
 func NewInboundMessage(source Source, kind InboundKind, text string, human bool) *InboundMessage {

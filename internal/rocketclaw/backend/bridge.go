@@ -1698,7 +1698,7 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 	}()
 
 	if fallback := attachmentFallback(msg); prepare && fallback != "" {
-		b.publishConsumed(ctx, msg, "")
+		b.publishConsumed(ctx, msg)
 
 		result.text = fallback
 		errLog = b.finish(ctx, request, &finish, &result, "")
@@ -2132,7 +2132,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	var header string
 	defer func() {
 		if header == "" {
-			b.publishConsumed(ctx, msg, "")
+			b.publishConsumed(ctx, msg)
 		}
 	}()
 
@@ -2572,7 +2572,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	header = prepared.Header
-	b.publishConsumed(ctx, msg, header)
+
+	b.publishConsumed(ctx, msg)
 
 	if !b.shadow {
 		outbound := b.newOutboundMessage(msg, turnID, "", false)
@@ -3576,7 +3577,6 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 			outbound.GoalMaxTurns = goal.MaxTurns
 		}
 
-		outbound.GoalActive = outbound.GoalTurn && statusActive && (!accounted || goal.MaxTurns <= 0 || goal.TurnsUsed+1 < goal.MaxTurns)
 		outbound.ChannelQuiet = outbound.GoalTurn || msg.Metadata[sessionRepliesMetadataKey] != "" ||
 			msg.Source == protocol.SourceSystem && msg.Metadata[protocol.InboundSenderSessionMetadataKey] == "" && msg.Metadata[backgroundNotesMetadataKey] == ""
 

@@ -462,7 +462,7 @@ func TestShadowExecutionOwnerEntrypoints(t *testing.T) {
 
 				publisher := &outboundPublisherMock{PublishOutboundFunc: func(context.Context, *protocol.OutboundMessage) error { return errors.New("connector unavailable") }}
 				child := &Bridge{shadow: true, config: Config{ConversationID: id, Agent: "primary/a", SessionService: store}, bus: publisher}
-				child.publishConsumed(t.Context(), inbound, "parent header")
+				child.publishConsumed(t.Context(), inbound)
 				require.NoError(t, child.finish(t.Context(), &bridgeRequest{inbound: turn.inbound, turnID: turn.id}, &turnFinish{conversationID: strings.TrimSpace(id)}, &runResult{turnID: turn.id, text: "local only"}, ""))
 				require.Empty(t, publisher.PublishOutboundCalls(), "connector failures cannot affect local child completion")
 				active, err := store.HasActiveTurn(t.Context(), id)

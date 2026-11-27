@@ -123,7 +123,7 @@ func TestRunOneOffRoutineSetsTraceConversationID(t *testing.T) {
 		require.Equal(t, "helper", agent)
 		require.Equal(t, "Body", prompt)
 		require.Equal(t, destination, progress.SyncDestination)
-		require.Equal(t, &protocol.RoutineMessage{RelativePath: "cron/daily.md", Agent: "helper", RanAt: "2000-01-02T03:04:05Z", Space: "Ops"}, progress.Routine, "a run from Web carries the cron's space")
+		require.Equal(t, &protocol.RoutineMessage{Agent: "helper", Space: "Ops"}, progress.Routine, "a run from Web carries the cron's space")
 
 		sources = append(sources, progress.ConversationID)
 		if !strings.HasPrefix(progress.ConversationID, "one-off-routine:cron/daily.md:20000102T030405.000000006Z:") {

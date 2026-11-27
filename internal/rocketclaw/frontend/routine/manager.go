@@ -187,7 +187,7 @@ func (m *Manager) RunOneOffRoutine(ctx context.Context, job *protocol.OneOffRout
 	progress.Run = &protocol.RoutineRun{Path: job.RelativePath, At: m.now(), OneOff: true}
 	progress.ConversationID = routineTraceConversationID(oneOffRoutineTracePrefix, job.RelativePath, progress.Run.At)
 	progress.SyncDestination = job.ConversationID
-	progress.Routine = &protocol.RoutineMessage{RelativePath: job.RelativePath, Agent: job.Agent, RanAt: m.now().Format(time.RFC3339), Space: job.Space}
+	progress.Routine = &protocol.RoutineMessage{Agent: job.Agent, Space: job.Space}
 
 	m.mu.Lock()
 	if m.closed {
@@ -322,7 +322,7 @@ func (m *Manager) executeJob(ctx context.Context, definition *config.RoutineDefi
 	progress := &backend.RoutineRunProgress{
 		ConversationID: routineTraceConversationID(routineTracePrefix, definition.Job.RelativePath, startedAt),
 		Run:            &protocol.RoutineRun{Path: definition.Job.RelativePath, At: startedAt},
-		Routine:        &protocol.RoutineMessage{RelativePath: definition.Job.RelativePath, Agent: definition.Job.Agent, RanAt: ranAt, Space: definition.Job.Space},
+		Routine:        &protocol.RoutineMessage{Agent: definition.Job.Agent, Space: definition.Job.Space},
 	}
 	log = log.With("conversation_id", progress.ConversationID)
 	log.Info("starting routine", "event", "routine_started", "prompt_len", len(prompt))
