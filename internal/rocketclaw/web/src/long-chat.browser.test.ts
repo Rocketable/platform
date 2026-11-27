@@ -61,7 +61,6 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "long-chat" } });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "long" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
-    // The desktop pull request watch reads history too; these reads are the transcript's.
     if (url.pathname === "/api/History" && url.searchParams.has("pull-request-discovery")) return Response.json({ messages: [], more: false });
     if (url.pathname === "/api/History") {
       const input = await request.json() as { revision?: string; limit?: number; before?: string; from?: string };
@@ -148,7 +147,6 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     });
     mark("navigate to long chat");
     await page.goto(`http://127.0.0.1:${server.port}/s/bG9uZw`);
-    // A slow first read shows that the chat is loading, not an empty chat.
     mark("show loading placeholder, not empty chat");
     await page.getByText("Loading conversation…").waitFor();
     expect(await page.getByText("Send a message to start the conversation.").count()).toBe(0);
@@ -160,8 +158,6 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     expect(pages).toEqual([]);
     expect(fullReads).toBe(1);
 
-    // Typing redraws only the composer; redrawing a long transcript per keystroke made input lag.
-    // Background polls may still redraw it a few times, so this bounds the count well below one per key.
     mark("type in composer and check redraw count");
     await page.evaluate(() => {
       const probe = window as unknown as { transcriptRenders: number };
@@ -184,7 +180,6 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     await page.locator("textarea").pressSequentially(typed);
     expect(await page.locator("textarea").inputValue()).toBe(typed);
     expect(await page.evaluate(() => (window as unknown as { transcriptRenders: number }).transcriptRenders)).toBeLessThan(typed.length / 2);
-    // Naming a tab group redraws only its field too; tab state belongs to the whole app.
     mark("open tab group menu");
     await page.getByRole("tab", { name: "Long chat", exact: true }).click({ button: "right" });
     await page.getByRole("menuitem", { name: "Add to group" }).click();
@@ -212,7 +207,6 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     await page.getByText("user 21", { exact: true }).waitFor({ state: "attached" });
     mark("check earlier page and retained user 71 anchor");
     expect(pages).toEqual([{ before: "71", limit: 50 }]);
-    // The turns already on screen stay put; the page grows above them.
     expect(await page.evaluate(() => {
       const element = document.querySelector("#transcript-scroll")!;
       const viewport = element.getBoundingClientRect();
