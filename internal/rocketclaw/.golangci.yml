@@ -108,6 +108,10 @@ linters:
         - name: package-comments
           disabled: true
 
+formatters:
+  enable:
+    - gofmt
+
 run:
   timeout: 5m
   tests: true
