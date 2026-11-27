@@ -12,7 +12,6 @@ const ocDist = path.resolve(import.meta.dir, "../../internal/web/oc-dist");
 const shots = path.resolve(import.meta.dir, "../../../../.tmp/web-screenshots");
 const encode = (text: string) => btoa(text).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const route = (id: string) => `/oc/${encode(id)}`;
-// The box server's own address, which RocketClaw only ever sends as an origin.
 const box = "http://box.test:4096";
 
 async function startThreadPRBrowser({ unavailable = true, pollClock = false, width }: { unavailable?: boolean; pollClock?: boolean; width?: number } = {}) {
@@ -216,7 +215,6 @@ test("thread PR pane adds quotes and diff notes without sending from the OpenCod
   assertShellReads();
 }, 30_000);
 
-// A RocketClaw Web serving the built view at /oc-ui/ and the fake OpenCode server behind /oc/box/api/.
 function start() {
   reset();
   const rows: Session[] = [
@@ -224,7 +222,6 @@ function start() {
     { id: "opencode:box:ses_off", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_off", preview: "Old work", server: "box", directory: "/srv/old", offline: true, tags: ["billing"] },
   ];
   const calls: { path: string; body: { id?: string; [key: string]: unknown } }[] = [];
-  // The view's entry waits until released, so its loading state can be seen.
   let release = () => {};
   const entry = new Promise<void>((resolve) => { release = resolve; });
   let failCreate = true;
@@ -240,11 +237,8 @@ function start() {
     });
     return { arrived: arrived.promise, release: released.resolve };
   };
-  // A test holds session creates here to press again while one is still running.
   const creates = { hold: Promise.resolve() };
-  // Loads of the view's entry left to fail, as a network blip or a deploy mid-load would.
   const entryFailures = { remaining: 0 };
-  // Typing watches the page holds open, by the chat each watches; a test pushes frames into them.
   const typing = new Map<ReadableStreamDefaultController<string>, string>();
   const web = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, websocket: { open(socket) {
     terminals.open++;
@@ -305,7 +299,6 @@ function start() {
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/SlackNames": return Response.json({ names: { U42: "Riley" } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
-      // New session needs the config to scope its draft.
       case "/api/ListConfig": return Response.json({ config: {} });
       case "/api/CreateSession":
         await creates.hold;
@@ -517,7 +510,6 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
       await rocketPalette("commands").fill(label);
       await page.getByRole("button", { name: `Sessions: ${label}` }).click();
     };
-    // RocketClaw's look, measured on its own page and text: fonts are page-wide, so a leaked one changes text width.
     const look = () => page.evaluate(async () => {
       await document.fonts.ready;
       const probe = document.createElement("span");
@@ -535,17 +527,14 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await tabs.getByRole("tab", { name: "Alpha work", exact: true }).waitFor();
     const before = await look();
 
-    // Opening the session shows Loading… until the view reports it, then the view itself: no frame.
     await tabs.getByRole("tab", { name: "Alpha work", exact: true }).click();
     await page.getByRole("status").filter({ hasText: "Loading…" }).waitFor();
     release();
     await view.getByText("answer in ses_a").waitFor();
-    // Markdown is sanitized and approved Pele keeps diagram labels as text, not executable HTML.
     await view.locator('[data-component="markdown-mermaid"] svg').waitFor();
     expect(await view.locator('script, [onerror], a[href^="javascript:"]').count()).toBe(0);
     expect(await view.locator('[data-component="markdown-mermaid"] img, [data-component="markdown-mermaid"] image').count()).toBe(0);
     expect(await page.evaluate(() => (window as Window & { __ocUnsafe?: number }).__ocUnsafe)).toBeUndefined();
-    // Extensions keep their empty states and configuration links, but no unsupported draft-prompt setup buttons.
     await view.getByRole("button", { name: "Session details", exact: true }).click();
     const details = page.locator('[data-oc-portal] [data-component="session-summary-panel"]');
     for (const [service, empty] of [["mcp", "No MCP servers configured"], ["plugins", "No plugins configured"], ["skills", "No skills configured"]]) {
@@ -581,7 +570,6 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     })).toEqual([true, true]);
     await page.screenshot({ path: path.join(shots, "opencode-session.png") });
 
-    // Leaving hides the view on its one event stream; coming back shows it again without reading the session again.
     const transcriptReads: string[] = [];
     page.on("request", (request: { url(): string }) => {
       const url = new URL(request.url());
@@ -596,7 +584,6 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     expect([await page.locator("[data-oc-view]:not([data-oc-portal])").count(), fake.streams]).toEqual([1, 1]);
     expect(transcriptReads).toEqual([]);
 
-    // Escape belongs to the view: twice from the composer, and twice after clicking timeline text, the tab stays.
     const tabCount = await tabs.getByRole("tab").count();
     await view.locator("[data-component=composer] [contenteditable=true]").click();
     await page.keyboard.press("Escape");
@@ -606,7 +593,6 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await page.keyboard.press("Escape");
     expect([page.url(), await tabs.getByRole("tab").count()]).toEqual([`${base}${route("opencode:box:ses_a")}`, tabCount]);
 
-    // From inside the view, ⌘P is RocketClaw's palette and ⌘K OpenCode's.
     await view.locator("[data-component=composer] [contenteditable=true]").click();
     await page.keyboard.press("ControlOrMeta+p");
     await rocketPalette("sessions").waitFor();
@@ -619,14 +605,12 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await page.keyboard.press("Escape");
     await until(async () => await palette.count() === 0);
 
-    // The terminal keeps unbound keys, but host shortcuts must not also reach its socket.
     await view.locator("[data-component=composer] [contenteditable=true]").click();
     await page.keyboard.press("Control+Backquote");
     await view.locator('[data-component="terminal"]').waitFor();
     await view.locator('[data-pane-content="bottom"] [data-component="terminal"]').waitFor();
     expect(await view.locator('[data-pane-content="side"]').isVisible()).toBe(false);
     await until(() => terminals.open === 1);
-    // Reload keys must reach the browser unchanged, not toggle review or enter the terminal.
     for (const target of [view.locator("[data-component=composer] [contenteditable=true]"), view.getByText("answer in ses_a", { exact: true }), view.locator('[data-component="terminal"]')]) {
       await target.click();
       expect(await target.evaluate((node: HTMLElement) => ["KeyR", "KeyO"].flatMap((code) => ["ctrlKey", "metaKey"].map((modifier) => {
@@ -637,8 +621,6 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
       expect(await view.locator('[data-pane-content="side"]').isVisible()).toBe(false);
     }
     expect(terminals.input).toEqual([]);
-    // mod+Shift+A (next tab needing you) and mod+Shift+S (park until done) are RocketClaw's: they never reach OpenCode's
-    // keys on the document.
     expect(await view.locator("[data-component=composer] [contenteditable=true]").evaluate((node: HTMLElement) => ["A", "S"].flatMap((key) => ["ctrlKey", "metaKey"].map((modifier) => {
       let reached = false;
       const reach = () => { reached = true; };
@@ -684,12 +666,10 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
       const pathname = new URL(request.url()).pathname;
       if (pathname === terminalPath || pathname.startsWith("/oc/box/api/experimental/persistent-pty/")) terminalRequests.push(request);
     });
-    // Native append carries the stored panes property when the last terminal is reopened.
     for (const close of ["command", "tab"]) {
       const requestStart = terminalRequests.length;
       const terminalList = holdOpenCode(`GET ${terminalPath}`);
       if (close === "command") {
-        // While Mod+W's close is pending, toggle still hides a visible terminal without waiting.
         const removing = holdOpenCode("DELETE /oc/box/api/experimental/persistent-pty/pty_1");
         await view.locator('[data-component="terminal"]').click();
         await page.keyboard.press("ControlOrMeta+w");
@@ -786,11 +766,9 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await sendToSideTerminal("z");
     expect([terminals.open, fake.streams, terminals.connections]).toEqual([1, 1, sideConnections]);
     expect(fake.requests.slice(beforeLeaving)).not.toContain("GET /oc/box/api/event");
-    // The restored terminal must not take focus during the remaining keyboard checks.
     await view.locator('[data-pane-tab^="terminal:"]').getByRole("button", { name: "Close tab", exact: true }).click();
     await until(() => terminals.open === 0);
 
-    // The Side pane's own launcher is an explicit destination, not a request for the bottom default.
     await view.locator('[data-slot="session-review-toggle"]').click();
     const side = view.locator('[data-pane-content="side"]');
     await side.getByRole("button", { name: "Add tab", exact: true }).click();
@@ -799,7 +777,6 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await side.locator('[data-pane-tab^="terminal:"]').getByRole("button", { name: "Close tab", exact: true }).click();
     await until(() => terminals.open === 0);
 
-    // The server link names the shown session on its own server, with no password.
     await command("Copy server link");
     await until(async () => await clipboard() === `${box}/server/${encode(box)}/session/ses_a`);
     await command("OpenCode commands");
@@ -807,20 +784,17 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await page.keyboard.press("Escape");
     await until(async () => await palette.count() === 0);
 
-    // A child session opens inside the view, and the link follows it. RocketClaw's default timeline detail shows its card.
     await view.locator("[data-component=task-tool-card]").first().click();
     await view.getByText("answer in ses_child").waitFor();
     await command("Copy server link");
     await until(async () => await clipboard() === `${box}/server/${encode(box)}/session/ses_child`);
     expect(page.url()).toBe(`${base}${route("opencode:box:ses_a")}`);
 
-    // Forking opens the fork, a session the list has not seen, in a new RocketClaw tab.
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     release();
     await view.getByText("answer in ses_a").waitFor();
     const beforeForkTabs = await tabs.getByRole("tab").count();
     await view.locator("[data-component=composer] [contenteditable=true]").fill("/fork");
-    // oc/packages/app/src/composer/suggestions/machine.ts consumes Enter until a result is active.
     await view.locator('[data-suggestion-id="session.fork"][data-active]').waitFor();
     await page.keyboard.press("Enter");
     await page.locator("[data-oc-portal]").locator("[role=option], button", { hasText: "question in ses_a" }).first().click();
@@ -844,14 +818,12 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     expect(await view.locator("[data-component=composer] [contenteditable=true]").textContent()).toBe("question in ses_a");
     const forkTabs = await tabs.getByRole("tab").count();
 
-    // Deleting the shown session closes its tab.
     await view.locator("[aria-label='More options']").first().click();
     await page.locator("[data-oc-portal] [role=menuitem]", { hasText: "Delete" }).click();
     await page.locator("[data-oc-portal] button", { hasText: "Delete session" }).click();
     await until(async () => await tabs.getByRole("tab").count() === forkTabs - 1);
     expect(page.url()).not.toContain(encode("opencode:box:ses_fork_").slice(0, -2));
 
-    // RocketClaw's palette and the tab's menu delete the shown session on its server after asking; Cancel keeps it.
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     await view.getByText("answer in ses_a").waitFor();
     const confirm = page.getByRole("dialog", { name: "Delete session", exact: true });
@@ -916,8 +888,6 @@ test("one OpenCode view loads with the page, waits hidden behind other tabs, and
     const visit = (href: string) => page.evaluate((target: string) => { history.pushState(null, "", target); window.dispatchEvent(new PopStateEvent("popstate")); }, href);
     const message = page.getByRole("textbox", { name: "Message", exact: true });
 
-    // A chat shows first; the view loads behind it, on one live stream per server, and reads each server's first
-    // open session.
     await page.goto(`${base}${chat}`);
     await page.locator("main [data-oc-view][data-oc-hidden]").getByText("answer in ses_a").waitFor({ state: "attached" });
     await until(() => fake.streams === 2 && transcripts.includes("/oc/far/api/session/ses_a/message"));
@@ -937,7 +907,6 @@ test("one OpenCode view loads with the page, waits hidden behind other tabs, and
       return find.defaultPrevented;
     })).toBe(false);
 
-    // Opening its tab, or another server's, shows the session the view already holds and moves the same view.
     const read = transcripts.length;
     await visit(route("opencode:box:ses_a"));
     await view.getByText("answer in ses_a").waitFor();
@@ -953,7 +922,6 @@ test("one OpenCode view loads with the page, waits hidden behind other tabs, and
     expect(transcripts.slice(moved)).toEqual([]);
     expect([await views.count(), fake.streams]).toEqual([1, 2]);
 
-    // A menu open in the view as RocketClaw's key leaves for the chat closes, and the chat takes clicks.
     await view.locator("[aria-label='More options']").first().click();
     await page.locator("[data-oc-portal] [role=menu]").waitFor();
     await visit(chat);
@@ -989,7 +957,6 @@ test("remote sessions list, tag, go offline, and start", async () => {
     await rename.getByText("Shared with everyone who can see this session. Leave blank to generate a title from the conversation.", { exact: true }).waitFor();
     await rename.getByRole("button", { name: "Cancel", exact: true }).click();
 
-    // People type any tag on a remote session; tags already in use are suggested, agent tags are not offered.
     await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("tag");
     expect(await page.getByRole("button", { name: "Sessions: Add tag customer" }).count()).toBe(0);
@@ -1001,27 +968,22 @@ test("remote sessions list, tag, go offline, and start", async () => {
     await until(() => calls.some(({ path }) => path === "/api/UpdateSession"));
     expect(calls.find(({ path }) => path === "/api/UpdateSession")?.body).toEqual({ id: "opencode:box:ses_a", tag: "billing" });
 
-    // An offline server's session shows a notice instead of the view; a server no longer configured, another.
     await page.goto(`${base}${route("opencode:box:ses_off")}`);
     await page.getByText("box is offline; this session reopens when it is reachable.").waitFor();
     expect(await page.locator("[data-oc-view]").count()).toBe(0);
     await page.goto(`${base}${route("opencode:gone:ses_x")}`);
     await page.getByText("This OpenCode session is no longer available.").waitFor();
 
-    // A new session takes a typed folder; a failed create shows its error and the next try opens the session.
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     await page.locator("main [data-oc-view]").getByText("answer in ses_a").waitFor();
     await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("new on box");
     await page.getByRole("button", { name: "Sessions: New on box" }).click();
     const folder = page.getByPlaceholder("Folder on box, like /srv/app");
-    // Folders the person picked lead the server's other folders, most recent first.
     const folders = page.getByRole("button", { name: /^\// });
     await folders.first().waitFor();
     expect(await folders.allTextContents()).toEqual(["/repo", "/srv/old"]);
     await page.keyboard.press("Escape");
-    // With an OpenCode server, a click on the footer's New session opens a menu with this server highlighted, named by
-    // the page's host, here a whole IP address: Enter starts a session here, and the next item, box, opens the same picker.
     const newSession = page.getByRole("button", { name: "New session", exact: true });
     const highlighted = (name: string) => page.getByRole("menuitem", { name, exact: true }).and(page.locator(":focus")).waitFor();
     await newSession.click();
@@ -1050,7 +1012,6 @@ test("remote sessions list, tag, go offline, and start", async () => {
     expect(calls.filter(({ path }) => path === "/api/CreateSession").map(({ body }) => body)).toEqual([{ opencodeServer: "box", directory: "/srv/fresh", spaceId: "main" }, { opencodeServer: "box", directory: "/srv/fresh", spaceId: "main" }]);
     expect(await openTabs()).toEqual(expect.arrayContaining([route("opencode:box:ses_a"), route("opencode:box:ses_child")]));
 
-    // OpenCode's New session, from inside the view, goes through RocketClaw: the session's own folder, a new tab.
     const view = page.locator("main [data-oc-view]");
     const palette = page.locator("[data-oc-portal] .command-palette");
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
@@ -1063,7 +1024,6 @@ test("remote sessions list, tag, go offline, and start", async () => {
     expect(calls.filter(({ path }) => path === "/api/CreateSession").map(({ body }) => body).slice(2)).toEqual([{ opencodeServer: "box", directory: "/repo", spaceId: "main" }]);
     expect(await openTabs()).toEqual(expect.arrayContaining([route("opencode:box:ses_a"), route("opencode:box:ses_child")]));
 
-    // Pressing New session again while the first is still being created starts one session, not two.
     const created = () => calls.filter(({ path }) => path === "/api/CreateSession").length;
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     await view.getByText("answer in ses_a").waitFor();
@@ -1083,14 +1043,11 @@ test("remote sessions list, tag, go offline, and start", async () => {
     await Bun.sleep(300);
     expect(created()).toBe(before + 1);
 
-    // A session the conversation mentions opens in its own RocketClaw tab. The view moves there instead of being
-    // built again, as OpenCode's own app moves between sessions, and moves back when the first tab is chosen.
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     await view.getByText("answer in ses_a").waitFor();
     await view.evaluate((node: HTMLElement & { built?: number }) => { node.built = 1; });
     await view.locator(`button[data-session-id="${linked}"]`).click();
     await page.waitForURL(`${base}${route(`opencode:box:${linked}`)}`);
-    // v2.3.0 leaves references to the shown session as plain text (packages/app/src/shell/routes/session-ui-provider.tsx).
     await view.getByText(`answer in ${linked}`).waitFor();
     await page.getByRole("tablist", { name: "Main tabs" }).getByRole("tab", { name: "Alpha work", exact: true }).click();
     await view.getByText("answer in ses_a").waitFor();
@@ -1099,7 +1056,6 @@ test("remote sessions list, tag, go offline, and start", async () => {
     expect([await page.locator("[data-oc-view]:not([data-oc-portal])").count(), fake.streams]).toEqual([1, 1]);
     expect(errors).toEqual([]);
 
-    // When the view's code fails to load, Retry loads it again without reloading the page.
     const fresh = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const entryURL = `${base}/oc-ui/_assets/index.js`;
     const entryEvents: string[] = [];
@@ -1134,8 +1090,6 @@ test("mobile keyboards keep the composer, model controls and bottom bar above th
   release();
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
-    // A keyboard can shrink only the visual viewport (Safari/Chrome), or both viewports.
-    // Simulate the browser metrics, not a real OS keyboard; device keyboard transitions still need a phone check.
     for (const width of [393, 820, 1280]) {
       const page = await browser.newPage({ viewport: { width, height: 844 }, isMobile: width < 1280, hasTouch: width < 1280 });
       await page.goto(`${base}${route("opencode:box:ses_a")}`);
@@ -1163,14 +1117,12 @@ test("mobile keyboards keep the composer, model controls and bottom bar above th
         expect(await editor.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
         expect(await composer.locator("[data-slot=composer-controls]").count()).toBe(1);
         if (text.length > 100) expect(await page.locator("[data-component=composer-scroll]").evaluate((node: HTMLElement) => node.scrollHeight > node.clientHeight)).toBe(true);
-        // Focusing the editor can also pan the visible viewport; a scroll event alone must reposition the shell.
         await page.evaluate(() => {
           Object.defineProperty(window.visualViewport!, "offsetTop", { configurable: true, value: 52 });
           window.visualViewport!.dispatchEvent(new Event("scroll"));
         });
         await until(async () => Math.abs((await bounds()).bar.bottom - 462) < 1);
         expect((await bounds()).composer.top).toBeGreaterThanOrEqual(52);
-        // Dismissing the keyboard restores the full page, with the unsent draft and focus intact.
         await visible(844, 0);
         await until(async () => Math.abs((await bounds()).bar.bottom - 844) < 1);
         expect(await editor.innerText()).toContain(text.trim());
@@ -1182,11 +1134,9 @@ test("mobile keyboards keep the composer, model controls and bottom bar above th
       await page.setViewportSize({ width, height: 844 });
       await visible(844, 0);
       await until(async () => Math.abs((await bounds()).bar.bottom - 844) < 1);
-      // Pinch zoom must keep the layout's full size, rather than reflowing it into the zoomed-in window.
       await visible(422, 100, 2);
       expect((await bounds()).bar.bottom).toBe(844);
       await visible(844, 0);
-      // RocketClaw's own composer shares the same shell, not just the embedded OpenCode view.
       await page.goto(base);
       const native = page.locator("textarea:enabled");
       await native.fill("A long RocketClaw draft\n".repeat(40));
@@ -1207,7 +1157,6 @@ test("OpenCode's composer reports typing for the session the view shows, and the
   const { chromium: engine } = await import(playwright!);
   const { web, calls, release, terminals, typing, base } = start();
   release();
-  // A server on another release shows RocketClaw's version pill over OpenCode's header, which the pill must clear.
   fake.version = "1.0.0";
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
@@ -1216,14 +1165,10 @@ test("OpenCode's composer reports typing for the session the view shows, and the
     page.on("pageerror", (error: Error) => errors.push(error.message));
     const view = page.locator("main [data-oc-view]");
     const composer = view.locator("[data-component=composer] [contenteditable=true]");
-    // The pill's live region, beside the view rather than inside OpenCode's DOM.
     const status = page.locator('main :has(> * > [data-oc-view]) > [role="status"][aria-live="polite"]');
-    // The reports in the order the tab numbered them, which they may reach the server out of.
     const reports = () => calls.filter(({ path }) => path === "/api/ReportTyping").map(({ body }) => body).sort((a, b) => Number(a.seq) - Number(b.seq)).map(({ id, typing }) => ({ id, typing }));
     const sent: string[] = [];
     let sentPrompt: { text: string; metadata: { rocketclaw_mention_ids?: string[] } } | undefined;
-    // The fake server has no models and answers sends with the wrong status; these answers let OpenCode's own send
-    // paths run to the end (packages/client/src/promise/generated/client.ts).
     const catalog: Record<string, unknown> = {
       agent: [{ id: "build", name: "build", request: { settings: {}, headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
       model: [{ id: "m", modelID: "m", providerID: "p", name: "Model", capabilities: { tools: true, input: ["text"], output: ["text"] }, variants: [], time: { released: 0 }, cost: [], status: "active", enabled: true, limit: { context: 1000, output: 100 } }],
@@ -1241,7 +1186,6 @@ test("OpenCode's composer reports typing for the session the view shows, and the
       if (kind === "generate") return request.fulfill({ json: { data: { text: "by the way", tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0 } } });
       return request.fulfill({ status: 204 });
     });
-    // The reports after the first `from` are exactly `expected`.
     const reported = async (from: number, ...expected: { id: string; typing: boolean }[]) => {
       await until(() => reports().length >= from + expected.length);
       await Bun.sleep(200);
@@ -1251,7 +1195,6 @@ test("OpenCode's composer reports typing for the session the view shows, and the
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     await view.getByText("answer in ses_a", { exact: true }).waitFor();
 
-    // Typing reports, and deleting the whole draft, line break included, reports not typing.
     await composer.pressSequentially("hel");
     await reported(0, ses("ses_a", true));
     for (let count = 0; count < 3; count++) await composer.press("Backspace");
@@ -1264,7 +1207,6 @@ test("OpenCode's composer reports typing for the session the view shows, and the
     await composer.press("Backspace");
     await reported(3, ses("ses_a", false));
 
-    // Every send empties the composer in OpenCode's own code: a picked slash command, /btw, and a shell command.
     await composer.pressSequentially("/fork");
     await view.locator('[data-suggestion-id="session.fork"][data-active]').waitFor();
     await page.keyboard.press("Enter");
@@ -1275,18 +1217,14 @@ test("OpenCode's composer reports typing for the session the view shows, and the
     await composer.press("Enter");
     await until(() => sent.includes("generate"));
     await reported(6, ses("ses_a", true), ses("ses_a", false));
-    // The answer opens beside the conversation; closing it gives the conversation the whole view again.
     await view.locator('[data-pane-tab^="btw:"]').getByRole("button", { name: "Close tab", exact: true }).click();
-    // "!" turns the composer to shell mode and leaves it empty.
     await composer.pressSequentially("!ls");
     await composer.press("Enter");
     await until(() => sent.includes("shell"));
     await reported(8, ses("ses_a", true), ses("ses_a", false), ses("ses_a", true), ses("ses_a", false));
     expect(await composer.textContent()).toBe("");
 
-    // OpenCode's terminal and its settings search are not its composer.
     await page.keyboard.press("Control+Backquote");
-    // The socket opens only after ghostty-web loads and makes the terminal's input; a click before that focuses nothing.
     await until(() => terminals.open === 1);
     await view.locator('[data-component="terminal"]').click();
     await page.keyboard.press("x");
@@ -1302,7 +1240,6 @@ test("OpenCode's composer reports typing for the session the view shows, and the
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
 
-    // A send while the last report hangs reports not typing at once, numbered after it.
     const held = Promise.withResolvers<void>();
     let requested = 0;
     await page.route("**/api/ReportTyping", async (request: any) => { if (++requested === 1) await held.promise; await request.continue(); });
@@ -1319,10 +1256,7 @@ test("OpenCode's composer reports typing for the session the view shows, and the
     await reported(12, ses("ses_a", true), ses("ses_a", false));
     await page.unroute("**/api/ReportTyping");
 
-    // The pill shows another person's typing below OpenCode's header and RocketClaw's version pill, clear of the
-    // composer and what sits above it, and lets clicks through to the conversation.
     const push = (id: string, principal: string) => { for (const [stream, watched] of typing) if (watched === `opencode:box:${id}`) stream.enqueue(`data: ${JSON.stringify({ principal, typing: true })}\n\n`); };
-    // OpenCode's header: its title bar, or on a narrow view its tabs and the location bar below them.
     const placed = async (id: string, shot: string, header = "[data-session-title] > div", text = "Ana is typing") => {
       push(id, "Ana");
       await status.getByText(text, { exact: true }).waitFor();
@@ -1336,7 +1270,6 @@ test("OpenCode's composer reports typing for the session the view shows, and the
       expect(pill.top - top.bottom).toBeLessThan(12);
       expect(pill.top).toBeGreaterThanOrEqual(version.bottom);
       expect(pill.bottom).toBeLessThanOrEqual(dock.top);
-      // Nothing of the view paints over it: taking the pointer for a moment, it is what the pointer finds.
       expect(await status.evaluate((node: HTMLElement, { x, y }: { x: number; y: number }) => {
         node.style.pointerEvents = "auto";
         const found = node.contains(document.elementFromPoint(x, y));
@@ -1351,15 +1284,12 @@ test("OpenCode's composer reports typing for the session the view shows, and the
     await page.mouse.click(pill.left + pill.width / 2, pill.top + pill.height / 2);
     expect(await view.evaluate((node: HTMLElement & { clicked?: string }) => node.clicked)).toContain("question in ses_a");
 
-    // A subagent session the view opens takes no prompts, so it has no composer to type in: the pill goes on watching
-    // the tab's own session, and says so.
     await view.locator("[data-component=task-tool-card]").first().click();
     await view.getByText("answer in ses_child").waitFor();
     expect(await composer.count()).toBe(0);
     await placed("ses_a", "child", undefined, "Ana is typing in the main session");
     expect([...typing.values()]).toEqual(["opencode:box:ses_a"]);
 
-    // The view moves to another tab of its server; typing there reports that session.
     await page.evaluate((href: string) => { history.pushState(null, "", href); window.dispatchEvent(new PopStateEvent("popstate")); }, route(`opencode:box:${linked}`));
     await view.getByText(`answer in ${linked}`).waitFor();
     await composer.pressSequentially("hi");
