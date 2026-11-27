@@ -716,9 +716,6 @@ result is ready: `History` stores a copy of a file a tool returned inline so the
 file's card can download it, `GetAgentDraft` applies a merge that already landed,
 and `SearchSessions` marks its tab unread when a search finishes. The server's
 instructions describe only this translation, never a single method. `GET /rpc_mcp` answers 405.
-Its access log names the tool a request called after a `#`, as in
-`POST /rpc_mcp#Prompt`, with one line per tool when a request calls several,
-so agent calls can be told apart from browser calls.
 
 Each `opencode` server's MCP bridge is served at `/opencode/<name>/mcp` on the
 node, outside this proxy. It answers coding servers, not browsers: the tailnet
