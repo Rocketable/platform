@@ -2445,14 +2445,15 @@ func TestStickyGlobalRoutineReportsToStickySession(t *testing.T) {
 		name     string
 		existing bool
 		sticky   harness.AgentSticky
-	}{{"no chat", false, harness.AgentStickyOff}, {"chat born off", true, harness.AgentStickyOff}, {"chat born global", true, harness.AgentStickyGlobal}} {
+		file     string
+	}{{"no chat", false, harness.AgentStickyOff, "global"}, {"chat born off", true, harness.AgentStickyOff, "global"}, {"chat born global", true, harness.AgentStickyGlobal, "global"}, {"identity agent", false, harness.AgentStickyOff, "bob@example.com"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			service := newTestSessionService(t)
 			manager, cfg, finals := newRoutineTestManager(t, service)
 			msg := seedRoutineRun(t, service, "cron:daily")
-			writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmodel: gpt-6.1-sol\nsticky: global\nspace: Ops\npermission: {}\n---\nRun the job.\n")
+			writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmodel: gpt-6.1-sol\nsticky: "+tc.file+"\nspace: Ops\npermission: {}\n---\nRun the job.\n")
 
 			if tc.existing {
 				_, _, err := service.CreateStickyConversation(t.Context(), protocol.Conversation{ID: "room", Agent: "job", CreatedBy: "alice", Space: "Original"}, tc.sticky)
@@ -2471,9 +2472,13 @@ func TestStickyGlobalRoutineReportsToStickySession(t *testing.T) {
 			agents, _, err := LoadRuntimeDefinitions(config.NewLockedConfig(cfg), cfg.RuntimeDirName())
 			require.NoError(t, err)
 
-			sticky, err := service.StickySessions(t.Context(), "bob", agents)
+			sticky, err := service.StickySessions(t.Context(), "bob@example.com", agents)
 			require.NoError(t, err)
 			assert.Equal(t, sticky["job"], owner, "the run reports into the session a new Web session resumes")
+
+			others, err := service.StickySessions(t.Context(), "alice", agents)
+			require.NoError(t, err)
+			assert.Equal(t, tc.file == "global", others["job"] == owner, "only a global chat is everyone's")
 
 			var space string
 			require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT s.name FROM conversations c JOIN web_spaces s ON s.id = c.space_id WHERE c.conversation_id = $1`, owner).Scan(&space))

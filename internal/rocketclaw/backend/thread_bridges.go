@@ -782,7 +782,7 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 		return "", false, err
 	}
 
-	start.conversationID, resumed, err = m.store.CreateStickyConversation(ctx, protocol.Conversation{ID: start.conversationID, Agent: start.agent, CreatedBy: string(start.createdBy), Space: agent.Space}, agent.Sticky)
+	start.conversationID, resumed, err = m.store.CreateStickyConversation(ctx, protocol.Conversation{ID: start.conversationID, Agent: start.agent, CreatedBy: cmp.Or(agent.Identity, string(start.createdBy)), Space: agent.Space}, agent.Sticky)
 	if err != nil {
 		return "", false, fmt.Errorf("persist new Web session: %w", err)
 	}

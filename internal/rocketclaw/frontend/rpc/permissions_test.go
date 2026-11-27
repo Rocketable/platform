@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -665,4 +666,80 @@ func TestRunRoutineFollowsStickyAgent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, "lobby", started.Id)
 	require.Equal(t, started.Id, <-ran)
+}
+
+func TestIdentityAgentChatIsPrivate(t *testing.T) {
+	t.Parallel()
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	root, err := os.OpenRoot(cfg.Workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(cfg.RuntimeDirName()+"/agents", 0o700))
+	require.NoError(t, root.WriteFile(cfg.RuntimeDirName()+"/agents/mine.md", []byte("---\nmodel: gpt-6.1-sol\nsticky: alice@example.com\npermission: {}\n---\nHelp."), 0o600))
+
+	ran := make(chan string, 1)
+	server := New(withoutBackgroundJobs(), sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockRoutines{LoadOneOffRoutineFunc: func(stem string) (protocol.OneOffRoutine, error) {
+		return protocol.OneOffRoutine{RelativePath: "agents/" + stem + ".md#1h", Agent: stem}, nil
+	}, RunOneOffRoutineFunc: func(_ context.Context, job *protocol.OneOffRoutine) (protocol.RoutineRunResult, error) {
+		ran <- job.ConversationID
+		return protocol.RoutineRunResult{}, nil
+	}})
+	person := func(login string) context.Context {
+		return metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-tailnet-login-bin", login, "rocketclaw-tailnet-name-bin", login))
+	}
+	alice, bob := person("alice@example.com"), person("bob@example.com")
+	offered := func(ctx context.Context) bool {
+		listed, err := server.listAgents(ctx, "")
+		require.NoError(t, err)
+
+		return slices.ContainsFunc(listed.Agents, func(agent *Agent) bool { return agent.Name == "mine" && agent.Sticky == "identity" })
+	}
+	sidebar := func(login, id string) (ids []string) {
+		for chat, err := range sessions.SidebarChats(t.Context(), login, &mockChannels{}, []string{id}) {
+			require.NoError(t, err)
+
+			ids = append(ids, chat.Session.Conversation.ID)
+		}
+
+		return ids
+	}
+
+	require.True(t, offered(alice))
+	require.False(t, offered(bob), "another person never sees the agent")
+
+	chat, err := server.createSession(alice, &CreateSessionRequest{Agent: "mine"})
+	require.NoError(t, err)
+	again, err := server.createSession(alice, &CreateSessionRequest{Agent: "mine"})
+	require.NoError(t, err)
+	require.Equal(t, []any{chat.Id, true}, []any{again.Id, again.Resumed})
+	_, err = sessions.AppendEntryID(t.Context(), chat.Id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
+	require.NoError(t, err)
+
+	_, err = server.createSession(bob, &CreateSessionRequest{Agent: "mine"})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
+
+	require.NoError(t, server.visibleConversation(alice, chat.Id))
+	require.Equal(t, codes.PermissionDenied, status.Code(server.visibleConversation(bob, chat.Id)))
+	require.Equal(t, []string{chat.Id}, sidebar("alice@example.com", chat.Id))
+	require.Empty(t, sidebar("bob@example.com", chat.Id))
+
+	_, err = server.runRoutine(bob, &RunRoutineRequest{Stem: "mine"})
+	require.Equal(t, codes.PermissionDenied, status.Code(err), "%v", err)
+	require.Error(t, server.routineInLimit("bob@example.com", backend.SpaceLimit{}, "mine"), "nor reads its runs")
+
+	started, err := server.runRoutine(alice, &RunRoutineRequest{Stem: "mine"})
+	require.NoError(t, err)
+	require.Equal(t, chat.Id, <-ran, "the run replies in the person's own chat")
+	require.Equal(t, chat.Id, started.Id)
+
+	_, err = server.tabs(alice, &ChangeTabsRequest{Share: &SharedTab{Space: "main", Path: "/s/" + base64.RawURLEncoding.EncodeToString([]byte(chat.Id))}})
+	require.Equal(t, codes.FailedPrecondition, status.Code(err), "%v", err)
 }

@@ -140,6 +140,9 @@ func (s *Server) changeTabs(ctx context.Context, username string, limit backend.
 			err = status.Error(codes.InvalidArgument, "tab path is not a valid escaped path")
 		} else if id := backend.TabConversation(request.Share.Path); id != "" {
 			err = s.visibleConversation(ctx, id)
+			if _, privateTo, errTop := s.sessions.TopLevelSession(ctx, id); err == nil && (errTop != nil || privateTo != "") {
+				err = cmp.Or(errTop, status.Error(codes.FailedPrecondition, "a private chat cannot be shared"))
+			}
 		}
 
 		if err == nil {

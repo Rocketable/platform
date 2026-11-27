@@ -432,6 +432,30 @@ func TestSudoDelegationHonorsTaskDenials(t *testing.T) {
 	}
 }
 
+func TestIdentityAgentIsReachedOnlyByItself(t *testing.T) {
+	scout, root, mine := testAgent("scout"), testAgent("root"), testAgent("mine")
+	root.Permission.Sudo = true
+	require.NoError(t, scout.Permission.Set("task", "*", PermissionAllow))
+	require.NoError(t, mine.Permission.Set("task", "*", PermissionAllow))
+	mine.Sticky, mine.Identity = AgentStickyIdentity, "alice@example.com"
+	agents := Agents{Items: map[string]Agent{"scout": scout, "root": root, "mine": mine, "writer": testAgent("writer")}}
+
+	for _, tc := range []struct {
+		caller, owner string
+		private       bool
+	}{
+		{caller: "scout", owner: "mine", private: true},
+		{caller: "root", owner: "mine", private: true},
+		{caller: "mine", owner: "mine"},
+		{caller: "mine", owner: "writer"},
+		{caller: "scout", owner: "writer"},
+	} {
+		ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: &looper{agent: agents.Items[tc.caller], agents: agents}})
+		require.Equal(t, tc.private, ToolCallPrivate(ctx, tc.owner), "%+v", tc)
+		require.Equal(t, !tc.private, ToolCallDelegates(ctx, DelegationRead, tc.owner, tc.owner), "%+v", tc)
+	}
+}
+
 func TestTaskToolDescriptionUsesOpenCodeGuidance(t *testing.T) {
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child")}})
 

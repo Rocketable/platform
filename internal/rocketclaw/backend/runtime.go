@@ -287,7 +287,7 @@ func (r *Runtime) AttachSlack(slack slackLookup) {
 }
 
 func (r *Runtime) resumeScheduledSessions(ctx context.Context) error {
-	ids, err := queryStrings(ctx, r.Sessions.db, `SELECT conversation_id FROM conversations WHERE paused AND sticky = 'global' AND agent = ANY($1) ORDER BY 1`, "scheduled paused sessions", r.Sessions.scheduledAgents())
+	ids, err := queryStrings(ctx, r.Sessions.db, `SELECT conversation_id FROM conversations WHERE paused AND sticky IN ('global', 'identity') AND agent = ANY($1) ORDER BY 1`, "scheduled paused sessions", r.Sessions.scheduledAgents())
 	if err != nil {
 		return err
 	}

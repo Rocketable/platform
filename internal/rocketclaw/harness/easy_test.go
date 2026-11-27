@@ -110,9 +110,15 @@ func TestLoadAgentSticky(t *testing.T) {
 			require.Equal(t, want, agent.Sticky, required+line)
 		}
 
-		_, errs := loadEasyTestAgent(t, required+"\nsticky: [user]")
-		require.Len(t, errs, 1)
-		require.EqualError(t, errs[0], "main.md: sticky: must be off, user, global or slack")
+		agent, errs := loadEasyTestAgent(t, required+"\nsticky: alice@example.com\nroutines: [30m]")
+		require.Empty(t, errs)
+		require.Equal(t, []any{AgentStickyIdentity, "alice@example.com", 1}, []any{agent.Sticky, agent.Identity, len(agent.Routines)}, "an identity agent may have routines")
+
+		for _, value := range []string{"[user]", "identity", "Alice <alice@example.com>", "[alice@example.com, bob@example.com]"} {
+			_, errs := loadEasyTestAgent(t, required+"\nsticky: "+value)
+			require.Len(t, errs, 1, value)
+			require.EqualError(t, errs[0], "main.md: sticky: must be off, user, global, slack or one email address", value)
+		}
 	}
 }
 

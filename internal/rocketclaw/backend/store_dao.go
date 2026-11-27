@@ -74,9 +74,10 @@ func (d stateDAO) createConversation(ctx context.Context, conversation protocol.
 	}
 
 	birth := map[harness.AgentSticky]struct{ column, value, conflict string }{
-		harness.AgentStickyOff:    {"", "", "(conversation_id)"},
-		harness.AgentStickyUser:   {", sticky", ", 'user'", "(agent, created_by) WHERE sticky = 'user'"},
-		harness.AgentStickyGlobal: {", sticky", ", 'global'", "(agent) WHERE sticky = 'global'"},
+		harness.AgentStickyOff:      {"", "", "(conversation_id)"},
+		harness.AgentStickyUser:     {", sticky", ", 'user'", "(agent, created_by) WHERE sticky = 'user'"},
+		harness.AgentStickyGlobal:   {", sticky", ", 'global'", "(agent) WHERE sticky = 'global'"},
+		harness.AgentStickyIdentity: {", sticky", ", 'identity'", "(agent, created_by) WHERE sticky = 'identity'"},
 	}[sticky]
 
 	created, err := execRows(ctx, d.db, "create conversation", `WITH existing AS (SELECT count(*) AS n FROM conversations WHERE conversation_id = $1),
@@ -249,7 +250,7 @@ func (s *SessionService) StickySessions(ctx context.Context, username string, ag
 
 	for name := range agents.Items {
 		switch agents.Items[name].Sticky {
-		case harness.AgentStickyUser:
+		case harness.AgentStickyUser, harness.AgentStickyIdentity:
 			user = append(user, name)
 		case harness.AgentStickyGlobal:
 			global = append(global, name)
@@ -263,7 +264,7 @@ func (s *SessionService) StickySessions(ctx context.Context, username string, ag
 	}
 
 	err := readRows(ctx, s.db, `SELECT agent, conversation_id FROM conversations
-WHERE sticky = 'global' AND agent = ANY($1) OR sticky = 'user' AND agent = ANY($2) AND created_by = $3 AND created_by <> ''`, "sticky sessions", func(row rowScanner) error {
+WHERE sticky = 'global' AND agent = ANY($1) OR sticky IN ('user', 'identity') AND agent = ANY($2) AND created_by = $3 AND created_by <> ''`, "sticky sessions", func(row rowScanner) error {
 		var agent, id string
 		if err := row.Scan(&agent, &id); err != nil {
 			return fmt.Errorf("scan sticky session: %w", err)
@@ -387,17 +388,15 @@ func (l SpaceLimit) AllowsSession(session *SidebarSession) bool {
 	}
 }
 
-func (s *SessionService) TopLevelSession(ctx context.Context, conversationID string) (SidebarSession, error) {
-	var session SidebarSession
-
-	_, err := scanFound("read top-level session", s.db.QueryRowContext(ctx, `WITH RECURSIVE starts AS (
+func (s *SessionService) TopLevelSession(ctx context.Context, conversationID string) (session SidebarSession, privateTo string, err error) {
+	_, err = scanFound("read top-level session", s.db.QueryRowContext(ctx, `WITH RECURSIVE starts AS (
     SELECT $1::text AS id
 ), `+ancestorsSQL+`, top AS (
     SELECT conversation_id FROM ancestors ORDER BY depth DESC LIMIT 1
 )
-SELECT COALESCE(c.space_id, ''), c.agent, c.kind FROM top JOIN conversations c USING (conversation_id)`, conversationID).Scan(&session.SpaceID, &session.Conversation.Agent, &session.Kind))
+SELECT COALESCE(c.space_id, ''), c.agent, c.kind, CASE WHEN c.sticky = 'identity' THEN c.created_by ELSE '' END FROM top JOIN conversations c USING (conversation_id)`, conversationID).Scan(&session.SpaceID, &session.Conversation.Agent, &session.Kind, &privateTo))
 
-	return session, err
+	return session, privateTo, err
 }
 
 func (s *SessionService) CreateSpace(ctx context.Context, name string) error {

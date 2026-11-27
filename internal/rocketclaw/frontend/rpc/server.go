@@ -210,7 +210,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 
 	for name := range definitions.Items {
 		agent := definitions.Items[name]
-		if tags := backend.AgentTagChoices(&agent); len(tags) > 0 && limit.AllowsAgent(name) {
+		if tags := backend.AgentTagChoices(&agent); len(tags) > 0 && limit.AllowsAgent(name) && !definitions.PrivateFrom(name, owner) {
 			first.AgentTags[name] = &TagChoices{Tags: tags}
 		}
 	}
@@ -337,7 +337,7 @@ func webAttention(attention *backend.Attention) (unreadAt string, quiet, parked 
 }
 
 func (s *Server) history(ctx context.Context, request *HistoryRequest) (*HistoryResponse, error) {
-	_, limit, err := s.spaceLimit(ctx)
+	username, limit, err := s.spaceLimit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +350,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	if !routineTrace {
 		err = s.readableConversation(ctx, request.Id)
 	} else {
-		err = s.routineInLimit(limit, backend.RoutineStem(path))
+		err = s.routineInLimit(username, limit, backend.RoutineStem(path))
 	}
 
 	if err != nil {
@@ -997,7 +997,7 @@ func (s *Server) humanConversation(ctx context.Context, id string) (bool, error)
 }
 
 func (s *Server) listRoutines(ctx context.Context) (*ListRoutinesResponse, error) {
-	_, limit, err := s.spaceLimit(ctx)
+	username, limit, err := s.spaceLimit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1013,15 +1013,15 @@ func (s *Server) listRoutines(ctx context.Context) (*ListRoutinesResponse, error
 	}
 
 	response := &ListRoutinesResponse{}
-	spaces := map[string]string{}
+	spaces, private := map[string]string{}, map[string]bool{}
 
 	for i := range jobs {
 		job := &jobs[i]
 
 		row := &Routine{Stem: backend.RoutineStem(job.RelativePath), Schedule: job.Schedule, Body: job.Body, Agent: job.Agent, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
 
-		spaces[row.Stem] = row.Space
-		if !limit.AllowsSpaceName(row.Space) {
+		spaces[row.Stem], private[row.Stem] = row.Space, agents.PrivateFrom(job.Agent, username)
+		if !limit.AllowsSpaceName(row.Space) || private[row.Stem] {
 			continue
 		}
 
@@ -1044,7 +1044,7 @@ func (s *Server) listRoutines(ctx context.Context) (*ListRoutinesResponse, error
 	runs := map[string]*Routine{}
 
 	for _, source := range sources {
-		if !limit.AllowsSpaceName(spaces[backend.RoutineStem(source.Run.Path)]) {
+		if stem := backend.RoutineStem(source.Run.Path); !limit.AllowsSpaceName(spaces[stem]) || private[stem] {
 			continue
 		}
 
@@ -1083,7 +1083,7 @@ func (s *Server) runRoutine(ctx context.Context, request *RunRoutineRequest) (*R
 	}
 
 	space := cmp.Or(job.Space, agents.Items[job.Agent].Space)
-	if !limit.AllowsSpaceName(space) || !limit.AllowsAgent(job.Agent) {
+	if !limit.AllowsSpaceName(space) || !limit.AllowsAgent(job.Agent) || agents.PrivateFrom(job.Agent, principal) {
 		return nil, fmt.Errorf("run web routine: %w", status.Error(codes.PermissionDenied, "this routine or its agent is outside your spaces"))
 	}
 
@@ -1418,7 +1418,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 		}
 	}
 
-	allowed = sameSpace(definitions, response.CurrentAgent, slices.DeleteFunc(allowed, func(name string) bool { return !limit.AllowsAgent(name) }))
+	allowed = sameSpace(definitions, response.CurrentAgent, slices.DeleteFunc(allowed, func(name string) bool { return !limit.AllowsAgent(name) || definitions.PrivateFrom(name, username) }))
 
 	sticky, err := s.sessions.StickySessions(ctx, username, definitions)
 	if err != nil {
@@ -1497,7 +1497,7 @@ func sameSpace(agents harness.Agents, current string, allowed []string) []string
 }
 
 func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) {
-	_, limit, err := s.spaceLimit(ctx)
+	username, limit, err := s.spaceLimit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1508,7 +1508,7 @@ func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) 
 	}
 
 	choices := slices.DeleteFunc(definitions.PrimaryNames(), func(name string) bool {
-		return !limit.AllowsAgent(name) || id == "" && definitions.Items[name].Sticky == harness.AgentStickySlack
+		return !limit.AllowsAgent(name) || definitions.PrivateFrom(name, username) || id == "" && definitions.Items[name].Sticky == harness.AgentStickySlack
 	})
 
 	channel, _, _, err := s.sessions.SlackThread(ctx, id)
@@ -1573,7 +1573,7 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 	}
 
 	if run {
-		if err := s.routineInLimit(limit, backend.RoutineStem(path)); err != nil {
+		if err := s.routineInLimit(principal, limit, backend.RoutineStem(path)); err != nil {
 			return nil, err
 		}
 	}
@@ -2205,7 +2205,7 @@ func (s *Server) turnFeedable(ctx context.Context, id string, joins bool) error 
 }
 
 func (s *Server) visibleConversation(ctx context.Context, id string) error {
-	_, limit, err := s.spaceLimit(ctx)
+	username, limit, err := s.spaceLimit(ctx)
 	if err != nil {
 		return err
 	}
@@ -2241,17 +2241,13 @@ func (s *Server) visibleConversation(ctx context.Context, id string) error {
 		return err
 	}
 
-	if !visible {
-		return fmt.Errorf("web queue: %w", status.Error(codes.PermissionDenied, "private conversation"))
-	}
-
-	if !limit.Limited() {
-		return nil
-	}
-
-	top, err := s.sessions.TopLevelSession(ctx, id)
+	top, privateTo, err := s.sessions.TopLevelSession(ctx, id)
 	if err != nil {
 		return fmt.Errorf("resolve web conversation visibility: %w", err)
+	}
+
+	if !visible || privateTo != "" && privateTo != username {
+		return fmt.Errorf("web queue: %w", status.Error(codes.PermissionDenied, "private conversation"))
 	}
 
 	if !limit.AllowsSession(&top) {
@@ -2324,17 +2320,14 @@ func (s *Server) spaceLimit(ctx context.Context) (username string, limit backend
 	return username, limit, nil
 }
 
-func (s *Server) routineInLimit(limit backend.SpaceLimit, stem string) error {
-	if !limit.Limited() {
-		return nil
-	}
-
+func (s *Server) routineInLimit(username string, limit backend.SpaceLimit, stem string) error {
 	agents, err := backend.LoadRuntimeAgents(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return fmt.Errorf("load web routine agents: %w", err)
 	}
 
-	if job, errLoad := s.routines.LoadOneOffRoutine(stem); errLoad != nil || !limit.AllowsSpaceName(cmp.Or(job.Space, agents.Items[job.Agent].Space)) {
+	job, errLoad := s.routines.LoadOneOffRoutine(stem)
+	if limit.Limited() && (errLoad != nil || !limit.AllowsSpaceName(cmp.Or(job.Space, agents.Items[job.Agent].Space))) || agents.PrivateFrom(job.Agent, username) {
 		return fmt.Errorf("web routine: %w", status.Error(codes.PermissionDenied, "this routine is outside your spaces"))
 	}
 

@@ -26,5 +26,11 @@ func (a Agents) delegates(caller *Agent, op DelegationOp, target, owner string) 
 func ToolCallDelegates(ctx context.Context, op DelegationOp, target, owner string) bool {
 	tc, _ := toolCallContextFrom(ctx)
 
-	return tc.looper.agents.delegates(&tc.looper.agent, op, target, owner)
+	return !ToolCallPrivate(ctx, owner) && tc.looper.agents.delegates(&tc.looper.agent, op, target, owner)
+}
+
+func ToolCallPrivate(ctx context.Context, owner string) bool {
+	tc, _ := toolCallContextFrom(ctx)
+
+	return owner != tc.looper.agent.Name && tc.looper.agents.Items[owner].Identity != ""
 }

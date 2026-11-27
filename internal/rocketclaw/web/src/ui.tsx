@@ -1628,17 +1628,27 @@ function useNextAttention(path: string) {
 // Cmd/Ctrl+Shift+A, or this bottom bar button, opens the next tab waiting for this person, and Cmd/Ctrl+Shift+S parks
 // the tab in view until it is done, as its palette command does. Each key is RocketClaw's even while it has nothing to
 // do, so neither OpenCode nor the browser takes it.
-function HomeButton() {
+function HomeButton({ startChat }: { startChat: (agent: string) => void }) {
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000 }).data?.agents ?? [];
   const { rows } = useContext(Sidebar);
   const main = agents.find((agent) => agent.name === "main");
+  const own = agents.filter((agent) => agent.sticky === "identity");
   const used = (id: string) => Date.parse(rows.find((row) => row.id === id)?.updatedAt ?? "") || 0;
   const recent = agents.flatMap((agent) => agent.sticky === "user" && agent.stickySession ? [agent.stickySession] : []).toSorted((a, b) => used(b) - used(a))[0];
   const home = main ? main.stickySession : recent;
-  if (!main && !home) return null;
-  return <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Home" onClick={() => navigate(home ? sessionPath(home) : "/")}>
+  const open = (agent: Agent) => agent.stickySession ? navigate(sessionPath(agent.stickySession)) : startChat(agent.name);
+  if (!main && !home && !own.length) return null;
+  const button = <Button variant="ghost" size="icon" aria-label="Home" className="size-[var(--navigation-button)] shrink-0" />;
+  const trigger = <Tooltip><TooltipTrigger render={own.length > 1 ? <Menu.Trigger render={button} /> : button} onClick={own.length > 1 ? undefined : () => own.length ? open(own[0]) : navigate(home ? sessionPath(home) : "/")}>
     <House className="size-[var(--navigation-icon)]" />
   </TooltipTrigger><TooltipContent side="top">Home</TooltipContent></Tooltip>;
+  if (own.length < 2) return trigger;
+  return <DropdownMenu>
+    {trigger}
+    <DropdownMenuContent side="top" className="w-auto min-w-44">
+      {[...own, ...main ? [main] : []].map((agent) => <Menu.Item key={agent.name} className="flex cursor-default items-center rounded-md px-1.5 py-1 text-sm outline-none focus:bg-accent focus:text-accent-foreground" onClick={() => open(agent)}>{agent.name}</Menu.Item>)}
+    </DropdownMenuContent>
+  </DropdownMenu>;
 }
 
 function AttentionButton() {
@@ -2509,15 +2519,15 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const { close: closeTab, pathname } = tabs;
   const sidebar = useTabSidebar(pathname);
   useRecordVisit(tabs, palette.mode !== undefined);
-  const newChat = useCallback(() => {
+  const startChat = useCallback((agent: string) => {
     const draft = drafts.get("") ?? drafts.get(conversation.id)!;
     if ([!scope, draft.reverting, !draft.hydrated].some(Boolean)) return;
     const owner = newChatOwner.current;
     draft.reverting = true;
     draft.persistenceError = "";
     onDraftChange();
-    return draftContent(JSON.stringify([scope, ""]), () => ({ text: "", files: [], agent: "" })).then(() => {
-      if (drafts.get("") === draft) { draft.text = ""; draft.mentions = undefined; draft.files = []; draft.agent = ""; draft.edit++; }
+    return draftContent(JSON.stringify([scope, ""]), () => ({ text: "", files: [], agent })).then(() => {
+      if (drafts.get("") === draft) { draft.text = ""; draft.mentions = undefined; draft.files = []; draft.agent = agent; draft.edit++; }
       if (newChatOwner.current !== owner) return;
       drafts.delete("");
       setConversation((current) => ({ ...current, created: "", key: current.key + 1 }));
@@ -2527,6 +2537,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       onDraftChange();
     });
   }, [drafts, scope, conversation.id, onDraftChange]);
+  const newChat = useCallback(() => startChat(""), [startChat]);
   useLayoutEffect(() => {
     newChatOwner.current = newChat;
     return () => { newChatOwner.current = undefined; };
@@ -2583,7 +2594,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} />
               <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
                 <div className="flex w-max items-center gap-[var(--navigation-gap)]">
-                  <HomeButton />
+                  <HomeButton startChat={startChat} />
                   <NewSessionButton newChat={newChat} openCode={(opencode) => setPalette((current) => ({ mode: "commands", key: current.key + 1, opencode }))} />
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions and commands" onClick={() => openPalette("sessions")}>
                     <Search className="size-[var(--navigation-icon)]" />
