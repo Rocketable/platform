@@ -47,7 +47,7 @@ func TestTryGatherFailFastCancelsSibling(t *testing.T) {
 	for branch, want := range map[string]string{"boom()": "boom: boom", "boom().unwrap()": "try_gather: boom: boom"} {
 		t.Run(branch, func(t *testing.T) {
 			var (
-				mu        sync.Mutex
+				mu           sync.Mutex
 				errCancelled error
 			)
 
