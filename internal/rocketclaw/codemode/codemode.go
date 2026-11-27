@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	starjson "go.starlark.net/lib/json"
+	"go.starlark.net/resolve"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 	"go.starlark.net/syntax"
@@ -110,14 +111,18 @@ func BuildCatalog(tools []ToolDesc) (map[string]ToolDesc, error) {
 }
 
 func FreeNames(source string) ([]string, error) {
+	file, err := sourceOptions().Parse("codemode.star", source, 0)
+	if err != nil {
+		return nil, wrapParseError(err)
+	}
+
 	var names []string
 
-	_, _, err := starlark.SourceProgramOptions(sourceOptions(), "codemode.star", source, func(name string) bool {
+	if err := resolve.File(file, func(name string) bool {
 		names = append(names, name)
 
 		return true
-	})
-	if err != nil {
+	}, starlark.Universe.Has); err != nil {
 		return nil, wrapParseError(err)
 	}
 

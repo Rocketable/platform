@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,6 +12,38 @@ import (
 )
 
 func allowAll(context.Context, string, map[string]any) error { return nil }
+
+func TestFreeNames(t *testing.T) {
+	names, err := FreeNames(`def main():
+    rows = inventory_list()
+    return len([inventory_read(id=row.id) for row in rows])
+`)
+	if want := []string{"inventory_list", "len", "inventory_read"}; err != nil || !slices.Equal(names, want) {
+		t.Fatalf("FreeNames() = (%v, %v), want (%v, nil)", names, err, want)
+	}
+
+	for _, tc := range []struct{ source, want string }{
+		{"def main():\n    return \"unterminated", "unexpected EOF in string"},
+		{"def main():\n    break\n", "break not in a loop"},
+	} {
+		names, err := FreeNames(tc.source)
+		if names != nil || err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("FreeNames(%q) = (%v, %v), want nil names and error containing %q", tc.source, names, err, tc.want)
+		}
+	}
+}
+
+func BenchmarkFreeNames(b *testing.B) {
+	const source = `def main():
+    rows = inventory_list()
+    return [inventory_read(id=row.id) for row in rows if row.active]
+`
+	for b.Loop() {
+		if _, err := FreeNames(source); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 func runToString(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc, call CallFunc, host []HostTool) (string, error) {
 	value, err := Run(ctx, source, tools, decide, call, host)
