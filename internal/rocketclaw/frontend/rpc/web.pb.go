@@ -4752,7 +4752,8 @@ type Agent struct {
 	CustomShell string                 `protobuf:"bytes,9,opt,name=custom_shell,json=customShell,proto3" json:"custom_shell,omitempty"`
 	// New sessions in another space do not offer this agent; empty offers it in every space.
 	Space string `protobuf:"bytes,11,opt,name=space,proto3" json:"space,omitempty"`
-	// user or global for an agent with one Web session per person or one in all; empty when off.
+	// user or global for an agent with one Web session per person or one in all, identity for one private to the caller,
+	// or slack; empty when off.
 	Sticky string `protobuf:"bytes,12,opt,name=sticky,proto3" json:"sticky,omitempty"`
 	// A sticky agent's existing session, the caller's own for user, that a new session resumes; empty when none.
 	StickySession string `protobuf:"bytes,13,opt,name=sticky_session,json=stickySession,proto3" json:"sticky_session,omitempty"`

@@ -794,7 +794,7 @@ VALUES ('opencode:box:ops', '', '', 'remote', FALSE, 'remote', 'box', 'ops', 'ne
 	require.NoError(t, err)
 	require.Equal(t, []string{"Writer loose-unborn", "Writer main-born", "Writer ops-born", "Writer ops-unborn", "Writer switched"}, search.Principals)
 
-	top, err := s.TopLevelSession(ctx, "ops-born/call-1")
+	top, _, err := s.TopLevelSession(ctx, "ops-born/call-1")
 	require.NoError(t, err)
 	require.Equal(t, []string{ops, "ops-agent", string(KindWebChat)}, []string{top.SpaceID, top.Conversation.Agent, string(top.Kind)})
 }

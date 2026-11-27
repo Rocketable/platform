@@ -1370,7 +1370,7 @@ SELECT
     FALSE AS automation,
     c.paused,
     COALESCE(c.goal_status, '') = '`+GoalStatusActive+`' AS goal,
-    c.kind = 'web_chat' AND c.created_by NOT IN ('', $2) AND c.routine_run IS NULL AND NOT c.reported AND NOT (c.sticky = 'global' AND COALESCE(c.agent = ANY($7), FALSE)) AS pausable,
+    c.kind = 'web_chat' AND c.created_by NOT IN ('', $2) AND c.routine_run IS NULL AND NOT c.reported AND NOT (c.sticky IN ('global', 'identity') AND COALESCE(c.agent = ANY($7), FALSE)) AS pausable,
     c.name,
     c.forked_from,
     COALESCE(c.tags, '[]'::jsonb) AS tags,
@@ -1405,7 +1405,7 @@ LEFT JOIN running r ON r.conversation_id = c.conversation_id
 LEFT JOIN work w ON w.conversation_id = c.conversation_id
 LEFT JOIN asking k ON k.conversation_id = c.conversation_id
 LEFT JOIN external_runs x ON x.conversation_id = c.conversation_id
-WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY($5))
+WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY($5)) AND (c.sticky <> 'identity' OR c.created_by = $6)
 ), remote AS (
 SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.automation, FALSE AS paused, FALSE AS goal, FALSE AS pausable, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
     o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at, COALESCE(u.quiet, FALSE),

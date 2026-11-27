@@ -1406,7 +1406,7 @@ WHERE m.conversation_id = $1`, source).Scan(&data, &owner, &active); err != nil 
 		}
 
 		agent, loaded := definitions.Items[inbound.Routine.Agent]
-		if agent.Sticky == harness.AgentStickyGlobal {
+		if agent.Sticky == harness.AgentStickyGlobal || agent.Sticky == harness.AgentStickyIdentity {
 			if err := tx.Commit(); err != nil {
 				return fmt.Errorf("commit producer handoff check: %w", err)
 			}
@@ -2010,7 +2010,7 @@ func (b *Bridge) openRoutineReport(ctx context.Context, outbound *protocol.Outbo
 		return nil
 	}
 
-	destination := protocol.Conversation{ID: "web:" + b.config.ConversationID, Agent: outbound.Routine.Agent, CreatedBy: string(ThreadCreatedByRoutine), Space: cmp.Or(outbound.Routine.Space, agent.Space)}
+	destination := protocol.Conversation{ID: "web:" + b.config.ConversationID, Agent: outbound.Routine.Agent, CreatedBy: cmp.Or(agent.Identity, string(ThreadCreatedByRoutine)), Space: cmp.Or(outbound.Routine.Space, agent.Space)}
 	facts := conversationFacts{kind: KindWebChat, routineRun: b.config.ConversationID}
 
 	if agent.Sticky != harness.AgentStickyOff {

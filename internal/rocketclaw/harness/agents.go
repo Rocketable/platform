@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/mail"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -35,6 +36,7 @@ type Agent struct {
 	FrontmatterNode *yaml.Node
 	FileMode        fs.FileMode
 	Sticky          AgentSticky
+	Identity        string
 	ReplyHint       string
 
 	WorkingDirectory string
@@ -58,10 +60,11 @@ type AgentRoutine struct {
 type AgentSticky string
 
 const (
-	AgentStickyOff    AgentSticky = ""
-	AgentStickyUser   AgentSticky = "user"
-	AgentStickyGlobal AgentSticky = "global"
-	AgentStickySlack  AgentSticky = "slack"
+	AgentStickyOff      AgentSticky = ""
+	AgentStickyUser     AgentSticky = "user"
+	AgentStickyGlobal   AgentSticky = "global"
+	AgentStickySlack    AgentSticky = "slack"
+	AgentStickyIdentity AgentSticky = "identity"
 )
 
 type Agents struct {
@@ -80,6 +83,12 @@ func (a Agents) PrimaryNames() []string {
 	slices.Sort(names)
 
 	return names
+}
+
+func (a Agents) PrivateFrom(name, login string) bool {
+	identity := a.Items[name].Identity
+
+	return identity != "" && identity != login
 }
 
 func (a Agents) ShadowNames(parent string) []string {
@@ -210,9 +219,15 @@ func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error)
 		return Agent{}, err
 	}
 
-	sticky, ok := map[string]AgentSticky{"off": AgentStickyOff, "user": AgentStickyUser, "global": AgentStickyGlobal, "slack": AgentStickySlack}[frontmatterValue(frontmatterNode, "sticky", "off")]
+	stickyValue, identity := frontmatterValue(frontmatterNode, "sticky", "off"), ""
+
+	sticky, ok := map[string]AgentSticky{"off": AgentStickyOff, "user": AgentStickyUser, "global": AgentStickyGlobal, "slack": AgentStickySlack}[stickyValue]
+	if address, err := mail.ParseAddress(stickyValue); !ok && err == nil && address.Address == stickyValue {
+		sticky, identity, ok = AgentStickyIdentity, stickyValue, true
+	}
+
 	if !ok {
-		return Agent{}, errors.New("sticky: must be off, user, global or slack")
+		return Agent{}, errors.New("sticky: must be off, user, global, slack or one email address")
 	}
 
 	name := strings.TrimSuffix(filePath, filepath.Ext(filePath))
@@ -255,7 +270,7 @@ func loadAgent(fsys fs.FS, filePath string, cfg *AgentLoadConfig) (Agent, error)
 		return Agent{}, errors.New("maxRecursion: must be an integer of 0 or more")
 	}
 
-	agent := Agent{Name: name, Model: model, ReasoningEffort: modelEffort, MaxRecursion: &maxRecursion, Space: space, Prompt: strings.TrimSpace(prompt), Location: filePath, OutputSchema: outputSchema, FrontmatterNode: frontmatterNode, FileMode: info.Mode(), Sticky: sticky, Routines: routines}
+	agent := Agent{Name: name, Model: model, ReasoningEffort: modelEffort, MaxRecursion: &maxRecursion, Space: space, Prompt: strings.TrimSpace(prompt), Location: filePath, OutputSchema: outputSchema, FrontmatterNode: frontmatterNode, FileMode: info.Mode(), Sticky: sticky, Identity: identity, Routines: routines}
 	if mode == AgentModeEasy {
 		if err := compileEasyAgent(&agent, cfg); err != nil {
 			return Agent{}, err

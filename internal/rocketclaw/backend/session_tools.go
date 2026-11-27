@@ -132,6 +132,8 @@ func checkSessionReach(ctx context.Context, op harness.DelegationOp, session, ag
 	reason := "a sudo agent's chats and agents that are not loaded are out of its reach"
 
 	switch {
+	case harness.ToolCallPrivate(ctx, owner):
+		reason = "agent " + owner + " is private to one person, and only it reaches its own sessions"
 	case caller.Permission.Sudo && action == harness.PermissionDeny:
 		reason = "its task rules deny agent " + agent
 	case caller.Permission.Sudo:
@@ -331,7 +333,7 @@ ORDER BY r.latest DESC, r.conversation_id COLLATE "C"`
 func listSessionsTool(service *SessionService, threads *threadBridgeManager) harness.Tool {
 	return harness.Tool{
 		Name: sessionsListToolName, Description: fmt.Sprintf("List durable conversations of this State Store, newest first. Supply all five fields: criteria, since (required), until (empty for no upper bound), limit (1 to %d) and include_message_preview. Returns TSV with a header, one session per row with entry counts, timestamps and optional message previews. "+
-			"Only sessions of agents your task permission rules name are listed, your own only when they name you, never a sudo agent's unless you are sudo; a sudo agent lists every session but those of another agent its task rules deny. "+
+			"Only sessions of agents your task permission rules name are listed, your own only when they name you, never a sudo agent's unless you are sudo; a sudo agent lists every session but those of another agent its task rules deny. An agent private to one person (sticky set to their email address) is reached only by itself, never by another agent, sudo or not. "+
 			"Empty criteria lists every such stored conversation by latest entry, including private MCP and routine sessions. "+
 			"Other criteria is a Web /search query and returns what /search would: only the chats Web lists, never private External MCP or routine producer chats, filtered before the limit; order then uses each chat's summary time, and since and until the later of it and when the chat's newest running or waiting turn was created, so current work counts as recent. "+
 			"Query language: tag:V, routine:V, agent:V and room:V match V exactly and case-sensitively; space:V matches the complete Birth Space name ignoring case, not tab placement; model:V matches part of the agent's configured model, ignoring case; V may be a JSON-quoted string such as tag:\"Needs review\"; is:forked and is:routine; is:running (a running turn or background work), is:queued (waiting turns other than scheduled ones), is:waiting (waiting on a person: a pending question, form or permission request) and is:external (bound to External MCP), all but is:waiting counting the hidden runs reporting to a chat as its own; sort:newest or sort:oldest. agent:V also matches chats showing a hidden routine or External MCP run of agent V. Room terms match any one room and agent terms any one agent; other filters use AND. Unknown or malformed terms are searched as text. "+
@@ -843,7 +845,7 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 
 	return harness.Tool{Name: sessionsWriteToolName, Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject}, Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
 		Description: "Create a top-level RocketClaw Web session, or write prompt to an existing one, without waiting for its turn. Supply every field. " +
-			"With an empty session_id, create a session named title, run by agent (empty for this turn's agent), or reuse that agent's sticky session; mode is ignored and prompt is queued. A reused session keeps its name and history. The receiver cannot see the sending conversation, so prompt must carry all the context it needs. A personal sticky agent requires the originating person's login identity. " +
+			"With an empty session_id, create a session named title, run by agent (empty for this turn's agent), or reuse that agent's sticky session; mode is ignored and prompt is queued. A reused session keeps its name and history. The receiver cannot see the sending conversation, so prompt must carry all the context it needs. A personal sticky agent requires the originating person's login identity. An agent private to one person (sticky set to their email address) is reached by no other agent. " +
 			"With session_id, deliver prompt to that session; title and agent are ignored. steer joins its running turn while that turn still takes input, otherwise runs as its next turn; enqueue runs after the work already queued; stop stops its current turn and goal, then runs prompt before anything already queued. " +
 			"Only stop takes an empty prompt: it then just stops the turn and goal, queues nothing, and posts that this session stopped it into that session's transcript without starting a turn. " +
 			"The receiver is told this session and agent sent it and that its answer comes back here. Each call that returns a queue_item_id gets exactly one reply: when the target's turn that took prompt ends, or, for an empty-prompt stop, once the stopped turn is over, a <session_reply> note naming that queue_item_id arrives here with the outcome and that turn's final answer. A steer's answer covers the whole turn it joined. " +

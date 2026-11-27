@@ -52,6 +52,14 @@ func (n *sessionMentionNotice) PromptAccepted(ctx context.Context) {
 
 	n.accepted = true
 
+	if _, privateTo, err := n.server.sessions.TopLevelSession(ctx, n.id); err != nil || privateTo != "" {
+		if err != nil {
+			slog.Warn("session mention privacy lookup failed", "session", n.id, "error", err)
+		}
+
+		return
+	}
+
 	cfg := n.server.cfg.Clone()
 
 	path := "/s/"

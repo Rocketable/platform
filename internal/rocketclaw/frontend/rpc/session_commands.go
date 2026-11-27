@@ -272,7 +272,7 @@ func (s *Server) summarizeBranch(ctx context.Context, request *SummarizeBranchRe
 }
 
 func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequest) (*SearchMessagesResponse, error) {
-	username, limit, err := s.spaceLimit(ctx)
+	owner, _, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -282,44 +282,45 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 		return &SearchMessagesResponse{}, nil
 	}
 
-	owner := ""
-	if limit.Limited() {
-		owner = username
+	scan, err := sharedSearch(ctx, s, "messages "+needle, messageSearch{needle: needle})
+	if err != nil {
+		return nil, err
 	}
 
-	return sharedSearch(ctx, s, fmt.Sprintf("messages %q %s", owner, needle), messageSearch{owner: owner, needle: needle})
+	chats := make([]string, 0, len(scan.hits))
+	for _, hit := range scan.hits {
+		chats = append(chats, hit.ConversationID)
+	}
+
+	listed := make(map[string]bool)
+
+	for chat, err := range s.sessions.SidebarChats(ctx, owner, s.channels, chats) {
+		if err != nil {
+			return nil, fmt.Errorf("web message search: %w", err)
+		}
+
+		listed[chat.Session.Conversation.ID] = true
+	}
+
+	hits := slices.DeleteFunc(slices.Clone(scan.hits), func(hit backend.MessageSearchHit) bool { return !listed[hit.ConversationID] })
+
+	return &SearchMessagesResponse{Matches: messageMatches(hits), TagIds: backend.MentionedIDs(hits, scan.mentions)}, nil
 }
 
-type messageSearch struct {
-	owner, needle string
+type messageSearch struct{ needle string }
+
+type messageScan struct {
+	hits     []backend.MessageSearchHit
+	mentions map[string]string
 }
 
-func (work messageSearch) search(scanCtx context.Context, s *Server) (*SearchMessagesResponse, error) {
+func (work messageSearch) search(scanCtx context.Context, s *Server) (*messageScan, error) {
 	hits, mentions, err := s.sessions.SearchMessagesMentioning(scanCtx, work.needle, s.channels)
 	if err != nil {
 		return nil, fmt.Errorf("web message search: %w", err)
 	}
 
-	if work.owner != "" {
-		chats := make([]string, 0, len(hits))
-		for _, hit := range hits {
-			chats = append(chats, hit.ConversationID)
-		}
-
-		listed := make(map[string]bool)
-
-		for chat, err := range s.sessions.SidebarChats(scanCtx, work.owner, s.channels, chats) {
-			if err != nil {
-				return nil, fmt.Errorf("web message search: %w", err)
-			}
-
-			listed[chat.Session.Conversation.ID] = true
-		}
-
-		hits = slices.DeleteFunc(hits, func(hit backend.MessageSearchHit) bool { return !listed[hit.ConversationID] })
-	}
-
-	return &SearchMessagesResponse{Matches: messageMatches(hits), TagIds: backend.MentionedIDs(hits, mentions)}, nil
+	return &messageScan{hits: hits, mentions: mentions}, nil
 }
 
 func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequest) (*SearchSessionsResponse, error) {

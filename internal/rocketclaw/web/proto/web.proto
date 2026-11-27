@@ -586,7 +586,8 @@ message Agent {
   reserved "voices";
   // New sessions in another space do not offer this agent; empty offers it in every space.
   string space = 11;
-  // user or global for an agent with one Web session per person or one in all; empty when off.
+  // user or global for an agent with one Web session per person or one in all, identity for one private to the caller,
+  // or slack; empty when off.
   string sticky = 12;
   // A sticky agent's existing session, the caller's own for user, that a new session resumes; empty when none.
   string sticky_session = 13;

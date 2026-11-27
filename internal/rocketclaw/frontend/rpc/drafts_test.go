@@ -295,7 +295,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 	sent, err := invoke[DraftPromptResponse](bob, connection, "DraftPrompt", &DraftPromptRequest{Id: probe.Id, Text: "hello"})
 	require.NoError(t, err)
 
-	notRun := []*AgentDraftProblem{{Variant: "b", Key: "sticky", Sentence: "off, user, global or slack."}}
+	notRun := []*AgentDraftProblem{{Variant: "b", Key: "sticky", Sentence: "off, user, global, slack, or one email address, written exactly as the person's login."}}
 	require.True(t, proto.Equal(&DraftPromptResponse{TestChat: sent.TestChat, Problems: notRun}, sent), "%v", sent)
 	require.NotEmpty(t, sent.TestChat)
 

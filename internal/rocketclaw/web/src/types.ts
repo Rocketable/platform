@@ -33,8 +33,8 @@ export type AttentionAction = "MARK_READ" | "MARK_UNREAD" | "PARK" | "PARK_UNTIL
 export type SessionBatch = { sessions?: Session[]; owner?: string; upstreamSuccess?: boolean; opencodeServers?: Remote["servers"]; agentTags?: Record<string, { tags?: string[] }>; version?: string; since?: string; removed?: string[]; tabs?: TabAttention[]; tabRevision?: string; navigate?: string };
 export type AgentChoices = { agents: Agent[]; currentAgent: string };
 export type Routine = { stem: string; status: string; lastRun: string; nextRun: string; schedule?: string; body?: string; agent?: string; upcoming?: string[]; origin?: string; space?: string };
-// sticky is "user" or "global" for an agent with one session per person or one in all; stickySession is the one a
-// new session resumes.
+// sticky is "user" or "global" for an agent with one session per person or one in all, or "identity" for one private
+// to this person; stickySession is the one a new session resumes.
 export type Agent = { name: string; model?: string; reasoning?: string; description?: string; verbosity?: string; prompt?: string; permissions?: string; origin?: string; customShell?: string; space?: string; rocketclaw?: string; sticky?: string; stickySession?: string };
 export type Skill = { name: string; description?: string; license?: string; compatibility?: string; content?: string; origin?: string };
 export type PageEntry = { space: string; path: string; updatedAt?: string };
