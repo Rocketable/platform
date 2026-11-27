@@ -42,8 +42,6 @@ function serve(histories: Record<string, History>) {
 for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
   const histories: Record<string, History> = {
-    // A task row opens the subagent its progress records, also when it continued it, or the one the server linked to an older row.
-    // A row's reasons open its permission review only once the delegations list it, or the one the server linked to an older task row.
     chat: { messages: [event("user", "Run the review", { messageId: "1:0" }), event("tool", `task {"description":"Review"}`, { toolName: "task", toolCallId: "call-task", delegation: "chat/call-task-0a1b2c3d", review: "chat/call-task" }), event("tool", `bash {"command":"ls"}`, { toolName: "bash", toolCallId: "call-plain", review: "chat/call-plain-review-9f9f9f9f" }), event("tool", `task {"description":"Again"}`, { toolName: "task", toolCallId: "call-again", delegation: "chat/call-task-0a1b2c3d" }),
       event("tool", `bash {"command":"rm"}`, { toolName: "bash", toolCallId: "call_0", review: "chat/call_0-review-1a2b3c4d" }), event("tool", "blocked", { toolCallId: "call_0" }), event("tool", `task {"description":"Fresh"}`, { toolName: "task", toolCallId: "call-fresh", delegation: "chat/call-fresh-2b3c4d5e", review: "chat/call-fresh-review-3c4d5e6f" }), event("tool", `bash {"command":"old"}`, { toolName: "bash", toolCallId: "call-old", delegation: "chat/call-old" }), event("assistant", "Review finished")],
       delegations: ["chat/call-task", "chat/call-task-0a1b2c3d", "chat/call_0-review-1a2b3c4d", "chat/call-fresh-2b3c4d5e", "chat/call-fresh-review-3c4d5e6f", "chat/call-old"], reviewRationales: { "chat/call-task": "The task is in scope.", "chat/call_0-review-1a2b3c4d": "The requested change is outside the allowed scope.", "chat/call-fresh-review-3c4d5e6f": "The read-only check is within the requested scope." } },
@@ -62,9 +60,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replace(/=+$/, "")}?message=1%3A0`);
     const open = page.locator("main").getByRole("link", { name: /^Open delegation/ });
     await page.locator("main").getByText("Review finished", { exact: true }).waitFor();
-    // The default Compact level folds both calls into one closed Chain of Thought row.
     await page.locator("main").getByRole("button", { name: "Used 6 tools", exact: true }).click();
-    // Auto-scroll can move the next click target while a panel is still growing.
     await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('main [data-slot="trace-collapsible-content"][data-open]')].every((panel) => panel.style.getPropertyValue("--collapsible-panel-height") === "auto"));
     for (const title of ["task", "task", "task", "bash · ls", "bash · rm", "bash · old"]) {
       await page.locator("main").getByRole("button", { name: title, exact: true, expanded: false }).first().click();
@@ -81,7 +77,6 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
     const panel = width >= 1024 ? page.getByRole("complementary", { name: "Delegation", exact: true }) : page.getByRole("dialog", { name: "Delegation", exact: true });
     const crumbs = panel.getByRole("navigation", { name: "Delegation breadcrumbs" });
     const delegation = () => new URL(page.url()).searchParams.get("delegation");
-    // A review opens from the reason under its call's box, not from a row of its own.
     const review = page.locator("main").getByRole("link", { name: "Open permission review", exact: true });
     expect(await review.count()).toBe(3);
     const denied = page.locator('main [data-tool-call-id="call_0"]');
@@ -122,7 +117,6 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
     expect(delegation()).toBe("chat/call-task-0a1b2c3d/call-inner");
     expect(await crumbs.getByRole("link").allTextContents()).toEqual(["Conversation", "task"]);
     expect(await crumbs.locator('[aria-current="page"]').textContent()).toBe("Run · print('checking every configured region for configuration drift')");
-    // A long last step shortens first; the steps before it stay whole.
     expect(await crumbs.getByRole("link", { name: "task", exact: true }).evaluate((link: HTMLElement) => link.scrollWidth <= link.clientWidth && link.clientWidth > 0)).toBe(true);
     await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/delegation-panel-${width}.png`), await page.screenshot());
     await panel.getByRole("link", { name: "Back to task", exact: true }).click();
@@ -189,9 +183,6 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
   const call = (name: string, input: object | string, extra: Partial<CodeModeCall> = {}): CodeModeCall => ({ name, arguments: typeof input === "string" ? input : JSON.stringify(input), status: "ok", ...extra });
   const script = (id: string, input: object, extra: Partial<TranscriptEvent> = {}) => event("tool", `execute ${JSON.stringify(input)}`, { toolName: "execute", toolCallId: id, ...extra });
   const result = (id: string, text: string, extra: Partial<TranscriptEvent> = {}) => event("tool", text, { toolCallId: id, ...extra });
-  // A review whose action cannot be read back, or one a background script saved after its turn ended,
-  // has a reason but no row; it follows the block's result.
-  // The script's review saves one answer per check under the check's turn, each after a long prompt.
   const answer = (id: number, rationale: string, turnId: string) => [event("user", `Planned action ${id}\n${"Transcript line.\n".repeat(60)}`, { messageId: `${id}:0`, turnId }), event("assistant", JSON.stringify({ risk_level: "low", user_authorization: "high", outcome: "allow", rationale }), { messageId: `${id}:1`, turnId })];
   const server = serve({ "chat/call-a-review-1": { delegations: [], messages: [
     ...answer(20, "The script only reads the diff.", "t-script"), ...answer(21, "Reading the diff is in scope.", "t-read"), ...answer(22, "Deleting files is out of scope.", "t-rm"),
@@ -240,22 +231,17 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replace(/=+$/, "")}`);
     await page.locator("main").getByText("Done", { exact: true }).waitFor();
 
-    // Compact: the description titles the block, and its reasons follow its result; the script is not in the page.
     expect(await trigger("call-a").getAttribute("title")).toBe("Validate PR diff");
     expect(await trigger("call-c").getAttribute("title")).toBe("Run · ls");
-    // Only the script reason and reasons no row shows follow the result, one footer each.
     const reasons = (id: string) => block(id).locator('[data-slot="code-block"]:has(> [aria-label="Result"]) ~ footer[data-slot="permission-review-rationale"]');
     expect(await reasons("call-a").allTextContents()).toEqual(["Allowed: The script only reads the diff.", "The late cleanup is in scope."]);
     expect(await reasons("call-c").allTextContents()).toEqual(["Listing files is read-only."]);
     expect(await reasons("call-d").count()).toBe(0);
-    // A script still running has no result yet; its reason stands alone.
     expect(await block("call-e").locator('footer[data-slot="permission-review-rationale"]').allTextContents()).toEqual(["Running tests is in scope."]);
     expect(await a.textContent()).not.toContain('print("checked")');
     expect(await a.locator('[aria-label="Script"]').count()).toBe(0);
 
-    // Detailed: each call is one row; the script waits behind its toggle.
     await level("detailed");
-    // A returned list of strings shows as its text, not as escaped JSON.
     expect(await a.locator('[aria-label="Result"]').innerText()).toBe("<path>go.mod</path>\nmodule x\n\nchecked");
     expect(await a.locator('[aria-label="Script"]').count()).toBe(0);
     await a.getByRole("button", { name: "Show script", exact: true }).click();
@@ -293,14 +279,12 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     await a.scrollIntoViewIfNeeded();
     await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/u4/code-mode-${width}.png`), await page.screenshot());
 
-    // A reason is one line until clicked.
     const late = reasons("call-a").last().getByRole("button");
     expect(await late.evaluate((node: Element) => getComputedStyle(node).whiteSpace)).toBe("nowrap");
     await late.click();
     expect(await late.getAttribute("aria-expanded")).toBe("true");
     expect(await late.evaluate((node: Element) => getComputedStyle(node).whiteSpace)).toBe("pre-wrap");
 
-    // A call's reason opens the script's review at the approver's answer on that call, with the arrow to its end.
     const panel = width >= 1024 ? page.getByRole("complementary", { name: "Delegation", exact: true }) : page.getByRole("dialog", { name: "Delegation", exact: true });
     const viewport = '[data-delegation-transcript]';
     const atEnd = (end: boolean) => page.waitForFunction(([selector, end]: [string, boolean]) => {
@@ -334,7 +318,6 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
       return box.top >= bounds.top && box.bottom <= bounds.bottom;
     }, [viewport, id, {}]);
     const params = () => Object.fromEntries(["delegation", "reason", "answer"].map((name) => [name, new URL(page.url()).searchParams.get(name)]));
-    // Two calls with the same reason each open their own answer.
     await heredoc.getByRole("link", { name: "Open permission review", exact: true }).click();
     await shown("21:1");
     expect(params()).toEqual({ delegation: "chat/call-a-review-1", reason: "Reading the diff is in scope.", answer: "t-read" });
@@ -401,7 +384,6 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     expect(params()).toEqual({ delegation: "chat/call-a-review-1", reason: "Reading the diff is in scope.", answer: "t-diff" });
     await page.goBack();
     await panel.waitFor({ state: "detached" });
-    // A reason with no review turn, as saved before turns were named, opens at the first answer giving it.
     await reasons("call-a").last().getByRole("link", { name: "Open permission review", exact: true }).click();
     await shown("23:1");
     expect(params()).toEqual({ delegation: "chat/call-a-review-1", reason: "The late cleanup is in scope.", answer: null });
@@ -410,7 +392,6 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     await latest.and(panel.locator('[data-active="true"]')).waitFor();
     await latest.click();
     await atEnd(true);
-    // Opened without an answer, it starts at its end.
     const plainReview = new URL(page.url());
     plainReview.searchParams.delete("reason");
     plainReview.searchParams.delete("answer");
@@ -419,12 +400,10 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     await atEnd(true);
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replace(/=+$/, "")}`);
 
-    // Everything shows the script without a toggle.
     await level("everything");
     await a.locator('[aria-label="Script"]').waitFor();
     expect(await a.getByRole("button", { name: "Show script", exact: true }).count()).toBe(0);
 
-    // Quiet hides a successful block; a failed one still shows, with the toggle.
     await level("quiet");
     await block("call-c").waitFor();
     expect(await a.count()).toBe(0);
@@ -439,7 +418,6 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     expect(await failure.first().getAttribute("title")).toBe("Increase timeline detail in the command palette to see tool details.");
     expect(await page.locator("main").getByText("tool call failed: boom", { exact: true }).count()).toBe(0);
     expect((await failure.first().boundingBox())!.height).toBeLessThan(32);
-    // Raising the level through the palette restores the failure's full panel.
     await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("Timeline:");
     await page.getByRole("button", { name: /^Timeline: Detailed/ }).click();
