@@ -7,8 +7,6 @@ import type { PendingQuestion, QueueItem, TranscriptEvent } from "./types";
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 const shots = path.resolve(import.meta.dir, "../../../../.tmp/web-screenshots");
 
-// OpenCode references: packages/app/src/composer/editor/editor.tsx (including our
-// embedded touch bar) and packages/app/src/session/composer/queue.ts.
 for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, false], [390, false]] as const) {
   test(`native composer at ${width}px with ${touch ? "touch" : "desktop"} input`, async () => {
     const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
@@ -63,7 +61,6 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
       await page.screenshot({ path: path.join(shots, `native-composer-idle-${width}-${touch ? "touch" : "desktop"}.png`) });
 
       await input.fill("First line");
-      // Clearing is optimistic; the fixture records each prompt before its response.
       const firstPrompt = page.waitForResponse("**/api/Prompt");
       await input.press("Enter");
       if (touch) {
@@ -185,8 +182,6 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
   }, 30_000);
 }
 
-// While the agent is paused, Send posts to the people in the chat at once, also during a finishing reply, and
-// starts no turn. A switch the server refuses says why, and a person's name shows as text, never as markup.
 for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused composer at ${width}px`, async () => {
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
   const name = "<img src=x onerror=alert(1)>";
@@ -214,7 +209,6 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/ListQueue": return Response.json({ items: queue });
       case "/api/UpdateSession": {
-        // The first switch is refused, as the server refuses a session that cannot pause.
         if (!refused) {
           refused = true;
           return Response.json({ code: 3, message: "this session's agent cannot pause" }, { status: 400 });
@@ -249,7 +243,6 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
     const input = page.locator("textarea"), transcript = page.locator("#transcript-scroll"), send = page.getByRole("button", { name: "Send", exact: true });
     const waitForPrompt = (text: string) => page.waitForResponse((response: { url(): string; request(): { postDataJSON(): { text: string } } }) =>
       response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === text);
-    // The pause toggle sits with Send, as a button that stays pressed while the agent is paused.
     const toggle = page.locator('[data-slot="composer-delivery"]').getByRole("button", { name: "Pause agent", exact: true });
     await page.locator("textarea:enabled").waitFor();
     expect(await toggle.getAttribute("aria-pressed")).toBe("false");
@@ -267,7 +260,6 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
     const box = (await toggle.boundingBox())!;
     expect(box.x + box.width).toBeLessThanOrEqual(width);
 
-    // On an idle chat the message shows at once and nothing works on it.
     await input.fill("Lunch at noon?");
     const lunch = waitForPrompt("Lunch at noon?");
     await send.click();
@@ -278,7 +270,6 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
     await mkdir(shots, { recursive: true });
     await page.screenshot({ path: path.join(shots, `paused-composer-idle-${width}.png`) });
 
-    // During a finishing reply a message shows at once too, and "Working…" stays with the reply.
     running = true;
     add({ itemId: "reply", inputId: "", role: "assistant", text: "Still answering the earlier request" });
     messages.at(-1)!.complete = false;
@@ -286,7 +277,6 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
     const working = page.getByText("Working…", { exact: true });
     await working.waitFor();
     await input.fill("While the reply runs");
-    // Paused, Steer would only post as Send does, so the row shows the pressed toggle and Send.
     const steer = page.locator('[data-slot="composer-delivery"]').getByRole("button", { name: "Steer", exact: true });
     expect(await steer.count()).toBe(0);
     expect(await toggle.getAttribute("aria-pressed")).toBe("true");
@@ -298,7 +288,6 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
     expect(prompts.at(-1)).toMatchObject({ text: "While the reply runs", delivery: "STEER" });
     expect(await working.count()).toBe(1);
 
-    // Send does not answer the agent's question; its card still can.
     questions = [{ id: "ask", question: "Which venue?", details: "", multiple: false, options: [{ label: "Cafe", value: "cafe", description: "" }] }];
     changed();
     const card = page.getByRole("form", { name: "Question" });
@@ -313,7 +302,6 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
     expect(answers).toEqual([]);
     expect(await card.isVisible()).toBe(true);
 
-    // A queued item waits for resume.
     queue.push({ id: "later", text: "Summarize the plan", delivery: "QUEUE" });
     const queued = page.locator('[data-queue-id="later"]').getByRole("button", { name: "Steer", exact: true });
     await queued.waitFor();
@@ -327,7 +315,6 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
     changed();
     await working.waitFor({ state: "hidden" });
 
-    // The person's name shows as text: as the author of their messages and in the line saying they paused the agent.
     expect(await transcript.locator('[data-slot="message-author"]').first().textContent()).toBe(name);
     const line = transcript.locator('[data-slot="code-block-code"]').filter({ hasText: "paused the agent." }).first();
     await line.waitFor({ state: "attached" });
@@ -339,7 +326,6 @@ for (const [width, touch] of [[1280, false], [390, true]] as const) test(`paused
     expect(updates.at(-1)).toEqual({ id: "paused", paused: false });
     expect(await input.getAttribute("placeholder")).toBe("Message or /command");
 
-    // Live, a reply running and a typed message bring Steer, and the toggle steps aside so Send stays on screen.
     running = true;
     changed();
     await working.waitFor();
