@@ -15,7 +15,7 @@ import (
 )
 
 func TestRoutineProducerRunsWithDestination(t *testing.T) {
-	progressRoutine := &protocol.RoutineMessage{RelativePath: "cron/daily.md", Agent: "job-agent", RanAt: "2000-01-02T03:04:05Z"}
+	progressRoutine := &protocol.RoutineMessage{Agent: "job-agent"}
 	for _, outcome := range []string{"normal", "run-error", "interrupted"} {
 		t.Run(outcome, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())

@@ -119,8 +119,7 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	require.True(t, admitted)
 	require.Empty(t, bus.outbound)
 
-	header, _, _ := strings.Cut(buildPrompt(initial, nil, false), "\n\n")
-	bridge.publishConsumed(t.Context(), initial, header)
+	bridge.publishConsumed(t.Context(), initial)
 
 	for _, id := range []string{"steer-first", "steer-second"} {
 		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &content, true)
@@ -271,12 +270,11 @@ func TestBridgeConsumedInputKeepsRawWebText(t *testing.T) {
 		Text: "hello", TextAttachments: []string{`attachment:id "file.txt" (workspace path "artifacts/uploads/id/file.txt")`},
 	}, true)
 	inbound.Metadata["web_message_id"] = "web-input"
-	bridge.publishConsumed(t.Context(), inbound, `[Web principal="alice"]`)
+	bridge.publishConsumed(t.Context(), inbound)
 
 	message := <-bus.outbound
 	require.Contains(t, message.ConsumedText, "attachment:id")
 	require.Equal(t, "hello", message.ConsumedRawText)
-	require.Equal(t, `[Web principal="alice"]`, message.ConsumedHeader)
 }
 
 func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
@@ -1090,7 +1088,6 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 	require.Equal(t, "failed-input", consumed.ConsumedID)
 	require.Equal(t, "hello", consumed.ConsumedText)
 	require.Equal(t, protocol.SourceWeb, consumed.ConsumedSource)
-	require.Empty(t, consumed.ConsumedHeader, "no model prompt was generated")
 
 	outbound := <-bus.outbound
 	assert.True(t, outbound.Complete)
@@ -1675,7 +1672,6 @@ func TestAttachmentFallbackAndImageAttachments(t *testing.T) {
 
 	consumed := readRocketCodeOutbound(t, bus)
 	require.Equal(t, "attachment-input", consumed.ConsumedID)
-	require.Empty(t, consumed.ConsumedHeader, "no model prompt was generated")
 	final := readRocketCodeOutbound(t, bus)
 	require.Equal(t, unsupportedFileFallback, final.Text)
 }
@@ -1974,7 +1970,7 @@ func TestReviewOriginHeader(t *testing.T) {
 		inbound *protocol.InboundMessage
 		want    string
 	}{
-		{"cron", &protocol.InboundMessage{Source: protocol.SourceSystem, Text: `[Web principal="x"] deploy`, Routine: &protocol.RoutineMessage{RelativePath: "cron/daily.md"}}, "[Routine]"},
+		{"cron", &protocol.InboundMessage{Source: protocol.SourceSystem, Text: `[Web principal="x"] deploy`, Routine: &protocol.RoutineMessage{}}, "[Routine]"},
 		{"web", &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}}, `[Web principal="Alice"]`},
 		{"slack", &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice (U1)", protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}}, `[Slack principal="Alice (U1)"]`},
 		{"ambient", &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice (U1)", protocol.InboundAmbientMetadataKey: protocol.AmbientJoinedThread}}, `[Slack unaddressed principal="Alice (U1)"]`},
@@ -2618,7 +2614,7 @@ func TestRunTurnExpandsOnlyRoutineDefinitionShellCommands(t *testing.T) {
 
 			msg := protocol.NewInboundMessage(tc.source, protocol.InboundKindPrompt, prompt, false)
 			if tc.cron {
-				msg.Routine = &protocol.RoutineMessage{RelativePath: "cron/report.md", Agent: "primary"}
+				msg.Routine = &protocol.RoutineMessage{Agent: "primary"}
 			}
 
 			if tc.wake {
@@ -3458,7 +3454,6 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	initial := readRocketCodeOutbound(t, bus)
 	require.Equal(t, queued.ID, initial.ConsumedID)
 	require.Equal(t, "work/model-b", initial.Model)
-	require.Equal(t, `[Web principal="Alice" additional_instructions="Reply in one sentence."]`, initial.ConsumedHeader)
 	start := readRocketCodeOutbound(t, bus)
 	require.False(t, start.Complete)
 	require.Equal(t, "turn-1", start.TurnID)
@@ -3494,9 +3489,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 		require.NotEqual(t, queued.ID, message.ConsumedID, "activated input must not be published again during the turn")
 
 		consumedSteer = consumedSteer || message.ConsumedID == "active-steer"
-		if message.ConsumedID == "active-steer" {
-			require.Equal(t, `[Web principal="Bob"]`, message.ConsumedHeader)
-		} else {
+		if message.ConsumedID != "active-steer" {
 			require.True(t, message.Complete, "only one blank start may precede the final answer")
 		}
 
@@ -3547,7 +3540,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 
 	items, err := harness.ReplayInputToParams(entries[0].Entry.ReplayInput)
 	require.NoError(t, err)
-	require.Equal(t, initial.ConsumedHeader, items[0].OfMessage.ExtraFields()["prompt_header"])
+	require.Equal(t, `[Web principal="Alice" additional_instructions="Reply in one sentence."]`, items[0].OfMessage.ExtraFields()["prompt_header"])
 	require.Equal(t, responses.EasyInputMessageRoleUser, items[2].OfMessage.Role)
 	require.Equal(t, `[Web principal="Bob"]`, items[2].OfMessage.ExtraFields()["prompt_header"])
 }
@@ -3778,7 +3771,6 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 
 	outbound := bridge.newOutboundMessage(inbound, "turn-2", "reply", false)
 	assert.True(t, outbound.GoalTurn)
-	assert.True(t, outbound.GoalActive)
 	assert.Equal(t, "main", outbound.Agent)
 	assert.Equal(t, inbound.SlackReply, outbound.SlackReply)
 	assert.Equal(t, 1, outbound.GoalTurnNumber)
@@ -3792,14 +3784,12 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 
 	outbound = bridge.newOutboundMessage(inbound, "turn-3", "reply", false)
 	assert.True(t, outbound.GoalTurn)
-	assert.True(t, outbound.GoalActive)
 	assert.Equal(t, 2, outbound.GoalTurnNumber)
 	assert.Equal(t, 3, outbound.GoalMaxTurns)
 
 	inbound.GoalAction = protocol.GoalActionNone
 	outbound = bridge.newOutboundMessage(inbound, "turn-4", "reply", false)
 	assert.True(t, outbound.GoalTurn)
-	assert.True(t, outbound.GoalActive)
 	assert.Equal(t, 2, outbound.GoalTurnNumber)
 	assert.Equal(t, 3, outbound.GoalMaxTurns)
 
@@ -3811,7 +3801,6 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 
 	outbound = bridge.newOutboundMessage(inbound, "turn-4b", "reply", false)
 	assert.True(t, outbound.GoalTurn)
-	assert.False(t, outbound.GoalActive)
 	assert.Equal(t, 3, outbound.GoalTurnNumber)
 
 	require.NoError(t, store.BeginGoal("thread-2", &GoalState{Objective: "ship it forever", MaxTurns: 0}))
@@ -3819,7 +3808,6 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	bridge.config.ConversationID = "thread-2"
 	outbound = bridge.newOutboundMessage(inbound, "turn-5", "reply", false)
 	assert.True(t, outbound.GoalTurn)
-	assert.True(t, outbound.GoalActive)
 	assert.Zero(t, outbound.GoalTurnNumber)
 	assert.Zero(t, outbound.GoalMaxTurns)
 
@@ -3828,7 +3816,6 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 
 	outbound = bridge.newOutboundMessage(inbound, "turn-6", "reply", false)
 	assert.True(t, outbound.GoalTurn)
-	assert.False(t, outbound.GoalActive)
 }
 
 func readRocketCodeOutbound(t *testing.T, bus *testBus) *protocol.OutboundMessage {

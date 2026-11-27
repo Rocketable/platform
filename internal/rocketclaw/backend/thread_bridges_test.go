@@ -826,7 +826,7 @@ func TestSessionsWriteRejectsUnavailableAgents(t *testing.T) {
 	protocol.SetInboundAllowedAgents(slack, []string{"primary"})
 	write(slack, "primary", "other", `agent "other" is not allowed on this source surface`)
 
-	cron := &protocol.InboundMessage{Source: protocol.SourceSystem, Routine: &protocol.RoutineMessage{RelativePath: "cron/daily.md", Agent: "job"}}
+	cron := &protocol.InboundMessage{Source: protocol.SourceSystem, Routine: &protocol.RoutineMessage{Agent: "job"}}
 	write(cron, "job", "primary", `agent "primary" is not allowed on this source surface`)
 	write(cron, "job", "", `agent "job" is not configured`)
 	write(new(protocol.InboundMessage), "missing", "", `agent "missing" is not configured`)

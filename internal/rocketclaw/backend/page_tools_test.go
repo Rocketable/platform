@@ -271,7 +271,7 @@ func TestPageStoreReadsEasyFileView(t *testing.T) {
 func TestPageToolsPublishIntoTheChatsSpace(t *testing.T) {
 	t.Parallel()
 
-	for name, cron := range map[string]*protocol.RoutineMessage{"agent space": nil, "cron space": {RelativePath: "cron/report.md", Agent: "primary", Space: "Ops"}} {
+	for name, cron := range map[string]*protocol.RoutineMessage{"agent space": nil, "cron space": {Agent: "primary", Space: "Ops"}} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 

@@ -1725,7 +1725,7 @@ func seedRoutineRun(t *testing.T, service *SessionService, runID string) *protoc
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
 	msg.ConversationID, msg.RequireOutputDecision = runID, true
-	msg.Routine = &protocol.RoutineMessage{RelativePath: "agents/job.md#1h", Agent: "job", RanAt: "2000-01-02T03:04:05Z"}
+	msg.Routine = &protocol.RoutineMessage{Agent: "job"}
 	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-cron", runID, msg))
 
 	return msg
@@ -1741,7 +1741,7 @@ func TestSilentRoutineRunOpensNoReportChat(t *testing.T) {
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
 	msg.ConversationID, msg.RequireOutputDecision = "cron:quiet", true
-	msg.Routine = &protocol.RoutineMessage{RelativePath: "cron/quiet.md", Agent: "job", RanAt: "2000-01-02T03:04:05Z"}
+	msg.Routine = &protocol.RoutineMessage{Agent: "job"}
 	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-quiet", "cron:quiet", msg))
 	writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmodel: gpt-6.1-sol\npermission: {}\n---\nRun the job.\n")
 
@@ -1928,7 +1928,7 @@ func TestSilentRoutineLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "run job", false)
 	msg.RequireOutputDecision = true
-	msg.Routine = &protocol.RoutineMessage{RelativePath: "cron/daily.md", Agent: "job"}
+	msg.Routine = &protocol.RoutineMessage{Agent: "job"}
 	require.NoError(t, bridge.Submit(t.Context(), msg))
 	assert.Empty(t, readFinal(t, finals).Text)
 	require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
@@ -2102,7 +2102,7 @@ DELETE FROM conversations WHERE conversation_id IN ('cron:pending', 'web:cron:pe
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original job", false)
 			inbound.RequireOutputDecision = true
-			inbound.Routine = &protocol.RoutineMessage{RelativePath: "cron/missing.md", Agent: "worker"}
+			inbound.Routine = &protocol.RoutineMessage{Agent: "worker"}
 			require.NoError(t, startTurnDB(t.Context(), store.db, "pending", "cron:pending", inbound))
 
 			effects := []producerEffect{{Schedule: &protocol.ScheduledMessageState{Message: "pending follow up", DueAt: time.Now().Add(-time.Minute)}}}
@@ -2299,7 +2299,7 @@ func TestDueFollowUpOfTurnedOffRoutineAgentOpensNoChat(t *testing.T) {
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "original job", false)
 			inbound.RequireOutputDecision = true
-			inbound.Routine = &protocol.RoutineMessage{RelativePath: "cron/daily.md", Agent: "main"}
+			inbound.Routine = &protocol.RoutineMessage{Agent: "main"}
 			require.NoError(t, startTurnDB(t.Context(), store.db, "pending", "cron:pending", inbound))
 			seedProducerEffects(t, store, "cron:pending", "pending",
 				producerEffect{Schedule: &protocol.ScheduledMessageState{Message: "pending follow up", DueAt: time.Now().Add(-time.Minute)}},
@@ -2532,7 +2532,7 @@ func TestStickyGlobalRoutineReminderOpensStickySession(t *testing.T) {
 
 	requests.Go(func() error { return bridge.handoffProducer(t.Context()) })
 	requests.Go(func() error {
-		return report.openRoutineReport(t.Context(), &protocol.OutboundMessage{Routine: &protocol.RoutineMessage{Agent: "job", RelativePath: "cron/report.md"}})
+		return report.openRoutineReport(t.Context(), &protocol.OutboundMessage{Routine: &protocol.RoutineMessage{Agent: "job"}})
 	})
 	requests.Go(func() error {
 		id, _, err := service.CreateStickyConversation(t.Context(), protocol.Conversation{ID: "web-candidate", Agent: "job", CreatedBy: "alice"}, harness.AgentStickyGlobal)

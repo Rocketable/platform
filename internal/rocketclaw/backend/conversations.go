@@ -720,7 +720,7 @@ SELECT id, FALSE, $3, $4 FROM shadow_turns WHERE parent_source_conversation_id =
 	b.mu.Unlock()
 
 	for i := range pending {
-		b.publishConsumed(ctx, pending[i].inbound, inputs[len(inputs)-len(pending)+i].Header)
+		b.publishConsumed(ctx, pending[i].inbound)
 	}
 
 	if err := b.notifyShadowInputs(ctx, turn); err != nil {
@@ -730,7 +730,7 @@ SELECT id, FALSE, $3, $4 FROM shadow_turns WHERE parent_source_conversation_id =
 	return offered, nil
 }
 
-func (b *Bridge) publishConsumed(ctx context.Context, inbound *protocol.InboundMessage, header string) {
+func (b *Bridge) publishConsumed(ctx context.Context, inbound *protocol.InboundMessage) {
 	if b.shadow {
 		return
 	}
@@ -752,7 +752,6 @@ func (b *Bridge) publishConsumed(ctx context.Context, inbound *protocol.InboundM
 
 		message.ConsumedID, message.ConsumedText, message.ConsumedSource = id, inbound.Text, inbound.Source
 		message.ConsumedRawText = inbound.Metadata[protocol.InboundRawTextMetadataKey]
-		message.ConsumedHeader = header
 		message.SourceConversationID = b.config.ConversationID
 		b.mu.Lock()
 		message.Agent, message.Model, message.ReasoningEffort = b.activeAttribution.Agent, b.activeAttribution.Model, b.activeAttribution.ReasoningEffort
