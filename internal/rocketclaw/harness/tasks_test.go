@@ -481,7 +481,7 @@ func TestLooperRunsTaskToolCall(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "start", output)
+	input <- testPromptInput("start", output)
 
 	close(input)
 
@@ -529,7 +529,7 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 	output := make(chan ChatResponse, 20)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "start", output)
+	input <- testPromptInput("start", output)
 
 	close(input)
 

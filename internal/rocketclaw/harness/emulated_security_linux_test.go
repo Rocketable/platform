@@ -86,7 +86,7 @@ func TestEmulatedShellNetwork(t *testing.T) {
 		"exec 3<>/dev/tcp/1.1.1.1/443",
 	} {
 		got := e.bash(t, dial)
-		require.False(t, got.Success, "%s reached the network: %s", dial, got.Output)
+		require.NotEmpty(t, got.ErrorCode, "%s reached the network: %s", dial, got.Output)
 	}
 
 	e.sandboxedOK(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge dial 1.1.1.1:443 | cut -c1-5", "dial:\n")
@@ -114,7 +114,7 @@ func TestEmulatedShellFilesystem(t *testing.T) {
 		require.Equal(t, deniedBashOutsidePath, e.bash(t, "cat "+path).Output, path)
 
 		got := e.sandboxed(t, "cat "+path)
-		require.False(t, got.Success, "D01, D04, D07: %s is visible: %s", path, got.Output)
+		require.NotEmpty(t, got.ErrorCode, "D01, D04, D07: %s is visible: %s", path, got.Output)
 	}
 
 	bashrc := filepath.Join(os.Getenv("HOME"), ".bashrc")
@@ -123,10 +123,10 @@ func TestEmulatedShellFilesystem(t *testing.T) {
 	}
 
 	e.ok(t, "cat "+filepath.Join(uploads, "report.txt"), "upload")
-	require.False(t, e.bash(t, "echo x > "+filepath.Join(uploads, "new")).Success, "uploads are read-only")
-	require.False(t, e.sandboxed(t, "touch /usr/bin/evil || touch /evil || touch /etc/evil").Success, "D02: the rootfs is read-only")
+	require.NotEmpty(t, e.bash(t, "echo x > "+filepath.Join(uploads, "new")).ErrorCode, "uploads are read-only")
+	require.NotEmpty(t, e.sandboxed(t, "touch /usr/bin/evil || touch /evil || touch /etc/evil").ErrorCode, "D02: the rootfs is read-only")
 
-	require.False(t, e.sandboxed(t, "ln -s "+filepath.Dir(marker)+" out && cd out").Success, "a link out of the folder leads nowhere in the guest")
+	require.NotEmpty(t, e.sandboxed(t, "ln -s "+filepath.Dir(marker)+" out && cd out").ErrorCode, "a link out of the folder leads nowhere in the guest")
 
 	for _, target := range []string{"out/host-marker", "../escape", marker, "/etc/passwd"} {
 		got := e.bash(t, "curl -so "+target+" "+server.URL+"/")
@@ -141,7 +141,7 @@ func TestEmulatedShellFilesystem(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(filepath.Dir(e.shell.Dir), "escape"))
 
 	got := e.sandboxed(t, "head -c 300M /dev/zero > big")
-	require.False(t, got.Success, got.Output)
+	require.NotEmpty(t, got.ErrorCode, got.Output)
 	require.Regexp(t, `File size limit exceeded|memory \(256 MiB\) or process \(64\) limit reached`, got.Output)
 
 	big, err := os.Stat(filepath.Join(e.shell.Dir, "big"))
@@ -149,10 +149,10 @@ func TestEmulatedShellFilesystem(t *testing.T) {
 	require.LessOrEqual(t, big.Size(), int64(256<<20))
 
 	got = e.sandboxed(t, "head -c 300M /dev/zero > /tmp/big")
-	require.False(t, got.Success, got.Output)
+	require.NotEmpty(t, got.ErrorCode, got.Output)
 
 	e.sandboxedOK(t, "id -u; grep -E '^(CapEff|NoNewPrivs|Seccomp):' /proc/self/status", "1000\nCapEff:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n")
-	require.False(t, e.bash(t, "unshare -U true").Success, "no nested user namespaces")
+	require.NotEmpty(t, e.bash(t, "unshare -U true").ErrorCode, "no nested user namespaces")
 }
 
 func TestEmulatedShellLimits(t *testing.T) {
@@ -168,7 +168,7 @@ func TestEmulatedShellLimits(t *testing.T) {
 	require.Regexp(t, limitLogged+`exec=x-\S+ limit=processes limit_processes=64 refused_forks=[1-9]\d*\n`, e.logs.String())
 
 	got = e.bash(t, `python3 -c 'b = bytearray(512 << 20)'`)
-	require.False(t, got.Success, "E03: %s", got.Output)
+	require.NotEmpty(t, got.ErrorCode, "E03: %s", got.Output)
 	require.Contains(t, got.Output, "memory (256 MiB)")
 	require.Regexp(t, limitLogged+`exec=x-\S+ limit=memory limit_bytes=268435456 oom_kills=[1-9]\d*\n`, e.logs.String())
 
@@ -180,7 +180,7 @@ func TestEmulatedShellLimits(t *testing.T) {
 	require.Contains(t, got.Output, "output stopped at 16 MiB", "E04: a host command's output counts too")
 	require.Regexp(t, limitLogged+`exec=x-\S+ command=bigout limit=host_command_output limit_bytes=16777216\n`, e.logs.String())
 
-	require.False(t, e.bash(t, strings.Repeat(":", 8<<20+1)).Success)
+	require.NotEmpty(t, e.bash(t, strings.Repeat(":", 8<<20+1)).ErrorCode)
 	require.Regexp(t, `level=WARN msg="emulated shell limit reached" conversation=web:c1 folder=\S+ cwd=\S+ script_bytes=8388609 limit=script limit_bytes=8388608\n`, e.logs.String())
 
 	start := time.Now()
@@ -196,7 +196,7 @@ func TestEmulatedShellLimits(t *testing.T) {
 
 	start = time.Now()
 	got = e.sss.Bash(ctx, &e.shell, &bashParams{Command: "slow", Workdir: e.shell.Dir})
-	require.False(t, got.Success)
+	require.NotEmpty(t, got.ErrorCode)
 	require.Less(t, time.Since(start), 10*time.Second)
 
 	e.ok(t, "/extensions/late & sleep 1; kill -TERM $!; wait $!; echo $?; sleep 2; test -e late || echo cancelled", "143\ncancelled\n")

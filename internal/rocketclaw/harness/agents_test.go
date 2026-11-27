@@ -2,7 +2,6 @@ package harness
 
 import (
 	"flag"
-	"io/fs"
 	"os"
 	"path"
 	"strings"
@@ -80,10 +79,6 @@ func TestDecodeAgentFrontmatter(t *testing.T) {
 
 func testMapFile(data string) *fstest.MapFile {
 	return &fstest.MapFile{Data: []byte(data), Mode: 0, ModTime: time.Time{}, Sys: nil}
-}
-
-func testMapFileMode(mode fs.FileMode, data string) *fstest.MapFile {
-	return &fstest.MapFile{Data: []byte(data), Mode: mode, ModTime: time.Time{}, Sys: nil}
 }
 
 func TestAgentMCPFacets(t *testing.T) {
@@ -203,7 +198,7 @@ func TestLoadAgents(t *testing.T) {
 
 	t.Run("loads valid top level markdown agents", func(t *testing.T) {
 		fsys := fstest.MapFS{
-			"review.md": testMapFileMode(0o640, `---
+			"review.md": testMapFile(`---
 description: Reviews code for correctness
 model: gpt-6.1-sol
 reasoningEffort: high
@@ -215,7 +210,7 @@ permission:
 
 You are in review mode.
 `),
-			"plan.md": testMapFileMode(0o600, `---
+			"plan.md": testMapFile(`---
 description: Plan changes only
 model: gpt-5.4
 ---
@@ -246,7 +241,6 @@ ignored
 		require.Equal(t, 2, *review.MaxRecursion)
 		require.Equal(t, "You are in review mode.", review.Prompt)
 		require.Equal(t, "review.md", review.Location)
-		require.Equal(t, fs.FileMode(0o640), review.FileMode.Perm())
 		require.Equal(t, PermissionSet{Buckets: []PermissionBucket{{Name: "edit", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}}, review.Permission)
 
 		plan := result.Agents.Items["plan"]

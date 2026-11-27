@@ -43,7 +43,7 @@ func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
 	}
 	looper.Tools = map[string]looperTool{"read": tool}
 
-	record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, nil, new(testPromptInput(PromptInputRoleUser, "inspect secret", nil)))
+	record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, nil, new(testPromptInput("inspect secret", nil)))
 
 	require.NoError(t, err)
 	require.False(t, interrupted)
@@ -91,7 +91,7 @@ func TestObservabilityUsesResolvedProviderAndModel(t *testing.T) {
 	looper.DisplayModel = "work/api-model"
 	looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test")}
 
-	record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, nil, new(testPromptInput(PromptInputRoleUser, "question", nil)))
+	record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, nil, new(testPromptInput("question", nil)))
 	require.Error(t, err)
 	require.Empty(t, record.ResponseID)
 	require.Empty(t, rendered)
@@ -129,7 +129,7 @@ func TestObservabilityEmitsProviderDiagnosticSpanEvents(t *testing.T) {
 		looper.DisplayModel = "gpt-test"
 		looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test")}
 
-		record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, nil, new(testPromptInput(PromptInputRoleUser, "question", nil)))
+		record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, nil, new(testPromptInput("question", nil)))
 
 		require.NoError(t, err)
 		require.False(t, interrupted)

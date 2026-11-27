@@ -3467,7 +3467,7 @@ func updateGoalTool(store *SessionService, conversationID string, active *GoalSt
 			switch {
 			case err != nil:
 				event.CheckOutput, reply = err.Error(), "The goal stays active: its check `"+active.Check+"` could not run: "+err.Error()
-			case !check.Success:
+			case check.ErrorCode != "":
 				event.CheckOutput, reply = check.String(), "The goal stays active: its check `"+active.Check+"` failed. Keep working from its output:\n\n"+check.String()
 			}
 

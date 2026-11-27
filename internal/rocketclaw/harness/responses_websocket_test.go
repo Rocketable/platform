@@ -359,7 +359,7 @@ func TestWebsocketStorageFailureDoesNotRetryOrReuseUnreadEvents(t *testing.T) {
 	input := make(chan PromptInput, 1)
 
 	output := make(chan ChatResponse, 10)
-	input <- testPromptInput(PromptInputRoleUser, "hello", output)
+	input <- testPromptInput("hello", output)
 
 	close(input)
 	err := loop.Loop(ctx, input, emptySession(), discardSession(), make(chan os.Signal, 1))

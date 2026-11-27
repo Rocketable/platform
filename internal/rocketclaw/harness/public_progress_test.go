@@ -51,7 +51,7 @@ func TestCodeModeCallPullRequests(t *testing.T) {
 			require.NoError(t, err)
 
 			record := codeModeCallRecord(t.Context(), "bash", arguments)
-			record.finish(ToolResult{Output: c.Output, Data: BashResult{Output: c.Output, Success: true}}, nil)
+			record.finish(ToolResult{Output: c.Output, Data: BashResult{Output: c.Output}}, nil)
 			require.Equal(t, codeModeCallOK, record.Status)
 			require.Equal(t, [][]string{c.Created, c.Mentioned}, [][]string{record.CreatedPullRequests, record.MentionedPullRequests})
 		})
@@ -71,7 +71,7 @@ func TestCodeModeCallStatusUsesTheResultsFailureCheck(t *testing.T) {
 		{name: "webfetch refused redirect", tool: "webfetch", result: ToolResult{Output: "redirect to http://10.0.0.1/: private address", Data: webFetchPage{Status: 302, Error: "redirect to http://10.0.0.1/: private address"}}, want: codeModeCallError},
 		{name: "webfetch page", tool: "webfetch", result: ToolResult{Output: "Hello", Data: webFetchPage{Status: 200, Output: "Hello"}}, want: codeModeCallOK},
 		{name: "bash exit status", tool: "bash", result: ToolResult{Output: "FAIL", Data: BashResult{Output: "FAIL", ErrorCode: "2"}}, want: codeModeCallError},
-		{name: "bash success", tool: "bash", result: ToolResult{Output: "hi", Data: BashResult{Output: "hi", Success: true}}, want: codeModeCallOK},
+		{name: "bash success", tool: "bash", result: ToolResult{Output: "hi", Data: BashResult{Output: "hi"}}, want: codeModeCallOK},
 		{name: "read failure", tool: "read", err: errors.New("File not found: x"), want: codeModeCallError},
 		{name: "plain text", tool: "emit", result: ToolResult{Output: "done"}, want: codeModeCallOK},
 	} {
@@ -97,7 +97,7 @@ func TestCodeModeCallPullRequestsNeedSuccessfulBash(t *testing.T) {
 	}{
 		{name: "failed", tool: "bash", result: ToolResult{Output: link, Data: BashResult{Output: link, ErrorCode: "1"}}},
 		{name: "denied", tool: "bash", err: permissionDeniedError(link)},
-		{name: "binary output", tool: "bash", result: ToolResult{Output: link + "\x00", Data: BashResult{Output: link + "\x00", Success: true}}},
+		{name: "binary output", tool: "bash", result: ToolResult{Output: link + "\x00", Data: BashResult{Output: link + "\x00"}}},
 		{name: "not bash", tool: "read", result: ToolResult{Output: link}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -140,7 +140,7 @@ func (e *emulated) sandboxedOK(t *testing.T, command, want string) {
 
 func requireBashOutput(t *testing.T, command string, got BashResult, want string) {
 	t.Helper()
-	require.True(t, got.Success, "%s: %s (%s)", command, got.Output, got.ErrorCode)
+	require.Empty(t, got.ErrorCode, "%s: %s", command, got.Output)
 	require.Equal(t, want, got.String(), command)
 }
 
@@ -182,7 +182,7 @@ declare -A m=([k]=v); echo "${m[k]}"`, "two: line 2\n3 2 1\nok SUB\nv\n")
 	require.Equal(t, deniedBashOutsidePath, e.bash(t, "grep -c ^Pid: /proc/self/status").Output)
 
 	got = e.sss.Bash(t.Context(), &e.shell, &bashParams{Command: "pwd; touch here; ls", Workdir: "/tmp"})
-	require.True(t, got.Success, got.Output)
+	require.Empty(t, got.ErrorCode, got.Output)
 	require.Equal(t, "/tmp\nhere\n", got.Output)
 }
 
@@ -212,7 +212,7 @@ func TestEmulatedShellEnvironment(t *testing.T) {
 	e := newEmulated(t, map[string]string{"quiet": "true"}, map[string]string{"AGENT_SECRET": "agent-secret"}, nil)
 
 	got := e.sandboxed(t, "env; cat /proc/[0-9]*/environ /proc/[0-9]*/cmdline 2>/dev/null; ls -la /extensions /run/rocketclaw; cat /run/rocketclaw/script; quiet")
-	require.True(t, got.Success, got.Output)
+	require.Empty(t, got.ErrorCode, got.Output)
 	require.Contains(t, got.Output, "ROCKETCLAW_CONVERSATION_ID=web:c1")
 
 	for _, leak := range []string{"host-process-secret", "agent-secret", "HOME=" + os.Getenv("HOME") + "\n", e.sss.root.Name(), os.Getenv("ROCKETCLAW_SANDBOX_DIR")} {
@@ -237,11 +237,11 @@ func TestEmulatedShellHostCommands(t *testing.T) {
 	e.ok(t, "echo hello | upper", "HELLO\n")
 
 	got := e.bash(t, strings.Repeat(":", 8<<20+1))
-	require.False(t, got.Success)
+	require.NotEmpty(t, got.ErrorCode)
 	require.Contains(t, got.Output, "command of 8388609 bytes exceeds 8388608")
 
 	got = newEmulated(t, map[string]string{"rocketclaw-x": "true"}, nil, nil).bash(t, "true")
-	require.False(t, got.Success)
+	require.NotEmpty(t, got.ErrorCode)
 	require.Contains(t, got.Output, `"rocketclaw-x": names are`)
 
 	e.sandboxedOK(t, "head -c 17000000 /dev/zero | drain > /dev/null 2>&1; echo $?", "0\n")
@@ -300,7 +300,7 @@ func TestEmulatedShellSecrets(t *testing.T) {
 	e.sandboxedOK(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge hostenv deploy", "exit 126: rocketclaw: malformed host command request\n")
 
 	got := e.sandboxed(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge raw quiet | od -c")
-	require.True(t, got.Success, got.Output)
+	require.Empty(t, got.ErrorCode, got.Output)
 	require.NotContains(t, strings.ReplaceAll(got.Output, " ", ""), "host-secret")
 
 	other := newEmulated(t, map[string]string{"deploy": `bash -c 'echo "[${DEPLOY_TOKEN-unset}]"'`}, map[string]string{"OTHER": "o"}, nil)

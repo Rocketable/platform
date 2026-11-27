@@ -71,7 +71,6 @@ var (
 type BashResult struct {
 	Output    string
 	ErrorCode string
-	Success   bool
 }
 
 func (r BashResult) String() string {
@@ -257,7 +256,6 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 	return BashResult{
 		Output:    full,
 		ErrorCode: errorCode,
-		Success:   err == nil && !timedOut,
 	}
 }
 
@@ -307,7 +305,6 @@ func bashFailure(message string) BashResult {
 	return BashResult{
 		Output:    message,
 		ErrorCode: "error",
-		Success:   false,
 	}
 }
 

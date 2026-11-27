@@ -145,7 +145,7 @@ func TestNewWithModelResolverResolvesRootAgent(t *testing.T) {
 	output := make(chan ChatResponse, 8)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "hello", output)
+	input <- testPromptInput("hello", output)
 
 	close(input)
 	require.NoError(t, loop.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1)))
@@ -266,7 +266,7 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 			loop.Journal = sink
 
 			input := make(chan PromptInput, 1)
-			input <- testPromptInput(PromptInputRoleUser, "hello", make(chan ChatResponse, 8))
+			input <- testPromptInput("hello", make(chan ChatResponse, 8))
 
 			close(input)
 
@@ -335,7 +335,7 @@ func TestOpenAIResponsesModeUsesResponsesEndpoint(t *testing.T) {
 	output := make(chan ChatResponse, 8)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "hello", output)
+	input <- testPromptInput("hello", output)
 
 	close(input)
 
@@ -380,7 +380,7 @@ func TestOpenAIResponsesModeStripsPersistedCompactionMetadata(t *testing.T) {
 	output := make(chan ChatResponse, 8)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "hello", output)
+	input <- testPromptInput("hello", output)
 
 	close(input)
 

@@ -1137,7 +1137,7 @@ func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T)
 	t.Parallel()
 
 	workspace := t.TempDir()
-	agents := harness.Agents{Items: map[string]harness.Agent{"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "base prompt", Location: "", Permission: harness.PermissionSet{Buckets: nil}, FileMode: 0}}}
+	agents := harness.Agents{Items: map[string]harness.Agent{"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "base prompt", Location: "", Permission: harness.PermissionSet{Buckets: nil}}}}
 
 	appendOverlayPromptToAgent(agents, "main", &config.Config{
 		Workspace: workspace,
