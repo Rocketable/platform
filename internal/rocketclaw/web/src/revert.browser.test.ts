@@ -46,7 +46,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     const page = await browser.newPage({ viewport: { width, height }, isMobile: width < 640, hasTouch: width < 640 });
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
-    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat")}`);
+    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replaceAll("=", "")}`);
     const input = page.locator("textarea");
     await input.fill("Existing draft");
     const selected = page.locator('[data-message-id="9007199254741001:2"]');
@@ -102,11 +102,11 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     await page.getByText("Identity rejected", { exact: true }).first().waitFor();
     expect(await input.inputValue()).toBe("");
     expect(await input.isEditable()).toBe(false);
-    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("other")}`);
+    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("other").replaceAll("=", "")}`);
     expect(await input.inputValue()).toBe("");
     expect(await input.isEditable()).toBe(false);
     rejected = false;
-    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat")}`);
+    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replaceAll("=", "")}`);
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "First request");
     rejectedConfig = true;
     await page.reload();
@@ -122,7 +122,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     for (const outcome of ["reset", "failure", "navigate", "scope"]) {
       const storageFailure = outcome === "failure" || outcome === "scope";
       if (outcome === "navigate") {
-        await page.evaluate(() => { history.pushState({}, "", `/s/${btoa("chat")}`); dispatchEvent(new PopStateEvent("popstate")); });
+        await page.evaluate(() => { history.pushState({}, "", `/s/${btoa("chat").replaceAll("=", "")}`); dispatchEvent(new PopStateEvent("popstate")); });
         await input.fill("Keep named draft");
         await page.evaluate(() => { history.pushState({}, "", "/"); dispatchEvent(new PopStateEvent("popstate")); });
       }
@@ -193,7 +193,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       expect(await input.inputValue()).toBe(scratch);
       expect(await input.isEditable()).toBe(false);
       if (outcome === "navigate") {
-        await page.evaluate(() => { history.pushState({}, "", `/s/${btoa("chat")}`); dispatchEvent(new PopStateEvent("popstate")); });
+        await page.evaluate(() => { history.pushState({}, "", `/s/${btoa("chat").replaceAll("=", "")}`); dispatchEvent(new PopStateEvent("popstate")); });
         await page.waitForFunction(() => document.querySelector("textarea")?.value === "Keep named draft");
         await input.focus();
         await input.evaluate((node: HTMLTextAreaElement) => node.setSelectionRange(node.value.length, node.value.length));
@@ -204,7 +204,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       }
       await page.evaluate(() => (window as unknown as { releaseClear: () => void }).releaseClear());
       if (outcome === "navigate") {
-        expect(new URL(page.url()).pathname).toBe(`/s/${btoa("chat")}`);
+        expect(new URL(page.url()).pathname).toBe(`/s/${btoa("chat").replaceAll("=", "")}`);
         expect(await input.inputValue()).toBe("Keep named draft + current edit");
         await page.evaluate(() => { history.pushState({}, "", "/"); dispatchEvent(new PopStateEvent("popstate")); });
       } else if (outcome === "scope") {
@@ -286,7 +286,7 @@ test("revert an unsaved latest turn by input ID", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
-    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat")}`);
+    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replaceAll("=", "")}`);
     const message = (text: string) => page.locator('[data-slot="message"]').filter({ hasText: text });
     const revert = (text: string) => message(text).getByRole("button", { name: "Revert message", exact: true, includeHidden: true });
     const live = message(liveText.trimEnd());

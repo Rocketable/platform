@@ -274,7 +274,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
   reportFailure = undefined;
 }, 30_000);
 
-test("a chat that doesn't exist says so instead of loading forever", async () => {
+test("a chat that doesn't exist, or a garbled link to one, says so instead of loading forever", async () => {
   const { chromium: engine } = await import(playwright!);
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
@@ -285,7 +285,7 @@ test("a chat that doesn't exist says so instead of loading forever", async () =>
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "missing" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
     if (url.pathname === "/api/History") return Response.json({ code: 5, message: "web conversation: conversation is not recorded" }, { status: 404 });
-    if (url.pathname === "/api/Tabs" || url.pathname === "/api/ChangeTabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+    if (url.pathname === "/api/Tabs" || url.pathname === "/api/ChangeTabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: "/s/a", space: "main" }], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = path.join(dist, url.pathname);
     return unpacked(await Bun.file(`${file}.gz`).exists() ? file : path.join(dist, "index.html"));
@@ -293,12 +293,24 @@ test("a chat that doesn't exist says so instead of loading forever", async () =>
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.port}/s/bm9uZQ`);
     await page.getByText("This chat doesn't exist.").waitFor();
     expect(await page.getByRole("link", { name: "Start a new chat" }).getAttribute("href")).toBe("/");
     expect(await page.getByText("Loading conversation…").count()).toBe(0);
     expect(await page.getByText("conversation is not recorded").count()).toBe(0);
     expect(await page.getByRole("textbox", { name: "Message or /command" }).count()).toBe(0);
+    for (const garbled of ["/s/a", "/s/YQ==", "/s/slack-thread:C1:2"]) {
+      await page.goto(`http://127.0.0.1:${server.port}${garbled}`);
+      await page.getByText("This chat doesn't exist.").waitFor();
+    }
+    await page.goto(`http://127.0.0.1:${server.port}/oc/a`);
+    await page.getByText("This OpenCode session is no longer available.").waitFor();
+    await page.locator('[data-tab="/s/a"] [role="tab"]').click();
+    await page.getByText("This chat doesn't exist.").waitFor();
+    expect(new URL(page.url()).pathname).toBe("/s/a");
+    expect(errors).toEqual([]);
   } finally {
     await browser.close();
     server.stop(true);

@@ -113,7 +113,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`messa
     const page = await browser.newPage({ viewport: { width, height }, isMobile: width < 640, hasTouch: width < 640 });
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
-    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat")}`);
+    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replaceAll("=", "")}`);
     const input = page.locator("textarea");
     const tree = page.getByRole("list", { name: "Messages and replies" });
     const lines = () => tree.locator("li > button:not([aria-label])").allTextContents();
@@ -124,7 +124,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`messa
     }));
     const drawn = (want: [string, string][]) => want.map(([connectors, line]) => ["true", "", connectors, line]);
     const left = async (name: string) => (await row(name).boundingBox())!.x;
-    const open = (chat = "chat") => page.evaluate((id: string) => { history.pushState({}, "", `/s/${btoa(id)}?tree=1`); dispatchEvent(new PopStateEvent("popstate")); }, chat);
+    const open = (chat = "chat") => page.evaluate((id: string) => { history.pushState({}, "", `/s/${btoa(id).replaceAll("=", "")}?tree=1`); dispatchEvent(new PopStateEvent("popstate")); }, chat);
     const opened = () => new URL(page.url()).searchParams.has("tree");
     const closed = () => page.waitForFunction(() => !new URLSearchParams(location.search).has("tree"));
     await page.getByText("New answer", { exact: true }).waitFor();

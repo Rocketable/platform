@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -521,15 +520,12 @@ func TabConversation(path string) string {
 		}
 	}
 
-	if unescaped, err := url.PathUnescape(encoded); err == nil {
-		encoded = unescaped
+	id, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return "\uFFFD"
 	}
 
-	if id, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(strings.NewReplacer("+", "-", "/", "_").Replace(encoded), "=")); err == nil {
-		encoded = string(id)
-	}
-
-	return strings.ToValidUTF8(encoded, "\uFFFD")
+	return strings.ToValidUTF8(string(id), "\uFFFD")
 }
 
 func (s *SessionService) TabState(ctx context.Context, username string) (TabState, int64, error) {

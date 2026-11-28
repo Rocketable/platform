@@ -636,7 +636,7 @@ test("handoff hits and queued items format tags and markup", async () => {
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("dest")}`);
+    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("dest").replaceAll("=", "")}`);
     const queued = page.locator('[data-queue-id="q1"]');
     await queued.getByText("@handle").waitFor();
     expect(await queued.locator("strong").textContent()).toBe("bold");

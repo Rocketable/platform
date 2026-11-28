@@ -116,7 +116,7 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	_, err = db.ExecContext(t.Context(), `INSERT INTO web_tab_attention (username, path, conversation_id, unread_at) VALUES ('alice', '/s/Yg', 'b', now()), ('alice', '/s/Yw', 'c', now())`)
 	require.NoError(t, err)
 
-	next := &TabState{Tabs: []*Tab{{Path: "/s/a", Space: "main"}, {Path: "/s/bm9uZQ", Space: "main"}, {Path: "/s/_w", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/s/a"}}
+	next := &TabState{Tabs: []*Tab{{Path: "/s/YQ", Space: "main"}, {Path: "/s/bm9uZQ", Space: "main"}, {Path: "/s/_w", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/s/YQ"}}
 	response, err = call("alice", &ChangeTabsRequest{State: next, Revision: 1})
 	require.NoError(t, err)
 	assert.False(t, response.Stale)
@@ -153,7 +153,7 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.True(t, proto.Equal(&TabState{Space: "main"}, response.State))
 	assert.Equal(t, []string{"main /s/YQ", "main /search"}, shared(response))
 
-	for path, code := range map[string]codes.Code{"/": codes.InvalidArgument, "/s/cHJpdmF0ZS1Y": codes.PermissionDenied, "/s/bm9uZQ": codes.NotFound, "/pages/x/%": codes.InvalidArgument, "/pages/x/%FF": codes.InvalidArgument} {
+	for path, code := range map[string]codes.Code{"/": codes.InvalidArgument, "/s/cHJpdmF0ZS1Y": codes.PermissionDenied, "/s/bm9uZQ": codes.NotFound, "/s/a": codes.NotFound, "/pages/x/%": codes.InvalidArgument, "/pages/x/%FF": codes.InvalidArgument} {
 		_, err = call("bob", &ChangeTabsRequest{Share: &SharedTab{Space: "main", Path: path}})
 		assert.Equal(t, code, status.Code(err), path)
 	}
@@ -230,7 +230,7 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.Equal(t, []string{space + " /search", space + " /cron"}, shared(response), "an edit after unsharing does not share again")
 
 	later := time.Now().Add(time.Hour).UTC().Format("2006-01-02T15:04:05.000Z07:00")
-	_, err = call("alice", &ChangeTabsRequest{Attention: &AttentionChange{Paths: []string{"/s/a", "/cron"}, Action: AttentionAction_PARK, Until: later}})
+	_, err = call("alice", &ChangeTabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_PARK, Until: later}})
 	require.NoError(t, err)
 	_, err = call("bob", &ChangeTabsRequest{Attention: &AttentionChange{Paths: []string{"/s/Yw"}, Action: AttentionAction_PARK, Until: later}})
 	require.NoError(t, err)
