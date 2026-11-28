@@ -19,7 +19,6 @@ export async function copyText(text: string, container: Element) {
   if (navigator.clipboard) {
     await navigator.clipboard.writeText(text);
   } else {
-    // RocketClaw also serves plain HTTP, where the Clipboard API is unavailable.
     const input = document.createElement("textarea");
     input.value = text;
     input.style.position = "fixed";
@@ -36,8 +35,6 @@ export async function copyText(text: string, container: Element) {
   }
 }
 
-// Browser-wide display preferences (code wrap, message output), shared by every mounted component
-// and by other tabs like the timeline detail store.
 const WRAP_KEY = "code-wrap";
 export const OUTPUT_KEY = "output-mode";
 const preferenceListeners = new Set<() => void>();
@@ -77,17 +74,12 @@ function highlight(text: string, needle?: string): ReactNode {
   }
 }
 
-// Code Block content is a grid, so several nodes share one span to stay on their lines.
 function searchedCode(text: string, needle?: string) {
   return needle ? <span>{highlight(text, needle)}</span> : text;
 }
 
-// A titled Code Block with wrap, expand and copy; compact keeps only the expand and copy buttons.
-// Copy uses copyText rather than CodeBlockCopyButton, which needs the Clipboard API that plain HTTP lacks.
-// A known language is highlighted, except while search highlights a needle.
 export function CodeBlock({ text, label = "Code", compact = false, needle, size, language = "" }: { text: string; label?: string; compact?: boolean; needle?: string; size?: "sm"; language?: string }) {
   const lines = useHighlightedCode(text, needle ? "" : language);
-  // The hook returns plain strings until a language loads; plain text then stays one text node.
   const code = lines.some((line) => typeof line !== "string") ? <span>{lines.flatMap((line, index) => index ? ["\n", line] : [line])}{text.endsWith("\n") ? "\n" : ""}</span> : searchedCode(text, needle);
   const wrap = usePreference(WRAP_KEY) === "true";
   const [copied, setCopied] = useState<string>();
@@ -166,7 +158,6 @@ function SlackTag({ id, sigil, needle }: { id: string; sigil: "@" | "#"; needle?
   return tagSpan(sigil + (name ?? id), needle);
 }
 
-// Markdown links, Slack links, bare URLs, Slack tags, inline code, then bold/italic/strike; only http(s) URLs match.
 const inlinePattern = /\[([^\]\n]+)\]\((?:<(https?:\/\/[^>\s]+)>|(https?:\/\/(?:[^()\s]|\([^()\s]*\))+))\)|<(https?:\/\/[^|>\s]+)(?:\|([^>\n]+))?>|(?<!\]\(<?|<)(https?:\/\/[^\s<>]*[^\s<>.,;:!?'")\]*])|<@([UW][A-Z0-9]+)(?:\|([^>\n]+))?>|<#(C[A-Z0-9]+)(?:\|([^>\n]+))?>|<!subteam\^(S[A-Z0-9]+)(?:\|([^>\n]+))?>|<!(here|channel|everyone)>|`([^`\n]+)`|(?<![\w*/])\*\*([^\s*](?:[^\n]*?[^\s*])?)\*\*(?![\w*/])|(?<![\w*/])\*([^\s*](?:[^*\n]*?[^\s*])?)\*(?![\w*/])|(?<![\w_])_([^\s_](?:[^_\n]*?[^\s_])?)_(?![\w_])|(?<![\w~])~([^\s~](?:[^~\n]*?[^\s~])?)~(?![\w~])/g;
 
 function inlineNodes(text: string, needle?: string, interactive = true): ReactNode[] {
@@ -212,12 +203,10 @@ export function cleanText(text: string, names: Record<string, string>): string {
   return out + text.slice(last);
 }
 
-// mentionIds lists the Slack users, channels and groups text tags without a label, whose names cleanText looks up.
 export function mentionIds(text: string): string[] {
   return [...text.matchAll(/<@([UW][A-Z0-9]+)>|<#(C[A-Z0-9]+)>|<!subteam\^(S[A-Z0-9]+)>/g)].map((match) => match[1] ?? match[2] ?? match[3]);
 }
 
-// useSlackNames maps the loaded names of ids; it keeps its result while ids and their names are unchanged.
 export function useSlackNames(ids: string[]): Record<string, string> {
   const combine = useCallback((results: { data?: string | null }[]) => Object.fromEntries(ids.flatMap((id, index) => results[index].data ? [[id, results[index].data]] : [])), [ids]);
   return useQueries({ queries: ids.map((id) => queries.slackName(id)), combine });
@@ -272,7 +261,6 @@ export function TranscriptText({ text, needle, interactive = true }: { text: str
     : <div key={part.start} className="whitespace-pre-wrap break-words">{blockNodes(part.text, needle, interactive)}</div>)}</>;
 }
 
-// Markdown keeps Slack tags as text; each becomes a span, rendered with names as in Raw output.
 function remarkSlackTags() {
   const walk = (node: Parent) => {
     node.children = node.children.flatMap((child): RootContent[] => {
@@ -365,7 +353,6 @@ const pullRequestComponents: Components = {
 
 const pullRequestSchema = { ...defaultSchema, attributes: { ...defaultSchema.attributes, blockquote: [...defaultSchema.attributes!.blockquote!, ["dataAlert", ...Object.keys(alertBorders)]] } };
 
-// A line starting with <!here> or <!subteam^…> would otherwise be an HTML block that hides its Markdown.
 export function MarkdownText({ text, repository, hideImages = false }: { text: string; repository?: GitHubPR; hideImages?: boolean }) {
   const escaped = text.replaceAll(/<(?=!(?:here|channel|everyone|subteam\^)[^<>\n]*>)/g, "\\<");
   return <div className={repository ? "markdown break-words [&_p]:whitespace-normal" : "markdown break-words"}>{repository
