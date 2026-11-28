@@ -1158,11 +1158,11 @@ type ChatOriginFacts struct {
 }
 
 const chatOriginSQL = `, creating AS NOT MATERIALIZED (
-    SELECT *, COALESCE(routine_run, CASE WHEN kind <> 'slack_thread' OR created_by = $2 THEN first_source END, '') AS creating_source FROM visible_chats
+    SELECT *, COALESCE(routine_run, CASE WHEN kind <> 'slack_thread' THEN first_source END, '') AS creating_source FROM visible_chats
 ), origins AS (
     SELECT c.*, COALESCE(c.external_id, '') AS external, COALESCE(c.external_agent, '') AS binding_agent,
         CASE WHEN c.external_id IS NOT NULL THEN c.conversation_id ELSE '' END AS managed, COALESCE(c.origin_pairs, 'null') AS pairs,
-        COALESCE(p.agent, '') AS producer_agent, COALESCE(p.routine_path, '') AS run_path, p.routine_run_at_unix_ns AS run_at, p.kind IS NOT DISTINCT FROM $3 AS one_off
+        COALESCE(p.agent, '') AS producer_agent, COALESCE(p.routine_path, '') AS run_path, p.routine_run_at_unix_ns AS run_at, p.kind IS NOT DISTINCT FROM $2 AS one_off
     FROM creating c LEFT JOIN conversations p ON p.conversation_id = c.creating_source AND p.routine_run_at_unix_ns IS NOT NULL
 )`
 
@@ -1202,7 +1202,7 @@ func (scan *chatOriginScan) read(row rowScanner, facts *ChatOriginFacts, dest ..
 
 func (s *SessionService) ChatOriginFacts(ctx context.Context, id string) iter.Seq2[ChatOriginFacts, error] {
 	return func(yield func(ChatOriginFacts, error) bool) {
-		rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+chatOriginSQL+` SELECT c.conversation_id, c.created_by, `+originColumns+` FROM origins c`, id, ThreadCreatedByRoutine, KindOneOffRoutineRun)
+		rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+chatOriginSQL+` SELECT c.conversation_id, c.created_by, `+originColumns+` FROM origins c`, id, KindOneOffRoutineRun)
 		if err != nil {
 			yield(ChatOriginFacts{}, fmt.Errorf("query chat origin facts: %w", err))
 			return
@@ -1370,7 +1370,7 @@ SELECT
     FALSE AS automation,
     c.paused,
     COALESCE(c.goal_status, '') = '`+GoalStatusActive+`' AS goal,
-    c.kind = 'web_chat' AND c.created_by NOT IN ('', $2) AND c.routine_run IS NULL AND NOT c.reported AND NOT (c.sticky IN ('global', 'identity') AND COALESCE(c.agent = ANY($7), FALSE)) AS pausable,
+    c.kind = 'web_chat' AND c.created_by NOT IN ('', $3) AND c.routine_run IS NULL AND NOT c.reported AND NOT (c.sticky IN ('global', 'identity') AND COALESCE(c.agent = ANY($7), FALSE)) AS pausable,
     c.name,
     c.forked_from,
     COALESCE(c.tags, '[]'::jsonb) AS tags,
@@ -1419,7 +1419,7 @@ WHERE o.kind = 'remote' AND o.server = ANY($4) AND ($5::text[] IS NULL OR o.conv
 ), chats AS (
 SELECT * FROM local UNION ALL SELECT * FROM remote
 )
-SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByRoutine, KindOneOffRoutineRun,
+SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", KindOneOffRoutineRun, ThreadCreatedByRoutine,
 		slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)), chats, username, s.scheduledAgents())
 	if err != nil {
 		return nil, fmt.Errorf("query sidebar sessions: %w", err)

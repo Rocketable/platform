@@ -256,19 +256,19 @@ func (s *SessionService) searchCandidates(ctx context.Context, slack slackLookup
 
 	candidates := []string{}
 	err = s.readParallelRows(ctx, `WITH own AS (
-    SELECT conversation_id, listed OR server IS NOT NULL AS shown, routine_run_at_unix_ns IS NOT NULL AS run FROM conversations WHERE search_words LIKE ANY ($6)
+    SELECT conversation_id, listed OR server IS NOT NULL AS shown, routine_run_at_unix_ns IS NOT NULL AS run FROM conversations WHERE search_words LIKE ANY ($5)
 ), `+visibleChatsSQL+chatOriginSQL+`, found AS (
     SELECT conversation_id FROM own WHERE shown
     UNION ALL SELECT c.conversation_id FROM creating c JOIN own p ON p.conversation_id = c.creating_source AND p.run
     UNION ALL SELECT c.conversation_id FROM visible_chats c JOIN turns t ON t.conversation_id = c.conversation_id AND t.phase NOT IN ('waiting', 'done') AND t.takes_lane
-    WHERE lower(replace(replace(t.inbound_json->>'Text', U&'\0130', 'i'), U&'\212A', 'k') COLLATE "C") LIKE ANY ($6)
-    UNION ALL SELECT conversation_id FROM origins c WHERE $5::text[] <> '{}' AND c.slack_channel = ANY($5) OR $4 ~ '[="\\[:cntrl:]]' AND c.pairs <> 'null'
-        OR (c.managed = c.conversation_id) <> (c.run_at IS NOT NULL) AND strpos('routine source: stem: run kind: scheduled one-off id: agent: ran at: external mcp conversation:', $4) > 0
+    WHERE lower(replace(replace(t.inbound_json->>'Text', U&'\0130', 'i'), U&'\212A', 'k') COLLATE "C") LIKE ANY ($5)
+    UNION ALL SELECT conversation_id FROM origins c WHERE $4::text[] <> '{}' AND c.slack_channel = ANY($4) OR $3 ~ '[="\\[:cntrl:]]' AND c.pairs <> 'null'
+        OR (c.managed = c.conversation_id) <> (c.run_at IS NOT NULL) AND strpos('routine source: stem: run kind: scheduled one-off id: agent: ran at: external mcp conversation:', $3) > 0
 )
 SELECT DISTINCT conversation_id FROM found`, "session search candidates", func(row rowScanner) error {
 		candidates = append(candidates, "")
 		return row.Scan(&candidates[len(candidates)-1])
-	}, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByRoutine, KindOneOffRoutineRun, needle, matched, patterns)
+	}, pgx.QueryExecModeCacheDescribe, "", KindOneOffRoutineRun, needle, matched, patterns)
 
 	return candidates, err
 }
