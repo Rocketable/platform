@@ -20,14 +20,8 @@ func (s testSecrets) SecretString(_ context.Context, arn string) (string, error)
 	if !ok {
 		return "", &config.SecretFetchError{ARN: arn}
 	}
-	return body, nil
-}
 
-func useTestSecrets(t *testing.T, secrets testSecrets) {
-	t.Helper()
-	previous := secretFetcher
-	secretFetcher = secrets
-	t.Cleanup(func() { secretFetcher = previous })
+	return body, nil
 }
 
 func TestRuntimeAndServeResolveTheSameSecret(t *testing.T) {
@@ -38,11 +32,12 @@ func TestRuntimeAndServeResolveTheSameSecret(t *testing.T) {
 		"openai": {"api_key": "test-key"},
 		"slack": {"bot_token":"xoxb-local","app_token":"xapp-test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}
 	}`), 0o600))
-	useTestSecrets(t, testSecrets{testSecretsARN: `{"slack":{"bot_token":"xoxb-secret"}}`})
 
-	_, runtimeCfg, err := loadRuntimeConfig(testSecretsARN, "")
+	secrets := testSecrets{testSecretsARN: `{"slack":{"bot_token":"xoxb-secret"}}`}
+
+	_, runtimeCfg, err := loadRuntimeConfig(testSecretsARN, "", secrets)
 	require.NoError(t, err)
-	serveCfg, err := config.Load(defaultConfigPath, testSecretsARN, secretFetcher)
+	serveCfg, err := config.Load(defaultConfigPath, testSecretsARN, secrets)
 	require.NoError(t, err)
 	assert.Equal(t, runtimeCfg.Slack.BotToken, serveCfg.Slack.BotToken)
 	assert.Equal(t, "xoxb-secret", runtimeCfg.Slack.BotToken)
@@ -51,19 +46,20 @@ func TestRuntimeAndServeResolveTheSameSecret(t *testing.T) {
 func TestSecretAloneConfiguresRuntime(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
-	useTestSecrets(t, testSecrets{testSecretsARN: `{
+
+	secrets := testSecrets{testSecretsARN: `{
 		"web": {"tsnet": {}}, "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 		"openai": {"api_key": "test-key"}
-	}`})
+	}`}
 
-	selected, cfg, err := loadRuntimeConfig(testSecretsARN, "")
+	selected, cfg, err := loadRuntimeConfig(testSecretsARN, "", secrets)
 	require.NoError(t, err)
 	assert.Equal(t, defaultConfigPath, selected.Path)
 	assert.Equal(t, workspace, cfg.Workspace)
 	assert.Equal(t, config.DefaultRuntimeDir, cfg.WorkDir)
 	assert.Equal(t, "test-key", cfg.OpenAI.APIKey)
 
-	_, _, err = loadRuntimeConfig("", "")
+	_, _, err = loadRuntimeConfig("", "", secrets)
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
@@ -78,43 +74,41 @@ func TestUsersSecretReplacesExternalMCPUsers(t *testing.T) {
 	)
 
 	t.Chdir(t.TempDir())
-	useTestSecrets(t, testSecrets{testSecretsARN: configSecret, usersARN: `{"alice":"pw-a","bob":"pw-b"}`})
 
-	_, cfg, err := loadRuntimeConfig(testSecretsARN, usersARN)
+	_, cfg, err := loadRuntimeConfig(testSecretsARN, usersARN, testSecrets{testSecretsARN: configSecret, usersARN: `{"alice":"pw-a","bob":"pw-b"}`})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"alice": "pw-a", "bob": "pw-b"}, cfg.MCPExternal.Users)
 
 	for _, body := range []string{`["LEAKED-SECRET-VALUE"]`, `{"alice":{"pw":"LEAKED-SECRET-VALUE"}}`, `null`} {
-		useTestSecrets(t, testSecrets{testSecretsARN: configSecret, usersARN: body})
-
-		err := runServe([]string{"--aws-secrets-manager-arn", testSecretsARN, "--aws-secrets-manager-users-arn", usersARN})
+		err := runServe([]string{"--aws-secrets-manager-arn", testSecretsARN, "--aws-secrets-manager-users-arn", usersARN}, testSecrets{testSecretsARN: configSecret, usersARN: body})
 		require.ErrorContains(t, err, "--aws-secrets-manager-users-arn "+usersARN)
 		assert.NotContains(t, err.Error(), "LEAKED-SECRET-VALUE")
 	}
 }
 
 func TestCommandsAcceptSecretsARNFlag(t *testing.T) {
-	useTestSecrets(t, testSecrets{testSecretsARN: `{}`})
+	secrets := testSecrets{testSecretsARN: `{}`}
 
 	t.Run("oai list", func(t *testing.T) {
 		prepareOAIConfig(t)
-		require.NoError(t, runOAIList([]string{"--aws-secrets-manager-arn", testSecretsARN}))
+		require.NoError(t, runOAIList([]string{"--aws-secrets-manager-arn", testSecretsARN}, secrets))
 	})
 	t.Run("oai logout", func(t *testing.T) {
 		prepareOAIConfig(t)
-		require.NoError(t, runOAILogout([]string{"--aws-secrets-manager-arn", testSecretsARN}))
+		require.NoError(t, runOAILogout([]string{"--aws-secrets-manager-arn", testSecretsARN}, secrets))
 	})
 	t.Run("oai login", func(t *testing.T) {
 		prepareOAIConfig(t)
 		mockDeviceLogin(t, "work-refresh")
 		synctest.Test(t, func(t *testing.T) {
-			require.NoError(t, runOAILogin([]string{"--aws-secrets-manager-arn", testSecretsARN, "work", "--headless"}))
+			require.NoError(t, runOAILogin([]string{"--aws-secrets-manager-arn", testSecretsARN, "work", "--headless"}, secrets))
 		})
 	})
 }
 
 func TestOAILoginWriteKeepsAWSObject(t *testing.T) {
 	prepareOAIConfig(t)
+
 	patched := []byte(`{
   "workspace": "../runtime",
   "web": {"tsnet": {}},
@@ -130,11 +124,10 @@ func TestOAILoginWriteKeepsAWSObject(t *testing.T) {
   }
 }`)
 	require.NoError(t, os.WriteFile(defaultConfigPath, patched, 0o640))
-	useTestSecrets(t, testSecrets{testSecretsARN: `{"token":"LEAKED-SECRET-VALUE"}`})
 	mockDeviceLogin(t, "work-refresh")
 
 	synctest.Test(t, func(t *testing.T) {
-		require.NoError(t, runOAILogin([]string{"work", "--headless"}))
+		require.NoError(t, runOAILogin([]string{"work", "--headless"}, testSecrets{testSecretsARN: `{"token":"LEAKED-SECRET-VALUE"}`}))
 	})
 
 	data, err := os.ReadFile(defaultConfigPath)
@@ -157,9 +150,7 @@ func TestServeErrorOmitsResolvedSecret(t *testing.T) {
 		  "channels": [{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]
 		}
 	}`), 0o600))
-	useTestSecrets(t, testSecrets{testSecretsARN: `{"token":"LEAKED-SECRET-VALUE"}`})
-
-	err := runServe([]string{"--aws-secrets-manager-arn", testSecretsARN, "--pprof=127.0.0.1:0"})
+	err := runServe([]string{"--aws-secrets-manager-arn", testSecretsARN, "--pprof=127.0.0.1:0"}, testSecrets{testSecretsARN: `{"token":"LEAKED-SECRET-VALUE"}`})
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "LEAKED-SECRET-VALUE")
 }

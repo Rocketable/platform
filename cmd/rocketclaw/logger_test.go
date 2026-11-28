@@ -64,6 +64,7 @@ func TestPostHogMirrorsCaptureEventsAndExceptions(t *testing.T) {
 	require.Len(t, events, 4)
 
 	names := map[string]captured{}
+
 	for _, event := range events {
 		exceptionDistinctID, _ := event.Properties["distinct_id"].(string)
 		assert.Equal(t, "lab", cmp.Or(event.DistinctID, exceptionDistinctID))

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"tailscale.com/ipn"
 )
 
@@ -29,14 +30,14 @@ Options:
          Merge this JSON secret over rocketclaw.json, as rocketclaw run does.
 `
 
-func runTS(args []string) error {
+func runTS(args []string, fetcher config.SecretFetcher) error {
 	if len(args) == 0 {
 		return printStdout(tsHelpText, "ts help")
 	}
 
 	switch args[0] {
 	case "login":
-		return runTSLogin(args[1:])
+		return runTSLogin(args[1:], fetcher)
 	case "help", "-h", "--help":
 		return printStdout(tsHelpText, "ts help")
 	default:
@@ -44,7 +45,7 @@ func runTS(args []string) error {
 	}
 }
 
-func runTSLogin(args []string) error {
+func runTSLogin(args []string, fetcher config.SecretFetcher) error {
 	flagSet := flag.NewFlagSet("ts login", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
 	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
@@ -57,10 +58,11 @@ func runTSLogin(args []string) error {
 		return errors.New("ts login takes no arguments")
 	}
 
-	_, cfg, err := loadRuntimeConfig(*secretsARN, "")
+	_, cfg, err := loadRuntimeConfig(*secretsARN, "", fetcher)
 	if err == nil {
 		err = cfg.ValidateTsnet()
 	}
+
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}

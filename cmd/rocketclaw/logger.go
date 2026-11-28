@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -34,7 +35,7 @@ type postHogEvents struct {
 func (e postHogEvents) Write(record []byte) (int, error) {
 	var properties posthog.Properties
 	if err := json.Unmarshal(record, &properties); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("decode log record: %w", err)
 	}
 
 	event, _ := properties["event"].(string)

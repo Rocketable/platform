@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
@@ -17,12 +18,14 @@ func (r *routineRunner) Run(ctx context.Context, agent, prompt string, progress 
 	destination := progress.SyncDestination
 	if destination != "" {
 		if err := r.backend.CreateConversation(ctx, protocol.Conversation{ID: destination, Agent: agent, CreatedBy: string(backend.ThreadCreatedByRoutine)}); err != nil {
-			return protocol.RoutineRunResult{}, err
+			return protocol.RoutineRunResult{}, fmt.Errorf("create routine destination conversation: %w", err)
 		}
 	}
+
 	if err := r.backend.CreateConversation(ctx, protocol.Conversation{ID: progress.ConversationID, Agent: agent, CreatedBy: string(backend.ThreadCreatedByRoutine), Run: progress.Run}); err != nil {
-		return protocol.RoutineRunResult{}, err
+		return protocol.RoutineRunResult{}, fmt.Errorf("create routine conversation: %w", err)
 	}
+
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, prompt, false)
 	inbound.ConversationID, inbound.SyncDestination = progress.ConversationID, destination
 	inbound.RequireOutputDecision = true
@@ -30,10 +33,16 @@ func (r *routineRunner) Run(ctx context.Context, agent, prompt string, progress 
 	reply := inbound.EnableResponseWait()
 	err := r.backend.RunTurn(ctx, inbound)
 	result := protocol.RoutineRunResult{ConversationID: destination}
+
 	select {
 	case response := <-reply:
 		result.Reported = strings.TrimSpace(response.Text) != "" || len(response.Attachments) > 0
 	default:
 	}
-	return result, err
+
+	if err != nil {
+		return result, fmt.Errorf("run routine turn: %w", err)
+	}
+
+	return result, nil
 }

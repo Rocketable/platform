@@ -28,6 +28,7 @@ func startWebRPC(rt *backend.Runtime, tailnet *tailnetNode, channels rpc.Channel
 	handler := http.NewServeMux()
 	handler.Handle("/", rpc.NewHTTPHandler(connection, rt.Cfg, cmp.Or(cfg.ServerDisplayName, cfg.Web.Tsnet.Hostname)))
 	handler.Handle("/opencode/{name}/mcp", http.NewCrossOriginProtection().Handler(rt.OpenCodeMCP()))
+
 	server := grpc.NewServer()
 	web := rpc.New(rt, rt.Sessions, rt.Cfg, channels, routines)
 	web.Register(server)

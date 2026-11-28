@@ -43,10 +43,11 @@ func main() {
 		os.Exit(code)
 	}
 
-	if err := run(os.Args[1:]); err != nil {
+	if err := run(os.Args[1:], &config.AWSFetcher{}); err != nil {
 		if message := strings.TrimSpace(err.Error()); message != "" {
 			fmt.Fprintf(os.Stderr, "%s\n", message)
 		}
+
 		os.Exit(exitCodeForError(err))
 	}
 }
@@ -54,54 +55,56 @@ func exitCodeForError(err error) int {
 	if coded, ok := errors.AsType[exitCoder](err); ok {
 		return coded.ExitCode()
 	}
+
 	return 1
 }
-func run(args []string) error {
+func run(args []string, fetcher config.SecretFetcher) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "run":
-			return runServe(args[1:])
+			return runServe(args[1:], fetcher)
 		case "oai":
-			return runOAI(args[1:])
+			return runOAI(args[1:], fetcher)
 		case "ts":
-			return runTS(args[1:])
+			return runTS(args[1:], fetcher)
 		case "help", "-h", "--help":
 			return printStdout(helpText, "help")
 		}
 	}
+
 	selected, err := selectRuntimeConfigFile()
 	if err != nil {
 		return fmt.Errorf("stat config path: %w", err)
 	}
+
 	if selected.Path == "" {
 		return printStdout(helpText, "help")
 	}
-	return runServe(args)
+
+	return runServe(args, fetcher)
 }
 
-var (
-	secretFetcher config.SecretFetcher = &config.AWSFetcher{}
+var errUsersSecretShape = errors.New("secret must be a JSON object of login to password strings")
 
-	errUsersSecretShape = errors.New("secret must be a JSON object of login to password strings")
-)
-
-func loadRuntimeConfig(secretsARN, usersARN string) (runtimeConfigFile, *config.Config, error) {
+func loadRuntimeConfig(secretsARN, usersARN string, fetcher config.SecretFetcher) (runtimeConfigFile, *config.Config, error) {
 	selected, err := selectRuntimeConfigFile()
 	if err != nil {
 		return runtimeConfigFile{}, nil, err
 	}
+
 	if selected.Path == "" {
 		selected = runtimeConfigFile{Path: defaultConfigPath, WorkDir: config.DefaultRuntimeDir}
 	}
 
-	cfg, err := config.Load(selected.Path, secretsARN, secretFetcher)
+	cfg, err := config.Load(selected.Path, secretsARN, fetcher)
 	if err != nil {
-		return runtimeConfigFile{}, nil, err
+		return runtimeConfigFile{}, nil, fmt.Errorf("load %s: %w", selected.Path, err)
 	}
+
 	cfg.WorkDir = selected.WorkDir
 
 	if usersARN != "" {
-		body, err := secretFetcher.SecretString(context.Background(), usersARN)
+		body, err := fetcher.SecretString(context.Background(), usersARN)
 		if err != nil {
 			return runtimeConfigFile{}, nil, fmt.Errorf("read --%s: %w", usersARNFlag, err)
 		}
@@ -125,15 +128,18 @@ func selectRuntimeConfigFile() (runtimeConfigFile, error) {
 		if err == nil {
 			return candidate, nil
 		}
+
 		if !errors.Is(err, os.ErrNotExist) {
 			return runtimeConfigFile{}, fmt.Errorf("stat %s: %w", candidate.Path, err)
 		}
 	}
+
 	return runtimeConfigFile{}, nil
 }
 func printStdout(text, name string) error {
 	if _, err := fmt.Fprint(os.Stdout, text); err != nil {
 		return fmt.Errorf("print %s: %w", name, err)
 	}
+
 	return nil
 }

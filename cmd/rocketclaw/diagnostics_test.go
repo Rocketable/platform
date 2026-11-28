@@ -51,6 +51,7 @@ func TestPprofFlagForms(t *testing.T) {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			flagSet := flag.NewFlagSet("rocketclaw", flag.ContinueOnError)
 			flagSet.SetOutput(io.Discard)
+
 			address := pprofAddress(defaultPprofAddress)
 			flagSet.Var(&address, "pprof", "")
 
@@ -68,7 +69,9 @@ func TestPprofFlagForms(t *testing.T) {
 
 func TestDiagnosticsRoutes(t *testing.T) {
 	runtime.SetBlockProfileRate(0)
+
 	previousMutexRate := runtime.SetMutexProfileFraction(0)
+
 	t.Cleanup(func() {
 		runtime.SetBlockProfileRate(0)
 		runtime.SetMutexProfileFraction(previousMutexRate)
@@ -90,8 +93,10 @@ func TestDiagnosticsRoutes(t *testing.T) {
 		require.Contains(t, after.String(), "TestDiagnosticsRoutes")
 	})
 
-	paths := []string{"", "cmdline", "symbol"}
-	for _, profile := range pprof.Profiles() {
+	profiles := pprof.Profiles()
+
+	paths := append(make([]string, 0, 3+len(profiles)), "", "cmdline", "symbol")
+	for _, profile := range profiles {
 		paths = append(paths, profile.Name())
 	}
 
@@ -303,6 +308,7 @@ func TestDiagnosticsLiveCapturesAndCancellation(t *testing.T) {
 			require.Equal(t, http.StatusInternalServerError, response.StatusCode)
 
 			cancelStarted := time.Now()
+
 			if tc.cancelBy == "request" {
 				cancel()
 			} else {
@@ -318,6 +324,7 @@ func TestDiagnosticsLiveCapturesAndCancellation(t *testing.T) {
 
 			connections.Wait()
 			require.Less(t, time.Since(cancelStarted), 5*time.Second, "cancellation must end the 60-second capture early")
+
 			if tc.name == "profile" {
 				require.NoError(t, pprof.StartCPUProfile(io.Discard))
 				pprof.StopCPUProfile()

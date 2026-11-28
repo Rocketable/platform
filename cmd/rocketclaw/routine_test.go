@@ -16,11 +16,14 @@ import (
 
 func TestRoutineProducerRunsWithDestination(t *testing.T) {
 	progressRoutine := &protocol.RoutineMessage{Agent: "job-agent"}
+
 	for _, outcome := range []string{"normal", "run-error", "interrupted"} {
 		t.Run(outcome, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
+
 			var operations []string
+
 			errRun := errors.New("producer run failed")
 			core := &BackendMock{
 				CreateConversationFunc: func(_ context.Context, conversation protocol.Conversation) error {
@@ -34,13 +37,16 @@ func TestRoutineProducerRunsWithDestination(t *testing.T) {
 					require.True(t, inbound.RequireOutputDecision)
 					require.Equal(t, progressRoutine, inbound.Routine)
 					require.Nil(t, inbound.SlackReply)
+
 					if outcome == "interrupted" {
 						cancel()
 						return context.Canceled
 					}
+
 					if outcome == "run-error" {
 						return errRun
 					}
+
 					return nil
 				},
 			}
@@ -49,6 +55,7 @@ func TestRoutineProducerRunsWithDestination(t *testing.T) {
 			progress.SyncDestination = "web-chat"
 			result, err := runner.Run(ctx, "job-agent", "job prompt", progress)
 			require.Equal(t, "web-chat", result.ConversationID)
+
 			switch outcome {
 			case "run-error":
 				require.ErrorIs(t, err, errRun)
@@ -57,6 +64,7 @@ func TestRoutineProducerRunsWithDestination(t *testing.T) {
 			default:
 				require.NoError(t, err)
 			}
+
 			want := []string{"create:web-chat:job-agent", "create:X:job-agent", "run:X"}
 			require.Equal(t, want, operations)
 		})
@@ -65,6 +73,7 @@ func TestRoutineProducerRunsWithDestination(t *testing.T) {
 
 func TestScheduledRoutineOnlyRunsTurn(t *testing.T) {
 	var operations []string
+
 	errRun := errors.New("run failed")
 	core := &BackendMock{
 		CreateConversationFunc: func(_ context.Context, conversation protocol.Conversation) error {
@@ -75,7 +84,9 @@ func TestScheduledRoutineOnlyRunsTurn(t *testing.T) {
 			require.Empty(t, inbound.SyncDestination)
 			require.True(t, inbound.RequireOutputDecision)
 			require.Nil(t, inbound.SlackReply, "a cron report never goes to Slack")
+
 			operations = append(operations, "run")
+
 			return errRun
 		},
 	}

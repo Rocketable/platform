@@ -39,7 +39,7 @@ func (externalMCPAssembler) Gate(context.Context, *config.Config, *slog.Logger) 
 	return func() error { return nil }, nil
 }
 
-func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (done <-chan struct{}, stops []func(context.Context) error, err error) {
 	events := rt.Subscribe(rt.RunCtx)
 	go func() {
 		for event := range events {
@@ -49,7 +49,7 @@ func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []
 
 	listener, err := net.Listen("tcp", rt.Cfg.Clone().MCPExternal.ListenAddr)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("listen for external MCP HTTP server: %w", err)
 	}
 
 	server := startExternalMCPServer(rt.RunCtx, listener, nil, &mcpAgentIndex{names: []string{"planner"}}, rt.Sessions, rt, rt.Log)
@@ -94,10 +94,12 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 		}
 
 		response := `{"id":"resp_done","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_done","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"done","annotations":[]}]}]}`
+
 		if last := body.Input[len(body.Input)-1]; last.Type == "function_call_output" {
 			outputs = append(outputs, last.Output)
 		} else {
 			code := "def main():\n    return bash(command=" + strconv.Quote(`printf '%s|%s|%s|%s|%s' "${ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID-unset}" "${ROCKETCLAW_CONVERSATION_ID-unset}" "${ROCKETCLAW_METADATA_EXTERNAL_CONVERSATION_ID-unset}" "${ROCKETCLAW_METADATA_ROCKETCLAW_RAW_TEXT-unset}" "${ROCKETCLAW_METADATA_WEB_MESSAGE_ID-unset}"`) + ")\n"
+
 			args, err := json.Marshal(map[string]string{"code": code})
 			if err != nil {
 				t.Error(err)
