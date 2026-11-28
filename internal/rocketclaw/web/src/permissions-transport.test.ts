@@ -13,7 +13,6 @@ test("a person limited to Ops sees and drives only Ops, and everything once unli
     let shots = 0;
     const shot = (name: string) => page.screenshot({ path: path.join(out, `${String(++shots).padStart(2, "0")}-${name}.png`) });
     const currentSpace = (name: string) => page.locator(`button[aria-current="true"][aria-label="${name}"]`).waitFor();
-    // The spaces' cards, and the current one's actions, which for someone limited to their own sessions only enter it.
     const spaceMenu = async (current: string, name: string) => {
       await currentSpace(current);
       const spaces = await page.locator('[data-tab-lists] button[aria-description][aria-expanded]:not([aria-label="Shared"])').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));

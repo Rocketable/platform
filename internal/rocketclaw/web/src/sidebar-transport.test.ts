@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { listSessions } from "./api";
 import type { AgentChoices } from "./types";
 
-// Go holds the second row until this real HTTP client cancels enumeration.
 test("first Go row and composer choices arrive before the blocked tail", async () => {
   const url = process.env.ROCKETCLAW_SIDEBAR_TEST_URL!;
   const abort = new AbortController();

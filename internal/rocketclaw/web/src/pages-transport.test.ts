@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 
-// Go's TestPagesRealBrowser owns the server, the stored probe page and asset, and the check that its API calls were refused.
 test("a page loads its own files but its script cannot read the API as the viewer, opened directly or inside its tab", async () => {
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
@@ -19,7 +18,6 @@ test("a page loads its own files but its script cannot read the API as the viewe
     await frame.waitForFunction(() => (window as any).result);
     expect(await frame.evaluate(() => (window as any).result)).toBe("TypeError");
     expect(await frame.evaluate(() => (window as any).asset)).toBe("loaded");
-    // The Web app itself reads the same API.
     expect(await page.evaluate(() => fetch("/api/ListSessions").then((response) => response.ok))).toBe(true);
     expect(errors).toEqual([]);
   } finally { await browser.close(); }

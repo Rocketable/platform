@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 
-// Go's TestReloadRealBackendBrowser owns the runtime and PostgreSQL fixture.
 test("authenticated browser reloads runtime assets without a conversation", async () => {
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
