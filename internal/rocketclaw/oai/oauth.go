@@ -705,6 +705,11 @@ func cleanCodexRequest(req *http.Request) (body map[string]json.RawMessage, thre
 		changed = true
 	}
 
+	if string(body["store"]) != "false" {
+		body["store"] = json.RawMessage("false")
+		changed = true
+	}
+
 	var stream bool
 	if err := json.Unmarshal(body["stream"], &stream); err != nil || !stream {
 		body["stream"] = json.RawMessage("true")

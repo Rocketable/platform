@@ -1092,6 +1092,21 @@ func TestCleanCodexRequestSendsTextInputAsAMessageList(t *testing.T) {
 	require.JSONEq(t, `[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]`, string(body.Input))
 }
 
+func TestCleanCodexRequestAlwaysSendsStoreFalse(t *testing.T) {
+	for _, body := range []string{`{"store":true,"input":[]}`, `{"input":[]}`} {
+		req := requestWithBody(body)
+
+		_, _, err := cleanCodexRequest(req)
+		require.NoError(t, err)
+
+		var sent struct {
+			Store json.RawMessage `json:"store"`
+		}
+		require.NoError(t, json.NewDecoder(req.Body).Decode(&sent))
+		require.Equal(t, "false", string(sent.Store), body)
+	}
+}
+
 func TestCleanCodexRequestPreservesUntouchedBodies(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1100,11 +1115,11 @@ func TestCleanCodexRequestPreservesUntouchedBodies(t *testing.T) {
 	}{
 		{name: "non-json", contentType: "text/plain", body: `plain body`},
 		{name: "invalid-json", contentType: "application/json", body: `{not-json`},
-		{name: "missing-input", contentType: "application/json", body: `{"instructions":"","stream":true}`},
-		{name: "null-input", contentType: "application/json", body: `{"instructions":"","stream":true,"input": null}`},
-		{name: "empty-input", contentType: "application/json", body: `{"instructions":"","stream":true,"input": [ ]}`},
-		{name: "non-array-input", contentType: "application/json", body: `{"instructions":"","stream":true,"input": { "type": "message" }}`},
-		{name: "unmodified-items", contentType: "application/json", body: `{"instructions":"","stream":true,"input": [ {"type":"message","content":"keep"}, null, {"type":123,"id":"keep"} ]}`},
+		{name: "missing-input", contentType: "application/json", body: `{"instructions":"","store":false,"stream":true}`},
+		{name: "null-input", contentType: "application/json", body: `{"instructions":"","store":false,"stream":true,"input": null}`},
+		{name: "empty-input", contentType: "application/json", body: `{"instructions":"","store":false,"stream":true,"input": [ ]}`},
+		{name: "non-array-input", contentType: "application/json", body: `{"instructions":"","store":false,"stream":true,"input": { "type": "message" }}`},
+		{name: "unmodified-items", contentType: "application/json", body: `{"instructions":"","store":false,"stream":true,"input": [ {"type":"message","content":"keep"}, null, {"type":123,"id":"keep"} ]}`},
 	}
 
 	for _, tt := range tests {
