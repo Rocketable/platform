@@ -16,7 +16,7 @@ The one conversation a `sticky: slack` agent keeps for a Slack channel. Root Sla
 
 ### Thread Session
 
-The conversation a `sticky: slack` agent keeps for one Slack thread. Mentions and Ambient Turns in the thread queue into it and are answered in the thread, including threads under the agent's own top-level answers. A top-level message admitted from a Watched Channel gets a Thread Session for its own thread. It starts no turn while the thread's root mention still waits or runs in a Channel Session, whatever sent the work, Web input included; when that root turn ends or moves, the Thread Session is woken to run what waited.
+The conversation a `sticky: slack` agent keeps for one Slack thread. Mentions and Ambient Turns in the thread queue into it and are answered in the thread, including threads under the agent's own top-level answers. A top-level message admitted from a Watched Channel gets a Thread Session for its own thread. It starts no turn while the thread's root mention still waits or runs in a Channel Session, whatever sent the work, Web input included; when that root turn ends or moves, the Thread Session is woken to run what waited. An unrecorded thread under a top-level message RocketClaw's own bot posted without the mark Channel Session answers carry gets no Thread Session: RocketClaw ignores mentions and replies in it.
 
 ### Root Slack Mention
 
@@ -31,12 +31,6 @@ Unmapped conversations use the `@` Channel Entry. Mapped channels keep that room
 ### `@` Channel Entry
 
 A configured Slack channel entry named `@` that supplies agents and an allowlist for Adhoc Callouts in joined channels that have no entry of their own. It is not a Slack channel.
-
-### Report Thread
-
-A Slack thread an earlier version posted a cron report or an External MCP session into: its conversation, now a Web chat created by a routine run or bound to the session, or an unrecorded thread whose root RocketClaw's own bot posted without the mark Channel Session answers carry. The last case covers threads whose record expired; a thread under a Channel Session answer is a Thread Session, not a Report Thread.
-
-A Report Thread is read-only. RocketClaw ignores every reply and mention in it, showing no working state and posting no reply, and posts nothing more into it. Read-only means RocketClaw ignores input, not that Slack locks the thread. Work on it continues in Web.
 
 ### Joined Thread
 
@@ -460,7 +454,6 @@ A running turn saves each item of its record once, as a step of its own, instead
 - A Root Slack Mention in an unmapped joined channel is an Adhoc Callout when an `@` Channel Entry exists.
 - A mention in a Managed Slack Thread becomes one Thread Queue item and runs as its own turn.
 - An unmentioned message in a Joined Thread or Watched Channel becomes at most one Thread Queue item, an Ambient Turn.
-- A Report Thread ignores Slack input; its conversation continues in Web.
 - A Managed Slack Thread, Thread Queue, External MCP binding, and Step Journal persist in the State Store.
 - Reload replaces Overlay Clones.
 - Frontends and the Backend share Protocol.

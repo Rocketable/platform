@@ -171,7 +171,7 @@ A mention from an allowed user starts work. Without [ambient listening](#ambient
 
 While a turn runs, the thread shows Slack's own working state with a Stop button, or that it needs someone while a question the turn asked in Web waits. A turn that runs scripts or subagents posts one checklist of them, updated as each finishes. When the turn ends, its answer and any files post as new replies. The answer ends with a footer: the agent, how the turn ended (done, failed, or stopped), and an Open in Web link. A turn without an answer posts the footer alone, except an ambient turn, which then posts nothing.
 
-Slack threads that earlier versions posted cron reports or MCP sessions into are read-only: the bot ignores every reply and mention in them. Their conversations are Web chats now; keep working there.
+The bot ignores mentions and replies in a thread it started itself outside a Channel Session, unless it already keeps a conversation for that thread.
 
 Slack has no commands. `/stop`, `/agent`, `/goal`, `/enqueue`, skill names, and any other `/` text after the mention reach the agent as plain text. Start the message with the mention: Slack takes a message that begins with `/` as one of its own slash commands and never posts it. There is no agent picker, steering, queue card, question button, or reaction control. Mention turns cannot use `ask_user_question`, so the agent asks in its reply or hands the work to Web. Use Web to switch agents, run commands and skills, start goals, manage queued work, and stop any turn. Web messages used in a Slack thread are still posted there, and every reply in that conversation still goes to Slack.
 

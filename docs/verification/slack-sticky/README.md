@@ -128,7 +128,7 @@ These are design choices the model makes, and each one is checked:
    The model lets an admission record drop out only once no delivery can name its mention again.
 
    Counterexample: `short-window`, where a record may drop out at any time. Witness: `witness-expiry`.
-6. **A thread under the bot's own top-level reply is a Thread Session, not a Report Thread.** The root must carry a
+6. **A thread under the bot's own top-level reply is a Thread Session, not an ignored bot-rooted thread.** The root must carry a
    Slack-side mark, such as message metadata, because the posting record in `steps` is gone once the turn closes.
 
    Counterexample: `legacy-report`, which is today's `slackThreadReplies` root check.
@@ -239,7 +239,7 @@ Slack call, or one critical section.
 | close | `closeTurn`. New: a Channel Session root wakes its thread's sessions | one transaction |
 | stop | `handleAgentSessionStopped` → `InterruptThread`. New: look the turn up by thread, then interrupt only if that turn is still running, in whichever session holds it | in-memory lookup, later interrupt |
 | crash | `app.go` startup order | restart |
-| `Ambient` gate and classify | `handleMessageEvent`, the `message` event handler of `handleEventsAPI` (`frontend/slack/connector.go`): config gates, mention text, edits, Report Thread, `MentionThread`, Watched Channel; the channel's agent read once for the classify and the admission | one pass of the serial Slack event loop |
+| `Ambient` gate and classify | `handleMessageEvent`, the `message` event handler of `handleEventsAPI` (`frontend/slack/connector.go`): config gates, mention text, edits, `MentionThread`, then an unrecorded thread under an unmarked bot root or a mention root, Watched Channel; the channel's agent read once for the classify and the admission | one pass of the serial Slack event loop |
 | `Ambient` screen | `ScreenAmbient` → `screenAmbient` on the backend router (`backend/thread_bridges.go`), the Decisions API under a 5-second timeout; an error, refusal or timeout passes | one backend call, on the event loop |
 | `Ambient` admit | `SubmitMention` (`backend/thread_bridges.go`) with the ambient key: the Thread Session of `thread_ts`, or of `ts` for a top-level message; the same `slack:<ch>:<ts>` duplicate check as mentions, `slack:<ch>:<ts>:<edited_ts>` for an edit; no status | one "Slack mention admission" transaction |
 | no-reply | new `slack_no_reply` tool, only on ambient turns: saves a `/no-reply` turn step | one write, journaled |
@@ -288,6 +288,12 @@ reachable:
 - `NoExpiry`: an admission record drops out of the duplicate check's window.
 
 ## Results
+
+On 2026-11-27, after the classify step started ignoring the bot-rooted thread only while it has no conversation,
+`make -k -C docs/verification/slack-sticky` exited 0 in 55m 35s with TLC `2026.11.26.020825` (rev `1138302`) and
+OpenJDK `21.0.13.1` on linux/aarch64. It matched every TLC outcome (17 passes, 30 named counterexamples), and each
+pass found the same distinct states and depth as before. The tools came from a local copy with the pinned SHA-256:
+the release's `v1.8.0` asset now has a different digest, so a fresh download fails the pin check.
 
 On 2026-11-26, `make -k` with TLC `2026.11.26.020825` (rev `1138302`) and OpenJDK `21.0.13.1`
 matched every TLC outcome (17 passes, 30 named counterexamples) in 52m 27s.
@@ -338,7 +344,7 @@ Must fail (each found its violation; the counterexample trace is in `.tmp/run/sl
 | `no-root-first` | Slack delivers the thread mention first and the root is not admitted first | `HeldUntilRootSettles` | 7 | 3 |
 | `per-conv-dedup` | **today:** dedup within one conversation; the agent changes between two deliveries | `OneAdmission` | 11 | 4 |
 | `thread-only-lookup` | **today:** `findPosted` searches only thread replies; a crash after a top-level post | `OneReply` | 129 | 9 |
-| `legacy-report` | **today:** a bot-rooted thread is a Report Thread; a mention under a reply | `MentionsAnswered` | 99 | 15 |
+| `legacy-report` | **before the mark:** every bot-rooted thread is ignored; a mention under a reply | `MentionsAnswered` | 99 | 15 |
 | `no-start-check` | no `sticky: slack` check when the turn fires; the agent is not `sticky: slack` then | `OnlySlackAgentsRun` | 9 | 4 |
 | `key-without-agent` | the Channel Session key leaves out the agent; the channel's agent changes | `SessionAgentFixed` | 405 | 8 |
 | `stop-by-conv` | **today:** a Stop interrupts whatever its conversation runs when it lands | `StopPrecise` | 574 | 10 |
@@ -378,6 +384,12 @@ Two of the bugs the model found were fixed in the model before these runs:
 - **Slack's own status expiry and refresh** (`pollSession`) are not modeled.
 - **The Web warning strip, and the rule that hides `sticky: slack` agents from other surfaces**, are not modeled. They
   are UI and listing filters.
+- **Older report chats that kept a Slack thread ID.** The model starts with no conversation rows. Cron report and
+  External MCP chats from before they became Web chats can still be stored as `slack-thread:<channel>:<ts>`. When such
+  a chat's agent is the channel's agent, `slackSessionID` resolves a mention or reply in that Slack thread to it, so the
+  thread counts as recorded: the message queues a turn into that Web chat, and its answer does not reach Slack.
+  `NoAmbientInReport` and the bot-root rule hold only for threads with no such row. This is accepted for old data,
+  which retention deletes 90 days after a chat's last message.
 - **Small bounds.** These are 1 to 2 agents, at most 7 items, 1 to 2 tool-call steps per turn, 1 crash, and up to 2
   Stops. Behavior that needs more is not covered.
 
@@ -398,7 +410,7 @@ results did not change (see Results, extended model).
   - a message that mentions the bot is ignored, because the mention path keeps it. Slack sends a `message` copy of every
     mention, before or after its `app_mention`;
   - an edit reaches the Thread Session of its thread only when that session exists, without screening;
-  - a Report Thread reply is ignored;
+  - a reply in an unrecorded thread whose root the bot posted without the Channel Session mark is ignored;
   - a reply in a thread whose root mentions the bot and which has no Thread Session is ignored, because the Channel
     Session owns that request;
   - anything else, a reply in a Joined Thread or a message in the Watched Channel, is screened.
@@ -425,7 +437,7 @@ stateDiagram-v2
     Gate --> Classify: new message
     Edit --> Admit: thread has a Thread Session
     Edit --> Ignored: unfurl, or no Thread Session
-    Classify --> Ignored: report thread, unrecorded thread under a mention root
+    Classify --> Ignored: unrecorded thread under an unmarked bot root or a mention root
     Classify --> Screen: reply in a joined thread
     Classify --> Screen: message in a watched channel
     Classify --> Ignored: neither
@@ -469,7 +481,7 @@ stateDiagram-v2
 | 9 | A plain reply in root 1's thread: a Joined Thread once that thread has a Thread Session, until then a thread under a mention root that the Channel Session owns |
 | 10 | A plain top-level message in the watched channel (its thread is ts 10) |
 | 11 | An edit of a plain reply in root 1's thread, with its own admission key |
-| 12 | A plain reply in a Report Thread (ts 300) |
+| 12 | A plain reply in an unrecorded thread under an unmarked bot root (ts 300), such as an older cron report thread |
 
 One thread, root 1's, plays both the Joined Thread and the thread under a mention root: whether item 9 or 11 arrives
 before or after the thread's Thread Session exists decides which. The Thread Session comes from mention 3 (root first)
@@ -478,7 +490,7 @@ or from root 1 moving into its thread.
 Safety (invariants), added:
 
 - `MentionNeverAmbient`: a message that mentions the bot is never admitted as ambient.
-- `NoAmbientInReport`: a Report Thread reply is never admitted.
+- `NoAmbientInReport`: a reply in that unrecorded bot-rooted thread is never admitted.
 - `NoAmbientUnderMentionRoot`: an ambient admission never creates the Thread Session of a thread whose root mentions
   the bot.
 - `AmbientInThread`: an ambient message queues in the Thread Session of its own thread, never in a Channel Session.
@@ -522,11 +534,11 @@ copy; "once" means no duplicate delivery. Each checks every invariant, the earli
 | Check | World | Properties | Distinct states | Depth | Time |
 | --- | --- | --- | --- | --- | --- |
 | `ambient-thread` | root 1, thread mention 3, reply 9, edit 11; up to twice | all invariants | 13,326,444 | 54 | 6m03s |
-| `ambient-watched` | root 1, top-level message 10, Report Thread reply 12; up to twice | all invariants | 376,794 | 33 | 13s |
+| `ambient-watched` | root 1, top-level message 10, bot-rooted thread reply 12; up to twice | all invariants | 376,794 | 33 | 13s |
 | `ambient-config` | 2 agents; root 1, reply 9, top-level message 10; each once; agent switch; sticky flip | all invariants | 2,173,008 | 39 | 1m45s |
 | `liveness-ambient-thread` | root 1, thread mention 3, reply 9; each once; 1 Stop | all invariants; `MentionsAnswered`, `StatusClears`, `AmbientSettles` | 319,233 | 39 | 4m37s |
 | `liveness-ambient-edit` | root 1, thread mention 3, edit 11; each once; 1 Stop | as above | 319,233 | 39 | 4m35s |
-| `liveness-ambient-watched` | root 1, top-level message 10, Report Thread reply 12; up to twice | as above | 376,794 | 33 | 7m24s |
+| `liveness-ambient-watched` | root 1, top-level message 10, bot-rooted thread reply 12; up to twice | as above | 376,794 | 33 | 7m24s |
 
 Must fail (each found its violation; the counterexample trace is in `.tmp/run/slack-sticky-model/<check>.log`):
 
@@ -547,14 +559,14 @@ How the ambient worlds were sized, and what that leaves out:
 
 - **The first safety world did not finish.** Every item together (root 1, mention 3, items 9 to 12, each delivered up to
   twice, one crash) ran out of time at 1800 seconds: 27.9 million distinct states, depth 20, 10.6 million still queued,
-  no violation found. It was split into `ambient-thread` and `ambient-watched`. The Report Thread reply is in the
+  no violation found. It was split into `ambient-thread` and `ambient-watched`. The bot-rooted thread reply is in the
   second only, and the edit in the first only.
 - **The first configuration world did not finish.** With thread mention 3 as well, `ambient-config` ran out of time
   at 1800 seconds with no violation found. It now has no thread mention, so root 1's thread gets its Thread Session
   only when root 1 moves into it.
 - **Liveness worlds are smaller.** The first two liveness worlds tried, each with duplicates, a Stop, a crash and the
   four earlier liveness properties as well, ran out of time at 1800 seconds with no violation found: root 1, mention 3,
-  reply 9 and edit 11; and root 1, top-level message 10 and Report Thread reply 12. The liveness worlds in root 1's
+  reply 9 and edit 11; and root 1, top-level message 10 and bot-rooted thread reply 12. The liveness worlds in root 1's
   thread now deliver each message once and take reply 9 and edit 11 one at a time; the watched one has no Stop.
 - **Liveness checks `MentionsAnswered`, `StatusClears` and `AmbientSettles`,** not `Settles` and `ChannelKnowsThread`.
   In these worlds every item is a mention or an ambient message, so `MentionsAnswered` and `AmbientSettles` together
@@ -587,7 +599,7 @@ Required (must pass), with 4 workers unless noted:
 | `liveness-ambient-thread` | as before | 622,721 | 41 | 9m57s |
 | `liveness-ambient-edit` | as before | 622,721 | 41 | 9m52s |
 | `ambient-thread` | **smaller:** root 1, thread mention 3, reply 9, no edit; up to twice; 1 Stop; 1 crash; 12 workers | 5,575,142 | 46 | 1m37s |
-| `liveness-ambient-watched` | **smaller:** root 1, top-level message 10, no Report Thread reply; up to twice; 1 crash; 12 workers | 365,006 | 33 | 3m17s |
+| `liveness-ambient-watched` | **smaller:** root 1, top-level message 10, no bot-rooted thread reply; up to twice; 1 crash; 12 workers | 365,006 | 33 | 3m17s |
 
 The new step multiplies the ambient worlds: `ambient-watched` grew from 376,794 to 1,095,018 distinct states,
 `ambient-config` from 2,173,008 to 11,005,296 and `liveness-ambient-thread` from 319,233 to 622,721. Two worlds no
@@ -598,7 +610,7 @@ longer finished:
   hand after about 8 minutes at 14.6 million distinct states with a growing queue. The edit now runs only in
   `liveness-ambient-edit` (each message once), and the world gained a Stop: it still has a mention waiting behind an
   ambient reply that shows its status mid-turn, duplicates and a crash, and Stop now reaches that reply.
-- `liveness-ambient-watched` with the Report Thread reply 12: stopped by hand after 27 minutes at 1,036,919 distinct
+- `liveness-ambient-watched` with the bot-rooted thread reply 12: stopped by hand after 27 minutes at 1,036,919 distinct
   states, no violation. The reply is never admitted, and `ambient-watched` still checks it with every invariant.
 
 Must fail (1 worker):

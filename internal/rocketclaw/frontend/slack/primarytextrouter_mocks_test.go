@@ -24,7 +24,7 @@ var _ protocol.PrimaryTextRouter = &primaryTextRouterMock{}
 //			InterruptTurnFunc: func(ctx context.Context, turnID string) error {
 //				panic("mock out the InterruptTurn method")
 //			},
-//			MentionThreadFunc: func(target protocol.TextConversationTarget) (bool, bool, error) {
+//			MentionThreadFunc: func(target protocol.TextConversationTarget) (bool, error) {
 //				panic("mock out the MentionThread method")
 //			},
 //			ScreenAmbientFunc: func(ctx context.Context, target protocol.TextConversationTarget, screen *protocol.AmbientScreen) bool {
@@ -47,7 +47,7 @@ type primaryTextRouterMock struct {
 	InterruptTurnFunc func(ctx context.Context, turnID string) error
 
 	// MentionThreadFunc mocks the MentionThread method.
-	MentionThreadFunc func(target protocol.TextConversationTarget) (bool, bool, error)
+	MentionThreadFunc func(target protocol.TextConversationTarget) (bool, error)
 
 	// ScreenAmbientFunc mocks the ScreenAmbient method.
 	ScreenAmbientFunc func(ctx context.Context, target protocol.TextConversationTarget, screen *protocol.AmbientScreen) bool
@@ -142,7 +142,7 @@ func (mock *primaryTextRouterMock) InterruptTurnCalls() []struct {
 }
 
 // MentionThread calls MentionThreadFunc.
-func (mock *primaryTextRouterMock) MentionThread(target protocol.TextConversationTarget) (bool, bool, error) {
+func (mock *primaryTextRouterMock) MentionThread(target protocol.TextConversationTarget) (bool, error) {
 	if mock.MentionThreadFunc == nil {
 		panic("primaryTextRouterMock.MentionThreadFunc: method is nil but PrimaryTextRouter.MentionThread was just called")
 	}

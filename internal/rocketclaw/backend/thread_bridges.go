@@ -478,29 +478,15 @@ func slackSessionID(ctx context.Context, db stateStoreDB, channelID, threadTS, m
 	return protocol.SlackThreadSessionID(channelID, threadTS, agent), nil
 }
 
-func (m *threadBridgeManager) MentionThread(target protocol.TextConversationTarget) (recorded, report bool, err error) {
-	managed := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-
-	thread, _, err := m.store.Thread(managed)
-	if err != nil {
-		return false, false, err
-	}
-
-	_, _, paired, err := m.store.ExternalMCPSessionByConversationID(managed)
-	if err != nil {
-		return false, false, err
-	}
-
-	report = thread.CreatedBy == ThreadCreatedByRoutine || paired
-
+func (m *threadBridgeManager) MentionThread(target protocol.TextConversationTarget) (recorded bool, err error) {
 	conversationID, err := slackSessionID(context.Background(), m.store.db, target.ChannelID, target.ThreadID, target.MessageID, target.Agent)
 	if err != nil {
-		return false, false, err
+		return false, err
 	}
 
 	_, recorded, err = m.store.Thread(conversationID)
 
-	return recorded, report, err
+	return recorded, err
 }
 
 func (m *threadBridgeManager) ScreenAmbient(ctx context.Context, target protocol.TextConversationTarget, screen *protocol.AmbientScreen) bool {

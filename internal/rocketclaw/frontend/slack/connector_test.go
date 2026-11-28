@@ -1260,7 +1260,7 @@ func newFooterRouter(t *testing.T, errLink error) *primaryTextRouterMock {
 	t.Helper()
 
 	return &primaryTextRouterMock{
-		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, false, nil },
+		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, error) { return true, nil },
 		WebURLFunc: func(conversationID string) (string, error) {
 			assert.Equal(t, "slack-thread:C123:111.222", conversationID)
 
@@ -2798,31 +2798,6 @@ func TestSlackCommandTextReachesOrdinaryRouting(t *testing.T) {
 	}
 }
 
-func TestHandleAppMentionEventIgnoresReportThread(t *testing.T) {
-	var (
-		posted    []url.Values
-		reactions []string
-	)
-
-	server := newSlackStackTestServer(t, &posted, &reactions)
-	defer server.Close()
-
-	router := &primaryTextRouterMock{MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, true, nil }}
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
-	connector.botUserID = "U999"
-
-	for _, text := range []string{"<@U999> why did this fail?", "<@U999>"} {
-		mention := newSlackAppMentionEvent()
-		mention.TimeStamp, mention.ThreadTimeStamp, mention.Text = "171235.0001", "171234.5678", text
-		connector.handleAppMentionEvent(t.Context(), mention, slackNativeForward{})
-	}
-
-	require.Len(t, router.MentionThreadCalls(), 2)
-	assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C123", MessageID: "171235.0001", ThreadID: "171234.5678", Agent: "social"}, router.MentionThreadCalls()[0].Target)
-	assert.Empty(t, posted)
-	assert.Empty(t, reactions)
-}
-
 func TestHandleEventsAPIIgnoresMessagesAndReactions(t *testing.T) {
 	edit := func(message map[string]any) *slackevents.MessageEvent {
 		return newSlackMessageEvent(t, map[string]any{"subtype": "message_changed", "user": nil, "text": nil, "thread_ts": nil, "ts": "171236.0000", "message": message})
@@ -2834,11 +2809,11 @@ func TestHandleEventsAPIIgnoresMessagesAndReactions(t *testing.T) {
 	editedMention.Edited = &slackevents.Edited{User: "U123", TimeStamp: "171234.9999"}
 
 	for _, tt := range []struct {
-		name             string
-		event            any
-		recorded, report bool
-		watch            string
-		root             map[string]any
+		name     string
+		event    any
+		recorded bool
+		watch    string
+		root     map[string]any
 	}{
 		{name: "1:1 DM", event: newSlackMessageEvent(t, map[string]any{"channel": "D123", "channel_type": "im"}), recorded: true},
 		{name: "bot message", event: newSlackMessageEvent(t, map[string]any{"bot_id": "B111"}), recorded: true},
@@ -2850,7 +2825,6 @@ func TestHandleEventsAPIIgnoresMessagesAndReactions(t *testing.T) {
 		{name: "aliased bot mention", event: newSlackMessageEvent(t, map[string]any{"text": "also <@U999|robot> check staging"}), recorded: true},
 		{name: "parent redelivery", event: newSlackMessageEvent(t, map[string]any{"ts": "171234.5678"}), watch: "deploy questions"},
 		{name: "reply in an unjoined thread of an unwatched channel", event: newSlackMessageEvent(t, nil)},
-		{name: "Report Thread reply", event: newSlackMessageEvent(t, nil), recorded: true, report: true},
 		{name: "change without an edit", event: edit(map[string]any{"user": "U123", "ts": "171235.0001", "thread_ts": "171234.5678", "text": "also check staging https://example.com"}), recorded: true},
 		{name: "edit of a top-level message never admitted", event: edit(map[string]any{"user": "U123", "ts": "171235.0001", "text": "how do I deploy now?", "edited": edited}), watch: "deploy questions"},
 		{name: "edit in an unjoined thread", event: edit(map[string]any{"user": "U123", "ts": "171235.0001", "thread_ts": "171234.5678", "text": "also check prod", "edited": edited}), watch: "deploy questions"},
@@ -2863,7 +2837,6 @@ func TestHandleEventsAPIIgnoresMessagesAndReactions(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			router := newMentionRouter(tt.recorded)
-			router.MentionThreadFunc = func(protocol.TextConversationTarget) (bool, bool, error) { return tt.recorded, tt.report, nil }
 
 			root := tt.root
 			if root == nil {
@@ -3411,7 +3384,7 @@ func newAmbientConnector(t *testing.T, router protocol.PrimaryTextRouter, watch 
 
 func newMentionRouter(recorded bool) *primaryTextRouterMock {
 	return &primaryTextRouterMock{
-		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return recorded, false, nil },
+		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, error) { return recorded, nil },
 		ScreenAmbientFunc: func(context.Context, protocol.TextConversationTarget, *protocol.AmbientScreen) bool { return true },
 		SubmitMentionFunc: func(context.Context, string, protocol.TextConversationTarget, *protocol.InboundMessage) (bool, error) {
 			return true, nil

@@ -196,7 +196,7 @@ func TestHandleAppMentionEventThreadUnderBotRoot(t *testing.T) {
 			connector.handleAppMentionEvent(context.Background(), newThreadMention("<@U999> why did this fail?"), slackNativeForward{})
 
 			if !tt.admitted {
-				assert.Empty(t, router.SubmitMentionCalls(), "a thread under an unmarked bot root is a Report Thread")
+				assert.Empty(t, router.SubmitMentionCalls(), "a thread under an unmarked bot root is ignored")
 				assert.Empty(t, writes)
 
 				return

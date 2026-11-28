@@ -1144,13 +1144,9 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	target := protocol.TextConversationTarget{ChannelID: ev.Channel, MessageID: ev.TimeStamp, ThreadID: threadTS, Agent: agent}
 
-	recorded, report, err := c.threadRouter.MentionThread(target)
+	recorded, err := c.threadRouter.MentionThread(target)
 	if err != nil {
 		c.log.Error("read Slack mention thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
-		return
-	}
-
-	if report {
 		return
 	}
 
@@ -1279,13 +1275,13 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 	target := protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: cmp.Or(msg.ThreadTimestamp, msg.Timestamp), Agent: agent}
 
-	recorded, report, err := c.threadRouter.MentionThread(target)
+	recorded, err := c.threadRouter.MentionThread(target)
 	if err != nil {
 		c.log.Error("read Slack ambient thread", "error", err, "channel", ev.Channel, "message_ts", msg.Timestamp, "thread_ts", target.ThreadID)
 		return
 	}
 
-	if report || !recorded && (editTS != "" || row.WakeWhen == "" && msg.ParentUserId != c.botUserID) {
+	if !recorded && (editTS != "" || row.WakeWhen == "" && msg.ParentUserId != c.botUserID) {
 		return
 	}
 
