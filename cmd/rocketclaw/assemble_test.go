@@ -23,6 +23,7 @@ import (
 func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
+
 	rt := &backend.Runtime{
 		Cfg:    config.NewLockedConfig(&config.Config{Slack: config.SlackConfig{BotToken: "xoxb", AppToken: "xapp"}}),
 		Log:    slog.New(slog.DiscardHandler),
@@ -62,6 +63,7 @@ func TestAssembleFrontendsWiresSlackRoutineAndMCP(t *testing.T) {
 
 			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
+
 			cfg := &config.Config{
 				Workspace:   workspace,
 				DatabaseURL: dsn,
@@ -78,6 +80,7 @@ func TestAssembleFrontendsWiresSlackRoutineAndMCP(t *testing.T) {
 					require.NoError(t, err)
 					require.NotNil(t, done)
 					require.Len(t, stops, 4, "Slack, Cron, external MCP, and Web must all start")
+
 					if slack.BotToken == "" {
 						require.Equal(t, ctx.Done(), done, "the inert Slack ends with the run")
 					}
@@ -85,6 +88,7 @@ func TestAssembleFrontendsWiresSlackRoutineAndMCP(t *testing.T) {
 					require.IsType(t, &routinefrontend.Manager{}, rt.Routines, "a reload refreshes the started cron jobs")
 					cancel()
 					<-done
+
 					for _, stop := range stops {
 						require.NoError(t, stop(context.Background()))
 					}

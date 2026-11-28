@@ -29,6 +29,7 @@ func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, prefix+path, http.NoBody)
 			handler.ServeHTTP(response, request)
+
 			if strings.HasPrefix(prefix, "/s/") {
 				require.Equal(t, http.StatusOK, response.Code, prefix+path)
 				require.Contains(t, response.Body.String(), "/assets/main-", prefix+path)

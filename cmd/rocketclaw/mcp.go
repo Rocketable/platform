@@ -35,15 +35,18 @@ func (i *mcpAgentIndex) Refresh() error {
 	if err != nil {
 		return fmt.Errorf("load external MCP agents: %w", err)
 	}
+
 	i.mu.Lock()
 	i.names = agents
 	i.mu.Unlock()
+
 	return nil
 }
 
 func (i *mcpAgentIndex) Exposed(agent string) bool {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+
 	return slices.Contains(i.names, agent)
 }
 

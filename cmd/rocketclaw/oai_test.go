@@ -24,9 +24,9 @@ func (f oaiLoginRoundTrip) RoundTrip(req *http.Request) (*http.Response, error) 
 	return f(req)
 }
 
-func requireSaveToken(t *testing.T, workspace, runtimeDir, provider string, token oai.Token) {
+func requireSaveToken(t *testing.T, workspace, provider string, token oai.Token) {
 	t.Helper()
-	require.NoError(t, oai.SaveTokenIn(workspace, runtimeDir, provider, token))
+	require.NoError(t, oai.SaveTokenIn(workspace, config.DefaultRuntimeDir, provider, token))
 }
 
 func TestRunOAILoginHelpAndInvalidArguments(t *testing.T) {
@@ -42,10 +42,11 @@ func TestRunOAILoginHelpAndInvalidArguments(t *testing.T) {
 		{args: []string{"--aws-secrets-manager-arn"}, wantErr: "flag needs an argument: -aws-secrets-manager-arn"},
 	} {
 		if tt.wantErr != "" {
-			require.ErrorContains(t, runOAILogin(tt.args), tt.wantErr, tt.args)
+			require.ErrorContains(t, runOAILogin(tt.args, testSecrets{}), tt.wantErr, tt.args)
 			continue
 		}
-		output := captureStdout(t, func() error { return runOAILogin(tt.args) })
+
+		output := captureStdout(t, func() error { return runOAILogin(tt.args, testSecrets{}) })
 		assert.Contains(t, output, "rocketclaw oai login [provider] [--headless]", tt.args)
 	}
 }
@@ -63,9 +64,10 @@ func TestRunOAILoginProviderAndFlagsInAnyOrder(t *testing.T) {
 			workspace := prepareOAIConfig(t)
 			mockDeviceLogin(t, tt.provider+"-refresh")
 			synctest.Test(t, func(t *testing.T) {
-				output := captureStdout(t, func() error { return runOAILogin(tt.args) })
+				output := captureStdout(t, func() error { return runOAILogin(tt.args, testSecrets{}) })
 				assert.Contains(t, output, "Saved "+tt.provider+" ChatGPT OAuth token")
 			})
+
 			token, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, tt.provider)
 			require.NoError(t, err)
 			assert.Equal(t, tt.provider+"-refresh", token.Refresh)
@@ -86,24 +88,28 @@ func TestRunOAILoginRejectsBeforeOAuth(t *testing.T) {
 			workspace := prepareOAIConfig(t)
 			original, err := os.ReadFile(defaultConfigPath)
 			require.NoError(t, err)
+
 			args := []string{tt.provider, "--headless"}
 			if tt.secret != "" {
-				useTestSecrets(t, testSecrets{testSecretsARN: tt.secret})
 				args = append(args, "--aws-secrets-manager-arn", testSecretsARN)
 			}
+
 			requests := 0
 			base := http.DefaultClient.Transport
 			http.DefaultClient.Transport = oaiLoginRoundTrip(func(*http.Request) (*http.Response, error) {
 				requests++
 				return nil, errors.New("OAuth must not start")
 			})
+
 			t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-			require.EqualError(t, runOAILogin(args), tt.want)
+			require.EqualError(t, runOAILogin(args, testSecrets{testSecretsARN: tt.secret}), tt.want)
 			assert.Zero(t, requests)
+
 			data, err := os.ReadFile(defaultConfigPath)
 			require.NoError(t, err)
 			assert.Equal(t, original, data)
+
 			_, err = oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, tt.provider)
 			require.ErrorIs(t, err, os.ErrNotExist)
 		})
@@ -128,27 +134,31 @@ func TestRunOAILoginSetsUpChatGPT(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()
 			t.Chdir(workspace)
+
 			if tt.file != "" {
 				require.NoError(t, os.WriteFile(defaultConfigPath, []byte(tt.file), 0o600))
 			}
+
 			args := []string{tt.provider, "--headless"}
 			if tt.secret != "" {
-				useTestSecrets(t, testSecrets{testSecretsARN: tt.secret})
 				args = append(args, "--aws-secrets-manager-arn", testSecretsARN)
 			}
+
 			mockDeviceLogin(t, "refresh")
 
 			synctest.Test(t, func(t *testing.T) {
-				output := captureStdout(t, func() error { return runOAILogin(args) })
+				output := captureStdout(t, func() error { return runOAILogin(args, testSecrets{testSecretsARN: tt.secret}) })
 				assert.Contains(t, output, "Restart RocketClaw to use ChatGPT OAuth for "+tt.provider)
 			})
 
 			data, err := os.ReadFile(defaultConfigPath)
 			require.NoError(t, err)
 			assert.JSONEq(t, tt.want, string(data))
+
 			info, err := os.Stat(defaultConfigPath)
 			require.NoError(t, err)
 			assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
 			token, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, tt.provider)
 			require.NoError(t, err)
 			assert.Equal(t, "refresh", token.Refresh)
@@ -159,12 +169,11 @@ func TestRunOAILoginSetsUpChatGPT(t *testing.T) {
 func TestRunOAILoginLeavesConfigAloneWhenSecretUsesChatGPT(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
-	useTestSecrets(t, testSecrets{testSecretsARN: `{"providers":{"work":{"auth":"chatgpt"}}}`})
 	mockDeviceLogin(t, "refresh")
 
 	synctest.Test(t, func(t *testing.T) {
 		output := captureStdout(t, func() error {
-			return runOAILogin([]string{"work", "--headless", "--aws-secrets-manager-arn", testSecretsARN})
+			return runOAILogin([]string{"work", "--headless", "--aws-secrets-manager-arn", testSecretsARN}, testSecrets{testSecretsARN: `{"providers":{"work":{"auth":"chatgpt"}}}`})
 		})
 		assert.NotContains(t, output, "Restart RocketClaw")
 	})
@@ -180,7 +189,7 @@ func TestRunOAIListIgnoresServerOnlySettings(t *testing.T) {
 	t.Chdir(t.TempDir())
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{"openai": {}, "providers": {"work": {"auth": "chatgpt"}}}`), 0o600))
 
-	output := captureStdout(t, func() error { return runOAI([]string{"list"}) })
+	output := captureStdout(t, func() error { return runOAI([]string{"list"}, testSecrets{}) })
 	assert.Equal(t, "openai (default)\tapi_key\tmissing\nwork\tchatgpt\tmissing\n", output)
 }
 
@@ -189,11 +198,12 @@ func TestRunOAILoginUpdatesOnlySelectedProvider(t *testing.T) {
 	mockDeviceLogin(t, "work-refresh")
 
 	synctest.Test(t, func(t *testing.T) {
-		captureStdout(t, func() error { return runOAILogin([]string{"work", "--headless"}) })
+		captureStdout(t, func() error { return runOAILogin([]string{"work", "--headless"}, testSecrets{}) })
 	})
 
 	data, err := os.ReadFile(defaultConfigPath)
 	require.NoError(t, err)
+
 	var raw map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(data, &raw))
 	assert.JSONEq(t, `{"auth":"api_key","api_key":"openai-key"}`, string(raw["openai"]))
@@ -254,6 +264,7 @@ func TestSaveOAILoginLeavesConfigAndCredentialsUnchangedWhenConfigCommitFails(t 
 	data, err := os.ReadFile(defaultConfigPath)
 	require.NoError(t, err)
 	assert.Equal(t, original, data)
+
 	_, err = oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, "work")
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
@@ -276,8 +287,8 @@ func TestRunOAILoginRestoresConfigWhenCredentialWriteFails(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "auth.json"), 0o700))
 	mockDeviceLogin(t, "work-refresh")
 
-	synctest.Test(t, func(t *testing.T) {
-		err = runOAILogin([]string{"work", "--headless"})
+	synctest.Test(t, func(*testing.T) {
+		err = runOAILogin([]string{"work", "--headless"}, testSecrets{})
 	})
 	require.ErrorContains(t, err, "OpenAI OAuth token")
 
@@ -289,16 +300,18 @@ func TestRunOAILoginRestoresConfigWhenCredentialWriteFails(t *testing.T) {
 func TestSaveOAILoginDoesNotRollbackCommittedToken(t *testing.T) {
 	workspace := prepareOAIConfig(t)
 	intended := oai.Token{Refresh: "refresh"}
-	requireSaveToken(t, workspace, config.DefaultRuntimeDir, "work", intended)
+	requireSaveToken(t, workspace, "work", intended)
 	authPath, err := oai.AuthFilePathIn(workspace, config.DefaultRuntimeDir)
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(authPath+".lock"))
 	require.NoError(t, os.Mkdir(authPath+".lock", 0o700))
+
 	err = saveOAILogin(defaultConfigPath, workspace, config.DefaultRuntimeDir, "work", false, intended)
 	require.Error(t, err)
 	stored, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, "work")
 	require.NoError(t, err)
 	assert.Equal(t, intended, stored)
+
 	data, err := os.ReadFile(defaultConfigPath)
 	require.NoError(t, err)
 	assert.Contains(t, providerJSON(t, mustRawConfig(t, data), "work"), `"auth": "chatgpt"`)
@@ -306,22 +319,27 @@ func TestSaveOAILoginDoesNotRollbackCommittedToken(t *testing.T) {
 
 func TestRunOAILoginSerializesDifferentProviderConfigChanges(t *testing.T) {
 	workspace := prepareOAIConfig(t)
-	selected, cfg, err := loadRuntimeConfig("", "")
+	selected, cfg, err := loadRuntimeConfig("", "", testSecrets{})
 	require.NoError(t, err)
 	lock, err := os.OpenFile(selected.Path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	require.NoError(t, err)
 	require.NoError(t, unix.Flock(int(lock.Fd()), unix.LOCK_EX))
+
 	started := make(chan struct{}, 2)
 	errs := make(chan error, 2)
+
 	for _, provider := range []string{"openai", "work"} {
 		go func() {
 			started <- struct{}{}
+
 			err := saveOAILogin(selected.Path, cfg.Workspace, cfg.RuntimeDirName(), provider, false, oai.Token{Refresh: provider + "-refresh"})
 			errs <- err
 		}()
 	}
+
 	<-started
 	<-started
+
 	probe, err := os.OpenFile(selected.Path+".lock", os.O_RDWR, 0)
 	require.NoError(t, err)
 	err = unix.Flock(int(probe.Fd()), unix.LOCK_EX|unix.LOCK_NB)
@@ -334,10 +352,12 @@ func TestRunOAILoginSerializesDifferentProviderConfigChanges(t *testing.T) {
 
 	data, err := os.ReadFile(defaultConfigPath)
 	require.NoError(t, err)
+
 	var raw map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(data, &raw))
 	assert.Contains(t, string(raw["openai"]), `"auth": "chatgpt"`)
 	assert.Contains(t, providerJSON(t, raw, "work"), `"auth": "chatgpt"`)
+
 	for _, provider := range []string{"openai", "work"} {
 		token, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, provider)
 		require.NoError(t, err)
@@ -347,8 +367,10 @@ func TestRunOAILoginSerializesDifferentProviderConfigChanges(t *testing.T) {
 
 func mustRawConfig(t *testing.T, data []byte) map[string]json.RawMessage {
 	t.Helper()
+
 	var raw map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(data, &raw))
+
 	return raw
 }
 
@@ -356,28 +378,28 @@ func TestRunOAILoginPrintsRestartGuidanceOnlyWhenModeChanges(t *testing.T) {
 	prepareOAIConfig(t)
 	mockDeviceLogin(t, "work-refresh")
 	synctest.Test(t, func(t *testing.T) {
-		output := captureStdout(t, func() error { return runOAILogin([]string{"work", "--headless"}) })
+		output := captureStdout(t, func() error { return runOAILogin([]string{"work", "--headless"}, testSecrets{}) })
 		assert.Contains(t, output, "Restart RocketClaw")
-		output = captureStdout(t, func() error { return runOAILogin([]string{"work", "--headless"}) })
+		output = captureStdout(t, func() error { return runOAILogin([]string{"work", "--headless"}, testSecrets{}) })
 		assert.NotContains(t, output, "Restart RocketClaw")
 	})
 }
 
 func TestRunOAIListSortsProvidersWithoutCredentials(t *testing.T) {
 	workspace := prepareOAIConfig(t)
-	requireSaveToken(t, workspace, config.DefaultRuntimeDir, "work", oai.Token{Refresh: "secret-refresh", Access: "secret-access", AccountID: "secret-account"})
+	requireSaveToken(t, workspace, "work", oai.Token{Refresh: "secret-refresh", Access: "secret-access", AccountID: "secret-account"})
 
-	output := captureStdout(t, func() error { return runOAI([]string{"list"}) })
+	output := captureStdout(t, func() error { return runOAI([]string{"list"}, testSecrets{}) })
 	assert.Equal(t, "alpha\tapi_key\tmissing\nhelp\tapi_key\tmissing\nopenai (default)\tapi_key\tmissing\nwork\tapi_key\tpresent\n", output)
 	assert.NotContains(t, output, "secret")
 }
 
 func TestRunOAILogoutRemovesOnlySelectedProvider(t *testing.T) {
 	workspace := prepareOAIConfig(t)
-	requireSaveToken(t, workspace, config.DefaultRuntimeDir, "openai", oai.Token{Refresh: "openai-refresh"})
-	requireSaveToken(t, workspace, config.DefaultRuntimeDir, "work", oai.Token{Refresh: "work-refresh"})
+	requireSaveToken(t, workspace, "openai", oai.Token{Refresh: "openai-refresh"})
+	requireSaveToken(t, workspace, "work", oai.Token{Refresh: "work-refresh"})
 
-	output := captureStdout(t, func() error { return runOAI([]string{"logout", "work"}) })
+	output := captureStdout(t, func() error { return runOAI([]string{"logout", "work"}, testSecrets{}) })
 	assert.Contains(t, output, "Removed local ChatGPT OAuth token for work")
 
 	_, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
@@ -391,20 +413,20 @@ func TestRunOAIWrapsRestartAndLogoutOutputErrors(t *testing.T) {
 		prepareOAIConfig(t)
 		mockDeviceLoginClosingStdout(t)
 		synctest.Test(t, func(t *testing.T) {
-			err := runOAILogin([]string{"work", "--headless"})
+			err := runOAILogin([]string{"work", "--headless"}, testSecrets{})
 			require.ErrorContains(t, err, "print oai login result")
 		})
 	})
 	t.Run("logout", func(t *testing.T) {
 		workspace := prepareOAIConfig(t)
-		requireSaveToken(t, workspace, config.DefaultRuntimeDir, "work", oai.Token{Refresh: "refresh"})
-		err := runWithClosedStdout(t, func() error { return runOAILogout([]string{"work"}) })
+		requireSaveToken(t, workspace, "work", oai.Token{Refresh: "refresh"})
+		err := runWithClosedStdout(t, func() error { return runOAILogout([]string{"work"}, testSecrets{}) })
 		require.ErrorContains(t, err, "print oai logout result")
 	})
 }
 
 func TestRunOAIHelpListsLoginListAndLogout(t *testing.T) {
-	output := captureStdout(t, func() error { return runOAI(nil) })
+	output := captureStdout(t, func() error { return runOAI(nil, testSecrets{}) })
 	assert.Contains(t, output, "rocketclaw oai login [provider] [--headless]")
 	assert.Contains(t, output, "rocketclaw oai list")
 	assert.Contains(t, output, "rocketclaw oai logout [provider]")
@@ -419,7 +441,7 @@ func TestRunOAIRejectsInvalidArguments(t *testing.T) {
 		{args: []string{"logout", "--bad"}, want: "parse oai logout flags"},
 		{args: []string{"logout", "openai", "work"}, want: "more than one provider"},
 	} {
-		err := runOAI(tt.args)
+		err := runOAI(tt.args, testSecrets{})
 		require.ErrorContains(t, err, tt.want)
 	}
 }
@@ -429,9 +451,11 @@ func prepareOAIConfig(t *testing.T) string {
 	root := t.TempDir()
 	configDir := filepath.Join(root, "config")
 	workspace := filepath.Join(root, "runtime")
+
 	require.NoError(t, os.Mkdir(configDir, 0o700))
 	require.NoError(t, os.Mkdir(workspace, 0o700))
 	t.Chdir(configDir)
+
 	data := `{
   "workspace": "../runtime", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
   "openai": {"auth":"api_key","api_key":"openai-key"},
@@ -446,26 +470,33 @@ func prepareOAIConfig(t *testing.T) string {
   "future_large": 9007199254740993
 }`
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(data), 0o640))
+
 	return workspace
 }
 
 func runWithClosedStdout(t *testing.T, run func() error) error {
 	t.Helper()
+
 	reader, writer, err := os.Pipe()
 	require.NoError(t, err)
 	require.NoError(t, reader.Close())
 	require.NoError(t, writer.Close())
+
 	stdout := os.Stdout
 	os.Stdout = writer
+
 	t.Cleanup(func() { os.Stdout = stdout })
+
 	return run()
 }
 
 func mockDeviceLogin(t *testing.T, refresh string) {
 	t.Helper()
+
 	base := http.DefaultClient.Transport
 	http.DefaultClient.Transport = oaiLoginRoundTrip(func(req *http.Request) (*http.Response, error) {
 		body := ""
+
 		switch req.URL.String() {
 		case "https://auth.openai.com/api/accounts/deviceauth/usercode":
 			body = `{"device_auth_id":"dev-123","user_code":"CODE-456","interval":"1"}`
@@ -476,22 +507,28 @@ func mockDeviceLogin(t *testing.T, refresh string) {
 		default:
 			t.Fatalf("unexpected OAuth request URL %s", req.URL)
 		}
+
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})
+
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 }
 
 func mockDeviceLoginClosingStdout(t *testing.T) {
 	t.Helper()
+
 	reader, writer, err := os.Pipe()
 	require.NoError(t, err)
+
 	stdout := os.Stdout
 	os.Stdout = writer
+
 	t.Cleanup(func() {
 		os.Stdout = stdout
 		_ = reader.Close()
 		_ = writer.Close()
 	})
+
 	base := http.DefaultClient.Transport
 	http.DefaultClient.Transport = oaiLoginRoundTrip(func(req *http.Request) (*http.Response, error) {
 		body := `{"device_auth_id":"dev-123","user_code":"CODE-456","interval":"1"}`
@@ -499,16 +536,21 @@ func mockDeviceLoginClosingStdout(t *testing.T) {
 			body = `{"authorization_code":"auth-code","code_verifier":"verifier"}`
 		} else if strings.HasSuffix(req.URL.Path, "/oauth/token") {
 			require.NoError(t, writer.Close())
+
 			body = `{"access_token":"access","refresh_token":"work-refresh","expires_in":60}`
 		}
+
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})
+
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 }
 
 func providerJSON(t *testing.T, raw map[string]json.RawMessage, provider string) string {
 	t.Helper()
+
 	var providers map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(raw["providers"], &providers))
+
 	return string(providers[provider])
 }

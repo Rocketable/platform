@@ -18,7 +18,7 @@ vendor: .FORCE
 	go mod vendor
 
 lint:
-	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run --fix ./...
+	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run --fix ../../cmd/rocketclaw ./...
 
 SANDBOX_TEST_DIR ?= $(abspath ../../.tmp)/sandbox-test
 SANDBOX_PACKAGE_CACHE ?= $(SANDBOX_TEST_DIR)/packages

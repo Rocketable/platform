@@ -40,7 +40,9 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
 			require.NoError(t, err)
+
 			diagnosticsAddress := listener.Addr().String()
+
 			if tc.occupied {
 				t.Cleanup(func() { require.NoError(t, listener.Close()) })
 			} else {
@@ -70,7 +72,7 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 
 			t.Cleanup(func() { os.Stderr = stderr })
 
-			err = runServe(args)
+			err = runServe(args, testSecrets{})
 			require.ErrorContains(t, err, tc.want)
 
 			if tc.want == "start rocketcode session service" {
@@ -109,6 +111,7 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 				require.Contains(t, string(output), `msg="started private pprof HTTP"`)
 				_, address, ok := strings.Cut(string(output), "address=")
 				require.True(t, ok)
+
 				address, _, _ = strings.Cut(address, "\n")
 				require.Equal(t, diagnosticsAddress, address)
 
@@ -146,7 +149,7 @@ func TestRunServeStopsAtTheTailnetGate(t *testing.T) {
 				workspace, tc.authKey, dsn,
 			), 0o600))
 
-			err = runServe([]string{"--pprof=false"})
+			err = runServe([]string{"--pprof=false"}, testSecrets{})
 			require.ErrorContains(t, err, "start the Web: ")
 			require.ErrorContains(t, err, tc.want)
 			require.Equal(t, 1, exitCodeForError(err))
@@ -185,19 +188,21 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 	t.Chdir(workspace)
 	require.NoError(t, os.Mkdir("agents", 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join("agents", "ops.md"), []byte("---\ndescription: Ops\nmodel: gpt-6.1-sol\nsticky: slack\n---\n"), 0o600))
+
 	configData := fmt.Sprintf(
 		`{"workspace":%q,"web":{"tsnet":{"auth_key":"tskey-auth-test"}},"database_url":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["ops"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
 		workspace, dsn,
 	)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))
 
-	err = runServe([]string{"--pprof=false"})
+	err = runServe([]string{"--pprof=false"}, testSecrets{})
 	require.EqualError(t, err, "run rocketclaw: assemble frontends: start Slack connector: slack auth test failed: invalid_auth")
-	cfg, err := config.Load(defaultConfigPath, "", secretFetcher)
+	cfg, err := config.Load(defaultConfigPath, "", testSecrets{})
 	require.NoError(t, err)
 	agents, _, err := backend.LoadRuntimeDefinitions(config.NewLockedConfig(cfg), ".rocketclaw")
 	require.NoError(t, err)
 	require.Contains(t, agents.Items, "ops")
+
 	for name, agent := range agents.Items {
 		require.False(t, agent.CustomShell.Emulated, "Slack auth fixture must not start background sandbox preparation for agent %q", name)
 	}
@@ -221,6 +226,7 @@ func serveFakeSlack(t *testing.T, handler http.HandlerFunc) {
 
 	base := http.DefaultTransport
 	http.DefaultTransport = transport
+
 	t.Cleanup(func() { http.DefaultTransport = base })
 }
 

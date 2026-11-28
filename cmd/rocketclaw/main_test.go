@@ -47,7 +47,7 @@ func TestRunWithDefaultConfigAttemptsServe(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{`), 0o600))
 
-	err = run(nil)
+	err = run(nil, testSecrets{})
 	require.ErrorContains(t, err, "load config")
 }
 
@@ -56,7 +56,7 @@ func TestRunWithLegacyConfigAttemptsServe(t *testing.T) {
 	t.Chdir(workspace)
 	require.NoError(t, os.WriteFile(legacyConfigPath, []byte(`{`), 0o600))
 
-	err := run(nil)
+	err := run(nil, testSecrets{})
 	require.ErrorContains(t, err, "load config")
 }
 
@@ -65,13 +65,14 @@ func TestRunServeKeepsLegacyConfigReadOnly(t *testing.T) {
 
 	workspace := t.TempDir()
 	t.Chdir(workspace)
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
 	legacy := fmt.Appendf(nil, `{"workspace":".","web":{"tsnet":{"auth_key":"tskey-auth-test"}},"database_url":%q,"slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","human_user_id":"U123","room":"D123","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`, dsn)
 	require.NoError(t, os.WriteFile(defaultConfigPath, legacy, 0o600))
 
-	err = runServe([]string{"--pprof=false"})
+	err = runServe([]string{"--pprof=false"}, testSecrets{})
 	require.ErrorContains(t, err, "slack.channels is required")
 
 	data, err := os.ReadFile(defaultConfigPath)
@@ -114,7 +115,7 @@ func TestRunServeRequiresConfig(t *testing.T) {
 		require.NoError(t, os.Chdir(cwd))
 	})
 
-	err = runServe(nil)
+	err = runServe(nil, testSecrets{})
 	require.ErrorContains(t, err, "load config")
 }
 
@@ -128,10 +129,10 @@ func TestSelectRuntimeConfigFileReportsStatErrors(t *testing.T) {
 	require.ErrorContains(t, err, "stat")
 	require.ErrorIs(t, err, os.ErrPermission)
 
-	_, _, err = loadRuntimeConfig("", "")
+	_, _, err = loadRuntimeConfig("", "", testSecrets{})
 	require.ErrorIs(t, err, os.ErrPermission)
 
-	err = run(nil)
+	err = run(nil, testSecrets{})
 	require.ErrorContains(t, err, "stat config path")
 	require.ErrorIs(t, err, os.ErrPermission)
 }
@@ -155,8 +156,9 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 		{name: "ts config", args: []string{"ts", "login"}, want: "load runtime config"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			err := run(tt.args)
+			err := run(tt.args, testSecrets{})
 			require.ErrorContains(t, err, tt.want)
+
 			if strings.HasSuffix(tt.name, " config") {
 				require.ErrorIs(t, err, os.ErrNotExist)
 			}
@@ -165,7 +167,7 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 }
 
 func TestRunDispatchesHelp(t *testing.T) {
-	output := captureStdout(t, func() error { return run([]string{"help"}) })
+	output := captureStdout(t, func() error { return run([]string{"help"}, testSecrets{}) })
 	assert.Contains(t, output, "Usage:")
 	assert.Contains(t, output, "rocketclaw run [--pprof=false|HOST:PORT]")
 	assert.Contains(t, output, "--pprof=HOST:PORT")

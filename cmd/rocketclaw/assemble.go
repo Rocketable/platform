@@ -78,9 +78,8 @@ func (a *processAssembler) Gate(ctx context.Context, cfg *config.Config, log *sl
 	return node.server.Close, nil
 }
 
-func (a *processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+func (a *processAssembler) Assemble(rt *backend.Runtime) (done <-chan struct{}, stops []func(context.Context) error, err error) {
 	cfg := rt.Cfg.Clone()
-	var stops []func(context.Context) error
 
 	runner := &routineRunner{backend: rt}
 	routines := routinefrontend.New(rt.Cfg, cfg.RuntimeDirName(), rt.Sessions, runner, rt.Log)
@@ -99,15 +98,18 @@ func (a *processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []fun
 	}
 
 	stops = append(stops, slack.Stop)
+
 	if err := routines.Start(rt.RunCtx); err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("start routines: %w", err)
 	}
+
 	stops = append(stops, routines.Stop)
 	rt.Routines = routines
-	done := slack.StartEvents(rt.RunCtx, rt)
+	done = slack.StartEvents(rt.RunCtx, rt)
 
 	if cfg.MCPExternal.Enabled {
 		agents := &mcpAgentIndex{cfg: rt.Cfg}
+
 		rt.ExternalMCPAgents = agents
 		if err := agents.Refresh(); err != nil {
 			return nil, nil, err

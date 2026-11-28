@@ -23,6 +23,7 @@ func TestShutdownSignalsHelper(t *testing.T) {
 	fmt.Println("ready")
 	<-ctx.Done()
 	fmt.Println("shutting down")
+
 	_, err := io.Copy(io.Discard, os.Stdin)
 	require.NoError(t, err)
 	fmt.Println("stopped")
@@ -38,6 +39,7 @@ func TestShutdownSignals(t *testing.T) {
 	} {
 		t.Run(tc.signal.String(), func(t *testing.T) {
 			helper := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestShutdownSignalsHelper$")
+
 			helper.Env = append(os.Environ(), "ROCKETCLAW_SIGNAL_HELPER=1")
 			release, err := helper.StdinPipe()
 			require.NoError(t, err)
@@ -52,6 +54,7 @@ func TestShutdownSignals(t *testing.T) {
 			require.True(t, lines.Scan())
 			require.Equal(t, "shutting down", lines.Text())
 			require.NoError(t, helper.Process.Signal(tc.signal))
+
 			if tc.stopped {
 				require.NoError(t, release.Close())
 			}

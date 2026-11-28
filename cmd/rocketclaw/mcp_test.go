@@ -167,10 +167,12 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneWebChat(t *testing.T) {
 
 	server := startExternalMCPServer(t.Context(), listener, nil, &mcpAgentIndex{names: []string{"planner"}}, store, mcpTurns(func(inbound *protocol.InboundMessage) error {
 		mu.Lock()
+
 		turns = append(turns, inbound)
 		mu.Unlock()
 
 		inbound.CompleteResponseWithAttachments("answer", nil, nil)
+
 		return nil
 	}), testLogger())
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
@@ -216,6 +218,7 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneWebChat(t *testing.T) {
 	assert.Contains(t, session.PrivateConversationID, "external_mcp:planner:")
 
 	require.Len(t, turns, calls)
+
 	for _, turn := range turns {
 		assert.Equal(t, session.PrivateConversationID, turn.ConversationID)
 		assert.Equal(t, session.ManagedConversationID, turn.SyncDestination)
@@ -239,6 +242,7 @@ func TestExternalMCPRepeatedIDKeepsLockedAgent(t *testing.T) {
 	turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
 		conversations = append(conversations, inbound.ConversationID)
 		inbound.CompleteResponseWithAttachments("answer", nil, nil)
+
 		return nil
 	})
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -300,6 +304,7 @@ func TestExternalMCPRefusesUnexposedAgents(t *testing.T) {
 	refused, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "planner", "input": "hello", "attachments": []map[string]any{{"data_base64": "not-base64"}}}})
 	require.NoError(t, err)
 	require.True(t, refused.IsError, "an undecodable attachment is refused")
+
 	_, ok, err := store.ExternalMCPSession("ticket-1")
 	require.NoError(t, err)
 	assert.False(t, ok, "a refused first call records nothing")

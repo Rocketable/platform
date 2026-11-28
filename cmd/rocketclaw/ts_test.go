@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -34,12 +35,12 @@ import (
 func TestRunTS(t *testing.T) {
 	prepareOAIConfig(t)
 
-	assert.Contains(t, captureStdout(t, func() error { return runTS(nil) }), "rocketclaw ts login")
-	require.EqualError(t, runTS([]string{"logout"}), `unknown ts command "logout"`)
-	require.EqualError(t, runTS([]string{"login", "extra"}), "ts login takes no arguments")
+	assert.Contains(t, captureStdout(t, func() error { return runTS(nil, testSecrets{}) }), "rocketclaw ts login")
+	require.EqualError(t, runTS([]string{"logout"}, testSecrets{}), `unknown ts command "logout"`)
+	require.EqualError(t, runTS([]string{"login", "extra"}, testSecrets{}), "ts login takes no arguments")
 
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{"web": {"tsnet": {"hostname": "Bad_Host"}}}`), 0o600))
-	require.ErrorContains(t, runTS([]string{"login"}), "load runtime config: web.tsnet.hostname must use only a-z, 0-9 and -")
+	require.ErrorContains(t, runTS([]string{"login"}, testSecrets{}), "load runtime config: web.tsnet.hostname must use only a-z, 0-9 and -")
 }
 
 func TestTailnetLogin(t *testing.T) {
@@ -65,7 +66,7 @@ func TestTailnetLogin(t *testing.T) {
 
 	done := make(chan error, 1)
 
-	go func() { done <- runTS([]string{"login"}) }()
+	go func() { done <- runTS([]string{"login"}, testSecrets{}) }()
 
 	lines := bufio.NewScanner(reader)
 	for lines.Scan() {
@@ -169,6 +170,7 @@ func startTestDERP(t *testing.T) *tailcfg.DERPMap {
 
 	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	require.NoError(t, err)
+
 	var serving errgroup.Group
 	serving.Go(func() error {
 		var packet [1500]byte
@@ -177,15 +179,18 @@ func startTestDERP(t *testing.T) *tailcfg.DERPMap {
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
+
 			if err != nil {
-				return err
+				return fmt.Errorf("read STUN request: %w", err)
 			}
+
 			tx, err := stun.ParseBindingRequest(packet[:n])
 			if err != nil {
-				return err
+				return fmt.Errorf("parse STUN binding request: %w", err)
 			}
+
 			if _, err := udp.WriteToUDPAddrPort(stun.Response(tx, address), address); err != nil && !errors.Is(err, net.ErrClosed) {
-				return err
+				return fmt.Errorf("write STUN response: %w", err)
 			}
 		}
 	})
@@ -195,6 +200,7 @@ func startTestDERP(t *testing.T) *tailcfg.DERPMap {
 	})
 
 	relay := derpserver.New(key.NewNode(), logger.Discard)
+
 	t.Cleanup(func() { _ = relay.Close() })
 
 	server := httptest.NewTLSServer(derpserver.Handler(relay))

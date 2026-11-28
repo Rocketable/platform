@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/posthog/posthog-go"
 	"golang.org/x/sync/errgroup"
@@ -24,21 +25,23 @@ import (
 
 var pseudoVersionRevision = regexp.MustCompile(`[-.]\d{14}-([0-9a-f]{12})$`)
 
-func runServe(args []string) error {
+func runServe(args []string, fetcher config.SecretFetcher) error {
 	processStart := time.Now().UTC().Format(time.RFC3339Nano)
 	flagSet := flag.NewFlagSet("rocketclaw", flag.ContinueOnError)
 	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
 	usersARN := flagSet.String(usersARNFlag, "", "Secrets Manager ARN of a JSON secret to use as mcp_external.users")
 	diagnosticsAddress := pprofAddress(defaultPprofAddress)
 	flagSet.Var(&diagnosticsAddress, "pprof", "serve private Go profiles at this host:port; true means "+defaultPprofAddress+", false turns them off")
+
 	if err := flagSet.Parse(args); err != nil {
 		return fmt.Errorf("parse serve flags: %w", err)
 	}
 
-	selected, cfg, err := loadRuntimeConfig(*secretsARN, *usersARN)
+	selected, cfg, err := loadRuntimeConfig(*secretsARN, *usersARN, fetcher)
 	if err == nil {
 		err = cfg.Validate()
 	}
+
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -78,6 +81,7 @@ func runServe(args []string) error {
 	if info, ok := debug.ReadBuildInfo(); ok {
 		build = *info
 	}
+
 	cfg.Revision, cfg.RevisionModified = logBuildIdentity(logger, &build)
 
 	if diagnosticsAddress != "" {
@@ -101,6 +105,7 @@ func runServe(args []string) error {
 
 		defer func() {
 			cancelDiagnostics()
+
 			if err := server.Close(); err != nil {
 				logger.Error("close private pprof HTTP", "error_type", fmt.Sprintf("%T", err))
 			}
@@ -169,6 +174,7 @@ func buildRevision(build *debug.BuildInfo) (revision string, modified bool) {
 func shutdownSignals() (context.Context, context.CancelFunc) {
 	ctxSignal, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	ctx, cancel := context.WithCancelCause(context.Background())
+
 	context.AfterFunc(ctxSignal, func() {
 		signal.Notify(make(chan os.Signal, 1), syscall.SIGTERM)
 		stop()
