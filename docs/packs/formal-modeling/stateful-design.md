@@ -8,7 +8,7 @@ applies_when:
 tags: [state-machine, concurrency, pluscal, tla, tlc, model-checking]
 ---
 
-**Scope.** This applies when correctness depends on the order of events between actors, or on surviving crashes, timeouts or retries. It does not apply to documentation, styling or changes without meaningful state, such as single-request CRUD. When applicability is borderline, the plan records the decision and why.
+**Scope.** This applies when correctness depends on the order of events between actors, or on surviving crashes, timeouts or retries. It does not apply to documentation, styling or changes without meaningful state, such as single-request CRUD. A bug fix is in scope like any other change: a fix that adds a background writer, or a write that can race another writer of the same row, needs the model before it is built, with or without a plan. When applicability is borderline, ask the user before building; a borderline call written only in a PR description does not pass the gate.
 
 **Brainstorm.** Draw a Mermaid `stateDiagram-v2` with named states, events, guards, terminal states, and the timeout, retry, cancel and recovery paths. List the assumptions: the actors, what persists and what lives only in a process, message delivery (lost, duplicated, reordered), which steps are atomic, and where a crash can happen. State at least one safety property (something bad never happens) and, when meaningful, one liveness property (something good eventually happens). The diagram explains the design; it proves nothing.
 
