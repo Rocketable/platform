@@ -714,6 +714,41 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
   }
 }, 30_000);
 
+test("Cmd+P keeps matching rows and returns to the top when the query changes", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const { server, origin } = serve(Array.from({ length: 20 }, (_, i) => ({ id: `report-${i}`, name: `Report ${i}` })), ({ query }) => response(query));
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(origin);
+    await page.getByRole("button", { name: "Search sessions and commands", exact: true }).click();
+    const palette = page.getByRole("dialog", { name: "Go to session" });
+    const row = await palette.getByText("Report 0", { exact: true }).elementHandle();
+    const previous = await row!.evaluate((node: HTMLElement) => {
+      const list = node.closest("ul")!;
+      list.scrollTop = 80;
+      return list.scrollTop;
+    });
+    expect(previous).toBeGreaterThan(0);
+    await palette.getByPlaceholder("Search sessions").fill("Rep");
+    expect(await row!.evaluate((node: HTMLElement) => ({ connected: node.isConnected, scroll: node.closest("ul")?.scrollTop }))).toEqual({ connected: true, scroll: 0 });
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Meta+Shift+p");
+    const commands = page.getByRole("dialog");
+    const input = commands.getByPlaceholder("Type a command");
+    await input.waitFor();
+    await page.setViewportSize({ width: 320, height: 70 });
+    const list = commands.locator("ul[data-pending]");
+    expect(await list.evaluate((node: HTMLElement) => {
+      node.scrollTop = 30;
+      return node.scrollTop;
+    })).toBeGreaterThan(0);
+    await input.fill("zzzzqqxxnoitems");
+    await list.getByText("No matches", { exact: true }).waitFor({ state: "attached" });
+    expect(await list.evaluate((node: HTMLElement) => node.scrollTop)).toBe(0);
+  } finally { await browser.close(); server.stop(true); }
+});
+
 test("Cmd+P draws large session lists only as scrolling and keyboard navigation need them", async () => {
   const { chromium: engine } = await import(playwright!);
   const rows = Array.from({ length: 600 }, (_, i) => ({ id: `report-${i}`, name: `Report ${String(i).padStart(4, "0")}`, agent: "main" }));
