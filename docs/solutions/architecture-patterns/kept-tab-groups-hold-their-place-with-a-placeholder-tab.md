@@ -1,7 +1,7 @@
 ---
 title: Every Tab Group Holds Its Place With a Hidden Placeholder Tab
 date: 2026-11-03
-last_updated: 2026-11-17
+last_updated: 2026-11-27
 category: docs/solutions/architecture-patterns/
 module: internal/rocketclaw/web
 problem_type: architecture_pattern
@@ -36,7 +36,7 @@ On 2026-11-11 the person asked for every group to be sticky: a group no longer g
 Every group holds one placeholder entry among the person's tabs, with path `group:<id>` and `group` set to the group's id (`keeper`/`isKeeper`, `ui.tsx:1000`). A group exists as long as that entry, or any member, is in the tab list:
 
 - **Add to new group** creates the group and inserts its placeholder after the new members with the existing `join` (`ui.tsx:1431-1436`).
-- `savedTabs()` adds a placeholder after the last member of any saved group that lacks one (`ui.tsx:1051-1054`). This upgrades groups saved while keeping was optional, the first time a window loads them. A group with no members and no placeholder was already dropped by `savedState`, so nothing restores it.
+- Nothing adds a placeholder to a group saved without one. Such a group, saved while keeping was optional, goes once its last tab goes, because `savedState` drops groups with no rows.
 - **Delete group** is now the only way a group goes. It closes the group's tabs by the usual close rules, then filters out the placeholder (`ui.tsx:1453-1456`). **Ungroup** and **Close group** leave the empty group in place (`ui.tsx:1451-1452`). The old **Keep group when empty** / **Don't keep group when empty** commands are gone.
 - The placeholder saves, syncs, and three-way merges like any tab, so neither change added a proto field, Go field, column, or migration.
 
@@ -61,7 +61,7 @@ A browser window still running a build from before placeholders shows them as od
 ## When to Apply
 
 - Writing Web code that iterates `state.tabs` or `saved.state.tabs`: use `shown`/`shownOf(space)` when you mean the tabs a person sees, or filter with `isKeeper`.
-- Adding another way to create a group: insert its placeholder with `join`, as Add to new group does, or the group goes when it empties until the next load adds one.
+- Adding another way to create a group: insert its placeholder with `join`, as Add to new group does, or the group goes when it empties.
 - Adding another way to remove a group: filter out its placeholder explicitly, as Delete group does, because the close path never sees it.
 - Writing Go code over `web_tabs` or `TabState.Tabs` that treats rows as locations.
 - Writing a browser test that waits for an exact saved tab list while a group exists.
