@@ -5,15 +5,12 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { collapsible, setTimelineRows, timelineCategories, timelineLevel, timelineLevels, useTimelineDetail, type TimelineCategory, type TimelinePlacement, type TimelineRows } from "./timeline-detail";
 
-// Follows OpenCode 7440ff784408a8a095b58ef908de3fc6ee66ca66, packages/app/src/settings/timeline-detail.tsx.
 export function TimelineDetailCard() {
   const rows = useTimelineDetail();
   const level = timelineLevel(rows);
   const position = timelineLevels.findIndex(({ id }) => id === (level?.id ?? "compact"));
   const heading = useId();
-  // Advanced opens for Custom only on first render, so a match while editing does not close it.
   const [custom] = useState(!level);
-  // Placement before an eye toggle hid a row, restored when it is shown again.
   const shown = useRef<Partial<Record<TimelineCategory, TimelinePlacement>>>({});
   const update = (id: TimelineCategory, row: TimelineRows[TimelineCategory]) => setTimelineRows({ ...rows, [id]: row });
   return (
@@ -23,10 +20,8 @@ export function TimelineDetailCard() {
         <p className="text-sm text-muted-foreground">Choose how much detail appears in the session timeline.</p>
       </div>
       <div className="relative">
-        {/* Base UI reports pointer changes on a one-thumb slider as a number and keyboard changes as an array. */}
         <Slider aria-labelledby={heading} min={0} max={timelineLevels.length - 1} step={1} value={[position]}
           getAriaValueText={() => level?.label ?? "Custom"} onValueChange={(value) => setTimelineRows(timelineLevels[[value].flat()[0]].rows)} />
-        {/* Level ticks follow OpenCode's timeline-detail-track markers; inset by half the edge-aligned thumb so they meet its centre. */}
         <div aria-hidden className="pointer-events-none absolute inset-x-1.5 top-1/2">
           {timelineLevels.map(({ id }, index) => (
             <span key={id} data-slot="slider-tick" data-selected={index <= position ? "" : undefined} style={{ left: `${(index / (timelineLevels.length - 1)) * 100}%` }}
