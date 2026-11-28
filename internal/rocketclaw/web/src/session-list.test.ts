@@ -23,7 +23,6 @@ async function* batchesOf(rows: SessionBatch[]) {
   yield* rows;
 }
 
-// Keep the last-word check private; browser tests cover its mounted callers.
 const api = new API({ cwd: import.meta.dir });
 const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
 await api.close();
@@ -90,7 +89,6 @@ describe("session list reconciliation", () => {
     expect(listedRows(held, { received: changed, since: "v1", removed: ["gone"] })).toEqual([changed[0], held.rows[0], changed[1]]);
     expect(listedRows(held, { received: [{ id: "only" }] }), "a listing since nothing held sent every row").toEqual([{ id: "only" }]);
     expect(listedRows(held, { received: [{ id: "only" }], since: "v0" })).toEqual([{ id: "only" }]);
-    // Tab rows sent since replace the held ones by location, and one with only its path leaves.
     const tabs = { ...held, tabs: [{ path: "/routines/a", unreadAt: "1" }, { path: "/pages/b", parked: true }, { path: "/search/c", until: "2" }] };
     expect(listedTabs(tabs, { tabs: [{ path: "/pages/b" }, { path: "/search/c", unreadAt: "3", note: "Search finished" }, { path: "/routines/d", unreadAt: "4" }], since: "v1" }))
       .toEqual([{ path: "/routines/a", unreadAt: "1" }, { path: "/search/c", unreadAt: "3", note: "Search finished" }, { path: "/routines/d", unreadAt: "4" }]);
@@ -99,7 +97,6 @@ describe("session list reconciliation", () => {
   });
 
   test("orders rows by the server's rule", () => {
-    // Newest to the nanosecond (Go trims trailing zeros), then ID; a row without a time is oldest.
     const rows: Session[] = [
       { id: "none" },
       { id: "whole", updatedAt: "2026-11-01T10:00:00Z" },
@@ -187,7 +184,6 @@ describe("session list reconciliation", () => {
       if (merged.length === rows.length + 1) published.resolve();
     });
     await consumed.promise;
-    // Saved hydration arriving between transport and display must survive the flush.
     baseline = [...baseline, { id: "saved", preview: "keep" }];
     try {
       expect(publications).toBe(1);

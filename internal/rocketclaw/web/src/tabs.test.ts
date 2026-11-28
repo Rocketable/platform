@@ -3,7 +3,6 @@ import { API } from "typescript/unstable/async";
 import { isFunctionDeclaration, isVariableStatement } from "typescript/unstable/ast/is";
 import type { SavedTabs } from "./types";
 
-// Exercise the actual cache publication without a UI-only export, as the picker tests do.
 const api = new API({ cwd: import.meta.dir });
 const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
 await api.close();

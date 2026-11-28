@@ -2,8 +2,6 @@ import { expect, test } from "bun:test";
 import { API } from "typescript/unstable/async";
 import { isFunctionDeclaration, isIdentifier, isVariableStatement } from "typescript/unstable/ast/is";
 
-// Exercise the actual picker matcher without introducing a UI-only export.
-// Browser acceptance covers the real composer, query changes and gestures.
 const api = new API({ cwd: import.meta.dir });
 const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
 await api.close();
