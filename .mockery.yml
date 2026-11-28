@@ -108,9 +108,6 @@ packages:
           structname: channelFactsStoreMock
   github.com/Rocketable/platform/internal/rocketclaw/oai:
     interfaces:
-      directorySyncer:
-        config:
-          structname: directorySyncerMock
       ResponseObserver:
         config:
           structname: responseObserverMock

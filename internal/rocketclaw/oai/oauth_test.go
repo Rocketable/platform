@@ -329,10 +329,7 @@ func TestFreshTokenInReportsMissingToken(t *testing.T) {
 	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh"})
 
 	_, err := freshTokenIn(t.Context(), workspace, config.DefaultRuntimeDir, "work", Token{})
-	missing, ok := errors.AsType[*MissingTokenError](err)
-	require.True(t, ok, "%v", err)
-	require.Equal(t, "work", missing.Provider)
-	require.ErrorIs(t, err, os.ErrNotExist)
+	require.EqualError(t, err, `OpenAI OAuth token for provider "work" is missing refresh token`)
 }
 
 func TestNewChatGPTClientInRequiresSelectedProviderToken(t *testing.T) {
@@ -940,22 +937,6 @@ func TestSaveTokenReportsWriteError(t *testing.T) {
 	require.ErrorContains(t, err, "write OpenAI OAuth token")
 }
 
-func TestWriteAuthFileReportsPostRenameFailuresAsCommitted(t *testing.T) {
-	for _, operation := range []string{"open directory", "sync directory"} {
-		t.Run(operation, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "auth.json")
-			errInjected := errors.New(operation)
-			syncDir := &directorySyncerMock{syncDirectoryFunc: func(string) error { return errInjected }}
-			committed, err := writeAuthFile(path, authFile{Providers: map[string]Token{"work": {Refresh: "refresh"}}}, syncDir)
-			require.True(t, committed)
-			require.ErrorIs(t, err, errInjected)
-			data, err := os.ReadFile(path)
-			require.NoError(t, err)
-			require.Contains(t, string(data), `"refresh": "refresh"`)
-		})
-	}
-}
-
 func TestGeneratePKCEProducesVerifierAndChallenge(t *testing.T) {
 	pkce := generatePKCE()
 	require.Len(t, pkce.verifier, 58)
@@ -1234,18 +1215,6 @@ func TestCleanCodexRequestExtractsCompactionThreshold(t *testing.T) {
 			require.Equal(t, tc.want, threshold)
 		})
 	}
-}
-
-func TestStripInputIDsKeepsIDsWhenStoreTrue(t *testing.T) {
-	req := requestWithBody(`{"store":true,"input":[{"id":"item-1","type":"message"}]}`)
-
-	_, _, err := cleanCodexRequest(req)
-	require.NoError(t, err)
-
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
-	items := body["input"].([]any)
-	require.Equal(t, "item-1", items[0].(map[string]any)["id"])
 }
 
 func TestTransportAddsOAuthHeadersAndStripsBodyIDs(t *testing.T) {

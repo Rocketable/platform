@@ -106,26 +106,19 @@ func HasTokenIn(workspace, runtimeDir, provider string) (bool, error) {
 }
 
 func SaveTokenIn(workspace, runtimeDir, provider string, token Token) error {
-	committed, err := updateAuthFileIn(workspace, runtimeDir, true, func(file *authFile) (bool, error) {
+	return updateAuthFileIn(workspace, runtimeDir, true, func(file *authFile) (bool, error) {
 		file.Providers[provider] = token
 		return true, nil
 	})
-	if committed && err != nil {
-		return fmt.Errorf("committed OpenAI OAuth token: %w", err)
-	}
-
-	return err
 }
 
 func RemoveTokenIn(workspace, runtimeDir, provider string) error {
-	_, err := updateAuthFileIn(workspace, runtimeDir, true, func(file *authFile) (bool, error) {
+	return updateAuthFileIn(workspace, runtimeDir, true, func(file *authFile) (bool, error) {
 		_, changed := file.Providers[provider]
 		delete(file.Providers, provider)
 
 		return changed, nil
 	})
-
-	return err
 }
 
 func readAuthFile(path string) (authFile, error) {
@@ -158,34 +151,34 @@ func readAuthFile(path string) (authFile, error) {
 	return authFile{Providers: map[string]Token{"openai": token}}, nil
 }
 
-func updateAuthFileIn(workspace, runtimeDir string, create bool, update func(*authFile) (bool, error)) (bool, error) {
+func updateAuthFileIn(workspace, runtimeDir string, create bool, update func(*authFile) (bool, error)) error {
 	path, err := AuthFilePathIn(workspace, runtimeDir)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return false, fmt.Errorf("create OpenAI OAuth token dir: %w", err)
+		return fmt.Errorf("create OpenAI OAuth token dir: %w", err)
 	}
 
 	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return false, fmt.Errorf("open OpenAI OAuth token lock: %w", err)
+		return fmt.Errorf("open OpenAI OAuth token lock: %w", err)
 	}
 	defer func() { _ = lock.Close() }()
 
 	if err := lock.Chmod(0o600); err != nil {
-		return false, fmt.Errorf("chmod OpenAI OAuth token lock: %w", err)
+		return fmt.Errorf("chmod OpenAI OAuth token lock: %w", err)
 	}
 
 	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
-		return false, fmt.Errorf("lock OpenAI OAuth token: %w", err)
+		return fmt.Errorf("lock OpenAI OAuth token: %w", err)
 	}
 
 	file, err := readAuthFile(path)
 	if err != nil {
 		if !create || !errors.Is(err, os.ErrNotExist) {
-			return false, fmt.Errorf("write OpenAI OAuth token: %w", err)
+			return fmt.Errorf("write OpenAI OAuth token: %w", err)
 		}
 
 		file = authFile{Providers: make(map[string]Token)}
@@ -193,31 +186,24 @@ func updateAuthFileIn(workspace, runtimeDir string, create bool, update func(*au
 
 	changed, err := update(&file)
 	if err != nil || !changed {
-		return false, err
+		return err
 	}
 
-	committed, err := writeAuthFile(path, file, localDirectorySyncer{})
-	if err != nil {
-		err = fmt.Errorf("write OpenAI OAuth token: %w", err)
+	if err := writeAuthFile(path, file); err != nil {
+		return fmt.Errorf("write OpenAI OAuth token: %w", err)
 	}
 
-	return committed, err
+	return nil
 }
 
-type directorySyncer interface {
-	syncDirectory(path string) error
-}
-
-type localDirectorySyncer struct{}
-
-func writeAuthFile(path string, file authFile, syncDir directorySyncer) (bool, error) {
+func writeAuthFile(path string, file authFile) error {
 	data, _ := json.MarshalIndent(file, "", "  ")
 
 	data = append(data, '\n')
 
 	temp, err := os.CreateTemp(filepath.Dir(path), ".auth.json-*")
 	if err != nil {
-		return false, fmt.Errorf("create temporary OpenAI OAuth token: %w", err)
+		return fmt.Errorf("create temporary OpenAI OAuth token: %w", err)
 	}
 
 	tempPath := temp.Name()
@@ -227,29 +213,21 @@ func writeAuthFile(path string, file authFile, syncDir directorySyncer) (bool, e
 
 	err = errors.Join(err, temp.Sync(), temp.Close())
 	if err != nil {
-		return false, fmt.Errorf("replace OpenAI OAuth token: %w", err)
+		return fmt.Errorf("replace OpenAI OAuth token: %w", err)
 	}
 
 	if err := os.Rename(tempPath, path); err != nil {
-		return false, fmt.Errorf("replace OpenAI OAuth token: %w", err)
+		return fmt.Errorf("replace OpenAI OAuth token: %w", err)
 	}
 
-	if err := syncDir.syncDirectory(filepath.Dir(path)); err != nil {
-		return true, fmt.Errorf("sync OpenAI OAuth token dir: %w", err)
-	}
-
-	return true, nil
-}
-
-func (localDirectorySyncer) syncDirectory(path string) error {
-	dir, err := os.Open(path)
+	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
-		return fmt.Errorf("open directory: %w", err)
+		return fmt.Errorf("sync OpenAI OAuth token dir: open directory: %w", err)
 	}
 	defer func() { _ = dir.Close() }()
 
 	if err := dir.Sync(); err != nil {
-		return fmt.Errorf("sync directory: %w", err)
+		return fmt.Errorf("sync OpenAI OAuth token dir: sync directory: %w", err)
 	}
 
 	return nil
@@ -629,25 +607,13 @@ func setCodexHeaders(req *http.Request, token Token, sessionID string) {
 	}
 }
 
-type MissingTokenError struct {
-	Provider string
-}
-
-func (e *MissingTokenError) Error() string {
-	return fmt.Sprintf("OpenAI OAuth token for provider %q is missing refresh token", e.Provider)
-}
-
-func (e *MissingTokenError) Unwrap() error {
-	return os.ErrNotExist
-}
-
 func freshTokenIn(ctx context.Context, workspace, runtimeDir, provider string, rejected Token) (Token, error) {
 	var selected Token
 
-	_, err := updateAuthFileIn(workspace, runtimeDir, false, func(file *authFile) (bool, error) {
+	err := updateAuthFileIn(workspace, runtimeDir, false, func(file *authFile) (bool, error) {
 		token := file.Providers[provider]
 		if strings.TrimSpace(token.Refresh) == "" {
-			return false, &MissingTokenError{Provider: provider}
+			return false, fmt.Errorf("OpenAI OAuth token for provider %q is missing refresh token", provider)
 		}
 
 		reuse := token.Access != "" && token.Expires > time.Now().Add(refreshSkew).UnixMilli()
@@ -745,10 +711,6 @@ func cleanCodexRequest(req *http.Request) (body map[string]json.RawMessage, thre
 		changed = true
 	}
 
-	var store bool
-
-	_ = json.Unmarshal(body["store"], &store)
-
 	if text := ""; bytes.HasPrefix(body["input"], []byte(`"`)) && json.Unmarshal(body["input"], &text) == nil {
 		message := responses.EasyInputMessageParam{Type: "message", Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfInputItemContentList: responses.ResponseInputMessageContentListParam{{OfInputText: &responses.ResponseInputTextParam{Text: text}}}}}
 		body["input"], _ = json.Marshal([]responses.EasyInputMessageParam{message})
@@ -760,7 +722,7 @@ func cleanCodexRequest(req *http.Request) (body map[string]json.RawMessage, thre
 		inputChanged := false
 
 		for i := range items {
-			if item, ok := cleanCodexInputItem(items[i], !store); ok {
+			if item, ok := cleanCodexInputItem(items[i], true); ok {
 				items[i] = item
 				inputChanged = true
 			}
