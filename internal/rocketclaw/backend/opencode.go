@@ -30,6 +30,7 @@ const (
 	openCodePrunePage    = 2_000
 	openCodePruneEvery   = 24 * time.Hour
 	openCodeShellsEvery  = 15 * time.Minute
+	openCodeTitlePage    = 200
 )
 
 type openCodeLocation struct {
@@ -167,6 +168,8 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, cfg *config.LockedCon
 	origin := startup.Web.Tsnet.Origin
 
 	var workers errgroup.Group
+
+	defer s.titles.Wait()
 	defer func() { _ = workers.Wait() }()
 
 	for name, server := range startup.OpenCode {
@@ -307,7 +310,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		cursors                                    []*int64
 		markedIDs, markedUsers, ended              []string
 		markedWaking, failures                     []bool
-		idleAt                                     []int64
+		idleAt, throughs                           []int64
 	)
 
 	for i, session := range sessions.Data {
@@ -332,7 +335,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 				if senders, err := openCodeSenders(ctx, name, server, session.ID, last.through, idle.Data[0].Time.Created); err == nil {
 					cursor = &idle.Data[0].Time.Created
 
-					ended, failures, idleAt = append(ended, id), append(failures, idle.Data[0].Outcome == "failed"), append(idleAt, idle.Data[0].Time.Created)
+					ended, failures, idleAt, throughs = append(ended, id), append(failures, idle.Data[0].Outcome == "failed"), append(idleAt, idle.Data[0].Time.Created), append(throughs, last.through)
 
 					for _, sender := range append(senders, "") {
 						markedIDs, markedUsers, markedWaking = append(markedIDs, id), append(markedUsers, sender), append(markedWaking, false)
@@ -383,10 +386,105 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	}
 
 	return s.storeOpenCodeSync(ctx, name, server, ids, running, []any{name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds,
-		agents, models, KindRemote, cursors, markedIDs, markedUsers, askings, markedWaking, automations}, ended, failures, idleAt)
+		agents, models, KindRemote, cursors, markedIDs, markedUsers, askings, markedWaking, automations}, ended, failures, idleAt, throughs)
 }
 
-func (s *SessionService) storeOpenCodeSync(ctx context.Context, name string, server config.OpenCodeConfig, ids []string, running []bool, synced []any, ended []string, failures []bool, idleAt []int64) error {
+func (s *SessionService) retitleOpenCode(ctx context.Context, name string, server config.OpenCodeConfig, id string, through, until int64) error {
+	cfg := s.definitions.Clone()
+	if cfg.TitleDecisionModel == "" || through == 0 {
+		return nil
+	}
+
+	var (
+		first, firstID string
+		before, after  int
+		session        = strings.TrimPrefix(id, "opencode:"+name+":")
+	)
+
+	for path := fmt.Sprintf("/api/session/%s/message?type=user&order=asc&limit=%d", url.PathEscape(session), openCodeTitlePage); path != ""; {
+		var page struct {
+			Data []struct {
+				ID   string `json:"id"`
+				Text string `json:"text"`
+				Time struct {
+					Created int64 `json:"created"`
+				} `json:"time"`
+			} `json:"data"`
+			Cursor struct {
+				Next string `json:"next"`
+			} `json:"cursor"`
+		}
+		if err := openCodeCall(ctx, name, server, http.MethodGet, path, nil, &page); err != nil {
+			return err
+		}
+
+		for _, prompt := range page.Data {
+			switch text := strings.TrimSpace(prompt.Text); {
+			case text == "" || prompt.Time.Created > until:
+				continue
+			case first == "":
+				first, firstID = text, prompt.ID
+			}
+
+			after++
+
+			if prompt.Time.Created <= through {
+				before++
+			}
+		}
+
+		path = ""
+		if page.Cursor.Next != "" {
+			path = fmt.Sprintf("/api/session/%s/message?type=user&limit=%d&cursor=%s", url.PathEscape(session), openCodeTitlePage, url.QueryEscape(page.Cursor.Next))
+		}
+	}
+
+	if after/titleCheckEvery == before/titleCheckEvery {
+		return nil
+	}
+
+	var recent struct {
+		Data []struct {
+			ID      string `json:"id"`
+			Type    string `json:"type"`
+			Text    string `json:"text"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"data"`
+	}
+	if err := openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(session)+"/message?order=desc&limit=100", nil, &recent); err != nil {
+		return err
+	}
+
+	var transcript strings.Builder
+
+	for _, message := range slices.Backward(recent.Data) {
+		var text strings.Builder
+
+		text.WriteString(message.Text)
+
+		for _, part := range message.Content {
+			if part.Type == "text" {
+				text.WriteString(part.Text)
+				text.WriteByte('\n')
+			}
+		}
+
+		switch body := strings.TrimSpace(text.String()); {
+		case body == "" || message.ID == firstID:
+		case message.Type == "user":
+			fmt.Fprintf(&transcript, "User: %s\n\n", body)
+		case message.Type == "assistant":
+			fmt.Fprintf(&transcript, "Assistant: %s\n\n", body)
+		}
+	}
+
+	return s.retitle(ctx, cfg, newModelResolver(cfg, s.log), id, first, strings.TrimSpace(transcript.String()))
+}
+
+func (s *SessionService) storeOpenCodeSync(ctx context.Context, name string, server config.OpenCodeConfig, ids []string, running []bool, synced []any, ended []string, failures []bool, idleAt, throughs []int64) error {
 	if len(ended) > 0 {
 		var again struct {
 			Data map[string]json.RawMessage `json:"data"`
@@ -414,11 +512,14 @@ func (s *SessionService) storeOpenCodeSync(ctx context.Context, name string, ser
 	if err := queryScalar(ctx, tx, "sync opencode sessions", `WITH incoming AS (
     SELECT *, substr(conversation_id, char_length('opencode:' || $1::text || ':') + 1) AS remote_session FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::bigint[], $18::boolean[], $20::boolean[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, read_through, asking, automation)
 ), upserted AS (
-    INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session, name, read_through, asking, automation)
-    SELECT conversation_id, agent, '', $14, FALSE, 'remote', $1, title, directory, updated_at, running, now(), reply, background, model, remote_session, title, read_through, asking, automation FROM incoming
+    INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session, name, generated_name, read_through, asking, automation)
+    SELECT conversation_id, agent, '', $14, FALSE, 'remote', $1, title, directory, updated_at, running, now(), reply, background, model, remote_session, title, title, read_through, asking, automation FROM incoming
     ON CONFLICT (conversation_id) DO UPDATE SET
         title = CASE WHEN conversations.synced_at > $9 THEN conversations.title ELSE excluded.title END,
-        name = CASE WHEN conversations.synced_at > $9 THEN conversations.name ELSE excluded.name END, directory = excluded.directory,
+        name = CASE WHEN conversations.synced_at > $9 OR conversations.name NOT IN ('', conversations.title) THEN conversations.name ELSE excluded.name END, directory = excluded.directory,
+        generated_name = CASE WHEN conversations.synced_at > $9 OR conversations.name NOT IN ('', conversations.title) OR excluded.title IS NOT DISTINCT FROM conversations.title
+            OR excluded.title = ANY(conversations.typed_titles) THEN conversations.generated_name ELSE excluded.name END,
+        typed_titles = CASE WHEN conversations.synced_at > $9 THEN conversations.typed_titles ELSE array_remove(conversations.typed_titles, excluded.title) END,
         last_updated = excluded.last_updated, running = excluded.running, background = excluded.background, asking = excluded.asking, automation = excluded.automation, synced_at = excluded.synced_at,
         reply = COALESCE(excluded.reply, conversations.reply), agent = excluded.agent, model = excluded.model,
         read_through = GREATEST(excluded.read_through, conversations.read_through)
@@ -454,6 +555,14 @@ SELECT count(*) > 0 FROM changes`, &changed, synced...); err != nil {
 	if changed || len(ended) > 0 {
 		s.ringListing()
 		s.ringParks()
+	}
+
+	for i, id := range ended {
+		s.titles.Go(func() {
+			if err := s.retitleOpenCode(ctx, name, server, id, throughs[i], idleAt[i]); err != nil && ctx.Err() == nil {
+				s.log.Warn("check whether the opencode session title still fits", "conversation_id", id, "error", err)
+			}
+		})
 	}
 
 	return nil
@@ -576,21 +685,42 @@ func (s *SessionService) pushOpenCodeNames(ctx context.Context, name string, ser
 	}
 
 	for remote, title := range named {
-		err := openCodeCall(ctx, name, server, http.MethodPatch, "/api/session/"+url.PathEscape(remote), &openCodeTitle{Title: title}, nil)
-		if _, refused := errors.AsType[*openCodeError](err); refused {
-			continue
-		}
-
-		if err != nil {
-			return err
-		}
-
-		if _, err := execState(ctx, s.db, "move opencode session name", `UPDATE conversations SET title = name WHERE server = $1 AND remote_session = $2`, name, remote); err != nil {
+		if err := s.pushOpenCodeName(ctx, name, server, remote, title); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (s *SessionService) pushOpenCodeName(ctx context.Context, name string, server config.OpenCodeConfig, remote, title string) error {
+	tx, err := s.beginStateTx(ctx, "opencode name push")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var pending int
+
+	found, err := scanFound("read pending opencode name", tx.QueryRowContext(ctx, `SELECT 1 FROM conversations WHERE server = $1 AND remote_session = $2 AND name = $3 AND name <> title FOR UPDATE`, name, remote, title).Scan(&pending))
+	if err != nil || !found {
+		return err
+	}
+
+	err = openCodeCall(ctx, name, server, http.MethodPatch, "/api/session/"+url.PathEscape(remote), &openCodeTitle{Title: title}, nil)
+	if _, refused := errors.AsType[*openCodeError](err); refused {
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if _, err := execState(ctx, tx, "move opencode session name", `UPDATE conversations SET title = name WHERE server = $1 AND remote_session = $2`, name, remote); err != nil {
+		return err
+	}
+
+	return commitState(tx, "opencode name push")
 }
 
 func (s *SessionService) pruneOpenCode(ctx context.Context, name string, server config.OpenCodeConfig) error {
@@ -670,8 +800,8 @@ func (s *SessionService) recordOpenCodeSession(ctx context.Context, name string,
     SELECT id FROM web_spaces WHERE id = $10
     UNION ALL SELECT space_id FROM conversations WHERE conversation_id = $11
 )
-INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, model, remote_session, space_id, forked_from)
-SELECT $1, $7, '', $6, FALSE, 'remote', $2, $3, $4, $5, FALSE, now(), $8, $9, max(id), $11 FROM space
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, generated_name, directory, last_updated, running, synced_at, model, remote_session, space_id, forked_from)
+SELECT $1, $7, '', $6, FALSE, 'remote', $2, $3, $3, $4, $5, FALSE, now(), $8, $9, max(id), $11 FROM space
 ON CONFLICT (conversation_id) DO UPDATE SET space_id = COALESCE(conversations.space_id, excluded.space_id), forked_from = excluded.forked_from`, id, name, session.Title, session.Location.Directory, time.UnixMilli(session.Time.Updated).UTC(), KindRemote, session.Agent, session.model(), session.ID, spaceID, source)
 
 	return id, err
@@ -679,6 +809,15 @@ ON CONFLICT (conversation_id) DO UPDATE SET space_id = COALESCE(conversations.sp
 
 type openCodeTitle struct {
 	Title string `json:"title"`
+}
+
+func (s *SessionService) renameOpenCode(ctx context.Context, server, session, title string) error {
+	upstream, ok := s.definitions.Clone().OpenCode[server]
+	if !ok {
+		return fmt.Errorf("opencode server %q is not configured", server)
+	}
+
+	return openCodeCall(ctx, server, upstream, http.MethodPatch, "/api/session/"+url.PathEscape(session), &openCodeTitle{Title: title}, nil)
 }
 
 func AgentTagChoices(agent *harness.Agent) []string {

@@ -1169,7 +1169,7 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 		}
 
 		if title != "" {
-			if title, _, err = s.sessions.NameGenerated(ctx, request.Id, title, true); err != nil {
+			if title, _, err = s.sessions.NameGenerated(ctx, request.Id, title, nil); err != nil {
 				return nil, fmt.Errorf("update web conversation: %w", err)
 			}
 		}

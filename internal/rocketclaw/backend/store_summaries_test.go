@@ -309,32 +309,46 @@ func TestNameGeneratedKeepsThePreviousName(t *testing.T) {
 	ctx := t.Context()
 	createWebChat(t, service, protocol.Conversation{ID: "chat", Agent: "main"})
 
+	read := func() string {
+		var stored string
+		require.NoError(t, queryScalar(ctx, service.db, "read name", `SELECT name FROM conversations WHERE conversation_id = 'chat'`, &stored))
+
+		return stored
+	}
+
 	for _, step := range []struct {
-		chosen, title string
-		replaceChosen bool
-		want          string
-		renamed       bool
+		chosen, title, judged string
+		person                bool
+		want                  string
+		renamed               bool
 	}{
 		{title: "Worktree to add retroturboencabulator", want: "Worktree to add retroturboencabulator", renamed: true},
 		{title: "Fix retroturboencabulator discombobulation", want: "Fix retroturboencabulator discombobulation (was Worktree to add retroturboencabulator)", renamed: true},
 		{title: "Ship the discombobulation fix", want: "Ship the discombobulation fix (was Fix retroturboencabulator discombobulation)", renamed: true},
 		{title: "Ship the discombobulation fix", want: "Ship the discombobulation fix", renamed: true},
 		{chosen: "My encabulator notes", title: "Encabulator release", want: "My encabulator notes"},
-		{title: "Encabulator release", replaceChosen: true, want: "Encabulator release (was My encabulator notes)", renamed: true},
+		{title: "Encabulator release", person: true, want: "Encabulator release (was My encabulator notes)", renamed: true},
 		{title: "Encabulator rollout", want: "Encabulator rollout (was Encabulator release)", renamed: true},
+		{title: "Encabulator launch", judged: "Encabulator release (was My encabulator notes)", want: "Encabulator rollout (was Encabulator release)"},
 	} {
 		if step.chosen != "" {
 			_, err := service.UpdateConversationDetails(ctx, "chat", &step.chosen)
 			require.NoError(t, err)
 		}
 
-		name, renamed, err := service.NameGenerated(ctx, "chat", step.title, step.replaceChosen)
+		judged := new(read())
+
+		switch {
+		case step.person:
+			judged = nil
+		case step.judged != "":
+			judged = &step.judged
+		}
+
+		name, renamed, err := service.NameGenerated(ctx, "chat", step.title, judged)
 		require.NoError(t, err)
 		require.Equal(t, step.renamed, renamed, step.title)
-
-		var stored string
-		require.NoError(t, queryScalar(ctx, service.db, "read name", `SELECT name FROM conversations WHERE conversation_id = 'chat'`, &stored))
-		require.Equal(t, step.want, stored)
+		require.Equal(t, step.want, read())
 
 		if renamed {
 			require.Equal(t, step.want, name)

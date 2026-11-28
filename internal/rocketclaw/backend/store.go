@@ -12,7 +12,6 @@ import (
 	"iter"
 	"log/slog"
 	"maps"
-	"net/http"
 	"net/url"
 	"os"
 	"slices"
@@ -142,6 +141,8 @@ type SessionService struct {
 
 	scheduledMu sync.Mutex
 	scheduled   []string
+
+	titles sync.WaitGroup
 }
 
 type ObservedSessionEntry struct {
@@ -467,6 +468,12 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 }
 
 func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversationID string, name *string) (bool, error) {
+	if name != nil {
+		if _, err := execState(ctx, s.db, "mark typed opencode title", `UPDATE conversations SET typed_titles = array_append(typed_titles, $2) WHERE conversation_id = $1 AND kind = $3`, conversationID, *name, KindRemote); err != nil {
+			return false, err
+		}
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("begin conversation details update: %w", err)
@@ -482,12 +489,7 @@ func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversa
 		}
 
 		if err == nil {
-			upstream, ok := s.definitions.Clone().OpenCode[server]
-			if !ok {
-				return false, fmt.Errorf("opencode server %q is not configured", server)
-			}
-
-			if err := openCodeCall(ctx, server, upstream, http.MethodPatch, "/api/session/"+url.PathEscape(id), &openCodeTitle{Title: *name}, nil); err != nil {
+			if err := s.renameOpenCode(ctx, server, id, *name); err != nil {
 				return false, err
 			}
 		}
@@ -495,6 +497,7 @@ func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversa
 
 	rows, err := execRows(ctx, tx, "update conversation details", `UPDATE conversations SET name = COALESCE($2, name),
     title = CASE WHEN kind = $3 THEN COALESCE($2, title) ELSE title END,
+    typed_titles = CASE WHEN $2::text IS NULL THEN typed_titles ELSE array_remove(typed_titles, $2::text) END,
     synced_at = CASE WHEN kind = $3 AND $2 IS NOT NULL THEN clock_timestamp() ELSE synced_at END WHERE conversation_id = $1`, conversationID, name, KindRemote)
 	if err != nil {
 		return false, err
@@ -503,18 +506,37 @@ func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversa
 	return rows > 0, commitState(tx, "conversation details update")
 }
 
-func (s *SessionService) NameGenerated(ctx context.Context, conversationID, title string, replaceChosen bool) (name string, renamed bool, err error) {
-	renamed, err = scanFound("name session", s.db.QueryRowContext(ctx, `WITH current AS (
-    SELECT conversation_id, regexp_replace(name, ' \(was .*\)$', '') AS previous FROM conversations
-    WHERE conversation_id = $1 AND ($3 OR name = '' OR name = generated_name)
-), retitled AS (
-    SELECT conversation_id, CASE WHEN previous IN ('', $2) THEN $2 ELSE $2 || ' (was ' || previous || ')' END AS name FROM current
-)
-UPDATE conversations c SET name = r.name, generated_name = r.name FROM retitled r
-WHERE c.conversation_id = r.conversation_id AND ($3 OR c.name = '' OR c.name = c.generated_name)
-RETURNING c.name`, conversationID, title, replaceChosen).Scan(&name))
+func (s *SessionService) NameGenerated(ctx context.Context, conversationID, title string, judged *string) (name string, renamed bool, err error) {
+	tx, err := s.beginStateTx(ctx, "session naming")
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = tx.Rollback() }()
 
-	return name, renamed, err
+	var server, remote string
+
+	renamed, err = scanFound("name session", tx.QueryRowContext(ctx, `WITH current AS (
+    SELECT regexp_replace(name, ' \(was .*\)$', '') AS previous, COALESCE(server, '') AS server, COALESCE(remote_session, '') AS remote_session FROM conversations
+    WHERE conversation_id = $1 AND ($3::text IS NULL OR name = $3 AND (name = '' OR name = generated_name)) FOR UPDATE
+)
+SELECT CASE WHEN previous IN ('', $2) THEN $2 ELSE $2 || ' (was ' || previous || ')' END, server, remote_session FROM current`, conversationID, title, judged).Scan(&name, &server, &remote))
+	if err != nil || !renamed {
+		return "", false, err
+	}
+
+	if remote != "" {
+		if err := s.renameOpenCode(ctx, server, remote, name); err != nil {
+			return "", false, err
+		}
+	}
+
+	if _, err := execState(ctx, tx, "name session", `UPDATE conversations SET name = $2, generated_name = $2,
+    title = CASE WHEN kind = $3 THEN $2 ELSE title END,
+    synced_at = CASE WHEN kind = $3 THEN clock_timestamp() ELSE synced_at END WHERE conversation_id = $1`, conversationID, name, KindRemote); err != nil {
+		return "", false, err
+	}
+
+	return name, true, commitState(tx, "session naming")
 }
 
 func (s *SessionService) MoveConversation(ctx context.Context, conversationID, spaceID string) error {

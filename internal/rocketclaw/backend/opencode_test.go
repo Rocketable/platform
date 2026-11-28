@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -38,6 +39,7 @@ type fakeOpenCode struct {
 	shells    map[string]map[string]string
 	events    chan string
 	messages  map[string][]openCodeTestMessage
+	userPage  int
 	reads     []string
 	mcps      map[string][]string
 	bridges   []string
@@ -51,6 +53,7 @@ type openCodeTestMessage struct {
 	Username string
 	Created  int64
 	Outcome  string
+	Text     string
 }
 
 func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -184,17 +187,37 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		f.reads = append(f.reads, id+"?"+r.URL.RawQuery)
 
-		if query := r.URL.Query(); query.Get("type") != "assistant" {
+		query := r.URL.Query()
+		if cursor := query.Get("cursor"); cursor != "" {
+			if query.Has("order") {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			position, _ := url.ParseQuery(cursor)
+			query.Set("order", position.Get("order"))
+			query.Set("offset", position.Get("offset"))
+		}
+
+		if query.Get("type") != "assistant" {
 			history := f.messages[id]
 			limit, _ := strconv.Atoi(query.Get("limit"))
 
-			if len(history) == 0 || query.Get("order") != "desc" || limit < 1 {
+			if len(history) == 0 || limit < 1 {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
 
+			type wirePart struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+
 			type wireMessage struct {
+				ID       string            `json:"id"`
 				Type     string            `json:"type"`
+				Text     string            `json:"text,omitempty"`
+				Content  []wirePart        `json:"content,omitempty"`
 				Metadata map[string]string `json:"metadata"`
 				Outcome  string            `json:"outcome,omitempty"`
 				Time     struct {
@@ -202,22 +225,52 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				} `json:"time"`
 			}
 
-			data := []wireMessage{}
-			for _, message := range slices.Backward(history) {
-				if message.Type == query.Get("type") && len(data) < limit {
-					wire := wireMessage{Type: message.Type, Metadata: map[string]string{"displayText": "hi"}, Outcome: message.Outcome}
-					if message.Username != "" {
-						wire.Metadata["rocketclaw_username"] = message.Username
-					}
+			type wireCursor struct {
+				Next string `json:"next,omitempty"`
+			}
 
-					wire.Time.Created = message.Created
-					data = append(data, wire)
+			ordered := slices.Clone(history)
+			if query.Get("order") != "asc" {
+				slices.Reverse(ordered)
+			}
+
+			ordered = slices.DeleteFunc(ordered, func(message openCodeTestMessage) bool {
+				return query.Get("type") != "" && message.Type != query.Get("type")
+			})
+			offset, _ := strconv.Atoi(query.Get("offset"))
+
+			size := limit
+			if query.Get("type") == "user" {
+				size = cmp.Or(min(limit, f.userPage), limit)
+			}
+
+			var cursor wireCursor
+			if ordered = ordered[offset:]; len(ordered) > size {
+				ordered, cursor.Next = ordered[:size], url.Values{"order": {query.Get("order")}, "offset": {strconv.Itoa(offset + size)}}.Encode()
+			}
+
+			data := []wireMessage{}
+
+			for _, message := range ordered {
+				wire := wireMessage{ID: fmt.Sprint("msg_", message.Created), Type: message.Type, Metadata: map[string]string{"displayText": "hi"}, Outcome: message.Outcome}
+				if message.Username != "" {
+					wire.Metadata["rocketclaw_username"] = message.Username
 				}
+
+				if message.Type == "assistant" {
+					wire.Content = []wirePart{{Type: "reasoning", Text: "thinking"}, {Type: "text", Text: message.Text}}
+				} else {
+					wire.Text = message.Text
+				}
+
+				wire.Time.Created = message.Created
+				data = append(data, wire)
 			}
 
 			_ = json.NewEncoder(w).Encode(struct {
-				Data []wireMessage `json:"data"`
-			}{data})
+				Data   []wireMessage `json:"data"`
+				Cursor wireCursor    `json:"cursor"`
+			}{data, cursor})
 
 			return
 		}
@@ -777,6 +830,118 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	assert.Equal(t, []string{"alice loud", "bob loud", "dave loud"}, attentionOn(t, s, id))
 }
 
+func TestSyncOpenCodeChecksTheTitleEveryFourthPrompt(t *testing.T) {
+	t.Parallel()
+
+	for _, recorded := range []bool{false, true} {
+		t.Run(fmt.Sprint("recorded=", recorded), func(t *testing.T) {
+			t.Parallel()
+
+			decisions := make(chan string, 8)
+			judge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				decisions <- string(body)
+
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"model":"judge","usage":{},"answers":[{"type":"predicate","name":"title_fits","probability":0.1}]}`)
+			}))
+			t.Cleanup(judge.Close)
+
+			titler := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				writeResponseMessage(t, w, "title", "msg", "Discombobulation fix")
+			}))
+			t.Cleanup(titler.Close)
+
+			s := newOpenCodeTestService(t, "box")
+			ctx := t.Context()
+			fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "Worktree setup", "/srv/app", 1000)}, messages: map[string][]openCodeTestMessage{}, userPage: 3}
+			server := httptest.NewServer(fake)
+			t.Cleanup(server.Close)
+
+			box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
+
+			require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
+				cfg.OpenCode["box"], cfg.OpenAI = box, config.OpenAIConfig{APIKey: "test", APIBaseURL: titler.URL}
+				cfg.Decision, cfg.TitleDecisionModel = map[config.DecisionProvider]config.DecisionProviderConfig{config.DecisionOpenAI: {APIKey: "test", APIBaseURL: judge.URL}}, "openai/judge"
+
+				return nil
+			}))
+
+			sync := func() {
+				t.Helper()
+				require.NoError(t, s.pushOpenCodeNames(ctx, "box", box))
+				require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+				s.titles.Wait()
+			}
+			prompt := func(created int64, text string) {
+				fake.sessions[0].Time.Updated = created + 2
+				fake.messages["ses_a"] = append(fake.messages["ses_a"], openCodeTestMessage{Type: "user", Username: "alice", Created: created, Text: text},
+					openCodeTestMessage{Type: "assistant", Created: created + 1, Text: "done: " + text}, openCodeTestMessage{Type: "idle", Created: created + 2})
+			}
+			turn := func(created int64, text string) {
+				t.Helper()
+				prompt(created, text)
+				sync()
+			}
+
+			if recorded {
+				_, err := s.recordOpenCodeSession(ctx, "box", &fake.sessions[0], "", "")
+				require.NoError(t, err)
+			}
+
+			for i, text := range []string{"add a worktree", "second", "third", "fourth"} {
+				prompt(int64(1000+10*i), text)
+			}
+
+			sync()
+			require.Empty(t, decisions, "turns that ended before RocketClaw saw the session do not check the title")
+
+			for i, text := range []string{"fifth", "sixth", "seventh"} {
+				turn(int64(2000+10*i), text)
+			}
+
+			require.Empty(t, decisions, "the next three prompts do not check the title")
+
+			turn(2100, "now fix the discombobulation")
+			require.Len(t, decisions, 1)
+
+			asked := <-decisions
+			for _, want := range []string{`\"title\":\"Worktree setup\"`, `\"original_request\":\"add a worktree\"`, `User: second`, `Assistant: done: seventh`, `User: now fix the discombobulation`} {
+				require.Contains(t, asked, want)
+			}
+
+			require.NotContains(t, asked, `User: add a worktree`, "the original request is not repeated in the recent conversation")
+			require.NotContains(t, asked, "thinking", "assistant reasoning is not sent to the title check")
+			require.Equal(t, "Discombobulation fix (was Worktree setup)", remoteSidebar(t, s)[0].Name, "an outgrown OpenCode title is regenerated and keeps the old one")
+			require.Equal(t, "Discombobulation fix (was Worktree setup)", fake.sessions[0].Title, "the new title reaches OpenCode")
+
+			sync()
+			require.Equal(t, "Discombobulation fix (was Worktree setup)", remoteSidebar(t, s)[0].Name, "the next sync keeps the new title")
+
+			updated, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_a", new("Chosen name"))
+			require.NoError(t, err)
+			require.True(t, updated)
+
+			for i, text := range []string{"ninth", "tenth", "eleventh", "twelfth"} {
+				turn(int64(3000+10*i), text)
+			}
+
+			require.Empty(t, decisions, "a name typed in RocketClaw is never checked")
+			require.Equal(t, "Chosen name", remoteSidebar(t, s)[0].Name)
+
+			fake.sessions[0].Title = "Renamed in OpenCode"
+
+			for i, text := range []string{"thirteenth", "fourteenth", "fifteenth", "sixteenth"} {
+				turn(int64(4000+10*i), text)
+			}
+
+			require.Len(t, decisions, 1, "a title that came from OpenCode is checked again")
+			require.Contains(t, <-decisions, `\"title\":\"Renamed in OpenCode\"`)
+		})
+	}
+}
+
 func TestSyncOpenCodeMarksAskingStarts(t *testing.T) {
 	t.Parallel()
 
@@ -1185,13 +1350,29 @@ VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	assert.Equal(t, []string{`opencode:box:ses_a remote ["billing", "urgent"] Named opencode:box:ses_a`, `web web_chat ["internal"] Named web`}, facts)
 }
 
+type openCodeLockProbe struct {
+	fake *fakeOpenCode
+	s    *SessionService
+	held chan bool
+}
+
+func (p *openCodeLockProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPatch {
+		_, err := p.s.db.ExecContext(r.Context(), `SELECT 1 FROM conversations WHERE remote_session = $1 FOR UPDATE NOWAIT`, strings.TrimPrefix(r.URL.Path, "/api/session/"))
+		p.held <- err != nil
+	}
+
+	p.fake.ServeHTTP(w, r)
+}
+
 func TestOpenCodeMovesOldNamesToTheServer(t *testing.T) {
 	t.Parallel()
 
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
 	fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "Alpha", "/srv/app", 2000), openCodeTestSession("ses_b", "Beta", "/srv/app", 1000)}}
-	server := httptest.NewServer(fake)
+	probe := &openCodeLockProbe{fake: fake, s: s, held: make(chan bool, 4)}
+	server := httptest.NewServer(probe)
 	t.Cleanup(server.Close)
 
 	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
@@ -1218,11 +1399,71 @@ func TestOpenCodeMovesOldNamesToTheServer(t *testing.T) {
 	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET name = 'old work' WHERE conversation_id = 'opencode:box:ses_b'`)
 	require.NoError(t, err)
 	require.NoError(t, s.pushOpenCodeNames(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "wrong"}))
-	assert.Equal(t, []string{"Alpha|Alpha", "old work|Beta"}, names(), "a refused name stays to move later")
+	require.Len(t, probe.held, 1)
+	<-probe.held
+	require.Equal(t, []string{"Alpha|Alpha", "old work|Beta"}, names(), "a refused name stays to move later")
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	require.Equal(t, []string{"Alpha|Alpha", "old work|Beta"}, names(), "a sync keeps a name that still waits to move")
+
+	require.NoError(t, s.pushOpenCodeName(ctx, "box", box, "ses_b", "older work"))
+	require.Empty(t, probe.held, "a name that changed since it was read is not sent")
+	require.Equal(t, "Beta", fake.sessions[1].Title)
 
 	require.NoError(t, s.pushOpenCodeNames(ctx, "box", box))
+	require.Len(t, probe.held, 1)
+	assert.True(t, <-probe.held, "the row stays locked while its name is sent, so a rename waits for the push")
 	assert.Equal(t, []string{"Alpha", "old work"}, []string{fake.sessions[0].Title, fake.sessions[1].Title})
 	assert.Equal(t, []string{"Alpha|Alpha", "old work|old work"}, names())
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+
+	var generated, typed string
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COALESCE(generated_name, ''), array_to_string(typed_titles, ',') FROM conversations WHERE conversation_id = 'opencode:box:ses_b'`).Scan(&generated, &typed))
+	assert.Equal(t, []string{"Alpha|Alpha", "old work|old work"}, names())
+	assert.NotEqual(t, "old work", generated, "a moved name stays typed")
+	assert.Empty(t, typed)
+}
+
+func TestSyncOpenCodeKeepsATypedTitleTyped(t *testing.T) {
+	t.Parallel()
+
+	s := newOpenCodeTestService(t, "box")
+	ctx := t.Context()
+	fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "Alpha", "/srv/app", 1000)}}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
+
+	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error { cfg.OpenCode["box"] = box; return nil }))
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+
+	row := func() string {
+		var name, generated, typed string
+		require.NoError(t, s.db.QueryRowContext(ctx, `SELECT name, COALESCE(generated_name, ''), array_to_string(typed_titles, ',') FROM conversations WHERE conversation_id = 'opencode:box:ses_a'`).Scan(&name, &generated, &typed))
+
+		return name + "|" + generated + "|" + typed
+	}
+
+	_, err := s.db.ExecContext(ctx, `CREATE FUNCTION fail_typed_save() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'save failed'; END $$;
+CREATE CONSTRAINT TRIGGER fail_typed_save AFTER UPDATE ON conversations DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.name = 'Typed') EXECUTE FUNCTION fail_typed_save()`)
+	require.NoError(t, err)
+
+	_, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_a", new("Typed"))
+	require.ErrorContains(t, err, "save failed")
+	require.Equal(t, "Typed", fake.sessions[0].Title, "OpenCode took the name before the save failed")
+	require.Equal(t, "Alpha|Alpha|Typed", row())
+
+	_, err = s.db.ExecContext(ctx, `DROP TRIGGER fail_typed_save ON conversations`)
+	require.NoError(t, err)
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	require.Equal(t, "Typed|Alpha|", row(), "a typed name OpenCode took while RocketClaw failed to save it stays typed")
+
+	updated, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_a", new("Chosen"))
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.Equal(t, "Chosen|Alpha|", row(), "a saved rename leaves no mark behind")
 }
 
 func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
