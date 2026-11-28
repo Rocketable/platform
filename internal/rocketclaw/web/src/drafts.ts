@@ -1,7 +1,6 @@
 export type DraftContent = { text: string; files: { id: string; file: File }[]; agent: string };
 let pending: Promise<unknown> = Promise.resolve();
 
-// IndexedDB clones File bytes; transcript and execution state never enter this store.
 export function draftContent(key: string, value?: () => DraftContent): Promise<DraftContent | undefined> {
   const work = pending.then(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
