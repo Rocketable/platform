@@ -4337,6 +4337,8 @@ func answerWebsocketTitle(t *testing.T, conn *websocket.Conn, message []byte) bo
 func runWebTest(t *testing.T, file string, env ...string) {
 	t.Helper()
 
+	require.NotEmpty(t, os.Getenv("ROCKETCLAW_PLAYWRIGHT_MODULE"), "run web tests through make -C internal/rocketclaw coverage-profile GOTESTPKGS=./frontend/rpc GOTESTRUN=%s", t.Name())
+
 	web := exec.CommandContext(t.Context(), "bun", "test", file)
 	web.Dir = "../../web"
 
