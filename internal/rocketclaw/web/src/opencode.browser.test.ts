@@ -350,6 +350,34 @@ test("a hosted page opens beside the embedded OpenCode session", async () => {
   } finally { await browser.close(); web.stop(true); }
 }, 30_000);
 
+test("an identity check the network drops keeps the OpenCode view and its draft", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const { web, release, base } = start();
+  release();
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.goto(`${base}${route("opencode:box:ses_a")}`);
+    const view = page.locator("main [data-oc-view]:not([data-oc-hidden])");
+    await view.getByText("answer in ses_a", { exact: true }).waitFor();
+    const draft = view.locator('[contenteditable="true"]').first();
+    await draft.fill("Unsent OpenCode draft");
+    const composer = await draft.elementHandle();
+    const dropped = { count: 0, failing: true };
+    await page.route("**/api/Identity", (request: any) => {
+      if (!dropped.failing) return request.continue();
+      dropped.count++;
+      return request.abort("connectionreset");
+    });
+    await until(() => dropped.count >= 2);
+    dropped.failing = false;
+    await page.waitForResponse("**/api/Identity");
+    expect(await composer.evaluate((element: Element) => element.isConnected)).toBe(true);
+    expect(await draft.textContent()).toBe("Unsent OpenCode draft");
+    expect(await view.getByText("answer in ses_a", { exact: true }).isVisible()).toBe(true);
+  } finally { await browser.close(); web.stop(true); }
+}, 30_000);
+
 test("remote diagrams and HTML find keep their content inside the view", async () => {
   const { chromium: engine } = await import(playwright!);
   const { web, release, base } = start();
