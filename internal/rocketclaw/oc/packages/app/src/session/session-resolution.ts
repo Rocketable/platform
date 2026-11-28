@@ -1,4 +1,6 @@
 import { createComputed, createMemo, createSignal, on, onCleanup, untrack } from "solid-js"
+// rocketclaw: a load that cannot reach the server is retried (upstream packages/app/src/session/session-resolution.ts)
+import { unreachable } from "@rocketclaw/host/unreachable"
 import {
   createSessionResolutionState,
   transitionSessionResolution,
@@ -34,6 +36,21 @@ export function createSessionResolution<T, P = never>(
   // Without a live connection or child sessions to load, cached metadata is already complete.
   const refresh = !!options?.children || !!options?.connected
   let timer: ReturnType<typeof setTimeout> | undefined
+  // rocketclaw: the pending retries of a transcript and a metadata load that could not reach the server, kept only
+  // for the target still shown (docs/verification/oc-tab-recovery) (upstream packages/app/src/session/session-resolution.ts)
+  let transcriptRetry: ReturnType<typeof setTimeout> | undefined
+  let metadataRetry: ReturnType<typeof setTimeout> | undefined
+  const shows = (target: object) => {
+    const current = untrack(state)
+
+    return current.status !== "idle" && current.status !== "not-found" && current.target === target
+  }
+  const resolves = (target: object, attempt: number) => {
+    const current = untrack(state)
+
+    return (current.status === "resolving" || current.status === "unreachable") && current.target === target &&
+      current.attempt === attempt
+  }
 
   const run = (effect: SessionResolutionEffect<SessionStore<T>>) => {
     if (effect.type === "timer.clear") {
@@ -57,7 +74,14 @@ export function createSessionResolution<T, P = never>(
     const id = effect.target.sessionID
 
     if (effect.type === "sync.transcript") {
-      void store.message.sync(id).catch(() => undefined)
+      // rocketclaw: a transcript load of the shown session that could not reach the server loads again; while the
+      // event stream stays connected nothing else would, and the session stays without its messages
+      // (upstream packages/app/src/session/session-resolution.ts)
+      void store.message.sync(id).catch((error) => {
+        if (!unreachable(error) || !shows(effect.target)) return
+        clearTimeout(transcriptRetry)
+        transcriptRetry = setTimeout(() => shows(effect.target) && run(effect), 2_000)
+      })
       void store.pending.sync(id).catch(() => undefined)
 
       return
@@ -73,7 +97,16 @@ export function createSessionResolution<T, P = never>(
           session: untrack(() => store.get(id)),
         }),
       )
-      .catch((error) => dispatch({ type: "sync.failed", target: effect.target, attempt: effect.attempt, error }))
+      .catch((error) => {
+        // rocketclaw: metadata that could not reach the server shows the session as unreachable, as the timeout
+        // does, and loads again, instead of an error page nothing clears while the event stream stays connected
+        // (upstream packages/app/src/session/session-resolution.ts)
+        if (!unreachable(error) || !resolves(effect.target, effect.attempt))
+          return dispatch({ type: "sync.failed", target: effect.target, attempt: effect.attempt, error })
+        dispatch({ type: "resolve.timed-out", attempt: effect.attempt })
+        clearTimeout(metadataRetry)
+        metadataRetry = setTimeout(() => resolves(effect.target, effect.attempt) && run(effect), 2_000)
+      })
   }
 
   const dispatch = (event: SessionResolutionEvent<T, SessionStore<T>, P>) => {

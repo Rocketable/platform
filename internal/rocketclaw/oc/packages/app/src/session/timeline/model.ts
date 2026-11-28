@@ -1,6 +1,8 @@
 import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js"
 import type { SessionMessageInfo } from "@opencode/client/promise"
 import { useServer } from "@/runtime/server/current"
+// rocketclaw: a load that cannot reach the server is not a transcript error (upstream packages/app/src/session/timeline/model.ts)
+import { unreachable } from "@rocketclaw/host/unreachable"
 import type { SessionModel } from "../model"
 import {
   createTimelineSyncState,
@@ -78,9 +80,13 @@ export function createTimelineModel(input: { session: Pick<SessionModel, "identi
             more: data.session.message.more(id),
           })
         },
+        // rocketclaw: a load that could not reach the server shows what the store holds, as the timeout does, and
+        // session resolution loads it again (upstream packages/app/src/session/timeline/model.ts)
         // The error boundary rethrows it, so a rejection without a value still needs one.
         (error) =>
-          settle({ type: "sync.failed", attempt, error: error instanceof Object ? error : new Error(String(error)) }),
+          unreachable(error)
+            ? settle({ type: "sync.timed-out", attempt })
+            : settle({ type: "sync.failed", attempt, error: error instanceof Object ? error : new Error(String(error)) }),
       )
 
       return

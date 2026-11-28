@@ -28,6 +28,9 @@ mock.module("@/runtime/persistence/drafts", () => ({
     }),
 }))
 
+const syncMachine = await import("@/session/timeline/sync-machine")
+mock.module("@/session/timeline/sync-machine", () => ({ ...syncMachine, TIMELINE_SYNC_TIMEOUT_MS: 1_000 }))
+
 // happy-dom lays nothing out; the timeline's virtualizer renders rows only into a scroll box with a size.
 for (const [name, value] of Object.entries({
   offsetWidth: 1000,
@@ -316,6 +319,150 @@ test("moving the view to another session shows it in place on the same live stre
   expect(server.streams).toBe(streams)
   await until(() => palettes() === 0)
 })
+
+test("a transcript whose load fails after the timeline stopped waiting loads again on the same live stream", async () => {
+  const view = show()
+  await answered(view)
+  const streams = server.streams
+  let stalled = false
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const { pathname } = new URL(new Request(input, init).url)
+    if (stalled || !pathname.endsWith(`/session/${linked}/message`)) return fetch(input, init)
+    stalled = true
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    throw new TypeError("Failed to fetch")
+  }) as typeof globalThis.fetch
+
+  try {
+    view.show("box", linked)
+    await answered(view, linked, 8_000)
+    expect(stalled).toBe(true)
+    expect(server.streams).toBe(streams)
+  } finally {
+    globalThis.fetch = fetch
+  }
+}, 15_000)
+
+for (const [name, path] of [
+  ["transcript", "/message"],
+  ["session details", ""],
+] as const)
+  test(`a ${name} load that cannot reach the server stops loading again once the view moves to another session`, async () => {
+    const view = show()
+    await answered(view)
+    const loads: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const { pathname } = new URL(new Request(input, init).url)
+      if (!pathname.endsWith(`/session/${linked}${path}`)) return fetch(input, init)
+      loads.push(pathname)
+      throw new TypeError("Failed to fetch")
+    }) as typeof globalThis.fetch
+
+    try {
+      view.show("box", linked)
+      await until(() => loads.length >= 2, 8_000)
+      view.show("box", "ses_a")
+      await answered(view)
+      const after = loads.length
+      await new Promise((resolve) => setTimeout(resolve, 3_000))
+      expect(loads.length).toBe(after)
+    } finally {
+      globalThis.fetch = fetch
+    }
+  }, 20_000)
+
+test("a transcript the server refuses shows the error page and is not loaded again", async () => {
+  const view = show()
+  await answered(view)
+  const loads: string[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const { pathname } = new URL(new Request(input, init).url)
+    if (!pathname.endsWith(`/session/${linked}/message`)) return fetch(input, init)
+    loads.push(pathname)
+    return Response.json({ _tag: "UnknownError", message: "boom" }, { status: 500 })
+  }) as typeof globalThis.fetch
+
+  try {
+    view.show("box", linked)
+    await until(() => view.root.textContent?.includes("Error Details"), 8_000)
+    const after = loads.length
+    await new Promise((resolve) => setTimeout(resolve, 3_000))
+    expect(loads.length).toBe(after)
+  } finally {
+    globalThis.fetch = fetch
+  }
+}, 20_000)
+
+for (const [name, path, failure, failures] of [
+  ["transcript loads that cannot reach the server, the timeline's own included,", "/message", "network", 2],
+  ["session details that cannot reach the server", "", "network", 1],
+  ["session details the gateway cannot reach", "", "502", 1],
+] as const)
+  test(`${name} load again instead of an error page`, async () => {
+    const view = show()
+    await answered(view)
+    let failed = 0
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const { pathname } = new URL(new Request(input, init).url)
+      if (failed === failures || !pathname.endsWith(`/session/${linked}${path}`)) return fetch(input, init)
+      failed++
+      if (failure === "502") return new Response(null, { status: 502 })
+      throw new TypeError("Failed to fetch")
+    }) as typeof globalThis.fetch
+
+    try {
+      view.show("box", linked)
+      await answered(view, linked, 8_000)
+      expect(failed).toBe(failures)
+      expect(view.root.textContent).not.toContain("Error Details")
+    } finally {
+      globalThis.fetch = fetch
+    }
+  }, 15_000)
+
+test("session details the server refuses still show the error page", async () => {
+  const view = show()
+  await answered(view)
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const { pathname } = new URL(new Request(input, init).url)
+    if (!pathname.endsWith(`/session/${linked}`)) return fetch(input, init)
+    return Response.json({ _tag: "UnknownError", message: "boom" }, { status: 500 })
+  }) as typeof globalThis.fetch
+
+  try {
+    view.show("box", linked)
+    await until(() => view.root.textContent?.includes("The server returned an HTTP 500 response."), 8_000)
+  } finally {
+    globalThis.fetch = fetch
+  }
+}, 15_000)
+
+test("a load that fails late for a session the view left keeps the shown session's retry", async () => {
+  server.sessions.set("ses_b", { ...server.sessions.get(linked)!, id: "ses_b", title: "Session ses_b" })
+  const view = show()
+  await answered(view)
+  const stalls = new Map([[linked, 2_500], ["ses_b", 1_500]])
+  const started = new Set<string>()
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const { pathname } = new URL(new Request(input, init).url)
+    const id = [...stalls.keys()].find((key) => pathname.endsWith(`/session/${key}/message`))
+    if (!id) return fetch(input, init)
+    const hold = stalls.get(id)!
+    stalls.delete(id)
+    started.add(id)
+    await new Promise((resolve) => setTimeout(resolve, hold))
+    throw new TypeError("Failed to fetch")
+  }) as typeof globalThis.fetch
+
+  try {
+    view.show("box", linked)
+    await until(() => started.has(linked))
+    view.show("box", "ses_b")
+    await answered(view, "ses_b", 8_000)
+  } finally {
+    globalThis.fetch = fetch
+  }
+}, 15_000)
 
 test("a message of the session the view shows moves to it without closing an open palette or resetting Back", async () => {
   const view = show()
