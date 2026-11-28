@@ -390,7 +390,7 @@ func TestRoutineRunEndMarksRoutineTabs(t *testing.T) {
 		return locationMarks(t, service, "Run finished")
 	}
 
-	require.NoError(t, service.PutThreadQueueItem("next", &protocol.ThreadQueueItem{ConversationID: "cron:twice", Message: "again"}))
+	require.NoError(t, service.PutThreadQueueItem("next", &protocol.ThreadQueueItem{ConversationID: "cron:twice", Inbound: queuedTestInbound("", "again", "")}))
 	assert.Empty(t, turnEnds("turn:first"))
 
 	removed, _, err := service.DeleteThreadQueueItem(ctx, "cron:twice", "next")
@@ -471,7 +471,7 @@ func TestAttentionParkUntilDone(t *testing.T) {
 	}
 	queue := func(t *testing.T, chat string) {
 		t.Helper()
-		require.NoError(t, service.PutThreadQueueItem(chat+":next", &protocol.ThreadQueueItem{ConversationID: chat, Message: "again"}))
+		require.NoError(t, service.PutThreadQueueItem(chat+":next", &protocol.ThreadQueueItem{ConversationID: chat, Inbound: queuedTestInbound("", "again", "")}))
 	}
 
 	t.Run("waits for the session to be idle", func(t *testing.T) {

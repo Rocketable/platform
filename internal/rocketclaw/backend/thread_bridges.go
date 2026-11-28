@@ -630,7 +630,7 @@ SELECT count(s.*) > 0, q.position FROM queued q LEFT JOIN seen s ON TRUE GROUP B
 			}
 		}
 
-		item := protocol.ThreadQueueItem{ID: id, ConversationID: ids[i], Message: mention.Text, Principal: mention.Metadata[protocol.InboundPrincipalMetadataKey], Kind: protocol.InboundKindEnqueue, Source: mention.Source, Inbound: mention, Position: position, StashAt: time.Now().UTC()}
+		item := protocol.ThreadQueueItem{ID: id, ConversationID: ids[i], Kind: protocol.InboundKindEnqueue, Inbound: mention, Position: position, StashAt: time.Now().UTC()}
 		if err := putThreadQueueItem(ctx, tx, id, &item); err != nil {
 			return false, err
 		}
@@ -894,7 +894,7 @@ func (b *Bridge) admitAgentWrite(ctx context.Context, mode sessionWriteMode, inb
 		return "", resubmit, errWriteDelivered
 	}
 
-	item := protocol.ThreadQueueItem{ID: inbound.Metadata["web_message_id"], ConversationID: b.config.ConversationID, Message: inbound.Text, Kind: inbound.Kind, Source: inbound.Source, Inbound: inbound, StashAt: time.Now().UTC()}
+	item := protocol.ThreadQueueItem{ID: inbound.Metadata["web_message_id"], ConversationID: b.config.ConversationID, Kind: inbound.Kind, Inbound: inbound, StashAt: time.Now().UTC()}
 
 	if err := tx.QueryRowContext(ctx, `SELECT CASE WHEN $2 THEN COALESCE(MIN(position) - 1, 0) ELSE COALESCE(MAX(position) + 1, 0) END FROM turns WHERE conversation_id = $1 AND phase = 'waiting'`, b.config.ConversationID, mode == sessionWriteStop).Scan(&item.Position); err != nil {
 		return "", resubmit, fmt.Errorf("read agent write position: %w", err)
@@ -994,7 +994,7 @@ func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.Thre
 	}
 
 	items = slices.DeleteFunc(items, func(item protocol.ThreadQueueItem) bool {
-		return item.Inbound != nil && !item.Inbound.Human && item.Inbound.Metadata[protocol.InboundSenderSessionMetadataKey] == ""
+		return !item.Inbound.Human && item.Inbound.Metadata[protocol.InboundSenderSessionMetadataKey] == ""
 	})
 
 	m.mu.Lock()
@@ -1007,14 +1007,7 @@ func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.Thre
 		for i := bridge.steersRead; i < len(bridge.steers); i++ {
 			request := &bridge.steers[i]
 			items = slices.DeleteFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == request.queueItemID })
-			inbound := request.inbound
-
-			item := protocol.ThreadQueueItem{ID: request.queueItemID, ConversationID: conversationID, Kind: protocol.InboundKindSteer, Message: inbound.Text, Principal: inbound.Metadata[protocol.InboundPrincipalMetadataKey], Inbound: inbound}
-			if inbound.SlackReply != nil {
-				item.SlackChannel, item.SlackTS = inbound.SlackReply.ChannelID, inbound.SlackReply.MessageTS
-			}
-
-			items = append(items, item)
+			items = append(items, protocol.ThreadQueueItem{ID: request.queueItemID, ConversationID: conversationID, Kind: protocol.InboundKindSteer, Inbound: request.inbound})
 		}
 		bridge.mu.Unlock()
 	}
@@ -1039,19 +1032,6 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 	}
 
 	inbound := item.Inbound
-	if inbound == nil {
-		content := item.Content
-		content.Text = item.Message
-		inbound = protocol.NewInboundMessageFromContent(item.Source, cmp.Or(item.Kind, protocol.InboundKindEnqueue), &content, true)
-		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.Principal
-		inbound.Metadata["web_message_id"] = id
-
-		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS, ThreadTS: item.SlackTS}
-		if item.SlackReply != nil {
-			inbound.SlackReply = new(*item.SlackReply)
-		}
-	}
-
 	kind := inbound.Kind
 
 	inbound.Kind = protocol.InboundKindSteer

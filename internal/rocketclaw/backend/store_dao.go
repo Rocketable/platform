@@ -1022,22 +1022,12 @@ func (s *SessionService) PutThreadQueueItem(id string, item *protocol.ThreadQueu
 
 func putThreadQueueItem(ctx context.Context, db stateStoreDB, id string, item *protocol.ThreadQueueItem) error {
 	kind := cmp.Or(item.Kind, protocol.InboundKindEnqueue)
-
-	content, _ := json.Marshal(item.Content)
-	reply, _ := json.Marshal(item.SlackReply)
-
-	var inbound *string
-
-	if item.Inbound != nil {
-		data, _ := json.Marshal(item.Inbound)
-
-		inbound = new(string(removeSessionEntryNUL(data)))
-	}
+	inbound, _ := json.Marshal(item.Inbound)
 
 	changed, err := execRows(ctx, db, "put thread queue item", `INSERT INTO turns (`+waitingColumns+`, updated_at_unix_ns, phase, reason)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $5, $15, CASE WHEN $10 <> 'held' THEN $16 WHEN $14::json->>'Kind' = 'enqueue' THEN $17 ELSE $18 END)
-ON CONFLICT (input_id) WHERE phase = 'waiting' DO UPDATE SET message = excluded.message, principal = excluded.principal, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns, position = excluded.position, park_after = excluded.park_after, slack_channel = excluded.slack_channel, slack_ts = excluded.slack_ts, delivery = excluded.delivery, reason = excluded.reason, content = excluded.content, source = excluded.source, slack_reply = excluded.slack_reply, inbound_json = excluded.inbound_json WHERE turns.conversation_id = excluded.conversation_id`,
-		strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, strings.TrimSpace(item.ParkAfter), item.SlackChannel, item.SlackTS, kind, content, item.Source, reply, inbound, turnWaiting, waitQueued, waitHeld, waitStashed)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $3, $8, CASE WHEN $6 <> 'held' THEN $9 WHEN $7::json->>'Kind' = 'enqueue' THEN $10 ELSE $11 END)
+ON CONFLICT (input_id) WHERE phase = 'waiting' DO UPDATE SET created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns, position = excluded.position, park_after = excluded.park_after, delivery = excluded.delivery, reason = excluded.reason, inbound_json = excluded.inbound_json WHERE turns.conversation_id = excluded.conversation_id`,
+		strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), timeUnixNano(item.StashAt), item.Position, strings.TrimSpace(item.ParkAfter), kind, string(removeSessionEntryNUL(inbound)), turnWaiting, waitQueued, waitHeld, waitStashed)
 	if err != nil {
 		return err
 	}
@@ -1049,7 +1039,7 @@ ON CONFLICT (input_id) WHERE phase = 'waiting' DO UPDATE SET message = excluded.
 	return nil
 }
 
-const waitingColumns = `input_id, conversation_id, message, principal, created_at_unix_ns, position, park_after, slack_channel, slack_ts, delivery, content, source, slack_reply, inbound_json`
+const waitingColumns = `input_id, conversation_id, created_at_unix_ns, position, park_after, delivery, inbound_json`
 
 func (s *SessionService) ThreadQueueForConversation(conversationID string) ([]protocol.ThreadQueueItem, error) {
 	return queryRows(context.Background(), s.db, `SELECT `+waitingColumns+` FROM turns WHERE conversation_id = $1 AND phase = 'waiting' AND reason <> $2 ORDER BY position, created_at_unix_ns`, "thread queue", scanThreadQueueItem, strings.TrimSpace(conversationID), waitScheduled)
@@ -1079,28 +1069,17 @@ func (d stateDAO) claimThreadQueueItem(ctx context.Context, conversationID, id s
 
 func scanThreadQueueItem(scanner rowScanner) (protocol.ThreadQueueItem, error) {
 	var (
-		item           protocol.ThreadQueueItem
-		stashAt        int64
-		content, reply []byte
-		inbound        []byte
+		item    protocol.ThreadQueueItem
+		stashAt int64
+		inbound []byte
 	)
 
-	if err := scanner.Scan(&item.ID, &item.ConversationID, &item.Message, &item.Principal, &stashAt, &item.Position, &item.ParkAfter, &item.SlackChannel, &item.SlackTS, &item.Kind, &content, &item.Source, &reply, &inbound); err != nil {
+	if err := scanner.Scan(&item.ID, &item.ConversationID, &stashAt, &item.Position, &item.ParkAfter, &item.Kind, &inbound); err != nil {
 		return protocol.ThreadQueueItem{}, fmt.Errorf("scan thread queue item: %w", err)
 	}
 
-	if inbound != nil {
-		if err := json.Unmarshal(inbound, &item.Inbound); err != nil {
-			return item, fmt.Errorf("decode thread queue inbound: %w", err)
-		}
-	}
-
-	if err := json.Unmarshal(content, &item.Content); err != nil {
-		return item, fmt.Errorf("decode thread queue content: %w", err)
-	}
-
-	if err := json.Unmarshal(reply, &item.SlackReply); err != nil {
-		return item, fmt.Errorf("decode thread queue reply: %w", err)
+	if err := json.Unmarshal(inbound, &item.Inbound); err != nil {
+		return item, fmt.Errorf("decode thread queue inbound: %w", err)
 	}
 
 	item.StashAt = timeFromUnixNano(stashAt)

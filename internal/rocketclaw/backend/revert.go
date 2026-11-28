@@ -556,8 +556,7 @@ SELECT COALESCE(max(position), -1) FROM waiting`, b.config.ConversationID, reque
 			return fmt.Errorf("make room for waiting input: %w", err)
 		}
 
-		item := protocol.ThreadQueueItem{ID: request.queueItemID, ConversationID: b.config.ConversationID, Message: request.inbound.Text,
-			Source: request.inbound.Source, Principal: request.inbound.Metadata[protocol.InboundPrincipalMetadataKey], Kind: protocol.InboundKindEnqueue,
+		item := protocol.ThreadQueueItem{ID: request.queueItemID, ConversationID: b.config.ConversationID, Kind: protocol.InboundKindEnqueue,
 			Inbound: request.inbound, StashAt: time.Now().UTC(), Position: len(b.waiting)}
 		if err := putThreadQueueItem(ctx, tx, item.ID, &item); err != nil {
 			return err
@@ -635,16 +634,7 @@ func (r *Runtime) mutateWebQueue(ctx context.Context, conversationID, id string,
 		return false, err
 	}
 
-	inbound := item.Inbound
-	if inbound == nil {
-		content := item.Content
-		content.Text = item.Message
-		inbound = protocol.NewInboundMessageFromContent(item.Source, kind, &content, true)
-		inbound.ConversationID = conversationID
-		inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = id, item.Principal
-	}
-
-	inbound.Kind, item.Inbound, item.Kind, item.ParkAfter = kind, inbound, kind, ""
+	item.Inbound.Kind, item.Kind, item.ParkAfter = kind, kind, ""
 	if err := putThreadQueueItem(ctx, tx, id, &item); err != nil {
 		return false, err
 	}
@@ -653,7 +643,7 @@ func (r *Runtime) mutateWebQueue(ctx context.Context, conversationID, id string,
 		return false, fmt.Errorf("commit promoted Web input: %w", err)
 	}
 	b.mu.Unlock()
-	err = b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: id}, "promote Web input")
+	err = b.enqueue(ctx, &bridgeRequest{inbound: item.Inbound, queueItemID: id}, "promote Web input")
 	b.mu.Lock()
 
 	return true, err
@@ -702,9 +692,7 @@ func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, inbound *protocol.Inb
 		}
 	}
 
-	item := protocol.ThreadQueueItem{ID: inbound.Metadata["web_message_id"], ConversationID: inbound.ConversationID, Message: inbound.Text,
-		Principal: inbound.Metadata[protocol.InboundPrincipalMetadataKey], Kind: inbound.Kind, Source: inbound.Source, Inbound: inbound, StashAt: time.Now().UTC(),
-		Content: protocol.InboundContent{Attachments: inbound.Attachments, AttachmentPresence: inbound.AttachmentPresence, AttachmentWarnings: inbound.AttachmentWarnings}}
+	item := protocol.ThreadQueueItem{ID: inbound.Metadata["web_message_id"], ConversationID: inbound.ConversationID, Kind: inbound.Kind, Inbound: inbound, StashAt: time.Now().UTC()}
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(position), -1) + 1 FROM turns WHERE conversation_id = $1 AND phase = 'waiting'`, inbound.ConversationID).Scan(&item.Position); err != nil {
 		return false, fmt.Errorf("read Web admission position: %w", err)
 	}

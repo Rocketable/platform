@@ -11,7 +11,7 @@ import (
 func TestMixedLaterWorkDefaultIsQueueThenScheduled(t *testing.T) {
 	due := time.Date(2000, 1, 1, 16, 0, 0, 0, time.UTC)
 	rows := MixedLaterWork(
-		[]ThreadQueueItem{{ID: "held", Kind: InboundKindHeld, Position: -1}, {ID: "q1", Message: "A", Position: 0}, {ID: "q2", Message: "B", Position: 1}, {ID: "held-parked", Kind: InboundKindHeld, ParkAfter: "s1"}},
+		[]ThreadQueueItem{{ID: "held", Kind: InboundKindHeld, Position: -1}, {ID: "q1", Position: 0}, {ID: "q2", Position: 1}, {ID: "held-parked", Kind: InboundKindHeld, ParkAfter: "s1"}},
 		map[string]ScheduledMessageState{"s1": {Message: "S", DueAt: due}},
 	)
 	require.Len(t, rows, 3)
@@ -26,7 +26,7 @@ func TestMixedLaterWorkDefaultIsQueueThenScheduled(t *testing.T) {
 func TestMixedLaterWorkParksAfterScheduled(t *testing.T) {
 	due := time.Date(2000, 1, 1, 16, 0, 0, 0, time.UTC)
 	rows := MixedLaterWork(
-		[]ThreadQueueItem{{ID: "q1", Message: "A", Position: 0, ParkAfter: "s1"}},
+		[]ThreadQueueItem{{ID: "q1", Position: 0, ParkAfter: "s1"}},
 		map[string]ScheduledMessageState{"s1": {Message: "S", DueAt: due}},
 	)
 	require.Len(t, rows, 2)
@@ -38,7 +38,7 @@ func TestMixedLaterWorkParksAfterScheduled(t *testing.T) {
 
 func TestMixedLaterWorkUnknownParkIsEmpty(t *testing.T) {
 	rows := MixedLaterWork(
-		[]ThreadQueueItem{{ID: "q1", Message: "A", Position: 0, ParkAfter: "gone"}},
+		[]ThreadQueueItem{{ID: "q1", Position: 0, ParkAfter: "gone"}},
 		nil,
 	)
 	require.Len(t, rows, 1)

@@ -184,8 +184,8 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = stageRevertDB(t.Context(), seed.db, conversationID, fmt.Sprintf("%d:0", boundary), protocol.RevertBefore)
 	require.NoError(t, err)
-	require.NoError(t, seed.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "first", Principal: "alice", Source: protocol.SourceWeb, Position: 0, StashAt: time.Unix(1, 0).UTC()}))
-	require.NoError(t, seed.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{ID: "q2", ConversationID: conversationID, Message: "second", Principal: "alice", Source: protocol.SourceWeb, Position: 1, StashAt: time.Unix(2, 0).UTC()}))
+	require.NoError(t, seed.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Position: 0, StashAt: time.Unix(1, 0).UTC(), Inbound: queuedTestInbound(protocol.SourceWeb, "first", "alice")}))
+	require.NoError(t, seed.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{ID: "q2", ConversationID: conversationID, Position: 1, StashAt: time.Unix(2, 0).UTC(), Inbound: queuedTestInbound(protocol.SourceWeb, "second", "alice")}))
 	require.NoError(t, seed.Stop())
 
 	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: testSlack()}

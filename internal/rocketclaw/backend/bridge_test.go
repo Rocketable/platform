@@ -198,10 +198,9 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{conversationID: bridge}}
 	for i, id := range []string{"queue-first", "queue-second"} {
-		require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{
-			ConversationID: conversationID, Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue,
-			Message: "same text", Principal: "alice", Position: i,
-		}))
+		item := webQueueItem(conversationID, id, "same text", "alice", protocol.InboundKindEnqueue)
+		item.Position = i
+		require.NoError(t, store.PutThreadQueueItem(id, item))
 		promoted, err := manager.promoteQueueItem(t.Context(), conversationID, id)
 		require.NoError(t, err)
 		require.True(t, promoted)
@@ -214,7 +213,7 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 	for i, id := range []string{"queue-first", "queue-second"} {
 		require.Equal(t, id, items[i].ID)
 		require.Equal(t, protocol.InboundKindSteer, items[i].Kind)
-		require.Equal(t, "alice", items[i].Principal)
+		require.Equal(t, "alice", items[i].Inbound.Metadata[protocol.InboundPrincipalMetadataKey])
 	}
 
 	require.Empty(t, bus.outbound)
@@ -232,7 +231,7 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, items)
 
-	queued := protocol.ThreadQueueItem{ID: "queue-next", ConversationID: conversationID, Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue, Message: "next turn", Principal: "alice"}
+	queued := protocol.ThreadQueueItem{ID: "queue-next", ConversationID: conversationID, Kind: protocol.InboundKindEnqueue, Inbound: queuedTestInbound(protocol.SourceWeb, "next turn", "alice")}
 	require.NoError(t, store.PutThreadQueueItem(queued.ID, &queued))
 	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &queued))
 	require.Empty(t, bus.outbound, "queued input is consumed only when its model prompt is built")
@@ -244,7 +243,7 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 	require.Empty(t, bus.outbound)
 	endTestTurn(t, store, conversationID, request.turnID, protocol.TerminalComplete)
 
-	slackQueued := protocol.ThreadQueueItem{ID: "slack-next", ConversationID: conversationID, Source: protocol.SourceSlack, Kind: protocol.InboundKindEnqueue, Message: "already visible", Principal: "bob"}
+	slackQueued := protocol.ThreadQueueItem{ID: "slack-next", ConversationID: conversationID, Kind: protocol.InboundKindEnqueue, Inbound: queuedTestInbound(protocol.SourceSlack, "already visible", "bob")}
 	require.NoError(t, store.PutThreadQueueItem(slackQueued.ID, &slackQueued))
 	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &slackQueued))
 	request = <-bridge.requestCh
@@ -523,7 +522,7 @@ func TestInterruptActiveTurnDoesNotDeleteThreadQueueOrScheduled(t *testing.T) {
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ConversationID: conversationID, StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, Inbound: queuedTestInbound("", "changelog", "U1")}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "due later", DueAt: time.Date(2000, 1, 1, 4, 0, 0, 0, time.UTC)}))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
@@ -538,7 +537,7 @@ func TestInterruptActiveTurnDoesNotDeleteThreadQueueOrScheduled(t *testing.T) {
 	items, err := store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
-	assert.Equal(t, "changelog", items[0].Message)
+	assert.Equal(t, "changelog", items[0].Inbound.Text)
 
 	messages, err := store.ScheduledMessagesForConversation(conversationID)
 	require.NoError(t, err)
@@ -554,7 +553,7 @@ func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
 	stashAt := time.Date(2000, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	recordTestConversations(t, store, "primary", map[string]ConversationKind{conversationID: KindSlackThread})
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "A", Principal: "U1", StashAt: stashAt, Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, StashAt: stashAt, Position: 0, Inbound: queuedTestInbound("", "A", "U1")}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "primary", Message: "scheduled", DueAt: time.Date(2000, 1, 1, 12, 5, 0, 0, time.UTC)}))
 
 	bridge := &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler), runtime: slackAgentRuntime(t), config: Config{ConversationID: conversationID, Agent: "primary", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
@@ -580,7 +579,7 @@ func TestPickLaterWorkWaitsWhenParkedAfterFutureScheduled(t *testing.T) {
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "Ship README", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1"}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1", Inbound: queuedTestInbound("", "Ship README", "U1")}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Now().UTC().Add(time.Hour)}))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
@@ -617,7 +616,7 @@ func TestPickLaterWorkStartsParkedQueueAfterScheduledCancel(t *testing.T) {
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "Ship README", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1", SlackChannel: "C123", SlackTS: "111.222"}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1", Inbound: queuedTestInbound("", "Ship README", "U1")}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Now().UTC().Add(time.Hour)}))
 	require.NoError(t, store.ResetScheduledMessages(conversationID))
 
@@ -692,7 +691,7 @@ func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 		recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 		require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 3}))
-		require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
+		require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, Inbound: queuedTestInbound("", "changelog", "U1")}))
 
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
@@ -731,7 +730,7 @@ func TestPickLaterWorkAfterStopGoalStartsLaterWork(t *testing.T) {
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 3}))
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, Inbound: queuedTestInbound("", "changelog", "U1")}))
 	require.NoError(t, store.StopGoal(conversationID))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
@@ -1680,6 +1679,20 @@ func tinyPNG() []byte {
 	return []byte("\x89PNG\r\n\x1a\n")
 }
 
+func queuedTestInbound(source protocol.Source, text, principal string) *protocol.InboundMessage {
+	inbound := protocol.NewInboundMessageFromContent(source, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: text}, true)
+	inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
+
+	return inbound
+}
+
+func webQueueItem(conversationID, id, text, principal string, kind protocol.InboundKind) *protocol.ThreadQueueItem {
+	inbound := queuedTestInbound(protocol.SourceWeb, text, principal)
+	inbound.Kind, inbound.ConversationID, inbound.Metadata["web_message_id"] = kind, conversationID, id
+
+	return &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Kind: kind, Inbound: inbound}
+}
+
 func TestModelResolverConfiguresOpenAI(t *testing.T) {
 	t.Parallel()
 
@@ -2104,48 +2117,9 @@ func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 		config:    Config{ConversationID: protocol.SlackThreadConversationID("C123", "111.0"), SessionService: store},
 	}
 
-	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &protocol.ThreadQueueItem{ID: "q1", Source: protocol.SourceSlack, Message: "wait 4s and say alpha", Principal: "U1", SlackChannel: "C123", SlackTS: "111.2", SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.0"}}))
-
-	req := <-bridge.requestCh
-	require.NotNil(t, req.inbound)
-	assert.Equal(t, protocol.SourceSlack, req.inbound.Source)
-	assert.Equal(t, protocol.InboundKindEnqueue, req.inbound.Kind)
-	assert.Equal(t, "wait 4s and say alpha", req.inbound.Text)
-	require.NotNil(t, req.inbound.SlackReply)
-	assert.Equal(t, "C123", req.inbound.SlackReply.ChannelID)
-	assert.Equal(t, "111.2", req.inbound.SlackReply.MessageTS)
-	assert.Equal(t, "111.0", req.inbound.SlackReply.ThreadTS)
-	assert.Equal(t, "U1", req.inbound.Metadata[protocol.InboundPrincipalMetadataKey])
-
-	item := &protocol.ThreadQueueItem{ID: "q2", Kind: protocol.InboundKindSteer, Message: "keep this instruction", Principal: "U2"}
-	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), item))
-	req = <-bridge.requestCh
-	assert.Equal(t, item.Kind, req.inbound.Kind)
-	assert.Equal(t, item.Message, req.inbound.Text)
-	assert.Equal(t, item.Principal, req.inbound.Metadata[protocol.InboundPrincipalMetadataKey])
-
-	for _, text := range []string{"/docs-helper \"typed args\"  Next", "/skill stop \"typed args\"  Next", ""} {
-		item := &protocol.ThreadQueueItem{ID: "raw-queue", ConversationID: bridge.config.ConversationID, Source: protocol.SourceWeb, Message: text, Principal: "author", Content: protocol.InboundContent{Text: text, TextAttachments: []string{"/docs-helper attachment-only"}, AttachmentWarnings: []string{"warning"}}}
-		require.NoError(t, bridge.config.SessionService.PutThreadQueueItem(item.ID, item))
-		items, err := bridge.config.SessionService.ThreadQueueForConversation(bridge.config.ConversationID)
-		require.NoError(t, err)
-		require.Len(t, items, 1)
-		require.Equal(t, item.Content, items[0].Content)
-		require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &items[0]))
-		inbound := (<-bridge.requestCh).inbound
-		require.Equal(t, text, inbound.Metadata[protocol.InboundRawTextMetadataKey])
-		require.Equal(t, "author", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
-		require.Contains(t, inbound.Text, "/docs-helper attachment-only")
-		require.Equal(t, []string{"warning"}, inbound.AttachmentWarnings)
-		require.Equal(t, parseDirectSkillTrigger(text), inboundDirectSkill(inbound))
-		_, claimed, err := (stateDAO{db: bridge.config.SessionService.db}).claimThreadQueueItem(t.Context(), bridge.config.ConversationID, item.ID)
-		require.NoError(t, err)
-		require.True(t, claimed)
-	}
-
 	waiting := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "source text", Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: tinyPNG()}}}, true)
 	waiting.Metadata = map[string]string{"external_conversation_id": "external-1", protocol.InboundPrincipalMetadataKey: "U3"}
-	item = &protocol.ThreadQueueItem{ID: "q3", ConversationID: bridge.config.ConversationID, Message: "queue display", Principal: "U3", Inbound: waiting}
+	item := &protocol.ThreadQueueItem{ID: "q3", ConversationID: bridge.config.ConversationID, Inbound: waiting}
 	require.NoError(t, bridge.config.SessionService.PutThreadQueueItem(item.ID, item))
 
 	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), item))
@@ -2165,7 +2139,7 @@ func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
 	service := newTestSessionServiceAt(t, workspace)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
-	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Now().UTC(), Position: 0}))
+	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, StashAt: time.Now().UTC(), Position: 0, Inbound: queuedTestInbound("", "changelog", "U1")}))
 
 	bus := newTestBus()
 	bus.Close()
@@ -2206,7 +2180,7 @@ func TestBridgeReleasesCallerOfClaimedQueueItem(t *testing.T) {
 
 		return inbound
 	}
-	require.NoError(t, service.PutThreadQueueItem("hello", &protocol.ThreadQueueItem{ID: "hello", ConversationID: "main", Source: protocol.SourceWeb, Message: "hello", Inbound: message()}))
+	require.NoError(t, service.PutThreadQueueItem("hello", &protocol.ThreadQueueItem{ID: "hello", ConversationID: "main", Inbound: message()}))
 
 	bridge := &Bridge{config: Config{ConversationID: "main", SessionService: service}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 	claimed, err := bridge.activateInbound(ctx, &bridgeRequest{inbound: message(), queueItemID: "hello"})
@@ -3040,7 +3014,7 @@ Request: $ARGUMENTS
 
 				promote := kind == protocol.InboundKindEnqueue && strings.HasPrefix(invocation, "/skill ")
 				if kind == protocol.InboundKindEnqueue {
-					item := protocol.ThreadQueueItem{ID: conversationID + "-queued", ConversationID: conversationID, Source: source, Message: invocation, Principal: "Alice", Content: protocol.InboundContent{Text: invocation, TextAttachments: []string{"attachment-only argument"}}}
+					item := protocol.ThreadQueueItem{ID: conversationID + "-queued", ConversationID: conversationID, Inbound: msg}
 					createWebChat(t, service, protocol.Conversation{ID: conversationID, Agent: "primary"})
 					manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: service, bridges: map[string]directBridge{conversationID: bridge}}
 					require.NoError(t, service.PutThreadQueueItem("removed", &item))
@@ -3107,7 +3081,7 @@ Request: $ARGUMENTS
 				assert.Contains(t, requestContent, invocation)
 
 				if kind == protocol.InboundKindEnqueue {
-					item := protocol.ThreadQueueItem{ID: conversationID + "-denied", ConversationID: conversationID, Source: source, Message: invocation}
+					item := protocol.ThreadQueueItem{ID: conversationID + "-denied", ConversationID: conversationID, Inbound: queuedTestInbound(source, invocation, "")}
 					require.NoError(t, service.PutThreadQueueItem(item.ID, &item))
 
 					bridge.requestCh = make(chan bridgeRequest, 1)
@@ -3423,9 +3397,9 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	var logs lockedBuffer
 
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}), config: Config{ConversationID: conversationID, Agent: "primary", SessionService: service}, bus: bus, log: slog.New(slog.NewJSONHandler(&logs, nil)), requestCh: make(chan bridgeRequest, 1), inputOpen: true}
-	queued := protocol.ThreadQueueItem{ID: "queued-input", ConversationID: conversationID, Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue, Message: "hello", Principal: "Alice"}
-	require.NoError(t, service.PutThreadQueueItem(queued.ID, &queued))
-	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &queued))
+	queued := webQueueItem(conversationID, "queued-input", "hello", "Alice", protocol.InboundKindEnqueue)
+	require.NoError(t, service.PutThreadQueueItem(queued.ID, queued))
+	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), queued))
 	require.Empty(t, bus.outbound)
 	bridge.SwitchAgent("reviewer")
 	request := <-bridge.requestCh
@@ -3506,7 +3480,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	require.True(t, assistant)
 	require.NoError(t, group.Wait())
 
-	for _, event := range []string{"queue_admitted", "queue_started", "steer_admitted", "steer_injected", "first_response_item", "first_assistant_text", "generation_finished", "delivery_acknowledged"} {
+	for _, event := range []string{"queue_started", "steer_admitted", "steer_injected", "first_response_item", "first_assistant_text", "generation_finished", "delivery_acknowledged"} {
 		require.Contains(t, logs.String(), `"event":"`+event+`"`)
 	}
 

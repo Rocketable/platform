@@ -177,7 +177,7 @@ func TestClaimedQueueItemRunsExactlyOnceAfterCrash(t *testing.T) {
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	crashed := newBridge()
 	conversationID := crashed.config.ConversationID
-	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "queued work", Principal: "U1", Source: protocol.SourceWeb}))
+	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Inbound: queuedTestInbound(protocol.SourceWeb, "queued work", "U1")}))
 
 	require.NoError(t, crashed.pickLaterWork(t.Context(), false))
 	request := <-crashed.requestCh
@@ -1604,7 +1604,7 @@ func TestPausedChatFinishesInterruptedReply(t *testing.T) {
 	rt := &Runtime{Sessions: service, threads: manager, Cfg: crashed.runtime}
 
 	seedActiveTurn(t, service, conversationID, "turn-mid", nil)
-	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "queued work", Source: protocol.SourceWeb}))
+	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Inbound: queuedTestInbound(protocol.SourceWeb, "queued work", "")}))
 
 	for range 2 {
 		require.NoError(t, rt.SetAgentPaused(t.Context(), conversationID, "Bob", true))
@@ -1661,7 +1661,7 @@ func TestPausedChatHoldsWorkUntilResume(t *testing.T) {
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	cfg, conversationID := newBridge().runtime, newBridge().config.ConversationID
 	require.NoError(t, service.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 1}))
-	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "queued work", Source: protocol.SourceWeb}))
+	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Inbound: queuedTestInbound(protocol.SourceWeb, "queued work", "")}))
 	require.NoError(t, service.PutScheduledMessage("once", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "primary", Message: "one-time reminder", DueAt: time.Now().Add(-time.Hour)}))
 	require.NoError(t, service.PutScheduledMessage("hourly", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "primary", Message: "recurring reminder", DueAt: time.Now().Add(-3 * time.Hour), Recurring: true, Interval: time.Hour}))
 
@@ -2643,7 +2643,7 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 				require.NoError(t, startTurnDB(t.Context(), service.db, "turn-private", privateID, msg))
 				require.NoError(t, manager.StartActiveTurns(t.Context()))
 			} else {
-				require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: privateID, Kind: protocol.InboundKindEnqueue, Message: msg.Text, Source: msg.Source, Inbound: msg}))
+				require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: privateID, Kind: protocol.InboundKindEnqueue, Inbound: msg}))
 				require.NoError(t, manager.StartQueuedConversations(t.Context()))
 			}
 
@@ -2980,7 +2980,7 @@ func TestShutdownReleasesRoutineRunnerWait(t *testing.T) {
 	queue, err := service.ThreadQueueForConversation("cron:daily")
 	require.NoError(t, err)
 	require.Len(t, queue, 1)
-	assert.Equal(t, "late job prompt", queue[0].Message)
+	assert.Equal(t, "late job prompt", queue[0].Inbound.Text)
 
 	destinationQueue, err := service.ThreadQueueForConversation(template.config.ConversationID)
 	require.NoError(t, err)
@@ -3437,7 +3437,7 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, items, 1)
 
-		return []any{items[0].Message, items[0].Kind}
+		return []any{items[0].Inbound.Text, items[0].Kind}
 	}
 	assert.Equal(t, []any{"parent work", protocol.InboundKindHeld}, queued(), "Web lists the parent's prompt as held")
 

@@ -561,7 +561,7 @@ func TestStartQueuedConversationsReportsLaterWorkErrors(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	createWebChat(t, store, protocol.Conversation{ID: conversationID})
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "one"}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Inbound: queuedTestInbound("", "one", "")}))
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
 		return newDirectBridgeMock()
 	}})
@@ -578,9 +578,9 @@ func TestStartQueuedConversationsWakesEachRecordedConversationOnce(t *testing.T)
 
 	createWebChat(t, store, protocol.Conversation{ID: first, Agent: "main"})
 	createWebChat(t, store, protocol.Conversation{ID: second, Agent: "main"})
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: first, Message: "one"}))
-	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{ID: "q2", ConversationID: first, Message: "two"}))
-	require.NoError(t, store.PutThreadQueueItem("q3", &protocol.ThreadQueueItem{ID: "q3", ConversationID: second, Message: "three"}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: first, Inbound: queuedTestInbound("", "one", "")}))
+	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{ID: "q2", ConversationID: first, Inbound: queuedTestInbound("", "two", "")}))
+	require.NoError(t, store.PutThreadQueueItem("q3", &protocol.ThreadQueueItem{ID: "q3", ConversationID: second, Inbound: queuedTestInbound("", "three", "")}))
 
 	woke := map[string]int{}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
@@ -642,9 +642,9 @@ func TestThreadBridgeManagerStashListAndDeleteQueue(t *testing.T) {
 	other := protocol.SlackThreadConversationID("C123", "333.444")
 	recordPrivateHistories(t, store, map[string]ConversationKind{target: KindSlackThread, other: KindSlackThread})
 
-	require.NoError(t, manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "q1", Message: "first", Principal: "U1", StashAt: time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC), SlackChannel: "C123", SlackTS: "1"}))
-	require.NoError(t, manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "q2", Message: "second", Principal: "U1", StashAt: time.Date(2026, 8, 24, 14, 0, 0, 0, time.UTC), SlackChannel: "C123", SlackTS: "2"}))
-	require.NoError(t, manager.stashQueueItem(t.Context(), other, &protocol.ThreadQueueItem{ID: "other", Message: "keep", Principal: "U2", StashAt: time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC)}))
+	require.NoError(t, manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "q1", StashAt: time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC), Inbound: queuedTestInbound("", "first", "U1")}))
+	require.NoError(t, manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "q2", StashAt: time.Date(2026, 8, 24, 14, 0, 0, 0, time.UTC), Inbound: queuedTestInbound("", "second", "U1")}))
+	require.NoError(t, manager.stashQueueItem(t.Context(), other, &protocol.ThreadQueueItem{ID: "other", StashAt: time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC), Inbound: queuedTestInbound("", "keep", "U2")}))
 
 	items, err := manager.queueItems(target)
 	require.NoError(t, err)
@@ -964,7 +964,7 @@ func TestPromotedAgentQueueItemStaysNonHuman(t *testing.T) {
 	for _, open := range []bool{true, false} {
 		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindEnqueue, "/docs-helper write docs", false)
 		inbound.Metadata = map[string]string{protocol.InboundSenderSessionMetadataKey: "web:sender", protocol.InboundSenderAgentMetadataKey: "planner"}
-		require.NoError(t, store.PutThreadQueueItem("agent", &protocol.ThreadQueueItem{ConversationID: conversationID, Source: protocol.SourceSystem, Kind: protocol.InboundKindEnqueue, Message: inbound.Text, Inbound: inbound}))
+		require.NoError(t, store.PutThreadQueueItem("agent", &protocol.ThreadQueueItem{ConversationID: conversationID, Kind: protocol.InboundKindEnqueue, Inbound: inbound}))
 
 		bridge.inputOpen = open
 		promoted, err := manager.promoteQueueItem(t.Context(), conversationID, "agent")
@@ -1054,8 +1054,8 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, queue, 1)
 			assert.Equal(t, tc.kind, queue[0].Kind)
-			assert.Equal(t, protocol.SourceSystem, queue[0].Source)
-			assert.Empty(t, queue[0].Principal, "an agent's write has no human principal")
+			assert.Equal(t, protocol.SourceSystem, queue[0].Inbound.Source)
+			assert.Empty(t, queue[0].Inbound.Metadata[protocol.InboundPrincipalMetadataKey], "an agent's write has no human principal")
 
 			items, err := manager.queueItems(target)
 			require.NoError(t, err)
@@ -1269,13 +1269,13 @@ func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, activated, "the held request does not run")
 
-			require.NoError(t, manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "by hand", Kind: protocol.InboundKindHeld, Source: protocol.SourceWeb, Principal: "alice", Message: "later"}))
+			require.NoError(t, manager.stashQueueItem(t.Context(), target, webQueueItem(target, "by hand", "later", "alice", protocol.InboundKindHeld)))
 			require.Equal(t, []string{"earlier"}, queueIDs(t, store, target), "a stash releases nothing")
 
 			if writer == "agent" {
 				_, _, err = manager.writeSession(t.Context(), target, "next", sessionWriteEnqueue, agentWrite("next"), nil)
 			} else {
-				err = manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "next", Kind: protocol.InboundKindEnqueue, Source: protocol.SourceWeb, Principal: "alice", Message: "next", StashAt: time.Now().UTC()})
+				err = manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "next", Kind: protocol.InboundKindEnqueue, StashAt: time.Now().UTC(), Inbound: queuedTestInbound(protocol.SourceWeb, "next", "alice")})
 			}
 
 			require.NoError(t, err)

@@ -29,16 +29,9 @@ type ThreadQueueItem struct {
 	Kind           InboundKind
 	ID             string
 	ConversationID string
-	Message        string
-	Content        InboundContent
-	Source         Source
-	SlackReply     *SlackReplyTarget
-	Principal      string
 	StashAt        time.Time
 	Position       int
 	ParkAfter      string
-	SlackChannel   string
-	SlackTS        string
 	Inbound        *InboundMessage
 }
 
