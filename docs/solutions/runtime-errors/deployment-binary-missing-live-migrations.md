@@ -48,16 +48,16 @@ The permission PR remained focused on the fix. The unread-message feature was a 
 
 ## Why This Works
 
-RocketClaw embeds migration SQL into each binary (`internal/rocketclaw/backend/store_schema.go:19-20`). Startup reads the database's `pg_migrations` ledger and rejects any applied migration ID absent from that binary's migration set (`internal/rocketclaw/backend/store_schema.go:76-95`). State-store initialization fails as a result (`internal/rocketclaw/backend/store.go:2012-2015`).
+RocketClaw embeds migration SQL into each binary (`internal/rocketclaw/backend/store_schema.go:19-20`). Startup reads the database's `pg_migrations` ledger and rejects any applied migration ID absent from that binary's migration set (`internal/rocketclaw/backend/store_schema.go:60-79`). State-store initialization fails as a result (`internal/rocketclaw/backend/store.go:2012-2015`).
 
-Building on the deployed feature baseline supplied the migrations the database already knew. Recognized, already-applied migrations are skipped (`internal/rocketclaw/backend/store_schema.go:103-106`). Recovery preserved that baseline while adding the fix; it did not remove ledger entries or bypass migration validation.
+Building on the deployed feature baseline supplied the migrations the database already knew. Recognized, already-applied migrations are skipped (`internal/rocketclaw/backend/store_schema.go:87-90`). Recovery preserved that baseline while adding the fix; it did not remove ledger entries or bypass migration validation.
 
-Since v0.2.5, startup itself first replaces the ledger rows for `001` through `059` with `001_baseline.sql` (`internal/rocketclaw/backend/store_schema.go:39-57`), so a binary older than v0.2.5 fails on an adopted database with `unknown migration in database: 001_baseline.sql`.
+From v0.2.5 through v0.2.80, startup first replaced the ledger rows for `001` through `059` with `001_baseline.sql`, so a binary older than v0.2.5 fails on an adopted database with `unknown migration in database: 001_baseline.sql`. Later releases no longer convert: a database still carrying the ledger from before `001_baseline.sql` fails with `unknown migration in database:` followed by one of its old IDs.
 
 ## Prevention
 
 - Identify the running binary's source revision before choosing the deployment base. A PR's base is not evidence of what is running.
-- Compare the live migration ledger with the candidate's embedded migrations before replacing the binary. For a v0.2.5+ candidate, ledger rows up to `059_legacy_handoff.sql` are replaced by `001_baseline.sql` at startup when `059` is present (`internal/rocketclaw/backend/store_schema.go:48-53`), so compare only later IDs; a non-empty ledger that has neither `059` nor `001_baseline.sql` is refused with `this State Store predates 059_legacy_handoff.sql; run v0.2.0 on it first` (`store_schema.go:54-55`). Matching migration IDs addresses this startup failure; it does not prove all application/schema compatibility.
+- Compare the live migration ledger with the candidate's embedded migrations before replacing the binary. A ledger that still lists `059_legacy_handoff.sql` instead of `001_baseline.sql` must first start on a release from v0.2.5 to v0.2.80, which converts it; later candidates reject it as an unknown migration. Matching migration IDs addresses this startup failure; it does not prove all application/schema compatibility.
 - When the deployed source differs from the PR base, build and verify the fix on the deployed baseline separately from the review branch.
 - Keep the known-running binary available during replacement, then check both HTTP service health and Slack connectivity. Restoring that exact binary worked here; arbitrary older binaries are not necessarily compatible after migrations have run.
 

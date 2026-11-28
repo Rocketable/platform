@@ -33,7 +33,7 @@ On `main` after #944, the migrations directory ends at `081_drop_web_tab_preview
 
 The tests had no way to notice, because the same commit removed the safety nets too. It deleted the tests of both undone commits from `store_test.go`, `tabs_test.go`, `tabs.browser.test.ts` and `opencode.browser.test.ts`. It also removed `"082_web_closed_tabs.sql"` from the migration list that `TestInitializeSessionDBAdoptsReleasedStore` checks (`internal/rocketclaw/backend/store_schema_test.go:677-682` in `fc3cfb70`'s parent). A test in the tree cannot catch a revert when the reverting commit edits that test too.
 
-Deleting an applied migration does real damage. At startup, the State Store refuses any migration recorded in its ledger that the binary does not embed (`internal/rocketclaw/backend/store_schema.go:90-91`, `unknown migration in database: …`). So a database that ran 082 under PR #939's build will not start on `main` after #944. `docs/solutions/runtime-errors/deployment-binary-missing-live-migrations.md` describes that failure.
+Deleting an applied migration does real damage. At startup, the State Store refuses any migration recorded in its ledger that the binary does not embed (`internal/rocketclaw/backend/store_schema.go:74-75`, `unknown migration in database: …`). So a database that ran 082 under PR #939's build will not start on `main` after #944. `docs/solutions/runtime-errors/deployment-binary-missing-live-migrations.md` describes that failure.
 
 It was found by chance. PR #956 (mark a tab unread) was being rebased onto the new `main` to claim migration 083, and the directory listing ended at 081.
 
@@ -104,8 +104,8 @@ Without the replay sweep, someone has to notice a missing file and then work out
 
 ## Prevention
 
-- **Recommended check (not added):** a CI step that fails a PR which deletes or renames anything under `internal/rocketclaw/backend/migrations/` compared to its merge base. For example, run `jj diff --summary --from <merge base> --to <PR head> -- internal/rocketclaw/backend/migrations` and fail on any line starting with `D` or `R`. Deleting a migration is rare and needs special handling, as when migrations 001 to 059 were folded into `001_baseline.sql` (`internal/rocketclaw/backend/store_schema.go:42-57`). So the rare legitimate case can explain itself in the PR. The check is not written yet because it needs a new CI step. In-tree tests cannot do this job, because the reverting commit can edit them (as it did here).
-- **In review:** treat a diff that deletes a migration, or removes entries from the migration list in `store_schema_test.go`, as a sign of a stale branch, unless the PR says why.
+- **Recommended check (not added):** a CI step that fails a PR which deletes or renames anything under `internal/rocketclaw/backend/migrations/` compared to its merge base. For example, run `jj diff --summary --from <merge base> --to <PR head> -- internal/rocketclaw/backend/migrations` and fail on any line starting with `D` or `R`. Deleting a migration is rare and needs special handling, as when migrations 001 to 059 were folded into `001_baseline.sql` in v0.2.5. So the rare legitimate case can explain itself in the PR. The check is not written yet because it needs a new CI step. In-tree tests cannot do this job, because the reverting commit can edit them (as it did here).
+- **In review:** treat a diff that deletes a migration as a sign of a stale branch, unless the PR says why.
 - **Before squash-merging a long-lived branch:** rebase it onto the current `main` and look at the per-file diff of files that `main` changed since the branch was cut. `docs/solutions/best-practices/rebasing-a-package-move-in-jj.md` describes the same kind of quiet loss in a single rebase.
 
 ## Related
