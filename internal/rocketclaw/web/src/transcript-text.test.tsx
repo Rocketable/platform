@@ -187,7 +187,6 @@ test("MarkdownText renders headings, tables, links, code, and Slack tags without
   const tag = (label: string) => `<span class="font-medium text-primary">${label}</span>`;
   expect(html(<MarkdownText text={"## Team\n\n| Name | Role |\n|---|---|\n| Alice | Developer |"} />)).toBe('<div class="markdown break-words"><h2>Team</h2>\n<div class="overflow-x-auto"><table><thead><tr><th>Name</th><th>Role</th></tr></thead><tbody><tr><td>Alice</td><td>Developer</td></tr></tbody></table></div></div>');
   expect(html(<MarkdownText text={"see [docs](https://x.com/a), `x`, <@U1>, <#C1|general> and <!here>"} />)).toBe(`<div class="markdown break-words"><p>see <a href="https://x.com/a" class="underline" target="_blank" rel="noopener noreferrer">docs</a>, <code class="rounded-sm bg-muted px-1 font-mono text-[0.9em]">x</code>, ${tag("@U1")}, ${tag("#general")} and ${tag("@here")}</p></div>`);
-  // A leading Slack tag would otherwise start an HTML block that hides the rest of the line's Markdown.
   const reply = html(<MarkdownText text={entry} />);
   expect(reply).toContain(`<p>${tag("@cs-operators")} <em>Sam now says he would buy a Windows computer if memory is the cause.</em></p>`);
   expect(reply).toContain('aria-label="Copy Code"');
