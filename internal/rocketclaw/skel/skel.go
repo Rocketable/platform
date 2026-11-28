@@ -597,18 +597,6 @@ func gitOverlaySlug(url, ref string) string {
 }
 
 func resetRuntimeDirectory(target, aside string, logger *slog.Logger, preserveOverlays bool) error {
-	preserved := map[string]struct{}{
-		".rocketcode":    {},
-		"attachments":    {},
-		"sandbox":        {},
-		"uploads":        {},
-		"auth.json":      {},
-		"auth.json.lock": {},
-	}
-	if preserveOverlays {
-		preserved[overlaysRoot] = struct{}{}
-	}
-
 	info, err := os.Stat(target)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -628,14 +616,17 @@ func resetRuntimeDirectory(target, aside string, logger *slog.Logger, preserveOv
 	}
 
 	for _, entry := range entries {
-		if _, ok := preserved[entry.Name()]; ok || strings.HasPrefix(entry.Name(), ".auth.json-") {
-			logger.Debug("preserved rocketclaw target entry", "path", filepath.Join(target, entry.Name()))
+		name := entry.Name()
+
+		path := filepath.Join(target, name)
+		if slices.Contains([]string{".rocketcode", "attachments", "sandbox", "uploads", "auth.json", "auth.json.lock"}, name) ||
+			preserveOverlays && name == overlaysRoot || strings.HasPrefix(name, ".auth.json-") {
+			logger.Debug("preserved rocketclaw target entry", "path", path)
 			continue
 		}
 
-		path := filepath.Join(target, entry.Name())
 		if aside != "" {
-			if err := os.Rename(path, filepath.Join(aside, entry.Name())); err != nil {
+			if err := os.Rename(path, filepath.Join(aside, name)); err != nil {
 				return fmt.Errorf("move rocketclaw target entry %s aside: %w", path, err)
 			}
 		} else if err := os.RemoveAll(path); err != nil {
