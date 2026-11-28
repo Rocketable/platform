@@ -80,7 +80,6 @@ function PreviewAction({ reference }: { reference: GitHubPR }) {
     const close = () => setOpen(false);
     window.addEventListener("popstate", close);
     window.addEventListener("pagehide", close);
-    // A cached conversation can stay mounted while its app tab is hidden.
     const observer = new MutationObserver(() => { if (!trigger.current?.checkVisibility()) close(); });
     for (let node = trigger.current?.parentElement; node; node = node.parentElement) observer.observe(node, { attributes: true, attributeFilter: ["hidden", "style", "class"] });
     return () => {
@@ -106,7 +105,6 @@ function usePreview(reference: GitHubPR, source?: OpenCodePRSource, refresh = 0)
   useEffect(() => {
     const request = new AbortController();
     controller.current = request;
-    // A refresh keeps the PR in place until its new copy arrives, and keeps it if reading fails.
     void loadPR(reference, token.current, request.signal, source).then((pr) => {
       if (!request.signal.aborted) setResult({ pr, ...unread, loading: false });
     }).catch((error: unknown) => {
@@ -149,7 +147,6 @@ function Preview({ reference, close }: { reference: GitHubPR; close: () => void 
   const [layout, setLayout] = useState<Layout>("Side panel");
   const state = usePreview(reference);
   const inlineFocus = useRef<HTMLSpanElement>(null);
-  // Let the departing popup return focus before transferring it to the inline region.
   useEffect(() => { if (layout === "Inline") queueMicrotask(() => inlineFocus.current?.focus()); }, [layout]);
   const controls = <span className="flex flex-wrap items-center gap-2">
     <Select value={layout} onValueChange={(value) => setLayout(value as Layout)}>
@@ -192,8 +189,6 @@ function PreviewBody({ reference, state, close, source, composer }: { reference:
   </span>;
 }
 
-// Visual reference: t3code apps/web/src/components/pullRequest/PullRequestDetailLayout.tsx
-// at 1d61dd3: title, actor/time, base ← head and counts above a segmented tab bar.
 function PreviewDetails({ reference, pr, state, composer }: { reference: GitHubPR; pr: PullRequest; state: ReturnType<typeof usePreview>; composer: PRComposer }) {
   const { result, load, idle, tab, setTab } = state;
   const description = useRef<HTMLSpanElement>(null);
