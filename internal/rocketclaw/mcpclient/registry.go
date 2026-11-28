@@ -69,37 +69,26 @@ func (r Registry) Open() *Session {
 	return &Session{reg: r, conns: make(map[string]*mcp.ClientSession)}
 }
 
-type ToolInfo struct {
-	Name        string
-	Description string
-	InputSchema map[string]any
-}
-
 type Session struct {
 	reg   Registry
 	mu    sync.Mutex
 	conns map[string]*mcp.ClientSession
 }
 
-func (s *Session) ListTools(ctx context.Context, server string) ([]ToolInfo, error) {
+func (s *Session) ListTools(ctx context.Context, server string) ([]*mcp.Tool, error) {
 	cs, err := s.connect(ctx, server)
 	if err != nil {
 		return nil, err
 	}
 
-	var out []ToolInfo
+	var out []*mcp.Tool
 
 	for tool, err := range cs.Tools(ctx, nil) {
 		if err != nil {
 			return nil, fmt.Errorf("list tools on %q: %w", server, err)
 		}
 
-		schema, _ := tool.InputSchema.(map[string]any)
-		out = append(out, ToolInfo{
-			Name:        tool.Name,
-			Description: tool.Description,
-			InputSchema: schema,
-		})
+		out = append(out, tool)
 	}
 
 	return out, nil
@@ -292,21 +281,12 @@ func flattenCallToolResult(result *mcp.CallToolResult) (string, error) {
 
 	text := b.String()
 
-	isError := result.IsError
 	if text == "" && result.StructuredContent != nil {
-		data, err := json.Marshal(result.StructuredContent)
-		if err != nil {
-			if isError {
-				return "", fmt.Errorf("mcp tool error: %w", err)
-			}
-
-			return "", fmt.Errorf("marshal structured content: %w", err)
-		}
-
+		data, _ := json.Marshal(result.StructuredContent)
 		text = string(data)
 	}
 
-	if isError {
+	if result.IsError {
 		return "", errors.New(cmp.Or(text, "mcp tool error"))
 	}
 

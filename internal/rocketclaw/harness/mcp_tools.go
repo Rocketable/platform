@@ -226,11 +226,12 @@ func listAllowedTools(ctx context.Context, session *mcpclient.Session, permissio
 					continue
 				}
 
+				schema, _ := info.InputSchema.(map[string]any)
 				results[i].tools = append(results[i].tools, codemode.ToolDesc{
 					Server:      server,
 					Name:        info.Name,
 					Description: info.Description,
-					InputSchema: info.InputSchema,
+					InputSchema: schema,
 				})
 			}
 
