@@ -3075,7 +3075,8 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   }, [mode]);
   // Leaving session search for routines or folders swaps the input, so each mode focuses its own.
   useLayoutEffect(() => { if (mode !== undefined) input.current?.focus(); }, [mode]);
-  const active = useRef<HTMLButtonElement>(null);
+  const active = useRef<HTMLButtonElement>(null), list = useRef<HTMLUListElement>(null);
+  useLayoutEffect(() => { list.current?.scrollTo({ top: 0, left: 0, behavior: "instant" }); }, [mode, query]);
   const { search, filtered, free, matches, rows } = usePaletteSessions(query, mode === "sessions", entered);
   const jobs = useQuery({ ...queries.routines(), staleTime: 10_000, enabled: mode === "commands" || mode === "routine" || mode === "timeline" });
   const runRoutine = useMutation({
@@ -3090,9 +3091,9 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
     },
   });
   // The folder picker leaves session search, so typed folders are never sent as a search.
-  const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(""); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent, opencode);
+  const { alert: remoteAlert, commands: remoteCommands, copy, empty: remoteEmpty, pick: pickRemote } = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(""); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent, opencode);
   const routines = routineInSpace(jobs.data, useInSpace());
-  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, routines, newChat, tabs, (next) => { setQuery(""); setPick(""); setMode(next); }, (stem) => runRoutine.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...tree, ...commands, ...tabCommands, ...spaceCommands, ...keyCommands, ...attention ? [{ key: "attention-next", label: "Sessions: Next needing you", run: attention }] : [], ...timeline, ...outputs], recent, origin.space));
+  const items = mode === undefined ? [] : pickRemote(() => paletteRows(mode, query.trim(), rows, routines, newChat, tabs, (next) => { setQuery(""); setPick(""); setMode(next); }, (stem) => runRoutine.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remoteCommands, ...tree, ...commands, ...tabCommands, ...spaceCommands, ...keyCommands, ...attention ? [{ key: "attention-next", label: "Sessions: Next needing you", run: attention }] : [], ...timeline, ...outputs], recent, origin.space));
   // Draw more rows only as scrolling or the keyboard needs them; every choice stays reachable.
   const { shown, next, selected, handoffsOnly } = usePalettePage(items, pick, `${mode}:${query}`);
   const choose = (item: (typeof items)[number]) => {
@@ -3108,7 +3109,6 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
     item.run();
   };
   useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [selected, mode]);
-  const copy = remote.copy;
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     const next = paletteMove(event, selected, items.length, () => {
       const item = items[selected];
@@ -3136,10 +3136,10 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
           onKeyDown={onKeyDown}
         />}
         {runRoutine.error || actions.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runRoutine.error ?? actions.error)?.message}</p> : null}
-        {remote.alert}
+        {remoteAlert}
         {mode === "sessions" ? <div className="px-3 text-sm empty:hidden"><SearchStatus search={search} /></div> : null}
-        <ul key={`${mode}:${query}`} data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
-          {handoffsOnly ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading, remote.empty)}</li> : null}
+        <ul key={mode} ref={list} data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
+          {handoffsOnly ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading, remoteEmpty)}</li> : null}
           {shown.map((item, index) => (
             <li key={item.key}>
               <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", item.session ? "py-2" : "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11", item.session && search.pending && "opacity-50", index === selected && "bg-accent")} onMouseDown={(event) => { event.preventDefault(); if (!item.session) peek(); }} onClick={() => choose(item)}>
