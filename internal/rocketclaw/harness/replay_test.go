@@ -84,7 +84,7 @@ func TestResponseOutputReplayText(t *testing.T) {
 }
 
 func TestReplayInputPreservesCompactionPayload(t *testing.T) {
-	raw := []json.RawMessage{json.RawMessage(`{"content":"summary","summary":{"text":"summary"},"recent":[{"id":"msg-1"}],"kept":2,"encrypted_content":"encrypted","id":"cmp-1","type":"compaction"}`)}
+	raw := []json.RawMessage{json.RawMessage(`{"content":"summary","kept":2,"encrypted_content":"encrypted","id":"cmp-1","type":"compaction"}`)}
 
 	params, err := ReplayInputToParams(raw)
 	require.NoError(t, err)

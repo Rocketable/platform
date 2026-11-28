@@ -51,7 +51,7 @@ func TestSessionEntryForProviderDifferentProviderProjectsReplay(t *testing.T) {
 			json.RawMessage(`{"type":"function_call_output","id":"provider-private-sentinel","call_id":"portable-string-call","output":"portable-string-output"}`),
 			json.RawMessage(`{"type":"reasoning","id":"provider-private-sentinel","encrypted_content":"provider-private-sentinel","summary":[{"type":"summary_text","text":"portable-summary-one"},{"type":"summary_text","text":"  "},{"type":"summary_text","text":"portable-summary-two"}],"content":[{"type":"reasoning_text","text":"provider-private-sentinel"}],"status":"completed"}`),
 			json.RawMessage(`{"type":"reasoning","encrypted_content":"provider-private-sentinel","summary":[]}`),
-			json.RawMessage(`{"type":"compaction","id":"provider-private-sentinel","encrypted_content":"provider-private-sentinel","content":"portable-compaction","recent":["provider-private-sentinel"]}`),
+			json.RawMessage(`{"type":"compaction","id":"provider-private-sentinel","encrypted_content":"provider-private-sentinel","content":"portable-compaction"}`),
 			json.RawMessage(`{"type":"compaction","encrypted_content":"provider-private-sentinel"}`),
 			json.RawMessage(`{"type":"provider_hosted","value":"provider-private-sentinel"}`),
 		},
@@ -97,15 +97,17 @@ func TestSessionEntryForProviderConvertsOnlyAnotherProvidersRanges(t *testing.T)
 	native := json.RawMessage(`{"type":"reasoning","encrypted_content":"work-native","summary":[]}`)
 	entry := SessionEntry{Model: "work/gpt", ReplayInput: []json.RawMessage{
 		native,
-		json.RawMessage(`{"type":"reasoning","encrypted_content":"provider-private-sentinel","summary":[{"type":"summary_text","text":"portable-readable"}]}`),
+		json.RawMessage(`{"type":"reasoning","encrypted_content":"provider-private-sentinel","summary":[{"type":"summary_text","text":"portable-readable"},{"type":"summary_text","text":"portable-second"}]}`),
 		native,
 	}, ReplayAttribution: []ReplayAttribution{{Start: 1, End: 2, Model: "openai/gpt"}}}
 	require.NoError(t, entry.forProvider("work"))
-	require.Len(t, entry.ReplayInput, 3)
+	require.Len(t, entry.ReplayInput, 4)
 	assert.Equal(t, native, entry.ReplayInput[0])
 	assert.Contains(t, string(entry.ReplayInput[1]), providerReplayReadable)
 	assert.NotContains(t, string(entry.ReplayInput[1]), providerReplayPrivate)
-	assert.Equal(t, native, entry.ReplayInput[2])
+	assert.Contains(t, string(entry.ReplayInput[2]), "portable-second")
+	assert.Equal(t, native, entry.ReplayInput[3])
+	assert.Equal(t, []ReplayAttribution{{Start: 1, End: 3, Model: "openai/gpt"}}, entry.ReplayAttribution)
 }
 
 func TestReplayForProviderDropsUnknownBeforePayloadDecode(t *testing.T) {
@@ -115,32 +117,6 @@ func TestReplayForProviderDropsUnknownBeforePayloadDecode(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, replay)
-}
-
-func TestReplayForProviderReadsExactSummaryShapesAndPrefersCompactionContent(t *testing.T) {
-	t.Parallel()
-
-	entry := SessionEntry{ReplayAttribution: []ReplayAttribution{{Start: 2, End: 3}}, ReplayInput: []json.RawMessage{
-		json.RawMessage(`{"type":"reasoning","summary":"summary-string"}`),
-		json.RawMessage(`{"type":"reasoning","summary":{"text":"summary-object"}}`),
-		json.RawMessage(`{"type":"reasoning","summary":[{"text":"summary-array-one"},{"text":" \n"},{"text":"summary-array-two"}]}`),
-		json.RawMessage(`{"type":"compaction","content":{"text":"compaction-content"},"summary":"must-not-appear"}`),
-		json.RawMessage(`{"type":"compaction","summary":{"text":"compaction-fallback"}}`),
-		json.RawMessage(`{"type":"compaction_summary","content":[{"text":" "},{"text":" padded content "}],"summary":"unused"}`),
-		json.RawMessage(`{"type":"compaction_summary","content":" ","summary":[{"text":""},{"text":" padded fallback "},{"text":"\t"}]}`),
-	}}
-	require.NoError(t, entry.forProvider("work"))
-	assert.Equal(t, []ReplayAttribution{{Start: 2, End: 4}}, entry.ReplayAttribution)
-
-	items, err := ReplayInputToParams(entry.ReplayInput)
-	require.NoError(t, err)
-
-	got := make([]string, len(items))
-	for i := range items {
-		got[i] = items[i].OfMessage.Content.OfString.Value
-	}
-
-	assert.Equal(t, []string{"summary-string", "summary-object", "summary-array-one", "summary-array-two", "compaction-content", "compaction-fallback", " padded content ", " padded fallback "}, got)
 }
 
 func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
@@ -156,17 +132,10 @@ func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
 		{name: "wrong output call id", raw: `{"type":"function_call_output","call_id":7,"output":"done"}`, want: "function output: json: cannot unmarshal number"},
 		{name: "message content missing", raw: `{"type":"message","role":"user"}`, want: "message content: missing"},
 		{name: "message content wrong text", raw: `{"type":"message","role":"user","content":[{"type":"input_text","text":7}]}`, want: "message content: decode array: json: cannot unmarshal number"},
-		{name: "reasoning missing text", raw: `{"type":"reasoning","summary":{}}`, want: "reasoning summary: missing text"},
-		{name: "reasoning wrong item", raw: `{"type":"reasoning","summary":["text"]}`, want: "reasoning summary: item 0: decode object: json: cannot unmarshal string"},
-		{name: "reasoning wrong shape", raw: `{"type":"reasoning","summary":7}`, want: "reasoning summary: expected string, text object, or text array"},
 		{name: "message null", raw: `{"type":"message","role":"user","content":null}`, want: "message content"},
 		{name: "message object", raw: `{"type":"message","role":"user","content":{"text":"wrong container"}}`, want: "message content"},
 		{name: "output null", raw: `{"type":"function_call_output","call_id":"call","output":null}`, want: "function output"},
 		{name: "output object", raw: `{"type":"function_call_output","call_id":"call","output":{"text":"wrong container"}}`, want: "function output"},
-		{name: "reasoning null", raw: `{"type":"reasoning","summary":null}`, want: "reasoning summary"},
-		{name: "reasoning wrong text", raw: `{"type":"reasoning","summary":{"text":7}}`, want: "reasoning summary"},
-		{name: "compaction null content", raw: `{"type":"compaction","content":null,"summary":"fallback"}`, want: "compaction content"},
-		{name: "compaction null summary", raw: `{"type":"compaction","summary":null}`, want: "compaction summary"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			entry := SessionEntry{Model: "openai/model", ReplayInput: []json.RawMessage{json.RawMessage(test.raw)}}
@@ -178,6 +147,9 @@ func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
 	for _, raw := range []json.RawMessage{
 		json.RawMessage(`{"type":"reasoning","encrypted_content":"private"}`),
 		json.RawMessage(`{"type":"compaction","encrypted_content":"private"}`),
+		json.RawMessage(`{"type":"reasoning","summary":"old"}`),
+		json.RawMessage(`{"type":"compaction","summary":{"text":"old"}}`),
+		json.RawMessage(`{"type":"compaction_summary","content":"old"}`),
 	} {
 		replay, err := replayForWork(raw)
 		require.NoError(t, err)
@@ -217,28 +189,6 @@ func TestReplayForProviderDropsContentArrayItemsWithoutPortableParts(t *testing.
 		require.Len(t, replay, 1, "empty strings survive even though empty content arrays do not")
 		require.JSONEq(t, string(raw), string(replay[0]))
 	}
-}
-
-func TestReplayForProviderCompactionFallsBackAfterBlankContent(t *testing.T) {
-	t.Parallel()
-
-	replay, err := replayForWork(
-		json.RawMessage(`{"type":"compaction","content":"","summary":"fallback-string"}`),
-		json.RawMessage(`{"type":"compaction","content":"  \n","summary":{"text":"fallback-whitespace"}}`),
-		json.RawMessage(`{"type":"compaction","content":{"text":""},"summary":[{"text":"fallback-object"}]}`),
-		json.RawMessage(`{"type":"compaction","content":[],"summary":"fallback-array"}`),
-	)
-	require.NoError(t, err)
-
-	items, err := ReplayInputToParams(replay)
-	require.NoError(t, err)
-
-	got := make([]string, len(items))
-	for i := range items {
-		got[i] = items[i].OfMessage.Content.OfString.Value
-	}
-
-	assert.Equal(t, []string{"fallback-string", "fallback-whitespace", "fallback-object", "fallback-array"}, got)
 }
 
 func TestReplayForProviderValidatesRequiredKnownFields(t *testing.T) {

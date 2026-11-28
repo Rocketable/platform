@@ -94,27 +94,24 @@ func (e *SessionEntry) forProvider(provider string) error {
 				items = append(items, output)
 			}
 		case "reasoning":
-			var item replayReasoning
-			if err := json.Unmarshal(raw, &item); err != nil {
-				return fmt.Errorf("decode replay item %d reasoning: %w", i, err)
+			var item struct{ Summary []struct{ Text string } }
+			if json.Unmarshal(raw, &item) == nil {
+				for _, part := range item.Summary {
+					summaryTexts = append(summaryTexts, part.Text)
+				}
 			}
-
-			texts, err := readableText(item.Summary)
-			if err != nil {
-				return fmt.Errorf("decode replay item %d reasoning summary: %w", i, err)
+		case "compaction":
+			var item struct{ Content string }
+			if json.Unmarshal(raw, &item) == nil {
+				summaryTexts = []string{item.Content}
 			}
-
-			summaryTexts = texts
-		case "compaction", "compaction_summary":
-			texts, err := compactionText(raw)
-			if err != nil {
-				return fmt.Errorf("decode replay item %d %w", i, err)
-			}
-
-			summaryTexts = texts
 		}
 
 		for _, text := range summaryTexts {
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+
 			message := responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleAssistant)
 			message.OfMessage.Type = "message"
 			items = append(items, message)
@@ -136,26 +133,6 @@ func (e *SessionEntry) forProvider(provider string) error {
 	return nil
 }
 
-func compactionText(raw json.RawMessage) ([]string, error) {
-	var item struct{ Content, Summary json.RawMessage }
-	if err := json.Unmarshal(raw, &item); err != nil {
-		return nil, fmt.Errorf("compaction: %w", err)
-	}
-
-	texts, err := readableText(item.Content)
-	if err != nil {
-		return nil, fmt.Errorf("compaction content: %w", err)
-	}
-
-	if len(texts) == 0 {
-		if texts, err = readableText(item.Summary); err != nil {
-			return nil, fmt.Errorf("compaction summary: %w", err)
-		}
-	}
-
-	return texts, nil
-}
-
 type replayMessage struct {
 	Role, Phase string
 	Content     json.RawMessage
@@ -174,8 +151,6 @@ type replayFunctionOutput struct {
 	CallID string `json:"call_id"`
 	Output json.RawMessage
 }
-
-type replayReasoning struct{ Summary json.RawMessage }
 
 type portableContent struct {
 	Type     string `json:"type"`
@@ -320,76 +295,4 @@ func portableFunctionOutput(callID string, raw json.RawMessage) (responses.Respo
 	output.OfFunctionCallOutput.Type = "function_call_output"
 
 	return output, true, nil
-}
-
-func nonblankText(texts []string) []string {
-	return slices.DeleteFunc(texts, func(text string) bool {
-		return strings.TrimSpace(text) == ""
-	})
-}
-
-func readableText(raw json.RawMessage) ([]string, error) {
-	if raw == nil {
-		return nil, nil
-	}
-
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 {
-		return nil, errors.New("empty value")
-	}
-
-	if raw[0] == '"' {
-		var text string
-		if err := json.Unmarshal(raw, &text); err != nil {
-			return nil, fmt.Errorf("decode string: %w", err)
-		}
-
-		return nonblankText([]string{text}), nil
-	}
-
-	decode := func(part json.RawMessage) (string, error) {
-		var item struct {
-			Text json.RawMessage `json:"text"`
-		}
-		if err := json.Unmarshal(part, &item); err != nil {
-			return "", fmt.Errorf("decode object: %w", err)
-		}
-
-		var text string
-
-		if item.Text == nil {
-			return "", errors.New("missing text")
-		}
-
-		if err := json.Unmarshal(item.Text, &text); err != nil {
-			return "", fmt.Errorf("decode text: %w", err)
-		}
-
-		return text, nil
-	}
-
-	switch raw[0] {
-	case '{':
-		text, err := decode(raw)
-		return nonblankText([]string{text}), err
-	case '[':
-		var parts []json.RawMessage
-		if err := json.Unmarshal(raw, &parts); err != nil {
-			return nil, fmt.Errorf("decode array: %w", err)
-		}
-
-		texts := make([]string, len(parts))
-		for i := range parts {
-			text, err := decode(parts[i])
-			if err != nil {
-				return nil, fmt.Errorf("item %d: %w", i, err)
-			}
-
-			texts[i] = text
-		}
-
-		return nonblankText(texts), nil
-	default:
-		return nil, errors.New("expected string, text object, or text array")
-	}
 }

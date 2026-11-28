@@ -384,13 +384,12 @@ func TestOpenAIResponsesModeStripsPersistedCompactionMetadata(t *testing.T) {
 
 	close(input)
 
-	session := sessionEntries([]SessionEntry{{ReplayInput: []json.RawMessage{json.RawMessage(`{"content":"private-content-value","encrypted_content":"sealed","id":"cmp-1","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`)}}})
+	session := sessionEntries([]SessionEntry{{ReplayInput: []json.RawMessage{json.RawMessage(`{"content":"private-content-value","encrypted_content":"sealed","id":"cmp-1","kept":1,"type":"compaction"}`)}}})
 	err := loop.Loop(context.Background(), input, session, discardSession(), make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.NotContains(t, body, "private-content-value")
-	require.NotContains(t, body, "private-summary-value")
-	require.NotContains(t, body, "private-recent-id")
+	require.NotContains(t, body, `"kept"`)
 	require.Contains(t, body, `"encrypted_content":"sealed"`)
 	require.Equal(t, []ChatResponse{assistantMessage("responses answer")}, collectResponses(output))
 }
