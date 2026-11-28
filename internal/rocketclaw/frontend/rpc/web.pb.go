@@ -10294,11 +10294,12 @@ func (x *Space) GetName() string {
 
 // One of a person's Web tabs: its location, group, and space ids, and a Search page's content.
 type Tab struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	Group         string                 `protobuf:"bytes,4,opt,name=group,proto3" json:"group,omitempty"`
-	Space         string                 `protobuf:"bytes,5,opt,name=space,proto3" json:"space,omitempty"`
-	Search        *SearchPage            `protobuf:"bytes,6,opt,name=search,proto3" json:"search,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// path is the tab's location, such as /s/<id> or /oc/<id> with the session ID in unpadded URL-safe base64.
+	Path          string      `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Group         string      `protobuf:"bytes,4,opt,name=group,proto3" json:"group,omitempty"`
+	Space         string      `protobuf:"bytes,5,opt,name=space,proto3" json:"space,omitempty"`
+	Search        *SearchPage `protobuf:"bytes,6,opt,name=search,proto3" json:"search,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -10630,11 +10631,12 @@ func (x *TabState) GetSharedOrder() []string {
 }
 
 type ListTab struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	List          string                 `protobuf:"bytes,1,opt,name=list,proto3" json:"list,omitempty"`
-	Server        string                 `protobuf:"bytes,2,opt,name=server,proto3" json:"server,omitempty"`
-	Path          string                 `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
-	Space         string                 `protobuf:"bytes,4,opt,name=space,proto3" json:"space,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	List   string                 `protobuf:"bytes,1,opt,name=list,proto3" json:"list,omitempty"`
+	Server string                 `protobuf:"bytes,2,opt,name=server,proto3" json:"server,omitempty"`
+	// path is the tab's location, such as /s/<id> or /oc/<id> with the session ID in unpadded URL-safe base64.
+	Path          string `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	Space         string `protobuf:"bytes,4,opt,name=space,proto3" json:"space,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -10702,7 +10704,8 @@ func (x *ListTab) GetSpace() string {
 type SharedTab struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Space string                 `protobuf:"bytes,1,opt,name=space,proto3" json:"space,omitempty"`
-	Path  string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// path is the tab's location, such as /s/<id> or /oc/<id> with the session ID in unpadded URL-safe base64.
+	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	// A Search tab's one page, which everyone in the space sees and edits.
 	Search *SearchPage `protobuf:"bytes,3,opt,name=search,proto3" json:"search,omitempty"`
 	// base is, in edit_shared, the page the edit was made from; an edit of a page that changed since is refused as stale.
@@ -10825,11 +10828,12 @@ func (x *StripLayout) GetOrder() []string {
 
 // AttentionChange does action to the caller's attention on the tab locations paths. until is an RFC 3339 time.
 type AttentionChange struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Paths         []string               `protobuf:"bytes,1,rep,name=paths,proto3" json:"paths,omitempty"`
-	Action        AttentionAction        `protobuf:"varint,2,opt,name=action,proto3,enum=rpc.AttentionAction" json:"action,omitempty"`
-	Until         string                 `protobuf:"bytes,3,opt,name=until,proto3" json:"until,omitempty"`
-	Admitted      int64                  `protobuf:"varint,4,opt,name=admitted,proto3" json:"admitted,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// paths are tab locations, such as /s/<id> or /oc/<id> with the session ID in unpadded URL-safe base64.
+	Paths         []string        `protobuf:"bytes,1,rep,name=paths,proto3" json:"paths,omitempty"`
+	Action        AttentionAction `protobuf:"varint,2,opt,name=action,proto3,enum=rpc.AttentionAction" json:"action,omitempty"`
+	Until         string          `protobuf:"bytes,3,opt,name=until,proto3" json:"until,omitempty"`
+	Admitted      int64           `protobuf:"varint,4,opt,name=admitted,proto3" json:"admitted,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

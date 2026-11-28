@@ -340,11 +340,11 @@ func TestRoutineRunEndMarksRoutineTabs(t *testing.T) {
 	require.NoError(t, err)
 
 	mainID, ops := spaces[0].ID, spaces[1].ID
-	routine, typed, shared := routineTabPath("marketing · 30m"), "/routines/marketing%20%C2%B7%2030m", "/routines/marketing · 30m"
+	routine := routineTabPath("marketing · 30m")
 
 	for person, tabs := range map[string][]Tab{
 		alice: {{Path: routine, Space: mainID}, {Path: "/routines", Space: ops}, {Path: routineTabPath("daily · 1h"), Space: mainID}},
-		bob:   {{Path: typed, Space: mainID}, {Path: "/routines", Space: mainID}},
+		bob:   {{Path: "/routines", Space: mainID}},
 		carol: {{Path: routine, Space: ops}, {Path: "/routines/daily", Space: ops}},
 		dave:  {{Path: routine, Space: mainID}, {Path: "/routines", Space: mainID}},
 	} {
@@ -353,7 +353,7 @@ func TestRoutineRunEndMarksRoutineTabs(t *testing.T) {
 		require.True(t, saved)
 	}
 
-	require.NoError(t, service.ShareTab(ctx, mainID, shared, nil))
+	require.NoError(t, service.ShareTab(ctx, mainID, routine, nil))
 
 	runEnds := func(runID, path, space string) []string {
 		t.Helper()
@@ -371,9 +371,7 @@ func TestRoutineRunEndMarksRoutineTabs(t *testing.T) {
 	}
 
 	assert.ElementsMatch(t, []string{
-		alice + " /routines loud", alice + " " + shared + " loud", alice + " " + routine + " loud",
-		bob + " " + shared + " loud", bob + " " + typed + " loud",
-		carol + " " + routine + " loud",
+		alice + " /routines loud", alice + " " + routine + " loud", bob + " " + routine + " loud", carol + " " + routine + " loud",
 	}, runEnds("cron:marketing", "agents/marketing.md#30m", "Ops"))
 
 	assert.ElementsMatch(t, []string{alice + " /routines loud", alice + " " + routineTabPath("daily · 1h") + " loud", bob + " /routines loud"},

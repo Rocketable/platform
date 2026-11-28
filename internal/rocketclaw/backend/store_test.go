@@ -2570,12 +2570,12 @@ func TestWebSharedTabs(t *testing.T) {
 	}
 
 	share("main", "/search")
-	share("main", "/s/a")
+	share("main", "/s/YQ")
 	share("main", "/search")
 	share("main", "/s/bm9uZQ")
 	share("gone", "/cron")
 	assert.Equal(t, []Tab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/s/YQ"}}, shared(),
-		"oldest first; a legacy spelling is stored canonical; sharing again, a missing session, or a missing space changes nothing")
+		"oldest first; sharing again, a missing session, or a missing space changes nothing")
 
 	share(ops, "/cron")
 	share(ops, "/s/YQ")
@@ -2740,10 +2740,10 @@ func TestWebClosedTabs(t *testing.T) {
 	page := &SearchPage{Name: "Triage", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}}}
 	a, b, cron, search := Tab{Path: "/s/YQ", Space: "main"}, Tab{Path: "/s/Yg", Space: "ops"}, Tab{Path: "/cron", Space: "main"}, Tab{Path: "/search/x", Space: "main", Search: page}
 	save("alice", Tab{Path: "/", Space: "main"}, Tab{Path: "group:g", Group: "g", Space: "main"}, a, b, search, cron)
-	save("alice", Tab{Path: "/s/a", Space: "main"}, b, search)
-	save("alice", Tab{Path: "/s/a", Space: "main"}, b)
+	save("alice", a, b, search)
+	save("alice", a, b)
 	assert.Equal(t, []string{"/search/x main true", "/cron main false"}, closed("alice"),
-		"newest closed first, keeping space and page; New session, a kept group's placeholder, and a tab saved under another spelling are not closed")
+		"newest closed first, keeping space and page; New session and a kept group's placeholder are not closed")
 
 	tabs, err := store.ClosedTabs(ctx, "alice")
 	require.NoError(t, err)
@@ -2831,8 +2831,8 @@ func TestWebTabLists(t *testing.T) {
 	add("alice", RecentList, ListTab{Path: "/cron", Space: "main"})
 	assert.Equal(t, []string{" /cron main", "lab /s/Yg ops", " /s/YQ main"}, listed("alice", RecentList), "a new tab is born on top, on every server")
 
-	add("alice", RecentList, ListTab{Path: "/s/a", Space: "ops"})
-	assert.Equal(t, []string{" /cron main", "lab /s/Yg ops", " /s/YQ ops"}, listed("alice", RecentList), "adding a listed tab under another spelling keeps its place and takes its new space")
+	add("alice", RecentList, ListTab{Path: "/s/YQ", Space: "ops"})
+	assert.Equal(t, []string{" /cron main", "lab /s/Yg ops", " /s/YQ ops"}, listed("alice", RecentList), "adding a listed tab again keeps its place and takes its new space")
 	assert.Empty(t, listed("bob", RecentList), "each person's lists are their own")
 
 	add("alice", ParkedList, ListTab{Path: "/cron", Space: "main"})

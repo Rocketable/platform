@@ -1584,7 +1584,7 @@ export async function appScenario(part: "lists" | "composer") {
       await timelinePage.getByRole("dialog", { name: "Run daily?", exact: true }).getByRole("button", { name: "Run", exact: true }).click();
       await timelinePage.waitForURL("**/s/bmV3LWNyb24tY2hhdA");
       expect(routineRunCalls).toBe(2);
-      await timelinePage.goto(`${origin}/routines/${btoa("nope")}`);
+      await timelinePage.goto(`${origin}/routines/${btoa("nope").replaceAll("=", "")}`);
       await timelinePage.getByText("No routine named nope in this space.", { exact: true }).waitFor();
       await timelinePage.close();
       jobs.splice(-130);

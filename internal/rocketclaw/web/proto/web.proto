@@ -1213,6 +1213,7 @@ message Tab {
   reserved 2, 3;
   reserved "pinned", "preview";
 
+  // path is the tab's location, such as /s/<id> or /oc/<id> with the session ID in unpadded URL-safe base64.
   string path = 1;
   string group = 4;
   string space = 5;
@@ -1258,6 +1259,7 @@ message TabState {
 message ListTab {
   string list = 1;
   string server = 2;
+  // path is the tab's location, such as /s/<id> or /oc/<id> with the session ID in unpadded URL-safe base64.
   string path = 3;
   string space = 4;
 }
@@ -1266,6 +1268,7 @@ message ListTab {
 // Search tab its one page.
 message SharedTab {
   string space = 1;
+  // path is the tab's location, such as /s/<id> or /oc/<id> with the session ID in unpadded URL-safe base64.
   string path = 2;
   // A Search tab's one page, which everyone in the space sees and edits.
   SearchPage search = 3;
@@ -1305,6 +1308,7 @@ enum AttentionAction {
 
 // AttentionChange does action to the caller's attention on the tab locations paths. until is an RFC 3339 time.
 message AttentionChange {
+  // paths are tab locations, such as /s/<id> or /oc/<id> with the session ID in unpadded URL-safe base64.
   repeated string paths = 1;
   AttentionAction action = 2;
   string until = 3;

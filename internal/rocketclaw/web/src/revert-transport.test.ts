@@ -10,7 +10,7 @@ test("real HTTP Revert commits only retained context and converges across viewer
     const url = process.env.ROCKETCLAW_REVERT_TEST_URL!;
     const errors: string[] = [];
     for (const page of [first, second]) page.on("pageerror", (error: Error) => errors.push(error.message));
-    await Promise.all([first.goto(`${url}/s/${btoa("chat")}`), second.goto(`${url}/s/${btoa("chat")}`)]);
+    await Promise.all([first.goto(`${url}/s/${btoa("chat").replaceAll("=", "")}`), second.goto(`${url}/s/${btoa("chat").replaceAll("=", "")}`)]);
     await second.locator("textarea").fill("Other viewer draft");
     // Keep Chromium's animation frames active for the viewer receiving pointer actions.
     await first.bringToFront();
