@@ -62,6 +62,7 @@ test:
 
 test-files:
 	@test -n "$(TESTS)" || { echo 'name the files: make test-files TESTS="src/tabs.browser.test.ts"' >&2; exit 1; }
+	@! printf '%s\n' $(TESTS) | grep -e '-transport\.test\.ts$$' >&2 || { echo 'a Go test in ../frontend/rpc runs each *-transport.test.ts file above (grep runWebTest there): make -C .. coverage-profile GOTESTPKGS=./frontend/rpc GOTESTRUN=<that test>' >&2; exit 1; }
 	go -C .. generate ./internal/web
 	printf '%s\n' $(TESTS) | xargs -n 1 -P 4 bun test
 
