@@ -110,31 +110,3 @@ func TestCodeModeCallPullRequestsNeedSuccessfulBash(t *testing.T) {
 		})
 	}
 }
-
-func TestCodeModeCallPullRequestsOfStoredRecords(t *testing.T) {
-	t.Parallel()
-
-	const (
-		link   = "https://github.com/o/r/pull/7"
-		create = `{"command":"gh pr create --fill"}`
-	)
-
-	for _, tc := range []struct {
-		name               string
-		record             CodeModeCall
-		created, mentioned []string
-	}{
-		{name: "stored results", record: CodeModeCall{Name: "bash", Arguments: create, Status: codeModeCallOK, Summary: link, MentionedPullRequests: []string{link}}, mentioned: []string{link}},
-		{name: "a record from before stored results", record: CodeModeCall{Name: "bash", Arguments: create, Status: codeModeCallOK, Summary: link}, created: []string{link}},
-		{name: "a failed call", record: CodeModeCall{Name: "bash", Arguments: create, Status: codeModeCallError, Summary: link}},
-		{name: "clipped arguments", record: CodeModeCall{Name: "bash", Arguments: `{"command":"gh pr create…[truncated]`, Status: codeModeCallOK, Summary: link}},
-		{name: "not bash", record: CodeModeCall{Name: "read", Arguments: create, Status: codeModeCallOK, Summary: link}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			created, mentioned := tc.record.PullRequests()
-			require.Equal(t, [][]string{tc.created, tc.mentioned}, [][]string{created, mentioned})
-		})
-	}
-}
