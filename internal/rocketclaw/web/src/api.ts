@@ -13,8 +13,6 @@ export async function rpc<T>(method: string, input: object = {}, signal?: AbortS
   return body;
 }
 
-// Completion belongs to the transport, not the terminal snapshot's flag.
-// Read through EOF so errors after the terminal snapshot cannot commit a cache.
 export const listSessions = (url: string, signal?: AbortSignal) => sse<SessionBatch>(url, { signal });
 
 async function* sse<T>(url: string, init: RequestInit): AsyncGenerator<T> {
@@ -57,13 +55,9 @@ async function* sse<T>(url: string, init: RequestInit): AsyncGenerator<T> {
   }
 }
 
-// Queries belong to the page's server unless their key starts with the server they belong to.
 export const queryKeyHash = (key: QueryKey) => hashKey(typeof key[0] === "object" ? key : [server(), ...key]);
 
-// SearchSessions on every server, each match tagged with its server. A remote that fails drops out; the local
-// server's failure fails the search. Only the page's server gets page: a Search page's tab and search, which it runs on.
 export async function searchAll(servers: string[], input: object, signal: AbortSignal, page?: { tab: string; searchId?: string; entered: boolean; fresh?: boolean }): Promise<SearchSessionsResponse> {
-  // A remote gets 10 seconds, so one that is unreachable never holds up the others.
   const replies = await Promise.all(servers.map((name) => rpc<SearchSessionsResponse>("SearchSessions", name === server() ? { ...input, ...page } : input, name ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : signal, name).then(
     (reply) => ({ ...reply, matches: reply.matches.map((match) => ({ ...match, rocketclaw: name })), messages: reply.messages.map((match) => ({ ...match, rocketclaw: name })) }),
     (error: Error) => { if (name) return undefined; throw error; })));
@@ -103,7 +97,6 @@ export const mutations = {
   createSession: async ({ server: remote, ...input }: { name?: string; agent?: string; sourceConversationId?: string; opencodeServer?: string; directory?: string; spaceId?: string; server?: string }) => rpc<{ id: string; resumed?: boolean }>("CreateSession", input, undefined, remote),
   prompt: (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string; mentionIds?: string[] }, name = server()) => rpc<{ privateText?: string; mentionWarning?: string }>("Prompt", input, undefined, name),
   runRoutine: async (input: { stem: string }) => (await rpc<{ id: string }>("RunRoutine", input)).id,
-  // server names the RocketClaw the session is on, this one when unset.
   updateSession: ({ server: remote, ...input }: { id: string; name?: string; tag?: string; paused?: boolean; server?: string }) => rpc("UpdateSession", input, undefined, remote),
   removeQueueItem: (input: { id: string; itemId: string }) => rpc("RemoveQueueItem", input),
   steerQueueItem: (input: { id: string; itemId: string }) => rpc("SteerQueueItem", input),
