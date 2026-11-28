@@ -1,11 +1,8 @@
-// Every bun test run preloads this (bunfig.toml). It closes each browser a test launched once the test
-// ends, timed out or not: bun skips a timed-out test's finally blocks, and a browser left open outlives bun.
 import { afterEach, setDefaultTimeout } from "bun:test";
 import { readFileSync } from "node:fs";
 
 setDefaultTimeout(30_000);
 
-// Unit tests run page code without a page; it reads the local server's root page as its address.
 globalThis.location ??= new URL("http://localhost/") as unknown as Location;
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;

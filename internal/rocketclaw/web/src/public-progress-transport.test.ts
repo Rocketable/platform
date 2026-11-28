@@ -4,7 +4,6 @@ import { timelineLevels } from "./timeline-detail";
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 
-// Go's TestPublicProgressRealBrowser serves one App per provider ending.
 for (const final of ["short", "empty", "stop", "calls"]) test(`real Go HTTP App shows persisted progress before provider completion (${final})`, async () => {
   const url = process.env[`ROCKETCLAW_PUBLIC_TEST_URL_${final}`]!;
   const id = `owned-public-${final}`;
@@ -12,7 +11,6 @@ for (const final of ["short", "empty", "stop", "calls"]) test(`real Go HTTP App 
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 375, height: 700 } });
-    // Show each call on its own so the per-call lifecycle summaries stay visible.
     await page.addInitScript((rows: string) => localStorage.setItem("timeline-detail", rows), JSON.stringify({ version: 1, rows: timelineLevels.find((level) => level.id === "everything")!.rows }));
     await page.goto(`${url}/s/${Buffer.from(id).toString("base64url")}`);
     if (final === "calls") {
@@ -47,14 +45,12 @@ for (const final of ["short", "empty", "stop", "calls"]) test(`real Go HTTP App 
     expect(await log.locator('[data-slot="message"][data-message-id]').count()).toBe(0);
     expect(await log.innerText()).not.toContain("PRIVATE_SENTINEL");
     expect(await log.locator('[data-slot="trace-collapsible-trigger"]').count()).toBe(0);
-    // Both reload and a new browser page fetch the same committed row, with no
-    // terminal event and no test-built History responses or content-bearing hint.
     await page.reload();
     await log.getByText("Held public partial suffix", { exact: true }).waitFor();
     const reopened = await browser.newPage();
     await reopened.goto(page.url());
     await reopened.locator("#transcript-scroll").getByText("Held public partial suffix", { exact: true }).waitFor();
-    await reopened.getByRole("button", { name: "Stop", exact: true }).click({ trial: true }); // Wait for draft hydration without stopping.
+    await reopened.getByRole("button", { name: "Stop", exact: true }).click({ trial: true });
     expect(await reopened.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
     if (final === "stop") {
       await page.getByRole("button", { name: "Stop", exact: true }).click();
