@@ -13,8 +13,6 @@ import { setPreference, usePreference } from "./transcript-text";
 const unavailable = "Patch unavailable (binary, too large, or omitted by GitHub).";
 const TREE_KEY = "pull-request-file-tree";
 
-// Layout reference: t3code apps/web/src/components/pullRequest/PullRequestCodeTab.tsx
-// at 1d61dd3: one diff scroller, with the file tree on its right and below it on narrow panes.
 export function PRCode({ files, more, reference, composer }: { files: PRFile[]; more?: () => void; reference: GitHubPR; composer: PRComposer }) {
   const [style, setStyle] = useState<"unified" | "split">("unified");
   const tree = usePreference(TREE_KEY) === "true";
@@ -52,7 +50,6 @@ export function PRCode({ files, more, reference, composer }: { files: PRFile[]; 
       if (existing) return existing;
       try {
         if (file.patch) {
-          // GitHub returns hunk text without file headers. Fixed names keep path text out of the patch grammar.
           const diff = parsePatchFiles(`--- file\n+++ file\n${file.patch}\n`, { throwOnError: true })[0].files[0];
           diff.name = file.filename;
           diff.prevName = file.previous_filename;
