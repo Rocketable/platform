@@ -137,11 +137,11 @@ export type EnumerationResult = {
 
 export async function readSessionEnumeration(
   owner: string,
-  batches: AsyncIterable<SessionBatch> | Promise<AsyncIterable<SessionBatch>>,
+  batches: AsyncIterable<SessionBatch>,
   baseline: () => Session[],
   onProgress: (rows: Session[]) => void,
-  signal?: AbortSignal,
-  onRemote: (remote: Remote) => void = () => {},
+  signal: AbortSignal,
+  onRemote: (remote: Remote) => void,
 ): Promise<EnumerationResult> {
   const byID = new Map<string, Session>();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -154,14 +154,14 @@ export async function readSessionEnumeration(
   const cancel = () => clearTimeout(timer);
   const flush = () => {
     timer = undefined;
-    if (!dirty || signal?.aborted || result.mismatch) return;
+    if (!dirty || signal.aborted || result.mismatch) return;
     dirty = false;
     onProgress(mergeSessionRows(baseline(), [...byID.values()]));
   };
-  signal?.addEventListener("abort", cancel, { once: true });
+  signal.addEventListener("abort", cancel, { once: true });
   try {
-    for await (const batch of await batches) {
-      if (signal?.aborted) break;
+    for await (const batch of batches) {
+      if (signal.aborted) break;
       if (batch.owner !== undefined) {
         if (batch.owner !== owner) {
           result.mismatch = true;
@@ -183,12 +183,12 @@ export async function readSessionEnumeration(
         flush();
       } else if (timer === undefined) timer = setTimeout(flush, 16);
     }
-    result.complete = upstreamSuccess && !result.mismatch && !signal?.aborted;
+    result.complete = upstreamSuccess && !result.mismatch && !signal.aborted;
   } catch (error) {
     result.mismatch = error instanceof RPCError && error.code === 16;
   } finally {
     cancel();
-    signal?.removeEventListener("abort", cancel);
+    signal.removeEventListener("abort", cancel);
   }
   flush();
   result.received = [...byID.values()];

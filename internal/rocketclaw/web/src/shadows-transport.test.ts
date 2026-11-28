@@ -48,7 +48,7 @@ test("real child-only changes refresh paired shadow turns through the parent str
     const parentText = await rows.evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => (node.children[0] as HTMLElement).innerText));
     expect(parentText.every((text: string) => !text.includes("gpt-shadow"))).toBe(true);
     expect((await page.locator("[data-shadow-cell]").allTextContents()).join("\n")).not.toContain("answer");
-    while ((await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).some((batch) => batch.sessions?.some((session) => session.id === "parent" && session.running))) await page.waitForTimeout(10);
+    while ((await Array.fromAsync(listSessions(`${url}/api/ListSessions`))).some((batch) => batch.sessions?.some((session) => session.id === "parent" && session.running))) await page.waitForTimeout(10);
     while (prompts < 2 || reads.length === readsAtPrompt) await page.waitForTimeout(10);
     for (let settled = -1; pendingReads || settled !== reads.length; await page.waitForTimeout(100)) settled = reads.length;
     const heldReads = reads.length;

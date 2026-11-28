@@ -37,14 +37,14 @@ for (const outcome of ["success", "cancel", "post-terminal-cancel", "fail", "pos
   const terminalSeen = Promise.withResolvers<void>();
   const batches = async function* () {
     try {
-      for await (const batch of listSessions(abort.signal, `http://127.0.0.1:${server.port}/api/ListSessions`)) {
+      for await (const batch of listSessions(`http://127.0.0.1:${server.port}/api/ListSessions`, abort.signal)) {
         yield batch;
         if (batch.upstreamSuccess) terminalSeen.resolve();
       }
     }
     catch (error) { failure = error; throw error; }
   };
-  const enumeration = readSessionEnumeration("alice", batches(), () => rows, (next) => { rows = next; seen.resolve(); });
+  const enumeration = readSessionEnumeration("alice", batches(), () => rows, (next) => { rows = next; seen.resolve(); }, new AbortController().signal, () => {});
   try {
     await seen.promise;
     expect(rows).toEqual(first.sessions!);
@@ -77,11 +77,11 @@ test("SSE preserves fragmented UTF-8, >4 MiB rows, empty results and HTTP authen
   } });
   const url = `http://127.0.0.1:${server.port}/api/ListSessions`;
   try {
-    expect(await Array.fromAsync(listSessions(undefined, url))).toEqual([huge, terminal]);
+    expect(await Array.fromAsync(listSessions(url))).toEqual([huge, terminal]);
     body = frame(terminal) + "event: complete\ndata: {}\n\n";
-    expect(await Array.fromAsync(listSessions(undefined, url))).toEqual([terminal]);
+    expect(await Array.fromAsync(listSessions(url))).toEqual([terminal]);
     denied = true;
-    await expect(Array.fromAsync(listSessions(undefined, url))).rejects.toMatchObject({ code: 16, message: "unauthenticated" });
+    await expect(Array.fromAsync(listSessions(url))).rejects.toMatchObject({ code: 16, message: "unauthenticated" });
   } finally { server.stop(true); }
 });
 
