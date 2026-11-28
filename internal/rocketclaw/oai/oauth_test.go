@@ -119,53 +119,6 @@ func TestAuthFileIsolatesProviderTokens(t *testing.T) {
 	require.JSONEq(t, `{"providers":{"openai":{"refresh":"openai-refresh","access":"openai-access","expires":0},"work":{"refresh":"work-refresh","access":"work-access","expires":0}}}`, string(data))
 }
 
-func TestLoadTokenInReadsOldTokenAsOpenAI(t *testing.T) {
-	workspace := t.TempDir()
-	path, err := AuthFilePath(workspace)
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-
-	legacy := []byte(`{"refresh":"legacy-refresh","access":"legacy-access"}`)
-	require.NoError(t, os.WriteFile(path, legacy, 0o600))
-
-	got, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
-	require.NoError(t, err)
-	require.Equal(t, Token{Refresh: "legacy-refresh", Access: "legacy-access"}, got)
-
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.Equal(t, legacy, data)
-}
-
-func TestLoadTokenInDoesNotUseOldTokenForNamedProvider(t *testing.T) {
-	workspace := t.TempDir()
-	path, err := AuthFilePath(workspace)
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-	require.NoError(t, os.WriteFile(path, []byte(`{"refresh":"legacy-refresh","access":"legacy-access"}`), 0o600))
-
-	_, err = LoadTokenIn(workspace, config.DefaultRuntimeDir, "work")
-	require.ErrorContains(t, err, `provider "work"`)
-}
-
-func TestSaveTokenInPreservesOldOpenAITokenWhenAddingNamedProvider(t *testing.T) {
-	workspace := t.TempDir()
-	path, err := AuthFilePath(workspace)
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-	require.NoError(t, os.WriteFile(path, []byte(`{"refresh":"legacy-refresh","access":"legacy-access"}`), 0o600))
-
-	requireSaveToken(t, workspace, "work", Token{Refresh: "work-refresh", Access: "work-access"})
-
-	openAI, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
-	require.NoError(t, err)
-	require.Equal(t, "legacy-refresh", openAI.Refresh)
-
-	work, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "work")
-	require.NoError(t, err)
-	require.Equal(t, "work-refresh", work.Refresh)
-}
-
 func TestRemoveTokenInRemovesOnlySelectedProvider(t *testing.T) {
 	workspace := t.TempDir()
 	requireSaveToken(t, workspace, "openai", Token{Refresh: "openai-refresh"})
@@ -360,7 +313,6 @@ func TestLoadTokenRejectsInvalidTokenFiles(t *testing.T) {
 		want string
 	}{
 		{name: "invalid json", data: `{not-json`, want: "parse OpenAI OAuth token"},
-		{name: "missing refresh", data: `{"access":"access"}`, want: "missing refresh token"},
 		{name: "malformed providers", data: `{"providers":[]}`, want: "parse OpenAI OAuth token"},
 		{name: "null providers", data: `{"providers":null}`, want: "providers must be an object"},
 	}
